@@ -45,15 +45,20 @@ def topic_matches(pattern: str, event_type: str) -> bool:
 def event_matches_filters(event: Event, filters: dict[str, object]) -> bool:
     """Return True when ``event`` satisfies every (key, value) filter.
 
-    Empty / None filters match everything. Comparison is plain equality
-    against the event's field of that name; an unknown field is treated
-    as "no match" (the event lacks the attribute the caller asked to
-    filter on).
+    Empty / ``None`` filters match everything. Comparison is plain
+    equality against the event's field of that name.
+
+    Unknown filter keys are treated as "no match" — a typo in a filter
+    key (e.g. ``{"thread_idd": th_a}``) would otherwise silently
+    broaden delivery to every event, which is the opposite of the
+    caller's intent. Subscribers asking to filter on a field the
+    event does not carry get nothing.
     """
     if not filters:
         return True
     for key, expected in filters.items():
-        actual = getattr(event, key, None)
-        if actual != expected:
+        if not hasattr(event, key):
+            return False
+        if getattr(event, key) != expected:
             return False
     return True

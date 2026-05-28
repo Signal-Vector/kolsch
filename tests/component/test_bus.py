@@ -189,6 +189,26 @@ async def test_attribute_filter_restricts_delivery_by_thread(
     assert all(e.thread_id == th_a for e in recorder.received)
 
 
+async def test_typo_in_filter_key_delivers_nothing(bus: EventBus) -> None:
+    """A filter on a non-existent field MUST deliver nothing.
+
+    Otherwise a typo (`thread_idd` instead of `thread_id`) silently
+    broadens delivery to every event — the opposite of the caller's
+    intent. Pinning the safer semantics here.
+    """
+    recorder = _Recorder()
+    await bus.subscribe(
+        "*",
+        recorder,
+        filters={"thread_idd": ThreadId(f"th_{uuid4()}")},  # typo
+    )
+
+    await bus.publish(_event(event_type=EventType.USER_MESSAGE))
+    await bus.publish(_event(event_type=EventType.TOOL_CALLED))
+
+    assert recorder.received == []
+
+
 async def test_attribute_filter_with_topic_pattern(bus: EventBus) -> None:
     th_a = ThreadId(f"th_{uuid4()}")
     th_b = ThreadId(f"th_{uuid4()}")
