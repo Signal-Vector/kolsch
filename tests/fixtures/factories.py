@@ -45,22 +45,36 @@ def make_agent_config(**overrides: Any) -> dict[str, Any]:
     return defaults
 
 
-def make_event(event_type: str, **data: Any) -> dict[str, Any]:
+def make_event(event_type: str, **fields: Any) -> dict[str, Any]:
     """Return a well-formed event dict for the given type.
 
-    Currently returns a plain dict; the canonical `Event` Pydantic model
-    lands with the store/engine. The envelope keys mirror Module API
-    Reference §13.2 so tests can already key by `type`, `data`, etc.
+    Envelope keys (`event_id`, `parent_event_id`, `thread_id`,
+    `session_id`, `actor`, `created_at`) may be supplied as keyword
+    arguments; anything else lands in the `data` payload. Defaults
+    match Module API Reference §13.2 so tests can already key by
+    `type`, `data`, etc.
+
+    Currently returns a plain dict; the canonical `Event` Pydantic
+    model lands with the store/engine.
     """
+    event_id = fields.pop("event_id", "ev_stub")
+    parent_event_id = fields.pop("parent_event_id", None)
+    thread_id = fields.pop("thread_id", "th_stub")
+    session_id = fields.pop("session_id", "ses_stub")
+    actor = fields.pop("actor", {"kind": "system"})
+    created_at = fields.pop("created_at", "1970-01-01T00:00:00Z")
+    # Whatever remains is the type-specific payload. Copy so the
+    # returned event is independent of the caller's local state.
+    payload = dict(fields)
     return {
-        "event_id": data.pop("event_id", "ev_stub"),
-        "parent_event_id": data.pop("parent_event_id", None),
-        "thread_id": data.pop("thread_id", "th_stub"),
-        "session_id": data.pop("session_id", "ses_stub"),
+        "event_id": event_id,
+        "parent_event_id": parent_event_id,
+        "thread_id": thread_id,
+        "session_id": session_id,
         "type": event_type,
-        "data": data,
-        "actor": data.pop("actor", {"kind": "system"}),
-        "created_at": data.pop("created_at", "1970-01-01T00:00:00Z"),
+        "data": payload,
+        "actor": actor,
+        "created_at": created_at,
     }
 
 

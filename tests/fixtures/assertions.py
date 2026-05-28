@@ -58,13 +58,15 @@ def assert_event_content(event: dict[str, Any], **expected: Any) -> None:
             f"{missing} (event type={event.get('type')!r})"
         )
         raise AssertionError(msg)
-    mismatched = {
-        key: (data[key], value) for key, value in expected.items() if data[key] != value
-    }
+    mismatched = [
+        (key, data[key], wanted)
+        for key, wanted in expected.items()
+        if data[key] != wanted
+    ]
     if mismatched:
         details = ", ".join(
-            f"{key}: expected {expected!r}, got {actual!r}"
-            for key, (actual, expected) in mismatched.items()
+            f"{key}: expected {wanted!r}, got {actual!r}"
+            for key, actual, wanted in mismatched
         )
         msg = f"event data mismatch (type={event.get('type')!r}): {details}"
         raise AssertionError(msg)

@@ -7,20 +7,19 @@ Per handbook §8.3:
 - records the context it was asked to process so tests can assert on
   what the model *would* have seen (the Materialization Rule check).
 
-The model-client contract is not yet declared in code (engine module
-lands later). This module ships the scripted-response data classes and
-the recorder; the engine-facing `generate(...)` method here uses
-`dict[str, object]` for the context until the typed model-client
-Protocol is published. When the Protocol lands, this stub conforms
-without changing test call sites.
+All data types here are Pydantic v2 models (handbook §2.1). The model
+client is async-only because I/O is async-first per the handbook; a
+sync entry point would let engine code drift away from the real
+async client contract.
+
+The model-client Protocol itself lives in the engine package (not yet
+shipped). When it lands, this Fake conforms to it without changing
+test call sites.
 """
 
-from __future__ import annotations
+from typing import Annotated, Literal
 
-from dataclasses import dataclass, field
-from typing import Literal
-
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
 
 class TextResponse(BaseModel):
@@ -53,7 +52,13 @@ class ErrorResponse(BaseModel):
     message: str
 
 
-FakeLLMResponse = TextResponse | ToolCallResponse | ErrorResponse
+# A tagged union — Pydantic uses the `kind` Literal to discriminate. The
+# discriminator makes validation explicit and gives mypy the right
+# narrowing inside `isinstance` checks below.
+FakeLLMResponse = Annotated[
+    TextResponse | ToolCallResponse | ErrorResponse,
+    Field(discriminator="kind"),
+]
 
 
 class FakeLLMScriptExhaustedError(RuntimeError):
@@ -77,8 +82,7 @@ class FakeLLMScriptedError(RuntimeError):
         self.error_type = error_type
 
 
-@dataclass
-class RecordedCall:
+class RecordedCall(BaseModel):
     """One recorded interaction with the Fake LLM.
 
     Captures whatever the engine passed as the context for the call so
@@ -87,33 +91,47 @@ class RecordedCall:
     `assert_materialization` helper consumes these).
     """
 
+    model_config = ConfigDict(frozen=True)
+
     context: dict[str, object]
     response: FakeLLMResponse
 
 
-@dataclass
-class FakeLLM:
+class FakeLLM(BaseModel):
     """Deterministic, zero-token model stub.
 
-    Usage:
+    Usage::
+
         fake = FakeLLM(script=[
             ToolCallResponse(tool="read", args={"path": "data/x.md"}),
             TextResponse(text="Based on the file, the answer is 42."),
         ])
         ...
         assert fake.calls[0].context["system_prompt"] == ...
+
+    `script` is consumed left-to-right; `calls` accumulates one
+    `RecordedCall` per `agenerate` invocation regardless of whether the
+    response was text, tool-call, or error.
     """
 
-    script: list[FakeLLMResponse] = field(default_factory=list)
-    calls: list[RecordedCall] = field(default_factory=list)
+    model_config = ConfigDict(arbitrary_types_allowed=False)
 
-    def generate(self, context: dict[str, object]) -> FakeLLMResponse:
+    script: list[FakeLLMResponse] = Field(default_factory=list)
+    calls: list[RecordedCall] = Field(default_factory=list)
+
+    async def agenerate(self, context: dict[str, object]) -> FakeLLMResponse:
         """Return the next scripted response and record the call.
 
-        `context` is whatever the engine assembled and would have sent to
-        a real model: system prompt, conversational messages, tool
+        `context` is whatever the engine assembled and would have sent
+        to a real model: system prompt, conversational messages, tool
         definitions. The shape stays loose until the engine publishes a
         typed model-client Protocol.
+
+        Raises:
+            FakeLLMScriptExhaustedError: the script has no more responses.
+            FakeLLMScriptedError: the next scripted response is an
+                `ErrorResponse`; the recorded call is still appended so
+                tests can introspect what the model was asked.
         """
         if not self.script:
             msg = (
@@ -127,15 +145,6 @@ class FakeLLM:
             raise FakeLLMScriptedError(response.error_type, response.message)
         return response
 
-    async def agenerate(self, context: dict[str, object]) -> FakeLLMResponse:
-        """Async variant — same scripted behaviour.
-
-        The model-client interface is async by handbook §2.1 (I/O is
-        async). This method exists so engine code that awaits the client
-        works against the Fake without monkey-patching.
-        """
-        return self.generate(context)
-
-    def reset(self) -> None:
+    def reset_calls(self) -> None:
         """Drop recorded calls and start over. Script is preserved."""
         self.calls.clear()
