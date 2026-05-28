@@ -213,10 +213,9 @@ async def test_parent_chain_correct_over_many_events(
 ) -> None:
     session_id, thread_id = session_with_thread
 
-    # 200 sequential appends — strictly less than spec's 1000 just for
-    # test runtime, but still covers the spec's intent and equals/exceeds
-    # the per-call cost of a thousand-event scenario.
-    append_count = 200
+    # Catalog TC-STR-04 literal: 1000 sequential appends. The flock +
+    # Pydantic + SQLite stack handles this in well under a second.
+    append_count = 1000
     appended_ids: list[str] = []
     for i in range(append_count):
         event = _new_event(
@@ -248,7 +247,8 @@ async def test_concurrent_appends_in_same_process_serialize(
 ) -> None:
     session_id, thread_id = session_with_thread
 
-    n = 50
+    # Catalog TC-STR-05 literal: 100 concurrent append coroutines.
+    n = 100
 
     async def _append(i: int) -> str:
         event = _new_event(
@@ -329,9 +329,10 @@ async def test_cross_process_appends_serialize(
 ) -> None:
     session_id, thread_id = session_with_thread
 
-    # 2 child processes x 25 appends each = 50 events appended via
-    # flock-mediated coordination.
-    n_per_child = 25
+    # Catalog TC-STR-06 literal: two separate OS processes, each
+    # appending 50 events. Total 100 events serialised at the kernel
+    # via flock on the per-session lock file.
+    n_per_child = 50
     n_children = 2
 
     ctx = multiprocessing.get_context("spawn")

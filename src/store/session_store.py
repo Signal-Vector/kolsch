@@ -361,9 +361,7 @@ class SessionStore:
             try:
                 session_id = SessionId(path.stem)
             except ValueError as exc:
-                warnings.append(
-                    f"{path.name}: invalid session id ({exc}); skipped"
-                )
+                warnings.append(f"{path.name}: invalid session id ({exc}); skipped")
                 sessions_found -= 1
                 continue
             opener = await asyncio.to_thread(read_first_event, path)
