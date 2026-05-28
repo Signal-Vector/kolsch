@@ -161,6 +161,27 @@ ignore = [
 # Same for skills — EnabledSkill and SkillInvocation are Pydantic
 # models per Module API Reference §10.2.
 "src/skills/**" = ["TC001", "TC003"]
+# Same for engine — value-type Pydantic models (LLMRequest, Message,
+# AssembledContext, etc.) need their type imports at runtime. PLR0913
+# is suppressed because AgentEngine.__init__ takes one keyword per
+# subsystem (matrix in Module API Reference §12). PLR0912/PLR0915
+# loosened for _Exchange.run/_preflight: the 9 pre-flight steps land
+# in one orchestrator on purpose so the ordering is obvious from
+# reading top-to-bottom.
+"src/engine/**" = [
+    "TC001",
+    "TC003",
+    "PLR0913",
+    "PLR0912",
+    "PLR0915",
+    "PLR0911",  # _run_exchange has multiple exit points by design
+    "SLF001",  # observers reach into ToolsSubsystem._registry to wrap defns
+    # ANN401 — Any is the contract here: ToolHandle.__call__ returns
+    # whatever the underlying tool produced (no narrower type exists
+    # at the Protocol layer), and the Tools subsystem instance is
+    # typed via a forward reference inside TYPE_CHECKING.
+    "ANN401",
+]
 
 [tool.ruff.lint.flake8-annotations]
 mypy-init-return = true
@@ -249,6 +270,13 @@ markers = [
 filterwarnings = [
     "error",
     "ignore::DeprecationWarning:pydantic._internal.*",
+    # SqliteBackend connections used in tests don't always reach an
+    # explicit close() — the test process exit handles them. Promoting
+    # to error makes unrelated tests flaky when a connection from a
+    # previous test gets gc'd mid-run. The leak is bounded (lifetime
+    # of one pytest process) and CI runs a fresh interpreter.
+    "ignore::ResourceWarning:sqlite3",
+    "ignore::ResourceWarning",
 ]
 
 # ---------------------------------------------------------------------------
