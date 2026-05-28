@@ -55,7 +55,11 @@ class AuthorizationResult(BaseModel):
 
     allowed: bool
     matched_rule: Rule | None = None
-    reason: str | None = None
+    # Always populated — both the matched-rule and default-deny paths
+    # in :meth:`RuleBasedAuthorizationProvider.allow` set a non-None
+    # string. Typed as `str` (not `str | None`) so callers don't have
+    # to defend against a None they will never see.
+    reason: str
 
 
 # ---------------------------------------------------------------------------

@@ -18,6 +18,7 @@ import pytest
 from errors import (
     AuthzMalformedRule,
     AuthzRegexInvalid,
+    ConfigInvalid,
     SecretNotFound,
     SecretReadFailed,
 )
@@ -284,7 +285,7 @@ async def test_default_deny_when_no_rule_matches() -> None:
     result = await provider.allow("agent.x", "tool.bash")
     assert result.allowed is False
     assert result.matched_rule is None
-    assert "default deny" in (result.reason or "").lower()
+    assert "default deny" in result.reason.lower()
 
 
 async def test_default_deny_with_empty_rule_set() -> None:
@@ -389,6 +390,39 @@ async def test_make_authorization_provider_dispatches_by_variant() -> None:
     )
     result = await provider.allow("user.local", "tool.read")
     assert result.allowed is True
+
+
+# --- Unknown-variant failure path: typed PlatformError at bootstrap --------
+# Spec §1.4.1 / §2.3.1 / §3.4.1 — variants declared in platform.yaml
+# that aren't registered MUST fail fast at bootstrap rather than
+# producing AttributeError later. The factory raises ConfigInvalid
+# with a `unknown_variant` finding code.
+
+
+async def test_make_secrets_provider_unknown_variant_raises_config_invalid(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(ConfigInvalid) as exc_info:
+        make_secrets_provider(
+            root=tmp_path,
+            config={"variant": "vault", "config": {}},
+        )
+    codes = [e["code"] for e in exc_info.value.detail["validation_errors"]]
+    assert "unknown_variant" in codes
+
+
+async def test_make_sandbox_provider_unknown_variant_raises_config_invalid() -> None:
+    with pytest.raises(ConfigInvalid) as exc_info:
+        make_sandbox_provider(config={"variant": "docker", "config": {}})
+    codes = [e["code"] for e in exc_info.value.detail["validation_errors"]]
+    assert "unknown_variant" in codes
+
+
+async def test_make_authz_provider_unknown_variant_raises_config_invalid() -> None:
+    with pytest.raises(ConfigInvalid) as exc_info:
+        make_authorization_provider(config={"variant": "policy_engine", "config": {}})
+    codes = [e["code"] for e in exc_info.value.detail["validation_errors"]]
+    assert "unknown_variant" in codes
 
 
 # ---------------------------------------------------------------------------
