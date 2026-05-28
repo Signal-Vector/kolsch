@@ -364,6 +364,7 @@ async def test_platform_config_sections_dispatch_distinctly(
     payload["secrets"]["config"]["MARKER"] = "secrets-marker"
     payload["sandbox"]["config"]["MARKER"] = "sandbox-marker"
     payload["authorization"]["config"]["MARKER"] = "authz-marker"
+    payload["storage"]["MARKER"] = "storage-marker"
     payload["event_bus"]["MARKER"] = "bus-marker"
     payload["file_access"]["MARKER"] = "fil-marker"
     payload["defaults"]["MARKER"] = "defaults-marker"
@@ -375,6 +376,7 @@ async def test_platform_config_sections_dispatch_distinctly(
     assert am.get_platform_config("secrets")["config"]["MARKER"] == "secrets-marker"
     assert am.get_platform_config("sandbox")["config"]["MARKER"] == "sandbox-marker"
     assert am.get_platform_config("authorization")["config"]["MARKER"] == "authz-marker"
+    assert am.get_platform_config("storage")["MARKER"] == "storage-marker"
     assert am.get_platform_config("event_bus")["MARKER"] == "bus-marker"
     assert am.get_platform_config("file_access")["MARKER"] == "fil-marker"
     assert am.get_platform_config("defaults")["MARKER"] == "defaults-marker"
@@ -548,6 +550,58 @@ async def test_catalog_is_read_only_no_python_imported(
     # The tool was still registered (path-only).
     entry = await am.get_asset("acme/tools/side_effect")
     assert entry.path.endswith("side_effect.py")
+
+
+async def test_non_mapping_agent_yaml_raises_config_invalid(
+    platform_root: Path,
+) -> None:
+    """A non-mapping agent .yaml file MUST surface as a typed
+    PlatformError (ConfigInvalid), not a raw TypeError. Handbook
+    hard rule: no non-PlatformError escapes a public method."""
+    _write_platform_yaml(platform_root)
+    bundle = _write_bundle(platform_root, dir_name="acme")
+    (bundle / "agents").mkdir()
+    # YAML list — not a mapping.
+    (bundle / "agents" / "broken.yaml").write_text(
+        "- not\n- a\n- mapping\n", encoding="utf-8"
+    )
+
+    am = AssetManagement(root=platform_root)
+    await am.initialize()
+    with pytest.raises(ConfigInvalid):
+        await am.build_resolved_config("acme/agents/broken")
+
+
+async def test_prompt_list_with_inline_url_is_not_treated_as_ref(
+    platform_root: Path,
+) -> None:
+    """An inline string in a list-shape PromptSpec that happens to
+    contain a slash (e.g. a URL) MUST NOT be treated as a prompt ref.
+    Only well-shaped <bundle>/prompts/<name> values trigger lookup."""
+    _write_platform_yaml(platform_root)
+    inline = "See https://example.com for context."
+    _write_bundle(
+        platform_root,
+        dir_name="acme",
+        agents={
+            "researcher": {
+                "schema_version": "0.1",
+                "assembly_version": "0.1",
+                "agent_id": "ag_researcher",
+                "name": "researcher",
+                "description": "a researcher",
+                "model": {"provider": "anthropic", "model": "claude-opus-4-7"},
+                "prompt": [inline],
+                "io": {"mode": "conversational"},
+            }
+        },
+    )
+
+    am = AssetManagement(root=platform_root)
+    await am.initialize()
+    cfg = await am.build_resolved_config("acme/agents/researcher")
+    # The URL passed through verbatim — no AssetsPromptLoadFailed.
+    assert cfg.prompt == [inline]
 
 
 async def test_list_assets_filtered_by_type(platform_root: Path) -> None:

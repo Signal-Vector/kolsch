@@ -13,7 +13,8 @@ from typing import TYPE_CHECKING, Any
 
 import yaml
 
-from errors import AssetsPromptLoadFailed
+from assets.refs import parse_ref
+from errors import AssetsInvalidRef, AssetsPromptLoadFailed, ConfigInvalid
 
 if TYPE_CHECKING:
     from assets.catalog import AssetCatalog
@@ -33,16 +34,45 @@ def assemble_partials(
 
 
 def load_agent_definition(agent_path: Path) -> dict[str, Any]:
-    """Read an agent's ``.yaml`` from disk and return its partial dict."""
-    payload = yaml.safe_load(agent_path.read_text(encoding="utf-8"))
+    """Read an agent's ``.yaml`` from disk and return its partial dict.
+
+    Surfaces malformed-shape failures as :class:`ConfigInvalid` (a
+    PlatformError) rather than raw :class:`TypeError` — handbook hard
+    rule: no non-PlatformError exception may escape a public method.
+    """
+    try:
+        payload = yaml.safe_load(agent_path.read_text(encoding="utf-8"))
+    except yaml.YAMLError as exc:
+        raise ConfigInvalid(
+            validation_errors=[
+                {
+                    "layer": 1,
+                    "source": f"agent:{agent_path}",
+                    "path": "/",
+                    "code": "yaml_parse_error",
+                    "message": str(exc),
+                }
+            ],
+            where="assets.assembler.load_agent_definition",
+        ) from exc
     if payload is None:
         return {}
     if not isinstance(payload, dict):
-        msg = (
-            f"agent file {agent_path} must contain a mapping; "
-            f"got {type(payload).__name__}"
+        raise ConfigInvalid(
+            validation_errors=[
+                {
+                    "layer": 1,
+                    "source": f"agent:{agent_path}",
+                    "path": "/",
+                    "code": "not_a_mapping",
+                    "message": (
+                        f"agent file {agent_path} must contain a mapping; "
+                        f"got {type(payload).__name__}"
+                    ),
+                }
+            ],
+            where="assets.assembler.load_agent_definition",
         )
-        raise TypeError(msg)
     return payload
 
 
@@ -79,16 +109,31 @@ def pre_resolve_prompts(
 def _load_prompt_item(item: Any, catalog: AssetCatalog) -> Any:  # noqa: ANN401
     """Resolve one PromptSpec list item.
 
-    Items that don't look like refs (no slash) pass through as inline
-    content. Items that look like refs are loaded from disk; an
-    unresolvable ref raises :class:`AssetsPromptLoadFailed`.
+    Ref detection is structural, not heuristic. An item only counts
+    as a ref when it parses as a full three-segment
+    ``<bundle>/<asset-type>/<name>`` AND its asset-type segment is
+    ``prompts``. Anything else (free-form text, urls, accidental
+    slashes) passes through as inline content. This avoids the
+    "contains a slash = treat as ref" footgun where
+    ``["Use https://example.com"]`` would otherwise hit the catalog
+    lookup and raise AssetsPromptLoadFailed.
+
+    Once an item IS recognised as a prompt ref, an unresolvable
+    target raises :class:`AssetsPromptLoadFailed` — the caller
+    declared the intent and got it wrong.
     """
     if not isinstance(item, str):
         # Already non-string — pass through; downstream validators
         # decide whether to accept it.
         return item
-    if "/" not in item:
-        return item  # inline content in a list-shape PromptSpec
+
+    try:
+        _bundle, asset_type, _name = parse_ref(item)
+    except AssetsInvalidRef:
+        # Not shaped like a ref — treat as inline content.
+        return item
+    if asset_type != "prompts":
+        return item  # references some other asset type; not for us.
 
     entry = catalog.assets.get(item)
     if entry is None or entry.asset_type != "prompt":
