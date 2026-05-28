@@ -154,6 +154,10 @@ ignore = [
 "src/assets/**" = ["TC001", "TC003"]
 # Same for the files package — PathPolicy is a Pydantic model.
 "src/files/**" = ["TC001", "TC003"]
+# Same for tools — ToolContext is Pydantic; the @tool decorator's
+# signature matches spec §2.2 directly (5 kwargs + the function it
+# decorates), and validator branching mirrors spec §3.4's checklist.
+"src/tools/**" = ["TC001", "TC003", "PLR0913", "PLR0912"]
 
 [tool.ruff.lint.flake8-annotations]
 mypy-init-return = true

@@ -215,17 +215,27 @@ def test_dotdot_escape_attempt_is_denied(tmp_path: Path) -> None:
 # ===========================================================================
 
 
-@pytest.mark.skip(
-    reason=(
-        "TC-FIL-06 is an integration test depending on the bash builtin "
-        "tool, which lands with the Tools subsystem in a later step. "
-        "Spec §4.7 + Fh-I6 — the v1 native sandbox does NOT enforce "
-        "path policy for bash; this test will assert that documented "
-        "behaviour once bash is implemented."
-    )
-)
 def test_bash_bypasses_path_policy_documented_limitation() -> None:
-    pytest.fail("placeholder — see skip reason")
+    """Spec §4.7 + Fh-I6 — v1's native sandbox does NOT enforce path
+    policy for bash. The runtime behaviour is pinned at the Tools-
+    subsystem layer (tests/component/test_tools.py::
+    test_builtin_bash_bypasses_path_policy_v1_gap, which actually
+    runs ``cat`` on a denied path and verifies it succeeds).
+
+    Here we pin the structural property — the ``bash`` builtin's
+    factory MUST NOT reference :func:`check_path_allowed`. If a
+    future change wires the policy in, this test forces the
+    engineer to flip it deliberately rather than slipping.
+    """
+    import inspect  # noqa: PLC0415
+
+    from tools.builtins import make_bash  # noqa: PLC0415
+
+    source = inspect.getsource(make_bash)
+    assert "check_path_allowed" not in source, (
+        "bash builtin must NOT enforce path policy in v1 (Fh-I6); "
+        "flip this test only when a real sandbox lands."
+    )
 
 
 # ===========================================================================

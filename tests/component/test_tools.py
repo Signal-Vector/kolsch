@@ -1,0 +1,549 @@
+"""Component tests for src/tools — TC-TLS-01..08.
+
+Spec: docs/explanation/tools-subsystem.md + Module API Reference §9.
+Tests use real provider implementations (DotenvSecretsProvider,
+NativeSandboxProvider, RuleBasedAuthorizationProvider) with stubs
+only at the MCP-server boundary (real MCP wire-protocol is deferred).
+"""
+
+from __future__ import annotations
+
+from typing import TYPE_CHECKING, Any
+from uuid import uuid4
+
+import pytest
+from pydantic import BaseModel
+
+from errors import (
+    SecretNotFound,
+    ToolExecutionFailed,
+    ToolInvalidArguments,
+    ToolSetupFailed,
+    ToolUnauthorized,
+)
+from files import PathPolicy
+from providers import (
+    DotenvSecretsProvider,
+    NativeSandboxProvider,
+    RuleBasedAuthorizationProvider,
+)
+from schemas import AgentId, SessionId, ThreadId
+from tools import (
+    MCPServer,
+    ToolContext,
+    ToolsSubsystem,
+    register_tool,
+    tool,
+)
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+
+def _root(tmp_path: Path) -> Path:
+    for sub in ("data", "bundles", ".platform", "logs"):
+        (tmp_path / sub).mkdir(exist_ok=True)
+    return tmp_path
+
+
+def _policy() -> PathPolicy:
+    return PathPolicy(
+        allowed_paths=["data/"],
+        denied_paths=[".env"],
+    )
+
+
+def _write_env(tmp_path: Path, payload: dict[str, str]) -> None:
+    lines = [f"{k}={v}" for k, v in payload.items()]
+    (tmp_path / ".env").write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def _new_context(*, agent_id: str = "ag_test") -> ToolContext:
+    return ToolContext(
+        agent_id=AgentId(agent_id),
+        session_id=SessionId(f"ses_{uuid4()}"),
+        thread_id=ThreadId(f"th_{uuid4()}"),
+        principal=f"agent.{agent_id}",
+        secrets={},
+    )
+
+
+def _allow_all_authz() -> RuleBasedAuthorizationProvider:
+    return RuleBasedAuthorizationProvider(
+        config={"rules": [{"who": ".*", "what": ".*", "effect": "allow"}]}
+    )
+
+
+def _make_subsystem(
+    *,
+    tmp_path: Path,
+    authz: RuleBasedAuthorizationProvider | None = None,
+    env: dict[str, str] | None = None,
+) -> ToolsSubsystem:
+    root = _root(tmp_path)
+    _write_env(tmp_path, env or {})
+    return ToolsSubsystem(
+        secrets=DotenvSecretsProvider(root=root, config={"path": ".env"}),
+        sandbox=NativeSandboxProvider(),
+        authz=authz or _allow_all_authz(),
+        path_policy=_policy(),
+        root=root,
+    )
+
+
+# ===========================================================================
+# TC-TLS-01 — dispatch order: validate → authz → secrets → sandbox → execute
+# ===========================================================================
+
+
+async def test_dispatch_order_is_validate_authz_secrets_sandbox_execute(
+    tmp_path: Path,
+) -> None:
+    order: list[str] = []
+
+    class ArgsModel(BaseModel):
+        n: int
+
+        def model_post_init(self, _ctx: Any) -> None:
+            order.append("validate")
+
+    @tool(name="recorder", description="records call order", args_schema=ArgsModel)
+    async def recorder(args: ArgsModel, ctx: ToolContext) -> dict[str, int]:
+        order.append("execute")
+        # ctx.secrets is populated AFTER step 3 — observe it here as proof.
+        assert "K" in ctx.secrets
+        return {"value": args.n}
+
+    class _RecordingAuthz:
+        async def allow(self, principal: str, action: str) -> Any:
+            order.append("authz")
+            return await _allow_all_authz().allow(principal, action)
+
+        async def list_rules(self) -> list[Any]:  # pragma: no cover
+            return []
+
+    class _RecordingSecrets:
+        def __init__(self) -> None:
+            self._inner = DotenvSecretsProvider(
+                root=_root(tmp_path), config={"path": ".env"}
+            )
+
+        async def resolve(self, name: str) -> str:
+            order.append("secrets")
+            return await self._inner.resolve(name)
+
+        async def exists(self, name: str) -> bool:
+            return await self._inner.exists(name)
+
+        async def list_names(self) -> list[str]:
+            return await self._inner.list_names()
+
+    class _RecordingSandbox:
+        async def execute(
+            self,
+            work: Any,
+            policy: dict[str, Any],
+        ) -> Any:
+            order.append("sandbox")
+            return await work()
+
+    _write_env(tmp_path, {"K": "v"})
+    subsystem = ToolsSubsystem(
+        secrets=_RecordingSecrets(),
+        sandbox=_RecordingSandbox(),
+        authz=_RecordingAuthz(),
+        path_policy=_policy(),
+        root=_root(tmp_path),
+    )
+    # Register the tool so secrets_needed is declared.
+    register_tool(
+        recorder,
+        secrets_needed=["K"],
+    )
+    await subsystem.register_for_agent(
+        agent_id=AgentId("ag_test"),
+        tools=[recorder],
+    )
+
+    ctx = _new_context()
+    await subsystem.invoke_tool("recorder", {"n": 1}, ctx)
+
+    # Module API Reference §9.1 + Step 10 prompt: EXACT order is
+    # validate (Pydantic) → authz → secrets → sandbox → execute.
+    # (Spec §6.2 lists authz-first in prose; the arbiter says
+    # validate-first. The implementation honours the arbiter.)
+    assert order == ["validate", "authz", "secrets", "sandbox", "execute"], (
+        f"unexpected dispatch order: {order}"
+    )
+
+
+# ===========================================================================
+# TC-TLS-02 — bad args rejected before tool runs
+# ===========================================================================
+
+
+async def test_bad_args_raise_invalid_arguments_and_tool_never_runs(
+    tmp_path: Path,
+) -> None:
+    ran = False
+
+    class StrictArgs(BaseModel):
+        path: str
+        encoding: str = "utf-8"
+
+    @tool(name="strict", description="strict args tool", args_schema=StrictArgs)
+    async def strict(args: StrictArgs, ctx: ToolContext) -> str:
+        nonlocal ran
+        ran = True
+        return args.path
+
+    subsystem = _make_subsystem(tmp_path=tmp_path)
+    await subsystem.register_for_agent(agent_id=AgentId("ag_test"), tools=[strict])
+
+    with pytest.raises(ToolInvalidArguments) as exc_info:
+        await subsystem.invoke_tool(
+            "strict",
+            {"encoding": "utf-8"},
+            _new_context(),  # missing 'path'
+        )
+    assert exc_info.value.detail["tool_name"] == "strict"
+    assert ran is False
+
+
+# ===========================================================================
+# TC-TLS-03 — authz denial surfaces as Diagnostic
+# ===========================================================================
+
+
+async def test_authz_denial_raises_tool_unauthorized_diagnostic(
+    tmp_path: Path,
+) -> None:
+    class _Args(BaseModel):
+        x: int
+
+    @tool(name="deniable", description="x", args_schema=_Args)
+    async def deniable(args: _Args, ctx: ToolContext) -> int:
+        return args.x
+
+    deny_bash = RuleBasedAuthorizationProvider(
+        config={
+            "rules": [
+                {"who": ".*", "what": r"tool\.deniable", "effect": "deny"},
+                {"who": ".*", "what": ".*", "effect": "allow"},
+            ]
+        }
+    )
+    subsystem = _make_subsystem(tmp_path=tmp_path, authz=deny_bash)
+    await subsystem.register_for_agent(agent_id=AgentId("ag_test"), tools=[deniable])
+
+    with pytest.raises(ToolUnauthorized) as exc_info:
+        await subsystem.invoke_tool("deniable", {"x": 1}, _new_context())
+    assert exc_info.value.detail["action"] == "tool.deniable"
+
+
+# ===========================================================================
+# TC-TLS-04 — tool exception → tool.execution_failed (Diagnostic)
+# ===========================================================================
+
+
+async def test_tool_exception_becomes_tool_execution_failed(
+    tmp_path: Path,
+) -> None:
+    class _Args(BaseModel):
+        x: int
+
+    class _MyBoom(RuntimeError):
+        pass
+
+    @tool(name="exploder", description="raises", args_schema=_Args)
+    async def exploder(args: _Args, ctx: ToolContext) -> int:
+        msg = "kaboom"
+        raise _MyBoom(msg)
+
+    subsystem = _make_subsystem(tmp_path=tmp_path)
+    await subsystem.register_for_agent(agent_id=AgentId("ag_test"), tools=[exploder])
+
+    with pytest.raises(ToolExecutionFailed) as exc_info:
+        await subsystem.invoke_tool("exploder", {"x": 1}, _new_context())
+    assert exc_info.value.detail["error_class"] == "_MyBoom"
+    # The original exception is preserved in __cause__ for in-process debugging.
+    assert isinstance(exc_info.value.__cause__, _MyBoom)
+
+
+# ===========================================================================
+# TC-TLS-05 — missing secret → tool.setup_failed with secret.not_found cause
+# ===========================================================================
+
+
+async def test_missing_secret_fails_registration_with_chained_cause(
+    tmp_path: Path,
+) -> None:
+    """Spec §6.1 step 3 — registration verifies secrets via
+    `secrets.exists`. A tool declaring an absent secret fails to
+    register with ToolSetupFailed; the cause chain carries
+    SecretNotFound so the operator sees the underlying reason."""
+
+    class _Args(BaseModel):
+        q: str
+
+    @tool(name="needy", description="needs a secret", args_schema=_Args)
+    async def needy(args: _Args, ctx: ToolContext) -> str:
+        return ctx.secrets["MISSING_KEY"]
+
+    register_tool(needy, secrets_needed=["MISSING_KEY"])
+
+    # Empty .env — MISSING_KEY is absent.
+    subsystem = _make_subsystem(tmp_path=tmp_path, env={})
+
+    with pytest.raises(ToolSetupFailed) as exc_info:
+        await subsystem.register_for_agent(agent_id=AgentId("ag_test"), tools=[needy])
+    assert exc_info.value.detail["tool_name"] == "needy"
+    assert isinstance(exc_info.value.__cause__, SecretNotFound)
+
+
+# ===========================================================================
+# TC-TLS-06 — verbatim result capture (no transformation)
+# ===========================================================================
+
+
+async def test_verbatim_result_capture(tmp_path: Path) -> None:
+    class _Args(BaseModel):
+        n: int
+
+    payload = {
+        "answer": 42,
+        "nested": [1, 2, {"deep": "value"}],
+        "unicode": "café",
+    }
+
+    @tool(name="structured", description="returns structured value", args_schema=_Args)
+    async def structured(args: _Args, ctx: ToolContext) -> dict[str, Any]:
+        return payload
+
+    subsystem = _make_subsystem(tmp_path=tmp_path)
+    await subsystem.register_for_agent(agent_id=AgentId("ag_test"), tools=[structured])
+
+    result = await subsystem.invoke_tool("structured", {"n": 1}, _new_context())
+    assert result.result == payload
+    # Same object reference too (passthrough, not a copy).
+    assert result.result is payload
+
+
+# ===========================================================================
+# TC-TLS-07 — read honors path policy; bash exempt (v1 documented gap)
+# ===========================================================================
+
+
+async def test_builtin_read_honors_path_policy(tmp_path: Path) -> None:
+    from errors import FileAccessDenied  # noqa: PLC0415
+
+    subsystem = _make_subsystem(tmp_path=tmp_path)
+    await subsystem.register_for_agent(
+        agent_id=AgentId("ag_test"),
+        builtin_names=["read"],
+    )
+
+    # Allowed: data/x.txt under the policy's data/ prefix.
+    (tmp_path / "data" / "x.txt").write_text("hello", encoding="utf-8")
+    result = await subsystem.invoke_tool("read", {"path": "data/x.txt"}, _new_context())
+    assert result.result["content"] == "hello"
+
+    # Denied: .env is in denied_paths.
+    with pytest.raises(FileAccessDenied):
+        await subsystem.invoke_tool("read", {"path": ".env"}, _new_context())
+
+
+async def test_builtin_bash_bypasses_path_policy_v1_gap(tmp_path: Path) -> None:
+    """Spec §4.7 + Fh-I6 — `bash` does NOT enforce the path policy
+    in v1's native sandbox. Pin the documented limitation so a future
+    real sandbox flips this test deliberately."""
+    subsystem = _make_subsystem(tmp_path=tmp_path)
+    await subsystem.register_for_agent(
+        agent_id=AgentId("ag_test"),
+        builtin_names=["bash"],
+    )
+
+    # The bash command touches a denied path. The path policy is NOT
+    # consulted; bash runs the command. v1 limitation.
+    target = tmp_path / "denied_zone" / "x.txt"
+    target.parent.mkdir()
+    target.write_text("untouched", encoding="utf-8")
+    result = await subsystem.invoke_tool(
+        "bash",
+        {"command": f"cat {target}"},
+        _new_context(),
+    )
+    assert result.result["stdout"].strip() == "untouched"
+    assert result.result["exit_code"] == 0
+
+
+# ===========================================================================
+# TC-TLS-08 — lazy MCP server starts on first use
+# ===========================================================================
+
+
+class _StubMCPServer:
+    """An in-memory MCPServer for testing the lazy-start lifecycle.
+
+    Real MCP wire-protocol (subprocess + JSON-RPC over stdio) is
+    deferred. This stub honours the same Protocol so tests can pin
+    the lifecycle without spinning up a real subprocess.
+    """
+
+    name: str
+    started: bool
+    start_count: int
+    invoke_count: int
+
+    def __init__(self, name: str, tools: dict[str, Any]) -> None:
+        self.name = name
+        self._tools = tools
+        self.started = False
+        self.start_count = 0
+        self.invoke_count = 0
+
+    async def start(self) -> None:
+        self.started = True
+        self.start_count += 1
+
+    async def stop(self) -> None:
+        self.started = False
+
+    async def list_tools(self) -> list[dict[str, Any]]:
+        return [{"name": k, "description": d} for k, d in self._tools.items()]
+
+    async def invoke(self, tool_name: str, args: dict[str, Any]) -> Any:
+        self.invoke_count += 1
+        return self._tools[tool_name]
+
+
+async def test_lazy_mcp_server_starts_on_first_invoke(tmp_path: Path) -> None:
+    server = _StubMCPServer(
+        name="stub",
+        tools={"hello": "from stub"},
+    )
+    subsystem = _make_subsystem(tmp_path=tmp_path)
+    await subsystem.register_for_agent(
+        agent_id=AgentId("ag_test"),
+        mcp_servers=[(server, "lazy")],
+    )
+    # Lazy — server is NOT started at registration time. We assert
+    # via the call-count side channel rather than `assert server.started`
+    # so mypy's flow-narrowing of bool literal asserts doesn't mark
+    # later assertions as unreachable.
+    assert server.start_count == 0
+
+    result = await subsystem.invoke_tool("mcp.stub.hello", {}, _new_context())
+    # First invoke triggers start.
+    assert server.start_count == 1
+    assert server.invoke_count == 1
+    assert result.result == "from stub"
+
+    # Second invoke reuses; start NOT called again.
+    await subsystem.invoke_tool("mcp.stub.hello", {}, _new_context())
+    assert server.start_count == 1
+    assert server.invoke_count == 2
+
+
+async def test_eager_mcp_server_starts_at_registration(tmp_path: Path) -> None:
+    server = _StubMCPServer(name="eager_stub", tools={"ping": "pong"})
+    subsystem = _make_subsystem(tmp_path=tmp_path)
+    await subsystem.register_for_agent(
+        agent_id=AgentId("ag_test"),
+        mcp_servers=[(server, "eager")],
+    )
+    assert server.started
+    assert server.start_count == 1
+
+
+# ===========================================================================
+# Spec invariants — additional coverage
+# ===========================================================================
+
+
+async def test_unknown_tool_raises(tmp_path: Path) -> None:
+    from errors import ToolNotFound  # noqa: PLC0415
+
+    subsystem = _make_subsystem(tmp_path=tmp_path)
+    await subsystem.register_for_agent(agent_id=AgentId("ag_test"))
+    with pytest.raises(ToolNotFound):
+        await subsystem.invoke_tool("does_not_exist", {}, _new_context())
+
+
+def test_mcp_server_protocol_shape() -> None:
+    """The MCPServer Protocol is structural; the stub satisfies it."""
+    assert isinstance(_StubMCPServer(name="x", tools={}), MCPServer)
+
+
+# ===========================================================================
+# Layer 3 validator — TC-TLS adjacent (spec §3.4)
+# ===========================================================================
+
+
+def test_layer3_accepts_default_builtin_set() -> None:
+    from tools import validate_standard_config  # noqa: PLC0415
+
+    result = validate_standard_config(
+        {"builtin": ["read", "write", "edit", "bash"]}
+    )
+    assert result.ok is True, result.errors
+
+
+def test_layer3_rejects_unknown_builtin() -> None:
+    from tools import validate_standard_config  # noqa: PLC0415
+
+    result = validate_standard_config({"builtin": ["read", "frobnicate"]})
+    assert result.ok is False
+    codes = [e.code for e in result.errors]
+    assert "unknown_builtin" in codes
+
+
+def test_layer3_rejects_duplicate_mcp_server_name() -> None:
+    from tools import validate_standard_config  # noqa: PLC0415
+
+    result = validate_standard_config(
+        {
+            "mcp": [
+                {"name": "github", "command": ["x"]},
+                {"name": "github", "command": ["y"]},
+            ]
+        }
+    )
+    assert result.ok is False
+    assert any(e.code == "duplicate_mcp_name" for e in result.errors)
+
+
+def test_layer3_rejects_env_inject_referencing_undeclared_secret() -> None:
+    from tools import validate_standard_config  # noqa: PLC0415
+
+    result = validate_standard_config(
+        {
+            "mcp": [
+                {
+                    "name": "github",
+                    "command": ["x"],
+                    "secrets_needed": ["GITHUB_TOKEN"],
+                    "env_inject": {"GITHUB_PAT": "WRONG_NAME"},
+                }
+            ]
+        }
+    )
+    assert result.ok is False
+    assert any(
+        e.code == "unknown_secret_in_env_inject" for e in result.errors
+    )
+
+
+def test_layer3_rejects_malformed_declared_entry() -> None:
+    from tools import validate_standard_config  # noqa: PLC0415
+
+    result = validate_standard_config(
+        {"declared": ["just-a-string-not-a-mapping"]}
+    )
+    assert result.ok is False
+    assert any(e.code == "malformed_entry" for e in result.errors)
