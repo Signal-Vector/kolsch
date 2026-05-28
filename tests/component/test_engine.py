@@ -58,6 +58,7 @@ from tests.fixtures.fake_llm import (
     TextResponse,
     ToolCallResponse,
 )
+from tests.golden._helpers import assert_matches_golden
 from tools import ToolContext, ToolsSubsystem, tool
 
 if TYPE_CHECKING:
@@ -301,13 +302,14 @@ async def test_tc_eng_01_simple_exchange_golden_sequence(tmp_path: Path) -> None
     assert result.type == EventType.AGENT_MESSAGE
     assert result.data["content"]["text"] == "Hi back."
 
-    # Replay the log; compare normalized types in order.
+    # Type-tuple smoke check.
     events = [e async for e in store.read_path_to_leaf(ctx.thread_id)]
-    # The path includes the session.opened (first ever event for the
-    # session) followed by the engine's exchange events. Skip
-    # session.opened for the engine-level golden compare.
     engine_events = [e for e in events if e.type != EventType.SESSION_OPENED]
     assert tuple(e.type for e in engine_events) == _GOLDEN_SIMPLE_TYPES
+
+    # Byte-level golden — diff against tests/golden/tc_eng_01_simple.jsonl.
+    # Regenerate via UPDATE_GOLDEN=1; review the diff before committing.
+    assert_matches_golden("tc_eng_01_simple", engine_events)
 
 
 # ===========================================================================
@@ -346,7 +348,11 @@ _GOLDEN_TOOL_TYPES = (
 async def test_tc_eng_02_tool_call_exchange_golden_sequence(tmp_path: Path) -> None:
     fake = FakeLLM(
         script=[
-            ToolCallResponse(tool="ping", args={"message": "ack"}),
+            ToolCallResponse(
+                tool="ping",
+                args={"message": "ack"},
+                tool_call_id="call_ping",
+            ),
             TextResponse(text="Tool said ack."),
         ],
     )
@@ -364,6 +370,9 @@ async def test_tc_eng_02_tool_call_exchange_golden_sequence(tmp_path: Path) -> N
     engine_events = [e for e in events if e.type != EventType.SESSION_OPENED]
     assert tuple(e.type for e in engine_events) == _GOLDEN_TOOL_TYPES
 
+    # Byte-level golden — diff against tests/golden/tc_eng_02_tool_call.jsonl.
+    assert_matches_golden("tc_eng_02_tool_call", engine_events)
+
 
 # ===========================================================================
 # TC-ENG-03 — Materialization check (3 scenarios)
@@ -371,23 +380,34 @@ async def test_tc_eng_02_tool_call_exchange_golden_sequence(tmp_path: Path) -> N
 
 
 async def test_tc_eng_03_materialization_simple_text(tmp_path: Path) -> None:
-    """Scenario 1: text-only exchange. Assembly Procedure on the log
-    path produces the same messages the Fake LLM was asked to process."""
+    """Scenario 1: text-only exchange. ``model.request.data.messages``
+    captures what the LLM saw verbatim (§B.6 draft-0.6 amendment) AND
+    the Assembly Procedure on the truncated path produces the same
+    projection (replay-by-derivation still works for non-wrapping
+    frameworks like FakeFramework)."""
     fake = FakeLLM(script=[TextResponse(text="Done.")])
     engine, store, _am = await _build_engine(tmp_path, fake)
     ctx = await _new_session_context(store)
 
     await engine.execute(_config(), ctx)
 
-    # The Fake LLM recorded what it saw on the last call.
     assert len(fake.calls) == 1
     seen_messages = _as_messages(fake.calls[0].context["messages"])
 
-    # Assembly procedure on the path AS IT WAS at the moment of the
-    # model call (Materialization Rule §B.6 — replay reconstructs
-    # what the model saw). The model call happens before its matching
-    # model.response, so truncate at the first model.request.
     all_events = [e async for e in store.read_path_to_leaf(ctx.thread_id)]
+
+    # §B.6 amendment — the canonical replay source. The captured
+    # messages on the model.request event MUST equal what the LLM
+    # saw. This is the load-bearing check; it holds under any
+    # framework that goes through the LLMHandle seam.
+    request_events = [e for e in all_events if e.type == EventType.MODEL_REQUEST]
+    assert len(request_events) == 1
+    captured = request_events[0].data["messages"]
+    assert captured == seen_messages
+
+    # Assembly Procedure on the path AS IT WAS at the moment of the
+    # model call (truncated at the first model.request) — derivation
+    # also produces the same projection under FakeFramework (no wrap).
     truncated = _events_before_first_model_request(all_events)
     assembled = assemble_context(truncated)
     derived_full = [
@@ -400,16 +420,15 @@ async def test_tc_eng_03_materialization_simple_text(tmp_path: Path) -> None:
         },
         *(m.model_dump() for m in assembled.messages),
     ]
-
     assert derived_full == seen_messages
-    assert assembled.system_prompt == fake.calls[0].context["system_prompt"]
 
 
 async def test_tc_eng_03_materialization_tool_call(tmp_path: Path) -> None:
-    """Scenario 2: tool-call exchange. After the round-trip, the
-    Assembly Procedure on the path produces the same messages the
-    LLM saw on its FINAL call (the message list grew through the
-    exchange)."""
+    """Scenario 2: tool-call exchange. Two model.request events fire
+    (one per turn); each captures the LLM-seam messages for that
+    turn. Replay sources from the event — Assembly Procedure on the
+    truncated path also reproduces the FakeFramework view as a
+    secondary check."""
     fake = FakeLLM(
         script=[
             ToolCallResponse(tool="ping", args={"message": "x"}),
@@ -430,10 +449,17 @@ async def test_tc_eng_03_materialization_tool_call(tmp_path: Path) -> None:
     roles = [m["role"] for m in final_messages]
     assert roles == ["system", "user", "assistant", "tool"]
 
-    # Walk path AS IT WAS at the moment of the LAST model call (the
-    # one that generated the final text "ok"). The Materialization
-    # Rule (§B.6) requires this view replays byte-equal.
     all_events = [e async for e in store.read_path_to_leaf(ctx.thread_id)]
+
+    # §B.6 amendment — the captured LLM-seam messages on the LAST
+    # model.request equal what the Fake LLM saw on its FINAL call.
+    request_events = [e for e in all_events if e.type == EventType.MODEL_REQUEST]
+    assert len(request_events) == 2
+    last_captured = request_events[-1].data["messages"]
+    assert last_captured == final_messages
+
+    # Assembly Procedure on the truncated path also reproduces it
+    # (FakeFramework doesn't wrap, so derivation matches capture).
     truncated = _events_before_last_model_request(all_events)
     assembled = assemble_context(truncated)
     derived_full = [
@@ -446,22 +472,19 @@ async def test_tc_eng_03_materialization_tool_call(tmp_path: Path) -> None:
         },
         *(m.model_dump() for m in assembled.messages),
     ]
-
-    # The Fake saw [system, user, assistant(tool_calls), tool]. The
-    # Assembly Procedure produces the same projection from the path.
     assert derived_full == final_messages
 
 
-async def test_tc_eng_03_materialization_with_memory(tmp_path: Path) -> None:
-    """Scenario 3: a config_set carrying memory state surfaces on
-    replay. The Assembly Procedure pulls the config from the most
-    recent config.set; the test verifies the prompt the Fake LLM saw
-    equals what the procedure reproduces."""
+async def test_tc_eng_03_materialization_with_layered_prompt(
+    tmp_path: Path,
+) -> None:
+    """Scenario 3: layered PromptSpec round-trips through the Assembly
+    Procedure. Renamed from the misleading ``..._with_memory`` since
+    the body never exercised memory — TC-ENG-03 scenario 4 below is
+    the real memory case."""
     fake = FakeLLM(script=[TextResponse(text="OK.")])
     cfg = _config().model_copy(
-        update={
-            "prompt": ["Layer 1.", "Layer 2."],
-        },
+        update={"prompt": ["Layer 1.", "Layer 2."]},
     )
     engine, store, _am = await _build_engine(tmp_path, fake)
     ctx = await _new_session_context(store)
@@ -476,6 +499,92 @@ async def test_tc_eng_03_materialization_with_memory(tmp_path: Path) -> None:
     assert "Layer 2." in assembled.system_prompt
     # That same system prompt is what the Fake saw.
     assert assembled.system_prompt == fake.calls[0].context["system_prompt"]
+
+
+async def test_tc_eng_03_materialization_with_memory(tmp_path: Path) -> None:
+    """Scenario 4: a ``memory.retrieved`` event on the path projects
+    its captured content verbatim into the model's context (§B.6
+    "Memory retrievals — memory.retrieved events carry the actual
+    content returned by the retrieval, verbatim"). The Assembly
+    Procedure replays the captured content; it never re-runs the
+    retrieval. This test pins the projection contract directly: emit
+    a memory.retrieved event into the log before the exchange, then
+    verify the Fake LLM's recorded context contains the verbatim
+    content."""
+    fake = FakeLLM(script=[TextResponse(text="Got it.")])
+    engine, store, _am = await _build_engine(tmp_path, fake)
+    ctx = await _new_session_context(store)
+
+    # Inject a memory.retrieved event into the log mid-thread, BEFORE
+    # the exchange runs. The Assembly Procedure will project it as a
+    # system "context injection" per §B.6.
+    from datetime import UTC, datetime  # noqa: PLC0415
+    from uuid import uuid4  # noqa: PLC0415
+
+    from schemas import (  # noqa: PLC0415
+        Actor,
+        Event,
+        EventId,
+        MemoryRetrievedData,
+    )
+
+    leaf = await store.get_leaf(ctx.thread_id)
+    thread = await store.get_thread(ctx.thread_id)
+    memory_event = Event(
+        event_id=EventId(f"ev_{uuid4()}"),
+        parent_event_id=leaf.event_id if leaf else None,
+        thread_id=ctx.thread_id,
+        session_id=thread.session_id,
+        type=EventType.MEMORY_RETRIEVED,
+        data=MemoryRetrievedData(
+            scope="session",
+            query={"semantic_query": "prior context"},
+            results=[
+                {
+                    "content": {"note": "User prefers concise replies."},
+                    "tags": ["preferences"],
+                },
+            ],
+            variant="recent_buffer",
+        ).model_dump(mode="json"),
+        actor=Actor(kind="system"),
+        created_at=datetime.now(UTC),
+    )
+    await store.append_event(ctx.thread_id, memory_event)
+
+    await engine.execute(_config(), ctx)
+
+    seen_messages = _as_messages(fake.calls[0].context["messages"])
+
+    # The memory retrieval surfaces as a system message in the
+    # projection. Find it and verify the verbatim content survives.
+    system_msgs = [m for m in seen_messages if m["role"] == "system"]
+    # The first system message is the agent's prompt; the second is
+    # the memory injection (assembled via _project_events).
+    memory_msg = next(
+        (m for m in system_msgs if "<memory>" in m["content"]),
+        None,
+    )
+    assert memory_msg is not None
+    # Verbatim — the {"note": ...} dict appears in the projection
+    # under the deterministic json.dumps form.
+    assert "User prefers concise replies." in memory_msg["content"]
+
+    # §B.6 amendment also holds: the captured model.request.messages
+    # has the same memory injection (load-bearing for replay).
+    events = [e async for e in store.read_path_to_leaf(ctx.thread_id)]
+    request_events = [e for e in events if e.type == EventType.MODEL_REQUEST]
+    captured_messages = request_events[0].data["messages"]
+    captured_memory_msg = next(
+        (
+            m
+            for m in captured_messages
+            if m["role"] == "system" and "<memory>" in m["content"]
+        ),
+        None,
+    )
+    assert captured_memory_msg is not None
+    assert "User prefers concise replies." in captured_memory_msg["content"]
 
 
 # ===========================================================================

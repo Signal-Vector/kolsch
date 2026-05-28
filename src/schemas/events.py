@@ -140,16 +140,28 @@ class AgentMessageData(_DataModel):
 
 
 class ModelRequestData(_DataModel):
-    """`model.request.data` — §B.8.
+    """`model.request.data` — §B.8 + §B.6 draft-0.6 amendment.
 
-    No ``assembled_context`` field per spec §B.8 — the context is
-    derivable from the tree via the Assembly Procedure at the version
-    recorded in the effective ``config.set``.
+    Schemas spec extended (2026-05-28) so the LLM-seam message list
+    is captured verbatim on the request event. Before this amendment,
+    §B.8 said "context is derivable from the tree via Assembly
+    Procedure"; under a wrapping framework (CrewAI's prompt-template
+    injection, multimodal reshaping) that derivation diverges from
+    what the LLM actually saw. Capturing here closes the gap.
+
+    Replay reads ``messages`` directly from this event for
+    "what did the model see at this call". The Assembly Procedure
+    still applies for projecting future calls (which haven't happened
+    yet and therefore haven't been captured).
     """
 
     call_id: AgentCallId
     model: dict[str, Any]
     config_event_id: EventId
+    # §B.6 amendment — the LLM-seam request.messages dump. Captured
+    # post-framework-wrap, pre-LLM-invoke. Replay sources from here,
+    # not from the path.
+    messages: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ModelResponseData(_DataModel):

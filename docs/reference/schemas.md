@@ -336,19 +336,36 @@ event, that is a spec violation. The Materialization Rule is the bargain
 that makes pi-style on-the-fly assembly honest: replay reconstructs what the
 model saw because every input is in the log.
 
-**Clarification (draft 0.5, 2026-05-28) — what "messages as sent to the
-model" means for `model.request.data.messages`.** When the Agent Engine
-wraps a framework (CrewAI in v1) that performs prompt-template injection
-between the engine's Assembly-Procedure output and the underlying LLM call
-(role-playing wrapping, tools/skills block injection, provider-specific
-message formatting), the materialized `model.request.data.messages` MUST
-be the list as observed at the LLM seam — i.e., **post-framework-wrap,
-immediately before the LLM is invoked** — not the Assembly-Procedure
-output verbatim. The wrap is part of the framework's deterministic
-contribution and is itself replay-faithful given the same engine inputs +
-the same framework version (`runtime.framework_version`, captured on
-`config.set`). Capturing the listener-level pre-wrap list would diverge
-from what the model actually saw and break replay correctness.
+**Amendment (draft 0.6, 2026-05-28) — `model.request.data.messages` is
+required and authoritative.** Earlier drafts (and §B.8 above) said
+"the context is derivable from the tree via the Assembly Procedure";
+that derivation is sufficient under a non-wrapping framework but
+diverges under any framework that mutates messages between the
+engine's hand-off and the LLM call (CrewAI's prompt-template
+injection, multimodal reshaping, role normalization). To close the
+gap, **`model.request.data` MUST carry a `messages` field — the
+verbatim list as observed at the LLM seam, immediately before the
+LLM is invoked.**
+
+Concretely:
+
+- `messages` is the list of `{role, content, tool_call_id?,
+  tool_calls?, name?}` dicts the underlying LLM received.
+- Captured post-framework-wrap, pre-LLM-invoke. The wrap is part of
+  the framework's deterministic contribution; the engine does not
+  attempt to "unwrap" — the wrapped view is the materialized fact.
+- **Replay reads `messages` directly from this event** for "what
+  did the model see at this call." The Assembly Procedure (§B.5)
+  still applies for projecting context for *future* calls (calls
+  that haven't happened yet and therefore haven't been captured).
+- The amendment is additive — schemas honoring the old "no messages
+  on model.request" shape are forward-compatible by treating
+  missing `messages` as the empty list.
+
+This is the load-bearing fix for the Materialization Rule under
+wrapping frameworks. Without it, replay against any non-trivial
+framework adapter (Step 12b's CrewAI adapter, future engine swaps)
+would silently lose fidelity.
 
 ## B.7 Phase 1 Event Types
 

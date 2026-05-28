@@ -90,6 +90,7 @@ class _ObservedLLMHandle:
             call_id=call_id,
             model=dict(self._model_spec),
             config_event_id=EventId(self._config_event_id or "ev_pending"),
+            messages=[m.model_dump(mode="json") for m in request.messages],
         )
         await self._emit(
             type_=EventType.MODEL_REQUEST,
