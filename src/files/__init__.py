@@ -1,0 +1,34 @@
+"""Files — path-access policy + ``file_ref`` validation.
+
+Per docs/explanation/file-handling.md Part 4 + Fh-I1..I10. Used by:
+
+- The builtin file-touching tools (``read`` / ``write`` / ``edit``)
+  to gate each invocation's path argument.
+- The engine's ``execute`` boundary to validate ``file_ref`` inputs
+  before any agent runs (Fh-I8).
+- The bootstrap path (Asset Management) to load the policy via
+  :func:`load_policy` from the ``file_access`` section of
+  ``platform.yaml``.
+
+The package is a top-level home rather than co-located in
+``src/tools/`` because both tools and the engine consume it; routing
+through ``tools/`` would force the engine to depend on tools.
+"""
+
+from files.policy import (
+    PathPolicy,
+    assert_writable_destination,
+    check_path_allowed,
+    is_path_allowed,
+    load_policy,
+    validate_file_ref,
+)
+
+__all__ = [
+    "PathPolicy",
+    "assert_writable_destination",
+    "check_path_allowed",
+    "is_path_allowed",
+    "load_policy",
+    "validate_file_ref",
+]

@@ -40,6 +40,7 @@ packages = [
     "src/tools",
     "src/skills",
     "src/engine",
+    "src/files",
 ]
 
 # ---------------------------------------------------------------------------
@@ -151,6 +152,8 @@ ignore = [
 # Same for the assets package — Pydantic-validated catalog records
 # need their type imports at runtime, not in TYPE_CHECKING.
 "src/assets/**" = ["TC001", "TC003"]
+# Same for the files package — PathPolicy is a Pydantic model.
+"src/files/**" = ["TC001", "TC003"]
 
 [tool.ruff.lint.flake8-annotations]
 mypy-init-return = true
@@ -168,6 +171,7 @@ known-first-party = [
     "tools",
     "skills",
     "engine",
+    "files",
 ]
 
 [tool.ruff.format]

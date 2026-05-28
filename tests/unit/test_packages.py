@@ -20,6 +20,7 @@ SUBSYSTEM_PACKAGES = [
     "tools",
     "skills",
     "engine",
+    "files",
 ]
 
 
