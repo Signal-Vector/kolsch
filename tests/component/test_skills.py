@@ -166,6 +166,10 @@ async def test_tc_skl_01_enabled_skill_in_listing(am: AssetManagement) -> None:
     assert "Conduct a structured literature review." in listing
     # Read path is the ref-derived logical path the model uses.
     assert "acme/skills/literature-review/SKILL.md" in listing
+    # Sk-I1 negative half — bodies MUST NOT leak into the listing.
+    # The fixture body is "Body content."; surfacing it would mean
+    # someone started reading SKILL.md instead of catalog metadata.
+    assert "Body content." not in listing
 
 
 # ===========================================================================
