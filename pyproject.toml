@@ -121,7 +121,21 @@ ignore = [
     "ANN",     # tests don't need exhaustive annotations on every helper
     "PLR2004", # magic numbers are fine in tests
     "ARG",     # pytest fixtures pass through unused args
+    "PT011",   # pytest.raises(...) without match — error type is the
+               # whole point of TC-ERR tests
+    "N818",    # local test-only Probe classes don't need Error suffix
+    "EM101",   # constructing canonical-shape errors with literals is
+               # the whole point of the catalog tests
+    "PT015",   # asserts with multi-part guards are fine in tests
+    "PT018",   # composite asserts read better than splitting in tests
+    "TRY301",  # cause-chain tests need nested raises to build chains
 ]
+# `src/errors/` is, by definition, the errors package. Every class is a
+# PlatformError subclass; the N818 "must end in Error" rule would force
+# names like ToolUnauthorizedError, which diverges from the spec's
+# naming convention (e.g. `ToolUnauthorized` in spec §3.2). Suppress
+# locally; ambiguity is impossible inside this package.
+"src/errors/**" = ["N818"]
 
 [tool.ruff.lint.flake8-annotations]
 mypy-init-return = true
