@@ -181,16 +181,28 @@ def validate_recent_buffer_config(
         )
 
     for field in ("recent_turns", "max_tokens"):
-        if field in body and not isinstance(body[field], int):
+        if field not in body:
+            continue
+        value = body[field]
+        if not isinstance(value, int) or isinstance(value, bool):
             errors.append(
                 ValidationError(
                     layer=3,
                     source="memory.recent_buffer",
                     path=f"/{field}",
                     code="not_an_int",
-                    message=(
-                        f"{field} must be an integer; got {type(body[field]).__name__}"
-                    ),
+                    message=(f"{field} must be an integer; got {type(value).__name__}"),
+                )
+            )
+            continue
+        if value < 0:
+            errors.append(
+                ValidationError(
+                    layer=3,
+                    source="memory.recent_buffer",
+                    path=f"/{field}",
+                    code="negative_value",
+                    message=(f"{field} must be non-negative; got {value}"),
                 )
             )
 

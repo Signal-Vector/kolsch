@@ -172,6 +172,10 @@ async def test_cache_rebuild_equals_pre_restart_state(
     store: SessionStore,
     memory: RecentBufferMemoryProvider,
 ) -> None:
+    """Catalog literal form: snapshot retrieval before restart, rebind
+    a fresh context (simulating restart), snapshot again, assert the
+    two snapshots are identical — including order. Catches
+    nondeterministic-ordering bugs the "expected-set" form misses."""
     session_id, thread_id, _ctx = await _bind(
         memory,
         store,
@@ -199,15 +203,27 @@ async def test_cache_rebuild_equals_pre_restart_state(
         item_id=item_b.item_id,
     )
 
-    # Rebind: fresh context, cache rebuilt from log.
-    rebuilt_ctx = await memory.bind_session(
+    # Snapshot 1 — bind a context, list items, capture ordered ids.
+    first_ctx = await memory.bind_session(
         session_id=session_id,
         agent_id=AgentId("ag_test"),
         config={"write_tag": "notes/research", "read_tags": ["notes/*"]},
     )
-    listed = await rebuilt_ctx.list_items()
-    listed_ids = {item.item_id for item in listed}
-    assert listed_ids == {item_a.item_id, item_c.item_id}
+    snapshot_first = [i.item_id for i in await first_ctx.list_items()]
+
+    # Snapshot 2 — fully discard the previous context (simulating a
+    # restart), bind a new one, list items again.
+    del first_ctx
+    second_ctx = await memory.bind_session(
+        session_id=session_id,
+        agent_id=AgentId("ag_test"),
+        config={"write_tag": "notes/research", "read_tags": ["notes/*"]},
+    )
+    snapshot_second = [i.item_id for i in await second_ctx.list_items()]
+
+    # Ordered equality — MEM I9 (deterministic replay).
+    assert snapshot_first == snapshot_second
+    assert set(snapshot_first) == {item_a.item_id, item_c.item_id}
 
 
 # ===========================================================================
@@ -236,12 +252,22 @@ async def test_user_cannot_override_write_tag(
     _, _, ctx = await _bind(memory, store, write_tag="notes/research")
     item = await ctx.write(
         content={"text": "fact"},
-        metadata={"tags": ["smuggled-tag"]},  # attempted override via metadata
+        # Attempted override via metadata. The remaining "ok" key
+        # exists so we can confirm legitimate metadata survives
+        # while the smuggled `tags` key is stripped — pin both
+        # halves of the policy.
+        metadata={"tags": ["smuggled-tag"], "ok": "kept"},
     )
     # The configured write_tag wins regardless of what the caller put
     # in metadata.
     assert item.tags == ["notes/research"]
     assert "smuggled-tag" not in item.tags
+    # The smuggled tag is also stripped from metadata — if it were
+    # left there, a future regression that "fixes item.tags but
+    # leaves metadata.tags" would slip through.
+    assert "tags" not in item.metadata
+    # Legitimate metadata keys are preserved.
+    assert item.metadata == {"ok": "kept"}
 
 
 # ===========================================================================
@@ -291,6 +317,26 @@ def test_layer3_rejects_subsystem_with_neither_write_nor_read() -> None:
     assert "memory_disabled_but_present" in codes
 
 
+def test_layer3_rejects_negative_recent_turns_and_max_tokens() -> None:
+    """The validator docstring promises "non-negative ints if
+    supplied"; pin the rule so a future regression doesn't drift."""
+    result = validate_recent_buffer_config(
+        {"write_tag": "x", "recent_turns": -5, "max_tokens": -1000}
+    )
+    assert result.ok is False
+    codes = [e.code for e in result.errors]
+    paths = [e.path for e in result.errors]
+    assert codes.count("negative_value") == 2
+    assert "/recent_turns" in paths
+    assert "/max_tokens" in paths
+
+
+def test_layer3_rejects_non_int_recent_turns() -> None:
+    result = validate_recent_buffer_config({"write_tag": "x", "recent_turns": "ten"})
+    assert result.ok is False
+    assert any(e.code == "not_an_int" for e in result.errors)
+
+
 def test_layer3_satisfies_kernel_config_validator_signature() -> None:
     """The validator is what the kernel calls during Layer 3 dispatch
     (spec §5.1). It MUST be a Callable[[dict], ValidationResult]."""
@@ -314,10 +360,14 @@ async def test_read_tags_wildcard_matches_hierarchical_children(
         read_tags=["research/*"],
     )
 
+    # Spec §5.1 — `research/*` MUST match BOTH `research/a` AND
+    # `research/a/b` (deeply nested). The shorthand "one level" is a
+    # common misreading; pin the deeper-depth case explicitly.
     a = _make_item(tag="research/a", text="paper-a")
     b = _make_item(tag="research/b", text="paper-b")
-    c = _make_item(tag="other/c", text="paper-c")
-    for item in (a, b, c):
+    deep = _make_item(tag="research/a/sub/deep", text="paper-deep")
+    other = _make_item(tag="other/c", text="paper-c")
+    for item in (a, b, deep, other):
         await _emit_memory_written(
             store, session_id=session_id, thread_id=thread_id, item=item
         )
@@ -331,7 +381,7 @@ async def test_read_tags_wildcard_matches_hierarchical_children(
     returned_text = {
         item.content["text"] for item in result.items if item.source == "memory_item"
     }
-    assert returned_text == {"paper-a", "paper-b"}
+    assert returned_text == {"paper-a", "paper-b", "paper-deep"}
 
 
 # ===========================================================================
@@ -360,10 +410,19 @@ async def test_session_isolation(
         agent_id=AgentId("ag_test"),
         config={"write_tag": "notes/research", "read_tags": ["notes/*"]},
     )
+    # Isolation MUST hold across BOTH read paths — `list_items`
+    # (introspection) and `retrieve` (context assembly). MEM I7.
     listed_a = await ctx_a.list_items()
-    ids_a = {item.item_id for item in listed_a}
-    assert a_item.item_id in ids_a
-    assert b_item.item_id not in ids_a
+    ids_listed = {item.item_id for item in listed_a}
+    assert a_item.item_id in ids_listed
+    assert b_item.item_id not in ids_listed
+
+    retrieved_a = await ctx_a.retrieve(RetrievalQuery())
+    ids_retrieved = {
+        item.source_id for item in retrieved_a.items if item.source == "memory_item"
+    }
+    assert a_item.item_id in ids_retrieved
+    assert b_item.item_id not in ids_retrieved
 
 
 # ===========================================================================
