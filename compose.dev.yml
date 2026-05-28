@@ -1,0 +1,52 @@
+# compose.dev.yml — the fast inner loop (handbook §8.2.1).
+#
+# Source is live-mounted, so code edits never trigger a rebuild. The
+# venv and uv cache are named volumes that persist across container
+# restarts. The image rebuilds only when the environment changes
+# (pyproject.toml / uv.lock / Containerfile).
+#
+# Bring up once with:
+#   podman compose -f compose.dev.yml up -d --build
+#
+# Then exec into the running container for ruff / mypy / pytest:
+#   podman compose -f compose.dev.yml exec dev uv run ruff check .
+#   podman compose -f compose.dev.yml exec dev uv run mypy .
+#   podman compose -f compose.dev.yml exec dev uv run pytest
+
+services:
+  dev:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: agent-platform-dev:latest
+    container_name: agent-platform-dev
+    # `init: true` reaps zombies from long-running test sessions.
+    init: true
+    working_dir: /workspace
+    environment:
+      # Default tier (SQLite + in-process bus) requires no services;
+      # backend-tier tests run against compose.test.yml (which spins up
+      # Postgres + Redis as part of the gate).
+      PYTHONDONTWRITEBYTECODE: "1"
+      PYTHONUNBUFFERED: "1"
+      UV_CACHE_DIR: /root/.cache/uv
+      UV_PROJECT_ENVIRONMENT: /opt/venv
+      UV_LINK_MODE: copy
+    volumes:
+      # Source code — live-mounted read-write. Edits on the host are
+      # reflected in the container instantly; no rebuild required.
+      - .:/workspace:rw,z
+      # Named volume for the uv-managed venv so dependencies persist
+      # across container restarts and `uv sync` is a no-op when nothing
+      # changed.
+      - dev-venv:/opt/venv
+      # Named volume for the uv download cache.
+      - dev-uv-cache:/root/.cache/uv
+    # Keep the container alive so the editor / `exec` can attach.
+    command: ["sleep", "infinity"]
+    tty: true
+    stdin_open: true
+
+volumes:
+  dev-venv:
+  dev-uv-cache:

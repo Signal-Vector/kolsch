@@ -1,0 +1,68 @@
+# CI — runs the identical compose.test.yml flow as the local commit
+# gate (handbook §9.3). "Passes at commit" == "passes in CI" because
+# the environment is the same image, freshly built, run against the
+# same Postgres + Redis services.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  gate:
+    name: commit gate (compose.test.yml)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Enable Docker BuildKit
+        run: |
+          echo "DOCKER_BUILDKIT=1" >> "$GITHUB_ENV"
+          echo "COMPOSE_DOCKER_CLI_BUILD=1" >> "$GITHUB_ENV"
+
+      # The local docs reference podman compose; GitHub runners ship
+      # Docker Compose v2. The compose file uses no Podman-specific
+      # syntax, so `docker compose` runs it identically. We pin the
+      # flow here so any drift between local and CI is one diff.
+      - name: Drop prior state (defence in depth)
+        run: docker compose -f compose.test.yml down -v
+
+      - name: Build the test image clean
+        run: docker compose -f compose.test.yml build --no-cache app
+
+      - name: Run the gate
+        run: |
+          docker compose -f compose.test.yml up \
+            --abort-on-container-exit \
+            --exit-code-from app
+
+      - name: Collect coverage artifact
+        if: always()
+        run: |
+          # The app container writes coverage.xml into /workspace before
+          # exiting; copy it out for upload.
+          container_id=$(docker compose -f compose.test.yml ps -q app || true)
+          if [ -n "$container_id" ]; then
+            docker cp "$container_id:/workspace/coverage.xml" ./coverage.xml || true
+          fi
+
+      - name: Upload coverage report
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml
+          path: coverage.xml
+          if-no-files-found: ignore
+
+      - name: Tear down
+        if: always()
+        run: docker compose -f compose.test.yml down -v

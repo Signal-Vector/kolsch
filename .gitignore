@@ -1,0 +1,48 @@
+# Python ------------------------------------------------------------------
+__pycache__/
+*.py[cod]
+*.egg-info/
+*.egg
+.eggs/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.tox/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# uv / venvs --------------------------------------------------------------
+.venv/
+venv/
+env/
+
+# Build artifacts ---------------------------------------------------------
+build/
+dist/
+*.whl
+
+# Platform runtime artifacts (handbook §5.3) ------------------------------
+.platform/
+sessions/
+content/
+logs/
+*.db
+*.db-journal
+
+# Secrets — NEVER commit (handbook §5.3) ----------------------------------
+.env
+.env.*
+!.env.example
+
+# Editor + OS -------------------------------------------------------------
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Codanna already lives in .codannaignore; index data is local.
+# Keep `.codannaignore` itself tracked — it's the project's index policy.
+.codanna/
+.fastembed_cache

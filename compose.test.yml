@@ -1,0 +1,75 @@
+# compose.test.yml — the commit gate and CI (handbook §8.2.2, §9.2).
+#
+# Deliberately the opposite of compose.dev.yml: clean rebuild, source
+# COPIED in (not mounted), fresh Postgres + Redis services, runs the
+# full gate.
+#
+# Run with:
+#   podman compose -f compose.test.yml down -v
+#   podman compose -f compose.test.yml build --no-cache app
+#   podman compose -f compose.test.yml up \
+#       --abort-on-container-exit --exit-code-from app
+#
+# CI runs the same flow. "Passes at commit" == "passes in CI."
+
+services:
+  postgres:
+    image: docker.io/library/postgres:16-alpine
+    environment:
+      POSTGRES_USER: agent
+      POSTGRES_PASSWORD: agent
+      POSTGRES_DB: agent
+    # Healthcheck so the `app` service can wait for readiness without
+    # racy sleeps.
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U agent -d agent"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  redis:
+    image: docker.io/library/redis:7-alpine
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  app:
+    build:
+      context: .
+      dockerfile: Containerfile
+    image: agent-platform-test:latest
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      # Test-side connection strings for the backend-variant component
+      # tests. The default tier (SQLite + in-process bus) ignores these.
+      AGENT_PLATFORM_TEST_POSTGRES_DSN: postgresql://agent:agent@postgres:5432/agent
+      AGENT_PLATFORM_TEST_REDIS_URL: redis://redis:6379
+      # testcontainers + Podman compatibility (handbook §8.2.3).
+      TESTCONTAINERS_RYUK_DISABLED: "true"
+    working_dir: /workspace
+    # The full gate, in fail-fast order (handbook §9.3):
+    #   1. ruff check
+    #   2. ruff format --check
+    #   3. mypy
+    #   4. unit + component + integration tests (golden inclusive)
+    #
+    # E2E tests are NOT in the gate; they cost tokens and run on a
+    # separate schedule.
+    command:
+      - sh
+      - -ec
+      - |
+        uv run ruff check .
+        uv run ruff format --check .
+        uv run mypy .
+        uv run pytest \
+            tests/unit \
+            tests/component \
+            tests/integration \
+            tests/golden

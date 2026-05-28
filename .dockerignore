@@ -1,0 +1,52 @@
+# Keep the container build context lean. The Containerfile copies only
+# pyproject.toml, uv.lock, README.md, src/, and tests/; everything else
+# is noise that slows builds and confuses caching.
+
+.git/
+.github/
+.codanna/
+.codannaignore
+.fastembed_cache/
+.devcontainer/
+.vscode/
+.idea/
+.pre-commit-config.yaml
+
+# Build outputs and venvs (don't ship the host venv into the image)
+.venv/
+venv/
+build/
+dist/
+*.egg-info/
+
+# Python caches
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.coverage
+.coverage.*
+coverage.xml
+htmlcov/
+
+# Platform runtime artifacts
+.platform/
+sessions/
+content/
+logs/
+*.db
+*.db-journal
+
+# Secrets — never bake into images
+.env
+.env.*
+
+# Docs and compose files (Containerfile doesn't reference them)
+docs/
+compose.dev.yml
+compose.test.yml
+AGENTS.md
+
+# OS noise
+.DS_Store

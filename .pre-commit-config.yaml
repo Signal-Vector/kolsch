@@ -1,0 +1,41 @@
+# Pre-commit hooks — handbook §3.5 + §4.
+#
+# Runs ruff + mypy on staged files before each commit. Install with:
+#   uv run pre-commit install
+#
+# The handbook also mandates the *commit gate*: a clean rebuild + full
+# suite via compose.test.yml (handbook §9.2). That gate is heavier and
+# is invoked by the local `scripts/commit-gate` wrapper or directly via
+# `podman compose -f compose.test.yml ...`; pre-commit handles the
+# lightweight per-file checks so feedback stays fast.
+
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.6.9
+    hooks:
+      - id: ruff
+        args: ["--fix"]
+      - id: ruff-format
+
+  - repo: https://github.com/pre-commit/mirrors-mypy
+    rev: v1.11.2
+    hooks:
+      - id: mypy
+        # Run with the same config the gate uses. Restrict to src/ and
+        # tests/ so the hook doesn't try to type-check stray YAML or
+        # markdown that the staged-file glob may include.
+        files: ^(src|tests)/.*\.py$
+        args: ["--config-file=pyproject.toml"]
+        additional_dependencies:
+          - "pydantic>=2.7,<3"
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v4.6.0
+    hooks:
+      - id: check-yaml
+      - id: check-toml
+      - id: check-merge-conflict
+      - id: end-of-file-fixer
+      - id: trailing-whitespace
+      - id: mixed-line-ending
+        args: ["--fix=lf"]
