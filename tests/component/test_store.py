@@ -606,6 +606,56 @@ async def test_update_session_returns_updated_record(
     assert rebuilt.starred is True
 
 
+async def test_jsonl_event_serialization_is_byte_stable(
+    store: SessionStore,
+    session_with_thread: tuple[SessionId, ThreadId],
+    tmp_path: Path,
+) -> None:
+    """JSONL lines for the same Event MUST be byte-identical across
+    invocations AND across the read/serialise round-trip.
+
+    Load-bearing invariant for the golden event-log tests (handbook
+    §8.4) and the partial-final-line recovery (spec §5.3). Pins the
+    sort_keys + compact-separator serialisation policy so a future
+    Pydantic upgrade or field reorder can't silently change every
+    existing line's bytes.
+    """
+    session_id, thread_id = session_with_thread
+    await store.append_event(
+        thread_id,
+        _new_event(thread_id=thread_id, session_id=session_id, data={"k": 1}),
+    )
+
+    jsonl = tmp_path / "sessions" / f"{session_id}.jsonl"
+    on_disk = jsonl.read_bytes()
+    line_count_before = on_disk.count(b"\n")
+
+    # Re-read every event and re-serialise. The bytes must match
+    # exactly — same set of events in the same order produces
+    # identical file content.
+    rebuilt_events = [e async for e in store.read_events(thread_id)]
+    # Read the session.opened too (it's filtered out of thread-only
+    # reads); use the underlying helper.
+    from store.jsonl import _serialise, read_lines  # noqa: PLC0415
+
+    all_events = list(read_lines(jsonl))
+    reserialised = b"".join(_serialise(e) for e in all_events)
+    assert reserialised == on_disk
+
+    # And every top-level key in every line is sorted.
+    for raw in on_disk.splitlines():
+        decoded = json.loads(raw)
+        assert list(decoded.keys()) == sorted(decoded.keys()), (
+            f"line keys not sorted: {list(decoded.keys())}"
+        )
+    # Reassert we exercised something.
+    assert line_count_before >= 2  # session.opened + the append.
+    # The default-thread fixture makes session.opened thread-scoped
+    # to the same thread, so both events surface to the per-thread
+    # reader — exact count doesn't matter, just that we read events.
+    assert len(rebuilt_events) >= 1
+
+
 async def test_read_path_to_leaf_equals_read_events_in_phase_1(
     store: SessionStore,
     session_with_thread: tuple[SessionId, ThreadId],

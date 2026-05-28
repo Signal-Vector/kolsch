@@ -251,8 +251,15 @@ omit = ["tests/*"]
 [tool.coverage.report]
 show_missing = true
 skip_covered = false
-# Floor only; per-subsystem ratchets land with their code (handbook §11.1).
-fail_under = 0
+# Coverage ratchet — handbook §11.1 floor is 85%. The current
+# suite sits at ~90%; setting `fail_under = 85` makes a substantial
+# drop fail CI while leaving headroom for normal noise. Bump this
+# value UP as coverage grows; the per-PR delta check
+# (handbook §11.2) is a CI responsibility (codecov / coverallsapp /
+# similar diff against the main branch). Bumping ahead of Step 8
+# locks the current baseline before the engine + golden tests bring
+# hundreds of new lines.
+fail_under = 85
 exclude_lines = [
     "pragma: no cover",
     "raise NotImplementedError",

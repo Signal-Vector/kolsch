@@ -52,8 +52,31 @@ def lock_path(root: Path, session_id: SessionId) -> Path:
 
 
 def _serialise(event: Event) -> bytes:
-    """Render an event as a JSONL line (one JSON object + ``\\n``)."""
-    return event.model_dump_json().encode("utf-8") + b"\n"
+    """Render an event as a JSONL line — byte-stable across runs.
+
+    The byte representation is load-bearing for two callers:
+
+    - Golden event-log tests (handbook §8.4) snapshot the JSONL
+      output and compare against committed files; any change to the
+      byte representation invalidates every golden file.
+    - The partial-final-line recovery (spec §5.3) probes the file's
+      last bytes; ambiguity here means corrupt detection misfires.
+
+    We therefore do NOT use :meth:`Event.model_dump_json` directly,
+    because Pydantic v2 emits keys in field-declaration order and a
+    future field reorder would silently change every line's bytes.
+    Instead: dump to a JSON-ready dict via Pydantic (handles
+    datetime, etc.), then re-encode through the stdlib with
+    ``sort_keys=True`` + compact separators. The byte output is
+    insensitive to Pydantic field order AND to nested-dict insertion
+    order. Re-reading and re-serialising the same Event yields
+    byte-identical output.
+    """
+    payload = event.model_dump(mode="json")
+    return (
+        json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        + b"\n"
+    )
 
 
 def _parse_line(raw: str, *, session_id: SessionId, line_number: int) -> Event:
