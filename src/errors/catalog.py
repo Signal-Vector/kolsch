@@ -23,6 +23,18 @@ CATALOG: dict[str, Level] = {
     "store.lock_timeout": Level.FATAL,
     "store.write_failed": Level.FATAL,
     "store.corrupt_log": Level.FATAL,
+    # ----- Asset Management (extension to spec §4.1) -------------------
+    # Asset Management's contract surfaces these codes in its Module
+    # API Reference §2 method raises but the error catalog (§4) does
+    # not yet enumerate them. Added here so PlatformError subclasses
+    # in `errors.assets` can register cleanly; flag for spec amendment.
+    "assets.duplicate_bundle_name": Level.FATAL,
+    "assets.bundle_name_mismatch": Level.FATAL,
+    "assets.reserved_bundle_name": Level.FATAL,
+    "assets.not_found": Level.FATAL,
+    "assets.invalid_ref": Level.FATAL,
+    "assets.ambiguous_shorthand": Level.FATAL,
+    "assets.prompt_load_failed": Level.FATAL,
     # ----- §4.3 Event Bus ----------------------------------------------
     # Bus errors are Diagnostic because the bus is best-effort — losing
     # a bus message must not fail an exchange.

@@ -9,6 +9,15 @@ is a PlatformError subclass whose ``code`` is registered in :data:`CATALOG`
 (Part 4) and whose ``level`` is intrinsic to the type (E-I3).
 """
 
+from errors.assets import (
+    AssetsAmbiguousShorthand,
+    AssetsBundleNameMismatch,
+    AssetsDuplicateBundleName,
+    AssetsInvalidRef,
+    AssetsNotFound,
+    AssetsPromptLoadFailed,
+    AssetsReservedBundleName,
+)
 from errors.authz import AuthzMalformedRule, AuthzRegexInvalid
 from errors.base import (
     PlatformError,
@@ -83,6 +92,13 @@ __all__ = [
     "CATALOG",
     "AgentUnauthorized",
     "AssemblyProcedureFailed",
+    "AssetsAmbiguousShorthand",
+    "AssetsBundleNameMismatch",
+    "AssetsDuplicateBundleName",
+    "AssetsInvalidRef",
+    "AssetsNotFound",
+    "AssetsPromptLoadFailed",
+    "AssetsReservedBundleName",
     "AuthzMalformedRule",
     "AuthzRegexInvalid",
     "BusPublishFailed",

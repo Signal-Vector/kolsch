@@ -13,6 +13,9 @@ dependencies = [
     # need as they land. Pydantic v2 is the project-wide data-model
     # library (handbook §2.1) so it is included at the runtime layer.
     "pydantic>=2.7,<3",
+    # YAML parsing for platform.yaml, bundle.yaml, agent .yaml,
+    # SKILL.md frontmatter. Asset Management uses it at startup.
+    "pyyaml>=6.0,<7",
 ]
 
 [project.urls]
@@ -48,6 +51,7 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "pre-commit>=3.7",
+    "types-pyyaml>=6.0",
 ]
 test = [
     "pytest>=8",
@@ -144,6 +148,9 @@ ignore = [
 "src/schemas/**" = ["TC001", "TC003"]
 # Same Pydantic-at-runtime concern for the kernel's Partial* models.
 "src/kernel/**" = ["TC001", "TC003"]
+# Same for the assets package — Pydantic-validated catalog records
+# need their type imports at runtime, not in TYPE_CHECKING.
+"src/assets/**" = ["TC001", "TC003"]
 
 [tool.ruff.lint.flake8-annotations]
 mypy-init-return = true

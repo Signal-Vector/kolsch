@@ -16,6 +16,13 @@ from errors import (
     CATALOG,
     AgentUnauthorized,
     AssemblyProcedureFailed,
+    AssetsAmbiguousShorthand,
+    AssetsBundleNameMismatch,
+    AssetsDuplicateBundleName,
+    AssetsInvalidRef,
+    AssetsNotFound,
+    AssetsPromptLoadFailed,
+    AssetsReservedBundleName,
     AuthzMalformedRule,
     AuthzRegexInvalid,
     BusPublishFailed,
@@ -174,6 +181,17 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
         "config_section": "file_access",
         "error": "malformed",
     },
+    # Asset Management (catalog extension)
+    AssetsDuplicateBundleName: {"name": "acme", "paths": ["bundles/a", "bundles/b"]},
+    AssetsBundleNameMismatch: {"directory": "foo", "manifest_name": "bar"},
+    AssetsReservedBundleName: {"name": "core"},
+    AssetsNotFound: {"ref": "acme/tools/missing"},
+    AssetsInvalidRef: {"ref": "no slashes"},
+    AssetsAmbiguousShorthand: {
+        "shorthand": "web-search",
+        "candidates": ["acme/tools/web-search", "scholarly/tools/web-search"],
+    },
+    AssetsPromptLoadFailed: {"ref": "acme/prompts/role", "reason": "missing"},
     # 4.12 Generic
     WrappedError: {
         "message": "ValueError: bad",
