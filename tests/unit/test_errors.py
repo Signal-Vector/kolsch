@@ -35,6 +35,7 @@ from errors import (
     ExchangeCancelled,
     ExchangeTimeout,
     FileAccessDenied,
+    FileAccessInvalidFileRef,
     FileAccessPathNormalizationFailed,
     FileAccessPolicyLoadFailed,
     Level,
@@ -176,6 +177,7 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
     SkillForcedNotEnabled: {"ref": "core/skills/x", "agent_id": "ag_x"},
     # 4.11 File Handling
     FileAccessDenied: {"path": "/etc/passwd", "reason": "default deny"},
+    FileAccessInvalidFileRef: {"value": "", "reason": "empty"},
     FileAccessPathNormalizationFailed: {"path": "/bad", "os_error": "ENOENT"},
     FileAccessPolicyLoadFailed: {
         "config_section": "file_access",

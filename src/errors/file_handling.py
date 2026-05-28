@@ -51,6 +51,31 @@ class FileAccessPathNormalizationFailed(PlatformError):
         )
 
 
+class FileAccessInvalidFileRef(PlatformError):
+    """A `file_ref` value failed shape validation (spec §1 + Fh-I1).
+
+    Raised before policy evaluation runs — empty strings and null
+    bytes in path data are caller bugs that the policy can't catch
+    by itself.
+    """
+
+    code = "file_access.invalid_file_ref"
+    level = Level.DIAGNOSTIC
+
+    def __init__(
+        self,
+        value: str,
+        reason: str,
+        *,
+        where: str = "files.policy.validate_file_ref",
+    ) -> None:
+        super().__init__(
+            message=f"Invalid file_ref value: {reason}",
+            where=where,
+            detail={"value": value, "reason": reason},
+        )
+
+
 class FileAccessPolicyLoadFailed(PlatformError):
     """The file-access policy failed to load at platform bootstrap."""
 

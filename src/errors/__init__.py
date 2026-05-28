@@ -40,6 +40,7 @@ from errors.engine import (
 )
 from errors.file_handling import (
     FileAccessDenied,
+    FileAccessInvalidFileRef,
     FileAccessPathNormalizationFailed,
     FileAccessPolicyLoadFailed,
 )
@@ -111,6 +112,7 @@ __all__ = [
     "ExchangeCancelled",
     "ExchangeTimeout",
     "FileAccessDenied",
+    "FileAccessInvalidFileRef",
     "FileAccessPathNormalizationFailed",
     "FileAccessPolicyLoadFailed",
     "Level",

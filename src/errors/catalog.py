@@ -88,6 +88,12 @@ CATALOG: dict[str, Level] = {
     "file_access.denied": Level.DIAGNOSTIC,
     "file_access.path_normalization_failed": Level.DIAGNOSTIC,
     "file_access.policy_load_failed": Level.FATAL,
+    # `invalid_file_ref` is not in the spec §4.11 catalog but is
+    # needed at the file_ref input boundary (Fh-I8) so the validator
+    # raises a PlatformError rather than a bare ValueError (handbook
+    # hard rule). Flag for spec amendment alongside the asset error
+    # codes also added downstream.
+    "file_access.invalid_file_ref": Level.DIAGNOSTIC,
     # ----- §4.12 Generic platform --------------------------------------
     # platform.wrapped's level is documented as "(varies)"; the
     # default-instance level is DIAGNOSTIC, matching the spec §3.4

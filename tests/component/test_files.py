@@ -16,7 +16,11 @@ from typing import TYPE_CHECKING
 
 import pytest
 
-from errors import FileAccessDenied, FileAccessPolicyLoadFailed
+from errors import (
+    FileAccessDenied,
+    FileAccessInvalidFileRef,
+    FileAccessPolicyLoadFailed,
+)
 from files import (
     PathPolicy,
     assert_writable_destination,
@@ -280,6 +284,34 @@ def test_check_path_allowed_does_not_raise_for_allowed(
     check_path_allowed("data/x.txt", policy=_default_policy(), root=root)
 
 
+def test_check_path_allowed_populates_matched_rule_on_rule_driven_deny(
+    tmp_path: Path,
+) -> None:
+    """Spec §4.11 + A-I5 explainability — a denial that fired because
+    of a specific rule MUST carry the structured rule in
+    ``detail.matched_rule`` so callers can distinguish "denied by
+    .env" from "default deny" without parsing the reason string."""
+    root = _root(tmp_path)
+    with pytest.raises(FileAccessDenied) as exc_info:
+        check_path_allowed(".env", policy=_default_policy(), root=root)
+    matched = exc_info.value.detail["matched_rule"]
+    assert matched is not None
+    assert matched["pattern"] == ".env"
+    assert matched["type"] == "denied_paths"
+
+
+def test_check_path_allowed_matched_rule_is_none_on_default_deny(
+    tmp_path: Path,
+) -> None:
+    """The default-deny path carries `matched_rule=None` — the
+    structured signal "no rule fired" rather than "rule X fired."""
+    root = _root(tmp_path)
+    target = str(tmp_path.parent / "_unrelated" / "x")
+    with pytest.raises(FileAccessDenied) as exc_info:
+        check_path_allowed(target, policy=_default_policy(), root=root)
+    assert exc_info.value.detail["matched_rule"] is None
+
+
 # ===========================================================================
 # validate_file_ref — spec §1
 # ===========================================================================
@@ -291,13 +323,18 @@ def test_validate_file_ref_accepts_normal_path() -> None:
 
 
 def test_validate_file_ref_rejects_empty() -> None:
-    with pytest.raises(ValueError, match="empty"):
+    """Handbook hard rule — public methods raise PlatformError
+    subclasses only; not raw ValueError."""
+    with pytest.raises(FileAccessInvalidFileRef) as exc_info:
         validate_file_ref("")
+    assert exc_info.value.detail["value"] == ""
+    assert "empty" in exc_info.value.detail["reason"].lower()
 
 
 def test_validate_file_ref_rejects_null_byte() -> None:
-    with pytest.raises(ValueError, match="null"):
+    with pytest.raises(FileAccessInvalidFileRef) as exc_info:
         validate_file_ref("data/x\x00.md")
+    assert "null byte" in exc_info.value.detail["reason"].lower()
 
 
 # ===========================================================================
