@@ -35,6 +35,40 @@ function in its own retry/parsing layer, the engine must see the *actual*
 args (the parsed ones it would have executed against), not the model's
 raw text.
 
+### 1.1 Events outside the Framework Protocol
+
+The framework adapter has **no obligation** toward these events; they are
+engine-only and emitted directly by the engine before/after/around
+`Framework.run_exchange`:
+
+- `session.opened` — emitted by the Store on `create_session`, not the
+  engine; listed for completeness.
+- `thread.exchange_started` / `thread.exchange_completed` /
+  `thread.exchange_failed` — exchange lifecycle, emitted by the engine
+  pre- and post-`run_exchange`.
+- `config.set` — emitted at pre-flight when the resolved config differs
+  from the most recent `config.set` on the thread (engine spec §2.1
+  step 6).
+- `user.message` — materialized from the trigger at pre-flight (§2.1
+  step 9), before any framework call.
+- `agent.message` — emitted by the engine on `run_exchange` return,
+  before `thread.exchange_completed` (§2.5).
+- `memory.retrieved` — emitted by the engine when its Memory provider
+  contributes content to the assembled context, before `run_exchange`.
+- `memory.written` / `memory.deleted` — emitted by the engine when an
+  agent's memory call returns; the Memory provider does not emit (per
+  Memory contract I1).
+- `context.compacted` — emitted by the engine pre-`run_exchange` when
+  projected context size exceeds the threshold (§2.6); the framework
+  adapter never sees compaction.
+- Synthetic `tool.called` / `tool.result` for force-invoke `read` on
+  SKILL.md — emitted at pre-flight step 7, before `run_exchange`. The
+  framework adapter never sees these (principal `system`, engine-only).
+
+A correct framework adapter only contributes the framework-mediated
+`model.*` and `tool.*` events listed in Part 1's table. Anything else
+is the engine's responsibility.
+
 ---
 
 ## Part 2 — What CrewAI actually exposes (May 2026, v1.14.6)
@@ -167,7 +201,18 @@ class LLMRequest(BaseModel):
 
 
 class LLMResponse(BaseModel):
-    """What the engine returns to the framework. Content or tool calls."""
+    """What the engine returns to the framework. Content or tool calls.
+
+    `raw` carries the provider-shaped response dict for downstream
+    materialization on `model.response.data` — i.e., the part of the
+    LLM's reply the engine cannot derive from `content` + `tool_calls`
+    alone (provider message-id, finish_reason, system_fingerprint,
+    cached-prompt markers, reasoning trace blocks, etc.). The
+    FakeFramework satisfies it with `raw={}` (the Fake LLM has no
+    provider details to thread); the CrewAI adapter populates it from
+    whatever the configured provider returned. This asymmetry is
+    deliberate — `raw` is a passthrough channel, not a contract the
+    Fake must implement faithfully."""
     content: str | None
     tool_calls: list[dict[str, Any]] | None
     usage: dict[str, int] | None
@@ -186,6 +231,13 @@ class LLMHandle(Protocol):
 # ---- Tool seam --------------------------------------------------------
 
 class ToolCall(BaseModel):
+    """The arguments the model emitted, validated against the tool's
+    args_schema by the engine before this Protocol type is constructed.
+
+    `arguments` MUST NOT contain resolved secret values (I10). Secrets
+    flow only via the engine's `ToolContext.secrets` on the inner side
+    of the seam — never through the framework, never through this
+    Protocol type, never through `tool.called.arguments` in events."""
     name: str
     arguments: dict[str, Any]
 
@@ -235,6 +287,32 @@ class Framework(Protocol):
 The FakeFramework used in Step 12a integration tests implements
 `run_exchange` directly: loop calling `llm` and dispatching tool calls
 the LLM emits. No CrewAI dependency; same Protocol; same engine code.
+
+### 3.1 Mapping to engine invariants (I1–I11)
+
+Where each contract invariant lands relative to the Framework Protocol
+boundary:
+
+| Invariant | Layer | How it's satisfied |
+|---|---|---|
+| **I1 Sole emission** | Engine | The engine is the sole writer of the JSONL log. Framework adapters never call `store.append_event`; they invoke `LLMHandle`/`ToolHandle`, which the engine instruments. |
+| **I2 Tree append** | Engine | `parent_event_id` and append ordering are engine-internal; the per-thread serialization lock lives in the engine, not the adapter. |
+| **I3 Materialization** | Split — guarantee at LLM seam | `model.request.data.messages` captured inside `LLMHandle.__call__` after framework wrap, before LLM. Spec §B.6 amended (2026-05-28) to make this explicit. |
+| **I4 Assembly Procedure conformance** | Engine | The procedure runs before `Framework.run_exchange`; the framework receives an already-assembled `system_prompt` + `user_message`. CrewAI may wrap further, captured under I3. |
+| **I5 Event schema conformance** | Engine | The engine projects `LLMRequest`/`LLMResponse`/`ToolCall` into `model.request`/`model.response`/`tool.called`/`tool.result` shapes per Schemas §B.2/§B.7/§B.8. The Protocol types are intentionally narrower than the event shapes (no `event_id`, `parent_event_id`, etc.); the engine adds the envelope. |
+| **I6 Event order** | Engine, given Protocol BEFORE/AFTER | Order falls out of the seam structure: `model.request` emitted at function entry of `LLMHandle.__call__`; `model.response` at exit. `tool.called` at entry of `ToolHandle.__call__`; `tool.result`/`tool.failed` at exit. The framework can drive arbitrary orderings between them; each pair is naturally adjacent. |
+| **I7 Failure surface** | Split | The engine catches Diagnostic errors from `LLMHandle`/`ToolHandle` and continues the loop. Fatal errors (model.retry_exhausted after the engine's retry, exchange.cancelled) terminate `run_exchange` and produce `thread.exchange_failed`. The Framework Protocol does not raise `AgentExecutionError` — only the engine does. |
+| **I8 Statelessness across calls** | Engine | Engine constructs the Protocol implementations fresh per `execute` call; nothing persists in-process. The CrewAI adapter MUST construct a new `Agent`/`Task`/`Crew` per `run_exchange` (no reuse). |
+| **I9 Sandboxing** | Engine, at seam inner side | The engine wraps `ToolHandle.__call__` in `sandbox.execute(...)` before invoking the user tool. The framework only sees `ToolHandle` — it cannot bypass sandbox. (Step 10 already wires this for direct invocation; the Framework Protocol inherits the same path.) |
+| **I10 Secrets** | Engine, at seam inner side | Secrets resolve into `ToolContext.secrets`, passed to the tool body via the engine's tool dispatch. `ToolCall.arguments` MUST NOT contain resolved secrets — this is now enforced in the Protocol type's docstring. |
+| **I11 Capability honesty** | Engine | `capabilities()` returns engine-level metadata only; CrewAI version is captured on `config.set` (per §B.6 amendment) but isn't surfaced through the Protocol. |
+
+The Framework Protocol intentionally pushes I1, I2, I4, I5, I8, I9, I10,
+I11 entirely onto the engine. Adapters have no way to violate them
+because they have no access to the levers (store, assembly, sandbox,
+secrets, capabilities). The three invariants that *touch* the boundary
+— I3 (Materialization), I6 (Event order), I7 (Failure surface) — are
+satisfied by the seam structure itself, not by adapter discipline.
 
 ---
 
