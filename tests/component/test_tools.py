@@ -358,6 +358,111 @@ async def test_builtin_read_honors_path_policy(tmp_path: Path) -> None:
         await subsystem.invoke_tool("read", {"path": ".env"}, _new_context())
 
 
+async def test_builtin_write_honors_path_policy(tmp_path: Path) -> None:
+    """Path-policy enforcement on `write` — symmetric coverage with
+    `read`. Allowed succeeds; denied raises FileAccessDenied."""
+    from errors import FileAccessDenied  # noqa: PLC0415
+
+    subsystem = _make_subsystem(tmp_path=tmp_path)
+    await subsystem.register_for_agent(
+        agent_id=AgentId("ag_test"),
+        builtin_names=["write"],
+    )
+    # Allowed.
+    await subsystem.invoke_tool(
+        "write",
+        {"path": "data/out.txt", "content": "hello"},
+        _new_context(),
+    )
+    assert (tmp_path / "data" / "out.txt").read_text() == "hello"
+    # Denied (.env is in denied_paths).
+    with pytest.raises(FileAccessDenied):
+        await subsystem.invoke_tool(
+            "write",
+            {"path": ".env", "content": "X=y"},
+            _new_context(),
+        )
+
+
+async def test_builtin_edit_honors_path_policy(tmp_path: Path) -> None:
+    """Path-policy enforcement on `edit` — symmetric coverage."""
+    from errors import FileAccessDenied  # noqa: PLC0415
+
+    subsystem = _make_subsystem(tmp_path=tmp_path)
+    await subsystem.register_for_agent(
+        agent_id=AgentId("ag_test"),
+        builtin_names=["edit"],
+    )
+    # Allowed.
+    (tmp_path / "data" / "x.txt").write_text("hello", encoding="utf-8")
+    await subsystem.invoke_tool(
+        "edit",
+        {"path": "data/x.txt", "old_str": "hello", "new_str": "hi"},
+        _new_context(),
+    )
+    assert (tmp_path / "data" / "x.txt").read_text() == "hi"
+    # Denied (.env).
+    with pytest.raises(FileAccessDenied):
+        await subsystem.invoke_tool(
+            "edit",
+            {"path": ".env", "old_str": "X", "new_str": "Y"},
+            _new_context(),
+        )
+
+
+async def test_write_into_content_dir_is_refused_even_when_policy_allows(
+    tmp_path: Path,
+) -> None:
+    """Spec Fh-I5 + Fh-I9 — tools MUST NOT write to ``content/``
+    even when the path policy allows reads there. The default
+    platform.yaml policy puts ``content/`` in ``allowed_paths``
+    (spec §4.4), so without the write-side guard a
+    ``write({"path": "content/x.bin"})`` would smuggle into the
+    engine's sidecar store. Pin the second gate."""
+    from errors import FileAccessDenied  # noqa: PLC0415
+
+    root = _root(tmp_path)
+    (root / "content").mkdir(exist_ok=True)
+    permissive_policy = PathPolicy(
+        allowed_paths=["data/", "content/"],  # reads under content/ allowed
+        denied_paths=[],
+    )
+    _write_env(tmp_path, {})
+    subsystem = ToolsSubsystem(
+        secrets=DotenvSecretsProvider(root=root, config={"path": ".env"}),
+        sandbox=NativeSandboxProvider(),
+        authz=_allow_all_authz(),
+        path_policy=permissive_policy,
+        root=root,
+    )
+    await subsystem.register_for_agent(
+        agent_id=AgentId("ag_test"),
+        builtin_names=["write", "edit"],
+    )
+
+    # The path-policy check PASSES (content/ is allowed for reads).
+    # The write-side guard MUST refuse.
+    with pytest.raises(FileAccessDenied):
+        await subsystem.invoke_tool(
+            "write",
+            {"path": "content/forbidden.bin", "content": "x"},
+            _new_context(),
+        )
+
+    # Edit too — it reads AND writes.
+    (root / "content" / "existing.txt").write_text("old", encoding="utf-8")
+    with pytest.raises(FileAccessDenied):
+        await subsystem.invoke_tool(
+            "edit",
+            {
+                "path": "content/existing.txt",
+                "old_str": "old",
+                "new_str": "new",
+            },
+            _new_context(),
+        )
+
+
 async def test_builtin_bash_bypasses_path_policy_v1_gap(tmp_path: Path) -> None:
     """Spec §4.7 + Fh-I6 — `bash` does NOT enforce the path policy
     in v1's native sandbox. Pin the documented limitation so a future
@@ -488,9 +593,7 @@ def test_mcp_server_protocol_shape() -> None:
 def test_layer3_accepts_default_builtin_set() -> None:
     from tools import validate_standard_config  # noqa: PLC0415
 
-    result = validate_standard_config(
-        {"builtin": ["read", "write", "edit", "bash"]}
-    )
+    result = validate_standard_config({"builtin": ["read", "write", "edit", "bash"]})
     assert result.ok is True, result.errors
 
 
@@ -534,16 +637,88 @@ def test_layer3_rejects_env_inject_referencing_undeclared_secret() -> None:
         }
     )
     assert result.ok is False
-    assert any(
-        e.code == "unknown_secret_in_env_inject" for e in result.errors
+    assert any(e.code == "unknown_secret_in_env_inject" for e in result.errors)
+
+
+async def test_declared_from_file_discovery_and_registration(
+    tmp_path: Path,
+) -> None:
+    """Spec §6.1 step 1 — the Tools subsystem (NOT Asset Management)
+    imports declared .py files at registration time and registers
+    every ``@tool``-decorated function it finds. Pin the contract:
+
+    - The Python file is imported (Am-I10 forbids this from happening
+      in Asset Management).
+    - Each ``@tool``-decorated function is registered.
+    - Non-tool callables are ignored.
+    - The tool is invocable through the same dispatch flow as any
+      other tool.
+    """
+    bundle = tmp_path / "bundles" / "demo" / "tools"
+    bundle.mkdir(parents=True)
+    source = '''
+from pydantic import BaseModel
+from tools import tool
+
+
+class GreetArgs(BaseModel):
+    name: str
+
+
+@tool(name="greet", description="Greets the caller", args_schema=GreetArgs)
+async def greet(args, ctx):
+    return {"text": f"hi, {args.name}"}
+
+
+def not_a_tool() -> None:
+    """A bare helper that MUST NOT be registered."""
+'''
+    tool_file = bundle / "greet.py"
+    tool_file.write_text(source, encoding="utf-8")
+
+    subsystem = _make_subsystem(tmp_path=tmp_path)
+    info = await subsystem.register_for_agent(
+        agent_id=AgentId("ag_test"),
+        declared_paths=[tool_file],
     )
+    names = {i.name for i in info}
+    assert names == {"greet"}, f"unexpected discovery: {names}"
+
+    result = await subsystem.invoke_tool("greet", {"name": "world"}, _new_context())
+    assert result.result == {"text": "hi, world"}
+
+
+async def test_declared_from_file_missing_file_raises_setup_failed(
+    tmp_path: Path,
+) -> None:
+    from errors import ToolSetupFailed  # noqa: PLC0415
+
+    subsystem = _make_subsystem(tmp_path=tmp_path)
+    with pytest.raises(ToolSetupFailed):
+        await subsystem.register_for_agent(
+            agent_id=AgentId("ag_test"),
+            declared_paths=[tmp_path / "does_not_exist.py"],
+        )
+
+
+async def test_declared_from_file_syntax_error_raises_setup_failed(
+    tmp_path: Path,
+) -> None:
+    from errors import ToolSetupFailed  # noqa: PLC0415
+
+    bad = tmp_path / "bad.py"
+    bad.write_text("def syntax error:\n", encoding="utf-8")
+    subsystem = _make_subsystem(tmp_path=tmp_path)
+    with pytest.raises(ToolSetupFailed):
+        await subsystem.register_for_agent(
+            agent_id=AgentId("ag_test"),
+            declared_paths=[bad],
+        )
 
 
 def test_layer3_rejects_malformed_declared_entry() -> None:
     from tools import validate_standard_config  # noqa: PLC0415
 
-    result = validate_standard_config(
-        {"declared": ["just-a-string-not-a-mapping"]}
-    )
+    result = validate_standard_config({"declared": ["just-a-string-not-a-mapping"]})
     assert result.ok is False
     assert any(e.code == "malformed_entry" for e in result.errors)

@@ -34,6 +34,7 @@ from tools.decorator import (
     register_tool,
     tool,
 )
+from tools.discovery import discover_tools_in_file
 from tools.mcp import MCPServer
 from tools.subsystem import ToolsSubsystem
 from tools.validator import validate_standard_config
@@ -46,6 +47,7 @@ __all__ = [
     "ToolResult",
     "ToolsSubsystem",
     "builtin_names",
+    "discover_tools_in_file",
     "get_tool_definition",
     "make_bash",
     "make_builtin",

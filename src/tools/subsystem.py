@@ -32,6 +32,7 @@ from tools.decorator import (
     ToolResult,
     get_tool_definition,
 )
+from tools.discovery import discover_tools_in_file
 from tools.dispatch import dispatch_tool
 from tools.registry import ToolRegistry, _MCPRegistration
 
@@ -81,17 +82,24 @@ class ToolsSubsystem:
         agent_id: AgentId,
         tools: list[Callable[..., Awaitable[Any]]] | None = None,
         builtin_names: list[str] | None = None,
+        declared_paths: list[Path] | None = None,
         mcp_servers: list[tuple[MCPServer, Literal["lazy", "eager"]]] | None = None,
     ) -> list[ToolInfo]:
         """Register the given tool set for ``agent_id``.
 
         Per spec §6.1:
-        - For each tool: verify declared secrets via
-          :meth:`SecretsProvider.exists`; raise
-          :class:`ToolSetupFailed` (with the underlying
-          :class:`SecretNotFound` chained) if any are missing.
-        - For each eager MCP server: call
-          :meth:`MCPServer.start` now.
+        - ``tools`` — already-imported ``@tool``-decorated functions
+          (test helper / programmatic registration).
+        - ``declared_paths`` — paths to ``.py`` files. Spec §6.1 step
+          1: scan + import here, NOT in Asset Management (Am-I10 keeps
+          asset discovery read-only of Python). Each file's
+          ``@tool``-decorated functions are extracted via
+          :func:`discover_tools_in_file` and registered.
+        - For each tool (regardless of source): verify declared
+          secrets via :meth:`SecretsProvider.exists`; raise
+          :class:`ToolSetupFailed` with the underlying
+          :class:`SecretNotFound` chained if any are missing.
+        - For each eager MCP server: call :meth:`MCPServer.start` now.
         - For each lazy MCP server: register as a placeholder; the
           subsystem starts it on first invoke (T-I8).
         """
@@ -101,6 +109,12 @@ class ToolsSubsystem:
             defn = get_tool_definition(fn)
             await self._verify_secrets(defn)
             registration.tools[defn.name] = defn
+
+        for path in declared_paths or []:
+            for fn in discover_tools_in_file(path):
+                defn = get_tool_definition(fn)
+                await self._verify_secrets(defn)
+                registration.tools[defn.name] = defn
 
         for name in builtin_names or []:
             fn = self._make_builtin(name)

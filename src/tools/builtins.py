@@ -22,7 +22,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, Field
 
 from errors import ToolExecutionFailed
-from files import check_path_allowed
+from files import assert_writable_destination, check_path_allowed
 from tools.decorator import tool
 
 if TYPE_CHECKING:
@@ -97,7 +97,13 @@ def make_write(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any
         args_schema=WriteArgs,
     )
     async def write(args: WriteArgs, ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG001
+        # Fh-I2 — path policy first.
         check_path_allowed(args.path, policy=policy, root=root)
+        # Fh-I5 + Fh-I9 — refuse writes into the engine-only
+        # content/ store, even when policy would otherwise allow
+        # reads there. Two-step check: policy gates reads; this
+        # gates writes.
+        assert_writable_destination(args.path, root=root)
         target = _resolve(args.path, root)
         if args.create_parents:
             target.parent.mkdir(parents=True, exist_ok=True)
@@ -120,7 +126,11 @@ def make_edit(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]
         args_schema=EditArgs,
     )
     async def edit(args: EditArgs, ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG001
+        # Fh-I2 + Fh-I5 — edit reads AND writes, so it needs both
+        # gates. The write-side refusal of content/ matters even when
+        # the path policy allows reads under content/.
         check_path_allowed(args.path, policy=policy, root=root)
+        assert_writable_destination(args.path, root=root)
         target = _resolve(args.path, root)
         try:
             text = target.read_text(encoding="utf-8")
