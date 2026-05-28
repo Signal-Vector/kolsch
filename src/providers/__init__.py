@@ -1,8 +1,49 @@
 """Providers — memory, secrets, sandbox, authorization.
 
-Each provider is a contract with one or more variants:
-- memory (recent_buffer in v1)
-- secrets (dotenv in v1)
-- sandbox (native in v1)
-- authorization
+Per Module API Reference §6-§8 +
+docs/explanation/secrets-sandbox-authz-contract.md. These three are
+**platform-level** Provider Modules: configured in ``platform.yaml``,
+applied uniformly to every agent. Memory is agent-level and lives
+elsewhere (Step 8).
+
+Each provider exposes a Protocol (the contract), one v1 variant, and
+a small registry seam so future variants slot in without core changes.
 """
+
+from providers.authz import (
+    AuthorizationProvider,
+    AuthorizationResult,
+    Rule,
+    RuleBasedAuthorizationProvider,
+    make_authorization_provider,
+    register_authorization_variant,
+)
+from providers.sandbox import (
+    NativeSandboxProvider,
+    SandboxProvider,
+    make_sandbox_provider,
+    register_sandbox_variant,
+)
+from providers.secrets import (
+    DotenvSecretsProvider,
+    SecretsProvider,
+    make_secrets_provider,
+    register_secrets_variant,
+)
+
+__all__ = [
+    "AuthorizationProvider",
+    "AuthorizationResult",
+    "DotenvSecretsProvider",
+    "NativeSandboxProvider",
+    "Rule",
+    "RuleBasedAuthorizationProvider",
+    "SandboxProvider",
+    "SecretsProvider",
+    "make_authorization_provider",
+    "make_sandbox_provider",
+    "make_secrets_provider",
+    "register_authorization_variant",
+    "register_sandbox_variant",
+    "register_secrets_variant",
+]
