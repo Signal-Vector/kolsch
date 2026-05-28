@@ -316,9 +316,7 @@ def test_catalog_has_no_orphan_codes() -> None:
     """
     catalog_codes = list_catalog_codes()
     class_codes = {
-        cls.code
-        for cls in iter_error_classes()
-        if cls.__module__.startswith("errors.")
+        cls.code for cls in iter_error_classes() if cls.__module__.startswith("errors.")
     }
     orphans = catalog_codes - class_codes
     assert not orphans, (

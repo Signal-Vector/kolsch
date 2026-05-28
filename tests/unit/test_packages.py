@@ -12,6 +12,7 @@ import pytest
 SUBSYSTEM_PACKAGES = [
     "kernel",
     "errors",
+    "schemas",
     "store",
     "bus",
     "assets",
