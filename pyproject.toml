@@ -158,6 +158,9 @@ ignore = [
 # signature matches spec §2.2 directly (5 kwargs + the function it
 # decorates), and validator branching mirrors spec §3.4's checklist.
 "src/tools/**" = ["TC001", "TC003", "PLR0913", "PLR0912"]
+# Same for skills — EnabledSkill and SkillInvocation are Pydantic
+# models per Module API Reference §10.2.
+"src/skills/**" = ["TC001", "TC003"]
 
 [tool.ruff.lint.flake8-annotations]
 mypy-init-return = true
