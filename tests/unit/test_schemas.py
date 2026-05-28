@@ -34,6 +34,7 @@ from schemas import (
     ModelSpec,
     PromptSpec,
     ResolvedAgentConfig,
+    RuntimeSpec,
     Session,
     SessionId,
     SessionOpenedData,
@@ -554,7 +555,7 @@ def test_resolved_agent_config_minimal() -> None:
         prompt="You are an agent.",
         io=IOSpec(mode="conversational"),
         subsystems={},
-        runtime={},
+        runtime=RuntimeSpec(),
     )
     assert cfg.prompt == "You are an agent."
 

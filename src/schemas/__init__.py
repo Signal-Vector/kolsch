@@ -18,6 +18,7 @@ from schemas.config import (
     ModelSpec,
     PromptSpec,
     ResolvedAgentConfig,
+    RuntimeSpec,
     SubsystemConfig,
 )
 from schemas.entities import Actor, ContentRef, Session, Thread
@@ -76,6 +77,7 @@ __all__ = [
     "PrefixedId",
     "PromptSpec",
     "ResolvedAgentConfig",
+    "RuntimeSpec",
     "Session",
     "SessionId",
     "SessionOpenedData",

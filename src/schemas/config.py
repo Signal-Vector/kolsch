@@ -40,7 +40,14 @@ class IOSpec(BaseModel):
     """`AgentConfig.io` — Schemas §A.5.
 
     ``inputs`` and ``outputs`` are typed maps (name → TypeSpec).
-    TypeSpec is permissive here; the kernel/asset-mgmt steps tighten it.
+    TypeSpec is permissive here; richer typing arrives with the asset-
+    management/typespec spec.
+
+    The platform recognises a ``file_ref`` TypeSpec kind whose runtime
+    value is a ``str`` — a file path the engine materialises into
+    ``user.message`` content per Materialisation Rule §B.6. Schemas at
+    this stage carry it via ``{"type": "file_ref"}``; downstream code
+    treats the corresponding value as a string.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -48,6 +55,23 @@ class IOSpec(BaseModel):
     mode: Literal["single_shot", "conversational"]
     inputs: dict[str, dict[str, Any]] = Field(default_factory=dict)
     outputs: dict[str, dict[str, Any]] = Field(default_factory=dict)
+
+
+class RuntimeSpec(BaseModel):
+    """`AgentConfig.runtime` — referenced in Module API Reference §13.3.
+
+    The full spec is deferred (open item in the kernel contract §7.5);
+    Phase 1 captures the well-known fields used by the engine's retry
+    policy and the exchange budget. Unknown fields are forbidden so a
+    typo in the YAML fails Layer 1 validation rather than being silently
+    ignored.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    max_retries: int = Field(default=2, ge=0)
+    timeout_seconds: float | None = Field(default=None, ge=0)
+    # Future RuntimeSpec fields land here as they're specified.
 
 
 class SubsystemConfig(BaseModel):
@@ -83,9 +107,7 @@ class ResolvedAgentConfig(BaseModel):
     prompt: PromptSpec
     io: IOSpec
     subsystems: dict[str, SubsystemConfig] = Field(default_factory=dict)
-    # RuntimeSpec is referenced in §13.3 but not detailed in §A; left
-    # permissive until the kernel/runtime spec lands.
-    runtime: dict[str, Any] = Field(default_factory=dict)
+    runtime: RuntimeSpec = Field(default_factory=RuntimeSpec)
 
 
 # Self-referential ModelSpec.fallback — resolve the forward reference.

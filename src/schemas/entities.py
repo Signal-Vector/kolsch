@@ -99,9 +99,6 @@ class ContentRef(BaseModel):
         # BOTH the 64-character length AND the hex character set in a
         # single check, with one actionable error message.
         if not _SHA256_HEX.fullmatch(v):
-            msg = (
-                f"ContentRef.hash must be a 64-char SHA-256 hex digest; "
-                f"got {v!r}"
-            )
+            msg = f"ContentRef.hash must be a 64-char SHA-256 hex digest; got {v!r}"
             raise ValueError(msg)
         return v

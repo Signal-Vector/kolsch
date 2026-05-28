@@ -142,6 +142,8 @@ ignore = [
 # in place, those imports look TYPE_CHECKING-only to ruff but must
 # stay at runtime or Pydantic can't build the model schema.
 "src/schemas/**" = ["TC001", "TC003"]
+# Same Pydantic-at-runtime concern for the kernel's Partial* models.
+"src/kernel/**" = ["TC001", "TC003"]
 
 [tool.ruff.lint.flake8-annotations]
 mypy-init-return = true
