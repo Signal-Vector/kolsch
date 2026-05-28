@@ -59,6 +59,16 @@ test = [
     "pytest-asyncio>=0.23",
     "pytest-cov>=5",
     "testcontainers>=4.7",
+    # CrewAI for the v1 production Framework adapter. Test-group only —
+    # the engine's contract (src/engine/framework.py) stays
+    # framework-agnostic per the prereq design note. Pinned to a
+    # specific version because (a) CrewAI iterates rapidly and breaks
+    # APIs (e.g. function_calling_llm deprecated in 1.14.5a6) and (b)
+    # the prereq spike was validated against this exact version. Bump
+    # alongside a fresh validation pass against
+    # docs/explanation/framework-protocol-design.md §2.
+    # Release notes: https://github.com/crewAIInc/crewAI/releases
+    "crewai==1.14.6",
 ]
 
 # ---------------------------------------------------------------------------
