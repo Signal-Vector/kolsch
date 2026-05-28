@@ -20,7 +20,7 @@ import re
 from datetime import datetime
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from schemas.identifiers import AgentId, SessionId, ThreadId
 
@@ -86,20 +86,22 @@ class ContentRef(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    hash: str = Field(min_length=64, max_length=64)
+    hash: str
     size: int = Field(ge=0)
     stored_at: str
 
+    @field_validator("hash")
     @classmethod
-    def __pydantic_init_subclass__(cls, **kwargs: object) -> None:
-        # Subclassing ContentRef is not part of the contract; this
-        # hook exists so a subclass would still inherit validation.
-        super().__pydantic_init_subclass__(**kwargs)
-
-    def model_post_init(self, _context: object) -> None:
-        if not _SHA256_HEX.fullmatch(self.hash):
+    def _validate_sha256_hex(cls, v: str) -> str:
+        # Using a field_validator (rather than model_post_init) so the
+        # failure surfaces as Pydantic's `ValidationError`, consistent
+        # with every other constraint on the model. The regex enforces
+        # BOTH the 64-character length AND the hex character set in a
+        # single check, with one actionable error message.
+        if not _SHA256_HEX.fullmatch(v):
             msg = (
                 f"ContentRef.hash must be a 64-char SHA-256 hex digest; "
-                f"got {self.hash!r}"
+                f"got {v!r}"
             )
             raise ValueError(msg)
+        return v

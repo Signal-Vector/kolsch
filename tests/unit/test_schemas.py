@@ -510,12 +510,32 @@ def test_thread_entity_record_includes_agent_id() -> None:
     assert t.agent_id == "ag_x"
 
 
-def test_content_ref_validation() -> None:
+def test_content_ref_accepts_valid_hex_hash() -> None:
     ContentRef(hash="a" * 64, size=128, stored_at=f"content/{'a' * 64}.bin")
+
+
+def test_content_ref_rejects_negative_size() -> None:
     with pytest.raises(ValidationError):
         ContentRef(hash="a" * 64, size=-1, stored_at="content/x.bin")
-    with pytest.raises(ValidationError):
+
+
+def test_content_ref_rejects_short_hash() -> None:
+    # 15 chars — fails because it's not 64 chars; the validator's
+    # length+hex regex catches both length and character-set issues.
+    with pytest.raises(ValidationError) as exc_info:
         ContentRef(hash="not_hex_at_all!", size=128, stored_at="content/x.bin")
+    assert "SHA-256" in str(exc_info.value)
+
+
+def test_content_ref_rejects_correct_length_but_non_hex_chars() -> None:
+    # 64 chars but with non-hex characters — this is the case the prior
+    # `min_length=64` constraint would have hidden: a value the wrong
+    # length would fail length before the hex check ever ran. The
+    # `field_validator` regex now enforces both in one check, so this
+    # input fires the hex branch specifically.
+    with pytest.raises(ValidationError) as exc_info:
+        ContentRef(hash="z" * 64, size=128, stored_at="content/z.bin")
+    assert "SHA-256" in str(exc_info.value)
 
 
 # ---------------------------------------------------------------------------
