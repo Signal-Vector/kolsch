@@ -387,11 +387,16 @@ def test_config_set_data() -> None:
 
 def test_memory_written_data() -> None:
     MemoryWrittenData(
+        item_id=MemoryItemId(f"mem_{_uuid()}"),
+        agent_id=AgentId("ag_test"),
         scope="research",
         content={"text": "fact"},
+        tags=["notes/research"],
+        metadata={"source": "user"},
         variant="recent_buffer",
     )
     with pytest.raises(ValidationError):
+        # Missing required item_id/agent_id/tags fields.
         MemoryWrittenData(scope="x", content={"text": "y"})  # type: ignore[call-arg]
 
 

@@ -30,6 +30,7 @@ from schemas.entities import Actor, ContentRef
 from schemas.error import Error
 from schemas.identifiers import (
     AgentCallId,
+    AgentId,
     EventId,
     MemoryItemId,
     SessionId,
@@ -206,10 +207,21 @@ class ConfigSetData(_DataModel):
 
 
 class MemoryWrittenData(_DataModel):
-    """`memory.written.data` — §B.8."""
+    """`memory.written.data` — §B.8 + extension.
 
+    Spec §B.8 lists only ``scope / content / variant``; that is too
+    sparse to satisfy MEM I3 (Memory's cache MUST be reconstructable
+    from the log). The extension below carries the full MemoryItem
+    record so a replay deterministically rebuilds the in-memory cache
+    (MEM I9 — deterministic replay). Flag for spec amendment of §B.8.
+    """
+
+    item_id: MemoryItemId
+    agent_id: AgentId
     scope: str
     content: dict[str, Any]
+    tags: list[str]
+    metadata: dict[str, Any] = Field(default_factory=dict)
     variant: str
 
 
