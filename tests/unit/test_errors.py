@@ -298,6 +298,35 @@ def test_every_class_code_is_registered_in_catalog() -> None:
         )
 
 
+def test_catalog_has_no_orphan_codes() -> None:
+    """Inverse of the class->catalog check: every catalogued code must
+    have a concrete subclass.
+
+    The class->catalog direction is already enforced at import time by
+    ``PlatformError.__init_subclass__``. The reverse direction catches
+    a different drift: a CATALOG entry added without a corresponding
+    implementation — the spec would claim a code exists but nothing in
+    the platform can emit it, which is a normative-registry violation
+    in spirit (E-I2).
+
+    Restrict the comparison to subclasses defined inside the ``errors.*``
+    namespace so ad-hoc test-local subclasses (which auto-register via
+    ``__init_subclass__``) don't satisfy the reverse direction by
+    accident.
+    """
+    catalog_codes = list_catalog_codes()
+    class_codes = {
+        cls.code
+        for cls in iter_error_classes()
+        if cls.__module__.startswith("errors.")
+    }
+    orphans = catalog_codes - class_codes
+    assert not orphans, (
+        f"Catalog codes without a concrete subclass: {sorted(orphans)}. "
+        f"Either implement the class or remove the entry from CATALOG."
+    )
+
+
 def test_catalog_codes_have_dotted_format() -> None:
     """E-I2 plus a soft check: codes follow `<scope>.<specific>` convention."""
     for code in list_catalog_codes():
