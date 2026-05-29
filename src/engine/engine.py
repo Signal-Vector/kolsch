@@ -138,7 +138,7 @@ class AgentEngine:
         self._authz = authz
         self._framework = framework
         self._llm = llm
-        # Phase 1.1 — pre-flight step 5.5 acquires a crewai.LLM via
+        # Phase 1.1 — pre-flight step 6 acquires a crewai.LLM via
         # `build_llm` when `self._llm is None`. Tests still pass `llm=`
         # directly to bypass this path; production wires
         # `llm_providers_config` so build_llm has something to look up.
@@ -304,13 +304,13 @@ class _Exchange:
         self.thread_id = str(context.thread_id)
         self.session_id: str = ""
         self.agent_id: str = str(config.agent_id)
-        # Wired in pre-flight step 5.5 — see _acquire_llm_if_needed.
+        # Wired in pre-flight step 6 — see _acquire_llm_if_needed.
         self.acquired_llm: crewai.LLM | None = None
-        # Wired in pre-flight step 6.
+        # Wired in pre-flight step 7.
         self.config_event_id: str | None = None
-        # Wired in pre-flight step 8.
-        self.exchange_started_id: str | None = None
         # Wired in pre-flight step 9.
+        self.exchange_started_id: str | None = None
+        # Wired in pre-flight step 10.
         self.user_message_event_id: str | None = None
         # Cancellation token — engine-internal default if caller omitted.
         self.cancel = context.cancellation or CancelToken()
@@ -405,7 +405,7 @@ class _Exchange:
                 config=memory_sub.config,
             )
 
-        # Step 5.5 — acquire LLM client (Phase 1.1 patch §5.5).
+        # Step 6 — acquire LLM client (spec §2.1, LLM-R3).
         # When the engine was constructed without an `llm` callable,
         # build one from this exchange's ModelSpec via `build_llm`.
         # Tests inject `llm=` directly and skip this seam; production
@@ -414,21 +414,21 @@ class _Exchange:
         # exchange may target a different model.
         self.acquired_llm = await self._acquire_llm_if_needed()
 
-        # Step 6 — emit config.set if the current effective config
+        # Step 7 — emit config.set if the current effective config
         # differs from the most recent config.set on the thread.
         await self._emit_config_set_if_changed()
 
         # Register tools with the Tools subsystem now (NOT with the
         # framework — that happens in setup). The synthetic force-invoke
-        # read in step 7 routes through tools_subsystem.invoke_tool,
+        # read in step 8 routes through tools_subsystem.invoke_tool,
         # which requires registration to have happened.
         await self._register_tools_with_subsystem()
 
-        # Step 7 — process force-invoke skills, if any.
+        # Step 8 — process force-invoke skills, if any.
         await self._process_force_invoke()
 
-        # Step 8 — emit thread.exchange_started. The trigger_event_id
-        # is what we materialize in step 9; emit a placeholder then
+        # Step 9 — emit thread.exchange_started. The trigger_event_id
+        # is what we materialize in step 10; emit a placeholder then
         # patch? Spec says it's the trigger event id. Phase 1 simplest
         # path: pre-allocate the user.message id, emit exchange_started
         # carrying that id, then emit user.message under that id.
@@ -442,7 +442,7 @@ class _Exchange:
         )
         self.exchange_started_id = str(started.event_id)
 
-        # Step 9 — materialize the trigger as user.message.
+        # Step 10 — materialize the trigger as user.message.
         await self._emit(
             type_=EventType.USER_MESSAGE,
             data=UserMessageData(
@@ -453,7 +453,7 @@ class _Exchange:
         )
 
     async def _acquire_llm_if_needed(self) -> crewai.LLM | None:
-        """Spec §2.1 step 5.5 — acquire a crewai.LLM via build_llm.
+        """Spec §2.1 step 6 — acquire a crewai.LLM via build_llm.
 
         Skipped (returns ``None``) when the engine was constructed
         with a callable `llm` — that's the test path. The test path
@@ -487,7 +487,7 @@ class _Exchange:
         )
 
     async def _emit_config_set_if_changed(self) -> None:
-        """Spec §2.1 step 6 — emit config.set when the effective config
+        """Spec §2.1 step 7 — emit config.set when the effective config
         differs from the most recent config.set on the path (or none)."""
         cur_resolved = self.config.model_dump(mode="json")
         # Walk path, find latest config.set.
@@ -536,7 +536,7 @@ class _Exchange:
         # the Phase 1 default tests use builtin or programmatic-only.
 
     async def _process_force_invoke(self) -> None:
-        """Spec §2.1 step 7 — for each force-invoke skill, emit a
+        """Spec §2.1 step 8 — for each force-invoke skill, emit a
         synthetic ``tool.called``/``tool.result`` pair for ``read`` on
         the SKILL.md path, with principal=system."""
         trigger = self.context.trigger
@@ -827,7 +827,7 @@ class _Exchange:
 
 
 def _extract_trigger_content(trigger: dict[str, Any]) -> dict[str, Any]:
-    """§2.1 step 9 — produce the ``user.message.data.content`` dict."""
+    """§2.1 step 10 — produce the ``user.message.data.content`` dict."""
     kind = trigger.get("kind")
     if kind in ("user_message", "user_message_with_force_skill"):
         content = trigger.get("content")

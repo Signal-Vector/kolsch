@@ -78,6 +78,22 @@ returned `crewai.LLM` is held for the exchange's lifetime and
 passed to the Framework. Failures map to the Fatal
 `llm.*` codes (Error Model §4.13).
 
+**Test path vs production path.** The engine constructor accepts an
+optional `llm: Callable[[LLMRequest], Awaitable[LLMResponse]]`
+parameter alongside `llm_providers_config`. Both seams coexist by
+design:
+
+- **Production path** — leave `llm=None`; pass `llm_providers_config`
+  populated from `platform.yaml`'s `llm_providers` section. Pre-flight
+  step 6 calls `build_llm` per exchange to get a `crewai.LLM`.
+- **Test path** — pass `llm=<callable>` directly. Pre-flight step 6
+  returns ``None`` without consulting the registry; the framework
+  uses the injected callable. The FakeFramework + EchoLLMDriver
+  bootstrap relies on this so tests don't need any provider config.
+
+A future patch may unify the two paths by deprecating the direct
+callable. For now, both seams are first-class.
+
 ---
 
 ## Part 3 — The `ProviderConnector` Protocol

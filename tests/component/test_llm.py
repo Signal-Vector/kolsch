@@ -52,9 +52,13 @@ from llm.providers.openrouter import OpenRouterConnector
 from schemas.config import ModelSpec
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Callable
 
-    Handler = Callable[[httpx.Request], httpx.Response | Awaitable[httpx.Response]]
+    # httpx.MockTransport accepts either a sync or async callable, but
+    # mypy can't unify ``Callable[..., R | Awaitable[R]]`` with httpx's
+    # ``Callable[..., R] | Callable[..., Coroutine[..., R]]``. Every
+    # test below uses the sync shape — pin the alias to that.
+    SyncHandler = Callable[[httpx.Request], httpx.Response]
 
 
 # ===========================================================================
@@ -62,7 +66,7 @@ if TYPE_CHECKING:
 # ===========================================================================
 
 
-def _mock_transport(handler: Handler) -> httpx.MockTransport:
+def _mock_transport(handler: SyncHandler) -> httpx.MockTransport:
     """Build a :class:`httpx.MockTransport` that runs `handler`."""
     return httpx.MockTransport(handler)
 
@@ -292,9 +296,7 @@ async def test_tc_llm_05_opencode_discover_models_shape() -> None:
 
     connector = OpenCodeConnector(transport=_mock_transport(handler))
     creds = Credentials(values={"api_key": "sk-test"})
-    entries = await connector.discover_models(
-        creds, "https://opencode.example.com/v1"
-    )
+    entries = await connector.discover_models(creds, "https://opencode.example.com/v1")
     assert len(entries) == 2
     assert entries[0].id == "gpt-oss-120b"
     # All parameter fields stay None — OpenCode doesn't expose them.
@@ -392,9 +394,7 @@ async def test_tc_llm_06_openrouter_lookup_returns_populated_metadata() -> None:
         return httpx.Response(200, json=catalog)
 
     connector = OpenRouterConnector(transport=_mock_transport(handler))
-    metadata = await connector.lookup_model_metadata(
-        "anthropic", "claude-opus-4-7"
-    )
+    metadata = await connector.lookup_model_metadata("anthropic", "claude-opus-4-7")
     assert metadata is not None
     assert metadata.context_length == 200000
     assert metadata.supports_tools is True
@@ -638,7 +638,9 @@ async def test_openrouter_discover_models_rejects_non_list_data() -> None:
         await connector.discover_models(Credentials(), None)
 
 
-async def test_openrouter_validate_credentials_network_failure_returns_ok_false() -> None:
+async def test_openrouter_validate_credentials_network_failure_returns_ok_false() -> (
+    None
+):
     def handler(_: httpx.Request) -> httpx.Response:
         msg = "boom"
         raise httpx.ConnectError(msg)

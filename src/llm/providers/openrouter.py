@@ -107,8 +107,7 @@ class OpenRouterConnector:
             return ValidationResult(
                 ok=False,
                 reason=(
-                    f"HTTP {response.status_code} from /auth/key"
-                    f" — credentials rejected"
+                    f"HTTP {response.status_code} from /auth/key — credentials rejected"
                 ),
             )
         meta: dict[str, Any] = {}
@@ -248,9 +247,7 @@ class OpenRouterConnector:
         supports_streaming: bool | None = None
         if isinstance(supported, list):
             supports_tools = "tools" in supported
-            supports_streaming = (
-                "stream" in supported or "streaming" in supported
-            )
+            supports_streaming = "stream" in supported or "streaming" in supported
         pricing = OpenRouterConnector._parse_pricing(raw.get("pricing"))
         return ModelEntry(
             id=model_id,

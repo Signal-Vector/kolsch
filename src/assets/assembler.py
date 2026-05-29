@@ -199,9 +199,7 @@ def _normalize_model_value(
     out = dict(value)
     fallback = out.get("fallback")
     if isinstance(fallback, list):
-        out["fallback"] = [
-            _normalize_model_value(item, aliases) for item in fallback
-        ]
+        out["fallback"] = [_normalize_model_value(item, aliases) for item in fallback]
     return out
 
 

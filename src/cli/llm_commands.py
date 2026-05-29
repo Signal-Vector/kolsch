@@ -67,8 +67,7 @@ class Prompter(Protocol):
     Production wires :class:`StdinPrompter`; tests pass a stub that
     returns canned answers."""
 
-    def ask(self, field: PromptField) -> str:
-        ...
+    def ask(self, field: PromptField) -> str: ...
 
 
 class StdinPrompter:
@@ -211,12 +210,26 @@ def _quote_value(value: str) -> str:
 # ---------------------------------------------------------------------------
 
 
+_PLANNED_PROVIDERS: frozenset[str] = frozenset(
+    {"anthropic", "openai", "bedrock", "llama"}
+)
+
+
 async def cmd_connect(args: argparse.Namespace, io: _CommandIO) -> int:
     """Interactive connect flow — patch §8.1."""
     provider_name = args.provider
     try:
         connector = io.connector_factory(provider_name)
     except LlmConnectorUnknown:
+        if provider_name in _PLANNED_PROVIDERS:
+            io.out.write(
+                f"The {provider_name!r} provider is planned for a future "
+                f"patch. See docs/explanation/llm-providers.md for the "
+                f"design sketch. If you'd like to contribute the "
+                f"implementation, see src/llm/providers/README.md for "
+                f"the pattern.\n",
+            )
+            return 1
         io.out.write(
             f"unknown provider: {provider_name!r}\n"
             f"known providers: {', '.join(known_types())}\n",
@@ -373,9 +386,7 @@ async def cmd_disconnect(args: argparse.Namespace, io: _CommandIO) -> int:
         io.out.write(f"provider {provider_name!r} is not connected\n")
         return 1
     existing = providers[provider_name]
-    secret_name = (
-        existing.get("api_key_secret") if isinstance(existing, dict) else None
-    )
+    secret_name = existing.get("api_key_secret") if isinstance(existing, dict) else None
 
     new_providers = {k: v for k, v in providers.items() if k != provider_name}
     if new_providers:
@@ -418,9 +429,7 @@ async def cmd_providers(args: argparse.Namespace, io: _CommandIO) -> int:
         if entry.get("serves_as_metadata_source"):
             flags.append("metadata-source")
         flag_str = f" [{', '.join(flags)}]" if flags else ""
-        io.out.write(
-            f"  - {name} (type={type_name}, models={model_count}){flag_str}\n"
-        )
+        io.out.write(f"  - {name} (type={type_name}, models={model_count}){flag_str}\n")
     return 0
 
 
@@ -471,9 +480,7 @@ async def cmd_refresh(args: argparse.Namespace, io: _CommandIO) -> int:
                 entry.get("base_url"),
             )
         except LlmDiscoveryFailed as exc:
-            io.out.write(
-                f"error refreshing {name}: {exc.detail['reason']}\n"
-            )
+            io.out.write(f"error refreshing {name}: {exc.detail['reason']}\n")
             continue
         io.out.write(f"✓ {name}: {len(entries)} models\n")
         entry["models"] = [_model_entry_to_yaml(e) for e in entries]
@@ -488,9 +495,7 @@ async def cmd_refresh(args: argparse.Namespace, io: _CommandIO) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _build_refresh_secrets(
-    root: Path, payload: dict[str, Any]
-) -> Any:  # noqa: ANN401 — opaque SecretsProvider
+def _build_refresh_secrets(root: Path, payload: dict[str, Any]) -> Any:  # noqa: ANN401 — opaque SecretsProvider
     """Instantiate a Secrets provider from the platform.yaml `secrets`
     section. Used by `refresh` so the command doesn't require a full
     runtime bootstrap.
@@ -585,9 +590,7 @@ async def _augment_entries(
             continue
         new_entry = entry
         for source in sources:
-            metadata = await source.lookup_model_metadata(
-                provider_name, entry.id
-            )
+            metadata = await source.lookup_model_metadata(provider_name, entry.id)
             if metadata is None:
                 continue
             new_entry = ModelEntry(

@@ -164,9 +164,7 @@ def _build_parser() -> argparse.ArgumentParser:
     connect = sub.add_parser("connect", help="Connect an LLM provider.")
     connect.add_argument("provider", help="Provider name (e.g. opencode).")
 
-    disconnect = sub.add_parser(
-        "disconnect", help="Disconnect an LLM provider."
-    )
+    disconnect = sub.add_parser("disconnect", help="Disconnect an LLM provider.")
     disconnect.add_argument("provider", help="Provider name.")
 
     sub.add_parser("providers", help="List connectors + connected providers.")

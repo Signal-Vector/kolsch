@@ -104,17 +104,13 @@ def _openrouter_handler(request: httpx.Request) -> httpx.Response:
 
 def _factory(
     opencode_handler: Callable[[httpx.Request], httpx.Response] = _opencode_handler,
-    openrouter_handler: Callable[
-        [httpx.Request], httpx.Response
-    ] = _openrouter_handler,
+    openrouter_handler: Callable[[httpx.Request], httpx.Response] = _openrouter_handler,
 ) -> Callable[[str], ProviderConnector]:
     """Build a connector factory that injects MockTransports per type."""
 
     def make(type_name: str) -> ProviderConnector:
         if type_name == "opencode":
-            return OpenCodeConnector(
-                transport=httpx.MockTransport(opencode_handler)
-            )
+            return OpenCodeConnector(transport=httpx.MockTransport(opencode_handler))
         if type_name == "openrouter":
             return OpenRouterConnector(
                 transport=httpx.MockTransport(openrouter_handler)
@@ -287,9 +283,11 @@ async def test_connect_failed_validation_leaves_files_unchanged(
     rc = await cmd_connect(args, io_)
     assert rc == 1
     # No platform.yaml write happened.
-    yaml_text = (tmp_path / "platform.yaml").read_text() if (
-        tmp_path / "platform.yaml"
-    ).exists() else ""
+    yaml_text = (
+        (tmp_path / "platform.yaml").read_text()
+        if (tmp_path / "platform.yaml").exists()
+        else ""
+    )
     assert "llm_providers" not in yaml_text
     # No .env write happened.
     assert not (tmp_path / ".env").exists()
@@ -550,6 +548,71 @@ async def test_refresh_named_provider_not_connected(tmp_path: Path) -> None:
     rc = await cmd_refresh(argparse.Namespace(provider="not-here"), io_)
     assert rc == 0
     assert "not connected" in buf.getvalue()
+
+
+async def test_connect_planned_provider_emits_friendly_message(
+    tmp_path: Path,
+) -> None:
+    """Patch §8.5 — the four planned providers get a "planned for a
+    future patch" message + design-sketch pointer, not the generic
+    'unknown provider' error."""
+    io_, buf = _command_io(tmp_path, {})
+    for planned in ("anthropic", "openai", "bedrock", "llama"):
+        buf.truncate(0)
+        buf.seek(0)
+        rc = await cmd_connect(argparse.Namespace(provider=planned), io_)
+        assert rc == 1
+        out = buf.getvalue()
+        assert "planned for a future patch" in out
+        assert planned in out
+        assert "providers/README.md" in out
+    # Truly unknown providers still get the generic message.
+    buf.truncate(0)
+    buf.seek(0)
+    rc = await cmd_connect(argparse.Namespace(provider="mistral"), io_)
+    assert rc == 1
+    assert "unknown provider" in buf.getvalue()
+
+
+async def test_connect_env_write_failure_leaves_platform_yaml_untouched(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Atomicity invariant — if the .env write throws AFTER discovery
+    succeeded, platform.yaml must NOT carry a half-written provider
+    entry that points at an absent secret.
+
+    Phase 1.1 writes .env BEFORE platform.yaml (the connect flow's
+    ordering rationale: an orphan secret is recoverable; a config
+    pointing at a missing secret is Fatal on next startup). So a
+    .env failure here is the worst case — the test confirms
+    platform.yaml stays clean.
+    """
+    from cli import llm_commands as cli_llm
+
+    answers = {
+        "base_url": "https://opencode.example.com/v1",
+        "api_key": "sk-test",
+    }
+    io_, _buf = _command_io(tmp_path, answers)
+
+    def fail_env_write(*_args: object, **_kwargs: object) -> None:
+        msg = "disk full"
+        raise OSError(msg)
+
+    monkeypatch.setattr(cli_llm, "_set_dotenv_entry", fail_env_write)
+
+    args = argparse.Namespace(provider="opencode")
+    with pytest.raises(OSError, match="disk full"):
+        await cli_llm.cmd_connect(args, io_)
+
+    # platform.yaml must NOT have an opencode entry — even though
+    # discovery succeeded, the connect failed mid-write.
+    yaml_path = tmp_path / "platform.yaml"
+    if yaml_path.exists():
+        payload = yaml.safe_load(yaml_path.read_text() or "{}") or {}
+        assert "opencode" not in (payload.get("llm_providers") or {})
+    # And the .env file should not exist (the planted write failed).
+    assert not (tmp_path / ".env").exists()
 
 
 async def test_providers_handles_malformed_entry(tmp_path: Path) -> None:

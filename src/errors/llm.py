@@ -157,9 +157,7 @@ class LlmDiscoveryFailed(PlatformError):
         where: str = "llm.connector.discover_models",
     ) -> None:
         super().__init__(
-            message=(
-                f"Failed to discover models for provider {provider!r}: {reason}"
-            ),
+            message=(f"Failed to discover models for provider {provider!r}: {reason}"),
             where=where,
             detail={"provider": provider, "reason": reason},
         )
@@ -213,5 +211,3 @@ class LlmConnectorDuplicate(PlatformError):
             where=where,
             detail={"type": type_name},
         )
-
-

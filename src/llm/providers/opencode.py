@@ -98,8 +98,7 @@ class OpenCodeConnector:
             return ValidationResult(
                 ok=False,
                 reason=(
-                    f"HTTP {response.status_code} from /models"
-                    f" — credentials rejected"
+                    f"HTTP {response.status_code} from /models — credentials rejected"
                 ),
             )
         return ValidationResult(ok=True)
