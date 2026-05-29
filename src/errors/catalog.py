@@ -114,6 +114,11 @@ CATALOG: dict[str, Level] = {
     # PlatformError; flag for spec amendment alongside the other
     # post-spec catalog additions above.
     "llm.connector_duplicate": Level.FATAL,
+    # ----- §4.14 Workspace (Phase 1.2, UX-R6) --------------------------
+    "workspace.not_initialized": Level.FATAL,
+    "workspace.permission_denied": Level.FATAL,
+    "setup.aborted": Level.RECOVERABLE,
+    "setup.starter_exists": Level.RECOVERABLE,
 }
 
 

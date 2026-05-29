@@ -6,6 +6,9 @@
   "workspaceFolder": "/workspace",
   "shutdownAction": "stopCompose",
   "remoteUser": "root",
+  "containerEnv": {
+    "KOLSCH_WORKSPACE": "/workspace"
+  },
   "customizations": {
     "vscode": {
       "settings": {

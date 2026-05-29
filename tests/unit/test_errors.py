@@ -66,6 +66,8 @@ from errors import (
     SecretNotFound,
     SecretReadFailed,
     SessionNotFound,
+    SetupAborted,
+    SetupStarterExists,
     SkillForcedNotEnabled,
     SkillFrontmatterInvalid,
     SkillMalformed,
@@ -80,6 +82,8 @@ from errors import (
     ToolSetupFailed,
     ToolTimeout,
     ToolUnauthorized,
+    WorkspaceNotInitialized,
+    WorkspacePermissionDenied,
     WrappedError,
     iter_error_classes,
     list_catalog_codes,
@@ -227,6 +231,11 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
     LlmDiscoveryFailed: {"provider": "opencode", "reason": "connection refused"},
     LlmValidationFailed: {"provider": "opencode", "reason": "401"},
     LlmConnectorDuplicate: {"type_name": "opencode"},
+    # 4.14 Workspace (Phase 1.2)
+    WorkspaceNotInitialized: {"path": "/var/ws/k", "env_var_set": False},
+    WorkspacePermissionDenied: {"path": "/var/ws/k", "operation": "mkdir"},
+    SetupAborted: {"step": "C", "reason": "ctrl-c"},
+    SetupStarterExists: {"path": "/var/ws/k/bundles/starter/agents/helper.yaml"},
 }
 
 

@@ -98,6 +98,12 @@ from errors.tools import (
     ToolTimeout,
     ToolUnauthorized,
 )
+from errors.workspace import (
+    SetupAborted,
+    SetupStarterExists,
+    WorkspaceNotInitialized,
+    WorkspacePermissionDenied,
+)
 
 __all__ = [
     "CATALOG",
@@ -153,6 +159,8 @@ __all__ = [
     "SecretNotFound",
     "SecretReadFailed",
     "SessionNotFound",
+    "SetupAborted",
+    "SetupStarterExists",
     "SkillForcedNotEnabled",
     "SkillFrontmatterInvalid",
     "SkillMalformed",
@@ -167,6 +175,8 @@ __all__ = [
     "ToolSetupFailed",
     "ToolTimeout",
     "ToolUnauthorized",
+    "WorkspaceNotInitialized",
+    "WorkspacePermissionDenied",
     "WrappedError",
     "get_catalog_level",
     "iter_error_classes",

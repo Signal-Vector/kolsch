@@ -15,13 +15,33 @@ import sys
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from platform_runtime import bootstrap_runtime
+from platform_runtime import (
+    bootstrap_runtime,
+    resolve_workspace,
+    workspace_is_initialized,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
 
 _log = logging.getLogger("cli")
+
+
+# Phase 1.2 patch §1.4 — the friendly message printed when a non-setup
+# command lands against an uninitialised workspace. The `{path}` token
+# is substituted at print time; no other formatting. Plain text on
+# stderr, no JSON, no traceback.
+_MISSING_WORKSPACE_MESSAGE = (
+    "No Kolsch workspace at {path}.\n"
+    "\n"
+    "Run `kolsch setup` to create one, or point KOLSCH_WORKSPACE at an\n"
+    "existing workspace.\n"
+)
+
+# Exit code for the missing-workspace path — distinct from generic
+# error code 1, so shell pipelines can tell them apart.
+_EXIT_MISSING_WORKSPACE = 3
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -37,6 +57,17 @@ def main(argv: Sequence[str] | None = None) -> int:
         level=logging.WARNING if not args.verbose else logging.INFO,
         format="%(levelname)s %(name)s: %(message)s",
     )
+
+    # Phase 1.2 — resolve the workspace once, intercept the missing-
+    # workspace case before any subsystem boots so the user gets a
+    # friendly message instead of a stack trace. `setup` is the one
+    # command exempt from the initialization gate; it's what populates
+    # the workspace.
+    resolved_root = resolve_workspace(args.root)
+    if args.command != "setup" and not workspace_is_initialized(resolved_root):
+        sys.stderr.write(_MISSING_WORKSPACE_MESSAGE.format(path=resolved_root))
+        return _EXIT_MISSING_WORKSPACE
+    args.root = resolved_root
 
     handler = _DISPATCH[args.command]
     return asyncio.run(handler(args))
@@ -159,6 +190,25 @@ def _build_parser() -> argparse.ArgumentParser:
     server = sub.add_parser("server", help="Start the FastAPI server.")
     server.add_argument("--host", default="127.0.0.1")
     server.add_argument("--port", type=int, default=8080)
+
+    # ---- setup — Phase 1.2 -------------------------------------------
+    setup = sub.add_parser(
+        "setup",
+        help=(
+            "First-run setup: scaffold workspace, connect provider, "
+            "ship a starter agent."
+        ),
+    )
+    setup.add_argument(
+        "--non-interactive",
+        dest="non_interactive",
+        action="store_true",
+        help=(
+            "Skip all prompts. Uses KOLSCH_PROVIDER / KOLSCH_PROVIDER_KEY "
+            "env vars when present to wire a provider; otherwise the "
+            "starter agent ships with `provider: fake`."
+        ),
+    )
 
     # ---- connect / disconnect / providers / refresh — Phase 1.1 ------
     connect = sub.add_parser("connect", help="Connect an LLM provider.")
@@ -370,6 +420,16 @@ async def _cmd_refresh(args: argparse.Namespace) -> int:
     return await cmd_refresh(args, make_default_io(root=args.root))
 
 
+async def _cmd_setup(args: argparse.Namespace) -> int:
+    # Setup orchestrates `connect` + `run` against the workspace it
+    # creates; import lazily so importing `cli.main` doesn't pull the
+    # six-step setup module + the runtime composition root into the
+    # `kolsch --help` path.
+    from cli._setup import make_default_setup_io, run_setup  # noqa: PLC0415
+
+    return await run_setup(args, make_default_setup_io(root=args.root))
+
+
 _DISPATCH = {
     "run": _cmd_run,
     "sessions": _cmd_sessions,
@@ -379,6 +439,7 @@ _DISPATCH = {
     "disconnect": _cmd_disconnect,
     "providers": _cmd_providers,
     "refresh": _cmd_refresh,
+    "setup": _cmd_setup,
 }
 
 
