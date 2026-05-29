@@ -52,6 +52,11 @@ AgentConfig
 ├── name                 string        — human handle; renameable
 ├── description          string        — what this agent is for
 ├── model                ModelSpec     — the LLM and its call parameters
+├── fallback_models      [ModelSpec input]  — optional, default []; ordered
+│                                            list of backup models the engine
+│                                            walks on Recoverable model.*
+│                                            errors. See A.4.2 (Phase 1.3,
+│                                            FB-R1).
 ├── io                   IOSpec        — typed declared inputs/outputs + mode
 ├── prompt               PromptSpec     — layered system-prompt composition
 ├── assembly_version     string        — assembly procedure version in effect
@@ -107,6 +112,40 @@ Layer 1 validation. Downstream code sees only `{provider, model}`.
 
 This permissiveness lives entirely in the resolver. The ModelSpec
 schema above is what every other module sees.
+
+### A.4.2 `fallback_models` — backup chain (Phase 1.3, FB-R1)
+
+`AgentConfig.fallback_models` is an optional ordered list. Default
+`[]`. Each entry accepts the same three input shapes as
+`ModelSpec.model` (§A.4.1):
+
+1. **Canonical object form** — `{provider, model}`.
+2. **Compact `provider/model` string** — split on the first `/`.
+3. **Alias string** — looked up in `platform.yaml`'s `model_aliases`.
+
+All entries are normalised to the canonical object form during
+Layer 1 validation. Downstream code (engine, replay, etc.) sees
+only `list[{provider, model}]`.
+
+When the agent omits the field, the platform-level
+`defaults.fallback_models` (Asset Management §3.2) applies; when the
+agent specifies it (even as `[]`), the agent value wins — no
+merging. Same precedence rule as every other agent/platform default.
+
+The engine walks this list on Recoverable `model.*` errors only —
+the trigger table lives in the Phase 1.3 patch §2.2. Fatal errors
+abort without consulting the chain.
+
+Duplicates within the chain (or with the primary) are allowed and
+emit a `config.fallback_duplicate` warning at agent load (Error
+Model §4.15) — they're not a mistake; a user may have intentionally
+listed the same model twice to retry it.
+
+> NOTE — Phase 1 reserved `ModelSpec.fallback` (the inner list on
+> `ModelSpec` itself) as a future shape. FB-R1 makes
+> `AgentConfig.fallback_models` the canonical agent-level chain;
+> the relationship between the two fields is a structural
+> follow-up flagged for review.
 
 ## A.5 IOSpec
 

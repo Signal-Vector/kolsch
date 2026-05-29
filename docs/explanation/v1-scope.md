@@ -68,6 +68,14 @@ That is the entire user-facing surface of v1. It is intentionally small.
   via the resolver.
 - Multi-file, additive package union — install a package; it adds assets
   and agents to the available pool; never silently overwrites.
+- **Model fallback chains** *(Phase 1.3, FB-R9)* — declare
+  `fallback_models: [haiku, gpt4o]` on the agent (or
+  `defaults.fallback_models` on the platform) and the engine
+  walks the chain on Recoverable `model.*` errors (rate limit,
+  transient 5xx, timeout, context overflow). Fallback is
+  pre-stream only in v1.3: once the first content event has
+  fired, the exchange ends with the truncation rather than
+  swapping models mid-stream.
 
 ### 2.3 Session and log capabilities in v1
 

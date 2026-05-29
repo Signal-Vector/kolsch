@@ -259,6 +259,8 @@ defaults:
   model:
     provider: "anthropic"
     model: "claude-opus-4-7"
+  fallback_models:                  # Phase 1.3 (FB-R2) — list[ModelSpec input]
+    - haiku                         # accepts alias, provider/model, or object
   memory:
     variant: "recent_buffer"
     config:
@@ -316,6 +318,27 @@ are deployment-level shortcuts that resolve to canonical
 `provider/model` strings during Layer 1 validation; aliases do not chain
 (see Schemas §A.4.1). Full field reference + per-connector extensions
 live in `docs/explanation/llm-providers.md`.
+
+**Phase 1.3 — `defaults.fallback_models`** (FB-R2). Optional. A list
+of `ModelSpec` inputs (same three shapes as `model:` — object,
+compact `provider/model` string, or alias). Becomes the system-
+defaults layer's `fallback_models` field for any agent whose own
+config omits it.
+
+Precedence is the usual agent-wins rule, with NO merging:
+
+- Agent specifies `fallback_models: [...]` → agent value wins, even
+  if it's the empty list (an empty list means "no fallback for this
+  agent").
+- Agent omits `fallback_models` and `defaults.fallback_models` is
+  set → platform default applies.
+- Both absent → no fallback chain; a Recoverable `model.*` error
+  fails the exchange.
+
+The engine resolves entries lazily — it builds `crewai.LLM` clients
+for fallback models only when the chain is actually consulted. See
+the Phase 1.3 patch §1.2 for the full precedence story and §2.1 for
+the engine's loop.
 
 ### 3.3 `.env` — Secrets
 

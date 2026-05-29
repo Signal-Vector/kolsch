@@ -143,6 +143,15 @@ These are non-negotiable. Violating them blocks merges.
   reads `KOLSCH_WORKSPACE` or constructs the default path. The CLI
   emits a friendly message (not a stack trace) when the workspace
   is uninitialized. *(Phase 1.2, UX-R10.)*
+- **Every new `model.*` error code MUST declare Recoverable or
+  Fatal in the same change that introduces it,** and update the
+  fallback trigger table in `docs/explanation/error-model.md`
+  §4.15 (the canonical "does this trigger fallback" surface).
+  The classification is what the engine's
+  `is_fallback_triggering` predicate consults; a new code with
+  no declared level silently defaults to "no fallback", which
+  is wrong-by-default for any genuinely transient condition.
+  *(Phase 1.3, FB-R10.)*
 
 ---
 

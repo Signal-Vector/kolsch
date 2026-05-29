@@ -250,6 +250,49 @@ Useful follow-ups:
   `llm.provider_not_configured`, which is the system telling you the
   truth).
 
+## 10. Add a fallback model
+
+Real providers blink — a 429 from Opus shouldn't kill your
+conversation. Open `bundles/acme/agents/hello.yaml` and add one
+field next to `model:`:
+
+```yaml
+model: opus
+fallback_models:
+  - haiku
+```
+
+(Add more entries if you want; the engine walks them in order.)
+Run it again with Opus simulated unavailable — for instance, swap
+the API key to an obviously-bad value temporarily, or pick a model
+that's currently rate-limited:
+
+```bash
+uv run kolsch run acme/agents/hello --input content="say hi"
+```
+
+You'll see two new things in `kolsch sessions events`:
+
+- A `model.fallback` event recording the transition
+  (`from: opus, to: haiku, reason: model.rate_limited`).
+- The successful `model.response` attributed to Haiku.
+
+Each `model.fallback` is one transition, in order. If the whole
+chain fails, the exchange ends with `llm.all_models_failed` and
+the event's `detail.attempts` lists every model that was tried —
+exactly the same information that's already in the log, surfaced
+once so debuggers don't have to grep.
+
+Fallback fires only before the first content token streams. After
+the user has seen partial output, the engine commits to the
+truncation rather than swap-and-replay — that's a UX decision,
+not a retry one. Mid-stream fallback is a future patch when the
+UX is solved.
+
+The exhaustive trigger list (which errors fall back; which abort)
+lives in `docs/explanation/error-model.md` §4.15. The how-to
+guide is `docs/how-to/configure-fallbacks.md`.
+
 ---
 
 ## What you just saw

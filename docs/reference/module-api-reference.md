@@ -1468,6 +1468,104 @@ from Phase 1.2 patch §1.4.
 
 ---
 
+## Part 11.7 — Model Fallback (Phase 1.3, FB-R6)
+
+The engine's resilience against transient provider failures. An
+agent declares `fallback_models: [...]` next to `model:`; the
+engine walks the chain on Recoverable `model.*` errors. No
+strategy engine, no health memory across exchanges — an ordered
+list, traversed sequentially, fresh state per exchange.
+
+Per the Phase 1.3 patch §0: fallback is for *different* endpoints
+(connector-level retries against the same endpoint are a connector
+concern). Pre-stream only in v1.3 — once the first content event
+has fired, the engine commits to truncation rather than swap-and-
+replay (patch §2.3).
+
+### 11.7.1 Agent + platform configuration
+
+The `fallback_models` field is documented in Schemas §A.4.2 (FB-R1).
+The `defaults.fallback_models` knob is documented in Asset
+Management §3.2 (FB-R2). Both accept the three `ModelSpec` input
+shapes (canonical object, compact `provider/model` string, alias);
+the resolver normalises every entry to canonical form at Layer 1.
+
+Precedence is agent-wins, no merging: an empty agent list (`[]`)
+means "no fallback for this agent" even when a platform default is
+present.
+
+### 11.7.2 The engine's loop
+
+Pre-flight step 6 (FB-R3) acquires the primary `crewai.LLM`. Step
+7 (FB-R3) resolves the fallback chain to canonical `ModelSpec`s
+without building clients — clients are built lazily via
+`build_llm` only when the chain is actually consulted.
+
+At exchange execution time the model call becomes a loop:
+
+```
+attempt 0: call primary
+  on Recoverable model.* error:
+    emit model.fallback {from=primary, to=fallback[0], reason}
+    build_llm(fallback[0]) → next attempt
+  on Fatal model.* error:
+    abort — fallback does not apply
+  on success:
+    emit model.response; exchange continues
+chain exhausted:
+  raise llm.all_models_failed; emit thread.exchange_failed
+```
+
+The classification ("does this error trigger fallback?") lives in
+a single predicate in `src/engine/_fallback.py`:
+
+```python
+def is_fallback_triggering(err: PlatformError) -> bool:
+    """Return True iff a Recoverable `model.*` error should
+    trigger the engine to consult the next fallback chain entry.
+
+    Exhaustively documented mapping — see Phase 1.3 patch §2.2
+    and Error Model §4.15. New `model.*` codes added later MUST
+    explicitly decide which side they fall on (AGENTS.md hard
+    rule)."""
+```
+
+### 11.7.3 The `model.fallback` event
+
+A new event type emitted once per fallback transition. Shape
+documented in Phase 1.3 patch §3.1; ordering in §3.2.
+
+```yaml
+type: model.fallback
+data:
+  from:    { provider, model }      # canonical ModelSpec
+  to:      { provider, model }      # canonical ModelSpec
+  reason:  "model.rate_limited"     # the triggering error code
+  reason_detail: "<human readable>"
+  attempt: 1                         # 1-indexed; attempt 0 was the primary
+```
+
+The event sits between the failing attempt's `model.request` (or
+its `model.response` if one was produced before failure) and the
+next attempt's `model.request`. Exactly one `model.fallback` per
+transition.
+
+### 11.7.4 Failure surface
+
+- `llm.all_models_failed` (Fatal) — chain exhausted.
+  `detail.attempts` is the full ordered list of
+  `(model, error_code, detail)` triples.
+- `config.fallback_duplicate` (Diagnostic — warning surface) —
+  Layer 1 validator at agent load. Not an error; the user may
+  have intentionally listed the same model twice. See Error
+  Model §4.15.
+- Fatal `model.*` codes (`model.authentication_failed`,
+  `model.bad_request`) — abort without consulting the chain.
+
+Full per-code table: Error Model §4.15.
+
+---
+
 ## Part 12 — Inter-Module Dependency Matrix
 
 Who calls whom. Rows are callers; columns are callees. Cells list the
@@ -1477,7 +1575,7 @@ specific methods called.
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **CLI / API** | — | initialize, get_asset, build_resolved_config, list_bundles | create_session, get_session, get_thread, delete_session | subscribe | — | resolve, exists | — | — | — | — | registry.{get,known_types,connected_metadata_sources}; connector.{auth_prompt_spec,validate_credentials,discover_models} for connect/refresh | **resolve_workspace, workspace_is_initialized** *(Phase 1.2, UX-R7)* |
 | **Asset Mgmt** | resolve_and_validate | (self) | — | — | — | — | — | — | — | — | — | — |
-| **Agent Engine** | (via Asset Mgmt) | build_resolved_config | get_leaf, append_event, read_path_to_leaf, write_content | publish | bind_session, (Context.*) | resolve, exists | execute | allow | register_tools_for_agent, invoke_tool | get_enabled_skills, format_skills_listing, force_invoke | **build_llm** *(Phase 1.1, pre-flight step 6)* | — |
+| **Agent Engine** | (via Asset Mgmt) | build_resolved_config | get_leaf, append_event, read_path_to_leaf, write_content | publish | bind_session, (Context.*) | resolve, exists | execute | allow | register_tools_for_agent, invoke_tool | get_enabled_skills, format_skills_listing, force_invoke | **build_llm** *(Phase 1.1, pre-flight step 6 — primary; Phase 1.3 FB-R6 calls it again per fallback chain entry on Recoverable model.\* errors)* | — |
 | **Memory Provider** | — | — | read_events | — | (self) | — | — | — | — | — | — | — |
 | **Tools Subsystem** | — | get_asset | — | — | — | resolve, exists | (calls engine's sandbox use) | allow | (self) | — | — | — |
 | **Skills Subsystem** | — | get_asset | — | — | — | — | — | — | — | (self) | — | — |

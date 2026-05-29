@@ -916,6 +916,32 @@ test plan; the test plan retains the four overall validation tests.
   `platformdirs` or reads `KOLSCH_WORKSPACE`. Verified by grep
   during the gate.
 
+### 10.14 Model Fallback (Phase 1.3, FB-R7)
+
+- The engine retries the next model in the chain on Recoverable
+  `model.*` errors (rate-limited, server error, timeout, context
+  overflow) and stops on Fatal ones (auth failure, bad request).
+  Trigger table: Error Model §4.15 + Phase 1.3 patch §2.2.
+- Exactly one `model.fallback` event is emitted per transition.
+  Ordering: between the failing attempt's `model.request` (or its
+  `model.response`) and the next attempt's `model.request` (patch
+  §3.2).
+- `llm.all_models_failed` (Fatal) includes every attempted model
+  in its `attempts` field — the full ordered list of
+  `(model, error_code, detail)` triples the engine tried.
+- Agent-level `fallback_models` overrides
+  `defaults.fallback_models`; absence of both means no fallback
+  (an empty list `[]` on the agent counts as explicit "no
+  fallback for this agent").
+- A fallback to an unconfigured provider fails at agent load
+  (pre-flight step 7) with a clear message naming the offending
+  entry — not at first-attempt time.
+- Streaming exchanges do not fall back after the first content
+  event. The boundary is the first `model.response` content
+  event; before it, fallback applies normally; after it, the
+  engine emits `thread.exchange_failed` with the partial output
+  captured and ends the exchange (patch §2.3).
+
 ---
 
 ## Part 11 — Coverage & Quality Gates

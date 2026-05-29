@@ -963,6 +963,123 @@ Handling), CRW (CrewAI Adapter — authored in Step 12b), INT
 
 ---
 
+## Part 9.7 — Model Fallback (FB) — Phase 1.3, FB-R8
+
+**TC-FB-01: Recoverable error triggers fallback; secondary serves the reply**
+- Layer: integration
+- Setup: agent declares `fallback_models: [haiku]`. Primary
+  (Opus) is wired (fake LLM) to raise `model.rate_limited` on
+  the first call; Haiku returns success.
+- Action: run the agent once.
+- Expected: event log contains, in order, `model.request` (Opus),
+  `model.fallback` (from=opus, to=haiku, reason=`model.rate_limited`),
+  `model.request` (Haiku), `model.response` (success),
+  `agent.message`. The `model.response.data.model` field names
+  Haiku.
+- Verifies: §10.14; engine fallback loop (patch §2.1); event
+  shape (patch §3.1).
+
+**TC-FB-02: Chain exhaustion raises `llm.all_models_failed`**
+- Layer: integration
+- Setup: chain of three models; all three raise Recoverable
+  errors (rate-limited, server error, timeout) in sequence.
+- Action: run the agent once.
+- Expected: two `model.fallback` events; final
+  `thread.exchange_failed` with cause `llm.all_models_failed`
+  whose `detail.attempts` is the full ordered list of
+  `(model, error_code, detail)` triples — primary + every chain
+  entry.
+- Verifies: §10.14; Error Model §4.15 cause-chain.
+
+**TC-FB-03: Primary succeeds — chain untouched, no lazy clients built**
+- Layer: integration
+- Setup: agent declares `fallback_models: [haiku, gpt4o]`;
+  primary (Opus) returns success on first call.
+- Action: run the agent once + count `build_llm` calls.
+- Expected: no `model.fallback` events; `build_llm` called
+  exactly once (for the primary).
+- Verifies: §10.14; lazy client construction (patch §2.1).
+
+**TC-FB-04: Alias entries normalised to canonical at Layer 1**
+- Layer: unit
+- Setup: agent declares `fallback_models: ["haiku"]` (alias
+  string). `model_aliases.haiku` resolves to
+  `openrouter/anthropic/claude-haiku-4-5`.
+- Action: kernel resolves the agent config.
+- Expected: the resolved `fallback_models[0]` equals
+  `{provider: "openrouter", model: "anthropic/claude-haiku-4-5"}`.
+  Any subsequent `model.fallback` event's `to.model` is the
+  canonical string, never the alias.
+- Verifies: §10.14; Schemas §A.4.2.
+
+**TC-FB-05: Unknown fallback alias fails at agent load**
+- Layer: unit
+- Setup: `fallback_models: ["mystery"]`; `model_aliases` has no
+  `mystery`.
+- Action: kernel resolves the agent config.
+- Expected: raises `config.unknown_alias` (Fatal) naming
+  `mystery` and the available aliases — at agent-load time, NOT
+  at exchange or fallback-trigger time.
+- Verifies: §10.14; fail-fast validation timing (patch §1.3).
+
+**TC-FB-06: `model.fallback` event shape matches the canonical schema**
+- Layer: unit
+- Setup: build a `model.fallback` event payload via the engine's
+  event constructor.
+- Action: validate against the canonical schema (patch §3.1).
+- Expected: event has `data.from {provider, model}`,
+  `data.to {provider, model}`, `data.reason` (string),
+  `data.reason_detail` (string), `data.attempt` (1-indexed int).
+- Verifies: §10.14; event shape conformance.
+
+**TC-FB-07: Streaming after first content event does NOT fall back**
+- Layer: integration
+- Setup: chain of two models; primary streams one content
+  chunk, then raises HTTP 500 mid-stream; secondary would
+  succeed if called.
+- Action: run the agent with `--stream`.
+- Expected: NO `model.fallback` event; the chain is not
+  consulted; engine emits `thread.exchange_failed` with the
+  partial output preserved in the failing `model.response`'s
+  data. The user sees the truncation.
+- Verifies: §10.14; streaming boundary (patch §2.3).
+
+**TC-FB-08: Three-entry chain — primary + first fallback fail; second succeeds**
+- Layer: integration
+- Setup: `fallback_models: [haiku, gpt4o]`. Opus raises
+  rate-limited; Haiku raises server-error; GPT4o succeeds.
+- Action: run the agent once.
+- Expected: two `model.fallback` events in order
+  (opus→haiku, haiku→gpt4o); third attempt's `model.response`
+  is successful; final `agent.message`.
+- Verifies: §10.14; ordered traversal (patch §2.1).
+
+**TC-FB-09: Fatal `model.*` does NOT trigger fallback**
+- Layer: integration
+- Setup: agent declares `fallback_models: [haiku]`. Primary
+  raises `model.authentication_failed` (Fatal).
+- Action: run the agent once.
+- Expected: NO `model.fallback` event; chain untouched; engine
+  emits `thread.exchange_failed` carrying the original Fatal
+  error.
+- Verifies: §10.14; Fatal-abort discipline (patch §2.2); Error
+  Model §4.15.
+
+**TC-FB-10: Reconstruction preserves the fallback chain in the log**
+- Layer: integration
+- Setup: a JSONL session log containing a complete fallback
+  sequence (request, fallback, request, fallback, request,
+  response, agent.message). Delete the entity DB.
+- Action: run `kolsch reconstruct` against the JSONL.
+- Expected: the reconstructed session's events include every
+  `model.fallback` in the original order; the
+  `model.response.data.model` field still names the final
+  model that produced the answer.
+- Verifies: §10.14; replay determinism + the no-loss event-log
+  guarantee.
+
+---
+
 ## Part 10 — Error Model (ERR)
 
 **TC-ERR-01: All subclasses serialize to envelope**
@@ -1413,8 +1530,9 @@ How the catalog maps to the success criteria (Handbook §10):
 | Engine | §10.5 | TC-ENG-01..11 (framework-agnostic; run against FakeFramework in 12a and CrewAIFramework in 12b) |
 | LLM Provider Configuration | §10.12 | TC-LLM-01..10 (Phase 1.1) |
 | Workspace Resolution & Setup | §10.13 | TC-UX-01..10 (Phase 1.2, UX-R9) |
-| CLI | Part 11.6 (cases) | TC-CLI-01..08 — success criteria still to author in handbook §10.14 |
-| HTTP API | Part 11.7 (cases) | TC-API-01..10 — success criteria still to author in handbook §10.15 |
+| Model Fallback | §10.14 | TC-FB-01..10 (Phase 1.3, FB-R8) |
+| CLI | Part 11.6 (cases) | TC-CLI-01..08 — success criteria still to author in handbook §10.15 |
+| HTTP API | Part 11.7 (cases) | TC-API-01..10 — success criteria still to author in handbook §10.16 |
 | Memory | §10.6 | TC-MEM-01..09 |
 | Secrets/Sandbox/Authz | §10.7 | TC-SEC/SBX/AUZ-* |
 | Tools | §10.8 | TC-TLS-01..08 |

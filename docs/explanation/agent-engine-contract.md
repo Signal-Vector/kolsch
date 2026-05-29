@@ -237,7 +237,8 @@ work. Its responsibilities, in order of an `execute` call:
    Hold the returned `MemoryContext` for the session's duration. The
    Memory provider replays `memory.written` / `memory.deleted` events
    from the log to rebuild its cache (per Memory contract §3.3).
-6. **Acquire LLM client.** *(Phase 1.1 — LLM-R3.)* Call
+6. **Acquire LLM client for the primary model.** *(Phase 1.1 — LLM-R3;
+   retitled by Phase 1.3 — FB-R3.)* Call
    `build_llm(config.model, provider_config, secrets)` where
    `provider_config` is the entry from `platform.yaml`'s
    `llm_providers[config.model.provider]`. Hold the returned
@@ -246,12 +247,25 @@ work. Its responsibilities, in order of an `execute` call:
    (`llm.provider_not_configured`, `llm.secret_missing`,
    `llm.client_init_failed`, `llm.connector_unknown`), emit
    `thread.exchange_failed` and raise per the failure surface (§1.6).
-7. **Resolve a `config.set` event if needed.** If the most recent
+7. **Build the fallback chain.** *(Phase 1.3 — FB-R3.)* Resolve each
+   entry in `config.fallback_models` (or
+   `defaults.fallback_models` if the agent omitted the field) to a
+   canonical `ModelSpec` via the kernel's normalisation. Store as
+   an ordered list of resolved `ModelSpec`s. Do NOT pre-build their
+   `crewai.LLM` clients — fallbacks may never be needed, and
+   per-provider credential failures should surface at use time, not
+   pre-flight time. Validate that each entry's `provider` is in
+   `llm_providers` (a fallback against an unconfigured provider is
+   a Fatal at this step — fail fast with a clear message naming the
+   offending entry). When neither `config.fallback_models` nor
+   `defaults.fallback_models` is set, the chain is empty and a
+   Recoverable `model.*` error ends the exchange directly.
+8. **Resolve a `config.set` event if needed.** If the most recent
    `config.set` on the thread differs from the incoming `config` (or there
    is none), emit a new `config.set` carrying the full resolved config
    (per Materialization Rule, §B.6). The new event becomes part of the
    tree path before the exchange begins.
-8. **Process force-invoke skills, if any.** If
+9. **Process force-invoke skills, if any.** If
    `trigger.kind == "user_message_with_force_skill"`, for each skill ref
    in `trigger.force_skills`:
    - Verify the skill is in the agent's enabled list (per Skills §4).
@@ -261,14 +275,14 @@ work. Its responsibilities, in order of an `execute` call:
    - Read the file (subject to path policy and authorization on
      `tool.read`).
    - Emit `tool.result` carrying the SKILL.md content.
-9. **Emit `thread.exchange_started`** with the trigger event id (which is
-   the `user.message` for conversational mode, or a synthetic input event
-   for single_shot mode — §B.7).
-10. **Materialize the trigger** as an event on the tree:
-   - Conversational: emit `user.message` with the trigger content verbatim.
-   - Single_shot: emit `user.message` (still the term used) with the typed
-     inputs verbatim — the conversational/single_shot distinction is an
-     IOSpec property and does not change the event vocabulary.
+10. **Emit `thread.exchange_started`** with the trigger event id (which is
+    the `user.message` for conversational mode, or a synthetic input event
+    for single_shot mode — §B.7).
+11. **Materialize the trigger** as an event on the tree:
+    - Conversational: emit `user.message` with the trigger content verbatim.
+    - Single_shot: emit `user.message` (still the term used) with the typed
+      inputs verbatim — the conversational/single_shot distinction is an
+      IOSpec property and does not change the event vocabulary.
 
 ### 2.2 Set up the framework
 
@@ -326,9 +340,20 @@ For each lifecycle event the framework reports, the engine:
 
 - **Model called:** emit `model.request` per §B.8 (records the call's
   metadata — model, parameters, config_event_id — but NOT the assembled
-  context, which is derivable per §B.5).
+  context, which is derivable per §B.5). When the call returns a
+  Recoverable `model.*` error and a fallback chain is available
+  (pre-flight step 7), the engine consults the next entry — see
+  the fallback loop below.
 - **Model responded:** emit `model.response` with content and reasoning
   trace verbatim, usage, cost, latency.
+- **Model fallback triggered:** *(Phase 1.3 — FB-R4.)* when a
+  Recoverable `model.*` error from the previous attempt led to
+  selecting the next chain entry, emit `model.fallback` per §B.8 with
+  `{from, to, reason, reason_detail, attempt}`. The event sits
+  between the failing attempt's `model.request` (or its
+  `model.response` if one was produced before failure) and the next
+  attempt's `model.request`. Exactly one `model.fallback` per
+  transition.
 - **Tool requested:** emit `tool.called` with arguments verbatim.
 - **Tool succeeded:** emit `tool.result` with the result verbatim.
 - **Tool failed:** emit `tool.failed` with error detail.
@@ -339,6 +364,29 @@ For each lifecycle event the framework reports, the engine:
   exceeds policy (see §2.6), trigger compaction via the Memory provider,
   emit `context.compacted` with the full pre-compaction content and the
   summary.
+
+**Fallback loop (Phase 1.3 — FB-R3).** When the primary model call
+returns a Recoverable `model.*` error (rate limit, transient 5xx,
+timeout, context overflow — see Error Model §4.15 for the trigger
+table), the engine:
+
+1. Constructs the next attempt's `crewai.LLM` from the chain
+   resolved at pre-flight step 7 (lazy build via `build_llm`).
+2. Emits a `model.fallback` event for the transition.
+3. Re-issues the request against the new model. Same lifecycle
+   handlers fire; recursion-by-iteration walks the chain.
+4. On chain exhaustion, raises `llm.all_models_failed` (Fatal) with
+   the full ordered list of attempts in `detail.attempts`. The
+   engine then proceeds to the standard `thread.exchange_failed`
+   emission path (§2.5 terminal failure branch).
+
+Fatal `model.*` errors (auth failure, bad request, etc.) abort the
+exchange without consulting the chain — the same key would fail at
+the next provider too. Streaming exchanges fall back ONLY when the
+error fires before the first content event; after partial output
+has been committed to the log, the engine ends the exchange with
+the truncation visible. See Phase 1.3 patch §2.2 + §2.3 for the
+canonical trigger table and the streaming boundary.
 
 All emissions are appended to the JSONL file in order via
 `store.append_event(...)`. They are *also* yielded from `execute_stream`.

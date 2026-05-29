@@ -610,6 +610,51 @@ message (exit code 3, no traceback) per Phase 1.2 patch §1.4.
 | `setup.aborted` | Recoverable | `{step, reason}` | `kolsch setup` after a user Ctrl-C — informational only |
 | `setup.starter_exists` | Recoverable | `{path}` | `kolsch setup` step D when the target file exists and the user declines overwrite |
 
+### 4.15 Model Fallback (Phase 1.3, FB-R5)
+
+Errors raised by the connector's call layer and the engine's
+fallback loop. The six `model.*` codes are not strictly new — some
+existed in Phase 1.1 as generic "the model call failed" without
+level distinctions. Phase 1.3 forces each to declare Recoverable
+vs Fatal, which is the basis of the fallback trigger decision.
+The canonical "does this trigger fallback" table lives in the
+Phase 1.3 patch §2.2; the levels below MUST match.
+
+| Code | Level | Detail | Where (typical) |
+|------|-------|--------|-----------------|
+| `model.rate_limited` | Recoverable | `{provider, model, retry_after_seconds?}` | connector's call layer (HTTP 429) |
+| `model.server_error` | Recoverable | `{provider, model, status_code}` | connector's call layer (HTTP 5xx) |
+| `model.timeout` | Recoverable | `{provider, model, timeout_seconds}` | connector's call layer |
+| `model.context_overflow` | Recoverable | `{provider, model, requested_tokens, max_tokens?}` | connector's call layer |
+| `model.authentication_failed` | Fatal | `{provider, model, status_code}` | connector's call layer (HTTP 401/403) |
+| `model.bad_request` | Fatal | `{provider, model, status_code, reason}` | connector's call layer (HTTP 400) |
+| `llm.all_models_failed` | Fatal | `{primary, attempts: [{model, error_code, detail}], reason}` | engine model loop, after exhausting the chain |
+| `config.fallback_duplicate` | Diagnostic | `{agent, model, positions}` | Layer 1 validator at agent load (warning surface) |
+
+**Why these levels.** The four Recoverable codes are conditions
+another model might handle differently (a rate limit on Opus does
+not constrain Haiku; a transient 5xx from one provider is unlikely
+to repeat at another; a different model may have a larger context
+window). The two Fatal `model.*` codes are conditions the chain
+won't help with: an auth failure with one provider's key won't
+succeed against another model on the same key, and a malformed
+request is broken regardless of which model receives it. The
+engine MUST NOT consult the fallback chain on Fatal `model.*`.
+
+**`llm.all_models_failed`'s `attempts` field** is the full ordered
+list of `(model, error_code, detail)` triples the engine tried.
+The cause chain on the emitted `thread.exchange_failed` event
+references this for replay.
+
+**`config.fallback_duplicate`** is a warning, not an error — the
+user may have intentionally listed the same model twice to retry
+it (Phase 1.3 patch §2.4). It surfaces at `kolsch run` startup so
+the user sees it, not silently in logs. The level is `Diagnostic`
+because no Warning level exists in the catalog today; if a Warning
+tier lands later, this code moves there. *(Flagged for spec
+review — Phase 1.3 introduced a "warning" concept that the Error
+Model doesn't yet have a first-class level for.)*
+
 ---
 
 ## Part 5 — How Errors Appear in Events
