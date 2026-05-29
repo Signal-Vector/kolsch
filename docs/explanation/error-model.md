@@ -577,6 +577,24 @@ auth provider produce errors.)
 | `platform.wrapped` | (varies) | `{original_type, args}` | (varies) |
 | `platform.internal_error` | Fatal | `{original_type, args, traceback?}` | (varies) |
 
+### 4.13 LLM Configuration (Phase 1.1, LLM-R6)
+
+Errors from the `build_llm` helper, the connector registry, and the
+CLI `connect`/`refresh` flows that wire LLM providers into the
+platform. The kernel resolver also emits `config.unknown_alias` here
+because alias resolution is part of `ModelSpec` Layer 1 validation
+(Schemas §A.4.1).
+
+| Code | Level | Detail | Where (typical) |
+|------|-------|--------|-----------------|
+| `llm.provider_not_configured` | Fatal | `{provider, configured_providers}` | `llm.build_llm` |
+| `llm.secret_missing` | Fatal | `{provider, secret_name}` | `llm.build_llm` (chains `secret.not_found`) |
+| `llm.client_init_failed` | Fatal | `{provider, model, reason}` | connector's `build_llm` |
+| `config.unknown_alias` | Fatal | `{alias, available_aliases}` | `kernel.resolver.normalize_model_spec` |
+| `llm.connector_unknown` | Fatal | `{type, registered_types}` | `llm.registry.get` |
+| `llm.discovery_failed` | Recoverable | `{provider, reason}` | connector's `discover_models` (CLI `connect`/`refresh`) |
+| `llm.validation_failed` | Fatal | `{provider, reason}` | CLI `connect` flow (`validate_credentials` returned ok=False) |
+
 ---
 
 ## Part 5 — How Errors Appear in Events

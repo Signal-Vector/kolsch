@@ -229,11 +229,39 @@ defaults:
     config:
       recent_turns: 20
       max_tokens: 4000
+llm_providers:                          # Phase 1.1 — populated by `kolsch connect`
+  opencode:
+    type: opencode
+    api_key_secret: OPENCODE_API_KEY
+    base_url: https://opencode.example.com/v1
+    timeout_seconds: 60
+    discovered_at: "2026-05-29T14:23:01Z"
+    models:
+      - id: gpt-oss-120b
+        context_length: 131072         # filled from openrouter metadata
+        supports_tools: true
+        supports_streaming: true
+      - id: qwen2.5-coder-32b
+        context_length: null           # unknown — no metadata source
+        supports_tools: null
+        supports_streaming: null
+  openrouter:
+    type: openrouter
+    api_key_secret: OPENROUTER_API_KEY
+    base_url: https://openrouter.ai/api/v1
+    timeout_seconds: 60
+    serves_as_metadata_source: true    # cross-provider lookup capability
+    discovered_at: "2026-05-29T14:20:11Z"
+    models: []                          # live OpenRouter catalog when connected
+model_aliases:                          # Phase 1.1 — deployment-level shortcuts
+  smart: opencode/gpt-oss-120b
+  cheap: opencode/qwen2.5-coder-32b
 ```
 
-Six top-level sections (provider modules + storage + bus + defaults).
-Defaults become the system-defaults layer of any agent config (the first
-layer the resolver merges; see §6 below).
+Eight top-level sections (provider modules + storage + bus + defaults +
+`llm_providers` + `model_aliases`). Defaults become the system-defaults
+layer of any agent config (the first layer the resolver merges; see §6
+below).
 
 The **defaults require no external services**: `storage.entity_backend:
 sqlite` and `event_bus.backend: in_process` mean a fresh install runs
@@ -244,6 +272,15 @@ tiers).
 The schema is owned by the platform-level Pydantic models; not enumerated
 in full here. Future contracts may add sections (e.g., memory backend
 config when non-`recent_buffer` variants ship).
+
+**Phase 1.1 — `llm_providers` and `model_aliases`** (LLM-R2). Populated
+by `kolsch connect <provider>` (CLI surface) and editable by hand. One
+entry per connected provider; each entry's `type` must be a key in the
+connector registry (see Module API Reference Part 11.5). `model_aliases`
+are deployment-level shortcuts that resolve to canonical
+`provider/model` strings during Layer 1 validation; aliases do not chain
+(see Schemas §A.4.1). Full field reference + per-connector extensions
+live in `docs/explanation/llm-providers.md`.
 
 ### 3.3 `.env` — Secrets
 

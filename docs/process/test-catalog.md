@@ -763,6 +763,104 @@ Handling), CRW (CrewAI Adapter — authored in Step 12b), INT
 
 ---
 
+## Part 9.5 — LLM Provider Configuration (LLM) — Phase 1.1, LLM-R8
+
+**TC-LLM-01: Alias resolves to canonical**
+- Layer: unit
+- Setup: `platform.yaml` with `model_aliases: {opus:
+  anthropic/claude-opus-4-7}`.
+- Action: kernel resolver normalizes a `ModelSpec.model = "opus"`.
+- Expected: result is `{provider: "anthropic", model: "claude-opus-4-7"}`.
+- Verifies: §10.12; Schemas §A.4.1.
+
+**TC-LLM-02: Unknown alias raises `config.unknown_alias`**
+- Layer: unit
+- Setup: `model_aliases` does not contain `mystery`.
+- Action: kernel resolver normalizes a `ModelSpec.model = "mystery"`.
+- Expected: raises `config.unknown_alias` (Fatal) with the available
+  aliases in `detail`.
+- Verifies: §10.12; Error Model §4.13.
+
+**TC-LLM-03: Unconfigured provider raises `llm.provider_not_configured`**
+- Layer: component
+- Setup: `llm_providers` empty.
+- Action: `build_llm({provider: "anthropic", model: "x"}, ...)`.
+- Expected: raises `llm.provider_not_configured` with the
+  configured providers list in `detail`.
+- Verifies: §10.12; Error Model §4.13.
+
+**TC-LLM-04: Missing API key raises `llm.secret_missing` with cause**
+- Layer: component
+- Setup: `llm_providers.openrouter.api_key_secret = "MISSING_KEY"`;
+  Secrets provider has no such key.
+- Action: `build_llm(...)`.
+- Expected: raises `llm.secret_missing` (Fatal); `__cause__` is
+  `secret.not_found` carrying `MISSING_KEY` in `detail.name`.
+- Verifies: §10.12; Error Model §4.13 + cross-module cause chain.
+
+**TC-LLM-05: OpenCodeConnector `discover_models` returns expected shape**
+- Layer: component
+- Setup: recorded fixture HTTP response (the OpenCode /v1/models
+  payload).
+- Action: `OpenCodeConnector().discover_models(creds, base_url)`
+  with the mocked transport.
+- Expected: returns `list[ModelEntry]` with `id` populated and all
+  parameter fields `None`.
+- Verifies: §10.12; ProviderConnector contract.
+
+**TC-LLM-06: OpenRouterConnector implements both Protocols**
+- Layer: component
+- Action: `isinstance(OpenRouterConnector(), ProviderConnector)` and
+  `isinstance(..., MetadataSourceConnector)` both True; functional
+  call to `lookup_model_metadata("anthropic", "claude-opus-4-7")`
+  with a fixtured catalog returns a populated `ModelMetadata`.
+- Expected: both isinstance checks pass; the metadata lookup
+  populates `context_length`, `supports_tools`, `pricing`.
+- Verifies: §10.12; the MetadataSourceConnector extension.
+
+**TC-LLM-07: Connect flow augments OpenCode discovery with OpenRouter metadata**
+- Layer: integration
+- Setup: OpenRouter already connected (in `llm_providers` +
+  `serves_as_metadata_source: true`).
+- Action: run the `kolsch connect opencode` flow (in-process; the
+  CLI's command function is called directly, no subprocess).
+- Expected: OpenCode entries are written to `platform.yaml` with
+  parameters populated from OpenRouter's catalog where matches
+  exist; entries without OpenRouter matches keep `null` parameters.
+- Verifies: §10.12; the connect-flow augmentation loop.
+
+**TC-LLM-08: Connect flow runs cleanly without OpenRouter**
+- Layer: integration
+- Setup: only OpenCode is being connected; no metadata source
+  available.
+- Action: run the connect flow.
+- Expected: completes successfully; all parameter fields are `null`;
+  no error / no warning treats the absence of a metadata source as
+  failure.
+- Verifies: §10.12; metadata augmentation is opt-in, never required.
+
+**TC-LLM-09: Registry rejects duplicate `register` calls**
+- Layer: unit
+- Action: `registry.register("opencode", X)` then
+  `registry.register("opencode", Y)`.
+- Expected: second call raises a `PlatformError` naming the type
+  collision.
+- Verifies: §10.12; registry hygiene.
+
+**TC-LLM-10: API key value never appears in `platform.yaml` or events**
+- Layer: integration
+- Setup: known API key value (e.g. `"sk-test-canary-12345"`); run
+  the connect flow for OpenCode.
+- Action: after the flow completes, grep `platform.yaml` and every
+  event in the session log for the canary string.
+- Expected: zero hits anywhere. The secret NAME appears in
+  `platform.yaml` (`api_key_secret: OPENCODE_API_KEY`); the VALUE
+  lives only in `.env`.
+- Verifies: §10.12; Materialization Rule's "secrets never in events"
+  extension to provider config.
+
+---
+
 ## Part 10 — Error Model (ERR)
 
 **TC-ERR-01: All subclasses serialize to envelope**
@@ -1211,8 +1309,9 @@ How the catalog maps to the success criteria (Handbook §10):
 | Store | §10.3 | TC-STR-01..12 |
 | Event Bus | §10.4 | TC-BUS-01..07 |
 | Engine | §10.5 | TC-ENG-01..11 (framework-agnostic; run against FakeFramework in 12a and CrewAIFramework in 12b) |
-| CLI | §10.12 | TC-CLI-01..08 |
-| HTTP API | §10.13 | TC-API-01..10 |
+| LLM Provider Configuration | §10.12 | TC-LLM-01..10 (Phase 1.1) |
+| CLI | Part 11.6 (cases) | TC-CLI-01..08 — success criteria still to author in handbook §10.13 |
+| HTTP API | Part 11.7 (cases) | TC-API-01..10 — success criteria still to author in handbook §10.14 |
 | Memory | §10.6 | TC-MEM-01..09 |
 | Secrets/Sandbox/Authz | §10.7 | TC-SEC/SBX/AUZ-* |
 | Tools | §10.8 | TC-TLS-01..08 |

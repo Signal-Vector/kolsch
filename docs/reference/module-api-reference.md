@@ -1304,27 +1304,126 @@ class EngineCapabilities(BaseModel):
 
 ---
 
+## Part 11.5 — LLM Provider Configuration (Phase 1.1, LLM-R5)
+
+**Role:** Bridge between the agent's `ModelSpec` and a usable
+`crewai.LLM`. Owns the connector registry, the connector Protocols,
+and the small `build_llm` helper the Agent Engine calls per exchange.
+
+**Originating spec:** `docs/process/phase1.1-llm-specs.md` +
+`docs/explanation/llm-providers.md`.
+
+### 11.5.1 Public API
+
+```python
+async def build_llm(
+    spec: ModelSpec,
+    provider_config: ProviderConfig,
+    secrets: SecretsProvider,
+) -> crewai.LLM:
+    """Construct a CrewAI LLM from a ModelSpec and provider config."""
+```
+
+**Preconditions:**
+- `spec` is canonical-form `{provider, model}` (alias expansion has
+  already happened in the kernel resolver — see Schemas §A.4.1).
+- `provider_config` is the entry from `platform.yaml`'s
+  `llm_providers[spec.provider]`.
+- `secrets` provides the resolved API key (if any).
+
+**Postconditions:**
+- Returns a configured `crewai.LLM` ready to call.
+- The provider's connector decides how to construct it.
+
+**Raises:**
+- `llm.provider_not_configured` (Fatal) — provider absent from
+  `llm_providers`.
+- `llm.secret_missing` (Fatal) — configured `api_key_secret` not
+  resolvable; `secret.not_found` chained as `__cause__`.
+- `llm.client_init_failed` (Fatal) — connector raised during
+  construction.
+- `llm.connector_unknown` (Fatal) — `provider_config.type` not in
+  the registry.
+
+### 11.5.2 The `ProviderConnector` Protocol
+
+Lives in `src/llm/protocol.py`. Every provider implements this.
+
+```python
+class ProviderConnector(Protocol):
+    type_name: ClassVar[str]
+
+    def auth_prompt_spec(self) -> AuthPromptSpec: ...
+    async def validate_credentials(
+        self, credentials: Credentials, base_url: str | None,
+    ) -> ValidationResult: ...
+    async def discover_models(
+        self, credentials: Credentials, base_url: str | None,
+    ) -> list[ModelEntry]: ...
+    async def build_llm(
+        self, model_id: str, provider_config: ProviderConfig,
+        api_key: str | None,
+    ) -> crewai.LLM: ...
+```
+
+### 11.5.3 The `MetadataSourceConnector` extension
+
+Layered on top of `ProviderConnector` for connectors that ALSO serve
+as a cross-provider metadata source. Today only OpenRouter
+implements it.
+
+```python
+class MetadataSourceConnector(ProviderConnector, Protocol):
+    async def lookup_model_metadata(
+        self, provider: str, model_id: str,
+        credentials: Credentials | None = None,
+    ) -> ModelMetadata | None: ...
+```
+
+### 11.5.4 The connector registry
+
+```python
+def register(type_name: str, connector_cls: type[ProviderConnector]) -> None: ...
+def get(type_name: str) -> ProviderConnector: ...
+def known_types() -> list[str]: ...
+def connected_metadata_sources() -> list[MetadataSourceConnector]: ...
+```
+
+Registration happens once at import-time in
+`src/llm/providers/__init__.py` — one line per provider. The CLI
+commands (`kolsch connect`, `kolsch refresh`, etc.) iterate the
+registry; the engine only consults it via `build_llm`.
+
+### 11.5.5 Supporting dataclasses
+
+`AuthPromptSpec`, `PromptField`, `Credentials`, `ValidationResult`,
+`ModelEntry`, `ModelMetadata`, `ModelPricing` — see
+`docs/explanation/llm-providers.md` §3 for full shapes.
+
+---
+
 ## Part 12 — Inter-Module Dependency Matrix
 
 Who calls whom. Rows are callers; columns are callees. Cells list the
 specific methods called.
 
-| Caller ↓ \ Callee → | Kernel | Asset Mgmt | Store | Bus | Memory | Secrets | Sandbox | Authz | Tools | Skills |
-|---|---|---|---|---|---|---|---|---|---|---|
-| **CLI / API** | — | initialize, get_asset, build_resolved_config, list_bundles | create_session, get_session, get_thread, delete_session | subscribe | — | — | — | — | — | — |
-| **Asset Mgmt** | resolve_and_validate | (self) | — | — | — | — | — | — | — | — |
-| **Agent Engine** | (via Asset Mgmt) | build_resolved_config | get_leaf, append_event, read_path_to_leaf, write_content | publish | bind_session, (Context.*) | resolve, exists | execute | allow | register_tools_for_agent, invoke_tool | get_enabled_skills, format_skills_listing, force_invoke |
-| **Memory Provider** | — | — | read_events | — | (self) | — | — | — | — | — |
-| **Tools Subsystem** | — | get_asset | — | — | — | resolve, exists | (calls engine's sandbox use) | allow | (self) | — |
-| **Skills Subsystem** | — | get_asset | — | — | — | — | — | — | — | (self) |
-| **Secrets/Sandbox/Authz** | — | get_platform_config | — | — | — | — | — | — | — | — |
+| Caller ↓ \ Callee → | Kernel | Asset Mgmt | Store | Bus | Memory | Secrets | Sandbox | Authz | Tools | Skills | LLM |
+|---|---|---|---|---|---|---|---|---|---|---|---|
+| **CLI / API** | — | initialize, get_asset, build_resolved_config, list_bundles | create_session, get_session, get_thread, delete_session | subscribe | — | resolve, exists | — | — | — | — | registry.{get,known_types,connected_metadata_sources}; connector.{auth_prompt_spec,validate_credentials,discover_models} for connect/refresh |
+| **Asset Mgmt** | resolve_and_validate | (self) | — | — | — | — | — | — | — | — | — |
+| **Agent Engine** | (via Asset Mgmt) | build_resolved_config | get_leaf, append_event, read_path_to_leaf, write_content | publish | bind_session, (Context.*) | resolve, exists | execute | allow | register_tools_for_agent, invoke_tool | get_enabled_skills, format_skills_listing, force_invoke | **build_llm** *(Phase 1.1, pre-flight step 6)* |
+| **Memory Provider** | — | — | read_events | — | (self) | — | — | — | — | — | — |
+| **Tools Subsystem** | — | get_asset | — | — | — | resolve, exists | (calls engine's sandbox use) | allow | (self) | — | — |
+| **Skills Subsystem** | — | get_asset | — | — | — | — | — | — | — | (self) | — |
+| **Secrets/Sandbox/Authz** | — | get_platform_config | — | — | — | — | — | — | — | — | — |
 
 **Read this as:** "When the Agent Engine acts, it calls Asset Mgmt's
 `build_resolved_config`, the Store's `get_leaf`/`append_event`/etc.,
 the Bus's `publish`, Memory's `bind_session`, Secrets's
 `resolve`/`exists`, Sandbox's `execute`, Authz's `allow`, Tools'
-`register_tools_for_agent`/`invoke_tool`, and Skills'
-`get_enabled_skills`/`format_skills_listing`/`force_invoke`."
+`register_tools_for_agent`/`invoke_tool`, Skills'
+`get_enabled_skills`/`format_skills_listing`/`force_invoke`, and the
+LLM module's **`build_llm`** per exchange."
 
 The Agent Engine is the central caller. Subsystems mostly don't call
 each other directly — they're called by the engine and by the entry

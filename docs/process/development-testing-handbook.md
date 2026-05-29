@@ -876,6 +876,27 @@ test plan; the test plan retains the four overall validation tests.
 - Tools never write to `content/` (verified by code inspection plus a
   runtime guard in tests).
 
+### 10.12 LLM Provider Configuration (Phase 1.1, LLM-R7)
+
+- The registry rejects duplicate registration — calling
+  `register(type, cls)` twice for the same `type` raises a
+  `PlatformError` rather than silently overwriting.
+- `build_llm` resolves the full chain: alias → canonical
+  `{provider, model}` → connector lookup via the registry →
+  `crewai.LLM` construction.
+- A connected `MetadataSourceConnector` (only OpenRouter in v1.1)
+  augments OTHER providers' `discover_models` results during the
+  connect flow — verified by connecting OpenRouter, then connecting
+  OpenCode, and asserting OpenCode's models gain context_length /
+  supports_tools fields from the OpenRouter catalog.
+- Provider connectors register independently — adding a new
+  connector requires no changes outside `src/llm/providers/` (one
+  new file + one line in `__init__.py`).
+- **API key values never appear in logs, events, or
+  `platform.yaml`** — only the secret NAMES do. Verified by
+  inspecting `platform.yaml` after a `connect` flow and by the
+  Materialization Rule audit on emitted events.
+
 ---
 
 ## Part 11 — Coverage & Quality Gates

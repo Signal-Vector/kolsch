@@ -65,6 +65,25 @@ engine does NOT do config resolution; it receives a ready-to-execute config.
 Includes `assembly_version` (§A.10), which selects the version of the
 Assembly Procedure in force.
 
+### 1.2.1 Engine dependencies (Phase 1.1 amendment, LLM-R4)
+
+The engine depends on these collaborators at construction time:
+
+- `SessionStore`, `EventBus`, `AssetManagement`, `ToolsSubsystem`,
+  `SkillsSubsystem`, `MemoryProvider`, `SecretsProvider`,
+  `SandboxProvider`, `AuthorizationProvider` — per the dependency
+  matrix in Module API Reference §12.
+- `Framework` — the chosen framework adapter (FakeFramework in tests
+  and dev; CrewAIFramework in production).
+- **`build_llm` helper** *(Phase 1.1, LLM-R4)* — the bridge between
+  `ModelSpec` and a usable `crewai.LLM`. The engine calls this at
+  pre-flight step 6 (§2.1) for each exchange. The helper itself
+  consults the **connector registry** (`src/llm/registry.py`) to
+  dispatch to the right `ProviderConnector` implementation. The
+  registry is process-global; connectors register themselves on
+  import (`src/llm/providers/__init__.py`). See Module API Reference
+  Part 11.5 for the helper + Protocol surface.
+
 ### 1.3 `ExecutionContext`
 
 ```
@@ -218,12 +237,21 @@ work. Its responsibilities, in order of an `execute` call:
    Hold the returned `MemoryContext` for the session's duration. The
    Memory provider replays `memory.written` / `memory.deleted` events
    from the log to rebuild its cache (per Memory contract §3.3).
-6. **Resolve a `config.set` event if needed.** If the most recent
+6. **Acquire LLM client.** *(Phase 1.1 — LLM-R3.)* Call
+   `build_llm(config.model, provider_config, secrets)` where
+   `provider_config` is the entry from `platform.yaml`'s
+   `llm_providers[config.model.provider]`. Hold the returned
+   `crewai.LLM` for the exchange's lifetime; pass it to the Framework
+   via the Framework Protocol. On any `llm.*` Fatal
+   (`llm.provider_not_configured`, `llm.secret_missing`,
+   `llm.client_init_failed`, `llm.connector_unknown`), emit
+   `thread.exchange_failed` and raise per the failure surface (§1.6).
+7. **Resolve a `config.set` event if needed.** If the most recent
    `config.set` on the thread differs from the incoming `config` (or there
    is none), emit a new `config.set` carrying the full resolved config
    (per Materialization Rule, §B.6). The new event becomes part of the
    tree path before the exchange begins.
-7. **Process force-invoke skills, if any.** If
+8. **Process force-invoke skills, if any.** If
    `trigger.kind == "user_message_with_force_skill"`, for each skill ref
    in `trigger.force_skills`:
    - Verify the skill is in the agent's enabled list (per Skills §4).
@@ -233,10 +261,10 @@ work. Its responsibilities, in order of an `execute` call:
    - Read the file (subject to path policy and authorization on
      `tool.read`).
    - Emit `tool.result` carrying the SKILL.md content.
-8. **Emit `thread.exchange_started`** with the trigger event id (which is
+9. **Emit `thread.exchange_started`** with the trigger event id (which is
    the `user.message` for conversational mode, or a synthetic input event
    for single_shot mode — §B.7).
-9. **Materialize the trigger** as an event on the tree:
+10. **Materialize the trigger** as an event on the tree:
    - Conversational: emit `user.message` with the trigger content verbatim.
    - Single_shot: emit `user.message` (still the term used) with the typed
      inputs verbatim — the conversational/single_shot distinction is an

@@ -90,6 +90,24 @@ ModelSpec
 Reasoning/"thinking" models add `parameters` here and a reasoning trace to
 the event log — they do NOT touch IOSpec.
 
+### A.4.1 Input shapes (Phase 1.1 amendment, LLM-R1)
+
+`ModelSpec.model` accepts three input shapes for ergonomics — the kernel
+resolver normalises all three to the canonical object form above during
+Layer 1 validation. Downstream code sees only `{provider, model}`.
+
+1. **Canonical object form** —
+   `{provider: "opencode", model: "gpt-oss-120b"}`.
+2. **Compact `provider/model` string** — `"opencode/gpt-oss-120b"` —
+   split on the first `/`; left = `provider`, right = `model`.
+3. **Alias string** — `"smart"` — looked up in `platform.yaml`'s
+   `model_aliases` map (see Asset Management §3.2) and expanded to the
+   canonical form. Aliases do not chain; an unknown alias raises
+   `config.unknown_alias` (Fatal) at Layer 1 validation.
+
+This permissiveness lives entirely in the resolver. The ModelSpec
+schema above is what every other module sees.
+
 ## A.5 IOSpec
 
 The typed task contract.

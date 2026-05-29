@@ -87,12 +87,31 @@ That is the entire user-facing surface of v1. It is intentionally small.
   session. Minimal but real.
 - **API** (FastAPI) — execute / execute_stream endpoints; session and
   thread CRUD-lite; log retrieval. Local-only by default.
+- **LLM provider management CLI** *(Phase 1.1, LLM-R9)* — four
+  commands for connecting and managing LLM providers:
+  - `kolsch connect <provider>` — interactive auth flow + model
+    discovery; writes to `platform.yaml` + `.env`.
+  - `kolsch disconnect <provider>` — removes the provider entry
+    and secret.
+  - `kolsch providers` — list configured providers, model counts,
+    last-refresh time.
+  - `kolsch refresh [<provider>]` — re-run model discovery; one
+    provider if named, all of them otherwise.
+  v1.1 implements these for `opencode` and `openrouter`; the four
+  other named providers (anthropic, openai, bedrock, llama) are
+  planned for later patches per the established connector pattern.
 
 ### 2.5 Deployment
 
 - Local-first. **The default install requires no external services** —
   SQLite for entity records plus an in-process event bus. `uv run
   kolsch` works with nothing else installed or running.
+- **The default install requires no LLM provider** *(Phase 1.1,
+  LLM-R10)* — agents can be defined and the CLI runs, but actually
+  *executing* an agent requires running `kolsch connect <provider>`
+  first to wire up an LLM. Until a provider is connected, agent
+  execution fails at pre-flight with
+  `llm.provider_not_configured`.
 - **Storage matures with scale** (three tiers): Tier 1 (default) SQLite +
   in-process bus; Tier 2 SQLite + Redis (cross-process fan-out); Tier 3
   Postgres + Redis (volume/concurrency at scale). Postgres and Redis are

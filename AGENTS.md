@@ -134,6 +134,10 @@ These are non-negotiable. Violating them blocks merges.
 - **Default to SQLite + in-process bus.** Don't introduce hard
   dependencies on Postgres or Redis; they are opt-in scale-up backends
   behind contracts.
+- **LLM provider config lives in `platform.yaml`'s `llm_providers`
+  section**, populated via `kolsch connect <provider>`. Never embed
+  API keys in agent configs or in code paths other than the
+  connector's `build_llm` method. *(Phase 1.1, LLM-R11.)*
 
 ---
 
