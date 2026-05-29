@@ -432,6 +432,6 @@ async def test_make_authz_provider_unknown_variant_raises_config_invalid() -> No
 
 
 def textwrap_dedent(text: str) -> str:
-    import textwrap as _tw  # noqa: PLC0415 — keep at use site
+    import textwrap as _tw
 
     return _tw.dedent(text)

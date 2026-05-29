@@ -340,7 +340,7 @@ async def test_verbatim_result_capture(tmp_path: Path) -> None:
 
 
 async def test_builtin_read_honors_path_policy(tmp_path: Path) -> None:
-    from errors import FileAccessDenied  # noqa: PLC0415
+    from errors import FileAccessDenied
 
     subsystem = _make_subsystem(tmp_path=tmp_path)
     await subsystem.register_for_agent(
@@ -361,7 +361,7 @@ async def test_builtin_read_honors_path_policy(tmp_path: Path) -> None:
 async def test_builtin_write_honors_path_policy(tmp_path: Path) -> None:
     """Path-policy enforcement on `write` — symmetric coverage with
     `read`. Allowed succeeds; denied raises FileAccessDenied."""
-    from errors import FileAccessDenied  # noqa: PLC0415
+    from errors import FileAccessDenied
 
     subsystem = _make_subsystem(tmp_path=tmp_path)
     await subsystem.register_for_agent(
@@ -386,7 +386,7 @@ async def test_builtin_write_honors_path_policy(tmp_path: Path) -> None:
 
 async def test_builtin_edit_honors_path_policy(tmp_path: Path) -> None:
     """Path-policy enforcement on `edit` — symmetric coverage."""
-    from errors import FileAccessDenied  # noqa: PLC0415
+    from errors import FileAccessDenied
 
     subsystem = _make_subsystem(tmp_path=tmp_path)
     await subsystem.register_for_agent(
@@ -419,7 +419,7 @@ async def test_write_into_content_dir_is_refused_even_when_policy_allows(
     (spec §4.4), so without the write-side guard a
     ``write({"path": "content/x.bin"})`` would smuggle into the
     engine's sidecar store. Pin the second gate."""
-    from errors import FileAccessDenied  # noqa: PLC0415
+    from errors import FileAccessDenied
 
     root = _root(tmp_path)
     (root / "content").mkdir(exist_ok=True)
@@ -572,7 +572,7 @@ async def test_eager_mcp_server_starts_at_registration(tmp_path: Path) -> None:
 
 
 async def test_unknown_tool_raises(tmp_path: Path) -> None:
-    from errors import ToolNotFound  # noqa: PLC0415
+    from errors import ToolNotFound
 
     subsystem = _make_subsystem(tmp_path=tmp_path)
     await subsystem.register_for_agent(agent_id=AgentId("ag_test"))
@@ -591,14 +591,14 @@ def test_mcp_server_protocol_shape() -> None:
 
 
 def test_layer3_accepts_default_builtin_set() -> None:
-    from tools import validate_standard_config  # noqa: PLC0415
+    from tools import validate_standard_config
 
     result = validate_standard_config({"builtin": ["read", "write", "edit", "bash"]})
     assert result.ok is True, result.errors
 
 
 def test_layer3_rejects_unknown_builtin() -> None:
-    from tools import validate_standard_config  # noqa: PLC0415
+    from tools import validate_standard_config
 
     result = validate_standard_config({"builtin": ["read", "frobnicate"]})
     assert result.ok is False
@@ -607,7 +607,7 @@ def test_layer3_rejects_unknown_builtin() -> None:
 
 
 def test_layer3_rejects_duplicate_mcp_server_name() -> None:
-    from tools import validate_standard_config  # noqa: PLC0415
+    from tools import validate_standard_config
 
     result = validate_standard_config(
         {
@@ -622,7 +622,7 @@ def test_layer3_rejects_duplicate_mcp_server_name() -> None:
 
 
 def test_layer3_rejects_env_inject_referencing_undeclared_secret() -> None:
-    from tools import validate_standard_config  # noqa: PLC0415
+    from tools import validate_standard_config
 
     result = validate_standard_config(
         {
@@ -691,7 +691,7 @@ def not_a_tool() -> None:
 async def test_declared_from_file_missing_file_raises_setup_failed(
     tmp_path: Path,
 ) -> None:
-    from errors import ToolSetupFailed  # noqa: PLC0415
+    from errors import ToolSetupFailed
 
     subsystem = _make_subsystem(tmp_path=tmp_path)
     with pytest.raises(ToolSetupFailed):
@@ -704,7 +704,7 @@ async def test_declared_from_file_missing_file_raises_setup_failed(
 async def test_declared_from_file_syntax_error_raises_setup_failed(
     tmp_path: Path,
 ) -> None:
-    from errors import ToolSetupFailed  # noqa: PLC0415
+    from errors import ToolSetupFailed
 
     bad = tmp_path / "bad.py"
     bad.write_text("def syntax error:\n", encoding="utf-8")
@@ -717,7 +717,7 @@ async def test_declared_from_file_syntax_error_raises_setup_failed(
 
 
 def test_layer3_rejects_malformed_declared_entry() -> None:
-    from tools import validate_standard_config  # noqa: PLC0415
+    from tools import validate_standard_config
 
     result = validate_standard_config({"declared": ["just-a-string-not-a-mapping"]})
     assert result.ok is False
