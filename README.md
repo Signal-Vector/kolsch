@@ -1,4 +1,4 @@
-# Agent Platform
+# Kolsch
 
 A local-first, definition-orchestrated multi-agent workflow platform.
 YAML is the source of truth; a Python/CrewAI backend executes agents;

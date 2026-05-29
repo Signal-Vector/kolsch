@@ -2,7 +2,7 @@
 
 Shipped in ``src/engine/`` (not ``tests/fixtures/``) because the CLI
 and API both rely on it as the default-tier LLM. Lets a fresh
-install run ``pi-platform run <agent>`` end-to-end with zero LLM
+install run ``kolsch run <agent>`` end-to-end with zero LLM
 keys and zero external services.
 
 Distinct from ``tests/fixtures/fake_llm.FakeLLM`` (which is the
@@ -29,7 +29,7 @@ class EchoLLMDriver:
 
     Implements the engine's LLM callable shape — async, accepts
     :class:`LLMRequest`, returns :class:`LLMResponse`. Ships as the
-    default-tier LLM so a new user can run ``pi-platform run`` against
+    default-tier LLM so a new user can run ``kolsch run`` against
     a brand-new platform root without configuring a real provider.
     """
 

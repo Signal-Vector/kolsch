@@ -1,5 +1,5 @@
 [project]
-name = "agent-platform"
+name = "kolsch"
 version = "0.0.0"
 description = "Local-first, definition-orchestrated multi-agent workflow platform."
 readme = "README.md"
@@ -24,11 +24,11 @@ dependencies = [
 ]
 
 [project.urls]
-Homepage = "https://example.invalid/agent-platform"
+Homepage = "https://example.invalid/kolsch"
 
-# Console script — `pi-platform` dispatches to src/cli/__init__.py:main.
+# Console script — `kolsch` dispatches to src/cli/__init__.py:main.
 [project.scripts]
-pi-platform = "cli:main"
+kolsch = "cli:main"
 
 [build-system]
 requires = ["hatchling>=1.25"]

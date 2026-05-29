@@ -82,7 +82,7 @@ and the framing throughout.
 - Note the three storage tiers briefly, referencing the handbook §6 for
   detail.
 - This materially improves the v1 first-run experience: `uv run
-  pi-platform` works with nothing else installed.
+  kolsch` works with nothing else installed.
 
 ---
 

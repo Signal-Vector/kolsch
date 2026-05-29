@@ -935,15 +935,15 @@ cases (TC-CRW-05+) before merging.
 
 ## Part 11.6 — CLI surface (TC-CLI-*) — authored in Step 13
 
-Tests for the `pi-platform` console script. The CLI runs in-process
+Tests for the `kolsch` console script. The CLI runs in-process
 via `cli.main(argv)`; no subprocess spawning. Each test uses a
 tmp_path platform root and the v1 default tier (SQLite + in-process
 bus + EchoLLM + FakeFramework).
 
-**TC-CLI-01: `pi-platform run` end-to-end with EchoLLM**
+**TC-CLI-01: `kolsch run` end-to-end with EchoLLM**
 - Layer: component
 - Setup: a tmp_path platform root with one demo agent.
-- Action: `pi-platform run acme/agents/demo --input content=hello`.
+- Action: `kolsch run acme/agents/demo --input content=hello`.
 - Expected: exit 0; stdout carries the agent.message JSON with
   `"Echo: hello"` as `content.text`.
 - Verifies: v1-scope §2.5 first-run experience.
@@ -960,7 +960,7 @@ bus + EchoLLM + FakeFramework).
 **TC-CLI-03: `sessions list` reflects engine runs**
 - Layer: component
 - Setup: run one exchange via TC-CLI-01.
-- Action: `pi-platform sessions list`.
+- Action: `kolsch sessions list`.
 - Expected: stdout includes the session id, agent_id, and the
   `cli:<agent_ref>` name.
 - Verifies: Session entity surface + CLI session list.
@@ -968,7 +968,7 @@ bus + EchoLLM + FakeFramework).
 **TC-CLI-04: `reconstruct` rebuilds entities after DB wipe**
 - Layer: component
 - Setup: run an exchange; delete the SQLite entity DB.
-- Action: `pi-platform reconstruct`.
+- Action: `kolsch reconstruct`.
 - Expected: exit 0; reconstruct result reports
   `sessions_reconstructed >= 1` and `threads_reconstructed >= 1`.
 - Verifies: §10.2 (Store reconstruct) + CLI.
@@ -976,14 +976,14 @@ bus + EchoLLM + FakeFramework).
 **TC-CLI-05: `sessions events <id>` prints the per-session log**
 - Layer: component
 - Setup: run an exchange; capture the session id from list.
-- Action: `pi-platform sessions events <session_id>`.
+- Action: `kolsch sessions events <session_id>`.
 - Expected: stdout contains JSON lines for `session.opened` ...
   `agent.message`.
 - Verifies: Store.read_events surface via CLI.
 
 **TC-CLI-06: no-command prints help with exit 1**
 - Layer: component
-- Action: `pi-platform` (no subcommand).
+- Action: `kolsch` (no subcommand).
 - Expected: stdout contains `usage:`; exit code 1.
 - Verifies: CLI ergonomics.
 
@@ -1000,7 +1000,7 @@ bus + EchoLLM + FakeFramework).
 - Layer: component
 - Setup: platform.yaml with authz denying agent.execute.*; the demo
   agent.
-- Action: `pi-platform run ... --stream`.
+- Action: `kolsch run ... --stream`.
 - Expected: exit 2; the streamed JSON includes a
   `thread.exchange_failed` event. (The CLI must distinguish
   stream-success from stream-with-Fatal-final so shell pipelines can

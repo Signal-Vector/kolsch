@@ -333,8 +333,8 @@ Concretely:
 
 If anything contributes to context and is NOT captured as an immutable
 event, that is a spec violation. The Materialization Rule is the bargain
-that makes pi-style on-the-fly assembly honest: replay reconstructs what the
-model saw because every input is in the log.
+that makes on-the-fly context assembly honest: replay reconstructs what
+the model saw because every input is in the log.
 
 **Amendment (draft 0.6, 2026-05-28) — `model.request.data.messages` is
 required and authoritative.** Earlier drafts (and §B.8 above) said

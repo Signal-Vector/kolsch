@@ -39,7 +39,7 @@ services:
     build:
       context: .
       dockerfile: Containerfile
-    image: agent-platform-test:latest
+    image: kolsch-test:latest
     depends_on:
       postgres:
         condition: service_healthy

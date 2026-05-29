@@ -19,7 +19,7 @@ through :func:`files.validate_file_ref` + :func:`files.check_path_allowed`
 before the engine sees them (Fh-I8).
 
 The public entry point is :func:`build_app`; tests use FastAPI's
-``TestClient`` against it. Production runs via ``pi-platform server``
+``TestClient`` against it. Production runs via ``kolsch server``
 (uvicorn-hosted).
 """
 

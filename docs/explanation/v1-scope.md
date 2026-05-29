@@ -92,7 +92,7 @@ That is the entire user-facing surface of v1. It is intentionally small.
 
 - Local-first. **The default install requires no external services** —
   SQLite for entity records plus an in-process event bus. `uv run
-  pi-platform` works with nothing else installed or running.
+  kolsch` works with nothing else installed or running.
 - **Storage matures with scale** (three tiers): Tier 1 (default) SQLite +
   in-process bus; Tier 2 SQLite + Redis (cross-process fan-out); Tier 3
   Postgres + Redis (volume/concurrency at scale). Postgres and Redis are
@@ -105,7 +105,7 @@ That is the entire user-facing surface of v1. It is intentionally small.
 
 ### 2.6 Built-in tools (the standard library)
 
-A small, focused set matching pi's minimalism:
+A deliberately minimal set:
 
 - `read` — read a file.
 - `write` — write a file.
@@ -343,12 +343,12 @@ A user, on their own machine, can:
 
 1. Install the platform via `docker compose up`.
 2. Author an agent config via YAML and Markdown files in a directory.
-3. Run that agent from the CLI: `pi-platform run <agent>` (name TBD).
+3. Run that agent from the CLI: `kolsch run <agent>` (name TBD).
 4. Have a conversation with the agent, or invoke it single-shot.
 5. The agent uses the configured tools (built-in or declared or MCP).
 6. Every detail is logged to a JSONL file.
 7. The session can be paused (close the CLI) and resumed
-   (`pi-platform resume <session>`).
+   (`kolsch resume <session>`).
 8. The session log can be replayed byte-identically through the same
    Assembly Procedure version.
 9. Optionally, the same operations are available via the FastAPI service
@@ -375,12 +375,13 @@ the dedicated test plan section.)
 
 ## Part 7 — Open Items
 
-1. **CLI command names.** "pi-platform" is placeholder; the project's name
-   and CLI binary need to be chosen.
-2. **The minimum useful built-in tool set.** §2.6 lists read/write/edit/bash
-   matching pi. Whether v1 also ships `grep`, `find`, `ls`, `tree` (also
-   pi-typical) needs a small decision. Leaning yes for parity, but
-   technically they can be MCP tools or declared.
+1. **CLI command names.** Resolved (post-Phase-1): the project is named
+   **Kolsch** and ships a single console script named `kolsch`.
+2. **The minimum useful built-in tool set.** §2.6 lists
+   read/write/edit/bash. Whether v1 also ships `grep`, `find`, `ls`,
+   `tree` (commonly bundled alongside the four) needs a small
+   decision. Leaning yes for parity, but technically they can be MCP
+   tools or declared.
 3. **The exact API surface.** §2.4 sketches "execute / execute_stream /
    session CRUD-lite / log retrieval." The precise endpoints are an API
    spec, not in this scope document.

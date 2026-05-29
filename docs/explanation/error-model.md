@@ -2,9 +2,11 @@
 
 **Draft 0.1**
 
-> Synthesized from pi's "errors as events" pattern (matches our streaming
-> architecture) and CrewAI's "Python exceptions with __cause__ chaining"
-> pattern (matches Python idiom).
+> Errors are emitted as events on the same append-only log as everything
+> else (matches our streaming architecture) AND raised as Python
+> exceptions with `__cause__` chaining (matches Python idiom). One model,
+> two surfaces — events for the consumer of `execute_stream`, exceptions
+> for the caller of `execute`.
 >
 > Three levels of error severity, classified explicitly. One canonical
 > serialization shape used everywhere errors appear in events or APIs.
@@ -90,7 +92,7 @@ Logged via the platform's standard logging. Not exposed.
 **Examples:**
 - Anthropic API returned a 503 on the model call; engine retries.
 - The model produced malformed JSON for a tool call; engine prompts the
-  model to fix it (a pi-style "feed back to the model" recovery).
+  model to fix it (a "feed the error back to the model" recovery).
 - A streaming model response cut off mid-token; engine retries from the
   last assistant message.
 

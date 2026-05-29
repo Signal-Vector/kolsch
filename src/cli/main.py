@@ -1,8 +1,8 @@
-"""``pi-platform`` CLI dispatcher.
+"""``kolsch`` CLI dispatcher.
 
 Argparse-based — no external CLI dep. Each subcommand has a small
 async handler in this module; the top-level :func:`main` is the
-entry point bound to the ``pi-platform`` console script.
+entry point bound to the ``kolsch`` console script.
 """
 
 from __future__ import annotations
@@ -49,7 +49,7 @@ def main(argv: Sequence[str] | None = None) -> int:
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="pi-platform",
+        prog="kolsch",
         description="Agent Platform CLI (v1 default tier).",
     )
     parser.add_argument(

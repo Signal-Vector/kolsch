@@ -304,7 +304,7 @@ The platform's datastores are modular backends, selected in
   `.platform/entities.db`.
 - Event bus → in-process asyncio pub/sub. No external broker.
 - Ground truth → filesystem JSONL (always, all tiers).
-- **Zero external services.** `uv run pi-platform` works with nothing
+- **Zero external services.** `uv run kolsch` works with nothing
   else installed or running.
 
 **Tier 2 — SQLite + Redis.**

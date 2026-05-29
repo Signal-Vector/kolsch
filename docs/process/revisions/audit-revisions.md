@@ -126,7 +126,7 @@ no `session.opened`), it is skipped with a warning. v1 does not
 attempt heroic recovery — that's a manual user task.
 
 This is a periodic-or-on-demand operation, not part of the normal
-`execute` path. Likely invoked via a CLI command (`pi-platform
+`execute` path. Likely invoked via a CLI command (`kolsch
 reconstruct`).
 
 ---

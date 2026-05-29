@@ -1,14 +1,14 @@
-"""``pi-platform`` CLI — Step 13.
+"""``kolsch`` CLI — Step 13.
 
 Per v1-scope §2.4: the developer-facing entry surface for the v1
 default tier. Commands:
 
-- ``pi-platform run <agent-ref> [--input key=value ...] [--stream]``
+- ``kolsch run <agent-ref> [--input key=value ...] [--stream]``
   — single-shot or conversational exchange.
-- ``pi-platform sessions list [--starred] [--archived] [--limit N]``
+- ``kolsch sessions list [--starred] [--archived] [--limit N]``
   — list sessions from the entity backend.
-- ``pi-platform reconstruct`` — rebuild entity records from JSONL.
-- ``pi-platform server [--host H] [--port P]`` — start the FastAPI
+- ``kolsch reconstruct`` — rebuild entity records from JSONL.
+- ``kolsch server [--host H] [--port P]`` — start the FastAPI
   surface (uvicorn).
 
 The CLI is intentionally argparse-only (no click dep) so the

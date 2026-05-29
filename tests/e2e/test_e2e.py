@@ -26,7 +26,7 @@ env vars set, it skips cleanly. With them set, it ACTUALLY runs the
 provider — no second skip inside the body.
 
 TC-E2E-04's body is the default-install gate: builds a fresh venv,
-installs the project as a wheel, runs ``pi-platform run`` end-to-end
+installs the project as a wheel, runs ``kolsch run`` end-to-end
 against a tmp-path platform root. Uses EchoLLM (no real provider
 needed).
 
@@ -401,7 +401,7 @@ async def test_tc_e2e_03_robustness_soak(tmp_path: Path) -> None:
     reason=(
         "TC-E2E-04 (Default install) is opt-in via E2E_DEFAULT_INSTALL=1. "
         "Exercises the clean-machine first-run experience — installs the "
-        "project into a throwaway venv, runs `pi-platform run`, verifies "
+        "project into a throwaway venv, runs `kolsch run`, verifies "
         "the default tier (SQLite + in-process bus + EchoLLM) works "
         "without any external services. Slow + writes to disk; opt-in "
         "to keep the default `pytest` run fast."
@@ -418,7 +418,7 @@ def test_tc_e2e_04_default_install_no_external_services(
     2. Install the project (from this repo) into that venv via
        ``uv pip install -e <repo_root>``.
     3. Author a minimal platform root with one demo agent.
-    4. Run ``pi-platform run acme/agents/demo --input content=hello``.
+    4. Run ``kolsch run acme/agents/demo --input content=hello``.
     5. Assert exit 0 + stdout contains the EchoLLM's reply.
 
     This is NOT async — subprocess-driven. No real LLM. No Postgres /
@@ -507,10 +507,10 @@ def test_tc_e2e_04_default_install_no_external_services(
         encoding="utf-8",
     )
 
-    # 4. Run pi-platform from the throwaway venv.
+    # 4. Run kolsch from the throwaway venv.
     result = subprocess.run(
         [
-            str(venv / "bin" / "pi-platform"),
+            str(venv / "bin" / "kolsch"),
             "--root",
             str(platform_root),
             "run",
@@ -525,7 +525,7 @@ def test_tc_e2e_04_default_install_no_external_services(
 
     # 5. Assert: exit 0 + EchoLLM reply on stdout.
     assert result.returncode == 0, (
-        f"pi-platform run failed: stderr=\n{result.stderr.decode('utf-8')}"
+        f"kolsch run failed: stderr=\n{result.stderr.decode('utf-8')}"
     )
     out = result.stdout.decode("utf-8").strip()
     payload = json.loads(out)

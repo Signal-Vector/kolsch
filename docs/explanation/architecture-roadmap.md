@@ -89,7 +89,7 @@ concerns.
 
 ### 1.3 Data Flow for a Single `execute` Call
 
-The flow when a user runs `pi-platform run my-agent --input "do this"`:
+The flow when a user runs `kolsch run my-agent --input "do this"`:
 
 1. **CLI parses** the command and constructs an `ExecutionContext`.
 2. **CLI calls** the Agent Engine's `execute` method.
@@ -161,8 +161,8 @@ provider. Optional scale-up backends (adopted only when needed):
 - Postgres (entity backend, for volume/concurrency at scale — Tier 3).
 - An LLM provider (Anthropic, OpenAI, etc.) — always required.
 
-The user starts the platform with `pi-platform server` (FastAPI) or
-just runs one-off `pi-platform run my-agent`. Both work.
+The user starts the platform with `kolsch server` (FastAPI) or
+just runs one-off `kolsch run my-agent`. Both work.
 
 ### 1.6 What's Pragmatic vs. What's Disciplined
 

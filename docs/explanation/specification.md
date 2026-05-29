@@ -28,8 +28,8 @@ the integrator:
   observability, testing, asset management, or sharing story.
 - Orchestrators (Conductor, Kestra) sequence steps but bring no asset layer,
   no session model, no authoring environment.
-- Single-agent tools (pi, OpenClaw) give an excellent one agent but no
-  multi-agent orchestration.
+- Single-agent tools give an excellent one agent but no multi-agent
+  orchestration.
 - LLM-orchestrated systems (AutoGen-style) are unpredictable and expensive;
   2025-2026 research shows shared-context multi-agent systems degrade
   measurably as agent count and history grow.
@@ -332,9 +332,9 @@ Rationale: Postgres for anything concurrently mutated (the "always
 durable/concurrent" decision requires real concurrency control) and for
 structured index rows (filter/group/aggregate is the relational query
 pattern). Files for append-only, immutable, sequentially-read data
-(precedented by pi and OpenClaw session logs; snapshot-friendly; avoids
-unbounded table growth). The event log is ground truth; Postgres index rows
-are a projection for fast cross-cutting queries.
+(snapshot-friendly; avoids unbounded table growth). The event log is
+ground truth; Postgres index rows are a projection for fast
+cross-cutting queries.
 
 Consequence: a full installation's data lives in two forms (Postgres + a file
 tree). "Backup, restore, and relocate the installation" is therefore an

@@ -1,4 +1,4 @@
-"""TC-CLI-01..05 — component tests for the ``pi-platform`` CLI.
+"""TC-CLI-01..05 — component tests for the ``kolsch`` CLI.
 
 Each test runs the CLI in-process via :func:`cli.main` against a
 tmp-path platform root + a hand-authored agent bundle. No subprocess
@@ -90,7 +90,7 @@ def platform_root(tmp_path: Path) -> Path:
 
 
 # ===========================================================================
-# TC-CLI-01 — pi-platform run end-to-end with EchoLLM
+# TC-CLI-01 — kolsch run end-to-end with EchoLLM
 # ===========================================================================
 
 
@@ -98,7 +98,7 @@ def test_tc_cli_01_run_end_to_end(
     platform_root: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """The default ``pi-platform run`` works with no external services.
+    """The default ``kolsch run`` works with no external services.
 
     Uses the v1 default tier (SQLite + in-process bus + EchoLLM via
     FakeFramework). Asserts the agent_message text from the engine

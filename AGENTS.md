@@ -10,10 +10,10 @@
 
 ## What this project is
 
-A local-first, definition-orchestrated multi-agent workflow platform.
-YAML is the source of truth; a Python/CrewAI backend executes agents;
-everything is captured in an append-only event log (JSONL) that is the
-ground truth. Phase 1 (current) is the single-agent foundation.
+**Kolsch** — a local-first, definition-orchestrated multi-agent workflow
+platform. YAML is the source of truth; a Python/CrewAI backend executes
+agents; everything is captured in an append-only event log (JSONL) that
+is the ground truth. Phase 1 (current) is the single-agent foundation.
 
 Read `docs/explanation/` for architecture and `docs/reference/` for the
 Module API Reference and schemas before changing anything non-trivial.

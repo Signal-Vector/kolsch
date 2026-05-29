@@ -375,9 +375,10 @@ appears more than once" — wait, that's two different things. Resolved:
 - `occurrence: N` (N > 1) — replace the Nth occurrence specifically.
 - `occurrence: 0` — replace all occurrences.
 
-This is closer to pi's `edit` semantics. The safety property is that
-`occurrence: 1` (the common case) fails loudly on ambiguity rather than
-silently picking wrong.
+The safety property is that `occurrence: 1` (the common case) fails
+loudly on ambiguity — when `old_str` matches multiple sites and the
+agent didn't pin which one — rather than silently picking the wrong
+one.
 
 ### 4.4 `bash`
 
@@ -723,8 +724,9 @@ perspective. Conflicts at config resolution are Layer 3 errors.
    mechanism is unclear. Handled in the Skills subsystem spec (next).
 
 8. **The standard library beyond v1's four tools.** `grep`, `find`,
-   `ls` and similar pi-typical tools are NOT in v1's builtin set per
-   the v1 scope. They could be built as declared tools and shipped in
-   a `core` bundle. Whether to do this in v1 or defer is a small
+   `ls` and similar filesystem-navigation tools are NOT in v1's
+   builtin set per the v1 scope. They could be built as declared
+   tools and shipped in a `core` bundle. Whether to do this in v1 or
+   defer is a small
    open question (the answer is probably "defer; users can declare
    them locally if needed").

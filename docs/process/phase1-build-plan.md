@@ -1317,8 +1317,8 @@ Step 13 — CLI + API surfaces. Implement the v1 entry surfaces (v1-scope
 §2.4) in src/ (e.g., src/cli/, src/api/).
 
 Deliver:
-- CLI: `pi-platform run <agent> [--input ...]` (single-shot and
-  conversational), `pi-platform server` (start FastAPI), `pi-platform
+- CLI: `kolsch run <agent> [--input ...]` (single-shot and
+  conversational), `kolsch server` (start FastAPI), `kolsch
   reconstruct` (store.reconstruct_from_filesystem), and session listing.
   The default tier (SQLite + in-process bus) must work with NO external
   services.
@@ -1328,7 +1328,7 @@ Deliver:
 - Both surfaces share the same engine/store calls — no logic duplicated.
 
 Write TC-CLI-* and TC-API-* cases (component/integration) plus a check
-that `pi-platform run` works end to end with the Fake LLM and no external
+that `kolsch run` works end to end with the Fake LLM and no external
 services.
 
 Acceptance: surfaces work against the default tier with zero external
@@ -1344,7 +1344,7 @@ Commit feat(cli) / feat(api): ... and report.
 Review Step 13 — CLI + API against v1-scope §2.4 and the engine surfaces.
 
 Verify:
-- `pi-platform run` works end to end with the Fake LLM and NO Postgres/
+- `kolsch run` works end to end with the Fake LLM and NO Postgres/
   Redis (default tier). This is the "great first-run experience" promise —
   test it on a clean default config.
 - The API exposes session CRUD, sync run, streaming run (SSE over

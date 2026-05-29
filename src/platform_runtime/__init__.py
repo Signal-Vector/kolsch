@@ -1,6 +1,6 @@
 """Platform runtime — the shared composition root for the CLI + API.
 
-Per the v1-scope §2.4 entry surfaces: both ``pi-platform`` (CLI) and
+Per the v1-scope §2.4 entry surfaces: both ``kolsch`` (CLI) and
 the FastAPI server need the same subsystem wiring. Centralising it
 here means there is one place that knows how to stand up the v1
 default tier (SQLite + in-process bus + dotenv secrets + native

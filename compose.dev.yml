@@ -18,8 +18,8 @@ services:
     build:
       context: .
       dockerfile: Containerfile
-    image: agent-platform-dev:latest
-    container_name: agent-platform-dev
+    image: kolsch-dev:latest
+    container_name: kolsch-dev
     # `init: true` reaps zombies from long-running test sessions.
     init: true
     working_dir: /workspace

@@ -152,8 +152,8 @@ There is no industry-wide bundle standard. What exists:
   by OpenAI and Google) — for *skills only*. The SKILL.md format we use.
 - **AgentSpec** (agents-oss) — single-agent manifest with framework
   codegen. Not a bundle format.
-- **Pi packages** (pi.dev) — closest precedent, but not an industry
-  standard.
+No prior industry-standard bundle format covers the
+agent+tool+skill+prompt grouping shape this platform needs.
 
 So this bundle format is platform-specific. **Skills inside bundles are
 portable** (any Agent Skills consumer can use them). The rest of the
