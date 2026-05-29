@@ -43,10 +43,11 @@ from engine.context import (
     CancelToken,
     EngineCapabilities,
 )
-from engine.observers import _ObservedLLMHandle, _ObservedToolHandle
+from engine.observers import _ObservedToolHandle
 from errors import (
     AgentUnauthorized,
     CapabilityMismatch,
+    ConfigFallbackDuplicate,
     ModelRetryExhausted,
     PlatformError,
     PlatformInternalError,
@@ -86,6 +87,7 @@ if TYPE_CHECKING:
         SandboxProvider,
         SecretsProvider,
     )
+    from schemas import ModelSpec
     from skills import SkillsSubsystem
     from store import SessionStore
     from tools import ToolsSubsystem
@@ -126,6 +128,13 @@ class AgentEngine:
         framework: Framework,
         llm: Callable[[LLMRequest], Awaitable[LLMResponse]] | None = None,
         llm_providers_config: dict[str, ProviderConfig] | None = None,
+        llm_for_model: (
+            Callable[
+                [ModelSpec],
+                Awaitable[Callable[[LLMRequest], Awaitable[LLMResponse]]],
+            ]
+            | None
+        ) = None,
     ) -> None:
         self._store = store
         self._bus = bus
@@ -138,6 +147,14 @@ class AgentEngine:
         self._authz = authz
         self._framework = framework
         self._llm = llm
+        # Phase 1.3 (Step 20) — async factory `llm_for_model` lets the
+        # fallback orchestrator lazily build per-attempt LLM clients.
+        # Tests can wire a `spec → FakeLLM` map; production wires
+        # `build_llm` via the bootstrap (`platform_runtime`). When the
+        # factory is None, fall back to wrapping `self._llm` so every
+        # spec returns the same callable — backward-compatible with
+        # Phase 1.1 / 1.2 tests that pass `llm=` directly.
+        self._llm_for_model = llm_for_model
         # Phase 1.1 — pre-flight step 6 acquires a crewai.LLM via
         # `build_llm` when `self._llm is None`. Tests still pass `llm=`
         # directly to bypass this path; production wires
@@ -306,11 +323,13 @@ class _Exchange:
         self.agent_id: str = str(config.agent_id)
         # Wired in pre-flight step 6 — see _acquire_llm_if_needed.
         self.acquired_llm: crewai.LLM | None = None
-        # Wired in pre-flight step 7.
+        # Wired in pre-flight step 7 — Phase 1.3 fallback chain.
+        self.fallback_chain: list[ModelSpec] = []
+        # Wired in pre-flight step 8.
         self.config_event_id: str | None = None
-        # Wired in pre-flight step 9.
-        self.exchange_started_id: str | None = None
         # Wired in pre-flight step 10.
+        self.exchange_started_id: str | None = None
+        # Wired in pre-flight step 11.
         self.user_message_event_id: str | None = None
         # Cancellation token — engine-internal default if caller omitted.
         self.cancel = context.cancellation or CancelToken()
@@ -405,30 +424,37 @@ class _Exchange:
                 config=memory_sub.config,
             )
 
-        # Step 6 — acquire LLM client (spec §2.1, LLM-R3).
-        # When the engine was constructed without an `llm` callable,
-        # build one from this exchange's ModelSpec via `build_llm`.
-        # Tests inject `llm=` directly and skip this seam; production
-        # wires `llm_providers_config` so the lookup has something to
+        # Step 6 — acquire LLM client for the primary model (spec §2.1
+        # step 6, post-Phase-1.3 FB-R3 retitle). When the engine was
+        # constructed without an `llm` callable, build one from this
+        # exchange's ModelSpec via `build_llm`. Tests inject `llm=`
+        # directly and skip this seam; production wires
+        # `llm_providers_config` so the lookup has something to
         # resolve. The crewai.LLM lives on the exchange because each
         # exchange may target a different model.
         self.acquired_llm = await self._acquire_llm_if_needed()
 
-        # Step 7 — emit config.set if the current effective config
+        # Step 7 — resolve fallback chain (Phase 1.3, FB-R3). Each
+        # entry's provider must be in `llm_providers`; clients are
+        # NOT built here (lazy construction is the engine loop's
+        # job per patch §2.1).
+        self.fallback_chain = await self._resolve_fallback_chain()
+
+        # Step 8 — emit config.set if the current effective config
         # differs from the most recent config.set on the thread.
         await self._emit_config_set_if_changed()
 
         # Register tools with the Tools subsystem now (NOT with the
         # framework — that happens in setup). The synthetic force-invoke
-        # read in step 8 routes through tools_subsystem.invoke_tool,
+        # read in step 9 routes through tools_subsystem.invoke_tool,
         # which requires registration to have happened.
         await self._register_tools_with_subsystem()
 
-        # Step 8 — process force-invoke skills, if any.
+        # Step 9 — process force-invoke skills, if any.
         await self._process_force_invoke()
 
-        # Step 9 — emit thread.exchange_started. The trigger_event_id
-        # is what we materialize in step 10; emit a placeholder then
+        # Step 10 — emit thread.exchange_started. The trigger_event_id
+        # is what we materialize in step 11; emit a placeholder then
         # patch? Spec says it's the trigger event id. Phase 1 simplest
         # path: pre-allocate the user.message id, emit exchange_started
         # carrying that id, then emit user.message under that id.
@@ -442,7 +468,7 @@ class _Exchange:
         )
         self.exchange_started_id = str(started.event_id)
 
-        # Step 10 — materialize the trigger as user.message.
+        # Step 11 — materialize the trigger as user.message.
         await self._emit(
             type_=EventType.USER_MESSAGE,
             data=UserMessageData(
@@ -486,8 +512,87 @@ class _Exchange:
             configured_providers=sorted(self.engine._llm_providers_config),
         )
 
+    def _build_llm_factory(
+        self,
+    ) -> Callable[
+        [ModelSpec],
+        Awaitable[Callable[[LLMRequest], Awaitable[LLMResponse]]],
+    ]:
+        """Return the per-spec LLM factory the
+        :class:`FallbackLLMHandle` uses to lazily construct attempt
+        clients.
+
+        Production callers wire ``llm_for_model=`` at engine
+        construction (typically a closure around `llm.build_llm` +
+        the runtime's `llm_providers_config`). Pre-Phase-1.3 callers
+        passing only `llm=` get a degenerate factory that returns
+        the same single callable for every spec — fallback still
+        works in tests, but every chain entry calls the same
+        underlying LLM.
+        """
+        per_spec = self.engine._llm_for_model
+        if per_spec is not None:
+            return per_spec
+        single = self.engine._llm
+        if single is None:
+            msg = (
+                "engine was constructed without either `llm=` or "
+                "`llm_for_model=` — no way to make an LLM call. Pass "
+                "one of them at engine construction, or wire build_llm "
+                "via platform_runtime (Phase 1.1+)."
+            )
+            raise PlatformInternalError(
+                original_type="engine.llm_adapter_missing",
+                args=[msg],
+            )
+
+        async def _single_factory(
+            spec: ModelSpec,
+        ) -> Callable[[LLMRequest], Awaitable[LLMResponse]]:
+            _ = spec
+            return single
+
+        return _single_factory
+
+    async def _resolve_fallback_chain(self) -> list[ModelSpec]:
+        """Spec §2.1 step 7 (Phase 1.3 FB-R3) — resolve + validate the
+        agent's fallback chain. Clients are NOT built here.
+
+        - If the agent specifies ``fallback_models`` (even ``[]``),
+          that wins per FB-R2 precedence.
+        - Otherwise the platform default (``defaults.fallback_models``)
+          is used. Phase 1.3 keeps this lookup out of the engine
+          (`platform_runtime.bootstrap_runtime` already merged
+          defaults into the agent config), so the engine just reads
+          ``config.fallback_models``.
+
+        Validates each entry's provider is in ``llm_providers``.
+        Emits a `config.fallback_duplicate` warning per duplicate
+        (Diagnostic — see Error Model §4.15).
+        """
+        from engine._fallback import build_fallback_chain  # noqa: PLC0415
+
+        configured = sorted(self.engine._llm_providers_config)
+        warnings: list[ConfigFallbackDuplicate] = []
+        chain = build_fallback_chain(
+            agent_id=self.agent_id,
+            fallback_specs=list(self.config.fallback_models),
+            primary=self.config.model,
+            configured_providers=configured,
+            emit_warning=warnings.append,
+        )
+        # Phase 1.3 review #3 — surface duplicates visibly. For now
+        # the engine forwards them as Diagnostic-level platform-log
+        # warnings; a future patch may add a real CLI banner. Tests
+        # observe them via `_Exchange.fallback_warnings` (kept for
+        # introspection).
+        self.fallback_warnings: list[ConfigFallbackDuplicate] = warnings
+        for w in warnings:
+            _log.warning("%s", str(w))
+        return chain
+
     async def _emit_config_set_if_changed(self) -> None:
-        """Spec §2.1 step 7 — emit config.set when the effective config
+        """Spec §2.1 step 8 — emit config.set when the effective config
         differs from the most recent config.set on the path (or none)."""
         cur_resolved = self.config.model_dump(mode="json")
         # Walk path, find latest config.set.
@@ -536,7 +641,7 @@ class _Exchange:
         # the Phase 1 default tests use builtin or programmatic-only.
 
     async def _process_force_invoke(self) -> None:
-        """Spec §2.1 step 8 — for each force-invoke skill, emit a
+        """Spec §2.1 step 9 — for each force-invoke skill, emit a
         synthetic ``tool.called``/``tool.result`` pair for ``read`` on
         the SKILL.md path, with principal=system."""
         trigger = self.context.trigger
@@ -641,29 +746,35 @@ class _Exchange:
             tool_schemas=tool_schemas,
         )
 
-        # §2.2 step 12 — register observers as the LLM/tool seams the
-        # framework will invoke. When `engine._llm` is None, pre-flight
-        # step 5.5 acquired a crewai.LLM into `self.acquired_llm`; a
-        # follow-up patch wires the crewai.LLM → LLMHandle adapter
-        # here. Until then, this path requires a direct LLMHandle
-        # callable to have been injected.
-        if self.engine._llm is None:
-            msg = (
-                "engine was constructed without a direct LLMHandle and the "
-                "crewai.LLM → LLMHandle adapter is not yet wired. Pass "
-                "`llm=` at engine construction, or wait for the follow-up "
-                "patch that wires `acquired_llm` into the framework."
-            )
-            raise PlatformInternalError(
-                original_type="engine.llm_adapter_missing",
-                args=[msg],
-            )
-        llm_handle = _ObservedLLMHandle(
+        # §2.2 step 12 — register the LLM/tool seams the framework
+        # will invoke.
+        #
+        # The LLM seam is :class:`FallbackLLMHandle` from Phase 1.3
+        # (Step 20): it wraps the per-attempt observation that the
+        # pre-1.3 :class:`_ObservedLLMHandle` did, plus the
+        # chain loop. The factory we hand it produces a per-attempt
+        # ``Callable[[LLMRequest], Awaitable[LLMResponse]]``:
+        #
+        # - If the engine was constructed with `llm_for_model=`
+        #   (the per-spec factory — production wires this via
+        #   `platform_runtime`'s build_llm), use it directly. Each
+        #   chain entry gets its own client built lazily.
+        # - If only `llm=` was passed (Phase 1.1/1.2 tests + the
+        #   default-tier EchoLLMDriver bootstrap), wrap it so every
+        #   spec returns the same callable. The chain still works;
+        #   just every entry calls the same underlying llm.
+        # - If neither, raise PlatformInternalError — the engine
+        #   has no way to make an LLM call.
+        llm_factory = self._build_llm_factory()
+        from engine._fallback import FallbackLLMHandle  # noqa: PLC0415
+
+        llm_handle = FallbackLLMHandle(
             emit=self._emit_void,
             agent_id=self.agent_id,
-            model_spec=self.config.model.model_dump(mode="json"),
+            primary_spec=self.config.model,
+            chain=list(self.fallback_chain),
+            llm_factory=llm_factory,
             config_event_id=self.config_event_id,
-            llm=self.engine._llm,
         )
         tool_handles = [
             _ObservedToolHandle(
@@ -827,7 +938,7 @@ class _Exchange:
 
 
 def _extract_trigger_content(trigger: dict[str, Any]) -> dict[str, Any]:
-    """§2.1 step 10 — produce the ``user.message.data.content`` dict."""
+    """§2.1 step 11 — produce the ``user.message.data.content`` dict."""
     kind = trigger.get("kind")
     if kind in ("user_message", "user_message_with_force_skill"):
         content = trigger.get("content")

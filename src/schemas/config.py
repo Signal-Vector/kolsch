@@ -104,6 +104,12 @@ class ResolvedAgentConfig(BaseModel):
     name: str
     description: str
     model: ModelSpec
+    # Phase 1.3 (FB-R1) — ordered list of backup models the engine
+    # walks on Recoverable model.* errors. Each entry is normalised
+    # to canonical {provider, model} form during Layer 1; the
+    # resolver accepts the three input shapes (object / compact
+    # string / alias) per Schemas §A.4.2.
+    fallback_models: list[ModelSpec] = Field(default_factory=list)
     prompt: PromptSpec
     io: IOSpec
     subsystems: dict[str, SubsystemConfig] = Field(default_factory=dict)

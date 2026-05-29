@@ -174,14 +174,26 @@ def pre_resolve_model(
     Nested ``fallback`` entries are recursively normalized so a
     ``fallback: ["cheap"]`` declaration also resolves cleanly.
 
+    Phase 1.3 (FB-R1) — also normalizes ``partial['fallback_models']``
+    (the agent-level chain) when present. Each entry accepts the same
+    three input shapes; alias resolution is identical. The list is
+    passed through verbatim when absent or empty.
+
     Returns a NEW dict; the input is not mutated.
     """
-    if "model" not in partial:
+    if "model" not in partial and "fallback_models" not in partial:
         return partial
     aliases = aliases or {}
-    normalized = _normalize_model_value(partial["model"], aliases)
     new_partial = dict(partial)
-    new_partial["model"] = normalized
+    if "model" in partial:
+        new_partial["model"] = _normalize_model_value(partial["model"], aliases)
+    if "fallback_models" in partial:
+        raw = partial["fallback_models"]
+        if isinstance(raw, list):
+            new_partial["fallback_models"] = [
+                _normalize_model_value(entry, aliases) for entry in raw
+            ]
+        # Else: pass through; downstream Pydantic raises ConfigInvalid.
     return new_partial
 
 

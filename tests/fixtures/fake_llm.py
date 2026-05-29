@@ -17,9 +17,12 @@ shipped). When it lands, this Fake conforms to it without changing
 test call sites.
 """
 
-from typing import Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
+
+if TYPE_CHECKING:
+    from errors import PlatformError
 
 
 class TextResponse(BaseModel):
@@ -148,3 +151,82 @@ class FakeLLM(BaseModel):
     def reset_calls(self) -> None:
         """Drop recorded calls and start over. Script is preserved."""
         self.calls.clear()
+
+    def inject_error(self, error_type: str, *, message: str = "") -> None:
+        """Phase 1.3 (Step 20) helper — schedule an :class:`ErrorResponse`
+        as the next scripted output.
+
+        Equivalent to ``script.insert(0, ErrorResponse(...))`` but
+        gives tests a more readable call site for
+        deterministic error injection:
+
+            fake.inject_error("model.rate_limited")
+
+        forces the next ``agenerate`` call to raise. The fallback
+        loop's classification layer (per-connector mapping) is
+        responsible for turning the raised
+        :class:`FakeLLMScriptedError` into the typed PlatformError
+        the engine ultimately catches; for tests that exercise the
+        engine directly, the engine's test adapter does this mapping
+        explicitly (see :mod:`tests.fixtures.fake_llm.platform_error_for_scripted`).
+        """
+        self.script.insert(
+            0,
+            ErrorResponse(
+                error_type=error_type,
+                message=message or f"injected {error_type}",
+            ),
+        )
+
+
+def platform_error_for_scripted(  # noqa: PLR0911 — one return per mapped code is the point
+    exc: FakeLLMScriptedError, *, provider: str = "fake", model: str = "fake-model"
+) -> "PlatformError":
+    """Map a ``FakeLLMScriptedError`` into the catalogued PlatformError.
+
+    Centralises the Fake → catalog mapping so test adapters share
+    the table. New ``model.*`` codes added later flow through this
+    function; if a test scripts an error_type that has no mapping,
+    the function raises ``ValueError`` (test setup bug).
+    """
+    from errors import (
+        ModelAuthenticationFailed,
+        ModelBadRequest,
+        ModelContextOverflow,
+        ModelRateLimited,
+        ModelServerError,
+        ModelTimeout,
+        ModelUpstreamError,
+    )
+
+    code = exc.error_type
+    msg = str(exc)
+    if code == "model.rate_limited":
+        return ModelRateLimited(provider=provider, model=model)
+    if code == "model.server_error":
+        return ModelServerError(provider=provider, model=model, status_code=503)
+    if code == "model.timeout":
+        return ModelTimeout(provider=provider, model=model, timeout_seconds=30.0)
+    if code == "model.context_overflow":
+        return ModelContextOverflow(
+            provider=provider, model=model, requested_tokens=200_000
+        )
+    if code == "model.authentication_failed":
+        return ModelAuthenticationFailed(
+            provider=provider, model=model, status_code=401
+        )
+    if code == "model.bad_request":
+        return ModelBadRequest(
+            provider=provider,
+            model=model,
+            status_code=400,
+            reason=msg or "malformed",
+        )
+    if code == "model.upstream_error":
+        # Phase 1.1 generic — kept for back-compat with existing tests.
+        return ModelUpstreamError(provider=provider, http_status=500, response=msg)
+    msg_err = (
+        f"FakeLLMScriptedError {code!r} has no mapping in "
+        f"platform_error_for_scripted; add it before testing"
+    )
+    raise ValueError(msg_err)

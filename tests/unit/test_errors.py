@@ -28,6 +28,7 @@ from errors import (
     BusPublishFailed,
     BusUnavailable,
     CapabilityMismatch,
+    ConfigFallbackDuplicate,
     ConfigInvalid,
     ConfigMergeFailed,
     ConfigUnknownAlias,
@@ -40,6 +41,7 @@ from errors import (
     FileAccessPathNormalizationFailed,
     FileAccessPolicyLoadFailed,
     Level,
+    LlmAllModelsFailed,
     LlmClientInitFailed,
     LlmConnectorDuplicate,
     LlmConnectorUnknown,
@@ -55,8 +57,14 @@ from errors import (
     MemoryItemNotFound,
     MemorySessionUnbound,
     MemoryWriteDisabled,
+    ModelAuthenticationFailed,
+    ModelBadRequest,
+    ModelContextOverflow,
     ModelMalformedResponse,
+    ModelRateLimited,
     ModelRetryExhausted,
+    ModelServerError,
+    ModelTimeout,
     ModelUpstreamError,
     PlatformError,
     PlatformInternalError,
@@ -236,6 +244,50 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
     WorkspacePermissionDenied: {"path": "/var/ws/k", "operation": "mkdir"},
     SetupAborted: {"step": "C", "reason": "ctrl-c"},
     SetupStarterExists: {"path": "/var/ws/k/bundles/starter/agents/helper.yaml"},
+    # 4.15 Model Fallback (Phase 1.3)
+    ModelRateLimited: {"provider": "openrouter", "model": "anthropic/x"},
+    ModelServerError: {
+        "provider": "openrouter",
+        "model": "anthropic/x",
+        "status_code": 503,
+    },
+    ModelTimeout: {
+        "provider": "openrouter",
+        "model": "anthropic/x",
+        "timeout_seconds": 30.0,
+    },
+    ModelContextOverflow: {
+        "provider": "openrouter",
+        "model": "anthropic/x",
+        "requested_tokens": 200_000,
+    },
+    ModelAuthenticationFailed: {
+        "provider": "openrouter",
+        "model": "anthropic/x",
+        "status_code": 401,
+    },
+    ModelBadRequest: {
+        "provider": "openrouter",
+        "model": "anthropic/x",
+        "status_code": 400,
+        "reason": "malformed",
+    },
+    LlmAllModelsFailed: {
+        "primary": {"provider": "anthropic", "model": "opus"},
+        "attempts": [
+            {
+                "model": {"provider": "anthropic", "model": "opus"},
+                "error_code": "model.rate_limited",
+                "detail": {},
+            },
+        ],
+        "reason": "exhausted",
+    },
+    ConfigFallbackDuplicate: {
+        "agent": "ag_x",
+        "model": {"provider": "openrouter", "model": "anthropic/x"},
+        "positions": [1, 3],
+    },
 }
 
 

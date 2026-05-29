@@ -119,6 +119,21 @@ CATALOG: dict[str, Level] = {
     "workspace.permission_denied": Level.FATAL,
     "setup.aborted": Level.RECOVERABLE,
     "setup.starter_exists": Level.RECOVERABLE,
+    # ----- §4.15 Model Fallback (Phase 1.3, FB-R5) ---------------------
+    # Four Recoverable codes — drive the fallback loop.
+    "model.rate_limited": Level.RECOVERABLE,
+    "model.server_error": Level.RECOVERABLE,
+    "model.timeout": Level.RECOVERABLE,
+    "model.context_overflow": Level.RECOVERABLE,
+    # Two Fatal model.* codes — abort without consulting the chain.
+    "model.authentication_failed": Level.FATAL,
+    "model.bad_request": Level.FATAL,
+    # Engine fallback-loop terminus.
+    "llm.all_models_failed": Level.FATAL,
+    # Layer 1 validator warning surface — Diagnostic in the v1.3
+    # taxonomy since the Error Model doesn't yet have a Warning tier
+    # (flagged in Phase 1.3 Step 19 review for follow-up).
+    "config.fallback_duplicate": Level.DIAGNOSTIC,
 }
 
 

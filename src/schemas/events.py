@@ -59,6 +59,8 @@ class EventType(StrEnum):
     # Model interaction
     MODEL_REQUEST = "model.request"
     MODEL_RESPONSE = "model.response"
+    # Phase 1.3 (FB-R4) — emitted once per fallback transition.
+    MODEL_FALLBACK = "model.fallback"
 
     # Config
     CONFIG_SET = "config.set"
@@ -177,6 +179,38 @@ class ModelResponseData(_DataModel):
     # When stop_reason == "error", `error` carries the canonical
     # Error envelope (Error Model §5.3). Optional otherwise.
     error: Error | None = None
+
+
+class ModelFallbackData(_DataModel):
+    """`model.fallback.data` — Phase 1.3 patch §3.1.
+
+    Emitted by the engine once per fallback transition. Lives
+    between the failing attempt (its ``model.request`` or
+    ``model.response``) and the next attempt's ``model.request``
+    per patch §3.2.
+
+    - ``from`` / ``to`` carry canonical ``{provider, model}``
+      dicts (the resolver normalises aliases at Layer 1).
+    - ``reason`` is the failing attempt's error code (e.g.
+      ``model.rate_limited``).
+    - ``reason_detail`` is a one-line human-readable summary.
+    - ``attempt`` is 1-indexed; attempt 0 was the primary, so
+      the first ``model.fallback`` event always has
+      ``attempt: 1``.
+    """
+
+    # `from` shadows the Python keyword; use field-aliased form so
+    # the JSON shape (and the on-disk JSONL) matches patch §3.1
+    # exactly. ``populate_by_name`` lets engine code construct via
+    # the Python identifier (``from_model=``) while
+    # ``model_dump(by_alias=True)`` round-trips to the spec'd JSON.
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
+
+    from_model: dict[str, str] = Field(alias="from")
+    to_model: dict[str, str] = Field(alias="to")
+    reason: str
+    reason_detail: str = ""
+    attempt: int
 
 
 class ToolCalledData(_DataModel):
