@@ -33,6 +33,15 @@ from engine.context import (
 )
 from engine.engine import ENGINE_VERSION, AgentEngine
 from engine.fake_framework import FakeFramework, FakeFrameworkLoopExceededError
+
+# CrewAIFramework imports CrewAI; only available when the test
+# group is installed. Guard the import so engine consumers without
+# crewai (runtime-only installs) can still use AgentEngine +
+# FakeFramework without ImportError.
+try:
+    from engine.crewai_framework import CrewAIFramework
+except ImportError:  # pragma: no cover — runtime path without crewai
+    CrewAIFramework = None  # type: ignore[assignment, misc]
 from engine.framework import (
     Framework,
     LLMDriver,
@@ -51,6 +60,7 @@ __all__ = [
     "AgentExecutionError",
     "AssembledContext",
     "CancelToken",
+    "CrewAIFramework",
     "EngineCapabilities",
     "ExecutionContext",
     "FakeFramework",

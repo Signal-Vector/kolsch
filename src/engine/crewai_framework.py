@@ -1,0 +1,403 @@
+"""CrewAIFramework — v1 production :class:`Framework` adapter.
+
+Wraps real CrewAI (pinned to ``crewai==1.14.6`` in
+``[dependency-groups.test]``) so the engine can drive
+production agentic workflows without changing its own contract. The
+engine never imports this module directly; callers wire it via
+``AgentEngine(framework=CrewAIFramework(), ...)``.
+
+Design (per docs/explanation/framework-protocol-design.md):
+
+- **Fake-LLM injection chosen mechanism: BaseLLM subclass**
+  (:class:`_CrewAILLM`). Justified in that class's docstring; the
+  short version: the prereq spike validated this is the only
+  mechanism that lets the engine see messages verbatim (post-
+  framework-wrap, pre-LLM-invoke) without monkey-patching litellm.
+  CrewAI's ``Agent(llm=BaseLLM-instance)`` bypasses
+  ``crewai.llm.LLM`` and litellm entirely — the engine's
+  :class:`LLMHandle` sees exactly what would have gone to a real
+  provider.
+
+- **Tool dispatch via BaseTool subclass** (:class:`_CrewAITool`).
+  Every framework-issued tool call invokes our wrapper, which
+  routes through the engine's :class:`ToolHandle`. Sandboxing
+  (Engine I9), authorization, and secrets stay engine-owned.
+
+- **Concurrency bridge.** ``Crew.kickoff_async`` runs the sync
+  ``kickoff`` on a worker thread (``asyncio.to_thread``). Inside
+  that thread our sync ``_run`` / ``call`` methods need to invoke
+  the engine's async handles. We capture the main event loop at
+  :meth:`run_exchange` entry and use
+  ``asyncio.run_coroutine_threadsafe(coro, main_loop).result()``
+  to schedule + block. The engine's per-thread lock then serializes
+  emits as designed.
+
+- **Retry composition.** CrewAI's internal retries are disabled
+  (``Agent(max_retry_limit=0)``); the engine owns retry per
+  ``RuntimeSpec.max_retries`` (TC-CRW-03 pins this).
+
+- **History injection.** CrewAI has no first-class "prior turns"
+  parameter on ``Task``. We prepend the assembled history as
+  preamble text on ``Task.description``. The captured
+  ``model.request.data.messages`` (§B.6 amendment) records what
+  the LLM actually saw — CrewAI's wrap is part of that record.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+from typing import TYPE_CHECKING, Any, ClassVar
+from uuid import uuid4
+
+# Heavy imports — only present when crewai is installed (test group).
+from crewai import Agent, Crew, Task
+from crewai.llms.base_llm import BaseLLM
+from crewai.tools.base_tool import BaseTool
+from pydantic import BaseModel, ConfigDict, Field
+
+from engine.framework import LLMRequest, Message, ToolCall
+
+if TYPE_CHECKING:
+    from collections.abc import Callable, Sequence
+
+    from engine.framework import LLMHandle, ToolHandle
+
+
+_DEFAULT_MAX_ITERATIONS = 10
+
+
+class CrewAIFramework:
+    """v1 production framework — implements :class:`Framework`."""
+
+    def __init__(self, *, model_name: str = "fake-crewai") -> None:
+        self._model_name = model_name
+
+    async def run_exchange(
+        self,
+        *,
+        system_prompt: str,
+        user_message: str,
+        history: Sequence[Message] = (),
+        llm: LLMHandle,
+        tools: Sequence[ToolHandle],
+        max_iterations: int = _DEFAULT_MAX_ITERATIONS,
+        cancellation: Callable[[], bool] | None = None,
+    ) -> str:
+        # Capture the main event loop. Inside Crew.kickoff_async,
+        # CrewAI runs the sync executor on a worker thread; our
+        # BaseLLM.call and BaseTool._run live in that thread and must
+        # schedule the engine's async handles BACK onto this loop.
+        main_loop = asyncio.get_running_loop()
+
+        adapter_llm = _CrewAILLM(
+            model=self._model_name,
+            llm_handle=llm,
+            main_loop=main_loop,
+            cancellation=cancellation,
+        )
+
+        adapter_tools: list[BaseTool] = [
+            _make_crewai_tool(handle=handle, main_loop=main_loop) for handle in tools
+        ]
+
+        # Backstory carries the engine-assembled system prompt; role
+        # and goal stay generic so the agent is configured by the
+        # engine, not by CrewAI defaults.
+        # Pydantic-mypy doesn't model CrewAI's Agent fields against
+        # our config; these kwargs match the runtime fields visible
+        # via Agent.model_fields.
+        agent = Agent(  # type: ignore[call-arg]
+            role="Assistant",
+            goal="Help the user accurately.",
+            backstory=system_prompt or "You are a helpful assistant.",
+            llm=adapter_llm,
+            tools=adapter_tools,
+            max_iter=max_iterations,
+            # Engine owns retry per RuntimeSpec.max_retries; disable
+            # CrewAI's internal retry so the two layers don't compound
+            # (TC-CRW-03).
+            max_retry_limit=0,
+            verbose=False,
+            allow_delegation=False,
+        )
+
+        task_description = _format_task_description(user_message, history)
+        task = Task(
+            description=task_description,
+            expected_output="A helpful response.",
+            agent=agent,
+        )
+
+        crew = Crew(
+            agents=[agent],
+            tasks=[task],
+            verbose=False,
+        )
+
+        # asyncio.to_thread inside kickoff_async will pick up
+        # main_loop's contextvars but its own asyncio loop is
+        # transient; our threadsafe scheduling keeps emits on main_loop.
+        result = await crew.kickoff_async()
+        return _extract_text(result)
+
+
+# ---------------------------------------------------------------------------
+# _CrewAILLM — the BaseLLM subclass (Fake-LLM injection mechanism)
+# ---------------------------------------------------------------------------
+
+
+class _CrewAILLM(BaseLLM):
+    """BaseLLM subclass routing every call through the engine's LLMHandle.
+
+    **Why BaseLLM subclass (vs. litellm monkeypatch vs. callback
+    injection):**
+
+    - litellm monkeypatch — replaces ``litellm.completion`` globally,
+      which would touch every other test running in the same process,
+      and would not capture the post-``_format_messages_for_provider``
+      message shape because ``crewai.llm.LLM`` reformats AFTER the
+      monkey point. Rejected.
+    - Callback injection (``Agent(llm=str, ...)`` + after-call hooks)
+      — after-call hooks fire AFTER the LLM ran; we cannot stub the
+      response without going through a real LLM first. Rejected.
+    - BaseLLM subclass — public, stable since PR #2277 (CrewAI
+      0.105.x). A subclass is wired via ``Agent(llm=BaseLLM-instance)``
+      and **bypasses `crewai.llm.LLM` and litellm entirely**. The
+      engine sees the exact messages CrewAI built (post-wrap,
+      pre-network) and chooses what response to return. Chosen.
+
+    The class is engine-internal (leading underscore) — the public
+    surface is :class:`CrewAIFramework`.
+    """
+
+    # Pydantic v2 model config. CrewAI's BaseLLM is a Pydantic
+    # BaseModel; we add private (non-validated) attributes via
+    # PrivateAttr-style assignment so the engine handle and main loop
+    # don't pollute the LLM's field schema.
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        arbitrary_types_allowed=True,
+    )
+
+    # Pass-through fields the base requires. Defaults make this
+    # constructible without the caller filling every BaseLLM field.
+    llm_type: str = "engine_fake"
+    provider: str = "engine"
+
+    # Engine-owned handles. Stored as model fields with arbitrary
+    # types allowed; Pydantic accepts them since model_config above
+    # opens that door.
+    llm_handle: Any = Field(default=None)
+    main_loop: Any = Field(default=None)
+    cancellation: Any = Field(default=None)
+
+    def supports_function_calling(self) -> bool:
+        # Drive CrewAI's native tool-calling path (see
+        # crew_agent_executor._invoke_loop) rather than ReAct text
+        # parsing. Native gives us a structured tool-call list back
+        # that matches our engine.framework.LLMResponse.tool_calls
+        # shape.
+        return True
+
+    def call(  # type: ignore[override]
+        self,
+        messages: str | list[dict[str, Any]],
+        tools: list[dict[str, Any]] | None = None,
+        callbacks: list[Any] | None = None,  # noqa: ARG002
+        available_functions: dict[str, Any] | None = None,  # noqa: ARG002
+        from_task: Any | None = None,  # noqa: ARG002
+        from_agent: Any | None = None,  # noqa: ARG002
+        response_model: type[BaseModel] | None = None,  # noqa: ARG002
+    ) -> str | Any:
+        # Normalize to list[dict].
+        msgs: list[dict[str, Any]]
+        if isinstance(messages, str):
+            msgs = [{"role": "user", "content": messages}]
+        else:
+            msgs = list(messages)
+
+        # Cancellation poll BEFORE making the network call.
+        if self.cancellation is not None and self.cancellation():
+            msg = "exchange cancelled by engine"
+            raise RuntimeError(msg)
+
+        request = LLMRequest(
+            messages=[_to_engine_message(m) for m in msgs],
+            tools=list(tools or []),
+            model=self.model,
+            parameters={},
+        )
+
+        # Schedule the async LLMHandle on the engine's main loop
+        # (we're inside CrewAI's worker thread from asyncio.to_thread).
+        coro = self.llm_handle(request)
+        future = asyncio.run_coroutine_threadsafe(coro, self.main_loop)
+        response = future.result()
+
+        # Translate engine LLMResponse → CrewAI's expected shape.
+        # Per crew_agent_executor._is_tool_call_list, an OpenAI-style
+        # dict with a `function` key is recognised as a tool call.
+        if response.tool_calls:
+            return [
+                {
+                    "id": call.get("id") or f"call_{uuid4().hex[:8]}",
+                    "function": {
+                        "name": call["name"],
+                        "arguments": (
+                            json.dumps(call["arguments"])
+                            if isinstance(call.get("arguments"), dict)
+                            else call.get("arguments", "{}")
+                        ),
+                    },
+                }
+                for call in response.tool_calls
+            ]
+        return response.content or ""
+
+
+# ---------------------------------------------------------------------------
+# _CrewAITool — the BaseTool subclass routing through ToolHandle
+# ---------------------------------------------------------------------------
+
+
+def _make_crewai_tool(
+    *,
+    handle: ToolHandle,
+    main_loop: asyncio.AbstractEventLoop,
+) -> BaseTool:
+    """Build a concrete BaseTool subclass bound to one ToolHandle.
+
+    The subclass is created per-handle so each tool surfaces its own
+    ``name``, ``description``, and ``args_schema`` to CrewAI's tool
+    converter. ``_run`` schedules the engine's async :class:`ToolHandle`
+    on the captured main loop and blocks for the result — the engine's
+    per-thread emit lock then serializes event construction.
+    """
+    name = handle.name
+    schema = handle.schema or {}
+    description = str(schema.get("description") or f"Tool: {name}")
+
+    # Build a minimal Pydantic schema that accepts whatever the LLM
+    # emits as arguments — CrewAI will call _run with **kwargs. The
+    # engine's tools subsystem re-validates inside invoke_tool, so
+    # this schema only needs to accept dicts.
+    args_schema = _build_passthrough_schema(name, schema)
+
+    class _Tool(BaseTool):
+        # Class-level attributes CrewAI's BaseTool reads at construction.
+        model_config: ClassVar[ConfigDict] = ConfigDict(
+            arbitrary_types_allowed=True,
+        )
+
+        def _run(self, **kwargs: Any) -> Any:
+            coro = handle(ToolCall(name=name, arguments=dict(kwargs)))
+            future = asyncio.run_coroutine_threadsafe(coro, main_loop)
+            result = future.result()
+            # Tool result must be a string for CrewAI's tool-message
+            # synthesis; JSON-serialize dicts deterministically.
+            if isinstance(result, str):
+                return result
+            return json.dumps(
+                result,
+                sort_keys=True,
+                separators=(",", ":"),
+                default=str,
+            )
+
+    return _Tool(
+        name=name,
+        description=description,
+        args_schema=args_schema,
+    )
+
+
+def _build_passthrough_schema(
+    tool_name: str,
+    schema: dict[str, Any],
+) -> type[BaseModel]:
+    """Return a Pydantic model that accepts the LLM-emitted kwargs.
+
+    Phase 1: we don't reconstruct the original args_schema from the
+    JSON Schema dict — CrewAI uses this only to advertise to the LLM.
+    The actual validation runs inside
+    :meth:`ToolsSubsystem.invoke_tool` (the dispatch order, spec §6.2).
+    """
+    # Use Pydantic's create_model so the class has a deterministic
+    # name visible in CrewAI's tool-schema export.
+    from pydantic import create_model  # noqa: PLC0415
+
+    fields: dict[str, Any] = {}
+    properties = schema.get("properties", {})
+    if isinstance(properties, dict):
+        for key in properties:
+            fields[str(key)] = (Any, None)
+    if not fields:
+        fields["_passthrough"] = (Any, None)
+    model: type[BaseModel] = create_model(
+        f"_PassthroughArgs_{tool_name}",
+        __base__=BaseModel,
+        **fields,
+    )
+    return model
+
+
+# ---------------------------------------------------------------------------
+# Helpers — message translation, task formatting, result extraction
+# ---------------------------------------------------------------------------
+
+
+def _to_engine_message(raw: dict[str, Any]) -> Message:
+    """Translate a CrewAI message dict into our :class:`Message`.
+
+    CrewAI uses LLMMessage TypedDict with optional ``tool_call_id``,
+    ``name``, ``tool_calls`` keys. The engine's Message has the same
+    shape but with strict typing; unknown keys are dropped.
+    """
+    content = raw.get("content")
+    if content is None:
+        content = ""
+    elif not isinstance(content, str):
+        # Multimodal content blocks — JSON-flatten so the verbatim
+        # capture remains string-comparable for golden tests.
+        content = json.dumps(content, sort_keys=True, separators=(",", ":"))
+    return Message(
+        role=str(raw.get("role", "user")),
+        content=content,
+        tool_call_id=raw.get("tool_call_id"),
+        tool_calls=raw.get("tool_calls"),
+        name=raw.get("name"),
+    )
+
+
+def _format_task_description(user_message: str, history: Sequence[Message]) -> str:
+    """Inline the history into the Task description.
+
+    CrewAI has no first-class "prior turns" parameter; prepending as
+    preamble keeps the engine's history visible to the LLM via
+    CrewAI's prompt builder. The §B.6 amendment captures whatever
+    CrewAI ultimately sends to the LLM, so replay sees the wrapped
+    view (not the pre-wrap engine view).
+    """
+    if not history:
+        return user_message
+    lines: list[str] = ["Previous conversation:"]
+    for msg in history:
+        prefix = msg.role.capitalize()
+        lines.append(f"{prefix}: {msg.content}")
+    lines.append("")
+    lines.append(f"Current message: {user_message}")
+    return "\n".join(lines)
+
+
+def _extract_text(result: Any) -> str:
+    """Pull the final text from a :class:`CrewOutput`.
+
+    ``CrewOutput.raw`` is the canonical attribute in v1.14.x; fall
+    back to ``str(result)`` defensively in case CrewAI shifts the
+    shape in a future bump (re-spike per the design note §2.6's
+    version-pin rationale).
+    """
+    raw = getattr(result, "raw", None)
+    if isinstance(raw, str):
+        return raw
+    return str(result)

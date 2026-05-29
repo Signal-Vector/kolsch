@@ -287,6 +287,18 @@ filterwarnings = [
     # of one pytest process) and CI runs a fresh interpreter.
     "ignore::ResourceWarning:sqlite3",
     "ignore::ResourceWarning",
+    # CrewAI's transitive imports (crewai.rag.embeddings, chromadb,
+    # litellm) emit ImportWarnings and DeprecationWarnings on import.
+    # Scoped here so they don't promote to errors during integration
+    # tests. Our own modules still escalate any warning to error.
+    "ignore::ImportWarning",
+    "ignore::DeprecationWarning:crewai.*",
+    "ignore::DeprecationWarning:litellm.*",
+    "ignore::DeprecationWarning:chromadb.*",
+    "ignore::DeprecationWarning:pkg_resources.*",
+    "ignore::UserWarning:crewai.*",
+    "ignore::UserWarning:litellm.*",
+    "ignore::PendingDeprecationWarning:crewai.*",
 ]
 
 # ---------------------------------------------------------------------------
