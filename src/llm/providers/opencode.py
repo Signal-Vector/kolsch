@@ -11,6 +11,42 @@ This connector is also the reference template for any OpenAI-compatible
 provider (OpenAI itself, forks, third-party hosted shims). The four
 methods stay near-identical; only ``type_name`` and
 :meth:`auth_prompt_spec` change.
+
+## Error Classification (Phase 1.3, FB-R10)
+
+Every provider response the connector might see maps to exactly one
+catalogued ``model.*`` code. The mapping is the basis of the engine's
+fallback decision (see Error Model §4.15 + Phase 1.3 patch §2.2);
+adding a new branch here without updating the trigger table breaks
+the AGENTS.md FB-R10 hard rule.
+
+- HTTP 429 → ``model.rate_limited`` (Recoverable).
+- HTTP 5xx (500-599) → ``model.server_error`` (Recoverable).
+- ``httpx.TimeoutException`` family → ``model.timeout`` (Recoverable).
+- HTTP 400 with body markers (``context_length`` / ``context_window``
+  / ``too long`` / ``maximum context``) → ``model.context_overflow``
+  (Recoverable).
+- HTTP 401 or 403 → ``model.authentication_failed`` (Fatal).
+- HTTP 400 (any other body) → ``model.bad_request`` (Fatal).
+
+OpenAI-compatible providers return a JSON error body of shape
+``{"error": {"message": ..., "code": ..., "type": ...}}``; the
+overflow detection scans both ``error.message`` and ``error.code``
+for the documented markers. Bodies that don't parse as JSON fall
+through to the status-only branches.
+
+Other HTTP statuses (200 with a malformed body, 3xx redirects, etc.)
+are NOT covered here — they are the response-parsing layer's
+problem and surface as :class:`errors.ModelMalformedResponse` (also
+Recoverable). Truly out-of-band failures (DNS resolution, connection
+refused) raise ``httpx.HTTPError`` subclasses; this connector wraps
+them as ``model.timeout`` since they prevent first-byte response.
+
+The classification helper :func:`classify_http_response` is a pure
+function — testable in isolation. A future commit wires it into the
+call layer that wraps ``crewai.LLM`` invocation; today the engine
+exercises the same mapping through the Fake-LLM test path
+(see :mod:`engine._fallback`).
 """
 
 from __future__ import annotations
@@ -28,6 +64,10 @@ from llm.protocol import (
     PromptField,
     ProviderConfig,
     ValidationResult,
+)
+from llm.providers._errors import (
+    classify_http_response,
+    classify_transport_error,
 )
 
 _DEFAULT_TIMEOUT_SECONDS = 30.0
@@ -50,6 +90,11 @@ class OpenCodeConnector:
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
         self._transport = transport
+
+    # ---- Phase 1.3 error classification (FB-R10) --------------------------
+
+    classify_http_response = staticmethod(classify_http_response)
+    classify_transport_error = staticmethod(classify_transport_error)
 
     # ---- Protocol surface --------------------------------------------------
 

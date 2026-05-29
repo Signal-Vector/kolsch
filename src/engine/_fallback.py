@@ -218,6 +218,57 @@ def build_fallback_chain(
 
 
 # ---------------------------------------------------------------------------
+# Streaming boundary — patch §2.3
+# ---------------------------------------------------------------------------
+
+
+class StreamState:
+    """Per-call streaming-boundary signal — Phase 1.3 patch §2.3.
+
+    Carries one boolean: has the connector emitted any content
+    token to the user yet? The :class:`FallbackLLMHandle`
+    Recoverable branch consults this on every retry attempt. Once
+    the flag is set, fallback is short-circuited — partial output
+    has been committed to the log + the user's terminal; swapping
+    models mid-stream would lie about which model produced the
+    answer.
+
+    Wiring:
+
+    - The engine constructs one :class:`StreamState` per
+      ``execute_stream`` call and passes it to the handle.
+    - The connector's streaming layer calls
+      :meth:`mark_content_emitted` on the first content chunk.
+    - The handle's orchestrator polls
+      :meth:`has_emitted_content` before advancing on a
+      Recoverable error; if True, it re-raises the original error
+      without emitting a ``model.fallback`` event.
+
+    Non-streaming callers don't need this — they pass ``None`` and
+    the orchestrator behaves exactly as before. The current Phase
+    1.1 / 1.2 connectors do not stream through the handle (they
+    return one ``LLMResponse``); when a streaming connector lands,
+    it sets this flag on the first token. The contract is
+    front-loaded so connector authors implement against a real
+    seam, not a TODO.
+    """
+
+    __slots__ = ("_emitted",)
+
+    def __init__(self) -> None:
+        self._emitted = False
+
+    def mark_content_emitted(self) -> None:
+        """Set the flag. Idempotent."""
+        self._emitted = True
+
+    def has_emitted_content(self) -> bool:
+        """Return whether any content token has been emitted to the
+        user since this StreamState was constructed."""
+        return self._emitted
+
+
+# ---------------------------------------------------------------------------
 # The orchestrator — framework-facing LLMHandle
 # ---------------------------------------------------------------------------
 
@@ -265,6 +316,7 @@ class FallbackLLMHandle:
         chain: list[ModelSpec],
         llm_factory: LLMFactory,
         config_event_id: str | None,
+        stream_state: StreamState | None = None,
     ) -> None:
         self._emit = emit
         self._agent_id = agent_id
@@ -272,6 +324,11 @@ class FallbackLLMHandle:
         self._chain = chain
         self._llm_factory = llm_factory
         self._config_event_id = config_event_id
+        # Phase 1.3 patch §2.3 — populated by the engine's streaming
+        # path; None for non-streaming exchanges. When set, the
+        # orchestrator's Recoverable branch consults
+        # `stream_state.has_emitted_content()` before advancing.
+        self._stream_state = stream_state
         # Production callers can observe `factory_calls` to confirm
         # lazy-build behaviour (TC-FB-03 etc).
         self.factory_calls: list[ModelSpec] = []
@@ -305,6 +362,12 @@ class FallbackLLMHandle:
                 # mis-resolved).
                 if not is_fallback_triggering(exc):
                     raise
+                if self._stream_emitted_content():
+                    # Phase 1.3 patch §2.3 streaming boundary —
+                    # partial output already committed; abort with
+                    # the original error rather than swapping models
+                    # mid-stream.
+                    raise
                 attempts.append(_attempt_entry(spec, exc))
                 previous_spec = spec
                 previous_error = exc
@@ -322,6 +385,13 @@ class FallbackLLMHandle:
                 if not is_fallback_triggering(exc):
                     # Fatal `model.*` (or anything else typed) — abort
                     # without consulting the rest of the chain.
+                    raise
+                if self._stream_emitted_content():
+                    # Phase 1.3 patch §2.3 streaming boundary —
+                    # post-token-emitted Recoverable does NOT
+                    # advance; re-raise the original Recoverable so
+                    # the engine emits `thread.exchange_failed` with
+                    # the truncation visible.
                     raise
                 previous_spec = spec
                 previous_error = exc
@@ -355,6 +425,17 @@ class FallbackLLMHandle:
                 f"All {len(attempts)} model attempts failed with Recoverable errors"
             ),
         )
+
+    # ---- Streaming-boundary helper ----------------------------------------
+
+    def _stream_emitted_content(self) -> bool:
+        """Return True iff the engine's streaming layer marked
+        content as emitted before the current attempt failed. Phase
+        1.3 patch §2.3: once tokens have streamed to the user,
+        fallback does NOT apply."""
+        if self._stream_state is None:
+            return False
+        return self._stream_state.has_emitted_content()
 
     # ---- Emission helpers -------------------------------------------------
 
@@ -481,6 +562,7 @@ __all__ = [
     "ModelRateLimited",
     "ModelServerError",
     "ModelTimeout",
+    "StreamState",
     "build_fallback_chain",
     "is_fallback_triggering",
 ]

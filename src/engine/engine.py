@@ -766,8 +766,16 @@ class _Exchange:
         # - If neither, raise PlatformInternalError — the engine
         #   has no way to make an LLM call.
         llm_factory = self._build_llm_factory()
-        from engine._fallback import FallbackLLMHandle  # noqa: PLC0415
+        from engine._fallback import FallbackLLMHandle, StreamState  # noqa: PLC0415
 
+        # Phase 1.3 patch §2.3 — the orchestrator consults this
+        # StreamState before advancing the chain on a Recoverable
+        # error. Once a streaming connector marks
+        # `mark_content_emitted()`, fallback is short-circuited and
+        # the engine emits `thread.exchange_failed` with the
+        # truncation visible. Non-streaming connectors (today: all
+        # of them) never set the flag, so behaviour is unchanged.
+        self.stream_state = StreamState()
         llm_handle = FallbackLLMHandle(
             emit=self._emit_void,
             agent_id=self.agent_id,
@@ -775,6 +783,7 @@ class _Exchange:
             chain=list(self.fallback_chain),
             llm_factory=llm_factory,
             config_event_id=self.config_event_id,
+            stream_state=self.stream_state,
         )
         tool_handles = [
             _ObservedToolHandle(

@@ -16,6 +16,38 @@ The OpenRouter API has two relevant endpoints:
 
 Catalog cache is per-instance: a single connector instance reused
 across an augmentation loop only hits ``/api/v1/models`` once.
+
+## Error Classification (Phase 1.3, FB-R10)
+
+OpenRouter PROXIES many providers; the same HTTP semantics apply on
+the wire but the underlying provider's quirks are flattened into a
+unified OpenAI-compat error body. The status-code mapping is
+identical to OpenCode's; the body-keyword scan also catches
+provider-specific overflow markers (Anthropic's
+``invalid_request_error.code = context_window_exceeded`` and
+OpenAI's ``context_length_exceeded`` both flatten to the same
+keywords in OpenRouter's relay body).
+
+- HTTP 429 → ``model.rate_limited`` (Recoverable).
+- HTTP 5xx → ``model.server_error`` (Recoverable).
+- ``httpx.TimeoutException`` / transport-down →
+  ``model.timeout`` (Recoverable).
+- HTTP 400 with body keyword ``context_*`` / ``too long`` /
+  ``maximum context`` → ``model.context_overflow`` (Recoverable).
+- HTTP 401 or 403 → ``model.authentication_failed`` (Fatal).
+- HTTP 400 otherwise → ``model.bad_request`` (Fatal).
+
+Because OpenRouter is a proxy, an upstream provider's 5xx may
+surface as either ``model.server_error`` (if OpenRouter returns the
+same 5xx) or ``model.bad_request`` (if OpenRouter wraps it). The
+conservative reading: 5xx-at-the-wire is always Recoverable; the
+non-5xx wrap is Fatal because the chain's other entries likely
+route through different providers anyway.
+
+The classification helper :func:`classify_http_response` is shared
+with the other OpenAI-compat connectors via
+:mod:`llm.providers._errors` so a new provider that picks up the
+same shape doesn't reimplement it.
 """
 
 from __future__ import annotations
@@ -35,6 +67,10 @@ from llm.protocol import (
     PromptField,
     ProviderConfig,
     ValidationResult,
+)
+from llm.providers._errors import (
+    classify_http_response,
+    classify_transport_error,
 )
 
 _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
@@ -59,6 +95,11 @@ class OpenRouterConnector:
         # ID (e.g. "anthropic/claude-opus-4-7"). None means "not yet
         # fetched"; an empty dict means "fetched, no entries".
         self._catalog: dict[str, ModelEntry] | None = None
+
+    # ---- Phase 1.3 error classification (FB-R10) --------------------------
+
+    classify_http_response = staticmethod(classify_http_response)
+    classify_transport_error = staticmethod(classify_transport_error)
 
     # ---- ProviderConnector surface ----------------------------------------
 

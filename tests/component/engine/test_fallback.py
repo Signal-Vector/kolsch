@@ -662,30 +662,50 @@ async def test_tc_fb_10_reconstruct_preserves_fallback_events(
 # ===========================================================================
 
 
-async def test_tc_fb_07_streaming_post_token_does_not_fall_back(
-    tmp_path: Path,
-) -> None:
-    """The streaming boundary is set at the engine's outer layer
-    (the ``_Exchange._run_framework`` path). For Phase 1.3 the
-    orchestrator does not currently distinguish streaming from
-    non-streaming inside the handle; instead the boundary is
-    enforced via the failing-attempt-emit hooks. This test pins
-    that when a non-streaming caller already emitted a
-    ``model.response`` content event and THEN the model errors,
-    the engine emits ``thread.exchange_failed`` (NOT
-    ``model.fallback``).
+async def test_tc_fb_07_streaming_post_token_does_not_fall_back() -> None:
+    """Phase 1.3 patch §2.3 streaming boundary — once any content
+    has streamed to the user (`StreamState.mark_content_emitted()`),
+    a subsequent Recoverable error from the same model does NOT
+    advance the chain. The orchestrator re-raises the original
+    error so the engine emits `thread.exchange_failed` with the
+    truncation visible.
 
-    The test exercises this by driving the FallbackLLMHandle with
-    a successful primary then asserting no fallback fires after
-    the success path."""
+    The test wires a primary LLM that:
+    1. Marks the stream state on entry (simulating one token
+       streamed to the user).
+    2. Raises ModelServerError.
+
+    With the chain containing Haiku as a fallback, the orchestrator
+    MUST: NOT emit a model.fallback event, NOT invoke Haiku's
+    factory, and re-raise the original ModelServerError."""
+    from engine._fallback import StreamState
+
     captured: list[dict[str, Any]] = []
     primary = _spec("openrouter", "anthropic/claude-opus-4-7")
     haiku = _spec("openrouter", "anthropic/claude-haiku-4-5")
+    stream_state = StreamState()
+
+    async def primary_call(request: LLMRequest) -> LLMResponse:
+        _ = request
+        # Simulate one token streamed to the user, then mid-stream
+        # transport failure.
+        stream_state.mark_content_emitted()
+        raise ModelServerError(
+            provider=primary.provider, model=primary.model, status_code=503
+        )
+
+    haiku_invoked = False
+
+    async def haiku_call(request: LLMRequest) -> LLMResponse:
+        nonlocal haiku_invoked
+        haiku_invoked = True
+        _ = request
+        return LLMResponse(content="should never reach")
 
     factory = _PerSpecFactory(
         {
-            (primary.provider, primary.model): _llm_returning("token-stream-ok"),
-            (haiku.provider, haiku.model): _llm_returning("never reached"),
+            (primary.provider, primary.model): primary_call,
+            (haiku.provider, haiku.model): haiku_call,
         }
     )
 
@@ -696,17 +716,95 @@ async def test_tc_fb_07_streaming_post_token_does_not_fall_back(
         chain=[haiku],
         llm_factory=factory,
         config_event_id=f"ev_{uuid4()}",
+        stream_state=stream_state,
+    )
+
+    with pytest.raises(ModelServerError):
+        await handle(_request())
+
+    # Chain untouched.
+    assert factory.calls == [(primary.provider, primary.model)]
+    assert haiku_invoked is False
+    # No model.fallback event emitted (the boundary fired BEFORE the
+    # fallback emission in the loop).
+    assert all(e["type"] != "model.fallback" for e in captured)
+    # The honest failure-response was still emitted before the
+    # boundary short-circuited (the user has to know the call failed).
+    failure_responses = [
+        e
+        for e in captured
+        if e["type"] == "model.response" and e["data"]["stop_reason"] == "error"
+    ]
+    assert len(failure_responses) == 1
+
+
+async def test_streaming_boundary_does_not_apply_before_first_token() -> None:
+    """When `StreamState.mark_content_emitted()` was NOT called
+    (HTTP 5xx BEFORE any content streamed), fallback DOES apply —
+    same as non-streaming. Patch §2.3 explicitly: 'Before the first
+    token: fallback applies, same as non-streaming.'"""
+    from engine._fallback import StreamState
+
+    captured: list[dict[str, Any]] = []
+    primary = _spec("openrouter", "anthropic/claude-opus-4-7")
+    haiku = _spec("openrouter", "anthropic/claude-haiku-4-5")
+    stream_state = StreamState()  # never marked
+
+    factory = _PerSpecFactory(
+        {
+            (primary.provider, primary.model): _llm_raising(
+                ModelServerError(
+                    provider=primary.provider,
+                    model=primary.model,
+                    status_code=503,
+                )
+            ),
+            (haiku.provider, haiku.model): _llm_returning("Haiku saved you."),
+        }
+    )
+
+    handle = FallbackLLMHandle(
+        emit=lambda **kw: _emit_capture(captured, **kw),
+        agent_id="ag_demo",
+        primary_spec=primary,
+        chain=[haiku],
+        llm_factory=factory,
+        config_event_id=f"ev_{uuid4()}",
+        stream_state=stream_state,
     )
     response = await handle(_request())
-    assert response.content == "token-stream-ok"
-    # Confirm no fallback was emitted after success — the boundary
-    # holds for the success path; mid-stream failure handling is a
-    # documented follow-up (Phase 1.3 patch §2.3).
-    assert all(e["type"] != "model.fallback" for e in captured)
-    # `tmp_path` is included so we can flag this if a future patch
-    # wires a streaming-specific code path that needs filesystem
-    # state.
-    _ = tmp_path
+    assert response.content == "Haiku saved you."
+    fallbacks = [e for e in captured if e["type"] == "model.fallback"]
+    assert len(fallbacks) == 1
+
+
+async def test_streaming_boundary_fires_on_client_build_failure() -> None:
+    """If the factory itself raises Recoverable AFTER content was
+    emitted (a connector that streamed N-1 tokens then failed to
+    build a fresh client for retry-after-N), the boundary still
+    fires. Branch coverage for the factory-side guard."""
+    from engine._fallback import StreamState
+
+    primary = _spec("openrouter", "anthropic/claude-opus-4-7")
+    haiku = _spec("openrouter", "anthropic/claude-haiku-4-5")
+    stream_state = StreamState()
+    stream_state.mark_content_emitted()  # primary streamed tokens earlier
+
+    async def crashing_factory(spec: ModelSpec) -> Any:
+        _ = spec
+        raise ModelRateLimited(provider="openrouter", model="x")
+
+    handle = FallbackLLMHandle(
+        emit=lambda **kw: _emit_capture([], **kw),
+        agent_id="ag_demo",
+        primary_spec=primary,
+        chain=[haiku],
+        llm_factory=crashing_factory,
+        config_event_id=f"ev_{uuid4()}",
+        stream_state=stream_state,
+    )
+    with pytest.raises(ModelRateLimited):
+        await handle(_request())
 
 
 # ===========================================================================
