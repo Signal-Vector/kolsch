@@ -307,6 +307,12 @@ addopts = [
     "--cov",
     "--cov-report=term-missing",
     "--cov-report=xml",
+    # Exclude E2E tests from the default `pytest` run — they cost
+    # tokens, need real LLM keys, and run on a separate (nightly /
+    # pre-release) schedule per test-catalog Part 13 + compose.test.yml.
+    # Run explicitly via `pytest -m e2e` (which OVERRIDES this).
+    "-m",
+    "not e2e",
 ]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"

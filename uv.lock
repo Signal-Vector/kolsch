@@ -51,7 +51,7 @@ dev = [
 ]
 test = [
     { name = "crewai", specifier = "==1.14.6" },
-    { name = "httpx2", specifier = ">=0.28" },
+    { name = "httpx2", specifier = ">=2.2,<3" },
     { name = "pytest", specifier = ">=8" },
     { name = "pytest-asyncio", specifier = ">=0.23" },
     { name = "pytest-cov", specifier = ">=5" },
