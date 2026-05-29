@@ -9,7 +9,6 @@ re-installed between edits.
 from __future__ import annotations
 
 import json
-from io import StringIO
 from typing import TYPE_CHECKING
 
 import pytest
@@ -293,7 +292,120 @@ def test_tc_cli_06_no_command_prints_help_and_exits_nonzero(
     assert "usage:" in captured.out.lower()
 
 
-# Suppress an unused import the linter spots when the file is read
-# without _StringIO usage — StringIO is imported for clarity in
-# future tests that need to capture sys.stderr explicitly.
-_ = StringIO
+# ===========================================================================
+# TC-CLI-07 — sessions update + delete
+# ===========================================================================
+
+
+def test_tc_cli_07_sessions_update_and_delete(
+    platform_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    main(
+        [
+            "--root",
+            str(platform_root),
+            "run",
+            "acme/agents/demo",
+            "--input",
+            "content=hello",
+        ],
+    )
+    capsys.readouterr()
+
+    main(["--root", str(platform_root), "sessions", "list"])
+    session_id = capsys.readouterr().out.strip().splitlines()[0].split()[0]
+
+    # Update: star + rename.
+    exit_code = main(
+        [
+            "--root",
+            str(platform_root),
+            "sessions",
+            "update",
+            session_id,
+            "--name",
+            "renamed",
+            "--star",
+        ],
+    )
+    assert exit_code == 0
+    out = capsys.readouterr().out.strip()
+    assert "starred=True" in out
+    assert "renamed" in out
+
+    # Delete: idempotent — running twice doesn't fail.
+    exit_code = main(
+        ["--root", str(platform_root), "sessions", "delete", session_id],
+    )
+    assert exit_code == 0
+    capsys.readouterr()
+    exit_code = main(
+        ["--root", str(platform_root), "sessions", "delete", session_id],
+    )
+    assert exit_code == 0
+
+
+# ===========================================================================
+# TC-CLI-08 — stream exit code 2 when the exchange fails
+# ===========================================================================
+
+
+def test_tc_cli_08_stream_exit_code_on_fatal(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """Step 13 review #6 — streaming run exits non-zero when the
+    final event is thread.exchange_failed, so shell pipelines can
+    distinguish stream-success from stream-with-Fatal-final."""
+    root = _make_platform_root(tmp_path)
+    # Author an agent with an authz rule that denies its own execute,
+    # then run it via stream — the pre-flight Fatal surfaces as
+    # thread.exchange_failed inside the stream.
+    (root / "platform.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "secrets": {"variant": "dotenv", "config": {"path": ".env"}},
+                "sandbox": {"variant": "native", "config": {}},
+                "authorization": {
+                    "variant": "rule_based",
+                    "config": {
+                        "rules": [
+                            {
+                                "who": "user.local",
+                                "what": r"agent\.execute\..*",
+                                "effect": "deny",
+                            },
+                        ],
+                    },
+                },
+                "storage": {
+                    "entity_backend": "sqlite",
+                    "entity_path": ".platform/entities.db",
+                },
+                "event_bus": {"backend": "in_process"},
+                "file_access": {
+                    "allowed_paths": ["data/"],
+                    "denied_paths": [".env"],
+                },
+                "defaults": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "--root",
+            str(root),
+            "run",
+            "acme/agents/demo",
+            "--input",
+            "content=hi",
+            "--stream",
+        ],
+    )
+    assert exit_code == 2
+    lines = [line for line in capsys.readouterr().out.splitlines() if line.strip()]
+    types = [json.loads(line)["type"] for line in lines]
+    assert "thread.exchange_failed" in types

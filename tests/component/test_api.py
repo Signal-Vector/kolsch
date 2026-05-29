@@ -8,7 +8,6 @@ without external services.
 
 from __future__ import annotations
 
-import json
 from typing import TYPE_CHECKING
 
 import pytest
@@ -267,4 +266,116 @@ def test_tc_api_07_unknown_agent_returns_404(client: TestClient) -> None:
     assert resp.status_code == 404
 
 
-_ = json  # silence unused-import linter
+# ===========================================================================
+# TC-API-08 — PATCH /sessions/{id} updates UI-state fields
+# ===========================================================================
+
+
+def test_tc_api_08_patch_session(client: TestClient) -> None:
+    session = client.post(
+        "/sessions",
+        json={"agent_id": "ag_demo", "name": "before"},
+    ).json()
+    sid = session["session_id"]
+
+    resp = client.patch(
+        f"/sessions/{sid}",
+        json={"name": "after", "starred": True},
+    )
+    assert resp.status_code == 200
+    updated = resp.json()
+    assert updated["name"] == "after"
+    assert updated["starred"] is True
+    assert updated["archived"] is False  # unchanged
+
+
+# ===========================================================================
+# TC-API-09 — DELETE /sessions/{id} removes the entity + JSONL
+# ===========================================================================
+
+
+def test_tc_api_09_delete_session(client: TestClient) -> None:
+    session = client.post(
+        "/sessions",
+        json={"agent_id": "ag_demo", "name": "to-delete"},
+    ).json()
+    sid = session["session_id"]
+
+    resp = client.delete(f"/sessions/{sid}")
+    assert resp.status_code == 204
+
+    # GET events on the deleted session → 404 (session_not_found).
+    resp = client.get(f"/sessions/{sid}/events")
+    assert resp.status_code == 404
+
+
+# ===========================================================================
+# TC-API-10 — Layer 3 validator wired: wildcard write_tag rejected
+# ===========================================================================
+
+
+def test_tc_api_10_layer3_validator_fires(tmp_path: Path) -> None:
+    """Step 13 review #1 — Layer 3 validators MUST fire on the
+    production execute paths. Author an agent with an invalid memory
+    config (wildcard write_tag, which MEM I5 forbids); the execute
+    request must surface ConfigInvalid as 400, NOT silently flow into
+    the engine."""
+    import asyncio  # noqa: PLC0415
+
+    import yaml  # noqa: PLC0415
+
+    from api import build_app  # noqa: PLC0415
+    from platform_runtime import bootstrap_runtime  # noqa: PLC0415
+
+    root = _make_platform_root(tmp_path)
+    # Author a SECOND agent with a broken memory subsystem config —
+    # write_tag contains the wildcard `*` which MEM I5 forbids.
+    bad_agent = root / "bundles" / "acme" / "agents" / "broken_memory.yaml"
+    bad_agent.write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "0.1",
+                "assembly_version": "1",
+                "agent_id": "ag_broken",
+                "name": "broken",
+                "description": "broken memory config.",
+                "model": {"provider": "fake", "model": "fake-model"},
+                "prompt": "You are broken.",
+                "io": {"mode": "conversational"},
+                "subsystems": {
+                    "memory": {
+                        "variant": "recent_buffer",
+                        "config": {"write_tag": "bad/*"},
+                    },
+                },
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    runtime = asyncio.run(bootstrap_runtime(root=root))
+    app = build_app(runtime)
+    client = TestClient(app)
+
+    session = client.post(
+        "/sessions",
+        json={"agent_id": "ag_broken", "name": "broken-test"},
+    ).json()
+
+    resp = client.post(
+        "/agents/acme/agents/broken_memory/execute",
+        json={
+            "session_id": session["session_id"],
+            "trigger_kind": "user_message",
+            "content": "hi",
+        },
+    )
+    # With the Layer 3 wire-up, ConfigInvalid fires inside
+    # runtime.build_resolved_config and surfaces as 400 BEFORE the
+    # engine sees the config — proving the validators run on the
+    # production path (Step 13 review #1).
+    assert resp.status_code == 400
+    detail = resp.json()["detail"]["error"]
+    assert detail["type"] == "config.invalid"
+    validation_errors = detail["detail"]["validation_errors"]
+    assert any(e["code"] == "wildcard_in_write_tag" for e in validation_errors)

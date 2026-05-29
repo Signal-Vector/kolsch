@@ -108,6 +108,47 @@ def _build_parser() -> argparse.ArgumentParser:
     )
     sessions_events.add_argument("session_id", help="Session id (ses_...).")
 
+    sessions_update = sessions_sub.add_parser(
+        "update",
+        help="Update name/starred/archived on a session.",
+    )
+    sessions_update.add_argument("session_id", help="Session id (ses_...).")
+    sessions_update.add_argument("--name", default=None)
+    sessions_update.add_argument(
+        "--star",
+        dest="starred",
+        action="store_const",
+        const=True,
+        default=None,
+        help="Star the session.",
+    )
+    sessions_update.add_argument(
+        "--unstar",
+        dest="starred",
+        action="store_const",
+        const=False,
+        help="Remove the star.",
+    )
+    sessions_update.add_argument(
+        "--archive",
+        dest="archived",
+        action="store_const",
+        const=True,
+        default=None,
+    )
+    sessions_update.add_argument(
+        "--unarchive",
+        dest="archived",
+        action="store_const",
+        const=False,
+    )
+
+    sessions_delete = sessions_sub.add_parser(
+        "delete",
+        help="Delete a session (entity record + JSONL file).",
+    )
+    sessions_delete.add_argument("session_id", help="Session id (ses_...).")
+
     # ---- reconstruct -------------------------------------------------
     sub.add_parser(
         "reconstruct",
@@ -131,7 +172,9 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     from engine import ExecutionContext  # noqa: PLC0415
 
     runtime = await bootstrap_runtime(root=args.root)
-    config = await runtime.asset_management.build_resolved_config(args.agent_ref)
+    # Route through runtime.build_resolved_config so Layer 3
+    # validators fire — see PlatformRuntime docstring.
+    config = await runtime.build_resolved_config(args.agent_ref)
 
     inputs = _parse_inputs(args.input)
     content = inputs.pop("content", None)
@@ -166,11 +209,20 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     ctx = ExecutionContext(thread_id=thread.thread_id, trigger=trigger)
 
     if args.stream:
+        # Track whether a Fatal event landed — execute_stream doesn't
+        # raise on Fatal (spec §1.6); the failed event IS the signal.
+        # Exit 2 so shell pipelines can distinguish stream success
+        # from stream-with-Fatal-final-event (review #6 fix).
+        from schemas import EventType  # noqa: PLC0415
+
+        had_fatal = False
         async for event in runtime.engine.execute_stream(config, ctx):
             sys.stdout.write(_format_event_line(event))
             sys.stdout.write("\n")
             sys.stdout.flush()
-        return 0
+            if event.type == EventType.THREAD_EXCHANGE_FAILED:
+                had_fatal = True
+        return 2 if had_fatal else 0
 
     try:
         agent_msg = await runtime.engine.execute(config, ctx)
@@ -210,11 +262,43 @@ async def _cmd_sessions_events(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _cmd_sessions_update(args: argparse.Namespace) -> int:
+    from schemas import SessionId  # noqa: PLC0415
+
+    runtime = await bootstrap_runtime(root=args.root)
+    sid = SessionId(args.session_id)
+    updated = await runtime.store.update_session(
+        sid,
+        name=args.name,
+        starred=args.starred,
+        archived=args.archived,
+    )
+    sys.stdout.write(
+        f"{updated.session_id}  starred={updated.starred}  "
+        f"archived={updated.archived}  name={updated.name}\n",
+    )
+    return 0
+
+
+async def _cmd_sessions_delete(args: argparse.Namespace) -> int:
+    from schemas import SessionId  # noqa: PLC0415
+
+    runtime = await bootstrap_runtime(root=args.root)
+    sid = SessionId(args.session_id)
+    await runtime.store.delete_session(sid)
+    sys.stdout.write(f"deleted {sid}\n")
+    return 0
+
+
 async def _cmd_sessions(args: argparse.Namespace) -> int:
     if args.sessions_command == "list" or args.sessions_command is None:
         return await _cmd_sessions_list(args)
     if args.sessions_command == "events":
         return await _cmd_sessions_events(args)
+    if args.sessions_command == "update":
+        return await _cmd_sessions_update(args)
+    if args.sessions_command == "delete":
+        return await _cmd_sessions_delete(args)
     return 1
 
 

@@ -71,9 +71,16 @@ test = [
     "pytest-asyncio>=0.23",
     "pytest-cov>=5",
     "testcontainers>=4.7",
-    # FastAPI TestClient uses httpx2 in recent starlette; pin
-    # explicitly so the testclient path doesn't fail at import.
-    "httpx2>=0.28",
+    # FastAPI's TestClient is starlette.testclient.TestClient, which
+    # tries `import httpx2 as httpx` first (starlette deprecated
+    # httpx in favour of httpx2; see
+    # .venv/lib/python3.13/site-packages/starlette/testclient.py:43).
+    # Without httpx2 installed, the import path raises a
+    # StarletteDeprecationWarning that promotes to an error under our
+    # filterwarnings setup. httpx2 is a real, maintained package
+    # (PyPI: httpx2==2.2.0 as of 2026-05); pin it explicitly so the
+    # test path doesn't fall back to the legacy httpx import.
+    "httpx2>=2.2,<3",
     # CrewAI for the v1 production Framework adapter. Test-group only —
     # the engine's contract (src/engine/framework.py) stays
     # framework-agnostic per the prereq design note. Pinned to a
@@ -193,8 +200,11 @@ ignore = [
 # API module — FastAPI routes accept Pydantic models via dependency
 # injection; type-checking blocks would break Pydantic field
 # inspection. Plus FBT for FastAPI's Query(default=False) idiom is
-# spurious — Query is a value, not a boolean trap.
-"src/api/**" = ["TC001", "TC003", "FBT001", "FBT002"]
+# spurious — Query is a value, not a boolean trap. PLR0915 raised
+# because register_routes deliberately co-locates all route handlers
+# in one function so the FastAPI app's routing table is visible top
+# to bottom (vs. scattered across modules).
+"src/api/**" = ["TC001", "TC003", "FBT001", "FBT002", "PLR0915"]
 # Platform runtime — Framework is a Protocol kwarg whose runtime
 # value never needs TYPE_CHECKING gating because it goes into the
 # AgentEngine constructor immediately.

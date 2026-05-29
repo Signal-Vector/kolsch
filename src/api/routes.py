@@ -12,7 +12,6 @@ engine event.
 
 from __future__ import annotations
 
-import asyncio
 import json
 from typing import TYPE_CHECKING, Any
 
@@ -23,6 +22,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from engine import AgentExecutionError, ExecutionContext
 from errors import (
     AssetsNotFound,
+    ConfigInvalid,
     FileAccessDenied,
     FileAccessInvalidFileRef,
     PlatformError,
@@ -47,6 +47,20 @@ class _CreateSessionRequest(BaseModel):
 
     agent_id: str = Field(..., description="ag_<id> for the session's owning agent.")
     name: str | None = None
+
+
+class _UpdateSessionRequest(BaseModel):
+    """PATCH /sessions/{id} — partial update of UI-state fields.
+
+    All fields optional; only present keys are applied (Module API
+    Reference §3.2.4 — entity_backend.update_session).
+    """
+
+    model_config = ConfigDict(extra="forbid")
+
+    name: str | None = None
+    starred: bool | None = None
+    archived: bool | None = None
 
 
 class _SessionView(BaseModel):
@@ -124,16 +138,51 @@ def register_routes(app: FastAPI, runtime: PlatformRuntime) -> None:
         )
         return [_session_view(s) for s in sessions]
 
+    @app.patch("/sessions/{session_id}", response_model=_SessionView)
+    async def update_session(
+        session_id: str,
+        req: _UpdateSessionRequest,
+    ) -> _SessionView:
+        try:
+            sid = SessionId(session_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        try:
+            updated = await runtime.store.update_session(
+                sid,
+                name=req.name,
+                starred=req.starred,
+                archived=req.archived,
+            )
+        except SessionNotFound as exc:
+            raise HTTPException(status_code=404, detail=str(exc)) from exc
+        return _session_view(updated)
+
+    @app.delete("/sessions/{session_id}", status_code=204)
+    async def delete_session(session_id: str) -> None:
+        try:
+            sid = SessionId(session_id)
+        except ValueError as exc:
+            raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # store.delete_session is idempotent — already-deleted is a
+        # no-op (Module API Reference §3.2.3). Returns no body.
+        await runtime.store.delete_session(sid)
+
     @app.get("/sessions/{session_id}/events")
     async def get_session_events(session_id: str) -> list[dict[str, Any]]:
         try:
             sid = SessionId(session_id)
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
+        # Verify the session still exists first — list_threads
+        # returns [] for a deleted session, but the API contract is
+        # "404 if the session is gone." get_session raises
+        # SessionNotFound, which we map to 404 here.
         try:
-            threads = await runtime.store.list_threads(sid)
+            await runtime.store.get_session(sid)
         except SessionNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+        threads = await runtime.store.list_threads(sid)
 
         events: list[dict[str, Any]] = []
         for thread in threads:
@@ -152,7 +201,18 @@ def register_routes(app: FastAPI, runtime: PlatformRuntime) -> None:
         req: _ExecuteRequest,
     ) -> _ExecuteResponse:
         ctx = await _prepare_context(runtime, agent_ref, req)
-        config = await runtime.asset_management.build_resolved_config(agent_ref)
+        # Route through runtime.build_resolved_config so Layer 3
+        # validators fire — see PlatformRuntime docstring. A
+        # ConfigInvalid surfaces here as 400 with the structured
+        # validation errors in the response body (the engine never
+        # gets the broken config).
+        try:
+            config = await runtime.build_resolved_config(agent_ref)
+        except ConfigInvalid as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": exc.to_dict()},
+            ) from exc
         try:
             event = await runtime.engine.execute(config, ctx)
         except AgentExecutionError as exc:
@@ -174,7 +234,15 @@ def register_routes(app: FastAPI, runtime: PlatformRuntime) -> None:
         req: _ExecuteRequest,
     ) -> StreamingResponse:
         ctx = await _prepare_context(runtime, agent_ref, req)
-        config = await runtime.asset_management.build_resolved_config(agent_ref)
+        # Route through runtime.build_resolved_config so Layer 3
+        # validators fire — see PlatformRuntime docstring.
+        try:
+            config = await runtime.build_resolved_config(agent_ref)
+        except ConfigInvalid as exc:
+            raise HTTPException(
+                status_code=400,
+                detail={"error": exc.to_dict()},
+            ) from exc
 
         async def event_stream() -> AsyncIterator[bytes]:
             try:
@@ -301,9 +369,3 @@ def _sse_format(*, event: str, data: str) -> bytes:
     """
     lines = [f"event: {event}", f"data: {data}", "", ""]
     return ("\n".join(lines)).encode("utf-8")
-
-
-async def _async_sleep_yield() -> None:
-    """Tiny yield used inside the streaming generator so concurrent
-    requests don't starve when one stream is long-running."""
-    await asyncio.sleep(0)

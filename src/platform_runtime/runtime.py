@@ -14,7 +14,7 @@ and providers (real LLMs, Postgres, Redis) are opt-in upgrades.
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from assets import AssetManagement
@@ -35,15 +35,20 @@ from providers import (
     RuleBasedAuthorizationProvider,
     SandboxProvider,
     SecretsProvider,
+    validate_recent_buffer_config,
 )
 from providers.secrets import DotenvSecretsProvider
-from skills import SkillsSubsystem
+from schemas import ResolvedAgentConfig
+from skills import SkillsSubsystem, make_standard_validator
 from store import SessionStore, SqliteBackend
-from tools import ToolsSubsystem
+from tools import ToolsSubsystem, validate_standard_config
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from pathlib import Path
+    from typing import Any
+
+    from kernel import ConfigValidator
 
 
 @dataclass(frozen=True)
@@ -52,6 +57,14 @@ class PlatformRuntime:
 
     Frozen because once built, the composition shouldn't shift under
     a running process. Construct via :func:`bootstrap_runtime`.
+
+    ``subsystem_validators`` is the Layer 3 dispatch dict per the
+    Kernel contract (§4.1) — keyed by subsystem name, then variant
+    name. Both CLI and API MUST pass this through
+    :meth:`build_resolved_config` so wildcard write_tags, unknown
+    variants, etc. fail at config-resolution time (Steps 8/10/11
+    landed the validators specifically to surface these errors here,
+    not at runtime).
     """
 
     root: Path
@@ -66,6 +79,31 @@ class PlatformRuntime:
     skills_subsystem: SkillsSubsystem
     path_policy: PathPolicy
     engine: AgentEngine
+    subsystem_validators: dict[str, dict[str, ConfigValidator]] = field(
+        default_factory=dict,
+    )
+
+    async def build_resolved_config(
+        self,
+        agent_ref: str,
+        call_overrides: dict[str, Any] | None = None,
+    ) -> ResolvedAgentConfig:
+        """Wrap :meth:`AssetManagement.build_resolved_config` with the
+        runtime's Layer 3 validators pre-wired.
+
+        Centralising the validator dispatch here closes the Step 13
+        review #1 gap — CLI and API were calling
+        ``asset_management.build_resolved_config`` directly without
+        validators, so memory's wildcard-write_tag (MEM I5), tools'
+        unknown-builtin checks, and skills' ref-existence checks were
+        all silently skipped on the production paths. Routing every
+        config build through this method makes that impossible.
+        """
+        return await self.asset_management.build_resolved_config(
+            agent_ref,
+            call_overrides=call_overrides,
+            subsystem_validators=self.subsystem_validators,
+        )
 
 
 async def bootstrap_runtime(
@@ -130,6 +168,16 @@ async def bootstrap_runtime(
         llm=chosen_llm,
     )
 
+    # Per-subsystem Layer 3 validators (kernel §4.1 dispatch shape:
+    # subsystem name → variant name → validator). Adding a new
+    # subsystem variant here is the one-line lever to make its
+    # validator fire on every build_resolved_config call.
+    subsystem_validators: dict[str, dict[str, ConfigValidator]] = {
+        "memory": {"recent_buffer": validate_recent_buffer_config},
+        "tools": {"standard": validate_standard_config},
+        "skills": {"standard": make_standard_validator(am)},
+    }
+
     return PlatformRuntime(
         root=root,
         asset_management=am,
@@ -143,4 +191,5 @@ async def bootstrap_runtime(
         skills_subsystem=skills_sub,
         path_policy=path_policy,
         engine=engine,
+        subsystem_validators=subsystem_validators,
     )
