@@ -21,6 +21,11 @@ dependencies = [
     # the engine's runtime is still framework-agnostic.
     "fastapi>=0.115,<1",
     "uvicorn[standard]>=0.30,<1",
+    # Phase 1.2 (UX-R1) — workspace resolution. `platformdirs` provides
+    # the canonical per-OS user-documents path that
+    # `platform_runtime.workspace.resolve_workspace` uses as the default
+    # when neither `--root` nor `$KOLSCH_WORKSPACE` is set.
+    "platformdirs>=4.2",
 ]
 
 [project.urls]

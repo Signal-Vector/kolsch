@@ -55,8 +55,8 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument(
         "--root",
         type=Path,
-        default=Path.cwd(),
-        help="Platform root (defaults to CWD).",
+        default=None,
+        help=("Workspace root. Default: $KOLSCH_WORKSPACE or ~/Documents/kolsch."),
     )
     parser.add_argument(
         "-v",
