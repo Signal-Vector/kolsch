@@ -161,41 +161,34 @@ async def test_tc_crw_01_lifecycle_ordering() -> None:
 
 
 # ===========================================================================
-# TC-CRW-02 — Materialization Rule: LLM seam captures exactly what
-# CrewAI sends
+# TC-CRW-02 — LLM-seam captures the post-CrewAI-wrap view (presence test)
 # ===========================================================================
 
 
-async def test_tc_crw_02_materialization_captures_seam() -> None:
-    """If CrewAI mutates the message list between the engine's handoff
-    and the LLM, the §B.6 amendment's capture path is the only thing
-    that surfaces the truth. This test pins: the LLMRequest the
-    adapter passes to LLMHandle EQUALS what CrewAI was going to send.
+async def test_tc_crw_02_seam_captures_post_wrap_view() -> None:
+    """The §B.6 amendment requires the engine to capture
+    ``model.request.data.messages`` as observed at the LLM seam (post-
+    framework-wrap). Under CrewAI, that means the LLMHandle receives
+    messages that ALREADY contain CrewAI's role-playing wrap, the
+    Task description trailer, and the expected-output preamble — not
+    the bare ``system_prompt`` + ``user_message`` the engine handed in.
 
-    We capture the request inside our LLMHandle and assert it matches
-    a separate Fake LLM recording of the same call. (Two records of
-    the same byte stream; they must agree.)"""
-    fake = FakeLLM(script=[TextResponse(text="OK.")])
-
+    Restructured from the original v1 form (which used a trivially
+    constructed-equality assertion the reviewer flagged as
+    self-confirming): the real value of this test is the WRAP-PRESENCE
+    check — the seam-captured messages contain CrewAI-injected text
+    that the engine never put there. That's how we know the seam is
+    post-wrap, not pre-wrap.
+    """
     captured_at_seam: list[LLMRequest] = []
 
     async def llm(request: LLMRequest) -> LLMResponse:
-        # Capture at the engine-side seam (what the engine would
-        # emit on model.request.data.messages).
         captured_at_seam.append(request)
-        # Forward to FakeLLM so it records too.
-        await fake.agenerate(
-            {
-                "messages": [m.model_dump() for m in request.messages],
-                "tools": list(request.tools),
-                "model": request.model,
-            }
-        )
         return LLMResponse(content="OK.")
 
     fw = CrewAIFramework()
     await fw.run_exchange(
-        system_prompt="You are an assistant.",
+        system_prompt="You are a tester.",
         user_message="Say OK.",
         llm=llm,
         tools=[],
@@ -203,18 +196,34 @@ async def test_tc_crw_02_materialization_captures_seam() -> None:
     )
 
     assert len(captured_at_seam) == 1
-    assert len(fake.calls) == 1
+    captured = captured_at_seam[0]
 
-    seam_messages = [m.model_dump() for m in captured_at_seam[0].messages]
-    fake_messages = fake.calls[0].context["messages"]
-    # Byte-equal by construction — the seam and the Fake see the
-    # same dict because we constructed both from the same source.
-    assert seam_messages == fake_messages
-    # And CrewAI's wrap is present (proves we're not just seeing the
-    # engine's pre-wrap input).
-    system_msg = next(m for m in seam_messages if m["role"] == "system")
-    assert "Assistant" in system_msg["content"]
-    assert "personal goal" in system_msg["content"].lower()
+    # The engine handed CrewAI: system="You are a tester.",
+    # user="Say OK." — nothing else. Anything else on the seam
+    # therefore came from CrewAI's wrap.
+
+    system_msgs = [m for m in captured.messages if m.role == "system"]
+    user_msgs = [m for m in captured.messages if m.role == "user"]
+    assert system_msgs and user_msgs
+
+    system_text = system_msgs[0].content
+    user_text = user_msgs[0].content
+
+    # System wrap markers — these phrases are CrewAI's, not ours.
+    # Their presence proves the seam captures POST-wrap.
+    assert "Assistant" in system_text  # CrewAI prepends agent.role.
+    assert "personal goal" in system_text.lower()  # CrewAI's "Your personal goal is:".
+
+    # User-side wrap markers — CrewAI wraps the Task description with
+    # "Current Task: ..." preamble + "expected criteria" trailer.
+    assert "Current Task:" in user_text
+    assert "expected" in user_text.lower()
+
+    # And the engine's original inputs survive inside the wrap (the
+    # post-wrap view contains the pre-wrap content; replay reads from
+    # the captured event regardless of the wrap).
+    assert "You are a tester." in system_text
+    assert "Say OK." in user_text
 
 
 # ===========================================================================

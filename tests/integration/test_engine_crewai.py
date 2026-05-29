@@ -411,3 +411,181 @@ async def test_tc_eng_11_skills_listing_against_crewai(tmp_path: Path) -> None:
     # Sk-I2 — disabled-from-model skill stays out of the listing
     # regardless of which framework wraps the prompt.
     assert "beta" not in system_text
+
+
+# ===========================================================================
+# TC-ENG-06 — Fatal error ends stream cleanly against CrewAIFramework
+# ===========================================================================
+
+
+async def test_tc_eng_06_fatal_ends_stream_against_crewai(tmp_path: Path) -> None:
+    """Streaming counterpart to TC-ENG-05. The engine MUST NOT raise
+    from execute_stream on a Fatal; the failed event is the final
+    yielded item and the iterator ends."""
+    from schemas import Event  # noqa: PLC0415
+
+    fake = FakeLLM(
+        script=[
+            ErrorResponse(error_type="model.upstream_error", message="x"),
+            ErrorResponse(error_type="model.upstream_error", message="x"),
+            ErrorResponse(error_type="model.upstream_error", message="x"),
+        ],
+    )
+    engine, store, _am = await build_engine(
+        tmp_path,
+        fake,
+        framework=CrewAIFramework(),
+    )
+    ctx = await new_session_context(store)
+    cfg = _config().model_copy(
+        update={"runtime": RuntimeSpec(max_retries=2, timeout_seconds=None)},
+    )
+
+    events: list[Event] = []
+    async for event in engine.execute_stream(cfg, ctx):
+        events.append(event)
+
+    # Stream ended without raising; last event is the Fatal.
+    assert events[-1].type == EventType.THREAD_EXCHANGE_FAILED
+    assert events[-1].data["error"]["type"] == "model.retry_exhausted"
+
+
+# ===========================================================================
+# TC-ENG-09 — Cancellation mid-exchange across the loop-bridge
+# ===========================================================================
+
+
+async def test_tc_eng_09_cancellation_against_crewai(tmp_path: Path) -> None:
+    """Cancellation across CrewAI's worker-thread → main-loop bridge.
+
+    Step 12b review #4 flagged the bridge's blocking behavior:
+    ``asyncio.run_coroutine_threadsafe(...).result()`` blocks the
+    worker thread until the LLMHandle returns. Cancellation cooperation
+    therefore lives at iteration boundaries, not mid-call. This test
+    pins that boundary: cancel BEFORE the framework runs, then assert
+    the typed cancellation surfaces via the engine's catalog (not as
+    a raw RuntimeError).
+
+    Mid-call cancellation is documented as a known limitation per
+    the Step 12b review and the CrewAIFramework module docstring."""
+    import asyncio  # noqa: PLC0415
+
+    from engine import CancelToken  # noqa: PLC0415
+    from schemas import Event  # noqa: PLC0415
+
+    cancel = CancelToken()
+    cancel.cancel()  # pre-cancel; framework's first cancellation poll fires.
+
+    fake = FakeLLM(script=[TextResponse(text="should not be reached")])
+    engine, store, _am = await build_engine(
+        tmp_path,
+        fake,
+        framework=CrewAIFramework(),
+    )
+    base_ctx = await new_session_context(store)
+    ctx = ExecutionContext(
+        thread_id=base_ctx.thread_id,
+        trigger=base_ctx.trigger,
+        cancellation=cancel,
+    )
+
+    events: list[Event] = []
+    async for event in engine.execute_stream(_config(), ctx):
+        events.append(event)
+
+    # The stream ended; the final event is thread.exchange_failed
+    # with the catalog-typed exchange.cancelled (verifying review #5
+    # fix — raw RuntimeError would have surfaced as
+    # platform.internal_error).
+    assert events[-1].type == EventType.THREAD_EXCHANGE_FAILED
+    assert events[-1].data["error"]["type"] == "exchange.cancelled"
+    # FakeLLM was never reached (we pre-cancelled).
+    assert len(fake.calls) == 0
+    # asyncio import preserved across PLR — runtime use here is to make
+    # the helper-import block clear; the engine's CancelToken sets the
+    # underlying asyncio.Event itself.
+    del asyncio
+
+
+# ===========================================================================
+# TC-ENG-10 — Force-invoke synthetic read sits OUTSIDE CrewAI's loop
+# ===========================================================================
+
+
+def _write_skill_for_force_invoke(
+    root: Path,
+    body: str = "Skill body content.",
+) -> Path:
+    """Helper: create acme/skills/literature with the given body."""
+    return _write_skill(root, "acme", "literature", body)
+
+
+async def test_tc_eng_10_force_invoke_against_crewai(tmp_path: Path) -> None:
+    """Pre-flight step 7 emits the synthetic read BEFORE
+    Framework.run_exchange is even called. CrewAI must not see /
+    interfere with the synthetic tool.called/tool.result pair. This
+    test verifies the engine's pre-flight isolation holds: the
+    synthetic events are in the log, principal=system, and they
+    appear strictly before the model.request from CrewAI's wrap."""
+    from tests.fixtures.engine_builder import write_platform_yaml  # noqa: PLC0415
+
+    write_platform_yaml(tmp_path)
+    md_path = _write_skill_for_force_invoke(tmp_path)
+
+    fake = FakeLLM(script=[TextResponse(text="Done.")])
+    engine, store, _am = await build_engine(
+        tmp_path,
+        fake,
+        framework=CrewAIFramework(),
+    )
+
+    cfg = _config().model_copy(
+        update={
+            "subsystems": {
+                "tools": SubsystemConfig(
+                    variant="standard",
+                    config={"builtin": ["read"]},
+                ),
+                "skills": SubsystemConfig(
+                    variant="standard",
+                    config={"enabled": [{"ref": "acme/skills/literature"}]},
+                ),
+            },
+        },
+    )
+
+    session = await store.create_session("ag_test", name="force-invoke")
+    threads = await store.list_threads(session.session_id)
+    ctx = ExecutionContext(
+        thread_id=threads[0].thread_id,
+        trigger={
+            "kind": "user_message_with_force_skill",
+            "content": "Use the skill.",
+            "force_skills": ["acme/skills/literature"],
+        },
+    )
+
+    await engine.execute(cfg, ctx)
+
+    events = [e async for e in store.read_path_to_leaf(ctx.thread_id)]
+    # The synthetic read landed exactly once, with actor.kind=system
+    # and the SKILL.md path on the arguments.
+    synthetic_called = [
+        e
+        for e in events
+        if e.type == EventType.TOOL_CALLED and e.actor.kind == "system"
+    ]
+    assert len(synthetic_called) == 1
+    assert synthetic_called[0].data["arguments"]["path"] == str(md_path)
+
+    # Critical: the synthetic call precedes BOTH thread.exchange_started
+    # and the CrewAI-issued model.request — i.e. CrewAI never saw it.
+    types_in_order = [e.type for e in events]
+    synthetic_idx = next(
+        i
+        for i, e in enumerate(events)
+        if e.type == EventType.TOOL_CALLED and e.actor.kind == "system"
+    )
+    started_idx = types_in_order.index(EventType.THREAD_EXCHANGE_STARTED)
+    model_request_idx = types_in_order.index(EventType.MODEL_REQUEST)
+    assert synthetic_idx < started_idx < model_request_idx

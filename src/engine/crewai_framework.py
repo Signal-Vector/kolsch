@@ -57,6 +57,7 @@ from crewai.tools.base_tool import BaseTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from engine.framework import LLMRequest, Message, ToolCall
+from errors import ExchangeCancelled
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -216,10 +217,13 @@ class _CrewAILLM(BaseLLM):
         else:
             msgs = list(messages)
 
-        # Cancellation poll BEFORE making the network call.
+        # Cancellation poll BEFORE making the network call. Raise the
+        # catalog-typed Fatal so the engine's _run_framework path catches
+        # it as a PlatformError and routes to thread.exchange_failed
+        # with the canonical `exchange.cancelled` code (handbook hard
+        # rule — no non-PlatformError escapes a public boundary).
         if self.cancellation is not None and self.cancellation():
-            msg = "exchange cancelled by engine"
-            raise RuntimeError(msg)
+            raise ExchangeCancelled(cancelled_at_event_id="")
 
         request = LLMRequest(
             messages=[_to_engine_message(m) for m in msgs],
