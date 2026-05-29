@@ -53,6 +53,7 @@ packages = [
     "src/cli",
     "src/api",
     "src/platform_runtime",
+    "src/llm",
 ]
 
 # ---------------------------------------------------------------------------
@@ -180,6 +181,18 @@ ignore = [
                # the import cost or fail without the e2e environment
     "SLF001",  # E2E tests reach into engine._llm / engine._tools as
                # test seams to override the LLM mid-test
+    "S105",    # Phase 1.1 LLM tests use literal secret-name strings
+               # ("MISSING_KEY", "OPENCODE_API_KEY") in assertions —
+               # these are names, not values; the secret detector
+               # flags them anyway. False positive in test fixtures.
+    "S106",    # Same — keyword args like `api_key_secret="OPENCODE_API_KEY"`
+               # are secret NAMES, not the values.
+    "S107",    # Same — default arg values in helper factories.
+    "PLR0913", # Test helper factories naturally take many kwargs to
+               # build varied ProviderConfig / SecretsProvider shapes.
+    "E501",    # Long test names + parametrized table rows occasionally
+               # exceed 88 cols; the docs/process catalog test names
+               # are deliberate.
 ]
 # `src/errors/` is, by definition, the errors package. Every class is a
 # PlatformError subclass; the N818 "must end in Error" rule would force

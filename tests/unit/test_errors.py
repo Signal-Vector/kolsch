@@ -30,6 +30,7 @@ from errors import (
     CapabilityMismatch,
     ConfigInvalid,
     ConfigMergeFailed,
+    ConfigUnknownAlias,
     ConfigUnknownVariant,
     ConfigVersionMismatch,
     ExchangeCancelled,
@@ -39,6 +40,13 @@ from errors import (
     FileAccessPathNormalizationFailed,
     FileAccessPolicyLoadFailed,
     Level,
+    LlmClientInitFailed,
+    LlmConnectorDuplicate,
+    LlmConnectorUnknown,
+    LlmDiscoveryFailed,
+    LlmProviderNotConfigured,
+    LlmSecretMissing,
+    LlmValidationFailed,
     McpProtocolError,
     McpServerUnreachable,
     McpUpstreamError,
@@ -200,6 +208,25 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
         "where": "test.scaffold",
         "detail": {"original_type": "builtins.ValueError", "args": ["bad"]},
     },
+    # 4.13 LLM Configuration (Phase 1.1)
+    LlmProviderNotConfigured: {
+        "provider": "anthropic",
+        "configured_providers": ["opencode"],
+    },
+    LlmSecretMissing: {"provider": "opencode", "secret_name": "OPENCODE_API_KEY"},
+    LlmClientInitFailed: {
+        "provider": "opencode",
+        "model": "gpt-oss-120b",
+        "reason": "boom",
+    },
+    ConfigUnknownAlias: {"alias": "mystery", "available_aliases": ["smart"]},
+    LlmConnectorUnknown: {
+        "type_name": "exotic",
+        "registered_types": ["opencode", "openrouter"],
+    },
+    LlmDiscoveryFailed: {"provider": "opencode", "reason": "connection refused"},
+    LlmValidationFailed: {"provider": "opencode", "reason": "401"},
+    LlmConnectorDuplicate: {"type_name": "opencode"},
 }
 
 

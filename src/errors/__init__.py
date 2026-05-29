@@ -51,6 +51,16 @@ from errors.kernel import (
     ConfigVersionMismatch,
 )
 from errors.level import Level
+from errors.llm import (
+    ConfigUnknownAlias,
+    LlmClientInitFailed,
+    LlmConnectorDuplicate,
+    LlmConnectorUnknown,
+    LlmDiscoveryFailed,
+    LlmProviderNotConfigured,
+    LlmSecretMissing,
+    LlmValidationFailed,
+)
 from errors.memory import (
     MemoryCompactionFailed,
     MemoryInvalidTag,
@@ -107,6 +117,7 @@ __all__ = [
     "CapabilityMismatch",
     "ConfigInvalid",
     "ConfigMergeFailed",
+    "ConfigUnknownAlias",
     "ConfigUnknownVariant",
     "ConfigVersionMismatch",
     "ExchangeCancelled",
@@ -116,6 +127,13 @@ __all__ = [
     "FileAccessPathNormalizationFailed",
     "FileAccessPolicyLoadFailed",
     "Level",
+    "LlmClientInitFailed",
+    "LlmConnectorDuplicate",
+    "LlmConnectorUnknown",
+    "LlmDiscoveryFailed",
+    "LlmProviderNotConfigured",
+    "LlmSecretMissing",
+    "LlmValidationFailed",
     "McpProtocolError",
     "McpServerUnreachable",
     "McpUpstreamError",

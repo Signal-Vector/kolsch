@@ -100,6 +100,20 @@ CATALOG: dict[str, Level] = {
     # reference implementation. When a wrapped exception must surface
     # at Fatal severity, raise `PlatformInternalError` instead.
     "platform.wrapped": Level.DIAGNOSTIC,
+    # ----- §4.13 LLM Configuration (Phase 1.1) -------------------------
+    "llm.provider_not_configured": Level.FATAL,
+    "llm.secret_missing": Level.FATAL,
+    "llm.client_init_failed": Level.FATAL,
+    "config.unknown_alias": Level.FATAL,
+    "llm.connector_unknown": Level.FATAL,
+    "llm.discovery_failed": Level.RECOVERABLE,
+    "llm.validation_failed": Level.FATAL,
+    # `llm.connector_duplicate` is NOT in the §4.13 spec table but is
+    # surfaced by registry.register() when a connector type registers
+    # twice (TC-LLM-09). Added so the registry can raise a typed
+    # PlatformError; flag for spec amendment alongside the other
+    # post-spec catalog additions above.
+    "llm.connector_duplicate": Level.FATAL,
 }
 
 

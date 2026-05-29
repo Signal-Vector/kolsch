@@ -77,7 +77,7 @@ def _default_platform_payload() -> dict[str, Any]:
     }
 
 
-def _write_bundle(  # noqa: PLR0913 — test factory; kwargs are intentional
+def _write_bundle(
     root: Path,
     *,
     dir_name: str,

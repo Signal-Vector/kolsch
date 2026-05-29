@@ -40,6 +40,9 @@ _KNOWN_SECTIONS: frozenset[str] = frozenset(
         "file_access",
         "defaults",
         "logging",
+        # Phase 1.1 LLM Provider Configuration — patch §2.2.
+        "llm_providers",
+        "model_aliases",
     }
 )
 

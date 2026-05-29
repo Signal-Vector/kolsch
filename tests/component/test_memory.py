@@ -91,7 +91,7 @@ def _now() -> datetime:
     return datetime.now(UTC)
 
 
-async def _emit_memory_written(  # noqa: PLR0913 — test factory; kwargs intentional
+async def _emit_memory_written(
     store: SessionStore,
     *,
     session_id: SessionId,

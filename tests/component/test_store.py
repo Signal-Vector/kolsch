@@ -44,7 +44,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-def _new_event(  # noqa: PLR0913 — test helper kwargs are intentional
+def _new_event(
     *,
     thread_id: ThreadId,
     session_id: SessionId,

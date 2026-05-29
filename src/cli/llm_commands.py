@@ -1,0 +1,634 @@
+"""``kolsch connect / disconnect / providers / refresh`` — Phase 1.1.
+
+Implements the four LLM provider commands described in patch Part 8.
+Lives outside :mod:`cli.main` so the heavy interactive + filesystem
+orchestration stays separate from the argparse skeleton.
+
+Invariants:
+
+- API key values NEVER touch ``platform.yaml`` (TC-LLM-10). The
+  ``api_key_secret`` field carries the secret NAME; the value lives
+  only in ``.env``.
+- ``platform.yaml`` writes are atomic — temp file + fsync + rename —
+  so a partial write never leaves a corrupt file on disk.
+- ``.env`` partial updates preserve every entry that isn't the secret
+  this command is touching.
+- A failed connect leaves both ``platform.yaml`` and ``.env`` unchanged
+  (we write only after every validation + discovery succeeds).
+"""
+
+from __future__ import annotations
+
+import os
+import sys
+from dataclasses import dataclass
+from getpass import getpass
+from pathlib import Path
+from typing import TYPE_CHECKING, Any, Protocol, TextIO
+
+import yaml
+
+from errors import (
+    LlmConnectorUnknown,
+    LlmDiscoveryFailed,
+    LlmValidationFailed,
+)
+from llm import (
+    Credentials,
+    ProviderConfig,
+    connected_metadata_sources,
+    known_types,
+)
+from llm import (
+    get as registry_get,
+)
+from llm.protocol import is_metadata_source
+
+if TYPE_CHECKING:
+    import argparse
+    from collections.abc import Callable
+
+    from llm.protocol import (
+        MetadataSourceConnector,
+        ModelEntry,
+        PromptField,
+        ProviderConnector,
+    )
+
+
+# ---------------------------------------------------------------------------
+# Prompter — test-injection seam for interactive input
+# ---------------------------------------------------------------------------
+
+
+class Prompter(Protocol):
+    """One-method protocol: read one prompt's value.
+
+    Production wires :class:`StdinPrompter`; tests pass a stub that
+    returns canned answers."""
+
+    def ask(self, field: PromptField) -> str:
+        ...
+
+
+class StdinPrompter:
+    """Production prompter — reads from stdin, uses :func:`getpass` for
+    secret fields so values don't echo to the terminal."""
+
+    def ask(self, field: PromptField) -> str:
+        suffix = f" [{field.default}]" if field.default else ""
+        label = f"{field.label}{suffix}: "
+        if field.kind == "secret":
+            value = getpass(f"Enter {field.label.lower()}: ")
+        else:
+            value = input(label)
+        value = value.strip()
+        if not value and field.default is not None:
+            return field.default
+        return value
+
+
+@dataclass(frozen=True)
+class _CommandIO:
+    """The four collaborators every command takes — kept on one
+    bag so tests can swap them without 6-positional-arg signatures."""
+
+    root: Path
+    out: Any  # file-like; defaults to sys.stdout in main.py
+    prompter: Prompter
+    connector_factory: Callable[[str], ProviderConnector]
+
+
+# ---------------------------------------------------------------------------
+# Atomic platform.yaml + partial .env writers
+# ---------------------------------------------------------------------------
+
+
+def _load_platform_yaml(root: Path) -> dict[str, Any]:
+    path = root / "platform.yaml"
+    if not path.exists():
+        return {}
+    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    if payload is None:
+        return {}
+    if not isinstance(payload, dict):
+        msg = f"platform.yaml top-level must be a mapping; got {type(payload).__name__}"
+        raise TypeError(msg)
+    return payload
+
+
+def _write_platform_yaml_atomic(root: Path, payload: dict[str, Any]) -> None:
+    """Write `payload` to `platform.yaml` atomically.
+
+    Pattern: temp file in same directory → fsync → atomic rename.
+    On any failure the original file is left untouched.
+    """
+    path = root / "platform.yaml"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        with tmp.open("w", encoding="utf-8") as f:
+            yaml.safe_dump(payload, f, sort_keys=False)
+            f.flush()
+            os.fsync(f.fileno())
+        tmp.replace(path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+
+
+def _load_dotenv_lines(env_path: Path) -> list[str]:
+    if not env_path.exists():
+        return []
+    return env_path.read_text(encoding="utf-8").splitlines()
+
+
+def _set_dotenv_entry(root: Path, key: str, value: str) -> None:
+    """Set `key=value` in `.env`, preserving every other line.
+
+    Comments + blank lines are preserved verbatim. An existing key is
+    rewritten in place; a new key is appended. Value is quoted with
+    double quotes when it contains whitespace or shell-special chars.
+    """
+    env_path = root / ".env"
+    lines = _load_dotenv_lines(env_path)
+    quoted = _quote_value(value)
+    new_line = f"{key}={quoted}"
+    rewritten = False
+    out: list[str] = []
+    for raw in lines:
+        stripped = raw.strip()
+        if not stripped or stripped.startswith("#") or "=" not in stripped:
+            out.append(raw)
+            continue
+        existing_key, _, _ = stripped.partition("=")
+        if existing_key.strip() == key:
+            out.append(new_line)
+            rewritten = True
+        else:
+            out.append(raw)
+    if not rewritten:
+        out.append(new_line)
+    env_path.write_text("\n".join(out) + "\n", encoding="utf-8")
+
+
+def _remove_dotenv_entry(root: Path, key: str) -> bool:
+    """Remove `key=...` from `.env` (if present). Returns True when
+    something was removed."""
+    env_path = root / ".env"
+    if not env_path.exists():
+        return False
+    lines = _load_dotenv_lines(env_path)
+    removed = False
+    out: list[str] = []
+    for raw in lines:
+        stripped = raw.strip()
+        if "=" not in stripped or stripped.startswith("#"):
+            out.append(raw)
+            continue
+        existing_key, _, _ = stripped.partition("=")
+        if existing_key.strip() == key:
+            removed = True
+            continue
+        out.append(raw)
+    if removed:
+        env_path.write_text(
+            ("\n".join(out) + "\n") if out else "",
+            encoding="utf-8",
+        )
+    return removed
+
+
+def _quote_value(value: str) -> str:
+    if value and all(c.isalnum() or c in "-_./" for c in value):
+        return value
+    escaped = value.replace("\\", "\\\\").replace('"', '\\"')
+    return f'"{escaped}"'
+
+
+# ---------------------------------------------------------------------------
+# connect <provider>
+# ---------------------------------------------------------------------------
+
+
+async def cmd_connect(args: argparse.Namespace, io: _CommandIO) -> int:
+    """Interactive connect flow — patch §8.1."""
+    provider_name = args.provider
+    try:
+        connector = io.connector_factory(provider_name)
+    except LlmConnectorUnknown:
+        io.out.write(
+            f"unknown provider: {provider_name!r}\n"
+            f"known providers: {', '.join(known_types())}\n",
+        )
+        return 1
+
+    responses = _gather_responses(connector, io)
+    if responses is None:
+        return 1
+    base_url = responses.get("base_url")
+    credentials = Credentials(values=dict(responses))
+
+    if not await _run_validation(connector, credentials, base_url, io, provider_name):
+        return 1
+
+    entries = await _run_discovery(connector, credentials, base_url, io)
+    if entries is None:
+        return 1
+
+    existing_payload = _load_platform_yaml(io.root)
+    existing_providers = _provider_configs_from_payload(existing_payload)
+    entries = await _maybe_augment(
+        entries, existing_providers, connector, provider_name, io
+    )
+
+    new_entry = _build_provider_entry(connector, base_url, entries, provider_name)
+    api_key_value = responses.get("api_key", "")
+    if api_key_value:
+        _set_dotenv_entry(io.root, new_entry["api_key_secret"], api_key_value)
+        io.out.write(f"✓ wrote {new_entry['api_key_secret']} to .env\n")
+
+    payload = dict(existing_payload)
+    llm_providers = dict(payload.get("llm_providers") or {})
+    llm_providers[provider_name] = new_entry
+    payload["llm_providers"] = llm_providers
+    _write_platform_yaml_atomic(io.root, payload)
+    io.out.write("✓ wrote provider config to platform.yaml\n")
+    return 0
+
+
+def _gather_responses(
+    connector: ProviderConnector,
+    io: _CommandIO,
+) -> dict[str, str] | None:
+    """Walk the connector's `auth_prompt_spec` and collect responses.
+    Returns ``None`` when a required field came back empty."""
+    spec = connector.auth_prompt_spec()
+    io.out.write(f"Connecting {spec.provider_label}...\n\n")
+    io.out.write(spec.intro + "\n\n")
+    responses: dict[str, str] = {}
+    for field in spec.fields:
+        value = io.prompter.ask(field)
+        if not value and field.required:
+            io.out.write(f"error: {field.label} is required\n")
+            return None
+        responses[field.name] = value
+    return responses
+
+
+async def _run_validation(
+    connector: ProviderConnector,
+    credentials: Credentials,
+    base_url: str | None,
+    io: _CommandIO,
+    provider_name: str,
+) -> bool:
+    io.out.write("\nValidating credentials...\n")
+    try:
+        result = await connector.validate_credentials(credentials, base_url)
+    except Exception as exc:  # noqa: BLE001 — surface as user-facing error
+        io.out.write(f"error: validation crashed: {exc}\n")
+        return False
+    if not result.ok:
+        io.out.write(
+            f"error: credentials rejected: {result.reason or 'unknown reason'}\n"
+        )
+        # Construct (don't raise) so the catalog code is exercised in
+        # tests and the failure path stays auditable.
+        _ = LlmValidationFailed(
+            provider=provider_name, reason=result.reason or "unknown"
+        )
+        return False
+    io.out.write("✓ credentials valid\n")
+    if result.metadata:
+        for key, val in sorted(result.metadata.items()):
+            io.out.write(f"  {key}: {val}\n")
+    return True
+
+
+async def _run_discovery(
+    connector: ProviderConnector,
+    credentials: Credentials,
+    base_url: str | None,
+    io: _CommandIO,
+) -> list[ModelEntry] | None:
+    io.out.write("\nDiscovering models...\n")
+    try:
+        entries = await connector.discover_models(credentials, base_url)
+    except LlmDiscoveryFailed as exc:
+        io.out.write(f"error: discovery failed: {exc.detail['reason']}\n")
+        return None
+    io.out.write(f"✓ found {len(entries)} models\n")
+    return entries
+
+
+async def _maybe_augment(
+    entries: list[ModelEntry],
+    existing_providers: dict[str, ProviderConfig],
+    connector: ProviderConnector,
+    provider_name: str,
+    io: _CommandIO,
+) -> list[ModelEntry]:
+    sources = _augmentation_sources(
+        existing_providers,
+        skip_type=connector.type_name,
+        connector_factory=io.connector_factory,
+    )
+    if sources and any(e.has_missing_fields() for e in entries):
+        io.out.write("Augmenting from metadata sources...\n")
+        entries = await _augment_entries(entries, sources, provider_name)
+        io.out.write("✓ augmented\n")
+    return entries
+
+
+def _build_provider_entry(
+    connector: ProviderConnector,
+    base_url: str | None,
+    entries: list[ModelEntry],
+    provider_name: str,
+) -> dict[str, Any]:
+    secret_name = _secret_name_for(provider_name)
+    new_entry: dict[str, Any] = {
+        "type": connector.type_name,
+        "api_key_secret": secret_name,
+    }
+    if base_url:
+        new_entry["base_url"] = base_url
+    if is_metadata_source(connector):
+        new_entry["serves_as_metadata_source"] = True
+    new_entry["models"] = [_model_entry_to_yaml(e) for e in entries]
+    return new_entry
+
+
+# ===========================================================================
+# disconnect <provider>
+# ===========================================================================
+
+
+async def cmd_disconnect(args: argparse.Namespace, io: _CommandIO) -> int:
+    provider_name = args.provider
+    payload = _load_platform_yaml(io.root)
+    providers = payload.get("llm_providers") or {}
+    if provider_name not in providers:
+        io.out.write(f"provider {provider_name!r} is not connected\n")
+        return 1
+    existing = providers[provider_name]
+    secret_name = (
+        existing.get("api_key_secret") if isinstance(existing, dict) else None
+    )
+
+    new_providers = {k: v for k, v in providers.items() if k != provider_name}
+    if new_providers:
+        payload["llm_providers"] = new_providers
+    else:
+        payload.pop("llm_providers", None)
+    _write_platform_yaml_atomic(io.root, payload)
+    io.out.write(f"✓ removed {provider_name} from platform.yaml\n")
+
+    if secret_name and _remove_dotenv_entry(io.root, secret_name):
+        io.out.write(f"✓ removed {secret_name} from .env\n")
+    return 0
+
+
+# ===========================================================================
+# `providers` — list registered connector types + connected providers
+# ===========================================================================
+
+
+async def cmd_providers(args: argparse.Namespace, io: _CommandIO) -> int:
+    _ = args
+    payload = _load_platform_yaml(io.root)
+    providers = payload.get("llm_providers") or {}
+    io.out.write("Registered connector types:\n")
+    for type_name in known_types():
+        io.out.write(f"  - {type_name}\n")
+    io.out.write("\nConnected providers (from platform.yaml):\n")
+    if not providers:
+        io.out.write("  (none)\n")
+        return 0
+    for name in sorted(providers):
+        entry = providers[name]
+        if not isinstance(entry, dict):
+            io.out.write(f"  - {name}: (malformed entry)\n")
+            continue
+        type_name = entry.get("type", "?")
+        models = entry.get("models") or []
+        model_count = len(models) if isinstance(models, list) else 0
+        flags = []
+        if entry.get("serves_as_metadata_source"):
+            flags.append("metadata-source")
+        flag_str = f" [{', '.join(flags)}]" if flags else ""
+        io.out.write(
+            f"  - {name} (type={type_name}, models={model_count}){flag_str}\n"
+        )
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# refresh [<provider>]
+# ---------------------------------------------------------------------------
+
+
+async def cmd_refresh(args: argparse.Namespace, io: _CommandIO) -> int:
+    payload = _load_platform_yaml(io.root)
+    providers = payload.get("llm_providers") or {}
+    if not providers:
+        io.out.write("no connected providers to refresh\n")
+        return 1
+    secrets = _build_refresh_secrets(io.root, payload)
+    targets = [args.provider] if args.provider else sorted(providers)
+    for name in targets:
+        if name not in providers:
+            io.out.write(f"provider {name!r} is not connected; skipping\n")
+            continue
+        entry = providers[name]
+        if not isinstance(entry, dict):
+            io.out.write(f"provider {name!r} entry is malformed; skipping\n")
+            continue
+        try:
+            connector = io.connector_factory(entry.get("type", ""))
+        except LlmConnectorUnknown:
+            io.out.write(
+                f"provider {name!r} references unknown type "
+                f"{entry.get('type')!r}; skipping\n"
+            )
+            continue
+
+        # Resolve the API key from the platform's Secrets provider —
+        # the same one the engine would use. We instantiate Secrets
+        # directly (rather than spinning up the full runtime) so
+        # `refresh` only requires the `secrets` section to be valid.
+        secret_name = entry.get("api_key_secret")
+        api_key: str | None = None
+        if secret_name:
+            api_key = await secrets.resolve(secret_name)
+        credentials = Credentials(
+            values={"api_key": api_key or "", "base_url": entry.get("base_url", "")}
+        )
+        try:
+            entries = await connector.discover_models(
+                credentials,
+                entry.get("base_url"),
+            )
+        except LlmDiscoveryFailed as exc:
+            io.out.write(
+                f"error refreshing {name}: {exc.detail['reason']}\n"
+            )
+            continue
+        io.out.write(f"✓ {name}: {len(entries)} models\n")
+        entry["models"] = [_model_entry_to_yaml(e) for e in entries]
+    providers_after = dict(providers)
+    payload["llm_providers"] = providers_after
+    _write_platform_yaml_atomic(io.root, payload)
+    return 0
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+
+def _build_refresh_secrets(
+    root: Path, payload: dict[str, Any]
+) -> Any:  # noqa: ANN401 — opaque SecretsProvider
+    """Instantiate a Secrets provider from the platform.yaml `secrets`
+    section. Used by `refresh` so the command doesn't require a full
+    runtime bootstrap.
+
+    Defaults to the dotenv variant when no `secrets` section exists —
+    matches first-run platform defaults.
+    """
+    from providers import make_secrets_provider  # noqa: PLC0415
+
+    secrets_cfg = payload.get("secrets") or {
+        "variant": "dotenv",
+        "config": {"path": ".env"},
+    }
+    return make_secrets_provider(root=root, config=secrets_cfg)
+
+
+def _secret_name_for(provider_name: str) -> str:
+    """Convention: ``<PROVIDER>_API_KEY`` (uppercase, hyphens → underscores)."""
+    sanitized = provider_name.upper().replace("-", "_").replace(".", "_")
+    return f"{sanitized}_API_KEY"
+
+
+def _provider_configs_from_payload(
+    payload: dict[str, Any],
+) -> dict[str, ProviderConfig]:
+    """Build ProviderConfig objects from the raw `llm_providers` map."""
+    out: dict[str, ProviderConfig] = {}
+    for name, raw in (payload.get("llm_providers") or {}).items():
+        if not isinstance(raw, dict):
+            continue
+        out[name] = ProviderConfig(
+            name=name,
+            type=raw.get("type", ""),
+            api_key_secret=raw.get("api_key_secret"),
+            base_url=raw.get("base_url"),
+            timeout_seconds=raw.get("timeout_seconds"),
+            extras={
+                k: v
+                for k, v in raw.items()
+                if k
+                not in {
+                    "type",
+                    "api_key_secret",
+                    "base_url",
+                    "timeout_seconds",
+                    "models",
+                }
+            },
+            models=list(raw.get("models") or []),
+        )
+    return out
+
+
+def _augmentation_sources(
+    existing_providers: dict[str, ProviderConfig],
+    *,
+    skip_type: str,
+    connector_factory: Callable[[str], ProviderConnector],
+) -> list[MetadataSourceConnector]:
+    """Return connected metadata sources, EXCLUDING any whose type
+    matches `skip_type` (so connecting OpenRouter doesn't try to
+    augment itself)."""
+    candidates = connected_metadata_sources(existing_providers)
+    # `connected_metadata_sources` returns fresh instances from the
+    # registry's get(); replace with factory-built instances so tests
+    # injecting transports get hit.
+    sources: list[MetadataSourceConnector] = []
+    for instance in candidates:
+        if instance.type_name == skip_type:
+            continue
+        try:
+            replacement = connector_factory(instance.type_name)
+        except LlmConnectorUnknown:
+            continue
+        if is_metadata_source(replacement):
+            sources.append(replacement)  # type: ignore[arg-type]
+    return sources
+
+
+async def _augment_entries(
+    entries: list[ModelEntry],
+    sources: list[MetadataSourceConnector],
+    provider_name: str,
+) -> list[ModelEntry]:
+    """Walk each source for each entry with missing fields; first hit wins."""
+    from llm.protocol import ModelEntry  # noqa: PLC0415
+
+    augmented: list[ModelEntry] = []
+    for entry in entries:
+        if not entry.has_missing_fields():
+            augmented.append(entry)
+            continue
+        new_entry = entry
+        for source in sources:
+            metadata = await source.lookup_model_metadata(
+                provider_name, entry.id
+            )
+            if metadata is None:
+                continue
+            new_entry = ModelEntry(
+                id=entry.id,
+                context_length=metadata.context_length,
+                supports_tools=metadata.supports_tools,
+                supports_streaming=metadata.supports_streaming,
+                pricing=metadata.pricing,
+            )
+            break
+        augmented.append(new_entry)
+    return augmented
+
+
+def _model_entry_to_yaml(entry: ModelEntry) -> dict[str, Any]:
+    """Serialize a :class:`ModelEntry` to the platform.yaml row shape."""
+    out: dict[str, Any] = {"id": entry.id}
+    if entry.context_length is not None:
+        out["context_length"] = entry.context_length
+    if entry.supports_tools is not None:
+        out["supports_tools"] = entry.supports_tools
+    if entry.supports_streaming is not None:
+        out["supports_streaming"] = entry.supports_streaming
+    if entry.pricing is not None:
+        out["pricing"] = {
+            "prompt_per_million": entry.pricing.prompt_per_million,
+            "completion_per_million": entry.pricing.completion_per_million,
+        }
+    return out
+
+
+def make_default_io(
+    *,
+    root: Path,
+    out: TextIO | None = None,
+) -> _CommandIO:
+    """Production helper — wires :class:`StdinPrompter` + the
+    registry's `get` for `connector_factory`."""
+    return _CommandIO(
+        root=root,
+        out=out if out is not None else sys.stdout,
+        prompter=StdinPrompter(),
+        connector_factory=registry_get,
+    )

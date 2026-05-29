@@ -160,6 +160,25 @@ def _build_parser() -> argparse.ArgumentParser:
     server.add_argument("--host", default="127.0.0.1")
     server.add_argument("--port", type=int, default=8080)
 
+    # ---- connect / disconnect / providers / refresh — Phase 1.1 ------
+    connect = sub.add_parser("connect", help="Connect an LLM provider.")
+    connect.add_argument("provider", help="Provider name (e.g. opencode).")
+
+    disconnect = sub.add_parser(
+        "disconnect", help="Disconnect an LLM provider."
+    )
+    disconnect.add_argument("provider", help="Provider name.")
+
+    sub.add_parser("providers", help="List connectors + connected providers.")
+
+    refresh = sub.add_parser(
+        "refresh",
+        help="Re-run model discovery for one (or all) connected providers.",
+    )
+    refresh.add_argument(
+        "provider", nargs="?", default=None, help="Provider name (optional)."
+    )
+
     return parser
 
 
@@ -322,11 +341,46 @@ async def _cmd_server(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _cmd_connect(args: argparse.Namespace) -> int:
+    # Eager-trigger provider registration so the registry sees both
+    # reference connectors before connect/disconnect/providers/refresh
+    # run.
+    import llm.providers  # noqa: F401, PLC0415
+    from cli.llm_commands import cmd_connect, make_default_io  # noqa: PLC0415
+
+    return await cmd_connect(args, make_default_io(root=args.root))
+
+
+async def _cmd_disconnect(args: argparse.Namespace) -> int:
+    import llm.providers  # noqa: F401, PLC0415
+    from cli.llm_commands import cmd_disconnect, make_default_io  # noqa: PLC0415
+
+    return await cmd_disconnect(args, make_default_io(root=args.root))
+
+
+async def _cmd_providers(args: argparse.Namespace) -> int:
+    import llm.providers  # noqa: F401, PLC0415
+    from cli.llm_commands import cmd_providers, make_default_io  # noqa: PLC0415
+
+    return await cmd_providers(args, make_default_io(root=args.root))
+
+
+async def _cmd_refresh(args: argparse.Namespace) -> int:
+    import llm.providers  # noqa: F401, PLC0415
+    from cli.llm_commands import cmd_refresh, make_default_io  # noqa: PLC0415
+
+    return await cmd_refresh(args, make_default_io(root=args.root))
+
+
 _DISPATCH = {
     "run": _cmd_run,
     "sessions": _cmd_sessions,
     "reconstruct": _cmd_reconstruct,
     "server": _cmd_server,
+    "connect": _cmd_connect,
+    "disconnect": _cmd_disconnect,
+    "providers": _cmd_providers,
+    "refresh": _cmd_refresh,
 }
 
 

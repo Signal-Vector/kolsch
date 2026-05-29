@@ -14,6 +14,7 @@ and providers (real LLMs, Postgres, Redis) are opt-in upgrades.
 
 from __future__ import annotations
 
+import importlib
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -154,6 +155,46 @@ async def bootstrap_runtime(
     chosen_framework = framework or FakeFramework()
     chosen_llm = llm or EchoLLMDriver().__call__
 
+    # Phase 1.1 — load the `llm_providers` section (if present) into
+    # the engine so pre-flight step 5.5 can dispatch to build_llm
+    # when an exchange needs a fresh client. Importing
+    # :mod:`llm.providers` here also triggers connector registration
+    # for the two reference providers (OpenCode, OpenRouter).
+    # NOTE: cannot bind `import llm.providers` to a name that shadows
+    # this function's `llm` parameter; the import-by-name form is
+    # enough — the side-effect is what we want.
+    importlib.import_module("llm.providers")
+    from llm import ProviderConfig  # noqa: PLC0415
+
+    llm_providers_config: dict[str, ProviderConfig] = {}
+    try:
+        raw_llm = am.get_platform_config("llm_providers")
+    except KeyError:
+        raw_llm = {}
+    for provider_name, raw in (raw_llm or {}).items():
+        if not isinstance(raw, dict):
+            continue
+        llm_providers_config[provider_name] = ProviderConfig(
+            name=provider_name,
+            type=raw.get("type", ""),
+            api_key_secret=raw.get("api_key_secret"),
+            base_url=raw.get("base_url"),
+            timeout_seconds=raw.get("timeout_seconds"),
+            extras={
+                k: v
+                for k, v in raw.items()
+                if k
+                not in {
+                    "type",
+                    "api_key_secret",
+                    "base_url",
+                    "timeout_seconds",
+                    "models",
+                }
+            },
+            models=list(raw.get("models") or []),
+        )
+
     engine = AgentEngine(
         store=store,
         bus=bus,
@@ -166,6 +207,7 @@ async def bootstrap_runtime(
         authz=authz,
         framework=chosen_framework,
         llm=chosen_llm,
+        llm_providers_config=llm_providers_config,
     )
 
     # Per-subsystem Layer 3 validators (kernel §4.1 dispatch shape:

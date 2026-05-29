@@ -73,10 +73,13 @@ from tools import ToolContext
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Awaitable, Callable
 
+    import crewai
+
     from assets import AssetManagement
     from bus import EventBus
     from engine.context import ExecutionContext
     from engine.framework import Framework, LLMRequest, LLMResponse
+    from llm import ProviderConfig
     from providers import (
         AuthorizationProvider,
         RecentBufferMemoryProvider,
@@ -121,7 +124,8 @@ class AgentEngine:
         sandbox: SandboxProvider,
         authz: AuthorizationProvider,
         framework: Framework,
-        llm: Callable[[LLMRequest], Awaitable[LLMResponse]],
+        llm: Callable[[LLMRequest], Awaitable[LLMResponse]] | None = None,
+        llm_providers_config: dict[str, ProviderConfig] | None = None,
     ) -> None:
         self._store = store
         self._bus = bus
@@ -134,6 +138,15 @@ class AgentEngine:
         self._authz = authz
         self._framework = framework
         self._llm = llm
+        # Phase 1.1 — pre-flight step 5.5 acquires a crewai.LLM via
+        # `build_llm` when `self._llm is None`. Tests still pass `llm=`
+        # directly to bypass this path; production wires
+        # `llm_providers_config` so build_llm has something to look up.
+        self._llm_providers_config: dict[str, ProviderConfig] = (
+            llm_providers_config or {}
+        )
+        # The acquired crewai.LLM lives on the exchange instance, NOT
+        # the engine — each exchange may target a different model.
         # Per-thread lock map. Each execute call shares the lock so
         # concurrent framework callbacks serialize their event-construct
         # paths. The map persists across calls because engine instances
@@ -291,6 +304,8 @@ class _Exchange:
         self.thread_id = str(context.thread_id)
         self.session_id: str = ""
         self.agent_id: str = str(config.agent_id)
+        # Wired in pre-flight step 5.5 — see _acquire_llm_if_needed.
+        self.acquired_llm: crewai.LLM | None = None
         # Wired in pre-flight step 6.
         self.config_event_id: str | None = None
         # Wired in pre-flight step 8.
@@ -390,6 +405,15 @@ class _Exchange:
                 config=memory_sub.config,
             )
 
+        # Step 5.5 — acquire LLM client (Phase 1.1 patch §5.5).
+        # When the engine was constructed without an `llm` callable,
+        # build one from this exchange's ModelSpec via `build_llm`.
+        # Tests inject `llm=` directly and skip this seam; production
+        # wires `llm_providers_config` so the lookup has something to
+        # resolve. The crewai.LLM lives on the exchange because each
+        # exchange may target a different model.
+        self.acquired_llm = await self._acquire_llm_if_needed()
+
         # Step 6 — emit config.set if the current effective config
         # differs from the most recent config.set on the thread.
         await self._emit_config_set_if_changed()
@@ -426,6 +450,40 @@ class _Exchange:
             ).model_dump(mode="json"),
             actor=Actor(kind="user", id="user.local"),
             event_id_override=EventId(self.user_message_event_id),
+        )
+
+    async def _acquire_llm_if_needed(self) -> crewai.LLM | None:
+        """Spec §2.1 step 5.5 — acquire a crewai.LLM via build_llm.
+
+        Skipped (returns ``None``) when the engine was constructed
+        with a callable `llm` — that's the test path. The test path
+        keeps working unchanged.
+
+        When `engine._llm is None`, this is the production path:
+
+        - Look up the configured provider in
+          :attr:`AgentEngine._llm_providers_config` (read from
+          platform.yaml at runtime bootstrap).
+        - Call :func:`llm.build_llm` with the agent's `ModelSpec` +
+          the provider config + secrets.
+        - Return the constructed ``crewai.LLM`` for use by the
+          framework adapter.
+
+        The framework adapter that turns the ``crewai.LLM`` into the
+        engine's ``LLMHandle`` shape ships in a follow-up patch; this
+        method only realises the lookup + construction seam.
+        """
+        if self.engine._llm is not None:
+            return None
+        from llm import build_llm  # noqa: PLC0415 — defer crewai import to runtime
+
+        provider_name = self.config.model.provider
+        provider_config = self.engine._llm_providers_config.get(provider_name)
+        return await build_llm(
+            self.config.model,
+            provider_config,
+            self.engine._secrets,
+            configured_providers=sorted(self.engine._llm_providers_config),
         )
 
     async def _emit_config_set_if_changed(self) -> None:
@@ -584,7 +642,22 @@ class _Exchange:
         )
 
         # §2.2 step 12 — register observers as the LLM/tool seams the
-        # framework will invoke.
+        # framework will invoke. When `engine._llm` is None, pre-flight
+        # step 5.5 acquired a crewai.LLM into `self.acquired_llm`; a
+        # follow-up patch wires the crewai.LLM → LLMHandle adapter
+        # here. Until then, this path requires a direct LLMHandle
+        # callable to have been injected.
+        if self.engine._llm is None:
+            msg = (
+                "engine was constructed without a direct LLMHandle and the "
+                "crewai.LLM → LLMHandle adapter is not yet wired. Pass "
+                "`llm=` at engine construction, or wait for the follow-up "
+                "patch that wires `acquired_llm` into the framework."
+            )
+            raise PlatformInternalError(
+                original_type="engine.llm_adapter_missing",
+                args=[msg],
+            )
         llm_handle = _ObservedLLMHandle(
             emit=self._emit_void,
             agent_id=self.agent_id,
