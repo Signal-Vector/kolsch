@@ -861,6 +861,108 @@ Handling), CRW (CrewAI Adapter — authored in Step 12b), INT
 
 ---
 
+## Part 9.6 — Workspace Resolution & Setup (UX) — Phase 1.2, UX-R9
+
+**TC-UX-01: `resolve_workspace(--root)` returns the flag value**
+- Layer: unit
+- Setup: `KOLSCH_WORKSPACE` unset; `cli_root=Path("/tmp/foo")`.
+- Action: `resolve_workspace(cli_root=Path("/tmp/foo"))`.
+- Expected: returns `Path("/tmp/foo").resolve()`.
+- Verifies: §10.13; resolution-chain precedence #1.
+
+**TC-UX-02: `resolve_workspace()` with `KOLSCH_WORKSPACE` set returns the env value**
+- Layer: unit
+- Setup: `KOLSCH_WORKSPACE=/tmp/from-env`; no `cli_root` passed.
+- Action: `resolve_workspace()`.
+- Expected: returns `Path("/tmp/from-env").resolve()`.
+- Verifies: §10.13; resolution-chain precedence #2.
+
+**TC-UX-03: `resolve_workspace()` with neither set returns the default**
+- Layer: unit
+- Setup: `KOLSCH_WORKSPACE` unset; no `cli_root` passed.
+- Action: `resolve_workspace()`.
+- Expected: returns
+  `Path(platformdirs.user_documents_dir(), "kolsch").resolve()`.
+- Verifies: §10.13; resolution-chain precedence #3.
+
+**TC-UX-04: CLI emits the friendly message on missing workspace, exits 3**
+- Layer: integration
+- Setup: a temp directory with no `platform.yaml`.
+- Action: run `kolsch run <agent>` against that directory via the
+  CLI dispatcher (in-process; `argparse` namespace + dispatch call).
+- Expected: stderr contains the friendly "No Kolsch workspace at
+  …. Run `kolsch setup`" message and NO Python traceback; exit
+  code is `3`.
+- Verifies: §10.13; Phase 1.2 patch §1.4; error code
+  `workspace.not_initialized`.
+
+**TC-UX-05: `kolsch setup --non-interactive` produces a runnable workspace**
+- Layer: integration
+- Setup: a fresh temp directory; no provider env vars.
+- Action: run `kolsch setup --non-interactive --root <tmp>` in
+  process.
+- Expected: `workspace_is_initialized(<tmp>)` returns `True`; the
+  starter agent file exists at
+  `bundles/starter/agents/helper.yaml` with `provider: fake`; the
+  test-run step succeeds against the fake LLM.
+- Verifies: §10.13; Phase 1.2 patch §2.5 (non-interactive
+  semantics).
+
+**TC-UX-06: `kolsch setup` re-run is idempotent**
+- Layer: integration
+- Setup: a workspace previously produced by `kolsch setup
+  --non-interactive`.
+- Action: re-run `kolsch setup --non-interactive --root <same>`
+  and compare file mtimes (or content hashes) before/after.
+- Expected: no file written by the first run is modified by the
+  second.
+- Verifies: §10.13; Phase 1.2 patch §2.3 (idempotency rules).
+
+**TC-UX-07: `kolsch setup` with provider env vars runs the connect flow**
+- Layer: integration
+- Setup: `KOLSCH_PROVIDER=opencode`,
+  `KOLSCH_PROVIDER_KEY="sk-test"`; OpenCode connector wired with a
+  mock transport returning a small `/v1/models` payload.
+- Action: run `kolsch setup --non-interactive --root <tmp>`.
+- Expected: `platform.yaml` contains an `llm_providers.opencode`
+  block; `.env` contains `OPENCODE_API_KEY=sk-test`; key value
+  does NOT appear in `platform.yaml`.
+- Verifies: §10.13; provider-env convention (Asset Mgmt §1.4
+  per UX-R5).
+
+**TC-UX-08: starter agent lands at the expected path with the chosen model**
+- Layer: integration
+- Setup: a fresh temp directory; two scenarios — (a) no provider
+  connected, (b) a connected provider exposing a `cheap` alias.
+- Action: run `kolsch setup` interactively (driven by a stub
+  prompter) selecting the relevant model option.
+- Expected: (a) the agent file's `model` field equals
+  `{provider: fake, model: fake-model}`; (b) the agent file's
+  `model` field equals the user-selected alias string.
+- Verifies: §10.13; Phase 1.2 patch §2.4 (starter agent file).
+
+**TC-UX-09: ending setup at step D and re-running picks up at step D**
+- Layer: integration
+- Setup: a workspace produced by `kolsch setup` aborted (Ctrl-C
+  simulation) after step C but before step D wrote the starter
+  agent.
+- Action: re-run `kolsch setup` against the same workspace.
+- Expected: steps A–C report "already done, skipping"; step D
+  prompts and runs.
+- Verifies: §10.13; Phase 1.2 patch §2.3.
+
+**TC-UX-10: `kolsch run starter/agents/helper` works against a setup-produced workspace**
+- Layer: integration
+- Setup: a workspace produced by `kolsch setup --non-interactive
+  --root <tmp>` (no provider).
+- Action: `kolsch run starter/agents/helper --input
+  content="hello" --root <tmp>` in process.
+- Expected: exit code 0; final `agent.message` event present in
+  the session log.
+- Verifies: §10.13; end-to-end smoke for the setup output.
+
+---
+
 ## Part 10 — Error Model (ERR)
 
 **TC-ERR-01: All subclasses serialize to envelope**
@@ -1310,8 +1412,9 @@ How the catalog maps to the success criteria (Handbook §10):
 | Event Bus | §10.4 | TC-BUS-01..07 |
 | Engine | §10.5 | TC-ENG-01..11 (framework-agnostic; run against FakeFramework in 12a and CrewAIFramework in 12b) |
 | LLM Provider Configuration | §10.12 | TC-LLM-01..10 (Phase 1.1) |
-| CLI | Part 11.6 (cases) | TC-CLI-01..08 — success criteria still to author in handbook §10.13 |
-| HTTP API | Part 11.7 (cases) | TC-API-01..10 — success criteria still to author in handbook §10.14 |
+| Workspace Resolution & Setup | §10.13 | TC-UX-01..10 (Phase 1.2, UX-R9) |
+| CLI | Part 11.6 (cases) | TC-CLI-01..08 — success criteria still to author in handbook §10.14 |
+| HTTP API | Part 11.7 (cases) | TC-API-01..10 — success criteria still to author in handbook §10.15 |
 | Memory | §10.6 | TC-MEM-01..09 |
 | Secrets/Sandbox/Authz | §10.7 | TC-SEC/SBX/AUZ-* |
 | Tools | §10.8 | TC-TLS-01..08 |

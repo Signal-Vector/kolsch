@@ -595,6 +595,21 @@ because alias resolution is part of `ModelSpec` Layer 1 validation
 | `llm.discovery_failed` | Recoverable | `{provider, reason}` | connector's `discover_models` (CLI `connect`/`refresh`) |
 | `llm.validation_failed` | Fatal | `{provider, reason}` | CLI `connect` flow (`validate_credentials` returned ok=False) |
 
+### 4.14 Workspace (Phase 1.2, UX-R6)
+
+Errors surfacing from the workspace resolver and the `kolsch setup`
+first-run flow. `workspace.not_initialized` is the **only** error a
+user should ever see from a missing workspace — the CLI intercepts
+it before runtime bootstrap and emits a friendly "run `kolsch setup`"
+message (exit code 3, no traceback) per Phase 1.2 patch §1.4.
+
+| Code | Level | Detail | Where (typical) |
+|------|-------|--------|-----------------|
+| `workspace.not_initialized` | Fatal | `{path, env_var_set}` | CLI dispatch (pre-bootstrap) |
+| `workspace.permission_denied` | Fatal | `{path, operation}` | `kolsch setup` step B; runtime bootstrap |
+| `setup.aborted` | Recoverable | `{step, reason}` | `kolsch setup` after a user Ctrl-C — informational only |
+| `setup.starter_exists` | Recoverable | `{path}` | `kolsch setup` step D when the target file exists and the user declines overwrite |
+
 ---
 
 ## Part 5 — How Errors Appear in Events

@@ -1,9 +1,13 @@
 # How-to Guides
 
-Task-oriented guides for using and extending the platform. These are
-added as implementation proceeds. Planned guides include:
+Task-oriented guides for using and extending the platform.
 
-- How to build and run your first agent.
+- [Workspace and setup](workspace-and-setup.md) — where the workspace
+  lives, switching between workspaces, backing up, resetting, and
+  scripted setup for CI.
+
+Planned:
+
 - How to write a custom tool.
 - How to write a new memory variant.
 - How to switch to the Postgres entity backend.

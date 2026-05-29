@@ -33,6 +33,25 @@ top of these specs.
   CrewAI and records its activity as events; it doesn't reimplement the
   agent loop.
 
+## Install and first run
+
+```bash
+# Install
+uv tool install kolsch                # (or pipx / pip)
+
+# First run
+kolsch setup                          # walks you through it
+
+# Use it
+kolsch run starter/agents/helper --input content="hello"
+```
+
+`kolsch setup` scaffolds a workspace at `~/Documents/kolsch` (override
+with `--root` or `$KOLSCH_WORKSPACE`), optionally connects an LLM
+provider, and ships a starter agent so the first run works without
+credentials. See `docs/how-to/workspace-and-setup.md` for switching
+between workspaces and other workspace operations.
+
 ## Where to start reading
 
 Start with the documentation index: [`docs/index.md`](docs/index.md).

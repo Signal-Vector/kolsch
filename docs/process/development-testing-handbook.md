@@ -897,6 +897,25 @@ test plan; the test plan retains the four overall validation tests.
   inspecting `platform.yaml` after a `connect` flow and by the
   Materialization Rule audit on emitted events.
 
+### 10.13 Workspace Resolution & Setup (Phase 1.2, UX-R8)
+
+- `resolve_workspace` returns the resolution chain in the documented
+  order — CLI `--root` > `KOLSCH_WORKSPACE` env var > the
+  `platformdirs`-derived default. Each layer is testable in
+  isolation.
+- The CLI emits the friendly missing-workspace message (not a
+  Python stack trace) when run against an uninitialized path, and
+  exits with code 3 (distinct from the generic error code 1).
+- `kolsch setup` is idempotent — running it twice leaves the
+  workspace identical to the once-run state; each step skips
+  cleanly when its destination already exists.
+- `kolsch setup --non-interactive` produces a runnable workspace
+  with the `provider: fake` starter agent when no
+  `KOLSCH_PROVIDER` / `KOLSCH_PROVIDER_KEY` env vars are set.
+- No module outside `src/platform_runtime/workspace.py` imports
+  `platformdirs` or reads `KOLSCH_WORKSPACE`. Verified by grep
+  during the gate.
+
 ---
 
 ## Part 11 — Coverage & Quality Gates

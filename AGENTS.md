@@ -138,6 +138,11 @@ These are non-negotiable. Violating them blocks merges.
   section**, populated via `kolsch connect <provider>`. Never embed
   API keys in agent configs or in code paths other than the
   connector's `build_llm` method. *(Phase 1.1, LLM-R11.)*
+- **Workspace location is resolved by
+  `platform_runtime.workspace.resolve_workspace`.** No other module
+  reads `KOLSCH_WORKSPACE` or constructs the default path. The CLI
+  emits a friendly message (not a stack trace) when the workspace
+  is uninitialized. *(Phase 1.2, UX-R10.)*
 
 ---
 

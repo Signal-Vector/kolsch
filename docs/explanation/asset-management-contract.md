@@ -60,6 +60,41 @@ It does NOT own:
   Management validates structural things (does the file exist, does
   the directory layout match the standard).
 
+### 1.4 Workspace Resolution
+
+*(Phase 1.2, UX-R5.)*
+
+Asset Management is rooted at a workspace path. The workspace path is
+resolved exactly once per process at startup by
+`platform_runtime.workspace.resolve_workspace`. The resolution chain,
+highest precedence first:
+
+1. The CLI's `--root <PATH>` flag.
+2. The `KOLSCH_WORKSPACE` environment variable.
+3. The platform-correct default: `<platformdirs.user_documents_dir()>/kolsch`
+   — typically `~/Documents/kolsch` on macOS and Linux,
+   `%USERPROFILE%/Documents/kolsch` on Windows.
+
+The resolver does NOT consult the current working directory. Users
+who want CWD-relative behavior set `KOLSCH_WORKSPACE=.` or pass
+`--root .` explicitly. No silent fallback.
+
+Asset Management never reads `KOLSCH_WORKSPACE` directly and never
+imports `platformdirs` — only `resolve_workspace` does. Asset
+Management is constructed with the resolved path.
+
+**Provider env vars for scripted setup.** When `kolsch setup` runs in
+`--non-interactive` mode, it consults two more env vars to wire a
+provider without prompting:
+
+- `KOLSCH_PROVIDER` — the provider name (e.g., `openrouter`).
+- `KOLSCH_PROVIDER_KEY` — the API key value, passed to the connector's
+  validate/discover flow. The key still lands in `.env` per the LLM
+  provider configuration patch — it is never written to `platform.yaml`.
+
+Both env vars are inputs to `kolsch setup` only; the runtime itself
+does not consult them at agent execution time.
+
 ---
 
 ## Part 2 — Bundle Format

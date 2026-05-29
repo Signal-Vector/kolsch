@@ -1402,20 +1402,86 @@ registry; the engine only consults it via `build_llm`.
 
 ---
 
+## Part 11.6 — Workspace Resolution (Phase 1.2, UX-R7)
+
+The single point of truth for "where does this `kolsch` invocation
+operate?". Owned by `src/platform_runtime/workspace.py`. Consumed by
+the CLI dispatcher, the HTTP server bootstrap, and the
+`kolsch setup` command. No other module reads `KOLSCH_WORKSPACE` or
+imports `platformdirs` — see AGENTS.md hard rules + the Phase 1.2
+patch §1.3.
+
+### 11.6.1 Public API
+
+```python
+KOLSCH_ENV_VAR = "KOLSCH_WORKSPACE"
+DEFAULT_DIR_NAME = "kolsch"
+
+
+def resolve_workspace(cli_root: Path | None = None) -> Path:
+    """Return the canonical workspace path for this invocation.
+
+    Resolution order (highest precedence first):
+      1. ``cli_root`` — the parsed value of the CLI ``--root`` flag.
+      2. ``$KOLSCH_WORKSPACE`` — the env-var override.
+      3. ``<platformdirs.user_documents_dir()>/kolsch`` — the default.
+
+    The returned path is absolute (``.resolve()``-d) and ``~``-expanded.
+    The path is NOT guaranteed to exist. Callers that need a populated
+    workspace should pair this with :func:`workspace_is_initialized`
+    (or instruct the user to run ``kolsch setup``).
+
+    Pure modulo ``os.environ`` read. Idempotent. Safe to call multiple
+    times per process.
+    """
+
+
+def workspace_is_initialized(root: Path) -> bool:
+    """Return ``True`` iff ``root / "platform.yaml"`` exists and is a file.
+
+    The single source of truth for "is this directory a Kolsch
+    workspace?". CLI dispatchers gate non-setup commands on this so an
+    uninitialized workspace produces a friendly message (exit code 3)
+    rather than a runtime traceback.
+    """
+```
+
+### 11.6.2 Resolution precedence
+
+| Source | When set | Notes |
+|---|---|---|
+| `--root <PATH>` (CLI flag) | Per invocation | Highest precedence; explicit user override. Default value is `None`. |
+| `KOLSCH_WORKSPACE` env var | Per shell session | For users who keep one workspace elsewhere and want it on every command. |
+| `~/Documents/kolsch` (default) | Always | Via `platformdirs.user_documents_dir()`. Created by `kolsch setup`. |
+
+The resolver does NOT consult the current working directory. Phase
+1's "use CWD" behavior is removed by UX-R2.
+
+### 11.6.3 Failure surface
+
+`resolve_workspace` itself does not raise — it always returns a
+`Path`. The downstream "no workspace here" condition is detected by
+`workspace_is_initialized()` and surfaced as the `workspace.not_initialized`
+error code (Error Model §4.14). The CLI catches the missing-workspace
+case before runtime bootstrap and exits 3 with the friendly message
+from Phase 1.2 patch §1.4.
+
+---
+
 ## Part 12 — Inter-Module Dependency Matrix
 
 Who calls whom. Rows are callers; columns are callees. Cells list the
 specific methods called.
 
-| Caller ↓ \ Callee → | Kernel | Asset Mgmt | Store | Bus | Memory | Secrets | Sandbox | Authz | Tools | Skills | LLM |
-|---|---|---|---|---|---|---|---|---|---|---|---|
-| **CLI / API** | — | initialize, get_asset, build_resolved_config, list_bundles | create_session, get_session, get_thread, delete_session | subscribe | — | resolve, exists | — | — | — | — | registry.{get,known_types,connected_metadata_sources}; connector.{auth_prompt_spec,validate_credentials,discover_models} for connect/refresh |
-| **Asset Mgmt** | resolve_and_validate | (self) | — | — | — | — | — | — | — | — | — |
-| **Agent Engine** | (via Asset Mgmt) | build_resolved_config | get_leaf, append_event, read_path_to_leaf, write_content | publish | bind_session, (Context.*) | resolve, exists | execute | allow | register_tools_for_agent, invoke_tool | get_enabled_skills, format_skills_listing, force_invoke | **build_llm** *(Phase 1.1, pre-flight step 6)* |
-| **Memory Provider** | — | — | read_events | — | (self) | — | — | — | — | — | — |
-| **Tools Subsystem** | — | get_asset | — | — | — | resolve, exists | (calls engine's sandbox use) | allow | (self) | — | — |
-| **Skills Subsystem** | — | get_asset | — | — | — | — | — | — | — | (self) | — |
-| **Secrets/Sandbox/Authz** | — | get_platform_config | — | — | — | — | — | — | — | — | — |
+| Caller ↓ \ Callee → | Kernel | Asset Mgmt | Store | Bus | Memory | Secrets | Sandbox | Authz | Tools | Skills | LLM | Workspace |
+|---|---|---|---|---|---|---|---|---|---|---|---|---|
+| **CLI / API** | — | initialize, get_asset, build_resolved_config, list_bundles | create_session, get_session, get_thread, delete_session | subscribe | — | resolve, exists | — | — | — | — | registry.{get,known_types,connected_metadata_sources}; connector.{auth_prompt_spec,validate_credentials,discover_models} for connect/refresh | **resolve_workspace, workspace_is_initialized** *(Phase 1.2, UX-R7)* |
+| **Asset Mgmt** | resolve_and_validate | (self) | — | — | — | — | — | — | — | — | — | — |
+| **Agent Engine** | (via Asset Mgmt) | build_resolved_config | get_leaf, append_event, read_path_to_leaf, write_content | publish | bind_session, (Context.*) | resolve, exists | execute | allow | register_tools_for_agent, invoke_tool | get_enabled_skills, format_skills_listing, force_invoke | **build_llm** *(Phase 1.1, pre-flight step 6)* | — |
+| **Memory Provider** | — | — | read_events | — | (self) | — | — | — | — | — | — | — |
+| **Tools Subsystem** | — | get_asset | — | — | — | resolve, exists | (calls engine's sandbox use) | allow | (self) | — | — | — |
+| **Skills Subsystem** | — | get_asset | — | — | — | — | — | — | — | (self) | — | — |
+| **Secrets/Sandbox/Authz** | — | get_platform_config | — | — | — | — | — | — | — | — | — | — |
 
 **Read this as:** "When the Agent Engine acts, it calls Asset Mgmt's
 `build_resolved_config`, the Store's `get_leaf`/`append_event`/etc.,
