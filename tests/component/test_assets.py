@@ -327,7 +327,7 @@ async def test_prompts_pre_resolved_tools_and_skills_pass_through(
 
     # The engine supplies subsystem validators; for this Am-I4 / Am-I5
     # test we don't care about per-variant body validation — accept all.
-    from kernel import ValidationResult  # noqa: PLC0415
+    from kernel import ValidationResult
 
     def _accept_anything(_body: dict[str, Any]) -> ValidationResult:
         return ValidationResult(ok=True)
@@ -401,7 +401,7 @@ async def test_missing_bundle_yaml_skipped_with_warning(
     (platform_root / "bundles" / "broken").mkdir()
 
     am = AssetManagement(root=platform_root)
-    import logging  # noqa: PLC0415
+    import logging
 
     with caplog.at_level(logging.WARNING, logger="assets"):
         await am.initialize()

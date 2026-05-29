@@ -227,9 +227,9 @@ def test_bash_bypasses_path_policy_documented_limitation() -> None:
     future change wires the policy in, this test forces the
     engineer to flip it deliberately rather than slipping.
     """
-    import inspect  # noqa: PLC0415
+    import inspect
 
-    from tools.builtins import make_bash  # noqa: PLC0415
+    from tools.builtins import make_bash
 
     source = inspect.getsource(make_bash)
     assert "check_path_allowed" not in source, (

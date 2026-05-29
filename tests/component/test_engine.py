@@ -193,7 +193,7 @@ async def _build_engine(
             # Real LLM adapters (Step 12b CrewAI) translate provider
             # errors into the typed catalog. Mirror that here so engine
             # retry/fatal logic sees the right Level.
-            from errors import ModelUpstreamError  # noqa: PLC0415
+            from errors import ModelUpstreamError
 
             if exc.error_type == "model.upstream_error":
                 raise ModelUpstreamError(
@@ -518,10 +518,10 @@ async def test_tc_eng_03_materialization_with_memory(tmp_path: Path) -> None:
     # Inject a memory.retrieved event into the log mid-thread, BEFORE
     # the exchange runs. The Assembly Procedure will project it as a
     # system "context injection" per §B.6.
-    from datetime import UTC, datetime  # noqa: PLC0415
-    from uuid import uuid4  # noqa: PLC0415
+    from datetime import UTC, datetime
+    from uuid import uuid4
 
-    from schemas import (  # noqa: PLC0415
+    from schemas import (
         Actor,
         Event,
         EventId,
@@ -602,7 +602,7 @@ class _BoomArgs(BaseModel):
     args_schema=_BoomArgs,
 )
 async def _boom_tool(_args: _BoomArgs, _ctx: ToolContext) -> dict[str, Any]:
-    from errors import ToolExecutionFailed  # noqa: PLC0415
+    from errors import ToolExecutionFailed
 
     raise ToolExecutionFailed(
         tool_name="boom",

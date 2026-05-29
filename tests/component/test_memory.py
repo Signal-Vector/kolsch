@@ -449,7 +449,7 @@ def test_memory_provider_does_not_call_store_append_event() -> None:
     log directly. Verified by source inspection: no reference to
     `append_event` appears anywhere in the provider's source.
     """
-    from providers import memory as memory_module  # noqa: PLC0415
+    from providers import memory as memory_module
 
     source = inspect.getsource(memory_module)
     assert "append_event" not in source, (

@@ -636,7 +636,7 @@ async def test_jsonl_event_serialization_is_byte_stable(
     rebuilt_events = [e async for e in store.read_events(thread_id)]
     # Read the session.opened too (it's filtered out of thread-only
     # reads); use the underlying helper.
-    from store.jsonl import _serialise, read_lines  # noqa: PLC0415
+    from store.jsonl import _serialise, read_lines
 
     all_events = list(read_lines(jsonl))
     reserialised = b"".join(_serialise(e) for e in all_events)

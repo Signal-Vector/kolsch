@@ -320,12 +320,12 @@ def test_tc_api_10_layer3_validator_fires(tmp_path: Path) -> None:
     config (wildcard write_tag, which MEM I5 forbids); the execute
     request must surface ConfigInvalid as 400, NOT silently flow into
     the engine."""
-    import asyncio  # noqa: PLC0415
+    import asyncio
 
-    import yaml  # noqa: PLC0415
+    import yaml
 
-    from api import build_app  # noqa: PLC0415
-    from platform_runtime import bootstrap_runtime  # noqa: PLC0415
+    from api import build_app
+    from platform_runtime import bootstrap_runtime
 
     root = _make_platform_root(tmp_path)
     # Author a SECOND agent with a broken memory subsystem config —

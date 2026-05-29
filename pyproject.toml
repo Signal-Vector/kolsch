@@ -167,6 +167,19 @@ ignore = [
     "PT015",   # asserts with multi-part guards are fine in tests
     "PT018",   # composite asserts read better than splitting in tests
     "TRY301",  # cause-chain tests need nested raises to build chains
+    "PLR0915", # E2E real-LLM tests deliberately exercise all 3 task
+               # shapes in one body so the assertion flow reads
+               # top-to-bottom; splitting would obscure the gating
+               # check
+    "S603",    # subprocess.run with fully-controlled arg list (TC-E2E-04
+               # spawns a known venv binary; not untrusted input)
+    "S607",    # same — `uv` is found via PATH on the gate runner; the
+               # alternative (hardcoded path) is more brittle
+    "PLC0415", # E2E tests import heavy deps (crewai.llm) lazily inside
+               # the test body so a `pytest --collect-only` doesn't pay
+               # the import cost or fail without the e2e environment
+    "SLF001",  # E2E tests reach into engine._llm / engine._tools as
+               # test seams to override the LLM mid-test
 ]
 # `src/errors/` is, by definition, the errors package. Every class is a
 # PlatformError subclass; the N818 "must end in Error" rule would force

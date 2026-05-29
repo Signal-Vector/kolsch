@@ -194,7 +194,7 @@ class _BoomArgs(BaseModel):
 
 @tool(name="boom", description="Always fails.", args_schema=_BoomArgs)
 async def _boom_tool(_args: _BoomArgs, _ctx: ToolContext) -> dict[str, Any]:
-    from errors import ToolExecutionFailed  # noqa: PLC0415
+    from errors import ToolExecutionFailed
 
     raise ToolExecutionFailed(
         tool_name="boom",
@@ -355,7 +355,7 @@ def _write_skill(root: Path, bundle: str, name: str, body: str) -> Path:
 
 
 async def test_tc_eng_11_skills_listing_against_crewai(tmp_path: Path) -> None:
-    from tests.fixtures.engine_builder import write_platform_yaml  # noqa: PLC0415
+    from tests.fixtures.engine_builder import write_platform_yaml
 
     write_platform_yaml(tmp_path)
     _write_skill(tmp_path, "acme", "alpha", "alpha body")
@@ -422,7 +422,7 @@ async def test_tc_eng_06_fatal_ends_stream_against_crewai(tmp_path: Path) -> Non
     """Streaming counterpart to TC-ENG-05. The engine MUST NOT raise
     from execute_stream on a Fatal; the failed event is the final
     yielded item and the iterator ends."""
-    from schemas import Event  # noqa: PLC0415
+    from schemas import Event
 
     fake = FakeLLM(
         script=[
@@ -468,10 +468,10 @@ async def test_tc_eng_09_cancellation_against_crewai(tmp_path: Path) -> None:
 
     Mid-call cancellation is documented as a known limitation per
     the Step 12b review and the CrewAIFramework module docstring."""
-    import asyncio  # noqa: PLC0415
+    import asyncio
 
-    from engine import CancelToken  # noqa: PLC0415
-    from schemas import Event  # noqa: PLC0415
+    from engine import CancelToken
+    from schemas import Event
 
     cancel = CancelToken()
     cancel.cancel()  # pre-cancel; framework's first cancellation poll fires.
@@ -527,7 +527,7 @@ async def test_tc_eng_10_force_invoke_against_crewai(tmp_path: Path) -> None:
     test verifies the engine's pre-flight isolation holds: the
     synthetic events are in the log, principal=system, and they
     appear strictly before the model.request from CrewAI's wrap."""
-    from tests.fixtures.engine_builder import write_platform_yaml  # noqa: PLC0415
+    from tests.fixtures.engine_builder import write_platform_yaml
 
     write_platform_yaml(tmp_path)
     md_path = _write_skill_for_force_invoke(tmp_path)
