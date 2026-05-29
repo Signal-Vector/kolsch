@@ -101,7 +101,7 @@ That is the entire user-facing surface of v1. It is intentionally small.
   — re-running picks up where it left off without overwriting. Accepts
   `--non-interactive` for CI / scripted installs (driven by the
   `KOLSCH_PROVIDER` / `KOLSCH_PROVIDER_KEY` env vars).
-- **LLM provider management CLI** *(Phase 1.1, LLM-R9)* — four
+- **LLM provider management CLI** *(Phase 1.1, LLM-R9)* — five
   commands for connecting and managing LLM providers:
   - `kolsch connect <provider>` — interactive auth flow + model
     discovery; writes to `platform.yaml` + `.env`.
@@ -111,6 +111,9 @@ That is the entire user-facing surface of v1. It is intentionally small.
     last-refresh time.
   - `kolsch refresh [<provider>]` — re-run model discovery; one
     provider if named, all of them otherwise.
+  - `kolsch models [<provider>] [--filter <substring>] [--verbose]
+    [--json]` — list discovered models per connected provider so
+    users know what to put in agent YAML's `model:` field.
   v1.1 implements these for `opencode` and `openrouter`; the four
   other named providers (anthropic, openai, bedrock, llama) are
   planned for later patches per the established connector pattern.

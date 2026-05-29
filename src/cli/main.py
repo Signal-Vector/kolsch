@@ -219,6 +219,40 @@ def _build_parser() -> argparse.ArgumentParser:
 
     sub.add_parser("providers", help="List connectors + connected providers.")
 
+    models = sub.add_parser(
+        "models",
+        help=(
+            "List discovered models per connected provider — useful for "
+            "populating agent YAML."
+        ),
+    )
+    models.add_argument(
+        "provider",
+        nargs="?",
+        default=None,
+        help="Provider name (default: all connected).",
+    )
+    models.add_argument(
+        "--filter",
+        dest="filter",
+        default=None,
+        help="Substring filter on model id (case-insensitive).",
+    )
+    models.add_argument(
+        "--verbose",
+        action="store_true",
+        help=(
+            "Show context_length, supports_tools, supports_streaming, "
+            "pricing, and the [metadata-source] flag."
+        ),
+    )
+    models.add_argument(
+        "--json",
+        dest="json_output",
+        action="store_true",
+        help="Machine-readable output.",
+    )
+
     refresh = sub.add_parser(
         "refresh",
         help="Re-run model discovery for one (or all) connected providers.",
@@ -242,6 +276,17 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     # Route through runtime.build_resolved_config so Layer 3
     # validators fire — see PlatformRuntime docstring.
     config = await runtime.build_resolved_config(args.agent_ref)
+
+    # Loud warning when the agent is bound to the built-in fake LLM —
+    # easy to miss when the reply looks plausible. Stays on stderr so
+    # pipes that consume stdout (JSON results) aren't polluted.
+    if config.model.provider == "fake":
+        sys.stderr.write(
+            "⚠ this agent uses the built-in fake LLM (provider: fake). "
+            "Replies are scripted echoes, not real model output. "
+            "Run `kolsch connect <provider>` and update the agent's "
+            "`model:` field to swap in a real model.\n"
+        )
 
     inputs = _parse_inputs(args.input)
     content = inputs.pop("content", None)
@@ -420,6 +465,13 @@ async def _cmd_refresh(args: argparse.Namespace) -> int:
     return await cmd_refresh(args, make_default_io(root=args.root))
 
 
+async def _cmd_models(args: argparse.Namespace) -> int:
+    import llm.providers  # noqa: F401, PLC0415
+    from cli.llm_commands import cmd_models, make_default_io  # noqa: PLC0415
+
+    return await cmd_models(args, make_default_io(root=args.root))
+
+
 async def _cmd_setup(args: argparse.Namespace) -> int:
     # Setup orchestrates `connect` + `run` against the workspace it
     # creates; import lazily so importing `cli.main` doesn't pull the
@@ -439,6 +491,7 @@ _DISPATCH = {
     "disconnect": _cmd_disconnect,
     "providers": _cmd_providers,
     "refresh": _cmd_refresh,
+    "models": _cmd_models,
     "setup": _cmd_setup,
 }
 

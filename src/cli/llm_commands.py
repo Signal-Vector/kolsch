@@ -433,6 +433,209 @@ async def cmd_providers(args: argparse.Namespace, io: _CommandIO) -> int:
     return 0
 
 
+# ===========================================================================
+# `models` — list discovered models per connected provider
+# ===========================================================================
+
+
+async def cmd_models(args: argparse.Namespace, io: _CommandIO) -> int:
+    """List discovered models from platform.yaml's `llm_providers` block.
+
+    Data source: each provider's pre-discovered `models` list (populated
+    by `connect` / `refresh`). No live API calls.
+    """
+    payload = _load_platform_yaml(io.root)
+    providers = payload.get("llm_providers") or {}
+    aliases = payload.get("model_aliases") or {}
+
+    requested: str | None = getattr(args, "provider", None)
+    verbose: bool = bool(getattr(args, "verbose", False))
+    filt: str | None = getattr(args, "filter", None)
+    as_json: bool = bool(getattr(args, "json_output", False))
+
+    # Validate the optional <provider> argument.
+    if requested is not None:
+        if requested not in known_types():
+            io.out.write(
+                f"unknown provider: {requested!r}\n"
+                f"registered: {', '.join(known_types())}\n"
+            )
+            return 1
+        if requested not in providers:
+            io.out.write(
+                f"provider {requested!r} is registered but not connected. "
+                f"Run `kolsch connect {requested}`.\n"
+            )
+            return 1
+        target_names: list[str] = [requested]
+    else:
+        target_names = sorted(providers)
+
+    if not target_names:
+        io.out.write("no providers connected — run `kolsch connect <provider>`.\n")
+        io.out.write(f"registered: {', '.join(known_types())}\n")
+        return 0
+
+    if as_json:
+        _emit_models_json(io, providers, target_names, aliases, filt)
+        return 0
+
+    return _emit_models_text(
+        io,
+        providers=providers,
+        target_names=target_names,
+        aliases=aliases,
+        filt=filt,
+        verbose=verbose,
+    )
+
+
+def _alias_lookup(aliases: dict[str, Any]) -> dict[tuple[str, str], str]:
+    """Build a reverse index ``(provider, model) → alias`` from
+    ``platform.yaml``'s ``model_aliases``.
+
+    Aliases are deployment-shareable strings users can type into agent
+    YAML; the `models` listing prefers them when shown.
+    """
+    out: dict[tuple[str, str], str] = {}
+    for alias, raw in aliases.items():
+        if not isinstance(raw, str) or "/" not in raw:
+            continue
+        provider, _, model = raw.partition("/")
+        out.setdefault((provider, model), alias)
+    return out
+
+
+def _emit_models_text(  # noqa: PLR0913 — keyword-only render args; splitting hides intent
+    io: _CommandIO,
+    *,
+    providers: dict[str, Any],
+    target_names: list[str],
+    aliases: dict[str, Any],
+    filt: str | None,
+    verbose: bool,
+) -> int:
+    alias_by_pair = _alias_lookup(aliases)
+    rendered_any = False
+    for name in target_names:
+        entry = providers[name]
+        if not isinstance(entry, dict):
+            io.out.write(f"{name}: (malformed entry)\n")
+            continue
+        raw_models = entry.get("models") or []
+        if not isinstance(raw_models, list):
+            io.out.write(f"{name}: (malformed models field)\n")
+            continue
+        flag_str = ""
+        if verbose and entry.get("serves_as_metadata_source"):
+            flag_str = " [metadata-source]"
+        # Filter in memory.
+        filtered = [
+            m
+            for m in raw_models
+            if isinstance(m, dict)
+            and isinstance(m.get("id"), str)
+            and (filt is None or filt.lower() in m["id"].lower())
+        ]
+        header = f"{name} ({len(filtered)} model"
+        header += "" if len(filtered) == 1 else "s"
+        header += f"){flag_str}\n"
+        io.out.write(header)
+        if not filtered:
+            if filt is not None:
+                io.out.write(f"  (no matches for {filt!r})\n")
+            elif not raw_models:
+                io.out.write(
+                    f"  (no models discovered — run `kolsch refresh {name}`)\n"
+                )
+            else:
+                io.out.write("  (no models)\n")
+            io.out.write("\n")
+            continue
+        rendered_any = True
+        for m in filtered:
+            model_id = m["id"]
+            alias = alias_by_pair.get((name, model_id))
+            alias_str = f"   alias: {alias}" if alias else ""
+            io.out.write(f"  {model_id}{alias_str}\n")
+            if verbose:
+                _emit_verbose_fields(io, m)
+        io.out.write("\n")
+
+    if rendered_any:
+        io.out.write(
+            "To use one in an agent:\n"
+            "    model: { provider: <provider>, model: <model_id> }\n"
+            "  or with an alias:\n"
+            "    model: <alias>\n"
+        )
+        if filt is None:
+            io.out.write(
+                "\nHint: `kolsch models --filter <substring>` to narrow "
+                "long catalogs.\n"
+            )
+    return 0
+
+
+def _emit_verbose_fields(io: _CommandIO, m: dict[str, Any]) -> None:
+    """Render `--verbose` extras for one model entry."""
+    ctx = m.get("context_length")
+    tools = m.get("supports_tools")
+    stream = m.get("supports_streaming")
+    pricing = m.get("pricing")
+    ctx_str = str(ctx) if ctx is not None else "?"
+    tools_str = "yes" if tools is True else "no" if tools is False else "?"
+    stream_str = "yes" if stream is True else "no" if stream is False else "?"
+    io.out.write(
+        f"    context_length: {ctx_str}   tools: {tools_str}   "
+        f"streaming: {stream_str}\n"
+    )
+    if isinstance(pricing, dict):
+        ppm = pricing.get("prompt_per_million")
+        cpm = pricing.get("completion_per_million")
+        if ppm is not None or cpm is not None:
+            io.out.write(f"    pricing: prompt=${ppm}/M  completion=${cpm}/M\n")
+
+
+def _emit_models_json(
+    io: _CommandIO,
+    providers: dict[str, Any],
+    target_names: list[str],
+    aliases: dict[str, Any],
+    filt: str | None,
+) -> None:
+    import json  # noqa: PLC0415
+
+    alias_by_pair = _alias_lookup(aliases)
+    out: dict[str, Any] = {}
+    for name in target_names:
+        entry = providers[name]
+        if not isinstance(entry, dict):
+            continue
+        raw_models = entry.get("models") or []
+        if not isinstance(raw_models, list):
+            raw_models = []
+        rendered: list[dict[str, Any]] = []
+        for m in raw_models:
+            if not isinstance(m, dict):
+                continue
+            model_id = m.get("id")
+            if not isinstance(model_id, str):
+                continue
+            if filt is not None and filt.lower() not in model_id.lower():
+                continue
+            row = dict(m)
+            alias = alias_by_pair.get((name, model_id))
+            if alias is not None:
+                row["alias"] = alias
+            rendered.append(row)
+        out[name] = {
+            "models": rendered,
+            "serves_as_metadata_source": bool(entry.get("serves_as_metadata_source")),
+        }
+    io.out.write(json.dumps(out, indent=2, sort_keys=True) + "\n")
+
+
 # ---------------------------------------------------------------------------
 # refresh [<provider>]
 # ---------------------------------------------------------------------------

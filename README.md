@@ -49,8 +49,20 @@ kolsch run starter/agents/helper --input content="hello"
 `kolsch setup` scaffolds a workspace at `~/Documents/kolsch` (override
 with `--root` or `$KOLSCH_WORKSPACE`), optionally connects an LLM
 provider, and ships a starter agent so the first run works without
-credentials. See `docs/how-to/workspace-and-setup.md` for switching
-between workspaces and other workspace operations.
+credentials.
+
+- **If you connect a provider during setup**, the starter agent uses
+  its first model — real answers from the first run.
+- **If you skip the provider step**, the starter agent ships with the
+  built-in **fake LLM** (echoes your input back). `kolsch run` prints
+  a clearly-labelled warning to stderr so you don't mistake echoes
+  for real replies. Connect a provider any time via `kolsch connect`
+  and update the agent's `model:` field.
+
+Find available models with `kolsch models` (all providers) or
+`kolsch models <provider>`. See `docs/how-to/workspace-and-setup.md`
+for switching between workspaces and `docs/how-to/find-models.md`
+for the model-discovery recipes.
 
 ## Where to start reading
 

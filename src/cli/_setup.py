@@ -368,24 +368,92 @@ async def _step_d_starter_agent(io: _SetupIO, *, non_interactive: bool) -> str:
     if not bundle_path.exists():
         bundle_path.write_text(_render_starter_bundle(), encoding="utf-8")
     io.out.write(f"  ✓ wrote starter agent at {agent_path.relative_to(io.root)}\n")
+    _announce_picked_model(io, model)
     return _PROCEEDED
+
+
+def _announce_picked_model(io: _SetupIO, model: str | dict[str, str]) -> None:
+    """Tell the user (clearly) which model the starter uses + why.
+
+    Three cases:
+
+    - Fake fallback: announce loudly that no usable provider was
+      available; the user needs to connect one to get real answers.
+    - Picked from a connected provider: name the provider + model.
+    - Picked alias: name the alias + what it resolves to.
+    """
+    if isinstance(model, dict) and model.get("provider") == "fake":
+        io.out.write(
+            "  ⚠ no usable provider was connected — the starter agent "
+            "uses the built-in fake LLM (echoes input back). Run "
+            "`kolsch connect <provider>` to swap in real answers.\n"
+        )
+        return
+    if isinstance(model, dict):
+        io.out.write(f"  → starter agent uses {model['provider']}/{model['model']}\n")
+        return
+    # Alias string.
+    io.out.write(f"  → starter agent uses alias {model!r}\n")
 
 
 def _pick_starter_model(io: _SetupIO) -> str | dict[str, str]:
     """Choose the model field value for the starter agent.
 
-    Priority (per Step 18 instruction): first alias in the order
-    ``opus`` > ``smart`` > any other alias, else the fake LLM.
+    Priority:
+
+    1. Connected providers whose ``serves_as_metadata_source`` flag is
+       NOT set — first provider's first model with a non-empty id.
+    2. Connected providers WITH ``serves_as_metadata_source: true``
+       (typically only OpenRouter) — same first-model rule, as a
+       fallback. A metadata-source provider can still route real
+       calls; we just prefer not to assume that intent.
+    3. ``provider: fake`` if no connected provider yielded a model.
+
+    When the picked model matches a deployment alias (lookup against
+    `model_aliases`), the alias string is returned for readability —
+    matches the existing `opus → openrouter/...` ergonomic.
     """
     payload = _read_yaml(io.root / "platform.yaml")
-    raw = payload.get("model_aliases")
-    aliases: dict[str, str] = raw if isinstance(raw, dict) else {}
-    for preferred in ("opus", "smart"):
-        if preferred in aliases:
-            return preferred
-    if aliases:
-        return sorted(aliases)[0]
+    providers_raw = payload.get("llm_providers")
+    providers: dict[str, dict[str, Any]] = {}
+    if isinstance(providers_raw, dict):
+        for name, entry in providers_raw.items():
+            if isinstance(entry, dict):
+                providers[name] = entry
+    aliases_raw = payload.get("model_aliases")
+    aliases: dict[str, str] = aliases_raw if isinstance(aliases_raw, dict) else {}
+
+    # Insertion-order traversal: dict iteration is connect-order in
+    # platform.yaml as written; sort metadata-sources to the end so
+    # the priority pool drains first.
+    ordered: list[tuple[str, dict[str, Any]]] = sorted(
+        providers.items(),
+        key=lambda kv: bool(kv[1].get("serves_as_metadata_source")),
+    )
+    for name, entry in ordered:
+        model_id = _first_model_id(entry)
+        if model_id is None:
+            continue
+        # Alias override when one exists for the picked pair.
+        for alias_name, target in aliases.items():
+            if target == f"{name}/{model_id}":
+                return alias_name
+        return {"provider": name, "model": model_id}
     return {"provider": "fake", "model": "fake-model"}
+
+
+def _first_model_id(entry: dict[str, Any]) -> str | None:
+    """Return the first non-empty model id from a provider's `models`
+    list, or ``None`` if the provider has none."""
+    raw_models = entry.get("models")
+    if not isinstance(raw_models, list):
+        return None
+    for m in raw_models:
+        if isinstance(m, dict):
+            mid = m.get("id")
+            if isinstance(mid, str) and mid:
+                return mid
+    return None
 
 
 def _render_starter_agent(model: str | dict[str, str]) -> str:

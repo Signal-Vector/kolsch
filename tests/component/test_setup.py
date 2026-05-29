@@ -310,12 +310,14 @@ async def test_tc_ux_08_starter_uses_opus_alias_when_present(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Scenario (b): a connected provider exposes an `opus` alias →
-    the starter agent's `model` is the alias string."""
+    """Scenario (b): a connected provider's first model has a matching
+    alias → the starter agent's `model` is the alias string."""
     monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
     monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
-    # Seed an aliases section before running setup so step D's
-    # `_pick_starter_model` sees it.
+    # Seed a connected provider whose first model matches the
+    # `opus` alias target. Step D's `_pick_starter_model` walks
+    # the provider's models list FIRST, then substitutes a matching
+    # alias for readability.
     (tmp_path / "platform.yaml").write_text(
         yaml.safe_dump(
             {
@@ -328,7 +330,10 @@ async def test_tc_ux_08_starter_uses_opus_alias_when_present(
                     "openrouter": {
                         "type": "openrouter",
                         "api_key_secret": "OPENROUTER_API_KEY",
-                        "models": [],
+                        "models": [
+                            {"id": "anthropic/claude-opus-4-7"},
+                            {"id": "openai/gpt-4o"},
+                        ],
                     },
                 },
             },
@@ -341,6 +346,125 @@ async def test_tc_ux_08_starter_uses_opus_alias_when_present(
     starter = tmp_path / "bundles" / "starter" / "agents" / "helper.yaml"
     payload = yaml.safe_load(starter.read_text())
     assert payload["model"] == "opus"
+
+
+async def test_starter_uses_non_metadata_provider_over_openrouter(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """When both OpenCode (non-metadata-source) and OpenRouter
+    (serves_as_metadata_source: true) are connected, the starter
+    picks OpenCode's first model — OpenRouter is preferred only
+    when it's the sole option."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    (tmp_path / "platform.yaml").write_text(
+        yaml.safe_dump(
+            {
+                **yaml.safe_load(_default_yaml()),
+                "llm_providers": {
+                    "openrouter": {
+                        "type": "openrouter",
+                        "api_key_secret": "OPENROUTER_API_KEY",
+                        "serves_as_metadata_source": True,
+                        "models": [{"id": "anthropic/claude-opus-4-7"}],
+                    },
+                    "opencode": {
+                        "type": "opencode",
+                        "api_key_secret": "OPENCODE_API_KEY",
+                        "models": [
+                            {"id": "gpt-oss-120b"},
+                            {"id": "qwen2.5-coder-32b"},
+                        ],
+                    },
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    io_ = _make_test_io(root=tmp_path)
+    await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
+    starter = tmp_path / "bundles" / "starter" / "agents" / "helper.yaml"
+    payload = yaml.safe_load(starter.read_text())
+    assert payload["model"] == {"provider": "opencode", "model": "gpt-oss-120b"}
+
+
+async def test_starter_uses_openrouter_when_sole_provider(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """If only an OpenRouter (metadata-source) provider is connected,
+    the starter still uses it rather than falling back to the fake
+    LLM — better real-LLM-than-echo."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    (tmp_path / "platform.yaml").write_text(
+        yaml.safe_dump(
+            {
+                **yaml.safe_load(_default_yaml()),
+                "llm_providers": {
+                    "openrouter": {
+                        "type": "openrouter",
+                        "api_key_secret": "OPENROUTER_API_KEY",
+                        "serves_as_metadata_source": True,
+                        "models": [{"id": "anthropic/claude-haiku-4-5"}],
+                    },
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    io_ = _make_test_io(root=tmp_path)
+    await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
+    starter = tmp_path / "bundles" / "starter" / "agents" / "helper.yaml"
+    payload = yaml.safe_load(starter.read_text())
+    assert payload["model"] == {
+        "provider": "openrouter",
+        "model": "anthropic/claude-haiku-4-5",
+    }
+
+
+async def test_starter_skips_provider_with_empty_models_list(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A connected provider whose discovery returned 0 models is
+    skipped; the next provider in the priority pool is tried."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    (tmp_path / "platform.yaml").write_text(
+        yaml.safe_dump(
+            {
+                **yaml.safe_load(_default_yaml()),
+                "llm_providers": {
+                    "opencode": {
+                        "type": "opencode",
+                        "api_key_secret": "OPENCODE_API_KEY",
+                        "models": [],  # empty — should be skipped
+                    },
+                    "openrouter": {
+                        "type": "openrouter",
+                        "api_key_secret": "OPENROUTER_API_KEY",
+                        "serves_as_metadata_source": True,
+                        "models": [{"id": "anthropic/claude-haiku-4-5"}],
+                    },
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    io_ = _make_test_io(root=tmp_path)
+    await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
+    starter = tmp_path / "bundles" / "starter" / "agents" / "helper.yaml"
+    payload = yaml.safe_load(starter.read_text())
+    # OpenCode skipped (empty), OpenRouter picked even as fallback.
+    assert payload["model"] == {
+        "provider": "openrouter",
+        "model": "anthropic/claude-haiku-4-5",
+    }
 
 
 def _default_yaml() -> str:

@@ -158,6 +158,38 @@ def test_tc_cli_02_run_stream_yields_events(
 
 
 # ===========================================================================
+# Runtime fake-LLM warning
+# ===========================================================================
+
+
+def test_run_warns_loudly_when_agent_uses_fake_llm(
+    platform_root: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """An agent whose `model.provider` is `fake` produces a stderr
+    warning at `kolsch run` time so users don't mistake echoed
+    output for a real model reply."""
+    exit_code = main(
+        [
+            "--root",
+            str(platform_root),
+            "run",
+            "acme/agents/demo",
+            "--input",
+            "content=hello world",
+        ],
+    )
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    # Warning lands on stderr (so stdout-consuming pipes get clean JSON).
+    assert "built-in fake LLM" in captured.err
+    assert "kolsch connect" in captured.err
+    # stdout is the actual agent reply, unpolluted by the warning.
+    assert "Echo: hello world" in captured.out
+    assert "fake LLM" not in captured.out
+
+
+# ===========================================================================
 # TC-CLI-03 — sessions list reflects the engine's runs
 # ===========================================================================
 
