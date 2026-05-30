@@ -182,8 +182,11 @@ These are non-negotiable. Violating them blocks merges.
   add a command to `cli.main._DISPATCH` without adding it to the
   smoke module's `_TOP_LEVEL_SUBCOMMANDS` tuple and the test
   refuses to pass. The catalog reference is
-  `docs/process/test-catalog.md` Part 11.6.1. *(Bug-sessions-
-  namespace-attr-error.md acceptance criterion 7.)*
+  `docs/process/test-catalog.md` Part 11.6.1. **CI runs the
+  suite with `pytest -n auto`** (pytest-xdist) to keep it
+  under 10s — see Part 11.6.1 for the rationale; serial
+  invocation is ~36s. *(Bug-sessions-namespace-attr-error.md
+  acceptance criterion 7.)*
 
 ---
 

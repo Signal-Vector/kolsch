@@ -1609,15 +1609,30 @@ LLM (the same path the first-agent tutorial uses).
   A future contributor adding a new subcommand without a
   corresponding smoke test fails this gate.
 
-**Performance.** The suite runs in ~35-40s on a developer laptop
-— above the bug ticket's <10s target. The floor is subprocess
-startup × test count (~30 tests × ~1s Python import overhead).
-The trade-off: AC 4 mandates subprocess invocation (the whole
-point of the smoke layer); AC 5's <10s target requires either
-reducing the test count (defeats the coverage point) or parallel
-execution via `pytest-xdist`. Adding `pytest-xdist` is a future
-improvement; the suite is fast enough today not to slow the
-inner-loop gate meaningfully (it's <10% of the total suite time).
+**Performance.** Run with `pytest-xdist`'s `-n auto` flag, the
+suite completes in **~6s** on a 10-core developer laptop — under
+the bug ticket's <10s target.
+
+```bash
+uv run pytest tests/component/test_cli_smoke.py -n auto
+```
+
+Without `-n auto` the suite takes ~36s (Python subprocess startup
+× 30+ tests). The smoke layer is the bulk of the test runtime
+serially (~86% of the 42s full-suite total) — the parallel mode
+is the load-bearing invocation. The full suite with `-n auto`
+drops from ~44s to ~16s.
+
+`pytest-xdist` ships in the `test` dependency group
+(`pyproject.toml`). The smoke suite's session-scoped
+`initialized_workspace` fixture is xdist-safe: each worker gets
+its own `tmp_path_factory.mktemp(...)` so workers don't share
+state; the workspace is read-only or no-op-write across every
+covered command, so parallel readers never contend on the
+SQLite entity DB or the JSONL log.
+
+CI invocation: run the full suite with `-n auto` for the gate;
+the inner-loop developer pattern is the same.
 
 ---
 

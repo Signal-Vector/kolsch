@@ -76,6 +76,16 @@ test = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "pytest-cov>=5",
+    # Parallel test execution — required to keep the CLI smoke suite
+    # (tests/component/test_cli_smoke.py) under the
+    # bug-sessions-namespace-attr-error.md AC 5 <10s target. Each smoke
+    # test spawns a fresh Python subprocess (~1s Python import floor ×
+    # N tests = ~30s+ serial). With `-n auto`, xdist drops this to
+    # roughly the per-test floor on a multi-core box. The smoke suite's
+    # session-scoped `initialized_workspace` fixture runs once per
+    # worker; each worker gets its own tmp_path so parallel readers /
+    # no-op writers don't contend.
+    "pytest-xdist>=3.5,<4",
     "testcontainers>=4.7",
     # FastAPI's TestClient is starlette.testclient.TestClient, which
     # tries `import httpx2 as httpx` first (starlette deprecated

@@ -16,10 +16,21 @@ invocation would miss argparse-to-dispatcher wiring bugs, sys.exit
 handling, and stderr formatting — the exact class of regression
 smoke tests are meant to catch.
 
-Per acceptance criterion 5, the suite is fast (<10s) thanks to a
-session-scoped ``initialized_workspace`` fixture that runs
-``kolsch setup --non-interactive`` ONCE per test session and is
-re-used across every workspace-needing smoke test.
+Per acceptance criterion 5, the suite is fast (<10s) when run
+with **pytest-xdist's** ``-n auto`` flag — each subprocess-spawning
+test runs in parallel across workers, dropping the wall-clock
+from ~36s (serial) to ~6s on a multi-core laptop:
+
+    uv run pytest tests/component/test_cli_smoke.py -n auto
+
+A session-scoped ``initialized_workspace`` fixture runs
+``kolsch setup --non-interactive`` once per worker (xdist's
+session scope is per-worker) and is re-used across every
+workspace-needing smoke test. Each worker gets its own
+``tmp_path_factory.mktemp(...)`` so workers don't share state;
+every covered command is read-only or no-op-write against the
+workspace, so parallel readers never contend on the SQLite
+entity DB or the JSONL log.
 
 **Policy (catalog Part 9.X + AGENTS.md hard rule):** every new CLI
 command or subcommand added in any future phase ships with a
