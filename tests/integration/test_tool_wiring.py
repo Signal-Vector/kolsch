@@ -359,6 +359,65 @@ async def test_tc_tool_wire_02_unknown_declared_ref_raises_config_unknown_tool(
 # ===========================================================================
 
 
+async def test_engine_preflight_registers_declared_tools_with_subsystem(
+    initialized_workspace_for_tool_wiring: Path,
+) -> None:
+    """Bug-engine-tools-wiring-gap.md Step E follow-up.
+
+    Pins the post-pre-flight registration state directly. The
+    bug doc's Step E imagined a ``bound_tools`` field on
+    ExecutionContext; the actual architecture puts the
+    registration on ``ToolsSubsystem._registry`` (the single
+    source of truth for what's registered per agent — Engine
+    I8 keeps it on the long-lived subsystem, not on the
+    per-exchange context).
+
+    This test runs an exchange with no tool_use response, then
+    asserts ``list_registered_tools(agent_id)`` shows every
+    tool the agent's config declared. TC-TOOL-WIRE-01 already
+    proves registration works at the event-emission level
+    (tool.called fires); this test proves it at the
+    subsystem-state level so a future refactor that breaks
+    the registration without breaking emission would still
+    fail loudly.
+    """
+    from schemas import AgentId
+
+    root = initialized_workspace_for_tool_wiring
+    # Text-only FakeLLM response — no tool_use, so the engine
+    # runs pre-flight + a single model turn + finalize. The
+    # pre-flight registration is what we're pinning.
+    fake = FakeLLM(script=[TextResponse(text="acknowledged.")])
+
+    runtime = await bootstrap_runtime(root=root, llm=_make_fake_llm_callable(fake))
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
+    session = await runtime.store.create_session(
+        str(config.agent_id),
+        name="preflight-registration-test",
+    )
+    threads = await runtime.store.list_threads(session.session_id)
+
+    ctx = ExecutionContext(
+        thread_id=threads[0].thread_id,
+        trigger={"kind": "user_message", "content": "hi"},
+    )
+    # Drain the exchange so pre-flight runs.
+    async for _ in runtime.engine.execute_stream(config, ctx):
+        pass
+
+    registered = runtime.tools_subsystem.list_registered_tools(
+        AgentId(str(config.agent_id))
+    )
+    names = {t.name for t in registered}
+    # The helper agent declares all four refs in its yaml.
+    expected = {"read_file", "write_file", "list_files", "bash"}
+    assert expected.issubset(names), (
+        f"engine pre-flight should have registered declared tools "
+        f"{expected}; subsystem shows {names}. Bug-engine-tools-"
+        f"wiring-gap.md Step E has regressed."
+    )
+
+
 def test_config_unknown_tool_carries_actionable_detail() -> None:
     """The :class:`ConfigUnknownTool` error envelope carries the bad
     ref + the available refs in its detail. Pins the error shape

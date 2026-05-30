@@ -276,6 +276,35 @@ work. Its responsibilities, in order of an `execute` call:
    is none), emit a new `config.set` carrying the full resolved config
    (per Materialization Rule, §B.6). The new event becomes part of the
    tree path before the exchange begins.
+8.5. **Register the agent's tools with the Tools subsystem.**
+   *(Bug-engine-tools-wiring-gap.md, PR 1 — fixes a Phase 2.0 gap
+   where this step was specified in §2.2 step 11 but the
+   implementation registered only `builtin` names; the
+   `declared` refs were silently dropped, leaving the model
+   with no tools and producing the documented hallucination.)*
+   For each entry in `config.subsystems.tools.config.declared`:
+   - Resolve the `ref` via
+     :meth:`AssetManagement.get_asset` to the file's on-disk
+     `path`. Missing refs raise
+     :class:`ConfigUnknownTool` (Fatal, `config.unknown_tool`)
+     with the bad ref and the catalog's available tool refs
+     in the detail. Per coordinator resolution to bug-doc Q1
+     (option (b) — engine-side enforcement), this fires here
+     at pre-flight rather than at agent-load-time validation;
+     validator-side enforcement (option (a)) is tracked as
+     FUL-1 for non-interactive surfaces (server / lint).
+   - Call
+     :meth:`ToolsSubsystem.register_for_agent(agent_id,
+     builtin_names=[...], declared_paths=[...])`. The
+     subsystem imports each path via
+     :func:`tools.discovery.discover_tools_in_file` and
+     registers every `@tool`-decorated function it finds
+     under the agent's id. Re-registration is idempotent
+     (Engine I8 — no exchange state carried across calls;
+     the registry holds long-lived subsystem state, not
+     exchange state).
+   MCP server registration is still deferred (Phase 2.0
+   §3.3 documents the shape).
 9. **Process force-invoke skills, if any.** If
    `trigger.kind == "user_message_with_force_skill"`, for each skill ref
    in `trigger.force_skills`:
