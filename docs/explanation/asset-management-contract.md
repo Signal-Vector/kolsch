@@ -245,7 +245,14 @@ authorization:
   variant: "rule_based"
   config:
     rules:
-      - who: ".*"
+      # Each rule carries an auto-assigned `id` (Phase 2.0, TOOL-R4)
+      # — a stable identifier of form `rl_<hash[:8]>` derived from
+      # who+what+effect. The id is the handle used by
+      # `kolsch permissions {remove, show}`. Effect values:
+      # "allow" | "deny" | "prompt" (Phase 2.0; see
+      # `docs/explanation/secrets-sandbox-authz-contract.md` §3.7).
+      - id: rl_default_allow
+        who: ".*"
         what: ".*"
         effect: "allow"
 storage:

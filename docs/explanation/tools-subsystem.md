@@ -418,6 +418,163 @@ The v1 default allow-all rule covers all of them. Restrictive rule sets
 
 ---
 
+## Part 4.5 — Builtin Tools (Phase 2.0)
+
+*(Phase 2.0, TOOL-R1. Supersedes the Phase 1 sketch in Part 4 for the
+concrete shipping set; the patch source of truth is
+`docs/process/phase2.0-tools-specs.md` Part 1.)*
+
+Phase 2.0 ships the platform's canonical builtin tool set as plain
+`@tool`-decorated Python files in **`bundles/kolsch/tools/`**, not as
+opaque "builtins" hidden inside the engine. Users can read each file,
+copy them as templates, or swap them. The discovery pathway is the
+existing Tools subsystem catalog (Part 6.1) — the same one that
+discovers any bundle-supplied declared tool. There is no separate
+"builtin registry" baked into the runtime (AGENTS.md hard rule per
+TOOL-R10).
+
+The shipping set is four tools: `read_file`, `write_file`, `list_files`,
+`bash`. The set is deliberately small and is the foundation the rest
+of Phase 2 (interactive chat, workflows) builds on.
+
+### 4.5.1 `read_file`
+
+```python
+# bundles/kolsch/tools/read_file.py
+@tool
+def read_file(path: str, max_bytes: int = 1_048_576) -> str:
+    """Read a UTF-8 text file from the workspace.
+
+    :param path: Workspace-relative or absolute path. Absolute paths
+        outside ``file_access.allowed_paths`` are rejected.
+    :param max_bytes: Refuse to read files larger than this (default
+        1 MiB). Protects context budgets.
+    :returns: File contents as a UTF-8 string.
+    :raises file.access_denied: Path outside allowed scope.
+    :raises file.too_large: File exceeds ``max_bytes``.
+    :raises file.not_found: Path doesn't exist.
+    """
+```
+
+Action name: `tool.read_file`. The 1 MiB default `max_bytes` is a
+context-budget guard; users tune it via the in-chat permission flow
+(Part 2 of the patch) or by editing the tool file directly.
+
+### 4.5.2 `write_file`
+
+```python
+@tool
+def write_file(path: str, content: str, *, create_parents: bool = True) -> dict:
+    """Write a UTF-8 text file to the workspace.
+
+    :param path: Workspace-relative or absolute path inside allowed scope.
+    :param content: New file contents (full overwrite; not a patch).
+    :param create_parents: Create missing parent directories.
+    :returns: ``{"path": "<abs>", "bytes_written": N, "created": bool}``.
+    :raises file.access_denied: Path outside allowed scope.
+    :raises file.permission_denied: Authz returned ``deny`` / ``prompt-denied``.
+    """
+```
+
+Action name: `tool.write_file`. Semantics are **full overwrite**, not
+patch-style edit — incremental editing belongs in a later phase when
+the model emits reliable diffs. Full-overwrite is honest about what
+it does.
+
+### 4.5.3 `list_files`
+
+```python
+@tool
+def list_files(
+    path: str = ".",
+    *,
+    glob: str = "*",
+    max_entries: int = 500,
+    include_hidden: bool = False,
+) -> list[dict]:
+    """List entries under ``path`` (non-recursive by default).
+
+    :param path: Directory to list. Workspace-relative or absolute.
+    :param glob: Glob pattern; ``**/*`` for recursive.
+    :param max_entries: Cap on returned entries.
+    :param include_hidden: Include dotfiles.
+    :returns: List of ``{"name", "path", "is_dir", "size_bytes"}`` dicts.
+    """
+```
+
+Action name: `tool.list_files`. Non-recursive by default; recursive
+walks need an explicit `glob="**/*"`. The `max_entries` cap is the
+same context-budget discipline as `read_file.max_bytes`.
+
+### 4.5.4 `bash`
+
+```python
+@tool
+def bash(
+    command: str,
+    *,
+    cwd: str | None = None,
+    timeout_seconds: int = 60,
+) -> dict:
+    """Run a shell command in the workspace.
+
+    :param command: Command to execute. Single string; shell parsing
+        applies (no auto-quoting of arguments).
+    :param cwd: Working directory; defaults to the workspace root.
+        Must resolve inside allowed scope.
+    :param timeout_seconds: Kill the command after this many seconds.
+    :returns: ``{"exit_code", "stdout", "stderr", "duration_seconds",
+        "timed_out"}``. ``stdout`` / ``stderr`` truncated to 64 KiB each.
+    :raises tool.timeout: Command exceeded ``timeout_seconds``.
+    :raises file.access_denied: ``cwd`` outside allowed scope.
+    """
+```
+
+Action name: `tool.bash`. Runs through the existing Sandbox provider
+(the `native` variant — subprocess, in-process). Docker sandbox is a
+later phase. The `bash` path-policy gap documented in
+`docs/explanation/file-handling.md` §4.7 still applies in Phase 2.0:
+the path-access policy guards `read_file` / `write_file` / `list_files`
+but does NOT constrain commands the shell runs. The workspace-only
+default rule set (patch §3.1) defaults `tool.bash` to `prompt` for
+exactly this reason — the user authorizes each command interactively.
+
+### 4.5.5 Error codes raised by the builtins
+
+| Tool | Codes |
+|---|---|
+| `read_file` | `file.access_denied`, `file.too_large`, `file.not_found` |
+| `write_file` | `file.access_denied`, `file.permission_denied` |
+| `list_files` | `file.access_denied`, `file.not_found` |
+| `bash` | `tool.timeout`, `file.access_denied` |
+
+All four codes are Recoverable per `docs/explanation/error-model.md`
+§4.16 (TOOL-R5). The model sees the error in its tool-result payload
+and can react (try a different path, retry with smaller `max_bytes`,
+give up).
+
+### 4.5.6 Bundle layout
+
+```
+bundles/kolsch/
+├── bundle.yaml
+├── agents/
+│   └── helper.yaml         # gains `tools:` declaration per Phase 2.0
+└── tools/
+    ├── read_file.py
+    ├── write_file.py
+    ├── list_files.py
+    └── bash.py
+```
+
+`bundles/kolsch/` is the canonical bundle name from Phase 2.0 onward.
+Phase 1.2 originally scaffolded `bundles/starter/`; Phase 2.3's drift
+detection handles the rename — see TOOL-R12 alignment note in
+`docs/process/phase1.2-usability-specs.md` §2.4 for the migration
+mechanism.
+
+---
+
 ## Part 5 — MCP Server Integration
 
 The platform supports MCP servers as a tool source. MCP is the open

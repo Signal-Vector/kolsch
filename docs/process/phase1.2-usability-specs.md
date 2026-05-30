@@ -340,6 +340,22 @@ description: Bundle created by `kolsch setup` to verify the install.
 No special "starter" treatment in the runtime — these are plain files
 the user can edit, copy as a template, or delete.
 
+> **Phase 2.0 alignment note (TOOL-R12).** Phase 2.0 + 2.3 land on
+> `bundles/kolsch/` rather than `bundles/starter/` — the
+> Phase 2.0 patch ships four canonical builtin tool files at
+> `bundles/kolsch/tools/` (per
+> `docs/explanation/tools-subsystem.md` §4.5) and Phase 2.3
+> formalises the bundle rename. **This Phase 1.2 spec is not
+> retroactively edited.** If Phase 1.2 has already scaffolded
+> `bundles/starter/` into existing workspaces, Phase 2.3's drift
+> detection handles the migration (detects the legacy bundle,
+> offers to rename it, leaves the YAML inside untouched). New
+> Phase 1.2 implementations landing AFTER Phase 2.0 should write
+> to `bundles/kolsch/` directly to avoid the migration cost.
+> Phase 1.2 reviewers reading this note: the original
+> `bundles/starter/` path remains correct for everything you
+> built; do not retrofit.
+
 ### 2.5 `--non-interactive` semantics
 
 Used by CI, smoke tests, and the integration-test fixture for setup.

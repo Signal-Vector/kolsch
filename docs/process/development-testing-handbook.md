@@ -942,6 +942,53 @@ test plan; the test plan retains the four overall validation tests.
   engine emits `thread.exchange_failed` with the partial output
   captured and ends the exchange (patch §2.3).
 
+### 10.15 Tools & Permissions (Phase 2.0, TOOL-R8)
+
+- The four builtin tools (`read_file`, `write_file`, `list_files`,
+  `bash`) land as plain `@tool`-decorated Python files in
+  `bundles/kolsch/tools/` and are discovered by the existing
+  Tools subsystem catalog — no "builtin registry" inside the
+  runtime (AGENTS.md hard rule per TOOL-R10).
+- A fresh `kolsch setup` produces a workspace whose
+  `platform.yaml` has the workspace-only default rules from
+  patch §3.1: `read_file` / `list_files` allowed silently inside
+  the resolved workspace path; `write_file` and `bash` set to
+  the new `prompt` effect; a removal-protected default-deny tail
+  (`rl_default_deny`) is the last rule.
+- The `prompt` effect is treated as `deny` by non-chat callers
+  (`kolsch run`, `kolsch server`, tests, golden) and emits an
+  `authz.prompt_unattended` event so replay shows what would
+  have been asked.
+- Rule changes from `kolsch permissions {add, remove}` or the
+  Phase 2.1 in-chat modal apply to the *very next* authz check
+  — no exchange-boundary reload, no process restart. Verified
+  by issuing `permissions add` mid-exchange from a second shell
+  and confirming the next tool call hits the new rule.
+- The `allow_all_test` Authorization variant is registered ONLY
+  under `KOLSCH_TEST_BUILD=1`. Production builds refuse to load
+  it — verified by attempting to load it with the env var unset
+  and confirming a fatal startup error names the variant.
+- Rule ids assigned by the deterministic `rl_<hash[:8]>` scheme
+  are stable across reorders and across reloads. Verified by
+  loading `platform.yaml` twice and confirming byte-identical
+  id assignment, then reordering rules and confirming
+  unaffected ids do not change.
+- The default-deny tail (`rl_default_deny`) is removal-protected.
+  `kolsch permissions remove rl_default_deny` raises
+  `authz.protected_rule` (Fatal); direct edit of `platform.yaml`
+  removing the tail is rejected by the runtime bootstrap.
+
+**§10.15 also.** Every existing Phase 1 + 1.1 + 1.2 + 1.3
+component test that relied on the old allow-all default must
+declare its own rule fixture explicitly OR opt in via the
+`allow_all_test` variant (gated by `KOLSCH_TEST_BUILD=1`). No
+test relies on the production-default rule set being permissive
+— if the production defaults tighten further in a later patch,
+the existing test suite continues to pass byte-for-byte. The gate
+verifies this by running the full pre-Phase-2.0 test suite
+against the Phase 2.0 default rule set without modifications and
+asserting zero new failures attributable to changed defaults.
+
 ---
 
 ## Part 11 — Coverage & Quality Gates

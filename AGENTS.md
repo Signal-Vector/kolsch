@@ -152,6 +152,23 @@ These are non-negotiable. Violating them blocks merges.
   no declared level silently defaults to "no fallback", which
   is wrong-by-default for any genuinely transient condition.
   *(Phase 1.3, FB-R10.)*
+- **Tools shipped by the platform live in `bundles/kolsch/tools/`
+  as plain Python files.** Never embed a "builtin tool" in the
+  engine or runtime; the file IS the tool, and users can read it,
+  copy it as a template, or swap it. The Tools subsystem catalog
+  discovers them via the same scan path that finds any
+  bundle-supplied declared tool. If you find yourself adding a
+  case branch like `if tool_name == "read_file": …` inside
+  `src/engine/` or `src/tools/`, you have violated this rule —
+  add the tool file instead. *(Phase 2.0, TOOL-R10.)*
+- **The production Authorization rule set must end with a
+  default-deny tail.** The `allow_all_test` variant is for tests
+  only — it is registered ONLY when `KOLSCH_TEST_BUILD=1` and
+  production builds refuse to load it. Removing
+  `rl_default_deny` from `platform.yaml` directly OR via
+  `kolsch permissions remove` is rejected (the runtime
+  bootstrap refuses to load a rule set without the tail; the
+  CLI raises `authz.protected_rule`). *(Phase 2.0, TOOL-R10.)*
 
 ---
 

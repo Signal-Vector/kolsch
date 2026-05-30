@@ -359,13 +359,22 @@ performing actions they want gated.
 
 ```
 Rule
+├── id       string      — stable identifier; assigned at parse time
+│                          (Phase 2.0, TOOL-R3 / TOOL-R4)
 ├── who      string      — principal pattern (regex, fullmatch)
 ├── what     string      — action pattern (regex, fullmatch)
-└── effect   enum        — "allow" | "deny"
+└── effect   enum        — "allow" | "deny" | "prompt"
 ```
 
 A rule says: principals matching `who`, performing actions matching
-`what`, are [allowed | denied].
+`what`, are [allowed | denied | prompted]. The `prompt` effect arrives
+in Phase 2.0 — see §3.7 below.
+
+The `id` field is a stable identifier assigned deterministically from
+the rule's `who+what+effect` (Phase 2.0, TOOL-R3). It is the handle
+the `kolsch permissions {remove, show}` CLI uses to reference a
+rule. Re-ordering preserves ids; editing a rule's content changes
+its id.
 
 ### 3.2.2 Regex semantics
 
@@ -443,18 +452,35 @@ case usable out of the box.
 async def allow(
     principal: str,
     action: str,
+    target: str | None = None,
 ) -> AuthorizationResult
-    """Return whether the principal may perform the action."""
+    """Return whether the principal may perform the action.
+
+    *(Phase 2.0, TOOL-R3.)* ``target`` is the optional call-site
+    specifier the caller wants matched against the rule's ``what``
+    pattern — for file tools the resolved absolute path, for ``bash``
+    the command string. When omitted, ``what`` is matched against
+    ``action`` alone.
+    """
 
 class AuthorizationResult:
-    allowed: bool
-    matched_rule: Rule | None     # the rule that matched, or None for default-deny
+    allowed: bool                  # True for ALLOW; False for DENY and PROMPT
+    effect: AuthzEffect            # ALLOW | DENY | PROMPT (Phase 2.0, TOOL-R3)
+    matched_rule: Rule | None      # the rule that matched, or None for default-deny
+    rule_id: str | None            # convenience accessor for matched_rule.id
     reason: str                    # human-readable explanation
+
+class AuthzEffect(StrEnum):
+    ALLOW  = "allow"
+    DENY   = "deny"
+    PROMPT = "prompt"              # NEW in Phase 2.0; non-chat callers treat as DENY
 ```
 
 `allow` returns a structured result, not just a bool, so callers can
 log which rule applied. The IDE later (and CLI tooling now) can use
-this for explainable authorization decisions.
+this for explainable authorization decisions. The `effect` field
+distinguishes the three classifications; `allowed` collapses to a
+bool for callers that only care whether to invoke the tool.
 
 ```
 async def list_rules() -> list[Rule]
@@ -543,6 +569,108 @@ caller's responsibility. The intended call sites in v1:
 Other subsystems may add their own check sites as they encounter
 sensitive operations. The action namespace (§3.2.3) is the place to
 document new check points.
+
+## 3.7 The `prompt` Effect (Phase 2.0)
+
+*(Phase 2.0, TOOL-R3. Patch source of truth:
+`docs/process/phase2.0-tools-specs.md` Part 2.)*
+
+Phase 2.0 introduces a third effect value, `prompt`, alongside the
+existing `allow` and `deny`. The Authorization provider treats it
+like any other classification: the rule matched, the effect is
+`prompt`, the result carries the rule that matched. The *caller*
+decides what to do with it — Authorization does not own the
+prompting UX.
+
+### 3.7.1 Why a third value, not an approval hook
+
+Phase 1's binary allow/deny forces every "ask the user" interaction
+into one of two unsatisfying shapes: hard-coded allow rules that
+defeat the point of authorization, or hard-coded deny rules that
+defeat the point of interactivity. `prompt` is the third option —
+"don't decide yet; surface the question to whoever is driving."
+
+The decision lives in the rule list (data), not in code paths.
+
+### 3.7.2 How callers interpret `prompt`
+
+The Tools subsystem's call dispatcher (per Tools spec §6.2) inspects
+the `AuthorizationResult.effect`:
+
+```python
+match result.effect:
+    case AuthzEffect.ALLOW:  return await tool_fn(**args)
+    case AuthzEffect.DENY:   raise PlatformError("authz.denied", ...)
+    case AuthzEffect.PROMPT: return await ctx.handle_prompt(result, tool_fn, args)
+```
+
+`ctx.handle_prompt` is an injectable callback the caller wires at
+runtime construction:
+
+| Caller | `handle_prompt` treatment |
+|---|---|
+| `kolsch chat` (interactive — Phase 2.1) | Show the four-choice modal (patch §4.2). The user's choice resolves to allow-once / allow-always / deny-once / deny-always. |
+| `kolsch run` (one-shot script) | Treat as deny, emit `authz.prompt_unattended` on the event log so replay shows what would have been asked. |
+| `kolsch server` (HTTP) | Treat as deny with a structured response (`{"effect": "prompt", "rule_id": "<id>"}`) so the HTTP caller can implement its own prompt UX. |
+| Tests, golden | Treat as deny. |
+
+This means `prompt` never hangs an unattended process. Chat is the
+only surface that *owns* the interactive choice; everything else
+collapses `prompt` to `deny` deterministically.
+
+### 3.7.3 Live edit semantics
+
+When the in-chat modal's "always allow" / "always deny" choice fires,
+the chat caller appends a new rule to the in-memory rule list,
+rewrites `platform.yaml` atomically (Phase 1.1 atomicity discipline),
+and resumes the engine's tool dispatch. The just-blocked tool call
+is re-issued; authz returns the new effect.
+
+The "same exchange" guarantee — from the model's perspective the
+tool call either succeeds (after `[y]` or `[a]`) or fails with
+`authz.denied` (after `[n]` or `[d]`). The model sees no "wait"
+state; the modal pauses the engine's tool-call dispatch until the
+user decides. Internally, the engine emits:
+
+- `authz.prompt_requested` (with tool, target, rule_id) when the
+  prompt fires.
+- `authz.prompt_answered` (with the user's choice + new rule id if
+  written) when the user responds.
+
+Replay sees both events; reconstruction is honest about which calls
+were user-approved live versus allowed by pre-existing rules.
+
+### 3.7.4 What this contract owns vs. delegates
+
+The Authorization provider owns:
+
+- Classifying `(principal, action, target)` into one of
+  `{ALLOW, DENY, PROMPT}` per the rule list.
+- Surfacing the matched rule (with its stable `id`) so callers can
+  reference it.
+- Re-reading the rule list on every check so live edits apply within
+  the same exchange — no caching, no exchange-boundary reload.
+
+The Authorization provider does NOT own:
+
+- Prompt UI rendering. The chat surface owns the modal; the server
+  surface owns its HTTP shape; tests inject a deny-everything
+  callback. The provider is UI-agnostic.
+- Rule persistence. The provider reads from the in-memory rule list
+  that Asset Management loaded from `platform.yaml`. Live edits are
+  the chat/CLI surface's responsibility (per
+  `kolsch permissions {list, add, remove, show}` — Phase 2.0
+  patch §4.1).
+
+### 3.7.5 The `allow_all_test` variant
+
+Phase 2.0 introduces an `allow_all_test` variant under TOOL-R8 / TOOL-R10
+that returns `ALLOW` for everything. It is registered ONLY when the
+`KOLSCH_TEST_BUILD=1` environment variable is set; production builds
+refuse to load it (AGENTS.md hard rule). Existing Phase 1+ component
+tests that relied on the old allow-all default either set their own
+rule fixture or opt in via `allow_all_test`; no test relies on
+production defaults being permissive.
 
 ## 3.6 Conformance Invariants
 

@@ -313,6 +313,20 @@ for `bash`'s exception — perform the path check at invocation time.
 On denial, the tool fails with `file_access.denied` (Error Model
 catalog §4.11).
 
+*(Phase 2.0, TOOL-R2.)* The Phase 2.0 builtins ship as
+`read_file`, `write_file`, `list_files`, and `bash` in
+`bundles/kolsch/tools/` (see `docs/explanation/tools-subsystem.md`
+§4.5). `file_access.allowed_paths` constrains the three file-touching
+tools (`read_file`, `write_file`, `list_files`) — out-of-scope paths
+surface as `file.access_denied` per Error Model §4.16, the same
+mechanism described in §4.7 for the Phase 1 set. `bash`'s exemption
+from path policy (§4.7 below) carries over unchanged; Phase 2.0's
+workspace-only default rule set (patch §3.1) defaults `tool.bash`
+to the new `prompt` effect (per Authz Protocol §3 in
+`docs/explanation/secrets-sandbox-authz-contract.md`) so the user
+authorizes each command interactively rather than the path policy
+trying — and failing — to constrain the shell.
+
 For `file_ref` inputs to `execute`, the input validation layer checks
 the path before the agent runs. Denial produces an error before the
 exchange starts.

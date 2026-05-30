@@ -655,6 +655,53 @@ tier lands later, this code moves there. *(Flagged for spec
 review — Phase 1.3 introduced a "warning" concept that the Error
 Model doesn't yet have a first-class level for.)*
 
+### 4.16 Tools & Permissions (Phase 2.0, TOOL-R5)
+
+Errors from the Phase 2.0 builtin tools (`bundles/kolsch/tools/`),
+the `prompt`-effect dispatch in the Tools subsystem call layer, and
+the `kolsch permissions {list, add, remove, show}` CLI. The patch
+source of truth is `docs/process/phase2.0-tools-specs.md` Part 5;
+the canonical "what each effect does" mapping for callers is
+`docs/explanation/secrets-sandbox-authz-contract.md` §3.7.
+
+| Code | Level | Detail | Where (typical) |
+|---|---|---|---|
+| `authz.denied` | Recoverable | `{tool, target, rule_id}` | Tools dispatcher when effect is `deny` |
+| `authz.prompt_unattended` | Recoverable | `{tool, target, rule_id, caller}` | Non-chat callers when effect is `prompt` (collapsed to deny) |
+| `authz.rule_invalid` | Fatal | `{position, reason}` | `kolsch permissions add` validating user input |
+| `authz.rule_not_found` | Fatal | `{id, available_ids}` | `kolsch permissions remove` for unknown id |
+| `authz.protected_rule` | Fatal | `{id, reason}` | `kolsch permissions remove rl_default_deny` (the default-deny tail is removal-protected) |
+| `file.access_denied` | Recoverable | `{path, allowed_paths}` | `read_file` / `write_file` / `list_files` when the path resolves outside `file_access.allowed_paths` |
+| `file.too_large` | Recoverable | `{path, size_bytes, max_bytes}` | `read_file` when the target exceeds the per-call `max_bytes` budget |
+| `file.not_found` | Recoverable | `{path}` | `read_file` / `list_files` when the path does not exist |
+| `tool.timeout` | Recoverable | `{tool, timeout_seconds}` | `bash` when the command exceeds `timeout_seconds` |
+
+**Why these levels.** The six Recoverable codes (`authz.denied`,
+`authz.prompt_unattended`, and the four file/tool codes) surface
+to the model as tool-result payloads — the model can react (try a
+different path, retry with smaller bytes budget, give up). The
+three Fatal codes (`authz.rule_invalid`, `authz.rule_not_found`,
+`authz.protected_rule`) are CLI-level configuration problems where
+the user typed something wrong — the command fails loudly rather
+than the model trying to recover from a structural issue.
+
+**`authz.denied` vs `authz.prompt_unattended`.** Both surface to
+the model as Recoverable. `authz.denied` means a rule explicitly
+denied the call. `authz.prompt_unattended` means a rule asked to
+prompt the user but the caller is not interactive — replay sees
+the distinction so a future interactive run can answer the same
+question.
+
+**Path overlap with §4.11.** Phase 1's `file_access.denied` (in
+§4.11) and Phase 2.0's `file.access_denied` (here) are the same
+condition; the dotted code matches the Phase 2.0 builtin
+nomenclature (`read_file` / `write_file` / `list_files`). Code
+emitting from the new builtins uses the §4.16 code; legacy
+emission from the Phase 1 builtins continues under §4.11 until
+Phase 2.3's drift detection ports them. Both serialize to the
+canonical envelope identically — readers parsing the event log
+treat them as synonyms.
+
 ---
 
 ## Part 5 — How Errors Appear in Events

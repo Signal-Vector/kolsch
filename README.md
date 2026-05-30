@@ -59,6 +59,14 @@ credentials.
   for real replies. Connect a provider any time via `kolsch connect`
   and update the agent's `model:` field.
 
+The helper agent ships with four canonical tools — `read_file`,
+`write_file`, `list_files`, and `bash` — that the model can call
+inside the workspace. `read_file` and `list_files` run silently
+within `file_access.allowed_paths`; `write_file` and `bash` default
+to `prompt` so the chat surface (Phase 2.1) asks before the agent
+modifies your machine. `kolsch permissions {list, add, remove}`
+edits the rule list out of chat; see `docs/how-to/permissions.md`.
+
 Find available models with `kolsch models` (all providers) or
 `kolsch models <provider>`. See `docs/how-to/workspace-and-setup.md`
 for switching between workspaces and `docs/how-to/find-models.md`

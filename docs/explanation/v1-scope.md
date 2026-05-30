@@ -117,6 +117,26 @@ That is the entire user-facing surface of v1. It is intentionally small.
   v1.1 implements these for `opencode` and `openrouter`; the four
   other named providers (anthropic, openai, bedrock, llama) are
   planned for later patches per the established connector pattern.
+- **Permissions management CLI** *(Phase 2.0, TOOL-R6)* — four
+  commands for live-editing the workspace's authorization rule
+  list out of chat:
+  - `kolsch permissions list` — print the rule list with stable
+    rule ids.
+  - `kolsch permissions add --who <pattern> --what <pattern>
+    --effect {allow,prompt,deny} [--before <id> | --after <id> |
+    --first]` — insert a new rule at the chosen position; writes
+    `platform.yaml` atomically and reloads the in-memory rule
+    list if a runtime is active in the same process.
+  - `kolsch permissions remove <id>` — remove the named rule.
+    Refuses to remove the protected default-deny tail
+    (`rl_default_deny`).
+  - `kolsch permissions show <id>` — print one rule, including
+    its `effect` (now `allow` | `deny` | `prompt`) and the
+    rule's place in evaluation order.
+  These commands plus the in-chat four-choice modal (Phase 2.1)
+  are the two surfaces for editing the rule list; direct
+  `platform.yaml` edits also work but the CLI is the path the
+  docs point at. See `docs/how-to/permissions.md` for recipes.
 
 ### 2.5 Deployment
 

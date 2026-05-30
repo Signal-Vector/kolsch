@@ -278,6 +278,32 @@ You'll get a real answer this time. Same agent, same session machinery,
 same event log on disk — only the LLM behind it changed. The
 fake-LLM stderr warning is gone.
 
+> **Sidebar — the in-chat permission modal (Phase 2.0).** The helper
+> agent ships with four canonical tools: `read_file`, `write_file`,
+> `list_files`, and `bash`. The first two are silently allowed
+> inside your workspace; the last two default to `prompt`, which
+> means the chat surface (Phase 2.1) shows a four-choice modal
+> before the tool runs:
+>
+> ```
+> ┌─ Permission requested ─────────────────────────────────────┐
+> │ Tool:    bash                                              │
+> │ Command: rg "build_llm" src/                               │
+> │                                                            │
+> │ [y] allow once   [a] always allow this pattern             │
+> │ [n] deny once    [d] deny always                           │
+> └────────────────────────────────────────────────────────────┘
+> ```
+>
+> `[a]` and `[d]` write a new rule into `platform.yaml` so the
+> next matching call takes the new path — within the same
+> exchange, no restart. Out-of-chat surfaces (`kolsch run`,
+> `kolsch server`) treat `prompt` as `deny` so unattended runs
+> never hang; the deny is logged as `authz.prompt_unattended` so
+> replay shows what would have been asked. To edit rules
+> directly, use `kolsch permissions list/add/remove/show`. The
+> recipes live in `docs/how-to/permissions.md`.
+
 Useful follow-ups:
 
 - `uv run kolsch refresh openrouter` — re-pull the catalog when new

@@ -1566,6 +1566,145 @@ Full per-code table: Error Model §4.15.
 
 ---
 
+## Part 11.8 — Permissions (Phase 2.0, TOOL-R7)
+
+The runtime + CLI surfaces for live-editing the workspace's
+Authorization rule list, the new `prompt` effect, and the rule-id
+scheme the CLI commands reference. Patch source of truth:
+`docs/process/phase2.0-tools-specs.md` §2 (`prompt` effect) + §4
+(live editing).
+
+The Authorization provider's runtime API is documented in §8. This
+section covers what's new in Phase 2.0: the third effect value,
+the live-edit endpoints on the provider, the deterministic
+rule-id scheme, and the module surface the
+`kolsch permissions {list, add, remove, show}` CLI calls into.
+
+### 11.8.1 The `prompt` effect value
+
+```python
+class AuthzEffect(StrEnum):
+    ALLOW  = "allow"
+    DENY   = "deny"
+    PROMPT = "prompt"   # NEW in Phase 2.0
+```
+
+Returned by the existing `allow(principal, action, target=None)`
+method (§8.1) inside `AuthorizationResult.effect`. The provider
+classifies; the caller dispatches per the table in
+`docs/explanation/secrets-sandbox-authz-contract.md` §3.7.2. Non-chat
+callers (`kolsch run`, `kolsch server`, tests, golden) collapse
+`PROMPT` to `DENY` and emit `authz.prompt_unattended`
+(Error Model §4.16).
+
+### 11.8.2 Live-edit API on the Authorization provider
+
+```python
+def list_rules() -> list[Rule]:
+    """Return the in-memory rule list in evaluation order."""
+
+def get_rule(rule_id: str) -> Rule:
+    """Look up one rule by stable id.
+
+    Raises ``authz.rule_not_found`` (Fatal) with the offering
+    `available_ids` if no rule has the requested id.
+    """
+
+def add_rule(
+    rule: Rule,
+    *,
+    before: str | None = None,
+    after: str | None = None,
+    first: bool = False,
+) -> Rule:
+    """Append/insert a rule, then rewrite `platform.yaml` atomically.
+
+    Returns the rule with its assigned id populated. Exactly one
+    of ``before``, ``after``, ``first`` may be set; default is
+    append (end of list, before the protected default-deny tail).
+
+    Raises ``authz.rule_invalid`` (Fatal) for malformed
+    who/what regex, unknown effect, or conflicting position
+    selectors.
+    """
+
+def remove_rule(rule_id: str) -> None:
+    """Remove a rule by id; rewrite `platform.yaml` atomically.
+
+    Raises ``authz.protected_rule`` (Fatal) when called with the
+    protected default-deny tail's id (`rl_default_deny`). Raises
+    ``authz.rule_not_found`` (Fatal) for unknown ids.
+    """
+```
+
+**Reload semantics.** Every call to `allow(...)` re-reads the
+in-memory rule list, so `add_rule` / `remove_rule` changes apply
+to the *very next* authz check — no exchange-boundary reload, no
+process restart. This is the "rule changes apply within the same
+exchange" guarantee from patch §0; the in-chat modal (Phase 2.1)
+depends on it.
+
+**Atomic write.** Both `add_rule` and `remove_rule` rewrite
+`platform.yaml` via temp + rename (Phase 1.1 atomicity
+discipline). The on-disk file is consistent at every moment.
+
+### 11.8.3 The rule-id scheme
+
+Rule ids are deterministic and stable across reorders:
+
+```python
+def assign_rule_id(rule: Rule) -> str:
+    # Hash who+what+effect; take first 8 hex chars.
+    h = hashlib.blake2b(
+        f"{rule.who}|{rule.what}|{rule.effect}".encode(),
+        digest_size=4,
+    ).hexdigest()
+    return f"rl_{h}"
+```
+
+Two rules with identical who+what+effect produce the same id —
+the canonical-rule semantics rule out duplicates anyway. Reordering
+preserves ids; editing a rule's content changes its id.
+
+The default-deny tail is named `rl_default_deny` by convention and
+is removal-protected (the only protected name in v1).
+
+### 11.8.4 CLI module surface
+
+```python
+# src/cli/permissions.py
+def cmd_permissions_list(runtime, args) -> int: ...
+def cmd_permissions_add(runtime, args) -> int: ...
+def cmd_permissions_remove(runtime, args) -> int: ...
+def cmd_permissions_show(runtime, args) -> int: ...
+```
+
+Each dispatcher:
+
+1. Resolves the workspace (Part 11.6) and bootstraps the
+   Authorization provider.
+2. Calls one of `list_rules` / `add_rule` / `remove_rule` /
+   `get_rule` per §11.8.2.
+3. Renders human-readable output, or `--json` machine-readable.
+
+The CLI does NOT reach into `platform.yaml` directly — it goes
+through the Authorization provider so atomicity, validation, and
+in-process reload all work uniformly.
+
+### 11.8.5 Failure surface (summary)
+
+| Code | Where |
+|---|---|
+| `authz.denied` | tools dispatcher |
+| `authz.prompt_unattended` | non-chat callers when effect is `prompt` |
+| `authz.rule_invalid` | `add_rule` validation |
+| `authz.rule_not_found` | `remove_rule` / `get_rule` for unknown id |
+| `authz.protected_rule` | `remove_rule rl_default_deny` |
+
+Full per-code table: Error Model §4.16.
+
+---
+
 ## Part 12 — Inter-Module Dependency Matrix
 
 Who calls whom. Rows are callers; columns are callees. Cells list the

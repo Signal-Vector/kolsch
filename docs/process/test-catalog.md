@@ -1080,6 +1080,172 @@ Handling), CRW (CrewAI Adapter — authored in Step 12b), INT
 
 ---
 
+## Part 9.8 — Tools & Permissions (TOOL) — Phase 2.0, TOOL-R9
+
+**TC-TOOL-01: Four builtins discovered from `bundles/kolsch/tools/`**
+- Layer: component
+- Setup: a `bundles/kolsch/tools/` directory containing
+  `read_file.py`, `write_file.py`, `list_files.py`, `bash.py`
+  each defining one `@tool`-decorated function.
+- Action: bootstrap the runtime; list the registered tools.
+- Expected: exactly the four tool names registered with action
+  namespaces `tool.read_file`, `tool.write_file`,
+  `tool.list_files`, `tool.bash`. No "builtin registry" inside
+  `src/` contributed any tool — verified by grep.
+- Verifies: §10.15; AGENTS.md hard rule per TOOL-R10.
+
+**TC-TOOL-02: `read_file` enforces `file_access.allowed_paths`**
+- Layer: component
+- Setup: workspace with `file_access.allowed_paths: ["data/"]`;
+  the agent has `read_file` enabled.
+- Action: tool call `read_file(path="/etc/passwd")`.
+- Expected: tool fails with `file.access_denied` (Recoverable);
+  the model sees the error in the tool-result payload.
+- Verifies: §10.15; Fh-I2; Error Model §4.16.
+
+**TC-TOOL-03: `read_file` enforces `max_bytes`**
+- Layer: component
+- Setup: a workspace file `data/big.txt` whose byte size
+  exceeds the default 1 MiB; `read_file` called with default
+  `max_bytes`.
+- Action: invoke `read_file(path="data/big.txt")`.
+- Expected: `file.too_large` (Recoverable) with `detail.size_bytes`
+  and `detail.max_bytes`.
+- Verifies: §10.15; context-budget guard.
+
+**TC-TOOL-04: `read_file` missing path → `file.not_found`**
+- Layer: component
+- Setup: workspace without `data/missing.txt`.
+- Action: invoke `read_file(path="data/missing.txt")`.
+- Expected: `file.not_found` (Recoverable) with `detail.path`.
+- Verifies: §10.15.
+
+**TC-TOOL-05: `bash` enforces `timeout_seconds`**
+- Layer: component
+- Setup: workspace authorizing `tool.bash`; agent invokes
+  `bash(command="sleep 10", timeout_seconds=1)`.
+- Action: run the agent.
+- Expected: `tool.timeout` (Recoverable); the subprocess is
+  killed; `tool.result` carries `timed_out: true` and a
+  bounded `duration_seconds`.
+- Verifies: §10.15; sandbox kill semantics.
+
+**TC-TOOL-06: `list_files` non-recursive by default**
+- Layer: component
+- Setup: workspace with `data/a.txt`, `data/sub/b.txt`.
+- Action: `list_files(path="data")`.
+- Expected: entries include `a.txt` and the `sub/` directory;
+  `b.txt` is NOT present (non-recursive). Re-running with
+  `glob="**/*"` includes `b.txt`.
+- Verifies: §10.15; default ergonomics.
+
+**TC-TOOL-07: `write_file` is atomic — failed write leaves prior content intact**
+- Layer: component
+- Setup: workspace with `data/x.txt` containing `"old"`;
+  `write_file` invoked with content that triggers a simulated
+  write failure (SIGKILL between temp write and rename, or a
+  mocked rename failure).
+- Action: invoke `write_file(path="data/x.txt", content="new")`
+  with the failure injected.
+- Expected: `data/x.txt` still contains `"old"`; no partial
+  write visible. (The Phase 1.1 atomicity discipline applies.)
+- Verifies: §10.15; atomic write contract.
+
+**TC-TOOL-08: Default rule set after `kolsch setup`**
+- Layer: component
+- Setup: fresh `kolsch setup --non-interactive` against a
+  tmp_path workspace.
+- Action: read `platform.yaml`'s `authorization.config.rules`.
+- Expected: five rules in order — `rl_read_workspace`,
+  `rl_list_workspace`, `rl_write_workspace` (effect: `prompt`),
+  `rl_bash_any` (effect: `prompt`), `rl_default_deny`. The
+  workspace path in the rules is the resolved absolute path,
+  not a `${VAR}` template.
+- Verifies: §10.15; patch §3.1 + §3.3.
+
+**TC-TOOL-09: `prompt` effect treated as deny by `kolsch run`**
+- Layer: integration
+- Setup: workspace with default rule set; Fake LLM scripted to
+  emit a `tool_use: bash` request.
+- Action: `kolsch run helper --input content="run a command"`.
+- Expected: the bash call is blocked; event log contains
+  `authz.prompt_requested` (Recoverable) then
+  `authz.prompt_unattended` (Recoverable). The exchange
+  continues with the model seeing the deny in its tool-result
+  payload; no hang.
+- Verifies: §10.15; secrets-sandbox-authz §3.7.2.
+
+**TC-TOOL-10: `kolsch permissions add` writes atomically and reloads in-process**
+- Layer: component
+- Setup: workspace with default rule set; an active runtime in
+  the same process.
+- Action: invoke `kolsch permissions add --who ".*"
+  --what "tool\.bash" --effect allow --first`; immediately
+  call `authz.allow("agent.X", "tool.bash", "cat /tmp/x")`.
+- Expected: the `authz.allow` call returns
+  `effect: ALLOW` matching the just-added rule. The on-disk
+  `platform.yaml` reflects the new rule. The runtime did
+  not need a restart.
+- Verifies: §10.15; live-edit semantics.
+
+**TC-TOOL-11: `kolsch permissions remove rl_default_deny` is protected**
+- Layer: component
+- Setup: workspace with the default rule set including
+  `rl_default_deny` at the end.
+- Action: invoke `kolsch permissions remove rl_default_deny`.
+- Expected: command exits non-zero with
+  `authz.protected_rule` (Fatal); the rule list is unchanged on
+  disk and in memory.
+- Verifies: §10.15; Error Model §4.16; patch §3.2.
+
+**TC-TOOL-12: Deterministic rule ids across reorders + reloads**
+- Layer: unit
+- Setup: a `platform.yaml` with four rules.
+- Action: load the rule set, snapshot the ids, reorder rules in
+  the YAML and reload, snapshot ids again; then edit one
+  rule's `effect` and reload, snapshot ids.
+- Expected: the first two snapshots are identical (reorder
+  preserves ids); the third snapshot differs only in the id
+  of the edited rule (its hash changed).
+- Verifies: §10.15; Module API Reference Part 11.8.3.
+
+**TC-TOOL-13: `allow_all_test` variant refuses to load in production**
+- Layer: component
+- Setup: `platform.yaml`'s `authorization.variant: allow_all_test`;
+  env var `KOLSCH_TEST_BUILD` UNSET.
+- Action: bootstrap the runtime.
+- Expected: fatal startup error names the variant and the
+  required env var; bootstrap fails before any agent runs.
+  Re-running with `KOLSCH_TEST_BUILD=1` loads successfully.
+- Verifies: §10.15; AGENTS.md hard rule per TOOL-R10.
+
+**TC-TOOL-14: `kolsch permissions list` matches in-memory order**
+- Layer: component
+- Setup: workspace with the default rule set; runtime bootstrapped.
+- Action: invoke `kolsch permissions list`.
+- Expected: stdout enumerates the five default rules in
+  evaluation order (silent allows first, prompts next,
+  `rl_default_deny` last); each row carries the stable id.
+- Verifies: §10.15; Module API Reference Part 11.8.4.
+
+**TC-TOOL-15: In-chat modal "always allow" lands within the same exchange**
+- Layer: integration
+- Setup: simulated chat surface (no real REPL — a test harness
+  that injects an `effect=ALLOW, persist={who, what, effect: allow}`
+  response to `handle_prompt`). Fake LLM scripted to call
+  `bash` twice with the same command.
+- Action: run the exchange.
+- Expected: first call fires `authz.prompt_requested`; the
+  harness's `handle_prompt` writes the new rule via
+  `add_rule(..., before=<prompt_rule_id>)`; the second call
+  hits the new ALLOW rule WITHOUT a prompt. Both `tool.bash`
+  invocations complete inside one exchange; no restart, no
+  exchange boundary.
+- Verifies: §10.15; secrets-sandbox-authz §3.7.3; the
+  load-bearing "same-exchange" guarantee from patch §0.
+
+---
+
 ## Part 10 — Error Model (ERR)
 
 **TC-ERR-01: All subclasses serialize to envelope**
@@ -1531,6 +1697,7 @@ How the catalog maps to the success criteria (Handbook §10):
 | LLM Provider Configuration | §10.12 | TC-LLM-01..10 (Phase 1.1) |
 | Workspace Resolution & Setup | §10.13 | TC-UX-01..10 (Phase 1.2, UX-R9) |
 | Model Fallback | §10.14 | TC-FB-01..10 (Phase 1.3, FB-R8) |
+| Tools & Permissions | §10.15 | TC-TOOL-01..15 (Phase 2.0, TOOL-R9) |
 | CLI | Part 11.6 (cases) | TC-CLI-01..08 — success criteria still to author in handbook §10.15 |
 | HTTP API | Part 11.7 (cases) | TC-API-01..10 — success criteria still to author in handbook §10.16 |
 | Memory | §10.6 | TC-MEM-01..09 |
