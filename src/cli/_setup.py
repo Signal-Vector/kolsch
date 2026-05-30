@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import os
+import shutil
 import sys
 from dataclasses import dataclass
 from pathlib import Path
@@ -335,20 +336,34 @@ async def _step_c_non_interactive(io: _SetupIO) -> str:
 # ---------------------------------------------------------------------------
 
 
-_STARTER_BUNDLE = "starter"
+_STARTER_BUNDLE = "kolsch"  # Phase 2.0 (patch §1.5) — was "starter" in 1.2.
 _STARTER_AGENT = "helper"
 
-_DEFAULT_AGENT_PROMPT = (
-    "You are a helpful assistant. Answer the user's question clearly "
-    "and concisely. If the question is ambiguous, ask one clarifying "
-    "question before answering."
-)
+# The packaged template the bundle is materialized from (Phase 2.0
+# coordinator resolution to E-2.0-001 — Option A: ship the four tool
+# files as a copyable template under src/, copy at setup time).
+_STARTER_BUNDLE_TEMPLATE_DIR = Path(__file__).parent / "_starter_bundle" / "kolsch"
+
+# Placeholder string in the packaged agents/helper.yaml replaced with
+# the resolved model line at materialization time (Step D).
+_MODEL_PLACEHOLDER = "{{MODEL_LINE}}"
 
 
 async def _step_d_starter_agent(io: _SetupIO, *, non_interactive: bool) -> str:
+    """Materialize the kolsch bundle from the packaged template.
+
+    Phase 2.0 (TOOL-R10, coordinator resolution E-2.0-001 Option A):
+    instead of rendering a synthetic agent.yaml inline, this step
+    copies the packaged template at
+    ``src/cli/_starter_bundle/kolsch/`` (bundle.yaml + agents/
+    helper.yaml + the four tool .py files) into
+    ``<workspace>/bundles/kolsch/``, substituting the resolved model
+    line into the helper agent's ``model:`` field. Each tool .py file
+    is the source of truth for what that tool does — users can edit,
+    copy, or swap them per TOOL-R10's intent.
+    """
     bundle_dir = io.root / "bundles" / _STARTER_BUNDLE
     agent_path = bundle_dir / "agents" / f"{_STARTER_AGENT}.yaml"
-    bundle_path = bundle_dir / "bundle.yaml"
 
     if agent_path.exists():
         io.out.write(f"✓ starter agent already at {agent_path}\n")
@@ -363,13 +378,46 @@ async def _step_d_starter_agent(io: _SetupIO, *, non_interactive: bool) -> str:
             io.out.write("  → skipped starter agent\n")
             return _SKIPPED
 
-    agent_path.parent.mkdir(parents=True, exist_ok=True)
-    agent_path.write_text(_render_starter_agent(model), encoding="utf-8")
-    if not bundle_path.exists():
-        bundle_path.write_text(_render_starter_bundle(), encoding="utf-8")
+    _copy_kolsch_bundle(io.root, model=model)
+    io.out.write(f"  ✓ materialized bundle at {bundle_dir.relative_to(io.root)}/\n")
     io.out.write(f"  ✓ wrote starter agent at {agent_path.relative_to(io.root)}\n")
     _announce_picked_model(io, model)
     return _PROCEEDED
+
+
+def _copy_kolsch_bundle(root: Path, *, model: str | dict[str, str]) -> None:
+    """Copy the packaged kolsch bundle template into the workspace.
+
+    Substitutes the model placeholder in agents/helper.yaml with the
+    resolved model line. The four tools/*.py files are copied
+    verbatim — they're standalone Python that the asset catalog
+    discovers + the Tools subsystem registers per the standard
+    bundle-tool path (per the Phase 2.0 coordinator resolution E-2.0-001
+    Option A).
+    """
+    target = root / "bundles" / _STARTER_BUNDLE
+    if target.exists():
+        # Idempotent — leave existing bundle alone. (Drift detection
+        # in Phase 2.3 will surface mismatches; setup doesn't overwrite.)
+        return
+
+    if not _STARTER_BUNDLE_TEMPLATE_DIR.exists():
+        msg = (
+            "packaged kolsch bundle template missing at "
+            f"{_STARTER_BUNDLE_TEMPLATE_DIR}; installation may be corrupted"
+        )
+        raise RuntimeError(msg)
+
+    shutil.copytree(_STARTER_BUNDLE_TEMPLATE_DIR, target)
+
+    # Substitute the model placeholder in the agent file. The template
+    # ships with the literal `{{MODEL_LINE}}` token; replace it with
+    # the resolved model line.
+    agent_path = target / "agents" / f"{_STARTER_AGENT}.yaml"
+    rendered = agent_path.read_text(encoding="utf-8").replace(
+        _MODEL_PLACEHOLDER, _render_model_line(model)
+    )
+    agent_path.write_text(rendered, encoding="utf-8")
 
 
 def _announce_picked_model(io: _SetupIO, model: str | dict[str, str]) -> None:
@@ -456,35 +504,16 @@ def _first_model_id(entry: dict[str, Any]) -> str | None:
     return None
 
 
-def _render_starter_agent(model: str | dict[str, str]) -> str:
-    # The model field can be either a compact-string alias or the
-    # canonical {provider, model} dict — render both shapes the same
-    # way YAML would normalise them.
+def _render_model_line(model: str | dict[str, str]) -> str:
+    """Render the model field value as it lands in agents/helper.yaml.
+
+    The model field can be either a compact-string alias or the
+    canonical ``{provider, model}`` dict; both shapes are valid YAML
+    inline.
+    """
     if isinstance(model, str):
-        model_line = model
-    else:
-        model_line = (
-            "{ provider: " + model["provider"] + ", model: " + model["model"] + " }"
-        )
-    return (
-        f'schema_version: "0.1"\n'
-        f'assembly_version: "1"\n'
-        f"agent_id: ag_helper\n"
-        f"name: helper\n"
-        f"description: A friendly general-purpose helper agent.\n"
-        f"model: {model_line}\n"
-        f"prompt: |\n"
-        f"  {_DEFAULT_AGENT_PROMPT}\n"
-        f"io: {{ mode: conversational }}\n"
-    )
-
-
-def _render_starter_bundle() -> str:
-    return (
-        "name: starter\n"
-        'version: "0.1"\n'
-        "description: Bundle created by `kolsch setup` to verify the install.\n"
-    )
+        return model
+    return "{ provider: " + model["provider"] + ", model: " + model["model"] + " }"
 
 
 # ---------------------------------------------------------------------------
@@ -561,20 +590,53 @@ def _setup_platform_payload() -> dict[str, Any]:
     """The platform.yaml setup writes.
 
     Starts from :func:`assets.platform_config.default_platform_payload`
-    and overrides the ``defaults`` section to empty. Reason: the stock
-    defaults include a top-level ``memory`` block intended as the
-    subsystem default, but the kernel resolver merges ``defaults`` into
-    the agent config directly — and ``ResolvedAgentConfig`` rejects
-    extras at the top level. The stock payload is OK for tests that
-    don't exercise the resolver; setup's workspace IS exercised by
-    `kolsch run` immediately afterward, so we ship a clean
-    ``defaults: {}`` until the broader memory-default routing is
-    sorted (flagged for the spec reviewer; see Phase 1.2 Step 18
-    summary).
+    and applies two Phase 2.0 overrides:
+
+    1. ``authorization.config.rules`` is the workspace-only
+       default set per Phase 2.0 patch §3.1 — read_file / list_files
+       silently allowed; write_file / bash gated by the ``prompt``
+       effect; protected ``rl_default_deny`` tail. (TOOL-R10 hard
+       rule + Step 22 reviewer Q11.)
+    2. ``defaults`` is overridden to empty for the same reason as
+       Phase 1.2: the stock ``defaults.memory`` block doesn't fit
+       the kernel's ``ResolvedAgentConfig`` shape at the top level.
+       Flagged for spec follow-up; see Phase 1.2 Step 18 summary.
     """
     payload = _stock_defaults()
     payload["defaults"] = {}
+    payload["authorization"] = {
+        "variant": "rule_based",
+        "config": {"rules": _workspace_only_default_rules()},
+    }
     return payload
+
+
+def _workspace_only_default_rules() -> list[dict[str, str]]:
+    """The workspace-only default rules per Phase 2.0 patch §3.1.
+
+    The ``who``/``what`` convention follows Phase 1's authz spec
+    (``who`` = principal regex, ``what`` = action regex). The patch
+    example inverts these; the implementation honours the existing
+    convention. See Step 22 reviewer notes + the tests in
+    ``tests/component/authz/test_phase2_authz.py``.
+
+    Includes an ``agent.execute.*`` allow at the top so the engine's
+    pre-flight authz check (``engine.engine:391``) passes — without
+    this the default-deny tail would block every exchange.
+    """
+    return [
+        # Pre-flight gate — the engine requires agent.execute.<id> to
+        # run any exchange. Default to allow; users tighten by adding
+        # a more specific deny before this rule.
+        {"who": ".*", "what": r"agent\.execute\..*", "effect": "allow"},
+        # The four Phase 2.0 builtins.
+        {"who": ".*", "what": r"tool\.read_file", "effect": "allow"},
+        {"who": ".*", "what": r"tool\.list_files", "effect": "allow"},
+        {"who": ".*", "what": r"tool\.write_file", "effect": "prompt"},
+        {"who": ".*", "what": r"tool\.bash", "effect": "prompt"},
+        # Default-deny tail (protected — TOOL-R10).
+        {"who": ".*", "what": ".*", "effect": "deny"},
+    ]
 
 
 # ---------------------------------------------------------------------------

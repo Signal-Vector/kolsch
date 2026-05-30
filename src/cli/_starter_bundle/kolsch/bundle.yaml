@@ -1,0 +1,7 @@
+name: kolsch
+version: "0.2"
+description: |
+  The kolsch starter bundle — created by `kolsch setup` per Phase 2.0
+  patch §1.5. Contains the canonical builtin tool set (read_file,
+  write_file, list_files, bash) and a helper agent that opts into
+  them. Users can edit, copy, or swap any of these files.

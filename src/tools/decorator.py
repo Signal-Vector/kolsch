@@ -11,10 +11,12 @@ from __future__ import annotations
 
 import re
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict
 
+from files import PathPolicy
 from schemas import AgentId, SessionId, ThreadId
 
 if TYPE_CHECKING:
@@ -27,18 +29,35 @@ _NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 class ToolContext(BaseModel):
     """The runtime context passed to every tool function — §9.2.
 
-    Five fields, all read-only. Tools cannot write the event log,
+    Seven fields, all read-only. Tools cannot write the event log,
     inspect the principal, or perform authz checks (all done by the
     dispatch flow before the tool runs).
+
+    The five Phase 1 fields (``agent_id``, ``session_id``,
+    ``thread_id``, ``principal``, ``secrets``) are required for every
+    tool invocation. The Phase 2.0 additions (``workspace_root``,
+    ``path_policy``) are optional and populated by the
+    :class:`ToolsSubsystem` from its constructor args when present —
+    they let user-authored bundle tools at
+    ``<workspace>/bundles/kolsch/tools/`` reach the platform's path
+    policy and workspace root without holding a closure over them
+    (the way the Phase 1 in-engine factories do). When the subsystem
+    was constructed without a ``path_policy`` / ``root`` (e.g., tests
+    that don't exercise file tools), the fields stay ``None`` —
+    bundle tools that need them should raise a clear error rather
+    than silently misbehave.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
 
     agent_id: AgentId
     session_id: SessionId
     thread_id: ThreadId
     principal: str
     secrets: dict[str, str]
+    # Phase 2.0 (TOOL-R7) — populated by the dispatcher; None elsewhere.
+    workspace_root: Path | None = None
+    path_policy: PathPolicy | None = None
 
 
 class ToolResult(BaseModel):

@@ -264,6 +264,11 @@ def _build_parser() -> argparse.ArgumentParser:
         "provider", nargs="?", default=None, help="Provider name (optional)."
     )
 
+    # Phase 2.0 (TOOL-R6) — kolsch permissions {list, add, remove, show}.
+    from cli.permissions import add_permissions_subparser  # noqa: PLC0415
+
+    add_permissions_subparser(sub)
+
     return parser
 
 
@@ -478,6 +483,12 @@ async def _cmd_models(args: argparse.Namespace) -> int:
     return await cmd_models(args, make_default_io(root=args.root))
 
 
+async def _cmd_permissions(args: argparse.Namespace) -> int:
+    from cli.permissions import cmd_permissions  # noqa: PLC0415
+
+    return await cmd_permissions(args)
+
+
 async def _cmd_setup(args: argparse.Namespace) -> int:
     # Setup orchestrates `connect` + `run` against the workspace it
     # creates; import lazily so importing `cli.main` doesn't pull the
@@ -499,6 +510,7 @@ _DISPATCH = {
     "refresh": _cmd_refresh,
     "models": _cmd_models,
     "setup": _cmd_setup,
+    "permissions": _cmd_permissions,
 }
 
 

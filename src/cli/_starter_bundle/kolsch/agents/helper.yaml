@@ -1,0 +1,23 @@
+schema_version: "0.1"
+assembly_version: "1"
+agent_id: ag_helper
+name: helper
+description: A friendly general-purpose helper agent.
+model: {{MODEL_LINE}}
+prompt: |
+  You are a helpful assistant. Answer the user's question clearly
+  and concisely. If the question is ambiguous, ask one clarifying
+  question before answering.
+io: { mode: conversational }
+# Phase 2.0 (patch §1.5): the helper opts into the four builtin
+# tools shipped by this bundle. The implementations live alongside
+# this file in `tools/`. Edit, copy, or remove any of them.
+subsystems:
+  tools:
+    variant: standard
+    config:
+      declared:
+        - ref: kolsch/tools/read_file
+        - ref: kolsch/tools/write_file
+        - ref: kolsch/tools/list_files
+        - ref: kolsch/tools/bash

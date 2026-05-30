@@ -147,12 +147,30 @@ class ToolsSubsystem:
         registry) and MCP invocations of the form
         ``mcp.<server>.<tool>`` (forwarded to the registered MCP
         server, starting it lazily if needed per spec §5.1).
+
+        Phase 2.0 (TOOL-R7): enriches the caller's ``ToolContext``
+        with the subsystem's ``workspace_root`` and ``path_policy``
+        so bundle tools at ``<workspace>/bundles/kolsch/tools/`` can
+        reach them without holding a closure (the way the Phase 1
+        in-engine factories do). Fields the caller already set
+        (non-None) are preserved.
         """
         agent_id = context.agent_id
 
+        # Enrich the context with workspace_root + path_policy when
+        # the subsystem knows them and the caller hasn't already
+        # supplied them. Phase 1 callers / tests that construct
+        # ToolContext directly stay byte-identical.
+        updates: dict[str, Any] = {}
+        if context.workspace_root is None and self._root is not None:
+            updates["workspace_root"] = self._root
+        if context.path_policy is None and self._path_policy is not None:
+            updates["path_policy"] = self._path_policy
+        enriched = context.model_copy(update=updates) if updates else context
+
         mcp_match = self._registry.lookup_mcp(agent_id, tool_name)
         if mcp_match is not None:
-            return await self._invoke_mcp(mcp_match, tool_name, args, context)
+            return await self._invoke_mcp(mcp_match, tool_name, args, enriched)
 
         defn = self._registry.get_tool(agent_id, tool_name)
         if defn is None:
@@ -161,7 +179,7 @@ class ToolsSubsystem:
         result = await dispatch_tool(
             defn=defn,
             args=args,
-            context=context,
+            context=enriched,
             authz=self._authz,
             secrets=self._secrets,
             sandbox=self._sandbox,

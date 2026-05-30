@@ -215,7 +215,7 @@ async def test_tc_ux_05_non_interactive_setup_initializes_workspace(
     for name in ("bundles", "sessions", "content", "logs", "data", ".platform"):
         assert (tmp_path / name).is_dir()
     # Starter agent ships with the fake LLM since no provider connected.
-    starter = tmp_path / "bundles" / "starter" / "agents" / "helper.yaml"
+    starter = tmp_path / "bundles" / "kolsch" / "agents" / "helper.yaml"
     assert starter.is_file()
     payload = yaml.safe_load(starter.read_text())
     assert payload["model"] == {"provider": "fake", "model": "fake-model"}
@@ -301,7 +301,7 @@ async def test_tc_ux_08_starter_falls_back_to_fake_without_provider(
     monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
     io_ = _make_test_io(root=tmp_path)
     await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
-    starter = tmp_path / "bundles" / "starter" / "agents" / "helper.yaml"
+    starter = tmp_path / "bundles" / "kolsch" / "agents" / "helper.yaml"
     payload = yaml.safe_load(starter.read_text())
     assert payload["model"] == {"provider": "fake", "model": "fake-model"}
 
@@ -343,7 +343,7 @@ async def test_tc_ux_08_starter_uses_opus_alias_when_present(
     )
     io_ = _make_test_io(root=tmp_path)
     await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
-    starter = tmp_path / "bundles" / "starter" / "agents" / "helper.yaml"
+    starter = tmp_path / "bundles" / "kolsch" / "agents" / "helper.yaml"
     payload = yaml.safe_load(starter.read_text())
     assert payload["model"] == "opus"
 
@@ -385,7 +385,7 @@ async def test_starter_uses_non_metadata_provider_over_openrouter(
     )
     io_ = _make_test_io(root=tmp_path)
     await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
-    starter = tmp_path / "bundles" / "starter" / "agents" / "helper.yaml"
+    starter = tmp_path / "bundles" / "kolsch" / "agents" / "helper.yaml"
     payload = yaml.safe_load(starter.read_text())
     assert payload["model"] == {"provider": "opencode", "model": "gpt-oss-120b"}
 
@@ -418,7 +418,7 @@ async def test_starter_uses_openrouter_when_sole_provider(
     )
     io_ = _make_test_io(root=tmp_path)
     await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
-    starter = tmp_path / "bundles" / "starter" / "agents" / "helper.yaml"
+    starter = tmp_path / "bundles" / "kolsch" / "agents" / "helper.yaml"
     payload = yaml.safe_load(starter.read_text())
     assert payload["model"] == {
         "provider": "openrouter",
@@ -458,7 +458,7 @@ async def test_starter_skips_provider_with_empty_models_list(
     )
     io_ = _make_test_io(root=tmp_path)
     await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
-    starter = tmp_path / "bundles" / "starter" / "agents" / "helper.yaml"
+    starter = tmp_path / "bundles" / "kolsch" / "agents" / "helper.yaml"
     payload = yaml.safe_load(starter.read_text())
     # OpenCode skipped (empty), OpenRouter picked even as fallback.
     assert payload["model"] == {
@@ -514,7 +514,7 @@ async def test_tc_ux_09_resumable_after_keyboard_interrupt(
     # The interrupt happens during step D's confirm prompt; setup
     # returns 4 (partial).
     assert rc_first == 4
-    starter = tmp_path / "bundles" / "starter" / "agents" / "helper.yaml"
+    starter = tmp_path / "bundles" / "kolsch" / "agents" / "helper.yaml"
     assert not starter.exists(), (
         "starter agent should not exist after step D was interrupted"
     )
@@ -565,7 +565,7 @@ def test_tc_ux_10_end_to_end_run_against_setup_workspace(
             "--root",
             str(tmp_path),
             "run",
-            "starter/agents/helper",
+            "kolsch/agents/helper",
             "--input",
             "content=hello",
         ]
@@ -623,7 +623,7 @@ async def test_interactive_setup_user_skips_provider(
     io_ = _make_test_io(root=tmp_path, prompter=prompter)
     rc = await run_setup(argparse.Namespace(non_interactive=False, root=tmp_path), io_)
     assert rc == 0
-    starter = tmp_path / "bundles" / "starter" / "agents" / "helper.yaml"
+    starter = tmp_path / "bundles" / "kolsch" / "agents" / "helper.yaml"
     assert starter.is_file()
 
 
@@ -641,7 +641,7 @@ async def test_interactive_user_declines_starter_agent(
     io_ = _make_test_io(root=tmp_path, prompter=prompter)
     rc = await run_setup(argparse.Namespace(non_interactive=False, root=tmp_path), io_)
     assert rc == 0
-    starter = tmp_path / "bundles" / "starter" / "agents" / "helper.yaml"
+    starter = tmp_path / "bundles" / "kolsch" / "agents" / "helper.yaml"
     assert not starter.exists()
 
 
