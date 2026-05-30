@@ -151,6 +151,7 @@ _TOP_LEVEL_SUBCOMMANDS: tuple[str, ...] = (
     "models",
     "refresh",
     "permissions",
+    "chat",
 )
 
 

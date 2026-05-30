@@ -14,7 +14,7 @@ import logging
 import sys
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from platform_runtime import (
     bootstrap_runtime,
@@ -282,7 +282,46 @@ def _build_parser() -> argparse.ArgumentParser:
     if permissions_parser is not None:
         _PARSER_REGISTRY["permissions"] = permissions_parser
 
+    # Phase 2.1 Step 24a — kolsch chat (streaming REPL).
+    _add_chat_subparser(sub)
+
     return parser
+
+
+def _add_chat_subparser(sub: argparse._SubParsersAction[Any]) -> None:
+    """Register the ``kolsch chat`` subparser.
+
+    Extracted from ``_build_parser`` to keep that function under the
+    PLR0915 statement-count ceiling. Phase 2.1 Step 24a.
+    """
+    chat = sub.add_parser(
+        "chat",
+        help="Open a streaming chat REPL against an agent.",
+    )
+    chat.add_argument(
+        "agent_ref",
+        nargs="?",
+        default=None,
+        help=(
+            "Full agent ref (e.g. kolsch/agents/helper). Defaults to "
+            "the configured starter agent."
+        ),
+    )
+    chat.add_argument(
+        "--session",
+        dest="session",
+        default=None,
+        help="Resume an existing session by id (24e — accepted but ignored in 24a).",
+    )
+    chat.add_argument(
+        "--model",
+        dest="model",
+        default=None,
+        help=(
+            "Session-scoped model override (ModelSpec input shape). "
+            "Recorded for the banner in 24a; full alias resolution lands in 24d."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -636,6 +675,12 @@ async def _cmd_permissions(args: argparse.Namespace) -> int:
     return await cmd_permissions(args)
 
 
+async def _cmd_chat(args: argparse.Namespace) -> int:
+    from cli.chat import cmd_chat  # noqa: PLC0415
+
+    return await cmd_chat(args)
+
+
 async def _cmd_setup(args: argparse.Namespace) -> int:
     # Setup orchestrates `connect` + `run` against the workspace it
     # creates; import lazily so importing `cli.main` doesn't pull the
@@ -658,6 +703,7 @@ _DISPATCH = {
     "models": _cmd_models,
     "setup": _cmd_setup,
     "permissions": _cmd_permissions,
+    "chat": _cmd_chat,
 }
 
 

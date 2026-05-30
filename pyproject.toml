@@ -26,6 +26,15 @@ dependencies = [
     # `platform_runtime.workspace.resolve_workspace` uses as the default
     # when neither `--root` nor `$KOLSCH_WORKSPACE` is set.
     "platformdirs>=4.2",
+    # Phase 2.1 (Step 24a) — `kolsch chat` REPL. `prompt_toolkit` powers
+    # the multi-line input loop with the patch §2.5 key-binding table
+    # (Enter submits, Ctrl-J / Alt-Enter / Shift-Enter insert newline);
+    # `rich` will render the streaming agent block + tool-call panels
+    # in later steps (24c+). Both are pinned to versions known to
+    # compose without the prompt_toolkit-vs-rich quirks documented in
+    # phase2.1-chat-specs.md Part 11 item 1.
+    "prompt_toolkit>=3.0.43,<4",
+    "rich>=13.7.1,<15",
 ]
 
 [project.urls]
