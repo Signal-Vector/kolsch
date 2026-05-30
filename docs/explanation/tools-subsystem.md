@@ -573,6 +573,30 @@ detection handles the rename — see TOOL-R12 alignment note in
 `docs/process/phase1.2-usability-specs.md` §2.4 for the migration
 mechanism.
 
+### 4.6 The chat as canonical callback consumer (Phase 2.1, CHAT-R1)
+
+The Phase 2.0 prompt-callback hook (see
+`docs/explanation/secrets-sandbox-authz-contract.md` §3.7.2 + the
+patch §4.2) is consumed by the `kolsch chat` REPL — that's its
+purpose. The chat's modal IS the reference implementation; the
+hook's contract was shaped specifically for the four-choice
+modal that 2.1 ships (see `docs/process/phase2.1-chat-specs.md`
+§4 for the modal + callback wiring).
+
+**Non-chat callers must NOT implement their own modal.** Per
+Phase 2.0 patch §2.2 — `kolsch run` (one-shot script),
+`kolsch server` (HTTP), tests, and the golden harness all treat
+`prompt` as `deny` (collapsed via the no-callback path) and emit
+`authz.prompt_unattended` so replay shows what would have been
+asked. Building a parallel approval surface in those callers
+would fork state: the chat's modal mutates `platform.yaml`
+through the authz live-edit API; a second mechanism in the
+server would need to coordinate with the first and the file
+would become the only consistent source of truth — defeating
+the in-memory live-edit guarantee that Phase 2.0's same-exchange
+contract depends on. One callback consumer, one rule list, one
+discipline.
+
 ---
 
 ## Part 5 — MCP Server Integration

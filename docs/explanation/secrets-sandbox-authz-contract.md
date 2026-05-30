@@ -640,6 +640,14 @@ user decides. Internally, the engine emits:
 Replay sees both events; reconstruction is honest about which calls
 were user-approved live versus allowed by pre-existing rules.
 
+**See also (Phase 2.1, CHAT-R2):** the `kolsch chat` REPL is the
+canonical consumer of this callback — `docs/process/phase2.1-chat-
+specs.md` §4 covers the modal's four-choice surface (`[y]`/`[n]`/
+`[a]`/`[d]`), the pattern suggestor that pre-fills the `[a]`/`[d]`
+rule's `what` from the call's target string, and the tuple-return
+contract this section specifies. The patch's §4 is the reference
+implementation; no authz contract change.
+
 ### 3.7.4 What this contract owns vs. delegates
 
 The Authorization provider owns:

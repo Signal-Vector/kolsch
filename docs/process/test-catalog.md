@@ -1246,6 +1246,212 @@ Handling), CRW (CrewAI Adapter — authored in Step 12b), INT
 
 ---
 
+## Part 9.9 — Chat (CHAT) — Phase 2.1, CHAT-R8
+
+**TC-CHAT-01: Basic exchange streams tokens through the renderer**
+- Layer: component
+- Setup: tmp_path workspace with the helper agent; FakeLLM
+  scripted to emit three token batches followed by a final
+  `model.response`.
+- Action: feed "hello" via prompt_toolkit's test harness;
+  consume `execute_stream`.
+- Expected: agent block renders tokens as they arrive (buffer
+  grows between events, not all at once); `thread.exchange_*`
+  events present in the session JSONL.
+- Verifies: §10.16; patch §3 event-to-render mapping.
+
+**TC-CHAT-02: Tool-call block renders with header + result**
+- Layer: component
+- Setup: helper agent configured with `read_file`; FakeLLM
+  scripted to emit a `tool.requested` for `read_file` then a
+  text completion.
+- Action: run one exchange.
+- Expected: panel header `▶ read_file(path="README.md")`
+  appears in the captured Rich console BEFORE the
+  `tool.completed` event; after completion the panel shows the
+  truncated result + "[N more lines]" footer.
+- Verifies: §10.16; patch §2.2 + §3.
+
+**TC-CHAT-03: Approval modal `[y]` runs the tool**
+- Layer: component
+- Setup: workspace with a `prompt`-effect rule for `tool.bash`;
+  helper agent + a FakeLLM that requests a bash call.
+- Action: feed `y` to the modal via the test harness.
+- Expected: the modal renders; on `y` the tool runs; the result
+  block appears; no rule was written to `platform.yaml`.
+- Verifies: §10.16; patch §4 callback consumption; Phase 2.0
+  §4.3.
+
+**TC-CHAT-04: Approval modal `[a]` writes a persistent rule**
+- Layer: component
+- Setup: same as TC-CHAT-03.
+- Action: feed `a` then accept the suggested `^rg .*$` pattern.
+- Expected: (a) the tool ran; (b) `platform.yaml` now contains
+  the new ALLOW rule with the suggested `what` pattern; (c) a
+  second bash call matching the pattern runs without prompting
+  in the same chat session.
+- Verifies: §10.16; patch §4.2 + §4.4; Phase 2.0 §4.3
+  "same-exchange" guarantee.
+
+**TC-CHAT-05: `/exit` and Ctrl-D both exit cleanly**
+- Layer: component
+- Action: invoke `/exit`; in a parallel test, simulate
+  Ctrl-D (EOFError) at the input prompt.
+- Expected: both paths return exit code 0; no traceback in
+  captured stderr.
+- Verifies: §10.16; patch §1.3 exit codes.
+
+**TC-CHAT-06: `/clear` clears scrollback but not the session**
+- Layer: component
+- Setup: chat with one exchange in history.
+- Action: invoke `/clear`; then `kolsch sessions events <id>`
+  against the same session.
+- Expected: the captured chat console is empty after `/clear`;
+  `sessions events` returns every event from before `/clear`.
+- Verifies: §10.16; patch §5 `/clear` semantics.
+
+**TC-CHAT-07: `--session <id>` replays prior conversation**
+- Layer: component
+- Setup: create session A with one exchange; close chat;
+  invoke `kolsch chat <agent> --session <A_id>`.
+- Expected: the resumed chat's captured console contains the
+  same blocks (modulo timestamps) as the original session's
+  captured console. The renderer is a pure function of the
+  event stream.
+- Verifies: §10.16; patch §6.2 resume.
+
+**TC-CHAT-08: Ctrl-C during streaming cancels cleanly**
+- Layer: component
+- Setup: FakeLLM scripted to emit tokens slowly (test-harness
+  delay) so the cancellation lands mid-stream.
+- Action: trigger Ctrl-C after the first token.
+- Expected: engine receives cancellation;
+  `thread.exchange_failed` with cause `engine.cancelled` lands
+  in the JSONL; the captured chat console's agent block ends
+  in `[cancelled]` styling; the input prompt returns.
+- Verifies: §10.16; patch §6.1 cancellation.
+
+**TC-CHAT-09: Tool error renders in red with error code visible**
+- Layer: component
+- Setup: a fake tool scripted to raise an error with code
+  `tool.execution_failed`.
+- Action: run one exchange that triggers the tool.
+- Expected: the tool-call block renders with a red border; the
+  error code text is in the panel body.
+- Verifies: §10.16; patch §2.2 block types.
+
+**TC-CHAT-10: Up-arrow navigates prompt history**
+- Layer: component
+- Setup: chat with two prior user messages.
+- Action: feed Up arrow twice at the input prompt; assert the
+  prompt buffer contains the second-most-recent message; feed
+  Up arrow once more; assert the most-recent message.
+- Expected: prompt_toolkit's history navigation is wired.
+- Verifies: §10.16; patch §2.5 input editing.
+
+**TC-CHAT-11: `/model <alias>` switches model mid-session**
+- Layer: component
+- Setup: workspace with two aliases (`opus` and `haiku`); chat
+  using `opus`.
+- Action: invoke `/model haiku`; run another exchange.
+- Expected: next `model.request` event's
+  `data.model` resolves to the canonical
+  `openrouter/anthropic/claude-haiku-4-5`; a
+  `session.model_overridden` event is present in the JSONL.
+- Verifies: §10.16; patch §5; Phase 1.1 §2.4 ModelSpec
+  input shapes.
+
+**TC-CHAT-12: `/tools` lists exactly the agent's tools**
+- Layer: component
+- Setup: helper agent with `tools: [read_file, write_file]`;
+  workspace has `bash` available in the bundle but the agent
+  doesn't declare it.
+- Action: invoke `/tools`.
+- Expected: `read_file` and `write_file` listed; `bash` NOT
+  listed.
+- Verifies: §10.16; patch §5.
+
+**TC-CHAT-13: `/new` creates a fresh session, preserves the old**
+- Layer: component
+- Setup: chat with one exchange in session A.
+- Action: invoke `/new`; run another exchange.
+- Expected: a new session B is created; the title bar updates
+  with B's id; the scrollback is cleared; `kolsch sessions list`
+  shows both A and B.
+- Verifies: §10.16; patch §5 `/new` vs `/clear` distinction.
+
+**TC-CHAT-14: `/thinking` graceful degradation**
+- Layer: component
+- Setup: session with no reasoning events (today's engine
+  doesn't emit them).
+- Action: invoke `/thinking last`; then `/thinking on`; then
+  `/thinking budget 1024`.
+- Expected: `last` prints the "no thinking content" note;
+  `on` is accepted and persisted as a session-local flag;
+  `budget 1024` records a `session.thinking_budget_set` event.
+- Verifies: §10.16; patch §5.2.
+
+**TC-CHAT-15: Slash-command completion narrows by prefix**
+- Layer: component
+- Action: type `/` → assert dropdown lists all eight commands;
+  type `/th` → assert dropdown narrows to `/thinking`; type
+  `/thinking ` (trailing space) → assert dropdown lists the
+  four `on`/`off`/`budget`/`last` options.
+- Verifies: §10.16; patch §5.3 completion via the static
+  registry.
+
+**TC-CHAT-16: Multi-line input via Shift+Enter (or Alt+Enter)**
+- Layer: component
+- Action: feed `"line1"`, then the Shift+Enter (or Alt+Enter)
+  key sequence via prompt_toolkit's harness, then `"line2"`,
+  then Enter.
+- Expected: submitted text is `"line1\nline2"`; emitted as ONE
+  `user.message` event with the full multi-line content.
+- Verifies: §10.16; patch §2.5 newline binding.
+
+**TC-CHAT-17: Cursor editing (Home + insert)**
+- Layer: component
+- Action: feed `"hello"`, then Home, then `"say "`, then Enter.
+- Expected: submitted text is `"say hello"`.
+- Verifies: §10.16; basic prompt_toolkit-editing wiring (smoke
+  for prompt_toolkit, not re-testing prompt_toolkit's
+  correctness).
+
+**TC-CHAT-18: Architectural check — chat is NOT full-screen**
+- Layer: unit
+- Action: introspect the chat module's source — assert no call
+  to `Application.run(full_screen=True)`, no call to
+  `enter_alternate_screen()` / equivalent, and that the
+  `PromptSession` is constructed without `full_screen=True`.
+- Expected: a future change introducing full-screen mode fails
+  this test loudly. The "scrolling actually works in iTerm2"
+  verification is a manual end-to-end check by the reviewer,
+  not automated.
+- Verifies: §10.16; patch §2.4 architectural commitment to
+  terminal-native scrolling + selection; AGENTS.md hard rule
+  introduced by CHAT-R9.
+
+**TC-CLI-SMOKE-CHAT-01: `kolsch chat --help` (CLI smoke)**
+- Layer: component (subprocess)
+- Action: `kolsch chat --help`.
+- Expected: exit 0; non-empty stdout; no traceback. Lives in
+  `tests/component/test_cli_smoke.py` per the bug-sessions-
+  namespace-attr-error.md hard rule (every new CLI subcommand
+  ships with a smoke test).
+
+**TC-CLI-SMOKE-CHAT-02: `kolsch chat <agent>` minimal-args**
+- Layer: component (subprocess)
+- Setup: tmp_path workspace via `kolsch setup --non-
+  interactive`; helper agent uses `provider: fake`.
+- Action: spawn `kolsch chat kolsch/agents/helper`; feed
+  `"hello"` then Ctrl-D via stdin redirection; capture stdout.
+- Expected: exit 0; the captured output contains one agent
+  reply block; no traceback.
+- Verifies: AGENTS.md hard rule (CLI smoke per
+  bug-sessions-namespace-attr-error.md) for the chat command.
+
+---
+
 ## Part 10 — Error Model (ERR)
 
 **TC-ERR-01: All subclasses serialize to envelope**
@@ -1845,6 +2051,7 @@ How the catalog maps to the success criteria (Handbook §10):
 | Workspace Resolution & Setup | §10.13 | TC-UX-01..10 (Phase 1.2, UX-R9) |
 | Model Fallback | §10.14 | TC-FB-01..10 (Phase 1.3, FB-R8) |
 | Tools & Permissions | §10.15 | TC-TOOL-01..15 (Phase 2.0, TOOL-R9) |
+| Chat REPL | §10.16 | TC-CHAT-01..18 + TC-CLI-SMOKE-CHAT-01..02 (Phase 2.1, CHAT-R8) |
 | CLI | Part 11.6 (cases) | TC-CLI-01..08 — success criteria still to author in handbook §10.15 |
 | HTTP API | Part 11.7 (cases) | TC-API-01..10 — success criteria still to author in handbook §10.16 |
 | Memory | §10.6 | TC-MEM-01..09 |

@@ -1705,6 +1705,136 @@ Full per-code table: Error Model §4.16.
 
 ---
 
+## Part 11.9 — Chat (Phase 2.1, CHAT-R6)
+
+The `kolsch chat` REPL — a streaming terminal interface that
+turns `runtime.engine.execute_stream`'s event sequence into a
+conversational view. Patch source of truth:
+`docs/process/phase2.1-chat-specs.md` Parts 1–6.
+
+The chat module owns: the command argv contract, the
+event-to-render mapping, the four-choice approval modal that
+consumes Phase 2.0's prompt callback, the slash-command surface,
+and the resume / cancellation / error semantics. The chat module
+does NOT own: any authz state, any session state, any rule
+list (live edits go through the Phase 2.0 `add_rule` API —
+§11.8.2). The chat is a pure consumer; the AGENTS.md hard rule
+introduced by CHAT-R9 enforces that property.
+
+### 11.9.1 Command contract
+
+```bash
+kolsch chat [<agent_ref>] [--session <SES_ID>] [--model <MODEL_REF>]
+            [--root <PATH>] [-v]
+```
+
+- `<agent_ref>` — bundle-qualified path (`kolsch/agents/helper`).
+  Defaults to the configured starter agent
+  (`platform.yaml`'s `defaults.starter_agent`, falling back to
+  `kolsch/agents/helper`).
+- `--session <SES_ID>` — resume an existing session via the
+  Phase 1.2 store. Without this flag, chat creates a fresh
+  session named `chat:<agent_ref>`.
+- `--model <MODEL_REF>` — session-scoped model override (any
+  `ModelSpec` input shape per §A.4.1). NOT persisted to the
+  agent YAML; survives until chat exits.
+- `--root` / `-v` — same semantics as every other subcommand.
+
+Exit codes:
+
+| Code | Meaning |
+|---|---|
+| 0 | Clean exit (`/exit`, EOF, Ctrl-D). |
+| 1 | Invalid invocation (missing agent, bad session id, bad model ref). |
+| 2 | Exchange-level Fatal that chat couldn't recover from. |
+| 3 | Workspace not initialized (Phase 1.2 §1.4). |
+
+### 11.9.2 Callback consumption
+
+The chat is the canonical consumer of the Phase 2.0 prompt
+callback (§11.8.1's `AuthzEffect.PROMPT` resolution). The
+callback's runtime shape:
+
+```python
+async def chat_prompt_callback(
+    *,
+    rule_id: str | None,
+    action: str,
+    target: str | None,
+) -> AuthzEffect | tuple[AuthzEffect, Rule]:
+    """The chat's modal renders, blocks until the user picks one
+    of [y]/[n]/[a]/[d], then returns per the patch §4.4 mapping:
+
+    - [y] → AuthzEffect.ALLOW
+    - [n] → AuthzEffect.DENY
+    - [a] with pattern P → (AuthzEffect.ALLOW, Rule(who, what=P, effect=ALLOW))
+    - [d] with pattern P → (AuthzEffect.DENY, Rule(who, what=P, effect=DENY))
+    """
+```
+
+When the callback returns the tuple form, Phase 2.0's authz
+provider appends the new rule (§11.8.2) AND rewrites
+`platform.yaml` atomically before the just-blocked tool call
+re-issues. The next matching call within the same exchange hits
+the new rule first.
+
+Pattern suggestion is a pure helper in the chat module —
+`_suggest_what_pattern(tool, target) -> str` — that maps
+`(tool.bash, "rg foo")` → `"^rg .*$"`, `(tool.write_file,
+"/path/X.py")` → `"^/path/.*$"`, etc. The user always sees and
+can edit the suggestion before committing.
+
+### 11.9.3 Slash-command surface
+
+The eight MVP commands per patch §5:
+
+| Command | Purpose |
+|---|---|
+| `/help` / `/help <cmd>` | List commands; or describe one |
+| `/exit` / `/quit` | Exit cleanly (same as Ctrl-D) |
+| `/new` | Fresh session, same agent + model |
+| `/clear` | Clear visible scrollback (event log untouched) |
+| `/model <ref>` | Switch active model; emits `session.model_overridden` |
+| `/thinking [on\|off\|budget <n>\|last]` | Extended-thinking display + budget |
+| `/tools` | List the agent's available tools + governing rules |
+| `/session [<id>]` | Show current session id; or switch sessions |
+
+Slash commands run BEFORE the input goes to the engine; they
+are chat-local operations and never produce engine events except
+where they explicitly emit one (`/model` → `session.model_
+overridden`; `/thinking budget` → `session.thinking_budget_set`).
+
+The static command registry is the single source of truth for
+both `/help` output and prompt_toolkit's completion dropdown —
+adding a new command means adding one entry that surfaces in
+both places.
+
+### 11.9.4 Renderer pure-consumer property
+
+Every visible block in the chat corresponds to an event the
+engine emitted. The renderer's only state is the current
+exchange's block list; everything else is read from events. If
+a UI element needs information the events don't carry, the
+engine grows the event vocabulary — the chat does NOT fork
+state. The AGENTS.md hard rule introduced by CHAT-R9
+mechanically encodes this property; TC-CHAT-18 (in the test
+catalog Part 9.9) enforces the "no full-screen mode" corollary
+that keeps terminal-native scrolling and selection working.
+
+### 11.9.5 Failure surface (summary)
+
+| Code | Where |
+|---|---|
+| `chat.agent_not_found` | Startup, before runtime bootstrap |
+| `chat.session_not_found` | Startup with `--session` |
+| `chat.model_override_invalid` | Startup with `--model` |
+| `chat.input_aborted` | Ctrl-C during streaming |
+| `chat.callback_resolution_failed` | Modal pattern-edit produced an invalid Rule |
+
+Full per-code table: Error Model §4.17.
+
+---
+
 ## Part 12 — Inter-Module Dependency Matrix
 
 Who calls whom. Rows are callers; columns are callees. Cells list the

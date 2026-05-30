@@ -702,6 +702,35 @@ Phase 2.3's drift detection ports them. Both serialize to the
 canonical envelope identically — readers parsing the event log
 treat them as synonyms.
 
+### 4.17 Chat (Phase 2.1, CHAT-R5)
+
+Errors emitted by the `kolsch chat` REPL — startup-time failures
+that exit cleanly with a friendly one-line message (same
+discipline as Phase 1.2's `workspace.not_initialized`) plus
+mid-session conditions the chat surfaces without ending the
+session. Patch source of truth: `docs/process/phase2.1-chat-
+specs.md` Part 7.
+
+| Code | Level | Detail | Where (typical) |
+|---|---|---|---|
+| `chat.agent_not_found` | Fatal | `{agent_ref}` | `kolsch chat <agent_ref>` startup, before runtime bootstrap |
+| `chat.session_not_found` | Fatal | `{session_id}` | `kolsch chat --session <id>` startup |
+| `chat.model_override_invalid` | Fatal | `{model_ref, reason}` | `kolsch chat --model <ref>` startup |
+| `chat.input_aborted` | Recoverable | `{}` | Ctrl-C during streaming — surfaces as the engine's `engine.cancelled` cause in the corresponding `thread.exchange_failed`; chat continues |
+| `chat.callback_resolution_failed` | Fatal | `{tool, reason}` | Modal callback couldn't construct a valid rule (e.g., user typed an invalid regex in the `[a]`/`[d]` pattern edit) |
+
+**Why these levels.** The three startup-time Fatals print one
+short message and exit before the runtime is even bootstrapped
+— there's nothing recoverable to do beyond fixing the
+invocation. `chat.input_aborted` is Recoverable because the
+chat is a long-running REPL: a cancelled exchange ends THAT
+exchange (with the partial agent block styled
+``[cancelled]``), not the chat session. The fifth Fatal —
+`chat.callback_resolution_failed` — is raised when the user's
+pattern edit produces a malformed `Rule`; the immediate tool
+call falls back to `deny-once` semantics and the user is told
+why their pattern was rejected.
+
 ---
 
 ## Part 5 — How Errors Appear in Events

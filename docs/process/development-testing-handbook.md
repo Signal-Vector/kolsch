@@ -989,6 +989,41 @@ verifies this by running the full pre-Phase-2.0 test suite
 against the Phase 2.0 default rule set without modifications and
 asserting zero new failures attributable to changed defaults.
 
+### 10.16 Chat REPL (Phase 2.1, CHAT-R7)
+
+- **Streaming tokens render in real time** — the renderer
+  appends tokens as `model.response.tokens` events arrive; no
+  buffer-until-complete. Verified by feeding scripted token
+  batches via the test harness and asserting the captured
+  Rich-console buffer grows incrementally between events.
+- **Tool-call blocks render before the result lands** — the
+  `tool.requested` event produces a panel header in "▶ running"
+  state; `tool.completed` fills in the result and collapses to
+  summary. The "▶ running" state is observable in the captured
+  buffer between the two events.
+- **The Phase 2.0 callback is the ONLY mechanism the chat uses
+  to resolve `prompt` effects.** No chat-local approval state;
+  no chat-side rule mutation outside the callback's tuple
+  return. Verified by grepping `src/cli/chat.py` for direct
+  writes to `platform.yaml` or direct calls to the authz
+  provider's `add_rule` outside the callback path — must be
+  zero.
+- **`/clear` does not modify the session or event log.** After
+  `/clear`, the visible scrollback is empty but
+  `kolsch sessions events <id>` against the same session
+  returns every event that preceded the `/clear`.
+- **Cancellation via Ctrl-C produces a `thread.exchange_failed`
+  with cause `engine.cancelled`** — the engine receives the
+  cancellation signal (Phase 1's typed cancellation, commit
+  `5d3efde`), emits the failure event, and the chat renders the
+  partial agent block in muted styling with a `[cancelled]`
+  suffix. The input prompt returns immediately.
+- **`--session <id>` resume produces a renderer state
+  byte-identical to what the original chat would have shown**
+  (same event log → same rendering, modulo timestamps). The
+  chat's renderer is a pure function of the event stream;
+  replay is the test.
+
 ---
 
 ## Part 11 — Coverage & Quality Gates

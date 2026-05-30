@@ -137,6 +137,17 @@ That is the entire user-facing surface of v1. It is intentionally small.
   are the two surfaces for editing the rule list; direct
   `platform.yaml` edits also work but the CLI is the path the
   docs point at. See `docs/how-to/permissions.md` for recipes.
+- **Interactive chat REPL** *(Phase 2.1, CHAT-R3)* —
+  `kolsch chat [<agent_ref>] [--session <SES_ID>]
+  [--model <MODEL_REF>]` opens a streaming conversation with
+  the named agent (defaults to the configured starter agent
+  when `<agent_ref>` is omitted). `--session` resumes an
+  existing session; `--model` overrides the agent's declared
+  model for this session only (recorded as a session-scoped
+  attribute — the YAML is untouched). The chat is the canonical
+  consumer of Phase 2.0's prompt-callback hook — the four-choice
+  modal that fires on `prompt`-effect rules lives here.
+  See `docs/process/phase2.1-chat-specs.md` for the full contract.
 
 ### 2.5 Deployment
 

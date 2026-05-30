@@ -144,6 +144,17 @@ Some events (`memory.retrieved`, `context.compacted`) appear when their
 conditions trigger. The exact ordering is constrained by §B.5 (Assembly
 Procedure) and Part 3 (Conformance) below.
 
+**The renderer is a pure consumer** *(Phase 2.1, CHAT-R4)*. The
+`kolsch chat` REPL consumes ``execute_stream`` events as-is and
+maps them to terminal blocks without inventing semantic state —
+every visible block corresponds to an event the engine emitted.
+``docs/process/phase2.1-chat-specs.md`` §3 documents the
+event-to-render mapping; ``execute_stream``'s contract is the
+single source of truth for what the chat shows. If a UI element
+needs information the events don't carry, the engine grows the
+event vocabulary — the chat does NOT fork state. This is also
+the AGENTS.md hard rule introduced by CHAT-R9.
+
 ### 1.5 What `execute` returns
 
 The final `agent.message` event in full, per §B.8. Equivalent to consuming

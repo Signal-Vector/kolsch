@@ -187,6 +187,21 @@ These are non-negotiable. Violating them blocks merges.
   under 10s — see Part 11.6.1 for the rationale; serial
   invocation is ~36s. *(Bug-sessions-namespace-attr-error.md
   acceptance criterion 7.)*
+- **The chat renderer is a pure consumer of the engine's event
+  stream.** The renderer MUST NOT invent UI state that isn't
+  derivable from events. If a UI element needs information the
+  events don't carry, the engine grows the event; the chat
+  doesn't fork state. The four-choice approval modal that
+  consumes Phase 2.0's prompt callback is the canonical example:
+  it returns its decision through the callback's tuple shape so
+  Phase 2.0's authz provider — not the chat — appends the new
+  rule and rewrites `platform.yaml`. The chat also MUST NOT
+  enter full-screen / alternate-screen mode (it stays in
+  prompt_toolkit's bottom-toolbar idiom) so terminal-native
+  scrolling and selection keep working; TC-CHAT-18 enforces
+  this architecturally by introspecting `src/cli/chat.py` for
+  `Application.run(full_screen=True)` and equivalents.
+  *(Phase 2.1, CHAT-R9.)*
 
 ---
 
