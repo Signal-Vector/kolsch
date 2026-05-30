@@ -1444,8 +1444,11 @@ bus + EchoLLM + FakeFramework).
 - Layer: component
 - Setup: run one exchange via TC-CLI-01.
 - Action: `kolsch sessions list`.
-- Expected: stdout includes the session id, agent_id, and the
-  `cli:<agent_ref>` name.
+- Expected: stdout includes the column header (`SESSION_ID`,
+  `STARTED`, `LAST`, `NAME`), the session id, an ISO start time,
+  a compact last-event delta (e.g., `30m`), and the
+  `cli:<agent_ref>` name. The agent_id is no longer in the
+  default output (per docs/process/qol-sessions-list-columns.md).
 - Verifies: Session entity surface + CLI session list.
 
 **TC-CLI-04: `reconstruct` rebuilds entities after DB wipe**

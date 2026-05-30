@@ -12,6 +12,7 @@ import asyncio
 import json
 import logging
 import sys
+from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -370,18 +371,111 @@ async def _cmd_run(args: argparse.Namespace) -> int:
 
 
 async def _cmd_sessions_list(args: argparse.Namespace) -> int:
+    """Print a compact, sorted-by-recency table of sessions.
+
+    Per docs/process/qol-sessions-list-columns.md — replaces the prior
+    ``key=value``-per-column layout with four aligned columns
+    (SESSION_ID, STARTED, LAST, NAME). The ``--starred`` / ``--archived``
+    filter flags still filter the underlying query; they just no longer
+    have columns in the default output.
+    """
     runtime = await bootstrap_runtime(root=args.root)
     sessions = await runtime.store.list_sessions(
         starred=(args.starred or None),
         archived=(args.archived or None),
         limit=args.limit,
     )
-    for s in sessions:
+    if not sessions:
+        return 0
+
+    now = datetime.now(UTC)
+    decorated = [
+        (s, await _compute_last_event_at(runtime, s.session_id)) for s in sessions
+    ]
+    # Sort by last-event descending. Sessions with no events sort to
+    # the bottom (None replaced by datetime.min for the key).
+    decorated.sort(
+        key=lambda item: item[1] or datetime.min.replace(tzinfo=UTC),
+        reverse=True,
+    )
+
+    # SESSION_ID width = max(header, longest id). Session ids are
+    # prefixed UUIDs (40 chars) — wider than the ticket's example
+    # "ses_a1b2c3d4" suggests, but truncating them breaks the
+    # round-trip contract (the displayed id must be copy-pasteable into
+    # `kolsch sessions events <id>` and friends). The column expands
+    # to fit; the other columns still align.
+    id_width = max(
+        len("SESSION_ID"),
+        *(len(str(s.session_id)) for s in sessions),
+    )
+    sys.stdout.write(
+        f"{'SESSION_ID':<{id_width}}  {'STARTED':<16}  {'LAST':<6}  NAME\n",
+    )
+    for session, last_at in decorated:
+        started = session.created_at.astimezone().strftime("%Y-%m-%d %H:%M")
+        last = _format_delta(now - last_at) if last_at is not None else "—"
+        sid = f"{session.session_id!s:<{id_width}}"
         sys.stdout.write(
-            f"{s.session_id}  agent={s.agent_id}  name={s.name}  "
-            f"starred={s.starred}  archived={s.archived}\n",
+            f"{sid}  {started:<16}  {last:<6}  {session.name}\n",
         )
     return 0
+
+
+_SECONDS_PER_MINUTE = 60
+_SECONDS_PER_HOUR = 3600
+_SECONDS_PER_DAY = 86_400
+
+
+def _format_delta(delta: timedelta) -> str:
+    """Render a non-negative timedelta as a compact ago-style string.
+
+    Compact units only — no "just now" / "1y" prose: the column is
+    fixed-width and grep-friendly. Per qol-sessions-list-columns.md
+    §"Delta formatter".
+    """
+    seconds = int(delta.total_seconds())
+    if seconds < _SECONDS_PER_MINUTE:
+        return f"{seconds}s"
+    if seconds < _SECONDS_PER_HOUR:
+        return f"{seconds // _SECONDS_PER_MINUTE}m"
+    if seconds < _SECONDS_PER_DAY:
+        return f"{seconds // _SECONDS_PER_HOUR}h"
+    return f"{seconds // _SECONDS_PER_DAY}d"
+
+
+async def _compute_last_event_at(
+    runtime: PlatformRuntime, session_id: object
+) -> datetime | None:
+    """Max ``created_at`` across every thread's last event in the session.
+
+    Walks the session's threads via ``runtime.store.list_threads`` and
+    reads the last event per thread via
+    :func:`store.jsonl.read_last_event_for_thread`. Returns ``None``
+    when the session has no events yet (rare — created but never run).
+
+    Per qol-sessions-list-columns.md §"Last-event computation":
+    one JSONL tail-scan per thread per session. Fast for typical
+    workspaces (<100 sessions); pathological cases (10k+ sessions)
+    are flagged as a deferred optimization, not a v1 blocker.
+    """
+    from schemas import SessionId  # noqa: PLC0415
+    from store.jsonl import (  # noqa: PLC0415
+        jsonl_path,
+        read_last_event_for_thread,
+    )
+
+    typed_session_id = SessionId(str(session_id))
+    threads = await runtime.store.list_threads(typed_session_id)
+    path = jsonl_path(runtime.root, typed_session_id)
+    latest: datetime | None = None
+    for thread in threads:
+        event = read_last_event_for_thread(path, thread.thread_id)
+        if event is None:
+            continue
+        if latest is None or event.created_at > latest:
+            latest = event.created_at
+    return latest
 
 
 async def _cmd_sessions_events(args: argparse.Namespace) -> int:

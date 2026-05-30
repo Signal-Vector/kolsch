@@ -317,8 +317,20 @@ def test_tc_cli_03_sessions_list(
     )
     assert exit_code == 0
     out = capsys.readouterr().out.strip()
-    assert "ag_demo" in out
+    # New column layout per qol-sessions-list-columns.md:
+    #   SESSION_ID  STARTED  LAST  NAME
+    # The agent_id column was removed (it's redundant with name).
+    assert "SESSION_ID" in out
+    assert "STARTED" in out
+    assert "LAST" in out
+    assert "NAME" in out
+    # The cli:<agent_ref> name is still present per the new design.
     assert "cli:acme/agents/demo" in out
+    # ag_demo no longer in default output (covered by Verifies update
+    # in the test catalog).
+    assert "agent=" not in out
+    assert "starred=" not in out
+    assert "archived=" not in out
 
 
 # ===========================================================================
@@ -381,11 +393,14 @@ def test_tc_cli_05_sessions_events(
     )
     capsys.readouterr()
 
-    # Discover the session id via `sessions list`.
+    # Discover the session id via `sessions list`. Skip the header
+    # row (qol-sessions-list-columns.md adds SESSION_ID/STARTED/LAST/
+    # NAME headers) by filtering for lines that start with ``ses_``.
     main(["--root", str(platform_root), "sessions", "list"])
     list_out = capsys.readouterr().out.strip().splitlines()
-    assert list_out, "expected at least one session"
-    session_id = list_out[0].split()[0]
+    session_rows = [line for line in list_out if line.startswith("ses_")]
+    assert session_rows, "expected at least one session row"
+    session_id = session_rows[0].split()[0]
     assert session_id.startswith("ses_")
 
     exit_code = main(
@@ -441,8 +456,15 @@ def test_tc_cli_07_sessions_update_and_delete(
     )
     capsys.readouterr()
 
+    # Skip the header row (qol-sessions-list-columns.md) by filtering
+    # for lines that start with ``ses_``.
     main(["--root", str(platform_root), "sessions", "list"])
-    session_id = capsys.readouterr().out.strip().splitlines()[0].split()[0]
+    rows = [
+        line
+        for line in capsys.readouterr().out.strip().splitlines()
+        if line.startswith("ses_")
+    ]
+    session_id = rows[0].split()[0]
 
     # Update: star + rename.
     exit_code = main(
