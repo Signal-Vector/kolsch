@@ -498,8 +498,22 @@ class _Exchange:
         The framework adapter that turns the ``crewai.LLM`` into the
         engine's ``LLMHandle`` shape ships in a follow-up patch; this
         method only realises the lookup + construction seam.
+
+        Phase 1.3+ (Step 20 + bug-echo-on-real-provider follow-up): when
+        ``llm_for_model`` is wired, the per-spec factory handles
+        construction lazily at call time (including ``provider:
+        "fake"`` → EchoLLMDriver). The pre-flight acquire becomes
+        redundant — skip it. Pre-Phase-1.3 callers that only wire
+        ``llm=`` still get the test-path short-circuit at the top of
+        this method.
         """
         if self.engine._llm is not None:
+            return None
+        if self.engine._llm_for_model is not None:
+            # Factory handles construction (including provider: fake)
+            # at call time; pre-flight acquire would only duplicate
+            # work AND fail for `provider: fake` because no `fake`
+            # connector is registered.
             return None
         from llm import build_llm  # noqa: PLC0415 — defer crewai import to runtime
 

@@ -50,6 +50,7 @@ if TYPE_CHECKING:
     from typing import Any
 
     from kernel import ConfigValidator
+    from schemas import ModelSpec
 
 
 @dataclass(frozen=True)
@@ -153,7 +154,6 @@ async def bootstrap_runtime(
     skills_sub = SkillsSubsystem(asset_management=am)
 
     chosen_framework = framework or FakeFramework()
-    chosen_llm = llm or EchoLLMDriver().__call__
 
     # Phase 1.1 — load the `llm_providers` section (if present) into
     # the engine so pre-flight step 5.5 can dispatch to build_llm
@@ -195,6 +195,38 @@ async def bootstrap_runtime(
             models=list(raw.get("models") or []),
         )
 
+    # Phase 1.1 deferred work (bug-echo-on-real-provider, hypotheses
+    # H1+H3) — wire build_llm via `llm_for_model=` so an agent whose
+    # ModelSpec points at a real provider actually reaches the real
+    # provider. Decision tree:
+    #
+    # - Caller passed `llm=` explicitly (test path) → honour it,
+    #   skip the factory. Pre-existing tests that pin a single
+    #   callable continue to work unchanged.
+    # - Otherwise and `llm_providers_config` is populated → wire
+    #   `llm_for_model=` to the per-spec factory (`provider == "fake"`
+    #   still gets EchoLLMDriver from inside the factory, preserving
+    #   the no-creds tutorial behaviour the bug ticket's AC #3
+    #   requires).
+    # - Otherwise (no providers AND no explicit llm=) → fall back to
+    #   EchoLLMDriver across the board, matching the original
+    #   v1-default-tier "fresh install runs end-to-end without
+    #   credentials" guarantee.
+    chosen_llm: Callable[[LLMRequest], Awaitable[LLMResponse]] | None = llm
+    chosen_llm_for_model: (
+        Callable[[ModelSpec], Awaitable[Callable[[LLMRequest], Awaitable[LLMResponse]]]]
+        | None
+    ) = None
+    if chosen_llm is None and llm_providers_config:
+        from engine._crewai_adapter import make_build_llm_factory  # noqa: PLC0415
+
+        chosen_llm_for_model = make_build_llm_factory(
+            llm_providers_config=llm_providers_config,
+            secrets=secrets,
+        )
+    elif chosen_llm is None:
+        chosen_llm = EchoLLMDriver().__call__
+
     engine = AgentEngine(
         store=store,
         bus=bus,
@@ -207,6 +239,7 @@ async def bootstrap_runtime(
         authz=authz,
         framework=chosen_framework,
         llm=chosen_llm,
+        llm_for_model=chosen_llm_for_model,
         llm_providers_config=llm_providers_config,
     )
 

@@ -158,17 +158,18 @@ def test_tc_cli_02_run_stream_yields_events(
 
 
 # ===========================================================================
-# Runtime fake-LLM warning
+# Runtime silent-echo warning (post-bug-echo-on-real-provider re-target)
 # ===========================================================================
 
 
-def test_run_warns_loudly_when_agent_uses_fake_llm(
+def test_fake_provider_agent_runs_without_warning(
     platform_root: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """An agent whose `model.provider` is `fake` produces a stderr
-    warning at `kolsch run` time so users don't mistake echoed
-    output for a real model reply."""
+    """An agent whose `model.provider` is the explicit `fake` does NOT
+    produce a warning — the tutorial / no-creds path is silent. Only
+    real-provider agents on an un-wired runtime trip the silent-echo
+    warning (see the next test)."""
     exit_code = main(
         [
             "--root",
@@ -181,12 +182,107 @@ def test_run_warns_loudly_when_agent_uses_fake_llm(
     )
     assert exit_code == 0
     captured = capsys.readouterr()
-    # Warning lands on stderr (so stdout-consuming pipes get clean JSON).
-    assert "built-in fake LLM" in captured.err
-    assert "kolsch connect" in captured.err
-    # stdout is the actual agent reply, unpolluted by the warning.
+    # Stdout carries the echoed reply (this fixture's agent uses
+    # provider: fake). No warning anywhere — fake is deliberate.
     assert "Echo: hello world" in captured.out
-    assert "fake LLM" not in captured.out
+    assert "silently echo" not in captured.err
+    assert "no real-LLM wiring" not in captured.err
+
+
+def test_real_provider_agent_warns_about_silent_echo(
+    tmp_path: Path,
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    """When an agent explicitly names a real provider but the runtime
+    has no `llm_for_model` wired (e.g., the workspace has no
+    `llm_providers` configured), `kolsch run` warns about the silent
+    echo on stderr. This is the post-bug-echo-on-real-provider
+    re-target: instead of warning on `provider: fake` (the deliberate
+    path), warn when a real-provider agent will silently fall through
+    to the EchoLLMDriver."""
+    import yaml
+
+    from schemas import AgentId
+
+    # Workspace skeleton with NO llm_providers configured.
+    for sub in ("bundles", "sessions", "content", "logs", "data", ".platform"):
+        (tmp_path / sub).mkdir(exist_ok=True)
+    (tmp_path / "platform.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "secrets": {"variant": "dotenv", "config": {"path": ".env"}},
+                "sandbox": {"variant": "native", "config": {}},
+                "authorization": {
+                    "variant": "rule_based",
+                    "config": {
+                        "rules": [{"who": ".*", "what": ".*", "effect": "allow"}],
+                    },
+                },
+                "storage": {
+                    "entity_backend": "sqlite",
+                    "entity_path": ".platform/entities.db",
+                },
+                "event_bus": {"backend": "in_process"},
+                "file_access": {
+                    "allowed_paths": ["data/", "bundles/"],
+                    "denied_paths": [".env"],
+                },
+                "defaults": {},
+            }
+        ),
+        encoding="utf-8",
+    )
+    (tmp_path / ".env").write_text("", encoding="utf-8")
+
+    # Agent pinned to a real provider via canonical object form. No
+    # alias / compact form (those still fail at agent-load — separate
+    # ticket per the bug-fix Phase A finding).
+    _ = AgentId  # type tag kept for future strict-typing of the YAML
+    bundle = tmp_path / "bundles" / "acme"
+    (bundle / "agents").mkdir(parents=True, exist_ok=True)
+    (bundle / "bundle.yaml").write_text(
+        yaml.safe_dump({"name": "acme", "version": "0.1", "description": "demo"}),
+        encoding="utf-8",
+    )
+    (bundle / "agents" / "real.yaml").write_text(
+        yaml.safe_dump(
+            {
+                "schema_version": "0.1",
+                "assembly_version": "1",
+                "agent_id": "ag_real",
+                "name": "real",
+                "description": "Real provider, no wiring.",
+                "model": {
+                    "provider": "openrouter",
+                    "model": "anthropic/claude-opus-4-7",
+                },
+                "prompt": "You are a helpful test agent.",
+                "io": {"mode": "conversational"},
+            }
+        ),
+        encoding="utf-8",
+    )
+
+    exit_code = main(
+        [
+            "--root",
+            str(tmp_path),
+            "run",
+            "acme/agents/real",
+            "--input",
+            "content=hi",
+        ],
+    )
+    # The runtime falls through to EchoLLMDriver (no providers), so the
+    # exchange completes with an echo. The warning makes the silent
+    # path loud.
+    assert exit_code == 0
+    captured = capsys.readouterr()
+    assert "silently echo" in captured.err
+    assert "kolsch connect openrouter" in captured.err
+    assert "'openrouter'" in captured.err
+    # stdout stays clean for pipes.
+    assert "silently echo" not in captured.out
 
 
 # ===========================================================================

@@ -24,6 +24,9 @@ from platform_runtime import (
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
+    from platform_runtime import PlatformRuntime
+    from schemas import ResolvedAgentConfig
+
 
 _log = logging.getLogger("cli")
 
@@ -277,16 +280,19 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     # validators fire — see PlatformRuntime docstring.
     config = await runtime.build_resolved_config(args.agent_ref)
 
-    # Loud warning when the agent is bound to the built-in fake LLM —
-    # easy to miss when the reply looks plausible. Stays on stderr so
-    # pipes that consume stdout (JSON results) aren't polluted.
-    if config.model.provider == "fake":
-        sys.stderr.write(
-            "⚠ this agent uses the built-in fake LLM (provider: fake). "
-            "Replies are scripted echoes, not real model output. "
-            "Run `kolsch connect <provider>` and update the agent's "
-            "`model:` field to swap in a real model.\n"
-        )
+    # Re-targeted post-bug-fix (bug-echo-on-real-provider): warn when
+    # a real-provider agent is about to run against the silent-echo
+    # path because no real LLM is wired. Today's runtime constructs
+    # the build_llm-backed per-spec factory only when at least one
+    # provider is connected in platform.yaml's `llm_providers`. If
+    # the agent's `model.provider` is real BUT the runtime fell
+    # through to EchoLLMDriver, the exchange will look like a real
+    # call in the event log (model.request carries the real spec)
+    # while actually producing the echo. That's the bug class the
+    # ticket fixed; the warning is the defensive surface so a
+    # regression is loud, not silent. `provider: fake` exits the
+    # check — that's the deliberate tutorial path.
+    _maybe_warn_silent_echo(config, runtime)
 
     inputs = _parse_inputs(args.input)
     content = inputs.pop("content", None)
@@ -499,6 +505,36 @@ _DISPATCH = {
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _maybe_warn_silent_echo(
+    config: ResolvedAgentConfig, runtime: PlatformRuntime
+) -> None:
+    """Emit a stderr warning when a real-provider agent will silently
+    echo (bug-echo-on-real-provider AC #5 defensive surface).
+
+    Fires when:
+
+    - `config.model.provider != "fake"` (the agent intends a real call), AND
+    - The runtime did NOT wire `llm_for_model` (i.e., engine has only
+      the `EchoLLMDriver` fallback). After the bug fix, this combination
+      only happens when no providers are connected — but the warning
+      catches any future regression that silently routes a real-provider
+      agent through the echo path.
+
+    Agents that explicitly use `provider: fake` are silent — that's the
+    tutorial path; the user knows what they signed up for.
+    """
+    if config.model.provider == "fake":
+        return
+    if runtime.engine._llm_for_model is not None:
+        return
+    sys.stderr.write(
+        f"⚠ this agent specifies provider {config.model.provider!r}, but "
+        f"no real-LLM wiring is active — the exchange will silently echo "
+        f"via the built-in fake LLM. Run `kolsch connect "
+        f"{config.model.provider}` to wire a real provider.\n"
+    )
 
 
 def _parse_inputs(raw: list[str]) -> dict[str, str]:
