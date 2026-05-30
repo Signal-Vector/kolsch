@@ -63,6 +63,12 @@ CATALOG: dict[str, Level] = {
     "mcp.server_unreachable": Level.DIAGNOSTIC,
     "mcp.upstream_error": Level.DIAGNOSTIC,
     "mcp.protocol_error": Level.DIAGNOSTIC,
+    # Bug-engine-tools-wiring-gap.md: raised by engine pre-flight
+    # when a declared tool ref doesn't resolve in the asset catalog.
+    # Naming `config.*` rather than `tool.*` because it's a config
+    # validity failure — the agent's tools.config.declared lists a
+    # ref that doesn't exist.
+    "config.unknown_tool": Level.FATAL,
     # ----- §4.6 Memory -------------------------------------------------
     "memory.write_disabled": Level.DIAGNOSTIC,
     "memory.item_not_found": Level.DIAGNOSTIC,

@@ -34,6 +34,7 @@ import asyncio
 import contextlib
 import logging
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -638,21 +639,91 @@ class _Exchange:
     async def _register_tools_with_subsystem(self) -> None:
         """Register builtins/declared tools with the Tools subsystem.
 
+        Per bug-engine-tools-wiring-gap.md (resolved Step D+E, PR 1):
+        resolve every ``subsystems.tools.config.declared[*].ref`` via
+        :meth:`AssetManagement.get_asset` to its on-disk Path, then
+        pass the collected paths to ``register_for_agent`` alongside
+        any builtins. Without this resolution, the helper agent's
+        four declared tools (read_file / write_file / list_files /
+        bash) never reach the framework — the model gets zero tools
+        and hallucinates output.
+
         Re-registration is idempotent — :meth:`ToolsSubsystem.register_for_agent`
         overwrites in-place. We do it on every execute so a config
         change (different tools enabled) takes effect (I8 — no exchange
-        state carried).
+        state carried). The asset-management catalog is built once at
+        bootstrap so the ``get_asset`` lookups are cheap; the actual
+        Python imports happen inside ``discover_tools_in_file`` and
+        hit Python's module cache on the second-and-subsequent
+        invocations.
+
+        Missing refs raise :class:`ConfigUnknownTool` (Fatal) per
+        coordinator resolution to bug-engine-tools-wiring-gap.md Q1
+        (option (b)): enforce at engine pre-flight rather than at
+        Layer 3 validator. FUL-1 tracks the validator-side
+        enforcement for server / lint-style usage.
+
+        MCP servers are still deferred — Phase 2.0 spec §3.3
+        documents the shape; engine wiring lands in a later phase.
         """
         tools_sub = self.config.subsystems.get("tools")
         if tools_sub is None:
             return
         body = tools_sub.config
+
+        declared_paths = await self._resolve_declared_tool_paths(
+            list(body.get("declared", []) or []),
+        )
+
         await self.engine._tools.register_for_agent(
             agent_id=self.agent_id,  # type: ignore[arg-type]
             builtin_names=list(body.get("builtin", []) or []),
+            declared_paths=declared_paths,
         )
-        # Declared and MCP tools registered similarly in real configs;
-        # the Phase 1 default tests use builtin or programmatic-only.
+        # MCP server registration lands when the MCP wiring patch ships.
+
+    async def _resolve_declared_tool_paths(
+        self,
+        declared_entries: list[dict[str, Any]],
+    ) -> list[Path]:
+        """Resolve each declared tool's ``ref`` to an on-disk Path.
+
+        The asset catalog (built at runtime bootstrap via
+        :meth:`AssetManagement.initialize`) already scanned every
+        bundle's ``tools/`` directory and produced an
+        :class:`AssetEntry` per file. This method maps each
+        config-supplied ref to its catalog entry's ``path`` field.
+
+        Missing refs surface as :class:`ConfigUnknownTool` (Fatal)
+        with the available refs listed in the error detail so the
+        user sees an actionable error rather than a silent-skip.
+        """
+        from errors import AssetsNotFound, ConfigUnknownTool  # noqa: PLC0415
+
+        paths: list[Path] = []
+        for entry in declared_entries:
+            # The Layer 3 validator rejects non-dict declared entries
+            # at config-load time (see validate_standard_config), so
+            # at this point every entry is a dict — defensive
+            # isinstance was stripped to satisfy mypy's narrowing.
+            ref = entry.get("ref")
+            if not isinstance(ref, str) or not ref:
+                continue
+            try:
+                asset = await self.engine._assets.get_asset(ref)
+            except AssetsNotFound as exc:
+                # list_assets is sync (no await); the catalog is a
+                # snapshot built at runtime bootstrap.
+                available = [
+                    a.ref for a in self.engine._assets.list_assets(asset_type="tool")
+                ]
+                raise ConfigUnknownTool(
+                    ref=ref,
+                    available_refs=available,
+                    agent_id=str(self.agent_id),
+                ) from exc
+            paths.append(Path(asset.path))
+        return paths
 
     async def _process_force_invoke(self) -> None:
         """Spec §2.1 step 9 — for each force-invoke skill, emit a

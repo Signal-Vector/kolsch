@@ -108,6 +108,7 @@ from errors.store import (
     ThreadNotFound,
 )
 from errors.tools import (
+    ConfigUnknownTool,
     McpProtocolError,
     McpServerUnreachable,
     McpUpstreamError,
@@ -150,6 +151,7 @@ __all__ = [
     "ConfigInvalid",
     "ConfigMergeFailed",
     "ConfigUnknownAlias",
+    "ConfigUnknownTool",
     "ConfigUnknownVariant",
     "ConfigVersionMismatch",
     "ExchangeCancelled",

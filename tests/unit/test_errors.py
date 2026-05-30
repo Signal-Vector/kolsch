@@ -37,6 +37,7 @@ from errors import (
     ConfigInvalid,
     ConfigMergeFailed,
     ConfigUnknownAlias,
+    ConfigUnknownTool,
     ConfigUnknownVariant,
     ConfigVersionMismatch,
     ExchangeCancelled,
@@ -166,6 +167,10 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
         "server_name": "github",
         "tool": "list_repos",
         "response": "500",
+    },
+    ConfigUnknownTool: {
+        "ref": "kolsch/tools/ghost",
+        "available_refs": ["kolsch/tools/read_file"],
     },
     McpProtocolError: {
         "server_name": "github",

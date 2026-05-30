@@ -53,6 +53,58 @@ class ToolNotFound(PlatformError):
         )
 
 
+class ConfigUnknownTool(PlatformError):
+    """An agent's ``subsystems.tools.config.declared`` lists a ref the
+    asset catalog doesn't resolve.
+
+    Raised at engine pre-flight by ``_register_tools_with_subsystem``
+    when the asset-management lookup for a declared ref returns
+    ``assets.not_found``. The chain is:
+
+    1. Agent config declares ``tools.config.declared: [{ref: "X/tools/Y"}]``.
+    2. Engine pre-flight resolves each ref via
+       ``AssetManagement.get_asset(ref)``.
+    3. ``AssetsNotFound`` is caught and re-raised as this typed
+       ``config.unknown_tool`` so the user sees a clear "agent config
+       names a tool you don't have" rather than the generic
+       "asset not found".
+
+    Lives in the tools error module rather than the kernel module
+    because it concerns the Tools subsystem's view of the catalog;
+    the kernel itself doesn't enumerate tools.
+
+    Per bug-engine-tools-wiring-gap.md acceptance criterion 4 — a
+    declared tool ref that doesn't resolve MUST fail loudly, not
+    silently at first use. Phase 2.x coordinator resolution: enforce
+    at engine pre-flight (option (b)); validator-side enforcement
+    (option (a) — agent-load-time) is tracked as FUL-1.
+    """
+
+    code = "config.unknown_tool"
+    level = Level.FATAL
+
+    def __init__(
+        self,
+        ref: str,
+        available_refs: list[str],
+        *,
+        agent_id: str | None = None,
+        where: str = "engine.preflight.register_tools",
+    ) -> None:
+        super().__init__(
+            message=(
+                f"Agent config references tool {ref!r} which is not in "
+                f"the catalog. Available tool refs: {sorted(available_refs)}"
+            ),
+            where=where,
+            detail={
+                "ref": ref,
+                "available_refs": sorted(available_refs),
+                "agent_id": agent_id,
+            },
+        )
+
+
 class ToolSetupFailed(PlatformError):
     """A tool failed to register (e.g., decorator parse, missing secret)."""
 

@@ -512,6 +512,18 @@ losing a bus message doesn't fail an exchange.)
 | `mcp.server_unreachable` | Diagnostic | `{server_name, transport_error}` | `tools.mcp.spawn` |
 | `mcp.upstream_error` | Diagnostic | `{server_name, tool, response}` | `tools.mcp.invoke` |
 | `mcp.protocol_error` | Diagnostic | `{server_name, expected, actual}` | `tools.mcp.invoke` |
+| `config.unknown_tool` | Fatal | `{ref, available_refs, agent_id}` | `engine.preflight.register_tools` |
+
+**`config.unknown_tool`** (bug-engine-tools-wiring-gap.md) — raised
+by engine pre-flight when an agent's
+`subsystems.tools.config.declared[*].ref` does not resolve in the
+asset-management catalog. The chain is: agent config →
+`AssetManagement.get_asset(ref)` raises `assets.not_found` →
+engine wraps as `config.unknown_tool` so the user sees a clear
+"agent config names a tool you don't have" rather than the
+generic asset error. Coordinator resolution (PR 1) enforces this
+at engine pre-flight (option (b)); validator-side enforcement at
+agent-load time is tracked as FUL-1.
 
 ### 4.6 Memory
 
