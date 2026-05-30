@@ -1244,6 +1244,41 @@ Handling), CRW (CrewAI Adapter — authored in Step 12b), INT
 - Verifies: §10.15; secrets-sandbox-authz §3.7.3; the
   load-bearing "same-exchange" guarantee from patch §0.
 
+**TC-TOOL-WIRE-01: Declared tools reach the framework and run for real** *(bug-engine-tools-wiring-gap.md PR 1)*
+- Layer: integration
+- Setup: workspace via `kolsch setup` (lands the helper agent
+  declaring all four builtin tool refs in
+  `subsystems.tools.config.declared`); authz config tweaked so
+  `tool.bash` is `allow` rather than `prompt` (the modal path
+  is exercised by TC-CHAT-03/04); FakeLLM scripted to invoke
+  `bash(command="echo hello-from-tool-wire-01")` then return
+  a final text reply.
+- Action: drive `runtime.engine.execute_stream` against the
+  helper agent.
+- Expected: (a) `tool.called` event present; (b) `tool.result`
+  carries real bash stdout (`hello-from-tool-wire-01`); (c)
+  final `agent.message` reflects the real output; (d) the
+  hallucination signature `bin boot dev etc` is NOT present.
+- Verifies: bug-engine-tools-wiring-gap.md acceptance
+  criteria 1 + 2 + 6; Engine I6 ordering for the tool seam.
+
+**TC-TOOL-WIRE-02: Declared ref that doesn't resolve raises `config.unknown_tool`** *(bug-engine-tools-wiring-gap.md PR 1)*
+- Layer: integration
+- Setup: workspace via `kolsch setup`; build a
+  ResolvedAgentConfig declaring `subsystems.tools.config.declared:
+  [{ref: "kolsch/tools/does_not_exist"}]`.
+- Action: drive `runtime.engine.execute_stream`.
+- Expected: exactly one `thread.exchange_failed` event with
+  `error.type == "config.unknown_tool"`; the error message
+  names the bad ref AND lists the available tool refs from
+  the catalog.
+- Verifies: bug-engine-tools-wiring-gap.md acceptance
+  criterion 4; coordinator's Q1 resolution (option (b) —
+  engine-side enforcement). Note: validator-side enforcement
+  at agent-load time (option (a)) is tracked as FUL-1; a
+  unit-level test against the resolver lands when FUL-1
+  ships.
+
 ---
 
 ## Part 9.9 — Chat (CHAT) — Phase 2.1, CHAT-R8
