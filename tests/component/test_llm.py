@@ -697,7 +697,14 @@ async def test_openrouter_build_llm_emits_litellm_prefixed_model() -> None:
     assert llm.model == "anthropic/claude-opus-4-7"
 
 
-async def test_opencode_build_llm_emits_openai_prefixed_model() -> None:
+async def test_opencode_build_llm_emits_hosted_vllm_prefixed_model() -> None:
+    """TC-LLM-05 route assertion — updated post bug-litellm-model-routing.md
+    (H1+H2). Pre-fix the connector emitted ``openai/<model_id>`` which
+    CrewAI 1.14.6 rejects for non-canonical model names without the
+    LiteLLM extra installed. The connector now uses ``hosted_vllm/``
+    — CrewAI's idiom for an OpenAI-compatible endpoint serving
+    arbitrary models. See the OpenCode connector module docstring for
+    the routing-choice rationale."""
     connector = OpenCodeConnector()
     config = ProviderConfig(
         name="opencode",
@@ -709,7 +716,7 @@ async def test_opencode_build_llm_emits_openai_prefixed_model() -> None:
         models=[],
     )
     llm = await connector.build_llm("gpt-oss-120b", config, "sk-y")
-    assert llm.provider == "openai"
+    assert llm.provider == "hosted_vllm"
     assert llm.model == "gpt-oss-120b"
 
 

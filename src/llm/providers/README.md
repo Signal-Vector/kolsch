@@ -181,6 +181,69 @@ register("<name>", <Name>Connector)   # and this line
 
 ---
 
+## 2.5. Picking the right `crewai.LLM` route
+
+*(Added after [bug-litellm-model-routing.md](../../../docs/process/bug-litellm-model-routing.md):
+the OpenCode connector originally used ``openai/<model>`` and
+LiteLLM rejected non-canonical model names with a hard import
+error.)*
+
+`crewai.LLM(model=...)` takes a `<prefix>/<model_id>` string. The
+prefix selects a CrewAI native provider class; the `model_id` is
+validated against that provider's known-model list. Two
+properties decide whether your provider's models will work:
+
+1. **Does the validator accept arbitrary names?** Some prefixes
+   (`openai/`, `anthropic/`, `bedrock/`) validate the model_id
+   against a hardcoded list of canonical names. Others
+   (`openrouter/`, `hosted_vllm/`, `ollama/`, `cerebras/`) return
+   `True` unconditionally — see `crewai/llm.py:432-497` in the
+   pinned CrewAI version.
+2. **Does the resulting native class speak the wire shape your
+   provider serves?** Most "OpenAI-compatible" providers should
+   land on `OpenAICompatibleCompletion`
+   (`crewai/llm.py:595-609`), which speaks Bearer auth +
+   `/v1/chat/completions`. The prefixes that route there are:
+   `openrouter`, `deepseek`, `ollama`, `ollama_chat`,
+   `hosted_vllm`, `cerebras`, `dashscope`.
+
+The decision matrix for new connectors:
+
+| Your provider              | Use prefix       | Why                                         |
+|----------------------------|------------------|---------------------------------------------|
+| OpenAI itself (canonical models only) | `openai/`        | Native client; validator passes for `gpt-*`/`o1-*`. |
+| OpenRouter (proxy)         | `openrouter/`    | Permissive validator; OpenAI-compat client. |
+| Anthropic API (canonical)  | `anthropic/`     | Native validator passes for `claude-*`.     |
+| Bedrock (AWS sigv4)        | `bedrock/`       | Native handles sigv4; validator passes.     |
+| Llama-local (Ollama)       | `ollama/`        | Permissive; talks to local Ollama daemon.   |
+| Llama-local (llama.cpp / vLLM, OpenAI-compat shim) | `hosted_vllm/`   | Permissive validator + OpenAI-compat client. **Same route as OpenCode**. |
+| OpenCode-style (any OpenAI-compat endpoint serving non-OpenAI model names) | `hosted_vllm/`   | The OpenCode bug-fix path. |
+
+**The trap**: `<provider>/<model>` looks like it should "just
+work" for any OpenAI-compatible endpoint, but `openai/` is the
+strict prefix and ships with a model-name validator that rejects
+anything not on OpenAI's actual list. Don't pick a prefix because
+its name matches your provider's marketing — pick one because its
+validator and client behaviour match your provider's actual wire
+shape.
+
+`hosted_vllm/` is misleadingly named: it isn't only for vLLM
+deployments. It's CrewAI's standing idiom for "OpenAI-compatible
+endpoint serving arbitrary model IDs." OpenCode uses it; the
+planned Llama-local connector (Phase 1.1 §9.4 llama.cpp/vLLM
+branch) should use it; any future OpenAI-compatible shim should
+use it unless its catalogue is canonical OpenAI.
+
+If a future contributor "fixes" `hosted_vllm/` back to `openai/`
+on a connector serving non-OpenAI models, the failure mode is the
+same `ImportError("Unable to initialize LLM…the model did not
+match any supported native provider…")`. The
+[bug-litellm-model-routing.md](../../../docs/process/bug-litellm-model-routing.md)
+ticket walks through the diagnostic; the OpenCode connector's
+module docstring explains the choice inline.
+
+---
+
 ## 3. Things to NOT do
 
 - **Don't invent a new abstraction.** The standard is

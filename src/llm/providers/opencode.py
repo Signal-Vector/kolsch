@@ -12,6 +12,56 @@ provider (OpenAI itself, forks, third-party hosted shims). The four
 methods stay near-identical; only ``type_name`` and
 :meth:`auth_prompt_spec` change.
 
+## CrewAI Routing Choice — `hosted_vllm/<model_id>`
+
+*(Bug-fix: docs/process/bug-litellm-model-routing.md, H1+H2.)*
+
+:meth:`build_llm` constructs ``crewai.LLM(model=f"hosted_vllm/{model_id}",
+…)``. The prefix is **deliberately not** ``openai/`` even though
+OpenCode IS OpenAI-compatible at the wire level. The rationale:
+
+CrewAI 1.14.6's native ``openai/`` provider validates the
+``model_part`` against OpenAI's canonical model list (``gpt-4*``,
+``gpt-3.5-*``, ``o1-*``, …). For non-canonical model names like
+``qwen3.6-plus`` the validator returns False and CrewAI tries to
+fall back to LiteLLM; with LiteLLM not installed (no
+``crewai[litellm]`` extra in ``pyproject.toml``) the fallback
+raises ``ImportError("Unable to initialize LLM with model
+'openai/<x>'. The model did not match any supported native
+provider…")``. See ``crewai/llm.py:412-428`` in the installed
+version.
+
+``hosted_vllm`` is the only native provider that pairs (a) a
+permissive model-name validator — ``_validate_model_in_constants``
+returns ``True`` for any string when the provider is
+``hosted_vllm``, with the literal comment "vLLM serves any model"
+(``crewai/llm.py:483-485``) — and (b) the same OpenAI-compat client
+class ``OpenAICompatibleCompletion`` that the ``openai/`` route
+would have used had validation passed
+(``crewai/llm.py:595-609``). It accepts ``base_url``, ``api_key``,
+and ``timeout`` with identical names (the parent
+``OpenAICompletion`` class), so the kwargs the OpenCode connector
+already produced pass through unchanged.
+
+**The prefix name is misleading.** ``hosted_vllm`` is CrewAI's
+idiom for "OpenAI-compatible endpoint serving arbitrary models" —
+it reflects CrewAI's history (originally added for vLLM
+deployments), not OpenCode's underlying implementation. An OpenCode
+endpoint is not literally a vLLM server; it's any OpenAI-compatible
+HTTP shim. The prefix is the right choice for this connector
+because of the validator + client behaviour, not because OpenCode
+runs vLLM. Future contributors: do NOT "fix" this back to
+``openai/`` — the alternative is adding the ~100 MB ``litellm``
+extra and passing ``custom_llm_provider="openai"`` to bypass the
+same validator, which is strictly worse.
+
+OpenRouter's connector (sibling file) uses ``openrouter/<model>``
+because that prefix has an analogously permissive validator (also
+in ``crewai/llm.py:493-495``); the lesson generalises — see
+``src/llm/providers/README.md`` for the rule that lets future
+connectors (Llama-local, Bedrock, Anthropic, OpenAI canonical)
+pick the right route on first try.
+
 ## Error Classification (Phase 1.3, FB-R10)
 
 Every provider response the connector might see maps to exactly one
@@ -195,10 +245,11 @@ class OpenCodeConnector:
         provider_config: ProviderConfig,
         api_key: str | None,
     ) -> crewai.LLM:
-        """Construct a `crewai.LLM` pointed at OpenCode via litellm's
-        OpenAI-compatible adapter."""
+        """Construct a `crewai.LLM` pointed at OpenCode via CrewAI's
+        ``hosted_vllm`` route — see the module docstring for the
+        routing-choice rationale (bug-litellm-model-routing.md)."""
         return crewai.LLM(
-            model=f"openai/{model_id}",
+            model=f"hosted_vllm/{model_id}",
             api_key=api_key,
             base_url=provider_config.base_url,
             timeout=(
