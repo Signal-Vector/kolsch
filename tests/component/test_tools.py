@@ -731,3 +731,80 @@ def test_layer3_rejects_malformed_declared_entry() -> None:
     result = validate_standard_config({"declared": ["just-a-string-not-a-mapping"]})
     assert result.ok is False
     assert any(e.code == "malformed_entry" for e in result.errors)
+
+
+# ===========================================================================
+# Step C follow-up (bug-engine-tools-wiring-gap.md) — pin args_schema shape
+# ===========================================================================
+
+
+async def test_declared_tool_info_carries_valid_json_schema(
+    tmp_path: Path,
+) -> None:
+    """Step C of the bug fix imagined a ``BoundTool`` dataclass
+    with a ``schema: dict`` field that the framework adapter
+    forwards to the model's ``tool_use`` protocol. The equivalent
+    in our architecture is ``ToolInfo.args_schema`` — derived from
+    the tool function's Pydantic args model via
+    ``model_json_schema()``.
+
+    This test pins the load-bearing property CrewAI / litellm
+    depends on: a declared tool's args_schema is a valid JSON
+    Schema dict that names its parameters + types + required
+    fields. Without this shape, the model gets a stringified
+    Python signature and tool_use breaks.
+
+    The Step C bug-doc prompt mentioned "schema derivation logic"
+    as a potential escalation trigger; the @tool decorator's
+    Pydantic-args contract sidesteps that — Pydantic's
+    model_json_schema is the derivation, by-construction valid.
+    This test pins the resulting shape so a future
+    decorator refactor that drops the json-schema export would
+    fail loudly rather than silently produce a stringified
+    schema.
+    """
+    bundle = tmp_path / "bundles" / "demo" / "tools"
+    bundle.mkdir(parents=True)
+    source = """
+from pydantic import BaseModel, Field
+from tools import tool
+
+
+class EchoArgs(BaseModel):
+    message: str = Field(description="text to echo back")
+    repeat: int = Field(default=1, ge=1, description="how many copies")
+
+
+@tool(name="echo", description="Echo the message N times", args_schema=EchoArgs)
+async def echo(args, ctx):
+    return {"text": " ".join([args.message] * args.repeat)}
+"""
+    tool_file = bundle / "echo.py"
+    tool_file.write_text(source, encoding="utf-8")
+
+    subsystem = _make_subsystem(tmp_path=tmp_path)
+    infos = await subsystem.register_for_agent(
+        agent_id=AgentId("ag_test"),
+        declared_paths=[tool_file],
+    )
+    info = next(i for i in infos if i.name == "echo")
+
+    schema = info.args_schema
+    # Shape: a valid JSON Schema dict.
+    assert isinstance(schema, dict)
+    assert schema.get("type") == "object"
+    # Both fields surface; their types are named.
+    properties = schema.get("properties", {})
+    assert "message" in properties
+    assert "repeat" in properties
+    assert properties["message"].get("type") == "string"
+    assert properties["repeat"].get("type") == "integer"
+    # `required` reflects the non-defaulted field.
+    required = schema.get("required", [])
+    assert "message" in required
+    assert "repeat" not in required  # has default
+    # Description carries through — the model uses it to decide
+    # how to fill the parameter.
+    assert "echo" in properties["message"].get("description", "").lower() or (
+        properties["message"].get("description") == "text to echo back"
+    )
