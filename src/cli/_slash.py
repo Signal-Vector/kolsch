@@ -702,8 +702,24 @@ class SlashCompleter(Completer):
         self,
         *,
         model_alias_provider: Callable[[], dict[str, str]] | None = None,
+        session_id_provider: Callable[[], list[tuple[str, str]]] | None = None,
     ) -> None:
+        """Optional dynamic suggestion sources.
+
+        ``model_alias_provider`` is queried on every keystroke when
+        the buffer is ``/model `` (trailing space); returns
+        ``{alias: canonical}``.
+
+        ``session_id_provider`` is queried when the buffer is
+        ``/session `` (trailing space); returns ``[(session_id,
+        display_label)]``. The store's ``list_sessions`` is async;
+        the closure here is sync — the chat snapshots recent ids
+        at startup and re-snapshots when ``/new`` opens a fresh
+        session. Stale ids that the user types still work (the
+        ``/session`` handler validates via ``store.get_session``).
+        """
         self._model_alias_provider = model_alias_provider
+        self._session_id_provider = session_id_provider
 
     def get_completions(
         self, document: Document, complete_event: CompleteEvent
@@ -714,21 +730,29 @@ class SlashCompleter(Completer):
             return
         head, sep, tail = text.partition(" ")
         if not sep:
-            # No space yet — narrow command list by prefix.
-            for command in _iter_visible_commands():
-                if command.name.startswith(head):
-                    yield Completion(
-                        text=command.name[len(head) :],
-                        display=command.name,
-                        display_meta=command.description,
-                    )
+            yield from self._complete_command_name(head)
             return
         # Trailing space (or characters after it) — sub-form
         # completions, if the command has any.
         resolved = _resolve_command_name(head)
         if resolved is None:
             return
-        partial = tail
+        yield from self._complete_command_arg(resolved, tail)
+
+    def _complete_command_name(self, head: str) -> Iterable[Completion]:
+        """Yield matching commands when the buffer is just ``/<prefix>``."""
+        for command in _iter_visible_commands():
+            if command.name.startswith(head):
+                yield Completion(
+                    text=command.name[len(head) :],
+                    display=command.name,
+                    display_meta=command.description,
+                )
+
+    def _complete_command_arg(
+        self, resolved: SlashCommand, partial: str
+    ) -> Iterable[Completion]:
+        """Yield arg-position completions for the resolved command."""
         if resolved.options:
             for option_value, option_desc in resolved.options:
                 if option_value.startswith(partial):
@@ -738,15 +762,16 @@ class SlashCompleter(Completer):
                         display_meta=option_desc,
                     )
             return
-        # /model dynamic alias completions when configured.
         if resolved.name == "/model" and self._model_alias_provider is not None:
-            for alias, canonical in self._model_alias_provider().items():
-                if alias.startswith(partial):
-                    yield Completion(
-                        text=alias[len(partial) :],
-                        display=alias,
-                        display_meta=canonical,
-                    )
+            yield from _prefix_matched_completions(
+                self._model_alias_provider().items(),
+                partial=partial,
+            )
+        if resolved.name == "/session" and self._session_id_provider is not None:
+            yield from _prefix_matched_completions(
+                self._session_id_provider(),
+                partial=partial,
+            )
         if resolved.free_form_arg_hint is not None and not partial:
             # A non-completing hint — yields with empty insertion
             # text so the popup just shows the placeholder line
@@ -755,6 +780,27 @@ class SlashCompleter(Completer):
                 text="",
                 display=resolved.free_form_arg_hint,
                 display_meta="(any value)",
+            )
+
+
+def _prefix_matched_completions(
+    pairs: Iterable[tuple[str, str]],
+    *,
+    partial: str,
+) -> Iterable[Completion]:
+    """Yield ``Completion`` objects for ``(value, label)`` pairs
+    whose value starts with ``partial``.
+
+    Shared between the ``/model`` and ``/session`` completion
+    branches — both follow the same shape (prefix-match a list of
+    pairs, render value + ``display_meta`` label).
+    """
+    for value, label in pairs:
+        if value.startswith(partial):
+            yield Completion(
+                text=value[len(partial) :],
+                display=value,
+                display_meta=label,
             )
 
 

@@ -241,7 +241,7 @@ class Renderer:
     def _render_tool_failed(self, event: Event) -> None:
         tool_name = str(event.data.get("tool_name", "<unknown>"))
         error = event.data.get("error") or {}
-        code = str(error.get("code", "<unknown>"))
+        code = _error_code(error)
         message = str(error.get("message", ""))
         self._console.print(
             Panel(
@@ -254,21 +254,53 @@ class Renderer:
         )
 
     def _render_exchange_failed(self, event: Event) -> None:
-        """Print a one-line system notice and unlock the input loop.
+        """Print a notice and unlock the input loop.
 
         Per patch §3 + §6.3: an exchange-failed event in the middle
-        of a chat does NOT end the chat; the user sees a notice and
-        can keep going (with ``/model`` or by re-prompting).
+        of a chat does NOT end the chat; the user sees a notice
+        and can keep going (with ``/model`` or by re-prompting).
+
+        Patch §6.1: a Ctrl-C cancellation specifically renders the
+        in-progress agent block in muted styling with a
+        ``[cancelled]`` suffix (NOT the generic yellow exchange-
+        failed line) so the user sees their partial reply, not a
+        generic "exchange failed" string. The discriminator is
+        the error's code: ``engine.cancelled`` triggers the muted
+        path; anything else stays on the generic notice.
         """
         error = event.data.get("error") or {}
-        code = str(error.get("code", "<unknown>"))
+        code = _error_code(error)
         message = str(error.get("message", ""))
+        if _is_cancellation_code(code):
+            self._render_cancelled(message)
+            return
         self._console.print(
             Text(
                 f"[exchange failed — {code}: {message}]",
                 style="yellow",
             ),
         )
+
+    def _render_cancelled(self, message: str) -> None:
+        """Patch §6.1 — Ctrl-C suffix on the partial agent block.
+
+        ``_last_agent_text`` is set by the most recent
+        ``model.response`` render; if the engine cancelled
+        before any tokens landed, there's no partial block —
+        we just print the muted "[cancelled]" sentinel so the
+        user sees something explicit.
+        """
+        partial = self._last_agent_text or ""
+        if partial:
+            suffix = Text(" [cancelled]", style="dim italic")
+            self._console.print(suffix)
+        else:
+            self._console.print(
+                Text(
+                    f"[cancelled — {message}]" if message else "[cancelled]",
+                    style="dim italic",
+                ),
+            )
 
     def _render_model_fallback(self, event: Event) -> None:
         """Italic notice per patch §3 row 12 / §6.3 row 1.
@@ -317,6 +349,37 @@ class Renderer:
 # ---------------------------------------------------------------------------
 # Module-private formatters
 # ---------------------------------------------------------------------------
+
+
+def _error_code(error: dict[str, object]) -> str:
+    """Pull the canonical error code from an Error envelope.
+
+    The schema's canonical key is ``type`` per
+    ``schemas.error.Error.type``; tests that build crafted
+    events sometimes use ``code`` (mirroring the PlatformError
+    catalog's user-facing field name) — handle both so the
+    renderer is honest about whatever the producer emitted.
+    """
+    for key in ("type", "code"):
+        value = error.get(key)
+        if isinstance(value, str) and value:
+            return value
+    return "<unknown>"
+
+
+_CANCELLATION_CODES: tuple[str, ...] = (
+    "engine.cancelled",
+    "exchange.cancelled",
+)
+"""Error codes that map to the patch §6.1 muted-suffix render path.
+
+Phase 1's engine uses ``exchange.cancelled`` for ``CancelToken``-
+triggered teardown; the chat spec uses the prose ``engine.cancelled``.
+Both surface the same UX in the renderer."""
+
+
+def _is_cancellation_code(code: str) -> bool:
+    return code in _CANCELLATION_CODES or "cancel" in code.lower()
 
 
 _PANEL_HEADER_ARG_MAX_LEN = 60

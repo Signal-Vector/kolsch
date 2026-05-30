@@ -353,6 +353,63 @@ async def test_agent_message_re_renders_when_differs_from_streamed() -> None:
     assert "final answer" in rendered
 
 
+async def test_thread_exchange_failed_engine_cancelled_renders_muted_suffix() -> None:
+    """Patch §6.1: a cancellation specifically renders the
+    in-progress agent block in muted styling with a
+    ``[cancelled]`` suffix — distinct from the generic yellow
+    "exchange failed" line that other failures get.
+
+    The discriminator is the error code (``engine.cancelled``);
+    other codes stay on the generic notice path.
+    """
+    # Pre-render a model.response so _last_agent_text is set;
+    # the cancellation then surfaces the partial-block suffix.
+    rendered = await _render_events(
+        [
+            _make_event(
+                EventType.MODEL_RESPONSE,
+                data={"content": {"text": "partial reply that"}},
+            ),
+            _make_event(
+                EventType.THREAD_EXCHANGE_FAILED,
+                data={
+                    "exchange_started_id": "ev_x",
+                    "error": {
+                        "code": "engine.cancelled",
+                        "message": "user cancelled",
+                    },
+                },
+            ),
+        ],
+    )
+    # Partial agent text + suffix both visible.
+    assert "partial reply that" in rendered
+    assert "[cancelled]" in rendered
+    # NOT the generic exchange-failed yellow line.
+    assert "exchange failed" not in rendered.lower()
+
+
+async def test_thread_exchange_failed_engine_cancelled_without_partial_text() -> None:
+    """Cancellation with no prior model.response — renderer
+    still surfaces "[cancelled]" so the user sees explicit
+    feedback rather than silence."""
+    rendered = await _render_events(
+        [
+            _make_event(
+                EventType.THREAD_EXCHANGE_FAILED,
+                data={
+                    "exchange_started_id": "ev_x",
+                    "error": {
+                        "code": "engine.cancelled",
+                        "message": "cancelled before tokens",
+                    },
+                },
+            ),
+        ],
+    )
+    assert "[cancelled" in rendered
+
+
 async def test_thread_exchange_failed_prints_system_notice() -> None:
     """Failed exchanges land as one-line system notices; the chat
     continues. Patch §6.3."""

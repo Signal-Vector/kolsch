@@ -180,15 +180,16 @@ async def cmd_chat(
         session_id=str(session.session_id),
     )
 
-    # Phase 2.1 / 24e — recent session IDs for the /session
-    # dynamic completer suggestions land in a later patch; the
-    # model_alias provider is wired now for /model. Aliases live
-    # in platform.yaml's ``model_aliases`` section.
+    # Phase 2.1 / 24e — model_aliases come from platform.yaml;
+    # recent_session_ids come from the store. Both feed the
+    # SlashCompleter's dynamic-suggestion paths per patch §5.3.
     model_aliases = _load_model_aliases(args.root)
+    recent_session_ids = await _snapshot_recent_session_ids(runtime)
     prompt_session = _build_prompt_session(
         input=prompt_input,
         output=prompt_output,
         model_aliases=model_aliases,
+        recent_session_ids=recent_session_ids,
     )
     # threads[0] convention — Phase 1 sessions are single-thread;
     # multi-thread support lands when the Workflow Engine arrives.
@@ -245,6 +246,7 @@ def _build_prompt_session(
     input: Input | None = None,  # noqa: A002 — prompt_toolkit's own kwarg name
     output: Output | None = None,
     model_aliases: dict[str, str] | None = None,
+    recent_session_ids: list[tuple[str, str]] | None = None,
 ) -> PromptSession[str]:
     """Construct the prompt_toolkit session with the patch §2.5 bindings.
 
@@ -267,8 +269,12 @@ def _build_prompt_session(
     # aliases dict so the completer doesn't import bootstrap-
     # adjacent modules.
     aliases_snapshot = dict(model_aliases or {})
+    sessions_snapshot = list(recent_session_ids or [])
     completer = SlashCompleter(
         model_alias_provider=(lambda: aliases_snapshot) if aliases_snapshot else None,
+        session_id_provider=(
+            (lambda: sessions_snapshot) if sessions_snapshot else None
+        ),
     )
 
     def _bottom_toolbar() -> str:
@@ -617,6 +623,41 @@ def _load_model_aliases(root: Path) -> dict[str, str]:
     if not isinstance(raw, dict):
         return {}
     return {str(k): str(v) for k, v in raw.items()}
+
+
+_RECENT_SESSIONS_LIMIT = 10
+"""How many recent session ids the /session completer surfaces.
+Cap at 10 so the popup stays scannable; users who need older
+sessions can paste the id or scroll ``kolsch sessions list``."""
+
+
+async def _snapshot_recent_session_ids(
+    runtime: PlatformRuntime,
+) -> list[tuple[str, str]]:
+    """Snapshot the most recent session ids at chat startup.
+
+    The completer is sync; we capture once. ``/new`` mid-chat
+    re-snapshotting isn't wired yet (the user would have to
+    restart chat to see a just-created session in the completer
+    popup) — small UX gap noted as a polish-phase item; the
+    handler-side ``/session <id>`` accepts any id the user
+    types, so it doesn't block correctness.
+
+    Returns a list of ``(session_id, display_label)`` tuples.
+    The label shows the session name + start date so the user
+    can pick the right one without leaving chat.
+    """
+    sessions = await runtime.store.list_sessions(limit=_RECENT_SESSIONS_LIMIT)
+    return [
+        (
+            str(s.session_id),
+            (
+                f"{s.name or '(unnamed)'} • "
+                f"{s.created_at.strftime('%Y-%m-%d %H:%M') if s.created_at else '?'}"
+            ),
+        )
+        for s in sessions
+    ]
 
 
 def _placeholder_session_id() -> SessionId:
