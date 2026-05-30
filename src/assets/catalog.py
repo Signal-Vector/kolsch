@@ -163,6 +163,18 @@ def _scan_tools(bundle: str, bundle_dir: Path) -> list[AssetEntry]:
                 metadata={},
             )
         )
+    # Bug-engine-tools-wiring-gap.md Step B Task 3 — emit one
+    # diagnostic INFO line per bundle scanned so ``kolsch run -v``
+    # surfaces tool discovery (the absence of this line in the
+    # user's repro was Check #2 of the ground-truth investigation).
+    # Empty tools/ dirs stay silent to keep the log clean for
+    # bundles that don't ship tools.
+    if out:
+        _log.info(
+            "catalog: registered %d tools from bundles/%s/tools/",
+            len(out),
+            bundle,
+        )
     return out
 
 
