@@ -64,6 +64,10 @@ Precise, complete, lookup-oriented.
 Task guides for using and extending the platform. *Added during
 implementation.*
 
+- [Chatting Effectively with `kolsch chat`](how-to/chatting-effectively.md)
+  — long conversations, mid-session model switches, approving
+  bash patterns wisely, using `--session` to resume.
+
 ## Tutorials — learning-oriented
 
 Step-by-step learning paths. *Added during implementation.*

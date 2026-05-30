@@ -39,12 +39,24 @@ top of these specs.
 # Install
 uv tool install kolsch                # (or pipx / pip)
 
-# First run
+# First run — scaffold the workspace
 kolsch setup                          # walks you through it
 
-# Use it
+# Day 2 — talk to the starter agent
+kolsch chat kolsch/agents/helper      # streaming REPL: tokens, tool calls, /commands
+
+# Or one-shot
 kolsch run starter/agents/helper --input content="hello"
 ```
+
+`kolsch chat` is the recommended day-2 command: a streaming
+conversation against the agent (token-by-token rendering,
+collapsible tool-call blocks, a four-choice approval modal for
+`prompt`-effect rules, slash commands like `/exit` / `/clear` /
+`/model`, and `--session <id>` to resume an earlier
+conversation). The full contract is in
+`docs/process/phase2.1-chat-specs.md`; everyday recipes live in
+`docs/how-to/chatting-effectively.md`.
 
 `kolsch setup` scaffolds a workspace at `~/Documents/kolsch` (override
 with `--root` or `$KOLSCH_WORKSPACE`), optionally connects an LLM

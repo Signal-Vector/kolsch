@@ -312,7 +312,66 @@ Useful follow-ups:
   agent then errors with `llm.provider_not_configured` on its next
   run — the system telling you the truth.
 
-## 10. Add a fallback model
+## 10. Chat with your agent
+
+So far you've been sending one-shot messages with `kolsch run`.
+The day-2 command is `kolsch chat` — a streaming REPL that turns
+the same engine you've been using into a real conversation.
+
+```bash
+uv run kolsch chat kolsch/agents/helper
+```
+
+You drop into a prompt. Type a message and hit Enter; tokens
+arrive live (no waiting for the whole reply), tool calls render
+as collapsible blocks, and the same session log you've been
+inspecting in step 3 keeps growing.
+
+```
+kolsch chat • helper • opus • ses_abc123
+
+You: list the markdown files in docs/
+
+  ▼ list_files(path="docs/", glob="**/*.md")
+    [42 entries: README.md, index.md, explanation/..., ...]
+
+Helper: There are 42 markdown files under `docs/`. The bulk live
+under `explanation/` (the architecture specs) and `process/`
+(testing handbook, test catalog, build plans)...
+
+You: ▍
+```
+
+A few things to try inside the chat:
+
+- **Tool approval modal.** Ask the helper to run `bash` (e.g.,
+  "run `rg build_llm src/` and show me the matches"). Because
+  `tool.bash` defaults to `prompt`, you get the four-choice
+  modal — `[y]` allow once, `[a]` always allow this pattern,
+  `[n]` deny once, `[d]` always deny. Picking `[a]` writes a
+  rule into `platform.yaml` immediately; the next matching
+  bash call inside the same chat runs without prompting.
+- **Slash commands.** `/help` lists them; `/clear` wipes the
+  visible scrollback without touching the session log;
+  `/model haiku` switches model mid-session (the next exchange
+  uses haiku); `/tools` shows what the agent can call;
+  `/exit` (or Ctrl-D) leaves cleanly.
+- **Resume a conversation.** Grab the session id from
+  `kolsch sessions list`, then
+  `kolsch chat kolsch/agents/helper --session ses_<id>` —
+  the prior conversation replays into the scrollback and you
+  continue where you left off. Same JSONL → same rendering;
+  the renderer is a pure consumer of the event stream.
+
+Everything you see in chat is also in
+`kolsch sessions events <id>` — the chat is a view onto the
+event log, not a parallel record. Crashed mid-stream? The
+JSONL is intact; re-open the session and the conversation
+comes back. Day-to-day recipes (long conversations,
+switching models, approving bash patterns wisely) live in
+`docs/how-to/chatting-effectively.md`.
+
+## 11. Add a fallback model
 
 Real providers blink — a 429 from Opus shouldn't kill your
 conversation. Open `bundles/starter/agents/helper.yaml` and add one
