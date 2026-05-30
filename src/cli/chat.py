@@ -54,6 +54,14 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 
+from cli._slash import (
+    ControlSignal,
+    SlashCompleter,
+    SlashContext,
+    dispatch_slash,
+    footer_hint_for_buffer,
+    is_slash_command,
+)
 from platform_runtime import bootstrap_runtime
 
 if TYPE_CHECKING:
@@ -70,13 +78,6 @@ _DEFAULT_AGENT_REF = "kolsch/agents/helper"
 """Fallback when ``<agent_ref>`` is omitted and
 ``platform.yaml``'s ``defaults.starter_agent`` is unset.
 Phase 2.1 patch §1.1."""
-
-
-_FOOTER_HINT = (
-    "Shift+Enter (or Alt+Enter / Ctrl-J) for new line • "
-    "Ctrl-D to exit • /help (coming in 24b)"
-)
-"""Bottom toolbar hint. Phase 2.1 patch §2.1 + §2.5."""
 
 
 # ---------------------------------------------------------------------------
@@ -166,11 +167,32 @@ def _build_prompt_session(
     fails loudly if a future change introduces full-screen mode.
     """
     bindings = _build_key_bindings()
+    # The completer + bottom_toolbar both read from the slash
+    # registry (single source of truth — patch §5.3 + §5.4).
+    completer = SlashCompleter()
+
+    def _bottom_toolbar() -> str:
+        # prompt_toolkit doesn't expose the current buffer on the
+        # bottom-toolbar callback; we peek at the active app's
+        # buffer via PromptSession's internals when available, and
+        # fall back to the idle hint otherwise. The fallback is
+        # the right default: while the chat is idle (no active
+        # buffer), the idle hint is what we'd show anyway.
+        from prompt_toolkit.application.current import get_app  # noqa: PLC0415
+
+        try:
+            buffer_text = get_app().current_buffer.text
+        except Exception:  # noqa: BLE001 — app may not be running yet
+            buffer_text = ""
+        return footer_hint_for_buffer(buffer_text)
+
     kwargs: dict[str, Any] = {
         "multiline": True,
         "key_bindings": bindings,
         "history": InMemoryHistory(),
-        "bottom_toolbar": lambda: _FOOTER_HINT,
+        "completer": completer,
+        "complete_while_typing": True,
+        "bottom_toolbar": _bottom_toolbar,
     }
     if input is not None:
         kwargs["input"] = input
@@ -225,14 +247,16 @@ def _build_key_bindings() -> KeyBindings:
 async def _run_input_loop(prompt_session: PromptSession[str], *, stdout: TextIO) -> int:
     """Drive the prompt_session in a loop until EOF or ``/exit``.
 
-    For 24a the body is a stub — each submitted line echoes as
-    ``you said: <text>``. The renderer + engine integration land
-    in 24c.
+    Submitted text starting with ``/`` is dispatched as a slash
+    command (24b — see ``cli._slash``). Anything else echoes as
+    ``you said: <text>`` for now; the renderer + engine
+    integration replace that stub in 24c.
 
     Ctrl-D / EOF returns exit code 0. Ctrl-C clears the current
-    input and continues (the slash-command surface in 24b adds
-    ``/exit``; until then Ctrl-D is the only documented exit).
+    input and continues (24c wires it to stream cancellation once
+    streaming exists).
     """
+    slash_ctx = SlashContext(stdout=stdout)
     while True:
         try:
             text = await prompt_session.prompt_async("You: ")
@@ -240,10 +264,15 @@ async def _run_input_loop(prompt_session: PromptSession[str], *, stdout: TextIO)
             stdout.write("\n")
             return 0
         except KeyboardInterrupt:
-            # Per patch §6.1: Ctrl-C while idle is a no-op (well,
-            # clears the input). 24c wires it to stream cancellation
-            # once streaming exists.
             stdout.write("\n")
+            continue
+        if is_slash_command(text):
+            signal = await dispatch_slash(text, slash_ctx)
+            if signal is ControlSignal.EXIT:
+                return 0
+            # CONTINUE / NEW_SESSION / RELOAD all return to the
+            # prompt; NEW_SESSION + RELOAD get richer behaviour
+            # in 24c / 24e.
             continue
         stdout.write(f"you said: {text}\n")
         stdout.flush()
