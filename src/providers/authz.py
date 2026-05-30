@@ -41,6 +41,7 @@ Conformance invariants:
 
 from __future__ import annotations
 
+import contextlib
 import hashlib
 import os
 import re
@@ -257,6 +258,18 @@ class RuleBasedAuthorizationProvider:
         self._rules: list[_CompiledRule] = [
             self._compile(index, entry) for index, entry in enumerate(raw_rules)
         ]
+        # Phase 2.1 (24d) — chat-injected callback resolved by
+        # _resolve_prompt when `allow(callback=)` is omitted. The
+        # chat lifecycle registers on startup + clears on exit so
+        # subsequent in-process commands never see a leaked modal
+        # surface.
+        self._registered_prompt_callback: PromptCallback | None = None
+        # Phase 2.1 (24d) — fires after a prompt callback persists
+        # a rule via `(effect, Rule)` tuple. The chat wires this to
+        # an atomic ``platform.yaml`` rewriter so the modal NEVER
+        # writes the YAML directly; this hook is the documented
+        # extension point.
+        self._rule_added_hook: Callable[[list[Rule]], None] | None = None
 
     @staticmethod
     def _compile(index: int, entry: object) -> _CompiledRule:
@@ -339,15 +352,24 @@ class RuleBasedAuthorizationProvider:
           *before* this call returns so the next check in the same
           exchange sees it.
         """
-        # A-I1 fullmatch + A-I2 first-match-wins. The `what` regex is
-        # matched against `target` (Phase 2.0) when supplied; falls
-        # back to `action` for backward compat with Phase 1 callers
-        # that didn't thread a target.
-        what_input = target if target is not None else action
+        # A-I1 fullmatch + A-I2 first-match-wins. Per spec §2.3, the
+        # `what` regex matches against the tool's target string (for
+        # file tools the resolved path; for bash the command). Phase
+        # 2.0 setup-produced rules use action-namespace patterns
+        # (e.g. ``what: r"tool\.bash"``) that match the action
+        # string. To honour both styles in one matcher, this
+        # implementation matches a rule's `what` against EITHER the
+        # supplied `target` OR the `action` — first-match-wins on
+        # rule order, additive on the per-rule matching domain.
+        # When `target` is None (Phase 1 / non-chat callers), this
+        # collapses to action-only matching — strictly backward-
+        # compatible with the pre-Phase-2.1 surface.
         for compiled in self._rules:
-            if compiled.who_re.fullmatch(principal) and compiled.what_re.fullmatch(
-                what_input
-            ):
+            if not compiled.who_re.fullmatch(principal):
+                continue
+            target_match = target is not None and compiled.what_re.fullmatch(target)
+            action_match = compiled.what_re.fullmatch(action)
+            if target_match or action_match:
                 effect = AuthzEffect(compiled.effect)
                 if effect is AuthzEffect.PROMPT:
                     return await self._resolve_prompt(
@@ -382,7 +404,14 @@ class RuleBasedAuthorizationProvider:
         target: str | None,
         callback: PromptCallback | None,
     ) -> AuthorizationResult:
-        if callback is None:
+        # Phase 2.1 (24d) — when the per-call callback is absent,
+        # fall back to the chat-injected registered callback. This
+        # keeps the dispatcher (tools/dispatch.py) callback-agnostic:
+        # it never has to thread the modal through; it just calls
+        # ``allow()`` and the provider resolves the right
+        # callback for the active surface.
+        effective_callback = callback or self._registered_prompt_callback
+        if effective_callback is None:
             # Non-chat callers (kolsch run, server, tests) collapse
             # `prompt` to `deny`. The dispatcher emits
             # authz.prompt_unattended at the call site so replay
@@ -396,13 +425,34 @@ class RuleBasedAuthorizationProvider:
                     "a callback; collapsed to deny"
                 ),
             )
-        answer = await callback(rule_id=compiled.raw.id, action=action, target=target)
+        answer = await effective_callback(
+            rule_id=compiled.raw.id,
+            action=action,
+            target=target,
+        )
         if isinstance(answer, tuple):
             resolved_effect, persist_rule = answer
             # Insert the persisted rule before the matched prompt rule
             # so future calls with the same target hit it first
             # (Phase 2.0 patch §4.2 "always allow/deny" semantics).
             self._insert_rule_before(persist_rule, anchor_id=compiled.raw.id)
+            # Phase 2.1 (24d) — fire the rule-added hook AFTER the
+            # in-memory insert so the chat's atomic-yaml-write
+            # hook sees the updated rule list. The hook is
+            # best-effort: failures don't undo the in-memory
+            # insert (the rule is already live for the current
+            # exchange — which is the load-bearing guarantee).
+            if self._rule_added_hook is not None:
+                # Diagnostic-level: hook failures don't undo the
+                # in-memory insert. The rule is already live for
+                # the current exchange — which is the load-bearing
+                # guarantee. A failed YAML write means the rule
+                # vanishes on chat exit; the user can re-add via
+                # `kolsch permissions add` or pick [a] again next
+                # time. We swallow to keep the modal's flow simple;
+                # the YAML write itself logs on failure.
+                with contextlib.suppress(Exception):
+                    self._rule_added_hook([c.raw for c in self._rules])
         else:
             resolved_effect = answer
         if resolved_effect not in (AuthzEffect.ALLOW, AuthzEffect.DENY):
@@ -423,6 +473,55 @@ class RuleBasedAuthorizationProvider:
 
     async def list_rules(self) -> list[Rule]:
         return [c.raw for c in self._rules]
+
+    # -- Phase 2.1 (24d) chat-callback registration --------------------
+
+    def register_prompt_callback(
+        self,
+        callback: PromptCallback,
+        *,
+        on_rule_added: Callable[[list[Rule]], None] | None = None,
+    ) -> None:
+        """Register a chat-injected prompt resolver + rule-persist hook.
+
+        The chat lifecycle calls this once on startup (after
+        bootstrap_runtime, before the input loop) and pairs it with
+        :meth:`clear_prompt_callback` in a finally so a subsequent
+        in-process command never sees the modal surface. See
+        ``src/cli/chat.py`` for the canonical registration.
+
+        :param callback: the modal callable. Receives keyword args
+            ``(rule_id, action, target)`` and returns either an
+            :class:`AuthzEffect` or a tuple
+            ``(effect, persisted_rule)``.
+        :param on_rule_added: optional hook fired AFTER the in-memory
+            rule insert (only in the tuple-return path). Receives
+            the updated rule list as
+            ``list[Rule]`` so the hook can atomically rewrite
+            ``platform.yaml``. The chat wires this to
+            ``cli.permissions._write_back``.
+
+        Calling :meth:`register_prompt_callback` twice replaces the
+        prior registration — no implicit chaining. Production
+        chat lifecycles only ever register once per process; the
+        replace semantics are for test setups that want a fresh
+        modal across cases.
+        """
+        self._registered_prompt_callback = callback
+        self._rule_added_hook = on_rule_added
+
+    def clear_prompt_callback(self) -> None:
+        """Remove the registered modal callback + rule-added hook.
+
+        Called by the chat lifecycle in a finally so a subsequent
+        in-process ``kolsch run`` against the same authz provider
+        does not see the modal — which would either hang (no
+        modal-stdin available) or worse, ALLOW silently. This is
+        load-bearing for tests that bootstrap then exercise more
+        than one command against the same runtime instance.
+        """
+        self._registered_prompt_callback = None
+        self._rule_added_hook = None
 
     # -- Phase 2.0 live-edit API (Module API Reference §11.8.2) --------
 

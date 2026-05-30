@@ -57,6 +57,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 
+from cli._modal import ApprovalModal
 from cli._renderer import Renderer
 from cli._slash import (
     ControlSignal,
@@ -66,10 +67,14 @@ from cli._slash import (
     footer_hint_for_buffer,
     is_slash_command,
 )
+from cli.permissions import _write_back as _persist_authz_rules
 from engine import ExecutionContext
 from platform_runtime import bootstrap_runtime
+from providers import RuleBasedAuthorizationProvider
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from prompt_toolkit.input.base import Input
     from prompt_toolkit.output.base import Output
 
@@ -160,13 +165,25 @@ async def cmd_chat(
         raise RuntimeError(msg)
     thread_id = threads[0].thread_id
 
-    return await _run_input_loop(
-        prompt_session,
-        stdout=stdout,
-        runtime=runtime,
-        config=config,
-        thread_id=thread_id,
-    )
+    # Phase 2.1 / 24d — register the approval modal as the
+    # chat-surface prompt callback. Pair the registration with a
+    # finally so a subsequent in-process command (test suites,
+    # the future Python embedding API) never sees a leaked
+    # modal — which would either hang on stdin or, worse, allow
+    # silently. The clear is unconditional regardless of how the
+    # loop exited.
+    modal = ApprovalModal(stdout=stdout)
+    _install_modal_callback(runtime, modal, yaml_path=args.root / "platform.yaml")
+    try:
+        return await _run_input_loop(
+            prompt_session,
+            stdout=stdout,
+            runtime=runtime,
+            config=config,
+            thread_id=thread_id,
+        )
+    finally:
+        _clear_modal_callback(runtime)
 
 
 # ---------------------------------------------------------------------------
@@ -330,6 +347,58 @@ async def _run_input_loop(
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _install_modal_callback(
+    runtime: PlatformRuntime,
+    modal: ApprovalModal,
+    *,
+    yaml_path: Path,
+) -> None:
+    """Register the modal as the authz provider's prompt callback.
+
+    Phase 2.1 / 24d: only the chat installs the callback; non-chat
+    callers (``kolsch run``, server, tests) leave it None and the
+    provider's ``_resolve_prompt`` collapses ``prompt`` to deny
+    per Phase 2.0 §2.2.
+
+    Includes the ``on_rule_added`` hook that atomically rewrites
+    ``platform.yaml`` so a rule added via the modal survives chat
+    exit. The hook uses ``cli.permissions._write_back`` — the
+    SAME helper ``kolsch permissions add`` uses for atomic
+    rewrites; one persistence path, not one-per-callsite.
+
+    Silently no-ops if the runtime's authz isn't the rule-based
+    variant (a future custom authz variant might not support the
+    callback registration API; the modal stays installable
+    without crashing — the per-call ``prompt`` would just collapse
+    to deny, same as a non-chat caller).
+    """
+    authz = runtime.authz
+    if not isinstance(authz, RuleBasedAuthorizationProvider):
+        return
+
+    def _on_rule_added(rules: list[Any]) -> None:
+        # The hook receives a list[Rule] but is typed list[Any] to
+        # keep this module free of an authz Rule import (it's a
+        # runtime-only callback, not a typed seam).
+        _persist_authz_rules(yaml_path, rules)
+
+    authz.register_prompt_callback(modal, on_rule_added=_on_rule_added)
+
+
+def _clear_modal_callback(runtime: PlatformRuntime) -> None:
+    """Tear down the modal registration on chat exit.
+
+    Load-bearing for tests: a subsequent in-process command
+    against the same runtime instance MUST NOT see the modal.
+    Without this clear, the next ``runtime.authz.allow(...)`` from
+    a non-chat caller would invoke the modal — which would try to
+    read stdin (no TTY in tests) and hang or worse.
+    """
+    authz = runtime.authz
+    if isinstance(authz, RuleBasedAuthorizationProvider):
+        authz.clear_prompt_callback()
 
 
 def _print_banner(

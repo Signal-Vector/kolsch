@@ -72,7 +72,16 @@ async def dispatch_tool(
 
     # Step 2 — authorization. The action name is `tool.<name>` by
     # default per spec T-I1; tools can override via the decorator.
-    auth = await authz.allow(context.principal, defn.action_name)
+    #
+    # Phase 2.1 (24d) — derive the target string from the validated
+    # args so the prompt-effect path has something meaningful to
+    # show in the modal (and to match against the
+    # write-on-[a]-or-[d] suggested pattern). The provider's
+    # matcher checks `target` first, then falls back to `action`,
+    # so existing rules with action-namespace `what` patterns
+    # still fire as before — see RuleBasedAuthorizationProvider.allow.
+    target = _extract_target_from_args(validated_args)
+    auth = await authz.allow(context.principal, defn.action_name, target=target)
     if not auth.allowed:
         raise ToolUnauthorized(
             tool_name=defn.name,
@@ -114,6 +123,34 @@ async def dispatch_tool(
             tool_name=defn.name,
             error_class=type(exc).__name__,
         ) from exc
+
+
+_TARGET_ARG_PRIORITY = ("path", "command", "url")
+"""Argument names dispatch_tool looks at to derive an authz target.
+
+Phase 2.0's spec §2.3 says ``what`` "matches the tool's target
+string. For file tools the target is the resolved absolute path.
+For ``bash`` it's the command string." This list captures the
+convention: file tools use ``path``, shell tools use ``command``,
+network tools (future) use ``url``. First-hit-wins so tools that
+declare both a path and a command (none today, but possible
+later) pick a stable one.
+"""
+
+
+def _extract_target_from_args(validated_args: object) -> str | None:
+    """Return the conventional target string from a tool's args, if any.
+
+    Tools whose declared args lack ``path``/``command``/``url``
+    return None — the authz provider's matcher then falls back to
+    matching ``what`` against ``action`` (the Phase-1-compat
+    behaviour), so this is safe to call for every tool.
+    """
+    for attr in _TARGET_ARG_PRIORITY:
+        value = getattr(validated_args, attr, None)
+        if isinstance(value, str):
+            return value
+    return None
 
 
 def authz_call(
