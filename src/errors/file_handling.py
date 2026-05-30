@@ -96,3 +96,55 @@ class FileAccessPolicyLoadFailed(PlatformError):
             where=where,
             detail={"config_section": config_section, "error": error},
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 2.0 (TOOL-R5) — error-model §4.16 file.* codes
+# ---------------------------------------------------------------------------
+
+
+class FileTooLarge(PlatformError):
+    """``read_file`` refused a target exceeding ``max_bytes``."""
+
+    code = "file.too_large"
+    level = Level.RECOVERABLE
+
+    def __init__(
+        self,
+        path: str,
+        size_bytes: int,
+        max_bytes: int,
+        *,
+        where: str = "tools.builtin.read_file",
+    ) -> None:
+        super().__init__(
+            message=(
+                f"File {path!r} is {size_bytes} bytes; refusing to read "
+                f"more than max_bytes={max_bytes}"
+            ),
+            where=where,
+            detail={
+                "path": path,
+                "size_bytes": size_bytes,
+                "max_bytes": max_bytes,
+            },
+        )
+
+
+class FileNotFound(PlatformError):
+    """``read_file`` / ``list_files`` — path does not exist."""
+
+    code = "file.not_found"
+    level = Level.RECOVERABLE
+
+    def __init__(
+        self,
+        path: str,
+        *,
+        where: str = "tools.builtin.read_file",
+    ) -> None:
+        super().__init__(
+            message=f"File not found: {path!r}",
+            where=where,
+            detail={"path": path},
+        )

@@ -23,8 +23,13 @@ from errors import (
     AssetsNotFound,
     AssetsPromptLoadFailed,
     AssetsReservedBundleName,
+    AuthzDenied,
     AuthzMalformedRule,
+    AuthzPromptUnattended,
+    AuthzProtectedRule,
     AuthzRegexInvalid,
+    AuthzRuleInvalid,
+    AuthzRuleNotFound,
     BusPublishFailed,
     BusUnavailable,
     CapabilityMismatch,
@@ -40,6 +45,8 @@ from errors import (
     FileAccessInvalidFileRef,
     FileAccessPathNormalizationFailed,
     FileAccessPolicyLoadFailed,
+    FileNotFound,
+    FileTooLarge,
     Level,
     LlmAllModelsFailed,
     LlmClientInitFailed,
@@ -288,6 +295,36 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
         "model": {"provider": "openrouter", "model": "anthropic/x"},
         "positions": [1, 3],
     },
+    # 4.16 Tools & Permissions (Phase 2.0)
+    AuthzDenied: {
+        "tool": "bash",
+        "target": "rm -rf /",
+        "rule_id": "rl_abcdef12",
+    },
+    AuthzPromptUnattended: {
+        "tool": "bash",
+        "target": "rg foo",
+        "rule_id": "rl_bash_any",
+        "caller": "kolsch run",
+    },
+    AuthzRuleInvalid: {
+        "position": -1,
+        "reason": "invalid regex in `what`",
+    },
+    AuthzRuleNotFound: {
+        "rule_id": "rl_nope",
+        "available_ids": ["rl_default_deny"],
+    },
+    AuthzProtectedRule: {
+        "rule_id": "rl_default_deny",
+        "reason": "default-deny tail is removal-protected",
+    },
+    FileTooLarge: {
+        "path": "/workspace/big.bin",
+        "size_bytes": 2 * 1024 * 1024,
+        "max_bytes": 1 * 1024 * 1024,
+    },
+    FileNotFound: {"path": "/workspace/missing.txt"},
 }
 
 

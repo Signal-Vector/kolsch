@@ -18,7 +18,15 @@ from errors.assets import (
     AssetsPromptLoadFailed,
     AssetsReservedBundleName,
 )
-from errors.authz import AuthzMalformedRule, AuthzRegexInvalid
+from errors.authz import (
+    AuthzDenied,
+    AuthzMalformedRule,
+    AuthzPromptUnattended,
+    AuthzProtectedRule,
+    AuthzRegexInvalid,
+    AuthzRuleInvalid,
+    AuthzRuleNotFound,
+)
 from errors.base import (
     PlatformError,
     WrappedError,
@@ -53,6 +61,8 @@ from errors.file_handling import (
     FileAccessInvalidFileRef,
     FileAccessPathNormalizationFailed,
     FileAccessPolicyLoadFailed,
+    FileNotFound,
+    FileTooLarge,
 )
 from errors.kernel import (
     ConfigInvalid,
@@ -126,8 +136,13 @@ __all__ = [
     "AssetsNotFound",
     "AssetsPromptLoadFailed",
     "AssetsReservedBundleName",
+    "AuthzDenied",
     "AuthzMalformedRule",
+    "AuthzPromptUnattended",
+    "AuthzProtectedRule",
     "AuthzRegexInvalid",
+    "AuthzRuleInvalid",
+    "AuthzRuleNotFound",
     "BusPublishFailed",
     "BusUnavailable",
     "CapabilityMismatch",
@@ -143,6 +158,8 @@ __all__ = [
     "FileAccessInvalidFileRef",
     "FileAccessPathNormalizationFailed",
     "FileAccessPolicyLoadFailed",
+    "FileNotFound",
+    "FileTooLarge",
     "Level",
     "LlmAllModelsFailed",
     "LlmClientInitFailed",

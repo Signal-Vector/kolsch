@@ -120,9 +120,18 @@ async def test_dispatch_order_is_validate_authz_secrets_sandbox_execute(
         return {"value": args.n}
 
     class _RecordingAuthz:
-        async def allow(self, principal: str, action: str) -> Any:
+        async def allow(
+            self,
+            principal: str,
+            action: str,
+            *,
+            target: str | None = None,
+            callback: Any = None,
+        ) -> Any:
             order.append("authz")
-            return await _allow_all_authz().allow(principal, action)
+            return await _allow_all_authz().allow(
+                principal, action, target=target, callback=callback
+            )
 
         async def list_rules(self) -> list[Any]:  # pragma: no cover
             return []

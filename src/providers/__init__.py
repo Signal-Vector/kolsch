@@ -11,10 +11,15 @@ a small registry seam so future variants slot in without core changes.
 """
 
 from providers.authz import (
+    DEFAULT_DENY_RULE_ID,
+    KOLSCH_TEST_BUILD_ENV_VAR,
+    AllowAllTestAuthorizationProvider,
     AuthorizationProvider,
     AuthorizationResult,
+    AuthzEffect,
     Rule,
     RuleBasedAuthorizationProvider,
+    derive_rule_id,
     make_authorization_provider,
     register_authorization_variant,
 )
@@ -46,8 +51,12 @@ from providers.secrets import (
 )
 
 __all__ = [
+    "DEFAULT_DENY_RULE_ID",
+    "KOLSCH_TEST_BUILD_ENV_VAR",
+    "AllowAllTestAuthorizationProvider",
     "AuthorizationProvider",
     "AuthorizationResult",
+    "AuthzEffect",
     "CompactionResult",
     "DotenvSecretsProvider",
     "FilterExpression",
@@ -63,6 +72,7 @@ __all__ = [
     "RuleBasedAuthorizationProvider",
     "SandboxProvider",
     "SecretsProvider",
+    "derive_rule_id",
     "make_authorization_provider",
     "make_memory_provider",
     "make_sandbox_provider",

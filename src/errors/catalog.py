@@ -134,6 +134,18 @@ CATALOG: dict[str, Level] = {
     # taxonomy since the Error Model doesn't yet have a Warning tier
     # (flagged in Phase 1.3 Step 19 review for follow-up).
     "config.fallback_duplicate": Level.DIAGNOSTIC,
+    # ----- §4.16 Tools & Permissions (Phase 2.0, TOOL-R5) --------------
+    # Five authz.* codes for the prompt-effect dispatch and the live-
+    # edit CLI; two new file.* codes for the Phase 2.0 builtin tools
+    # (file_access.denied from §4.11 covers the access-denied surface
+    # for both Phase 1 and Phase 2.0 builtins).
+    "authz.denied": Level.RECOVERABLE,
+    "authz.prompt_unattended": Level.RECOVERABLE,
+    "authz.rule_invalid": Level.FATAL,
+    "authz.rule_not_found": Level.FATAL,
+    "authz.protected_rule": Level.FATAL,
+    "file.too_large": Level.RECOVERABLE,
+    "file.not_found": Level.RECOVERABLE,
 }
 
 
