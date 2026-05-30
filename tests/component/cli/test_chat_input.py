@@ -157,25 +157,55 @@ def test_tc_chat_18_chat_module_is_not_full_screen() -> None:
 # ===========================================================================
 
 
-async def test_run_input_loop_echoes_each_submitted_line_then_exits_on_eof() -> None:
-    """24a stub: each submitted line echoes ``you said: <text>``;
-    the loop returns 0 when stdin sends EOF (Ctrl-D). Two messages
-    + EOF here exercises the full body of ``_run_input_loop``.
+async def test_run_input_loop_routes_messages_to_engine(
+    chat_workspace: Path,
+) -> None:
+    """24c contract: each submitted non-slash line is forwarded to
+    the engine via ``execute_stream``; the renderer prints the
+    EchoLLMDriver's reply. Two messages + EOF here exercises the
+    full body of ``_run_input_loop`` AND the renderer's
+    happy-path event handling.
+
+    EchoLLMDriver returns ``"Echo: <last user message>"`` so the
+    rendered output names the user's text back to them.
     """
     import io as _io
+
+    from platform_runtime import bootstrap_runtime
+
+    runtime = await bootstrap_runtime(root=chat_workspace)
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
+    session = await runtime.store.create_session(
+        str(config.agent_id),
+        name="test-run-input-loop",
+    )
+    threads = await runtime.store.list_threads(session.session_id)
+    thread_id = threads[0].thread_id
 
     out = _io.StringIO()
     with (
         create_pipe_input() as pipe_input,
         create_app_session(input=pipe_input, output=DummyOutput()),
     ):
-        session = chat._build_prompt_session(input=pipe_input, output=DummyOutput())
+        prompt_session = chat._build_prompt_session(
+            input=pipe_input, output=DummyOutput()
+        )
         pipe_input.send_text("hello\rsecond\r")
         pipe_input.close()
-        rc = await chat._run_input_loop(session, stdout=out)
+        rc = await chat._run_input_loop(
+            prompt_session,
+            stdout=out,
+            runtime=runtime,
+            config=config,
+            thread_id=thread_id,
+        )
     assert rc == 0
-    assert "you said: hello" in out.getvalue()
-    assert "you said: second" in out.getvalue()
+    rendered = out.getvalue()
+    # Echo prefix from the default-tier EchoLLMDriver.
+    assert "Echo:" in rendered
+    # The user's submissions surfaced in the output as the "You: " echo.
+    assert "You: hello" in rendered
+    assert "You: second" in rendered
 
 
 def test_print_banner_format_matches_patch_2_1_sketch() -> None:

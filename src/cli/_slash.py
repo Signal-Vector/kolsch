@@ -28,6 +28,7 @@ Patch sections:
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, TextIO
@@ -39,6 +40,10 @@ if TYPE_CHECKING:
 
     from prompt_toolkit.completion import CompleteEvent
     from prompt_toolkit.document import Document
+
+    from providers import AuthorizationProvider
+    from providers.authz import Rule
+    from schemas import ResolvedAgentConfig
 
 
 # ---------------------------------------------------------------------------
@@ -82,13 +87,42 @@ class SlashContext:
 
     Kept narrow on purpose — handlers are chat-local operations
     per patch §5; they MUST NOT reach into runtime state or
-    emit events except through the documented channels. The
-    24b stub set (``/help``, ``/exit``, ``/clear``) only touches
-    ``stdout``; richer fields land as later steps grow.
+    emit events except through the documented channels.
+
+    24b ships the field set as just ``stdout``; 24c widens it for
+    ``/tools`` (needs the agent config + an authz provider) and
+    keeps the read-only-only invariant: every field added so far
+    is a **lookup surface**, never a write seam. Specifically: no
+    store, no event bus, no engine handle. A handler that wanted
+    to mutate the session would need a store reference — and the
+    context structurally doesn't carry one. That's what makes the
+    chat patch §5.1 "slash commands run when input has the slash
+    prefix" claim load-bearing rather than a convention.
     """
 
     stdout: TextIO
     """Where command output writes."""
+
+    agent_config: ResolvedAgentConfig | None = None
+    """The resolved config for the agent the chat is talking to.
+
+    Optional so the simple commands (``/help``, ``/exit``,
+    ``/clear``) work in tests that construct a ``SlashContext``
+    by hand. ``/tools`` (24c) requires this field — its handler
+    raises a clear error if it's None."""
+
+    authz: AuthorizationProvider | None = None
+    """The runtime's :class:`AuthorizationProvider`.
+
+    ``/tools`` (24c) walks its rule list to surface which
+    rule governs each of the agent's tools. The patch §5 row 7
+    "+ the rule chain currently governing it" requirement maps
+    onto :meth:`AuthorizationProvider.list_rules`."""
+
+    agent_name: str | None = None
+    """Pretty-printable agent name for command output (``/tools``
+    headers, etc.). Defaults to the agent's ``name`` field;
+    None signals "use a fallback" so tests stay terse."""
 
 
 # ---------------------------------------------------------------------------
@@ -183,6 +217,60 @@ async def _handler_exit(arg_text: str, ctx: SlashContext) -> ControlSignal:
     return ControlSignal.EXIT
 
 
+async def _handler_tools(arg_text: str, ctx: SlashContext) -> ControlSignal:
+    """``/tools`` — list the tools this agent can call + their governing rule.
+
+    Patch §5 row 7. Reads the agent's tools from
+    ``ctx.agent_config.subsystems["tools"].config`` (the same
+    declaration the engine reads at pre-flight), then walks
+    ``ctx.authz.list_rules()`` and surfaces the first rule whose
+    ``(who, what)`` regexes match the tool's
+    ``(principal, action)`` pair.
+
+    Principal at tool dispatch time is ``agent.<agent_id>`` per
+    agent-engine-contract §1.8; action is ``tool.<tool_name>``
+    per the Tools subsystem's authz dispatch contract. Matching
+    uses ``re.fullmatch`` to mirror the authz provider's
+    ``A-I1`` invariant — so what ``/tools`` shows IS what the
+    runtime would resolve at dispatch.
+
+    Tools the agent does NOT have access to are NOT listed. The
+    spec is emphatic about this (TC-CHAT-12 pins it as part of
+    the acceptance criterion).
+    """
+    _ = arg_text
+    config = ctx.agent_config
+    if config is None:
+        ctx.stdout.write(
+            "/tools: no agent context available.\n"
+            "(this is a chat-runtime invariant — please report.)\n",
+        )
+        return ControlSignal.CONTINUE
+
+    tool_names = _tools_for_agent(config)
+    if not tool_names:
+        ctx.stdout.write(
+            "no tools configured for this agent "
+            "(subsystems.tools is empty or unset).\n",
+        )
+        return ControlSignal.CONTINUE
+
+    rules: list[Rule] = []
+    if ctx.authz is not None:
+        rules = await ctx.authz.list_rules()
+    principal = f"agent.{config.agent_id}"
+
+    ctx.stdout.write("tools available to this agent:\n")
+    for name in tool_names:
+        rule = _governing_rule(rules, principal=principal, tool_name=name)
+        if rule is None:
+            descriptor = "(no matching rule — default deny)"
+        else:
+            descriptor = f"{rule.id} ({rule.effect})"
+        ctx.stdout.write(f"  {name:<20}  {descriptor}\n")
+    return ControlSignal.CONTINUE
+
+
 async def _handler_clear(arg_text: str, ctx: SlashContext) -> ControlSignal:
     """``/clear`` — clear visible scrollback; session + event log untouched.
 
@@ -267,8 +355,7 @@ COMMAND_REGISTRY: dict[str, SlashCommand] = {
         name="/tools",
         description="list tools available to this agent",
         usage="/tools   list this agent's tools + the rules governing each",
-        handler=None,
-        placeholder_step="24c",
+        handler=_handler_tools,
     ),
     "/session": SlashCommand(
         name="/session",
@@ -424,6 +511,84 @@ _DEFAULT_FOOTER_HINT = (
 )
 """Idle hint — shown when the input is empty or doesn't start
 with ``/``. Patch §5.4 + §2.1."""
+
+
+# ---------------------------------------------------------------------------
+# /tools helpers — kept module-private so tests can exercise them directly
+# ---------------------------------------------------------------------------
+
+
+def _tools_for_agent(config: ResolvedAgentConfig) -> list[str]:
+    """Return the tool names a ``ResolvedAgentConfig`` enables.
+
+    Reads from ``config.subsystems["tools"].config`` — the same
+    structure the engine reads at pre-flight step 11
+    (``_register_tools_with_subsystem``). Two flavours:
+
+    - ``builtin: [name, ...]`` — Phase-1-era platform builtins.
+      Used by older agent configs; no live shippable agent today
+      relies on it, but the helper handles both shapes.
+    - ``declared: [{ref: "<bundle>/tools/<name>"}, ...]`` — the
+      file-IS-the-tool path the helper agent uses. The shipped
+      starter bundle declares four refs this way.
+
+    Returns names in the order the config lists them so the
+    ``/tools`` output is deterministic.
+    """
+    sub = config.subsystems.get("tools")
+    if sub is None:
+        return []
+    body = sub.config or {}
+    names: list[str] = []
+    for raw in body.get("builtin") or []:
+        if isinstance(raw, str):
+            names.append(raw)
+    for raw in body.get("declared") or []:
+        if isinstance(raw, dict):
+            ref = str(raw.get("ref", ""))
+            # Tool name is the path's final segment ("kolsch/tools/read_file"
+            # → "read_file"). Matches the Tools subsystem's discovery rule.
+            if ref:
+                names.append(ref.rpartition("/")[2] or ref)
+        elif isinstance(raw, str):
+            names.append(raw.rpartition("/")[2] or raw)
+    return names
+
+
+def _governing_rule(
+    rules: list[Rule],
+    *,
+    principal: str,
+    tool_name: str,
+) -> Rule | None:
+    """First-match-wins rule lookup mirroring the authz provider.
+
+    The authz provider's ``allow`` uses ``re.fullmatch`` on both
+    ``who`` and ``what`` (A-I1). This helper mirrors that exactly
+    so ``/tools`` shows the SAME rule the runtime would resolve at
+    dispatch time — no divergence.
+
+    Action shape per agent-engine-contract / tools dispatch:
+    ``tool.<name>``. Principal at tool dispatch is
+    ``agent.<agent_id>`` (§1.8).
+
+    Returns ``None`` when no rule matches — the caller renders
+    that as "(default deny)" because the authz provider's
+    A-I3 invariant is default-deny when no rule matches.
+    """
+    action = f"tool.{tool_name}"
+    for rule in rules:
+        try:
+            if re.fullmatch(rule.who, principal) and re.fullmatch(
+                rule.what,
+                action,
+            ):
+                return rule
+        except re.error:
+            # A malformed regex would have failed at provider load
+            # time; defensive only — never raise out of /tools.
+            continue
+    return None
 
 
 def footer_hint_for_buffer(buffer_text: str) -> str:

@@ -36,8 +36,11 @@ from cli._slash import (
     footer_hint_for_buffer,
     is_slash_command,
 )
+from platform_runtime import bootstrap_runtime
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     import pytest
 
 
@@ -68,14 +71,15 @@ def test_registry_exit_command_aliases_quit() -> None:
     assert "/quit" in COMMAND_REGISTRY["/exit"].aliases
 
 
-def test_registry_real_handlers_are_help_exit_clear_only() -> None:
-    """24b ships real handlers for /help, /exit (+ /quit alias),
-    /clear; the rest are placeholders with a documented step
-    where the handler lands."""
+def test_registry_real_handlers_match_phase_2_1_step_24c_set() -> None:
+    """24c lights up ``/tools`` on top of 24b's ``/help``, ``/exit``
+    (+ ``/quit`` alias), ``/clear``. The remaining four (/new,
+    /model, /thinking, /session) stay placeholders for their
+    respective steps."""
     implemented = {
         name for name, cmd in COMMAND_REGISTRY.items() if cmd.handler is not None
     }
-    assert implemented == {"/help", "/exit", "/clear"}
+    assert implemented == {"/help", "/exit", "/clear", "/tools"}
     for name, cmd in COMMAND_REGISTRY.items():
         if cmd.handler is None:
             assert cmd.placeholder_step is not None, (
@@ -292,21 +296,47 @@ def test_footer_hint_unknown_command_falls_back_to_default() -> None:
 # ===========================================================================
 
 
-async def test_tc_chat_05_input_loop_exits_on_slash_exit() -> None:
+async def test_tc_chat_05_input_loop_exits_on_slash_exit(
+    chat_workspace: Path,
+) -> None:
     """TC-CHAT-05: ``/exit`` submitted to the input loop returns 0
     (and the input loop terminates — the subprocess smoke in
     test_chat_smoke.py exercises the same shape end-to-end via
-    the CLI entry point in a later refresh)."""
+    the CLI entry point).
+
+    24c: ``_run_input_loop`` now requires runtime, config, and
+    thread_id (the engine wiring lands here). Bootstrap a real
+    runtime against the session-scoped chat_workspace fixture so
+    the input loop has something to wire to. The engine never
+    runs in this test because the user input is a slash command,
+    not a message.
+    """
     out = _io.StringIO()
+    runtime = await bootstrap_runtime(root=chat_workspace)
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
+    session = await runtime.store.create_session(
+        str(config.agent_id),
+        name="tc-chat-05",
+    )
+    threads = await runtime.store.list_threads(session.session_id)
+    thread_id = threads[0].thread_id
     with (
         create_pipe_input() as pipe_input,
         create_app_session(input=pipe_input, output=DummyOutput()),
     ):
-        session = chat._build_prompt_session(input=pipe_input, output=DummyOutput())
+        prompt_session = chat._build_prompt_session(
+            input=pipe_input, output=DummyOutput()
+        )
         # Feed "/exit" + Enter — the loop dispatches the slash
         # command, the handler returns EXIT, the loop exits with 0.
         pipe_input.send_text("/exit\r")
-        rc = await chat._run_input_loop(session, stdout=out)
+        rc = await chat._run_input_loop(
+            prompt_session,
+            stdout=out,
+            runtime=runtime,
+            config=config,
+            thread_id=thread_id,
+        )
     assert rc == 0
 
 
@@ -323,30 +353,167 @@ async def test_tc_chat_06_clear_does_not_touch_session_or_event_log(
     The handler emits ANSI clear sequences to stdout but performs
     no I/O against the store or event log. The test asserts the
     contract structurally: the dispatch is pure stdout, and the
-    handler signature receives only a ``SlashContext`` (which
-    carries ``stdout`` and nothing else).
+    handler signature receives only a ``SlashContext`` whose
+    fields are READ-ONLY lookups — no store, no event bus, no
+    engine reference.
 
-    Adjacent in this step is the simpler invariant:
-    ``ctx`` has NO store / runtime / event-bus reference, so a
-    handler couldn't side-effect those even if it tried.
+    24c widens the field set (stdout / agent_config / authz /
+    agent_name) for ``/tools``; the read-only invariant still
+    holds. A handler that wanted to mutate the session would need
+    a store reference — which isn't on the context.
     """
     _ = tmp_path_factory  # fixture present for symmetry with the smoke layer
     out = _io.StringIO()
     ctx = SlashContext(stdout=out)
-    # Belt-and-braces: SlashContext only carries `stdout`. A
-    # handler that wanted to mutate the session would need a
-    # store reference — which isn't on the context. The contract
-    # is what TC-CHAT-06 verifies; the runtime invariant is the
-    # context's narrow shape.
+    # SlashContext exposes ONLY read-only lookups in 24c. The
+    # field set is what we lock here; adding a write seam (store,
+    # event bus, engine) would widen the surface a handler can
+    # touch and needs a CHAT-R review.
     fields = set(ctx.__dataclass_fields__.keys())
-    assert fields == {"stdout"}, (
-        f"SlashContext should only expose stdout in 24b; got {fields}. "
-        f"Adding fields (e.g., a store reference) widens the surface a "
-        f"handler could touch — needs a CHAT-R review."
+    assert fields == {"stdout", "agent_config", "authz", "agent_name"}, (
+        f"SlashContext shape changed unexpectedly; got {fields}. "
+        f"Read-only lookups only — no store / engine / event-bus "
+        f"references. Needs a CHAT-R review before widening."
     )
+    # Defaulted fields stay None when the caller doesn't supply
+    # them (the simple handlers shouldn't depend on them).
+    assert ctx.agent_config is None
+    assert ctx.authz is None
+    assert ctx.agent_name is None
     signal = await dispatch_slash("/clear", ctx)
     assert signal is ControlSignal.CONTINUE
     # The handler wrote the ANSI clear sequence. Nothing else
     # happened.
     rendered = out.getvalue()
     assert "\x1b[3J" in rendered  # scrollback clear
+
+
+# ===========================================================================
+# TC-CHAT-12 — /tools lists exactly the agent's tools (and no others)
+# ===========================================================================
+
+
+async def test_tc_chat_12_tools_lists_helper_agents_four_declared_tools(
+    chat_workspace: Path,
+) -> None:
+    """TC-CHAT-12: ``/tools`` lists exactly the tools the agent has
+    access to. The shipped ``kolsch/agents/helper`` declares four
+    refs in its ``subsystems.tools.config.declared`` block
+    (``read_file``, ``write_file``, ``list_files``, ``bash``); the
+    output names all four and contains none beyond.
+
+    The rule chain column shows the rule_id that governs each
+    tool. The helper agent in a freshly-initialised workspace
+    runs against the default ``rl_default_deny`` tail — the
+    column says "default deny" because no rule earlier in the
+    chain matches ``tool.<name>`` for the helper. (A real
+    deployment that ran ``kolsch permissions add`` would surface
+    that rule's id instead — the lookup mirrors authz's
+    first-match-wins.)
+    """
+    runtime = await bootstrap_runtime(root=chat_workspace)
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
+    out = _io.StringIO()
+    ctx = SlashContext(
+        stdout=out,
+        agent_config=config,
+        authz=runtime.authz,
+        agent_name=config.name,
+    )
+    signal = await dispatch_slash("/tools", ctx)
+    assert signal is ControlSignal.CONTINUE
+    rendered = out.getvalue()
+    # All four declared tools are listed.
+    assert "read_file" in rendered
+    assert "write_file" in rendered
+    assert "list_files" in rendered
+    assert "bash" in rendered
+    # And nothing else: a builtin like "search" that the agent
+    # does NOT declare must not appear.
+    assert "search" not in rendered
+    # The output identifies itself as a tools listing.
+    assert "tools available" in rendered.lower()
+
+
+async def test_tools_handler_without_agent_config_prints_polite_error() -> None:
+    """When ``ctx.agent_config`` is None (test-context construction
+    without runtime), ``/tools`` prints a polite error rather than
+    crashing. Defensive — the chat itself always populates the
+    field, but keeping the defensive path tested protects against
+    future signature drift."""
+    out = _io.StringIO()
+    ctx = SlashContext(stdout=out)
+    signal = await dispatch_slash("/tools", ctx)
+    assert signal is ControlSignal.CONTINUE
+    assert "no agent context" in out.getvalue().lower()
+
+
+async def test_tools_handler_with_empty_subsystems_prints_empty_note() -> None:
+    """An agent with no ``tools`` subsystem prints a one-line
+    "no tools configured" note rather than an empty listing.
+    Exercises the early-return branch in the handler.
+    """
+    from schemas import (
+        AgentId,
+        IOSpec,
+        ModelSpec,
+        ResolvedAgentConfig,
+    )
+
+    bare = ResolvedAgentConfig(
+        schema_version="0.1",
+        assembly_version="1",
+        agent_id=AgentId("ag_bare"),
+        name="bare",
+        description="agent with no tools",
+        model=ModelSpec(provider="fake", model="fake-model"),
+        prompt="...",
+        io=IOSpec(mode="conversational"),
+    )
+    out = _io.StringIO()
+    ctx = SlashContext(stdout=out, agent_config=bare)
+    signal = await dispatch_slash("/tools", ctx)
+    assert signal is ControlSignal.CONTINUE
+    assert "no tools" in out.getvalue().lower()
+
+
+async def test_tools_handler_surfaces_matching_rule_id(
+    chat_workspace: Path,
+) -> None:
+    """When an authz rule's ``(who, what)`` matches the agent's
+    ``(principal, tool.<name>)`` pair, ``/tools`` shows that
+    rule's id and effect. Mirrors authz first-match-wins.
+    """
+    from providers import RuleBasedAuthorizationProvider
+
+    runtime = await bootstrap_runtime(root=chat_workspace)
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
+    out = _io.StringIO()
+    # Custom authz with a rule that matches every agent + every
+    # tool — first match wins, so /tools surfaces this rule's id.
+    custom_authz = RuleBasedAuthorizationProvider(
+        config={
+            "rules": [
+                {
+                    "who": "agent\\..*",
+                    "what": "tool\\..*",
+                    "effect": "allow",
+                },
+                {"who": ".*", "what": ".*", "effect": "deny"},
+            ],
+        },
+    )
+    rules = await custom_authz.list_rules()
+    matching_rule = next(r for r in rules if r.effect == "allow")
+    ctx = SlashContext(
+        stdout=out,
+        agent_config=config,
+        authz=custom_authz,
+        agent_name=config.name,
+    )
+    signal = await dispatch_slash("/tools", ctx)
+    assert signal is ControlSignal.CONTINUE
+    rendered = out.getvalue()
+    # Every tool row carries the same rule (it's the first match).
+    assert matching_rule.id in rendered
+    assert "(allow)" in rendered

@@ -1,9 +1,12 @@
 """``kolsch chat`` — Phase 2.1 streaming REPL.
 
-Step 24a scaffold: the command exists, the input loop works
-correctly, and the no-full-screen architectural guard is in
-place. No engine integration, no slash commands, no renderer —
-those land in 24b, 24c, 24d.
+Step 24a scaffolded the input loop + the no-full-screen guard.
+Step 24b added the slash-command framework. Step 24c (this layer)
+replaces the echo stub with **real engine integration**: each user
+submission becomes an ``ExecutionContext`` whose ``execute_stream``
+events feed the :class:`cli._renderer.Renderer`. The renderer is a
+pure consumer (CHAT-R9) — every visible block traces back to one
+event the engine emitted.
 
 Architectural commitment (patch §2.4): the chat MUST stay in
 prompt_toolkit's non-full-screen idiom. Native terminal scrolling
@@ -54,6 +57,7 @@ from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
 from prompt_toolkit.key_binding import KeyBindings
 
+from cli._renderer import Renderer
 from cli._slash import (
     ControlSignal,
     SlashCompleter,
@@ -62,11 +66,15 @@ from cli._slash import (
     footer_hint_for_buffer,
     is_slash_command,
 )
+from engine import ExecutionContext
 from platform_runtime import bootstrap_runtime
 
 if TYPE_CHECKING:
     from prompt_toolkit.input.base import Input
     from prompt_toolkit.output.base import Output
+
+    from platform_runtime import PlatformRuntime
+    from schemas import ResolvedAgentConfig, ThreadId
 
 
 # ---------------------------------------------------------------------------
@@ -142,7 +150,23 @@ async def cmd_chat(
         input=prompt_input,
         output=prompt_output,
     )
-    return await _run_input_loop(prompt_session, stdout=stdout)
+    # Phase 2.1 / 24a continues to support the threads[0] convention
+    # the FakeFramework + Phase 1 store wires up at create_session
+    # time. ``--session`` resume (24e) replaces this lookup with a
+    # by-id fetch.
+    threads = await runtime.store.list_threads(session.session_id)
+    if not threads:
+        msg = f"created session {session.session_id} has no threads"
+        raise RuntimeError(msg)
+    thread_id = threads[0].thread_id
+
+    return await _run_input_loop(
+        prompt_session,
+        stdout=stdout,
+        runtime=runtime,
+        config=config,
+        thread_id=thread_id,
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -244,19 +268,33 @@ def _build_key_bindings() -> KeyBindings:
     return kb
 
 
-async def _run_input_loop(prompt_session: PromptSession[str], *, stdout: TextIO) -> int:
+async def _run_input_loop(
+    prompt_session: PromptSession[str],
+    *,
+    stdout: TextIO,
+    runtime: PlatformRuntime,
+    config: ResolvedAgentConfig,
+    thread_id: ThreadId,
+) -> int:
     """Drive the prompt_session in a loop until EOF or ``/exit``.
 
     Submitted text starting with ``/`` is dispatched as a slash
-    command (24b — see ``cli._slash``). Anything else echoes as
-    ``you said: <text>`` for now; the renderer + engine
-    integration replace that stub in 24c.
+    command (``cli._slash``). Anything else is forwarded to the
+    engine: build an :class:`ExecutionContext` with the user's
+    content as the trigger, then feed the resulting event stream
+    to a fresh :class:`Renderer` per exchange (patch §3 — "the
+    renderer's only state is the current exchange's block list").
 
-    Ctrl-D / EOF returns exit code 0. Ctrl-C clears the current
-    input and continues (24c wires it to stream cancellation once
-    streaming exists).
+    Ctrl-D / EOF returns exit code 0. Ctrl-C currently clears the
+    current input and continues — cancellation-during-streaming
+    arrives in a later step (patch §6.1).
     """
-    slash_ctx = SlashContext(stdout=stdout)
+    slash_ctx = SlashContext(
+        stdout=stdout,
+        agent_config=config,
+        authz=runtime.authz,
+        agent_name=config.name,
+    )
     while True:
         try:
             text = await prompt_session.prompt_async("You: ")
@@ -272,10 +310,21 @@ async def _run_input_loop(prompt_session: PromptSession[str], *, stdout: TextIO)
                 return 0
             # CONTINUE / NEW_SESSION / RELOAD all return to the
             # prompt; NEW_SESSION + RELOAD get richer behaviour
-            # in 24c / 24e.
+            # in later steps.
             continue
-        stdout.write(f"you said: {text}\n")
+        # Echo the user's message ourselves so it appears with the
+        # patch §2.2 "You: " prefix. The user.message event the
+        # engine emits is a redundant confirmation per patch §3
+        # row 2; the renderer treats it as a no-op so we don't
+        # double-print.
+        stdout.write(f"You: {text}\n")
         stdout.flush()
+        ctx = ExecutionContext(
+            thread_id=thread_id,
+            trigger={"kind": "user_message", "content": text},
+        )
+        renderer = Renderer(stdout=stdout, agent_name=config.name)
+        await renderer.render(runtime.engine.execute_stream(config, ctx))
 
 
 # ---------------------------------------------------------------------------
