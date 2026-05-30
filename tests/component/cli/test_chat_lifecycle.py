@@ -140,27 +140,74 @@ async def test_tc_chat_11_model_switches_mid_session(
     chat_workspace: Path,
 ) -> None:
     """TC-CHAT-11: ``/model <ref>`` updates ``state.config.model``
-    in place. The next exchange's model.request will carry the
-    new model (engine reads ``state.config`` per call).
+    in place. The next exchange's ``model.request`` event carries
+    the new model in its ``data.model`` field.
+
+    Per escalation E-2.1-001 (resolution: ship-as-(c)), the
+    chat does NOT emit a ``session.model_overridden`` event —
+    auditability flows through ``model.request``. The two
+    assertions in this test together pin that contract:
+      (1) the next ``model.request`` reflects the override, AND
+      (2) NO ``session.*`` event is appended.
     """
+    from engine import ExecutionContext
+
     state, runtime = await _build_state(chat_workspace)
     original_model = state.config.model
 
     out = _io.StringIO()
-    ctx = SlashContext(
+    ctx_slash = SlashContext(
         stdout=out,
         agent_config=state.config,
         authz=runtime.authz,
         agent_name=state.config.name,
         state=state,
     )
-    signal = await dispatch_slash("/model anthropic/claude-haiku-4-5", ctx)
+    signal = await dispatch_slash("/model anthropic/claude-haiku-4-5", ctx_slash)
     assert signal is ControlSignal.CONTINUE
     assert state.model_override is not None
     assert state.config.model.provider == "anthropic"
     assert state.config.model.model == "claude-haiku-4-5"
     assert state.config.model != original_model
     assert "model set to anthropic/claude-haiku-4-5" in out.getvalue()
+
+    # Drive an exchange so model.request appears on the JSONL.
+    ctx = ExecutionContext(
+        thread_id=state.thread_id,
+        trigger={"kind": "user_message", "content": "ping"},
+    )
+    async for _ in runtime.engine.execute_stream(state.config, ctx):
+        pass
+
+    events = [e async for e in runtime.store.read_path_to_leaf(state.thread_id)]
+
+    # (1) The model.request carries the override per E-2.1-001's
+    # "auditable via model.request.data.model on the next exchange".
+    model_requests = [e for e in events if e.type == EventType.MODEL_REQUEST]
+    assert len(model_requests) >= 1, "expected at least one model.request event"
+    captured_model = model_requests[-1].data.get("model") or {}
+    assert captured_model.get("provider") == "anthropic"
+    assert captured_model.get("model") == "claude-haiku-4-5"
+
+    # (2) No session.* event was appended — E-2.1-001 ship-as-(c).
+    # I1 (engine is sole writer) stays intact; the chat-side
+    # /model never wrote to the log. A regression that adds a
+    # chat-emitted session.model_overridden event would surface
+    # here as a session.* type on the leaf path.
+    session_events = [
+        e for e in events if str(e.type).startswith("session.")
+    ]
+    # session.opened is the only event with a "session." prefix
+    # the store legitimately emits (at create_session time);
+    # anything else would be a regression of E-2.1-001's
+    # "JSONL stays clean" property.
+    forbidden = [e for e in session_events if str(e.type) != "session.opened"]
+    assert forbidden == [], (
+        f"E-2.1-001 violation: chat appended {[e.type for e in forbidden]} "
+        f"to the session log; /model is supposed to be auditable via "
+        f"model.request only (no session.* events). See "
+        f"phase2.1-chat-specs.md §11 open item 7."
+    )
 
 
 async def test_tc_chat_11_model_bare_prints_current_model(
@@ -243,15 +290,56 @@ async def test_tc_chat_14_thinking_on_then_off_toggles_flag(
 async def test_tc_chat_14_thinking_budget_sets_value(
     chat_workspace: Path,
 ) -> None:
-    """Patch §5.2 row 4: /thinking budget <n> sets budget; the
-    "may not honor it" note covers the engine's no-reasoning case."""
-    state, _ = await _build_state(chat_workspace)
+    """Patch §5.2 row 4: ``/thinking budget <n>`` sets the
+    session-local budget; the "may not honor it" note covers
+    the engine's no-reasoning case.
+
+    Per escalation E-2.1-001 (resolution: ship-as-(c)), the
+    chat does NOT emit a ``session.thinking_budget_set`` event.
+    Auditability flows through the model.request the connector
+    echoes the budget into (when honoring) — under the
+    EchoLLMDriver the budget is silently ignored, so the
+    user-facing "may not honor it" message IS the audit signal
+    per the revised §5.2 row.
+
+    This test asserts both: (1) the user-facing note printed,
+    AND (2) no ``session.*`` event was appended to the log.
+    """
+    from engine import ExecutionContext
+
+    state, runtime = await _build_state(chat_workspace)
     out = _io.StringIO()
-    ctx = SlashContext(stdout=out, state=state)
-    await dispatch_slash("/thinking budget 1024", ctx)
+    ctx_slash = SlashContext(stdout=out, state=state)
+    await dispatch_slash("/thinking budget 1024", ctx_slash)
     assert state.thinking_budget == 1024
     assert "1024" in out.getvalue()
+    # (1) The "not honored" note — under EchoLLMDriver the
+    # connector ignores budget, so this is the audit signal.
     assert "may not honor it" in out.getvalue()
+
+    # Drive an exchange so the log fills with model.request +
+    # related events; then assert no session.* event landed.
+    ctx = ExecutionContext(
+        thread_id=state.thread_id,
+        trigger={"kind": "user_message", "content": "ping"},
+    )
+    async for _ in runtime.engine.execute_stream(state.config, ctx):
+        pass
+
+    events = [e async for e in runtime.store.read_path_to_leaf(state.thread_id)]
+    session_events = [
+        e for e in events if str(e.type).startswith("session.")
+    ]
+    forbidden = [e for e in session_events if str(e.type) != "session.opened"]
+    # (2) E-2.1-001 ship-as-(c): the JSONL stays clean.
+    assert forbidden == [], (
+        f"E-2.1-001 violation: /thinking budget appended "
+        f"{[e.type for e in forbidden]} to the session log; the "
+        f"revised §5.2 says budget is auditable via the "
+        f"connector's model.request echo or the 'not honored' note "
+        f"— never via a chat-emitted session.* event. See "
+        f"phase2.1-chat-specs.md §11 open item 7."
+    )
 
 
 async def test_tc_chat_14_thinking_budget_invalid_int(
