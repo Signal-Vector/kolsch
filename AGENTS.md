@@ -169,6 +169,21 @@ These are non-negotiable. Violating them blocks merges.
   `kolsch permissions remove` is rejected (the runtime
   bootstrap refuses to load a rule set without the tail; the
   CLI raises `authz.protected_rule`). *(Phase 2.0, TOOL-R10.)*
+- **Every new CLI command or subcommand requires a smoke test
+  in `tests/component/test_cli_smoke.py`.** No exceptions. The
+  smoke test invokes the CLI in a fresh subprocess
+  (`subprocess.run([sys.executable, "-m", "cli", ...])`) — NOT
+  via in-process `cli.main(argv)` — because the point is to
+  catch the class of parser-to-dispatcher wiring bugs that only
+  surface when the CLI is actually spawned (the
+  `bug-sessions-namespace-attr-error.md` crash being exhibit A).
+  Coverage is mechanically enforced by
+  `test_smoke_coverage_enumerates_every_top_level_subcommand`:
+  add a command to `cli.main._DISPATCH` without adding it to the
+  smoke module's `_TOP_LEVEL_SUBCOMMANDS` tuple and the test
+  refuses to pass. The catalog reference is
+  `docs/process/test-catalog.md` Part 11.6.1. *(Bug-sessions-
+  namespace-attr-error.md acceptance criterion 7.)*
 
 ---
 

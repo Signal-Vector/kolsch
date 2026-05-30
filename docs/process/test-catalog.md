@@ -1492,6 +1492,135 @@ bus + EchoLLM + FakeFramework).
 
 ---
 
+## Part 11.6.1 — CLI smoke layer (TC-CLI-SMOKE-*) — bug-sessions-namespace-attr-error.md
+
+*(Added after the user-reported bug where `kolsch sessions` with no
+op crashed with `AttributeError` because the dispatcher fell through
+to a handler reading attributes from a sibling subparser. The
+systemic gap: TC-CLI-* covered happy paths but no smoke layer
+verified the parser-to-dispatcher wiring for every reachable entry
+point.)*
+
+**Policy (HARD RULE — also enshrined in `AGENTS.md`):** every new
+CLI command or subcommand added in any future phase MUST come with
+a smoke test in `tests/component/test_cli_smoke.py`. No exceptions.
+A coverage-gate test (`test_smoke_coverage_enumerates_every_top_
+level_subcommand`) refuses to pass when `_DISPATCH` lists a command
+that isn't in the smoke module's `_TOP_LEVEL_SUBCOMMANDS` tuple,
+so the rule is mechanically enforced — not just a convention.
+
+**Invocation discipline:** smoke tests use
+`subprocess.run([sys.executable, "-m", "cli", ...])` — NOT
+in-process `cli.main(argv)`. The point is to catch parser-to-
+dispatcher wiring bugs that only surface when the CLI is actually
+spawned: `sys.exit` handling, stderr formatting, the
+`__main__` entry point. In-process invocation would miss exactly
+the class of bug the smoke layer is meant to catch (this bug being
+exhibit A).
+
+**Fixture discipline:** a session-scoped `_initialized_workspace`
+fixture runs `kolsch setup --non-interactive` ONCE per test session
+and is reused across every workspace-needing smoke test. No real
+network — `KOLSCH_PROVIDER` / `KOLSCH_PROVIDER_KEY` are scrubbed
+from the subprocess env so setup falls back to the built-in fake
+LLM (the same path the first-agent tutorial uses).
+
+**TC-CLI-SMOKE-01: top-level `--help` exits 0**
+- Layer: component (subprocess)
+- Action: `kolsch --help`.
+- Expected: exit 0; non-empty stdout containing "kolsch"; no
+  traceback in stderr.
+
+**TC-CLI-SMOKE-02: every subcommand's `--help` exits 0**
+- Layer: component (subprocess, parametrized over every top-level
+  subcommand: `run`, `sessions`, `reconstruct`, `server`, `setup`,
+  `connect`, `disconnect`, `providers`, `models`, `refresh`,
+  `permissions`)
+- Action: `kolsch <subcommand> --help`.
+- Expected: exit 0; non-empty stdout; no traceback.
+
+**TC-CLI-SMOKE-03: no-arg invocation prints help, exits 1**
+- Layer: component (subprocess)
+- Action: `kolsch` (no arguments).
+- Expected: exit 1; usage info in stdout; no traceback.
+
+**TC-CLI-SMOKE-04: unknown subcommand exits non-zero cleanly**
+- Layer: component (subprocess)
+- Action: `kolsch not-a-real-command`.
+- Expected: exit non-zero; no traceback. (argparse handles this;
+  smoke pins the no-crash property.)
+
+**TC-CLI-SMOKE-05: `sessions` (no op) prints help, exits non-zero**
+- Layer: component (subprocess)
+- Setup: an initialized workspace (the fixture).
+- Action: `kolsch sessions` (no operation).
+- Expected: exit non-zero; help text mentions all four ops
+  (`list`, `events`, `update`, `delete`); no `AttributeError` /
+  `Traceback` in stderr. **This is the bug regression** —
+  verifies the H1 fix against future regressions.
+
+**TC-CLI-SMOKE-06: `permissions` (no op) prints help, exits non-zero**
+- Layer: component (subprocess)
+- Setup: an initialized workspace.
+- Action: `kolsch permissions` (no operation).
+- Expected: exit non-zero; help text mentions all four ops
+  (`list`, `add`, `remove`, `show`); no traceback. (Parity with
+  TC-CLI-SMOKE-05; before the fix, this returned an awkward
+  `"unknown permissions op None"` message — not a crash, but
+  inconsistent with the new uniform pattern.)
+
+**TC-CLI-SMOKE-07..13: workspace-needing commands run cleanly**
+- Layer: component (subprocess)
+- Setup: initialized workspace.
+- Actions:
+  - 07: `kolsch sessions list` → exit 0
+  - 08: `kolsch sessions list --starred --archived --limit 5`
+    → exit 0 (flag combination)
+  - 09: `kolsch providers` → exit 0 (empty connected set)
+  - 10: `kolsch reconstruct` → exit 0
+  - 11: `kolsch models` → exit 0 (no providers)
+  - 12: `kolsch refresh` → exit 0 OR 1 (legitimately exits 1 when
+    nothing's connected; smoke pins no-traceback only)
+  - 13: `kolsch permissions list` → exit 0; `rl_default_deny` in
+    stdout (Phase 2.0 default rule)
+- Expected: no traceback in any of them.
+
+**TC-CLI-SMOKE-14: missing-workspace friendly message**
+- Layer: component (subprocess)
+- Setup: an empty tmp_path (no `platform.yaml`).
+- Action: `kolsch sessions list` against the empty path.
+- Expected: exit 3 (the Phase 1.2 workspace-not-initialized exit
+  code); stderr contains "No Kolsch workspace at" + "kolsch setup";
+  no traceback.
+
+**TC-CLI-SMOKE-15: every nested op exposes `--help` cleanly**
+- Layer: component (subprocess, parametrized over
+  `sessions list/events/update/delete` and
+  `permissions list/add/remove/show`)
+- Action: `kolsch <parent> <op> --help`.
+- Expected: exit 0; no traceback. (Pins that no nested op's
+  argparse wiring is so broken that even `--help` crashes.)
+
+**`test_smoke_coverage_enumerates_every_top_level_subcommand` (gate)**
+- Layer: component (in-process)
+- Action: introspect `cli.main._DISPATCH` and compare against the
+  smoke module's `_TOP_LEVEL_SUBCOMMANDS` tuple.
+- Expected: no command in `_DISPATCH` is missing from the tuple.
+  A future contributor adding a new subcommand without a
+  corresponding smoke test fails this gate.
+
+**Performance.** The suite runs in ~35-40s on a developer laptop
+— above the bug ticket's <10s target. The floor is subprocess
+startup × test count (~30 tests × ~1s Python import overhead).
+The trade-off: AC 4 mandates subprocess invocation (the whole
+point of the smoke layer); AC 5's <10s target requires either
+reducing the test count (defeats the coverage point) or parallel
+execution via `pytest-xdist`. Adding `pytest-xdist` is a future
+improvement; the suite is fast enough today not to slow the
+inner-loop gate meaningfully (it's <10% of the total suite time).
+
+---
+
 ## Part 11.7 — HTTP API surface (TC-API-*) — authored in Step 13
 
 Tests for the FastAPI app built by `api.build_app(runtime)`. Run via

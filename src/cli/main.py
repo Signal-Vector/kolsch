@@ -81,6 +81,15 @@ def main(argv: Sequence[str] | None = None) -> int:
 # ---------------------------------------------------------------------------
 
 
+_PARSER_REGISTRY: dict[str, argparse.ArgumentParser] = {}
+"""Stash for subcommand parsers, populated by ``_build_parser``.
+
+Lets handlers print sub-parser-specific help when a multi-subcommand
+top-level (``sessions``, ``permissions``) is invoked without an op —
+the fix for bug-sessions-namespace-attr-error.md. Keyed by command
+name (``"sessions"``, ``"permissions"``)."""
+
+
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="kolsch",
@@ -129,6 +138,7 @@ def _build_parser() -> argparse.ArgumentParser:
 
     # ---- sessions ----------------------------------------------------
     sessions = sub.add_parser("sessions", help="Session operations.")
+    _PARSER_REGISTRY["sessions"] = sessions
     sessions_sub = sessions.add_subparsers(dest="sessions_command", metavar="<op>")
 
     sessions_list = sessions_sub.add_parser("list", help="List sessions.")
@@ -267,7 +277,9 @@ def _build_parser() -> argparse.ArgumentParser:
     # Phase 2.0 (TOOL-R6) — kolsch permissions {list, add, remove, show}.
     from cli.permissions import add_permissions_subparser  # noqa: PLC0415
 
-    add_permissions_subparser(sub)
+    permissions_parser = add_permissions_subparser(sub)
+    if permissions_parser is not None:
+        _PARSER_REGISTRY["permissions"] = permissions_parser
 
     return parser
 
@@ -414,7 +426,18 @@ async def _cmd_sessions_delete(args: argparse.Namespace) -> int:
 
 
 async def _cmd_sessions(args: argparse.Namespace) -> int:
-    if args.sessions_command == "list" or args.sessions_command is None:
+    """Dispatch the ``sessions`` op.
+
+    *(Bug-fix: docs/process/bug-sessions-namespace-attr-error.md.)*
+    When the user typed ``kolsch sessions`` with no operation,
+    ``args.sessions_command`` is ``None`` — print the subparser's
+    help to stderr and exit 1 instead of falling through to
+    ``_cmd_sessions_list`` (which would crash on missing
+    ``args.starred`` / ``args.archived`` / ``args.limit``).
+    """
+    if args.sessions_command is None:
+        return _print_subcommand_help_and_exit("sessions")
+    if args.sessions_command == "list":
         return await _cmd_sessions_list(args)
     if args.sessions_command == "events":
         return await _cmd_sessions_events(args)
@@ -422,6 +445,24 @@ async def _cmd_sessions(args: argparse.Namespace) -> int:
         return await _cmd_sessions_update(args)
     if args.sessions_command == "delete":
         return await _cmd_sessions_delete(args)
+    return 1
+
+
+def _print_subcommand_help_and_exit(command: str) -> int:
+    """Print a multi-subcommand subparser's help to stderr; return 1.
+
+    Used by ``_cmd_sessions`` and ``_cmd_permissions`` when the user
+    invokes the parent subcommand without specifying an op.
+    Bug-sessions-namespace-attr-error.md acceptance criterion 1 —
+    show available operations, NO Python traceback.
+    """
+    subparser = _PARSER_REGISTRY.get(command)
+    if subparser is not None:
+        subparser.print_help(file=sys.stderr)
+    else:
+        sys.stderr.write(
+            f"{command}: missing operation. Run `kolsch {command} --help`.\n"
+        )
     return 1
 
 
@@ -484,6 +525,18 @@ async def _cmd_models(args: argparse.Namespace) -> int:
 
 
 async def _cmd_permissions(args: argparse.Namespace) -> int:
+    """Dispatch the ``permissions`` op.
+
+    *(Bug-fix parity: docs/process/bug-sessions-namespace-attr-error.md
+    reviewer Q2 — same help-and-exit pattern as ``_cmd_sessions``.)*
+    ``cmd_permissions`` itself handles the ``None`` case without
+    crashing, but the user-facing message was awkward
+    (``"unknown permissions op None"``). Uniform fix: print the
+    subparser's help to stderr and exit 1, matching the sessions
+    dispatcher.
+    """
+    if args.permissions_command is None:
+        return _print_subcommand_help_and_exit("permissions")
     from cli.permissions import cmd_permissions  # noqa: PLC0415
 
     return await cmd_permissions(args)

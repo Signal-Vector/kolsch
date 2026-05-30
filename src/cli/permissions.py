@@ -41,13 +41,18 @@ from providers import (
 # ---------------------------------------------------------------------------
 
 
-def add_permissions_subparser(sub: argparse._SubParsersAction[Any]) -> None:
+def add_permissions_subparser(
+    sub: argparse._SubParsersAction[Any],
+) -> argparse.ArgumentParser:
     """Register the ``kolsch permissions`` subparser tree.
 
     Four leaf subcommands mirror the runtime API on
-    :class:`RuleBasedAuthorizationProvider`.
+    :class:`RuleBasedAuthorizationProvider`. Returns the parent
+    ``permissions`` subparser so the dispatcher can stash a reference
+    for the help-on-missing-op path
+    (bug-sessions-namespace-attr-error.md).
     """
-    perms = sub.add_parser(
+    perms: argparse.ArgumentParser = sub.add_parser(
         "permissions",
         help="Inspect and edit the workspace authorization rule list.",
     )
@@ -98,6 +103,8 @@ def add_permissions_subparser(sub: argparse._SubParsersAction[Any]) -> None:
         help="Print one rule's details.",
     )
     show.add_argument("rule_id", help="Stable rule id.")
+
+    return perms
 
 
 # ---------------------------------------------------------------------------
