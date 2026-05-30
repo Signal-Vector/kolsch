@@ -72,7 +72,7 @@ async def read_file(args: ReadFileArgs, ctx: ToolContext) -> str:
     check_path_allowed(args.path, policy=ctx.path_policy, root=ctx.workspace_root)
     target: Path = _resolve(args.path, ctx.workspace_root)
     try:
-        size = target.stat().st_size
+        size = target.stat().st_size  # noqa: ASYNC240 — sync IO is intentional
     except FileNotFoundError as exc:
         raise FileNotFound(path=args.path) from exc
     except OSError as exc:
@@ -83,7 +83,7 @@ async def read_file(args: ReadFileArgs, ctx: ToolContext) -> str:
     if size > args.max_bytes:
         raise FileTooLarge(path=args.path, size_bytes=size, max_bytes=args.max_bytes)
     try:
-        content: str = target.read_text(encoding="utf-8")
+        content: str = target.read_text(encoding="utf-8")  # noqa: ASYNC240
     except FileNotFoundError as exc:
         raise FileNotFound(path=args.path) from exc
     except OSError as exc:

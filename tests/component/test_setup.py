@@ -138,12 +138,18 @@ def _build_test_connect_io_factory(
     return factory
 
 
-async def _noop_run_handler(args: argparse.Namespace) -> int:
+async def _noop_run_handler(
+    args: argparse.Namespace,
+) -> tuple[int, str | None]:
     """Stand-in for `_cmd_run` for tests that don't exercise step E
-    end-to-end. Returns 0 to signal a "successful" test run without
-    standing up the full runtime."""
+    end-to-end. Returns ``(0, None)`` to signal a "successful" test
+    run without standing up the full runtime.
+
+    Bug-setup-test-run-failure-handling.md: the run-handler signature
+    is now ``(exit_code, failure_code)`` so Step E can route the
+    error code into the classifier-driven hint."""
     _ = args
-    return 0
+    return (0, None)
 
 
 def _make_test_io(
@@ -152,7 +158,8 @@ def _make_test_io(
     out: io.StringIO | None = None,
     err: io.StringIO | None = None,
     prompter: SetupPrompter | None = None,
-    run_handler: Callable[[argparse.Namespace], Awaitable[int]] | None = None,
+    run_handler: Callable[[argparse.Namespace], Awaitable[tuple[int, str | None]]]
+    | None = None,
 ) -> _SetupIO:
     captured_out = out if out is not None else io.StringIO()
     return _SetupIO(
@@ -348,14 +355,21 @@ async def test_tc_ux_08_starter_uses_opus_alias_when_present(
     assert payload["model"] == "opus"
 
 
-async def test_starter_uses_non_metadata_provider_over_openrouter(
+async def test_starter_prefers_openrouter_over_opencode_when_no_aliases(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """When both OpenCode (non-metadata-source) and OpenRouter
-    (serves_as_metadata_source: true) are connected, the starter
-    picks OpenCode's first model — OpenRouter is preferred only
-    when it's the sole option."""
+    """When both OpenCode and OpenRouter are connected with no
+    ``model_aliases`` defined, the starter picks OpenRouter — per the
+    documented provider-priority tie-breaker.
+
+    *(Bug-setup-test-run-failure-handling.md: prior to the bug fix
+    this test asserted the inverse — preferring the
+    non-metadata-source provider — which surfaced the user-reported
+    bug where setup chose a raw OpenCode model and tripped on a
+    transient upstream 500. The new behaviour reflects acceptance
+    criterion 3's tie-breaker order. The aliased-preferred path is
+    covered separately by TC-UX-12.)*"""
     monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
     monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
     (tmp_path / "platform.yaml").write_text(
@@ -387,7 +401,10 @@ async def test_starter_uses_non_metadata_provider_over_openrouter(
     await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
     starter = tmp_path / "bundles" / "kolsch" / "agents" / "helper.yaml"
     payload = yaml.safe_load(starter.read_text())
-    assert payload["model"] == {"provider": "opencode", "model": "gpt-oss-120b"}
+    assert payload["model"] == {
+        "provider": "openrouter",
+        "model": "anthropic/claude-opus-4-7",
+    }
 
 
 async def test_starter_uses_openrouter_when_sole_provider(
@@ -822,9 +839,11 @@ async def test_step_e_test_run_failure_returns_partial(
     monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
     monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
 
-    async def failing_run(args: argparse.Namespace) -> int:
+    async def failing_run(
+        args: argparse.Namespace,
+    ) -> tuple[int, str | None]:
         _ = args
-        return 1
+        return (1, None)
 
     io_ = _make_test_io(root=tmp_path, run_handler=failing_run)
     rc = await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
@@ -878,3 +897,245 @@ def test_default_connect_io_factory_with_api_key() -> None:
         default="https://example.com",
     )
     assert io_obj.prompter.ask(field2) == "https://example.com"
+
+
+# ===========================================================================
+# TC-UX-11..13 — bug-setup-test-run-failure-handling.md regression tests
+# ===========================================================================
+
+
+async def test_tc_ux_11_failed_test_run_emits_partial_banner_and_exit_4(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TC-UX-11: setup --non-interactive with a fake run handler that
+    simulates a 5xx model failure. Assert:
+
+    - the partial-completion banner appears in stdout
+    - the "Kolsch is ready" string does NOT appear in stdout
+    - exit code is 4
+    - the diagnostic line mentions "5xx" or "server" (the
+      classifier's hint for ``model.server_error``)
+    - platform.yaml and starter agent exist (workspace IS set up;
+      only the test run failed)
+
+    This reproduces the user-reported bug
+    (bug-setup-test-run-failure-handling.md Part 0) deterministically
+    without depending on a flaky upstream.
+    """
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+
+    async def failing_run(
+        args: argparse.Namespace,
+    ) -> tuple[int, str | None]:
+        _ = args
+        # The adapter in make_default_setup_io extracts this code from
+        # AgentExecutionError.failed_event in production; the test
+        # injects it directly so the classifier hint can be asserted.
+        return (2, "model.server_error")
+
+    captured_out = io.StringIO()
+    captured_err = io.StringIO()
+    io_ = _make_test_io(
+        root=tmp_path,
+        out=captured_out,
+        err=captured_err,
+        run_handler=failing_run,
+    )
+
+    rc = await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
+
+    out = captured_out.getvalue()
+
+    # Exit code 4 (partial completion) — Phase 1.2 spec §2.5.
+    assert rc == 4
+
+    # The "Kolsch is ready" string MUST NOT appear on this path.
+    assert "Kolsch is ready" not in out, (
+        f"the buggy success banner fired despite the test failing; "
+        f"see bug-setup-test-run-failure-handling.md acceptance "
+        f"criterion 1.\nfull stdout:\n{out}"
+    )
+
+    # The partial-completion banner appears with the workspace path +
+    # the classifier-driven hint for model.server_error.
+    assert "completed partially" in out
+    assert "model.server_error" in out
+    # The hint specifically mentions "5xx" per criterion 4.
+    assert "5xx" in out
+
+    # The workspace IS set up — only the test run failed.
+    assert (tmp_path / "platform.yaml").is_file()
+    assert (tmp_path / "bundles" / "kolsch" / "agents" / "helper.yaml").is_file()
+
+
+async def test_tc_ux_12_starter_prefers_alias_over_raw_opencode_model(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TC-UX-12: two providers connected — OpenRouter has aliases
+    (``opus``, ``smart``, ``gpt4o``), OpenCode has raw model ids.
+    Assert that the starter agent's ``model:`` field is the
+    ``opus`` alias string — NOT a raw ``opencode/<model>``
+    object.
+
+    This reproduces the user-reported model-picker bug
+    (bug-setup-test-run-failure-handling.md Part 0 + H4): the user
+    had aliases available but setup chose a raw OpenCode model
+    instead, and that model returned a transient 500.
+    """
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    (tmp_path / "platform.yaml").write_text(
+        yaml.safe_dump(
+            {
+                **yaml.safe_load(_default_yaml()),
+                "llm_providers": {
+                    "openrouter": {
+                        "type": "openrouter",
+                        "api_key_secret": "OPENROUTER_API_KEY",
+                        "serves_as_metadata_source": True,
+                        "models": [
+                            {"id": "anthropic/claude-opus-4-7"},
+                            {"id": "openai/gpt-4o"},
+                        ],
+                    },
+                    "opencode": {
+                        "type": "opencode",
+                        "api_key_secret": "OPENCODE_API_KEY",
+                        "models": [
+                            {"id": "minimax-m2.7"},
+                            {"id": "qwen2.5-coder-32b"},
+                        ],
+                    },
+                },
+                "model_aliases": {
+                    "opus": "openrouter/anthropic/claude-opus-4-7",
+                    "smart": "openrouter/openai/gpt-4o",
+                    "gpt4o": "openrouter/openai/gpt-4o",
+                },
+            },
+            sort_keys=False,
+        ),
+        encoding="utf-8",
+    )
+    io_ = _make_test_io(root=tmp_path)
+    await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
+    starter = tmp_path / "bundles" / "kolsch" / "agents" / "helper.yaml"
+    payload = yaml.safe_load(starter.read_text())
+
+    # The picker chose ``opus`` (the documented historic recommendation,
+    # first in _ALIAS_PRIORITY).
+    assert payload["model"] == "opus", (
+        f"expected ``opus`` alias, got {payload['model']!r}; this is "
+        f"the user-reported model-picker bug — see "
+        f"bug-setup-test-run-failure-handling.md acceptance "
+        f"criterion 3 + H4."
+    )
+
+    # The raw OpenCode model that caused the upstream 500 in the
+    # original report MUST NOT have been chosen.
+    assert payload["model"] != {"provider": "opencode", "model": "minimax-m2.7"}
+
+
+async def test_tc_ux_13_user_declining_test_run_still_succeeds(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """TC-UX-13: the user presses [n] on the test-run prompt. Setup
+    treats this as full success (the user actively skipped, not a
+    failure). The banner says "ready" with a "(test skipped)"
+    suffix so the user knows nothing was exchanged but the workspace
+    IS ready.
+
+    Bug-setup-test-run-failure-handling.md acceptance criterion 2 —
+    declining the test is exit 0, not exit 4.
+    """
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+
+    class _DeclineTestPrompter:
+        """Mirrors NonInteractivePrompter for choose/text/default-confirm
+        but returns False for the test-run confirm prompt specifically."""
+
+        def __init__(self) -> None:
+            self.confirm_count = 0
+
+        def choose(self, q: str, opts: list[str], default: str) -> str:
+            _ = q, opts
+            return default.lower()
+
+        def text(self, q: str, default: str = "") -> str:
+            _ = q
+            return default
+
+        def confirm(self, q: str, *, default: bool = True) -> bool:
+            self.confirm_count += 1
+            # The Step E prompt asks "Run the helper agent once to
+            # confirm everything works?". Step D's confirm also fires
+            # ("Create starter agent at ..."). Return True for the
+            # starter-agent confirm; False for the test-run confirm.
+            if "Run the helper agent" in q:
+                return False
+            return default
+
+    captured_out = io.StringIO()
+    io_ = _make_test_io(
+        root=tmp_path,
+        out=captured_out,
+        prompter=_DeclineTestPrompter(),
+    )
+
+    rc = await run_setup(argparse.Namespace(non_interactive=False, root=tmp_path), io_)
+
+    out = captured_out.getvalue()
+
+    # Exit 0 — declined is success, not failure.
+    assert rc == 0
+
+    # The success banner appears with the "(test skipped)" suffix.
+    assert "Kolsch is ready (test skipped)" in out, (
+        f"expected the success banner with the (test skipped) suffix; got:\n{out}"
+    )
+
+    # The partial-completion banner MUST NOT appear.
+    assert "completed partially" not in out
+
+
+# ===========================================================================
+# _classify_failure unit table (acceptance criterion 4 — five codes)
+# ===========================================================================
+
+
+def test_classify_failure_table_covers_documented_codes() -> None:
+    """Each documented error code maps to a specific hint substring.
+
+    Maintained as a single-source-of-truth table in ``_classify_failure``
+    (bug-setup-test-run-failure-handling.md edit (c)). New
+    ``model.*`` codes Phase 1.3 lands later extend this table; the
+    default branch keeps unknown codes safe.
+    """
+    from cli._setup import _classify_failure
+
+    cases = [
+        ("model.server_error", "5xx"),
+        ("model.authentication_failed", "credentials failed"),
+        ("llm.provider_not_configured", "isn't connected"),
+        ("model.timeout", "took too long"),
+        ("model.rate_limited", "rate-limited"),
+    ]
+    for code, expected_substring in cases:
+        hint = _classify_failure(code)
+        assert expected_substring.lower() in hint.lower(), (
+            f"_classify_failure({code!r}) missing expected substring "
+            f"{expected_substring!r}; got: {hint!r}"
+        )
+
+    # Unknown code → default hint.
+    default = _classify_failure("model.exotic_future_code")
+    assert "test exchange failed" in default.lower()
+
+    # None → default hint.
+    none_hint = _classify_failure(None)
+    assert "test exchange failed" in none_hint.lower()

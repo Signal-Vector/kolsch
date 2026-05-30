@@ -36,8 +36,6 @@ from providers import (
     RuleBasedAuthorizationProvider,
 )
 
-
-
 # ---------------------------------------------------------------------------
 # Argparse wiring — called from cli.main.build_parser
 # ---------------------------------------------------------------------------

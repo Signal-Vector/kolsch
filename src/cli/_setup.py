@@ -24,6 +24,7 @@ import os
 import shutil
 import sys
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TextIO
 
@@ -53,6 +54,35 @@ _EXIT_PARTIAL = 4  # Phase 1.2 patch §2.5 — partial setup completion.
 
 _PROCEEDED = "proceeded"
 _SKIPPED = "skipped"
+
+
+# ---------------------------------------------------------------------------
+# Step E result — richer than the string tokens above (bug-setup-test-run-
+# failure-handling.md edit (a)). Carries the outcome enum + an optional
+# failure code so the orchestrator can pick the right banner + a
+# classifier-derived hint.
+# ---------------------------------------------------------------------------
+
+
+class _StepEOutcome(StrEnum):
+    """How the test exchange ended — drives the banner + exit code in
+    the orchestrator. Distinct from the ``proceeded``/``skipped``/
+    ``partial`` tokens the other steps return because Step E's outcome
+    has finer-grained user-facing behaviour."""
+
+    PASSED = "pass"
+    SKIPPED = "skipped"
+    FAILED = "fail"
+
+
+@dataclass(frozen=True)
+class _StepEResult:
+    """The richer return type from Step E (bug-setup-test-run-failure-
+    handling.md edit (a))."""
+
+    outcome: _StepEOutcome
+    failure_code: str | None = None
+    failure_detail: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -142,9 +172,15 @@ class _SetupIO:
     # The factory receives the provider name + an optional API key
     # override (used by --non-interactive's env-driven path).
     connect_io_factory: Callable[[Path, str, str | None], _CommandIO]
-    # Run-handler — the same shape as `cli.main._cmd_run`. Used by
-    # step E to verify the install with a real exchange.
-    run_handler: Callable[[argparse.Namespace], Awaitable[int]]
+    # Run-handler — wraps `cli.main._cmd_run`. Used by step E to verify
+    # the install with a real exchange. Returns ``(exit_code,
+    # failure_code)`` so Step E can pass the failure code to
+    # :func:`_classify_failure` for an actionable hint
+    # (bug-setup-test-run-failure-handling.md). ``failure_code`` is
+    # the canonical Error Model code from the failed event's
+    # ``data.error.type`` when an exchange ended Fatal; ``None``
+    # otherwise (success / non-engine failures).
+    run_handler: Callable[[argparse.Namespace], Awaitable[tuple[int, str | None]]]
 
 
 # ---------------------------------------------------------------------------
@@ -153,7 +189,16 @@ class _SetupIO:
 
 
 async def run_setup(args: argparse.Namespace, io: _SetupIO) -> int:
-    """Walk the six steps. Returns exit code (0 ok, 4 partial)."""
+    """Walk the six steps. Returns exit code (0 ok, 4 partial).
+
+    Bug-fix (bug-setup-test-run-failure-handling.md edit (b)): Step F
+    is gated on Step E's outcome — the success banner only fires when
+    the test exchange actually passed (or was actively skipped). A
+    failed test produces a partial-completion banner that names the
+    failed step, the workspace path, and a classifier-driven hint
+    derived from the failure code, NOT a hardcoded "check provider
+    credentials" string.
+    """
     non_interactive: bool = bool(getattr(args, "non_interactive", False))
     if non_interactive:
         io = _SetupIO(
@@ -167,37 +212,115 @@ async def run_setup(args: argparse.Namespace, io: _SetupIO) -> int:
 
     io.out.write("Welcome to Kolsch.\n\n")
 
-    proceeded_any = False
-    skipped_any = False
     partial = False
+    step_e_result: _StepEResult | None = None
 
     for step_name, step_fn in (
         ("A workspace location", _step_a_workspace_location),
         ("B workspace skeleton", _step_b_skeleton),
         ("C LLM provider", _step_c_provider),
         ("D starter agent", _step_d_starter_agent),
-        ("E test run", _step_e_test_run),
     ):
         try:
             result = await step_fn(io, non_interactive=non_interactive)
         except KeyboardInterrupt:
             io.err.write(f"\nsetup aborted at step {step_name}\n")
             return _EXIT_PARTIAL
-        if result == _PROCEEDED:
-            proceeded_any = True
-        elif result == _SKIPPED:
-            skipped_any = True
-        elif result == "partial":
+        if result == "partial":
             partial = True
 
-    _step_f_banner(io)
+    # Step E is handled separately because its outcome drives the banner
+    # + exit code (bug-setup-test-run-failure-handling.md).
+    try:
+        step_e_result = await _step_e_test_run(io, non_interactive=non_interactive)
+    except KeyboardInterrupt:
+        io.err.write("\nsetup aborted at step E test run\n")
+        return _EXIT_PARTIAL
 
+    # Branch on Step E's outcome. A FAILED test run prints the
+    # partial-completion banner and returns 4, regardless of whether
+    # earlier steps reported partial.
+    if step_e_result.outcome is _StepEOutcome.FAILED:
+        _step_f_banner_failure(io, step_e_result)
+        return _EXIT_PARTIAL
+
+    # Success path — passed OR actively skipped both render a "ready"
+    # banner. The skipped variant suffixes "(test skipped)" so the
+    # user knows nothing was actually exchanged.
+    _step_f_banner_success(
+        io, test_skipped=step_e_result.outcome is _StepEOutcome.SKIPPED
+    )
+
+    # A non-Step-E partial (e.g., Step C connect failure) still
+    # surfaces as exit 4 even when Step E itself ran cleanly.
     if partial:
         return _EXIT_PARTIAL
-    # If literally every step was skipped (re-run on a fully-set-up
-    # workspace), we still report success — the workspace IS ready.
-    _ = proceeded_any, skipped_any
     return _EXIT_OK
+
+
+# ---------------------------------------------------------------------------
+# Edit (c) — _classify_failure (bug-setup-test-run-failure-handling.md
+# acceptance criterion 4)
+# ---------------------------------------------------------------------------
+
+
+def _classify_failure(failure_code: str | None) -> str:
+    """Map a failed-event error code to a user-facing actionable hint.
+
+    Single source of truth — extend the table as Phase 1.3 lands more
+    ``model.*`` codes or as new failure modes appear. Unknown codes
+    (including ``None``) fall through to the generic hint.
+
+    Mapping is per bug-setup-test-run-failure-handling.md §3 acceptance
+    criterion 4:
+
+    - ``model.server_error`` / 5xx → "the model returned a 5xx; usually
+      transient. Try again, or pick a different model by editing the
+      agent's ``model:`` field (or `kolsch permissions`)."
+    - ``model.authentication_failed`` / 401/403 → "credentials failed;
+      re-run `kolsch connect <provider>`."
+    - ``llm.provider_not_configured`` → "the agent's provider isn't
+      connected; run `kolsch connect <provider>`."
+    - ``model.timeout`` → "the model took too long to respond. Try
+      again or pick a faster model."
+    - Default (any other code) → "the test exchange failed; check
+      `kolsch sessions events <id>` for details, then re-run setup or
+      `kolsch run` directly."
+    """
+    table = {
+        "model.server_error": (
+            "the model returned a 5xx; this is usually transient. "
+            "Try again, or pick a different model by editing the "
+            "agent's `model:` field (or via `kolsch permissions`)."
+        ),
+        "model.authentication_failed": (
+            "credentials failed; re-run `kolsch connect <provider>` to refresh the key."
+        ),
+        "llm.provider_not_configured": (
+            "the agent's provider isn't connected; "
+            "run `kolsch connect <provider>` first."
+        ),
+        "model.timeout": (
+            "the model took too long to respond. Try again or pick a faster model."
+        ),
+        "model.rate_limited": (
+            "the model is rate-limited; wait a few seconds and re-run, "
+            "or pick a less-trafficked model."
+        ),
+        "model.context_overflow": (
+            "the request exceeded the model's context window. "
+            "Pick a model with a larger context, or shorten the input."
+        ),
+        "model.bad_request": (
+            "the model rejected the request as malformed. "
+            "Check `kolsch sessions events <id>` for the response detail."
+        ),
+    }
+    return table.get(
+        failure_code or "",
+        "the test exchange failed; check `kolsch sessions events <id>` "
+        "for details, then re-run setup or `kolsch run` directly.",
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -444,22 +567,47 @@ def _announce_picked_model(io: _SetupIO, model: str | dict[str, str]) -> None:
     io.out.write(f"  → starter agent uses alias {model!r}\n")
 
 
+_ALIAS_PRIORITY: tuple[str, ...] = ("opus", "smart", "cheap")
+"""Deployment-alias preference order (bug-setup-test-run-failure-
+handling.md acceptance criterion 3). ``opus`` first because it's the
+historic recommendation; ``smart`` and ``cheap`` are the two other
+documented aliases. Aliases outside this list fall through to
+alphabetical."""
+
+_PROVIDER_PRIORITY: tuple[str, ...] = ("openrouter", "opencode")
+"""Provider preference order for the raw-discovery fallback when no
+alias is present. OpenRouter first because it serves as the metadata
+source and is the recommended primary provider per the first-agent
+tutorial."""
+
+
 def _pick_starter_model(io: _SetupIO) -> str | dict[str, str]:
     """Choose the model field value for the starter agent.
 
-    Priority:
+    **Bug-fix (bug-setup-test-run-failure-handling.md edit (d)):**
+    The picker now prefers a deployment alias from ``platform.yaml``'s
+    ``model_aliases`` over a raw discovered model id whenever any alias
+    exists. The historic behaviour (raw-discovery from the first
+    non-metadata-source provider) was the wrong shape — when the user
+    has OpenRouter aliases like ``opus`` + ``smart`` and also has
+    OpenCode connected, the user's curated aliases should win over the
+    first-discovered raw OpenCode model.
 
-    1. Connected providers whose ``serves_as_metadata_source`` flag is
-       NOT set — first provider's first model with a non-empty id.
-    2. Connected providers WITH ``serves_as_metadata_source: true``
-       (typically only OpenRouter) — same first-model rule, as a
-       fallback. A metadata-source provider can still route real
-       calls; we just prefer not to assume that intent.
-    3. ``provider: fake`` if no connected provider yielded a model.
+    Tie-breaker order:
 
-    When the picked model matches a deployment alias (lookup against
-    `model_aliases`), the alias string is returned for readability —
-    matches the existing `opus → openrouter/...` ergonomic.
+    1. Aliases. Within the aliases dict:
+       a. ``opus`` if present (historic recommendation).
+       b. ``smart`` if present (second documented alias).
+       c. ``cheap`` if present (third documented alias).
+       d. First alphabetical alias otherwise.
+    2. Raw ``{provider, model}`` from discovered providers, when no
+       alias exists. Within discovered providers:
+       a. ``openrouter`` first (the recommended primary; metadata source).
+       b. ``opencode`` second (the secondary documented provider).
+       c. Other providers alphabetically.
+       Within each provider, the first model id from its ``models`` list.
+    3. ``{"provider": "fake", "model": "fake-model"}`` if no
+       provider yielded a model.
     """
     payload = _read_yaml(io.root / "platform.yaml")
     providers_raw = payload.get("llm_providers")
@@ -471,22 +619,34 @@ def _pick_starter_model(io: _SetupIO) -> str | dict[str, str]:
     aliases_raw = payload.get("model_aliases")
     aliases: dict[str, str] = aliases_raw if isinstance(aliases_raw, dict) else {}
 
-    # Insertion-order traversal: dict iteration is connect-order in
-    # platform.yaml as written; sort metadata-sources to the end so
-    # the priority pool drains first.
-    ordered: list[tuple[str, dict[str, Any]]] = sorted(
-        providers.items(),
-        key=lambda kv: bool(kv[1].get("serves_as_metadata_source")),
-    )
-    for name, entry in ordered:
+    # 1) Aliases win whenever any exist. Apply the documented
+    # tie-breaker order.
+    if aliases:
+        for preferred in _ALIAS_PRIORITY:
+            if preferred in aliases:
+                return preferred
+        # Fall through to alphabetical for any alias outside the
+        # documented set.
+        return sorted(aliases.keys())[0]
+
+    # 2) Raw discovery fallback. Order providers by documented
+    # priority, then alphabetically for unknown providers.
+    def _provider_key(item: tuple[str, dict[str, Any]]) -> tuple[int, str]:
+        name = item[0]
+        try:
+            rank = _PROVIDER_PRIORITY.index(name)
+        except ValueError:
+            rank = len(_PROVIDER_PRIORITY)
+        return (rank, name)
+
+    for name, entry in sorted(providers.items(), key=_provider_key):
         model_id = _first_model_id(entry)
         if model_id is None:
             continue
-        # Alias override when one exists for the picked pair.
-        for alias_name, target in aliases.items():
-            if target == f"{name}/{model_id}":
-                return alias_name
         return {"provider": name, "model": model_id}
+
+    # 3) Nothing connected — fall back to the fake LLM so the starter
+    # agent is still runnable.
     return {"provider": "fake", "model": "fake-model"}
 
 
@@ -521,14 +681,21 @@ def _render_model_line(model: str | dict[str, str]) -> str:
 # ---------------------------------------------------------------------------
 
 
-async def _step_e_test_run(io: _SetupIO, *, non_interactive: bool) -> str:
+async def _step_e_test_run(io: _SetupIO, *, non_interactive: bool) -> _StepEResult:
+    """Run the starter agent once to verify the install.
+
+    Returns a :class:`_StepEResult` so the orchestrator can branch on
+    the precise outcome (pass / fail / skipped) for both the banner
+    and the exit code. See bug-setup-test-run-failure-handling.md
+    edits (a) and (b).
+    """
     agent_ref = f"{_STARTER_BUNDLE}/agents/{_STARTER_AGENT}"
     agent_path = (
         io.root / "bundles" / _STARTER_BUNDLE / "agents" / f"{_STARTER_AGENT}.yaml"
     )
     if not agent_path.exists():
         io.out.write("  (no starter agent to test; skipping test run)\n")
-        return _SKIPPED
+        return _StepEResult(outcome=_StepEOutcome.SKIPPED)
     if not non_interactive:
         run_it = io.prompter.confirm(
             "Run the helper agent once to confirm everything works?",
@@ -536,9 +703,9 @@ async def _step_e_test_run(io: _SetupIO, *, non_interactive: bool) -> str:
         )
         if not run_it:
             io.out.write("  → skipped test run\n")
-            return _SKIPPED
+            return _StepEResult(outcome=_StepEOutcome.SKIPPED)
     io.out.write(f"Running {agent_ref}...\n")
-    rc = await io.run_handler(
+    rc, failure_code = await io.run_handler(
         argparse.Namespace(
             root=io.root,
             agent_ref=agent_ref,
@@ -548,13 +715,16 @@ async def _step_e_test_run(io: _SetupIO, *, non_interactive: bool) -> str:
         )
     )
     if rc != 0:
-        io.err.write(
-            f"  → test run failed (rc={rc}); check provider credentials "
-            "or re-run `kolsch connect`\n"
+        # The hint surfaces via the partial-completion banner; don't
+        # write a canned diagnostic here — the orchestrator owns
+        # the user-facing message so the wording is in one place.
+        return _StepEResult(
+            outcome=_StepEOutcome.FAILED,
+            failure_code=failure_code,
+            failure_detail=f"test run failed (rc={rc})",
         )
-        return "partial"
     io.out.write("  ✓ test run completed successfully\n")
-    return _PROCEEDED
+    return _StepEResult(outcome=_StepEOutcome.PASSED)
 
 
 # ---------------------------------------------------------------------------
@@ -562,16 +732,53 @@ async def _step_e_test_run(io: _SetupIO, *, non_interactive: bool) -> str:
 # ---------------------------------------------------------------------------
 
 
-def _step_f_banner(io: _SetupIO) -> None:
+def _step_f_banner_success(io: _SetupIO, *, test_skipped: bool = False) -> None:
+    """The success banner — printed on Step E pass OR skipped.
+
+    Bug-setup-test-run-failure-handling.md acceptance criterion 2 + 3:
+    a user pressing ``[n]`` on the test-run prompt is full success; the
+    banner suffixes ``(test skipped)`` so the user knows nothing was
+    actually exchanged but the workspace IS ready.
+    """
     agent_ref = f"{_STARTER_BUNDLE}/agents/{_STARTER_AGENT}"
     io.out.write("\n")
-    io.out.write("Kolsch is ready.\n\n")
+    if test_skipped:
+        io.out.write("Kolsch is ready (test skipped).\n\n")
+    else:
+        io.out.write("Kolsch is ready.\n\n")
     io.out.write("Try:\n")
     io.out.write(f'  kolsch run {agent_ref} --input content="<your prompt>"\n')
     io.out.write("  kolsch sessions list\n")
     io.out.write("  kolsch --help\n\n")
     io.out.write(f"Workspace: {io.root}\n")
     io.out.write("Docs:      docs/tutorials/first-agent.md\n")
+
+
+def _step_f_banner_failure(io: _SetupIO, result: _StepEResult) -> None:
+    """The partial-completion banner — printed when Step E failed.
+
+    Bug-setup-test-run-failure-handling.md acceptance criterion 1: name
+    the failed step, the workspace path, and the classifier-driven
+    hint. NEVER print "Kolsch is ready" on this path; the user must
+    see that something needs attention.
+    """
+    agent_ref = f"{_STARTER_BUNDLE}/agents/{_STARTER_AGENT}"
+    hint = _classify_failure(result.failure_code)
+    io.out.write("\n")
+    io.out.write("Kolsch setup completed partially — test run failed.\n\n")
+    io.out.write(f"Workspace: {io.root}  (initialized successfully)\n")
+    io.out.write(f"Agent:     {agent_ref}  (created)\n")
+    if result.failure_code:
+        io.out.write(f"Cause:     {result.failure_code} — {hint}\n")
+    else:
+        io.out.write(f"Cause:     test exchange failed — {hint}\n")
+    if result.failure_detail:
+        io.out.write(f"Detail:    {result.failure_detail}\n")
+    io.out.write("\nNext steps:\n")
+    io.out.write("  kolsch sessions list                 # find the failed session\n")
+    io.out.write(f'  kolsch run {agent_ref} --input content="<retry>"\n')
+    io.out.write("\n")
+    io.out.write("Docs: docs/tutorials/first-agent.md\n")
 
 
 # ---------------------------------------------------------------------------
@@ -698,11 +905,37 @@ def make_default_setup_io(*, root: Path) -> _SetupIO:
     import llm.providers  # noqa: F401, PLC0415
     from cli.main import _cmd_run  # noqa: PLC0415
 
+    async def _run_handler(
+        args: argparse.Namespace,
+    ) -> tuple[int, str | None]:
+        """Adapter — wraps the existing ``_cmd_run`` so Step E can read
+        the failure code from a Fatal ``AgentExecutionError`` without
+        re-implementing agent execution (Phase 1.2 spec rule). On
+        success returns ``(0, None)``; on Fatal returns
+        ``(exit_code, error_code)`` where ``error_code`` is the
+        canonical Error Model code from
+        ``failed_event.data["error"]["type"]``.
+        """
+        from engine.context import AgentExecutionError  # noqa: PLC0415
+
+        try:
+            rc = await _cmd_run(args)
+        except AgentExecutionError as exc:
+            error_code = None
+            if exc.failed_event is not None and isinstance(exc.failed_event.data, dict):
+                err = exc.failed_event.data.get("error")
+                if isinstance(err, dict):
+                    code = err.get("type")
+                    if isinstance(code, str):
+                        error_code = code
+            return (2, error_code)
+        return (rc, None)
+
     return _SetupIO(
         root=root,
         out=sys.stdout,
         err=sys.stderr,
         prompter=StdinSetupPrompter(sys.stdout),
         connect_io_factory=_default_connect_io_factory,
-        run_handler=_cmd_run,
+        run_handler=_run_handler,
     )
