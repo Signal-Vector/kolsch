@@ -1295,6 +1295,8 @@ Handling), CRW (CrewAI Adapter — authored in Step 12b), INT
 
 **TC-CHAT-05: `/exit` and Ctrl-D both exit cleanly**
 - Layer: component
+- Setup: chat running against the helper agent at an idle input
+  prompt (no in-flight exchange).
 - Action: invoke `/exit`; in a parallel test, simulate
   Ctrl-D (EOFError) at the input prompt.
 - Expected: both paths return exit code 0; no traceback in
@@ -1312,8 +1314,12 @@ Handling), CRW (CrewAI Adapter — authored in Step 12b), INT
 
 **TC-CHAT-07: `--session <id>` replays prior conversation**
 - Layer: component
-- Setup: create session A with one exchange; close chat;
-  invoke `kolsch chat <agent> --session <A_id>`.
+- Setup: session A on disk with one completed exchange in its
+  JSONL; capture the original chat's rendered console buffer
+  for the exchange.
+- Action: close the original chat; invoke
+  `kolsch chat <agent> --session <A_id>`; capture the resumed
+  chat's rendered console buffer.
 - Expected: the resumed chat's captured console contains the
   same blocks (modulo timestamps) as the original session's
   captured console. The renderer is a pure function of the
@@ -1393,15 +1399,23 @@ Handling), CRW (CrewAI Adapter — authored in Step 12b), INT
 
 **TC-CHAT-15: Slash-command completion narrows by prefix**
 - Layer: component
-- Action: type `/` → assert dropdown lists all eight commands;
-  type `/th` → assert dropdown narrows to `/thinking`; type
-  `/thinking ` (trailing space) → assert dropdown lists the
-  four `on`/`off`/`budget`/`last` options.
+- Setup: chat at an idle input prompt; the static
+  slash-command registry populated with the eight MVP commands.
+- Action: type `/`; then clear and type `/th`; then clear and
+  type `/thinking ` (trailing space). Capture the completion
+  dropdown contents at each step.
+- Expected: at `/` the dropdown lists all eight commands; at
+  `/th` it narrows to `/thinking`; at `/thinking ` (trailing
+  space) it lists the four `on` / `off` / `budget` / `last`
+  options.
 - Verifies: §10.16; patch §5.3 completion via the static
   registry.
 
 **TC-CHAT-16: Multi-line input via Shift+Enter (or Alt+Enter)**
 - Layer: component
+- Setup: chat at an idle input prompt; prompt_toolkit's test
+  harness configured to deliver the Shift+Enter (or Alt+Enter)
+  key sequence as a distinct event.
 - Action: feed `"line1"`, then the Shift+Enter (or Alt+Enter)
   key sequence via prompt_toolkit's harness, then `"line2"`,
   then Enter.
@@ -1411,6 +1425,7 @@ Handling), CRW (CrewAI Adapter — authored in Step 12b), INT
 
 **TC-CHAT-17: Cursor editing (Home + insert)**
 - Layer: component
+- Setup: chat at an empty input prompt.
 - Action: feed `"hello"`, then Home, then `"say "`, then Enter.
 - Expected: submitted text is `"say hello"`.
 - Verifies: §10.16; basic prompt_toolkit-editing wiring (smoke
@@ -1419,6 +1434,8 @@ Handling), CRW (CrewAI Adapter — authored in Step 12b), INT
 
 **TC-CHAT-18: Architectural check — chat is NOT full-screen**
 - Layer: unit
+- Setup: the chat module's source as installed in the test
+  environment (`src/cli/chat.py`).
 - Action: introspect the chat module's source — assert no call
   to `Application.run(full_screen=True)`, no call to
   `enter_alternate_screen()` / equivalent, and that the
@@ -1433,11 +1450,16 @@ Handling), CRW (CrewAI Adapter — authored in Step 12b), INT
 
 **TC-CLI-SMOKE-CHAT-01: `kolsch chat --help` (CLI smoke)**
 - Layer: component (subprocess)
+- Setup: no fixture; subprocess invocation only.
 - Action: `kolsch chat --help`.
 - Expected: exit 0; non-empty stdout; no traceback. Lives in
   `tests/component/test_cli_smoke.py` per the bug-sessions-
   namespace-attr-error.md hard rule (every new CLI subcommand
   ships with a smoke test).
+- Verifies: AGENTS.md hard rule (CLI smoke per
+  bug-sessions-namespace-attr-error.md) for the chat command;
+  coverage-gate test
+  `test_smoke_coverage_enumerates_every_top_level_subcommand`.
 
 **TC-CLI-SMOKE-CHAT-02: `kolsch chat <agent>` minimal-args**
 - Layer: component (subprocess)
