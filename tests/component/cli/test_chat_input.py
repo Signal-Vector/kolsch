@@ -307,9 +307,12 @@ async def test_cmd_chat_in_process_honors_model_override(
 ) -> None:
     """``--model <ref>`` overrides the banner's model label.
 
-    24a behaviour: the override is recorded for the banner only;
-    full ModelSpec input-shape parsing + alias resolution lands
-    in 24d. This test pins the 24a contract.
+    24e: the override resolves through the same ModelSpec parser
+    ``/model`` uses, so bare aliases get expanded against
+    ``platform.yaml``'s ``model_aliases``. The compact form
+    ``provider/model`` is always valid; the test uses that so
+    it doesn't depend on a model_aliases entry being present in
+    the workspace.
     """
     import argparse
     import io as _io
@@ -337,7 +340,7 @@ async def test_cmd_chat_in_process_honors_model_override(
                 root=root,
                 agent_ref=None,  # exercise the _DEFAULT_AGENT_REF fallback
                 session=None,
-                model="opus",
+                model="anthropic/claude-opus-4-7",
             ),
             out=out,
             prompt_input=pipe_input,

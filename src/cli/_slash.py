@@ -29,7 +29,7 @@ Patch sections:
 from __future__ import annotations
 
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import TYPE_CHECKING, TextIO
 
@@ -41,9 +41,10 @@ if TYPE_CHECKING:
     from prompt_toolkit.completion import CompleteEvent
     from prompt_toolkit.document import Document
 
+    from platform_runtime import PlatformRuntime
     from providers import AuthorizationProvider
     from providers.authz import Rule
-    from schemas import ResolvedAgentConfig
+    from schemas import ModelSpec, ResolvedAgentConfig, SessionId, ThreadId
 
 
 # ---------------------------------------------------------------------------
@@ -79,6 +80,50 @@ class ControlSignal(StrEnum):
 # ---------------------------------------------------------------------------
 # Handler context — what every handler gets at invocation time
 # ---------------------------------------------------------------------------
+
+
+@dataclass
+class ChatSessionState:
+    """Mutable per-chat-session state slash handlers may touch.
+
+    Phase 2.1 / 24e introduces this so the lifecycle commands
+    (``/new``, ``/model``, ``/session``, ``/thinking``) can effect
+    a state change that subsequent exchanges and the input loop
+    pick up. The 24c renderer + the 24d modal don't need mutable
+    state; they read from ``SlashContext`` 's frozen fields.
+
+    Boundaries on what handlers may write:
+
+    - ``model_override`` + ``config`` — ``/model`` swaps the
+      ModelSpec for *this session only*. No platform.yaml edit.
+    - ``thinking_on`` / ``thinking_budget`` — ``/thinking``
+      session-local flags. Persist for the lifetime of the chat
+      process; reset when chat exits. The engine adapter today
+      ignores them (graceful degradation per patch §5.2); the
+      flags are still recorded so a future engine patch sees
+      them without re-debating the surface.
+    - ``pending_clear`` / ``pending_new_session`` /
+      ``pending_session_id`` — flags the loop reads after
+      dispatch to perform the actual session-management work.
+      Handlers MUST NOT call ``store.create_session`` directly;
+      they signal via these flags so the loop is the single
+      site that owns session-lifecycle transitions.
+
+    All four pending fields are reset by the loop after it
+    handles them so a single ``/new`` doesn't keep firing.
+    """
+
+    runtime: PlatformRuntime
+    config: ResolvedAgentConfig
+    session_id: SessionId
+    thread_id: ThreadId
+    model_override: ModelSpec | None = None
+    thinking_on: bool = False
+    thinking_budget: int | None = None
+    pending_clear: bool = False
+    pending_new_session: bool = False
+    pending_session_id: SessionId | None = None
+    model_aliases: dict[str, str] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -123,6 +168,16 @@ class SlashContext:
     """Pretty-printable agent name for command output (``/tools``
     headers, etc.). Defaults to the agent's ``name`` field;
     None signals "use a fallback" so tests stay terse."""
+
+    state: ChatSessionState | None = None
+    """Mutable session state for the lifecycle commands (24e+).
+
+    None when SlashContext is built without an active chat
+    (test surface for ``/help``, ``/exit``, ``/clear``). Handlers
+    that need mutable state (``/new``, ``/model``, ``/thinking``,
+    ``/session``) print a clear error when this is None so the
+    "no chat runtime" case fails predictably rather than
+    crashing the test harness."""
 
 
 # ---------------------------------------------------------------------------
@@ -215,6 +270,188 @@ async def _handler_exit(arg_text: str, ctx: SlashContext) -> ControlSignal:
     """``/exit`` / ``/quit`` — clean exit, code 0. Patch §5 row 2."""
     _ = arg_text, ctx
     return ControlSignal.EXIT
+
+
+async def _handler_new(arg_text: str, ctx: SlashContext) -> ControlSignal:
+    """``/new`` — open a fresh session under the same agent + model.
+
+    Patch §5 row 3. The old session is preserved on disk (the
+    user can resume via ``kolsch chat <agent> --session
+    <old_id>``); only the visible scrollback clears. The new
+    session id appears in the reprinted title bar.
+
+    Handler signals via ``ctx.state``; the input loop performs
+    the actual ``store.create_session`` call so session-lifecycle
+    transitions stay in one place.
+    """
+    _ = arg_text
+    if ctx.state is None:
+        ctx.stdout.write("/new requires a chat runtime; not available here.\n")
+        return ControlSignal.CONTINUE
+    ctx.state.pending_clear = True
+    ctx.state.pending_new_session = True
+    return ControlSignal.NEW_SESSION
+
+
+async def _handler_model(arg_text: str, ctx: SlashContext) -> ControlSignal:
+    """``/model [<ref>]`` — show or switch the current model.
+
+    Patch §5 row 5. Accepts the three Phase 1.1 ModelSpec input
+    shapes: object (rare from a slash command), compact string
+    (``opencode/gpt-oss-120b``), and alias (``opus`` →
+    ``platform.yaml`` ``model_aliases.opus``).
+
+    Without arg: prints the active model. With arg: validates
+    via ``assets.assembler._normalize_model_value``, swaps
+    ``state.config.model`` for THIS session, and prints a
+    confirmation. Invalid refs print an error and the chat stays
+    in the session — patch §5 row 5 + 24d builder note "does NOT
+    crash". The model.overridden event mentioned in patch §5 row
+    5 is deferred: Engine I1 (engine is sole writer of the log)
+    forbids the chat from appending directly; the override lives
+    in-memory and the next exchange's ``model.request`` reflects
+    it (which is the spec's load-bearing behaviour).
+    """
+    from assets.assembler import _normalize_model_value  # noqa: PLC0415
+    from schemas import ModelSpec  # noqa: PLC0415
+
+    if ctx.state is None:
+        ctx.stdout.write("/model requires a chat runtime; not available here.\n")
+        return ControlSignal.CONTINUE
+    arg = arg_text.strip()
+    if not arg:
+        current = ctx.state.config.model
+        ctx.stdout.write(f"current model: {current.provider}/{current.model}\n")
+        return ControlSignal.CONTINUE
+    try:
+        normalized = _normalize_model_value(arg, ctx.state.model_aliases)
+        if not isinstance(normalized, dict):
+            msg = f"unexpected normalization shape: {type(normalized).__name__}"
+            raise TypeError(msg)  # noqa: TRY301
+        new_spec = ModelSpec(**normalized)
+    except Exception as exc:  # noqa: BLE001 — surface every validation flavour
+        ctx.stdout.write(f"/model: invalid model ref {arg!r}: {exc}\n")
+        return ControlSignal.CONTINUE
+    ctx.state.model_override = new_spec
+    ctx.state.config = ctx.state.config.model_copy(update={"model": new_spec})
+    ctx.stdout.write(f"model set to {new_spec.provider}/{new_spec.model}\n")
+    return ControlSignal.CONTINUE
+
+
+_THINKING_FORMS = {"on", "off", "last"}
+"""Discrete forms ``/thinking`` accepts. ``budget <n>`` is the
+fourth, handled separately because it carries an integer arg."""
+
+
+async def _handler_thinking(arg_text: str, ctx: SlashContext) -> ControlSignal:
+    """``/thinking [on|off|budget <n>|last]`` — extended-thinking control.
+
+    Patch §5.2 — multi-form command shipped with graceful
+    degradation: the engine doesn't emit reasoning events today
+    (Part 10 item 2 of the chat spec deferred that to a later
+    phase), so ``/thinking last`` always prints the documented
+    "no thinking content" note; ``/thinking on`` accepts the
+    flag for when reasoning events do start landing.
+    """
+    if ctx.state is None:
+        ctx.stdout.write("/thinking requires a chat runtime; not available here.\n")
+        return ControlSignal.CONTINUE
+    arg = arg_text.strip()
+    if not arg:
+        _print_thinking_state(ctx)
+    elif arg == "on":
+        ctx.state.thinking_on = True
+        ctx.stdout.write(
+            "thinking display: on "
+            "(will gate reasoning events when the engine emits them)\n",
+        )
+    elif arg == "off":
+        ctx.state.thinking_on = False
+        ctx.stdout.write("thinking display: off\n")
+    elif arg.startswith("budget"):
+        _apply_thinking_budget(arg, ctx)
+    elif arg == "last":
+        ctx.stdout.write(
+            "No thinking content in this exchange — your current model "
+            "may not emit reasoning events, or the engine doesn't yet "
+            "expose them.\n",
+        )
+    else:
+        ctx.stdout.write(
+            f"/thinking: unknown form {arg!r}; expected one of "
+            "on, off, budget <n>, last\n",
+        )
+    return ControlSignal.CONTINUE
+
+
+def _print_thinking_state(ctx: SlashContext) -> None:
+    """Bare ``/thinking`` — print the current state per patch §5.2 row 1."""
+    state = ctx.state
+    if state is None:
+        return  # guard for type narrowing; caller checks
+    on_label = "on" if state.thinking_on else "off"
+    budget_label = (
+        str(state.thinking_budget) if state.thinking_budget is not None else "(unset)"
+    )
+    ctx.stdout.write(
+        f"thinking display: {on_label}\n"
+        f"thinking budget: {budget_label}\n"
+        "last-reply thinking: unavailable "
+        "(engine doesn't emit reasoning events yet)\n",
+    )
+
+
+def _apply_thinking_budget(arg: str, ctx: SlashContext) -> None:
+    """``/thinking budget <n>`` parser — sets the session-local budget."""
+    state = ctx.state
+    if state is None:
+        return  # guard for type narrowing; caller checks
+    tokens = arg.split(maxsplit=1)
+    expected_token_count = 2
+    if len(tokens) != expected_token_count:
+        ctx.stdout.write("/thinking budget <n>   n must be an integer\n")
+        return
+    try:
+        n = int(tokens[1])
+    except ValueError:
+        ctx.stdout.write(
+            f"/thinking budget <n>   {tokens[1]!r} is not an integer\n",
+        )
+        return
+    state.thinking_budget = n
+    ctx.stdout.write(
+        f"thinking budget set to {n}; this model may not honor it.\n",
+    )
+
+
+async def _handler_session(arg_text: str, ctx: SlashContext) -> ControlSignal:
+    """``/session [<id>]`` — show or switch the current session.
+
+    Patch §5 row 8. Without arg: prints the current session id.
+    With arg: validates the id via ``store.get_session`` and
+    signals the loop to switch + replay via the renderer. The
+    actual switch happens in the loop; the handler only signals
+    so session-lifecycle transitions stay in one place.
+    """
+    if ctx.state is None:
+        ctx.stdout.write("/session requires a chat runtime; not available here.\n")
+        return ControlSignal.CONTINUE
+    arg = arg_text.strip()
+    if not arg:
+        ctx.stdout.write(f"current session: {ctx.state.session_id}\n")
+        return ControlSignal.CONTINUE
+    # Strip surrounding quotes the user may paste.
+    target_id = arg.strip("'\" ")
+    try:
+        from schemas import SessionId  # noqa: PLC0415
+
+        session_id = SessionId(target_id)
+        session = await ctx.state.runtime.store.get_session(session_id)
+    except Exception as exc:  # noqa: BLE001 — surface anything
+        ctx.stdout.write(f"/session: session {target_id!r} not loadable: {exc}\n")
+        return ControlSignal.CONTINUE
+    ctx.state.pending_session_id = session.session_id
+    return ControlSignal.RELOAD
 
 
 async def _handler_tools(arg_text: str, ctx: SlashContext) -> ControlSignal:
@@ -319,8 +556,7 @@ COMMAND_REGISTRY: dict[str, SlashCommand] = {
         name="/new",
         description="start a fresh session, same agent",
         usage="/new   open a new session under this agent (preserves the old)",
-        handler=None,
-        placeholder_step="24c",
+        handler=_handler_new,
     ),
     "/clear": SlashCommand(
         name="/clear",
@@ -332,9 +568,8 @@ COMMAND_REGISTRY: dict[str, SlashCommand] = {
         name="/model",
         description="switch model for this session",
         usage=("/model <ref>   any ModelSpec input shape (alias or provider/model)"),
-        handler=None,
+        handler=_handler_model,
         free_form_arg_hint="<type any model ref>",
-        placeholder_step="24d",
     ),
     "/thinking": SlashCommand(
         name="/thinking",
@@ -342,14 +577,13 @@ COMMAND_REGISTRY: dict[str, SlashCommand] = {
         usage=(
             "/thinking [on|off|budget <n>|last]   extended-thinking display + budget"
         ),
-        handler=None,
+        handler=_handler_thinking,
         options=(
             ("on", "show thinking inline"),
             ("off", "hide thinking (default)"),
             ("budget <n>", "set max thinking tokens for next exchange"),
             ("last", "show thinking from the most recent reply"),
         ),
-        placeholder_step="24c",
     ),
     "/tools": SlashCommand(
         name="/tools",
@@ -361,9 +595,8 @@ COMMAND_REGISTRY: dict[str, SlashCommand] = {
         name="/session",
         description="show or switch current session",
         usage="/session [<id>]   print the current session id, or switch",
-        handler=None,
+        handler=_handler_session,
         free_form_arg_hint="<recent session id>",
-        placeholder_step="24e",
     ),
 }
 """Eight visible commands; ``/exit`` carries ``/quit`` as an alias.
@@ -455,7 +688,22 @@ class SlashCompleter(Completer):
       requires every Completion to be "insertable", so the hint
       is yielded as a no-op completion whose ``text`` is empty).
     - Anything else → no completions (popup hides).
+
+    Phase 2.1 / 24e: ``/model `` (trailing space) ALSO yields
+    aliases from ``platform.yaml``'s ``model_aliases`` section
+    when ``model_alias_provider`` is supplied at construction.
+    The aliases are queried fresh on every completion request so
+    a future ``kolsch llm models alias add`` mid-session would
+    surface immediately (today there's no such command — the
+    provider is just a closure over the dict).
     """
+
+    def __init__(
+        self,
+        *,
+        model_alias_provider: Callable[[], dict[str, str]] | None = None,
+    ) -> None:
+        self._model_alias_provider = model_alias_provider
 
     def get_completions(
         self, document: Document, complete_event: CompleteEvent
@@ -490,6 +738,15 @@ class SlashCompleter(Completer):
                         display_meta=option_desc,
                     )
             return
+        # /model dynamic alias completions when configured.
+        if resolved.name == "/model" and self._model_alias_provider is not None:
+            for alias, canonical in self._model_alias_provider().items():
+                if alias.startswith(partial):
+                    yield Completion(
+                        text=alias[len(partial) :],
+                        display=alias,
+                        display_meta=canonical,
+                    )
         if resolved.free_form_arg_hint is not None and not partial:
             # A non-completing hint — yields with empty insertion
             # text so the popup just shows the placeholder line

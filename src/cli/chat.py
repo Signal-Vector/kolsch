@@ -60,6 +60,7 @@ from prompt_toolkit.key_binding import KeyBindings
 from cli._modal import ApprovalModal
 from cli._renderer import Renderer
 from cli._slash import (
+    ChatSessionState,
     ControlSignal,
     SlashCompleter,
     SlashContext,
@@ -68,7 +69,7 @@ from cli._slash import (
     is_slash_command,
 )
 from cli.permissions import _write_back as _persist_authz_rules
-from engine import ExecutionContext
+from engine import CancelToken, ExecutionContext
 from platform_runtime import bootstrap_runtime
 from providers import RuleBasedAuthorizationProvider
 
@@ -79,7 +80,7 @@ if TYPE_CHECKING:
     from prompt_toolkit.output.base import Output
 
     from platform_runtime import PlatformRuntime
-    from schemas import ResolvedAgentConfig, ThreadId
+    from schemas import ResolvedAgentConfig, SessionId, ThreadId
 
 
 # ---------------------------------------------------------------------------
@@ -134,15 +135,43 @@ async def cmd_chat(
 
     model_label = _format_model_label(config.model)
     if args.model:
-        # 24a: record the override for the banner; full ModelSpec
-        # input-shape parsing + Layer 1 alias resolution lands in
-        # 24d alongside the `/model` slash command.
-        model_label = args.model
+        # 24e: --model startup override resolves through the same
+        # ModelSpec parser /model uses; on parse failure we exit
+        # 1 with a clear message rather than entering the chat
+        # with a bogus model. Patch §1.1 + §1.3 row "Invalid
+        # invocation".
+        try:
+            override = _parse_startup_model_override(
+                args.model,
+                runtime,
+                args.root,
+            )
+        except Exception as exc:  # noqa: BLE001 — surface every shape
+            err_stream = err if err is not None else sys.stderr
+            err_stream.write(f"chat: invalid --model {args.model!r}: {exc}\n")
+            return 1
+        config = config.model_copy(update={"model": override})
+        model_label = f"{override.provider}/{override.model}"
 
-    session = await runtime.store.create_session(
-        str(config.agent_id),
-        name=f"chat:{agent_ref}",
-    )
+    # Phase 2.1 / 24e — --session loads an existing session and
+    # replays its events through the same Renderer (patch §6.2).
+    # Without --session, create a fresh session.
+    if getattr(args, "session", None):
+        try:
+            from schemas import SessionId  # noqa: PLC0415
+
+            session = await runtime.store.get_session(SessionId(str(args.session)))
+        except Exception as exc:  # noqa: BLE001
+            err_stream = err if err is not None else sys.stderr
+            err_stream.write(
+                f"chat: --session {args.session!r} not loadable: {exc}\n",
+            )
+            return 1
+    else:
+        session = await runtime.store.create_session(
+            str(config.agent_id),
+            name=f"chat:{agent_ref}",
+        )
 
     _print_banner(
         stdout,
@@ -151,19 +180,36 @@ async def cmd_chat(
         session_id=str(session.session_id),
     )
 
+    # Phase 2.1 / 24e — recent session IDs for the /session
+    # dynamic completer suggestions land in a later patch; the
+    # model_alias provider is wired now for /model. Aliases live
+    # in platform.yaml's ``model_aliases`` section.
+    model_aliases = _load_model_aliases(args.root)
     prompt_session = _build_prompt_session(
         input=prompt_input,
         output=prompt_output,
+        model_aliases=model_aliases,
     )
-    # Phase 2.1 / 24a continues to support the threads[0] convention
-    # the FakeFramework + Phase 1 store wires up at create_session
-    # time. ``--session`` resume (24e) replaces this lookup with a
-    # by-id fetch.
+    # threads[0] convention — Phase 1 sessions are single-thread;
+    # multi-thread support lands when the Workflow Engine arrives.
     threads = await runtime.store.list_threads(session.session_id)
     if not threads:
-        msg = f"created session {session.session_id} has no threads"
+        msg = f"session {session.session_id} has no threads"
         raise RuntimeError(msg)
     thread_id = threads[0].thread_id
+
+    # 24e — replay the loaded session's events before entering the
+    # input loop. The replay uses the SAME Renderer as live
+    # exchanges (patch §6.2 "render-output byte-identical"),
+    # which is what the 24c renderer's pure-consumer property
+    # makes possible.
+    if getattr(args, "session", None):
+        await _replay_session(
+            runtime=runtime,
+            thread_id=thread_id,
+            stdout=stdout,
+            agent_name=config.name,
+        )
 
     # Phase 2.1 / 24d — register the approval modal as the
     # chat-surface prompt callback. Pair the registration with a
@@ -181,6 +227,9 @@ async def cmd_chat(
             runtime=runtime,
             config=config,
             thread_id=thread_id,
+            session_id=session.session_id,
+            agent_ref=agent_ref,
+            model_aliases=model_aliases,
         )
     finally:
         _clear_modal_callback(runtime)
@@ -195,6 +244,7 @@ def _build_prompt_session(
     *,
     input: Input | None = None,  # noqa: A002 — prompt_toolkit's own kwarg name
     output: Output | None = None,
+    model_aliases: dict[str, str] | None = None,
 ) -> PromptSession[str]:
     """Construct the prompt_toolkit session with the patch §2.5 bindings.
 
@@ -206,11 +256,20 @@ def _build_prompt_session(
     Patch §2.4: ``full_screen`` is NEVER set. The architectural
     guard test (TC-CHAT-18) inspects this module's source and
     fails loudly if a future change introduces full-screen mode.
+
+    24e: ``model_aliases`` drives the ``/model`` dynamic
+    completer suggestions per patch §5.3 row "/model".
     """
     bindings = _build_key_bindings()
     # The completer + bottom_toolbar both read from the slash
     # registry (single source of truth — patch §5.3 + §5.4).
-    completer = SlashCompleter()
+    # 24e adds /model dynamic suggestions via a closure over the
+    # aliases dict so the completer doesn't import bootstrap-
+    # adjacent modules.
+    aliases_snapshot = dict(model_aliases or {})
+    completer = SlashCompleter(
+        model_alias_provider=(lambda: aliases_snapshot) if aliases_snapshot else None,
+    )
 
     def _bottom_toolbar() -> str:
         # prompt_toolkit doesn't expose the current buffer on the
@@ -285,32 +344,56 @@ def _build_key_bindings() -> KeyBindings:
     return kb
 
 
-async def _run_input_loop(
+async def _run_input_loop(  # noqa: PLR0913 — loop owns all the chat state; bundling further hurts readability
     prompt_session: PromptSession[str],
     *,
     stdout: TextIO,
     runtime: PlatformRuntime,
     config: ResolvedAgentConfig,
     thread_id: ThreadId,
+    session_id: SessionId | None = None,
+    agent_ref: str | None = None,
+    model_aliases: dict[str, str] | None = None,
 ) -> int:
-    """Drive the prompt_session in a loop until EOF or ``/exit``.
+    """Drive the prompt_session until EOF, ``/exit``, or an unrecoverable error.
 
-    Submitted text starting with ``/`` is dispatched as a slash
-    command (``cli._slash``). Anything else is forwarded to the
-    engine: build an :class:`ExecutionContext` with the user's
-    content as the trigger, then feed the resulting event stream
-    to a fresh :class:`Renderer` per exchange (patch §3 — "the
-    renderer's only state is the current exchange's block list").
+    Submitted text starting with ``/`` dispatches as a slash
+    command; anything else becomes an :class:`ExecutionContext`
+    fed to the engine via :meth:`AgentEngine.execute_stream` and
+    rendered through a fresh :class:`Renderer` per exchange
+    (patch §3 — "the renderer's only state is the current
+    exchange's block list").
 
-    Ctrl-D / EOF returns exit code 0. Ctrl-C currently clears the
-    current input and continues — cancellation-during-streaming
-    arrives in a later step (patch §6.1).
+    24e adds three lifecycle behaviours per patch §5 + §6:
+
+    - ``/new`` → loop spins up a new session under the same
+      agent, clears the visible scrollback, reprints the banner.
+    - ``/session <id>`` → loop loads the named session and
+      replays its events through the SAME renderer (no
+      replay-specific code path — patch §6.2).
+    - Ctrl-C during the renderer's await → signal the engine's
+      typed cancellation hook, drain the remaining events
+      (the engine emits ``thread.exchange_failed`` with cause
+      ``engine.cancelled``), then return to the prompt
+      (patch §6.1).
+
+    Ctrl-D / EOF returns exit code 0. Ctrl-C at the prompt
+    clears the current input without exiting (the hint-line
+    advice).
     """
+    state = ChatSessionState(
+        runtime=runtime,
+        config=config,
+        session_id=session_id or _placeholder_session_id(),
+        thread_id=thread_id,
+        model_aliases=dict(model_aliases or {}),
+    )
     slash_ctx = SlashContext(
         stdout=stdout,
         agent_config=config,
         authz=runtime.authz,
         agent_name=config.name,
+        state=state,
     )
     while True:
         try:
@@ -323,30 +406,231 @@ async def _run_input_loop(
             continue
         if is_slash_command(text):
             signal = await dispatch_slash(text, slash_ctx)
+            # Apply pending state transitions BEFORE checking
+            # the signal so /clear's ANSI sequence runs in the
+            # same iteration as the handler.
+            if state.pending_clear:
+                stdout.write("\x1b[H\x1b[2J\x1b[3J")
+                stdout.flush()
+                state.pending_clear = False
             if signal is ControlSignal.EXIT:
                 return 0
-            # CONTINUE / NEW_SESSION / RELOAD all return to the
-            # prompt; NEW_SESSION + RELOAD get richer behaviour
-            # in later steps.
+            if signal is ControlSignal.NEW_SESSION and state.pending_new_session:
+                await _open_new_session(
+                    state,
+                    stdout=stdout,
+                    agent_ref=agent_ref or _DEFAULT_AGENT_REF,
+                )
+                # Reflect new state into the slash_ctx for handlers
+                # that read agent_config (e.g., /tools). slash_ctx
+                # is frozen so build a fresh one.
+                slash_ctx = _refresh_slash_ctx(slash_ctx, state)
+                state.pending_new_session = False
+            if signal is ControlSignal.RELOAD and state.pending_session_id is not None:
+                await _switch_session(
+                    state,
+                    target_session_id=state.pending_session_id,
+                    stdout=stdout,
+                )
+                slash_ctx = _refresh_slash_ctx(slash_ctx, state)
+                state.pending_session_id = None
             continue
         # Echo the user's message ourselves so it appears with the
         # patch §2.2 "You: " prefix. The user.message event the
         # engine emits is a redundant confirmation per patch §3
-        # row 2; the renderer treats it as a no-op so we don't
-        # double-print.
+        # row 2; the renderer treats it as a no-op.
         stdout.write(f"You: {text}\n")
         stdout.flush()
+        cancel = CancelToken()
         ctx = ExecutionContext(
-            thread_id=thread_id,
+            thread_id=state.thread_id,
             trigger={"kind": "user_message", "content": text},
+            cancellation=cancel,
         )
-        renderer = Renderer(stdout=stdout, agent_name=config.name)
-        await renderer.render(runtime.engine.execute_stream(config, ctx))
+        renderer = Renderer(stdout=stdout, agent_name=state.config.name)
+        event_stream = state.runtime.engine.execute_stream(state.config, ctx)
+        try:
+            await renderer.render(event_stream)
+        except KeyboardInterrupt:
+            # Patch §6.1 — Ctrl-C during streaming: signal the
+            # engine's typed cancellation hook + drain the
+            # remaining events (the engine emits
+            # thread.exchange_failed with cause engine.cancelled)
+            # so the JSONL stays honest. The renderer's
+            # exchange_failed branch surfaces the cancel as a
+            # yellow system notice.
+            cancel.cancel()
+            stdout.write("\n[interrupted; waiting for engine to cancel...]\n")
+            stdout.flush()
+            # Best-effort drain so the engine emits its
+            # thread.exchange_failed before the loop returns to
+            # the prompt. A second KeyboardInterrupt (or any
+            # error) is swallowed — the engine's own teardown
+            # is the source of truth for the cancellation event.
+            import contextlib  # noqa: PLC0415
+
+            with contextlib.suppress(KeyboardInterrupt, Exception):
+                await renderer.render(event_stream)
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+async def _open_new_session(
+    state: ChatSessionState,
+    *,
+    stdout: TextIO,
+    agent_ref: str,
+) -> None:
+    """``/new`` impl — create a fresh session under the same agent + model.
+
+    Patch §5 row 3 — old session is preserved on disk for
+    ``kolsch chat <agent> --session <old_id>`` resume.
+    """
+    session = await state.runtime.store.create_session(
+        str(state.config.agent_id),
+        name=f"chat:{agent_ref}",
+    )
+    threads = await state.runtime.store.list_threads(session.session_id)
+    state.session_id = session.session_id
+    state.thread_id = threads[0].thread_id
+    _print_banner(
+        stdout,
+        agent_name=state.config.name,
+        model_label=_format_model_label(state.config.model),
+        session_id=str(session.session_id),
+    )
+
+
+async def _switch_session(
+    state: ChatSessionState,
+    *,
+    target_session_id: SessionId,
+    stdout: TextIO,
+) -> None:
+    """``/session <id>`` impl — load + replay an existing session.
+
+    Patch §6.2 — uses the SAME Renderer as live exchanges so the
+    rendered output is byte-identical to what the original chat
+    showed (modulo timestamps / rule IDs).
+    """
+    threads = await state.runtime.store.list_threads(target_session_id)
+    if not threads:
+        stdout.write(
+            f"/session: session {target_session_id!r} has no threads; "
+            "staying in current session.\n",
+        )
+        return
+    state.session_id = target_session_id
+    state.thread_id = threads[0].thread_id
+    _print_banner(
+        stdout,
+        agent_name=state.config.name,
+        model_label=_format_model_label(state.config.model),
+        session_id=str(target_session_id),
+    )
+    await _replay_session(
+        runtime=state.runtime,
+        thread_id=state.thread_id,
+        stdout=stdout,
+        agent_name=state.config.name,
+    )
+
+
+async def _replay_session(
+    *,
+    runtime: PlatformRuntime,
+    thread_id: ThreadId,
+    stdout: TextIO,
+    agent_name: str,
+) -> None:
+    """Pipe a thread's events through a fresh Renderer.
+
+    Patch §6.2 — single render code path; the renderer's
+    pure-consumer property (CHAT-R9 + 24c) is what makes resume
+    output identical to live output.
+    """
+    renderer = Renderer(stdout=stdout, agent_name=agent_name)
+    await renderer.render(runtime.store.read_path_to_leaf(thread_id))
+
+
+def _refresh_slash_ctx(
+    prior: SlashContext,
+    state: ChatSessionState,
+) -> SlashContext:
+    """Rebuild SlashContext with the post-transition config.
+
+    SlashContext is frozen; lifecycle commands that change the
+    agent_config (``/new`` doesn't, ``/model`` does, ``/session``
+    doesn't change config) need a fresh context so subsequent
+    ``/tools`` runs against the right agent's tool list.
+    """
+    from dataclasses import replace  # noqa: PLC0415
+
+    return replace(prior, agent_config=state.config)
+
+
+def _parse_startup_model_override(
+    raw: str,
+    runtime: PlatformRuntime,
+    root: Path,
+) -> Any:  # noqa: ANN401 — concrete ModelSpec; Any sidesteps a TYPE_CHECKING import cycle
+    """Parse the ``--model <ref>`` CLI override into a ModelSpec.
+
+    Same alias-resolution path as ``/model`` so the two surfaces
+    behave consistently.
+    """
+    from assets.assembler import _normalize_model_value  # noqa: PLC0415
+    from schemas import ModelSpec  # noqa: PLC0415
+
+    _ = runtime  # reserved for runtime-driven validation in a later patch
+    aliases = _load_model_aliases(root)
+    normalized = _normalize_model_value(raw, aliases)
+    if not isinstance(normalized, dict):
+        msg = f"unexpected normalization shape: {type(normalized).__name__}"
+        raise TypeError(msg)
+    return ModelSpec(**normalized)
+
+
+def _load_model_aliases(root: Path) -> dict[str, str]:
+    """Read ``platform.yaml``'s ``model_aliases`` section.
+
+    Returns an empty dict when the section is absent — common for
+    fresh workspaces. The ``/model`` slash command and the
+    ``--model`` startup flag both rely on this for alias
+    resolution.
+    """
+    import yaml  # noqa: PLC0415
+
+    yaml_path = root / "platform.yaml"
+    if not yaml_path.is_file():
+        return {}
+    try:
+        payload = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+    except yaml.YAMLError:
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    raw = payload.get("model_aliases") or {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): str(v) for k, v in raw.items()}
+
+
+def _placeholder_session_id() -> SessionId:
+    """Synthesize an empty SessionId for the rare in-test path that
+    bypasses cmd_chat's session-creation logic. Production cmd_chat
+    always passes a real session_id; tests of ``_run_input_loop``
+    in isolation use this fallback so the dataclass invariant
+    holds.
+    """
+    from uuid import uuid4  # noqa: PLC0415
+
+    from schemas import SessionId  # noqa: PLC0415
+
+    return SessionId(f"ses_{uuid4()}")
 
 
 def _install_modal_callback(

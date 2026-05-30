@@ -71,21 +71,31 @@ def test_registry_exit_command_aliases_quit() -> None:
     assert "/quit" in COMMAND_REGISTRY["/exit"].aliases
 
 
-def test_registry_real_handlers_match_phase_2_1_step_24c_set() -> None:
-    """24c lights up ``/tools`` on top of 24b's ``/help``, ``/exit``
-    (+ ``/quit`` alias), ``/clear``. The remaining four (/new,
-    /model, /thinking, /session) stay placeholders for their
-    respective steps."""
+def test_registry_real_handlers_match_phase_2_1_step_24e_set() -> None:
+    """24e completes the Phase 2.1 chat surface — every registry
+    entry now has a real handler. No placeholders remain;
+    ``/quit`` continues to share ``/exit``'s handler via the
+    aliases tuple (it has no entry of its own)."""
     implemented = {
         name for name, cmd in COMMAND_REGISTRY.items() if cmd.handler is not None
     }
-    assert implemented == {"/help", "/exit", "/clear", "/tools"}
-    for name, cmd in COMMAND_REGISTRY.items():
-        if cmd.handler is None:
-            assert cmd.placeholder_step is not None, (
-                f"{name} is a placeholder but doesn't name the step "
-                f"where its handler lands"
-            )
+    assert implemented == {
+        "/help",
+        "/exit",
+        "/clear",
+        "/tools",
+        "/new",
+        "/model",
+        "/thinking",
+        "/session",
+    }
+    # No placeholder rows remain.
+    placeholders = {
+        name for name, cmd in COMMAND_REGISTRY.items() if cmd.handler is None
+    }
+    assert placeholders == set(), (
+        f"24e expected all handlers real; placeholders remain: {placeholders}"
+    )
 
 
 def test_is_slash_command() -> None:
@@ -165,22 +175,20 @@ async def test_dispatch_clear_writes_terminal_clear_escape() -> None:
     assert "\x1b[3J" in out.getvalue()
 
 
-async def test_dispatch_placeholder_command_prints_step_and_continues() -> None:
-    """Every placeholder command (handler=None) prints a polite
-    message naming the step where the real handler lands, and
-    continues."""
-    for name, cmd in COMMAND_REGISTRY.items():
-        if cmd.handler is not None:
-            continue
+async def test_dispatch_handlers_without_state_print_clear_error() -> None:
+    """Lifecycle handlers (``/new``, ``/model``, ``/thinking``,
+    ``/session``) require ``ctx.state`` per 24e; when absent
+    they print a polite "no chat runtime" message and continue
+    rather than crash. Tests that construct SlashContext by
+    hand without a runtime get this graceful path."""
+    runtime_dependent = {"/new", "/model", "/thinking", "/session"}
+    for name in runtime_dependent:
         out = _io.StringIO()
         signal = await dispatch_slash(name, SlashContext(stdout=out))
         assert signal is ControlSignal.CONTINUE
         rendered = out.getvalue()
-        assert "not yet implemented" in rendered.lower()
-        step = cmd.placeholder_step
-        assert step is not None
-        assert step in rendered, (
-            f"{name} placeholder message missing step {step}: {rendered}"
+        assert "requires a chat runtime" in rendered.lower(), (
+            f"{name} should print a 'no runtime' note; got {rendered!r}"
         )
 
 
@@ -370,16 +378,19 @@ async def test_tc_chat_06_clear_does_not_touch_session_or_event_log(
     # event bus, engine) would widen the surface a handler can
     # touch and needs a CHAT-R review.
     fields = set(ctx.__dataclass_fields__.keys())
-    assert fields == {"stdout", "agent_config", "authz", "agent_name"}, (
+    assert fields == {"stdout", "agent_config", "authz", "agent_name", "state"}, (
         f"SlashContext shape changed unexpectedly; got {fields}. "
-        f"Read-only lookups only — no store / engine / event-bus "
-        f"references. Needs a CHAT-R review before widening."
+        f"24e adds the mutable `state` for lifecycle commands; "
+        f"every field is still a chat-internal lookup. No store / "
+        f"engine / event-bus reference — adding one needs a "
+        f"CHAT-R review."
     )
     # Defaulted fields stay None when the caller doesn't supply
     # them (the simple handlers shouldn't depend on them).
     assert ctx.agent_config is None
     assert ctx.authz is None
     assert ctx.agent_name is None
+    assert ctx.state is None
     signal = await dispatch_slash("/clear", ctx)
     assert signal is ControlSignal.CONTINUE
     # The handler wrote the ANSI clear sequence. Nothing else
