@@ -13,10 +13,10 @@ phase2.1-chat-specs.md Part 3:
 Event type                        Action
 ================================  =============================================
 ``thread.exchange_started``       silent boundary (no UI)
-``user.message``                  echo "You: <content>" (the chat already
-                                  printed the user's input; the event confirms
-                                  it — the renderer does NOT re-print to avoid
-                                  duplicating)
+``user.message``                  silent — prompt_toolkit's terminal echo of
+                                  the submitted prompt line is the canonical
+                                  scrollback "You: <content>"; the event
+                                  confirms it for the JSONL only.
 ``model.request``                 print "<AgentName> is thinking..." indicator
 ``model.response`` (non-stream)   render the final content (markdown)
 ``tool.called``                   print tool-call panel header "▶ running"
@@ -77,14 +77,27 @@ stays in the JSONL — the truncation is display-only."""
 
 
 _THINKING_INDICATOR = "  …"
-"""Subtle "is thinking" indicator printed once on ``model.request``.
+"""Subtle "is thinking" indicator printed once PER EXCHANGE on the
+first ``model.request``.
 
 Per patch §2.2: "Spinner + 'Thinking...' in the agent block's
 spot." 24c uses a one-line text indicator (not a spinning
 animation) — the FakeFramework + EchoLLM resolve instantly so an
 animation would only ever flash. When real streaming connectors
 land in a later phase the indicator becomes the spinner inside a
-Rich ``Live`` ctx."""
+Rich ``Live`` ctx.
+
+bug-crewai-stdout-leak-investigation Finding F5 / Step G2: in
+multi-turn tool-call exchanges the framework loops
+``model.request → tool.called → tool.result → model.request``
+until a text response. Pre-fix the indicator fired on every
+``model.request``, producing N ellipses between every tool-call
+panel — visually noisy and easily misread as a CrewAI leak. The
+renderer now tracks the current exchange's id (set on
+``thread.exchange_started``) and suppresses subsequent indicator
+fires within the same exchange; the next ``thread.exchange_started``
+(or ``thread.exchange_completed`` / ``thread.exchange_failed``)
+resets the gate. Per E-BUG-CREWAI-006 D10."""
 
 
 # ---------------------------------------------------------------------------
@@ -138,6 +151,16 @@ class Renderer:
         # whether to re-render (patch §3 "if differs from streamed
         # tokens, update final").
         self._last_agent_text: str | None = None
+        # G2 — per-exchange thinking-indicator gate. The current
+        # exchange id is set on ``thread.exchange_started``; the
+        # first ``model.request`` of an exchange emits the indicator
+        # and records the exchange id; subsequent ``model.request``s
+        # (tool-loop iterations) see the recorded id and skip the
+        # print. ``thread.exchange_completed`` /
+        # ``thread.exchange_failed`` reset both fields so the next
+        # exchange's first ``model.request`` fires again.
+        self._current_exchange_id: str | None = None
+        self._last_indicated_exchange_id: str | None = None
 
     # -----------------------------------------------------------------------
     # The single public method
@@ -175,10 +198,54 @@ class Renderer:
             return
         handler(self, event)
 
-    def _render_model_request(self) -> None:
-        self._console.print(
-            Text(_THINKING_INDICATOR, style="dim italic"),
-        )
+    def _track_exchange_started(self, event: Event) -> None:
+        """G2 — record the new exchange's id so the per-exchange
+        thinking-indicator gate (in :meth:`_render_model_request`)
+        can fire exactly once per exchange.
+
+        Silent on the wire — patch §3 row 1 keeps
+        ``thread.exchange_started`` UI-less; this handler only
+        updates state."""
+        self._current_exchange_id = str(event.event_id)
+        self._last_indicated_exchange_id = None
+
+    def _render_model_request(self, event: Event) -> None:
+        """G2 — emit :data:`_THINKING_INDICATOR` ONCE per exchange,
+        not once per ``model.request``. In multi-turn tool-call
+        exchanges the framework loops
+        ``model.request → tool.called → tool.result → model.request``
+        until a text response; printing the indicator on every
+        ``model.request`` produced N indicators between tool panels
+        (the Finding F5 / E-BUG-CREWAI-005 symptom). The current
+        exchange id is set on ``thread.exchange_started``; we emit
+        on the first ``model.request`` where the current id differs
+        from the last-indicated id, then record the current id so
+        subsequent fires within the same exchange skip the print."""
+        _ = event  # exchange-id flows through self, not the event
+        if self._current_exchange_id is None:
+            # Defensive — event stream started mid-exchange (no
+            # ``thread.exchange_started`` seen). Render once so the
+            # indicator isn't silently lost; cap further fires until
+            # a real ``thread.exchange_started`` resets state.
+            self._console.print(Text(_THINKING_INDICATOR, style="dim italic"))
+            self._last_indicated_exchange_id = "<orphan>"
+            return
+        if self._current_exchange_id == self._last_indicated_exchange_id:
+            return  # already indicated for this exchange — suppress
+        self._console.print(Text(_THINKING_INDICATOR, style="dim italic"))
+        self._last_indicated_exchange_id = self._current_exchange_id
+
+    def _reset_indicator_gate(self, event: Event) -> None:
+        """G2 — clear the per-exchange indicator gate on
+        ``thread.exchange_completed`` so the NEXT exchange's first
+        ``model.request`` fires the indicator again.
+
+        ``thread.exchange_failed`` shares this reset logic but is
+        wired separately (its handler also renders a failure
+        notice); see :meth:`_render_exchange_failed`."""
+        _ = event
+        self._current_exchange_id = None
+        self._last_indicated_exchange_id = None
 
     def _render_model_response(self, event: Event) -> None:
         content = event.data.get("content") or {}
@@ -271,6 +338,10 @@ class Renderer:
         error = event.data.get("error") or {}
         code = _error_code(error)
         message = str(error.get("message", ""))
+        # G2 — failed exchange ends the per-exchange indicator gate
+        # too; the next user message starts a fresh exchange.
+        self._current_exchange_id = None
+        self._last_indicated_exchange_id = None
         if _is_cancellation_code(code):
             self._render_cancelled(message)
             return
@@ -445,21 +516,27 @@ def _truncate_tool_body(body: str, *, max_lines: int) -> tuple[str, int]:
 
 
 _DISPATCH: dict[EventType, Callable[[Renderer, Event], None]] = {
-    EventType.MODEL_REQUEST: lambda r, _e: r._render_model_request(),
+    # G2 — silent on the wire, but updates per-exchange indicator state.
+    EventType.THREAD_EXCHANGE_STARTED: lambda r, e: r._track_exchange_started(e),
+    EventType.MODEL_REQUEST: lambda r, e: r._render_model_request(e),
     EventType.MODEL_RESPONSE: lambda r, e: r._render_model_response(e),
     EventType.TOOL_CALLED: lambda r, e: r._render_tool_called(e),
     EventType.TOOL_RESULT: lambda r, e: r._render_tool_result(e),
     EventType.TOOL_FAILED: lambda r, e: r._render_tool_failed(e),
     EventType.AGENT_MESSAGE: lambda r, e: r._render_agent_message(e),
+    # G2 — silent on the wire; resets the per-exchange indicator gate.
+    EventType.THREAD_EXCHANGE_COMPLETED: lambda r, e: r._reset_indicator_gate(e),
     EventType.THREAD_EXCHANGE_FAILED: lambda r, e: r._render_exchange_failed(e),
     EventType.MODEL_FALLBACK: lambda r, e: r._render_model_fallback(e),
 }
 """Event-type → render-method binding. Patch §3 mapping.
 
-Silent events (``thread.exchange_started``, ``user.message``,
-``thread.exchange_completed``, ``config.set``, ``memory.*``,
-``model.fallback`` once Phase 1.3 settles, etc.) are not in this
-table; :meth:`Renderer._dispatch` treats absent entries as
+Silent rendering: ``thread.exchange_started`` and
+``thread.exchange_completed`` are listed because G2's per-exchange
+thinking-indicator gate needs their event ids to bound the gate;
+their handlers update state but emit no UI. Other silent events
+(``user.message``, ``config.set``, ``memory.*``, etc.) are not
+listed; :meth:`Renderer._dispatch` treats absent entries as
 no-op. Adding a new branch means adding ONE line here."""
 
 

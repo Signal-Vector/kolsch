@@ -146,8 +146,16 @@ async def test_tc_chat_01_basic_exchange_routes_through_engine(
 
     assert rc == 0
     rendered = out.getvalue()
-    # The user's submission surfaced in the output.
-    assert "You: hello" in rendered
+    # bug-chat-permissions-and-console-leak Step E: the chat no
+    # longer echoes the user's submitted line to stdout itself.
+    # In production prompt_toolkit's terminal echo lands "You:
+    # hello" in the scrollback; in this harness DummyOutput
+    # discards that echo, so the captured stdout MUST be free
+    # of "You: hello". Pinning zero (rather than 1) is the
+    # regression assertion for the duplicate-echo bug — see
+    # also test_input_loop_does_not_explicitly_echo_user_input
+    # below.
+    assert rendered.count("You: hello") == 0
     # The renderer printed the agent's reply (EchoLLMDriver echoes).
     assert "Echo:" in rendered
     assert "hello" in rendered
@@ -273,9 +281,13 @@ async def test_thread_exchange_started_is_silent() -> None:
 
 
 async def test_user_message_is_silent() -> None:
-    """The chat already echoed the user's input; the renderer
-    treats the confirming ``user.message`` event as a no-op
-    (patch §3 row 2)."""
+    """The renderer treats ``user.message`` as a no-op (patch §3
+    row 2). prompt_toolkit's terminal echo is the canonical
+    scrollback "You: <text>" line; the renderer must NOT
+    duplicate it. Verified jointly with
+    test_input_loop_does_not_explicitly_echo_user_input — both
+    silences are needed to keep the user's submission appearing
+    exactly once."""
     rendered = await _render_events(
         [
             _make_event(EventType.USER_MESSAGE, data={"content": {"text": "hi"}}),
@@ -284,14 +296,281 @@ async def test_user_message_is_silent() -> None:
     assert rendered == ""
 
 
+async def test_input_loop_does_not_explicitly_echo_user_input(
+    chat_workspace: Path,
+) -> None:
+    """bug-chat-permissions-and-console-leak Step E regression pin.
+
+    Before the fix, ``_run_input_loop`` wrote
+    ``f"You: {text}\\n"`` to its ``stdout`` parameter right after
+    prompt_toolkit's submit. Combined with prompt_toolkit's own
+    terminal echo of the finalized "You: <text>" line, real-TTY
+    users saw the line twice. The fix deletes the explicit
+    write; prompt_toolkit's echo is the sole source.
+
+    This test exercises the input loop end-to-end against the
+    EchoLLMDriver runtime with a DummyOutput-backed prompt
+    session (prompt_toolkit's echo lands on the DummyOutput, not
+    on the captured stdout). After the fix, the captured stdout
+    contains NO "You: <text>" copy — pinning the bug as fixed.
+    Before the fix, the captured stdout contained exactly one
+    "You: <text>"; flipping back to one would fail this
+    assertion.
+    """
+    runtime = await bootstrap_runtime(root=chat_workspace)
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
+    session = await runtime.store.create_session(
+        str(config.agent_id),
+        name="step-e-regression",
+    )
+    threads = await runtime.store.list_threads(session.session_id)
+    thread_id = threads[0].thread_id
+
+    out = _io.StringIO()
+    with (
+        create_pipe_input() as pipe_input,
+        create_app_session(input=pipe_input, output=DummyOutput()),
+    ):
+        prompt_session = chat._build_prompt_session(
+            input=pipe_input, output=DummyOutput()
+        )
+        pipe_input.send_text("regression-text\r")
+        pipe_input.close()
+        rc = await chat._run_input_loop(
+            prompt_session,
+            stdout=out,
+            runtime=runtime,
+            config=config,
+            thread_id=thread_id,
+        )
+
+    assert rc == 0
+    captured = out.getvalue()
+    # The bug: chat.py wrote "You: regression-text\n" to stdout
+    # in addition to prompt_toolkit's terminal echo. The fix
+    # removes that write. Both the input-loop echo and the
+    # renderer's user.message handler are silent — so the
+    # captured stream has zero copies.
+    assert "You: regression-text" not in captured
+    # Agent reply still rendered (proves the loop ran, the
+    # assertion above is not vacuous).
+    assert "Echo: regression-text" in captured
+
+
 async def test_model_request_prints_thinking_indicator() -> None:
     rendered = await _render_events(
         [
             _make_event(EventType.MODEL_REQUEST, data={"call_id": "ac_1"}),
         ],
     )
-    # The indicator is subtle but non-empty.
+    # The indicator is subtle but non-empty. Defensive "<orphan>"
+    # branch in _render_model_request: when no thread.exchange_started
+    # has been seen yet (stream started mid-exchange), still render
+    # once so the user isn't left with no indicator.
     assert rendered.strip() != ""
+
+
+# ===========================================================================
+# G2 — Per-exchange thinking-indicator gate
+# bug-crewai-stdout-leak-investigation Step G2 / E-BUG-CREWAI-005
+# ===========================================================================
+
+
+_THINKING_GLYPH = "…"
+
+
+async def test_thinking_indicator_fires_exactly_once_per_multi_tool_exchange() -> None:
+    """G2 regression pin: the renderer's ``_THINKING_INDICATOR``
+    must appear EXACTLY ONCE in a multi-tool-call exchange,
+    regardless of how many ``model.request`` events the framework's
+    tool-loop emits.
+
+    Pre-fix (``bug-crewai-stdout-leak-investigation`` Finding F5),
+    the indicator fired on every ``model.request``, producing N
+    ellipsis lines between every panel — the user's reported
+    "stray ellipses between event blocks" symptom. The fix tracks
+    the current exchange id via ``thread.exchange_started`` and
+    suppresses subsequent indicator fires within the same exchange.
+
+    This test crafts the event sequence a framework's three-turn
+    tool-call loop would emit (three ``model.request`` events
+    interleaved with ``tool.called`` / ``tool.result``) and
+    asserts ONE indicator in the captured output.
+    """
+    exchange_id = f"ev_{uuid4()}"
+    events = [
+        _make_event(
+            EventType.THREAD_EXCHANGE_STARTED,
+            data={"trigger_event_id": "ev_user"},
+            event_id=exchange_id,
+        ),
+        _make_event(EventType.MODEL_REQUEST, data={"call_id": "ac_1"}),
+        _make_event(
+            EventType.TOOL_CALLED,
+            data={
+                "tool_name": "bash",
+                "tool_call_id": "tc_1",
+                "arguments": {"command": "ls"},
+            },
+        ),
+        _make_event(
+            EventType.TOOL_RESULT,
+            data={
+                "tool_call_id": "tc_1",
+                "tool_name": "bash",
+                "result": {"stdout": "file1\nfile2\n", "stderr": "", "exit_code": 0},
+            },
+        ),
+        _make_event(EventType.MODEL_REQUEST, data={"call_id": "ac_2"}),
+        _make_event(
+            EventType.TOOL_CALLED,
+            data={
+                "tool_name": "read_file",
+                "tool_call_id": "tc_2",
+                "arguments": {"path": "file1"},
+            },
+        ),
+        _make_event(
+            EventType.TOOL_RESULT,
+            data={
+                "tool_call_id": "tc_2",
+                "tool_name": "read_file",
+                "result": {"content": "contents of file1"},
+            },
+        ),
+        _make_event(EventType.MODEL_REQUEST, data={"call_id": "ac_3"}),
+        _make_event(
+            EventType.MODEL_RESPONSE,
+            data={"content": {"text": "Here's what I found."}},
+        ),
+        _make_event(
+            EventType.AGENT_MESSAGE,
+            data={
+                "content": {"text": "Here's what I found."},
+                "exchange_id": exchange_id,
+            },
+        ),
+        _make_event(
+            EventType.THREAD_EXCHANGE_COMPLETED,
+            data={
+                "exchange_started_id": exchange_id,
+                "agent_message_id": "ev_msg",
+            },
+        ),
+    ]
+    rendered = await _render_events(events)
+    assert rendered.count(_THINKING_GLYPH) == 1, (
+        f"thinking indicator fired {rendered.count(_THINKING_GLYPH)}x "
+        f"in a three-turn tool-call exchange; G2's per-exchange gate "
+        f"has regressed. Captured output:\n{rendered}"
+    )
+
+
+async def test_thinking_indicator_fires_again_for_next_exchange() -> None:
+    """G2: the gate resets on ``thread.exchange_completed`` so the
+    NEXT exchange's first ``model.request`` fires the indicator
+    again. Drives two sequential exchanges through ONE renderer
+    instance (the chat constructs a fresh Renderer per exchange
+    in production, but the gate must work even if a renderer is
+    re-used; coordinator D10 wires the gate via exchange_id,
+    not via instance lifetime)."""
+    exchange_1 = f"ev_{uuid4()}"
+    exchange_2 = f"ev_{uuid4()}"
+    events = [
+        _make_event(
+            EventType.THREAD_EXCHANGE_STARTED,
+            data={"trigger_event_id": "ev_user1"},
+            event_id=exchange_1,
+        ),
+        _make_event(EventType.MODEL_REQUEST, data={"call_id": "ac_1"}),
+        _make_event(EventType.MODEL_REQUEST, data={"call_id": "ac_2"}),
+        _make_event(
+            EventType.MODEL_RESPONSE,
+            data={"content": {"text": "first."}},
+        ),
+        _make_event(
+            EventType.THREAD_EXCHANGE_COMPLETED,
+            data={
+                "exchange_started_id": exchange_1,
+                "agent_message_id": "ev_msg1",
+            },
+        ),
+        _make_event(
+            EventType.THREAD_EXCHANGE_STARTED,
+            data={"trigger_event_id": "ev_user2"},
+            event_id=exchange_2,
+        ),
+        _make_event(EventType.MODEL_REQUEST, data={"call_id": "ac_3"}),
+        _make_event(
+            EventType.MODEL_RESPONSE,
+            data={"content": {"text": "second."}},
+        ),
+        _make_event(
+            EventType.THREAD_EXCHANGE_COMPLETED,
+            data={
+                "exchange_started_id": exchange_2,
+                "agent_message_id": "ev_msg2",
+            },
+        ),
+    ]
+    rendered = await _render_events(events)
+    # Two exchanges → two indicator fires (one per exchange,
+    # despite the first exchange having two model.request events).
+    assert rendered.count(_THINKING_GLYPH) == 2, (
+        f"thinking indicator fired {rendered.count(_THINKING_GLYPH)}x "
+        f"across two exchanges; expected exactly 2. "
+        f"Captured output:\n{rendered}"
+    )
+
+
+async def test_thinking_indicator_resets_on_exchange_failed() -> None:
+    """G2: ``thread.exchange_failed`` resets the gate same as
+    ``thread.exchange_completed``. Otherwise a failed exchange
+    would lock the gate against the recovery exchange's first
+    ``model.request``."""
+    exchange_1 = f"ev_{uuid4()}"
+    exchange_2 = f"ev_{uuid4()}"
+    events = [
+        _make_event(
+            EventType.THREAD_EXCHANGE_STARTED,
+            data={"trigger_event_id": "ev_user1"},
+            event_id=exchange_1,
+        ),
+        _make_event(EventType.MODEL_REQUEST, data={"call_id": "ac_1"}),
+        _make_event(
+            EventType.THREAD_EXCHANGE_FAILED,
+            data={
+                "exchange_started_id": exchange_1,
+                "error": {"code": "model.timeout", "message": "timeout"},
+            },
+        ),
+        _make_event(
+            EventType.THREAD_EXCHANGE_STARTED,
+            data={"trigger_event_id": "ev_user2"},
+            event_id=exchange_2,
+        ),
+        _make_event(EventType.MODEL_REQUEST, data={"call_id": "ac_2"}),
+        _make_event(
+            EventType.MODEL_RESPONSE,
+            data={"content": {"text": "recovered."}},
+        ),
+        _make_event(
+            EventType.THREAD_EXCHANGE_COMPLETED,
+            data={
+                "exchange_started_id": exchange_2,
+                "agent_message_id": "ev_msg",
+            },
+        ),
+    ]
+    rendered = await _render_events(events)
+    # 1 indicator for exchange_1 + 1 for exchange_2 = 2 total.
+    # If exchange_failed didn't reset the gate, the second
+    # model.request would be suppressed and we'd see 1 only.
+    assert rendered.count(_THINKING_GLYPH) == 2, (
+        f"thinking indicator fired {rendered.count(_THINKING_GLYPH)}x; "
+        f"expected 2 (one per exchange). G2's reset on "
+        f"thread.exchange_failed has regressed. Output:\n{rendered}"
+    )
 
 
 async def test_model_response_renders_text_with_agent_prefix() -> None:
