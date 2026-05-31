@@ -20,10 +20,12 @@ Step composition rules from the patch:
 from __future__ import annotations
 
 import argparse
+import difflib
 import os
 import shutil
 import sys
 from dataclasses import dataclass
+from datetime import UTC, datetime
 from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TextIO
@@ -359,13 +361,17 @@ _WORKSPACE_DIRS: tuple[str, ...] = (
 
 
 async def _step_b_skeleton(io: _SetupIO, *, non_interactive: bool) -> str:
-    _ = non_interactive
     yaml_path = io.root / "platform.yaml"
     env_path = io.root / ".env"
 
     already = yaml_path.is_file()
     if already:
         io.out.write(f"✓ workspace already initialized at {io.root}\n")
+        # bug-chat-permissions-and-console-leak Step C / E-BUG-CHAT-001
+        # resolution (option a): when re-run against a workspace whose
+        # platform.yaml still carries the Phase 1 allow-all sentinel,
+        # offer to migrate to the Phase 2.0 §3.1 defaults.
+        _maybe_migrate_authz_rules(io, yaml_path, non_interactive=non_interactive)
         return _SKIPPED
 
     io.root.mkdir(parents=True, exist_ok=True)
@@ -844,6 +850,168 @@ def _workspace_only_default_rules() -> list[dict[str, str]]:
         # Default-deny tail (protected — TOOL-R10).
         {"who": ".*", "what": ".*", "effect": "deny"},
     ]
+
+
+# ---------------------------------------------------------------------------
+# Authz-rules migration — bug-chat-permissions-and-console-leak Step C
+# ---------------------------------------------------------------------------
+#
+# Workspaces created before commit deaf95f (2026-05-30) carry the
+# Phase 1 allow-all rule set, not the Phase 2.0 §3.1 defaults. The
+# migration here is per E-BUG-CHAT-001 option (a): on `kolsch setup`
+# re-run, detect the sentinel, prompt the user, and rewrite
+# ``authorization.config.rules`` in place — preserving any
+# user-added custom rules in their original relative position.
+# Non-interactive re-runs default to "skip" so silent mutation of
+# the user's config can't happen via CI.
+
+
+_ALLOW_ALL_SENTINEL: dict[str, str] = {"who": ".*", "what": ".*", "effect": "allow"}
+
+
+def _has_pre_phase_2_authz_shape(rules: list[object]) -> bool:
+    """True when the rule list looks Phase-1-origin: the allow-all
+    sentinel is present AND there is no default-deny tail.
+
+    Phase 1 ``kolsch setup`` wrote only the sentinel; users may
+    have appended their own custom rules after the fact, so the
+    detection accepts ``[sentinel, ...customs]`` rather than
+    ``[sentinel]``-only. The absence of the
+    ``{who:.*, what:.*, effect:deny}`` tail is the signal: Phase
+    2.0's §3.1 defaults always end with that tail, so a list with
+    the sentinel and no deny tail can only have come from Phase 1.
+    """
+    if not rules:
+        return False
+    has_sentinel = any(_is_sentinel_rule(r) for r in rules)
+    has_default_deny_tail = _is_default_deny_rule(rules[-1])
+    return has_sentinel and not has_default_deny_tail
+
+
+def _is_sentinel_rule(rule: object) -> bool:
+    return (
+        isinstance(rule, dict)
+        and rule.get("who") == _ALLOW_ALL_SENTINEL["who"]
+        and rule.get("what") == _ALLOW_ALL_SENTINEL["what"]
+        and rule.get("effect") == _ALLOW_ALL_SENTINEL["effect"]
+    )
+
+
+def _is_default_deny_rule(rule: object) -> bool:
+    return (
+        isinstance(rule, dict)
+        and rule.get("who") == ".*"
+        and rule.get("what") == ".*"
+        and rule.get("effect") == "deny"
+    )
+
+
+def _migrate_rules_preserving_customs(
+    existing: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Return the §3.1 defaults with any non-sentinel rules from
+    ``existing`` preserved BEFORE the default-deny tail.
+
+    Customs (rules that are not the allow-all sentinel) survive in
+    their original relative position. The tail ``rl_default_deny``
+    stays last so first-match-wins semantics keep the deny as the
+    floor."""
+    defaults = _workspace_only_default_rules()
+    customs = [r for r in existing if not _is_sentinel_rule(r)]
+    # The last default is the deny tail; keep it last.
+    return defaults[:-1] + customs + defaults[-1:]
+
+
+def _backup_platform_yaml(yaml_path: Path) -> Path:
+    """Copy ``yaml_path`` to
+    ``.platform/platform.yaml.bak.<UTC-timestamp>``.
+
+    UTC + ISO-ish basic format keeps backups sortable and avoids
+    timezone ambiguity. Returns the backup path so the caller can
+    surface it to the user."""
+    ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    backup_dir = yaml_path.parent / ".platform"
+    backup_dir.mkdir(parents=True, exist_ok=True)
+    backup = backup_dir / f"platform.yaml.bak.{ts}"
+    backup.write_bytes(yaml_path.read_bytes())
+    return backup
+
+
+_MIGRATION_PROMPT_OPTIONS: list[str] = [
+    "[m] migrate to §3.1 defaults",
+    "[k] keep mine — no changes",
+    "[d] diff first",
+    "[s] skip — decide later",
+]
+_MIGRATION_PROMPT_DEFAULT = "s"
+
+
+def _maybe_migrate_authz_rules(
+    io: _SetupIO, yaml_path: Path, *, non_interactive: bool
+) -> None:
+    """Detect the Phase 1 allow-all sentinel and prompt for migration.
+
+    No-op when the workspace already has the §3.1 defaults (or any
+    other non-sentinel rule set). Non-interactive runs default to
+    "skip" so CI re-runs never mutate the user's config silently
+    (per E-BUG-CHAT-001's resolution: migration is opt-in)."""
+    payload = _read_yaml(yaml_path)
+    authz = payload.get("authorization") or {}
+    if authz.get("variant") != "rule_based":
+        return
+    rules = (authz.get("config") or {}).get("rules") or []
+    if not _has_pre_phase_2_authz_shape(rules):
+        return
+
+    if non_interactive:
+        io.out.write(
+            "  ⚠ this workspace has the old allow-all rule set "
+            "(pre-Phase 2.0). Re-run setup interactively to migrate "
+            "to the §3.1 defaults, or edit platform.yaml by hand.\n"
+        )
+        return
+
+    choice = io.prompter.choose(
+        "This workspace has the old allow-all rule set. The current "
+        "default is workspace-only with prompt-on-bash. Migrate?",
+        _MIGRATION_PROMPT_OPTIONS,
+        default=_MIGRATION_PROMPT_DEFAULT,
+    )
+    while choice == "d":
+        _print_migration_diff(io, rules)
+        choice = io.prompter.choose(
+            "Choose:",
+            _MIGRATION_PROMPT_OPTIONS,
+            default=_MIGRATION_PROMPT_DEFAULT,
+        )
+
+    if choice == "m":
+        backup = _backup_platform_yaml(yaml_path)
+        new_rules = _migrate_rules_preserving_customs(rules)
+        payload["authorization"]["config"]["rules"] = new_rules
+        yaml_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+        io.out.write("  ✓ migrated authorization rules → §3.1 defaults\n")
+        io.out.write(f"  ✓ backup written to {backup.relative_to(yaml_path.parent)}\n")
+    elif choice == "k":
+        io.out.write("  → keeping current rules; no changes written\n")
+    else:  # "s" or any unrecognised default — defer
+        io.out.write("  → deferred; will prompt again on the next setup run\n")
+
+
+def _print_migration_diff(io: _SetupIO, current_rules: list[dict[str, Any]]) -> None:
+    """Show a unified diff of the rules block (current → migrated)."""
+    before = yaml.safe_dump({"rules": current_rules}, sort_keys=False).splitlines()
+    after = yaml.safe_dump(
+        {"rules": _migrate_rules_preserving_customs(current_rules)},
+        sort_keys=False,
+    ).splitlines()
+    diff = difflib.unified_diff(
+        before, after, fromfile="current", tofile="after migration", lineterm=""
+    )
+    io.out.write("\n")
+    for line in diff:
+        io.out.write(line + "\n")
+    io.out.write("\n")
 
 
 # ---------------------------------------------------------------------------

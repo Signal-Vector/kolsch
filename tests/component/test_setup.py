@@ -1139,3 +1139,304 @@ def test_classify_failure_table_covers_documented_codes() -> None:
     # None → default hint.
     none_hint = _classify_failure(None)
     assert "test exchange failed" in none_hint.lower()
+
+
+# ===========================================================================
+# bug-chat-permissions-and-console-leak Step C — authz-rule migration
+# ===========================================================================
+#
+# Workspaces created before commit deaf95f carry the Phase 1 allow-all
+# sentinel. `kolsch setup` re-run against such a workspace must offer
+# to migrate the rules to Phase 2.0 §3.1 defaults, preserving any
+# user-added custom rules in their relative position. E-BUG-CHAT-001
+# option (a) is the implementation; these tests pin the four
+# user-facing flows ([m]/[k]/[d]/[s]) plus idempotency, custom-rule
+# preservation, the timestamped backup, and the non-interactive
+# "skip silently" safety default.
+
+
+class _MigrationPrompter:
+    """Test prompter for the migration flow that returns a fixed
+    sequence of ``choose`` answers.
+
+    Distinct from the file's existing ``_ScriptedPrompter`` (which
+    uses separate keyword-script lists per method); the migration
+    flow only invokes ``choose``, so the simpler queue model keeps
+    the per-test setup minimal. Once the script is exhausted,
+    ``choose`` returns the call's ``default``."""
+
+    def __init__(self, choose_answers: list[str]) -> None:
+        self._answers = list(choose_answers)
+        self.choose_calls: list[tuple[str, tuple[str, ...]]] = []
+
+    def choose(self, question: str, options: list[str], default: str) -> str:
+        self.choose_calls.append((question, tuple(options)))
+        if not self._answers:
+            return default.lower()
+        return self._answers.pop(0).lower()
+
+    def text(self, question: str, default: str = "") -> str:
+        _ = question
+        return default
+
+    def confirm(self, question: str, *, default: bool = True) -> bool:
+        _ = question
+        return default
+
+
+def _seed_pre_phase_2_workspace(
+    root: Path,
+    *,
+    extra_custom_rules: list[dict[str, str]] | None = None,
+) -> Path:
+    """Seed a workspace whose ``platform.yaml`` carries the Phase 1
+    allow-all sentinel (optionally with user-added custom rules
+    appended). Returns the path to ``platform.yaml``.
+
+    This mirrors what `kolsch setup` produced before commit deaf95f
+    landed the Phase 2.0 §3.1 defaults — the exact starting state
+    the migration is designed to recover from."""
+    root.mkdir(parents=True, exist_ok=True)
+    (root / ".platform").mkdir(parents=True, exist_ok=True)
+    rules: list[dict[str, str]] = [
+        {"who": ".*", "what": ".*", "effect": "allow"},
+    ]
+    if extra_custom_rules:
+        rules.extend(extra_custom_rules)
+    payload = {
+        "schema_version": "0.1",
+        "authorization": {
+            "variant": "rule_based",
+            "config": {"rules": rules},
+        },
+    }
+    yaml_path = root / "platform.yaml"
+    yaml_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    return yaml_path
+
+
+def _rules_in(yaml_path: Path) -> list[dict[str, str]]:
+    payload = yaml.safe_load(yaml_path.read_text())
+    return payload["authorization"]["config"]["rules"]
+
+
+_PHASE_2_0_DEFAULT_WHATS: tuple[str, ...] = (
+    r"agent\.execute\..*",
+    r"tool\.read_file",
+    r"tool\.list_files",
+    r"tool\.write_file",
+    r"tool\.bash",
+)
+
+
+async def test_migration_replaces_allow_all_with_3_1_defaults(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[m]igrate against an allow-all-only workspace → rules become
+    the §3.1 default set; backup file lands under ``.platform/``."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    yaml_path = _seed_pre_phase_2_workspace(tmp_path)
+    prompter = _MigrationPrompter(choose_answers=["m"])
+    io_ = _make_test_io(root=tmp_path, prompter=prompter)
+    args = argparse.Namespace(non_interactive=False, root=tmp_path)
+
+    rc = await run_setup(args, io_)
+    assert rc == 0
+
+    rules = _rules_in(yaml_path)
+    whats = [r["what"] for r in rules]
+    # §3.1 defaults present in order…
+    for default_what in _PHASE_2_0_DEFAULT_WHATS:
+        assert default_what in whats, f"missing default rule: {default_what}"
+    # …and the deny tail is last (first-match-wins floor).
+    assert rules[-1] == {"who": ".*", "what": ".*", "effect": "deny"}
+
+    # Backup file written into .platform/ with the timestamped name.
+    backups = sorted((tmp_path / ".platform").glob("platform.yaml.bak.*"))
+    assert len(backups) == 1, f"expected one backup, found {backups}"
+    backup_payload = yaml.safe_load(backups[0].read_text())
+    backup_rules = backup_payload["authorization"]["config"]["rules"]
+    assert backup_rules == [{"who": ".*", "what": ".*", "effect": "allow"}]
+
+
+async def test_migration_preserves_user_custom_rules_in_position(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """User-added custom rules survive the migration in their relative
+    position (LANDING before the §3.1 default-deny tail). Per
+    E-BUG-CHAT-001 resolution: any rule whose ``(who, what, effect)``
+    triple does NOT match the allow-all sentinel is preserved."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    customs = [
+        {"who": "ag_helper", "what": r"tool\.bash", "effect": "allow"},
+        {"who": ".*", "what": r"agent\.execute\.ag_admin", "effect": "deny"},
+    ]
+    yaml_path = _seed_pre_phase_2_workspace(tmp_path, extra_custom_rules=customs)
+    prompter = _MigrationPrompter(choose_answers=["m"])
+    io_ = _make_test_io(root=tmp_path, prompter=prompter)
+    args = argparse.Namespace(non_interactive=False, root=tmp_path)
+
+    rc = await run_setup(args, io_)
+    assert rc == 0
+
+    migrated = _rules_in(yaml_path)
+    # Both customs present, in original relative order, and BEFORE
+    # the default-deny tail.
+    tail = migrated[-1]
+    assert tail == {"who": ".*", "what": ".*", "effect": "deny"}
+    custom_positions = [migrated.index(c) for c in customs]
+    assert custom_positions == sorted(custom_positions), (
+        f"custom rules out of order: positions={custom_positions}"
+    )
+    assert all(pos < len(migrated) - 1 for pos in custom_positions), (
+        "custom rule landed at or after the default-deny tail"
+    )
+
+
+async def test_migration_keep_mine_does_not_modify_yaml(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[k]eep mine → file content is byte-identical; no backup is
+    written."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    yaml_path = _seed_pre_phase_2_workspace(tmp_path)
+    before = yaml_path.read_bytes()
+    prompter = _MigrationPrompter(choose_answers=["k"])
+    io_ = _make_test_io(root=tmp_path, prompter=prompter)
+    args = argparse.Namespace(non_interactive=False, root=tmp_path)
+
+    rc = await run_setup(args, io_)
+    assert rc == 0
+
+    assert yaml_path.read_bytes() == before
+    assert not list((tmp_path / ".platform").glob("platform.yaml.bak.*"))
+
+
+async def test_migration_skip_defers_decision_no_backup(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[s]kip → file untouched, no backup; surface a "deferred"
+    message so the user knows the prompt will return on next run."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    yaml_path = _seed_pre_phase_2_workspace(tmp_path)
+    before = yaml_path.read_bytes()
+    captured = io.StringIO()
+    prompter = _MigrationPrompter(choose_answers=["s"])
+    io_ = _make_test_io(root=tmp_path, out=captured, prompter=prompter)
+    args = argparse.Namespace(non_interactive=False, root=tmp_path)
+
+    rc = await run_setup(args, io_)
+    assert rc == 0
+    assert yaml_path.read_bytes() == before
+    assert not list((tmp_path / ".platform").glob("platform.yaml.bak.*"))
+    assert "deferred" in captured.getvalue()
+
+
+async def test_migration_diff_then_migrate_shows_diff_and_migrates(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """[d]iff first → user sees a unified diff of current → migrated
+    rules; the prompt re-fires; following with [m] performs the
+    migration. Pins both the diff-display flow and the re-prompt
+    loop's exit condition."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    yaml_path = _seed_pre_phase_2_workspace(tmp_path)
+    captured = io.StringIO()
+    prompter = _MigrationPrompter(choose_answers=["d", "m"])
+    io_ = _make_test_io(root=tmp_path, out=captured, prompter=prompter)
+    args = argparse.Namespace(non_interactive=False, root=tmp_path)
+
+    rc = await run_setup(args, io_)
+    assert rc == 0
+
+    transcript = captured.getvalue()
+    # Diff markers — unified-diff format puts `---`/`+++` headers
+    # then `-`/`+` lines for changes.
+    assert "--- current" in transcript
+    assert "+++ after migration" in transcript
+    # Migration ran after diff.
+    rules = _rules_in(yaml_path)
+    assert rules[-1] == {"who": ".*", "what": ".*", "effect": "deny"}
+    # Migration prompt fired twice (initial + after diff). The full
+    # setup flow also fires Step C's provider prompt; filter to the
+    # migration-specific calls by question text so the count is not
+    # coupled to unrelated steps.
+    migration_calls = [
+        c for c in prompter.choose_calls if "allow-all" in c[0] or "Choose:" in c[0]
+    ]
+    assert len(migration_calls) == 2
+
+
+async def test_migration_non_interactive_skips_silently_with_warning(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Non-interactive re-runs default to skip (no silent mutation
+    of the user's config in CI). A warning surfaces so the user
+    knows the workspace is on the old defaults."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    yaml_path = _seed_pre_phase_2_workspace(tmp_path)
+    before = yaml_path.read_bytes()
+    captured = io.StringIO()
+    io_ = _make_test_io(root=tmp_path, out=captured)
+    args = argparse.Namespace(non_interactive=True, root=tmp_path)
+
+    rc = await run_setup(args, io_)
+    assert rc == 0
+    assert yaml_path.read_bytes() == before
+    assert not list((tmp_path / ".platform").glob("platform.yaml.bak.*"))
+    transcript = captured.getvalue()
+    assert "allow-all" in transcript
+    assert "interactively" in transcript
+
+
+async def test_migration_idempotent_on_already_migrated_workspace(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Running setup against a workspace that ALREADY has the §3.1
+    defaults must not prompt, not write a backup, not modify the
+    file. Pins the sentinel-detection guard: anything other than
+    the literal allow-all sentinel skips the migration path."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    # Fresh setup → §3.1 defaults.
+    first_io = _make_test_io(root=tmp_path)
+    assert (
+        await run_setup(
+            argparse.Namespace(non_interactive=True, root=tmp_path), first_io
+        )
+        == 0
+    )
+    yaml_path = tmp_path / "platform.yaml"
+    before = yaml_path.read_bytes()
+    # Re-run with a prompter that would fail loudly if invoked.
+    failing_prompter = _MigrationPrompter(choose_answers=[])
+    second_io = _make_test_io(root=tmp_path, prompter=failing_prompter)
+    assert (
+        await run_setup(
+            argparse.Namespace(non_interactive=False, root=tmp_path), second_io
+        )
+        == 0
+    )
+    assert yaml_path.read_bytes() == before
+    assert not list((tmp_path / ".platform").glob("platform.yaml.bak.*"))
+    # No MIGRATION prompts fired; Step C's unrelated provider prompt
+    # is acceptable (and orthogonal to the migration path).
+    migration_calls = [
+        c
+        for c in failing_prompter.choose_calls
+        if "allow-all" in c[0] or "Choose:" in c[0]
+    ]
+    assert migration_calls == []
