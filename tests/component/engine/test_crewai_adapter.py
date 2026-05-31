@@ -23,10 +23,18 @@ optional-install pattern, per ``engine/__init__.py``).
 
 from __future__ import annotations
 
+import contextlib
+import io
+import os
+import subprocess
+import sys
+import textwrap
+from pathlib import Path
 from typing import Any
 
 from engine._crewai_adapter import _engine_response_from_crewai, make_llm_callable
-from engine.framework import LLMRequest, Message
+from engine.crewai_framework import CrewAIFramework
+from engine.framework import LLMRequest, LLMResponse, Message
 
 
 class _StubCrewaiLLM:
@@ -315,3 +323,184 @@ def test_engine_response_from_crewai_stringifies_unknown_shapes() -> None:
     response = _engine_response_from_crewai(42)
     assert response.content == "42"
     assert not response.tool_calls
+
+
+# ===========================================================================
+# G1 — Stdout/stderr capture regression (bug-crewai-stdout-leak-investigation)
+# ===========================================================================
+
+
+async def test_run_exchange_suppresses_crewai_stdout_leakage() -> None:
+    """G1 regression pin: ``run_exchange`` MUST wrap
+    ``crew.kickoff_async`` in ``redirect_stdout`` + ``redirect_stderr``
+    so CrewAI's singleton EventListener can't leak prose past the
+    chat renderer.
+
+    CrewAI 1.14.6 wires a process-singleton EventListener whose
+    ``ConsoleFormatter`` is hardcoded ``verbose=True`` regardless
+    of ``Agent(verbose=False)`` / ``Crew(verbose=False)``. Probe 1
+    of the investigation doc captured 665 stdout bytes of EventsBus
+    pairing-mismatch warnings on the failure path plus 2,673 stderr
+    bytes of Python ``logging`` ERROR records; Probe 2 showed
+    ``verbose=True`` adds ~12 KB of Rich panels. Probe 3 confirmed
+    that ``contextlib.redirect_stdout`` + ``redirect_stderr``
+    around ``crew.kickoff_async`` catches the byte stream cleanly
+    in isolation.
+
+    Mechanism: this test wraps the entire ``run_exchange`` call in
+    an OUTER ``redirect_stdout``. If the inner wrap in
+    ``run_exchange`` is intact, CrewAI's writes go to the inner
+    StringIO (discarded) and the outer buffer stays empty. If
+    someone deletes the inner wrap, CrewAI's prose escapes to the
+    outer buffer; the marker assertions below catch it.
+
+    Unlike the other tests in this file (which stub
+    ``crewai.LLM``), this one drives the real
+    ``CrewAIFramework.run_exchange`` end-to-end with a fake
+    ``LLMHandle`` — the leak is a property of the real
+    Agent/Crew/EventListener stack, not the lightweight stub.
+    """
+    framework = CrewAIFramework()
+
+    async def fake_llm(_request: LLMRequest) -> LLMResponse:
+        return LLMResponse(content="Hi from the fake LLM.")
+
+    outer_stdout = io.StringIO()
+    outer_stderr = io.StringIO()
+    with (
+        contextlib.redirect_stdout(outer_stdout),
+        contextlib.redirect_stderr(outer_stderr),
+    ):
+        result = await framework.run_exchange(
+            system_prompt="be brief",
+            user_message="say hi",
+            llm=fake_llm,
+            tools=[],
+        )
+
+    assert "Hi from the fake LLM." in result
+
+    captured_stdout = outer_stdout.getvalue()
+    captured_stderr = outer_stderr.getvalue()
+
+    # Markers spanning the shapes CrewAI's ConsoleFormatter is
+    # known to emit (per the Step A investigation against
+    # crewai/events/utils/console_formatter.py). If a future
+    # CrewAI version adds new prose, extend this list — the
+    # contract is "nothing CrewAI emits reaches the user's
+    # terminal," not "this specific phrase doesn't."
+    crewai_prose_markers = [
+        "Thinking",  # ConsoleFormatter:889 "Thinking...\n"
+        "Crew Execution",  # known crew-panel header
+        "Agent Started",  # known agent-step panel
+        "╭",  # Rich panel top border — any panel at all
+        "╰",  # Rich panel bottom border
+    ]
+    for marker in crewai_prose_markers:
+        assert marker not in captured_stdout, (
+            f"CrewAI stdout leak: {marker!r} in outer stdout. "
+            f"crewai_framework.run_exchange's redirect_stdout wrap "
+            f"is missing or broken — bug-crewai-stdout-leak-"
+            f"investigation Step G1 has regressed."
+        )
+        assert marker not in captured_stderr, (
+            f"CrewAI stderr leak: {marker!r} in outer stderr."
+        )
+
+
+def test_run_exchange_suppresses_crewai_logger_leak_on_failing_llm(
+    tmp_path: Path,
+) -> None:
+    """G1 regression pin — failure-path variant (TC-CREWAI-NOLEAK-02).
+
+    Has actual pre-fix bite. The structural test above passes
+    even pre-fix in the healthy path (CrewAI's ``verbose=False``
+    on success emits nothing). To exercise the wrap's load-bearing
+    contract we need CrewAI's FAILURE path, where the singleton
+    listener's ``Error executing listener call_llm_and_parse: ...``
+    log message hits ``stderr`` (CrewAI's flow.py:3161
+    ``logger.error`` + Python's default ``lastResort`` handler).
+
+    **Why this test runs in a subprocess.** Inside pytest, the
+    root logger is reconfigured so ``lastResort`` doesn't fire —
+    CrewAI's records get swallowed silently into pytest's capture
+    machinery rather than reaching ``sys.stderr``. The pre-fix
+    leak therefore can't be reproduced from inside a pytest test
+    process. The Step H investigation Probe 4 verified the actual
+    behaviour in standalone Python:
+
+    - Pre-fix (no wrap) + raising fake_llm → 72 bytes to stderr:
+      ``Error executing listener call_llm_and_parse: <reason>``.
+    - Post-fix (wrap) + raising fake_llm → 0 bytes.
+
+    Forking a clean Python subprocess restores the standalone
+    logging behaviour; the subprocess writes its findings to its
+    own stdout, this test reads them and asserts the wrap
+    suppressed the leak.
+    """
+    probe_path = tmp_path / "failing_llm_probe.py"
+    probe_path.write_text(
+        textwrap.dedent("""
+            import asyncio, contextlib, io, sys
+            from engine.crewai_framework import CrewAIFramework
+            from engine.framework import LLMRequest, LLMResponse
+
+            async def main() -> int:
+                framework = CrewAIFramework()
+
+                async def failing_llm(_req: LLMRequest) -> LLMResponse:
+                    raise RuntimeError("simulated upstream failure")
+
+                out_buf, err_buf = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out_buf), \\
+                     contextlib.redirect_stderr(err_buf):
+                    with contextlib.suppress(Exception):
+                        await framework.run_exchange(
+                            system_prompt="be brief",
+                            user_message="say hi",
+                            llm=failing_llm,
+                            tools=[],
+                        )
+
+                captured = out_buf.getvalue() + err_buf.getvalue()
+                # Same signature list as the in-process test below;
+                # these are CrewAI's known failure-path emitters.
+                signatures = ("Error executing listener", "[CrewAIEventsBus]")
+                for sig in signatures:
+                    if sig in captured:
+                        print("LEAK_DETECTED", sig, file=sys.__stdout__)
+                        print(
+                            "STDOUT(first 500):", out_buf.getvalue()[:500],
+                            file=sys.__stdout__,
+                        )
+                        print(
+                            "STDERR(first 500):", err_buf.getvalue()[:500],
+                            file=sys.__stdout__,
+                        )
+                        return 1
+                print("CLEAN", file=sys.__stdout__)
+                return 0
+
+            sys.exit(asyncio.run(main()))
+        """).strip()
+    )
+
+    result = subprocess.run(
+        [sys.executable, str(probe_path)],
+        env={**os.environ},
+        capture_output=True,
+        text=True,
+        timeout=30,
+        check=False,
+        cwd=str(Path(__file__).parent.parent.parent.parent / "src"),
+    )
+    assert result.returncode == 0, (
+        f"Failing-LLM subprocess detected a CrewAI leak past the "
+        f"G1 wrap. The wrap at crewai_framework.py:run_exchange has "
+        f"regressed.\nProbe stdout:\n{result.stdout}\n"
+        f"Probe stderr:\n{result.stderr}"
+    )
+    assert "CLEAN" in result.stdout, (
+        f"Probe did not reach the success report; check for setup "
+        f"errors. stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )

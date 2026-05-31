@@ -1677,6 +1677,53 @@ when concrete CrewAI quirks surface.
 adapter risks not covered above. Step 12b adds the corresponding test
 cases (TC-CRW-05+) before merging.
 
+**TC-CREWAI-NOLEAK-01: Chat subprocess does not leak CrewAI signatures** *(bug-crewai-stdout-leak-investigation.md Step H)*
+- Layer: component (subprocess; fake LLM; no real network)
+- Setup: ``chat_workspace`` fixture provides a ``kolsch setup
+  --non-interactive`` workspace; subprocess invokes
+  ``python -m cli chat --model fake/fake-model`` with piped
+  ``"say hi\n/exit\n"`` on stdin.
+- Action: capture the subprocess's stdout + stderr; grep for the
+  CrewAI 1.14.6 listener signature strings (``Thinking``,
+  ``Crew Execution``, ``Agent Started``, ``Task Started``,
+  ``[CrewAIEventsBus]``, ``Working Agent``).
+- Expected: zero signature hits across both streams.
+- Pre-fix bite: NONE in the healthy fake-LLM path — the EchoLLMDriver
+  succeeds, CrewAI's ``verbose=False`` Agent + Crew suppress the
+  panels, and no failure-path warnings fire. The test is a
+  defensive forward-looking pin: future code paths that bypass
+  ``CrewAIFramework.run_exchange`` (e.g., a new sync entry-point)
+  surface here without surfacing in the in-process tests. The
+  load-bearing pre-fix bite lives in TC-CREWAI-NOLEAK-02.
+- Verifies: G1 wrap remains in place on every chat-side code path.
+
+**TC-CREWAI-NOLEAK-02: Failing LLM subprocess does not leak CrewAI logger** *(bug-crewai-stdout-leak-investigation.md Step H)*
+- Layer: component (subprocess-of-subprocess; standalone Python so
+  Python ``logging`` ``lastResort`` handler fires)
+- Setup: pytest test writes a probe script to ``tmp_path`` that
+  constructs ``CrewAIFramework``, builds a raising fake
+  ``LLMHandle``, wraps the ``run_exchange`` call in an outer
+  ``redirect_stdout`` + ``redirect_stderr``, and checks the
+  captured buffers for ``Error executing listener`` (CrewAI's
+  ``flow.py:3161`` ``logger.error``) or ``[CrewAIEventsBus]``.
+- Action: run the probe in a fresh ``sys.executable`` subprocess
+  so pytest's logging-capture machinery doesn't swallow CrewAI's
+  records. The probe exits 0 if no signatures detected, 1 if any.
+- Expected: probe exit 0 and ``"CLEAN"`` in stdout.
+- Pre-fix bite: VERIFIED. Stashing the wrap at
+  ``crewai_framework.py:175-180`` causes the probe to detect the
+  72-byte stderr leak (``Error executing listener
+  call_llm_and_parse: <reason>``) and exit 1; the pytest test
+  fails with the leak details inline. Restoring the wrap
+  re-passes it.
+- Why this needs a subprocess: inside pytest, the root logger is
+  reconfigured so ``lastResort`` doesn't fire — CrewAI's records
+  get captured silently into pytest's machinery rather than
+  reaching ``sys.stderr``. Standalone Python keeps the default
+  ``lastResort`` behaviour, restoring the production leak path.
+- Verifies: G1 wrap at ``crewai_framework.py:run_exchange``
+  catches CrewAI's failure-path logger output.
+
 ---
 
 ## Part 11.6 — CLI surface (TC-CLI-*) — authored in Step 13

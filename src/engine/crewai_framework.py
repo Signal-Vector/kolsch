@@ -41,11 +41,46 @@ Design (per docs/explanation/framework-protocol-design.md):
   preamble text on ``Task.description``. The captured
   ``model.request.data.messages`` (§B.6 amendment) records what
   the LLM actually saw — CrewAI's wrap is part of that record.
+
+- **Stdout/stderr capture around ``kickoff_async``**
+  (bug-crewai-stdout-leak-investigation Step G1, coordinator
+  resolution E-BUG-CREWAI-006 D11). CrewAI 1.14.6 wires a
+  singleton ``EventListener`` whose ``ConsoleFormatter`` is
+  hardcoded ``verbose=True`` regardless of
+  ``Agent(verbose=False)`` / ``Crew(verbose=False)``. Probe 1
+  in the investigation doc captured 665 stdout bytes (EventsBus
+  pairing-mismatch warnings on the failure path) plus 2,673
+  stderr bytes (Python ``logging`` ERROR records) leaking
+  through during a single LLM error; Probe 2 showed
+  ``verbose=True`` adds ~12 KB of Rich panel output. Probe 3
+  confirmed that per-call ``redirect_stdout`` + ``redirect_stderr``
+  catches the byte stream cleanly (no singleton-import-time
+  capture quirk). The fix wraps ``await crew.kickoff_async()``
+  in ``contextlib.redirect_stdout`` + ``redirect_stderr``
+  pointed at ``io.StringIO`` and discards the captured bytes —
+  defense-in-depth against the failure-path warnings, the
+  verbose=True panels, and any future regression upstream that
+  re-routes formatter output through ``sys.stdout`` / ``sys.stderr``.
+
+  *D11 annotation* — CrewAI's failure-path warnings are noise;
+  the user-facing failure signal comes from
+  ``thread.exchange_failed`` events, rendered by the chat's
+  renderer per Phase 2.1 §3. The wrap is therefore safe to
+  discard (no user-relevant signal is in those bytes); the
+  engine event stream carries the authoritative failure UI.
+
+  Caveat: ``redirect_stdout`` is process-wide for the duration
+  of the await, so concurrent coroutines that also write to
+  stdout during the exchange will have their output swallowed
+  too. The engine runs one exchange at a time per chat thread,
+  so this is fine in practice.
 """
 
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import io
 import json
 from typing import TYPE_CHECKING, Any, ClassVar
 from uuid import uuid4
@@ -139,7 +174,18 @@ class CrewAIFramework:
         # asyncio.to_thread inside kickoff_async will pick up
         # main_loop's contextvars but its own asyncio loop is
         # transient; our threadsafe scheduling keeps emits on main_loop.
-        result = await crew.kickoff_async()
+        #
+        # Capture-and-discard wrap — see the module docstring's
+        # "Stdout/stderr capture around kickoff_async" section for
+        # the why (CrewAI 1.14.6's verbose=True singleton + the D11
+        # annotation that failure-path warnings are noise, not signal).
+        # Do NOT remove without first checking that the upstream
+        # singleton has been fixed.
+        with (
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            result = await crew.kickoff_async()
         return _extract_text(result)
 
 
