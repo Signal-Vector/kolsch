@@ -45,6 +45,11 @@ Ctrl-D raises ``EOFError`` and exits the loop cleanly (returns
 current input without exiting (a hint nudges the user toward
 Ctrl-D / ``/exit`` in later steps; for 24a the input simply
 clears).
+
+Chat is interactive-only; the user's submitted line lands in
+the scrollback via prompt_toolkit's terminal echo. Non-TTY
+usage is not supported (use ``kolsch run`` for scripted
+invocation).
 """
 
 from __future__ import annotations
@@ -441,12 +446,6 @@ async def _run_input_loop(  # noqa: PLR0913 — loop owns all the chat state; bu
                 slash_ctx = _refresh_slash_ctx(slash_ctx, state)
                 state.pending_session_id = None
             continue
-        # Echo the user's message ourselves so it appears with the
-        # patch §2.2 "You: " prefix. The user.message event the
-        # engine emits is a redundant confirmation per patch §3
-        # row 2; the renderer treats it as a no-op.
-        stdout.write(f"You: {text}\n")
-        stdout.flush()
         cancel = CancelToken()
         ctx = ExecutionContext(
             thread_id=state.thread_id,

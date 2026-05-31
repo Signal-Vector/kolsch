@@ -203,9 +203,17 @@ async def test_run_input_loop_routes_messages_to_engine(
     rendered = out.getvalue()
     # Echo prefix from the default-tier EchoLLMDriver.
     assert "Echo:" in rendered
-    # The user's submissions surfaced in the output as the "You: " echo.
-    assert "You: hello" in rendered
-    assert "You: second" in rendered
+    # bug-chat-permissions-and-console-leak Step E: chat no
+    # longer writes "You: <text>" itself. In production
+    # prompt_toolkit's terminal echo lands the line in the
+    # scrollback; here DummyOutput discards that echo, so the
+    # captured stdout must be free of "You: ..." copies. The
+    # agent reply (Echo: ...) below proves the loop ran end to
+    # end and routed both submissions through the engine.
+    assert "You: hello" not in rendered
+    assert "You: second" not in rendered
+    assert rendered.count("Echo: hello") == 1
+    assert rendered.count("Echo: second") == 1
 
 
 def test_print_banner_format_matches_patch_2_1_sketch() -> None:
