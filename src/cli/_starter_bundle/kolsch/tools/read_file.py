@@ -33,13 +33,46 @@ _DEFAULT_MAX_BYTES = 1 * 1024 * 1024  # 1 MiB context-budget guard
 
 
 class ReadFileArgs(BaseModel):
-    path: str
-    max_bytes: int = Field(default=_DEFAULT_MAX_BYTES, ge=1)
+    path: str = Field(
+        description=(
+            "Path to the file to read. Workspace-relative "
+            "(``bundles/kolsch/agents/helper.yaml``) or absolute "
+            "(``/abs/path/to/file.txt``). Absolute paths must "
+            "resolve inside ``file_access.allowed_paths``."
+        ),
+    )
+    max_bytes: int = Field(
+        default=_DEFAULT_MAX_BYTES,
+        ge=1,
+        description=(
+            "Refuse to read files larger than this many bytes. "
+            "Default 1 MiB — protects the model's context budget. "
+            "Files exceeding this raise ``file.too_large`` "
+            "(Recoverable) BEFORE being opened."
+        ),
+    )
 
 
 @tool(
     name="read_file",
-    description="Read a UTF-8 text file from the workspace.",
+    description=(
+        "Read the contents of a UTF-8 text file and return it as a "
+        "string. Use this tool when the user asks you to read, "
+        "show, inspect, or look at a file — and any time you need "
+        "the contents of a file to answer a question, fix a bug, "
+        "or make an edit. Prefer this over running ``cat`` via "
+        "``bash``: this tool enforces the workspace's path policy "
+        "and protects against runaway-large reads. "
+        "\n\n"
+        "DO NOT use for directories — call ``list_files`` instead. "
+        "DO NOT use for binary files (images, archives, executables); "
+        "the UTF-8 decode will fail or produce garbage. "
+        "\n\n"
+        "Returns the file's content as a UTF-8 string. Raises "
+        "``file.not_found`` (Recoverable) if the path doesn't exist; "
+        "``file.access_denied`` if outside the allowed scope; "
+        "``file.too_large`` if the file exceeds ``max_bytes``."
+    ),
     args_schema=ReadFileArgs,
 )
 async def read_file(args: ReadFileArgs, ctx: ToolContext) -> str:

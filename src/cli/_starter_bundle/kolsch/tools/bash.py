@@ -35,14 +35,58 @@ _OUTPUT_TRUNCATE_BYTES = 64 * 1024  # 64 KiB per stream
 
 
 class BashArgs(BaseModel):
-    command: str
-    cwd: str | None = None
-    timeout_seconds: int = Field(default=_DEFAULT_TIMEOUT_SECONDS, ge=1)
+    command: str = Field(
+        description=(
+            "Bash command to execute. Single string passed to the "
+            "shell, so quoting and pipelines work as you'd expect "
+            "in a terminal. Examples: 'ls -la', 'git status', "
+            'rg "build_llm" src/, npm test.'
+        ),
+    )
+    cwd: str | None = Field(
+        default=None,
+        description=(
+            "Working directory for the command. Workspace-relative "
+            "or absolute (must resolve inside an allowed path). "
+            "When omitted, runs in the workspace root."
+        ),
+    )
+    timeout_seconds: int = Field(
+        default=_DEFAULT_TIMEOUT_SECONDS,
+        ge=1,
+        description=(
+            "Maximum seconds before the command is killed and "
+            "tool.timeout is raised. Default 60. Increase for "
+            "long-running builds; decrease for quick probes."
+        ),
+    )
 
 
 @tool(
     name="bash",
-    description="Run a shell command in the workspace (timed, truncated).",
+    description=(
+        "Execute a shell command in the workspace and return its "
+        "combined stdout, stderr, and exit code. Use this tool any "
+        "time the user asks you to RUN a command, EXECUTE something, "
+        "check the system state, run tests, run a build, query git, "
+        "or invoke an installed CLI (npm, uv, docker, etc.). When "
+        "the user says 'run X', 'execute X', or quotes a literal "
+        "shell command, this is the tool to call — do not narrate "
+        "or hallucinate the output. "
+        "\n\n"
+        "DO NOT use this tool for file operations: use ``read_file`` "
+        "to read, ``write_file`` to write, ``list_files`` to list a "
+        "directory. Using ``cat`` / ``echo > file`` / ``ls`` via "
+        "bash bypasses the platform's path-policy enforcement and "
+        "loses the structured-return contract the file tools provide. "
+        "\n\n"
+        "Returns ``{exit_code: int, stdout: str, stderr: str, "
+        "duration_seconds: float, timed_out: bool}``. "
+        "stdout and stderr are truncated to 64 KiB each — a "
+        "``[... truncated N bytes]`` suffix appears when truncation "
+        "happens. Commands exceeding ``timeout_seconds`` are killed "
+        "and raise ``tool.timeout``."
+    ),
     args_schema=BashArgs,
 )
 async def bash(args: BashArgs, ctx: ToolContext) -> dict[str, Any]:
