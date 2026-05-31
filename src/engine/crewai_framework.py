@@ -169,6 +169,16 @@ class CrewAIFramework:
             agents=[agent],
             tasks=[task],
             verbose=False,
+            # Inspired by crewAI/crewAI#3789 — tracing=False short-circuits
+            # CrewAI's tracing setup + the "Tracing Status" info panel +
+            # the first-time-consent prompt path. Our G1 wrap already
+            # discards those bytes, so this is belt-and-suspenders: it
+            # avoids the wasted CPU of rendering panels that get thrown
+            # away, and it neutralises any consent-prompt path that might
+            # block on stdin. Confirmed in CrewAI 1.14.6: the tracing
+            # parameter is honoured at the top of should_enable_tracing
+            # (events/listeners/tracing/utils.py:96).
+            tracing=False,
         )
 
         # asyncio.to_thread inside kickoff_async will pick up
