@@ -86,11 +86,18 @@ class _ObservedLLMHandle:
     async def __call__(self, request: LLMRequest) -> LLMResponse:
         call_id = AgentCallId(f"cl_{uuid4()}")
         # BEFORE — model.request (Engine I6).
+        # Bug-engine-tools-wiring-gap.md Step F — include the
+        # tool-schema list the framework forwarded to the LLM.
+        # ``request.tools`` is the canonical post-framework-wrap
+        # source for what the model actually saw (CrewAI / other
+        # frameworks may reshape; the engine emits what crossed
+        # the seam, not the engine-assembled pre-wrap list).
         request_data = ModelRequestData(
             call_id=call_id,
             model=dict(self._model_spec),
             config_event_id=EventId(self._config_event_id or "ev_pending"),
             messages=[m.model_dump(mode="json") for m in request.messages],
+            tools=list(request.tools),
         )
         await self._emit(
             type_=EventType.MODEL_REQUEST,

@@ -155,6 +155,14 @@ class ModelRequestData(_DataModel):
     "what did the model see at this call". The Assembly Procedure
     still applies for projecting future calls (which haven't happened
     yet and therefore haven't been captured).
+
+    Bug-engine-tools-wiring-gap.md Step F extends the capture to the
+    tool list the LLM saw — Engine I3 (Materialization Rule) wants
+    every input that contributed to the model's context recorded on
+    the event, and the tool schemas DO contribute (the model uses
+    them to decide tool_use). Before this extension the JSONL was
+    silent on whether the model saw any tools at all — the symptom
+    the user's hallucination bug surfaced.
     """
 
     call_id: AgentCallId
@@ -164,6 +172,11 @@ class ModelRequestData(_DataModel):
     # post-framework-wrap, pre-LLM-invoke. Replay sources from here,
     # not from the path.
     messages: list[dict[str, Any]] = Field(default_factory=list)
+    # Bug-engine-tools-wiring-gap.md Step F — the LLM-seam tool
+    # schema list. Empty when the agent declares no tools; populated
+    # with one entry per registered tool (``{name, schema, ...}``)
+    # otherwise. Engine I3 (Materialization Rule) compliance.
+    tools: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ModelResponseData(_DataModel):

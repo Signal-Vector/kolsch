@@ -450,6 +450,13 @@ class FallbackLLMHandle:
         # request event — matches the pre-Phase-1.3 observer
         # behaviour. The `from`/`to` fields on `model.fallback` are
         # the canonical (provider, model) pair per patch §3.1.
+        #
+        # Bug-engine-tools-wiring-gap.md Step F — also include the
+        # tool-schema list the framework forwarded. This is the
+        # production emit path (FallbackLLMHandle replaces the
+        # pre-Phase-1.3 _ObservedLLMHandle); the parallel fix in
+        # observers.py is for test paths that still wire
+        # _ObservedLLMHandle directly.
         await self._emit(
             type_=EventType.MODEL_REQUEST,
             data=ModelRequestData(
@@ -457,6 +464,7 @@ class FallbackLLMHandle:
                 model=spec.model_dump(mode="json"),
                 config_event_id=EventId(self._config_event_id or "ev_pending"),
                 messages=[m.model_dump(mode="json") for m in request.messages],
+                tools=list(request.tools),
             ).model_dump(mode="json"),
             actor=Actor(kind="agent", id=self._agent_id),
         )
