@@ -46,7 +46,6 @@ from typing import TYPE_CHECKING, TextIO
 
 from prompt_toolkit import PromptSession
 from rich.console import Console
-from rich.panel import Panel
 from rich.text import Text
 
 from providers import Rule
@@ -252,7 +251,7 @@ class ApprovalModal:
         return effect, rule
 
     # -----------------------------------------------------------------------
-    # Rendering — Rich Panel per patch §4.1
+    # Rendering — capsule per qol-chat-capsule-layout.md §Permission
     # -----------------------------------------------------------------------
 
     def _render_panel(
@@ -262,38 +261,26 @@ class ApprovalModal:
         target: str | None,
         rule_id: str | None,
     ) -> None:
-        lines: list[Text] = []
-        lines.append(Text(f"Tool:    {tool}", style="bold"))
-        if target is not None:
-            label = "Command:" if tool == "bash" else "Target: "
-            lines.append(Text(f"{label} {target}"))
-        if rule_id is not None:
-            lines.append(Text(f"Matched rule: {rule_id}", style="dim"))
-        lines.append(Text(""))
-        # Rich markup treats ``[...]`` as a style tag. Escape the
-        # literal ``[`` brackets via ``\[`` so the panel prints the
-        # patch §4.1 hint characters as-is.
-        lines.append(
-            Text.from_markup(
-                r"[bold green]\[y][/] allow once   "
-                r"[bold green]\[a][/] always allow this pattern",
-            ),
-        )
-        lines.append(
-            Text.from_markup(
-                r"[bold red]\[n][/] deny once    "
-                r"[bold red]\[d][/] deny always",
-            ),
-        )
-        body = Text("\n").join(lines)
-        self._console.print(
-            Panel(
-                body,
-                title="Permission requested",
-                title_align="left",
-                border_style="yellow",
-                padding=(1, 2),
-            ),
+        """Render the permission prompt as a sidebar capsule
+        (qol-chat-capsule-layout.md) — replaces the prior Rich
+        Panel modal. Per-spec layout: source bar, signature line,
+        blank, choice rows, blank, cursor line."""
+        from cli._renderer import _capsule, _now_hhmmss  # noqa: PLC0415
+
+        sig = f"{tool}({target})" if target is not None else f"{tool}()"
+        suffix = f"  —  matched {rule_id}" if rule_id is not None else ""
+        body_lines: list[str] = [
+            f"{sig}{suffix}",
+            "",
+            "[y] once    [a] always allow this",
+            "[n] deny once    [d] always deny",
+            "",
+        ]
+        _capsule(
+            self._console,
+            source="permission",
+            timestamp=_now_hhmmss(),
+            body_lines=body_lines,
         )
 
     # -----------------------------------------------------------------------

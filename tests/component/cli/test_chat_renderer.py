@@ -573,7 +573,11 @@ async def test_thinking_indicator_resets_on_exchange_failed() -> None:
     )
 
 
-async def test_model_response_renders_text_with_agent_prefix() -> None:
+async def test_model_response_renders_text_in_agent_capsule() -> None:
+    """Per qol-chat-capsule-layout.md §Agent capsule — the agent's
+    name appears in the capsule header ``<agent> · HH:MM:SS``;
+    body lines carry the message text. The prior ``Helper:`` prose
+    prefix is gone."""
     rendered = await _render_events(
         [
             _make_event(
@@ -583,8 +587,10 @@ async def test_model_response_renders_text_with_agent_prefix() -> None:
         ],
         agent_name="Helper",
     )
-    assert "Helper:" in rendered
+    assert "Helper" in rendered
     assert "Sure thing." in rendered
+    # Bar character marks the capsule.
+    assert "│" in rendered
 
 
 async def test_agent_message_dedupes_against_last_model_response() -> None:

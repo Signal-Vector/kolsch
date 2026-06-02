@@ -192,14 +192,16 @@ async def test_modal_invalid_choice_reprompts_until_valid() -> None:
     assert result is AuthzEffect.ALLOW
 
 
-async def test_modal_renders_target_label_for_non_bash_tools() -> None:
-    """Non-bash tools use ``Target:`` rather than ``Command:`` in
-    the panel header (cosmetic — patch §4.1's example uses
-    ``Command:`` only for bash)."""
+async def test_modal_renders_target_inside_signature_for_non_bash_tools() -> None:
+    """Per qol-chat-capsule-layout.md §Permission, the target is
+    rendered inside the tool-signature line (``<tool>(<arg>)``)
+    rather than via a separate ``Target:`` row."""
     out = _io.StringIO()
     modal = ApprovalModal(stdout=out, input_fn=_scripted_input(["y"]))
     await modal(rule_id="rl_write", action="tool.write_file", target="/abs/X.py")
-    assert "Target" in out.getvalue()
+    rendered = out.getvalue()
+    assert "/abs/X.py" in rendered
+    assert "write_file" in rendered
 
 
 # ===========================================================================

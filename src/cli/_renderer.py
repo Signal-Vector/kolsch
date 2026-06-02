@@ -50,12 +50,134 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, TextIO
 
+from datetime import datetime
+
 from rich.console import Console
-from rich.markdown import Markdown
-from rich.panel import Panel
 from rich.text import Text
 
 from schemas import EventType
+
+
+# ---------------------------------------------------------------------------
+# Capsule primitive — qol-chat-capsule-layout.md
+# ---------------------------------------------------------------------------
+#
+# A capsule renders a chat block as a sidebar:
+#
+#     │ tool · HH:MM:SS                                   [cyan3]
+#     │ bash(command='ls -la')
+#     │   running
+#
+# Each line is prefixed with the bar character (`│` U+2502) in the source's
+# color. The header carries `<source> · HH:MM:SS` (source label in source
+# color; timestamp in grey50). No closing border; blank line between
+# capsules.
+
+_BAR = "│"
+_CODE_BAR = "┃"
+
+_CAPSULE_PALETTE: dict[str, str] = {
+    "user": "bright_blue",
+    "agent": "grey70",
+    "system": "grey42",
+    "permission": "dark_orange3",
+    "tool": "cyan3",
+    "tool-dim": "cyan3 dim",
+    "code": "cyan",
+}
+
+
+def _now_hhmmss() -> str:
+    return datetime.now().strftime("%H:%M:%S")  # noqa: DTZ005 — local time is right for UX
+
+
+def _render_agent_capsule(console: Console, agent_name: str, text: str) -> None:
+    """Render an agent message as a sidebar capsule with `┃ `
+    code-block styling for ``` fenced sections per
+    qol-chat-capsule-layout.md §Code block.
+
+    Splits the text on triple-backtick boundaries. Prose lines get
+    the outer agent bar `│`; code-block lines get the outer bar
+    PLUS the inner `┃` in cyan. The language label appears on its
+    own `┃ <lang>` line before the code body.
+    """
+    style = _CAPSULE_PALETTE["agent"]
+    ts = _now_hhmmss()
+
+    # Header.
+    header = Text()
+    header.append(f"{_BAR} ", style=style)
+    header.append(agent_name, style=style)
+    header.append(f" · {ts}", style="grey50")
+    console.print(header)
+
+    in_code = False
+    lang = ""
+    for raw_line in text.split("\n"):
+        if raw_line.startswith("```"):
+            if not in_code:
+                lang = raw_line[3:].strip() or "text"
+                # Emit the `┃ <lang>` header inside the agent capsule.
+                line = Text()
+                line.append(f"{_BAR} ", style=style)
+                line.append(f"{_CODE_BAR} ", style=_CAPSULE_PALETTE["code"])
+                line.append(lang, style=_CAPSULE_PALETTE["code"])
+                console.print(line)
+                in_code = True
+            else:
+                in_code = False
+                lang = ""
+            continue
+        line = Text()
+        line.append(f"{_BAR} ", style=style)
+        if in_code:
+            line.append(f"{_CODE_BAR} ", style=_CAPSULE_PALETTE["code"])
+            line.append(raw_line)
+        else:
+            line.append(raw_line)
+        console.print(line)
+
+    console.print()
+
+
+def _capsule(
+    console: Console,
+    *,
+    source: str,
+    header_extra: str = "",
+    body_lines: list[str],
+    timestamp: str | None = None,
+    color: str | None = None,
+) -> None:
+    """Print one capsule per qol-chat-capsule-layout.md spec.
+
+    ``source`` is the label (``"tool"`` / ``"permission"`` / etc.);
+    ``color`` overrides the palette lookup when set (e.g. the dim
+    failed-tool variant).
+    ``header_extra`` lets callers append duration info (`→ HH:MM:SS (1.8s)`).
+    ``body_lines`` are the content lines; each gets the bar prefix.
+    """
+    style = color if color is not None else _CAPSULE_PALETTE.get(source, "white")
+    ts = timestamp if timestamp is not None else _now_hhmmss()
+
+    # Header: bar + label + · + timestamp.
+    header = Text()
+    header.append(f"{_BAR} ", style=style)
+    header.append(source, style=style)
+    header.append(f" · {ts}", style="grey50")
+    if header_extra:
+        header.append(f" {header_extra}", style=style)
+    console.print(header)
+
+    # Body: each line gets the bar prefix.
+    for line in body_lines:
+        body = Text()
+        body.append(f"{_BAR} ", style=style)
+        body.append(line)
+        console.print(body)
+
+    # Blank line separator between capsules.
+    console.print()
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator, Callable
@@ -161,6 +283,13 @@ class Renderer:
         # exchange's first ``model.request`` fires again.
         self._current_exchange_id: str | None = None
         self._last_indicated_exchange_id: str | None = None
+        # qol-chat-capsule-layout.md §Tool capsule — tool.called is
+        # silent; tool.result / tool.failed render the completed
+        # capsule. We carry the call's arguments from tool.called to
+        # the matching tool.result/tool.failed via this map so the
+        # rendered signature shows args (the result event itself
+        # doesn't carry them).
+        self._tool_call_args: dict[str, dict[str, object]] = {}
 
     # -----------------------------------------------------------------------
     # The single public method
@@ -252,9 +381,7 @@ class Renderer:
         text = self._extract_text(content)
         if not text:
             return
-        self._console.print(Text(f"{self._agent_name}: ", style="bold"), end="")
-        self._console.print(Markdown(text))
-        self._console.print()  # trailing blank for readability
+        _render_agent_capsule(self._console, self._agent_name, text)
         self._last_agent_text = text
 
     def _render_agent_message(self, event: Event) -> None:
@@ -265,59 +392,71 @@ class Renderer:
         if text == self._last_agent_text:
             return  # patch §3 row 9 — non-divergent, no re-render
         # Diverges from what model.response rendered — re-print.
-        self._console.print(Text(f"{self._agent_name}: ", style="bold"), end="")
-        self._console.print(Markdown(text))
-        self._console.print()
+        _render_agent_capsule(self._console, self._agent_name, text)
         self._last_agent_text = text
 
     def _render_tool_called(self, event: Event) -> None:
-        tool_name = str(event.data.get("tool_name", "<unknown>"))
-        args = event.data.get("arguments") or {}
-        header = f"▶ {tool_name}({_format_args(args)})"
-        self._console.print(
-            Panel(
-                Text("running...", style="dim"),
-                title=header,
-                title_align="left",
-                border_style="cyan",
-                padding=(0, 1),
-            ),
-        )
+        """``tool.called`` is silent per qol-chat-capsule-layout.md
+        §Tool capsule (one-capsule-per-tool-call discipline).
+
+        Captures the call's arguments by tool_call_id so the
+        matching ``tool.result`` / ``tool.failed`` capsule can
+        render the full ``<tool>(<args>)`` signature line —
+        result events themselves don't carry the arguments.
+
+        Rich `Live`-based in-place evolution is deferred (the
+        QoL's escalation path #1 — static-capsule-only).
+        """
+        tool_call_id = str(event.data.get("tool_call_id", ""))
+        if tool_call_id:
+            self._tool_call_args[tool_call_id] = (
+                event.data.get("arguments") or {}
+            )
 
     def _render_tool_result(self, event: Event) -> None:
+        """Tool-result capsule — the completed form per spec."""
         tool_name = str(event.data.get("tool_name", "<unknown>"))
+        tool_call_id = str(event.data.get("tool_call_id", ""))
+        args = self._tool_call_args.pop(tool_call_id, {})
+        signature = f"{tool_name}({_format_args(args)})"
         result = event.data.get("result") or {}
         body, truncated_lines = _truncate_tool_body(
             _format_tool_result(result),
             max_lines=_TOOL_RESULT_MAX_LINES,
         )
-        suffix = ""
+        body_lines: list[str] = [signature]
+        for line in body.split("\n"):
+            body_lines.append(f"  {line}")
         if truncated_lines > 0:
             tool_call_id = str(event.data.get("tool_call_id", "?"))
-            suffix = f"\n[{truncated_lines} more lines, /show {tool_call_id} for full]"
-        self._console.print(
-            Panel(
-                Text(body + suffix),
-                title=f"▼ {tool_name}",
-                title_align="left",
-                border_style="green",
-                padding=(0, 1),
-            ),
+            body_lines.append(
+                f"  [{truncated_lines} more lines, /show {tool_call_id} for full]",
+            )
+        _capsule(
+            self._console,
+            source="tool",
+            body_lines=body_lines,
         )
 
     def _render_tool_failed(self, event: Event) -> None:
+        """Tool-failed capsule — dim cyan variant per spec.
+
+        The header gains a `failed` suffix; the whole bar dims so the
+        user reads "transactional record, this didn't succeed."
+        """
         tool_name = str(event.data.get("tool_name", "<unknown>"))
+        tool_call_id = str(event.data.get("tool_call_id", ""))
+        args = self._tool_call_args.pop(tool_call_id, {})
+        signature = f"{tool_name}({_format_args(args)})"
         error = event.data.get("error") or {}
         code = _error_code(error)
         message = str(error.get("message", ""))
-        self._console.print(
-            Panel(
-                Text(f"{code}: {message}", style="red"),
-                title=f"✗ {tool_name}",
-                title_align="left",
-                border_style="red",
-                padding=(0, 1),
-            ),
+        _capsule(
+            self._console,
+            source="tool",
+            color=_CAPSULE_PALETTE["tool-dim"],
+            header_extra="failed",
+            body_lines=[signature, f"  {code}: {message}"],
         )
 
     def _render_exchange_failed(self, event: Event) -> None:
