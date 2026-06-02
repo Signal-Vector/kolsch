@@ -114,6 +114,9 @@ async def web_search(args: WebSearchArgs, ctx: ToolContext) -> dict:
 @tool(
     name              str           required
     description       str           required
+    summary           str?          optional; one-line summary used by
+                                    tools.summary() rendering (Phase 2.2).
+                                    Default: first sentence of description.
     args_schema       BaseModel?    optional; if absent, tool takes no args
     secrets_needed    [str]         optional; default []
     returns_schema    BaseModel?    optional; for tools returning structured data
@@ -130,6 +133,15 @@ references, in the model's tool-call requests. Must match `[a-z][a-z0-9_]*`.
 of the tool definition. Quality of description directly affects whether
 the LLM uses the tool correctly. Tool authors are responsible for writing
 clear, trigger-rich descriptions.
+
+**`summary`** *(Phase 2.2, ENV-R5)* — one-line summary used by
+`tools.summary()` rendering in Jinja-templated prompts (see
+process/phase2.2-agent-envelope-specs.md §5). Surfaced as
+`ToolItem.summary` on the `tools` variable. Optional; defaults to
+the substring of `description` from start through the first period
+(trimmed). The model still receives the full `description` via the
+upstream LLM API's `tools=` parameter — `summary` only affects the
+prompt's conversational tool section.
 
 **`args_schema`** — the Pydantic model describing the tool's parameters.
 The platform exports this as JSON Schema for the LLM. Optional for tools
@@ -422,7 +434,7 @@ The v1 default allow-all rule covers all of them. Restrictive rule sets
 
 *(Phase 2.0, TOOL-R1. Supersedes the Phase 1 sketch in Part 4 for the
 concrete shipping set; the patch source of truth is
-`docs/process/phase2.0-tools-specs.md` Part 1.)*
+`process/phase2.0-tools-specs.md` Part 1.)*
 
 Phase 2.0 ships the platform's canonical builtin tool set as plain
 `@tool`-decorated Python files in **`bundles/kolsch/tools/`**, not as
@@ -570,7 +582,7 @@ bundles/kolsch/
 `bundles/kolsch/` is the canonical bundle name from Phase 2.0 onward.
 Phase 1.2 originally scaffolded `bundles/starter/`; Phase 2.3's drift
 detection handles the rename — see TOOL-R12 alignment note in
-`docs/process/phase1.2-usability-specs.md` §2.4 for the migration
+`process/phase1.2-usability-specs.md` §2.4 for the migration
 mechanism.
 
 ### 4.6 The chat as canonical callback consumer (Phase 2.1, CHAT-R1)
@@ -580,7 +592,7 @@ The Phase 2.0 prompt-callback hook (see
 patch §4.2) is consumed by the `kolsch chat` REPL — that's its
 purpose. The chat's modal IS the reference implementation; the
 hook's contract was shaped specifically for the four-choice
-modal that 2.1 ships (see `docs/process/phase2.1-chat-specs.md`
+modal that 2.1 ships (see `process/phase2.1-chat-specs.md`
 §4 for the modal + callback wiring).
 
 **Non-chat callers must NOT implement their own modal.** Per
@@ -859,6 +871,39 @@ of the platform's async-first stance.
 An agent's resolved config MUST NOT contain two tools with the same
 `name`. Builtin/declared/MCP namespaces are flat from the model's
 perspective. Conflicts at config resolution are Layer 3 errors.
+
+---
+
+## Part 7.5 — Permission API for tool authors (Phase 2.2, ENV-R5)
+
+Phase 2.2 adds a small module — `kolsch.tools.permissions` —
+that lets tool functions query the composed authz rule set
+programmatically from inside a `@tool` body.
+
+```python
+permissions.check(who: str, what: str) -> AuthzEffect
+permissions.require(who: str, what: str) -> None
+```
+
+`who` is the principal pattern (the agent or user identity —
+e.g. `"agent.ag_helper"`); `what` is the action OR target
+pattern (e.g. `"tool.bash"` for the action, or the resolved
+path the tool is about to touch). The orientation matches
+§3.2.1 — see that section for the regex semantics.
+
+**Behaviour:**
+
+- Uses the SAME composed rules as engine pre-dispatch: walks
+  agent permissions (§3.8) → platform rules → default-deny.
+- Returns `DENY` when no rule matches (default-deny tail).
+- Treats `PROMPT` as `DENY` for `require` in non-chat context
+  (mid-tool prompts are deferred per Phase 2.2 §12 item 1).
+
+**Implementation:** the engine's tool dispatcher binds a
+`ContextVar` to a carrier with the agent's composed permissions
+just before calling the tool function, and clears it after (in
+both the success and exception paths). Out-of-context calls
+raise `tool.permissions_no_context` (Fatal).
 
 ---
 

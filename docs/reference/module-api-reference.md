@@ -1310,7 +1310,7 @@ class EngineCapabilities(BaseModel):
 `crewai.LLM`. Owns the connector registry, the connector Protocols,
 and the small `build_llm` helper the Agent Engine calls per exchange.
 
-**Originating spec:** `docs/process/phase1.1-llm-specs.md` +
+**Originating spec:** `process/phase1.1-llm-specs.md` +
 `docs/explanation/llm-providers.md`.
 
 ### 11.5.1 Public API
@@ -1571,7 +1571,7 @@ Full per-code table: Error Model §4.15.
 The runtime + CLI surfaces for live-editing the workspace's
 Authorization rule list, the new `prompt` effect, and the rule-id
 scheme the CLI commands reference. Patch source of truth:
-`docs/process/phase2.0-tools-specs.md` §2 (`prompt` effect) + §4
+`process/phase2.0-tools-specs.md` §2 (`prompt` effect) + §4
 (live editing).
 
 The Authorization provider's runtime API is documented in §8. This
@@ -1710,7 +1710,7 @@ Full per-code table: Error Model §4.16.
 The `kolsch chat` REPL — a streaming terminal interface that
 turns `runtime.engine.execute_stream`'s event sequence into a
 conversational view. Patch source of truth:
-`docs/process/phase2.1-chat-specs.md` Parts 1–6.
+`process/phase2.1-chat-specs.md` Parts 1–6.
 
 The chat module owns: the command argv contract, the
 event-to-render mapping, the four-choice approval modal that
@@ -1832,6 +1832,100 @@ that keeps terminal-native scrolling and selection working.
 | `chat.callback_resolution_failed` | Modal pattern-edit produced an invalid Rule |
 
 Full per-code table: Error Model §4.17.
+
+---
+
+## Part 11.10 — Agent Envelope (Phase 2.2)
+
+The agent-envelope machinery — Jinja templating, per-agent
+permissions, context files, and agent inheritance via `extends:`.
+Patch: `process/phase2.2-agent-envelope-specs.md`.
+
+### 11.10.1 `kolsch.tools.permissions`
+
+Two async functions backed by a `ContextVar` bound by the
+engine's tool dispatcher:
+
+```python
+permissions.check(who: str, what: str) -> AuthzEffect
+permissions.require(who: str, what: str) -> None
+```
+
+`who` is the principal pattern (e.g. `"agent.ag_helper"`);
+`what` is the action OR target pattern. Walks the composed
+rule list — agent permissions → platform rules → default-deny.
+
+Out-of-context calls raise `tool.permissions_no_context`. The
+ContextVar is cleared in both the success and exception paths
+of the dispatcher.
+
+### 11.10.2 The Jinja render context
+
+```python
+templating.render.render_prompt(
+    template_string: str,
+    context: dict[str, Any],
+    *,
+    template_name: str = "<inline>",
+) -> str
+```
+
+Pure Jinja2 render harness. Uses `jinja2.Environment` with
+`StrictUndefined`, `autoescape=False`. `template_name` identifies
+the source for error reporting; the engine pre-flight passes the
+agent's YAML path. Render failures surface as
+`errors.ConfigTemplateRenderFailed`
+(`code = "config.template_render_failed"`, Fatal) with
+`detail = {template, reason}`.
+
+The engine pre-flight binds the five standardized variables:
+
+| Key | Type | Default rendering |
+|---|---|---|
+| `tools` | `ToolsVar` (list-shaped) | `tools.list()` — markdown blocks per tool |
+| `docs` | `DocsVar` (list-shaped) | primaries inlined + secondaries listed |
+| `workspace` | `WorkspaceVar` (single-object) | `## Active workspace` + path + allow/deny lists |
+| `agent` | `AgentVar` (single-object) | `<name> (<id>) — <provider>/<model>` |
+| `platform` | `PlatformVar` (single-object) | `Workspace: <path> · Providers: <names> · <N> rules` |
+
+List-shaped variables expose `.list()` / `.summary()` /
+`.names()` / `.get(name)` / `.count` plus `__iter__`, `__len__`,
+`__getitem__`, `__contains__`.
+
+### 11.10.3 `extends:` chain resolution
+
+`templating.inheritance.resolve_extends_chain(agent_path,
+workspace_root) -> list[AgentConfig]` walks the chain from
+leaf to root, detecting cycles. Failure modes:
+`config.parent_agent_not_found`, `config.agent_inheritance_cycle`.
+
+`templating.inheritance.apply_inheritance(chain) ->
+ResolvedAgentConfig` applies wholesale-per-field override from
+root toward leaf.
+
+The child's `prompt:` is rendered as a Jinja template with
+`parent` bound to the parent's prompt source via a custom
+`DictLoader`. Required blocks (`{% block X required %}`) surface
+as `config.required_block_missing` when child extends but does
+not override.
+
+### 11.10.4 Failure surface (summary)
+
+Eleven codes per Error Model §4.18:
+
+| Code | Level | Where |
+|---|---|---|
+| `config.context_file_unprefixed` | Fatal | agent-load |
+| `context.file_not_found` | Fatal | agent-load |
+| `context.file_too_large` | Fatal | agent-load |
+| `config.template_render_failed` | Fatal | pre-flight 5.6.6 |
+| `config.required_block_missing` | Fatal | pre-flight 5.6.6 |
+| `config.agent_inheritance_cycle` | Fatal | pre-flight 5.6.5 |
+| `config.parent_agent_not_found` | Fatal | pre-flight 5.6.5 |
+| `config.extends_template_without_inheritance` | Fatal | pre-flight 5.6.6 |
+| `agent.template_warning` | Recoverable (Warning) | pre-flight 5.6.6 |
+| `authz.denied` | Recoverable | pre-dispatch + tool's `permissions.require` |
+| `tool.permissions_no_context` | Fatal | tool API called outside dispatcher |
 
 ---
 

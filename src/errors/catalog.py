@@ -17,6 +17,27 @@ CATALOG: dict[str, Level] = {
     "config.unknown_variant": Level.FATAL,
     "config.version_mismatch": Level.FATAL,
     "config.merge_failed": Level.FATAL,
+    # Phase 2.2 (ENV-R6, §4.18) — Jinja render failure surfaced by
+    # templating.render.render_prompt. Listed here alongside other
+    # config.* kernel codes; further §4.18 codes (context.*,
+    # config.required_block_missing, etc.) land as subsequent
+    # Phase 2.2 steps ship them.
+    "config.template_render_failed": Level.FATAL,
+    # Phase 2.2 Step 8 (ENV-R6, §4.18) — agent declares a
+    # context_file or extends: path without the kolsch: /
+    # workspace: prefix.
+    "config.context_file_unprefixed": Level.FATAL,
+    # Phase 2.2 Step 12 (ENV-R6, §4.18) — context file resolution errors.
+    "context.file_not_found": Level.FATAL,
+    "context.file_too_large": Level.FATAL,
+    # Phase 2.2 Step 13 (ENV-R6, §4.18) — agent inheritance errors.
+    "config.agent_inheritance_cycle": Level.FATAL,
+    "config.parent_agent_not_found": Level.FATAL,
+    "config.required_block_missing": Level.FATAL,
+    "config.extends_template_without_inheritance": Level.FATAL,
+    # Phase 2.2 Step 10 (ENV-R6, §4.18) — tool's permissions API
+    # invoked outside the engine's dispatcher binding.
+    "tool.permissions_no_context": Level.FATAL,
     # ----- §4.2 Session/Run Store --------------------------------------
     "session.not_found": Level.FATAL,
     "thread.not_found": Level.FATAL,
@@ -106,7 +127,7 @@ CATALOG: dict[str, Level] = {
     # reference implementation. When a wrapped exception must surface
     # at Fatal severity, raise `PlatformInternalError` instead.
     "platform.wrapped": Level.DIAGNOSTIC,
-    # ----- §4.13 LLM Configuration (Phase 1.1) -------------------------
+    # ----- §4.13 LLM Configuration -------------------------
     "llm.provider_not_configured": Level.FATAL,
     "llm.secret_missing": Level.FATAL,
     "llm.client_init_failed": Level.FATAL,
@@ -120,12 +141,12 @@ CATALOG: dict[str, Level] = {
     # PlatformError; flag for spec amendment alongside the other
     # post-spec catalog additions above.
     "llm.connector_duplicate": Level.FATAL,
-    # ----- §4.14 Workspace (Phase 1.2, UX-R6) --------------------------
+    # ----- §4.14 Workspace --------------------------
     "workspace.not_initialized": Level.FATAL,
     "workspace.permission_denied": Level.FATAL,
     "setup.aborted": Level.RECOVERABLE,
     "setup.starter_exists": Level.RECOVERABLE,
-    # ----- §4.15 Model Fallback (Phase 1.3, FB-R5) ---------------------
+    # ----- §4.15 Model Fallback ---------------------
     # Four Recoverable codes — drive the fallback loop.
     "model.rate_limited": Level.RECOVERABLE,
     "model.server_error": Level.RECOVERABLE,
@@ -140,7 +161,7 @@ CATALOG: dict[str, Level] = {
     # taxonomy since the Error Model doesn't yet have a Warning tier
     # (flagged in Phase 1.3 Step 19 review for follow-up).
     "config.fallback_duplicate": Level.DIAGNOSTIC,
-    # ----- §4.16 Tools & Permissions (Phase 2.0, TOOL-R5) --------------
+    # ----- §4.16 Tools & Permissions --------------
     # Five authz.* codes for the prompt-effect dispatch and the live-
     # edit CLI; two new file.* codes for the Phase 2.0 builtin tools
     # (file_access.denied from §4.11 covers the access-denied surface

@@ -131,13 +131,48 @@ class AssetManagement:
             load_agent_definition, Path(agent_entry.path)
         )
 
+        # Phase 2.2 Step 14 — if the agent declares `extends:`, walk the
+        # parent chain BEFORE the kernel merge so the parents participate
+        # as additional layers. The leaf (this agent) wins per-field
+        # wholesale; the kernel's RFC 7386 merge applied to the
+        # parents-then-child sequence gives the same result as
+        # apply_inheritance + downstream defaults composition.
+        agent_partials_chain: list[dict[str, Any]] = [agent_partial]
+        if isinstance(agent_partial, dict) and agent_partial.get("extends"):
+            from templating.inheritance import (  # noqa: PLC0415
+                resolve_extends_chain,
+            )
+
+            extends_chain = await asyncio.to_thread(
+                resolve_extends_chain,
+                Path(agent_entry.path),
+                self._root,
+            )
+            # `resolve_extends_chain` returns leaf-first; strip the
+            # extends key from each layer so it doesn't survive into
+            # the merged config.
+            agent_partials_chain = [
+                {k: v for k, v in layer.items() if k != "extends"}
+                for layer in extends_chain
+            ]
+
         # Step 2 — assemble system defaults from platform.yaml.
         defaults = platform_cfg.get("defaults", {})
 
         # Step 3 — pre-resolve prompts on each layer (Am-I4 + Am-I5).
+        # When extends: was walked above, the agent_partials_chain has
+        # the leaf at index 0 and ascends — we reverse it for the kernel
+        # merge (which applies layers in order, last-wins) so the leaf
+        # ends up last and its values override parents.
+        resolved_agent_partial = agent_partials_chain[0]
+        if len(agent_partials_chain) > 1:
+            composed: dict[str, Any] = {}
+            for layer in reversed(agent_partials_chain):
+                composed.update(layer)
+            resolved_agent_partial = composed
         partials = assemble_partials(
             defaults=pre_resolve_prompts(defaults, catalog),
-            agent_config=pre_resolve_prompts(agent_partial, catalog),
+            agent_config=pre_resolve_prompts(resolved_agent_partial, catalog),
             call_overrides=(
                 pre_resolve_prompts(call_overrides, catalog) if call_overrides else None
             ),

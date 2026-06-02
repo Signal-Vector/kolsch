@@ -43,6 +43,10 @@ _KNOWN_SECTIONS: frozenset[str] = frozenset(
         # Phase 1.1 LLM Provider Configuration — patch §2.2.
         "llm_providers",
         "model_aliases",
+        # Phase 2.2 (ENV-R2) — optional multi-line text describing the
+        # workspace's purpose. Surfaced in agent prompts via
+        # `{{ workspace.summary }}` and `{{ platform.workspace_summary }}`.
+        "workspace_summary",
     }
 )
 
@@ -153,9 +157,17 @@ def _load_existing(path: Path) -> dict[str, Any]:
 
 
 def _validate_section_shape(payload: dict[str, Any]) -> None:
-    """Each declared section must itself be a mapping."""
+    """Each declared section must itself be a mapping (with two
+    Phase 2.2 exceptions: ``workspace_summary`` is a string;
+    ``model_aliases`` is a flat alias→ref string map but happens
+    to satisfy mapping shape already)."""
     errors: list[dict[str, Any]] = []
     for key, value in payload.items():
+        # Phase 2.2 (ENV-R2) — workspace_summary is a string, not a
+        # mapping. Skip the shape check; downstream consumers treat
+        # any non-string as None.
+        if key == "workspace_summary":
+            continue
         if not isinstance(value, dict):
             errors.append(
                 {

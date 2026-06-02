@@ -76,6 +76,25 @@ That is the entire user-facing surface of v1. It is intentionally small.
   pre-stream only in v1.3: once the first content event has
   fired, the exchange ends with the truncation rather than
   swapping models mid-stream.
+- **Jinja2-templated prompts** *(Phase 2.2, ENV-R4)* — the
+  `prompt:` field is rendered as a Jinja2 template with
+  `StrictUndefined`. Plain-text prompts (no `{{`, `{%`) render
+  byte-identical to themselves. Standardized variables: `tools`,
+  `docs`, `workspace`, `agent`, `platform`.
+- **Per-agent envelope fields** *(Phase 2.2)* — agents declare
+  `permissions:` (per-agent authz rules composed over platform
+  rules), `context_files:` (kolsch- or workspace-prefixed
+  documentation files inlined or referenced in the prompt), and
+  `extends:` (single-parent inheritance with wholesale-per-field
+  override).
+
+**Agent YAML fields in v1** (post-Phase 2.2): `schema_version`,
+`assembly_version`, `agent_id`, `name`, `description`, `model`,
+`fallback_models`, `io`, `prompt`, `subsystems`, and the Phase
+2.2 envelope additions `extends`, `permissions`, `context_files`.
+Composition order: `schema default ← defaults.<field> ← extends
+chain ← agent` (wholesale-per-field override; see Schemas
+§A.11.2).
 
 ### 2.3 Session and log capabilities in v1
 
@@ -147,7 +166,7 @@ That is the entire user-facing surface of v1. It is intentionally small.
   attribute — the YAML is untouched). The chat is the canonical
   consumer of Phase 2.0's prompt-callback hook — the four-choice
   modal that fires on `prompt`-effect rules lives here.
-  See `docs/process/phase2.1-chat-specs.md` for the full contract.
+  See `process/phase2.1-chat-specs.md` for the full contract.
 
 ### 2.5 Deployment
 

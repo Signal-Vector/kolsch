@@ -64,6 +64,7 @@ class BashArgs(BaseModel):
 
 @tool(
     name="bash",
+    summary="Run a shell command in the workspace.",
     description=(
         "Execute a shell command in the workspace and return its "
         "combined stdout, stderr, and exit code. Use this tool any "

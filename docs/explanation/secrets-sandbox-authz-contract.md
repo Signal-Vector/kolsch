@@ -573,7 +573,7 @@ document new check points.
 ## 3.7 The `prompt` Effect (Phase 2.0)
 
 *(Phase 2.0, TOOL-R3. Patch source of truth:
-`docs/process/phase2.0-tools-specs.md` Part 2.)*
+`process/phase2.0-tools-specs.md` Part 2.)*
 
 Phase 2.0 introduces a third effect value, `prompt`, alongside the
 existing `allow` and `deny`. The Authorization provider treats it
@@ -641,7 +641,7 @@ Replay sees both events; reconstruction is honest about which calls
 were user-approved live versus allowed by pre-existing rules.
 
 **See also (Phase 2.1, CHAT-R2):** the `kolsch chat` REPL is the
-canonical consumer of this callback — `docs/process/phase2.1-chat-
+canonical consumer of this callback — `process/phase2.1-chat-
 specs.md` §4 covers the modal's four-choice surface (`[y]`/`[n]`/
 `[a]`/`[d]`), the pattern suggestor that pre-fills the `[a]`/`[d]`
 rule's `what` from the call's target string, and the tuple-return
@@ -716,6 +716,81 @@ Explainability is required.
 ### A-I6 — Async semantics
 
 All methods are `async`, consistent with the rest of the platform.
+
+---
+
+## 3.8 Per-agent permissions (Phase 2.2, ENV-R3)
+
+Phase 2.2 (process/phase2.2-agent-envelope-specs.md §1) adds
+**per-agent** authorization rules that compose over the platform
+rules. Same `Rule` shape as §3.2.1; same `re.fullmatch` semantics;
+same first-match-wins discipline.
+
+### 3.8.1 Composition order
+
+When the engine evaluates `allow(...)` for a tool call, the rule
+lists are walked in this order — first match returns its effect:
+
+1. **Agent's `permissions:`** in declaration order (loaded from
+   the agent's resolved config — itself composed via Phase 2.2
+   §8.2 from `agent → extends chain → defaults.permissions →
+   schema default`).
+2. **Platform's `authorization.config.rules`** in declaration
+   order.
+3. **Platform's default-deny tail** (`rl_default_deny`).
+
+Agent rules can widen, narrow, or shift the effect for any
+principal-action-target combination; the platform's default-deny
+tail still catches unhandled cases.
+
+### 3.8.2 Provider surface change
+
+`AuthorizationProvider.allow` (§3.3) gains an optional
+keyword-only `agent_permissions` parameter:
+
+```python
+class AuthorizationProvider(Protocol):
+    async def allow(
+        self,
+        principal: str,
+        action: str,
+        *,
+        target: str | None = None,
+        callback: PromptCallback | None = None,
+        agent_permissions: list[Rule] | None = None,   # Phase 2.2
+    ) -> AuthorizationResult: ...
+```
+
+When `agent_permissions` is `None` or empty, behaviour is
+identical to Phase 2.0 / 2.1 — every existing caller continues
+to work unchanged.
+
+The matched `AuthorizationResult.matched_rule` is the rule that
+fired (agent OR platform); a `who_chain` token in the result's
+`reason` names which layer matched.
+
+### 3.8.3 The `permissions` API for tool authors
+
+Phase 2.2 §2 adds a small module — `kolsch.tools.permissions` —
+with two async functions:
+
+```python
+permissions.check(who: str, what: str) -> AuthzEffect
+permissions.require(who: str, what: str) -> None
+```
+
+`who` is the principal pattern (the agent or user identity);
+`what` is the action OR target pattern. `check` returns the
+effect; `require` raises `PlatformError("authz.denied", ...)`
+on `DENY` or on `PROMPT` when no callback is available
+(non-chat callers).
+
+Implementation: a `ContextVar` set by the engine's tool
+dispatcher before the tool function is called, cleared after.
+Out-of-context calls raise `tool.permissions_no_context`.
+
+See process/phase2.2-agent-envelope-specs.md §2 for the full
+behaviour table.
 
 ---
 

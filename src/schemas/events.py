@@ -77,6 +77,12 @@ class EventType(StrEnum):
     # Compaction
     CONTEXT_COMPACTED = "context.compacted"
 
+    # Phase 2.2 (ENV §9) — template-config consistency warnings
+    # emitted by the engine's pre-flight step 5.6.6 AST walker when a
+    # prompt references variable data the resolved config doesn't carry
+    # (e.g. ``{{ tools }}`` referenced + no tools declared).
+    AGENT_TEMPLATE_WARNING = "agent.template_warning"
+
 
 # ---------------------------------------------------------------------------
 # Per-event-type `data` payload models — Schemas §B.8
@@ -318,6 +324,18 @@ class ContextCompactedData(_DataModel):
     summary: dict[str, Any]
     tokens_before: int
     tokens_after: int
+
+
+class AgentTemplateWarningData(_DataModel):
+    """``agent.template_warning.data`` — Phase 2.2 §9 + ENV-R6 §4.18.
+
+    Emitted by the engine's pre-flight step 5.6.6 when a prompt
+    references variable data the resolved config doesn't carry.
+    """
+
+    reference: str
+    reason: str
+    hint: str
 
 
 # ---------------------------------------------------------------------------

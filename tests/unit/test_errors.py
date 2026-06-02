@@ -1,7 +1,6 @@
 """Unit tests for the Error Model implementation.
 
-Maps to the catalog cases TC-ERR-01..05 (docs/process/test-catalog.md
-§10), plus the conformance invariants E-I1..E-I7 from the spec.
+Maps to the catalog cases TC-ERR-01..05, plus the conformance invariants E-I1..E-I7 from the spec.
 
 The Error Model is fully internal: no I/O, no async paths. Everything
 here is a unit test.
@@ -33,13 +32,21 @@ from errors import (
     BusPublishFailed,
     BusUnavailable,
     CapabilityMismatch,
+    ConfigAgentInheritanceCycle,
+    ConfigContextFileUnprefixed,
+    ConfigExtendsTemplateWithoutInheritance,
     ConfigFallbackDuplicate,
     ConfigInvalid,
     ConfigMergeFailed,
+    ConfigParentAgentNotFound,
+    ConfigRequiredBlockMissing,
+    ConfigTemplateRenderFailed,
     ConfigUnknownAlias,
     ConfigUnknownTool,
     ConfigUnknownVariant,
     ConfigVersionMismatch,
+    ContextFileNotFound,
+    ContextFileTooLarge,
     ExchangeCancelled,
     ExchangeTimeout,
     FileAccessDenied,
@@ -95,6 +102,7 @@ from errors import (
     ToolExecutionFailed,
     ToolInvalidArguments,
     ToolNotFound,
+    ToolPermissionsNoContext,
     ToolSetupFailed,
     ToolTimeout,
     ToolUnauthorized,
@@ -117,6 +125,29 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
     ConfigUnknownVariant: {"subsystem": "memory", "variant": "imaginary"},
     ConfigVersionMismatch: {"expected": "0.1", "actual": "0.2"},
     ConfigMergeFailed: {"layer_index": 1, "key_path": "/model"},
+    ConfigTemplateRenderFailed: {
+        "template": "bundles/kolsch/agents/helper.yaml",
+        "reason": "'workspce' is undefined",
+    },
+    ConfigContextFileUnprefixed: {"path": "plain.md"},
+    ConfigAgentInheritanceCycle: {"cycle": ["a.yaml", "b.yaml", "a.yaml"]},
+    ConfigParentAgentNotFound: {
+        "path": "kolsch:agents/missing.yaml",
+        "resolved": "/tmp/missing.yaml",
+    },
+    ConfigRequiredBlockMissing: {
+        "block_name": "role",
+        "agent_path": "bundles/x/agents/child.yaml",
+    },
+    ConfigExtendsTemplateWithoutInheritance: {
+        "agent_path": "bundles/x/agents/child.yaml"
+    },
+    ContextFileNotFound: {"path": "workspace:x.md", "resolved": "/tmp/x.md"},
+    ContextFileTooLarge: {
+        "path": "workspace:x.md",
+        "size_bytes": 100_000,
+        "max_bytes": 65_536,
+    },
     # 4.2 Store
     SessionNotFound: {"session_id": "ses_x"},
     ThreadNotFound: {"thread_id": "th_x"},
@@ -155,6 +186,7 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
         "principal": "agent.ag_x",
     },
     ToolNotFound: {"tool_name": "frobnicate", "agent_id": "ag_x"},
+    ToolPermissionsNoContext: {"tool": "bash"},
     ToolSetupFailed: {"tool_name": "web_search", "reason": "secret missing"},
     ToolInvalidArguments: {"tool_name": "read", "validation_errors": []},
     ToolExecutionFailed: {"tool_name": "read", "error_class": "FileNotFoundError"},
@@ -232,7 +264,7 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
         "where": "test.scaffold",
         "detail": {"original_type": "builtins.ValueError", "args": ["bad"]},
     },
-    # 4.13 LLM Configuration (Phase 1.1)
+    # 4.13 LLM Configuration
     LlmProviderNotConfigured: {
         "provider": "anthropic",
         "configured_providers": ["opencode"],
@@ -251,12 +283,12 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
     LlmDiscoveryFailed: {"provider": "opencode", "reason": "connection refused"},
     LlmValidationFailed: {"provider": "opencode", "reason": "401"},
     LlmConnectorDuplicate: {"type_name": "opencode"},
-    # 4.14 Workspace (Phase 1.2)
+    # 4.14 Workspace
     WorkspaceNotInitialized: {"path": "/var/ws/k", "env_var_set": False},
     WorkspacePermissionDenied: {"path": "/var/ws/k", "operation": "mkdir"},
     SetupAborted: {"step": "C", "reason": "ctrl-c"},
     SetupStarterExists: {"path": "/var/ws/k/bundles/starter/agents/helper.yaml"},
-    # 4.15 Model Fallback (Phase 1.3)
+    # 4.15 Model Fallback
     ModelRateLimited: {"provider": "openrouter", "model": "anthropic/x"},
     ModelServerError: {
         "provider": "openrouter",
@@ -300,7 +332,7 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
         "model": {"provider": "openrouter", "model": "anthropic/x"},
         "positions": [1, 3],
     },
-    # 4.16 Tools & Permissions (Phase 2.0)
+    # 4.16 Tools & Permissions
     AuthzDenied: {
         "tool": "bash",
         "target": "rm -rf /",

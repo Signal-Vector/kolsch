@@ -17,10 +17,15 @@ from __future__ import annotations
 
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from schemas.config import ModelSpec, PromptSpec
+from schemas.config import ContextFileSpec, ModelSpec, PermissionRule, PromptSpec
 from schemas.identifiers import AgentId
+
+# Mirror the resolved schema's prefix grammar at the partial layer so a
+# malformed `extends:` surfaces in `validate_partial` rather than
+# slipping through to merge + validate_resolved.
+_PARTIAL_EXTENDS_PREFIXES = ("kolsch:", "workspace:")
 
 
 class PartialModelSpec(BaseModel):
@@ -91,3 +96,23 @@ class PartialAgentConfig(BaseModel):
     io: PartialIOSpec | None = None
     subsystems: dict[str, PartialSubsystemConfig] | None = None
     runtime: PartialRuntimeSpec | None = None
+    # Phase 2.2 envelope additions — §A.11. The resolved schema's
+    # `_validate_extends_prefix` and `ContextFileSpec._validate_prefix`
+    # run during Layer 1 resolution (Pydantic short-circuits on
+    # construction) so a malformed prefix surfaces in `validate_partial`.
+    extends: str | None = None
+    permissions: list[PermissionRule] | None = None
+    context_files: list[ContextFileSpec] | None = None
+
+    @field_validator("extends")
+    @classmethod
+    def _validate_extends_prefix(cls, value: str | None) -> str | None:
+        if value is None:
+            return value
+        if not value.startswith(_PARTIAL_EXTENDS_PREFIXES):
+            msg = (
+                f"extends {value!r} must start with one of "
+                f"{_PARTIAL_EXTENDS_PREFIXES!r}"
+            )
+            raise ValueError(msg)
+        return value

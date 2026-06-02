@@ -58,7 +58,21 @@ AgentConfig
 │                                            errors. See A.4.2 (Phase 1.3,
 │                                            FB-R1).
 ├── io                   IOSpec        — typed declared inputs/outputs + mode
-├── prompt               PromptSpec     — layered system-prompt composition
+├── prompt               PromptSpec     — layered system-prompt composition;
+│                                        rendered as a Jinja2 template at
+│                                        engine pre-flight (Phase 2.2; see
+│                                        §A.11). Backward-compatible.
+├── extends              string?       — Phase 2.2; optional prefixed path to
+│                                        a parent agent file (§A.11.3).
+├── permissions          [Rule]        — Phase 2.2; optional per-agent authz
+│                                        rules composed agent → extends →
+│                                        defaults → platform → default-deny
+│                                        (§A.11.4).
+├── context_files        [ContextFileSpec]
+│                                       — Phase 2.2; optional list of
+│                                         documentation files inlined or
+│                                         referenced in the rendered prompt
+│                                         (§A.11.5).
 ├── assembly_version     string        — assembly procedure version in effect
 │                                        (see Part B.5; recorded on config.set)
 └── subsystems           map<string, SubsystemConfig>
@@ -68,7 +82,9 @@ AgentConfig
 
 Base layer = *what the agent is*. `subsystems` map = *how each pluggable
 subsystem is configured*. `assembly_version` selects which version of the
-context-assembly procedure (Part B.5) is in force for this agent.
+context-assembly procedure (Part B.5) is in force for this agent. The
+Phase 2.2 envelope fields (`extends`, `permissions`, `context_files`) are
+covered in §A.11.
 
 ## A.3 Identity — `id` and `name`
 
@@ -247,6 +263,66 @@ A resolved config is fully validated before the Agent Engine executes it.
 - Fidelity comes from the event log capturing fully-dereferenced actual
   values at execution time and from the assembly procedure being
   deterministic at its recorded version.
+
+## A.11 Phase 2.2 — Agent Envelope (`extends`, `permissions`, `context_files`)
+
+Phase 2.2 (process/phase2.2-agent-envelope-specs.md) adds three optional
+fields to `AgentConfig` plus reinterprets `prompt:` as a Jinja2 template.
+
+### A.11.1 `prompt:` as a Jinja2 template
+
+The `prompt:` field carries a Jinja2 template; the engine pre-flight
+renders it once per exchange with a standardized variable context. The
+render uses `StrictUndefined` — typo'd variable names raise
+`config.template_render_failed` (Fatal) at agent-load. A prompt with no
+Jinja markers renders byte-identical to itself; every Phase 1.x / 2.0 /
+2.1 agent file continues to work unchanged.
+
+### A.11.2 Composition order (binding)
+
+For every agent-envelope field:
+
+```
+schema default  ←  defaults.<field>  ←  extends chain  ←  agent
+        (lowest precedence)                      (highest precedence)
+```
+
+Per-field wholesale override (no list / dict merging). Silence (field
+absent) is transparent — the next-lower layer is consulted. An explicit
+`[]` or `null` is a present-but-empty value that wholesale-replaces
+the next-lower layer.
+
+### A.11.3 `extends: str | None`
+
+Optional prefixed-path reference to a parent agent YAML:
+
+- `kolsch:<rel>` — resolves to a resource inside the installed kolsch
+  package via `importlib.resources.files("kolsch") / <rel>`.
+- `workspace:<rel>` — resolves to `<workspace_root> / <rel>`.
+
+Plain paths are rejected at agent-load with
+`config.context_file_unprefixed`. Cycles raise
+`config.agent_inheritance_cycle`; missing parents raise
+`config.parent_agent_not_found`.
+
+### A.11.4 `permissions: list[Rule]`
+
+Optional list of per-agent authz rules. Same shape as
+`platform.yaml:authorization.config.rules` entries — `who` matches the
+principal; `what` matches the action OR the resolved target. Composed
+agent → platform → default-deny.
+
+### A.11.5 `context_files: list[ContextFileSpec]`
+
+Optional list of documentation files. Each entry:
+
+| Field | Required | Type | Default |
+|---|---|---|---|
+| `path` | yes | `str` | Prefixed: `kolsch:<rel>` or `workspace:<rel>` |
+| `summary` | no | `str | None` | first non-empty line of file |
+| `primary` | no | `bool` | `false` (secondary = listed by path + summary only) |
+
+Each file is capped at 64 KiB; oversize raises `context.file_too_large`.
 
 ---
 

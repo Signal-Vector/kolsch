@@ -90,7 +90,14 @@ class ToolInfo(BaseModel):
 
 @dataclass
 class ToolDefinition:
-    """Everything the dispatch needs to know about a tool — spec §2.2."""
+    """Everything the dispatch needs to know about a tool — spec §2.2.
+
+    Phase 2.2 (ENV-R5 / Step 11) — gains an optional ``summary``
+    field used by :class:`templating.vars.tools.ToolItem` for the
+    prompt's compact tool listing. Derived from the first
+    sentence of ``description`` when omitted from
+    :func:`tool` (the substring through the first period, trimmed).
+    """
 
     name: str
     description: str
@@ -99,6 +106,7 @@ class ToolDefinition:
     secrets_needed: list[str] = field(default_factory=list)
     action: str | None = None
     timeout_seconds: float | None = None
+    summary: str = ""
 
     @property
     def action_name(self) -> str:
@@ -115,6 +123,17 @@ class ToolDefinition:
         )
 
 
+def _derive_summary(description: str) -> str:
+    """Spec §5.1 fallback: the substring of ``description`` from
+    start through the first period, trimmed. When the description
+    has no period, the full description is the summary (still
+    trimmed)."""
+    period_index = description.find(".")
+    if period_index < 0:
+        return description.strip()
+    return description[: period_index + 1].strip()
+
+
 def tool(
     *,
     name: str,
@@ -123,6 +142,7 @@ def tool(
     secrets_needed: list[str] | None = None,
     action: str | None = None,
     timeout_seconds: float | None = None,
+    summary: str | None = None,
 ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
     """The ``@tool`` decorator — spec §2.
 
@@ -136,10 +156,21 @@ def tool(
       otherwise. Tools that take no args declare an empty ``BaseModel``.
     - ``returns_schema`` from spec §2.2 is omitted in v1 (no
       Pydantic-validate-return step in dispatch).
+
+    Phase 2.2 (ENV-R5 / Step 11):
+    - ``summary`` — optional one-line summary surfaced via
+      :class:`templating.vars.tools.ToolItem`'s ``.summary`` for the
+      prompt's compact tool listing. When omitted, derived from the
+      first sentence of ``description`` (the substring through the
+      first period, trimmed). The model still receives the full
+      ``description`` via the upstream LLM API's ``tools=`` parameter
+      regardless of ``summary``.
     """
     if not _NAME_PATTERN.fullmatch(name):
         msg = f"tool name {name!r} must match ^[a-z][a-z0-9_]*$ per spec §2.2"
         raise ValueError(msg)
+
+    resolved_summary = summary if summary is not None else _derive_summary(description)
 
     def decorate(
         fn: Callable[..., Awaitable[Any]],
@@ -152,6 +183,7 @@ def tool(
             secrets_needed=list(secrets_needed or []),
             action=action,
             timeout_seconds=timeout_seconds,
+            summary=resolved_summary,
         )
         fn._tool_definition = defn  # type: ignore[attr-defined]
         return fn

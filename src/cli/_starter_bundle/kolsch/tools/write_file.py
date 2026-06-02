@@ -55,6 +55,7 @@ class WriteFileArgs(BaseModel):
 
 @tool(
     name="write_file",
+    summary="Atomically write a UTF-8 text file to the workspace.",
     description=(
         "Write a UTF-8 text file to the workspace, replacing any "
         "existing content. Use this tool to create new files or "

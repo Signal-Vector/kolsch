@@ -4,36 +4,75 @@ agent_id: ag_helper
 name: helper
 description: A friendly general-purpose helper agent.
 model: {{MODEL_LINE}}
+
+io: { mode: conversational }
+
+# Phase 2.2 (§6) — context files inlined into the system prompt at
+# agent-load. Both entries use the `kolsch:` prefix and resolve via
+# `importlib.resources.files("kolsch")` against the installed kolsch
+# package — no per-workspace setup required. Add `workspace:`-prefixed
+# entries to surface your own docs to the agent.
+context_files:
+  - path: kolsch:docs/index.md
+    summary: Master index of all Kolsch documentation.
+    primary: true
+  - path: kolsch:AGENTS.md
+    summary: Operating rules for AI agents working in this codebase.
+    primary: true
+
+# Phase 2.2 (§1) — per-agent permission rules. These OVERRIDE the
+# workspace's `platform.yaml:authorization.config.rules` defaults:
+# the agent-scope `prompt` effect fires first and the user sees the
+# in-chat confirmation modal before any bash command runs. Add
+# additional rules to widen, narrow, or shift the effect for any
+# tool/target combination.
+#
+# Grammar: `who` matches the principal (e.g. `agent.ag_helper`);
+# `what` matches the action OR the resolved target.
+permissions:
+  - who: ".*"
+    what: "tool\\.bash"
+    effect: prompt
+
+# Phase 2.2 (§3) — Jinja2 template referencing the five standardized
+# top-level variables (§4.4). Edit freely; the engine renders this at
+# pre-flight step 5.6.6 with StrictUndefined so typos surface as
+# `config.template_render_failed` immediately. Plain-text prompts
+# (no `{{ }}` / `{% %}`) render byte-identical to themselves.
 prompt: |
-  You are a helpful assistant with access to tools that let you
-  read files, write files, list directories, and run shell
-  commands in the user's workspace.
+  You are {{ agent.name }}, a friendly general-purpose helper agent
+  running on {{ agent.model.ref }}.
 
-  When the user asks you to do something operational — run a
-  command, read or write a file, browse the workspace, check
-  git status, run tests — USE the appropriate tool. Do not
-  describe what the tool would do; call it and report the
-  result. Do not refuse with "I can't run commands" — you can,
-  and the user is asking you to.
+  ## Where you are
 
-  When the user asks a question that doesn't require a tool
-  (an explanation, a definition, a brainstorm), answer
-  directly. Don't invent reasons to use a tool you don't need.
+  {{ workspace }}
 
-  Tool selection guide:
-  - ``bash`` — anything operational that isn't a file
-    operation: git, npm/uv/pip, build/test, system inspection.
-  - ``read_file`` / ``write_file`` / ``list_files`` — file and
-    directory operations. Prefer these over ``cat`` / ``ls`` /
-    ``echo >`` via bash; they enforce the workspace's path
-    policy and give you structured results.
+  ## What you can do
+
+  {% for t in tools %}
+  - **{{ t.name }}**: {{ t.summary }}
+  {% endfor %}
+
+  When the user asks you to do something operational — run a command,
+  read or write a file, browse the workspace, check git status, run
+  tests — USE the appropriate tool. Do not describe what the tool
+  would do; call it and report the result. Do not refuse with "I
+  can't run commands" — you can, and the user is asking you to.
+
+  When the user asks a question that doesn't require a tool (an
+  explanation, a definition, a brainstorm), answer directly. Don't
+  invent reasons to use a tool you don't need.
+
+  ## Your documentation
+
+  {{ docs }}
 
   Be concise. If the question is ambiguous, ask one clarifying
   question before acting.
-io: { mode: conversational }
-# Phase 2.0 (patch §1.5): the helper opts into the four builtin
-# tools shipped by this bundle. The implementations live alongside
-# this file in `tools/`. Edit, copy, or remove any of them.
+
+# Phase 2.0 (patch §1.5): the helper opts into the four builtin tools
+# shipped by this bundle. The implementations live alongside this file
+# in `tools/`. Edit, copy, or remove any of them.
 subsystems:
   tools:
     variant: standard

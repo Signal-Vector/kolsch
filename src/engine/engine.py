@@ -441,15 +441,28 @@ class _Exchange:
         # job per patch §2.1).
         self.fallback_chain = await self._resolve_fallback_chain()
 
-        # Step 8 — emit config.set if the current effective config
-        # differs from the most recent config.set on the thread.
-        await self._emit_config_set_if_changed()
-
         # Register tools with the Tools subsystem now (NOT with the
         # framework — that happens in setup). The synthetic force-invoke
         # read in step 9 routes through tools_subsystem.invoke_tool,
         # which requires registration to have happened.
+        #
+        # Phase 2.2 Step 14 — registration is moved BEFORE step 8 so
+        # the prompt-render step has access to the registered tool
+        # metadata when building the ``tools`` variable.
         await self._register_tools_with_subsystem()
+
+        # Phase 2.2 Step 14 — render the prompt template with the
+        # standardized variable context (spec §4 + §3 + agent-engine-
+        # contract §5.6.6). Replaces ``self.config.prompt`` with the
+        # rendered string so config.set persists the prompt the model
+        # actually saw. Plain-text prompts (no Jinja markers) survive
+        # the round-trip byte-identical via the StrictUndefined render
+        # harness.
+        await self._render_prompt_if_needed()
+
+        # Step 8 — emit config.set if the current effective config
+        # differs from the most recent config.set on the thread.
+        await self._emit_config_set_if_changed()
 
         # Step 9 — process force-invoke skills, if any.
         await self._process_force_invoke()
@@ -635,6 +648,181 @@ class _Exchange:
             actor=Actor(kind="system"),
         )
         self.config_event_id = str(evt.event_id)
+
+    async def _render_prompt_if_needed(self) -> None:
+        """Phase 2.2 Step 14 / spec §3 + §4 — render the agent's
+        Jinja2 prompt template with the standardized variable
+        context.
+
+        Build the five top-level variables (``tools`` / ``docs`` /
+        ``workspace`` / ``agent`` / ``platform``) from the resolved
+        config + runtime state, call
+        :func:`templating.render.render_prompt`, and replace
+        ``self.config`` with a :meth:`pydantic.BaseModel.model_copy`
+        carrying the rendered string. A prompt with no Jinja markers
+        renders byte-identical to itself, so every Phase 1.x agent
+        survives the round-trip untouched.
+
+        Walks the prompt's Jinja AST after render and emits
+        ``agent.template_warning`` (Recoverable) for variable
+        accesses whose data is empty (e.g. ``{{ tools }}``
+        referenced + agent declares no tools) per spec §9.
+        """
+        prompt = self.config.prompt
+        if not isinstance(prompt, str):
+            # Layered list-form prompts pre-date Phase 2.2 — engine
+            # treats them as fully pre-resolved by the asset
+            # manager. Skip the render.
+            return
+
+        from templating import render_prompt  # noqa: PLC0415
+        from templating.vars import (  # noqa: PLC0415
+            AgentVar,
+            DocsVar,
+            ModelView,
+            ToolsVar,
+            WorkspaceVar,
+        )
+        from templating.vars._platform import (  # noqa: PLC0415
+            AliasesVar,
+            AuthorizationVar,
+            FileAccessVar,
+            PlatformVar,
+            ProvidersVar,
+        )
+        from templating.vars.docs import DocItem  # noqa: PLC0415
+        from templating.vars.tools import ToolItem  # noqa: PLC0415
+
+        # ToolsVar — from the just-registered tool defns.
+        registered = self.engine._tools.list_registered_tools(
+            self.agent_id,  # type: ignore[arg-type]
+        )
+        tool_items: list[ToolItem] = []
+        for info in registered:
+            defn = self.engine._tools._registry.get_tool(  # type: ignore[arg-type]
+                self.agent_id,  # type: ignore[arg-type]
+                info.name,
+            )
+            summary = getattr(defn, "summary", "") if defn is not None else ""
+            tool_items.append(
+                ToolItem(
+                    name=info.name,
+                    description=info.description,
+                    summary=summary or info.description.split(".")[0].strip(),
+                    signature="",
+                    schema=info.args_schema,
+                )
+            )
+        tools_var = ToolsVar(tool_items)
+
+        # DocsVar — load each ContextFileSpec via Step 12.
+        from templating.context_files import (  # noqa: PLC0415
+            load_context_file,
+        )
+
+        workspace_root = Path(self.engine._assets._root)  # type: ignore[attr-defined]
+        doc_items: list[DocItem] = []
+        for spec in self.config.context_files:
+            doc_items.append(
+                await asyncio.to_thread(
+                    load_context_file, spec, workspace_root
+                )
+            )
+        docs_var = DocsVar(doc_items)
+
+        # WorkspaceVar from platform.yaml.
+        platform_cfg = self.engine._assets._platform_config or {}  # type: ignore[attr-defined]
+        file_access = platform_cfg.get("file_access") or {}
+        workspace_summary = platform_cfg.get("workspace_summary")
+        workspace_var = WorkspaceVar(
+            path=str(workspace_root),
+            summary=workspace_summary,
+            allowed_paths=list(file_access.get("allowed_paths", [])),
+            denied_paths=list(file_access.get("denied_paths", [])),
+        )
+
+        # AgentVar — self-introspection over the resolved config.
+        agent_var = AgentVar(
+            name=self.config.name,
+            id=str(self.config.agent_id),
+            model=ModelView.from_model_spec(self.config.model),
+            tools=tools_var,
+            permissions=list(self.config.permissions),
+            context_files=list(doc_items),
+        )
+
+        # PlatformVar — projection over platform.yaml.
+        providers = list(self.engine._llm_providers_config.values())
+        authz_cfg = platform_cfg.get("authorization", {}) or {}
+        platform_var = PlatformVar(
+            providers=ProvidersVar(providers),
+            authorization=AuthorizationVar(
+                variant=authz_cfg.get("variant", ""),
+                rules=[],
+            ),
+            workspace_summary=workspace_summary,
+            file_access=FileAccessVar(
+                allowed_paths=list(file_access.get("allowed_paths", [])),
+                denied_paths=list(file_access.get("denied_paths", [])),
+            ),
+            aliases=AliasesVar(platform_cfg.get("model_aliases", {}) or {}),
+            _workspace_path=str(workspace_root),
+        )
+
+        context = {
+            "tools": tools_var,
+            "docs": docs_var,
+            "workspace": workspace_var,
+            "agent": agent_var,
+            "platform": platform_var,
+        }
+
+        rendered = render_prompt(
+            prompt,
+            context,
+            template_name=f"agent:{self.config.agent_id}",
+        )
+
+        # Replace config with a copy carrying the rendered prompt.
+        # ResolvedAgentConfig is frozen so we go through model_copy.
+        self.config = self.config.model_copy(update={"prompt": rendered})
+
+        # Phase 2.2 §9 — emit agent.template_warning for empty-data
+        # references. Minimal first cut: warn when the prompt
+        # references the variable name but the corresponding data is
+        # empty. Step 15 can broaden this to the full AST walk.
+        from schemas import AgentTemplateWarningData  # noqa: PLC0415
+
+        warnings: list[tuple[str, str, str]] = []
+        if "tools" in prompt and tools_var.count == 0:
+            warnings.append(
+                (
+                    "tools",
+                    "prompt references {{ tools }} but agent declares "
+                    "no tools",
+                    "add tools to subsystems.tools.config.declared or "
+                    "remove the reference",
+                )
+            )
+        if "docs" in prompt and docs_var.count == 0:
+            warnings.append(
+                (
+                    "docs",
+                    "prompt references {{ docs }} but agent declares "
+                    "no context_files",
+                    "add a context_files: entry or remove the reference",
+                )
+            )
+        for reference, reason, hint in warnings:
+            await self._emit(
+                type_=EventType.AGENT_TEMPLATE_WARNING,
+                data=AgentTemplateWarningData(
+                    reference=reference,
+                    reason=reason,
+                    hint=hint,
+                ).model_dump(mode="json"),
+                actor=Actor(kind="system"),
+            )
 
     async def _register_tools_with_subsystem(self) -> None:
         """Register builtins/declared tools with the Tools subsystem.
@@ -844,10 +1032,10 @@ class _Exchange:
         #   (the per-spec factory — production wires this via
         #   `platform_runtime`'s build_llm), use it directly. Each
         #   chain entry gets its own client built lazily.
-        # - If only `llm=` was passed (Phase 1.1/1.2 tests + the
-        #   default-tier EchoLLMDriver bootstrap), wrap it so every
-        #   spec returns the same callable. The chain still works;
-        #   just every entry calls the same underlying llm.
+        # - If only `llm=` was passed (Phase 1.1/1.2 tests + the default-tier
+        #   EchoLLMDriver bootstrap), wrap it so every spec returns
+        #   the same callable. The chain still works; just every
+        #   entry calls the same underlying llm.
         # - If neither, raise PlatformInternalError — the engine
         #   has no way to make an LLM call.
         llm_factory = self._build_llm_factory()

@@ -148,7 +148,7 @@ Procedure) and Part 3 (Conformance) below.
 `kolsch chat` REPL consumes ``execute_stream`` events as-is and
 maps them to terminal blocks without inventing semantic state —
 every visible block corresponds to an event the engine emitted.
-``docs/process/phase2.1-chat-specs.md`` §3 documents the
+``process/phase2.1-chat-specs.md`` §3 documents the
 event-to-render mapping; ``execute_stream``'s contract is the
 single source of truth for what the chat shows. If a UI element
 needs information the events don't carry, the engine grows the
@@ -276,6 +276,37 @@ work. Its responsibilities, in order of an `execute` call:
    is none), emit a new `config.set` carrying the full resolved config
    (per Materialization Rule, §B.6). The new event becomes part of the
    tree path before the exchange begins.
+
+5.6.5. **Resolve the `extends:` chain (Phase 2.2, ENV-R4).** If
+   `config.extends` is set, walk the parent chain from leaf to
+   root using `templating.inheritance.resolve_extends_chain`
+   (Phase 2.2 Step 13). Apply each layer's wholesale-per-field
+   overrides (Schemas §A.11.2). Cycles raise
+   `config.agent_inheritance_cycle` (Fatal); missing parents
+   raise `config.parent_agent_not_found` (Fatal). The resolved
+   `AgentConfig` subsequent pre-flight steps see is the
+   post-merge config.
+
+5.6.6. **Render the prompt template (Phase 2.2, ENV-R4).** Build
+   the standardized variable context (Phase 2.2 §4) from the
+   resolved config plus runtime state — `tools`, `docs`,
+   `workspace`, `agent`, `platform`. Call
+   `templating.render.render_prompt` (Phase 2.2 Step 2). The
+   result replaces the raw `prompt:` string for downstream
+   assembly. Render errors raise `config.template_render_failed`
+   (Fatal) with the template path and the underlying Jinja error.
+
+   A prompt with no Jinja markers (`{{`, `{%`) renders
+   byte-identical to itself — Phase 1.x / 2.0 / 2.1 agents
+   survive the round-trip unchanged.
+
+   After a successful render, the engine walks the parsed Jinja
+   AST and cross-checks variable accesses against the resolved
+   config. For each access whose data is empty
+   (`{{ tools }}` referenced + no tools declared, etc.), the
+   engine emits an `agent.template_warning` event
+   (`Recoverable`, Warning) carrying `{reference, reason, hint}`.
+
 8.5. **Register the agent's tools with the Tools subsystem.**
    *(Bug-engine-tools-wiring-gap.md, PR 1 — fixes a Phase 2.0 gap
    where this step was specified in §2.2 step 11 but the

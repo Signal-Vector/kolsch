@@ -347,6 +347,51 @@ for fallback models only when the chain is actually consulted. See
 the Phase 1.3 patch §1.2 for the full precedence story and §2.1 for
 the engine's loop.
 
+**Phase 2.2 — `workspace_summary`** (ENV-R2). Optional multi-line
+text describing the workspace's purpose. Surfaced in agent prompts
+via `{{ workspace.summary }}` and `{{ platform.workspace_summary }}`
+(process/phase2.2-agent-envelope-specs.md §4.4 / §7). Returns
+`None` when unset so `| default("…")` in templates works.
+
+```yaml
+# platform.yaml (excerpt)
+workspace_summary: |
+  Active development workspace for the Kolsch platform. Source code
+  lives under bundles/ as agent YAML + tool Python; sessions/ holds
+  append-only event-log JSONL files; docs/ is reference material
+  referenced by agents via context_files.
+```
+
+### 3.2.Y Install-relative path resolution (`kolsch:` prefix)
+
+Phase 2.2 introduces install-relative paths for context files and
+the `extends:` chain. A reference of the form `kolsch:<rel>`
+resolves to a resource inside the installed kolsch package:
+
+```python
+importlib.resources.files("kolsch") / "<rel>"
+```
+
+The `kolsch` package is an umbrella package shipped from
+`src/kolsch/`; its `__init__.py` is empty. `pyproject.toml`'s
+`[tool.hatch.build.targets.wheel.force-include]` section ships
+the repo-root `docs/` directory and `AGENTS.md` into the wheel
+under `kolsch/docs/` and `kolsch/AGENTS.md`. In an installed wheel
+`importlib.resources.files("kolsch")` returns a `Traversable` that
+finds those files directly.
+
+In source-tree dev (editable install) `importlib.resources` returns
+`src/kolsch/`, which does NOT contain the force-included files.
+Phase 2.2 Step 12's loader handles the source-tree-vs-installed
+dispatch: probe `importlib.resources` first; if the resource is
+absent AND the runtime is a source-tree install, fall back to
+repo-root-relative resolution via the `kolsch` package's
+`__file__.parent.parent.parent`.
+
+`workspace:<rel>` resolves to `<workspace_root> / <rel>` per
+Phase 1.2's `resolve_workspace`. Plain paths (no prefix) are
+rejected at agent-load with `config.context_file_unprefixed`.
+
 ### 3.3 `.env` — Secrets
 
 The dotenv variant's source file. Standard `.env` format:

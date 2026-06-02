@@ -1,10 +1,9 @@
 # AGENTS.md
 
 > Operating instructions for AI agents working on this codebase. Humans:
-> see `README.md` for the project overview and
-> `docs/development-testing-handbook.md` for full engineering practices.
-> This file is the agent's quick-start contract — read it before making
-> changes.
+> see `README.md` for the project overview and `docs/` for full
+> engineering practices. This file is the agent's quick-start contract —
+> read it before making changes.
 
 ---
 
@@ -53,8 +52,8 @@ If the index seems stale, it can be refreshed; check
 
 1. **Understand the contract.** Every subsystem has a public API defined
    in `docs/reference/module-api-reference.md`. Changes must honor it.
-   If you need to change a contract, update both the reference AND the
-   originating spec, and flag it in your summary.
+   If you need to change a contract, update the reference in the same
+   change and flag it in your summary.
 
 2. **Find the affected area via Codanna.** Query the index for the
    functions and call sites you'll touch. Know what depends on what
@@ -137,12 +136,12 @@ These are non-negotiable. Violating them blocks merges.
 - **LLM provider config lives in `platform.yaml`'s `llm_providers`
   section**, populated via `kolsch connect <provider>`. Never embed
   API keys in agent configs or in code paths other than the
-  connector's `build_llm` method. *(Phase 1.1, LLM-R11.)*
+  connector's `build_llm` method.
 - **Workspace location is resolved by
   `platform_runtime.workspace.resolve_workspace`.** No other module
   reads `KOLSCH_WORKSPACE` or constructs the default path. The CLI
   emits a friendly message (not a stack trace) when the workspace
-  is uninitialized. *(Phase 1.2, UX-R10.)*
+  is uninitialized.
 - **Every new `model.*` error code MUST declare Recoverable or
   Fatal in the same change that introduces it,** and update the
   fallback trigger table in `docs/explanation/error-model.md`
@@ -151,7 +150,7 @@ These are non-negotiable. Violating them blocks merges.
   `is_fallback_triggering` predicate consults; a new code with
   no declared level silently defaults to "no fallback", which
   is wrong-by-default for any genuinely transient condition.
-  *(Phase 1.3, FB-R10.)*
+
 - **Tools shipped by the platform live in `bundles/kolsch/tools/`
   as plain Python files.** Never embed a "builtin tool" in the
   engine or runtime; the file IS the tool, and users can read it,
@@ -160,7 +159,7 @@ These are non-negotiable. Violating them blocks merges.
   bundle-supplied declared tool. If you find yourself adding a
   case branch like `if tool_name == "read_file": …` inside
   `src/engine/` or `src/tools/`, you have violated this rule —
-  add the tool file instead. *(Phase 2.0, TOOL-R10.)*
+  add the tool file instead.
 - **The production Authorization rule set must end with a
   default-deny tail.** The `allow_all_test` variant is for tests
   only — it is registered ONLY when `KOLSCH_TEST_BUILD=1` and
@@ -168,7 +167,7 @@ These are non-negotiable. Violating them blocks merges.
   `rl_default_deny` from `platform.yaml` directly OR via
   `kolsch permissions remove` is rejected (the runtime
   bootstrap refuses to load a rule set without the tail; the
-  CLI raises `authz.protected_rule`). *(Phase 2.0, TOOL-R10.)*
+  CLI raises `authz.protected_rule`).
 - **Every new CLI command or subcommand requires a smoke test
   in `tests/component/test_cli_smoke.py`.** No exceptions. The
   smoke test invokes the CLI in a fresh subprocess
@@ -181,12 +180,10 @@ These are non-negotiable. Violating them blocks merges.
   `test_smoke_coverage_enumerates_every_top_level_subcommand`:
   add a command to `cli.main._DISPATCH` without adding it to the
   smoke module's `_TOP_LEVEL_SUBCOMMANDS` tuple and the test
-  refuses to pass. The catalog reference is
-  `docs/process/test-catalog.md` Part 11.6.1. **CI runs the
+  refuses to pass. The catalog reference is Part 11.6.1. **CI runs the
   suite with `pytest -n auto`** (pytest-xdist) to keep it
   under 10s — see Part 11.6.1 for the rationale; serial
-  invocation is ~36s. *(Bug-sessions-namespace-attr-error.md
-  acceptance criterion 7.)*
+  invocation is ~36s.
 - **The chat renderer is a pure consumer of the engine's event
   stream.** The renderer MUST NOT invent UI state that isn't
   derivable from events. If a UI element needs information the
@@ -201,7 +198,27 @@ These are non-negotiable. Violating them blocks merges.
   scrolling and selection keep working; TC-CHAT-18 enforces
   this architecturally by introspecting `src/cli/chat.py` for
   `Application.run(full_screen=True)` and equivalents.
-  *(Phase 2.1, CHAT-R9.)*
+- **Agent prompts are Jinja2 templates.** Variable names are
+  resolved via the standardized API (`tools`, `docs`,
+  `workspace`, `agent`, `platform`) defined in
+  `process/phase2.2-agent-envelope-specs.md` §4. Typo'd variables
+  raise `config.template_render_failed` at agent-load
+  (StrictUndefined). The five top-level variables expose the
+  standardized method family (`.list()`, `.summary()`,
+  `.names()`, `.get(name)`, `.count` where the underlying object
+  is list-shaped); see Schemas §A.11 for the full API. Plain-text
+  prompts (no `{{`, `{%`) render byte-identical to themselves —
+  every Phase 1.x agent continues to work unchanged.
+- **Never put secrets in `platform.yaml`.** The `platform`
+  variable in agent prompts can read it (via the Jinja render
+  context), so anything in `platform.yaml` is reachable from
+  every agent the workspace runs. `platform.yaml` is for
+  non-sensitive configuration only: provider topology, defaults,
+  authz rules, file-access lists, workspace_summary text. Secrets
+  live in `.env` per Phase 1.1's `dotenv` provider; agent code
+  reaches them via `ctx.secrets` after the Secrets provider
+  resolves names listed in `@tool(secrets_needed=[...])`.
+
 
 ---
 
@@ -269,8 +286,8 @@ services; only the Postgres/Redis backend component tests do.
 
 In your summary, report:
 - What changed and why (one paragraph).
-- Which contracts (if any) you touched — and confirm the reference +
-  spec were updated.
+- Which contracts (if any) you touched — and confirm the reference
+  was updated.
 - Test results: which layers ran, pass/fail.
 - Any golden diffs and whether they were intentional.
 - Any new docs added.
@@ -283,8 +300,8 @@ explains *what and why*.
 
 ## If you're unsure
 
-- **Contract ambiguity** → the originating spec in `docs/` is the
-  arbiter; if it's silent, flag it rather than guessing.
+- **Contract ambiguity** → `docs/reference/module-api-reference.md`
+  is the arbiter; if it's silent, flag it rather than guessing.
 - **Where something lives** → query Codanna.
 - **Whether a change is safe** → check the dependency matrix and run the
   integration + golden tests.

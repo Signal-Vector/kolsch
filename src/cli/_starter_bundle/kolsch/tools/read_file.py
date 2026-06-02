@@ -55,6 +55,7 @@ class ReadFileArgs(BaseModel):
 
 @tool(
     name="read_file",
+    summary="Read a UTF-8 text file's contents.",
     description=(
         "Read the contents of a UTF-8 text file and return it as a "
         "string. Use this tool when the user asks you to read, "

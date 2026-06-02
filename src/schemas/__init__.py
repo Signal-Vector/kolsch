@@ -14,8 +14,10 @@ imports.
 """
 
 from schemas.config import (
+    ContextFileSpec,
     IOSpec,
     ModelSpec,
+    PermissionRule,
     PromptSpec,
     ResolvedAgentConfig,
     RuntimeSpec,
@@ -25,6 +27,7 @@ from schemas.entities import Actor, ContentRef, Session, Thread
 from schemas.error import Error
 from schemas.events import (
     AgentMessageData,
+    AgentTemplateWarningData,
     ConfigSetData,
     ContextCompactedData,
     Event,
@@ -60,9 +63,11 @@ __all__ = [
     "AgentCallId",
     "AgentId",
     "AgentMessageData",
+    "AgentTemplateWarningData",
     "ConfigSetData",
     "ContentRef",
     "ContextCompactedData",
+    "ContextFileSpec",
     "Error",
     "Event",
     "EventId",
@@ -76,6 +81,7 @@ __all__ = [
     "ModelRequestData",
     "ModelResponseData",
     "ModelSpec",
+    "PermissionRule",
     "PrefixedId",
     "PromptSpec",
     "ResolvedAgentConfig",

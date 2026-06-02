@@ -61,6 +61,7 @@ class ListFilesArgs(BaseModel):
 
 @tool(
     name="list_files",
+    summary="List entries under a workspace directory.",
     description=(
         "List the entries (files + subdirectories) under a directory "
         "and return them as a structured list. Use this tool to "

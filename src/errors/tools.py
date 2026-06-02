@@ -6,6 +6,39 @@ from errors.base import PlatformError
 from errors.level import Level
 
 
+class ToolPermissionsNoContext(PlatformError):
+    """A tool called :func:`tools.permissions.check` /
+    :func:`tools.permissions.require` outside the engine's
+    dispatcher binding — Phase 2.2 error-model §4.18.
+
+    Indicates a developer mistake — typically a unit test that
+    imported the tool function directly and exercised it
+    without going through the dispatcher. Fatal so the test
+    harness gets a clear pointer to set up an authz fixture
+    instead of silently treating every check as DENY.
+    """
+
+    code = "tool.permissions_no_context"
+    level = Level.FATAL
+
+    def __init__(
+        self,
+        tool: str,
+        *,
+        caller: str = "<unknown>",
+        where: str = "tools.permissions",
+    ) -> None:
+        super().__init__(
+            message=(
+                f"tools.permissions called outside the engine's "
+                f"dispatcher binding (tool={tool!r}); set up an "
+                f"authz fixture or dispatch through the engine"
+            ),
+            where=where,
+            detail={"tool": tool, "caller": caller},
+        )
+
+
 class ToolUnauthorized(PlatformError):
     """Authorization denied a tool call (Diagnostic — exchange continues)."""
 

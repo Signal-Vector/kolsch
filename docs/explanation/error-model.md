@@ -672,7 +672,7 @@ Model doesn't yet have a first-class level for.)*
 Errors from the Phase 2.0 builtin tools (`bundles/kolsch/tools/`),
 the `prompt`-effect dispatch in the Tools subsystem call layer, and
 the `kolsch permissions {list, add, remove, show}` CLI. The patch
-source of truth is `docs/process/phase2.0-tools-specs.md` Part 5;
+source of truth is `process/phase2.0-tools-specs.md` Part 5;
 the canonical "what each effect does" mapping for callers is
 `docs/explanation/secrets-sandbox-authz-contract.md` §3.7.
 
@@ -720,7 +720,7 @@ Errors emitted by the `kolsch chat` REPL — startup-time failures
 that exit cleanly with a friendly one-line message (same
 discipline as Phase 1.2's `workspace.not_initialized`) plus
 mid-session conditions the chat surfaces without ending the
-session. Patch source of truth: `docs/process/phase2.1-chat-
+session. Patch source of truth: `process/phase2.1-chat-
 specs.md` Part 7.
 
 | Code | Level | Detail | Where (typical) |
@@ -742,6 +742,39 @@ exchange (with the partial agent block styled
 pattern edit produces a malformed `Rule`; the immediate tool
 call falls back to `deny-once` semantics and the user is told
 why their pattern was rejected.
+
+### 4.18 Agent Envelope (Phase 2.2, ENV-R6)
+
+Errors emitted by the Phase 2.2 envelope machinery — context-file
+resolution, Jinja rendering, `extends:` chain walking, and the
+per-agent permissions API for tool authors.
+
+| Code | Level | Detail | Where (typical) |
+|---|---|---|---|
+| `config.context_file_unprefixed` | Fatal | `{path}` | agent-load — a `context_files[].path` or `extends:` value lacks the `kolsch:` / `workspace:` prefix |
+| `context.file_not_found` | Fatal | `{path, resolved}` | agent-load — `kolsch:` / `workspace:` resolved to an absolute path that does not exist |
+| `context.file_too_large` | Fatal | `{path, size_bytes, max_bytes}` | agent-load — context file exceeds the 64 KiB cap |
+| `config.template_render_failed` | Fatal | `{template, reason}` | engine pre-flight (5.6.6) — Jinja render raised `UndefinedError` / `TemplateSyntaxError` / etc. |
+| `config.required_block_missing` | Fatal | `{block_name, agent_path}` | engine pre-flight (5.6.6) — child uses `{% extends parent %}` and does not override a `{% block X required %}` |
+| `config.agent_inheritance_cycle` | Fatal | `{cycle: [path1, path2, ...]}` | engine pre-flight (5.6.5) — `extends:` chain contains a cycle |
+| `config.parent_agent_not_found` | Fatal | `{path, resolved}` | engine pre-flight (5.6.5) — `extends:` points at a missing file |
+| `config.extends_template_without_inheritance` | Fatal | `{agent_path}` | engine pre-flight (5.6.6) — child prompt uses `{% extends parent %}` but its YAML has no `extends:` field |
+| `agent.template_warning` | Recoverable (Warning) | `{reference, reason, hint}` | engine pre-flight (5.6.6) — template-config consistency walker (Phase 2.2 §9) flags an empty-data variable access |
+| `authz.denied` | Recoverable | `{tool, target, rule_id, who_chain}` | engine pre-dispatch OR tool's `permissions.require` call when the composed rules resolve to `DENY` / `PROMPT`-without-callback |
+| `tool.permissions_no_context` | Fatal | `{tool, caller}` | tool's `permissions.check` / `.require` called outside the engine's dispatch ContextVar (e.g. a unit test that imported the tool directly) |
+
+**Why these levels.** The seven `config.*` codes plus the two
+`context.*` codes are Fatals because the agent cannot load.
+`agent.template_warning` is the deliberate exception: empty
+rendering is sometimes intentional (a parent template
+references `docs`, and child agents may legitimately declare
+none), so a hard error would prevent legitimate scaffolding.
+`authz.denied` keeps its Phase 2.0 Recoverable level — a denied
+tool call ends the call, not the exchange.
+`tool.permissions_no_context` is Fatal because it indicates a
+developer mistake (a tool calling the API outside the engine's
+dispatch path); the fix is in the test harness, not the
+runtime.
 
 ---
 

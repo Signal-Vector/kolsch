@@ -32,9 +32,15 @@ dependencies = [
     # `rich` will render the streaming agent block + tool-call panels
     # in later steps (24c+). Both are pinned to versions known to
     # compose without the prompt_toolkit-vs-rich quirks documented in
-    # phase2.1-chat-specs.md Part 11 item 1.
+    # Part 11 item 1.
     "prompt_toolkit>=3.0.43,<4",
     "rich>=13.7.1,<15",
+    # Phase 2.2 (ENV-R13) — Jinja2 templating for agent prompts.
+    # `>= 3.1.0` is required for the native `{% block X required %}`
+    # syntax used by agent inheritance (Phase 2.2 §8.4). Used by
+    # `src/templating/render.py` and the prompt pre-flight in
+    # `src/engine/engine.py` (steps 5.6.5 + 5.6.6).
+    "jinja2>=3.1.0,<4",
 ]
 
 [project.urls]
@@ -51,6 +57,18 @@ build-backend = "hatchling.build"
 # The src/ layout follows AGENTS.md exactly: each subsystem is a
 # top-level package under src/ (kernel/, errors/, store/, bus/, assets/,
 # providers/, tools/, skills/, engine/).
+#
+# `src/kolsch` (Phase 2.2, ENV-R13) is an umbrella package whose
+# only purpose is to host repo-root documentation as package data.
+# The `kolsch:` prefix in agent `context_files` / `extends:` resolves
+# via `importlib.resources.files("kolsch") / <rel>` and reads the
+# files force-included below. Source-tree dev finds them via the
+# empty package + force-include; installed contexts find them via
+# package-data lookup.
+#
+# `src/templating` (Phase 2.2) houses the Jinja render harness, the
+# five variable objects, and `context_files` / `extends:`
+# resolution.
 [tool.hatch.build.targets.wheel]
 packages = [
     "src/kernel",
@@ -68,7 +86,30 @@ packages = [
     "src/api",
     "src/platform_runtime",
     "src/llm",
+    "src/templating",
+    "src/kolsch",
 ]
+
+# Phase 2.2 (ENV-R13 / E-2.2-001 A3) — repo-root docs ship as
+# package data inside the `kolsch` umbrella so
+# `importlib.resources.files("kolsch") / "docs/index.md"` (etc.)
+# finds the file in any installed wheel. Verify with:
+#     uv build && unzip -l dist/kolsch-*.whl | grep kolsch/docs/
+#
+# IMPORTANT: this force-include applies to the wheel target only.
+# Editable installs (`uv sync`, `pip install -e .`) ship the source
+# tree directly via a .pth file; `importlib.resources.files("kolsch")`
+# resolves to `src/kolsch/` on disk, which does NOT contain the
+# force-included files. The Phase 2.2 Step 12 `context_files`
+# loader is responsible for the source-tree-vs-installed dispatch
+# (its reviewer prompt covers BOTH contexts). Most likely
+# implementation: probe `importlib.resources` first; if the resource
+# is missing AND the runtime is a source-tree install, fall back to
+# the repo-root-relative path resolved via the `kolsch` package's
+# `__file__` parent's parent.
+[tool.hatch.build.targets.wheel.force-include]
+"docs" = "src/kolsch/docs"
+"AGENTS.md" = "src/kolsch/AGENTS.md"
 
 # ---------------------------------------------------------------------------
 # Dependency groups — installed via `uv sync --group <name>` (or all groups
@@ -359,7 +400,7 @@ addopts = [
     "--cov-report=xml",
     # Exclude E2E tests from the default `pytest` run — they cost
     # tokens, need real LLM keys, and run on a separate (nightly /
-    # pre-release) schedule per test-catalog Part 13 + compose.test.yml.
+    # pre-release) schedule per + compose.test.yml.
     # Run explicitly via `pytest -m e2e` (which OVERRIDES this).
     "-m",
     "not e2e",

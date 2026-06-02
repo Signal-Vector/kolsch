@@ -77,12 +77,12 @@ runtime is a configuration error."""
 
 
 # ---------------------------------------------------------------------------
-# Types — Module API Reference §8.2 + Phase 2.0 §11.8.1
+# Types — Module API Reference §8.2 +
 # ---------------------------------------------------------------------------
 
 
 class AuthzEffect(StrEnum):
-    """The three classifications a rule can return (Phase 2.0)."""
+    """The three classifications a rule can return."""
 
     ALLOW = "allow"
     DENY = "deny"
@@ -151,7 +151,7 @@ class AuthorizationResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# Prompt callback (Phase 2.0)
+# Prompt callback
 # ---------------------------------------------------------------------------
 
 
@@ -187,7 +187,7 @@ if TYPE_CHECKING:
 
 
 class AuthorizationProvider(Protocol):
-    """Three-method contract per spec §3.3 + Phase 2.0 §11.8.
+    """Three-method contract per spec §3.3 +
 
     Phase 2.0 (TOOL-R3): :meth:`allow` accepts optional ``target``
     and ``callback`` parameters. ``target`` is matched against the
@@ -204,6 +204,7 @@ class AuthorizationProvider(Protocol):
         *,
         target: str | None = None,
         callback: PromptCallback | None = None,
+        agent_permissions: list[Rule] | None = None,
     ) -> AuthorizationResult: ...
 
     async def list_rules(self) -> list[Rule]: ...
@@ -333,6 +334,7 @@ class RuleBasedAuthorizationProvider:
         *,
         target: str | None = None,
         callback: PromptCallback | None = None,
+        agent_permissions: list[Rule] | None = None,
     ) -> AuthorizationResult:
         """Evaluate ``(principal, action[, target])`` against the rule list.
 
@@ -351,20 +353,80 @@ class RuleBasedAuthorizationProvider:
           tuple form the new rule is appended to the in-memory list
           *before* this call returns so the next check in the same
           exchange sees it.
+
+        Phase 2.2 (ENV §3.8 / Step 9):
+
+        - ``agent_permissions`` (keyword-only) is the resolved
+          agent's per-agent rule list — composed agent-first,
+          platform-second, default-deny tail. ``None`` or ``[]``
+          is identical to the pre-Phase-2.2 surface (every existing
+          caller continues to work unchanged). When non-empty,
+          each :class:`Rule` is compiled in-place and walked
+          first-match-wins; if a match is found the rule returns
+          directly (PROMPT effects still resolve through the
+          callback). The :class:`AuthorizationResult` carries
+          a ``who_chain`` detail in its ``reason`` so debugging
+          can identify which layer matched.
         """
-        # A-I1 fullmatch + A-I2 first-match-wins. Per spec §2.3, the
-        # `what` regex matches against the tool's target string (for
-        # file tools the resolved path; for bash the command). Phase
-        # 2.0 setup-produced rules use action-namespace patterns
-        # (e.g. ``what: r"tool\.bash"``) that match the action
-        # string. To honour both styles in one matcher, this
-        # implementation matches a rule's `what` against EITHER the
-        # supplied `target` OR the `action` — first-match-wins on
-        # rule order, additive on the per-rule matching domain.
-        # When `target` is None (Phase 1 / non-chat callers), this
-        # collapses to action-only matching — strictly backward-
-        # compatible with the pre-Phase-2.1 surface.
-        for compiled in self._rules:
+        # Phase 2.2 — walk agent permissions first. Per-call compile is
+        # acceptable because agent_permissions is small (single-digit
+        # rules typically) and the engine calls allow() once per tool
+        # invocation, not on a hot loop.
+        if agent_permissions:
+            agent_match = await self._match_against_rules(
+                rules=[self._compile_rule_record(r) for r in agent_permissions],
+                principal=principal,
+                action=action,
+                target=target,
+                callback=callback,
+                layer="agent",
+            )
+            if agent_match is not None:
+                return agent_match
+
+        # Platform rules — same matching logic as Phase 2.0.
+        platform_match = await self._match_against_rules(
+            rules=self._rules,
+            principal=principal,
+            action=action,
+            target=target,
+            callback=callback,
+            layer="platform",
+        )
+        if platform_match is not None:
+            return platform_match
+
+        # A-I3 default deny.
+        return AuthorizationResult(
+            allowed=False,
+            effect=AuthzEffect.DENY,
+            matched_rule=None,
+            reason="no rule matched; default deny (who_chain=default)",
+        )
+
+    async def _match_against_rules(
+        self,
+        *,
+        rules: list[_CompiledRule],
+        principal: str,
+        action: str,
+        target: str | None,
+        callback: PromptCallback | None,
+        layer: str,
+    ) -> AuthorizationResult | None:
+        """Walk one layer's compiled rules first-match-wins. Returns
+        :class:`AuthorizationResult` on match (PROMPT resolved
+        through :meth:`_resolve_prompt`); returns ``None`` when no
+        rule fires so the caller can fall through to the next
+        layer.
+
+        ``layer`` (``"agent"`` / ``"platform"``) is folded into the
+        result's ``reason`` (and into PROMPT's resolved reason via
+        :meth:`_resolve_prompt`) so debugging output identifies
+        which layer matched."""
+        # A-I1 fullmatch + A-I2 first-match-wins. Same target-OR-action
+        # matching as the Phase 2.0 path.
+        for compiled in rules:
             if not compiled.who_re.fullmatch(principal):
                 continue
             target_match = target is not None and compiled.what_re.fullmatch(target)
@@ -377,6 +439,7 @@ class RuleBasedAuthorizationProvider:
                         action=action,
                         target=target,
                         callback=callback,
+                        layer=layer,
                     )
                 return AuthorizationResult(
                     allowed=effect is AuthzEffect.ALLOW,
@@ -385,16 +448,10 @@ class RuleBasedAuthorizationProvider:
                     reason=(
                         f"matched rule {compiled.raw.id}: who={compiled.raw.who!r} "
                         f"what={compiled.raw.what!r} "
-                        f"effect={compiled.effect!r}"
+                        f"effect={compiled.effect!r} (who_chain={layer})"
                     ),
                 )
-        # A-I3 default deny.
-        return AuthorizationResult(
-            allowed=False,
-            effect=AuthzEffect.DENY,
-            matched_rule=None,
-            reason="no rule matched; default deny",
-        )
+        return None
 
     async def _resolve_prompt(
         self,
@@ -403,6 +460,7 @@ class RuleBasedAuthorizationProvider:
         action: str,
         target: str | None,
         callback: PromptCallback | None,
+        layer: str = "platform",
     ) -> AuthorizationResult:
         # Phase 2.1 (24d) — when the per-call callback is absent,
         # fall back to the chat-injected registered callback. This
@@ -422,7 +480,7 @@ class RuleBasedAuthorizationProvider:
                 matched_rule=compiled.raw,
                 reason=(
                     f"prompt rule {compiled.raw.id} matched without "
-                    "a callback; collapsed to deny"
+                    f"a callback; collapsed to deny (who_chain={layer})"
                 ),
             )
         answer = await effective_callback(
@@ -434,7 +492,7 @@ class RuleBasedAuthorizationProvider:
             resolved_effect, persist_rule = answer
             # Insert the persisted rule before the matched prompt rule
             # so future calls with the same target hit it first
-            # (Phase 2.0 patch §4.2 "always allow/deny" semantics).
+            # ( "always allow/deny" semantics).
             self._insert_rule_before(persist_rule, anchor_id=compiled.raw.id)
             # Phase 2.1 (24d) — fire the rule-added hook AFTER the
             # in-memory insert so the chat's atomic-yaml-write
@@ -467,7 +525,7 @@ class RuleBasedAuthorizationProvider:
             matched_rule=compiled.raw,
             reason=(
                 f"prompt rule {compiled.raw.id} resolved by callback "
-                f"to {resolved_effect.value!r}"
+                f"to {resolved_effect.value!r} (who_chain={layer})"
             ),
         )
 
@@ -683,7 +741,7 @@ class RuleBasedAuthorizationProvider:
 
 
 # ---------------------------------------------------------------------------
-# allow_all_test variant (Phase 2.0, TOOL-R10) — test builds only
+# allow_all_test variant — test builds only
 # ---------------------------------------------------------------------------
 
 
@@ -724,8 +782,9 @@ class AllowAllTestAuthorizationProvider:
         *,
         target: str | None = None,
         callback: PromptCallback | None = None,
+        agent_permissions: list[Rule] | None = None,
     ) -> AuthorizationResult:
-        _ = principal, action, target, callback
+        _ = principal, action, target, callback, agent_permissions
         return AuthorizationResult(
             allowed=True,
             effect=AuthzEffect.ALLOW,
