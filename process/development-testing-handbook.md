@@ -1024,6 +1024,47 @@ asserting zero new failures attributable to changed defaults.
   chat's renderer is a pure function of the event stream;
   replay is the test.
 
+### 10.17 Agent Envelope (Phase 2.2, ENV-R7)
+
+Patch source of truth:
+`process/phase2.2-agent-envelope-specs.md`.
+
+- **Agent permissions override platform permissions in
+  composition order.** For each `allow(...)` call the provider
+  walks agent rules → platform rules → default-deny. A `who_chain`
+  field on the matched-result names which layer made the call
+  (verified by TC-ENV-01).
+- **Jinja2 templating renders agent prompts at pre-flight.**
+  Pre-flight step 5.6.6 (per
+  `docs/explanation/agent-engine-contract.md` 2.1 step 8.7)
+  applies Jinja2 rendering with `StrictUndefined`. Plain-text
+  prompts (no `{{ }}` / `{% %}` markers) pass through unchanged
+  — the rendering step is backward compatible.
+- **The five top-level variables (`tools`, `docs`, `workspace`,
+  `agent`, `platform`) all expose the standardized method
+  family** (`list()`, `summary()`, `read(name)`, etc. per Phase
+  2.2 §4.2). Typo'd variable names raise
+  `config.template_render_failed` at agent-load.
+- **`tools.summary()` reads from `@tool(summary=...)` or the
+  first sentence of `description`.** Bundles that pre-date Phase
+  2.2 work without modification; the auto-derived summary is the
+  fallback.
+- **`context_files` two-tier rendering.** `primary: true` files
+  are inlined into the rendered prompt via `docs.primary()`;
+  other entries are listed by summary via `docs.list()` with
+  content lazily fetched via `docs.read(name)`.
+- **Agent inheritance via `extends:` resolves correctly through
+  multi-level chains; cycles detected.** Pre-flight step 5.6.5
+  walks the chain via prefix-resolved paths; cycles raise
+  `config.agent_inheritance_cycle` (Fatal) carrying the cycle
+  list.
+- **Template-config consistency warnings emit
+  `agent.template_warning` events at agent-load.** Empty-data
+  references (e.g., `{{ tools.list() }}` with no tools declared,
+  `{{ docs.primary() }}` with no primary context files) produce
+  one warning event per reference; the event lands on the
+  session event log per Engine I1.
+
 ---
 
 ## Part 11 — Coverage & Quality Gates

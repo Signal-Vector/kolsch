@@ -861,6 +861,86 @@ Handling), CRW (CrewAI Adapter — authored in Step 12b), INT
 
 ---
 
+### Max Tokens (LLM-MAXTOK) — bug-llm-max-tokens-credit-overrun.md
+
+Three-layer regression for the completion-token cap the bug fix
+introduces:
+
+1. **Connector layer** — every connector exposes
+   `DEFAULT_MAX_TOKENS = 4096` as a class constant; `build_llm`
+   applies it when the caller passes `max_tokens=None`. Without
+   the cap, litellm falls through to the model's reported max
+   completion tokens (65,536 for Claude Opus/Sonnet 4-7's
+   long-output variant) and OpenRouter's reservation check
+   pre-charges the full budget, tripping 402 errors on the first
+   message.
+2. **Agent layer** — `agent.yaml:max_tokens` propagates through
+   `PartialAgentConfig` → kernel merge → `ResolvedAgentConfig` →
+   engine pre-flight → `FallbackLLMHandle` → factory → connector
+   → `crewai.LLM`.
+3. **Defaults layer** — `platform.yaml:defaults.max_tokens` fills
+   in when the agent is silent (qol-setup Step 6 layered-merge
+   composition extended to a new field; agent partial wins
+   wholesale per-field when both layers carry a value).
+
+Companion unit tests:
+
+- `tests/unit/llm/test_connector_max_tokens.py` — connector
+  contract (class-constant discipline + `build_llm` kwarg
+  wiring) for both connectors.
+- `tests/unit/schemas/test_max_tokens_composition.py` — kernel-
+  merge composition (agent > defaults > None) via
+  `AssetManagement.build_resolved_config`.
+
+The integration tests below pin the end-to-end chain: from
+agent declaration to the actual kwarg the wire-level
+`crewai.LLM(...)` constructor receives.
+
+**TC-LLM-MAXTOK-01: No override → connector default lands at the wire**
+- Layer: integration
+- Setup: workspace with `llm_providers.openrouter` configured;
+  agent declares `provider: openrouter, model:
+  anthropic/claude-opus-4-7` with no `max_tokens`;
+  `platform.yaml:defaults` empty. Spy `_SpyLLM` replaces
+  `openrouter_module.crewai.LLM`.
+- Action: `bootstrap_runtime(root=tmp_path)` (no `llm=` so the
+  per-spec factory wires up); run one exchange end-to-end.
+- Expected: exactly one `crewai.LLM` construction; captured
+  kwargs include `max_tokens=4096` (the
+  `OpenRouterConnector.DEFAULT_MAX_TOKENS` class constant).
+- Pre-fix FAIL signature: kwargs are
+  `{api_key, base_url, model, timeout}` — no `max_tokens` key.
+- Verifies: §10.12 (LLM provider config); the canonical
+  regression for bug-llm-max-tokens-credit-overrun.md.
+
+**TC-LLM-MAXTOK-02: Agent override propagates to crewai.LLM**
+- Layer: integration
+- Setup: same workspace shape as TC-LLM-MAXTOK-01; agent
+  declares `max_tokens: 8192`; defaults empty.
+- Action: bootstrap + one exchange; inspect spy kwargs.
+- Expected: `crewai.LLM` kwargs include `max_tokens=8192`.
+  Confirms the Step 3 chain: agent yaml → PartialAgentConfig →
+  kernel merge → ResolvedAgentConfig → engine pre-flight →
+  FallbackLLMHandle constructor capture → factory → connector
+  → `crewai.LLM`.
+- Verifies: §10.12 + agent-envelope §8.2 (per-field override
+  wholesale rule, extended to the new `max_tokens` field).
+
+**TC-LLM-MAXTOK-03: Platform defaults propagate when agent silent**
+- Layer: integration
+- Setup: same workspace shape; agent omits `max_tokens`;
+  `platform.yaml:defaults: {max_tokens: 2048}`.
+- Action: bootstrap + one exchange; inspect spy kwargs.
+- Expected: `crewai.LLM` kwargs include `max_tokens=2048`.
+  Confirms the qol-setup Step 6 layered-merge defaults-fallback
+  mechanism extends to the new field with zero refactoring
+  (defaults as layer-0 partial; agent silent → defaults value
+  carries).
+- Verifies: §10.12 + qol-setup-evolution-and-defaults Step 6
+  (defaults composition).
+
+---
+
 ## Part 9.6 — Workspace Resolution & Setup (UX) — Phase 1.2, UX-R9
 
 **TC-UX-01: `resolve_workspace(--root)` returns the flag value**
@@ -1509,6 +1589,173 @@ Handling), CRW (CrewAI Adapter — authored in Step 12b), INT
 
 ---
 
+## Part 9.10 — Agent Envelope (ENV) — Phase 2.2, ENV-R8
+
+**TC-ENV-01: Agent permissions override platform permissions**
+- Layer: component
+- Setup: platform.yaml with `tool.bash: prompt`; helper agent
+  with `permissions: [{who: ag_helper, what: tool.bash, effect: allow}]`.
+- Action: dispatch a bash call from the helper agent through the
+  authz provider.
+- Expected: `AuthorizationResult.allowed=True`; `matched_rule`
+  references the agent-declared rule; `who_chain` includes
+  `agent:<index>` and NOT the platform rule's id.
+- Verifies: §10.17 composition order; Phase 2.2 §1.2 + §3.X.
+
+**TC-ENV-02: `permissions.require` from inside a tool body raises on deny**
+- Layer: component
+- Setup: a custom tool whose body calls
+  `await ctx.permissions.require("ag_helper", "tool.bash")` against
+  an agent + platform combo that resolves to DENY.
+- Action: invoke the tool through the engine dispatch.
+- Expected: the tool emits `tool.failed` with `error.code =
+  authz.denied`; the exchange continues (Recoverable, not Fatal).
+- Verifies: §10.17 + Phase 2.2 §2.2.
+
+**TC-ENV-03: Jinja prompt renders with all five top-level variables**
+- Layer: component
+- Setup: helper agent with prompt referencing each variable
+  (`{{ tools.list() }}`, `{{ docs.primaries() }}`,
+  `{{ workspace.summary() }}`, `{{ agent.name }}`,
+  `{{ platform.summary() }}`).
+- Action: pre-flight render the prompt at agent-load.
+- Expected: the rendered prompt contains the substituted values
+  for each variable; no `{{ }}` markers remain.
+- Verifies: §10.17 standardized variable family; Phase 2.2 §4.
+
+**TC-ENV-04: Plain-text prompt (no Jinja markers) renders unchanged**
+- Layer: component
+- Setup: helper agent with prompt = `"You are helpful."` (no
+  template markers).
+- Action: pre-flight render.
+- Expected: the rendered prompt is byte-identical to the input.
+- Verifies: §10.17 backward compatibility; Phase 2.2 §3.2.
+
+**TC-ENV-05: `tools.summary()` reads the `summary` field from `@tool`**
+- Layer: component
+- Setup: declared tool with
+  `@tool(name="t1", description="long...", summary="short")` plus
+  a second tool with description-only.
+- Action: render `{{ tools.summary() }}` against the agent.
+- Expected: the output contains `short` for the first tool and
+  the first-sentence-derivation for the second.
+- Verifies: §10.17 summary-field discipline; Phase 2.2 §5.1.
+
+**TC-ENV-06: `context_files` two-tier rendering — primary inlined, secondary listed**
+- Layer: component
+- Setup: helper agent with two context_files: one
+  `primary: true`, one default (`primary: false`).
+- Action: render the prompt referencing `{{ docs.primaries() }}` and
+  `{{ docs.list() }}`.
+- Expected: the primary file's content appears inlined; the
+  secondary file appears as a one-line summary entry but its
+  content does NOT appear (the agent can fetch on demand via
+  `docs.read(name)`).
+- Verifies: §10.17 two-tier rendering; Phase 2.2 §6.
+
+**TC-ENV-07: `kolsch:` prefix resolves to install location; `workspace:` to workspace root**
+- Layer: component
+- Setup: a workspace with a file at
+  `<root>/context/local.md`; the running kolsch install ships a
+  file at `<install>/docs/styleguide.md`.
+- Action: resolve `workspace:context/local.md` and
+  `kolsch:docs/styleguide.md` via the asset manager.
+- Expected: both resolve to absolute paths; `workspace:` lands
+  inside the workspace root; `kolsch:` lands via
+  `importlib.resources.files("kolsch")`.
+- Verifies: §10.17 install-relative resolution; Phase 2.2 ENV-R2
+  + asset-management-contract §3.2.Y.
+
+**TC-ENV-08: `extends:` inherits parent's fields; child override wins wholesale**
+- Layer: component
+- Setup: parent agent (`_base.yaml`) with `model: opus`, `tools: [bash]`;
+  child agent with `extends: kolsch:agents/_base.yaml` and
+  `model: haiku` (no tools override).
+- Action: resolve the child agent through the engine pre-flight.
+- Expected: resolved config has `model = haiku` (child wins) AND
+  `tools = [bash]` (inherited from parent).
+- Verifies: §10.17 inheritance; Phase 2.2 §8.
+
+**TC-ENV-09: Cycle detection raises `config.agent_inheritance_cycle`**
+- Layer: component
+- Setup: agent A extends B; B extends A.
+- Action: load A.
+- Expected: pre-flight raises `config.agent_inheritance_cycle`
+  (Fatal); the detail `cycle` lists `[A, B, A]` (or equivalent).
+- Verifies: §10.17 cycle detection; Phase 2.2 §8 + error-model
+  §4.18.
+
+**TC-ENV-10: Required block missing raises `config.required_block_missing`**
+- Layer: component
+- Setup: parent template declares
+  `{% block role required %}{% endblock %}`; child extends and
+  does NOT redefine `role`.
+- Action: render the child's prompt at pre-flight.
+- Expected: `config.required_block_missing` (Fatal) with detail
+  `{block_name: "role", agent_path: "<child path>"}`.
+- Verifies: §10.17 required-block discipline; Phase 2.2 §8 +
+  error-model §4.18.
+
+**TC-ENV-11: `agent.template_warning` emits at agent-load for empty-data references**
+- Layer: component
+- Setup: helper agent declaring no tools but with a prompt that
+  references `{{ tools.list() }}`.
+- Action: pre-flight render.
+- Expected: rendering succeeds (Warning, not Fatal); ONE
+  `agent.template_warning` event lands on the session JSONL with
+  `data.reference = "tools.list()"`, `data.reason` naming
+  "no tools declared", and a `data.hint` recommending either
+  removing the reference or declaring at least one tool.
+- Verifies: §10.17 consistency warnings; Phase 2.2 §9.
+
+**TC-ENV-12: StrictUndefined raises on typo'd variable names**
+- Layer: component
+- Setup: helper agent with prompt referencing `{{ tools.lits() }}`
+  (typo: `lits` instead of `list`).
+- Action: pre-flight render.
+- Expected: `config.template_render_failed` (Fatal) with detail
+  `{template: "<agent path>", reason: <Jinja's UndefinedError>}`.
+- Verifies: §10.17 StrictUndefined discipline; Phase 2.2 §3.4 +
+  error-model §4.18.
+
+**TC-ENV-13: `defaults.<field>` fall-through composition (per E-2.2-001 A2)**
+- Layer: component
+- Setup: three sub-cases driven through
+  `AssetManagement.build_resolved_config`:
+  - **(a) silence falls through.** Agent omits `permissions:`;
+    `extends:` parent omits it; `platform.yaml:defaults.permissions
+    = [rule_X]`.
+  - **(b) explicit `[]` blocks defaults.** Agent omits
+    `permissions:`; parent declares `permissions: []`; defaults set
+    to `[rule_X]`.
+  - **(c) agent wins wholesale.** Agent declares
+    `permissions: [rule_Z]`; parent `[rule_Y]`; defaults `[rule_X]`.
+- Action: resolve each variant.
+- Expected: (a) `permissions == [rule_X]`; (b) `permissions == []`;
+  (c) `permissions == [rule_Z]`.
+- Verifies: §10.17 + Phase 2.2 §8.2 silence-vs-empty semantics +
+  composition order (`schema default ← defaults ← extends ← agent`).
+  Pins E-2.2-001 A2.
+
+**TC-ENV-14: `kolsch:` prefix resolves in both source-tree and installed-wheel contexts**
+- Layer: integration
+- Setup: build the wheel via `uv build`; install it into a clean
+  venv that does NOT include the source tree on the import path.
+  Resolve `kolsch:docs/index.md` via the asset manager's
+  context-file loader.
+- Action: load the resource via
+  `importlib.resources.files("kolsch") / "docs/index.md"` and
+  read the bytes.
+- Expected: the bytes match the source-tree `docs/index.md`
+  byte-for-byte; the resolver returns an absolute filesystem
+  path (or a `Traversable` whose `read_text()` returns the same
+  content). Same test in the source-tree context returns the
+  identical bytes from `<repo>/docs/index.md`.
+- Verifies: §10.17 + Phase 2.2 §6.2; E-2.2-001 A3's package-data
+  resolution.
+
+---
+
 ## Part 10 — Error Model (ERR)
 
 **TC-ERR-01: All subclasses serialize to envelope**
@@ -1758,7 +2005,7 @@ bus + EchoLLM + FakeFramework).
   `STARTED`, `LAST`, `NAME`), the session id, an ISO start time,
   a compact last-event delta (e.g., `30m`), and the
   `cli:<agent_ref>` name. The agent_id is no longer in the
-  default output (per docs/process/qol-sessions-list-columns.md).
+  default output (per process/qol-sessions-list-columns.md).
 - Verifies: Session entity surface + CLI session list.
 
 **TC-CLI-04: `reconstruct` rebuilds entities after DB wipe**

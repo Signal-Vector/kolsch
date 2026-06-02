@@ -981,7 +981,7 @@ an `LLM` column showing the Agent Engine calls `build_llm`.
 
 Add §4.13 "LLM Configuration" with the seven codes from Part 10.
 
-### LLM-R7. `docs/process/development-testing-handbook.md` §10
+### LLM-R7. `process/development-testing-handbook.md` §10
 
 Add success criteria §10.12 "LLM Provider Configuration":
 - The registry rejects duplicate registration.
@@ -993,7 +993,7 @@ Add success criteria §10.12 "LLM Provider Configuration":
 - API key values never appear in logs, events, or `platform.yaml`
   (only secret names do).
 
-### LLM-R8. `docs/process/test-catalog.md`
+### LLM-R8. `process/test-catalog.md`
 
 Add Part 9.5 "LLM Provider Configuration (LLM)" with cases:
 - TC-LLM-01: alias resolves to canonical (`opus` →

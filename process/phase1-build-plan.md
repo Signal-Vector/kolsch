@@ -75,7 +75,7 @@ only up to the prior step).
 
 Before doing anything:
 1. Read AGENTS.md at the repo root — it is your operating manual.
-2. Read docs/process/development-testing-handbook.md — engineering
+2. Read process/development-testing-handbook.md — engineering
    principles, Python practices, tooling, the containerized dev
    workflow, and the testing strategy. Follow it exactly.
 3. Use the Codanna code index (not grep) to navigate existing code.
@@ -113,7 +113,7 @@ raise the conflict explicitly.
   interface** plus the **event-sequence assertion helpers** and **fixture
   factories** the test strategy depends on.
 - **Depends on:** nothing.
-- **Spec refs:** `docs/process/development-testing-handbook.md` (§3, §4,
+- **Spec refs:** `process/development-testing-handbook.md` (§3, §4,
   §8, §9), `AGENTS.md` (project layout).
 
 - **Developer prompt:**
@@ -217,7 +217,7 @@ Deliver:
 - A registry/enumeration mechanism so all codes can be listed
   programmatically (needed by TC-ERR-04).
 
-Write tests first from TC-ERR-01..05 (docs/process/test-catalog.md). In
+Write tests first from TC-ERR-01..05 (process/test-catalog.md). In
 particular: every subclass serializes to the envelope; the cause chain
 nests 3 deep; every class code is in the catalog; level is intrinsic.
 
@@ -1366,8 +1366,8 @@ Verdict: PASS or FAIL with specific defects citing file + spec section.
   including the four overall validation tests and the backend-swap
   transparency test.
 - **Depends on:** all prior steps.
-- **Spec refs:** `docs/process/test-plan.md` §12,
-  `docs/process/test-catalog.md` Parts 12–13.
+- **Spec refs:** `process/test-plan.md` §12,
+  `process/test-catalog.md` Parts 12–13.
 - **Test Catalog:** TC-INT-01..07, TC-E2E-01..04.
 
 - **Developer prompt:**

@@ -308,11 +308,25 @@ Docs:      docs/tutorials/first-agent.md
   exception is the provider's API key, which goes into the workspace's
   `.env` per Phase 1.1.
 
+> **Migration-aware idempotency (this QoL):** "idempotent" in
+> setup is interpreted as "detect drift between local and
+> canonical state; offer migration; non-destructively apply." See
+> [qol-setup-evolution-and-defaults.md](qol-setup-evolution-and-defaults.md)
+> for the mechanism.
+
 ### 2.4 The starter agent file
 
 Exact content materialized by Step D (with `<MODEL>` substituted from
 the user's choice — `opus`, another alias, or `fake-model` if no
 provider connected):
+
+> **Post-2.2 amendment ([qol-setup-evolution-and-defaults.md](qol-setup-evolution-and-defaults.md)):**
+> After the qol-setup-evolution-and-defaults work landed, the
+> starter helper agent omits `model:` and inherits from
+> `platform.yaml`'s `defaults.model`. The `<MODEL>` placeholder in
+> this section's template becomes obsolete; the substitution
+> moved to the platform-yaml `defaults.model` slot. The shape
+> below is preserved verbatim as the Phase 1.2 historical record.
 
 ```yaml
 # bundles/starter/agents/helper.yaml
@@ -442,7 +456,7 @@ Add Part 11.6 "Workspace Resolution" documenting `resolve_workspace`,
 dependency matrix (Part 12) to show that the CLI and API both depend
 on the workspace module.
 
-### UX-R8. `docs/process/development-testing-handbook.md` §10
+### UX-R8. `process/development-testing-handbook.md` §10
 
 Add success criteria §10.13 "Workspace Resolution & Setup":
 
@@ -456,7 +470,7 @@ Add success criteria §10.13 "Workspace Resolution & Setup":
 - No module outside `src/platform_runtime/workspace.py` imports
   `platformdirs` or reads `KOLSCH_WORKSPACE`.
 
-### UX-R9. `docs/process/test-catalog.md`
+### UX-R9. `process/test-catalog.md`
 
 Add Part 9.6 "Workspace Resolution & Setup (UX)" with cases:
 

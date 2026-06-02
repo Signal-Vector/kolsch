@@ -112,7 +112,7 @@ Step A — Establish the baseline leak in raw CrewAI and
 confirm verbose=False is insufficient.
 
 Read first:
-- docs/process/bug-crewai-stdout-leak-investigation.md Part 0.
+- process/bug-crewai-stdout-leak-investigation.md Part 0.
 
 Create and run TWO probe scripts:
 
@@ -795,7 +795,7 @@ Tasks:
    G fix, run the test, confirm failure. Restore the fix,
    confirm pass.
 
-4. Add to docs/process/test-catalog.md as TC-CREWAI-NOLEAK-01.
+4. Add to process/test-catalog.md as TC-CREWAI-NOLEAK-01.
 
 Scope: ~60 lines test + small catalog entry.
 

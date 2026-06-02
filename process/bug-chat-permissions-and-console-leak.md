@@ -300,11 +300,11 @@ PR — at the developer's discretion based on test size.
 Step A — Confirm or correct the hypothesis set.
 
 Read first:
-- docs/process/bug-chat-permissions-and-console-leak.md, in full
+- process/bug-chat-permissions-and-console-leak.md, in full
   (especially Parts 0, 1, 2).
-- docs/process/phase2.0-tools-specs.md §3.1 (the default rule
+- process/phase2.0-tools-specs.md §3.1 (the default rule
   set the setup is supposed to write).
-- docs/process/phase1.2-usability-specs.md §2.2 Step B (setup's
+- process/phase1.2-usability-specs.md §2.2 Step B (setup's
   skeleton step) and TOOL-R12 in phase2.0-tools-specs.md Part 6
   (the alignment flag).
 - src/cli/_setup.py (the setup orchestrator).
@@ -417,7 +417,7 @@ step ships a test that pins the contract so future drift is
 caught.
 
 Read first:
-- docs/process/phase2.0-tools-specs.md §3.1 (the canonical
+- process/phase2.0-tools-specs.md §3.1 (the canonical
   rule set).
 - src/cli/_setup.py:821 _workspace_only_default_rules() (the
   function under test).

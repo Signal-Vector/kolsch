@@ -173,8 +173,8 @@ framework but echoey result) vs H6 (event-construction bug).
 ### Step B — Confirm Phase 1.1 implementation actually landed
 
 The Phase 1.1 specs and build plan exist
-(`docs/process/phase1.1-llm-specs.md`,
-`docs/process/phase1.1-llm-provider.md`). Confirm Step 16 was
+(`process/phase1.1-llm-specs.md`,
+`process/phase1.1-llm-provider.md`). Confirm Step 16 was
 actually executed:
 
 ```bash
@@ -288,9 +288,9 @@ of an LLM-generated reply. Investigate, root-cause, fix, and add
 a regression test.
 
 Read first:
-- docs/process/bug-echo-on-real-provider.md (this ticket — the
+- process/bug-echo-on-real-provider.md (this ticket — the
   hypotheses, investigation strategy, acceptance criteria).
-- docs/process/phase1.1-llm-specs.md Parts 1, 2.4, 5, 6 (the
+- process/phase1.1-llm-specs.md Parts 1, 2.4, 5, 6 (the
   build_llm contract and the connector implementations).
 - docs/explanation/agent-engine-contract.md §2.1 (the pre-flight
   steps, especially the post-Phase-1.1 step 5.5).
@@ -377,7 +377,7 @@ Review the echo-on-real-provider bug fix. The deliverable is a
 root-cause writeup, a minimal fix, and a regression test.
 
 Read first:
-- docs/process/bug-echo-on-real-provider.md (the ticket — Part 3
+- process/bug-echo-on-real-provider.md (the ticket — Part 3
   acceptance criteria are your checklist).
 - The developer's root-cause writeup (in the PR description).
 - The diff.

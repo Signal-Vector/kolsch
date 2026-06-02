@@ -269,9 +269,9 @@ OpenCode-served model produces a CrewAI/LiteLLM error
 model did not match any supported native provider…".
 
 Read first:
-- docs/process/bug-litellm-model-routing.md (this ticket — the
+- process/bug-litellm-model-routing.md (this ticket — the
   hypotheses, investigation strategy, acceptance criteria).
-- docs/process/phase1.1-llm-specs.md §5.1 (the OpenCode connector
+- process/phase1.1-llm-specs.md §5.1 (the OpenCode connector
   spec) and §6.1 (OpenRouter, for contrast).
 - src/llm/providers/opencode.py and src/llm/providers/
   openrouter.py (the code).
@@ -372,10 +372,10 @@ Report:
 Review the OpenCode-LiteLLM routing fix.
 
 Read first:
-- docs/process/bug-litellm-model-routing.md (the ticket — Part 3
+- process/bug-litellm-model-routing.md (the ticket — Part 3
   acceptance criteria are your checklist).
 - The developer's root-cause writeup in the PR description.
-- docs/process/phase1.1-llm-specs.md §5.1 (OpenCode spec) and
+- process/phase1.1-llm-specs.md §5.1 (OpenCode spec) and
   §6.1 (OpenRouter spec, for asymmetry context).
 - The diff.
 

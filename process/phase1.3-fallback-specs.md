@@ -361,7 +361,7 @@ event. Update the dependency matrix (Part 12) to note that the
 engine consumes the LLM registry multiple times per exchange in
 fallback scenarios.
 
-### FB-R7. `docs/process/development-testing-handbook.md` §10
+### FB-R7. `process/development-testing-handbook.md` §10
 
 Add success criteria §10.14 "Model Fallback":
 
@@ -378,7 +378,7 @@ Add success criteria §10.14 "Model Fallback":
 - Streaming exchanges do not fall back after the first content
   event.
 
-### FB-R8. `docs/process/test-catalog.md`
+### FB-R8. `process/test-catalog.md`
 
 Add Part 9.7 "Model Fallback (FB)" with cases TC-FB-01..10 per
 patch Part 6 below.
@@ -395,7 +395,7 @@ Add to "Hard rules":
 
 > Every new `model.*` error code MUST declare Recoverable or Fatal
 > in the same change that introduces it, and update the fallback
-> trigger table in `docs/process/phase1.3-fallback-specs.md`
+> trigger table in `process/phase1.3-fallback-specs.md`
 > §2.2 (or its successor in the error model doc).
 
 ### FB-R11. `docs/tutorials/first-agent.md`
@@ -416,7 +416,7 @@ provider diversity), reading `kolsch sessions events` for
 
 ## Part 6 — Test Cases (referenced from FB-R8)
 
-The full test cases that land in `docs/process/test-catalog.md`
+The full test cases that land in `process/test-catalog.md`
 Part 9.7. Each follows the Setup/Action/Expected/Verifies form
 used throughout the catalog.
 
