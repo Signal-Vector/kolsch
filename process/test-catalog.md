@@ -226,6 +226,90 @@ Handling), CRW (CrewAI Adapter — authored in Step 12b), INT
 
 ---
 
+### Agent ID Derivation (AGENTID) — bug-agent-id-derive-from-ref.md
+
+Pre-fix, `agent_id:` was a required field in agent YAML and a bare
+identifier like `agent_id: butler` raised `AgentId requires prefix
+'ag_'`. The user pushed back: `<bundle>/<name>` already uniquely
+identifies the agent, so demanding a third user-typed-and-prefixed
+field is unnecessary friction. Step 2 made `agent_id` optional in
+YAML; when omitted, the resolver derives `ag_<bundle>_<name>` from
+the asset ref. Explicit values still work and still must be
+canonical `ag_*`. These regressions pin the four corners of the new
+contract.
+
+**TC-AGENTID-01: YAML without `agent_id` resolves with derived id**
+- Layer: integration
+- Setup: tmp-path workspace with bundle `test` and agent
+  `bundles/test/agents/demo.yaml` whose payload omits the
+  `agent_id` field; every other required Layer-1 field present.
+- Action: `await AssetManagement.build_resolved_config("test/agents/demo")`.
+- Expected: returns a `ResolvedAgentConfig` whose `agent_id ==
+  "ag_test_demo"`; other fields parse normally (model.provider,
+  model.model, description, name).
+- Pre-fix bite: VERIFIED. Pre-fix, omitting `agent_id` produced
+  `ConfigInvalid: Configuration validation failed with 1 error(s)`
+  with `detail.validation_errors[0].message == "Field required"`
+  raised at `kernel.resolver.validate` (resolved-layer Pydantic
+  flagged the missing required field).
+- Verifies: bug-agent-id-derive-from-ref §Part 2 acceptance
+  criteria 1, 2.
+
+**TC-AGENTID-02: Explicit `agent_id` is honored over derivation**
+- Layer: integration
+- Setup: same workspace shape as TC-AGENTID-01 except the YAML
+  carries `agent_id: ag_custom`.
+- Action: `await AssetManagement.build_resolved_config("test/agents/demo")`.
+- Expected: `cfg.agent_id == "ag_custom"`; explicitly NOT
+  `ag_test_demo`. RFC 7386 merge gives the agent partial priority
+  over the prepended derived baseline.
+- Pre-fix bite: NONE — explicit `agent_id` always worked pre-fix.
+  This test is forward-looking: it pins that the derivation hook
+  did not flip the merge priority for the explicit case.
+- Verifies: bug-agent-id-derive-from-ref §Part 2 acceptance
+  criterion 3.
+
+**TC-AGENTID-03: Malformed explicit `agent_id` still rejected**
+- Layer: integration
+- Setup: agent YAML with `agent_id: butler` (missing the canonical
+  `ag_` prefix).
+- Action: `await AssetManagement.build_resolved_config("test/agents/demo")`.
+- Expected: raises `ConfigInvalid` whose
+  `detail.validation_errors` carries a finding with `path`
+  containing `agent_id` and `message` containing both `ag_` and
+  `prefix` (the `AgentId requires prefix 'ag_'` text). Proves the
+  fix is "let users omit the field," NOT "accept any string and
+  prepend `ag_`."
+- Pre-fix bite: NONE — the AgentId regex check existed pre-fix and
+  still runs. The test is forward-looking insurance against the
+  fix accidentally turning into a leniency layer for malformed
+  explicit values.
+- Verifies: bug-agent-id-derive-from-ref §Part 2 acceptance
+  criterion 4.
+
+**TC-AGENTID-04: Starter `kolsch/agents/helper` keeps explicit id**
+- Layer: integration
+- Setup: tmp-path workspace with a `bundles/kolsch/` directory and
+  the ACTUAL starter `helper.yaml` from
+  `src/cli/_starter_bundle/kolsch/agents/helper.yaml` (with
+  `{{MODEL_LINE}}` substituted the same way `kolsch setup` does at
+  `src/cli/_setup.py:546-549`). Accept-anything subsystem
+  validator for the `tools.standard` variant.
+- Action: `await AssetManagement.build_resolved_config("kolsch/agents/helper")`.
+- Expected: `cfg.agent_id == "ag_helper"` (explicit value in
+  helper.yaml line 3), NOT the derived `ag_kolsch_helper`.
+- Pre-fix bite: NONE — pre-fix the starter resolved to `ag_helper`
+  too. The test is the load-bearing non-migration check: any
+  future edit that drops the `agent_id:` line from helper.yaml
+  would silently change the resolved id to `ag_kolsch_helper`,
+  breaking every historical event log, authz rule (`agent.ag_helper`),
+  and memory binding that pins `ag_helper`. This test trips before
+  such an edit ships.
+- Verifies: bug-agent-id-derive-from-ref §Part 2 acceptance
+  criterion 6.
+
+---
+
 ## Part 3 — Session/Run Store (STR)
 
 **TC-STR-01: Create session writes file and entity**
