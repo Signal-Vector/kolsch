@@ -1563,6 +1563,184 @@ agent declaration to the actual kwarg the wire-level
   terminal-native scrolling + selection; AGENTS.md hard rule
   introduced by CHAT-R9.
 
+### Chat Deny/Esc (CHAT-DENY/CHAT-ESC) — bug-chat-deny-stops-and-esc-interrupts.md
+
+Pre-fix, the modal's deny ([n]/[d]) surfaced the deny to the model
+as a tool error payload and the framework kept looping; Esc during
+streaming did nothing (only Ctrl-C cancelled). Step 2 routed both
+into the shared ``CancelToken`` ChatSessionState carries per-exchange;
+the framework's iteration-boundary poll (``fake_framework.py:78-79``)
+observes the flip and raises. These regressions pin the new
+contract.
+
+**TC-CHAT-DENY-01: Deny once stops the active exchange**
+- Layer: component
+- Setup: ``ChatSessionState`` stub with an active ``CancelToken``;
+  ``RuleBasedAuthorizationProvider`` with a ``prompt`` rule for
+  ``tool.bash``; ``ApprovalModal`` constructed with the state and
+  ``input_fn`` scripted to ``["n"]``.
+- Action: ``await provider.allow(principal="agent.helper",
+  action="tool.bash", target="rm -rf /")``.
+- Expected: provider result is DENY; ``cancel.is_cancelled() == True``
+  AND ``state.last_cancel_reason == "denied"``. The cancel flip
+  happens INSIDE the modal BEFORE the return — so the framework's
+  next iteration poll observes it.
+- Pre-fix bite: VERIFIED. Pre-fix the modal returns DENY but
+  ``cancel.is_cancelled()`` stays False — the framework would keep
+  looping and surface the deny to the model as a tool error.
+- Verifies: bug-chat-deny-stops-and-esc-interrupts §Part 2
+  acceptance criteria 1, 2.
+
+**TC-CHAT-DENY-02: Always-deny flips the token AND emits the rule**
+- Layer: component
+- Setup: same as DENY-01 plus an ``on_rule_added`` spy registered
+  with the provider; ``input_fn`` scripted to ``["d", ""]`` (accept
+  suggested pattern).
+- Action: ``await provider.allow(...)`` against
+  ``("tool.bash", "rm -rf /")``.
+- Expected: provider result is DENY; ``cancel.is_cancelled() == True``;
+  ``state.last_cancel_reason == "denied"``; the ``on_rule_added``
+  spy fired exactly once with the new deny rule
+  (``what="^rm .*$"``, ``effect="deny"``) inserted BEFORE the
+  prompt rule. The rule write happens AFTER the modal returns,
+  via the provider's ``_resolve_prompt`` hook fire
+  (``authz.py:503-513``); the cancel flip happens BEFORE the
+  return — both happen, neither blocks the other.
+- Pre-fix bite: PARTIAL. Pre-fix the rule write fires correctly
+  (existing TC-CHAT-04 already pinned that) but the cancel-flip
+  + reason-stamp side effects don't happen — so the exchange
+  doesn't stop. This TC pins the new BOTH-happen contract.
+- Verifies: bug-chat-deny-stops-and-esc-interrupts §Part 2
+  acceptance criteria 1, 3.
+
+**TC-CHAT-DENY-03: Fan-out short-circuit**
+- Layer: component
+- Setup: ``ChatSessionState`` stub with a CancelToken that's
+  already ``.cancel()``-ed (simulating an earlier tool_call in
+  the same framework iteration already denied); modal constructed
+  with an ``input_fn`` that raises ``AssertionError`` if invoked.
+- Action: ``await provider.allow(...)``.
+- Expected: provider result is DENY; ``input_fn`` was never
+  called (assert via the raise-on-call sentinel); the modal's
+  panel never rendered (``out.getvalue() == ""``). The user
+  saw nothing additional after their initial deny in the fan-out.
+- Pre-fix bite: VERIFIED. Pre-fix the modal has no short-circuit
+  guard; it would render the panel + call input_fn for each
+  tool_call in the fan-out, prompting the user multiple times.
+- Verifies: bug-chat-deny-stops-and-esc-interrupts §Part 2
+  acceptance criterion 4.
+
+**TC-CHAT-ESC-01: Esc binding flips the cancel token**
+- Layer: component
+- Setup: ``ChatSessionState`` stub with an active ``CancelToken``;
+  ``_watch_esc_during_streaming(state, cancel, inp_factory=lambda:
+  pipe_inp)`` spawned as an asyncio task; ``pipe_inp`` is
+  ``prompt_toolkit.input.defaults.create_pipe_input()``.
+- Action: ``await asyncio.sleep(0.05)`` to let ``attach()``
+  register; ``pipe_inp.send_text("\\x1b")``; await the watcher
+  task to completion with a 2s timeout.
+- Expected: watcher exits cleanly; ``cancel.is_cancelled() == True``
+  AND ``state.last_cancel_reason == "interrupted"``. Same
+  downstream path as Ctrl-C (already pinned by TC-CHAT-08);
+  just a different upstream key.
+- Pre-fix bite: VERIFIED. Pre-fix the chat has no Esc listener
+  wired at all — ``_watch_esc_during_streaming`` doesn't exist
+  in ``src/cli/chat.py``; the test fails at import with
+  ``ImportError: cannot import name '_watch_esc_during_streaming'``.
+- Verifies: bug-chat-deny-stops-and-esc-interrupts §Part 2
+  acceptance criterion 5; PoC pasted in Step 1 writeup.
+
+**TC-CHAT-ESC-01b: Non-Esc keystrokes do NOT flip cancel (companion)**
+- Layer: component
+- Setup: same as ESC-01.
+- Action: send ``"ab"`` instead of ``"\\x1b"``; sleep 0.1s.
+- Expected: ``cancel.is_cancelled() == False``;
+  ``state.last_cancel_reason is None``. Watcher is still waiting
+  on the ``triggered`` event; the test cancels it explicitly
+  to match production's finally branch.
+- Pre-fix bite: NONE — forward-looking pin. A future refactor
+  that accidentally widened the key match (e.g. `if kp.key`
+  truthiness check instead of `kp.key == Keys.Escape`) would
+  silently consume the user's keystrokes during streaming.
+- Verifies: bug-chat-deny-stops-and-esc-interrupts §Part 2
+  acceptance criterion 8 (at-prompt + during-streaming
+  safety — the user's other typing is not consumed).
+
+**TC-CHAT-DENY-E2E-1..5: End-to-end engine-level evidence for the five manual scenarios**
+- Layer: component
+- Setup: Workspace bootstrapped via ``kolsch setup --non-interactive`` (mirrors
+  the user's real workspace shape). FakeLLM scripted to issue
+  ``ToolCallResponse(bash, ...)``; ApprovalModal wired into the
+  RuleBasedAuthorizationProvider with scripted ``input_fn``. Each
+  scenario picks its inputs to match the manual checklist scenario
+  it stands in for.
+- Action: ``runtime.engine.execute_stream(config, ctx)`` end-to-end;
+  the test collects every event emitted by the real engine + framework
+  + tool subsystem + authz provider + modal pipeline.
+- Expected (per scenario):
+  - **Scenario 1 (deny once)**: exactly one ``thread.exchange_failed``
+    with code ``exchange.cancelled``; NO ``model.request`` after the
+    ``tool.failed`` deny event; ``state.last_cancel_reason ==
+    "denied"``.
+  - **Scenario 2A ([d] + accept pattern)**: same stop shape;
+    ``platform.yaml`` now contains the persisted deny rule inserted
+    BEFORE the prompt rule (first-match-wins).
+  - **Scenario 2B (restart with persisted rule)**: bootstrap a fresh
+    runtime against the same workspace; bash call auto-denies via
+    the persisted rule; the modal's ``input_fn`` is NEVER invoked
+    (raise-on-call sentinel).
+  - **Scenario 3 (Esc during streaming)**: cancellation flips after
+    the first tool round-trip; the event immediately preceding
+    ``thread.exchange_failed`` is ``tool.result``, NOT ``model.request``
+    — proves cancellation lands at the cycle boundary.
+  - **Scenario 4 (Ctrl-C still cancels)**: same engine-level shape as
+    Scenario 3; ``state.last_cancel_reason == "interrupted"``. Cross-pin
+    with TC-CHAT-08 (engine cancellation path).
+  - **Scenario 5 (Esc at empty prompt)**: drive
+    ``PromptSession.prompt_async`` via ``create_pipe_input`` with
+    ``"\\x1b" + "hello" + "\\r"``; assert the prompt returns
+    ``"hello"`` (bare Esc was a no-op Meta prefix).
+- Pre-fix bite: VERIFIED via stash + run (Step 3 writeup Part B):
+  - Scenario 1 pre-fix fails at modal construction with
+    ``TypeError: ApprovalModal.__init__() got an unexpected keyword
+    argument 'state'``.
+  - Scenario 3 pre-fix fails at import with
+    ``ImportError: cannot import name '_watch_esc_during_streaming'
+    from 'cli.chat'``.
+- Verifies: bug-chat-deny-stops-and-esc-interrupts §Part 2 acceptance
+  criteria 1-9; lives in
+  ``tests/component/cli/test_chat_deny_stops_e2e.py``. Captures the
+  writeup-ready JSONL excerpts via the ``KOLSCH_STEP3_EVIDENCE``
+  sidecar-file env var (see Step 3 writeup Part C.0 for the
+  invocation).
+
+**TC-CHAT-ESC-02: Listener is torn down with the exchange**
+- Layer: component
+- Setup: simulate the chat input-loop iteration's try/finally:
+  spawn the watcher; let it attach; ``watcher.cancel(); await
+  watcher`` to model the finally branch; capture
+  ``state.active_cancel`` before clearing.
+- Action: clear ``state.active_cancel = None`` and
+  ``state.last_cancel_reason = None`` to mirror the production
+  finally; THEN send ``"\\x1b"`` to the pipe.
+- Expected: post-teardown Esc does NOT mutate state and does
+  NOT raise. ``state.active_cancel is None``;
+  ``state.last_cancel_reason is None``; the original cancel
+  handle's ``is_cancelled()`` stays False (no stray callback
+  fired after teardown).
+- Pre-fix bite: NONE — without the production code's finally
+  branch this test cannot be authored at all (there's no
+  ``esc_task`` to cancel pre-fix). The TC pins the lifecycle
+  invariant: the watcher's asyncio reader MUST be removed
+  before the next ``prompt_session.prompt_async("You: ")``
+  attaches its own reader to stdin.
+- Verifies: bug-chat-deny-stops-and-esc-interrupts §Part 2
+  acceptance criterion 5 (lifecycle clause); Step 1 writeup
+  Q5 "Esc-at-prompt safety" — the watcher does not leak past
+  the per-exchange try/finally.
+
+---
+
 **TC-CLI-SMOKE-CHAT-01: `kolsch chat --help` (CLI smoke)**
 - Layer: component (subprocess)
 - Setup: no fixture; subprocess invocation only.

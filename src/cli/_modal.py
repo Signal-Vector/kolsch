@@ -54,6 +54,8 @@ from providers.authz import AuthzEffect
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from cli._slash import ChatSessionState
+
 
 # ---------------------------------------------------------------------------
 # Pattern suggestor — patch §4.3
@@ -166,6 +168,16 @@ class ApprovalModal:
         Production uses :class:`Console` constructed against
         ``stdout`` with terminal autodetection disabled (the §2.4
         commitment).
+    :param state: optional :class:`ChatSessionState` reference. When
+        bound (via constructor or :meth:`bind_state`), the modal
+        cooperates with the chat's cancel-token plumbing per
+        ``bug-chat-deny-stops-and-esc-interrupts.md``:
+        a DENY result flips ``state.active_cancel`` so the framework
+        stops looping, and an already-cancelled token short-circuits
+        further modal invocations in a fan-out. None (the default)
+        preserves the pre-fix behavior — useful for the existing
+        unit tests that exercise the callback shape without a chat
+        runtime.
     """
 
     def __init__(
@@ -174,6 +186,7 @@ class ApprovalModal:
         stdout: TextIO,
         input_fn: Callable[[str], Awaitable[str]] | None = None,
         console: Console | None = None,
+        state: ChatSessionState | None = None,
     ) -> None:
         self._stdout = stdout
         self._input_fn = input_fn or _default_input_fn
@@ -182,6 +195,18 @@ class ApprovalModal:
             force_terminal=False,
             highlight=False,
         )
+        self._state = state
+
+    def bind_state(self, state: ChatSessionState | None) -> None:
+        """Late-bind the per-session state.
+
+        The modal is constructed during ``cmd_chat`` startup (so the
+        authz provider's prompt callback is registered before any
+        input is processed) but the ``ChatSessionState`` is built
+        inside ``_run_input_loop``. ``bind_state`` lets the loop
+        attach the state without restructuring the lifecycle.
+        """
+        self._state = state
 
     # -----------------------------------------------------------------------
     # The PromptCallback __call__ — matches providers.PromptCallback
@@ -209,7 +234,22 @@ class ApprovalModal:
         Esc on the pattern edit (patch §4.2) abandons the rule
         write — the original ``[y]``/``[n]`` semantics apply for
         the current call only.
+
+        Per ``bug-chat-deny-stops-and-esc-interrupts.md`` Q4 the
+        modal short-circuits to DENY at the top of the call when
+        ``state.active_cancel`` is already cancelled — that
+        handles a fan-out where the user denied the first
+        tool_call and the framework is still walking the rest.
+        A DENY result also flips ``state.active_cancel`` BEFORE
+        returning so the framework's next iteration observes the
+        cancellation and stops the exchange.
         """
+        if self._is_already_cancelled():
+            # Fan-out short-circuit: another tool_call in the same
+            # framework iteration already cancelled the exchange.
+            # Skip the panel + input collection entirely.
+            return AuthzEffect.DENY
+
         tool_name = action.removeprefix("tool.")
         self._render_panel(tool=tool_name, target=target, rule_id=rule_id)
         choice = await self._collect_choice()
@@ -217,6 +257,7 @@ class ApprovalModal:
         if choice == "y":
             return AuthzEffect.ALLOW
         if choice == "n":
+            self._flip_cancel_for_deny()
             return AuthzEffect.DENY
 
         # [a] / [d] — show pattern edit step.
@@ -228,7 +269,10 @@ class ApprovalModal:
         if pattern is None:
             # User abandoned the rule write — collapse to the
             # single-call semantics per patch §4.2.
-            return AuthzEffect.ALLOW if choice == "a" else AuthzEffect.DENY
+            if choice == "a":
+                return AuthzEffect.ALLOW
+            self._flip_cancel_for_deny()
+            return AuthzEffect.DENY
 
         effect = AuthzEffect.ALLOW if choice == "a" else AuthzEffect.DENY
         # The new rule mirrors the setup-produced rule shape (see
@@ -248,7 +292,53 @@ class ApprovalModal:
             what=pattern,
             effect="allow" if effect is AuthzEffect.ALLOW else "deny",
         )
+        # Persist the rule first (return-value contract is unchanged),
+        # then flip the cancel token so the framework stops. Order
+        # matters: the rule write happens inside the authz provider
+        # AFTER __call__ returns, but the cancel flip happens here
+        # so the framework's next poll observes it.
+        if effect is AuthzEffect.DENY:
+            self._flip_cancel_for_deny()
         return effect, rule
+
+    # -----------------------------------------------------------------------
+    # Cancel-token cooperation — bug-chat-deny-stops-and-esc-interrupts.md
+    # -----------------------------------------------------------------------
+
+    def _is_already_cancelled(self) -> bool:
+        """True when the bound state's CancelToken has already fired.
+
+        Used by the fan-out short-circuit at the top of
+        :meth:`__call__`. False when no state is bound, no
+        CancelToken is attached, or the token is still un-cancelled
+        — none of those are short-circuit conditions.
+        """
+        state = self._state
+        if state is None:
+            return False
+        cancel = state.active_cancel
+        if cancel is None:
+            return False
+        return cancel.is_cancelled()
+
+    def _flip_cancel_for_deny(self) -> None:
+        """Stamp the deny reason + flip the active CancelToken.
+
+        Called immediately before any DENY return. The chat layer
+        consumes ``state.last_cancel_reason`` post-render to print
+        the distinct "[stopped — you denied the tool]" line.
+
+        If no state is bound (legacy callers, unit tests without a
+        chat runtime) this is a no-op and the deny falls back to
+        the pre-fix behavior — surfaced to the model as a tool
+        error.
+        """
+        state = self._state
+        if state is None or state.active_cancel is None:
+            return
+        if state.last_cancel_reason is None:
+            state.last_cancel_reason = "denied"
+        state.active_cancel.cancel()
 
     # -----------------------------------------------------------------------
     # Rendering — capsule per qol-chat-capsule-layout.md §Permission

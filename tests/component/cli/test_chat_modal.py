@@ -562,6 +562,223 @@ async def test_cmd_chat_clears_modal_callback_even_when_loop_raises(
     assert result.allowed is False
 
 
+# ===========================================================================
+# bug-chat-deny-stops-and-esc-interrupts.md — Step 2 modal behavior
+# ===========================================================================
+#
+# Three new behaviors land in Step 2:
+#   - Fan-out short-circuit: if ``state.active_cancel`` is already
+#     cancelled when the modal is invoked, return DENY immediately
+#     without rendering the panel or calling input_fn.
+#   - Deny [n] flips ``state.active_cancel`` and stamps
+#     ``state.last_cancel_reason = "denied"`` BEFORE returning DENY.
+#   - Deny [d] flips the cancel AND still returns the rule tuple
+#     so the provider persists it via the existing on_rule_added
+#     hook (verified by inspecting the (effect, rule) return shape;
+#     the persistence path is exercised end-to-end by TC-CHAT-04
+#     above, which is unchanged because that test omits state).
+
+
+def _stub_state_with_cancel(cancel: object) -> object:
+    """Build a minimal stand-in for :class:`ChatSessionState`.
+
+    The modal only reads ``active_cancel`` and writes
+    ``last_cancel_reason``; the full dataclass requires a runtime,
+    config, session_id, thread_id that the unit tests for the modal
+    have no reason to bootstrap. ``SimpleNamespace`` mirrors the
+    shape exactly and the modal's type-check is permissive
+    (TYPE_CHECKING import only).
+    """
+    from types import SimpleNamespace
+
+    return SimpleNamespace(active_cancel=cancel, last_cancel_reason=None)
+
+
+async def test_modal_short_circuits_when_active_cancel_already_cancelled() -> None:
+    """Fan-out short-circuit (Q4 / Acceptance #4).
+
+    Construct a modal whose bound state's ``active_cancel`` is
+    already ``.cancel()``-ed. Assert ``__call__`` returns DENY
+    immediately — no panel render, no input_fn invocation.
+    """
+    from engine import CancelToken
+
+    out = _io.StringIO()
+    cancel = CancelToken()
+    cancel.cancel()  # already-cancelled — simulates a prior modal in the same fan-out
+    state = _stub_state_with_cancel(cancel)
+
+    async def _never_called(prompt: str) -> str:
+        _ = prompt
+        msg = "input_fn must not be called when active_cancel is already cancelled"
+        raise AssertionError(msg)
+
+    modal = ApprovalModal(
+        stdout=out,
+        input_fn=_never_called,
+        state=state,  # type: ignore[arg-type]
+    )
+    result = await modal(
+        rule_id="rl_test", action="tool.bash", target="rg foo"
+    )
+    assert result is AuthzEffect.DENY
+    # Panel never rendered — fan-out is silent for the remaining
+    # tool calls.
+    assert out.getvalue() == ""
+
+
+async def test_modal_deny_once_flips_active_cancel() -> None:
+    """[n] flips the cancel token + stamps reason BEFORE returning.
+
+    Verifies the Step 2 contract: by the time the authz provider
+    receives DENY and the framework receives the tool error, the
+    cancel token is already cancelled — so the next framework
+    iteration observes it and the exchange stops.
+    """
+    from engine import CancelToken
+
+    out = _io.StringIO()
+    cancel = CancelToken()
+    assert cancel.is_cancelled() is False  # not yet cancelled
+    state = _stub_state_with_cancel(cancel)
+
+    modal = ApprovalModal(
+        stdout=out,
+        input_fn=_scripted_input(["n"]),
+        state=state,  # type: ignore[arg-type]
+    )
+    result = await modal(
+        rule_id="rl_test", action="tool.bash", target="rm -rf /"
+    )
+    assert result is AuthzEffect.DENY
+    assert cancel.is_cancelled() is True
+    assert state.last_cancel_reason == "denied"  # type: ignore[attr-defined]
+
+
+async def test_modal_deny_always_flips_cancel_and_returns_rule() -> None:
+    """[d] + accept pattern: flip the cancel AND return the (DENY, Rule)
+    tuple so the provider persists the rule via on_rule_added.
+
+    The exchange stops; the rule survives chat exit. Both happen.
+    """
+    from engine import CancelToken
+
+    out = _io.StringIO()
+    cancel = CancelToken()
+    state = _stub_state_with_cancel(cancel)
+
+    modal = ApprovalModal(
+        stdout=out,
+        # [d] then accept the suggested pattern via empty submit.
+        input_fn=_scripted_input(["d", ""]),
+        state=state,  # type: ignore[arg-type]
+    )
+    result = await modal(
+        rule_id="rl_bash_any", action="tool.bash", target="rm -rf /"
+    )
+    assert isinstance(result, tuple)
+    effect, rule = result
+    assert effect is AuthzEffect.DENY
+    assert rule.effect == "deny"
+    assert rule.what == "^rm .*$"  # suggest_pattern's bash heuristic
+    # AND the cancel token is flipped — the exchange stops too.
+    assert cancel.is_cancelled() is True
+    assert state.last_cancel_reason == "denied"  # type: ignore[attr-defined]
+
+
+async def test_modal_allow_does_not_flip_active_cancel() -> None:
+    """Symmetry guard: [y] returns ALLOW and must NOT touch the
+    cancel token. Without this guard a refactor that flips on every
+    return would silently kill normal allow flows."""
+    from engine import CancelToken
+
+    out = _io.StringIO()
+    cancel = CancelToken()
+    state = _stub_state_with_cancel(cancel)
+
+    modal = ApprovalModal(
+        stdout=out,
+        input_fn=_scripted_input(["y"]),
+        state=state,  # type: ignore[arg-type]
+    )
+    result = await modal(
+        rule_id="rl_test", action="tool.bash", target="ls"
+    )
+    assert result is AuthzEffect.ALLOW
+    assert cancel.is_cancelled() is False
+    assert state.last_cancel_reason is None  # type: ignore[attr-defined]
+
+
+async def test_modal_allow_always_does_not_flip_active_cancel() -> None:
+    """[a] + accept pattern: ALLOW + rule, cancel untouched.
+
+    Pairs with the deny-always test above to confirm only the deny
+    paths flip the cancel; allow paths are inert."""
+    from engine import CancelToken
+
+    out = _io.StringIO()
+    cancel = CancelToken()
+    state = _stub_state_with_cancel(cancel)
+
+    modal = ApprovalModal(
+        stdout=out,
+        input_fn=_scripted_input(["a", ""]),
+        state=state,  # type: ignore[arg-type]
+    )
+    result = await modal(
+        rule_id="rl_bash_any", action="tool.bash", target="rg foo"
+    )
+    assert isinstance(result, tuple)
+    effect, _rule = result
+    assert effect is AuthzEffect.ALLOW
+    assert cancel.is_cancelled() is False
+    assert state.last_cancel_reason is None  # type: ignore[attr-defined]
+
+
+async def test_modal_bind_state_late_binds() -> None:
+    """``bind_state`` lets ``chat._run_input_loop`` attach the
+    per-session state AFTER the modal is constructed in
+    ``cmd_chat``. Without this seam the modal would need to be
+    moved into the input loop, which would break the existing
+    modal-clear lifecycle."""
+    from engine import CancelToken
+
+    out = _io.StringIO()
+    cancel = CancelToken()
+    cancel.cancel()
+    state = _stub_state_with_cancel(cancel)
+
+    async def _never_called(prompt: str) -> str:
+        _ = prompt
+        msg = "input_fn must not be called when active_cancel is already cancelled"
+        raise AssertionError(msg)
+
+    # Modal constructed WITHOUT state — pre-fix construction.
+    modal = ApprovalModal(stdout=out, input_fn=_never_called)
+    # Late-bind, mirroring _run_input_loop's call.
+    modal.bind_state(state)  # type: ignore[arg-type]
+
+    result = await modal(
+        rule_id="rl_test", action="tool.bash", target="ls"
+    )
+    # Short-circuit fired post-bind — proves bind_state took effect.
+    assert result is AuthzEffect.DENY
+
+
+async def test_modal_without_state_still_returns_pre_fix_shape() -> None:
+    """Regression pin: a modal constructed WITHOUT state behaves
+    identically to pre-Step-2 — [n] returns bare DENY, no cancel
+    side-effects. This is what every existing test relies on; the
+    new state plumbing must be additive only.
+    """
+    out = _io.StringIO()
+    modal = ApprovalModal(stdout=out, input_fn=_scripted_input(["n"]))
+    result = await modal(
+        rule_id="rl_test", action="tool.bash", target="rm -rf /"
+    )
+    assert result is AuthzEffect.DENY
+
+
 async def test_register_replaces_previous_callback() -> None:
     """Calling ``register_prompt_callback`` twice replaces — no
     implicit chaining. The most-recently-registered modal is the

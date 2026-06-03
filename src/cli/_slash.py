@@ -31,7 +31,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, TextIO
+from typing import TYPE_CHECKING, Literal, TextIO
 
 from prompt_toolkit.completion import Completer, Completion
 
@@ -41,6 +41,7 @@ if TYPE_CHECKING:
     from prompt_toolkit.completion import CompleteEvent
     from prompt_toolkit.document import Document
 
+    from engine import CancelToken
     from platform_runtime import PlatformRuntime
     from providers import AuthorizationProvider
     from providers.authz import Rule
@@ -108,9 +109,22 @@ class ChatSessionState:
       Handlers MUST NOT call ``store.create_session`` directly;
       they signal via these flags so the loop is the single
       site that owns session-lifecycle transitions.
+    - ``active_cancel`` / ``last_cancel_reason`` — per-exchange
+      cancellation handle + reason tag shared between the input
+      loop, the modal, and the Esc background watcher per
+      ``bug-chat-deny-stops-and-esc-interrupts.md`` Step 1. The
+      input loop sets ``active_cancel`` right after constructing
+      the ``CancelToken`` and clears both fields in a ``finally``
+      around ``renderer.render``. The modal's deny path flips
+      ``active_cancel.cancel()`` and stamps
+      ``last_cancel_reason = "denied"`` before returning DENY so
+      the framework's next iteration observes the cancellation.
+      The Esc watcher does the equivalent with ``"interrupted"``.
+      After the renderer drains, the loop prints a distinct
+      post-render line based on the reason tag.
 
-    All four pending fields are reset by the loop after it
-    handles them so a single ``/new`` doesn't keep firing.
+    All pending fields are reset by the loop after it handles
+    them so a single ``/new`` doesn't keep firing.
     """
 
     runtime: PlatformRuntime
@@ -124,6 +138,8 @@ class ChatSessionState:
     pending_new_session: bool = False
     pending_session_id: SessionId | None = None
     model_aliases: dict[str, str] = field(default_factory=dict)
+    active_cancel: CancelToken | None = None
+    last_cancel_reason: Literal["denied", "interrupted"] | None = None
 
 
 @dataclass(frozen=True)

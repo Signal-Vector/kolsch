@@ -55,12 +55,16 @@ invocation).
 from __future__ import annotations
 
 import argparse
+import asyncio
+import contextlib
 import sys
 from typing import TYPE_CHECKING, Any, TextIO
 
 from prompt_toolkit import PromptSession
 from prompt_toolkit.history import InMemoryHistory
+from prompt_toolkit.input import create_input
 from prompt_toolkit.key_binding import KeyBindings
+from prompt_toolkit.keys import Keys
 
 from cli._modal import ApprovalModal
 from cli._renderer import Renderer
@@ -236,6 +240,7 @@ async def cmd_chat(
             session_id=session.session_id,
             agent_ref=agent_ref,
             model_aliases=model_aliases,
+            modal=modal,
         )
     finally:
         _clear_modal_callback(runtime)
@@ -355,7 +360,7 @@ def _build_key_bindings() -> KeyBindings:
     return kb
 
 
-async def _run_input_loop(  # noqa: PLR0913 — loop owns all the chat state; bundling further hurts readability
+async def _run_input_loop(  # noqa: PLR0913, PLR0912, PLR0915 — loop owns all the chat state + per-exchange branching; bundling further hurts readability
     prompt_session: PromptSession[str],
     *,
     stdout: TextIO,
@@ -365,6 +370,7 @@ async def _run_input_loop(  # noqa: PLR0913 — loop owns all the chat state; bu
     session_id: SessionId | None = None,
     agent_ref: str | None = None,
     model_aliases: dict[str, str] | None = None,
+    modal: ApprovalModal | None = None,
 ) -> int:
     """Drive the prompt_session until EOF, ``/exit``, or an unrecoverable error.
 
@@ -399,6 +405,13 @@ async def _run_input_loop(  # noqa: PLR0913 — loop owns all the chat state; bu
         thread_id=thread_id,
         model_aliases=dict(model_aliases or {}),
     )
+    # bug-chat-deny-stops-and-esc-interrupts.md Q1 — late-bind state
+    # to the modal so the deny path can flip state.active_cancel and
+    # the fan-out guard can read it. The modal is constructed during
+    # cmd_chat startup (so the authz registration lands before any
+    # input is processed); state only exists here.
+    if modal is not None:
+        modal.bind_state(state)
     slash_ctx = SlashContext(
         stdout=stdout,
         agent_config=config,
@@ -447,6 +460,12 @@ async def _run_input_loop(  # noqa: PLR0913 — loop owns all the chat state; bu
                 state.pending_session_id = None
             continue
         cancel = CancelToken()
+        # bug-chat-deny-stops-and-esc-interrupts.md Q1/Q4/Q5 — share
+        # the per-exchange cancel handle via ChatSessionState so the
+        # modal's deny path and the Esc background watcher can flip
+        # the same token Ctrl-C already flips. The finally below
+        # clears both fields so the next iteration starts fresh.
+        state.active_cancel = cancel
         ctx = ExecutionContext(
             thread_id=state.thread_id,
             trigger={"kind": "user_message", "content": text},
@@ -454,33 +473,121 @@ async def _run_input_loop(  # noqa: PLR0913 — loop owns all the chat state; bu
         )
         renderer = Renderer(stdout=stdout, agent_name=state.config.name)
         event_stream = state.runtime.engine.execute_stream(state.config, ctx)
+        # bug-chat-deny-stops-and-esc-interrupts.md Q2 — spawn the
+        # Esc watcher BEFORE entering renderer.render so it's
+        # already attached when the first event lands. The watcher
+        # is cancelled in the finally so the next prompt_async
+        # iteration doesn't fight for stdin.
+        esc_task = asyncio.create_task(_watch_esc_during_streaming(state, cancel))
+        exit_reason: str | None = None
         try:
-            await renderer.render(event_stream)
-        except KeyboardInterrupt:
-            # Patch §6.1 — Ctrl-C during streaming: signal the
-            # engine's typed cancellation hook + drain the
-            # remaining events (the engine emits
-            # thread.exchange_failed with cause engine.cancelled)
-            # so the JSONL stays honest. The renderer's
-            # exchange_failed branch surfaces the cancel as a
-            # yellow system notice.
-            cancel.cancel()
-            stdout.write("\n[interrupted; waiting for engine to cancel...]\n")
-            stdout.flush()
-            # Best-effort drain so the engine emits its
-            # thread.exchange_failed before the loop returns to
-            # the prompt. A second KeyboardInterrupt (or any
-            # error) is swallowed — the engine's own teardown
-            # is the source of truth for the cancellation event.
-            import contextlib  # noqa: PLC0415
-
-            with contextlib.suppress(KeyboardInterrupt, Exception):
+            try:
                 await renderer.render(event_stream)
+            except KeyboardInterrupt:
+                # Patch §6.1 — Ctrl-C during streaming: signal the
+                # engine's typed cancellation hook + drain the
+                # remaining events (the engine emits
+                # thread.exchange_failed with cause engine.cancelled)
+                # so the JSONL stays honest. The renderer's
+                # exchange_failed branch surfaces the cancel as a
+                # yellow system notice.
+                if state.last_cancel_reason is None:
+                    state.last_cancel_reason = "interrupted"
+                cancel.cancel()
+                stdout.write("\n[interrupted; waiting for engine to cancel...]\n")
+                stdout.flush()
+                # Best-effort drain so the engine emits its
+                # thread.exchange_failed before the loop returns to
+                # the prompt. A second KeyboardInterrupt (or any
+                # error) is swallowed — the engine's own teardown
+                # is the source of truth for the cancellation event.
+                with contextlib.suppress(KeyboardInterrupt, Exception):
+                    await renderer.render(event_stream)
+        finally:
+            # Tear down the Esc watcher BEFORE the next prompt's
+            # prompt_async grabs stdin — otherwise the watcher's
+            # asyncio reader would race the PromptSession's.
+            esc_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await esc_task
+            # Capture the reason BEFORE clearing so the post-render
+            # print sees it; the clear keeps the next exchange
+            # honest.
+            exit_reason = state.last_cancel_reason
+            state.active_cancel = None
+            state.last_cancel_reason = None
+        # bug-chat-deny-stops-and-esc-interrupts.md Q3 — chat-surface
+        # print of the distinct cancellation reason. The renderer's
+        # generic [cancelled] suffix already fired on the partial
+        # agent block (if any); this confirms what happened and
+        # which key produced it.
+        if exit_reason == "denied":
+            stdout.write("[stopped — you denied the tool]\n")
+            stdout.flush()
+        elif exit_reason == "interrupted":
+            stdout.write("[stopped — interrupted]\n")
+            stdout.flush()
 
 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+async def _watch_esc_during_streaming(
+    state: ChatSessionState,
+    cancel: CancelToken,
+    *,
+    inp_factory: Any = None,  # noqa: ANN401 — Callable[[], prompt_toolkit.Input]; tests inject create_pipe_input
+) -> None:
+    """Watch stdin for a bare Esc keystroke; flip the cancel token when seen.
+
+    Routed into the same ``CancelToken`` Ctrl-C uses
+    (``chat.py:467``) so the framework's iteration-boundary poll
+    (``fake_framework.py:88-90``) observes cancellation and raises
+    on the next cycle. ``state.last_cancel_reason`` is stamped to
+    ``"interrupted"`` BEFORE ``cancel.cancel()`` so the chat's
+    post-render print can distinguish Esc from a modal-driven deny.
+
+    Uses prompt_toolkit's :class:`Input` abstraction so the Vt100
+    parser handles the bare-Esc-vs-``Esc[A``-prefix disambiguation
+    (~0.5s flush timer) for us. ``inp_factory`` is the test seam
+    (``create_pipe_input`` in unit tests; the default
+    ``create_input`` reads the real terminal).
+
+    Gracefully no-ops if stdin is not a TTY (Input construction,
+    ``raw_mode``, or ``attach`` fails). The chat is interactive-only
+    in production — non-TTY use is documented as "go use
+    ``kolsch run``" — but component tests that drive the loop
+    without a real terminal don't blow up.
+    """
+    try:
+        inp = (inp_factory or create_input)()
+    except Exception:  # noqa: BLE001 — non-TTY surfaces vary by platform
+        return
+
+    triggered = asyncio.Event()
+
+    def _on_input_ready() -> None:
+        # Drain everything currently buffered and force the parser to
+        # flush a lone Esc (otherwise the Vt100 parser would hold the
+        # byte waiting for a possible escape-sequence continuation).
+        for kp in list(inp.read_keys()) + list(inp.flush_keys()):
+            if kp.key == Keys.Escape:
+                if state.last_cancel_reason is None:
+                    state.last_cancel_reason = "interrupted"
+                cancel.cancel()
+                triggered.set()
+                return
+
+    try:
+        with inp.raw_mode(), inp.attach(_on_input_ready):
+            await triggered.wait()
+    except asyncio.CancelledError:
+        # Normal teardown — the per-exchange finally cancelled us.
+        raise
+    except Exception:  # noqa: BLE001 — raw_mode/attach failures should not crash chat
+        return
 
 
 async def _open_new_session(
