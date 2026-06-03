@@ -1971,6 +1971,74 @@ cases (TC-CRW-05+) before merging.
 - Verifies: G1 wrap at ``crewai_framework.py:run_exchange``
   catches CrewAI's failure-path logger output.
 
+### Framework Iteration (FRM-NOCAP) — bug-framework-iteration-cap-removal.md
+
+The pre-fix framework loop hard-capped at 10 iterations and raised
+``FakeFrameworkLoopExceededError`` on exhaustion, which the engine
+boundary then mis-classified as ``platform.internal_error``. Step 2
+removed the cap; the loop now terminates only when the LLM stops
+emitting tool calls or ``cancellation`` fires. These regressions pin
+the new contract on both framework implementations.
+
+**TC-FRM-NOCAP-01: FakeFramework loops past the old 10-iteration cap**
+- Layer: integration
+- Setup: ``FakeFramework`` with a scripted ``LLMHandle`` that emits
+  15 tool calls (unique ids) then one content-only response, plus a
+  no-op echo tool. No ``max_iterations`` kwarg — exercises the
+  protocol's ``None`` default.
+- Action: ``await fw.run_exchange(...)``.
+- Expected: returns the scripted final text (``"Done."``); the LLM
+  saw exactly 16 calls (15 tool turns + 1 content turn); no
+  exception raised.
+- Pre-fix bite: VERIFIED. Pre-fix, this test fails at
+  ``src/engine/fake_framework.py:152`` with
+  ``FakeFrameworkLoopExceededError: FakeFramework: max_iterations=10
+  reached without a content-only response`` — i.e., exactly the
+  failure path the user reported wrapped as ``platform.internal_error``.
+- Verifies: bug-framework-iteration-cap-removal §Part 2 acceptance
+  criteria 1, 2, 5.
+
+**TC-FRM-NOCAP-02: Cancellation interrupts an in-progress loop**
+- Layer: integration
+- Setup: ``FakeFramework`` with an LLM that emits unlimited tool
+  calls (would loop forever without cancellation), plus a counter-
+  based ``cancellation`` callback that returns False twice then True.
+- Action: ``await fw.run_exchange(..., cancellation=...)``.
+- Expected: raises ``asyncio.CancelledError``; the LLM saw exactly
+  2 calls before cancellation fired on the 3rd poll. Pins the
+  iteration-boundary cancellation latency model documented in Step 1's
+  writeup — Esc reaches the framework at the next iteration boundary,
+  not mid-call.
+- Pre-fix bite: NONE — cancellation polling was already in place
+  pre-fix. This test is forward-looking: it ensures that with the cap
+  removed, cancellation remains the user's only way to stop a runaway
+  loop, and that it still works as designed.
+- Verifies: bug-framework-iteration-cap-removal §Part 2 acceptance
+  criterion 6; ENG cancellation seam.
+
+**TC-FRM-NOCAP-03: CrewAIFramework forwards the unbounded sentinel**
+- Layer: integration
+- Setup: monkeypatch ``engine.crewai_framework.Agent`` with a
+  function that captures construction kwargs and raises a sentinel
+  exception (short-circuits before Crew construction). Construct a
+  ``CrewAIFramework`` and call ``run_exchange`` with no
+  ``max_iterations`` kwarg (protocol default of ``None``). A
+  companion case (``-03b``) passes ``max_iterations=7`` explicitly.
+- Action: ``await fw.run_exchange(...)``; let the sentinel raise;
+  inspect captured kwargs.
+- Expected: for the default-None case, ``captured["max_iter"] ==
+  crewai_framework._UNBOUNDED_MAX_ITER == 10**9``; for the explicit-7
+  case, ``captured["max_iter"] == 7``. Also pins
+  ``captured["max_retry_limit"] == 0`` so TC-CRW-03's retry
+  composition assumption stays load-bearing.
+- Pre-fix bite: VERIFIED. Pre-fix, this test fails with
+  ``AttributeError: module 'engine.crewai_framework' has no attribute
+  '_UNBOUNDED_MAX_ITER'`` — i.e., the sentinel does not exist; the
+  pre-fix code embedded the literal 10 at the Agent construction site.
+- Verifies: bug-framework-iteration-cap-removal §Part 2 acceptance
+  criterion 3; preserves the per-framework override seam Option B
+  was chosen to keep.
+
 ---
 
 ## Part 11.6 — CLI surface (TC-CLI-*) — authored in Step 13
