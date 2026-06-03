@@ -149,6 +149,21 @@ class AgentId(PrefixedId):
             raise ValueError(msg)
 
 
+def derive_agent_id(bundle: str, name: str) -> AgentId:
+    """Derive an :class:`AgentId` from an agent's bundle + asset name.
+
+    Used by :mod:`assets.asset_manager` when an agent YAML omits
+    ``agent_id`` so the resolved config still carries a canonical id
+    (spec §A.3). ``AgentId(...)`` construction runs the prefix + body
+    regex check; bundle names (lowercase alphanumeric + ``-``/``_``,
+    per ``assets.manifest.is_valid_bundle_name``) always satisfy the
+    body class, so the only failure mode is an agent file stem
+    containing characters outside ``[a-zA-Z0-9_\\-.]``. The raise
+    surfaces the bad input rather than producing a malformed id.
+    """
+    return AgentId(f"ag_{bundle}_{name}")
+
+
 class SubscriptionId(PrefixedId):
     """An event-bus subscription handle.
 

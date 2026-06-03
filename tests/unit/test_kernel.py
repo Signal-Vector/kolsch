@@ -86,6 +86,42 @@ def test_partially_populated_partial_passes() -> None:
 
 
 # ---------------------------------------------------------------------------
+# TC-AGENTID-PARTIAL — agent_id optional + explicit-value semantics (Step 2 of
+# bug-agent-id-derive-from-ref.md). The partial accepts an omitted agent_id
+# (the resolver fills in the derived value); explicit canonical values pass
+# through unchanged; malformed explicit values still raise the AgentId regex
+# error so we don't accidentally turn the fix into a leniency layer.
+# ---------------------------------------------------------------------------
+
+
+def test_partial_config_accepts_missing_agent_id() -> None:
+    partial = _valid_partial()
+    del partial["agent_id"]
+    result = validate_partial(partial)
+    assert result.ok is True, result.errors
+    assert result.errors == []
+
+
+def test_partial_config_still_accepts_explicit_agent_id() -> None:
+    partial = _valid_partial()
+    partial["agent_id"] = "ag_x"
+    result = validate_partial(partial)
+    assert result.ok is True, result.errors
+    assert result.errors == []
+
+
+def test_partial_config_rejects_malformed_explicit_agent_id() -> None:
+    partial = _valid_partial()
+    partial["agent_id"] = "butler"  # missing canonical ag_ prefix
+    result = validate_partial(partial)
+    assert result.ok is False
+    paths = [e.path for e in result.errors]
+    messages = [e.message for e in result.errors]
+    assert any("agent_id" in p for p in paths), paths
+    assert any("ag_" in m for m in messages), messages
+
+
+# ---------------------------------------------------------------------------
 # TC-KRN-02 — unknown field rejected
 # ---------------------------------------------------------------------------
 

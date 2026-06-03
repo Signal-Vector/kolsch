@@ -2005,7 +2005,7 @@ and indirectly by every subsystem:
 class ResolvedAgentConfig(BaseModel):
     schema_version: str
     assembly_version: str
-    agent_id: AgentId
+    agent_id: AgentId           # optional in YAML; resolver derives ag_<bundle>_<name> when omitted (see Schemas §A.3)
     name: str
     description: str
     model: ModelSpec

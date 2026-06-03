@@ -48,7 +48,10 @@ JSON-Merge-Patch merge of an ordered list of partials.
 ```
 AgentConfig
 ├── schema_version       string        — schema version this conforms to
-├── id                   string        — "ag_..."  immutable system identity
+├── id                   string        — "ag_..."  immutable system identity;
+│                                        optional in YAML — kernel derives
+│                                        `ag_<bundle>_<name>` from the asset
+│                                        ref when omitted (see §A.3)
 ├── name                 string        — human handle; renameable
 ├── description          string        — what this agent is for
 ├── model                ModelSpec     — the LLM and its call parameters
@@ -95,6 +98,15 @@ Every entity has both:
 - `name` — human handle; renameable; what appears in YAML and UI.
 
 Authoring references resolve by `name`; execution binds and records `id`.
+
+`id` may be omitted from agent YAML. When omitted, the kernel resolver
+derives `ag_<bundle>_<name>` from the agent's asset ref (e.g., an agent
+at `bundles/andre/agents/butler.yaml` resolves to `ag_andre_butler`).
+An explicit `agent_id` from any partial — platform defaults, an
+`extends:` parent, the agent's own YAML, or call-time overrides —
+takes precedence over the derived value via the §A.9 RFC 7386 merge.
+Use an explicit `agent_id` when stability across bundle/agent renames
+matters (the derived form changes when either segment is renamed).
 
 ## A.4 ModelSpec
 

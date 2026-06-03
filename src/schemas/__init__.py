@@ -56,6 +56,7 @@ from schemas.identifiers import (
     SessionId,
     SubscriptionId,
     ThreadId,
+    derive_agent_id,
 )
 
 __all__ = [
@@ -100,4 +101,5 @@ __all__ = [
     "ToolFailedData",
     "ToolResultData",
     "UserMessageData",
+    "derive_agent_id",
 ]

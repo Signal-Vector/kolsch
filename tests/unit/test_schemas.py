@@ -49,6 +49,7 @@ from schemas import (
     ToolFailedData,
     ToolResultData,
     UserMessageData,
+    derive_agent_id,
 )
 
 # ---------------------------------------------------------------------------
@@ -162,6 +163,25 @@ def test_agent_id_rejects_invalid_chars() -> None:
         AgentId("ag_has spaces")
     with pytest.raises(ValueError, match="characters"):
         AgentId("ag_with/slash")
+
+
+def test_derive_agent_id_format() -> None:
+    # bug-agent-id-derive-from-ref.md Step 2: the helper composes
+    # ag_<bundle>_<name> from the asset ref's (bundle, name) tuple
+    # and returns an AgentId instance (so downstream typed fields
+    # accept it without re-validation).
+    derived = derive_agent_id("andre", "butler")
+    assert derived == "ag_andre_butler"
+    assert isinstance(derived, AgentId)
+    # Hyphens in either segment survive the AgentId body regex.
+    assert derive_agent_id("customer-support", "weekly-summary") == (
+        "ag_customer-support_weekly-summary"
+    )
+    # Filename-stem with characters outside the AgentId body class
+    # surfaces the underlying ValueError rather than producing a
+    # malformed id — Step 1 §4 documented this as the failure mode.
+    with pytest.raises(ValueError, match="characters"):
+        derive_agent_id("andre", "has space")
 
 
 def test_subscription_id_rejects_empty() -> None:

@@ -21,7 +21,7 @@ from assets.platform_config import load_or_create
 from assets.refs import parse_ref, resolve_shorthand
 from errors import AssetsNotFound
 from kernel import resolve_and_validate
-from schemas import ResolvedAgentConfig
+from schemas import ResolvedAgentConfig, derive_agent_id
 
 if TYPE_CHECKING:
     from assets.catalog import AssetCatalog, AssetEntry
@@ -170,13 +170,25 @@ class AssetManagement:
             for layer in reversed(agent_partials_chain):
                 composed.update(layer)
             resolved_agent_partial = composed
-        partials = assemble_partials(
-            defaults=pre_resolve_prompts(defaults, catalog),
-            agent_config=pre_resolve_prompts(resolved_agent_partial, catalog),
-            call_overrides=(
-                pre_resolve_prompts(call_overrides, catalog) if call_overrides else None
+        # Prepend a derived-agent-id partial as the lowest-priority
+        # layer so an omitted `agent_id:` in YAML still produces a
+        # canonical id in the resolved config (bug-agent-id-derive-
+        # from-ref.md). RFC 7386 merge gives any explicit value from
+        # defaults / extends / agent / overrides priority over the
+        # derived baseline.
+        bundle, _, agent_name = parse_ref(agent_ref)
+        partials: list[dict[str, Any]] = [
+            {"agent_id": derive_agent_id(bundle, agent_name)},
+            *assemble_partials(
+                defaults=pre_resolve_prompts(defaults, catalog),
+                agent_config=pre_resolve_prompts(resolved_agent_partial, catalog),
+                call_overrides=(
+                    pre_resolve_prompts(call_overrides, catalog)
+                    if call_overrides
+                    else None
+                ),
             ),
-        )
+        ]
 
         # Step 4 — hand to the kernel for merge + validation.
         return await asyncio.to_thread(
