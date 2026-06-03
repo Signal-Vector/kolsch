@@ -32,7 +32,7 @@ from engine.context import (
     ExecutionContext,
 )
 from engine.engine import ENGINE_VERSION, AgentEngine
-from engine.fake_framework import FakeFramework, FakeFrameworkLoopExceededError
+from engine.fake_framework import FakeFramework
 
 # CrewAIFramework imports CrewAI; only available when the test
 # group is installed. Guard the import so engine consumers without
@@ -64,7 +64,6 @@ __all__ = [
     "EngineCapabilities",
     "ExecutionContext",
     "FakeFramework",
-    "FakeFrameworkLoopExceededError",
     "Framework",
     "LLMDriver",
     "LLMHandle",

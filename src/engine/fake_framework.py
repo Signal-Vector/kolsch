@@ -8,7 +8,9 @@ because it is shipped behavior, not a test fixture.
 The loop is intentionally minimal: build ``[system, user]``,
 call the LLM, dispatch any tool calls the LLM emits, append the
 tool result + assistant turn to the message list, repeat until the
-LLM returns a content-only response or ``max_iterations`` is hit.
+LLM returns a content-only response or ``cancellation`` fires. There
+is no per-exchange iteration cap; runaway loops are terminated by
+the user via Esc (which flips ``cancellation``).
 
 What this Framework promises (per the prereq design note):
 
@@ -42,19 +44,6 @@ if TYPE_CHECKING:
     from engine.framework import LLMHandle, ToolHandle
 
 
-_DEFAULT_MAX_ITERATIONS = 10
-
-
-class FakeFrameworkLoopExceededError(RuntimeError):
-    """The LLM kept emitting tool calls past ``max_iterations``.
-
-    Surfaced as a non-PlatformError on purpose — the engine catches it
-    at the boundary and wraps it as a Fatal ``model.retry_exhausted``
-    (or similar) per spec §1.6. Framework-internal errors are not
-    PlatformError subclasses; the engine is the boundary.
-    """
-
-
 class FakeFramework:
     """Reference Framework for v1 — deterministic, zero-LLM-cost."""
 
@@ -69,7 +58,7 @@ class FakeFramework:
         history: Sequence[Message] = (),
         llm: LLMHandle,
         tools: Sequence[ToolHandle],
-        max_iterations: int = _DEFAULT_MAX_ITERATIONS,
+        max_iterations: int | None = None,  # noqa: ARG002
         cancellation: Callable[[], bool] | None = None,
     ) -> str:
         # The engine's Assembly Procedure (§B.5) supplies `history`
@@ -85,7 +74,7 @@ class FakeFramework:
         tool_schemas = [{"name": t.name, "schema": t.schema} for t in tools]
         tool_map = {t.name: t for t in tools}
 
-        for _ in range(max_iterations):
+        while True:
             if cancellation is not None and cancellation():
                 raise asyncio.CancelledError
 
@@ -144,12 +133,6 @@ class FakeFramework:
                         tool_call_id=tool_call_id,
                     ),
                 )
-
-        msg = (
-            f"FakeFramework: max_iterations={max_iterations} reached "
-            "without a content-only response"
-        )
-        raise FakeFrameworkLoopExceededError(msg)
 
 
 def _stringify(value: object) -> str:

@@ -100,7 +100,15 @@ if TYPE_CHECKING:
     from engine.framework import LLMHandle, ToolHandle
 
 
-_DEFAULT_MAX_ITERATIONS = 10
+# Sentinel passed to CrewAI's ``Agent.max_iter`` when the caller
+# requests "no cap" (the protocol's ``max_iterations=None``). CrewAI
+# 1.14.6 requires an int (``base_agent.py:258`` — plain ``int`` field,
+# default 25, no validator), and ``has_reached_max_iterations``
+# (``utilities/agent_utils.py:271-281``) is a simple ``>=`` compare, so
+# 10**9 is operationally "unbounded" without any overflow risk. Kept
+# at module scope so the sentinel is one named constant, not a magic
+# literal embedded at the construction site.
+_UNBOUNDED_MAX_ITER = 10**9
 
 
 class CrewAIFramework:
@@ -117,7 +125,7 @@ class CrewAIFramework:
         history: Sequence[Message] = (),
         llm: LLMHandle,
         tools: Sequence[ToolHandle],
-        max_iterations: int = _DEFAULT_MAX_ITERATIONS,
+        max_iterations: int | None = None,
         cancellation: Callable[[], bool] | None = None,
     ) -> str:
         # Capture the main event loop. Inside Crew.kickoff_async,
@@ -149,7 +157,9 @@ class CrewAIFramework:
             backstory=system_prompt or "You are a helpful assistant.",
             llm=adapter_llm,
             tools=adapter_tools,
-            max_iter=max_iterations,
+            max_iter=(
+                max_iterations if max_iterations is not None else _UNBOUNDED_MAX_ITER
+            ),
             # Engine owns retry per RuntimeSpec.max_retries; disable
             # CrewAI's internal retry so the two layers don't compound
             # (TC-CRW-03).

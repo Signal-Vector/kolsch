@@ -266,7 +266,7 @@ class Framework(Protocol):
         user_message: str,
         llm: LLMHandle,
         tools: list[ToolHandle],
-        max_iterations: int,
+        max_iterations: int | None = None,
         cancellation: Callable[[], bool] | None = None,
     ) -> str:
         """Run the agent loop. Each model turn calls `llm`; each tool

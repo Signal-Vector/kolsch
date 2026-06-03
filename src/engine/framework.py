@@ -182,6 +182,13 @@ class Framework(Protocol):
     canonical :class:`engine.context.CancelToken` (per Module API §13.5)
     is constructed by the engine and bound to this callback by the
     engine's preflight before being handed to the framework.
+
+    ``max_iterations`` is an optional per-call cap on the framework's
+    internal loop. ``None`` (the default) means no cap — the framework
+    loops until the LLM stops emitting tool calls or ``cancellation``
+    fires. The engine does not impose a cap in v1; the kwarg remains
+    on the Protocol so individual frameworks can offer a per-call
+    override if they need one.
     """
 
     async def run_exchange(
@@ -192,7 +199,7 @@ class Framework(Protocol):
         history: Sequence[Message] = (),
         llm: LLMHandle,
         tools: Sequence[ToolHandle],
-        max_iterations: int,
+        max_iterations: int | None = None,
         cancellation: Callable[[], bool] | None = None,
     ) -> str: ...
 

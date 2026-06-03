@@ -1099,7 +1099,6 @@ class _Exchange:
                     history=history_messages,
                     llm=llm_handle,
                     tools=tool_handles,
-                    max_iterations=10,
                     cancellation=self.cancel.is_cancelled,
                 )
             except PlatformError as exc:
