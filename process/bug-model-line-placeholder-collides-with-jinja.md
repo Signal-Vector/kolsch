@@ -1,6 +1,6 @@
 # Bug — `{{MODEL_LINE}}` setup-time substitution collides with Jinja syntax in agent YAML
 
-**Draft 0.1** *(three-step build plan. Independent of the inheritance fix and the unified-refs QoL; ships in any order.)*
+**Draft 0.2** *(bumps 0.1 after Step 1 verification proved option (a) as originally specified is mechanically infeasible: helper.yaml's explicit `model:` would shadow `defaults.model` per the RFC 7386 merge order verified at `assembler.py:35` + `resolver.py:53-56`. Resolution locked option (a-prime) — drop `model:` from helper.yaml; defaults composition takes over. Full resolution in Part 5.)*
 
 > The starter-bundle helper.yaml ships with a literal
 > placeholder:
@@ -112,16 +112,28 @@ From the agent-YAML-design conversation:
    works immediately after `kolsch init` without manual
    editing.
 
-3. **Setup-time model selection still happens**, but it
-   writes to a separate place. Two sub-options for where:
-   a. Writes to workspace's `platform.yaml` under a
-      `defaults.model:` key (the resolver already supports
-      defaults composition per qol-setup-evolution).
-   b. Writes directly to the helper.yaml via YAML-parse +
-      edit (mutating the file on disk).
-   Step 1 picks one. Recommendation: (a) — separation of
-   concerns; the starter file stays static; per-workspace
-   defaults live with other workspace defaults.
+3. **Setup-time model selection writes to `platform.yaml`'s
+   `defaults.model`** — option (a-prime) per E-BUG-MODELLINE-001
+   coordinator resolution.
+   - helper.yaml does NOT declare a `model:` field. The
+     defaults composition (`platform_config.py:88-97` already
+     ships `default_platform_payload.defaults.model`) is the
+     source of the model value.
+   - Setup writes the user's pick to
+     `platform.yaml`'s `defaults.model.provider` and
+     `defaults.model.model`.
+   - **Why not the earlier (a) form** (helper.yaml has explicit
+     `model:`; defaults provide an override): the merge order
+     verified in Step 1 (`assembler.py:35` partial order +
+     `resolver.py:53-56` RFC 7386 left-to-right fold) means
+     agent-level fields shadow defaults. The original (a)
+     wording was based on a flawed assumption about merge
+     order.
+   - **Why not (b) YAML-parse-edit helper.yaml**: requires
+     either a pyyaml comment-loss regression (helper.yaml's
+     inline teaching comments at lines 7-14, 24-32, 38-41,
+     75-77 are real UX) or a ruamel.yaml dependency bump for
+     a single setup-time edit. Disproportionate.
 
 4. **No Jinja-side change.** The Jinja templating system
    stays as-is. The fix is to remove the conflicting
@@ -144,19 +156,21 @@ The bug is fixed when **all** hold:
 1. **`{{MODEL_LINE}}` appears nowhere in src/.** `grep -rn
    "MODEL_LINE" src/` returns zero hits.
 
-2. **Starter bundle helper.yaml ships with a working
-   default model** spelled out as ordinary YAML:
-   ```yaml
-   model: { provider: opencode, model: qwen3.6-plus }
-   ```
-   (Or whatever the canonical default is at the time the
-   spec lands.)
+2. **Starter bundle ships a working default model via
+   `platform.yaml`'s `defaults.model` composition.**
+   `helper.yaml` does NOT declare a `model:` field at all.
+   The resolver's defaults composition (`assembler.py:35` +
+   `resolver.py:53-56`) injects the model value from
+   `defaults.model`. A fresh install's `default_platform_payload`
+   already ships a default value at `platform_config.py:88-97`;
+   this bug does not change that seed value (see Part 6
+   "Out of scope" and follow-up filing instruction).
 
 3. **`kolsch setup` no longer performs string substitution
-   on helper.yaml.** The setup flow either:
-   a. Writes the user-selected model to a separate
-      defaults config (per Step 1's pick option a), OR
-   b. YAML-parse-edits the helper.yaml (per option b).
+   on helper.yaml.** The setup flow writes the user-selected
+   provider+model to `platform.yaml`'s `defaults.model.provider`
+   and `defaults.model.model`. No file mutation of helper.yaml;
+   no setup-time templating.
 
 4. **Existing user workspaces are unaffected.** A workspace
    that already went through old-style setup has a
@@ -358,55 +372,74 @@ Read first:
 
 Tasks:
 
-1. Update src/cli/_starter_bundle/kolsch/agents/helper.yaml.
-   - Replace `model: {{MODEL_LINE}}` with the canonical
-     default per Step 1's pick:
-     `model: { provider: opencode, model: qwen3.6-plus }`
-     (or whichever spec Step 1 named).
+1. Update src/cli/_starter_bundle/kolsch/agents/helper.yaml
+   per E-BUG-MODELLINE-001 option (a-prime).
+   - DELETE the line `model: {{MODEL_LINE}}` entirely. Do
+     NOT replace with a literal model spec — the file no
+     longer carries a model field.
+   - Add a short inline comment in its place explaining the
+     source, e.g.:
+       # model: omitted intentionally; resolved from
+       # platform.yaml's defaults.model. Override here by
+       # adding a `model:` field if you want a per-agent
+       # value (it will shadow the workspace default).
 
 2. Remove the substitution logic from src/cli/_setup.py.
    - Delete `_MODEL_PLACEHOLDER = "{{MODEL_LINE}}"` at
      line 488.
-   - Delete the substitution call site at line 553.
+   - Delete the substitution call site (Step 1 verified
+     three sites: 488 / 556-558 / 683-692). Remove ALL
+     three.
    - Remove any helper functions that exist only to
      support this substitution.
 
-3. Wire setup's model-selection output to the chosen
-   location (per Step 1's pick).
-   - If option (a) — write to platform.yaml:
-     - Setup writes the user-selected model to
-       platform.yaml's defaults.model.provider and
-       defaults.model.model.
-     - The resolver's existing defaults composition
-       handles propagation.
-   - If option (b) — YAML-parse-edit:
-     - Read helper.yaml as YAML; set the model fields;
-       write back. Use ruamel.yaml or pyyaml (whichever
-       the project already depends on) preserving
-       comments / formatting.
+3. Wire setup's model-selection output to
+   `platform.yaml`'s `defaults.model` per option (a-prime).
+   - Setup writes the user-selected provider+model to
+     `platform.yaml`'s `defaults.model.provider` and
+     `defaults.model.model`.
+   - The resolver's existing defaults composition handles
+     propagation (`assembler.py:35` ordering +
+     `resolver.py:53-56` merge_patch).
+   - If a YAML write helper for platform.yaml doesn't
+     already exist in the setup flow, add a minimal one.
+     Use whichever YAML library setup already imports;
+     don't introduce a new dependency.
 
 4. Update src/cli/_setup.py's flow so:
-   - A user accepting defaults gets a workspace where the
-     starter helper.yaml's shipped default model is in
-     effect.
+   - A user accepting defaults gets a workspace where
+     `default_platform_payload`'s seed `defaults.model` is
+     active (current behavior; this fix doesn't change the
+     seed value).
    - A user picking a different model gets that model
-     active via the chosen mechanism (a or b).
+     active via the new `defaults.model` write.
 
 5. Tests:
    - tests/component/test_setup_no_model_line.py:
-     * After setup with default selection, helper.yaml in
-       the workspace contains the starter's default model
-       value (NO {{MODEL_LINE}}).
-     * After setup with a non-default selection, the
-       chosen model is active per the wiring (defaults
-       composition OR YAML-edited helper).
+     * After setup with default selection: helper.yaml in
+       the workspace has NO `model:` field; platform.yaml
+       has `defaults.model` matching the seed; resolved
+       config's model field equals the seed.
+     * After setup with a non-default selection: helper.yaml
+       still has NO `model:` field; platform.yaml's
+       `defaults.model` matches the user's pick; resolved
+       config's model field equals the pick.
      * grep for {{MODEL_LINE}} in the workspace after
        setup returns zero hits.
+     * grep for `^model:` in helper.yaml returns zero hits.
 
-6. Update existing tests that asserted the substitution
-   behavior. The old behavior is gone; the tests should
-   either be deleted (asserted behavior no longer exists)
-   or updated to the new path.
+6. Update existing tests per Step 1's enumerated list (six
+   tests):
+   - test_agent_id_derivation.py:207-247 — direct
+     `_MODEL_PLACEHOLDER` substitution path; update to the
+     new defaults-write mechanism.
+   - test_canonical_skills.py:183-209 — sanitisation
+     assertions; update assertion shape.
+   - test_setup.py:302-313 / :316-355 / :358-407 / :410+ —
+     four assertions on post-substitution `payload["model"]`;
+     update each to assert against the resolved config's
+     model field OR `platform.yaml`'s `defaults.model`.
+   - Step 1 confirmed none need full deletion.
 
 7. NO change to:
    - The Jinja templating system.
@@ -606,7 +639,41 @@ When NOT to escalate:
 
 ## Part 5 — Coordinator Escalation Log
 
-*(empty)*
+### E-BUG-MODELLINE-001 — Option (a) as originally specified is mechanically infeasible due to merge-order shadowing
+
+- **Raised by:** developer (Step 1 verification writeup) + reviewer (REVISE verdict on Step 1)
+- **Step:** 1
+- **Trigger:** Spec Part 1 §3(a) had setup write to `defaults.model`; spec Part 2 acceptance #2 had helper.yaml ship with `model:` declared. Step 1's merge-order trace (`assembler.py:35` returns partial order `[defaults, agent_config, call_overrides?]`; `resolver.py:53-56` folds via RFC 7386 merge_patch left-to-right) proved helper.yaml's explicit `model:` shadows `defaults.model` at resolve time. The two spec statements contradict each other; the original option (a) cannot achieve acceptance.
+- **Why this is not a guess:** the dev verified both citations verbatim. Cross-confirmed by reviewer who additionally noted `platform_config.py:88-97` already ships `default_platform_payload.defaults.model`, so the defaults-composition infrastructure is live.
+- **Options on the table:**
+  - **(a)** original — write to `defaults.model`. **Infeasible** per the above.
+  - **(b)** YAML-parse-edit helper.yaml. Requires pyyaml (comment-loss UX regression on helper.yaml's substantial inline teaching docs at lines 7-14, 24-32, 38-41, 75-77) OR a ruamel.yaml dependency bump for a single setup-time edit.
+  - **(a-prime)** ship helper.yaml WITHOUT a `model:` field. Setup writes to `defaults.model`; defaults composition takes over. No library bump; no comment-loss; helper.yaml stays static.
+  - **(c)** hybrid — both. Defeats the separation argument.
+- **Developer's recommendation:** (a-prime) primarily; (b)+ruamel as fallback if acceptance #2's "spelled out as ordinary YAML" wording is non-negotiable.
+
+### Adjacent finding — `default_platform_payload` ships claude-opus-4-7, not opencode/qwen3.6-plus
+
+- **Raised by:** reviewer
+- **Trigger:** Spec Part 1 §2 named `opencode/qwen3.6-plus` as "what `kolsch setup` would default-pick today." Step 1 verified the actual setup picker tiebreaker (`_setup.py:600-666`: alias → openrouter → opencode → fake/fake-model) and `default_platform_payload` seed (anthropic/claude-opus-4-7 per `platform_config.py:88-97`). The spec's named default was wrong on both counts.
+- **Implication:** the spec's named default model is unreliable as a target for this bug. The correct framing is "this bug doesn't touch the seed value; whatever `default_platform_payload` ships is what runs."
+
+---
+
+### Coordinator resolution — E-BUG-MODELLINE-001
+
+- **Decided by:** coordinator
+- **Decision:** **Option (a-prime).** helper.yaml drops the `model:` field entirely. Setup writes the user's pick to `platform.yaml`'s `defaults.model`. Acceptance #2's "spelled out as ordinary YAML" wording is softened.
+- **Rationale:** (a-prime) is the only option that (1) is mechanically feasible per the verified merge order, (2) doesn't bump dependencies or regress helper.yaml's inline teaching comments, and (3) keeps the starter file static. The "user reading helper.yaml might wonder where the model comes from" concern is real but a one-line inline comment + a docs note handle it.
+- **The adjacent finding** (`default_platform_payload` value) is OUT OF SCOPE for this bug. The seed value (claude-opus-4-7 vs. fake/fake-model vs. anything else) is a separate UX decision about first-run experience. Filed as follow-up: `qol-zero-config-first-run-experience.md` to land independently.
+- **Affects:**
+  - Part 1 §3 rewritten to lock (a-prime).
+  - Part 2 acceptance #2 softened to name the `defaults.model` mechanism.
+  - Part 2 acceptance #3 narrowed to only option (a-prime) (the (a)/(b) branching is gone).
+  - Step 2 task 1 redirected: DELETE `model:` line from helper.yaml + add inline comment.
+  - Step 2 task 3 narrowed to the platform.yaml write path; option (b) dropped.
+  - Part 6 out-of-scope gains an explicit line on `default_platform_payload` seed value + the follow-up filing instruction.
+- **Resume instruction:** Dev proceeds with Step 2 per the revised task list. Step 3 must file `qol-zero-config-first-run-experience.md` as a follow-up before declaring closure.
 
 ---
 
@@ -617,6 +684,15 @@ When NOT to escalate:
 - Changing the setup flow's interactive UX.
 - Removing all setup-time templating (only the
   Jinja-syntax-colliding one).
+- **Changing the `default_platform_payload` seed `defaults.model`
+  value** (currently anthropic/claude-opus-4-7 per
+  `platform_config.py:88-97`). This bug plugs setup's output
+  into `defaults.model` but does not touch the seed.
+  Step 3 MUST file `qol-zero-config-first-run-experience.md`
+  as a follow-up covering whether the seed should change to
+  fake/fake-model (echo on first install; friendlier
+  zero-config UX) or stay as an opinionated provider-dependent
+  default (claude-opus-4-7 or similar).
 
 ---
 

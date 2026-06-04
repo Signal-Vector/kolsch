@@ -3,7 +3,11 @@ assembly_version: "1"
 agent_id: ag_helper
 name: helper
 description: A friendly general-purpose helper agent.
-model: {{MODEL_LINE}}
+
+# model: intentionally omitted — resolved from `platform.yaml`'s
+# `defaults.model` via the kernel's defaults composition. Add a
+# `model:` field here to override the workspace default for this
+# agent only.
 
 io: { mode: conversational }
 

@@ -187,17 +187,12 @@ def test_helper_agent_does_not_auto_enable_canonical_skills() -> None:
     or force-invoke with ``/skill <ref>`` at chat time. Auto-enabling
     them on helper would dilute the invariant.
 
-    The helper template carries an unresolved ``{{MODEL_LINE}}``
-    placeholder that ``yaml.safe_load`` rejects (it parses as an
-    inline mapping). Substitute a parseable stand-in for the
-    structural inspection; what we're checking is the
-    ``subsystems.skills`` shape, not the model field."""
+    Post-E-BUG-MODELLINE-001 (a-prime): helper.yaml no longer carries
+    the unresolved ``{{MODEL_LINE}}`` placeholder; the model is sourced
+    from ``platform.yaml``'s ``defaults.model``. We can yaml.safe_load
+    the helper directly."""
     helper_yaml = _STARTER_BUNDLE_TEMPLATE_DIR / "agents" / "helper.yaml"
-    raw = helper_yaml.read_text(encoding="utf-8")
-    # The placeholder ``{{MODEL_LINE}}`` is YAML-invalid; replace
-    # with a quoted placeholder so the rest of the structure parses.
-    sanitised = raw.replace("{{MODEL_LINE}}", '"placeholder"')
-    payload = yaml.safe_load(sanitised)
+    payload = yaml.safe_load(helper_yaml.read_text(encoding="utf-8"))
     skills_subsystem = (payload.get("subsystems") or {}).get("skills")
     if skills_subsystem is None:
         return  # Subsystem block absent — strongest form of "not enabled".

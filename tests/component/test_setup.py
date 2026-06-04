@@ -222,10 +222,18 @@ async def test_tc_ux_05_non_interactive_setup_initializes_workspace(
     for name in ("bundles", "sessions", "content", "logs", "data", ".platform"):
         assert (tmp_path / name).is_dir()
     # Starter agent ships with the fake LLM since no provider connected.
+    # Post-E-BUG-MODELLINE-001 option (a-prime): helper.yaml no longer
+    # declares a `model:` field; the picked model lands in platform.yaml's
+    # defaults.model and flows in through the kernel's defaults composition.
     starter = tmp_path / "bundles" / "kolsch" / "agents" / "helper.yaml"
     assert starter.is_file()
-    payload = yaml.safe_load(starter.read_text())
-    assert payload["model"] == {"provider": "fake", "model": "fake-model"}
+    helper_payload = yaml.safe_load(starter.read_text())
+    assert "model" not in helper_payload
+    platform_payload = yaml.safe_load((tmp_path / "platform.yaml").read_text())
+    assert platform_payload["defaults"]["model"] == {
+        "provider": "fake",
+        "model": "fake-model",
+    }
 
 
 # ===========================================================================
@@ -303,14 +311,21 @@ async def test_tc_ux_08_starter_falls_back_to_fake_without_provider(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Scenario (a): no provider → starter model is the fake LLM."""
+    """Scenario (a): no provider → starter model is the fake LLM.
+
+    Post-E-BUG-MODELLINE-001 (a-prime): the picked model lands in
+    ``platform.yaml``'s ``defaults.model`` rather than the helper
+    agent's ``model:`` field.
+    """
     monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
     monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
     io_ = _make_test_io(root=tmp_path)
     await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
-    starter = tmp_path / "bundles" / "kolsch" / "agents" / "helper.yaml"
-    payload = yaml.safe_load(starter.read_text())
-    assert payload["model"] == {"provider": "fake", "model": "fake-model"}
+    platform_payload = yaml.safe_load((tmp_path / "platform.yaml").read_text())
+    assert platform_payload["defaults"]["model"] == {
+        "provider": "fake",
+        "model": "fake-model",
+    }
 
 
 async def test_tc_ux_08_starter_uses_opus_alias_when_present(
@@ -350,9 +365,8 @@ async def test_tc_ux_08_starter_uses_opus_alias_when_present(
     )
     io_ = _make_test_io(root=tmp_path)
     await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
-    starter = tmp_path / "bundles" / "kolsch" / "agents" / "helper.yaml"
-    payload = yaml.safe_load(starter.read_text())
-    assert payload["model"] == "opus"
+    platform_payload = yaml.safe_load((tmp_path / "platform.yaml").read_text())
+    assert platform_payload["defaults"]["model"] == "opus"
 
 
 async def test_starter_prefers_openrouter_over_opencode_when_no_aliases(
@@ -399,9 +413,8 @@ async def test_starter_prefers_openrouter_over_opencode_when_no_aliases(
     )
     io_ = _make_test_io(root=tmp_path)
     await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
-    starter = tmp_path / "bundles" / "kolsch" / "agents" / "helper.yaml"
-    payload = yaml.safe_load(starter.read_text())
-    assert payload["model"] == {
+    platform_payload = yaml.safe_load((tmp_path / "platform.yaml").read_text())
+    assert platform_payload["defaults"]["model"] == {
         "provider": "openrouter",
         "model": "anthropic/claude-opus-4-7",
     }
@@ -435,9 +448,8 @@ async def test_starter_uses_openrouter_when_sole_provider(
     )
     io_ = _make_test_io(root=tmp_path)
     await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
-    starter = tmp_path / "bundles" / "kolsch" / "agents" / "helper.yaml"
-    payload = yaml.safe_load(starter.read_text())
-    assert payload["model"] == {
+    platform_payload = yaml.safe_load((tmp_path / "platform.yaml").read_text())
+    assert platform_payload["defaults"]["model"] == {
         "provider": "openrouter",
         "model": "anthropic/claude-haiku-4-5",
     }
@@ -475,10 +487,9 @@ async def test_starter_skips_provider_with_empty_models_list(
     )
     io_ = _make_test_io(root=tmp_path)
     await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
-    starter = tmp_path / "bundles" / "kolsch" / "agents" / "helper.yaml"
-    payload = yaml.safe_load(starter.read_text())
+    platform_payload = yaml.safe_load((tmp_path / "platform.yaml").read_text())
     # OpenCode skipped (empty), OpenRouter picked even as fallback.
-    assert payload["model"] == {
+    assert platform_payload["defaults"]["model"] == {
         "provider": "openrouter",
         "model": "anthropic/claude-haiku-4-5",
     }
@@ -1022,13 +1033,15 @@ async def test_tc_ux_12_starter_prefers_alias_over_raw_opencode_model(
     )
     io_ = _make_test_io(root=tmp_path)
     await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
-    starter = tmp_path / "bundles" / "kolsch" / "agents" / "helper.yaml"
-    payload = yaml.safe_load(starter.read_text())
+    platform_payload = yaml.safe_load((tmp_path / "platform.yaml").read_text())
+    picked = platform_payload["defaults"]["model"]
 
     # The picker chose ``opus`` (the documented historic recommendation,
-    # first in _ALIAS_PRIORITY).
-    assert payload["model"] == "opus", (
-        f"expected ``opus`` alias, got {payload['model']!r}; this is "
+    # first in _ALIAS_PRIORITY). Post-E-BUG-MODELLINE-001 (a-prime) the
+    # picked value lives in platform.yaml's defaults.model, not
+    # helper.yaml.
+    assert picked == "opus", (
+        f"expected ``opus`` alias, got {picked!r}; this is "
         f"the user-reported model-picker bug — see "
         f"bug-setup-test-run-failure-handling.md acceptance "
         f"criterion 3 + H4."
@@ -1036,7 +1049,7 @@ async def test_tc_ux_12_starter_prefers_alias_over_raw_opencode_model(
 
     # The raw OpenCode model that caused the upstream 500 in the
     # original report MUST NOT have been chosen.
-    assert payload["model"] != {"provider": "opencode", "model": "minimax-m2.7"}
+    assert picked != {"provider": "opencode", "model": "minimax-m2.7"}
 
 
 async def test_tc_ux_13_user_declining_test_run_still_succeeds(
@@ -1195,9 +1208,22 @@ def _seed_pre_phase_2_workspace(
 
     This mirrors what `kolsch setup` produced before commit deaf95f
     landed the Phase 2.0 §3.1 defaults — the exact starting state
-    the migration is designed to recover from."""
+    the migration is designed to recover from.
+
+    Also lays down a stub ``bundles/kolsch/agents/helper.yaml`` so
+    Step D's "agent already at <path>" short-circuit fires on re-run.
+    Without it, Step D would materialize the bundle and write to
+    ``platform.yaml``'s ``defaults.model`` (E-BUG-MODELLINE-001
+    option a-prime), which would defeat the byte-equality assertions
+    these migration tests rely on.
+    """
     root.mkdir(parents=True, exist_ok=True)
     (root / ".platform").mkdir(parents=True, exist_ok=True)
+    (root / "bundles" / "kolsch" / "agents").mkdir(parents=True, exist_ok=True)
+    (root / "bundles" / "kolsch" / "agents" / "helper.yaml").write_text(
+        "# stub — Step D short-circuits when this file exists\n",
+        encoding="utf-8",
+    )
     rules: list[dict[str, str]] = [
         {"who": ".*", "what": ".*", "effect": "allow"},
     ]

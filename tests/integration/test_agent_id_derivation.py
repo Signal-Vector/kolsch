@@ -210,16 +210,23 @@ async def test_tc_agentid_04_starter_helper_keeps_explicit_id(tmp_path: Path) ->
     historical event log, authz rule, and memory binding that pins
     ``ag_helper``.
 
-    The test reads the ACTUAL starter ``helper.yaml`` source (with
-    ``kolsch setup``'s ``{{MODEL_LINE}}`` placeholder substituted)
+    The test reads the ACTUAL starter ``helper.yaml`` source verbatim
     so any future edit that drops the ``agent_id`` line trips this
-    test. Subsystem validators are accept-anything: we're testing
+    test. Post-E-BUG-MODELLINE-001 (a-prime): helper.yaml no longer
+    carries a ``model:`` field; the model value flows in from
+    ``platform.yaml``'s ``defaults.model`` via the kernel's defaults
+    composition. The platform fixture seeds that value so resolution
+    succeeds. Subsystem validators are accept-anything: we're testing
     identity, not the Tools variant body shape."""
     # Lay down the platform shell + a bundles/kolsch/agents/ directory.
     for sub in ("bundles", "sessions", "content", "logs", "data", ".platform"):
         (tmp_path / sub).mkdir(exist_ok=True)
+    platform_payload = {
+        **_PLATFORM_PAYLOAD,
+        "defaults": {"model": {"provider": "fake", "model": "fake-model"}},
+    }
     (tmp_path / "platform.yaml").write_text(
-        yaml.safe_dump(_PLATFORM_PAYLOAD), encoding="utf-8"
+        yaml.safe_dump(platform_payload), encoding="utf-8"
     )
     bundle = tmp_path / "bundles" / "kolsch"
     (bundle / "agents").mkdir(parents=True, exist_ok=True)
@@ -229,12 +236,11 @@ async def test_tc_agentid_04_starter_helper_keeps_explicit_id(tmp_path: Path) ->
         ),
         encoding="utf-8",
     )
-    # Read the actual starter YAML and substitute the model placeholder
-    # the same way `kolsch setup` does (src/cli/_setup.py:546-549).
-    rendered = _STARTER_HELPER.read_text(encoding="utf-8").replace(
-        "{{MODEL_LINE}}", "{provider: fake, model: fake-model}"
+    # Read the actual starter YAML verbatim — it has no model: field
+    # after E-BUG-MODELLINE-001 (a-prime).
+    (bundle / "agents" / "helper.yaml").write_text(
+        _STARTER_HELPER.read_text(encoding="utf-8"), encoding="utf-8"
     )
-    (bundle / "agents" / "helper.yaml").write_text(rendered, encoding="utf-8")
 
     am = AssetManagement(root=tmp_path)
     await am.initialize()

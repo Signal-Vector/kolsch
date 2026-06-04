@@ -43,12 +43,14 @@ step:**
 
 - **You connected a provider** — the starter agent uses that
   provider's first available model. Real answers from the start.
-- **You skipped the provider step** — the starter agent ships with
-  `provider: fake` (the built-in echo LLM). Every `kolsch run` then
+- **You skipped the provider step** — the starter workspace's
+  `platform.yaml` gets `defaults.model: {provider: fake, model:
+  fake-model}` (the built-in echo LLM). Every `kolsch run` then
   prints a clearly-labelled warning to stderr so you don't mistake
   the echoed input for a real reply. You can swap in a real model
-  any time via `kolsch connect <provider>` + editing the agent's
-  `model:` field.
+  any time via `kolsch connect <provider>` + editing
+  `platform.yaml`'s `defaults.model` (or adding a `model:` field
+  to a specific agent).
 
 The rest of this tutorial assumes the default workspace location. If
 you skipped `kolsch setup` and want to know what it produced, read
@@ -82,17 +84,20 @@ event_bus:
 file_access:
   allowed_paths: [ data/, bundles/ ]
   denied_paths:  [ .env ]
-defaults: {}
+defaults:
+  model: { provider: fake, model: fake-model }   # what setup picked
 ```
 
-`bundles/starter/agents/helper.yaml` (your first agent):
+`bundles/kolsch/agents/helper.yaml` (your first agent):
 ```yaml
 schema_version: "0.1"
 assembly_version: "1"
 agent_id: ag_helper
 name: helper
 description: A friendly general-purpose helper agent.
-model: { provider: fake, model: fake-model }
+# model: intentionally omitted — resolved from platform.yaml's
+# defaults.model via the kernel's defaults composition. Add a
+# `model:` field here to override for this agent only.
 prompt: You are a helpful assistant.
 io: { mode: conversational }
 ```
@@ -253,17 +258,26 @@ shows its id (what goes in `model.model`) and any matching alias (a
 shareable shortcut you can use in place of the canonical
 `provider/model` pair). Use `--json` if you're scripting this.
 
-Now swap your agent over. Open
-`bundles/starter/agents/helper.yaml` and change the `model:` line:
+Now swap your agent over. The cleanest knob is
+`platform.yaml`'s `defaults.model` — change it once and every
+agent in the workspace that doesn't pin its own model picks up
+the new value:
 
 ```yaml
-# from (if setup left you on the fake LLM):
-model: { provider: fake, model: fake-model }
-# to one of:
-model: { provider: openrouter, model: anthropic/claude-opus-4-7 }
-# or — if you've defined an alias, e.g., via `kolsch connect`:
-model: opus
+# in platform.yaml:
+defaults:
+  # from (if setup left you on the fake LLM):
+  model: { provider: fake, model: fake-model }
+  # to one of:
+  model: { provider: openrouter, model: anthropic/claude-opus-4-7 }
+  # or — if you've defined an alias, e.g., via `kolsch connect`:
+  model: opus
 ```
+
+If you want only the helper to switch (leaving other agents alone),
+add a `model:` field to
+`bundles/kolsch/agents/helper.yaml` instead — an agent-level
+`model:` overrides `defaults.model` for that agent only.
 
 Aliases mean your agent definitions don't have to know which provider
 you're using. Either form works.
@@ -374,8 +388,9 @@ switching models, approving bash patterns wisely) live in
 ## 11. Add a fallback model
 
 Real providers blink — a 429 from Opus shouldn't kill your
-conversation. Open `bundles/starter/agents/helper.yaml` and add one
-field next to `model:`:
+conversation. Open `bundles/kolsch/agents/helper.yaml` and add
+an explicit `model:` plus a `fallback_models:` list (the agent-level
+`model:` overrides whatever's in `platform.yaml`'s `defaults.model`):
 
 ```yaml
 model: opus

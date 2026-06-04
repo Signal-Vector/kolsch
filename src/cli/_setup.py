@@ -483,23 +483,19 @@ _STARTER_AGENT = "helper"
 # files as a copyable template under src/, copy at setup time).
 _STARTER_BUNDLE_TEMPLATE_DIR = Path(__file__).parent / "_starter_bundle" / "kolsch"
 
-# Placeholder string in the packaged agents/helper.yaml replaced with
-# the resolved model line at materialization time (Step D).
-_MODEL_PLACEHOLDER = "{{MODEL_LINE}}"
-
 
 async def _step_d_starter_agent(io: _SetupIO, *, non_interactive: bool) -> str:
     """Materialize the kolsch bundle from the packaged template.
 
     Phase 2.0 (TOOL-R10, coordinator resolution E-2.0-001 Option A):
-    instead of rendering a synthetic agent.yaml inline, this step
-    copies the packaged template at
-    ``src/cli/_starter_bundle/kolsch/`` (bundle.yaml + agents/
-    helper.yaml + the four tool .py files) into
-    ``<workspace>/bundles/kolsch/``, substituting the resolved model
-    line into the helper agent's ``model:`` field. Each tool .py file
-    is the source of truth for what that tool does — users can edit,
-    copy, or swap them per TOOL-R10's intent.
+    copies the packaged template at ``src/cli/_starter_bundle/kolsch/``
+    (bundle.yaml + agents/helper.yaml + the four tool .py files) into
+    ``<workspace>/bundles/kolsch/`` verbatim. The chosen model lands in
+    ``platform.yaml``'s ``defaults.model`` block — the helper's
+    ``model:`` field is intentionally absent so the kernel's defaults
+    composition (`assets/assembler.py:35` partial order +
+    `kernel/resolver.py` RFC 7386 merge) supplies the value
+    (E-BUG-MODELLINE-001 option a-prime).
     """
     bundle_dir = io.root / "bundles" / _STARTER_BUNDLE
     agent_path = bundle_dir / "agents" / f"{_STARTER_AGENT}.yaml"
@@ -517,22 +513,24 @@ async def _step_d_starter_agent(io: _SetupIO, *, non_interactive: bool) -> str:
             io.out.write("  → skipped starter agent\n")
             return _SKIPPED
 
-    _copy_kolsch_bundle(io.root, model=model)
+    _copy_kolsch_bundle(io.root)
+    _write_defaults_model(io.root / "platform.yaml", model)
     io.out.write(f"  ✓ materialized bundle at {bundle_dir.relative_to(io.root)}/\n")
     io.out.write(f"  ✓ wrote starter agent at {agent_path.relative_to(io.root)}\n")
     _announce_picked_model(io, model)
     return _PROCEEDED
 
 
-def _copy_kolsch_bundle(root: Path, *, model: str | dict[str, str]) -> None:
+def _copy_kolsch_bundle(root: Path) -> None:
     """Copy the packaged kolsch bundle template into the workspace.
 
-    Substitutes the model placeholder in agents/helper.yaml with the
-    resolved model line. The four tools/*.py files are copied
-    verbatim — they're standalone Python that the asset catalog
-    discovers + the Tools subsystem registers per the standard
-    bundle-tool path (per the Phase 2.0 coordinator resolution E-2.0-001
-    Option A).
+    The four tools/*.py files are copied verbatim — they're standalone
+    Python that the asset catalog discovers + the Tools subsystem
+    registers per the standard bundle-tool path (per the Phase 2.0
+    coordinator resolution E-2.0-001 Option A). The helper agent file
+    is also a verbatim copy; per E-BUG-MODELLINE-001 the model value
+    lives in ``platform.yaml``'s ``defaults.model``, not the agent
+    file.
     """
     target = root / "bundles" / _STARTER_BUNDLE
     if target.exists():
@@ -549,14 +547,24 @@ def _copy_kolsch_bundle(root: Path, *, model: str | dict[str, str]) -> None:
 
     shutil.copytree(_STARTER_BUNDLE_TEMPLATE_DIR, target)
 
-    # Substitute the model placeholder in the agent file. The template
-    # ships with the literal `{{MODEL_LINE}}` token; replace it with
-    # the resolved model line.
-    agent_path = target / "agents" / f"{_STARTER_AGENT}.yaml"
-    rendered = agent_path.read_text(encoding="utf-8").replace(
-        _MODEL_PLACEHOLDER, _render_model_line(model)
-    )
-    agent_path.write_text(rendered, encoding="utf-8")
+
+def _write_defaults_model(yaml_path: Path, model: str | dict[str, str]) -> None:
+    """Write the picked model into ``platform.yaml``'s ``defaults.model``.
+
+    E-BUG-MODELLINE-001 option (a-prime): instead of substituting a
+    placeholder in the starter helper.yaml, setup writes the chosen
+    model to the workspace's ``defaults.model`` so the kernel's
+    defaults composition supplies the agent's resolved ``model:``
+    field. Alias strings are written verbatim; canonical
+    ``{provider, model}`` dicts are written as-is.
+    """
+    payload = _read_yaml(yaml_path)
+    defaults = payload.get("defaults")
+    if not isinstance(defaults, dict):
+        defaults = {}
+    defaults["model"] = model
+    payload["defaults"] = defaults
+    yaml_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
 
 def _announce_picked_model(io: _SetupIO, model: str | dict[str, str]) -> None:
@@ -678,18 +686,6 @@ def _first_model_id(entry: dict[str, Any]) -> str | None:
             if isinstance(mid, str) and mid:
                 return mid
     return None
-
-
-def _render_model_line(model: str | dict[str, str]) -> str:
-    """Render the model field value as it lands in agents/helper.yaml.
-
-    The model field can be either a compact-string alias or the
-    canonical ``{provider, model}`` dict; both shapes are valid YAML
-    inline.
-    """
-    if isinstance(model, str):
-        return model
-    return "{ provider: " + model["provider"] + ", model: " + model["model"] + " }"
 
 
 # ---------------------------------------------------------------------------

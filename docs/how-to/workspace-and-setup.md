@@ -113,6 +113,36 @@ trace, no runtime bootstrap — the CLI catches the missing workspace
 before any subsystem boots. The behaviour is gated by
 `workspace_is_initialized()` in `platform_runtime.workspace`.
 
+## Where the starter agent's model comes from
+
+`kolsch setup` picks a model for the starter `kolsch/helper` agent
+and writes it to **`platform.yaml`'s `defaults.model`** — not to the
+agent file. The helper's `bundles/kolsch/agents/helper.yaml`
+intentionally has no `model:` field; the kernel's defaults
+composition supplies the value at agent-load (the lowest-priority
+layer, beneath any explicit `model:` on the agent itself).
+
+What setup writes depends on what's connected:
+
+- **No provider connected** → `defaults.model: {provider: fake,
+  model: fake-model}`. The agent echoes input; useful for offline
+  smoke tests.
+- **One or more providers connected with `model_aliases`** →
+  `defaults.model: <alias>` (preferring `opus` → `smart` → `cheap`).
+- **Provider connected without aliases** → `defaults.model:
+  {provider: <name>, model: <first-discovered-model>}`.
+
+To change the model afterwards, either:
+
+1. Edit `platform.yaml`'s `defaults.model` directly — affects every
+   agent in the workspace that doesn't pin its own.
+2. Add a `model:` field to a specific agent's YAML — overrides
+   `defaults.model` for that agent only.
+
+The setup-time `{{MODEL_LINE}}` placeholder mechanism was removed
+in E-BUG-MODELLINE-001 (it collided with Phase 2.2 Jinja syntax in
+agent YAMLs). The starter file now ships as plain, unprocessed YAML.
+
 ## Scripted setup (CI, devcontainers)
 
 `kolsch setup --non-interactive` skips every prompt and uses the
