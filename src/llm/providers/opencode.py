@@ -120,7 +120,15 @@ from llm.providers._errors import (
     classify_transport_error,
 )
 
-_DEFAULT_TIMEOUT_SECONDS = 30.0
+# bug-chat-opencode-qwen-timeout-investigation.md Step 3 — the
+# original 30s default sat below the observed long-tail of opencode
+# responses (replay of session ses_abae69a7 showed 12 successful
+# calls between 30 and 56s, with two reaching 112-113s). Users on
+# affected models (qwen3.6-plus + others) saw a 32% timeout rate
+# at 30s; bumping to 180s drops it to 0% in the same session
+# (Step 2 H1 probe, Step 3 post-fix replay). Override per-provider
+# via `llm_providers.<name>.timeout_seconds` in platform.yaml.
+_DEFAULT_TIMEOUT_SECONDS = 180.0
 _HTTP_CLIENT_ERROR_MIN = 400
 
 

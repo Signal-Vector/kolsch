@@ -505,7 +505,64 @@ sketch follows the connector checklist
 
 ---
 
-## Part 6 — Failure Modes
+## Part 6 — Tuning
+
+The connector defaults are picked to work out-of-the-box on the
+two reference providers we ship. A few knobs are commonly worth
+adjusting when a workload's profile differs.
+
+### 6.1 `timeout_seconds` (per-provider, default 180 s for OpenCode)
+
+OpenCode (and any OpenAI-compatible provider going through the same
+connector template) uses a single client-side timeout for the
+underlying HTTP call. It is set via:
+
+```yaml
+# platform.yaml
+llm_providers:
+  opencode:
+    type: opencode
+    base_url: https://opencode.example.com/v1
+    api_key_secret: OPENCODE_API_KEY
+    timeout_seconds: 180   # optional; defaults to the connector's value
+```
+
+The current default is **180 seconds**. The previous default was
+30 seconds — `bug-chat-opencode-qwen-timeout-investigation.md`
+documents how that value caused a 32% timeout rate on a long
+multi-turn tool-using session with `qwen3.6-plus`. The replay
+captured natural latency in the 30-113s range on individual
+calls, so anything under ~120s will clip the tail; 180s gives a
+50% headroom over the worst observed.
+
+When to tune:
+
+- **Drop it (e.g., 60 s)** if the model you point at is a short,
+  fast model that never legitimately takes that long, and you'd
+  rather fail-fast than wait — the engine's retry layer
+  (`runtime.max_retries`) will pick up the failure and try again.
+- **Raise it (e.g., 300 s+)** if your provider serves slow large
+  models (qwen-max, claude-opus on long reasoning, etc.) and you
+  observe the kolsch chat surfacing timeout errors despite the
+  default. The longest acceptable value is bounded by what your
+  user is willing to wait staring at a "thinking..." spinner;
+  values above 300 s usually mean a better solution is to swap
+  the model or split the work.
+
+Interaction with retry layers:
+
+- The connector timeout caps a **single HTTP attempt**. crewai/
+  litellm may retry internally a small number of times — that
+  amplifies the effective wall-clock budget. Reflected in
+  observed kolsch latencies that exceed the connector timeout
+  by 1-2×.
+- The engine's `runtime.max_retries` on the agent spec retries
+  the entire exchange (full message reassembly). Independent of
+  the connector timeout.
+
+---
+
+## Part 7 — Failure Modes
 
 Catalog (Error Model §4.13):
 
@@ -521,7 +578,7 @@ Catalog (Error Model §4.13):
 
 ---
 
-## Part 7 — Status
+## Part 8 — Status
 
 Phase 1.1 design draft 0.1. The patch shipped two reference
 connectors (OpenCode + OpenRouter) and the four CLI commands.
