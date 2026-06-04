@@ -372,6 +372,16 @@ async def _step_b_skeleton(io: _SetupIO, *, non_interactive: bool) -> str:
         # platform.yaml still carries the Phase 1 allow-all sentinel,
         # offer to migrate to the Phase 2.0 §3.1 defaults.
         _maybe_migrate_authz_rules(io, yaml_path, non_interactive=non_interactive)
+        # Phase 2.4 Step 9 — drop in canonical kolsch skills that
+        # weren't in the packaged template at the time the user first
+        # ran setup. Additive only; never overwrites existing files.
+        # Runs BEFORE the validation hook so the new skills are in the
+        # catalog when validation walks it.
+        _maybe_install_missing_kolsch_skills(io)
+        # Step 6 (skills-subsystem.md Draft 0.2 follow-up): advisory
+        # skill validation. Warning-only — never blocks setup so a
+        # user mid-editing a SKILL.md doesn't get stuck.
+        await _maybe_warn_invalid_skills(io)
         return _SKIPPED
 
     io.root.mkdir(parents=True, exist_ok=True)
@@ -996,6 +1006,107 @@ def _maybe_migrate_authz_rules(
         io.out.write("  → keeping current rules; no changes written\n")
     else:  # "s" or any unrecognised default — defer
         io.out.write("  → deferred; will prompt again on the next setup run\n")
+
+
+def _maybe_install_missing_kolsch_skills(io: _SetupIO) -> None:
+    """Drop in canonical kolsch skills missing from an existing workspace.
+
+    Phase 2.4 Step 9 — additive drift handler for the kolsch bundle's
+    ``skills/`` tree. Compares the packaged template's skill set to
+    what's on disk; copies the difference. Never overwrites — if the
+    user edited a canonical skill, their edits stay. If they deleted
+    one, the next setup re-run adds it back (intentional: skills are
+    additive content, not config the user "owns").
+
+    Silent no-op when:
+    - The user has no kolsch bundle (they removed it; respect that).
+    - The packaged template ships no skills.
+    - Every canonical skill is already present.
+    """
+    import shutil  # noqa: PLC0415
+
+    bundle_dir = io.root / "bundles" / _STARTER_BUNDLE
+    if not (bundle_dir / "bundle.yaml").is_file():
+        return  # User doesn't have the kolsch bundle; nothing to do.
+
+    template_skills_dir = _STARTER_BUNDLE_TEMPLATE_DIR / "skills"
+    if not template_skills_dir.is_dir():
+        return  # Template ships no skills; nothing to install.
+
+    skills_target = bundle_dir / "skills"
+    skills_target.mkdir(parents=True, exist_ok=True)
+
+    added: list[str] = []
+    for source_skill in sorted(template_skills_dir.iterdir()):
+        if not source_skill.is_dir():
+            continue
+        if not (source_skill / "SKILL.md").is_file():
+            continue
+        target_skill = skills_target / source_skill.name
+        if target_skill.exists():
+            continue  # Already present (possibly user-edited); leave alone.
+        shutil.copytree(source_skill, target_skill)
+        added.append(source_skill.name)
+
+    if added:
+        io.out.write(
+            f"  ✓ installed {len(added)} canonical skill(s): "
+            f"{', '.join(added)}\n",
+        )
+
+
+async def _maybe_warn_invalid_skills(io: _SetupIO) -> None:
+    """Skill-validation advisory hook — runs on setup re-runs.
+
+    Builds a fresh :class:`AssetManagement`, walks every catalogued
+    skill, and prints a one-line warning per skill that fails
+    :func:`cli.skills.validate_skill_entry`. Never blocks setup —
+    Step 6's explicit design call (a user mid-editing a SKILL.md
+    should not be locked out of completing setup).
+
+    Silent when the workspace has no skills catalogued — no noise
+    on fresh re-runs.
+    """
+    from assets import AssetManagement  # noqa: PLC0415
+    from cli.skills import validate_skill_entry  # noqa: PLC0415
+
+    am = AssetManagement(root=io.root)
+    try:
+        await am.initialize()
+    except Exception as exc:  # noqa: BLE001 — never fatal at advisory layer
+        io.out.write(f"  ⚠ skill validation skipped: {exc}\n")
+        return
+
+    skills = sorted(
+        am.list_assets(asset_type="skill"),
+        key=lambda e: e.ref,
+    )
+    if not skills:
+        return
+
+    failures: list[tuple[str, list[str]]] = []
+    for entry in skills:
+        errs = validate_skill_entry(entry)
+        if errs:
+            failures.append((entry.ref, errs))
+
+    if not failures:
+        io.out.write(f"  ✓ validated {len(skills)} skill(s)\n")
+        return
+
+    io.out.write(
+        f"  ⚠ skill validation: {len(failures)} of {len(skills)} "
+        "skill(s) have warnings:\n",
+    )
+    for ref, errs in failures:
+        # Show error codes only at the setup surface — keeps the
+        # banner tight. Users get the full human-readable view via
+        # `kolsch skills validate <ref>`.
+        io.out.write(f"      {ref}: {', '.join(errs)}\n")
+    io.out.write(
+        "    (Run `kolsch skills validate` for details; "
+        "warnings do not block setup.)\n",
+    )
 
 
 def _print_migration_diff(io: _SetupIO, current_rules: list[dict[str, Any]]) -> None:
