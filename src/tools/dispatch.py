@@ -43,6 +43,7 @@ if TYPE_CHECKING:
         SandboxProvider,
         SecretsProvider,
     )
+    from providers.authz import Rule
     from tools.decorator import ToolContext, ToolDefinition
 
 
@@ -54,12 +55,21 @@ async def dispatch_tool(
     authz: AuthorizationProvider,
     secrets: SecretsProvider,
     sandbox: SandboxProvider,
+    agent_permissions: list[Rule] | None = None,
+    bundle_permissions: list[Rule] | None = None,
 ) -> Any:  # noqa: ANN401 — caller knows the return type for their tool
     """Run a tool through the validate → authz → secrets → sandbox →
     execute pipeline. Returns the tool function's raw return value.
 
     Caller (:class:`ToolsSubsystem.invoke_tool`) wraps the return in
     :class:`ToolResult`.
+
+    ``agent_permissions`` / ``bundle_permissions`` are forwarded to
+    ``authz.allow`` so the provider walks the four-level stack
+    (qol-tool-permission-discovery-uniform-with-stacking.md). Both
+    default to ``None`` so Phase 1 programmatic callers (tests,
+    integration harnesses that construct ToolsSubsystem with their
+    own minimal authz) stay byte-identical.
     """
     # Step 1 — Pydantic validate args.
     try:
@@ -81,7 +91,13 @@ async def dispatch_tool(
     # so existing rules with action-namespace `what` patterns
     # still fire as before — see RuleBasedAuthorizationProvider.allow.
     target = _extract_target_from_args(validated_args)
-    auth = await authz.allow(context.principal, defn.action_name, target=target)
+    auth = await authz.allow(
+        context.principal,
+        defn.action_name,
+        target=target,
+        agent_permissions=agent_permissions,
+        bundle_permissions=bundle_permissions,
+    )
     if not auth.allowed:
         raise ToolUnauthorized(
             tool_name=defn.name,

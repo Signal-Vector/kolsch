@@ -56,6 +56,14 @@ class AssetManagement:
         self._root = root
         self._platform_config: dict[str, Any] | None = None
         self._catalog: AssetCatalog | None = None
+        # qol-tool-permission-discovery-uniform-with-stacking.md Step 2
+        # — populated as a side effect of build_resolved_config so the
+        # engine's tool-registration site can map agent_id back to its
+        # home bundle. Necessary because the resolved agent_id may be
+        # either explicit (taken from the YAML's `agent_id:`) or
+        # derived (`ag_<bundle>_<name>`); reversing the derivation
+        # isn't reliable in the explicit case.
+        self._agent_id_to_bundle: dict[str, str] = {}
 
     # --- bootstrap -----------------------------------------------------
 
@@ -88,6 +96,47 @@ class AssetManagement:
     def list_bundles(self) -> list[BundleManifest]:
         _, catalog = self._require_initialized()
         return list(catalog.bundles.values())
+
+    def get_bundle(self, name: str) -> BundleManifest | None:
+        """Return the catalog's parsed manifest for ``name``, or
+        ``None`` if no such bundle is registered.
+
+        Read-only accessor used by the engine's tools-subsystem
+        registration to look up the bundle's ``permissions:`` field
+        for the four-level authz stack (qol-tool-permission-discovery-
+        uniform-with-stacking.md Step 2)."""
+        _, catalog = self._require_initialized()
+        return catalog.bundles.get(name)
+
+    def get_bundle_for_agent_id(self, agent_id: str) -> str | None:
+        """Find the home bundle of a resolved agent.
+
+        Used by the engine to look up which bundle's permissions
+        apply to an agent's tool invocations. Two-step lookup:
+
+        1. The ``_agent_id_to_bundle`` cache populated as a side
+           effect of :meth:`build_resolved_config` — covers both
+           explicit and derived agent_id YAMLs.
+        2. Fallback for callers that bootstrapped the engine
+           without going through ``build_resolved_config`` (rare —
+           tests with synthetic configs): walk the catalog and
+           match :func:`schemas.derive_agent_id` outputs.
+
+        Returns ``None`` when no catalog agent matches (e.g., tests
+        with synthetic configs not backed by a bundle on disk).
+        """
+        cached = self._agent_id_to_bundle.get(str(agent_id))
+        if cached is not None:
+            return cached
+        _, catalog = self._require_initialized()
+        for entry in catalog.assets.values():
+            if entry.asset_type != "agent":
+                continue
+            bundle = entry.bundle
+            agent_name = entry.ref.rsplit("/", 1)[-1]
+            if str(derive_agent_id(bundle, agent_name)) == str(agent_id):
+                return bundle
+        return None
 
     def list_assets(
         self,
@@ -245,12 +294,20 @@ class AssetManagement:
         ]
 
         # Step 4 — hand to the kernel for merge + validation.
-        return await asyncio.to_thread(
+        resolved = await asyncio.to_thread(
             resolve_and_validate,
             partials,
             subsystem_validators or {},
             system_validators or [],
         )
+        # Stash the resolved-agent-id → home-bundle mapping so the
+        # engine's tool-registration site can look up the bundle's
+        # ``permissions:`` block (qol-tool-permission-discovery-
+        # uniform-with-stacking.md Step 2). The resolved agent_id may
+        # be explicit (the YAML's ``agent_id:``) or derived; this
+        # mapping covers both cases without re-parsing.
+        self._agent_id_to_bundle[str(resolved.agent_id)] = bundle
+        return resolved
 
     # --- internal ------------------------------------------------------
 

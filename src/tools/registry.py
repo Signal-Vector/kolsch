@@ -15,6 +15,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
+    from providers.authz import Rule
     from schemas import AgentId
     from tools.decorator import ToolDefinition
     from tools.mcp import MCPServer
@@ -35,12 +36,24 @@ class _MCPRegistration:
 
 @dataclass
 class _AgentRegistration:
-    """All tools + MCP servers registered for one agent."""
+    """All tools + MCP servers registered for one agent.
+
+    ``agent_permissions`` and ``bundle_permissions`` (qol-tool-
+    permission-discovery-uniform-with-stacking.md Step 2) are the
+    pre-resolved rule layers the dispatcher hands to
+    ``authz.allow`` so the provider walks
+    agent → bundle → platform → no-rule-callback → default-deny.
+    Both stay empty for callers that don't supply them (tests +
+    Phase 1 programmatic registration); the provider's existing
+    Phase 2.0 behaviour is preserved.
+    """
 
     tools: dict[str, ToolDefinition] = field(default_factory=dict)
     # Keyed by MCP server name (e.g. "github"); the action namespace
     # is `mcp.<name>.<tool>` per spec §5.4.
     mcp_servers: dict[str, _MCPRegistration] = field(default_factory=dict)
+    agent_permissions: list[Rule] = field(default_factory=list)
+    bundle_permissions: list[Rule] = field(default_factory=list)
 
 
 class ToolRegistry:

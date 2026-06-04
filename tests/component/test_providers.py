@@ -357,6 +357,137 @@ async def test_list_rules_returns_compiled_rules_read_only() -> None:
 
 
 # ===========================================================================
+# TC-AUZ-PERMDISC-* — qol-tool-permission-discovery-uniform-with-stacking
+# ===========================================================================
+
+
+async def test_allow_no_rule_no_callback_raises_default_deny() -> None:
+    """Regression guard for the non-interactive path: an empty rule
+    set with no callback registered preserves the Phase 2.0 default
+    deny behaviour (the dispatcher raises ToolUnauthorized off this
+    result)."""
+    from providers.authz import AuthzEffect  # noqa: PLC0415
+
+    provider = _authz([])
+    result = await provider.allow("agent.x", "tool.bash")
+    assert result.allowed is False
+    assert result.effect is AuthzEffect.DENY
+    assert result.matched_rule is None
+    assert "default deny" in result.reason.lower()
+
+
+async def test_allow_no_rule_with_callback_fires_with_rule_id_none() -> None:
+    """qol-tool-permission-discovery Step 2 — when no rule matches
+    AND a prompt callback has been registered (chat mode), the
+    callback fires with ``rule_id=None`` so the modal can render
+    the no-covering-rule variant of the panel."""
+    from providers.authz import AuthzEffect  # noqa: PLC0415
+
+    provider = _authz([])
+    seen: dict[str, object] = {}
+
+    async def _cb(
+        *,
+        rule_id: str | None,
+        action: str,
+        target: str | None,
+    ) -> AuthzEffect:
+        seen["rule_id"] = rule_id
+        seen["action"] = action
+        seen["target"] = target
+        return AuthzEffect.ALLOW
+
+    provider.register_prompt_callback(_cb)  # type: ignore[arg-type]
+    result = await provider.allow(
+        "agent.x", "tool.bash", target="echo hi",
+    )
+    assert seen["rule_id"] is None
+    assert seen["action"] == "tool.bash"
+    assert seen["target"] == "echo hi"
+    assert result.allowed is True
+    assert result.effect is AuthzEffect.ALLOW
+    assert "who_chain=no_rule" in result.reason
+
+
+async def test_allow_no_rule_with_callback_persists_rule_and_fires_hook() -> (
+    None
+):
+    """The callback's ``(effect, Rule)`` tuple lands the new rule
+    above the default-deny tail AND fires the ``on_rule_added``
+    hook so the chat's ``cli.permissions._write_back`` persists it
+    to ``platform.yaml``."""
+    from providers.authz import AuthzEffect, Rule  # noqa: PLC0415
+
+    provider = _authz([])
+    hook_called_with: list[list[Rule]] = []
+
+    async def _cb(
+        *,
+        rule_id: str | None,
+        action: str,
+        target: str | None,
+    ) -> tuple[AuthzEffect, Rule]:
+        _ = rule_id, target
+        return (
+            AuthzEffect.ALLOW,
+            Rule(who=".*", what=action, effect="allow"),
+        )
+
+    def _on_rule_added(rules: list[Rule]) -> None:
+        hook_called_with.append(list(rules))
+
+    provider.register_prompt_callback(_cb, on_rule_added=_on_rule_added)  # type: ignore[arg-type]
+    first = await provider.allow("agent.x", "tool.bash")
+    assert first.allowed is True
+
+    # Second invocation hits the persisted rule directly — callback
+    # is not fired again. If it were, _cb would record a new entry.
+    second = await provider.allow("agent.x", "tool.bash")
+    assert second.allowed is True
+    assert second.matched_rule is not None
+    assert second.matched_rule.effect == "allow"
+
+    # The hook fired exactly once (after the first persist).
+    assert len(hook_called_with) == 1
+    persisted = hook_called_with[0]
+    assert any(r.what == "tool.bash" and r.effect == "allow" for r in persisted)
+
+
+async def test_priority_agent_layer_wins_over_bundle_layer() -> None:
+    """Four-level stack: agent's allow rule wins over the bundle's
+    deny rule for the same action."""
+    from providers.authz import Rule  # noqa: PLC0415
+
+    provider = _authz([])
+    agent_rules = [Rule(who=".*", what=r"tool\.bash", effect="allow")]
+    bundle_rules = [Rule(who=".*", what=r"tool\.bash", effect="deny")]
+    result = await provider.allow(
+        "agent.x",
+        "tool.bash",
+        agent_permissions=agent_rules,
+        bundle_permissions=bundle_rules,
+    )
+    assert result.allowed is True
+    assert "who_chain=agent" in result.reason
+
+
+async def test_priority_bundle_layer_wins_over_platform_layer() -> None:
+    """Four-level stack: a bundle's allow rule wins over a platform
+    deny rule for the same action."""
+    provider = _authz([{"who": ".*", "what": r"tool\.bash", "effect": "deny"}])
+    from providers.authz import Rule  # noqa: PLC0415
+
+    bundle_rules = [Rule(who=".*", what=r"tool\.bash", effect="allow")]
+    result = await provider.allow(
+        "agent.x",
+        "tool.bash",
+        bundle_permissions=bundle_rules,
+    )
+    assert result.allowed is True
+    assert "who_chain=bundle" in result.reason
+
+
+# ===========================================================================
 # Registry seam — make_*_provider dispatches by variant name
 # ===========================================================================
 

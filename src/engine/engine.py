@@ -878,10 +878,36 @@ class _Exchange:
             list(body.get("declared", []) or []),
         )
 
+        # qol-tool-permission-discovery-uniform-with-stacking.md Step 2 —
+        # thread the agent's permissions + its home bundle's
+        # permissions to the tools subsystem so the dispatcher hands
+        # them to ``authz.allow``. The provider walks
+        # agent → bundle → platform → no-rule callback → default-deny.
+        # PermissionRule is structurally identical to Rule; the
+        # provider's compile path accepts either via duck-typing of
+        # the .who / .what / .effect fields.
+        from providers.authz import Rule  # noqa: PLC0415
+
+        agent_rules: list[Rule] = [
+            Rule(id=r.id, who=r.who, what=r.what, effect=r.effect)
+            for r in self.config.permissions
+        ]
+        bundle_rules: list[Rule] = []
+        home_bundle = self.engine._assets.get_bundle_for_agent_id(self.agent_id)
+        if home_bundle is not None:
+            manifest = self.engine._assets.get_bundle(home_bundle)
+            if manifest is not None:
+                bundle_rules = [
+                    Rule(id=r.id, who=r.who, what=r.what, effect=r.effect)
+                    for r in manifest.permissions
+                ]
+
         await self.engine._tools.register_for_agent(
             agent_id=self.agent_id,  # type: ignore[arg-type]
             builtin_names=list(body.get("builtin", []) or []),
             declared_paths=declared_paths,
+            agent_permissions=agent_rules,
+            bundle_permissions=bundle_rules,
         )
         # MCP server registration lands when the MCP wiring patch ships.
 

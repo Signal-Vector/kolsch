@@ -380,8 +380,26 @@ Plain paths are rejected at agent-load with
 
 Optional list of per-agent authz rules. Same shape as
 `platform.yaml:authorization.config.rules` entries — `who` matches the
-principal; `what` matches the action OR the resolved target. Composed
-agent → platform → default-deny.
+principal; `what` matches the action OR the resolved target.
+
+Per `qol-tool-permission-discovery-uniform-with-stacking.md` Step 2
+the resolver composes the **four-level stack**:
+
+```
+agent.yaml `permissions:`            ← most specific
+   ↑
+bundle.yaml `permissions:`           ← NEW (see §A.13)
+   ↑
+platform.yaml `authorization.rules`  ← workspace default
+   ↑
+default-deny (non-chat) / first-use modal (chat)
+```
+
+First-match-wins inside each layer. The chat-mode no-rule
+callback persists `[a]`/`[d]` choices into `platform.yaml`; the
+narrower layers (bundle, agent) override later via hand-edit.
+See [`docs/how-to/permissions.md`](../how-to/permissions.md) for
+authoring guidance and the cross-bundle-naming caveat.
 
 ### A.11.5 `context_files: list[ContextFileSpec]`
 
@@ -394,6 +412,39 @@ Optional list of documentation files. Each entry:
 | `primary` | no | `bool` | `false` (secondary = listed by path + summary only) |
 
 Each file is capped at 64 KiB; oversize raises `context.file_too_large`.
+
+## A.13 BundleManifest (`bundle.yaml`)
+
+`bundle.yaml` declares one bundle's identity, metadata, and (per
+`qol-tool-permission-discovery-uniform-with-stacking.md` Step 2)
+its bundle-wide authz rules. Full prose lives in
+[`docs/explanation/asset-management-contract.md`](../explanation/asset-management-contract.md) §2.2.
+
+| Field | Required | Type | Default |
+|---|---|---|---|
+| `name` | yes | `str` | — (must match directory name) |
+| `version` | yes | `str` | — (semver) |
+| `description` | yes | `str` | — |
+| `required_env_vars` | no | `list[str]` | `[]` |
+| `dependencies` | no | `list[str]` | `[]` |
+| `permissions` | no | `list[PermissionRule]` | `[]` |
+
+`permissions` carries the bundle layer of the four-level authz
+stack (§A.11.4). Same `PermissionRule` shape as agent and
+platform rules: `{id?, who, what, effect}`. Rules apply to tool
+invocations whose **home bundle** is this bundle — the engine
+looks up the agent's home bundle at tool-registration time and
+threads the bundle's rules into the authz check.
+
+The catalog scanner (`src/assets/catalog.py`) loads
+`BundleManifest` once at startup; the field flows through to the
+authz provider without any per-call YAML reads.
+
+Today's action namespace is single-segment (`tool.<name>`),
+so a bundle rule `what: "tool\\.bash"` matches any bundle's
+`bash` tool. See `docs/how-to/permissions.md` §"Naming tools
+across bundles" for the workaround and the migration plan to
+bundle-rooted action names.
 
 ---
 

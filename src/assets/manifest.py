@@ -14,6 +14,8 @@ from typing import TYPE_CHECKING
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from schemas import PermissionRule
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -26,6 +28,13 @@ class BundleManifest(BaseModel):
 
     ``path`` is the absolute path to the bundle directory; filled in by
     the catalog scanner after a successful load.
+
+    ``permissions`` (qol-tool-permission-discovery-uniform-with-stacking.md
+    Step 2) is the bundle-wide authz rule list — same shape as
+    ``platform.yaml:authorization.config.rules`` and the agent-level
+    ``permissions:`` field on :class:`schemas.ResolvedAgentConfig`. The
+    authz provider walks rules in priority order — agent first, then
+    bundle, then platform, then no-rule callback, then default deny.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -35,6 +44,7 @@ class BundleManifest(BaseModel):
     description: str
     required_env_vars: list[str] = Field(default_factory=list)
     dependencies: list[str] = Field(default_factory=list)
+    permissions: list[PermissionRule] = Field(default_factory=list)
     path: str
 
 

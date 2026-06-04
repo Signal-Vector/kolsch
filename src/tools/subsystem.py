@@ -46,6 +46,7 @@ if TYPE_CHECKING:
         SandboxProvider,
         SecretsProvider,
     )
+    from providers.authz import Rule
     from schemas import AgentId
     from tools.mcp import MCPServer
 
@@ -84,6 +85,8 @@ class ToolsSubsystem:
         builtin_names: list[str] | None = None,
         declared_paths: list[Path] | None = None,
         mcp_servers: list[tuple[MCPServer, Literal["lazy", "eager"]]] | None = None,
+        agent_permissions: list[Rule] | None = None,
+        bundle_permissions: list[Rule] | None = None,
     ) -> list[ToolInfo]:
         """Register the given tool set for ``agent_id``.
 
@@ -133,6 +136,13 @@ class ToolsSubsystem:
                 reg.tools = [str(t.get("name", "")) for t in listed]
             registration.mcp_servers[server.name] = reg
 
+        # Pin the agent / bundle permission layers for the dispatcher.
+        # Both are no-ops when the caller doesn't supply them — the
+        # provider's existing two-layer (platform → default-deny)
+        # behaviour stays intact for Phase 1 programmatic tests.
+        registration.agent_permissions = list(agent_permissions or [])
+        registration.bundle_permissions = list(bundle_permissions or [])
+
         return [defn.to_info() for defn in registration.tools.values()]
 
     async def invoke_tool(
@@ -168,9 +178,18 @@ class ToolsSubsystem:
             updates["path_policy"] = self._path_policy
         enriched = context.model_copy(update=updates) if updates else context
 
+        registration = self._registry.ensure_agent(agent_id)
+
         mcp_match = self._registry.lookup_mcp(agent_id, tool_name)
         if mcp_match is not None:
-            return await self._invoke_mcp(mcp_match, tool_name, args, enriched)
+            return await self._invoke_mcp(
+                mcp_match,
+                tool_name,
+                args,
+                enriched,
+                agent_permissions=registration.agent_permissions,
+                bundle_permissions=registration.bundle_permissions,
+            )
 
         defn = self._registry.get_tool(agent_id, tool_name)
         if defn is None:
@@ -183,6 +202,8 @@ class ToolsSubsystem:
             authz=self._authz,
             secrets=self._secrets,
             sandbox=self._sandbox,
+            agent_permissions=registration.agent_permissions,
+            bundle_permissions=registration.bundle_permissions,
         )
         return ToolResult(result=result, metadata={})
 
@@ -231,6 +252,9 @@ class ToolsSubsystem:
         invocation_name: str,
         args: dict[str, Any],
         context: ToolContext,
+        *,
+        agent_permissions: list[Rule] | None = None,
+        bundle_permissions: list[Rule] | None = None,
     ) -> ToolResult:
         reg, mcp_tool_name = match
 
@@ -238,7 +262,12 @@ class ToolsSubsystem:
         # §5.4 — `mcp.<server>.<tool>`. The dispatch order below
         # mirrors the standard tool flow as closely as the spec allows.
         action = invocation_name  # already in the right shape
-        auth = await self._authz.allow(context.principal, action)
+        auth = await self._authz.allow(
+            context.principal,
+            action,
+            agent_permissions=agent_permissions,
+            bundle_permissions=bundle_permissions,
+        )
         if not auth.allowed:
             from errors import ToolUnauthorized  # noqa: PLC0415
 

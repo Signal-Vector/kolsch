@@ -94,9 +94,37 @@ def deny_e2e_workspace(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 @pytest.fixture
 def scenario_2_workspace(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    """Fresh per-test workspace for Scenario 2 (it mutates platform.yaml)."""
+    """Fresh per-test workspace for Scenario 2 (it mutates platform.yaml).
+
+    Strips the starter ``helper.yaml``'s agent-level
+    ``tool.bash → prompt`` rule so the four-level stack
+    (qol-tool-permission-discovery-uniform-with-stacking.md Step 2)
+    falls through to the platform layer — which is the layer this
+    scenario exercises (the modal persists a deny rule into
+    ``platform.yaml`` and the restart should hit it). Without this
+    strip the agent layer's prompt rule wins and the restart's
+    persisted platform deny rule is never consulted (which is its
+    own UX problem, tracked in the follow-up scope-toggle QoL).
+    """
     root = tmp_path_factory.mktemp("scenario_2_workspace")
     _setup_workspace(root)
+
+    helper_path = root / "bundles" / "kolsch" / "agents" / "helper.yaml"
+    if helper_path.is_file():
+        agent_payload = (
+            yaml.safe_load(helper_path.read_text(encoding="utf-8")) or {}
+        )
+        agent_payload["permissions"] = [
+            r
+            for r in (agent_payload.get("permissions") or [])
+            if not (
+                r.get("what") == r"tool\.bash" and r.get("effect") == "prompt"
+            )
+        ]
+        helper_path.write_text(
+            yaml.safe_dump(agent_payload, sort_keys=False), encoding="utf-8"
+        )
+
     return root
 
 

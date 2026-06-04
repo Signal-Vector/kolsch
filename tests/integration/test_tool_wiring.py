@@ -95,7 +95,7 @@ def initialized_workspace_for_tool_wiring(
 
 
 def _allow_bash_in_workspace(root: Path) -> None:
-    """Rewrite platform.yaml to allow ``tool.bash`` outright.
+    """Rewrite platform.yaml + helper.yaml to allow ``tool.bash`` outright.
 
     The default rule set has ``tool.bash`` as ``prompt`` (the
     workspace assumes the Phase 2.1 chat modal will resolve it).
@@ -108,6 +108,14 @@ def _allow_bash_in_workspace(root: Path) -> None:
     a user running ``kolsch permissions add --who '.*' --what
     'tool.bash' --effect allow``. The test doesn't pin the
     modal-resolution path; that's Phase 2.1's TC-CHAT-03/04.
+
+    Post-Phase-2.2 (and per qol-tool-permission-discovery-uniform-
+    with-stacking.md Step 2) the resolver composes the four-level
+    stack agent → bundle → platform → default. The starter
+    ``helper.yaml`` ships an agent-level ``tool.bash`` → prompt
+    rule; that rule wins over the platform layer in a
+    no-callback (non-chat) context and collapses to deny. So the
+    fixture flips BOTH layers' prompt → allow.
     """
     yaml_path = root / "platform.yaml"
     payload = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
@@ -117,6 +125,24 @@ def _allow_bash_in_workspace(root: Path) -> None:
             rule["effect"] = "allow"
             break
     yaml_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+
+    # Agent-layer rule flip — same target.
+    helper_path = root / "bundles" / "kolsch" / "agents" / "helper.yaml"
+    if helper_path.is_file():
+        agent_payload = (
+            yaml.safe_load(helper_path.read_text(encoding="utf-8")) or {}
+        )
+        agent_rules = agent_payload.get("permissions") or []
+        for rule in agent_rules:
+            if (
+                rule.get("what") == r"tool\.bash"
+                and rule.get("effect") == "prompt"
+            ):
+                rule["effect"] = "allow"
+                break
+        helper_path.write_text(
+            yaml.safe_dump(agent_payload, sort_keys=False), encoding="utf-8"
+        )
 
 
 def _make_fake_llm_callable(

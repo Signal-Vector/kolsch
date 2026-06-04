@@ -1498,6 +1498,88 @@ default workspace path policy (`logs/` allowed,
 - Verifies: §9.6; binary-as-text guard surfaces as the new
   catalogued error (not the old `file.too_large`).
 
+### Part 9.8.2 — Tool Permission Discovery (PERM-DISCOVERY) — qol-tool-permission-discovery-uniform-with-stacking.md
+
+Five tests pin the QoL's four properties: (1) interactive
+no-rule fires the modal; (2) the persistence path matches
+existing `effect: prompt` UX; (3) non-interactive callers
+preserve default-deny; (4) the four-level stack composes
+agent → bundle → platform → no-rule callback → default. The
+TCs live in `tests/integration/test_no_rule_modal_flow.py`;
+the engine-end-to-end bundle wiring lives in
+`tests/integration/test_bundle_permissions.py` as
+`TC-PERMDISC-INT-01`/`02`.
+
+**TC-PERM-DISCOVERY-01: Interactive no-rule → modal → [a] → persisted**
+- Layer: integration (provider + modal callback path)
+- Setup: empty rule set on a `RuleBasedAuthorizationProvider`;
+  `ApprovalModal` registered with a scripted `[a]` answer and
+  the standard `cli.permissions._write_back` `on_rule_added`
+  hook against a tmp `platform.yaml`.
+- Action: `allow(principal, action="tool.bash", target="echo hi")`
+  called twice.
+- Verify:
+  - First call: modal panel rendered without a "matched <id>"
+    suffix; the suggested pattern (`^echo .*$`) lands in
+    `platform.yaml`'s rules list.
+  - Second call: modal's input_fn is NOT invoked (the scripted
+    inputs would AssertionError on overflow); the persisted
+    allow rule fires; `result.matched_rule.effect == "allow"`.
+- Verifies: §3.1 + §3.3 of the spec — the modal callback fires
+  with `rule_id=None`, persists via the existing hook, and
+  short-circuits subsequent invocations.
+
+**TC-PERM-DISCOVERY-02: Interactive no-rule → [n] → no persist → next call prompts**
+- Layer: integration
+- Setup: empty rule set; modal with scripted `[n]` answer; an
+  `on_rule_added` hook that records every call.
+- Action: `allow(...)` called twice with the same action/target.
+- Verify:
+  - First call: `result.allowed is False`, `result.effect is
+    DENY`; `on_rule_added` was never called; `list_rules()`
+    returns the original (empty) set.
+  - Second call: modal fires again because nothing was
+    persisted.
+- Verifies: spec §3.4 — `[n]` is single-call semantics; no
+  rule lands; the next invocation re-prompts.
+
+**TC-PERM-DISCOVERY-03: Non-interactive no-rule → default deny**
+- Layer: integration
+- Setup: empty rule set; NO callback registered.
+- Action: `allow(principal, "tool.bash", target="ls")`.
+- Verify:
+  - `result.allowed is False`, `effect is DENY`,
+    `matched_rule is None`.
+  - `result.reason` contains `who_chain=default` (NOT
+    `who_chain=no_rule`) — confirming the callback branch
+    didn't fire.
+- Verifies: spec §4 / `phase2.0-tools-specs.md` §2.2 — non-chat
+  callers preserve the existing default-deny path; the
+  dispatcher converts the result to `ToolUnauthorized` at the
+  call site.
+
+**TC-PERM-DISCOVERY-04: Stacking — agent rule wins over bundle and platform**
+- Layer: component (provider's layered walk)
+- Setup: platform rule `tool.bash → deny`; bundle rule
+  `tool.bash → deny`; agent rule `tool.bash → allow`.
+- Action: `allow(..., agent_permissions=..., bundle_permissions=...)`.
+- Verify: `result.allowed is True`; `result.reason` contains
+  `who_chain=agent`.
+- Verifies: spec §3.2 / Decision #2 — agent is the most
+  specific layer; first-match-wins inside the layer; the
+  bundle and platform layers are never consulted.
+
+**TC-PERM-DISCOVERY-05: Stacking — bundle rule wins over platform**
+- Layer: component
+- Setup: platform rule `tool.bash → deny`; bundle rule
+  `tool.bash → allow`; no agent rules.
+- Action: `allow(..., bundle_permissions=...)`.
+- Verify: `result.allowed is True`; `result.reason` contains
+  `who_chain=bundle`.
+- Verifies: spec §3.2 — bundle layer is consulted between
+  agent and platform; first-match-wins short-circuits before
+  the platform layer runs.
+
 ---
 
 ## Part 9.9 — Chat (CHAT) — Phase 2.1, CHAT-R8

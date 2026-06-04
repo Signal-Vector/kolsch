@@ -144,6 +144,112 @@ allow` rule before the tail rather than removing the tail. The
 intent then survives a future tightening of defaults — you can
 delete your allow rule and you're back to safe defaults instantly.
 
+## First-use prompts (chat mode)
+
+Adding a new tool to an agent used to be a two-step routine:
+declare the tool, then hand-edit `platform.yaml` (or the agent's
+`permissions:`) to allow it. Otherwise the very first invocation
+hit default-deny and returned a `tool.failed` event mid-exchange
+with no path forward.
+
+In chat mode, an unconfigured tool now fires the same
+`[y]/[a]/[n]/[d]` modal you already know from `prompt`-effect
+rules. The difference: there's no "matched rule" line in the
+panel — the modal shows the action + target and waits for your
+choice.
+
+- **`[y]`** — allow once; no rule written.
+- **`[a]`** — always allow; a new rule with the suggested
+  pattern is appended to `platform.yaml`.
+- **`[n]`** — deny once; no rule written; next call prompts again.
+- **`[d]`** — always deny; a new deny rule lands in `platform.yaml`.
+
+Non-chat callers (`kolsch run`, the server, tests) still hard-deny
+when no rule matches — the modal needs an interactive surface,
+and `phase2.0-tools-specs.md` §2.2 keeps unattended paths from
+hanging.
+
+## Four-level stack
+
+The authz provider walks four layers, deepest first:
+
+```
+agent.yaml `permissions:`            ← most specific
+   ↑
+bundle.yaml `permissions:`           ← NEW (per-bundle)
+   ↑
+platform.yaml `authorization.rules`  ← workspace default
+   ↑
+default: prompt-on-first-use (chat) / deny (non-chat)
+```
+
+First-match-wins inside each layer; fall through if nothing
+matches. A narrower agent rule wins over the wider bundle rule
+which wins over the wider platform rule. Concretely — given:
+
+```yaml
+# agent: permissions
+- { who: ".*", what: "tool\\.bash", effect: allow }
+
+# bundle: permissions
+- { who: ".*", what: "tool\\.bash", effect: deny }
+
+# platform.yaml
+- { who: ".*", what: "tool\\.bash", effect: prompt }
+```
+
+the agent's `allow` rule fires — bundle and platform are never
+consulted for that action. Persist the chat modal's `[a]/[d]`
+goes to **`platform.yaml`** by default (the widest scope); to
+narrow it, hand-edit the rule into `bundle.yaml` or the agent's
+own `permissions:` block. The four-level walk ensures the
+narrower copy wins over the broader original.
+
+## Bundle permissions
+
+A bundle author who ships a tool can ship the rules that gate it
+alongside the tool itself. Drop a `permissions:` block into the
+bundle's `bundle.yaml`:
+
+```yaml
+# bundles/git-write/bundle.yaml
+name: git-write
+version: 0.1
+description: "Tools that mutate the repository — commit, push, branch."
+permissions:
+  - { who: ".*", what: "tool\\.commit",      effect: prompt }
+  - { who: ".*", what: "tool\\.push",        effect: prompt }
+  - { who: ".*", what: "^git-write/branch$", effect: allow  }
+```
+
+Any agent whose **home bundle** is `git-write` invokes these
+tools through the bundle's rules. The shape is the same
+`PermissionRule` as `platform.yaml.authorization.config.rules`
+and agent-level `permissions:` (see
+[`docs/reference/schemas.md`](../reference/schemas.md) §A.11.4).
+
+A consumer who imports the bundle into their workspace gets the
+rules for free — no need to hand-write them in their own
+`platform.yaml`. Override one with a narrower rule in
+`agent.yaml`'s `permissions:` if the agent needs different
+treatment than the bundle author chose.
+
+## Naming tools across bundles (v1 caveat)
+
+Action names today are **single-segment** — `tool.<name>` —
+regardless of which bundle ships the tool. Two bundles that both
+ship a tool called `bash` share authz rules: a rule with
+`what: "tool\\.bash"` matches both bundles' `bash` invocations.
+
+Workaround: name tools uniquely if you want bundle-scoped rules.
+A `git-write` bundle shipping `git_commit` rather than `commit`
+sidesteps the collision.
+
+Forward-reference: `process/qol-action-namespace-bundle-scoped.md`
+(when filed) tracks the migration to bundle-rooted action names
+(`tool.<bundle>.<name>`). Until that ships, plan tool names with
+the cross-bundle namespace in mind.
+
 ## What this does NOT cover
 
 - **Per-agent rule scopes.** v1 rules are platform-wide. Per-agent

@@ -205,6 +205,7 @@ class AuthorizationProvider(Protocol):
         target: str | None = None,
         callback: PromptCallback | None = None,
         agent_permissions: list[Rule] | None = None,
+        bundle_permissions: list[Rule] | None = None,
     ) -> AuthorizationResult: ...
 
     async def list_rules(self) -> list[Rule]: ...
@@ -335,6 +336,7 @@ class RuleBasedAuthorizationProvider:
         target: str | None = None,
         callback: PromptCallback | None = None,
         agent_permissions: list[Rule] | None = None,
+        bundle_permissions: list[Rule] | None = None,
     ) -> AuthorizationResult:
         """Evaluate ``(principal, action[, target])`` against the rule list.
 
@@ -367,6 +369,25 @@ class RuleBasedAuthorizationProvider:
           callback). The :class:`AuthorizationResult` carries
           a ``who_chain`` detail in its ``reason`` so debugging
           can identify which layer matched.
+
+        QoL — uniform tool permission discovery (Step 2):
+
+        - ``bundle_permissions`` (keyword-only) is the tool's home
+          bundle's rule list (``bundle.yaml.permissions:``). Walked
+          between the agent layer and the platform layer; same
+          first-match-wins + PROMPT-via-callback semantics. ``None``
+          / ``[]`` keeps the three-layer Phase 2.2 behaviour.
+        - When no rule matches in any of the agent / bundle /
+          platform layers AND a prompt callback has been registered
+          via :meth:`register_prompt_callback` (chat mode), fire the
+          callback with ``rule_id=None`` so the modal can render the
+          "no covering rule yet — what would you like to do?" panel.
+          The callback's ``(effect, persist_rule)`` tuple persists
+          the new rule the same way the existing PROMPT-effect path
+          does. When no callback is registered (non-chat: ``kolsch
+          run``, server, tests), fall through to the existing
+          default-deny behaviour — :class:`errors.ToolUnauthorized`
+          at the dispatcher boundary, same as today.
         """
         # Phase 2.2 — walk agent permissions first. Per-call compile is
         # acceptable because agent_permissions is small (single-digit
@@ -384,6 +405,23 @@ class RuleBasedAuthorizationProvider:
             if agent_match is not None:
                 return agent_match
 
+        # Bundle permissions — same matching machinery as the agent
+        # layer. The dispatcher looks up the home bundle of the tool
+        # being invoked and passes its rules through; an agent in a
+        # different bundle invoking this tool still sees its home
+        # bundle's rules applied here.
+        if bundle_permissions:
+            bundle_match = await self._match_against_rules(
+                rules=[self._compile_rule_record(r) for r in bundle_permissions],
+                principal=principal,
+                action=action,
+                target=target,
+                callback=callback,
+                layer="bundle",
+            )
+            if bundle_match is not None:
+                return bundle_match
+
         # Platform rules — same matching logic as Phase 2.0.
         platform_match = await self._match_against_rules(
             rules=self._rules,
@@ -395,6 +433,20 @@ class RuleBasedAuthorizationProvider:
         )
         if platform_match is not None:
             return platform_match
+
+        # No-rule path — fire the registered modal callback if any.
+        # Mirrors _resolve_prompt's effective-callback dance: per-call
+        # ``callback=`` wins, falling back to the chat-injected
+        # ``_registered_prompt_callback``. When neither is set, fall
+        # through to A-I3 default deny so non-chat callers
+        # (``kolsch run``, server, tests) never hang on a stdin read.
+        effective_callback = callback or self._registered_prompt_callback
+        if effective_callback is not None:
+            return await self._resolve_no_rule(
+                callback=effective_callback,
+                action=action,
+                target=target,
+            )
 
         # A-I3 default deny.
         return AuthorizationResult(
@@ -529,6 +581,55 @@ class RuleBasedAuthorizationProvider:
             ),
         )
 
+    async def _resolve_no_rule(
+        self,
+        *,
+        callback: PromptCallback,
+        action: str,
+        target: str | None,
+    ) -> AuthorizationResult:
+        """Resolve the no-rule path via the registered prompt callback.
+
+        QoL — uniform tool permission discovery (Step 2). Mirrors
+        :meth:`_resolve_prompt` but for the case where NO rule
+        matched — ``rule_id`` passed to the callback is ``None``
+        (the modal renders the "no covering rule" variant of the
+        panel). On a tuple return the rule lands above the
+        default-deny tail (the same spot ``kolsch permissions add``
+        with no ``before``/``after``/``first`` uses) and the
+        ``_rule_added_hook`` fires so the chat's
+        ``cli.permissions._write_back`` persists it to
+        ``platform.yaml``.
+        """
+        answer = await callback(rule_id=None, action=action, target=target)
+        if isinstance(answer, tuple):
+            resolved_effect, persist_rule = answer
+            self._insert_at_tail(persist_rule)
+            if self._rule_added_hook is not None:
+                # Same swallow-pattern as _resolve_prompt: the in-memory
+                # insert is the load-bearing guarantee; a YAML write
+                # failure means the rule vanishes on chat exit but the
+                # current exchange still sees it.
+                with contextlib.suppress(Exception):
+                    self._rule_added_hook([c.raw for c in self._rules])
+        else:
+            resolved_effect = answer
+        if resolved_effect not in (AuthzEffect.ALLOW, AuthzEffect.DENY):
+            msg = (
+                "no-rule prompt callback must resolve to ALLOW or "
+                f"DENY; got {resolved_effect!r}"
+            )
+            raise ValueError(msg)
+        return AuthorizationResult(
+            allowed=resolved_effect is AuthzEffect.ALLOW,
+            effect=resolved_effect,
+            matched_rule=None,
+            reason=(
+                f"no rule matched; callback resolved to "
+                f"{resolved_effect.value!r} (who_chain=no_rule)"
+            ),
+        )
+
     async def list_rules(self) -> list[Rule]:
         return [c.raw for c in self._rules]
 
@@ -594,6 +695,22 @@ class RuleBasedAuthorizationProvider:
             rule_id=rule_id,
             available_ids=[c.raw.id for c in self._rules],
         )
+
+    def _insert_at_tail(self, rule: Rule) -> Rule:
+        """Insert ``rule`` immediately before the default-deny tail
+        (or at the very end when no tail is present).
+
+        QoL — uniform tool permission discovery (Step 2). The no-rule
+        callback path uses this position — it's the same spot
+        ``kolsch permissions add`` picks when no
+        ``before``/``after``/``first`` is supplied — so persisted
+        rules participate in subsequent matches in the same
+        first-match-wins walk.
+        """
+        rule = self._ensure_id(rule)
+        compiled = self._compile_rule_record(rule)
+        self._rules.insert(self._tail_index(), compiled)
+        return compiled.raw
 
     def _insert_rule_before(self, rule: Rule, *, anchor_id: str) -> Rule:
         """Insert ``rule`` immediately before the rule with ``anchor_id``.
@@ -783,8 +900,16 @@ class AllowAllTestAuthorizationProvider:
         target: str | None = None,
         callback: PromptCallback | None = None,
         agent_permissions: list[Rule] | None = None,
+        bundle_permissions: list[Rule] | None = None,
     ) -> AuthorizationResult:
-        _ = principal, action, target, callback, agent_permissions
+        _ = (
+            principal,
+            action,
+            target,
+            callback,
+            agent_permissions,
+            bundle_permissions,
+        )
         return AuthorizationResult(
             allowed=True,
             effect=AuthzEffect.ALLOW,
