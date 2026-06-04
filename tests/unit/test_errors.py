@@ -53,6 +53,7 @@ from errors import (
     FileAccessInvalidFileRef,
     FileAccessPathNormalizationFailed,
     FileAccessPolicyLoadFailed,
+    FileLineTooLong,
     FileNotFound,
     FileTooLarge,
     Level,
@@ -362,6 +363,12 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
         "max_bytes": 1 * 1024 * 1024,
     },
     FileNotFound: {"path": "/workspace/missing.txt"},
+    FileLineTooLong: {
+        "path": "/workspace/binary.txt",
+        "line_number": 0,
+        "line_byte_length": 2 * 1024 * 1024,
+        "max_bytes": 1 * 1024 * 1024,
+    },
 }
 
 

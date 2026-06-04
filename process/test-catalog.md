@@ -1267,15 +1267,19 @@ agent declaration to the actual kwarg the wire-level
   the model sees the error in the tool-result payload.
 - Verifies: §10.15; Fh-I2; Error Model §4.16.
 
-**TC-TOOL-03: `read_file` enforces `max_bytes`**
+**TC-TOOL-03: `read_file` enforces per-line `max_bytes`** *(QoL-revised — see Part 9.8.1)*
 - Layer: component
-- Setup: a workspace file `data/big.txt` whose byte size
-  exceeds the default 1 MiB; `read_file` called with default
-  `max_bytes`.
-- Action: invoke `read_file(path="data/big.txt")`.
-- Expected: `file.too_large` (Recoverable) with `detail.size_bytes`
-  and `detail.max_bytes`.
-- Verifies: §10.15; context-budget guard.
+- Setup: a workspace file containing one line whose UTF-8 byte
+  length exceeds `max_bytes`; `read_file` called with the
+  corresponding `max_bytes`.
+- Action: invoke `read_file(path="data/binary.txt", max_bytes=100)`.
+- Expected: `file.line_too_long` (Recoverable) with
+  `detail.line_number`, `detail.line_byte_length`,
+  `detail.max_bytes`. The pre-QoL `file.too_large` is no longer
+  raised by `read_file` — whole-file overflow soft-truncates via
+  pagination instead (see TC-TOOLS-OVERFLOW-02).
+- Verifies: §10.15; binary-as-text guard;
+  `process/qol-tool-output-truncation-and-persistence.md` §9.6.
 
 **TC-TOOL-04: `read_file` missing path → `file.not_found`**
 - Layer: component
@@ -1442,6 +1446,57 @@ agent declaration to the actual kwarg the wire-level
   at agent-load time (option (a)) is tracked as FUL-1; a
   unit-level test against the resolver lands when FUL-1
   ships.
+
+---
+
+### Part 9.8.1 — Tool Overflow + Pagination (TOOLS-OVERFLOW) — qol-tool-output-truncation-and-persistence.md
+
+The QoL ships three integration tests covering the cross-tool
+handoff and a doc trail at
+`process/qol-tool-output-truncation-and-persistence.md` (Part 9
+pins the design; Steps 2-4 implement). All three exercise the
+default workspace path policy (`logs/` allowed,
+`.platform/` denied — see §9.2 for the location rationale).
+
+**TC-TOOLS-OVERFLOW-01: bash overflow handoff to read_file**
+- Layer: integration
+- Setup: tmp workspace; session active; the agent has `bash`
+  and `read_file` registered.
+- Action 1: `bash(command="seq 1 100000")` — stdout overflows
+  the 64 KiB inline budget.
+- Verify: `result["stdout_persisted_to"]` is set; the file
+  exists at
+  `<workspace>/logs/tool-outputs/<session_id>/<call_id>.stdout.txt`;
+  the file contains the full `seq` output (~580 KiB).
+- Action 2: `read_file(path=stdout_persisted_to, offset=50000,
+  limit=100)`.
+- Verify: returns lines 50001-50100 (matching the `seq` output
+  at those positions); `truncated=true`; `next_offset=50100`.
+- Verifies: §9.5, §9.10 wording; cross-tool handoff.
+
+**TC-TOOLS-OVERFLOW-02: read_file pagination flow**
+- Layer: integration
+- Setup: tmp workspace; a 10000-line file at `data/big.txt`.
+- Action: five sequential `read_file` calls with the previous
+  call's `next_offset` threaded through, starting at `offset=0,
+  limit=2000`.
+- Verify: concatenated content lines == original file lines
+  (modulo the cat -n prefix); the 5th call's `truncated=False`
+  and `next_offset=None`; `total_lines=10000` consistent across
+  all five.
+- Verifies: §9.5 pagination contract; soft-truncation; the
+  fact that what used to raise `file.too_large` now paginates.
+
+**TC-TOOLS-OVERFLOW-03: line-too-long surfaces cleanly**
+- Layer: integration
+- Setup: tmp workspace with a single 2 MiB line at
+  `data/binary.txt`.
+- Action: `read_file(path="data/binary.txt", max_bytes=1048576)`.
+- Verify: raises `file.line_too_long` (Recoverable) with
+  `detail.line_number=0`, `detail.line_byte_length=2097152`,
+  `detail.max_bytes=1048576`.
+- Verifies: §9.6; binary-as-text guard surfaces as the new
+  catalogued error (not the old `file.too_large`).
 
 ---
 

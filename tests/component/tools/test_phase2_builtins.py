@@ -20,8 +20,8 @@ import pytest
 
 from errors import (
     FileAccessDenied,
+    FileLineTooLong,
     FileNotFound,
-    FileTooLarge,
     ToolTimeout,
 )
 from files import PathPolicy
@@ -92,7 +92,13 @@ def _subsystem(tmp_path: Path) -> ToolsSubsystem:
 async def test_tc_tool_01_read_file_inside_workspace_succeeds(
     tmp_path: Path,
 ) -> None:
-    """TC-TOOL-01: read_file inside workspace → success."""
+    """TC-TOOL-01: read_file inside workspace → success.
+
+    Under the QoL line-based shape (§9.5) the return is a dict with
+    numbered content + pagination metadata, not a bare string. The
+    single-line file ``"kölsch"`` renders as ``"1\\tkölsch\\n"`` and
+    reports ``total_lines=1`` / ``truncated=False``.
+    """
     subsystem = _subsystem(tmp_path)
     (tmp_path / "data" / "hello.txt").write_text("kölsch", encoding="utf-8")
     await subsystem.register_for_agent(
@@ -104,7 +110,12 @@ async def test_tc_tool_01_read_file_inside_workspace_succeeds(
         {"path": "data/hello.txt"},
         _context(),
     )
-    assert result.result == "kölsch"
+    assert isinstance(result.result, dict)
+    assert result.result["content"] == "1\tkölsch\n"
+    assert result.result["total_lines"] == 1
+    assert result.result["lines_returned"] == 1
+    assert result.result["truncated"] is False
+    assert result.result["next_offset"] is None
 
 
 async def test_tc_tool_02_read_file_outside_workspace_denied(
@@ -124,11 +135,16 @@ async def test_tc_tool_02_read_file_outside_workspace_denied(
         )
 
 
-async def test_tc_tool_03_read_file_too_large(tmp_path: Path) -> None:
-    """TC-TOOL-03: read_file → file.too_large when size > max_bytes.
+async def test_tc_tool_03_read_file_line_too_long(tmp_path: Path) -> None:
+    """TC-TOOL-03 (post-QoL): read_file → file.line_too_long when a
+    single line exceeds max_bytes.
 
-    Verified via stat BEFORE the open — the file content is never
-    read for an over-sized target.
+    Under the QoL shape (§9.6), whole-file overflow is no longer a
+    refuse — large files soft-truncate instead. The remaining hard
+    guard is the single-line cap (binary-as-text protection): one
+    pathological line bigger than ``max_bytes`` raises
+    :class:`FileLineTooLong`. A 1024-byte file with no newlines IS
+    one giant line; with ``max_bytes=100`` it trips the guard.
     """
     subsystem = _subsystem(tmp_path)
     big = tmp_path / "data" / "big.txt"
@@ -137,15 +153,16 @@ async def test_tc_tool_03_read_file_too_large(tmp_path: Path) -> None:
         agent_id=AgentId("ag_test"),
         builtin_names=["read_file"],
     )
-    with pytest.raises(FileTooLarge) as excinfo:
+    with pytest.raises(FileLineTooLong) as excinfo:
         await subsystem.invoke_tool(
             "read_file",
             {"path": "data/big.txt", "max_bytes": 100},
             _context(),
         )
     detail = excinfo.value.detail
-    assert detail["size_bytes"] == 1024
+    assert detail["line_byte_length"] == 1024
     assert detail["max_bytes"] == 100
+    assert detail["line_number"] == 0
 
 
 async def test_tc_tool_04_read_file_not_found(tmp_path: Path) -> None:

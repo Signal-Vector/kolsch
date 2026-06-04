@@ -955,6 +955,7 @@ class _Exchange:
                         thread_id=self.thread_id,  # type: ignore[arg-type]
                         principal="system",
                         secrets={},
+                        tool_call_id=tool_call_id,
                     ),
                 )
             except PlatformError as exc:

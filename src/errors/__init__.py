@@ -61,6 +61,7 @@ from errors.file_handling import (
     FileAccessInvalidFileRef,
     FileAccessPathNormalizationFailed,
     FileAccessPolicyLoadFailed,
+    FileLineTooLong,
     FileNotFound,
     FileTooLarge,
 )
@@ -177,6 +178,7 @@ __all__ = [
     "FileAccessInvalidFileRef",
     "FileAccessPathNormalizationFailed",
     "FileAccessPolicyLoadFailed",
+    "FileLineTooLong",
     "FileNotFound",
     "FileTooLarge",
     "Level",

@@ -148,3 +148,44 @@ class FileNotFound(PlatformError):
             where=where,
             detail={"path": path},
         )
+
+
+class FileLineTooLong(PlatformError):
+    """``read_file`` — a single line exceeds the byte cap.
+
+    Raised by the QoL line-based ``read_file`` when any line's
+    UTF-8 byte length is greater than ``max_bytes``. Distinct from
+    :class:`FileTooLarge` (which was raised on whole-file overflow
+    pre-QoL): under the new soft-truncation model a file larger
+    than the line budget paginates cleanly; only a single pathological
+    line — usually a binary file masquerading as text — trips this
+    guard. Per ``process/qol-tool-output-truncation-and-persistence.md``
+    §9.6.
+    """
+
+    code = "file.line_too_long"
+    level = Level.RECOVERABLE
+
+    def __init__(
+        self,
+        path: str,
+        line_number: int,
+        line_byte_length: int,
+        max_bytes: int,
+        *,
+        where: str = "tools.builtin.read_file",
+    ) -> None:
+        super().__init__(
+            message=(
+                f"Line {line_number} of {path!r} is {line_byte_length} bytes; "
+                f"refusing to return (max_bytes={max_bytes}). "
+                "Likely a binary file or generated content."
+            ),
+            where=where,
+            detail={
+                "path": path,
+                "line_number": line_number,
+                "line_byte_length": line_byte_length,
+                "max_bytes": max_bytes,
+            },
+        )

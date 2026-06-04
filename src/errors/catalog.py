@@ -173,6 +173,11 @@ CATALOG: dict[str, Level] = {
     "authz.protected_rule": Level.FATAL,
     "file.too_large": Level.RECOVERABLE,
     "file.not_found": Level.RECOVERABLE,
+    # QoL tool-output-truncation-and-persistence §9.6 — read_file
+    # raises this when a single line exceeds max_bytes (binary
+    # masquerading as text). Distinct from file.too_large which is
+    # no longer raised by read_file under the new line-based shape.
+    "file.line_too_long": Level.RECOVERABLE,
 }
 
 

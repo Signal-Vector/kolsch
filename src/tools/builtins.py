@@ -36,13 +36,14 @@ import os
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
 from errors import (
     FileAccessDenied,
+    FileLineTooLong,
     FileNotFound,
-    FileTooLarge,
     ToolExecutionFailed,
     ToolTimeout,
 )
@@ -57,7 +58,8 @@ if TYPE_CHECKING:
 
 
 # Phase 2.0 tunables (patch §1.1, §1.4).
-_DEFAULT_READ_MAX_BYTES = 1 * 1024 * 1024  # 1 MiB
+_DEFAULT_READ_MAX_BYTES = 1 * 1024 * 1024  # 1 MiB — NEW MEANING: single-line cap
+_DEFAULT_READ_LINE_LIMIT = 2000  # QoL: line-based pagination default
 _DEFAULT_LIST_MAX_ENTRIES = 500
 _DEFAULT_BASH_TIMEOUT_SECONDS = 60
 _BASH_OUTPUT_TRUNCATE_BYTES = 64 * 1024  # 64 KiB per stream
@@ -263,6 +265,8 @@ def make_bash(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]
 
 class ReadFileArgs(BaseModel):
     path: str
+    offset: int = Field(default=0, ge=0)
+    limit: int = Field(default=_DEFAULT_READ_LINE_LIMIT, ge=1)
     max_bytes: int = Field(default=_DEFAULT_READ_MAX_BYTES, ge=1)
 
 
@@ -286,54 +290,95 @@ class BashV2Args(BaseModel):
 
 
 def make_read_file(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]]:
-    """Phase 2.0 §1.1 — read a UTF-8 text file with ``max_bytes`` pre-check.
+    """Phase 2.0 §1.1 + QoL §9 — line-based read with soft truncation.
 
-    Differences from the Phase 1 ``read``:
+    Replaces the pre-QoL whole-file-bytes shape. New shape:
 
-    - Stats the target BEFORE opening; refuses files larger than
-      ``max_bytes`` with :class:`FileTooLarge` (Recoverable). Protects
-      the model's context budget without burning a read first.
-    - Maps ``FileNotFoundError`` to the catalogued :class:`FileNotFound`
-      so the model sees an Error Model §4.16 code, not a stdlib name.
+    - Args: ``path`` + ``offset`` (0-indexed line) + ``limit`` (max
+      lines, default 2000) + ``max_bytes`` (single-line cap, default
+      1 MiB).
+    - Return: ``{content, lines_returned, total_lines, next_offset,
+      truncated}`` — see ``process/qol-tool-output-truncation-and-
+      persistence.md`` §9.5.
+    - Whole-file size is no longer capped (``FileTooLarge`` is NOT
+      raised here); only a single line exceeding ``max_bytes`` trips
+      :class:`FileLineTooLong` (the binary-as-text guard).
+    - Output is ``cat -n`` numbered so the model can reference line
+      numbers in responses + follow-up calls.
     """
 
     @tool(
         name="read_file",
-        description="Read a UTF-8 text file from the workspace.",
+        description="Read a UTF-8 text file by line range (paginated).",
         args_schema=ReadFileArgs,
     )
-    async def read_file(args: ReadFileArgs, ctx: ToolContext) -> str:  # noqa: ARG001  # noqa is per-line; ctx is part of the tool signature.
+    async def read_file(args: ReadFileArgs, ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG001
         check_path_allowed(args.path, policy=policy, root=root)
         target = _resolve(args.path, root)
         try:
-            size = target.stat().st_size
+            raw = target.read_bytes()
         except FileNotFoundError as exc:
             raise FileNotFound(path=args.path) from exc
         except OSError as exc:
-            # Other OS errors (permission, IO) — surface as access_denied
-            # so the model treats it as "path I can't reach" rather than
-            # an opaque tool failure.
             raise FileAccessDenied(
                 path=args.path,
-                reason=f"stat failed: {type(exc).__name__}: {exc}",
+                reason=f"read failed: {type(exc).__name__}: {exc}",
             ) from exc
-        if size > args.max_bytes:
-            raise FileTooLarge(
-                path=args.path,
-                size_bytes=size,
-                max_bytes=args.max_bytes,
-            )
-        try:
-            return target.read_text(encoding="utf-8")
-        except FileNotFoundError as exc:
-            raise FileNotFound(path=args.path) from exc
-        except OSError as exc:
-            raise ToolExecutionFailed(
-                tool_name="read_file",
-                error_class=type(exc).__name__,
-            ) from exc
+        return _paginate_read_file(
+            raw,
+            path=args.path,
+            offset=args.offset,
+            limit=args.limit,
+            max_bytes=args.max_bytes,
+        )
 
     return read_file
+
+
+def _paginate_read_file(
+    raw: bytes,
+    *,
+    path: str,
+    offset: int,
+    limit: int,
+    max_bytes: int,
+) -> dict[str, Any]:
+    """Shared implementation between the builtin and (conceptually)
+    the bundle copy. Returns the QoL §9.5 dict shape.
+
+    Single-line byte cap is the only hard refusal — everything else
+    soft-truncates.
+    """
+    text = raw.decode("utf-8", errors="replace")
+    lines = text.splitlines()
+    total_lines = len(lines)
+
+    for i, line in enumerate(lines):
+        line_bytes = len(line.encode("utf-8"))
+        if line_bytes > max_bytes:
+            raise FileLineTooLong(
+                path=path,
+                line_number=i,
+                line_byte_length=line_bytes,
+                max_bytes=max_bytes,
+            )
+
+    slice_end = min(offset + limit, total_lines)
+    selected = lines[offset:slice_end]
+    truncated = slice_end < total_lines
+    next_offset = slice_end if truncated else None
+    width = max(1, len(str(total_lines)))
+    rendered = "\n".join(
+        f"{i + 1:>{width}}\t{line}" for i, line in enumerate(selected, start=offset)
+    )
+    content = rendered + "\n" if rendered else ""
+    return {
+        "content": content,
+        "lines_returned": len(selected),
+        "total_lines": total_lines,
+        "next_offset": next_offset,
+        "truncated": truncated,
+    }
 
 
 def make_write_file(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]]:
@@ -456,23 +501,30 @@ def make_bash_v2(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[A
     The legacy Phase 1 ``bash`` (``make_bash`` above) stays in place
     for backward compatibility; agents opting into the Phase 2.0 set
     register ``bash_v2``. Same shell semantics; richer return:
-    ``{exit_code, stdout, stderr, duration_seconds, timed_out}``.
-    Streams are truncated to 64 KiB each so a chatty command can't
-    blow the context budget.
+    ``{exit_code, stdout, stderr, stdout_persisted_to,
+    stderr_persisted_to, duration_seconds, timed_out}``.
+
+    Streams have a 64 KiB inline preview budget. When a stream
+    EXCEEDS that budget, the full bytes are written to
+    ``<root>/logs/tool-outputs/<session_id>/<call_id>.<stream>.txt``
+    and the path is returned in ``*_persisted_to`` (QoL
+    process/qol-tool-output-truncation-and-persistence.md §9). The
+    model then calls ``read_file`` on the path with offset/limit to
+    drill in — no more lost tail when a chatty command exceeds the
+    inline budget.
 
     The ``cwd`` argument, when supplied, is policy-checked the same
     way file tools' ``path`` is — the workspace-only default rule set
     means the model can't redirect commands to dangerous directories
     via ``cwd`` alone.
     """
-    _ = policy, root  # cwd policy check is done explicitly below
 
     @tool(
         name="bash_v2",
-        description="Run a shell command in the workspace (timed, truncated).",
+        description="Run a shell command in the workspace (timed, persisted overflow).",
         args_schema=BashV2Args,
     )
-    async def bash_v2(args: BashV2Args, ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG001
+    async def bash_v2(args: BashV2Args, ctx: ToolContext) -> dict[str, Any]:
         cwd_arg = args.cwd
         if cwd_arg is not None:
             # cwd, unlike the command itself, is a path; gate it.
@@ -527,10 +579,18 @@ def make_bash_v2(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[A
                 except (ProcessLookupError, OSError):
                     pass
         duration = time.monotonic() - started
+        stdout_text, stdout_persisted = _persist_or_inline_stream(
+            stdout_b, ctx, "stdout", root=root
+        )
+        stderr_text, stderr_persisted = _persist_or_inline_stream(
+            stderr_b, ctx, "stderr", root=root
+        )
         return {
             "exit_code": proc.returncode if proc.returncode is not None else -1,
-            "stdout": _truncate_stream(stdout_b),
-            "stderr": _truncate_stream(stderr_b),
+            "stdout": stdout_text,
+            "stderr": stderr_text,
+            "stdout_persisted_to": stdout_persisted,
+            "stderr_persisted_to": stderr_persisted,
             "duration_seconds": round(duration, 3),
             "timed_out": timed_out,
         }
@@ -582,7 +642,12 @@ def _truncate_stream(data: bytes) -> str:
     data; bytes-level truncation happens BEFORE decode to avoid
     splitting a multi-byte sequence in the middle (we accept the
     cost of falling back to errors='replace' if the truncate boundary
-    lands inside a codepoint)."""
+    lands inside a codepoint).
+
+    Retained for the legacy Phase 1 ``bash`` factory; the Phase 2.0
+    ``bash_v2`` uses :func:`_persist_or_inline_stream` instead so the
+    full tail is available via ``read_file``.
+    """
     if len(data) <= _BASH_OUTPUT_TRUNCATE_BYTES:
         return data.decode("utf-8", errors="replace")
     head = data[:_BASH_OUTPUT_TRUNCATE_BYTES]
@@ -590,6 +655,50 @@ def _truncate_stream(data: bytes) -> str:
     return (
         decoded + f"\n[... truncated {len(data) - _BASH_OUTPUT_TRUNCATE_BYTES} bytes]"
     )
+
+
+def _persist_or_inline_stream(
+    data: bytes,
+    ctx: ToolContext,
+    stream: str,
+    *,
+    root: Path,
+) -> tuple[str, str | None]:
+    """Decode + return inline preview, persisting on overflow.
+
+    See ``process/qol-tool-output-truncation-and-persistence.md``
+    §9 for the path convention. Mirrors the helper in the bundle
+    ``bash.py`` so the two tool surfaces (builtin + bundle) behave
+    identically — when a stream exceeds 64 KiB, the full bytes go
+    to ``<root>/logs/tool-outputs/<session_id>/<call_id>.<stream>.txt``
+    and the path is returned for the model to ``read_file`` on.
+
+    The ``logs/`` prefix is in the default
+    ``file_access.allowed_paths`` so the subsequent read_file passes
+    the policy gate. Returns ``(inline_text, persisted_path_str_or_None)``.
+    """
+    if len(data) <= _BASH_OUTPUT_TRUNCATE_BYTES:
+        return data.decode("utf-8", errors="replace"), None
+
+    call_id = ctx.tool_call_id or f"tc_anon_{uuid4()}"
+    session = str(ctx.session_id) if ctx.session_id else "anon"
+    path = root / "logs" / "tool-outputs" / session / f"{call_id}.{stream}.txt"
+    path.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        path.write_bytes(data)
+    except OSError:
+        # Best-effort — fall back to the legacy truncate marker.
+        preview = data[:_BASH_OUTPUT_TRUNCATE_BYTES].decode("utf-8", errors="replace")
+        overflow = len(data) - _BASH_OUTPUT_TRUNCATE_BYTES
+        return preview + f"\n[... truncated {overflow} bytes (persistence failed)]", None
+
+    preview = data[:_BASH_OUTPUT_TRUNCATE_BYTES].decode("utf-8", errors="replace")
+    overflow = len(data) - _BASH_OUTPUT_TRUNCATE_BYTES
+    footer = (
+        f"\n[... full output at {path}; {overflow} more bytes; "
+        f"use read_file with offset/limit]"
+    )
+    return preview + footer, str(path)
 
 
 def make_builtin(

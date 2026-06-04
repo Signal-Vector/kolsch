@@ -29,7 +29,7 @@ _NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 class ToolContext(BaseModel):
     """The runtime context passed to every tool function — §9.2.
 
-    Seven fields, all read-only. Tools cannot write the event log,
+    Eight fields, all read-only. Tools cannot write the event log,
     inspect the principal, or perform authz checks (all done by the
     dispatch flow before the tool runs).
 
@@ -46,6 +46,14 @@ class ToolContext(BaseModel):
     that don't exercise file tools), the fields stay ``None`` —
     bundle tools that need them should raise a clear error rather
     than silently misbehave.
+
+    The QoL addition (``tool_call_id``) carries the engine's per-call
+    id so tools that need to persist artifacts (e.g., bash overflow
+    writing the full stream to a workspace tmp path) can name them
+    by call rather than colliding across concurrent invocations.
+    Populated by ``_ObservedToolHandle.__call__`` and the
+    force-invoke read path; ``None`` when a tool runs outside the
+    engine (tests, REPL probes).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
@@ -58,6 +66,10 @@ class ToolContext(BaseModel):
     # Phase 2.0 (TOOL-R7) — populated by the dispatcher; None elsewhere.
     workspace_root: Path | None = None
     path_policy: PathPolicy | None = None
+    # QoL — tool output truncation + persistence — populated by the
+    # observer / engine force-invoke path; None when a tool runs
+    # outside the engine (tests, programmatic dispatch).
+    tool_call_id: str | None = None
 
 
 class ToolResult(BaseModel):

@@ -220,6 +220,7 @@ class _ObservedToolHandle:
                     thread_id=self._thread_id,  # type: ignore[arg-type]
                     principal=f"agent.{self._agent_id}",
                     secrets={},
+                    tool_call_id=tool_call_id,
                 ),
             )
         except ToolUnauthorized as exc:
