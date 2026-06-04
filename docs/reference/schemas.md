@@ -47,7 +47,9 @@ JSON-Merge-Patch merge of an ordered list of partials.
 
 ```
 AgentConfig
-├── schema_version       string        — schema version this conforms to
+├── schema_version       string        — schema version this conforms to;
+│                                        optional, defaults to "0.1" when
+│                                        omitted (§A.10)
 ├── id                   string        — "ag_..."  immutable system identity;
 │                                        optional in YAML — kernel derives
 │                                        `ag_<bundle>_<name>` from the asset
@@ -77,7 +79,9 @@ AgentConfig
 │                                         referenced in the rendered prompt
 │                                         (§A.11.5).
 ├── assembly_version     string        — assembly procedure version in effect
-│                                        (see Part B.5; recorded on config.set)
+│                                        (see Part B.5; recorded on config.set);
+│                                        optional, defaults to "1" when
+│                                        omitted (§A.10)
 └── subsystems           map<string, SubsystemConfig>
                                        — memory, tools, skills; each optional;
                                          absence = disabled
@@ -266,10 +270,17 @@ A resolved config is fully validated before the Agent Engine executes it.
 ## A.10 Schema and procedure versioning
 
 - `schema_version` is on every artifact; older snapshots remain
-  interpretable.
+  interpretable. Optional in YAML; the resolved config defaults to `"0.1"`
+  when omitted. No active migration framework branches on the value today —
+  the field is reserved for future schema evolution.
 - `assembly_version` is part of every resolved config; an older event log
   replays under the assembly procedure version recorded in its `config.set`
-  events, preserving fidelity across procedure evolution.
+  events, preserving fidelity across procedure evolution. Optional in YAML;
+  the resolved config defaults to `"1"` when omitted. The engine's
+  capability check (`engine.py:_preflight` Step 2) runs against the
+  *resolved* value: declaring a version the engine doesn't support raises
+  `CapabilityMismatch` (fatal). Authors who want their YAML pinned to a
+  specific assembly contract should still declare it explicitly.
 - External references (model name, asset path) are NOT versioned — they
   resolve to what they name now.
 - Fidelity comes from the event log capturing fully-dereferenced actual

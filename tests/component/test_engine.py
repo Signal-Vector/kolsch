@@ -277,6 +277,41 @@ async def _new_session_context(store: SessionStore) -> ExecutionContext:
 
 
 # ===========================================================================
+# QoL — assembly_version capability check still fires after Step 2.
+# ===========================================================================
+
+
+async def test_preflight_rejects_unsupported_assembly_version(
+    tmp_path: Path,
+) -> None:
+    """Engine pre-flight Step 2 raises CapabilityMismatch when the
+    resolved config declares an assembly_version the engine doesn't
+    support. Regression for ``qol-yaml-version-fields-optional.md``
+    Step 2: the resolved-layer default ("1") must not paper over the
+    load-bearing comparison at ``engine.py:_preflight``.
+    """
+    import asyncio
+
+    from engine.engine import _Exchange
+    from errors import CapabilityMismatch
+
+    fake = FakeLLM(script=[])
+    engine, store, _am = await _build_engine(tmp_path, fake)
+    ctx = await _new_session_context(store)
+
+    bad_config = _config().model_copy(update={"assembly_version": "999"})
+    exchange = _Exchange(
+        engine=engine,
+        config=bad_config,
+        context=ctx,
+        inputs={},
+        queue=asyncio.Queue(),
+    )
+    with pytest.raises(CapabilityMismatch):
+        await exchange._preflight()
+
+
+# ===========================================================================
 # TC-ENG-01 — Simple exchange golden sequence
 # ===========================================================================
 

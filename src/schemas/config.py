@@ -159,8 +159,12 @@ class ResolvedAgentConfig(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    schema_version: str
-    assembly_version: str
+    # Defaults applied at the resolved layer so YAMLs that omit
+    # these envelope fields still merge cleanly. The kernel pipeline
+    # passes raw dicts through resolve(); putting defaults on the
+    # partial Pydantic class wouldn't propagate (E-QOL-VERS-001).
+    schema_version: str = "0.1"
+    assembly_version: str = "1"
     agent_id: AgentId
     name: str
     description: str

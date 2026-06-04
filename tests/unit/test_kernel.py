@@ -552,8 +552,9 @@ def test_partials_with_mismatched_schema_versions_rejected() -> None:
 
 
 def test_validate_resolved_requires_required_fields() -> None:
-    # Missing required schema_version, agent_id, name, description,
-    # model, prompt, io.
+    # Missing required agent_id, name, description, model, prompt, io.
+    # schema_version and assembly_version have defaults at the resolved
+    # layer (E-QOL-VERS-001) so an empty dict no longer raises on them.
     result = validate_resolved({})
     assert result.ok is False
     assert len(result.errors) >= 1

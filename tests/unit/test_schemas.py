@@ -601,6 +601,51 @@ def test_resolved_agent_config_with_prompt_list() -> None:
     assert cfg.subsystems["memory"].variant == "recent_buffer"
 
 
+def _resolved_kwargs_without_versions() -> dict[str, object]:
+    return {
+        "agent_id": AgentId("ag_x"),
+        "name": "x",
+        "description": "d",
+        "model": ModelSpec(provider="anthropic", model="claude-opus-4-7"),
+        "prompt": "You are an agent.",
+        "io": IOSpec(mode="conversational"),
+    }
+
+
+def test_resolved_default_schema_version_when_missing() -> None:
+    cfg = ResolvedAgentConfig(
+        assembly_version="1",
+        **_resolved_kwargs_without_versions(),  # type: ignore[arg-type]
+    )
+    assert cfg.schema_version == "0.1"
+
+
+def test_resolved_default_assembly_version_when_missing() -> None:
+    cfg = ResolvedAgentConfig(
+        schema_version="0.1",
+        **_resolved_kwargs_without_versions(),  # type: ignore[arg-type]
+    )
+    assert cfg.assembly_version == "1"
+
+
+def test_resolved_default_both_when_missing() -> None:
+    cfg = ResolvedAgentConfig(
+        **_resolved_kwargs_without_versions(),  # type: ignore[arg-type]
+    )
+    assert cfg.schema_version == "0.1"
+    assert cfg.assembly_version == "1"
+
+
+def test_resolved_preserves_explicit_versions() -> None:
+    cfg = ResolvedAgentConfig(
+        schema_version="0.2",
+        assembly_version="2",
+        **_resolved_kwargs_without_versions(),  # type: ignore[arg-type]
+    )
+    assert cfg.schema_version == "0.2"
+    assert cfg.assembly_version == "2"
+
+
 def test_io_spec_mode_constrained() -> None:
     IOSpec(mode="conversational")
     IOSpec(mode="single_shot")
