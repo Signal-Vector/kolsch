@@ -92,7 +92,7 @@ from crewai.tools.base_tool import BaseTool
 from pydantic import BaseModel, ConfigDict, Field
 
 from engine.framework import LLMRequest, Message, ToolCall
-from errors import ExchangeCancelled
+from errors import ExchangeCancelled, ModelUpstreamError, PlatformError
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Sequence
@@ -205,7 +205,35 @@ class CrewAIFramework:
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(io.StringIO()),
         ):
-            result = await crew.kickoff_async()
+            try:
+                result = await crew.kickoff_async()
+            except PlatformError:
+                # Engine-typed errors (e.g., ExchangeCancelled raised
+                # from inside _CrewAILLM.call) pass through unchanged
+                # so the retry loop / boundary classify them as already-
+                # typed.
+                raise
+            except ConnectionError as exc:
+                # bug-platform-internal-error-boundary-swallow.md Step 2
+                # (A) — CrewAI's OpenAI adapter re-raises every
+                # ``openai.APIConnectionError`` (incl. ``APITimeoutError``)
+                # as a bare ``builtins.ConnectionError`` with the prefix
+                # "Failed to connect to OpenAI API:"
+                # (.venv/.../crewai/llms/providers/openai/completion.py:917-923).
+                # Translate to ModelUpstreamError (Recoverable) so the
+                # engine's retry pipeline at ``engine.py:1095-1112`` runs
+                # — the user's configured ``runtime.max_retries`` becomes
+                # effective for transient transport failures instead of
+                # collapsing the whole exchange on the first hiccup.
+                #
+                # ``from exc`` preserves the cause chain so cause-chain
+                # inspection (B) can still classify accurately if a
+                # future CrewAI release flattens the type.
+                raise ModelUpstreamError(
+                    provider="crewai",
+                    http_status=0,
+                    response=str(exc),
+                ) from exc
         return _extract_text(result)
 
 
