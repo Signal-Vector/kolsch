@@ -362,6 +362,21 @@ class _Exchange:
             await self.emit_exchange_failed(exc)
             return
         except Exception as exc:  # noqa: BLE001 — engine boundary
+            # bug-platform-internal-error-boundary-swallow.md Step 2 (B)
+            # — safety-net cause-chain inspection before falling back to
+            # PlatformInternalError. The primary translation lives in
+            # the framework adapter (A); this catches anything that
+            # slipped past (future framework releases, paths the adapter
+            # doesn't yet cover). When a known typed exception appears
+            # in __cause__, re-classify so the user sees the right
+            # surface (e.g., model.upstream_error) instead of an
+            # opaque "internal platform error".
+            from engine._classify import classify_from_cause_chain  # noqa: PLC0415
+
+            classified = classify_from_cause_chain(exc, agent_id=self.agent_id)
+            if classified is not None:
+                await self.emit_exchange_failed(classified)
+                return
             wrapped = PlatformInternalError.from_exception(exc)
             await self.emit_exchange_failed(wrapped)
             return
@@ -898,7 +913,9 @@ class _Exchange:
             if not isinstance(ref, str) or not ref:
                 continue
             try:
-                asset = await self.engine._assets.get_asset(ref)
+                asset = await self.engine._assets.get_asset(
+                    ref, field_asset_type="tool"
+                )
             except AssetsNotFound as exc:
                 # list_assets is sync (no await); the catalog is a
                 # snapshot built at runtime bootstrap.
@@ -1116,6 +1133,57 @@ class _Exchange:
                 raise ExchangeCancelled(
                     cancelled_at_event_id=self.exchange_started_id or "",
                 ) from None
+            except Exception as exc:  # noqa: BLE001 — in-loop classifier
+                # bug-platform-internal-error-boundary-swallow.md 0.3
+                # — IN-LOOP cause-chain classifier (the primary fix per
+                # 0.3). 0.2 put the classifier at the outer boundary,
+                # which correctly re-typed non-PlatformErrors but ran
+                # too late — the retry loop had already exited. With
+                # this block, a transport failure whose ``__cause__``
+                # carries a known typed exception (e.g.
+                # ``openai.APITimeoutError`` through CrewAI's
+                # adapter's ``raise ConnectionError(...) from e``)
+                # classifies as ``ModelUpstreamError`` (Recoverable)
+                # and the loop retries up to ``max_retries+1`` attempts
+                # before exhausting. ``runtime.max_retries`` finally
+                # means something for transport hiccups.
+                #
+                # Branch table:
+                #   Recoverable match → append to attempts_data,
+                #                       continue (mirrors the
+                #                       PlatformError-Recoverable
+                #                       branch above).
+                #   Fatal match       → ``raise classified from exc``
+                #                       so the outer ``except
+                #                       PlatformError`` at run() picks
+                #                       it up as the typed surface
+                #                       (e.g. ``agent.unauthorized``
+                #                       instead of
+                #                       ``platform.internal_error``).
+                #   No match          → bare ``raise``; the outer
+                #                       boundary's cause-chain
+                #                       safety net (0.2's wiring at
+                #                       engine.py:364-385) takes
+                #                       over, ultimately falling
+                #                       through to
+                #                       PlatformInternalError for
+                #                       genuine engine bugs.
+                from engine._classify import (  # noqa: PLC0415
+                    classify_from_cause_chain,
+                )
+
+                classified = classify_from_cause_chain(
+                    exc, agent_id=self.agent_id
+                )
+                if classified is None:
+                    raise
+                if classified.level.name != "RECOVERABLE":
+                    raise classified from exc
+                attempts_data.append(
+                    Error.from_platform_error(classified).model_dump(mode="json")
+                )
+                last_exc = classified
+                continue
 
         # Exhausted retries — Fatal.
         raise ModelRetryExhausted(

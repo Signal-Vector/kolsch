@@ -1728,10 +1728,10 @@ kolsch chat [<agent_ref>] [--session <SES_ID>] [--model <MODEL_REF>]
             [--root <PATH>] [-v]
 ```
 
-- `<agent_ref>` — bundle-qualified path (`kolsch/agents/helper`).
+- `<agent_ref>` — bundle-qualified path (`kolsch/helper`).
   Defaults to the configured starter agent
   (`platform.yaml`'s `defaults.starter_agent`, falling back to
-  `kolsch/agents/helper`).
+  `kolsch/helper`).
 - `--session <SES_ID>` — resume an existing session via the
   Phase 1.2 store. Without this flag, chat creates a fresh
   session named `chat:<agent_ref>`.

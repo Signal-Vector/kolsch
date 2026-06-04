@@ -49,10 +49,12 @@ if TYPE_CHECKING:
 # ===========================================================================
 
 
-def test_registry_has_eight_visible_commands_per_patch_5() -> None:
-    """Patch §5 lists eight commands (``/exit`` and ``/quit`` share
-    one entry via ``aliases``). The registry has eight entries."""
-    assert len(COMMAND_REGISTRY) == 8
+def test_registry_has_nine_visible_commands_per_patch_5() -> None:
+    """Patch §5 lists nine commands (``/exit`` and ``/quit`` share
+    one entry via ``aliases``). The registry has nine entries —
+    eight from Step 24e plus ``/skill`` from the phase 2.4
+    skills-build work."""
+    assert len(COMMAND_REGISTRY) == 9
     expected = {
         "/help",
         "/exit",
@@ -62,6 +64,7 @@ def test_registry_has_eight_visible_commands_per_patch_5() -> None:
         "/thinking",
         "/tools",
         "/session",
+        "/skill",
     }
     assert set(COMMAND_REGISTRY.keys()) == expected
 
@@ -75,7 +78,8 @@ def test_registry_real_handlers_match_phase_2_1_step_24e_set() -> None:
     """24e completes the Phase 2.1 chat surface — every registry
     entry now has a real handler. No placeholders remain;
     ``/quit`` continues to share ``/exit``'s handler via the
-    aliases tuple (it has no entry of its own)."""
+    aliases tuple (it has no entry of its own). Phase 2.4
+    skills-build adds ``/skill`` alongside the original eight."""
     implemented = {
         name for name, cmd in COMMAND_REGISTRY.items() if cmd.handler is not None
     }
@@ -88,6 +92,7 @@ def test_registry_real_handlers_match_phase_2_1_step_24e_set() -> None:
         "/model",
         "/thinking",
         "/session",
+        "/skill",
     }
     # No placeholder rows remain.
     placeholders = {
@@ -218,10 +223,11 @@ def _completions_for(text: str) -> list[str]:
     ]
 
 
-def test_tc_chat_15_completer_lists_all_eight_commands_after_slash() -> None:
-    """TC-CHAT-15 (first form): typing ``/`` yields all eight
-    visible commands. Aliases (``/quit``) are NOT in the popup —
-    the registry's ``aliases`` field is invisible by design."""
+def test_tc_chat_15_completer_lists_all_nine_commands_after_slash() -> None:
+    """TC-CHAT-15 (first form): typing ``/`` yields all nine
+    visible commands (eight Step 24e + ``/skill`` from phase
+    2.4). Aliases (``/quit``) are NOT in the popup — the
+    registry's ``aliases`` field is invisible by design."""
     completions = _completions_for("/")
     assert set(completions) == {
         "/help",
@@ -232,6 +238,7 @@ def test_tc_chat_15_completer_lists_all_eight_commands_after_slash() -> None:
         "/thinking",
         "/tools",
         "/session",
+        "/skill",
     }
 
 
@@ -321,7 +328,7 @@ async def test_tc_chat_05_input_loop_exits_on_slash_exit(
     """
     out = _io.StringIO()
     runtime = await bootstrap_runtime(root=chat_workspace)
-    config = await runtime.build_resolved_config("kolsch/agents/helper")
+    config = await runtime.build_resolved_config("kolsch/helper")
     session = await runtime.store.create_session(
         str(config.agent_id),
         name="tc-chat-05",
@@ -408,7 +415,7 @@ async def test_tc_chat_12_tools_lists_helper_agents_four_declared_tools(
     chat_workspace: Path,
 ) -> None:
     """TC-CHAT-12: ``/tools`` lists exactly the tools the agent has
-    access to. The shipped ``kolsch/agents/helper`` declares four
+    access to. The shipped ``kolsch/helper`` declares four
     refs in its ``subsystems.tools.config.declared`` block
     (``read_file``, ``write_file``, ``list_files``, ``bash``); the
     output names all four and contains none beyond.
@@ -423,7 +430,7 @@ async def test_tc_chat_12_tools_lists_helper_agents_four_declared_tools(
     first-match-wins.)
     """
     runtime = await bootstrap_runtime(root=chat_workspace)
-    config = await runtime.build_resolved_config("kolsch/agents/helper")
+    config = await runtime.build_resolved_config("kolsch/helper")
     out = _io.StringIO()
     ctx = SlashContext(
         stdout=out,
@@ -498,7 +505,7 @@ async def test_tools_handler_surfaces_matching_rule_id(
     from providers import RuleBasedAuthorizationProvider
 
     runtime = await bootstrap_runtime(root=chat_workspace)
-    config = await runtime.build_resolved_config("kolsch/agents/helper")
+    config = await runtime.build_resolved_config("kolsch/helper")
     out = _io.StringIO()
     # Custom authz with a rule that matches every agent + every
     # tool — first match wins, so /tools surfaces this rule's id.

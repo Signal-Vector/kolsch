@@ -272,7 +272,7 @@ Run the helper agent once to confirm everything works.
 If `y`, the command effectively runs:
 
 ```
-kolsch run starter/agents/helper --input content="hello"
+kolsch run starter/helper --input content="hello"
 ```
 
 …and reports success/failure. On failure, prints the failure cause
@@ -288,7 +288,7 @@ that the test run needs a connected provider (or `provider: fake`).
 🎉 Kolsch is ready.
 
 Try:
-  kolsch run starter/agents/helper --input content="<your prompt>"
+  kolsch run starter/helper --input content="<your prompt>"
   kolsch sessions list
   kolsch --help
 
@@ -492,7 +492,7 @@ Add Part 9.6 "Workspace Resolution & Setup (UX)" with cases:
   (`fake-model` when no provider).
 - TC-UX-09: ending setup at step D and re-running picks up at step D
   (skipping completed steps).
-- TC-UX-10: `kolsch run starter/agents/helper` works against a
+- TC-UX-10: `kolsch run starter/helper` works against a
   setup-produced workspace with no further configuration.
 
 ### UX-R10. `AGENTS.md`
@@ -517,7 +517,7 @@ uv tool install kolsch                # (or pipx / pip)
 kolsch setup                          # walks you through it
 
 # Use it
-kolsch run starter/agents/helper --input content="hello"
+kolsch run starter/helper --input content="hello"
 ```
 
 ### UX-R12. `docs/tutorials/first-agent.md`

@@ -18,6 +18,7 @@ from errors import (
     AssetsAmbiguousShorthand,
     AssetsBundleNameMismatch,
     AssetsDuplicateBundleName,
+    AssetsDuplicateName,
     AssetsInvalidRef,
     AssetsNotFound,
     AssetsPromptLoadFailed,
@@ -34,6 +35,7 @@ from errors import (
     CapabilityMismatch,
     ConfigAgentInheritanceCycle,
     ConfigContextFileUnprefixed,
+    ConfigDeprecatedRefForm,
     ConfigExtendsTemplateWithoutInheritance,
     ConfigFallbackDuplicate,
     ConfigInvalid,
@@ -131,6 +133,10 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
         "reason": "'workspce' is undefined",
     },
     ConfigContextFileUnprefixed: {"path": "plain.md"},
+    ConfigDeprecatedRefForm: {
+        "deprecated_form": "kolsch/tools/bash",
+        "canonical_form": "kolsch/bash",
+    },
     ConfigAgentInheritanceCycle: {"cycle": ["a.yaml", "b.yaml", "a.yaml"]},
     ConfigParentAgentNotFound: {
         "path": "kolsch:agents/missing.yaml",
@@ -250,6 +256,11 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
     },
     # Asset Management (catalog extension)
     AssetsDuplicateBundleName: {"name": "acme", "paths": ["bundles/a", "bundles/b"]},
+    AssetsDuplicateName: {
+        "bundle": "acme",
+        "name": "butler",
+        "refs": ["acme/agents/butler", "acme/tools/butler"],
+    },
     AssetsBundleNameMismatch: {"directory": "foo", "manifest_name": "bar"},
     AssetsReservedBundleName: {"name": "core"},
     AssetsNotFound: {"ref": "acme/tools/missing"},

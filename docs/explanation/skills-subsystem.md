@@ -218,8 +218,8 @@ containing `SKILL.md`. Each such subdirectory is a discovered skill.
 
 A discovered skill is referenced as `<package>/skills/<skill-name>`.
 Examples:
-- `local/skills/literature-review` — user's local skill.
-- `acme-research/skills/literature-review` — skill from the
+- `local/literature-review` — user's local skill.
+- `acme-research/literature-review` — skill from the
   `acme-research` bundle.
 
 References are how agent configs name skills (Part 4) and how
@@ -235,7 +235,7 @@ SkillRegistry
 └── skills: dict[ref, SkillMetadata]
 
 SkillMetadata
-├── ref                       — "local/skills/web-scraper"
+├── ref                       — "local/web-scraper"
 ├── path                       — absolute path to SKILL.md
 ├── name                       — from frontmatter
 ├── description                — from frontmatter
@@ -261,9 +261,9 @@ subsystems:
     variant: standard
     config:
       enabled:
-        - ref: "local/skills/literature-review"
-        - ref: "acme-research/skills/scholarly-search"
-        - ref: "local/skills/dangerous-cleanup"
+        - ref: "local/literature-review"
+        - ref: "acme-research/scholarly-search"
+        - ref: "local/dangerous-cleanup"
 ```
 
 ### 4.1 `enabled` — list of skill references
@@ -329,9 +329,9 @@ You have access to the following skills. To load a skill's full
 instructions, use the `read` tool on its path:
 
 - **literature-review** — Conduct a structured literature review on
-  a given topic. Path: `local/skills/literature-review/SKILL.md`
+  a given topic. Path: `local/literature-review/SKILL.md`
 - **scholarly-search** — Search academic databases via institution
-  access. Path: `acme-research/skills/scholarly-search/SKILL.md`
+  access. Path: `acme-research/scholarly-search/SKILL.md`
 ```
 
 The exact wording is part of the platform's prompt-template and can be
@@ -429,7 +429,7 @@ information needed to force-invoke. A new trigger kind:
 trigger:
   kind: "user_message_with_force_skill"
   content: "<the user's message>"
-  force_skills: ["local/skills/literature-review"]
+  force_skills: ["local/literature-review"]
 ```
 
 The CLI or IDE translates `/skill:literature-review` into this trigger
@@ -601,7 +601,7 @@ last-write-wins.
    schema follow-up.
 
 7. **Skill-to-skill reference.** A skill might reference another skill
-   ("see skill `local/skills/web-search` for usage"). Currently this
+   ("see skill `local/web-search` for usage"). Currently this
    is just text in the body; the model would have to recognize it and
    call `read` on the other skill. No special mechanism in v1; flagged
    for the IDE-later when skill graphs might be visualized.

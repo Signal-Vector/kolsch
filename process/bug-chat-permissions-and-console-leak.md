@@ -50,7 +50,7 @@ honored (or that part of TOOL-R12 was never implemented).
 
 **Reproduction:**
 
-1. `uv run kolsch chat` (against the kolsch/agents/helper).
+1. `uv run kolsch chat` (against the kolsch/helper).
 2. Type "bash ls for me".
 3. **Symptom A (permissions):** the agent runs `bash` directly;
    no modal appears. Result: `bundles content data logs platform.yaml sessions`.

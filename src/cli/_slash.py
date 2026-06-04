@@ -140,6 +140,18 @@ class ChatSessionState:
     model_aliases: dict[str, str] = field(default_factory=dict)
     active_cancel: CancelToken | None = None
     last_cancel_reason: Literal["denied", "interrupted"] | None = None
+    pending_force_skill: list[str] = field(default_factory=list)
+    """Skill refs the next user message will force-invoke.
+
+    Populated by ``/skill <ref>`` (one append per invocation; multiple
+    ``/skill`` calls before the next submit accumulate). The chat input
+    loop reads + clears this list when constructing the next
+    ``ExecutionContext`` — present refs flip the trigger from
+    ``user_message`` to ``user_message_with_force_skill``. Validation
+    happens at the handler site (``_handler_skill``) so a typo'd ref
+    fails with a friendly chat-line rather than the engine's
+    pre-flight ``SkillForcedNotEnabled`` (which would also kill the
+    just-typed user message)."""
 
 
 @dataclass(frozen=True)
@@ -524,6 +536,64 @@ async def _handler_tools(arg_text: str, ctx: SlashContext) -> ControlSignal:
     return ControlSignal.CONTINUE
 
 
+async def _handler_skill(arg_text: str, ctx: SlashContext) -> ControlSignal:
+    """``/skill <ref>`` — force-invoke a skill on the next exchange.
+
+    Stashes the ref on :attr:`ChatSessionState.pending_force_skill`.
+    The chat input loop reads + clears that list when building the
+    next ``ExecutionContext``: a non-empty list flips the trigger
+    shape from ``user_message`` to ``user_message_with_force_skill``,
+    which the engine's pre-flight step 9 (``_process_force_invoke``)
+    expands into a synthetic ``tool.read`` on the SKILL.md path.
+
+    Validation at the slash site: a ref NOT in the agent's
+    ``subsystems.skills.config.enabled`` prints a friendly error and
+    leaves ``pending_force_skill`` untouched. The engine would
+    otherwise raise :class:`errors.SkillForcedNotEnabled` at
+    pre-flight, which is fatal to the exchange and would discard
+    the user's just-typed message — surfacing the typo here keeps
+    the next message intact.
+
+    Multiple ``/skill`` calls before a submit accumulate; one
+    exchange consumes them all. The trigger's ``force_skills`` list
+    preserves the order they were typed.
+    """
+    if ctx.state is None:
+        ctx.stdout.write("/skill requires a chat runtime; not available here.\n")
+        return ControlSignal.CONTINUE
+    ref = arg_text.strip()
+    if not ref:
+        # Bare ``/skill`` — print pending refs as a state surface.
+        pending = list(ctx.state.pending_force_skill)
+        if pending:
+            ctx.stdout.write("pending force-invoke on next message:\n")
+            for r in pending:
+                ctx.stdout.write(f"  {r}\n")
+        else:
+            ctx.stdout.write(
+                "/skill <ref>   queue a skill to force-load before the next message.\n"
+            )
+        return ControlSignal.CONTINUE
+    enabled = _enabled_skill_refs(ctx.state.config)
+    if ref not in enabled:
+        ctx.stdout.write(
+            f"/skill: {ref!r} is not in this agent's enabled skills.\n"
+        )
+        if enabled:
+            ctx.stdout.write(f"enabled: {', '.join(enabled)}\n")
+        else:
+            ctx.stdout.write(
+                "(this agent has no skills enabled in "
+                "subsystems.skills.config.enabled.)\n"
+            )
+        return ControlSignal.CONTINUE
+    ctx.state.pending_force_skill.append(ref)
+    ctx.stdout.write(
+        f"queued {ref} — force-load runs before your next message.\n"
+    )
+    return ControlSignal.CONTINUE
+
+
 async def _handler_clear(arg_text: str, ctx: SlashContext) -> ControlSignal:
     """``/clear`` — clear visible scrollback; session + event log untouched.
 
@@ -546,6 +616,13 @@ async def _handler_clear(arg_text: str, ctx: SlashContext) -> ControlSignal:
     # gnome-terminal.
     ctx.stdout.write("\x1b[H\x1b[2J\x1b[3J")
     ctx.stdout.flush()
+    # ``/clear`` is a context-reset signal — any /skill refs the user
+    # queued before clearing the scrollback would silently bleed into
+    # the next message, force-loading a skill they may not even
+    # remember queuing. Drop pending refs to keep state in line with
+    # what the user can see.
+    if ctx.state is not None:
+        ctx.state.pending_force_skill.clear()
     return ControlSignal.CONTINUE
 
 
@@ -614,9 +691,19 @@ COMMAND_REGISTRY: dict[str, SlashCommand] = {
         handler=_handler_session,
         free_form_arg_hint="<recent session id>",
     ),
+    "/skill": SlashCommand(
+        name="/skill",
+        description="force-load a skill before the next exchange",
+        usage=(
+            "/skill <ref>   queue a SKILL.md read (force-invoke); "
+            "the next message triggers it"
+        ),
+        handler=_handler_skill,
+        free_form_arg_hint="<bundle>/skills/<name>",
+    ),
 }
-"""Eight visible commands; ``/exit`` carries ``/quit`` as an alias.
-Patch §5."""
+"""Nine visible commands; ``/exit`` carries ``/quit`` as an alias.
+Patch §5 + ``/skill`` (skills-subsystem.md Draft 0.2 Step 3 follow-up)."""
 
 
 # ---------------------------------------------------------------------------
@@ -719,6 +806,7 @@ class SlashCompleter(Completer):
         *,
         model_alias_provider: Callable[[], dict[str, str]] | None = None,
         session_id_provider: Callable[[], list[tuple[str, str]]] | None = None,
+        skill_ref_provider: Callable[[], list[tuple[str, str]]] | None = None,
     ) -> None:
         """Optional dynamic suggestion sources.
 
@@ -733,9 +821,16 @@ class SlashCompleter(Completer):
         at startup and re-snapshots when ``/new`` opens a fresh
         session. Stale ids that the user types still work (the
         ``/session`` handler validates via ``store.get_session``).
+
+        ``skill_ref_provider`` is queried when the buffer is
+        ``/skill `` (trailing space); returns ``[(skill_ref,
+        display_label)]`` for the agent's enabled skills. Snapshotted
+        from ``config.subsystems.skills.config.enabled`` at chat
+        startup so the popup is fast.
         """
         self._model_alias_provider = model_alias_provider
         self._session_id_provider = session_id_provider
+        self._skill_ref_provider = skill_ref_provider
 
     def get_completions(
         self, document: Document, complete_event: CompleteEvent
@@ -786,6 +881,11 @@ class SlashCompleter(Completer):
         if resolved.name == "/session" and self._session_id_provider is not None:
             yield from _prefix_matched_completions(
                 self._session_id_provider(),
+                partial=partial,
+            )
+        if resolved.name == "/skill" and self._skill_ref_provider is not None:
+            yield from _prefix_matched_completions(
+                self._skill_ref_provider(),
                 partial=partial,
             )
         if resolved.free_form_arg_hint is not None and not partial:
@@ -865,13 +965,36 @@ def _tools_for_agent(config: ResolvedAgentConfig) -> list[str]:
     for raw in body.get("declared") or []:
         if isinstance(raw, dict):
             ref = str(raw.get("ref", ""))
-            # Tool name is the path's final segment ("kolsch/tools/read_file"
+            # Tool name is the ref's final segment ("kolsch/read_file"
+            # → "read_file", or the legacy "kolsch/read_file"
             # → "read_file"). Matches the Tools subsystem's discovery rule.
             if ref:
                 names.append(ref.rpartition("/")[2] or ref)
         elif isinstance(raw, str):
             names.append(raw.rpartition("/")[2] or raw)
     return names
+
+
+def _enabled_skill_refs(config: ResolvedAgentConfig) -> list[str]:
+    """Return the agent's enabled skill refs in declaration order.
+
+    Reads ``config.subsystems["skills"].config["enabled"]`` — the
+    same list :class:`SkillsSubsystem.get_enabled_skills` walks at
+    runtime. Used by ``/skill`` for validation + completion. Returns
+    ``[]`` when the subsystem is absent / unconfigured (the agent
+    has no skills; ``/skill`` prints a clear message in that case).
+    """
+    sub = config.subsystems.get("skills")
+    if sub is None:
+        return []
+    body = sub.config or {}
+    out: list[str] = []
+    for entry in body.get("enabled") or []:
+        if isinstance(entry, dict):
+            ref = entry.get("ref")
+            if isinstance(ref, str) and ref:
+                out.append(ref)
+    return out
 
 
 def _governing_rule(

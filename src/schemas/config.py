@@ -19,10 +19,23 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from schemas.identifiers import AgentId
 
-# Phase 2.2 (ENV-R1 / §6.2) — agent envelope path prefixes. Both
-# context_files[].path and extends: values must use one of these
-# two prefixes. Plain paths raise config.context_file_unprefixed
-# at Layer 1 so authors are explicit about which root they mean.
+# Phase 2.2 (ENV-R1 / §6.2) — agent envelope path prefixes.
+#
+# Pre-QoL: both context_files[].path and extends: values had to
+# start with one of these two prefixes; plain paths raised
+# config.context_file_unprefixed at Layer 1.
+#
+# Post-QoL (qol-prefix-defaults-and-unified-refs.md):
+# - kolsch: still resolves to the installed kolsch package.
+# - workspace: still resolves to the workspace root, but now
+#   emits config.deprecated_ref_form since the prefix is implicit.
+# - Plain paths are accepted and treated as workspace-rooted.
+# - For `extends:` specifically, the new convention also accepts
+#   the 2-seg catalog ref `<bundle>/<name>` and the 1-seg
+#   shorthand `<name>` — the resolver disambiguates by field.
+#
+# The schema validator is now permissive; the heavy lifting is
+# in `templating.context_files.resolve_path` and `assets.refs`.
 _ENVELOPE_PATH_PREFIXES = ("kolsch:", "workspace:")
 
 # §A.6 — PromptSpec is either a list of (already-resolved) layer
@@ -103,11 +116,12 @@ class ContextFileSpec(BaseModel):
     @field_validator("path")
     @classmethod
     def _validate_prefix(cls, value: str) -> str:
-        if not value.startswith(_ENVELOPE_PATH_PREFIXES):
-            msg = (
-                f"context_files[].path {value!r} must start with one of "
-                f"{_ENVELOPE_PATH_PREFIXES!r}"
-            )
+        # Permissive — accepts kolsch:/workspace: prefixes AND
+        # plain paths (workspace-rooted by default per
+        # qol-prefix-defaults-and-unified-refs.md). The resolver
+        # at templating.context_files.resolve_path does the work.
+        if not isinstance(value, str) or not value:
+            msg = f"context_files[].path must be a non-empty string; got {value!r}"
             raise ValueError(msg)
         return value
 
@@ -187,13 +201,15 @@ class ResolvedAgentConfig(BaseModel):
     @field_validator("extends")
     @classmethod
     def _validate_extends_prefix(cls, value: str | None) -> str | None:
+        # Permissive — accepts all four ref forms per
+        # qol-prefix-defaults-and-unified-refs.md Step 1's grammar
+        # (1 / 2 / 3-segment catalog refs AND prefixed file
+        # paths). The resolver (asset_manager / refs) disambiguates
+        # and emits deprecation warnings as appropriate.
         if value is None:
             return value
-        if not value.startswith(_ENVELOPE_PATH_PREFIXES):
-            msg = (
-                f"extends {value!r} must start with one of "
-                f"{_ENVELOPE_PATH_PREFIXES!r}"
-            )
+        if not isinstance(value, str) or not value:
+            msg = f"extends must be a non-empty string when present; got {value!r}"
             raise ValueError(msg)
         return value
 

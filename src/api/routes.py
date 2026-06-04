@@ -330,7 +330,9 @@ async def _prepare_context(
     # so callers see a clean 404 rather than a 500 from the engine
     # boundary.
     try:
-        await runtime.asset_management.get_asset(agent_ref)
+        await runtime.asset_management.get_asset(
+            agent_ref, field_asset_type="agent"
+        )
     except AssetsNotFound as exc:
         raise HTTPException(status_code=404, detail=str(exc)) from exc
     except PlatformError as exc:

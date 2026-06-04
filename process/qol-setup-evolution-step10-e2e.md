@@ -36,7 +36,7 @@ Creating workspace at /private/tmp/kolsch-step10-e2e
    agent will use the fake LLM)
   ✓ materialized bundle at bundles/kolsch/
   ✓ wrote starter agent at bundles/kolsch/agents/helper.yaml
-Running kolsch/agents/helper...
+Running kolsch/helper...
 {"content": {"text": "Echo: hello"}, "exchange_id": "ev_…"}
   ✓ test run completed successfully
 
@@ -191,7 +191,7 @@ Migrated: 2 platform.yaml field(s), authz rules (→ §3.1
 defaults), 1 bundle file(s) refreshed.
 
 Try:
-  kolsch run kolsch/agents/helper --input content="<your prompt>"
+  kolsch run kolsch/helper --input content="<your prompt>"
   kolsch sessions list
   kolsch --help
 
@@ -278,7 +278,7 @@ qol-setup-shaped workspace (where the helper inherits
 `defaults.model` cleanly):
 
 ```text
-$ kolsch --root /tmp/kolsch-step10-fresh run kolsch/agents/helper \
+$ kolsch --root /tmp/kolsch-step10-fresh run kolsch/helper \
     --input content="hello world"
 {"content": {"text": "Echo: hello world"}, "exchange_id": "ev_…"}
 ```

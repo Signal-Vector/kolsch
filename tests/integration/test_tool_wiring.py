@@ -211,7 +211,7 @@ async def test_tc_tool_wire_01_helper_agent_routes_bash_through_engine_to_real_s
     )
 
     runtime = await bootstrap_runtime(root=root, llm=_make_fake_llm_callable(fake))
-    config = await runtime.build_resolved_config("kolsch/agents/helper")
+    config = await runtime.build_resolved_config("kolsch/helper")
     session = await runtime.store.create_session(
         str(config.agent_id),
         name="tc-tool-wire-01",
@@ -305,7 +305,7 @@ async def test_tc_tool_wire_02_unknown_declared_ref_raises_config_unknown_tool(
                 variant="standard",
                 config={
                     "declared": [
-                        {"ref": "kolsch/tools/does_not_exist"},
+                        {"ref": "kolsch/does_not_exist"},
                     ],
                 },
             ),
@@ -390,7 +390,7 @@ async def test_engine_preflight_registers_declared_tools_with_subsystem(
     fake = FakeLLM(script=[TextResponse(text="acknowledged.")])
 
     runtime = await bootstrap_runtime(root=root, llm=_make_fake_llm_callable(fake))
-    config = await runtime.build_resolved_config("kolsch/agents/helper")
+    config = await runtime.build_resolved_config("kolsch/helper")
     session = await runtime.store.create_session(
         str(config.agent_id),
         name="preflight-registration-test",

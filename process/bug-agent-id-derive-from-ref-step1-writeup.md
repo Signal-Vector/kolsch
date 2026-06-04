@@ -195,7 +195,7 @@ partials = [
 Already in scope at the chosen callsite. **No plumbing change.**
 
 - `build_resolved_config(agent_ref, ...)` receives `agent_ref`
-  (e.g., `"andre/agents/butler"`).
+  (e.g., `"andre/butler"`).
 - `parse_ref(agent_ref)` (already imported) returns
   `(bundle, asset_type, name)`. `bundle == "andre"`, `name ==
   "butler"`. Cite: `src/assets/refs.py:23-36`.
@@ -277,7 +277,7 @@ Both of these are valid, simultaneously-installable bundles:
 
 Both pass `is_valid_bundle_name` (`foo_bar` and `foo` both match
 `^[a-z0-9][a-z0-9_-]*$`). Both produce distinct catalog refs
-(`foo_bar/agents/baz` and `foo/agents/bar_baz`). Both derive
+(`foo_bar/baz` and `foo/bar_baz`). Both derive
 the same agent id: `ag_foo_bar_baz`.
 
 ### Why this matters in practice

@@ -98,7 +98,7 @@ io:
 
 ```
 $ cd /tmp/kolsch-e2e-versions
-$ KOLSCH_WORKSPACE=$(pwd) kolsch run demo/agents/minimal --input content=hello
+$ KOLSCH_WORKSPACE=$(pwd) kolsch run demo/minimal --input content=hello
 {"content": {"text": "Echo: hello"}, "exchange_id": "ev_2b57123f-1185-42be-9a0e-bcad1da9f254"}
 ```
 

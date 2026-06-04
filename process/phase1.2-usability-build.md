@@ -304,7 +304,7 @@ Per process/test-catalog.md Part 9.6:
   prompt to raise KeyboardInterrupt). Re-run setup; confirm step C
   is detected as completed and step D runs fresh.
 - TC-UX-10: end-to-end — run setup --non-interactive, then run
-  `kolsch run starter/agents/helper --input content=hello` against
+  `kolsch run starter/helper --input content=hello` against
   the produced workspace; assert exit code 0 and an agent_message
   on stdout.
 

@@ -137,7 +137,7 @@ grep -A2 'file_access' /tmp/kolsch-qol/platform.yaml
 # Expected: allowed_paths includes "." as the first entry
 
 # Confirm list_files(".") works
-echo '{...}' | uv run kolsch --root /tmp/kolsch-qol run kolsch/agents/helper \
+echo '{...}' | uv run kolsch --root /tmp/kolsch-qol run kolsch/helper \
   --input content="list the files in my workspace"
 # In the JSONL, the tool.called for list_files(path=".") should NOT have a
 # matching tool.failed; the result should carry the six top-level entries.

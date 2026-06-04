@@ -45,17 +45,29 @@ def test_context_file_spec_accepts_workspace_prefix() -> None:
     assert spec.primary is False
 
 
-def test_context_file_spec_rejects_plain_path() -> None:
-    """Plain paths must raise — spec §6.2 forbids ambiguous
-    references. The ValueError flows through Layer 1 as a
-    Pydantic ``ValidationError``."""
-    with pytest.raises(ValidationError):
-        ContextFileSpec(path="plain.md")
+def test_context_file_spec_accepts_plain_path() -> None:
+    """Plain paths are now accepted at the schema layer
+    (qol-prefix-defaults-and-unified-refs.md Step 2 — implicit
+    workspace: prefix). Resolution semantics live in
+    ``templating.context_files.resolve_path``; the schema only
+    requires a non-empty string."""
+    spec = ContextFileSpec(path="plain.md")
+    assert spec.path == "plain.md"
 
 
-def test_context_file_spec_rejects_unknown_prefix() -> None:
+def test_context_file_spec_accepts_unknown_prefix_shape() -> None:
+    """Schema layer is permissive — any non-empty string is
+    accepted. URLs would fall through to plain-path workspace
+    lookup at resolve time and surface ContextFileNotFound, not
+    a schema error."""
+    spec = ContextFileSpec(path="http://example.com/x.md")
+    assert spec.path == "http://example.com/x.md"
+
+
+def test_context_file_spec_rejects_empty_path() -> None:
+    """The one remaining schema check — non-empty string."""
     with pytest.raises(ValidationError):
-        ContextFileSpec(path="http://example.com/x.md")
+        ContextFileSpec(path="")
 
 
 # ---------------------------------------------------------------------------
@@ -115,32 +127,29 @@ def test_partial_agent_without_envelope_fields_still_validates() -> None:
     assert result.ok
 
 
-def test_partial_agent_with_unprefixed_context_file_path_fails_layer_1() -> None:
-    """The path-prefix discipline propagates from Pydantic
-    validation up to Layer 1's per-partial check. The bad path
-    surfaces in ``validation_errors`` rather than passing
-    through."""
+def test_partial_agent_with_unprefixed_context_file_path_passes_layer_1() -> None:
+    """qol-prefix-defaults-and-unified-refs.md Step 2 — the
+    schema layer accepts plain paths; the resolver applies the
+    implicit ``workspace:`` interpretation."""
     partial = {
         "schema_version": "0.1",
         "context_files": [{"path": "plain.md"}],
     }
     result = validate_partial(partial)
-    assert not result.ok
-    # The error path includes "/context_files/0/path".
-    paths = [err.path for err in result.errors]
-    assert any("context_files" in p for p in paths)
+    assert result.ok, result.errors
 
 
-def test_partial_agent_with_unprefixed_extends_fails_layer_1() -> None:
-    """Same discipline for ``extends:``."""
+def test_partial_agent_with_unprefixed_extends_passes_layer_1() -> None:
+    """qol-prefix-defaults-and-unified-refs.md Step 2 — the
+    extends validator is now permissive. The four input forms
+    (1 / 2 / 3-segment catalog refs + prefixed file paths) are
+    disambiguated at resolve time."""
     partial = {
         "schema_version": "0.1",
         "extends": "plain.yaml",
     }
     result = validate_partial(partial)
-    assert not result.ok
-    paths = [err.path for err in result.errors]
-    assert any("extends" in p for p in paths)
+    assert result.ok, result.errors
 
 
 def test_partial_agent_with_invalid_permission_effect_fails_layer_1() -> None:

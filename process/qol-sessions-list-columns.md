@@ -15,7 +15,7 @@ when listing sessions:
 
 | Before | After |
 |---|---|
-| `ses_xxx  agent=ag_demo  name=cli:acme/agents/demo  starred=False  archived=False` | `ses_xxx  2025-05-29 14:23  30m  cli:acme/agents/demo` |
+| `ses_xxx  agent=ag_demo  name=cli:acme/demo  starred=False  archived=False` | `ses_xxx  2025-05-29 14:23  30m  cli:acme/demo` |
 
 Single-file change in the CLI layer. No schema, no store API, no engine
 work.
@@ -45,9 +45,9 @@ scope creep and would require an extra deprecation note.
 
 ```
 SESSION_ID      STARTED              LAST    NAME
-ses_a1b2c3d4    2025-05-29 14:23     30m     cli:acme/agents/demo
-ses_5e6f7a8b    2025-05-28 09:11     2h      cli:kolsch/agents/helper
-ses_xyz98765    2025-05-19 18:42     10d     cli:reference/agents/openclaw
+ses_a1b2c3d4    2025-05-29 14:23     30m     cli:acme/demo
+ses_5e6f7a8b    2025-05-28 09:11     2h      cli:kolsch/helper
+ses_xyz98765    2025-05-19 18:42     10d     cli:reference/openclaw
 ```
 
 Plain f-string padding; no new dependency.
@@ -148,14 +148,14 @@ No new dependencies.
 
 ```bash
 # Inside the dev container or with the venv active.
-uv run kolsch run kolsch/agents/helper --input content="hello"
-uv run kolsch run kolsch/agents/helper --input content="another"
+uv run kolsch run kolsch/helper --input content="hello"
+uv run kolsch run kolsch/helper --input content="another"
 
 uv run kolsch sessions list
 # Expect:
 #   SESSION_ID      STARTED              LAST    NAME
-#   ses_xxx         2026-05-30 14:23     5s      cli:kolsch/agents/helper
-#   ses_yyy         2026-05-30 14:20     3m      cli:kolsch/agents/helper
+#   ses_xxx         2026-05-30 14:23     5s      cli:kolsch/helper
+#   ses_yyy         2026-05-30 14:20     3m      cli:kolsch/helper
 ```
 
 ### Tests

@@ -115,7 +115,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="Execute one agent exchange.")
     run.add_argument(
         "agent_ref",
-        help="Full agent ref (e.g. acme/agents/researcher).",
+        help="Full agent ref (e.g. acme/researcher).",
     )
     run.add_argument(
         "--input",
@@ -135,6 +135,18 @@ def _build_parser() -> argparse.ArgumentParser:
         type=str,
         default=None,
         help="Existing session id (default: create a fresh session).",
+    )
+    run.add_argument(
+        "--skill",
+        action="append",
+        default=[],
+        metavar="<bundle>/skills/<name>",
+        help=(
+            "Force-load a skill before the exchange. Repeatable. The "
+            "engine emits a synthetic tool.read on the SKILL.md path "
+            "(skills spec §6). Refs not in the agent's enabled list "
+            "fail at submit time."
+        ),
     )
 
     # ---- sessions ----------------------------------------------------
@@ -282,6 +294,14 @@ def _build_parser() -> argparse.ArgumentParser:
     if permissions_parser is not None:
         _PARSER_REGISTRY["permissions"] = permissions_parser
 
+    # Step 4 (skills-subsystem.md Draft 0.2 follow-up) —
+    # kolsch skills {list, show, which}.
+    from cli.skills import add_skills_subparser  # noqa: PLC0415
+
+    skills_parser = add_skills_subparser(sub)
+    if skills_parser is not None:
+        _PARSER_REGISTRY["skills"] = skills_parser
+
     # Phase 2.1 Step 24a — kolsch chat (streaming REPL).
     _add_chat_subparser(sub)
 
@@ -303,7 +323,7 @@ def _add_chat_subparser(sub: argparse._SubParsersAction[Any]) -> None:
         nargs="?",
         default=None,
         help=(
-            "Full agent ref (e.g. kolsch/agents/helper). Defaults to "
+            "Agent ref (e.g. kolsch/helper). Defaults to "
             "the configured starter agent."
         ),
     )
@@ -373,8 +393,36 @@ async def _cmd_run(args: argparse.Namespace) -> int:
         raise RuntimeError(msg)
     thread = threads[0]
 
+    # Phase 2.0 / skills-subsystem.md Step 3 — --skill collects refs
+    # to force-load before the exchange. Validate against the agent's
+    # enabled list at submit time so a typo doesn't crash through to
+    # SkillForcedNotEnabled (Fatal) at engine pre-flight.
+    force_skills = list(getattr(args, "skill", None) or [])
+    if force_skills:
+        unknown = _validate_force_skill_refs(force_skills, config)
+        if unknown:
+            sys.stderr.write(
+                f"run: --skill ref(s) not in this agent's enabled list: "
+                f"{', '.join(unknown)}\n",
+            )
+            enabled = _enabled_skill_refs(config)
+            if enabled:
+                sys.stderr.write(f"enabled: {', '.join(enabled)}\n")
+            else:
+                sys.stderr.write(
+                    "(this agent has no skills enabled in "
+                    "subsystems.skills.config.enabled.)\n"
+                )
+            return 2
+
     if config.io.mode == "single_shot":
         trigger = {"kind": "invocation", "inputs": inputs}
+    elif force_skills:
+        trigger = {
+            "kind": "user_message_with_force_skill",
+            "content": content if content is not None else "",
+            "force_skills": force_skills,
+        }
     else:
         trigger = {
             "kind": "user_message",
@@ -675,6 +723,19 @@ async def _cmd_permissions(args: argparse.Namespace) -> int:
     return await cmd_permissions(args)
 
 
+async def _cmd_skills(args: argparse.Namespace) -> int:
+    """Dispatch the ``skills`` op.
+
+    Same help-and-exit pattern as ``_cmd_sessions`` /
+    ``_cmd_permissions`` for the missing-op case.
+    """
+    if args.skills_command is None:
+        return _print_subcommand_help_and_exit("skills")
+    from cli.skills import cmd_skills  # noqa: PLC0415
+
+    return await cmd_skills(args)
+
+
 async def _cmd_chat(args: argparse.Namespace) -> int:
     from cli.chat import cmd_chat  # noqa: PLC0415
 
@@ -703,6 +764,7 @@ _DISPATCH = {
     "models": _cmd_models,
     "setup": _cmd_setup,
     "permissions": _cmd_permissions,
+    "skills": _cmd_skills,
     "chat": _cmd_chat,
 }
 
@@ -740,6 +802,38 @@ def _maybe_warn_silent_echo(
         f"via the built-in fake LLM. Run `kolsch connect "
         f"{config.model.provider}` to wire a real provider.\n"
     )
+
+
+def _enabled_skill_refs(config: object) -> list[str]:
+    """Return the agent's enabled skill refs in declaration order.
+
+    Mirrors :func:`cli._slash._enabled_skill_refs` (kept duplicated so
+    main.py does not pull the chat module in for a one-line read of
+    its own typed config). Returns ``[]`` when the subsystem is absent.
+    """
+    subsystems = getattr(config, "subsystems", None) or {}
+    sub = subsystems.get("skills") if isinstance(subsystems, dict) else None
+    if sub is None:
+        return []
+    body = getattr(sub, "config", None) or {}
+    out: list[str] = []
+    for entry in body.get("enabled") or []:
+        if isinstance(entry, dict):
+            ref = entry.get("ref")
+            if isinstance(ref, str) and ref:
+                out.append(ref)
+    return out
+
+
+def _validate_force_skill_refs(refs: list[str], config: object) -> list[str]:
+    """Return the subset of ``refs`` NOT in the agent's enabled skills.
+
+    Surfaces typos at submit time instead of failing with
+    :class:`errors.SkillForcedNotEnabled` (Fatal) at engine pre-flight,
+    which would also discard the just-submitted user message.
+    """
+    enabled = set(_enabled_skill_refs(config))
+    return [r for r in refs if r not in enabled]
 
 
 def _parse_inputs(raw: list[str]) -> dict[str, str]:

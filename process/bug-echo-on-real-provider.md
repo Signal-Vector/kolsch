@@ -32,7 +32,7 @@ landed.
 
 **Action:**
 ```bash
-uv run kolsch run starter/agents/helper --input content="hello, kolsch"
+uv run kolsch run starter/helper --input content="hello, kolsch"
 ```
 
 **Expected:** A real LLM-generated reply from Claude Opus (or the
@@ -425,7 +425,7 @@ Functional review:
 
 8. End-to-end smoke. Use the fake LLM with an injected non-echo
    response. Run:
-     kolsch run starter/agents/helper --input content="hello"
+     kolsch run starter/helper --input content="hello"
    Confirm the agent reply is the injected string, NOT "hello".
    (If you have real provider credentials and budget, also run
    against a real model — but the fake injection is sufficient

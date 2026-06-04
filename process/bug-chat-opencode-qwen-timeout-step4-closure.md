@@ -85,7 +85,7 @@ failing on the post-fix.
 Per the bug doc Step 4 acceptance ("≥10 exchanges with ≤1
 failure"):
 
-- Agent: `andre/agents/butler` (the same agent the user's failing
+- Agent: `andre/butler` (the same agent the user's failing
   session used).
 - Provider/model: `opencode / qwen3.6-plus` (the failing combo).
 - Session: `ses_fa4ee2f9-47db-4db5-8e8f-036975c161e7` (full JSONL
@@ -175,7 +175,7 @@ Per the bug doc Part 0, this bug is closed by **the user's own
 confirmation in a real chat session**. The PR will not be marked
 PASS until that confirmation lands.
 
-Please run a real `kolsch chat andre/agents/butler` session (≥10
+Please run a real `kolsch chat andre/butler` session (≥10
 exchanges, the kind of multi-turn exploratory chat the failing
 session was) against opencode/qwen3.6-plus, and report whether:
 

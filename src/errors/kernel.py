@@ -240,6 +240,47 @@ class ContextFileTooLarge(PlatformError):
         )
 
 
+class ConfigDeprecatedRefForm(PlatformError):
+    """A ref appears in a config envelope in a deprecated form
+    (3-segment ``<bundle>/<asset_type>/<name>`` or explicit
+    ``workspace:`` prefix). Recoverable — the agent still loads;
+    the canonical 2-segment / unprefixed form is recommended.
+
+    Surfaces at agent-load via the resolver's ``emit_warning``
+    callback. Collected, logged, and (when the engine emits a
+    ``config.set`` event under the new ref convention) visible
+    alongside the resolved config so authors can locate the
+    deprecated entry by JSON-pointer.
+
+    Per qol-prefix-defaults-and-unified-refs.md Step 2.
+    """
+
+    code = "config.deprecated_ref_form"
+    level = Level.RECOVERABLE
+
+    def __init__(
+        self,
+        deprecated_form: str,
+        canonical_form: str,
+        *,
+        location: str = "",
+        where: str = "assets.refs.parse_ref",
+    ) -> None:
+        super().__init__(
+            message=(
+                f"deprecated ref form {deprecated_form!r}; prefer "
+                f"{canonical_form!r}"
+                + (f" at {location}" if location else "")
+            ),
+            where=where,
+            detail={
+                "deprecated_form": deprecated_form,
+                "canonical_form": canonical_form,
+                "location": location,
+            },
+        )
+
+
 class ConfigContextFileUnprefixed(PlatformError):
     """A ``context_files[].path`` or ``extends:`` value lacks the
     required ``kolsch:`` / ``workspace:`` prefix — Phase 2.2

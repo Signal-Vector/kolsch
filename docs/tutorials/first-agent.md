@@ -103,13 +103,13 @@ Plus the standard directory skeleton:
 
 That's the workspace. **The YAML is the source of truth — Kolsch has
 nothing else to read.** The rest of the tutorial uses the
-`starter/agents/helper` agent the setup command produced; substitute
-`starter/agents/helper` (or any other ref) if you've gone off-script.
+`starter/helper` agent the setup command produced; substitute
+`starter/helper` (or any other ref) if you've gone off-script.
 
 ## 2. Run it
 
 ```bash
-uv run kolsch run starter/agents/helper --input content="hello, kolsch"
+uv run kolsch run starter/helper --input content="hello, kolsch"
 ```
 
 You'll see one line of JSON: the agent's reply.
@@ -147,7 +147,7 @@ uv run kolsch sessions list
 Then continue the conversation:
 
 ```bash
-uv run kolsch run starter/agents/helper \
+uv run kolsch run starter/helper \
   --session ses_<paste-id> \
   --input content="say it again"
 ```
@@ -158,7 +158,7 @@ The new exchange lands in the same thread, appended after the first.
 ## 5. Stream events as they happen
 
 ```bash
-uv run kolsch run starter/agents/helper --input content="stream me" --stream
+uv run kolsch run starter/helper --input content="stream me" --stream
 ```
 
 Same six events as before — but printed live as the engine emits them
@@ -271,7 +271,7 @@ you're using. Either form works.
 Run it:
 
 ```bash
-uv run kolsch run starter/agents/helper --input content="explain kölsch in one sentence"
+uv run kolsch run starter/helper --input content="explain kölsch in one sentence"
 ```
 
 You'll get a real answer this time. Same agent, same session machinery,
@@ -319,7 +319,7 @@ The day-2 command is `kolsch chat` — a streaming REPL that turns
 the same engine you've been using into a real conversation.
 
 ```bash
-uv run kolsch chat kolsch/agents/helper
+uv run kolsch chat kolsch/helper
 ```
 
 You drop into a prompt. Type a message and hit Enter; tokens
@@ -358,7 +358,7 @@ A few things to try inside the chat:
   `/exit` (or Ctrl-D) leaves cleanly.
 - **Resume a conversation.** Grab the session id from
   `kolsch sessions list`, then
-  `kolsch chat kolsch/agents/helper --session ses_<id>` —
+  `kolsch chat kolsch/helper --session ses_<id>` —
   the prior conversation replays into the scrollback and you
   continue where you left off. Same JSONL → same rendering;
   the renderer is a pure consumer of the event stream.
@@ -389,7 +389,7 @@ the API key to an obviously-bad value temporarily, or pick a model
 that's currently rate-limited:
 
 ```bash
-uv run kolsch run starter/agents/helper --input content="say hi"
+uv run kolsch run starter/helper --input content="say hi"
 ```
 
 You'll see two new things in `kolsch sessions events`:

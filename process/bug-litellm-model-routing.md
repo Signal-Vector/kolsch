@@ -33,7 +33,7 @@
 
 **Action:**
 ```bash
-uv run kolsch run starter/agents/helper --input content="2+2"
+uv run kolsch run starter/helper --input content="2+2"
 ```
 
 **Actual output (verbatim from the report):**
@@ -431,7 +431,7 @@ Functional review:
      - uv.lock must be regenerated and committed
      - `uv sync` against the new lock must succeed
      - the previously-failing CLI invocation must succeed:
-         uv run kolsch run starter/agents/helper \
+         uv run kolsch run starter/helper \
            --input content="hello"
        (against an OpenCode-mocked or real endpoint;
        use the fixture HTTP layer for the committed test).

@@ -30,6 +30,38 @@ class AssetsDuplicateBundleName(PlatformError):
         )
 
 
+class AssetsDuplicateName(PlatformError):
+    """Two assets in the same bundle share a name across asset types.
+
+    Under the new 2-segment ref convention
+    (qol-prefix-defaults-and-unified-refs.md), ``<bundle>/<name>``
+    must resolve to a unique catalog entry. A bundle that ships
+    both ``tools/butler.py`` and ``agents/butler.yaml`` cannot
+    disambiguate which one ``<bundle>/butler`` means; surfaces
+    at catalog scan time so the failure is loud and early.
+    """
+
+    code = "assets.duplicate_name"
+    level = Level.FATAL
+
+    def __init__(
+        self,
+        bundle: str,
+        name: str,
+        refs: list[str],
+        *,
+        where: str = "assets.catalog.build",
+    ) -> None:
+        super().__init__(
+            message=(
+                f"Bundle {bundle!r} has multiple assets named {name!r}: "
+                f"{sorted(refs)}"
+            ),
+            where=where,
+            detail={"bundle": bundle, "name": name, "refs": sorted(refs)},
+        )
+
+
 class AssetsBundleNameMismatch(PlatformError):
     """A bundle's manifest name disagrees with its directory. Am-I1."""
 

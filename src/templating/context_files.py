@@ -3,10 +3,12 @@
 
 Two pure-ish functions:
 
-- :func:`resolve_path` — maps a prefixed reference
-  (``kolsch:<rel>`` or ``workspace:<rel>``) to an absolute
-  :class:`pathlib.Path`. Plain references raise
-  :class:`errors.ConfigContextFileUnprefixed`.
+- :func:`resolve_path` — maps a path reference to an absolute
+  :class:`pathlib.Path`. Accepts ``kolsch:<rel>`` (package
+  resource), ``workspace:<rel>`` (deprecated; emits
+  :class:`errors.ConfigDeprecatedRefForm`), and plain
+  ``<rel>`` (workspace-rooted by default per
+  qol-prefix-defaults-and-unified-refs.md).
 - :func:`load_context_file` — reads the file at the resolved
   path subject to the 64 KiB cap, returning a fully-populated
   :class:`templating.vars.docs.DocItem`. Raises
@@ -40,12 +42,13 @@ size and the cap so the message is actionable.
 from __future__ import annotations
 
 import importlib.resources
+import logging
 from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from errors import (
-    ConfigContextFileUnprefixed,
+    ConfigDeprecatedRefForm,
     ContextFileNotFound,
     ContextFileTooLarge,
 )
@@ -54,6 +57,16 @@ if TYPE_CHECKING:
     from schemas import ContextFileSpec
 
 from templating.vars.docs import DocItem
+
+_log = logging.getLogger("templating.context_files")
+
+
+def _log_deprecated_ref(warning: ConfigDeprecatedRefForm) -> None:
+    """Default emit_warning sink — log at WARNING level so the
+    deprecation surfaces in `kolsch run -v` and pytest captures.
+    Per qol-prefix-defaults-and-unified-refs.md Step 2.
+    """
+    _log.warning("%s", warning)
 
 # Phase 2.2 §6.4 — 64 KiB cap on context files.
 DEFAULT_MAX_BYTES = 65_536
@@ -64,23 +77,47 @@ DEFAULT_MAX_BYTES = 65_536
 # ---------------------------------------------------------------------------
 
 
-def resolve_path(prefixed_path: str, workspace_root: Path) -> Path:
-    """Resolve a ``kolsch:<rel>`` or ``workspace:<rel>`` reference
+def resolve_path(
+    prefixed_path: str,
+    workspace_root: Path,
+    *,
+    emit_warning: Callable[[ConfigDeprecatedRefForm], None] | None = None,
+) -> Path:
+    """Resolve a ``context_files[].path`` / ``extends:`` value
     to an absolute :class:`pathlib.Path`.
 
-    Plain references raise :class:`ConfigContextFileUnprefixed`
-    (Fatal) — spec §6.2's no-ambiguity discipline.
+    Per qol-prefix-defaults-and-unified-refs.md Step 2:
 
-    :raises ConfigContextFileUnprefixed: when the prefix is
-        missing or unrecognised.
+    - **``kolsch:<rel>``** — kolsch-package resource lookup
+      (unchanged).
+    - **``workspace:<rel>``** — workspace-root lookup; emits a
+      :class:`ConfigDeprecatedRefForm` warning since the
+      ``workspace:`` prefix is now implicit.
+    - **Plain ``<rel>``** — workspace-root lookup. Was rejected
+      with ``config.context_file_unprefixed`` (Fatal) under the
+      old strict prefix rule; now the canonical form.
+
+    ``emit_warning`` is the deprecation-warning sink; defaults to
+    logging at WARNING level via the module logger. Tests pass a
+    list-append to assert the warning fires.
     """
-    if prefixed_path.startswith("workspace:"):
-        rel = prefixed_path[len("workspace:") :]
-        return (workspace_root / rel).resolve()
+    sink = emit_warning if emit_warning is not None else _log_deprecated_ref
     if prefixed_path.startswith("kolsch:"):
         rel = prefixed_path[len("kolsch:") :]
         return _resolve_kolsch_resource(rel)
-    raise ConfigContextFileUnprefixed(path=prefixed_path)
+    if prefixed_path.startswith("workspace:"):
+        rel = prefixed_path[len("workspace:") :]
+        sink(
+            ConfigDeprecatedRefForm(
+                deprecated_form=prefixed_path,
+                canonical_form=rel,
+                location="context_files[].path or extends:",
+                where="templating.context_files.resolve_path",
+            )
+        )
+        return (workspace_root / rel).resolve()
+    # Plain (unprefixed) path → workspace-root by default.
+    return (workspace_root / prefixed_path).resolve()
 
 
 def _resolve_kolsch_resource(relative: str) -> Path:
@@ -132,12 +169,16 @@ def load_context_file(
 
     Errors:
 
-    - :class:`ConfigContextFileUnprefixed` — missing prefix.
     - :class:`ContextFileNotFound` — resolved path doesn't exist.
     - :class:`ContextFileTooLarge` — file exceeds ``max_bytes``.
 
     The ``summary`` fallback (first non-empty line of file) is
     applied here when :attr:`ContextFileSpec.summary` is ``None``.
+
+    Post qol-prefix-defaults-and-unified-refs.md Step 2: plain
+    paths resolve under the workspace root; ``workspace:`` is
+    accepted but emits :class:`ConfigDeprecatedRefForm` via the
+    module logger.
     """
     resolved = resolve_path(spec.path, workspace_root)
     if not resolved.is_file():

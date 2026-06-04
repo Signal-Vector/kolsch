@@ -27,6 +27,10 @@ CATALOG: dict[str, Level] = {
     # context_file or extends: path without the kolsch: /
     # workspace: prefix.
     "config.context_file_unprefixed": Level.FATAL,
+    # qol-prefix-defaults-and-unified-refs.md Step 2 — a config
+    # envelope ref uses the legacy 3-segment form or an explicit
+    # workspace: prefix; Recoverable warning, not a load failure.
+    "config.deprecated_ref_form": Level.RECOVERABLE,
     # Phase 2.2 Step 12 (ENV-R6, §4.18) — context file resolution errors.
     "context.file_not_found": Level.FATAL,
     "context.file_too_large": Level.FATAL,
@@ -50,6 +54,7 @@ CATALOG: dict[str, Level] = {
     # not yet enumerate them. Added here so PlatformError subclasses
     # in `errors.assets` can register cleanly; flag for spec amendment.
     "assets.duplicate_bundle_name": Level.FATAL,
+    "assets.duplicate_name": Level.FATAL,
     "assets.bundle_name_mismatch": Level.FATAL,
     "assets.reserved_bundle_name": Level.FATAL,
     "assets.not_found": Level.FATAL,

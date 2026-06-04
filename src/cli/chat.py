@@ -73,6 +73,7 @@ from cli._slash import (
     ControlSignal,
     SlashCompleter,
     SlashContext,
+    _enabled_skill_refs,
     dispatch_slash,
     footer_hint_for_buffer,
     is_slash_command,
@@ -97,10 +98,11 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-_DEFAULT_AGENT_REF = "kolsch/agents/helper"
+_DEFAULT_AGENT_REF = "kolsch/helper"
 """Fallback when ``<agent_ref>`` is omitted and
 ``platform.yaml``'s ``defaults.starter_agent`` is unset.
-Phase 2.1 patch §1.1."""
+Phase 2.1 patch §1.1; migrated to the 2-segment canonical
+form per qol-prefix-defaults-and-unified-refs.md."""
 
 
 # ---------------------------------------------------------------------------
@@ -194,11 +196,16 @@ async def cmd_chat(
     # SlashCompleter's dynamic-suggestion paths per patch §5.3.
     model_aliases = _load_model_aliases(args.root)
     recent_session_ids = await _snapshot_recent_session_ids(runtime)
+    enabled_skill_refs = [
+        (ref, "force-load before next message")
+        for ref in _enabled_skill_refs(config)
+    ]
     prompt_session = _build_prompt_session(
         input=prompt_input,
         output=prompt_output,
         model_aliases=model_aliases,
         recent_session_ids=recent_session_ids,
+        enabled_skill_refs=enabled_skill_refs,
     )
     # threads[0] convention — Phase 1 sessions are single-thread;
     # multi-thread support lands when the Workflow Engine arrives.
@@ -257,6 +264,7 @@ def _build_prompt_session(
     output: Output | None = None,
     model_aliases: dict[str, str] | None = None,
     recent_session_ids: list[tuple[str, str]] | None = None,
+    enabled_skill_refs: list[tuple[str, str]] | None = None,
 ) -> PromptSession[str]:
     """Construct the prompt_toolkit session with the patch §2.5 bindings.
 
@@ -280,11 +288,13 @@ def _build_prompt_session(
     # adjacent modules.
     aliases_snapshot = dict(model_aliases or {})
     sessions_snapshot = list(recent_session_ids or [])
+    skills_snapshot = list(enabled_skill_refs or [])
     completer = SlashCompleter(
         model_alias_provider=(lambda: aliases_snapshot) if aliases_snapshot else None,
         session_id_provider=(
             (lambda: sessions_snapshot) if sessions_snapshot else None
         ),
+        skill_ref_provider=(lambda: skills_snapshot) if skills_snapshot else None,
     )
 
     def _bottom_toolbar() -> str:
@@ -466,9 +476,14 @@ async def _run_input_loop(  # noqa: PLR0913, PLR0912, PLR0915 — loop owns all 
         # the same token Ctrl-C already flips. The finally below
         # clears both fields so the next iteration starts fresh.
         state.active_cancel = cancel
+        # Pending /skill refs flip the trigger shape per Skills spec
+        # §6.4. Consumed (cleared) here so a one-shot ``/skill`` does
+        # not bleed into the next exchange.
+        trigger = _build_user_trigger(text, state.pending_force_skill)
+        state.pending_force_skill.clear()
         ctx = ExecutionContext(
             thread_id=state.thread_id,
-            trigger={"kind": "user_message", "content": text},
+            trigger=trigger,
             cancellation=cancel,
         )
         renderer = Renderer(stdout=stdout, agent_name=state.config.name)
@@ -532,6 +547,23 @@ async def _run_input_loop(  # noqa: PLR0913, PLR0912, PLR0915 — loop owns all 
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
+
+
+def _build_user_trigger(text: str, force_skills: list[str]) -> dict[str, Any]:
+    """Construct the per-exchange trigger dict.
+
+    Returns the ``user_message_with_force_skill`` shape when
+    ``force_skills`` is non-empty, otherwise the plain ``user_message``
+    shape. Pure for test reach — the input loop calls this then
+    clears the source list.
+    """
+    if force_skills:
+        return {
+            "kind": "user_message_with_force_skill",
+            "content": text,
+            "force_skills": list(force_skills),
+        }
+    return {"kind": "user_message", "content": text}
 
 
 async def _watch_esc_during_streaming(
@@ -608,6 +640,10 @@ async def _open_new_session(
     threads = await state.runtime.store.list_threads(session.session_id)
     state.session_id = session.session_id
     state.thread_id = threads[0].thread_id
+    # ``/new`` is a context shift — a /skill ref queued in the prior
+    # session must not silently force-load on the first message of the
+    # fresh one. Drop pending refs alongside the session rebind.
+    state.pending_force_skill.clear()
     _print_banner(
         stdout,
         agent_name=state.config.name,
@@ -637,6 +673,10 @@ async def _switch_session(
         return
     state.session_id = target_session_id
     state.thread_id = threads[0].thread_id
+    # Same logic as /new — switching sessions is a context shift; a
+    # queued /skill ref from the prior conversation has no place in the
+    # one we're about to load.
+    state.pending_force_skill.clear()
     _print_banner(
         stdout,
         agent_name=state.config.name,

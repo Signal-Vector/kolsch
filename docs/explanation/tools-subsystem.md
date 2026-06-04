@@ -241,8 +241,8 @@ subsystems:
     config:
       builtin: ["read", "write", "edit", "bash"]
       declared:
-        - ref: "local/tools/web-search"
-        - ref: "acme-research/tools/scholarly-search"
+        - ref: "local/web-search"
+        - ref: "acme-research/scholarly-search"
       mcp:
         - name: "github"
           command: ["npx", "@modelcontextprotocol/server-github"]

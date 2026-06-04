@@ -129,7 +129,7 @@ skills has only `bundle.yaml` and `skills/`.
 The directory name IS the bundle name and IS the namespace for the
 bundle's assets. A bundle directory `acme-research/` is the
 `acme-research` bundle; its tool `web-search` is referenced as
-`acme-research/tools/web-search`.
+`acme-research/web-search`.
 
 ### 2.2 The manifest
 
@@ -527,7 +527,7 @@ At platform startup, the Asset Management module:
 5. **Scan each bundle's asset subdirectories** (`tools/`, `skills/`,
    `agents/`, `prompts/`). Build the asset entries.
 6. **Validate references in agent files** (best-effort — check that
-   referenced tools/skills/prompts exist in the catalog). Missing
+   referenced tools/prompts exist in the catalog). Missing
    references are warnings at catalog build, errors at agent execute.
 7. **Produce the `AssetCatalog`**.
 
@@ -547,7 +547,7 @@ BundleManifest
 └── path                          — absolute path to the bundle directory
 
 AssetEntry
-├── ref            — "acme-research/tools/web-search"
+├── ref            — "acme-research/web-search"
 ├── asset_type     — "tool" | "skill" | "agent" | "prompt"
 ├── bundle         — bundle name
 ├── path           — absolute path to the asset file/directory
@@ -609,10 +609,10 @@ A namespaced ref has the form:
 ```
 
 Examples:
-- `acme-research/tools/web-search`
-- `acme-research/skills/literature-review`
-- `personal/agents/researcher`
-- `team-shared/prompts/code-style`
+- `acme-research/web-search`
+- `acme-research/literature-review`
+- `personal/researcher`
+- `team-shared/code-style`
 
 The `<asset-type>` is the asset directory's name (`tools`, `skills`,
 `agents`, `prompts`).
@@ -627,7 +627,7 @@ tools:
   config:
     declared:
       - ref: "web-search"               # shorthand
-      - ref: "acme-research/tools/scholarly-search"   # full
+      - ref: "acme-research/scholarly-search"   # full
 ```
 
 The Tools subsystem (and Skills, respectively) resolve shorthand at
@@ -698,8 +698,8 @@ Inline `prompt` strings pass through unchanged.
 ```yaml
 # Before:
 prompt:
-  - "acme-research/prompts/role.md"
-  - "personal/prompts/project-context.md"
+  - "acme-research/role.md"
+  - "personal/project-context.md"
 
 # After:
 prompt:

@@ -29,6 +29,7 @@ from assets.skill_metadata import parse_skill_frontmatter
 from errors import (
     AssetsBundleNameMismatch,
     AssetsDuplicateBundleName,
+    AssetsDuplicateName,
     AssetsReservedBundleName,
 )
 
@@ -119,12 +120,28 @@ def scan(root: Path) -> AssetCatalog:
                 manifest_name=manifest.name,
             )
 
-    # --- Pass 4: build asset entries -----------------------------------
+    # --- Pass 4: build asset entries + uniqueness check ---------------
+    # Under the new 2-segment ref convention
+    # (qol-prefix-defaults-and-unified-refs.md), `<bundle>/<name>`
+    # must resolve to a unique catalog entry. A bundle that ships
+    # both `agents/butler.yaml` and `tools/butler.py` cannot
+    # disambiguate which one `<bundle>/butler` means; surface the
+    # collision at catalog scan time so the failure is loud and
+    # early. This check is independent of the existing full-ref
+    # dedup (which keys on `<bundle>/<plural>/<name>` and won't
+    # catch cross-type collisions within a bundle).
     manifests: dict[str, BundleManifest] = {m.name: m for _, m in raw}
     assets: dict[str, AssetEntry] = {}
+    by_bundle_name: dict[tuple[str, str], list[str]] = {}
     for manifest in manifests.values():
         for entry in _scan_bundle_assets(manifest):
             assets[entry.ref] = entry
+            name = entry.ref.rsplit("/", 1)[-1]
+            by_bundle_name.setdefault((entry.bundle, name), []).append(entry.ref)
+
+    for (bundle, name), refs in by_bundle_name.items():
+        if len(refs) > 1:
+            raise AssetsDuplicateName(bundle=bundle, name=name, refs=refs)
 
     return AssetCatalog(bundles=manifests, assets=assets)
 

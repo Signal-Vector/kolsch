@@ -115,7 +115,7 @@ header with a zero count — no error, just no rows.
 ## How agents use what you find here
 
 ```yaml
-# bundles/your-bundle/agents/your-agent.yaml
+# bundles/your-bundle/your-agent.yaml
 schema_version: "0.1"
 agent_id: ag_yours
 name: yours

@@ -44,7 +44,7 @@ Three problems compound:
    (`butler` in the filename + `name: butler` in YAML), AND an
    `agent_id` they have to invent and prefix
    (`ag_butler`). Two of those are redundant — the ref
-   `andre/agents/butler` is already canonical. The `agent_id`
+   `andre/butler` is already canonical. The `agent_id`
    adds one more identifier to keep in sync.
 
 3. **The papercut compounds with the bad error surface.** The
@@ -65,7 +65,7 @@ optional in the YAML. On omission, the resolver derives
 When provided, honor the user's value (must still be a
 canonical `ag_*` form — we are not also building a
 "prepend-prefix" leniency layer). The starter bundle's
-`kolsch/agents/helper.yaml` keeps its explicit `agent_id:
+`kolsch/helper.yaml` keeps its explicit `agent_id:
 ag_helper` (no migration; no breakage of existing event logs
 or authz rules).
 
@@ -109,7 +109,7 @@ before changing the schema.
   layer.**
 - The starter bundle uses `agent_id: ag_helper` explicitly
   (`src/cli/_starter_bundle/kolsch/agents/helper.yaml`). The
-  fallback agent ref `_DEFAULT_AGENT_REF = "kolsch/agents/helper"`
+  fallback agent ref `_DEFAULT_AGENT_REF = "kolsch/helper"`
   (`src/cli/chat.py:96`) does NOT depend on the agent_id
   shape; it's a ref string. So a derived id for helper would
   be `ag_kolsch_helper` — DIFFERENT from `ag_helper`. **We
@@ -130,7 +130,7 @@ before changing the schema.
 
 - **Where the bundle name is available at that callsite.**
   Resolution starts from an asset ref
-  (`andre/agents/butler`); the resolver must thread the
+  (`andre/butler`); the resolver must thread the
   bundle name through to the derivation hook. Step 1 confirms
   the bundle name is already in scope OR identifies the
   minimal plumbing to thread it through.
@@ -211,7 +211,7 @@ The bug is fixed when **all** hold:
    shape (optional), not the post-resolution shape (always
    present, always valid).
 
-6. **No migration for `kolsch/agents/helper.yaml`.** The
+6. **No migration for `kolsch/helper.yaml`.** The
    starter bundle keeps `agent_id: ag_helper` explicitly.
    This protects existing event logs, authz rules, and memory
    bindings that pin `ag_helper`. Changing it would derive
@@ -233,7 +233,7 @@ The bug is fixed when **all** hold:
      config has `ag_x` (NOT the derived form).
    - YAML with explicit `agent_id: x` (malformed) fails with
      the existing AgentId error.
-   - Manual: `kolsch chat andre/agents/butler` with no
+   - Manual: `kolsch chat andre/butler` with no
      `agent_id` in butler.yaml succeeds.
 
 9. **No regressions in:**
@@ -257,7 +257,7 @@ The bug is fixed when **all** hold:
   Part 2 #7 requires AT LEAST a mention of the new shape in
   existing docs. A full "authoring an agent" how-to is a
   bigger doc effort and lives in its own ticket.
-- **Migrating `kolsch/agents/helper.yaml`** to omit
+- **Migrating `kolsch/helper.yaml`** to omit
   `agent_id`. Explicitly required NOT to migrate (see
   #6 above).
 - **Renaming `agent_id` to something else** (e.g. just
@@ -346,7 +346,7 @@ Verification tasks:
 
 3. Bundle name plumbing.
    - The derivation needs bundle + agent name. The asset
-     ref (e.g. "andre/agents/butler") is the canonical source
+     ref (e.g. "andre/butler") is the canonical source
      and is available at build_resolved_config's entry. Trace
      whether it's already in scope at the chosen callsite or
      whether one more arg needs threading through.
@@ -689,7 +689,7 @@ Tasks:
          # Setup: tmp workspace with bundle "test"; agent
          # "demo.yaml" missing agent_id; other required
          # fields present.
-         # Action: runtime.build_resolved_config("test/agents/demo").
+         # Action: runtime.build_resolved_config("test/demo").
          # Expected:
          #   - returns ResolvedAgentConfig with
          #     agent_id == "ag_test_demo".
@@ -718,11 +718,11 @@ Tasks:
 
    TC-AGENTID-04 — Starter helper still resolves to ag_helper.
      def test_starter_helper_keeps_explicit_id():
-         """kolsch/agents/helper resolves to ag_helper, NOT
+         """kolsch/helper resolves to ag_helper, NOT
          ag_kolsch_helper — proving non-migration of the
          starter."""
          # Setup: workspace with the starter bundle installed.
-         # Action: build_resolved_config("kolsch/agents/helper").
+         # Action: build_resolved_config("kolsch/helper").
          # Expected:
          #   - resolved config.agent_id == "ag_helper".
 
@@ -743,8 +743,8 @@ Tasks:
       to REMOVE the agent_id line. Save.
    c. Run:
         uv run --project /Users/andrecohen/Desktop/SV/Projects/kolsch \\
-          kolsch run andre/agents/butler --input content="hello"
-      (or `kolsch chat andre/agents/butler` if preferred).
+          kolsch run andre/butler --input content="hello"
+      (or `kolsch chat andre/butler` if preferred).
    d. Verify:
       * No ConfigInvalid raise.
       * Resolved config (via a brief Python probe — see
@@ -925,7 +925,7 @@ When NOT to escalate:
   is a bigger doc effort.
 - **Prepend-`ag_` leniency for malformed explicit values.**
   Out of scope by design.
-- **Migrating `kolsch/agents/helper.yaml`** or any other
+- **Migrating `kolsch/helper.yaml`** or any other
   existing agent YAML to omit `agent_id`. The fix is
   opt-in for new agents; existing explicit values stay.
 - **Renaming `agent_id` to `id`** or any other field-rename

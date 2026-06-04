@@ -37,7 +37,7 @@ bash}.py` and Phase 2.1 at Step 24a.
 
 **Action:**
 ```bash
-uv run kolsch run kolsch/agents/helper --input content="run the bash command ls"
+uv run kolsch run kolsch/helper --input content="run the bash command ls"
 ```
 
 **Observed event sequence (verbatim from the user's JSONL):**
@@ -58,7 +58,7 @@ No `tool.requested`, no `tool.completed`, no `authz.*` events.
 **Four ground-truth checks confirm the wiring gap:**
 
 1. `ls bundles/kolsch/tools/` → all four files exist on disk.
-2. `uv run kolsch run kolsch/agents/helper --input content="hi" -v 2>&1 | grep -iE "tool|skill|catalog"` → no log lines mention tool discovery or registration.
+2. `uv run kolsch run kolsch/helper --input content="hi" -v 2>&1 | grep -iE "tool|skill|catalog"` → no log lines mention tool discovery or registration.
 3. `uv run kolsch chat --help` → succeeds; help text contains
    `(24e — accepted but ignored in 24a)` — Phase 2.1 is at Step
    24a only.
@@ -397,7 +397,7 @@ Read first:
 Tasks:
 
 1. Define a `BoundTool` dataclass (or named tuple):
-   - `ref: str` — the canonical ref, e.g. "kolsch/tools/bash".
+   - `ref: str` — the canonical ref, e.g. "kolsch/bash".
    - `name: str` — the function name.
    - `callable: Callable` — the imported function.
    - `schema: dict` — the JSON schema for tool-use (derived from
@@ -782,7 +782,7 @@ Tasks:
            final_text("The command output: hello"),
        ])
        # Run the exchange.
-       result = run_exchange(agent="kolsch/agents/helper",
+       result = run_exchange(agent="kolsch/helper",
                               llm=fake,
                               input="run echo hello")
 
@@ -881,7 +881,7 @@ Tasks:
    future Phase 1.3 / model-fallback work; not this bug.)
 
 2. Run:
-   uv run kolsch run kolsch/agents/helper \
+   uv run kolsch run kolsch/helper \
      --input content="run the bash command ls"
 
 3. Verify:

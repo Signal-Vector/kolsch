@@ -649,8 +649,8 @@ With:
 >
 > ```yaml
 > prompt:
->   - \"acme-research/prompts/role.md\"
->   - \"my-bundle/prompts/project-context.md\"
+>   - \"acme-research/role.md\"
+>   - \"my-bundle/project-context.md\"
 > ```
 >
 > **Single string** — inline content used directly:

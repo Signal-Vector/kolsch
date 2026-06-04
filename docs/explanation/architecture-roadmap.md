@@ -425,7 +425,7 @@ each thread is one node's execution history. The Phase 1 thread
 mechanics support this; the Phase 2 engine actually uses it.
 
 **Asset management.** A new asset type `workflow` joins
-`tools/skills/agents/prompts`. Discovered the same way.
+`tools/agents/prompts`. Discovered the same way.
 
 **Composition mechanism.** Workflow nodes declare which agent (or sub-
 workflow) they invoke. The IOSpec of each node's agent must align with

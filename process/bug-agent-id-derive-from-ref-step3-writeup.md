@@ -128,7 +128,7 @@ Worktree cleaned up post-verification: `git worktree remove
 ## 4. Manual end-to-end — three scenarios
 
 Workspace: `~/Documents/kolsch` (existing user workspace).
-Target agent: `andre/agents/butler` at
+Target agent: `andre/butler` at
 `~/Documents/kolsch/bundles/andre/agents/butler.yaml`.
 Provider config: `opencode/qwen3.6-plus`.
 
@@ -158,7 +158,7 @@ async def main():
     am = AssetManagement(root=Path.home() / "Documents" / "kolsch")
     await am.initialize()
     cfg = await am.build_resolved_config(
-        "andre/agents/butler",
+        "andre/butler",
         subsystem_validators={"tools": {"standard": _accept}},
     )
     print(f"agent_id={cfg.agent_id!r}")
@@ -255,7 +255,7 @@ coordinator can run:
 
 ```
 uv run --project /Users/andrecohen/Desktop/SV/Projects/kolsch \
-  kolsch chat andre/agents/butler
+  kolsch chat andre/butler
 ```
 
 …after dropping the `agent_id` line from butler.yaml and confirm
@@ -359,7 +359,7 @@ needed unless someone changes their mind.
 | 3. Explicit `agent_id` honored over derivation | ✓ — TC-AGENTID-02 + Scenario B (explicit `ag_butler` wins via RFC 7386 merge) |
 | 4. Malformed explicit `agent_id` still fails | ✓ — TC-AGENTID-03 + Scenario C (existing AgentId prefix error still raised) |
 | 5. `ResolvedAgentConfig` still has required, non-None `agent_id: AgentId` | ✓ — `schemas/config.py:164` unchanged |
-| 6. No migration for `kolsch/agents/helper.yaml` | ✓ — TC-AGENTID-04 + `git diff src/cli/_starter_bundle/` empty |
+| 6. No migration for `kolsch/helper.yaml` | ✓ — TC-AGENTID-04 + `git diff src/cli/_starter_bundle/` empty |
 | 7. Authoring docs surface the new shape | ✓ — `docs/reference/schemas.md` §A.2 + §A.3 + `docs/reference/module-api-reference.md` §13.3 |
 | 8. Regression tests cover all paths | ✓ — TC-AGENTID-01..04 |
 | 9. No regressions in `tc_eng_*` goldens or existing tests | ✓ — full suite 904 passed, 1 pre-existing skip, 4 deselected (Step 2 verification) |

@@ -8,6 +8,7 @@ this class; internal modules consume the building blocks directly.
 from __future__ import annotations
 
 import asyncio
+import logging
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -19,7 +20,7 @@ from assets.assembler import (
 )
 from assets.platform_config import load_or_create
 from assets.refs import parse_ref, resolve_shorthand
-from errors import AssetsNotFound
+from errors import AssetsNotFound, ConfigDeprecatedRefForm
 from kernel import resolve_and_validate
 from schemas import ResolvedAgentConfig, derive_agent_id
 
@@ -27,6 +28,17 @@ if TYPE_CHECKING:
     from assets.catalog import AssetCatalog, AssetEntry
     from assets.manifest import BundleManifest
     from kernel import ConfigValidator
+
+
+_log = logging.getLogger("assets")
+
+
+def _log_deprecated_ref(warning: ConfigDeprecatedRefForm) -> None:
+    """Surface a deprecation warning at agent-load via the assets
+    logger. Centralised so every caller path emits at the same
+    level / format.
+    """
+    _log.warning("%s", warning)
 
 
 class AssetManagement:
@@ -86,10 +98,36 @@ class AssetManagement:
             return list(catalog.assets.values())
         return [a for a in catalog.assets.values() if a.asset_type == asset_type]
 
-    async def get_asset(self, ref: str) -> AssetEntry:
+    async def get_asset(
+        self,
+        ref: str,
+        *,
+        field_asset_type: str | None = None,
+    ) -> AssetEntry:
+        """Look up an asset by ref. Accepts the three catalog-ref
+        forms (1 / 2 / 3-segment) when ``field_asset_type`` is
+        supplied; falls back to the legacy 3-segment-only lookup
+        when ``field_asset_type`` is ``None``.
+
+        ``field_asset_type`` is the singular asset type
+        ('tool' / 'skill' / 'agent' / 'prompt') the caller knows
+        from the field context (e.g. an agent ref under
+        ``extends:`` → 'agent'). When the input is a legacy
+        3-segment ref or an explicit ``workspace:`` prefix is
+        used elsewhere, the resolver emits a
+        :class:`ConfigDeprecatedRefForm` via the assets logger.
+        """
         _, catalog = self._require_initialized()
-        # parse_ref enforces the three-segment shape and raises
-        # AssetsInvalidRef for malformed input.
+        if field_asset_type is not None:
+            canonical = resolve_shorthand(
+                catalog,
+                ref,
+                field_asset_type,
+                emit_warning=_log_deprecated_ref,
+            )
+            return catalog.assets[canonical]
+        # Backward-compat: 3-seg-only shape validation + direct
+        # lookup. Callers without a field context fall through here.
         parse_ref(ref)
         entry = catalog.assets.get(ref)
         if entry is None:
@@ -98,7 +136,12 @@ class AssetManagement:
 
     async def resolve_ref(self, ref: str, asset_type: str) -> str:
         _, catalog = self._require_initialized()
-        return resolve_shorthand(catalog, ref, asset_type)
+        return resolve_shorthand(
+            catalog,
+            ref,
+            asset_type,
+            emit_warning=_log_deprecated_ref,
+        )
 
     # --- layer assembly (spec §6) -------------------------------------
 
@@ -123,8 +166,12 @@ class AssetManagement:
         """
         platform_cfg, catalog = self._require_initialized()
 
-        # Step 1 — load the agent's definition partial.
-        agent_entry = await self.get_asset(agent_ref)
+        # Step 1 — load the agent's definition partial. The agent
+        # ref may arrive in any of the three input forms (1 / 2 /
+        # 3-segment); pass field_asset_type="agent" so
+        # get_asset routes through resolve_shorthand and emits a
+        # deprecation warning for legacy 3-segment input.
+        agent_entry = await self.get_asset(agent_ref, field_asset_type="agent")
         if agent_entry.asset_type != "agent":
             raise AssetsNotFound(ref=agent_ref, asset_type="agent")
         agent_partial = await asyncio.to_thread(
@@ -147,6 +194,7 @@ class AssetManagement:
                 resolve_extends_chain,
                 Path(agent_entry.path),
                 self._root,
+                catalog,
             )
             # `resolve_extends_chain` returns leaf-first; strip the
             # extends key from each layer so it doesn't survive into
@@ -176,7 +224,13 @@ class AssetManagement:
         # from-ref.md). RFC 7386 merge gives any explicit value from
         # defaults / extends / agent / overrides priority over the
         # derived baseline.
-        bundle, _, agent_name = parse_ref(agent_ref)
+        #
+        # Use the resolved AssetEntry rather than re-parsing
+        # agent_ref — the input may be 1 / 2 / 3-segment, but
+        # entry.ref is always the canonical 3-segment internal
+        # key (qol-prefix-defaults-and-unified-refs.md).
+        bundle = agent_entry.bundle
+        agent_name = agent_entry.ref.rsplit("/", 1)[-1]
         partials: list[dict[str, Any]] = [
             {"agent_id": derive_agent_id(bundle, agent_name)},
             *assemble_partials(

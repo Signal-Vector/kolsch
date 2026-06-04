@@ -438,7 +438,7 @@ target set) and the tests during Step 15.
 
 Reproduction harness loaded `~/Documents/kolsch/bundles/kolsch/agents/helper.yaml`
 through the same code path `kolsch chat` exercises
-(`AssetManagement.build_resolved_config("kolsch/agents/helper")`).
+(`AssetManagement.build_resolved_config("kolsch/helper")`).
 The raised `ConfigInvalid.to_dict()`:
 
 ```json
@@ -905,7 +905,7 @@ coordinator before the bug is marked Closed.
    AFTER Step 15 updates it to the Phase 2.2 shape. (If
    you used the original Phase 1.3 helper for testing,
    diff against the new starter and resolve.)
-2. **Chat smoke.** `uv run kolsch chat kolsch/agents/helper`
+2. **Chat smoke.** `uv run kolsch chat kolsch/helper`
    against your configured LLM. Verify:
    - The system prompt the model receives (visible via
      `model.request` event) has `agent.name`, `tools`

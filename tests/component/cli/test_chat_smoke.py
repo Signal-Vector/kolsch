@@ -116,7 +116,7 @@ def test_tc_cli_smoke_chat_02_minimal_args_exits_on_eof(
     """
     result = _run(
         "chat",
-        "kolsch/agents/helper",
+        "kolsch/helper",
         workspace=initialized_workspace_for_chat,
         stdin="",  # empty stdin → EOFError on the first prompt → exit 0
     )

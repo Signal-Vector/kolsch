@@ -1,16 +1,17 @@
 """``context_files`` resolution + loading — Phase 2.2 Step 12.
 
-Pins:
+Pins (post qol-prefix-defaults-and-unified-refs.md Step 2):
 
-- ``workspace:<rel>`` resolves under the workspace root.
+- ``workspace:<rel>`` resolves under the workspace root AND
+  emits :class:`ConfigDeprecatedRefForm` (the prefix is now
+  implicit; explicit ``workspace:`` is deprecated).
 - ``kolsch:<rel>`` resolves to a real file under the installed
   package (works in editable-dev too via the source-tree
-  fallback).
-- Plain paths raise :class:`ConfigContextFileUnprefixed` at the
-  resolver layer (Step 8 also rejects them at schema validation;
-  this is defence in depth).
-- Missing file → :class:`ContextFileNotFound` (not a generic
-  ``OSError``).
+  fallback). NO deprecation — ``kolsch:`` stays required for
+  package resources.
+- Plain ``<rel>`` paths resolve under the workspace root with no
+  warning — this is the canonical form.
+- Missing file → :class:`ContextFileNotFound`.
 - 64 KiB cap enforced via :meth:`Path.stat` before reading.
 """
 
@@ -19,7 +20,7 @@ from __future__ import annotations
 import pytest
 
 from errors import (
-    ConfigContextFileUnprefixed,
+    ConfigDeprecatedRefForm,
     ContextFileNotFound,
     ContextFileTooLarge,
 )
@@ -40,35 +41,64 @@ if True:
 
 
 def test_workspace_prefix_resolves_under_workspace_root(tmp_path: Path) -> None:
+    """Explicit ``workspace:`` still resolves but is now deprecated
+    — sink captures the ConfigDeprecatedRefForm emit."""
     (tmp_path / "CONVENTIONS.md").write_text("conventions", encoding="utf-8")
-    path = resolve_path("workspace:CONVENTIONS.md", tmp_path)
+    warnings: list[ConfigDeprecatedRefForm] = []
+    path = resolve_path(
+        "workspace:CONVENTIONS.md",
+        tmp_path,
+        emit_warning=warnings.append,
+    )
     assert path == (tmp_path / "CONVENTIONS.md").resolve()
+    assert len(warnings) == 1
+    assert warnings[0].detail["deprecated_form"] == "workspace:CONVENTIONS.md"
+    assert warnings[0].detail["canonical_form"] == "CONVENTIONS.md"
 
 
 def test_workspace_prefix_resolves_nested_path(tmp_path: Path) -> None:
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "x.md").write_text("x", encoding="utf-8")
-    path = resolve_path("workspace:docs/x.md", tmp_path)
+    warnings: list[ConfigDeprecatedRefForm] = []
+    path = resolve_path(
+        "workspace:docs/x.md", tmp_path, emit_warning=warnings.append
+    )
     assert path == (tmp_path / "docs" / "x.md").resolve()
+    assert len(warnings) == 1
 
 
 def test_kolsch_prefix_resolves_real_repo_doc(tmp_path: Path) -> None:
     """The wheel ships ``docs/`` as package data under ``kolsch``
     and the editable-install fallback walks the source tree.
     Either way, ``kolsch:docs/index.md`` resolves to a real file."""
-    path = resolve_path("kolsch:docs/index.md", tmp_path)
+    warnings: list[ConfigDeprecatedRefForm] = []
+    path = resolve_path("kolsch:docs/index.md", tmp_path, emit_warning=warnings.append)
     assert path.is_file()
+    # ``kolsch:`` stays required for package resources — no deprecation.
+    assert warnings == []
 
 
-def test_plain_path_raises_unprefixed(tmp_path: Path) -> None:
-    with pytest.raises(ConfigContextFileUnprefixed) as excinfo:
-        resolve_path("plain.md", tmp_path)
-    assert excinfo.value.detail["path"] == "plain.md"
+def test_plain_path_resolves_under_workspace_root(tmp_path: Path) -> None:
+    """Plain paths are the canonical form per
+    qol-prefix-defaults-and-unified-refs.md — no prefix needed."""
+    (tmp_path / "plain.md").write_text("plain", encoding="utf-8")
+    warnings: list[ConfigDeprecatedRefForm] = []
+    path = resolve_path("plain.md", tmp_path, emit_warning=warnings.append)
+    assert path == (tmp_path / "plain.md").resolve()
+    assert warnings == []
 
 
-def test_unknown_prefix_raises_unprefixed(tmp_path: Path) -> None:
-    with pytest.raises(ConfigContextFileUnprefixed):
-        resolve_path("http://example.com/doc.md", tmp_path)
+def test_nested_plain_path_resolves_under_workspace_root(tmp_path: Path) -> None:
+    """``bundles/X/notes.md`` no longer needs an explicit
+    ``workspace:`` prefix."""
+    (tmp_path / "bundles" / "X").mkdir(parents=True)
+    (tmp_path / "bundles" / "X" / "notes.md").write_text("n", encoding="utf-8")
+    warnings: list[ConfigDeprecatedRefForm] = []
+    path = resolve_path(
+        "bundles/X/notes.md", tmp_path, emit_warning=warnings.append
+    )
+    assert path == (tmp_path / "bundles" / "X" / "notes.md").resolve()
+    assert warnings == []
 
 
 # ---------------------------------------------------------------------------

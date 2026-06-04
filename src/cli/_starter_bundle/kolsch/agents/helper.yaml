@@ -40,7 +40,7 @@ permissions:
 # `config.template_render_failed` immediately. Plain-text prompts
 # (no `{{ }}` / `{% %}`) render byte-identical to themselves.
 prompt: |
-  You are {{ agent.name }}, a friendly general-purpose helper agent
+  You are {{ agent.name }}, {% block role %}a friendly general-purpose helper agent{% endblock %}
   running on {{ agent.model.ref }}.
 
   ## Where you are
@@ -67,6 +67,8 @@ prompt: |
 
   {{ docs }}
 
+  {% block special_instructions %}{% endblock %}
+
   Be concise. If the question is ambiguous, ask one clarifying
   question before acting.
 
@@ -78,7 +80,7 @@ subsystems:
     variant: standard
     config:
       declared:
-        - ref: kolsch/tools/read_file
-        - ref: kolsch/tools/write_file
-        - ref: kolsch/tools/list_files
-        - ref: kolsch/tools/bash
+        - ref: kolsch/read_file
+        - ref: kolsch/write_file
+        - ref: kolsch/list_files
+        - ref: kolsch/bash

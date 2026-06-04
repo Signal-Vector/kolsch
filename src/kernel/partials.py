@@ -107,12 +107,12 @@ class PartialAgentConfig(BaseModel):
     @field_validator("extends")
     @classmethod
     def _validate_extends_prefix(cls, value: str | None) -> str | None:
+        # Permissive — accepts all four ref forms per
+        # qol-prefix-defaults-and-unified-refs.md (mirrors the
+        # resolved schema's validator). The resolver decides.
         if value is None:
             return value
-        if not value.startswith(_PARTIAL_EXTENDS_PREFIXES):
-            msg = (
-                f"extends {value!r} must start with one of "
-                f"{_PARTIAL_EXTENDS_PREFIXES!r}"
-            )
+        if not isinstance(value, str) or not value:
+            msg = f"extends must be a non-empty string when present; got {value!r}"
             raise ValueError(msg)
         return value

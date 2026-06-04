@@ -205,8 +205,8 @@ concatenated in order:
 
 ```yaml
 prompt:
-  - "acme-research/prompts/role.md"
-  - "my-bundle/prompts/project-context.md"
+  - "acme-research/role.md"
+  - "my-bundle/project-context.md"
 ```
 
 **Single string** — inline content used directly:
@@ -246,11 +246,59 @@ kernel validates wrapper; named subsystem validates body. Phase 1 subsystems:
 
 ## A.8 Asset References (Option B)
 
-A namespaced path: `<package>/<asset-type>/<name>`. Reserved package names:
-`local`, `core`. Collision-safe across packages. Not rename-stable —
-authoring refs may dangle on rename; past runs are unaffected because the
-log captures actual content materialized at use time (Materialization Rule,
-Part B.6).
+Authoring refs follow the canonical 2-segment grammar
+`<bundle>/<name>` per
+[qol-prefix-defaults-and-unified-refs.md](../../process/qol-prefix-defaults-and-unified-refs.md).
+Asset type is inferred from the field where the ref appears
+(`extends:` → agent, `subsystems.tools.config.declared[].ref` →
+tool, `subsystems.skills.config.enabled[].ref` → skill).
+
+Within a bundle, the 1-segment shorthand `<name>` also resolves
+(catalog scan for the field-supplied asset type; ambiguous
+across bundles raises `assets.ambiguous_shorthand`). Collision-
+safe across packages but NOT rename-stable — authoring refs may
+dangle on rename; past runs are unaffected because the log
+captures actual content materialized at use time
+(Materialization Rule, Part B.6).
+
+### A.8.1 Migrating from the legacy ref form
+
+The legacy 3-segment form (`<bundle>/<asset_type>/<name>`,
+e.g. `kolsch/tools/bash`) still parses for the migration window
+and resolves to the same catalog entry — no forced rewrites.
+The resolver emits a Recoverable `config.deprecated_ref_form`
+warning (logged at WARNING via the `assets` /
+`templating.context_files` loggers) so authors can locate the
+deprecated entries.
+
+| Today | Canonical |
+|---|---|
+| `extends: workspace:bundles/kolsch/agents/helper.yaml` | `extends: kolsch/helper` |
+| `extends: kolsch/agents/helper` | `extends: kolsch/helper` |
+| `subsystems.tools.config.declared[].ref: kolsch/tools/bash` | `subsystems.tools.config.declared[].ref: kolsch/bash` |
+| `subsystems.skills.config.enabled[].ref: kolsch/skills/literature-review` | `subsystems.skills.config.enabled[].ref: kolsch/literature-review` |
+| `context_files[].path: workspace:bundles/X/notes.md` | `context_files[].path: bundles/X/notes.md` |
+| `context_files[].path: kolsch:docs/index.md` | `context_files[].path: kolsch:docs/index.md` (unchanged — `kolsch:` stays required for package resources) |
+
+**No forced migration.** Existing YAMLs continue to load; the
+warning surfaces in `kolsch run -v` logs and in tests via the
+`emit_warning` sink. Update at your own pace; the legacy form
+will keep parsing through at least one minor version.
+
+**Locating your own warnings.** Filter session JSONLs / logs
+for the string `config.deprecated_ref_form`; the
+`detail.deprecated_form` and `detail.canonical_form` fields
+quote the offending value and the recommended rewrite.
+
+### A.8.2 Catalog name uniqueness
+
+Within a single bundle, asset *names* must be unique across
+asset types. A bundle that ships both `tools/butler.py` and
+`agents/butler.yaml` cannot disambiguate which one
+`<bundle>/butler` means; the catalog raises
+`assets.duplicate_name` at scan time. Across bundles, the same
+name is fine — `acme/butler` and `kolsch/butler` are distinct
+2-segment refs.
 
 ## A.9 The Resolver (JSON Merge Patch, RFC 7386)
 

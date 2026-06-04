@@ -135,9 +135,19 @@ def _load_prompt_item(item: Any, catalog: AssetCatalog) -> Any:  # noqa: ANN401
     try:
         _bundle, asset_type, _name = parse_ref(item)
     except AssetsInvalidRef:
-        # Not shaped like a ref — treat as inline content.
+        # Not shaped like a ref — treat as inline content. 2-seg
+        # refs without field_asset_type land here by design; if
+        # the agent author wants a 2-seg prompt ref they declare
+        # it via a future Phase-2 path. Today's detection stays
+        # conservative to preserve the inline-content footgun
+        # guard documented above.
         return item
-    if asset_type != "prompts":
+    # parse_ref returns the *singular* asset type (per the
+    # qol-prefix-defaults-and-unified-refs.md grammar refactor);
+    # the catalog still stores PLURAL middle-segment keys so the
+    # subsequent `catalog.assets.get(item)` lookup uses the
+    # original 3-seg input as the catalog key.
+    if asset_type != "prompt":
         return item  # references some other asset type; not for us.
 
     entry = catalog.assets.get(item)

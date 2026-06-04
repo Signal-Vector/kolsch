@@ -96,7 +96,7 @@ class SkillsSubsystem:
 
     async def _lookup_skill_asset(self, ref: str) -> AssetEntry:
         try:
-            asset = await self._am.get_asset(ref)
+            asset = await self._am.get_asset(ref, field_asset_type="skill")
         except AssetsNotFound as exc:
             raise SkillNotFound(ref=ref) from exc
         # The catalog stores skills under the same map as other asset

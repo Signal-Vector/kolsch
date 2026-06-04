@@ -41,7 +41,7 @@ Create starter agent at .../bundles/kolsch/agents/helper.yaml? [Y/n] Y
   ✓ wrote starter agent at bundles/kolsch/agents/helper.yaml
   → starter agent uses opencode/minimax-m2.7
 Run the helper agent once to confirm everything works? [Y/n] y
-Running kolsch/agents/helper...
+Running kolsch/helper...
 ERROR root: OpenAI API call failed: Error code: 500 - {'type': 'error',
   'error': {'type': 'error', 'message': 'Internal server error'}}
 ERROR root: OpenAI API call failed: Error code: 500 - {'type': 'error',
@@ -69,7 +69,7 @@ engine.context.AgentExecutionError: Agent execution failed at event
 Kolsch is ready.
 
 Try:
-  kolsch run kolsch/agents/helper --input content="<your prompt>"
+  kolsch run kolsch/helper --input content="<your prompt>"
   kolsch sessions list
   kolsch --help
 
