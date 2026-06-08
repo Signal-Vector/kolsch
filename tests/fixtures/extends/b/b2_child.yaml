@@ -1,0 +1,6 @@
+extends: x/b2_parent
+name: b2_child
+description: B2 child — overrides model only.
+model:
+  provider: fake
+  model: child-model

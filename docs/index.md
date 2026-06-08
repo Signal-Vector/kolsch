@@ -67,6 +67,9 @@ implementation.*
 - [Chatting Effectively with `kolsch chat`](how-to/chatting-effectively.md)
   — long conversations, mid-session model switches, approving
   bash patterns wisely, using `--session` to resume.
+- [Extending an Agent](how-to/extending-an-agent.md) —
+  declare a child agent that inherits from an existing one
+  via `extends:` (worked butler example).
 
 ## Tutorials — learning-oriented
 

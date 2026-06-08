@@ -1,0 +1,3 @@
+extends: x/f2_a
+name: f2_b
+description: F2 — second node of the cycle.

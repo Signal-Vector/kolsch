@@ -41,6 +41,7 @@ strategy, this module is the only seam.
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -51,6 +52,7 @@ from jinja2.exceptions import (
     TemplateError,
     TemplateRuntimeError,
 )
+from jinja2.nodes import Extends
 
 from assets.refs import resolve_shorthand
 from errors import (
@@ -176,6 +178,55 @@ def resolve_extends_chain(
         current_path = parent_path
 
 
+def resolve_parent_chain_from_extends(
+    extends_ref: str,
+    workspace_root: Path,
+    catalog: AssetCatalog | None = None,
+) -> list[dict[str, Any]]:
+    """Walk the parent chain starting from an ``extends:`` ref.
+
+    Unlike :func:`resolve_extends_chain`, this entry point takes
+    the leaf's ``extends:`` value directly rather than the leaf
+    YAML's on-disk path. Used at engine render time (see
+    bug-engine-extends-parent-not-rendered.md Step 2): the engine
+    has ``self.config.extends`` but no easy handle on the leaf
+    YAML path post-resolution.
+
+    Returns a list of raw YAML payloads, immediate-parent first
+    (i.e. excludes the leaf). Single-parent chain → length 1;
+    multi-level → length N.
+
+    :raises ConfigAgentInheritanceCycle: when the chain loops.
+    :raises ConfigParentAgentNotFound: when an ``extends:``
+        reference points at a missing file.
+    """
+    chain: list[dict[str, Any]] = []
+    visited: set[Path] = set()
+    cycle_trail: list[str] = []
+    current_ref: str | None = extends_ref
+    while current_ref:
+        parent_path = _resolve_extends_to_path(
+            current_ref, catalog, workspace_root
+        )
+        if not parent_path.is_file():
+            raise ConfigParentAgentNotFound(
+                path=current_ref,
+                resolved=str(parent_path),
+            )
+        resolved_path = parent_path.resolve()
+        if resolved_path in visited:
+            cycle_trail.append(str(resolved_path))
+            raise ConfigAgentInheritanceCycle(cycle=cycle_trail)
+        visited.add(resolved_path)
+        cycle_trail.append(str(resolved_path))
+        payload: dict[str, Any] = yaml.safe_load(
+            resolved_path.read_text(encoding="utf-8")
+        ) or {}
+        chain.append(payload)
+        current_ref = payload.get("extends")
+    return chain
+
+
 def apply_inheritance(chain: list[dict[str, Any]]) -> dict[str, Any]:
     """Compose a chain (leaf-first) into a single resolved dict.
 
@@ -256,6 +307,126 @@ def render_with_parent(
             template=template_name,
             reason=str(exc),
         ) from exc
+
+
+# ---------------------------------------------------------------------------
+# Chain rendering (multi-level extends).
+# ---------------------------------------------------------------------------
+
+
+_PARENT_NAME_PREFIX = "__kolsch_parent_"
+_EXTENDS_PARENT_DIRECTIVE = re.compile(r"\{%\s*extends\s+parent\s*%\}")
+
+
+def render_with_parents(
+    child_template_string: str,
+    parent_chain: list[str],
+    context: dict[str, Any],
+    *,
+    template_name: str = "<inline>",
+) -> str:
+    """Render a child template against an ordered ancestor chain.
+
+    ``parent_chain[0]`` is the immediate parent, ``parent_chain[1]``
+    is the grandparent, etc., root last. Each ancestor may itself
+    contain ``{% extends parent %}``; per-layer the directive is
+    rewritten to ``{% extends "__kolsch_parent_<n+1>" %}`` at load
+    time so Jinja resolves it against the next ancestor up. The
+    leaf gets ``parent = "__kolsch_parent_0"`` injected into its
+    render context so ``{% extends parent %}`` in the leaf
+    resolves to the immediate parent.
+
+    The single-parent case (``len(parent_chain) == 1``) is
+    behaviourally identical to :func:`render_with_parent`; passing
+    a single-element list keeps callers free to use this function
+    for the simple case as well.
+
+    The synthetic loader name prefix ``__kolsch_parent_`` is
+    reserved internally — agent authors can't collide because the
+    rewrite uses the literal-string form of ``{% extends %}``,
+    which doesn't consult the ``parent`` variable at all once
+    rewritten.
+
+    :raises ConfigRequiredBlockMissing: when an ancestor declares
+        a ``{% block X required %}`` that the leaf does not override.
+    :raises ConfigTemplateRenderFailed: for any other render-time
+        Jinja error.
+    """
+    if not parent_chain:
+        msg = "render_with_parents requires at least one parent"
+        raise ValueError(msg)
+
+    loader_map: dict[str, str] = {}
+    for i, src in enumerate(parent_chain):
+        name = f"{_PARENT_NAME_PREFIX}{i}"
+        if i + 1 < len(parent_chain):
+            next_name = f"{_PARENT_NAME_PREFIX}{i + 1}"
+            src = _EXTENDS_PARENT_DIRECTIVE.sub(
+                f'{{% extends "{next_name}" %}}',
+                src,
+                count=1,
+            )
+        loader_map[name] = src
+
+    env = Environment(
+        undefined=StrictUndefined,
+        autoescape=False,
+        loader=DictLoader(loader_map),
+    )
+    enriched_context = {**context, "parent": f"{_PARENT_NAME_PREFIX}0"}
+    try:
+        template = env.from_string(child_template_string)
+        return template.render(enriched_context)
+    except (TemplateAssertionError, TemplateRuntimeError) as exc:
+        message = str(exc)
+        if "Required block" in message:
+            raise ConfigRequiredBlockMissing(
+                block_name=_extract_block_name(message),
+                agent_path=template_name,
+            ) from exc
+        raise ConfigTemplateRenderFailed(
+            template=template_name,
+            reason=message,
+        ) from exc
+    except TemplateError as exc:
+        raise ConfigTemplateRenderFailed(
+            template=template_name,
+            reason=str(exc),
+        ) from exc
+
+
+def prompt_uses_extends_directive(prompt: str) -> bool:
+    """Return ``True`` when ``prompt`` syntactically contains a
+    ``{% extends ... %}`` directive at the top of its AST.
+
+    Used by the engine's orphan-check at the dispatch site
+    (``_render_prompt_if_needed``): an author who wrote
+    ``{% extends parent %}`` but forgot the ``extends:`` field on
+    the YAML gets a typed
+    :class:`errors.ConfigExtendsTemplateWithoutInheritance`
+    instead of the loader-less ``render_prompt`` env's
+    unhelpful ``TypeError: no loader for this environment``.
+
+    Implementation note: we parse with a bare
+    :class:`jinja2.Environment` (no loader). Parsing builds the
+    AST without triggering the loader's ``get_source`` lookup;
+    the lookup only fires at template **load** time (Jinja
+    inheritance is resolved when a template is loaded, not
+    parsed). Comment forms like ``{# {% extends parent %} #}``
+    don't false-trigger because Jinja strips comments during
+    parse — a comment node yields no :class:`Extends` node.
+
+    Returns ``False`` on any parse error: malformed templates
+    surface their own error later via ``render_prompt``'s
+    StrictUndefined path; this detector is purely a binary
+    "is the extends directive present" probe.
+    """
+    try:
+        ast = Environment().parse(prompt)
+    except TemplateError:
+        return False
+    # ``ast.find_all(Extends)`` is the canonical Jinja walk.
+    return any(True for _ in ast.find_all(Extends))
 
 
 def _extract_block_name(message: str) -> str:

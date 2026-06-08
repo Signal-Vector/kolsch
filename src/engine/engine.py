@@ -48,6 +48,7 @@ from engine.observers import _ObservedToolHandle
 from errors import (
     AgentUnauthorized,
     CapabilityMismatch,
+    ConfigExtendsTemplateWithoutInheritance,
     ConfigFallbackDuplicate,
     ModelRetryExhausted,
     PlatformError,
@@ -691,6 +692,11 @@ class _Exchange:
             return
 
         from templating import render_prompt  # noqa: PLC0415
+        from templating.inheritance import (  # noqa: PLC0415
+            prompt_uses_extends_directive,
+            render_with_parents,
+            resolve_parent_chain_from_extends,
+        )
         from templating.vars import (  # noqa: PLC0415
             AgentVar,
             DocsVar,
@@ -792,11 +798,53 @@ class _Exchange:
             "platform": platform_var,
         }
 
-        rendered = render_prompt(
-            prompt,
-            context,
-            template_name=f"agent:{self.config.agent_id}",
-        )
+        # bug-engine-extends-parent-not-rendered.md Step 2 — three
+        # paths for prompt render:
+        #
+        #   1. orphan: prompt has `{% extends parent %}` but the
+        #      YAML has no `extends:` field → typed Fatal so the
+        #      author gets a useful error instead of the
+        #      loader-less Environment's `TypeError: no loader …`.
+        #   2. inheritance: prompt has an `extends:` field → walk
+        #      the parent chain via the catalog and render via
+        #      `render_with_parents` (DictLoader-backed env).
+        #   3. plain: the historical Phase 2.2 path —
+        #      `render_prompt` with the no-loader StrictUndefined
+        #      env.
+        #
+        # Order is load-bearing: the orphan check must fire BEFORE
+        # `render_prompt` because that path's env has no loader and
+        # would crash on the directive.
+        template_name = f"agent:{self.config.agent_id}"
+        if (
+            self.config.extends is None
+            and prompt_uses_extends_directive(prompt)
+        ):
+            raise ConfigExtendsTemplateWithoutInheritance(
+                agent_path=template_name,
+            )
+        if self.config.extends is not None:
+            parent_chain_yaml = await asyncio.to_thread(
+                resolve_parent_chain_from_extends,
+                self.config.extends,
+                workspace_root,
+                self.engine._assets.catalog(),  # noqa: SLF001
+            )
+            parent_chain_prompts = [
+                str(layer.get("prompt", "")) for layer in parent_chain_yaml
+            ]
+            rendered = render_with_parents(
+                prompt,
+                parent_chain_prompts,
+                context,
+                template_name=template_name,
+            )
+        else:
+            rendered = render_prompt(
+                prompt,
+                context,
+                template_name=template_name,
+            )
 
         # Replace config with a copy carrying the rendered prompt.
         # ResolvedAgentConfig is frozen so we go through model_copy.

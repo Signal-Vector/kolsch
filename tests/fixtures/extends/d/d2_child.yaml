@@ -1,0 +1,7 @@
+extends: x/d2_parent
+name: d2_child
+description: |
+  D2 child — extends parent but does NOT override the required
+  block. Expected: config.required_block_missing Fatal.
+prompt: |
+  {% extends parent %}

@@ -1,0 +1,5 @@
+extends: x/e1_c
+name: e1_middle
+description: E1 middle (B) — passes through; doesn't override the block.
+prompt: |
+  {% extends parent %}

@@ -93,6 +93,17 @@ class AssetManagement:
 
     # --- catalog read API ---------------------------------------------
 
+    def catalog(self) -> AssetCatalog:
+        """Return the built :class:`AssetCatalog`.
+
+        qol-permission-system-human-readable.md Step 2 — the authz
+        provider takes the catalog at construction so it can
+        validate qualified tool refs in rule ``what:`` fields. Read
+        access only; the catalog is built once at
+        :meth:`initialize` and immutable thereafter (Am-I7)."""
+        _, catalog = self._require_initialized()
+        return catalog
+
     def list_bundles(self) -> list[BundleManifest]:
         _, catalog = self._require_initialized()
         return list(catalog.bundles.values())
@@ -245,12 +256,19 @@ class AssetManagement:
                 self._root,
                 catalog,
             )
-            # `resolve_extends_chain` returns leaf-first; strip the
-            # extends key from each layer so it doesn't survive into
-            # the merged config.
+            # `resolve_extends_chain` returns leaf-first. Strip
+            # `extends:` from non-leaf layers (their parents already
+            # got resolved during chain walk; preserving the keys
+            # would re-merge stale refs). Preserve it on the LEAF
+            # (index 0) so the engine's render-time dispatch at
+            # `_render_prompt_if_needed` can see the directive and
+            # route to `render_with_parents`
+            # (bug-engine-extends-parent-not-rendered.md Step 2).
             agent_partials_chain = [
-                {k: v for k, v in layer.items() if k != "extends"}
-                for layer in extends_chain
+                layer
+                if i == 0
+                else {k: v for k, v in layer.items() if k != "extends"}
+                for i, layer in enumerate(extends_chain)
             ]
 
         # Step 2 — assemble system defaults from platform.yaml.

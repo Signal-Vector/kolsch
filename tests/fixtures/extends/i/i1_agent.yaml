@@ -1,0 +1,8 @@
+name: i1
+description: "I1 — workspace context_files entry resolves; body inlined into {{ docs }}."
+prompt: |
+  Docs: {{ docs }}.
+context_files:
+  - path: workspace:i1_doc.md
+    summary: Fixture doc for I1.
+    primary: true

@@ -1,0 +1,9 @@
+extends: x/b3_parent
+name: b3_child
+description: B3 child — replaces the tools list (RFC 7386 wholesale override).
+subsystems:
+  tools:
+    variant: standard
+    config:
+      declared:
+        - ref: x/child_tool_only

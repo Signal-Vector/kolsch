@@ -1,0 +1,6 @@
+extends: x/k2_parent
+name: k2_child
+description: K2 child — uses {{ super() }} to additively compose with the parent's block.
+prompt: |
+  {% extends parent %}
+  {% block body %}{{ super() }} + CHILD_PART{% endblock %}

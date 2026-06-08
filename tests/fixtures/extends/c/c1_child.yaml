@@ -1,0 +1,6 @@
+extends: x/c1_parent
+name: c1_child
+description: C1 child — fills the role block via {% extends parent %}.
+prompt: |
+  {% extends parent %}
+  {% block role %}OVERRIDDEN-ROLE{% endblock %}

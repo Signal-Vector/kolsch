@@ -1,0 +1,6 @@
+extends: x/d1_parent
+name: d1_child
+description: D1 child — fills the required block.
+prompt: |
+  {% extends parent %}
+  {% block role %}HERE{% endblock %}

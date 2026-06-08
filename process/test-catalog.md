@@ -1582,6 +1582,91 @@ the engine-end-to-end bundle wiring lives in
 
 ---
 
+### Part 9.8.3 — Permission System (PERM-SYS) — qol-permission-system-human-readable.md Step 4
+
+**TC-PERM-SYS-01: Migration round-trip (legacy → new shape)**
+- Layer: integration
+- Setup: synthetic workspace seeded with the canonical pre-QoL
+  rule list (legacy `{id, who, what, effect}` regex shape) +
+  a real kolsch bundle in `bundles/`.
+- Action: invoke
+  `cli._setup._maybe_migrate_authz_rules_to_qol_schema` (the
+  Step-4 migration hook the setup runner calls
+  unconditionally on re-run).
+- Verify:
+  - Every rule in the post-migration YAML uses the new
+    `{what, pattern, effect}` shape; `who`/`id` fields are
+    stripped.
+  - The `tool\.bash` legacy rule converts to
+    `what: kolsch/bash` (catalog-resolved).
+  - A timestamped backup lands under `.platform/`.
+  - Loading the migrated YAML into a fresh provider with the
+    catalog matches a real `tool.bash` invocation against the
+    new qualified ref.
+- Verifies: Step 1 migration heuristic table (acceptance
+  criterion 8) + Step 4 setup-runner wiring (E-QOL-PERMSYS-002).
+
+**TC-PERM-SYS-02: Bare tool name blocks startup**
+- Layer: integration
+- Setup: workspace whose platform.yaml carries a rule with
+  `what: bash` (bare name) + a kolsch bundle that owns `bash`.
+- Action: call `bootstrap_runtime` against the workspace.
+- Verify: raises `AuthzBareToolRef` (code
+  `authz.bare_tool_ref`, Fatal) with the matched candidate
+  `kolsch/bash` in `detail["candidates"]`.
+- Verifies: acceptance criteria 3 + 4 — qualified-ref
+  requirement + clear startup error naming the qualified form.
+
+**TC-PERM-SYS-03: /perm allow persists + takes effect on next call**
+- Layer: integration
+- Setup: workspace bootstrapped with the new-shape default
+  catch-all only (no broader bash-specific rule). Run a
+  pre-/perm allow check to confirm the catch-all denies.
+- Action: dispatch `/perm allow kolsch/bash "find *"` via the
+  real slash handler.
+- Verify:
+  - The provider's in-memory rule list grows by one above the
+    catch-all.
+  - The next `allow("user.local", "tool.bash",
+    target="find / -name x")` returns `allowed=True` with
+    `matched_rule.what == "kolsch/bash"`,
+    `matched_rule.pattern == "find *"`.
+  - Reloading the YAML into a fresh provider preserves the
+    new rule.
+- Verifies: acceptance criterion 5 — `/perm` slash commands
+  work in chat; written rule survives reload.
+
+**TC-PERM-SYS-04: authz.denied renders distinct capsule with /perm hint**
+- Layer: component (renderer-direct)
+- Setup: craft a `tool.failed` Event with
+  `error.type=tool.unauthorized`, a matched-rule dict in new
+  shape, and `recovery_hint='/perm allow kolsch/bash "find *"'`.
+- Action: feed the event into `Renderer._render_tool_failed`.
+- Verify: rendered output contains the `permission` source
+  label (orange palette), the `denied: <tool>` line, a
+  `matched rule: what=... pattern=... effect=...` line, and
+  the verbatim `/perm allow` command.
+- Verifies: acceptance criterion 6 — distinct denied capsule
+  with the matched rule + recovery command (per
+  qol-chat-capsule-layout.md §Permission capsule).
+
+**TC-PERM-SYS-05: tool.failed event carries recovery_hint end-to-end**
+- Layer: integration
+- Setup: build a `ToolUnauthorized` with the new-shape
+  matched_rule + invoke `engine.observers._derive_authz_recovery_hint`
+  with realistic bash arguments.
+- Action: round-trip the derived hint through
+  `ToolFailedData(...)` → `model_dump(mode="json")` →
+  `ToolFailedData.model_validate(dump)`.
+- Verify: the hint string survives the round-trip byte-equal;
+  derivation produces `/perm allow kolsch/bash "find *"` for
+  a `command="find / -name foo"` invocation.
+- Verifies: acceptance criterion 7 — the framework's payload
+  + the JSONL both carry the actionable hint (the schema
+  round-trip is the replay-equivalence guarantee).
+
+---
+
 ## Part 9.9 — Chat (CHAT) — Phase 2.1, CHAT-R8
 
 **TC-CHAT-01: Basic exchange streams tokens through the renderer**
@@ -2152,6 +2237,85 @@ contract.
   identical bytes from `<repo>/docs/index.md`.
 - Verifies: §10.17 + Phase 2.2 §6.2; E-2.2-001 A3's package-data
   resolution.
+
+---
+
+### Part 9.10.1 — Extends Inheritance Corpus (EXT-CORPUS) — bug-engine-extends-parent-not-rendered.md
+
+> The 28-case fixture corpus from Part 4 of
+> `process/bug-engine-extends-parent-not-rendered.md`. Each case is a
+> minimal YAML pair (or triple, for multi-level chains) under
+> `tests/fixtures/extends/<category>/`, parametrised through the
+> runner at `tests/integration/test_extends_corpus.py`. The runner
+> replays the engine's three-path dispatch
+> (`prompt_uses_extends_directive` → `render_with_parents` →
+> `render_prompt`) so each case exercises the same wiring the engine
+> ships at `src/engine/engine.py:_render_prompt_if_needed`. Note:
+> the spec's Part 4 "Totals" subsection says "24 cases" but the
+> enumerated table lists 28 IDs — the count is an arithmetic error
+> in the spec, the corpus uses the enumerated 28.
+
+Categories and IDs (mirrors Part 4 of the spec verbatim):
+
+| ID | Category | Intent | Currently | Outcome |
+|---|---|---|---|---|
+| EXT-CORPUS-A1 | A — no inheritance | Plain prompt, no Jinja | ✓ | renders byte-identical |
+| EXT-CORPUS-A2 | A — no inheritance | Jinja vars + `{% for t in tools %}` | ✓ | substitutes agent name + tool names |
+| EXT-CORPUS-B1 | B — field inheritance | Child omits everything; only name changes | ✓ | child wins on name; rest inherited |
+| EXT-CORPUS-B2 | B — field inheritance | Child overrides model only | ✓ | child model; parent prompt/tools |
+| EXT-CORPUS-B3 | B — field inheritance | Child replaces tools list wholesale | ✓ | RFC 7386 — child has ONLY its tools |
+| EXT-CORPUS-B4 | B — field inheritance | Child writes fresh prompt (no `{% extends parent %}`) | ✓ | child prompt wins; parent ignored |
+| EXT-CORPUS-C1 | C — block inheritance | Parent block; child fills via `{% extends parent %}` | ✗→✓ | parent prose + child block |
+| EXT-CORPUS-C2 | C — block inheritance | Parent block; child extends but no override | ✗→✓ | parent's default block content |
+| EXT-CORPUS-C3 | C — block inheritance | Parent has no blocks; child extends | ✗→✓ | parent prompt verbatim; child non-block silently discarded |
+| EXT-CORPUS-C4 | C — block inheritance | Multiple blocks; child fills some | ✗→✓ | filled = child; unfilled = parent default |
+| EXT-CORPUS-C5 | C — block inheritance | Orphan `{% extends parent %}` (no `extends:` field) | ⚠→✓ | `config.extends_template_without_inheritance` Fatal |
+| EXT-CORPUS-D1 | D — required blocks | Required block filled | ✗→✓ | renders cleanly |
+| EXT-CORPUS-D2 | D — required blocks | Required block NOT filled | ✗→✓ | `config.required_block_missing` Fatal |
+| EXT-CORPUS-D3 | D — required blocks | Required-block parent + fresh-prompt child | ✗→✓ | renders; required check does NOT fire |
+| EXT-CORPUS-E1 | E — multi-level chains | A→B→C; A fills C's block | ✗→✓ | block traverses chain; A's content wins |
+| EXT-CORPUS-E2 | E — multi-level chains | A→B→C; each adds different fields | ✓ | each non-redefined field walks up chain |
+| EXT-CORPUS-F1 | F — cycles + missing | Self-cycle: A extends A | ✓ | `config.agent_inheritance_cycle` Fatal |
+| EXT-CORPUS-F2 | F — cycles + missing | Two-node cycle: A→B→A | ✓ | `config.agent_inheritance_cycle` Fatal |
+| EXT-CORPUS-F3 | F — cycles + missing | Missing parent file | ✓ | `config.parent_agent_not_found` Fatal |
+| EXT-CORPUS-F4 | F — cycles + missing | Malformed extends (too many segments) | ✓ | `config.parent_agent_not_found` Fatal |
+| EXT-CORPUS-F5 | F — cycles + missing | `kolsch:` to non-existent kolsch resource | ✓ | `config.parent_agent_not_found` Fatal |
+| EXT-CORPUS-G1 | G — skills + prompts | Agent with enabled skills | ✓ | field side: skills config preserved |
+| EXT-CORPUS-G3 | G — skills + prompts | Child inherits parent's enabled-skills list | ⚠→✓ | field side: child's skills == parent's (RFC 7386) |
+| EXT-CORPUS-H1 | H — render-time guarantees | `{{ tools }}` referenced + no tools | ✓ | renders (engine-side emits `agent.template_warning`) |
+| EXT-CORPUS-H2 | H — render-time guarantees | Typo'd variable name (StrictUndefined) | ✓ | `config.template_render_failed` Fatal |
+| EXT-CORPUS-I1 | I — context_files prefix | `workspace:` context_files resolves | ✓ | doc body inlined into `{{ docs }}` |
+| EXT-CORPUS-K1 | K — inheritance + Jinja vars | Block content references envelope vars | ✗→✓ | vars render against child's context |
+| EXT-CORPUS-K2 | K — inheritance + Jinja vars | Child uses `{{ super() }}` to compose additively | ✗→✓ | parent + child content concatenated |
+
+Legend:
+- `✓` — was passing pre-Step-2; regression guard.
+- `✗→✓` — was failing pre-Step-2 with
+  `TypeError: no loader for this environment specified`; Step 2's
+  wiring fix turns it ✓. Pre-fix sampling on C1/C2/K1/K2 confirmed
+  the failure shape — see Step 3 PR description.
+- `⚠→✓` — Step 1 pinned the current behaviour; corpus now asserts it.
+
+**Common assertion shape:**
+- Layer: integration.
+- Setup: tmp workspace with `platform.yaml` (default model +
+  `io.mode = conversational`); synthetic bundle `bundles/x/` with the
+  case's YAMLs installed under `bundles/x/agents/`. Skills (G*)
+  install under `bundles/x/skills/<name>/SKILL.md`; workspace docs
+  (I1) install at the workspace root. Permissive Layer-3 validators
+  for `tools/standard` and `skills/standard` so subsystem dispatch
+  doesn't reject the synthetic configs.
+- Action: `AssetManagement.build_resolved_config(case.target_agent_ref)`
+  → if `loads_with_render`, replay engine dispatch (orphan check →
+  `render_with_parents` / `render_prompt`); if `error_at_load`,
+  expect the named `PlatformError.code`.
+- Expected: per the table — outcome + the case's
+  `expected_render_contains` / `expected_render_excludes` /
+  `expected_error_code` (case table at
+  `tests/integration/_extends_corpus_cases.py`).
+- Verifies: §10.17 + Phase 2.2 §8 +
+  bug-engine-extends-parent-not-rendered.md acceptance criteria #4
+  (the corpus IS the acceptance gate).
 
 ---
 

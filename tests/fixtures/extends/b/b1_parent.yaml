@@ -1,0 +1,4 @@
+name: b1_parent
+description: B1 parent — has prompt + name; child overrides everything via the rename.
+prompt: |
+  You are {{ agent.name }}. Parent prose.

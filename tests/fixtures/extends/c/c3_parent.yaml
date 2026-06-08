@@ -1,0 +1,4 @@
+name: c3_parent
+description: C3 parent — has NO blocks.
+prompt: |
+  Plain parent prompt with no blocks.

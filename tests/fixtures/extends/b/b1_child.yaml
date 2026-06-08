@@ -1,0 +1,3 @@
+extends: x/b1_parent
+name: b1_child
+description: B1 child — inherits everything; only the name changes.

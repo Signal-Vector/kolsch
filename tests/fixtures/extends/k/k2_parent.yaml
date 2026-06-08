@@ -1,0 +1,6 @@
+name: k2_parent
+description: K2 parent — declares a block with a default that super() can compose with.
+prompt: |
+  Header.
+  {% block body %}PARENT_PART{% endblock %}
+  Footer.

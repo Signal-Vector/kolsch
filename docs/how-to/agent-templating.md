@@ -234,36 +234,55 @@ The parent declares a prompt with `{% block X %}…{% endblock %}`
 placeholders; the child fills them via `{% extends parent %}`.
 
 ```yaml
-# bundles/kolsch/agents/_base.yaml
+# bundles/kolsch/agents/helper.yaml (the kolsch starter helper)
 prompt: |
-  {% block role required %}{% endblock %}
+  You are {{ agent.name }}, {% block role %}a friendly general-purpose helper agent{% endblock %}
+  running on {{ agent.model.ref }}.
+
+  ## Where you are
 
   {{ workspace }}
 
-  ## Available tools
+  ## What you can do
+
   {% for t in tools %}
   - **{{ t.name }}**: {{ t.summary }}
   {% endfor %}
 
   {% block special_instructions %}{% endblock %}
+
+  Be concise. If the question is ambiguous, ask one clarifying
+  question before acting.
 ```
 
 ```yaml
-# bundles/<bundle>/agents/helper.yaml
-extends: kolsch:agents/_base.yaml
-agent_id: ag_helper
-name: helper
+# bundles/<bundle>/agents/butler.yaml
+extends: kolsch/helper
+name: butler
+description: A personal butler agent inheriting from kolsch helper.
 prompt: |
   {% extends parent %}
-
-  {% block role %}
-  You are helper, a friendly assistant.
+  {% block role %}a personal butler — attentive, precise, and proactive{% endblock %}
+  {% block special_instructions %}
+  Manage files, run commands, keep the workspace organized.
   {% endblock %}
 ```
 
-`{% block role required %}` is Jinja 3.1's required-block syntax:
-the child MUST override it. A child that extends but doesn't
-override raises `config.required_block_missing` at agent-load.
+`{% extends parent %}` is the Phase 2.2 wiring — the engine
+binds the parent template's source under the name `"parent"`
+and the child inherits all of the parent's prose plus any
+non-overridden blocks. Blocks the child does override (`role`,
+`special_instructions`) get replaced wholesale. This shape
+matches the EXT-CORPUS C1 fixture at
+`tests/fixtures/extends/c/c1_parent.yaml` +
+`tests/fixtures/extends/c/c1_child.yaml`; every example in
+this section corresponds to a corpus case so the docs and the
+tests can't drift.
+
+`{% block role required %}` (Jinja 3.1's required-block syntax)
+forces every inheriting child to override the block — see the
+[Declare required blocks](#declare-required-blocks) section
+below.
 
 ### Inherit everything except the prompt
 
@@ -273,10 +292,10 @@ field the child doesn't redefine is inherited (model, tools,
 permissions, context_files).
 
 ```yaml
-# bundles/<bundle>/agents/deploy.yaml
-extends: kolsch:agents/_base.yaml
-agent_id: ag_deploy
+# bundles/<bundle>/agents/deploy.yaml — EXT-CORPUS B4 shape
+extends: kolsch/helper
 name: deploy
+description: A deployment agent inheriting kolsch/helper's tool set.
 prompt: |
   You are a deployment agent. Run kubectl and helm commands the
   user asks for. Confirm any destructive operation by repeating
@@ -285,12 +304,169 @@ prompt: |
 
 ### Multi-level chains
 
-`A extends B extends C` is supported. Resolution walks the chain
-from root (`C`) toward leaf (`A`); each layer's fields override
-the layer below (Schemas §A.11.2 binding composition order).
-Cycles raise `config.agent_inheritance_cycle` at agent-load.
+`A extends B extends C` is supported — see
+[Multi-level chains](#multi-level-chains) below for a worked
+example and how the chain composes at render time.
 
 ---
+
+### Resolving the parent reference
+
+`extends:` accepts the canonical 2-segment catalog ref
+`<bundle>/<name>` per
+[qol-prefix-defaults-and-unified-refs.md](../../process/qol-prefix-defaults-and-unified-refs.md);
+asset type is inferred from the field (`extends:` → `agent`).
+The resolver also accepts file-path forms for migration:
+
+- **`kolsch/<name>`** — the canonical form. Resolves against
+  the **workspace's `bundles/kolsch/` bundle** (the one `kolsch
+  setup` materialised from the starter bundle on first run). So
+  in a workspace that ran `kolsch setup`, `extends: kolsch/helper`
+  resolves to `bundles/kolsch/agents/helper.yaml`.
+- **`workspace:<rel>`** — explicit workspace-root file path
+  (e.g. `extends: workspace:bundles/kolsch/agents/helper.yaml`).
+  Still parses, emits a `config.deprecated_ref_form`
+  Recoverable warning. Equivalent to the canonical form above.
+- **`kolsch:<rel>`** — resolves against the **installed kolsch
+  package** via `importlib.resources.files("kolsch") / <rel>`.
+  Today the package ships only `docs/` and `AGENTS.md` (see
+  `src/kolsch/__init__.py`); **no agents are reachable via
+  `kolsch:`**.
+  <!-- lint-allowed-kolsch-agents: intentional warning callout -->
+  The pre-QoL examples in older docs that used
+  `extends: kolsch:agents/<name>.yaml` were broken on
+  publication and will fail with `config.parent_agent_not_found`
+  — use the catalog-ref form above instead.
+
+Missing parents raise `config.parent_agent_not_found`; cycles
+raise `config.agent_inheritance_cycle`. Both are Fatal at
+agent-load.
+
+### Common gotchas
+
+Three failure modes the EXT-CORPUS (`process/test-catalog.md`
+Part 9.10.1) pins as regression cases. Each is the kind of
+thing that surfaces once when you write your first inheriting
+agent and never again.
+
+**Stray text outside a block is silently discarded** (EXT-CORPUS
+C3). Jinja's `{% extends %}` directive only renders block
+content; everything else in the child template is dropped on
+the floor — no warning, no error.
+
+```yaml
+# parent: plain prompt, no blocks
+prompt: |
+  Plain parent body.
+
+# child: the "Note to self" line vanishes
+prompt: |
+  {% extends parent %}
+  Note to self: this text never reaches the model.
+```
+
+Fix: wrap the new content in a block the parent declares (or
+adds blocks to the parent). If the parent genuinely has no
+extensible blocks, use the "fresh prompt" pattern from
+[Inherit everything except the prompt](#inherit-everything-except-the-prompt)
+instead of `{% extends parent %}`.
+
+**Orphan `{% extends parent %}`** (EXT-CORPUS C5). Using the
+directive in your prompt without an `extends:` field on the
+YAML is a no-op for the resolver but a syntactic intent the
+engine catches:
+
+```
+config.extends_template_without_inheritance
+  agent_path: agent:ag_butler
+```
+
+Fix: either add the matching `extends: <bundle>/<name>` field,
+or remove the `{% extends parent %}` directive (and write a
+fresh prompt instead).
+
+<!-- lint-allowed-kolsch-agents: intentional warning callout (EXT-CORPUS F5) -->
+**`kolsch:agents/<name>.yaml` doesn't resolve** (EXT-CORPUS
+F5). The installed kolsch package ships only `docs/` +
+`AGENTS.md` today; the `kolsch:` prefix routes through
+`importlib.resources`, so any path under `agents/` raises
+`config.parent_agent_not_found`. To extend the kolsch starter
+helper, use the canonical catalog ref `extends: kolsch/helper`
+— that resolves against the workspace's `bundles/kolsch/`
+bundle, which is exactly where the helper agent ships.
+
+### Compose with `{{ super() }}`
+
+To **add to** a parent block instead of replacing it, use
+Jinja's `{{ super() }}` inside the child's block:
+
+```yaml
+# parent
+prompt: |
+  Header.
+  {% block body %}PARENT_PART{% endblock %}
+  Footer.
+
+# child — EXT-CORPUS K2
+extends: kolsch/helper
+prompt: |
+  {% extends parent %}
+  {% block body %}{{ super() }} + CHILD_PART{% endblock %}
+```
+
+Rendered output: `Header.\nPARENT_PART + CHILD_PART\nFooter.`
+
+This is the **only additive composition path** in the
+envelope. Field-level inheritance (`tools:`, `permissions:`,
+`context_files:`) is strictly wholesale-per-field per RFC 7386
+— a child that declares `tools: [bash]` replaces the parent's
+tools entirely (no union). `{{ super() }}` lives at the Jinja
+block layer; nothing analogous exists at the YAML field layer.
+
+### Multi-level chains
+
+`A extends B extends C` is supported. Resolution walks the
+chain from root (`C`) toward leaf (`A`); each layer's fields
+override the layer below per Schemas §A.11.2 binding
+composition order. Cycles raise
+`config.agent_inheritance_cycle` at agent-load; missing parents
+raise `config.parent_agent_not_found`.
+
+Rendering walks the chain the same way: each non-root layer
+may include its own `{% extends parent %}`, and the engine
+loads every ancestor's template into a single Jinja
+`DictLoader` so blocks resolve naturally across the chain.
+
+```yaml
+# bundles/x/agents/e1_c.yaml — the root
+name: e1_root
+prompt: |
+  ROOT_HEADER
+  {% block role %}root-default{% endblock %}
+  ROOT_FOOTER
+```
+
+```yaml
+# bundles/x/agents/e1_b.yaml — middle layer, no override
+extends: x/e1_c
+name: e1_middle
+prompt: |
+  {% extends parent %}
+```
+
+```yaml
+# bundles/x/agents/e1_a.yaml — leaf, fills the deepest block
+extends: x/e1_b
+name: e1_leaf
+prompt: |
+  {% extends parent %}
+  {% block role %}LEAF_OVERRIDE{% endblock %}
+```
+
+Rendered output for `e1_leaf`:
+`ROOT_HEADER\nLEAF_OVERRIDE\nROOT_FOOTER`. This example
+matches the EXT-CORPUS E1 fixture at
+`tests/fixtures/extends/e/`.
 
 ## Declare required blocks
 

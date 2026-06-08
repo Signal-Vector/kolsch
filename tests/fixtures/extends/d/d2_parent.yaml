@@ -1,0 +1,6 @@
+name: d2_parent
+description: D2 parent — declares a required block.
+prompt: |
+  Header.
+  {% block role required %}{% endblock %}
+  Footer.

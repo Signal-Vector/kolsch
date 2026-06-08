@@ -1,0 +1,9 @@
+name: g3_parent
+description: G3 parent — declares enabled skill; should be inherited by child.
+prompt: Parent body.
+subsystems:
+  skills:
+    variant: standard
+    config:
+      enabled:
+        - ref: x/g3_skill

@@ -1,0 +1,6 @@
+name: e1_root
+description: E1 root (C) — top of the chain; declares the deepest block.
+prompt: |
+  ROOT_HEADER
+  {% block role %}root-default{% endblock %}
+  ROOT_FOOTER

@@ -1,0 +1,5 @@
+extends: x/c2_parent
+name: c2_child
+description: C2 child — extends parent but doesn't override the block.
+prompt: |
+  {% extends parent %}

@@ -365,30 +365,71 @@ the next-lower layer.
 
 ### A.11.3 `extends: str | None`
 
-Optional prefixed-path reference to a parent agent YAML:
+Optional reference to a parent agent. Accepts the canonical
+2-segment catalog ref `<bundle>/<name>` (per §A.8) and, for
+migration, the legacy prefixed-file-path forms:
 
-- `kolsch:<rel>` — resolves to a resource inside the installed kolsch
-  package via `importlib.resources.files("kolsch") / <rel>`.
-- `workspace:<rel>` — resolves to `<workspace_root> / <rel>`.
+- `<bundle>/<name>` — **canonical**. Catalog ref; asset type
+  inferred as `agent` from the field. So `extends: kolsch/helper`
+  resolves against the workspace's `bundles/kolsch/` bundle.
+- `workspace:<rel>` — legacy explicit workspace-root file path;
+  emits `config.deprecated_ref_form` Recoverable warning.
+- `kolsch:<rel>` — resolves against the **installed kolsch
+  package** via `importlib.resources.files("kolsch") / <rel>`.
+  The package ships only `docs/` + `AGENTS.md` today (see
+  `src/kolsch/__init__.py`) so
+  <!-- lint-allowed-kolsch-agents: intentional warning callout -->
+  `kolsch:agents/<name>.yaml` forms do not resolve — use the
+  catalog-ref form `extends: kolsch/<name>` to point at the
+  workspace's kolsch bundle's agents.
 
-Plain paths are rejected at agent-load with
-`config.context_file_unprefixed`. Cycles raise
-`config.agent_inheritance_cycle`; missing parents raise
-`config.parent_agent_not_found`.
+Cycles raise `config.agent_inheritance_cycle`; missing parents
+raise `config.parent_agent_not_found`; orphan
+`{% extends parent %}` in the prompt without a matching
+`extends:` field raises
+`config.extends_template_without_inheritance`.
+
+**Preserved on the resolved config.** The leaf's `extends:`
+value survives RFC 7386 composition into
+`ResolvedAgentConfig.extends` (non-leaf layers strip it during
+chain resolution). The engine reads this field at render time
+to dispatch the inheritance-aware Jinja path (`render_with_parents`,
+which constructs a `DictLoader` carrying every ancestor's
+template) vs. the plain `render_prompt` path. Pre-resolved
+configs that you construct directly (e.g. tests with
+synthetic `ResolvedAgentConfig` objects) can set `extends`
+to mark themselves as inheritance-bearing.
 
 ### A.11.4 `permissions: list[Rule]`
 
 Optional list of per-agent authz rules. Same shape as
-`platform.yaml:authorization.config.rules` entries — `who` matches the
-principal; `what` matches the action OR the resolved target.
+`platform.yaml:authorization.config.rules` entries.
 
-Per `qol-tool-permission-discovery-uniform-with-stacking.md` Step 2
-the resolver composes the **four-level stack**:
+Per `qol-permission-system-human-readable.md` Step 2 the canonical
+shape is three fields:
+
+| Field | Required | Type | Notes |
+|---|---|---|---|
+| `what` | yes | `str` | Fully-qualified tool ref (`<bundle>/<name>`), system action namespace (`agent.execute.*`), or catch-all `*`. Bare names rejected at load. |
+| `pattern` | no | `str` (glob, default `"*"`) | Glob matched against the target (path / command / url). `*` and `?` only — regex characters (`^`, `$`, `[`, `\`, …) rejected at load. |
+| `effect` | yes | `Literal["allow", "deny", "prompt"]` | First-match-wins; `prompt` in non-chat callers collapses to `deny`. |
+
+Example:
+
+```yaml
+permissions:
+  - { what: kolsch/bash,        pattern: "find *", effect: allow }
+  - { what: kolsch/write_file,  pattern: "*",      effect: prompt }
+  - { what: "*",                pattern: "*",      effect: deny }
+```
+
+The resolver composes the **four-level stack** per
+`qol-tool-permission-discovery-uniform-with-stacking.md` Step 2:
 
 ```
 agent.yaml `permissions:`            ← most specific
    ↑
-bundle.yaml `permissions:`           ← NEW (see §A.13)
+bundle.yaml `permissions:`           ← per-bundle (see §A.13)
    ↑
 platform.yaml `authorization.rules`  ← workspace default
    ↑
@@ -399,7 +440,33 @@ First-match-wins inside each layer. The chat-mode no-rule
 callback persists `[a]`/`[d]` choices into `platform.yaml`; the
 narrower layers (bundle, agent) override later via hand-edit.
 See [`docs/how-to/permissions.md`](../how-to/permissions.md) for
-authoring guidance and the cross-bundle-naming caveat.
+authoring guidance + the `/perm` slash-command surface.
+
+#### Legacy rule form
+
+Workspaces created before
+`qol-permission-system-human-readable.md` shipped carry the
+pre-QoL four-field shape:
+
+```yaml
+# Legacy
+- { id: rl_abc, who: ".*", what: "tool\\.bash", effect: prompt }
+```
+
+The provider's compile dispatch still accepts the legacy shape —
+loading discriminates on `who`'s presence. Legacy rules use
+`re.fullmatch` against the regex `what`; new-shape rules use
+`fnmatch.fnmatchcase` against the glob.
+
+The schema migration is one-shot: `kolsch setup` re-run calls
+`cli._migrations.authz_rules.migrate_authz_rules` over the rule
+list and atomically rewrites `platform.yaml`. Rules the
+heuristic can't convert (custom user regexes with character
+classes, lookahead, etc.) stay in legacy form and emit a
+**`config.deprecated_regex_rule`** Recoverable event so the
+user knows to convert by hand. `kolsch permissions list`
+annotates unconverted rules with
+`[legacy regex — please convert]`.
 
 ### A.11.5 `context_files: list[ContextFileSpec]`
 
@@ -407,7 +474,7 @@ Optional list of documentation files. Each entry:
 
 | Field | Required | Type | Default |
 |---|---|---|---|
-| `path` | yes | `str` | Prefixed: `kolsch:<rel>` or `workspace:<rel>` |
+| `path` | yes | `str` | Workspace-root path (e.g. `bundles/X/notes.md`); `kolsch:<rel>` for installed-package resources (`docs/` + `AGENTS.md` today); explicit `workspace:<rel>` still parses with a `config.deprecated_ref_form` warning |
 | `summary` | no | `str | None` | first non-empty line of file |
 | `primary` | no | `bool` | `false` (secondary = listed by path + summary only) |
 
@@ -431,10 +498,12 @@ its bundle-wide authz rules. Full prose lives in
 
 `permissions` carries the bundle layer of the four-level authz
 stack (§A.11.4). Same `PermissionRule` shape as agent and
-platform rules: `{id?, who, what, effect}`. Rules apply to tool
-invocations whose **home bundle** is this bundle — the engine
-looks up the agent's home bundle at tool-registration time and
-threads the bundle's rules into the authz check.
+platform rules: `{what, pattern, effect}` (new) or
+`{id?, who, what, effect}` (legacy, supported via the schema
+migration). Rules apply to tool invocations whose **home bundle**
+is this bundle — the engine looks up the agent's home bundle at
+tool-registration time and threads the bundle's rules into the
+authz check.
 
 The catalog scanner (`src/assets/catalog.py`) loads
 `BundleManifest` once at startup; the field flows through to the

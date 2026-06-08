@@ -1,0 +1,9 @@
+extends: x/c3_parent
+name: c3_child
+description: |
+  C3 child — extends a parent with no blocks. Jinja silently
+  discards the child's non-block content; rendered prompt should
+  equal parent's prompt verbatim.
+prompt: |
+  {% extends parent %}
+  This text outside any block is silently discarded by Jinja.

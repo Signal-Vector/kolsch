@@ -1,0 +1,6 @@
+name: c1_parent
+description: C1 parent — declares a role block with a default.
+prompt: |
+  Header.
+  {% block role %}parent-default-role{% endblock %}
+  Footer.

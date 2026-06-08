@@ -1,0 +1,6 @@
+name: c4_parent
+description: C4 parent — has TWO blocks with defaults.
+prompt: |
+  {% block role %}parent-default-role{% endblock %}
+  middle prose
+  {% block tail %}parent-default-tail{% endblock %}

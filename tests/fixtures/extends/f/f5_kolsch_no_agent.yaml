@@ -1,0 +1,6 @@
+extends: kolsch:agents/no_such_agent.yaml
+name: f5_kolsch
+description: |
+  F5 — extends a kolsch: ref that doesn't resolve (the installed
+  kolsch package ships only docs/ + AGENTS.md, no agents/).
+  Expected: config.parent_agent_not_found.

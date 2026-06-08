@@ -1,0 +1,6 @@
+name: b2_parent
+description: B2 parent — supplies model + prompt.
+model:
+  provider: fake
+  model: parent-model
+prompt: Parent body.

@@ -1,0 +1,6 @@
+name: a2
+description: Jinja variables resolve against the standard envelope (A2).
+prompt: |
+  You are {{ agent.name }}.
+  {% for t in tools %}- {{ t.name }}
+  {% endfor %}

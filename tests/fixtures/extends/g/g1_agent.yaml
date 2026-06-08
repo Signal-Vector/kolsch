@@ -1,0 +1,10 @@
+name: g1_agent
+description: G1 — agent with one enabled skill; listing should be appended.
+prompt: |
+  G1 agent body.
+subsystems:
+  skills:
+    variant: standard
+    config:
+      enabled:
+        - ref: x/g1_skill

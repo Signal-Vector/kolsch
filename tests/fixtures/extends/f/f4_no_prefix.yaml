@@ -1,0 +1,7 @@
+extends: bundle/with/too/many/segments/that/cant/parse
+name: f4_bad
+description: |
+  F4 — malformed extends ref (too many segments). Expected: a
+  clean Fatal at agent-load (config.parent_agent_not_found or
+  AssetsInvalidRef). The exact code may shift with parser
+  changes; the contract is "does NOT pass silently".

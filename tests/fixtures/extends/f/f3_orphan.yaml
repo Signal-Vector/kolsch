@@ -1,0 +1,3 @@
+extends: workspace:bundles/x/agents/does_not_exist.yaml
+name: f3_orphan
+description: "F3 — extends points at a missing file. Expected: config.parent_agent_not_found."

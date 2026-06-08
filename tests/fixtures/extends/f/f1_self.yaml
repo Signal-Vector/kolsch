@@ -1,0 +1,3 @@
+extends: x/f1_self
+name: f1_self
+description: "F1 — self-cycle. Expected: config.agent_inheritance_cycle Fatal."

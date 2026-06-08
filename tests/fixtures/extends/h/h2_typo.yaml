@@ -1,0 +1,4 @@
+name: h2
+description: H2 — typo'd variable name. StrictUndefined → config.template_render_failed Fatal.
+prompt: |
+  I am {{ agent.naem }}.

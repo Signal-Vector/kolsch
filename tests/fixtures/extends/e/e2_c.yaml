@@ -1,0 +1,3 @@
+name: e2_root
+description: E2 root (C) — declares description (will be inherited by A).
+prompt: Root body — should reach A via chain.

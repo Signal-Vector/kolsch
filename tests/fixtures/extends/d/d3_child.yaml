@@ -1,0 +1,10 @@
+extends: x/d3_parent
+name: d3_child
+description: |
+  D3 child — writes a fresh prompt (no {% extends parent %}).
+  The required-block check is bound to inheritance dispatch; it
+  must NOT fire when the child opts out of inheritance even
+  though it still declares extends: at the YAML level (for field
+  inheritance only).
+prompt: |
+  Fresh child prompt — no inheritance directive at the Jinja level.

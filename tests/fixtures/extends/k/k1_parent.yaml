@@ -1,0 +1,6 @@
+name: k1_parent
+description: K1 parent — declares a block whose default doesn't reference vars.
+prompt: |
+  Header.
+  {% block body %}parent-default{% endblock %}
+  Footer.

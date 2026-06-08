@@ -1,0 +1,3 @@
+extends: x/e2_b
+name: e2_leaf
+description: E2 leaf (A) — only declares its own name; inherits prompt + model from chain.

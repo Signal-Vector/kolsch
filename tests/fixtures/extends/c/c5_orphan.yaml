@@ -1,0 +1,8 @@
+name: c5_orphan
+description: |
+  C5 — prompt uses {% extends parent %} but the YAML has no
+  extends: field. Expected: config.extends_template_without_inheritance
+  Fatal at agent-load.
+prompt: |
+  {% extends parent %}
+  {% block role %}lonely{% endblock %}

@@ -1,0 +1,4 @@
+name: a1
+description: Plain prompt — no Jinja markers (A1 baseline).
+prompt: |
+  You are a plain agent. No templating here.

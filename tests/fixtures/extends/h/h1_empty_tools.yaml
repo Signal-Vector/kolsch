@@ -1,0 +1,4 @@
+name: h1
+description: "H1 — references {{ tools }} but declares no tools. Expected: agent.template_warning."
+prompt: |
+  Tools: {{ tools }}.

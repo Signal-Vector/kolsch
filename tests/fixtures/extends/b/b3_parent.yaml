@@ -1,0 +1,10 @@
+name: b3_parent
+description: B3 parent — declares two tools.
+prompt: Parent body.
+subsystems:
+  tools:
+    variant: standard
+    config:
+      declared:
+        - ref: x/parent_tool_a
+        - ref: x/parent_tool_b

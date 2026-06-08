@@ -1,0 +1,6 @@
+name: d3_parent
+description: D3 parent — declares a required block.
+prompt: |
+  Header.
+  {% block role required %}{% endblock %}
+  Footer.

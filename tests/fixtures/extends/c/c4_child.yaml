@@ -1,0 +1,6 @@
+extends: x/c4_parent
+name: c4_child
+description: C4 child — fills `role` but not `tail`.
+prompt: |
+  {% extends parent %}
+  {% block role %}OVERRIDDEN-ROLE{% endblock %}

@@ -1,0 +1,3 @@
+extends: x/f2_b
+name: f2_a
+description: "F2 — two-node cycle (A → B → A). Expected: config.agent_inheritance_cycle."

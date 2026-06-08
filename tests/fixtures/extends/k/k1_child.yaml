@@ -1,0 +1,6 @@
+extends: x/k1_parent
+name: k1_child
+description: K1 child — block content references envelope vars (must render against the leaf's context).
+prompt: |
+  {% extends parent %}
+  {% block body %}name-from-block={{ agent.name }}{% endblock %}

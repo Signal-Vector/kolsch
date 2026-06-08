@@ -386,139 +386,48 @@ the docs are accurate.
 ```
 [standing instructions]
 
-Step 1 — Verify the design picks before any production code.
+Step 1 — Verify the design and lock the open questions.
+No production code.
 
 Read first:
-- /Users/andrecohen/Desktop/SV/Projects/kolsch/process/bug-engine-extends-parent-not-rendered.md Parts 0-4.
-- /Users/andrecohen/Desktop/SV/Projects/kolsch/src/templating/inheritance.py (apply_inheritance, resolve_extends_chain, render_with_parent).
-- /Users/andrecohen/Desktop/SV/Projects/kolsch/src/templating/render.py (render_prompt — the no-loader environment).
-- /Users/andrecohen/Desktop/SV/Projects/kolsch/src/engine/engine.py:667-805 (_render_prompt_if_needed).
-- /Users/andrecohen/Desktop/SV/Projects/kolsch/src/assets/asset_manager.py:130-170 (chain resolution + extends stripping).
-- /Users/andrecohen/Desktop/SV/Projects/kolsch/src/engine/assembly.py:48-90 (skills_listing post-append).
-- /Users/andrecohen/Desktop/SV/Projects/kolsch/docs/how-to/agent-templating.md:225-320.
+- This spec, Parts 0-4.
+- src/templating/inheritance.py (apply_inheritance,
+  render_with_parent).
+- src/templating/render.py (render_prompt — no-loader env).
+- src/engine/engine.py:667-805 (_render_prompt_if_needed).
+- src/assets/asset_manager.py:130-170 (chain + extends
+  stripping).
 
-Verification tasks:
+Tasks:
 
-1. Confirm the wiring gap.
-   - Trace from agent.config.prompt (with `{% extends parent %}`)
-     to render_prompt (no loader). Cite the exact lines.
-   - Confirm apply_inheritance strips extends from every layer
-     (asset_manager.py:155). Cite.
-   - Confirm render_with_parent is not called anywhere except
-     tests. grep for it; document.
+1. Cite the wiring gap with file:line in three places:
+   render.py no-loader env; engine.py:795 always calls
+   render_prompt; asset_manager.py:155 strips extends.
 
-2. Pick the dispatch design (Option A vs B from Part 2).
-   - Default recommendation: A (preserve leaf's extends;
-     engine re-walks the catalog at render time).
-   - Confirm engine has access to the asset catalog at render
-     time. Trace from `_render_prompt_if_needed` to
-     `self.engine._assets._catalog` or equivalent — what's the
-     accessor for "give me the parent agent's prompt source"?
-   - If catalog access from the engine is awkward, fall back
-     to Option B (derive parent_prompt_source on the resolved
-     config). Document the call.
+2. Pick dispatch design (A vs B from Part 2). Confirm
+   engine's catalog access for Option A; name the accessor.
 
-3. Pin the asset_manager.py change.
-   - Recommended: keep stripping `extends` from non-leaf
-     layers (those have already been resolved during chain
-     walk); but for the LEAF (index 0 in agent_partials_chain
-     per :154-157), preserve the extends value.
-   - Confirm by reading whether the resolver's downstream
-     merge would otherwise re-apply the stripped extends.
-     If the resolver iterates and re-strips, the asset manager
-     fix needs to be at a different point.
+3. Pin the asset_manager change: preserve `extends` on the
+   leaf (chain index 0); confirm downstream merge doesn't
+   re-strip.
 
-4. Pin the engine change.
-   - At `_render_prompt_if_needed`, after building the
-     context dict (line ~787-793):
-       if self.config.extends is not None:
-           parent_source = await self._load_parent_prompt_source()
-           rendered = render_with_parent(
-               child_template_string=prompt,
-               parent_template_string=parent_source,
-               context=context,
-               template_name=f"agent:{self.config.agent_id}",
-           )
-       else:
-           rendered = render_prompt(prompt, context, template_name=...)
-   - Sketch the `_load_parent_prompt_source` helper. What
-     does it call? Likely:
-       parent_entry = self.engine._assets.catalog.get(self.config.extends)
-       parent_partial = load_agent_definition(parent_entry.path)
-       return parent_partial.get("prompt", "")
-   - For multi-level chains (E1-E2), the parent itself may
-     have its own `extends:`. Does the helper need to walk
-     the chain, or does Jinja handle this naturally if we
-     also load grandparents into the DictLoader? Decide.
+4. Pin the C5 error class (orphan `{% extends parent %}` —
+   prompt uses the directive but config.extends is None).
+   New code recommended.
 
-5. Pin C5's error class.
-   - Case C5: child uses `{% extends parent %}` but has no
-     `extends:` field. Today: TypeError from Jinja.
-   - Step 2's dispatch falls into the else-branch (no
-     extends → render_prompt → still no loader → still
-     TypeError).
-   - Recommend: add a pre-render check: if the prompt
-     contains `{% extends parent %}` AND `self.config.extends`
-     is None → raise a typed PlatformError.
-     Pick the code: new (`config.extends_parent_without_extends_field`)
-     OR reuse `config.template_render_failed` with a specific
-     detail. Recommend new code; clearer for the author.
-   - Document the pick.
+5. Pin multi-level chain handling: load-all-ancestors-into-
+   DictLoader vs. asset-manager-pre-flatten. Pick one.
 
-6. F5 message improvement (optional, per Part 7).
-   - Today: `kolsch:agents/helper.yaml` → "parent agent ... not found"
-     with the resolved package path.
-   - Decide whether Step 2 amends the message to say
-     "kolsch: resolves against the installed package which
-     ships only docs/ and AGENTS.md; use workspace: for
-     agent YAMLs in your bundle." Lock yes/no in the writeup.
+6. Pin fixture layout: tests/fixtures/extends/ with subdirs
+   per category (a..k); sketch the fixture-load helper Step 3
+   uses.
 
-7. Multi-level chain handling for render_with_parent.
-   - Today: render_with_parent loads ONE parent into DictLoader.
-   - If parent has its own extends (Category E1 — A extends B
-     extends C, with blocks defined in C), the parent's
-     prompt contains `{% extends parent %}` too. Does the
-     current render_with_parent support this?
-   - Trace by reading. If not, document the multi-level fix:
-     load EVERY ancestor into the DictLoader under names
-     `parent`, `grandparent`, etc. OR re-bind `parent` per
-     level via recursive render. Pick one.
-   - Recommend: the simpler approach is the asset manager
-     pre-flattens the chain at apply_inheritance time:
-     walks the chain, recursively renders each layer against
-     its own parent, producing a single "flat parent prompt
-     source" that the leaf sees. The leaf calls
-     render_with_parent against that flattened source.
-     Document the call.
-
-8. Corpus fixture layout.
-   - Pin the directory layout: tests/fixtures/extends/
-     with subdirs a/, b/, c/, d/, e/, f/, g/, h/, i/, k/.
-   - Each fixture is a minimal YAML; for cases that need
-     a parent, include both files in the same subdir.
-   - Pin the fixture-load helper signature for Step 3 (a
-     function that takes a category + case id and returns
-     a temp workspace with the fixtures planted, ready for
-     build_resolved_config).
-   - Document.
-
-9. STOP and post the writeup + fixture skeleton (empty
-   subdirs + a README listing case names per Part 4). No
-   production code, no fixture content.
-
-ESCALATION PATH: if Step 1 reveals that:
- (a) Engine cannot access the asset catalog at render time
-     without a wider refactor (Option A becomes infeasible),
- (b) render_with_parent's DictLoader-of-one approach does
-     not support multi-level chains and the recursive
-     pre-flatten is non-trivial,
- (c) the resolved config's extends value can't be preserved
-     without a Pydantic schema change that touches multiple
-     callers,
-escalate before proceeding.
-
-Acceptance: writeup posted; fixture skeleton ready;
-coordinator approves to proceed.
+ESCALATION:
+- Engine can't reach the catalog at render time.
+- render_with_parent doesn't support multi-level + pre-flatten
+  needs deferred-variable Jinja that doesn't natively exist.
+- Preserving leaf.extends requires schema changes that touch
+  unrelated callers.
 ```
 
 ### Reviewer prompt
@@ -526,42 +435,18 @@ coordinator approves to proceed.
 ```
 [standing instructions]
 
-Review Step 1.
-
-NO production code. The writeup + fixture skeleton are the
-deliverable.
+Review Step 1. No code; writeup is the deliverable.
 
 Checks:
-
-1. The wiring gap is cited with file:line in three places
-   (render.py no-loader; engine.py:795 always-render_prompt;
-   asset_manager.py:155 extends-stripped).
-
-2. Option A vs B is decided with rationale. If A, the
-   engine-side `_load_parent_prompt_source` accessor is
-   sketched concretely (which catalog object, which method).
-   If B, the schema change is justified.
-
-3. The leaf-preservation strategy for asset_manager is
-   concrete: "keep extends on agent_partials_chain[0],
-   strip from the rest" or equivalent.
-
-4. C5's error class is decided (new code vs. reused).
-   "TBD" is a fail.
-
-5. F5 message decision is locked (yes/no on amending).
-
-6. Multi-level chain handling is decided. The two options
-   (load-all-ancestors-into-DictLoader vs.
-   asset-manager-pre-flattens) are not both fine; pick one.
-   If the writeup says "we'll figure it out in Step 2,"
-   fail.
-
-7. Fixture directory layout is concrete (paths, file naming
-   convention).
-
-8. All three escalation conditions are confirmed
-   not-an-issue with citations or escalated.
+1. Three wiring-gap citations with file:line.
+2. Dispatch design (A or B) picked with rationale; catalog
+   accessor named if A.
+3. asset_manager leaf-preservation is concrete.
+4. C5 error class decided (no TBD).
+5. Multi-level chain handling picked (single approach, not
+   "figure out in Step 2").
+6. Fixture layout pinned.
+7. Escalation conditions confirmed or raised.
 
 Verdict: APPROVE-TO-PROCEED or REVISE.
 ```
@@ -583,102 +468,45 @@ Read first:
 - src/engine/engine.py:667-805.
 - src/templating/inheritance.py.
 
-Tasks (in this order):
+Tasks:
 
-1. Asset manager — preserve leaf's extends.
-   - At src/assets/asset_manager.py around line 154-157:
-     change the loop that strips extends from each layer to
-     preserve it on the LEAF (index 0 of agent_partials_chain)
-     while stripping from non-leaf layers.
-   - The leaf preservation must happen BEFORE the chain is
-     reversed for the kernel merge (or coordinate with
-     wherever the resolved config gets the field).
-   - Confirm the resolved config's `extends` field carries
-     the original `extends:` value from the child YAML.
+1. asset_manager.py:154-157 — preserve `extends` on the leaf
+   (chain index 0); keep stripping from non-leaf layers.
+   Confirm the resolved config carries the original value.
 
-2. Asset manager — multi-level chain pre-flatten (if Step 1
-   picked the pre-flatten approach).
-   - If the leaf's prompt source contains `{% extends parent %}`
-     AND the chain has more than one parent, compute a
-     "flattened parent" prompt source by recursively rendering
-     each layer against its own parent using render_with_parent
-     called with an EMPTY context (block resolution only,
-     deferred variable evaluation).
-   - This is the hard part. If Jinja's render-with-empty-context
-     doesn't actually defer variable evaluation (it errors on
-     StrictUndefined for `{{ agent.name }}`), fall back to the
-     load-all-ancestors approach (Step 1's alternative).
-   - Document the chosen path in the PR description.
+2. Multi-level chain handling per Step 1's pick (pre-flatten
+   in asset_manager OR load-all-ancestors at render time).
+   Document the chosen path in the PR.
 
-3. Engine — dispatch at _render_prompt_if_needed.
-   - In src/engine/engine.py around line 793-799:
-     - Before the `rendered = render_prompt(...)` line, add:
-         if self.config.extends is not None:
-             parent_source = await self._load_parent_prompt_source()
-             rendered = render_with_parent(
-                 child_template_string=prompt,
-                 parent_template_string=parent_source,
-                 context=context,
-                 template_name=f"agent:{self.config.agent_id}",
-             )
-         else:
-             rendered = render_prompt(prompt, context, ...)
-   - Add the `_load_parent_prompt_source` async helper as a
-     method on the exchange (or inline if simple):
-       async def _load_parent_prompt_source(self) -> str:
-           parent_ref = self.config.extends  # e.g., "workspace:bundles/X/agents/Y.yaml"
-           # Resolve via catalog accessor Step 1 pinned.
-           ...
-           # Return the parent's `prompt` field source string.
+3. engine.py:_render_prompt_if_needed — add the dispatch
+   branch before the existing `render_prompt(...)` call:
+   if `self.config.extends is not None` → call
+   `render_with_parent` with the parent source; else →
+   render_prompt as today. Add a `_load_parent_prompt_source`
+   helper using the catalog accessor Step 1 pinned.
 
-4. Engine — C5 detection (no extends but uses {% extends parent %}).
-   - Before falling into the else-branch render_prompt call,
-     check: if `prompt` contains the literal string `{% extends parent %}`
-     (or any `{% extends `) AND `self.config.extends is None`,
-     raise the typed PlatformError Step 1 picked.
-   - The check can be a simple substring match; false
-     positives from comments are acceptable (a comment containing
-     `{% extends parent %}` is weird enough that an error is
-     fine).
+4. C5 detection — BEFORE the else-branch render_prompt call,
+   check: prompt contains `{% extends parent %}` AND
+   self.config.extends is None → raise the typed PlatformError
+   Step 1 picked. Order matters (must fire before render_prompt).
 
-5. F5 message (if Step 1 picked yes).
-   - Amend the ConfigParentAgentNotFound error to include
-     a hint about prefix when the original ref was
-     `kolsch:agents/...`.
-   - File location: src/errors/kernel.py (or wherever the
-     class lives).
+5. F5 message — if Step 1 picked "yes," amend
+   ConfigParentAgentNotFound with the `kolsch:`-vs-`workspace:`
+   hint. Skip otherwise.
 
 6. Unit tests in tests/unit/test_engine_extends_dispatch.py:
-   - test_extends_none_uses_render_prompt: a config with
-     `extends=None` and a plain prompt → render_prompt path.
-   - test_extends_set_uses_render_with_parent: a config with
-     `extends="workspace:..."` and a `{% extends parent %}`
-     prompt → render_with_parent path (mock the catalog to
-     return a known parent source; assert the rendered output
-     reflects parent + child content).
-   - test_extends_parent_without_extends_field_raises:
-     prompt has `{% extends parent %}` but extends=None →
-     the C5 error.
+   extends=None → render_prompt path; extends set →
+   render_with_parent; orphan `{% extends parent %}` → C5
+   error.
 
-7. NO change to:
-   - The Framework protocol or implementations.
-   - The boundary classifier work (separate ticket).
-   - The skills_listing post-append at assembly.py:83-87.
-   - render_prompt itself.
-   - render_with_parent itself (the helper works; we're
-     wiring it).
+7. NO change to render_prompt, render_with_parent,
+   Framework protocol, assembly.py, or the boundary
+   classifier.
 
-Scope: ~120 LOC across asset_manager + engine + errors;
-~80 LOC tests.
-
-ESCALATION PATH: if Jinja's render-with-empty-context for
-the pre-flatten path errors instead of deferring variable
-evaluation, escalate. The fallback (load-all-ancestors) is a
-larger change.
-
-Acceptance: unit tests pass; the trigger case (butler with
-{% extends parent %}) renders cleanly when manually probed
-via the same Python harness used in Step 1.
+ESCALATION: Jinja's empty-context render-for-pre-flatten
+errors on StrictUndefined for `{{ agent.name }}` instead of
+deferring variable evaluation; fallback is the larger
+load-all-ancestors approach.
 ```
 
 ### Reviewer prompt
@@ -689,46 +517,22 @@ via the same Python harness used in Step 1.
 Review Step 2.
 
 Checks:
-
-1. asset_manager.py preserves the leaf's extends. Verify by
-   reading the strip loop. The change is a single index-0
-   carve-out, not a broader rewrite.
-
-2. The engine's dispatch branch reads
-   `self.config.extends is not None` — NOT a substring
-   check on the prompt. Heuristic-on-prompt dispatch is
-   fragile (comments could trigger). The schema field is
-   the source of truth.
-
-3. _load_parent_prompt_source resolves the parent via the
-   catalog accessor Step 1 named. Verify by tracing.
-
-4. C5 detection FIRES BEFORE falling into render_prompt.
-   Order: extends-set branch → C5 check on else-branch →
-   render_prompt. Reverse order would let C5 hit Jinja and
-   produce TypeError again.
-
-5. The C5 error class is the one Step 1 picked. New code
-   path consistent with errors/kernel.py conventions.
-
-6. F5 message: matches Step 1's decision. If "no," no
-   changes to the error class are present.
-
-7. Multi-level chain handling matches Step 1's pick.
-   No surprise alternative.
-
-8. NO changes outside the documented scope. Specifically:
-   - render_prompt unchanged.
-   - render_with_parent unchanged.
-   - assembly.py unchanged.
-   - Engine boundary classifier unchanged.
-
-9. Unit tests cover the three documented paths (no-extends,
-   extends-set, C5).
-
-10. Run the full test suite. tc_eng_* goldens still
-    byte-equal (the dispatch is additive; existing paths
-    unchanged).
+1. asset_manager preserves leaf.extends as a single
+   index-0 carve-out (not a broader rewrite).
+2. Engine dispatch reads `self.config.extends is not None`
+   — NOT a prompt substring check (would let comments
+   trigger).
+3. _load_parent_prompt_source uses the Step 1 catalog
+   accessor.
+4. C5 detection fires BEFORE the render_prompt call (order
+   verified by reading).
+5. C5 error class matches Step 1's pick.
+6. Multi-level chain handling matches Step 1 (no surprise
+   alternative).
+7. NO change to render_prompt, render_with_parent,
+   assembly.py, boundary classifier.
+8. Unit tests cover the three paths.
+9. Full suite green; tc_eng_* goldens byte-equal.
 
 Verdict: PASS or FAIL.
 ```
@@ -751,117 +555,37 @@ Read first:
 
 Tasks:
 
-1. Create tests/fixtures/extends/ with the 10 category
-   subdirs (a/, b/, c/, d/, e/, f/, g/, h/, i/, k/).
-   Step 1 already scaffolded the dir skeleton; this step
-   populates each fixture.
+1. Populate tests/fixtures/extends/ with all 24 fixtures
+   per Part 4. Step 1 scaffolded the subdirs (a..k); this
+   step writes the YAMLs. Keep each fixture minimal.
 
-2. Author each fixture per Part 4's case table. Each fixture
-   is a minimal YAML expressing the case's intent. Keep
-   fixtures SHORT (the corpus is large; per-fixture verbosity
-   makes the suite unreviewable).
+2. Build tests/integration/_extends_corpus_cases.py — the
+   case table. One entry per Part 4 ID with:
+   case_id, category, fixture_files, target_agent_ref,
+   expected_outcome
+   (loads_with_render | loads_with_error | error_at_load_<code>),
+   expected_render_contains / excludes, expected_error_code.
 
-   Examples:
-     # tests/fixtures/extends/c/c1_parent.yaml
-     schema_version: "0.1"
-     assembly_version: "1"
-     agent_id: ag_c1_parent
-     name: c1_parent
-     model: { provider: opencode, model: qwen3.6-plus }
-     io: { mode: conversational }
-     prompt: |
-       You are {% block role %}defaultrole{% endblock %} for testing.
+3. Build tests/integration/test_extends_corpus.py that
+   parametrizes over the case table: install fixtures in a
+   tmp workspace, call build_resolved_config, drive the
+   render, assert outcome matches.
 
-     # tests/fixtures/extends/c/c1_child.yaml
-     schema_version: "0.1"
-     assembly_version: "1"
-     agent_id: ag_c1_child
-     name: c1_child
-     extends: workspace:bundles/test/agents/c1_parent.yaml
-     io: { mode: conversational }
-     prompt: |
-       {% extends parent %}
-       {% block role %}filledrole{% endblock %}
+4. Walk Part 4's table: ✓ cases must pass (regression
+   guard); ✗ cases must pass post-Step-2; ⚠ cases pin
+   current behavior with an explanatory comment.
 
-3. Build tests/integration/test_extends_corpus.py:
+5. Pre-fix sampling — stash Step 2; run C1, C2, K1, K2;
+   document each pre-fix failure mode in the PR.
 
-   The test parametrizes over the 24 cases. Each case
-   declares:
-     - case_id (e.g., "c1")
-     - category (e.g., "c")
-     - fixture_files: list of YAMLs to install in the temp
-       workspace.
-     - target_agent_ref: which one to build_resolved_config for.
-     - expected_outcome: "loads_with_render" | "loads_with_error" |
-       "error_at_load_<code>"
-     - expected_render_contains: list[str] (substrings the
-       rendered prompt must contain) — only for loads_with_render
-     - expected_render_excludes: list[str] (substrings that
-       must NOT appear) — only for loads_with_render
-     - expected_error_code: str (e.g., "config.required_block_missing")
-       — only for error_at_load_*
+6. Add EXT-CORPUS section to process/test-catalog.md (24
+   entries, IDs match Part 4 verbatim).
 
-   Test runner per case:
-     - Builds a tmp workspace with the fixture files at the
-       declared paths.
-     - Bootstraps the runtime.
-     - Calls build_resolved_config(target_agent_ref).
-     - If expected_outcome starts with "error_at_load":
-       - assert that ConfigInvalid (or the named exception
-         class) raises with the expected code in
-         detail.validation_errors.
-     - If expected_outcome is "loads_with_render":
-       - Drive the prompt through the engine's render path
-         (or invoke a thin helper that does just the render
-         step with a mock context).
-       - Assert each expected_render_contains substring
-         appears.
-       - Assert each expected_render_excludes substring does
-         NOT appear.
-     - If expected_outcome is "loads_with_error" (rare):
-       - assert the load succeeds AND a specific event was
-         emitted (e.g., agent.template_warning for H1).
+7. NO production code changes. If any case reveals a
+   Step 2 gap, escalate.
 
-   The case table itself is a Python module
-   (tests/integration/_extends_corpus_cases.py) so tests
-   parametrize over the same list the docs reference. The
-   IDs (C1, C2, etc.) MUST match Part 4's IDs verbatim.
-
-4. Walk the case table. For each case:
-   - If it's in the ✓ regression-guard column: confirm test
-     passes (this is the regression check).
-   - If it's in the ✗ column: confirm test passes AFTER
-     Step 2's wiring (Step 2's tests covered the engine
-     side; this step covers the fixtures-as-source path).
-   - If it's in the ⚠ column: confirm the test pins
-     whatever current behavior IS, with a comment naming
-     that we're documenting reality.
-
-5. Pre-fix verification — sampling.
-   - git-stash Step 2's code; run a sampling: TC C1, C2, K1, K2.
-     All should FAIL with the documented pre-fix failure mode
-     (TypeError no loader, or empty render output).
-   - Document in the PR description for each sampled case:
-     pre-fix failure message + post-fix success.
-
-6. Add the 24 cases to process/test-catalog.md under a new
-   "Engine Extends Corpus (EXT-CORPUS)" section. Use the
-   ID convention (TC-EXT-A1, TC-EXT-B1, etc.). One row per
-   case with intent + expected.
-
-7. NO production code changes. If any case reveals a Step 2
-   gap, escalate — don't patch Step 2 silently from Step 3.
-
-Scope: 24 fixture YAMLs (small, ~10-30 lines each) +
-~300 LOC test runner + ~150 LOC case table + catalog entries.
-
-ESCALATION PATH: if any case in the ✗ column STILL fails
-after Step 2's wiring landed, Step 2 is incomplete.
-Escalate with the failing case ID + the captured failure
-output.
-
-Acceptance: all 24 tests pass on post-fix code; pre-fix
-sampling documented; catalog updated.
+ESCALATION: a ✗ case still fails after Step 2 landed.
+Escalate with the failing case ID + the captured output.
 ```
 
 ### Reviewer prompt
@@ -872,37 +596,19 @@ sampling documented; catalog updated.
 Review Step 3.
 
 Checks:
-
-1. tests/fixtures/extends/ has all 24 fixtures organized by
-   category subdir. Spot-check: open three random fixtures
-   from different categories; confirm shape matches Part 4.
-
-2. The case table (tests/integration/_extends_corpus_cases.py)
-   lists ALL 24 case IDs from Part 4 with consistent naming.
-   Missing any ID is a fail.
-
-3. The test runner walks the corpus and runs each case
-   without skipping. Confirm by reading the parametrize
-   decorator + the runner body.
-
-4. Pre-fix verification: PR description shows at least
-   3-4 cases failing pre-Step-2-code and passing post.
-   The pre-fix failure messages match the "Currently"
-   column from Part 4 (✗ cases produce loader errors;
-   ✓ cases work both pre and post; ⚠ cases pin current
-   behavior).
-
-5. The ⚠ cases (C5 and G3 per Part 4) are pinned to
-   documented behavior. Comments in the test explain what
-   was decided in Step 1.
-
-6. process/test-catalog.md gained the EXT-CORPUS section
-   with all 24 entries.
-
-7. Full test suite green. tc_eng_* goldens still
-   byte-equal.
-
-8. NO production-code changes outside src/ since Step 2.
+1. tests/fixtures/extends/ has all 24 fixtures organized
+   by category. Spot-check three from different categories.
+2. _extends_corpus_cases.py lists all 24 IDs from Part 4
+   verbatim.
+3. test_extends_corpus.py parametrizes over the table; no
+   skips.
+4. Pre-fix sampling shows 3-4 ✗ cases failing pre-Step-2
+   with the expected failure modes.
+5. ⚠ cases (C5 + G3) pinned to Step 1's documented
+   behavior.
+6. EXT-CORPUS section added to test-catalog.md.
+7. Full suite green; tc_eng_* goldens byte-equal.
+8. NO production code changes outside src/ since Step 2.
 
 Verdict: PASS or FAIL.
 ```
@@ -937,143 +643,51 @@ VERIFY THE PRE-CONDITION FIRST:
   here would immediately need rewriting.
 
 Read first:
-- Steps 1-3 PRs (especially Step 3 — the fixture corpus
-  is your example source).
-- qol-prefix-defaults-and-unified-refs.md (the convention
-  the docs use).
-- docs/how-to/agent-templating.md (current state — the
-  misleading file).
-- docs/reference/schemas.md around lines 60-100 (where
-  agent envelope fields are documented) and 290-340
-  (composition order + prefix resolution).
-- docs/how-to/ as a directory — get a sense of the
-  established how-to voice + length.
-- docs/index.md and docs/how-to/README.md (if it exists)
-  for how-to listings.
+- Steps 1-3 PRs (Step 3's corpus is your example source).
+- docs/how-to/agent-templating.md (the misleading file).
+- docs/reference/schemas.md (envelope fields + prefix table).
+- docs/index.md (how-to listing).
 
 Tasks:
 
-1. Fix docs/how-to/agent-templating.md.
-   - Find every occurrence of `kolsch:agents/...` in the
-     file (grep). Each is misleading.
-   - Replace the canonical example (currently around
-     lines 251-262 + 275-284) with the working
-     `workspace:bundles/kolsch/agents/helper.yaml` form.
-     The YAML body should match Step 3's C1 fixture so
-     the doc and the test prove the same thing.
-   - Add a "Resolving the parent reference" subsection
-     (200-400 words) explaining:
-     - The two prefix forms (workspace:, kolsch:).
-     - That `kolsch:` resolves against the installed
-       kolsch package (which currently ships only
-       docs/ + AGENTS.md per src/kolsch/__init__.py),
-       so `kolsch:agents/...` is documented but not yet
-       realised. Point at the Step 4 follow-up ticket
-       for shipping canonical agents as package resources.
-     - Recommend `workspace:bundles/<bundle>/agents/<name>.yaml`
-       as the only currently-working form for cross-bundle
-       agent inheritance.
+1. Fix docs/how-to/agent-templating.md. Replace every
+   `kolsch:agents/...` example with the working
+   `workspace:bundles/kolsch/agents/helper.yaml` form. The
+   canonical example must match Step 3's C1 fixture.
 
-   - Add a "Common gotchas" subsection:
-     - C3 (stray text in child that uses extends gets
-       silently discarded): show an example, name the
-       behavior, link the C3 fixture.
-     - C5 (using `{% extends parent %}` without an
-       `extends:` field): show the error code Step 2 picked.
-     - F5 (`kolsch:` ref to a non-existent kolsch-package
-       resource): show the error message + the fix.
+2. Add four subsections to agent-templating.md:
+   - "Resolving the parent reference" — explain workspace:
+     vs. kolsch: (the latter currently ships only docs/ +
+     AGENTS.md per src/kolsch/__init__.py).
+   - "Common gotchas" — C3 stray-text discard, C5 orphan
+     {% extends parent %}, F5 kolsch:-not-found.
+   - "Compose with {{ super() }}" — K2 example; note this
+     is the only additive composition kolsch has.
+   - "Multi-level chains" — E1 three-file example.
 
-   - Add a "Compose parent content with `{{ super() }}`"
-     subsection covering K2. Concrete example:
-       parent: {% block role %}helper{% endblock %}
-       child:  {% block role %}{{ super() }} + butler{% endblock %}
-       → renders as "helper + butler".
-     Explain this is the ONLY additive composition kolsch
-     supports — at the YAML field level everything is
-     RFC 7386 replace-only. Link the K2 fixture.
+3. Author docs/how-to/extending-an-agent.md (~150-250
+   lines) using butler as the worked example. Sections:
+   Pick a parent → Decide what to override (Patterns
+   A/B/C tied to B1/B4/C1 fixtures) → Define your child
+   agent → Verify it loads → Run a chat session against it.
+   Butler YAML must match what Step 5 will restore.
 
-   - Add a "Multi-level chains" subsection covering E1.
-     Use the same three-file structure E1's fixture uses;
-     mention that intermediate parents can also have blocks.
+4. Update docs/reference/schemas.md: note `extends:` is
+   preserved on the resolved config (post-Step-2); update
+   the prefix table to reflect the kolsch:-only-ships-docs
+   reality.
 
-2. Author NEW docs/how-to/extending-an-agent.md.
-   - Target length: ~150-250 lines.
-   - Pattern: focused how-to, butler as the running example.
-   - Structure:
-     ## Pick a parent
-     ## Decide what to override
-       - Pattern A: inherit prompt verbatim (drop `prompt:`
-         from child) — show B1 fixture
-       - Pattern B: write a fresh prompt (no `{% extends parent %}`)
-         — show B4 fixture
-       - Pattern C: extend the parent's template + fill
-         blocks — show C1 fixture (this is the canonical
-         pattern; spend the most words here)
-     ## Define your child agent
-       (full butler.yaml shown verbatim — must match the
-       Step 5 restoration)
-     ## Verify it loads
-       Show the Python harness from this conversation:
-       `await runtime.build_resolved_config('andre/agents/butler')`
-     ## Run a chat session against it
-       Show `uv run kolsch chat andre/agents/butler` + what
-       to look for in the rendered system prompt event in
-       the session JSONL.
-   - Link FROM agent-templating.md TO this new how-to as
-     "for a step-by-step walkthrough, see Extending an
-     Agent."
+5. Update docs/index.md to list the new how-to.
 
-3. Update docs/reference/schemas.md.
-   - At the `extends` field docs (around line 68-72 + 311):
-     - Note that the value is preserved on the resolved
-       config (post-Step-2 behavior). Engine uses it at
-       render time to look up the parent prompt source.
-     - Cross-reference the new how-to.
-   - At the prefix resolution table (around line 311):
-     - Add a note that `kolsch:` reaches resources packaged
-       inside the installed kolsch package — currently
-       docs/ and AGENTS.md only, per
-       src/kolsch/__init__.py's force-include.
-     - Add a sentence to the `workspace:` row reinforcing
-       that workspace-bundle agents are the only currently-
-       reachable extends target.
+6. Lint pass: `grep -rn "kolsch:agents/" docs/` must
+   return zero unmarked hits.
 
-4. Update docs/index.md (if it has a how-to listing).
-   - Add the new how-to under the agent-authoring section.
+7. NO production code changes. NO new fixtures. NO bundle
+   YAML changes.
 
-5. EVERY example in the new docs MUST correspond to a
-   Step 3 fixture. If you find yourself writing a new
-   example that has no matching fixture, either:
-   - Add a fixture to Step 3's corpus (escalate — Step 3
-     is in main; adding a fixture is a small follow-up
-     PR), OR
-   - Cite an existing fixture and rework the example to
-     match it.
-   Doc-fixture divergence is the recurring failure mode
-   this step eliminates.
-
-6. Run a docs lint pass:
-     grep -rn "kolsch:agents/" docs/
-   should return ZERO matches after this step. Any
-   remaining occurrence is either:
-   - In a "this doesn't work yet" call-out (acceptable;
-     comment must explicitly mark it), OR
-   - An oversight (fix).
-
-7. NO production code changes. NO new fixtures (those
-   land in Step 3 or escalate). NO bundle YAML changes
-   (those land in Step 5).
-
-Scope: ~200 LOC docs added/changed across three files +
-one new how-to file.
-
-ESCALATION PATH: if writing the docs reveals an
-unanswered design question (e.g., "what's the actual
-intended UX for inheritance debugging?"), escalate.
-Don't ship docs that paper over a real uncertainty.
-
-Acceptance: agent-templating.md is honest; the new how-to
-exists; schemas.md is consistent; the lint pass is clean.
+ESCALATION: docs work surfaces a design question Step 1
+didn't pin (e.g., inheritance debugging UX). Escalate;
+don't paper over.
 ```
 
 ### Reviewer prompt
@@ -1084,57 +698,25 @@ exists; schemas.md is consistent; the lint pass is clean.
 Review Step 4 (Docs).
 
 Checks:
-
-1. grep -rn "kolsch:agents/" docs/ returns zero hits OR
-   only explicitly-marked "not yet implemented" examples.
-   Any unmarked kolsch:agents/ reference is a fail.
-
-2. EVERY YAML example in the touched docs corresponds to
-   a fixture under tests/fixtures/extends/ from Step 3.
-   Spot-check four examples (one from each major doc):
-     - agent-templating.md canonical example → C1 fixture
-     - agent-templating.md {{ super() }} example → K2 fixture
-     - extending-an-agent.md walkthrough → at least C1, B1, B4
-     - schemas.md prefix example → matches I1 or B1 fixture
-   Doc-fixture mismatch is a fail.
-
-3. docs/how-to/extending-an-agent.md exists, has the
-   "## Pick a parent / Decide what to override / Define
-   your child agent / Verify it loads / Run a chat session"
-   structure, and uses butler as the worked example. The
-   butler YAML in the doc MUST match the form Step 5
-   will restore in ~/Documents/kolsch/bundles/andre/agents/butler.yaml.
-
-4. docs/reference/schemas.md notes the post-Step-2
-   behavior on the `extends` field (preserved on the
-   resolved config). If the dev left it saying "stripped
-   during composition" — fail; that's the pre-Step-2 lie.
-
-5. "Common gotchas" subsection in agent-templating.md
-   covers C3, C5, F5 explicitly with the error codes /
-   messages Step 2 produced.
-
-6. "Compose parent content with {{ super() }}" subsection
-   has a runnable K2-equivalent example. Verify by reading
-   K2's fixture file alongside the doc example.
-
-7. "Multi-level chains" subsection has an E1-equivalent
-   example (three files: grandparent, parent, child).
-
-8. docs/index.md (or the how-to listing) links the new
-   how-to. Missing link is a fail — undiscoverable docs
-   are nearly as bad as missing docs.
-
-9. The how-to is the recommended length (~150-250 lines).
-   Substantially shorter usually means content was elided;
-   substantially longer usually means scope crept.
-
-10. NO production code changes. git diff src/ should be
-    empty.
-
-11. The mkdocs/sphinx build (or whichever doc build the
-    project uses) succeeds. Render the touched files
-    locally before approving.
+1. `grep -rn "kolsch:agents/" docs/` returns zero unmarked
+   hits.
+2. Every YAML example in touched docs corresponds to a
+   Step 3 fixture. Spot-check four: agent-templating
+   canonical (C1), super() (K2), extending-an-agent
+   walkthrough (B1/B4/C1), schemas prefix (I1 or B1).
+3. extending-an-agent.md has all five sections; butler
+   YAML matches what Step 5 will restore.
+4. schemas.md says `extends:` is preserved on resolved
+   config (NOT "stripped during composition").
+5. Common gotchas covers C3, C5, F5 with the actual error
+   codes Step 2 produced.
+6. {{ super() }} subsection has a runnable K2-equivalent
+   example.
+7. Multi-level chains has an E1-equivalent three-file
+   example.
+8. docs/index.md lists the new how-to.
+9. How-to length 150-250 lines.
+10. NO production code changes (git diff src/ empty).
 
 Verdict: PASS or FAIL.
 ```
@@ -1153,94 +735,53 @@ work by following them, then hand off to the user.
 
 Read first:
 - Steps 1-4 PRs.
-- docs/how-to/extending-an-agent.md (Step 4's new tutorial
-  — you're going to use IT as the script for this step).
-- bundles/andre/agents/butler.yaml in ~/Documents/kolsch
-  (currently the stop-gap drop-prompt form per the
-  same-conversation work).
+- docs/how-to/extending-an-agent.md (use as the script).
+- ~/Documents/kolsch/bundles/andre/agents/butler.yaml
+  (currently the stop-gap drop-prompt form).
 
 Tasks:
 
-1. Follow docs/how-to/extending-an-agent.md as written.
-   - Restore butler.yaml to the `{% extends parent %}` form
-     per the how-to's "Define your child agent" section.
-   - The butler.yaml content MUST match what the how-to
-     shows verbatim. If the dev finds they need to deviate,
-     the how-to is wrong → escalate to Step 4.
+1. Restore butler.yaml to the `{% extends parent %}` form
+   per the how-to's "Define your child agent" section.
+   Content must match the how-to verbatim. If you need to
+   deviate, the how-to is wrong → escalate to Step 4.
 
-2. Verify it loads (the how-to's "Verify it loads" section
-   is your script).
-   - Run the build_resolved_config harness shown in the
-     how-to. Confirm no errors.
-   - Confirm: 4 tools inherited, 2 context_files inherited,
-     the bash-prompt permission inherited.
+2. Run the build_resolved_config harness from the how-to.
+   Confirm load + that butler inherits 4 tools, 2
+   context_files, the bash-prompt permission.
 
-3. Run a real chat session per the how-to's "Run a chat
-   session against it" section.
-   - uv run kolsch chat andre/agents/butler
-   - Send a prompt that exercises butler:
-     "list files in src/engine and explain what each is for"
-   - Capture session JSONL.
-   - Verify in the system prompt event:
-     a. Parent's prose present (tool selection guide,
-        conciseness rule).
-     b. Child's role filled (text says "butler" not
-        "helper agent").
-     c. Child's special_instructions filled.
-     d. {{ agent.name }} → "butler".
+3. Run a real chat session: `uv run kolsch chat
+   andre/agents/butler`; send a tool-exercising prompt;
+   capture JSONL. Verify the rendered system prompt shows
+   parent prose + child role + child special_instructions
+   + {{ agent.name }} → "butler".
 
-4. Confirm canonical helper has the blocks.
-   - src/cli/_starter_bundle/kolsch/agents/helper.yaml has
-     the {% block role %} and {% block special_instructions %}
-     placeholders (per same-conversation work).
-   - User's workspace ~/Documents/kolsch/bundles/kolsch/agents/helper.yaml
-     similarly.
+4. Verify both helper.yaml copies (starter bundle +
+   workspace) have the {% block %} placeholders.
 
-5. Follow-up tickets to file (each as a small process/
-   doc):
-   - "Ship canonical kolsch agents as package resources"
-     — needed for kolsch:agents/... to reach agents
-     end-to-end. Reference Step 4's call-out in
-     agent-templating.md.
-   - "Symmetric {{ skills }} Jinja variable" — addresses
-     the assembly.py:83-87 asymmetry surfaced in Category G.
-   - "Empty-context Jinja partial render" — only if
-     Step 2 hit the escalation around deferred variable
-     evaluation.
+5. File follow-up tickets as actual files under process/:
+   - "Ship canonical kolsch agents as package resources."
+   - "Symmetric {{ skills }} Jinja variable."
+   - "Empty-context Jinja partial render" (only if Step 2
+     hit the deferred-variable-evaluation escalation).
 
 6. Closure writeup at
-   process/bug-engine-extends-parent-not-rendered-step5-closure.md:
-   - JSONL excerpt with the rendered system prompt
-     showing parent + child composition (post-fix).
-   - Corpus pass status: all 24 ✓.
-   - The docs walkthrough was followed without modification
-     — confirms doc-reality match.
-   - Pointers to the follow-up tickets filed in task 5.
+   process/bug-engine-extends-parent-not-rendered-step5-closure.md
+   with JSONL excerpt + corpus pass status (all 24 ✓) +
+   confirmation that the docs walkthrough worked
+   unmodified.
 
-7. Hand off to the user. The PR description MUST:
-   - Ask the user to follow docs/how-to/extending-an-agent.md
-     from a fresh chat session.
-   - Ask them to confirm both that the docs read clearly AND
-     that butler renders the inherited content.
-   - Note that the reviewer's verdict stays REVISE-PENDING-USER
-     until the user confirms.
+7. PR description asks the user to follow
+   extending-an-agent.md from their own session and
+   confirm both that docs read clearly AND butler renders
+   correctly. Reviewer verdict stays REVISE-PENDING-USER
+   until confirmed.
 
-Scope: small bundle file edits (butler.yaml restore) +
-manual report + follow-up tickets. NO new production code,
-NO new docs (those landed in Step 4).
-
-ESCALATION PATH:
-- If the docs need editing to match what the dev
-  actually has to do, Step 4 was inaccurate → revise
-  Step 4, don't patch in Step 5.
-- If the manual chat shows the rendered prompt is missing
-  content, Step 2's wiring missed a case → revise Step 2.
-- If the user, after confirming, reports a remaining
-  papercut not in any current ticket, file a fresh one.
-
-Acceptance: butler renders correctly via the steps in
-docs/how-to/extending-an-agent.md; user is asked to
-confirm; follow-up tickets filed.
+ESCALATION:
+- Docs need editing to match what the dev actually does →
+  Step 4 inaccurate; revise Step 4.
+- Rendered prompt missing content → Step 2 incomplete;
+  revise Step 2.
 ```
 
 ### Reviewer prompt
@@ -1251,38 +792,23 @@ confirm; follow-up tickets filed.
 Review Step 5.
 
 Checks:
+1. butler.yaml matches the how-to verbatim. Divergence is
+   either a doc bug (back to Step 4) or a silent rewrite
+   (fail).
+2. PR description has the JSONL excerpt showing parent +
+   child composition in the system prompt event;
+   {{ agent.name }} renders to "butler".
+3. The dev followed the how-to as the script. PR names
+   which sections were used at each task. Vague "I read
+   the docs" is a fail.
+4. Both helper.yaml copies have the {% block %}
+   placeholders.
+5. Follow-up tickets filed as files in process/.
+6. User-confirmation request in PR; verdict
+   REVISE-PENDING-USER until the user confirms.
+7. Full suite green; goldens byte-equal.
 
-1. butler.yaml in ~/Documents/kolsch matches the form shown
-   in docs/how-to/extending-an-agent.md verbatim. If they
-   diverge, either the doc is wrong (back to Step 4) or the
-   dev silently rewrote the YAML mid-step (fail).
-
-2. Manual chat: PR description has a JSONL excerpt showing
-   the resolved system prompt event with:
-   - Parent prose AND child block content visible.
-   - {{ agent.name }} rendering to "butler".
-   No JSONL excerpt → fail.
-
-3. The dev FOLLOWED Step 4's how-to as written. The PR
-   description names which sections of the how-to were
-   used at each task. Vague "I read the docs" is a fail —
-   the discipline is doc-as-script.
-
-4. Both copies of helper.yaml (starter bundle AND
-   workspace) have the {% block %} placeholders. Verify
-   by reading.
-
-5. Follow-up tickets are FILED as actual files under
-   process/ (not just listed in the PR description).
-
-6. The user-confirmation request is in the PR description.
-   The reviewer's verdict is REVISE-PENDING-USER until
-   the user confirms via a real chat session AND
-   confirms the docs read cleanly.
-
-7. Full test suite green. Goldens byte-equal.
-
-Verdict: PASS (only after user confirms), REVISE-PENDING-USER,
+Verdict: PASS (after user confirms), REVISE-PENDING-USER,
 or FAIL.
 ```
 
