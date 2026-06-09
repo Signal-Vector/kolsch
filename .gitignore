@@ -28,6 +28,7 @@ dist/
 sessions/
 content/
 logs/
+.tool-outputs/
 *.db
 *.db-journal
 
