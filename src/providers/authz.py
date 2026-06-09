@@ -1,9 +1,8 @@
 """Authorization provider — spec Module 3 + Module API Reference §8.
 
 The ``rule_based`` variant is a real ACL implementation from day one
-(spec §3 — not a placeholder). Rules are ``{id, who, what, effect}``;
-regexes are compiled at init with ``re.fullmatch`` semantics;
-evaluation is first-match-wins with default-deny.
+(spec §3 — not a placeholder). Evaluation is first-match-wins with
+default-deny.
 
 Phase 2.0 extensions (TOOL-R3 / TOOL-R7):
 
@@ -17,7 +16,7 @@ Phase 2.0 extensions (TOOL-R3 / TOOL-R7):
 - ``AuthorizationResult.effect`` — the three-value classification;
   ``allowed`` collapses to a bool for callers that only need that.
 - ``allow(principal, action, target=None, callback=None)`` —
-  the optional ``target`` matches against the rule's ``what``
+  the optional ``target`` matches against the rule's pattern
   (for file tools the resolved path; for ``bash`` the command
   string). The optional ``callback`` is the in-chat prompt
   resolver — when omitted, ``prompt`` collapses to ``deny`` so
@@ -28,8 +27,33 @@ Phase 2.0 extensions (TOOL-R3 / TOOL-R7):
   ``KOLSCH_TEST_BUILD=1`` env var is set; production refuses
   to load it (TOOL-R10 hard rule).
 
+qol-permission-system-human-readable.md Step 2 — schema migration:
+
+- The canonical rule shape is now ``{what, pattern, effect}``. ``what``
+  is the tool's fully-qualified ref (``kolsch/bash``) OR a system
+  action namespace (``agent.execute.*``) OR the catch-all ``*``;
+  ``pattern`` is a glob (``*`` / ``?``) matched against the target
+  string; ``effect`` is unchanged.
+- The legacy shape ``{id, who, what, effect}`` (regex-based ``what``)
+  is still accepted at load via the migration shim under
+  ``cli/_migrations``. In-memory :class:`Rule` carries the legacy
+  ``id`` / ``who`` fields as deprecated-but-tolerated for the
+  in-flight Step 2→Step 3 transition (so the modal at
+  ``cli/_modal.py`` keeps constructing rules with ``who=".*"`` until
+  Step 3 rewrites it).
+- The matcher dispatches per-shape: legacy rules use the existing
+  ``re.fullmatch`` semantics; new-shape rules use
+  ``fnmatch.fnmatchcase``.
+- When a catalog is supplied at construction the provider validates
+  each new-shape rule's ``what`` against it (qualified slash form
+  must resolve; bare names rejected with candidates). The catalog
+  also feeds the action→tool_ref map so a rule like
+  ``what: kolsch/bash`` fires on an action invocation
+  (``tool.bash``).
+
 Conformance invariants:
-- A-I1 — ``re.fullmatch`` ONLY (not ``match``/``search``).
+- A-I1 — legacy rules use ``re.fullmatch``; new-shape rules use
+  ``fnmatch.fnmatchcase`` (no regex backtracking surface).
 - A-I2 — first-match-wins; no "most-specific-match" heuristic.
 - A-I3 — default deny when no rule matches.
 - A-I4 — pure decision; no I/O. (Live-edit methods are NOT pure;
@@ -42,6 +66,7 @@ Conformance invariants:
 from __future__ import annotations
 
 import contextlib
+import fnmatch
 import hashlib
 import os
 import re
@@ -50,10 +75,20 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
-from errors import AuthzMalformedRule, AuthzRegexInvalid, ConfigInvalid
+from errors import (
+    AuthzBareToolRef,
+    AuthzMalformedRule,
+    AuthzPatternInvalid,
+    AuthzRegexInvalid,
+    AuthzToolRefUnknown,
+    ConfigInvalid,
+)
+from errors.assets import AssetsAmbiguousShorthand
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+
+    from assets.catalog import AssetCatalog
 
 
 # ---------------------------------------------------------------------------
@@ -89,19 +124,103 @@ class AuthzEffect(StrEnum):
     PROMPT = "prompt"
 
 
+def _build_action_to_tool_ref(catalog: AssetCatalog) -> dict[str, str]:
+    """Build the ``action → tool_ref`` map used by the new-shape matcher.
+
+    qol-permission-system-human-readable.md Step 2 — the action
+    namespace stays as ``tool.<name>`` (per Part 6 out-of-scope) but
+    rule ``what`` now uses the qualified tool ref ``<bundle>/<name>``.
+    The matcher needs both forms to fnmatch a rule like
+    ``what: kolsch/bash`` against an action invocation
+    ``tool.bash`` — this map bridges them.
+
+    When two bundles ship a tool with the same name, the action
+    namespace itself is ambiguous (a follow-up will migrate the
+    action namespace to ``tool.<home_bundle>.<name>``; see
+    ``qol-action-namespace-bundle-scoped.md``). For now, last-write
+    wins; the deny-side surface is safe (the legacy regex matcher
+    still fires on action) and the documented limitation is the
+    qualified-tool-ref rule.
+    """
+    out: dict[str, str] = {}
+    for entry in catalog.assets.values():
+        if entry.asset_type != "tool":
+            continue
+        # Catalog refs are 3-seg `<bundle>/<plural>/<name>`; tool refs
+        # in `what:` are 2-seg `<bundle>/<name>`.
+        name = entry.ref.rsplit("/", 1)[-1]
+        out[f"tool.{name}"] = f"{entry.bundle}/{name}"
+    return out
+
+
+_PATTERN_REGEX_CHARS: tuple[str, ...] = (
+    "[",
+    "]",
+    "^",
+    "$",
+    "\\",
+    "(",
+    ")",
+    "+",
+    "|",
+    "{",
+    "}",
+)
+"""Characters rejected in new-shape ``pattern`` fields.
+
+qol-permission-system-human-readable.md decision 3: ``pattern`` is a
+glob, not a regex. Accepting any of these would either silently
+miscompile a legacy regex as a glob (e.g., ``^find .*$`` becomes a
+literal-never-matches string) or expose fnmatch's character-class
+extension (``[abc]``) that confuses readers familiar with regex
+character classes. Both are footguns the schema migration is meant
+to eliminate."""
+
+
 class Rule(BaseModel):
     """One ACL rule.
 
-    Phase 2.0 (TOOL-R3): ``id`` is auto-derived from ``who+what+effect``
-    when absent; ``effect`` is one of ``allow`` / ``deny`` / ``prompt``.
+    qol-permission-system-human-readable.md Step 2 — the canonical
+    shape is now ``{what, pattern, effect}``:
+
+    - ``what`` is the tool's fully-qualified ref
+      (``kolsch/bash``) OR a system action namespace
+      (``agent.execute.*``) OR the catch-all ``*``.
+    - ``pattern`` is a glob matched against the target string
+      (the path / command / url the tool receives). Defaults to
+      ``*`` for rules that don't care about the target.
+    - ``effect`` is ``allow`` / ``deny`` / ``prompt``.
+
+    Legacy compatibility: the pre-QoL shape ``{id, who, what, effect}``
+    (with ``what`` as a regex matched against either action OR target)
+    is still accepted — ``who`` defaults to ``None``, which the
+    provider's compile step treats as "new-shape, glob-matched"; when
+    ``who`` is supplied (any string, typically ``.*``) the rule
+    compiles as legacy regex. ``id`` is auto-derived from
+    ``who+what+effect`` when absent. Step 3 rewrites the in-tree
+    callers that still construct the legacy shape; this transitional
+    surface lets them keep working until then.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    id: str = ""
-    who: str
     what: str
+    pattern: str = "*"
     effect: Literal["allow", "deny", "prompt"]
+
+    # Legacy fields — presence of ``who`` flags the rule as legacy.
+    id: str = ""
+    who: str | None = None
+
+    @property
+    def is_legacy(self) -> bool:
+        """True when the rule was constructed in the pre-QoL shape.
+
+        The compile step keys off this property to choose the regex
+        vs. glob matcher. Discriminator is ``who``'s presence (rather
+        than checking ``pattern``'s default) because every legacy rule
+        carries ``who`` and no new-shape YAML rule has one."""
+        return self.who is not None
 
 
 def derive_rule_id(who: str, what: str, effect: str) -> str:
@@ -109,11 +228,18 @@ def derive_rule_id(who: str, what: str, effect: str) -> str:
 
     Stable across reorders and reloads — two rules with identical
     content always produce the same id. The default-deny shape
-    (``who=".*"``, ``what=".*"``, ``effect="deny"``) returns the
-    reserved :data:`DEFAULT_DENY_RULE_ID` instead so the tail is
-    referenced by a fixed name.
+    (legacy: ``who=".*"``, ``what=".*"``, ``effect="deny"``; new:
+    ``what="*"``, ``pattern="*"``, ``effect="deny"``, passed as
+    ``what="*|*"`` from :meth:`_ensure_id`) returns the reserved
+    :data:`DEFAULT_DENY_RULE_ID` instead so the tail is referenced
+    by a fixed name across both schema shapes.
     """
     if who == ".*" and what == ".*" and effect == "deny":
+        return DEFAULT_DENY_RULE_ID
+    # qol-permission-system-human-readable.md Step 2 — new-shape
+    # catch-all collapses to ``{what: "*", pattern: "*", effect: "deny"}``;
+    # _ensure_id encodes that as ``what="*|*"`` here.
+    if who == ".*" and what == "*|*" and effect == "deny":
         return DEFAULT_DENY_RULE_ID
     payload = f"{who}|{what}|{effect}"
     digest = hashlib.sha256(payload.encode("utf-8")).hexdigest()[:8]
@@ -217,26 +343,51 @@ class AuthorizationProvider(Protocol):
 
 
 class _CompiledRule:
-    """A rule with its regexes already compiled for fast matching.
+    """A rule with its match expressions pre-compiled.
 
-    Held privately; the public surface is :class:`Rule` (the raw,
-    serialisable record) returned through :class:`AuthorizationResult`
-    and :meth:`list_rules`.
+    Two shapes coexist during the QoL migration window:
+
+    - **Legacy** rules carry ``who_re`` and ``what_re`` (compiled regex
+      patterns matched via ``re.fullmatch``). ``what_re`` matches
+      against the target (preferred) or action.
+    - **New-shape** rules carry ``what`` (glob) and ``pattern`` (glob),
+      both matched via ``fnmatch.fnmatchcase``. ``what`` matches the
+      action OR the tool ref; ``pattern`` matches the target.
+
+    ``is_legacy`` records which path :meth:`_match` should follow. The
+    public surface is :class:`Rule` (the raw, serialisable record)
+    returned through :class:`AuthorizationResult` and
+    :meth:`list_rules`.
     """
 
-    __slots__ = ("effect", "raw", "what_re", "who_re")
+    __slots__ = (
+        "effect",
+        "is_legacy",
+        "raw",
+        "what",
+        "what_re",
+        "who_re",
+    )
 
     def __init__(
         self,
-        who_re: re.Pattern[str],
-        what_re: re.Pattern[str],
         effect: Literal["allow", "deny", "prompt"],
         raw: Rule,
+        *,
+        is_legacy: bool,
+        who_re: re.Pattern[str] | None = None,
+        what_re: re.Pattern[str] | None = None,
+        what: str | None = None,
     ) -> None:
-        self.who_re = who_re
-        self.what_re = what_re
         self.effect = effect
         self.raw = raw
+        self.is_legacy = is_legacy
+        self.who_re = who_re
+        self.what_re = what_re
+        # The new-shape `what` is matched via fnmatch at evaluation
+        # time; pre-compiled translation would help but fnmatch
+        # already maintains its own LRU cache for translate().
+        self.what = what
 
 
 class RuleBasedAuthorizationProvider:
@@ -250,13 +401,29 @@ class RuleBasedAuthorizationProvider:
     removal.
     """
 
-    def __init__(self, *, config: dict[str, Any]) -> None:
+    def __init__(
+        self,
+        *,
+        config: dict[str, Any],
+        catalog: AssetCatalog | None = None,
+    ) -> None:
         raw_rules = config.get("rules", []) or []
         if not isinstance(raw_rules, list):
             raise AuthzMalformedRule(
                 rule_index=-1,
                 error=(f"`rules` must be a list; got {type(raw_rules).__name__}"),
             )
+        # qol-permission-system-human-readable.md Step 2 — when a
+        # catalog is supplied, the provider validates every new-shape
+        # rule's `what` against it AND builds an action→tool_ref map
+        # so a rule like `what: kolsch/bash` fires on the
+        # corresponding `tool.bash` action invocation. When ``None``
+        # (tests, non-workspace callers), legacy-only behaviour
+        # without catalog validation is preserved.
+        self._catalog = catalog
+        self._action_to_tool_ref: dict[str, str] = (
+            _build_action_to_tool_ref(catalog) if catalog is not None else {}
+        )
         self._rules: list[_CompiledRule] = [
             self._compile(index, entry) for index, entry in enumerate(raw_rules)
         ]
@@ -273,13 +440,27 @@ class RuleBasedAuthorizationProvider:
         # extension point.
         self._rule_added_hook: Callable[[list[Rule]], None] | None = None
 
-    @staticmethod
-    def _compile(index: int, entry: object) -> _CompiledRule:
+    def _compile(self, index: int, entry: object) -> _CompiledRule:
+        """Compile one raw rule entry into a :class:`_CompiledRule`.
+
+        Dispatches on the entry's shape: presence of ``who`` flags
+        the legacy ``{id, who, what, effect}`` regex shape; absence
+        flags the new ``{what, pattern, effect}`` glob shape.
+        """
         if not isinstance(entry, dict):
             raise AuthzMalformedRule(
                 rule_index=index,
                 error=f"rule must be a mapping; got {type(entry).__name__}",
             )
+        # The discriminator: legacy YAML always carries `who`; new
+        # YAML never does. Same heuristic the Rule.is_legacy property
+        # uses for in-memory rules.
+        if "who" in entry:
+            return self._compile_legacy(index, entry)
+        return self._compile_new_shape(index, entry)
+
+    @staticmethod
+    def _compile_legacy(index: int, entry: dict[str, Any]) -> _CompiledRule:
         for required in ("who", "what", "effect"):
             if required not in entry:
                 raise AuthzMalformedRule(
@@ -322,10 +503,131 @@ class RuleBasedAuthorizationProvider:
             else derive_rule_id(who, what, effect)
         )
         return _CompiledRule(
-            who_re=who_re,
-            what_re=what_re,
             effect=effect,
             raw=Rule(id=rule_id, who=who, what=what, effect=effect),
+            is_legacy=True,
+            who_re=who_re,
+            what_re=what_re,
+        )
+
+    def _compile_new_shape(self, index: int, entry: dict[str, Any]) -> _CompiledRule:
+        for required in ("what", "effect"):
+            if required not in entry:
+                raise AuthzMalformedRule(
+                    rule_index=index,
+                    error=f"missing required field {required!r}",
+                )
+        what = entry["what"]
+        pattern = entry.get("pattern", "*")
+        effect = entry["effect"]
+        if effect not in ("allow", "deny", "prompt"):
+            raise AuthzMalformedRule(
+                rule_index=index,
+                error=(f"effect must be 'allow', 'deny', or 'prompt'; got {effect!r}"),
+            )
+        if not isinstance(what, str) or not what:
+            raise AuthzMalformedRule(
+                rule_index=index,
+                error=f"`what` must be a non-empty string; got {what!r}",
+            )
+        if not isinstance(pattern, str):
+            raise AuthzMalformedRule(
+                rule_index=index,
+                error=f"`pattern` must be a string; got {type(pattern).__name__}",
+            )
+        # Validate `pattern` — must be a glob, not a regex.
+        forbidden = [c for c in _PATTERN_REGEX_CHARS if c in pattern]
+        if forbidden:
+            raise AuthzPatternInvalid(
+                rule_index=index,
+                pattern=pattern,
+                forbidden_chars=forbidden,
+            )
+        # Validate `what` against the catalog (skipped when no
+        # catalog supplied, e.g. tests).
+        self._validate_what(index=index, what=what)
+        # Derive a stable id so the live-edit API + default-deny
+        # tail detection still work for new-shape rules. The
+        # catch-all (``what="*"``, ``pattern="*"``, ``effect="deny"``)
+        # collapses to :data:`DEFAULT_DENY_RULE_ID`; everything else
+        # gets a deterministic hash. ``who=".*"`` is the canonical
+        # placeholder fed into ``derive_rule_id`` so legacy and
+        # new-shape catch-alls coalesce to the same id.
+        rule_id = derive_rule_id(".*", f"{what}|{pattern}", effect)
+        return _CompiledRule(
+            effect=effect,
+            raw=Rule(id=rule_id, what=what, pattern=pattern, effect=effect),
+            is_legacy=False,
+            what=what,
+        )
+
+    def _validate_what(self, *, index: int, what: str) -> None:
+        """Per qol-permission-system-human-readable.md Step 2 task 3.
+
+        - ``*`` → accept (catch-all).
+        - Contains ``.`` (e.g., ``agent.execute.*``) → accept;
+          system-action namespace, not catalog-validated.
+        - Contains ``/`` → must resolve to a catalogued tool.
+        - Bare name → raise :class:`AuthzBareToolRef` (with
+          candidates) or :class:`AssetsAmbiguousShorthand` per
+          decisions 6+7.
+
+        Skipped entirely when no catalog was supplied at
+        construction (test paths construct rule lists without a
+        workspace on disk; integration / real-workspace paths
+        always pass a catalog).
+        """
+        if what == "*":
+            return
+        if "." in what:
+            return  # system action namespace; not catalog-validated
+        if self._catalog is None:
+            return  # legacy / test path — no catalog to validate against
+        if "/" in what:
+            # Qualified slash form. Resolve against the catalog —
+            # rejects unknown tool refs with AuthzToolRefUnknown.
+            parts = what.split("/")
+            if len(parts) != 2 or not all(parts):
+                raise AuthzMalformedRule(
+                    rule_index=index,
+                    error=(
+                        f"`what: {what!r}` is not a valid 2-segment tool ref "
+                        "(expected `<bundle>/<name>`)"
+                    ),
+                )
+            bundle, name = parts
+            canonical = f"{bundle}/tools/{name}"
+            entry = self._catalog.assets.get(canonical)
+            if entry is None or entry.asset_type != "tool":
+                raise AuthzToolRefUnknown(
+                    rule_index=index,
+                    tool_ref=what,
+                )
+            return
+        # Bare name (no `/`, no `.`, not `*`). Walk the catalog for
+        # candidates so the error names the qualified form(s) the
+        # user should write.
+        candidates = sorted(
+            f"{entry.bundle}/{entry.ref.rsplit('/', 1)[-1]}"
+            for entry in self._catalog.assets.values()
+            if entry.asset_type == "tool"
+            and entry.ref.rsplit("/", 1)[-1] == what
+        )
+        if len(candidates) > 1:
+            raise AssetsAmbiguousShorthand(
+                shorthand=what,
+                candidates=candidates,
+                asset_type="tool",
+            )
+        # Single candidate OR no candidates — either way the user
+        # wrote a bare name and decision 6 says we reject it. With
+        # candidates the error lists them; without, the candidates
+        # list is empty (still actionable: tells the user the bare
+        # form is wrong + nothing matches).
+        raise AuthzBareToolRef(
+            rule_index=index,
+            bare_name=what,
+            candidates=candidates,
         )
 
     async def allow(
@@ -476,34 +778,87 @@ class RuleBasedAuthorizationProvider:
         result's ``reason`` (and into PROMPT's resolved reason via
         :meth:`_resolve_prompt`) so debugging output identifies
         which layer matched."""
-        # A-I1 fullmatch + A-I2 first-match-wins. Same target-OR-action
-        # matching as the Phase 2.0 path.
+        # The action→tool_ref map is built from the platform catalog
+        # at construction; per-layer rules (agent / bundle) inherit
+        # the same map.
+        tool_ref = self._action_to_tool_ref.get(action)
         for compiled in rules:
-            if not compiled.who_re.fullmatch(principal):
+            if not self._rule_matches(
+                compiled=compiled,
+                principal=principal,
+                action=action,
+                target=target,
+                tool_ref=tool_ref,
+            ):
                 continue
+            effect = AuthzEffect(compiled.effect)
+            if effect is AuthzEffect.PROMPT:
+                return await self._resolve_prompt(
+                    compiled=compiled,
+                    action=action,
+                    target=target,
+                    callback=callback,
+                    layer=layer,
+                )
+            return AuthorizationResult(
+                allowed=effect is AuthzEffect.ALLOW,
+                effect=effect,
+                matched_rule=compiled.raw,
+                reason=self._reason_for_match(compiled=compiled, layer=layer),
+            )
+        return None
+
+    @staticmethod
+    def _rule_matches(
+        *,
+        compiled: _CompiledRule,
+        principal: str,
+        action: str,
+        target: str | None,
+        tool_ref: str | None,
+    ) -> bool:
+        """Per-rule match decision. Dispatches on shape."""
+        if compiled.is_legacy:
+            # Phase 2.0 / A-I1 semantics: re.fullmatch against
+            # `who` AND (`what` against target OR action).
+            assert compiled.who_re is not None  # set at compile
+            assert compiled.what_re is not None
+            if not compiled.who_re.fullmatch(principal):
+                return False
             target_match = target is not None and compiled.what_re.fullmatch(target)
             action_match = compiled.what_re.fullmatch(action)
-            if target_match or action_match:
-                effect = AuthzEffect(compiled.effect)
-                if effect is AuthzEffect.PROMPT:
-                    return await self._resolve_prompt(
-                        compiled=compiled,
-                        action=action,
-                        target=target,
-                        callback=callback,
-                        layer=layer,
-                    )
-                return AuthorizationResult(
-                    allowed=effect is AuthzEffect.ALLOW,
-                    effect=effect,
-                    matched_rule=compiled.raw,
-                    reason=(
-                        f"matched rule {compiled.raw.id}: who={compiled.raw.who!r} "
-                        f"what={compiled.raw.what!r} "
-                        f"effect={compiled.effect!r} (who_chain={layer})"
-                    ),
-                )
-        return None
+            return bool(target_match or action_match)
+        # New-shape: `what` glob matches action OR tool_ref;
+        # `pattern` glob matches target (or empty string when
+        # target is None — `pattern: "*"` then trivially matches).
+        assert compiled.what is not None
+        what_pattern = compiled.what
+        action_match = fnmatch.fnmatchcase(action, what_pattern)
+        tool_ref_match = tool_ref is not None and fnmatch.fnmatchcase(
+            tool_ref, what_pattern
+        )
+        if not (action_match or tool_ref_match):
+            return False
+        return fnmatch.fnmatchcase(target or "", compiled.raw.pattern)
+
+    @staticmethod
+    def _reason_for_match(*, compiled: _CompiledRule, layer: str) -> str:
+        """Format the `AuthorizationResult.reason` for a matched rule.
+
+        Legacy and new-shape rules carry different identifying
+        fields; this helper renders each in its own canonical form
+        so downstream log readers can tell them apart."""
+        if compiled.is_legacy:
+            return (
+                f"matched rule {compiled.raw.id}: who={compiled.raw.who!r} "
+                f"what={compiled.raw.what!r} "
+                f"effect={compiled.effect!r} (who_chain={layer})"
+            )
+        return (
+            f"matched rule: what={compiled.raw.what!r} "
+            f"pattern={compiled.raw.pattern!r} "
+            f"effect={compiled.effect!r} (who_chain={layer})"
+        )
 
     async def _resolve_prompt(
         self,
@@ -632,6 +987,21 @@ class RuleBasedAuthorizationProvider:
 
     async def list_rules(self) -> list[Rule]:
         return [c.raw for c in self._rules]
+
+    def lookup_tool_ref(self, action: str) -> str | None:
+        """Map an action string (``tool.bash``) to a qualified tool ref
+        (``kolsch/bash``).
+
+        qol-permission-system-human-readable.md Step 3 — the chat
+        modal + the ``/perm`` slash commands both need this lookup
+        to write new-shape rules whose ``what`` is the qualified
+        ref. The map is built from the catalog at construction
+        (see :func:`_build_action_to_tool_ref`); returns ``None``
+        when no catalog was supplied (test paths) or the action
+        isn't a ``tool.<name>`` invocation (e.g.
+        ``agent.execute.<id>`` or ``mcp.<server>.<tool>``).
+        """
+        return self._action_to_tool_ref.get(action)
 
     # -- Phase 2.1 (24d) chat-callback registration --------------------
 
@@ -824,36 +1194,85 @@ class RuleBasedAuthorizationProvider:
 
     @staticmethod
     def _ensure_id(rule: Rule) -> Rule:
+        """Populate ``id`` on legacy rules; new-shape rules need no id.
+
+        The Phase 2.0 live-edit API still keys on ``id`` for the
+        prompt-callback rule-insert anchor + the ``remove_rule`` /
+        ``get_rule`` paths. New-shape rules carry their own
+        identifier shape (the matched-rule object itself, surfaced
+        via the denied capsule's ``what``/``pattern``) but the
+        internal anchor still uses a derived id. We synthesise one
+        from ``what+pattern+effect``."""
         if rule.id:
             return rule
-        derived = derive_rule_id(rule.who, rule.what, rule.effect)
+        if rule.is_legacy:
+            assert rule.who is not None
+            derived = derive_rule_id(rule.who, rule.what, rule.effect)
+        else:
+            # New-shape: derive from (what, pattern, effect). The
+            # ``who=".*"`` placeholder keeps the derived hash stable
+            # across reorders + future who-less callers without
+            # leaking the legacy convention into the rule itself.
+            derived = derive_rule_id(
+                ".*",
+                f"{rule.what}|{rule.pattern}",
+                rule.effect,
+            )
         return rule.model_copy(update={"id": derived})
 
-    @staticmethod
-    def _compile_rule_record(rule: Rule) -> _CompiledRule:
-        try:
-            who_re = re.compile(rule.who)
-        except re.error as exc:
-            raise AuthzRegexInvalid(
+    def _compile_rule_record(self, rule: Rule) -> _CompiledRule:
+        """Compile a :class:`Rule` object (vs. a raw YAML dict).
+
+        Dispatches the same way :meth:`_compile` does — legacy rules
+        (``who`` set) use regex; new-shape rules (``who`` absent)
+        use glob. Used by ``add_rule`` / ``_resolve_prompt`` where
+        the caller already constructed a :class:`Rule`.
+        """
+        if rule.is_legacy:
+            assert rule.who is not None
+            try:
+                who_re = re.compile(rule.who)
+            except re.error as exc:
+                raise AuthzRegexInvalid(
+                    rule_index=-1,
+                    field="who",
+                    regex=rule.who,
+                    error=str(exc),
+                ) from exc
+            try:
+                what_re = re.compile(rule.what)
+            except re.error as exc:
+                raise AuthzRegexInvalid(
+                    rule_index=-1,
+                    field="what",
+                    regex=rule.what,
+                    error=str(exc),
+                ) from exc
+            return _CompiledRule(
+                effect=rule.effect,
+                raw=rule,
+                is_legacy=True,
+                who_re=who_re,
+                what_re=what_re,
+            )
+        # New-shape — validate pattern and what; reject regex
+        # characters in pattern. Catalog validation is best-effort:
+        # callers like agent/bundle permissions construct Rule
+        # objects programmatically and we skip catalog checks here
+        # (the per-call surface is too hot for repeated catalog
+        # walks; the platform-rule path validates at __init__).
+        forbidden = [c for c in _PATTERN_REGEX_CHARS if c in rule.pattern]
+        if forbidden:
+            raise AuthzPatternInvalid(
                 rule_index=-1,
-                field="who",
-                regex=rule.who,
-                error=str(exc),
-            ) from exc
-        try:
-            what_re = re.compile(rule.what)
-        except re.error as exc:
-            raise AuthzRegexInvalid(
-                rule_index=-1,
-                field="what",
-                regex=rule.what,
-                error=str(exc),
-            ) from exc
+                pattern=rule.pattern,
+                forbidden_chars=forbidden,
+            )
         return _CompiledRule(
-            who_re=who_re,
-            what_re=what_re,
             effect=rule.effect,
             raw=rule,
+            is_legacy=False,
+            what=rule.what,
         )
 
 
@@ -871,8 +1290,16 @@ class AllowAllTestAuthorizationProvider:
     unset at construction time.
     """
 
-    def __init__(self, *, config: dict[str, Any]) -> None:
-        _ = config
+    def __init__(
+        self,
+        *,
+        config: dict[str, Any],
+        catalog: AssetCatalog | None = None,
+    ) -> None:
+        # ``catalog`` accepted (and ignored) so the factory protocol
+        # stays uniform with :class:`RuleBasedAuthorizationProvider`
+        # — see qol-permission-system-human-readable.md Step 2.
+        _ = (config, catalog)
         if os.environ.get(KOLSCH_TEST_BUILD_ENV_VAR) != "1":
             raise ConfigInvalid(
                 validation_errors=[
@@ -939,8 +1366,15 @@ def register_authorization_variant(
 def make_authorization_provider(
     *,
     config: dict[str, Any],
+    catalog: AssetCatalog | None = None,
 ) -> AuthorizationProvider:
-    """Dispatch by ``config['variant']`` per platform.yaml §authorization."""
+    """Dispatch by ``config['variant']`` per platform.yaml §authorization.
+
+    qol-permission-system-human-readable.md Step 2 — ``catalog``
+    forwards to variant factories so the rule-based variant can
+    validate qualified tool refs against it. Variants that don't
+    care (``allow_all_test``) accept and ignore the kwarg.
+    """
     variant = config.get("variant")
     body = config.get("config", {}) or {}
     factory = _REGISTRY.get(variant or "")
@@ -960,7 +1394,7 @@ def make_authorization_provider(
             ],
             where="providers.authz.make_authorization_provider",
         )
-    return factory(config=body)
+    return factory(config=body, catalog=catalog)
 
 
 register_authorization_variant("rule_based", RuleBasedAuthorizationProvider)

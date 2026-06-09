@@ -40,7 +40,6 @@ modal's I/O.
 
 from __future__ import annotations
 
-import re
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, TextIO
 
@@ -63,38 +62,44 @@ if TYPE_CHECKING:
 
 
 def suggest_pattern(*, tool: str, target: str | None) -> str:
-    """Suggest a ``what`` regex for an [a]/[d] persist rule.
+    """Suggest a glob ``pattern`` for an [a]/[d] persist rule.
 
     Pure function — same inputs always produce the same output.
+
+    qol-permission-system-human-readable.md Step 3 rewrites this to
+    emit a glob (``find *``, ``/abs/path/*``) instead of the
+    previous regex (``^find .*$``, ``^/abs/path/.*$``). The caller
+    pairs the returned pattern with the tool's qualified ref
+    (resolved separately via :data:`ApprovalModal._tool_ref_lookup`)
+    to form a new-shape :class:`providers.authz.Rule`.
+
     Three heuristics in priority order:
 
-    1. **bash**: the first whitespace-bounded token of the command
-       becomes a fixed prefix; the rest becomes ``.*``. So
-       ``rg "foo bar" src/`` suggests ``^rg .*$`` — broad enough
-       to cover any future ``rg`` invocation, narrow enough that
-       a hostile ``rm -rf`` doesn't slip through. Patch §4.3
-       row 1.
+    1. **bash** with a command target: the first
+       whitespace-bounded token becomes a fixed prefix; the rest
+       becomes ``*``. So ``rg "foo bar" src/`` suggests
+       ``rg *`` — broad enough to cover any future ``rg``
+       invocation, narrow enough that a hostile ``rm -rf``
+       doesn't slip through. Patch §4.3 row 1.
 
     2. **write_file / read_file / list_files** with an absolute
-       path target: suggest ``^<parent_dir>/.*$``. So
-       ``/abs/path/X.py`` suggests ``^/abs/path/.*$`` — every
-       file in that directory tree. Patch §4.3 row 2.
+       path target: suggest ``<parent_dir>/*``. So
+       ``/abs/path/X.py`` suggests ``/abs/path/*`` — every file
+       in that directory tree. Patch §4.3 row 2.
 
-    3. **other tools or no target**: fall back to the
-       action-namespace pattern ``^tool\\.<name>$``. That covers
-       the case where the dispatcher couldn't extract a target
-       (the tool's args don't include ``path``/``command``/``url``);
-       the user can still refine before committing.
-
-    The user is always shown the suggestion and can edit; the
-    suggestor is friction-removal, not enforcement.
+    3. **other tools or no target**: fall back to ``*``. The
+       user can refine the pattern before committing, and the
+       paired qualified-ref ``what`` already pins the rule to
+       the right tool, so ``*`` is the right default catch-all.
     """
     if tool == "bash" and target:
-        # First non-whitespace token; ``re.escape`` so chars like
-        # ``./`` survive the regex compile when the user accepts.
+        # First non-whitespace token; literal (glob has no escape
+        # sequences for whitespace, but the tokens we'd ever see
+        # here — `find`, `ls`, `grep`, `cat`, `rg`, etc. — are
+        # plain words, so no escaping is needed).
         first_token = target.strip().split(maxsplit=1)[0] if target.strip() else ""
         if first_token:
-            return f"^{re.escape(first_token)} .*$"
+            return f"{first_token} *"
 
     if tool in {"read_file", "write_file", "list_files"} and target:
         # Directory portion of the path. ``rpartition("/")`` keeps
@@ -102,13 +107,49 @@ def suggest_pattern(*, tool: str, target: str | None) -> str:
         # would touch the filesystem.
         parent, sep, _name = target.rpartition("/")
         if sep:
-            # Trailing slash + ``.*`` so the regex matches every
-            # file under the directory tree.
-            return f"^{re.escape(parent)}/.*$"
+            return f"{parent}/*"
 
-    # Catch-all: pin to the tool's action namespace. Matches what
-    # Phase 2.0's setup-produced rules use.
-    return f"^tool\\.{re.escape(tool)}$"
+    # Catch-all glob — the paired qualified-ref `what` already
+    # pins the rule to the right tool, so `*` is the right
+    # broad default.
+    return "*"
+
+
+def _glob_to_legacy_regex(pattern: str, *, action: str) -> str:
+    """Fallback used when the modal can't resolve a qualified tool ref.
+
+    The new-shape persist path writes a glob ``pattern`` paired with
+    a qualified ``what``. When no qualified ref is available (no
+    catalog / MCP tool / test stub), we have to fall back to the
+    pre-Step-3 legacy shape — that path expects a regex in ``what``
+    matched against action OR target. We re-build the equivalent
+    regex by escaping the glob's non-``*`` chars and translating
+    ``*`` → ``.*``. Empty / star-only patterns degrade to the
+    action namespace (``^tool\\.<name>$``) so the fallback is at
+    least scoped to this tool.
+    """
+    import re as _re  # noqa: PLC0415
+
+    if not pattern or pattern == "*":
+        # Nothing usable in the pattern itself — pin to the action.
+        return f"^{_re.escape(action)}$"
+    # Build the regex chunk-by-chunk so `*` and `?` survive without
+    # being escaped to literals. We keep ASCII whitespace literal too
+    # (re.escape would emit `\ ` for spaces, which is functionally
+    # the same but produces noisy regex; the pre-Step-3 modal
+    # behaviour didn't escape the space between the bash verb and
+    # `.*`).
+    out: list[str] = []
+    for ch in pattern:
+        if ch == "*":
+            out.append(".*")
+        elif ch == "?":
+            out.append(".")
+        elif ch.isspace():
+            out.append(ch)
+        else:
+            out.append(_re.escape(ch))
+    return f"^{''.join(out)}$"
 
 
 # ---------------------------------------------------------------------------
@@ -187,6 +228,7 @@ class ApprovalModal:
         input_fn: Callable[[str], Awaitable[str]] | None = None,
         console: Console | None = None,
         state: ChatSessionState | None = None,
+        tool_ref_lookup: Callable[[str], str | None] | None = None,
     ) -> None:
         self._stdout = stdout
         self._input_fn = input_fn or _default_input_fn
@@ -196,6 +238,15 @@ class ApprovalModal:
             highlight=False,
         )
         self._state = state
+        # qol-permission-system-human-readable.md Step 3 — resolves
+        # an action string (e.g. ``tool.bash``) to the qualified tool
+        # ref (``kolsch/bash``) that the new-shape Rule's ``what``
+        # field requires. The chat lifecycle (``cli/chat.py``) wires
+        # this from :meth:`RuleBasedAuthorizationProvider.lookup_tool_ref`.
+        # Tests + non-chat callers default to ``None``, in which case
+        # the modal falls back to the legacy ``who/what`` Rule shape
+        # so its behaviour is byte-identical to Step 2.
+        self._tool_ref_lookup = tool_ref_lookup
 
     def bind_state(self, state: ChatSessionState | None) -> None:
         """Late-bind the per-session state.
@@ -227,9 +278,17 @@ class ApprovalModal:
         - ``[y]`` → ``ALLOW`` (single value; no rule).
         - ``[n]`` → ``DENY`` (single value; no rule).
         - ``[a]`` (with pattern P) →
-          ``(ALLOW, Rule(who=action, what=P, effect=ALLOW))``.
+          ``(ALLOW, Rule(what=<tool_ref>, pattern=P, effect=ALLOW))``.
         - ``[d]`` (with pattern P) →
-          ``(DENY, Rule(who=action, what=P, effect=DENY))``.
+          ``(DENY, Rule(what=<tool_ref>, pattern=P, effect=DENY))``.
+
+        qol-permission-system-human-readable.md Step 3 — when a
+        :attr:`_tool_ref_lookup` is bound (chat lifecycle wires it),
+        the persisted rule uses the new ``{what, pattern, effect}``
+        schema with ``what`` as the qualified tool ref. When no
+        lookup is bound (tests, unknown action), it falls back to
+        the legacy ``{who, what, effect}`` regex shape so existing
+        callers stay byte-identical.
 
         Esc on the pattern edit (patch §4.2) abandons the rule
         write — the original ``[y]``/``[n]`` semantics apply for
@@ -275,23 +334,41 @@ class ApprovalModal:
             return AuthzEffect.DENY
 
         effect = AuthzEffect.ALLOW if choice == "a" else AuthzEffect.DENY
-        # The new rule mirrors the setup-produced rule shape (see
-        # ``cli._setup._workspace_only_default_rules``): ``who`` is
-        # ``.*`` (any principal — Phase 2.0 §3.2 "Phase 2.0 only
-        # uses tool name; principal identity is reserved for Phase 3"),
-        # ``what`` is the user-accepted pattern, and the dispatcher's
-        # action vs. target distinction is handled by the provider's
-        # matcher (it tries the regex against both — see
-        # ``RuleBasedAuthorizationProvider.allow``). So a pattern
-        # ``^rg .*$`` matches any future call with that command, and
-        # a pattern ``^tool\.bash$`` matches any call by action
-        # namespace.
-        rule = Rule(
-            id="",  # provider auto-derives from (who, what, effect)
-            who=".*",
-            what=pattern,
-            effect="allow" if effect is AuthzEffect.ALLOW else "deny",
+        # qol-permission-system-human-readable.md Step 3 — write the
+        # new-shape Rule whenever a tool-ref lookup is available
+        # (chat lifecycle wires this through). ``what`` becomes the
+        # qualified tool ref (``kolsch/bash``); ``pattern`` is the
+        # user-accepted glob. When no lookup is available (tests, or
+        # an unknown action like ``mcp.foo.bar``) we fall back to the
+        # legacy ``who/what`` shape — the provider's compile path
+        # recognises the legacy form and uses the regex matcher, so
+        # nothing breaks at the cost of a less ergonomic rule.
+        effect_str = "allow" if effect is AuthzEffect.ALLOW else "deny"
+        tool_ref = (
+            self._tool_ref_lookup(action)
+            if self._tool_ref_lookup is not None
+            else None
         )
+        if tool_ref is not None:
+            rule = Rule(
+                what=tool_ref,
+                pattern=pattern,
+                effect=effect_str,
+            )
+        else:
+            # Legacy fallback — the user is denying / allowing a tool
+            # the catalog can't qualify (e.g. mcp.<server>.<name>,
+            # or a test path with no catalog). ``pattern`` here
+            # already looks like a glob (Step 3 suggest_pattern
+            # always emits globs), so wrap it as a permissive regex
+            # for the legacy matcher: literal-prefixed plus `.*`.
+            # Mirrors the pre-Step-3 behaviour.
+            rule = Rule(
+                id="",
+                who=".*",
+                what=_glob_to_legacy_regex(pattern, action=action),
+                effect=effect_str,
+            )
         # Persist the rule first (return-value contract is unchanged),
         # then flip the cancel token so the framework stops. Order
         # matters: the rule write happens inside the authz provider

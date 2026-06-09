@@ -124,7 +124,19 @@ async def cmd_permissions(
 
     yaml_path = args.root / "platform.yaml"
     config = _read_authz_config(yaml_path)
-    provider = RuleBasedAuthorizationProvider(config=config)
+    # qol-permission-system-human-readable.md Step 2 — build a fresh
+    # :class:`AssetManagement` so the provider can validate qualified
+    # tool refs against the catalog. Initialization is cheap (one
+    # workspace scan) and gives every CLI subcommand the same
+    # validation surface the chat / engine paths get.
+    from assets import AssetManagement  # noqa: PLC0415
+
+    am = AssetManagement(root=args.root)
+    await am.initialize()
+    provider = RuleBasedAuthorizationProvider(
+        config=config,
+        catalog=am.catalog(),
+    )
 
     op = args.permissions_command
     if op == "list":
@@ -142,6 +154,15 @@ async def cmd_permissions(
 
 
 async def _cmd_list(provider: RuleBasedAuthorizationProvider, *, out: TextIO) -> int:
+    """List every rule, marking legacy-shape entries.
+
+    qol-permission-system-human-readable.md Step 4 acceptance
+    criterion 9: legacy regex rules render with a
+    ``[legacy regex — please convert]`` marker so users know
+    which entries still need the schema migration. New-shape
+    rules render in the canonical ``what / pattern / effect``
+    form.
+    """
     rules = await provider.list_rules()
     if not rules:
         out.write("(no rules)\n")
@@ -151,10 +172,18 @@ async def _cmd_list(provider: RuleBasedAuthorizationProvider, *, out: TextIO) ->
     effect_w = max(len(r.effect) for r in rules)
     for rule in rules:
         protected = "  (protected)" if rule.id == DEFAULT_DENY_RULE_ID else ""
-        out.write(
-            f"{rule.id:<{id_w}}  {rule.effect:<{effect_w}}  "
-            f"who={rule.who!r}  what={rule.what!r}{protected}\n"
-        )
+        if rule.who is None:
+            # New shape — surface what/pattern.
+            out.write(
+                f"{rule.id:<{id_w}}  {rule.effect:<{effect_w}}  "
+                f"what={rule.what!r}  pattern={rule.pattern!r}{protected}\n"
+            )
+        else:
+            out.write(
+                f"{rule.id:<{id_w}}  {rule.effect:<{effect_w}}  "
+                f"who={rule.who!r}  what={rule.what!r}  "
+                f"[legacy regex — please convert]{protected}\n"
+            )
     return 0
 
 
@@ -295,9 +324,21 @@ def _write_back(yaml_path: Path, rules: list[Rule]) -> None:
 
 
 def _rule_to_dict(rule: Rule) -> dict[str, str]:
-    """Serialize a Rule for round-trip — preserve the id field so the
-    next load gets stable references even if the user later edits the
-    YAML by hand and the id-derivation hashes diverge."""
+    """Serialize a Rule for round-trip.
+
+    qol-permission-system-human-readable.md Step 3 — new-shape rules
+    (``who is None``) serialize without ``id`` / ``who`` and carry
+    ``pattern``; legacy rules still serialize with the old
+    ``{id, who, what, effect}`` shape so an unmigrated workspace
+    that gets one rule added/removed via the CLI doesn't accidentally
+    flip back to the new shape mid-file.
+    """
+    if rule.who is None:
+        return {
+            "what": rule.what,
+            "pattern": rule.pattern,
+            "effect": rule.effect,
+        }
     return {
         "id": rule.id,
         "who": rule.who,

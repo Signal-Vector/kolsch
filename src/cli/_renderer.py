@@ -48,7 +48,7 @@ chat rendered.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, TextIO
+from typing import TYPE_CHECKING, Any, TextIO
 
 from datetime import datetime
 
@@ -443,6 +443,14 @@ class Renderer:
 
         The header gains a `failed` suffix; the whole bar dims so the
         user reads "transactional record, this didn't succeed."
+
+        qol-permission-system-human-readable.md Step 3 — authz
+        denials get a DISTINCT capsule (orange ``permission``
+        source) showing the matched rule and the exact ``/perm``
+        command to undo. Discriminator: the error code is
+        ``tool.unauthorized`` AND the event carries a non-empty
+        ``recovery_hint``. Generic tool failures (unrelated to
+        authz) still use the dim cyan ``tool`` capsule.
         """
         tool_name = str(event.data.get("tool_name", "<unknown>"))
         tool_call_id = str(event.data.get("tool_call_id", ""))
@@ -451,12 +459,65 @@ class Renderer:
         error = event.data.get("error") or {}
         code = _error_code(error)
         message = str(error.get("message", ""))
+        recovery_hint = event.data.get("recovery_hint")
+
+        if code == "tool.unauthorized" and isinstance(recovery_hint, str):
+            self._render_denied_capsule(
+                signature=signature,
+                error=error,
+                recovery_hint=recovery_hint,
+            )
+            return
+
         _capsule(
             self._console,
             source="tool",
             color=_CAPSULE_PALETTE["tool-dim"],
             header_extra="failed",
             body_lines=[signature, f"  {code}: {message}"],
+        )
+
+    def _render_denied_capsule(
+        self,
+        *,
+        signature: str,
+        error: dict[str, Any],
+        recovery_hint: str,
+    ) -> None:
+        """Render the authz-denied capsule per
+        qol-permission-system-human-readable.md Step 3 + the layout
+        spec at qol-chat-capsule-layout.md §Permission capsule.
+
+        Visual contract — distinct from the generic tool-failure
+        capsule because the user must act:
+
+            │ permission · HH:MM:SS                          [dark_orange3]
+            │ denied: <tool_ref>(<arg-summary>)
+            │   matched rule:  what=<w>  pattern=<p>  effect=deny
+            │
+            │ to allow:  /perm allow <ref> <pattern>
+
+        The matched rule's ``what`` / ``pattern`` are pulled from
+        the wrapped ``ToolUnauthorized`` detail. When a rule
+        carries the legacy regex shape (``who`` present), we
+        surface the legacy ``what`` regex instead — the user can
+        still convert via ``/perm`` once they understand which
+        rule fired.
+        """
+        detail = error.get("detail") or {}
+        matched_rule = detail.get("matched_rule") or {}
+        # Build the matched-rule line — both schema shapes render
+        # cleanly into the capsule.
+        rule_line = _format_matched_rule(matched_rule)
+        body_lines = [f"denied: {signature}"]
+        if rule_line:
+            body_lines.append(f"  matched rule:  {rule_line}")
+        body_lines.append("")
+        body_lines.append(f"to allow:  {recovery_hint}")
+        _capsule(
+            self._console,
+            source="permission",
+            body_lines=body_lines,
         )
 
     def _render_exchange_failed(self, event: Event) -> None:
@@ -559,6 +620,34 @@ class Renderer:
 # ---------------------------------------------------------------------------
 # Module-private formatters
 # ---------------------------------------------------------------------------
+
+
+def _format_matched_rule(matched_rule: dict[str, object]) -> str:
+    """Format the matched-rule line for the denied capsule.
+
+    qol-permission-system-human-readable.md Step 3 — both schema
+    shapes render cleanly:
+
+    - **New shape** (``who is None``): ``what=<w>  pattern=<p>
+      effect=<e>``.
+    - **Legacy shape** (``who`` present): ``what=<w>
+      effect=<e>``. The legacy rule's ``what`` is a regex that
+      matched either action or target; surface it verbatim so
+      the user can recognise which rule fired before deciding
+      whether to migrate it.
+
+    Returns ``""`` when the matched-rule dict is empty (default
+    deny — no rule matched, just the catch-all).
+    """
+    if not matched_rule:
+        return ""
+    what = matched_rule.get("what")
+    effect = matched_rule.get("effect")
+    pattern = matched_rule.get("pattern")
+    who = matched_rule.get("who")
+    if who is None and isinstance(pattern, str):
+        return f"what={what!r}  pattern={pattern!r}  effect={effect!r}"
+    return f"what={what!r}  effect={effect!r}"
 
 
 def _error_code(error: dict[str, object]) -> str:

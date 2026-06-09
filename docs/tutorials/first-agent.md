@@ -75,7 +75,12 @@ authorization:
   variant: rule_based
   config:
     rules:
-      - { who: ".*", what: ".*", effect: allow }
+      # qol-permission-system-human-readable.md schema: three-field
+      # `{what, pattern, effect}`. Open-but-protected default — the
+      # catch-all allows everything for the tutorial; production
+      # workspaces use the tighter setup defaults from
+      # `cli/_setup._workspace_only_default_rules`.
+      - { what: "*", pattern: "*", effect: allow }
 storage:
   entity_backend: sqlite
   entity_path: .platform/entities.db

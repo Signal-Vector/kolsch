@@ -131,7 +131,14 @@ async def bootstrap_runtime(
 
     secrets = DotenvSecretsProvider(root=root, config=secrets_cfg.get("config", {}))
     sandbox = NativeSandboxProvider(config=sandbox_cfg.get("config", {}))
-    authz = RuleBasedAuthorizationProvider(config=authz_cfg.get("config", {}))
+    # qol-permission-system-human-readable.md Step 2 — pass the
+    # catalog so the provider can validate qualified tool refs in
+    # rule `what:` fields AND build the action→tool_ref map so
+    # `what: kolsch/bash` matches the `tool.bash` action namespace.
+    authz = RuleBasedAuthorizationProvider(
+        config=authz_cfg.get("config", {}),
+        catalog=am.catalog(),
+    )
     path_policy = load_policy(file_access_cfg)
 
     storage_cfg = am.get_platform_config("storage")

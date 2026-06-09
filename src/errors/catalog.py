@@ -176,6 +176,11 @@ CATALOG: dict[str, Level] = {
     "authz.rule_invalid": Level.FATAL,
     "authz.rule_not_found": Level.FATAL,
     "authz.protected_rule": Level.FATAL,
+    # qol-permission-system-human-readable.md Step 2 — schema migration.
+    "authz.bare_tool_ref": Level.FATAL,
+    "authz.pattern_invalid": Level.FATAL,
+    "authz.tool_ref_unknown": Level.FATAL,
+    "config.deprecated_regex_rule": Level.RECOVERABLE,
     "file.too_large": Level.RECOVERABLE,
     "file.not_found": Level.RECOVERABLE,
     # QoL tool-output-truncation-and-persistence §9.6 — read_file

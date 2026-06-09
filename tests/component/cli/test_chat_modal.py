@@ -78,39 +78,39 @@ def _provider_with_bash_prompt() -> RuleBasedAuthorizationProvider:
 
 
 def test_suggest_pattern_bash_uses_first_token_with_dot_star() -> None:
-    """Patch §4.3 row 1: bash → first whitespace-bounded token +
-    ``.*`` so the user gets a useful default without typing."""
-    assert suggest_pattern(tool="bash", target='rg "foo bar" src/') == "^rg .*$"
-    assert suggest_pattern(tool="bash", target="ls -la /tmp") == "^ls .*$"
+    """Patch §4.3 row 1 + qol-permission-system-human-readable.md
+    Step 3: bash → ``<first-token> *`` glob (was: regex
+    ``^<token> .*$``)."""
+    assert suggest_pattern(tool="bash", target='rg "foo bar" src/') == "rg *"
+    assert suggest_pattern(tool="bash", target="ls -la /tmp") == "ls *"
 
 
 def test_suggest_pattern_bash_empty_target_falls_back() -> None:
-    """No command string → action-namespace fallback (the
-    dispatcher couldn't extract a target)."""
-    assert suggest_pattern(tool="bash", target=None) == r"^tool\.bash$"
-    assert suggest_pattern(tool="bash", target="") == r"^tool\.bash$"
+    """No command string → ``*`` catch-all glob (the qualified
+    ``what`` ref already pins it to bash)."""
+    assert suggest_pattern(tool="bash", target=None) == "*"
+    assert suggest_pattern(tool="bash", target="") == "*"
 
 
 def test_suggest_pattern_file_tools_use_parent_dir() -> None:
-    """Patch §4.3 row 2: file tools → parent directory tree."""
-    assert suggest_pattern(
-        tool="write_file", target="/abs/path/X.py"
-    ) == r"^/abs/path/\.\*$".replace(r"\.\*", ".*")
+    """Patch §4.3 row 2: file tools → ``<parent>/*`` glob."""
+    assert suggest_pattern(tool="write_file", target="/abs/path/X.py") == "/abs/path/*"
     assert (
         suggest_pattern(tool="read_file", target="/workspace/docs/spec.md")
-        == "^/workspace/docs/.*$"
+        == "/workspace/docs/*"
     )
 
 
 def test_suggest_pattern_unknown_tool_falls_back_to_action_namespace() -> None:
-    """Tools the suggestor doesn't recognise → ``^tool\\.<name>$``.
-    Coarse but always safe; the user can refine."""
-    assert suggest_pattern(tool="ping", target="example.com") == r"^tool\.ping$"
+    """Tools the suggestor doesn't recognise → ``*`` catch-all glob.
+    The paired ``what`` already names the tool, so ``*`` is the
+    right default."""
+    assert suggest_pattern(tool="ping", target="example.com") == "*"
 
 
 def test_suggest_pattern_file_tool_with_no_target_falls_back() -> None:
-    """File tool but no target (defensive) → action-namespace."""
-    assert suggest_pattern(tool="write_file", target=None) == r"^tool\.write_file$"
+    """File tool but no target (defensive) → ``*`` catch-all glob."""
+    assert suggest_pattern(tool="write_file", target=None) == "*"
 
 
 # ===========================================================================
@@ -144,8 +144,14 @@ async def test_modal_n_returns_deny_no_rule() -> None:
 
 
 async def test_modal_a_with_accepted_pattern_returns_allow_rule_tuple() -> None:
-    """Patch §4.4: ``[a]`` + accept suggested pattern → tuple
-    ``(ALLOW, Rule(who=action, what=pattern, effect=allow))``."""
+    """Patch §4.4 + qol-permission-system-human-readable.md Step 3:
+    ``[a]`` + accept pattern → tuple ``(ALLOW, Rule)``.
+
+    Without a tool_ref_lookup the modal falls back to the legacy
+    regex shape so the rule still loads via the provider's legacy
+    compile path. With a lookup the rule uses the new schema —
+    covered in :func:`test_modal_a_with_lookup_writes_new_shape`.
+    """
     out = _io.StringIO()
     # "" on the pattern prompt accepts the suggested default.
     modal = ApprovalModal(stdout=out, input_fn=_scripted_input(["a", ""]))
@@ -153,22 +159,52 @@ async def test_modal_a_with_accepted_pattern_returns_allow_rule_tuple() -> None:
     assert isinstance(result, tuple)
     effect, rule = result
     assert effect is AuthzEffect.ALLOW
-    # ``who`` is ``.*`` per Phase 2.0 §3.2 ("only uses tool name;
-    # principal identity is reserved for Phase 3"). The action vs.
-    # target match happens via the provider's matcher on ``what``.
+    # No tool_ref_lookup → legacy fallback. ``who`` is ``.*`` and
+    # ``what`` is the glob-translated-to-regex form so the legacy
+    # matcher still fires.
     assert rule.who == ".*"
     assert rule.what == "^rg .*$"
     assert rule.effect == "allow"
 
 
-async def test_modal_a_with_edited_pattern_uses_user_value() -> None:
-    """User can override the suggested pattern by typing a new one."""
+async def test_modal_a_with_lookup_writes_new_shape() -> None:
+    """qol-permission-system-human-readable.md Step 3 — when a
+    ``tool_ref_lookup`` is bound the persisted rule uses the new
+    ``{what, pattern, effect}`` schema with ``what`` as the
+    qualified tool ref. Mirror image of
+    :func:`test_modal_a_with_accepted_pattern_returns_allow_rule_tuple`
+    (no lookup → legacy fallback).
+    """
     out = _io.StringIO()
-    modal = ApprovalModal(stdout=out, input_fn=_scripted_input(["a", "^rg foo .*$"]))
+    modal = ApprovalModal(
+        stdout=out,
+        input_fn=_scripted_input(["a", ""]),
+        tool_ref_lookup=lambda action: (
+            "kolsch/bash" if action == "tool.bash" else None
+        ),
+    )
     result = await modal(rule_id="rl_bash_any", action="tool.bash", target="rg foo")
     assert isinstance(result, tuple)
     _, rule = result
-    assert rule.what == "^rg foo .*$"  # the user's pick wins
+    # New-shape: no `who`, qualified `what`, glob `pattern`.
+    assert rule.who is None
+    assert rule.what == "kolsch/bash"
+    assert rule.pattern == "rg *"
+    assert rule.effect == "allow"
+
+
+async def test_modal_a_with_edited_pattern_uses_user_value() -> None:
+    """User can override the suggested pattern by typing a new one.
+
+    The user types a glob (qol-permission-system-human-readable.md
+    Step 3 docs ``/perm`` style); the legacy fallback translates
+    it into the equivalent regex for the in-flight Rule write."""
+    out = _io.StringIO()
+    modal = ApprovalModal(stdout=out, input_fn=_scripted_input(["a", "rg foo *"]))
+    result = await modal(rule_id="rl_bash_any", action="tool.bash", target="rg foo")
+    assert isinstance(result, tuple)
+    _, rule = result
+    assert rule.what == "^rg foo .*$"  # glob `rg foo *` → regex
 
 
 async def test_modal_d_with_accepted_pattern_returns_deny_rule_tuple() -> None:

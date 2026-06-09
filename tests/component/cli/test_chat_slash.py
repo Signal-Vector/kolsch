@@ -49,12 +49,11 @@ if TYPE_CHECKING:
 # ===========================================================================
 
 
-def test_registry_has_nine_visible_commands_per_patch_5() -> None:
-    """Patch §5 lists nine commands (``/exit`` and ``/quit`` share
-    one entry via ``aliases``). The registry has nine entries —
-    eight from Step 24e plus ``/skill`` from the phase 2.4
-    skills-build work."""
-    assert len(COMMAND_REGISTRY) == 9
+def test_registry_has_ten_visible_commands_per_patch_5() -> None:
+    """Patch §5 + skills-build + qol-permission-system-human-readable.md
+    Step 3 add ``/skill`` then ``/perm``. ``/exit`` and ``/quit`` still
+    share one entry via ``aliases``."""
+    assert len(COMMAND_REGISTRY) == 10
     expected = {
         "/help",
         "/exit",
@@ -65,6 +64,7 @@ def test_registry_has_nine_visible_commands_per_patch_5() -> None:
         "/tools",
         "/session",
         "/skill",
+        "/perm",
     }
     assert set(COMMAND_REGISTRY.keys()) == expected
 
@@ -93,6 +93,7 @@ def test_registry_real_handlers_match_phase_2_1_step_24e_set() -> None:
         "/thinking",
         "/session",
         "/skill",
+        "/perm",
     }
     # No placeholder rows remain.
     placeholders = {
@@ -223,10 +224,11 @@ def _completions_for(text: str) -> list[str]:
     ]
 
 
-def test_tc_chat_15_completer_lists_all_nine_commands_after_slash() -> None:
-    """TC-CHAT-15 (first form): typing ``/`` yields all nine
+def test_tc_chat_15_completer_lists_all_ten_commands_after_slash() -> None:
+    """TC-CHAT-15 (first form): typing ``/`` yields all ten
     visible commands (eight Step 24e + ``/skill`` from phase
-    2.4). Aliases (``/quit``) are NOT in the popup — the
+    2.4 + ``/perm`` from qol-permission-system-human-readable.md
+    Step 3). Aliases (``/quit``) are NOT in the popup — the
     registry's ``aliases`` field is invisible by design."""
     completions = _completions_for("/")
     assert set(completions) == {
@@ -239,6 +241,7 @@ def test_tc_chat_15_completer_lists_all_nine_commands_after_slash() -> None:
         "/tools",
         "/session",
         "/skill",
+        "/perm",
     }
 
 

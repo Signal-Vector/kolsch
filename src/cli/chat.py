@@ -235,7 +235,17 @@ async def cmd_chat(
     # modal — which would either hang on stdin or, worse, allow
     # silently. The clear is unconditional regardless of how the
     # loop exited.
-    modal = ApprovalModal(stdout=stdout)
+    # qol-permission-system-human-readable.md Step 3 — pass the
+    # authz provider's action→tool_ref lookup so the modal's
+    # [a]/[d] write path constructs new-shape Rules (qualified
+    # ``what`` + glob ``pattern``). When the authz variant doesn't
+    # expose lookup_tool_ref (a future custom variant), the modal
+    # falls back to legacy regex shape — same as Step 2 behaviour.
+    tool_ref_lookup = getattr(runtime.authz, "lookup_tool_ref", None)
+    modal = ApprovalModal(
+        stdout=stdout,
+        tool_ref_lookup=tool_ref_lookup,
+    )
     _install_modal_callback(runtime, modal, yaml_path=args.root / "platform.yaml")
     try:
         return await _run_input_loop(

@@ -250,11 +250,27 @@ class ToolResultData(_DataModel):
 
 
 class ToolFailedData(_DataModel):
-    """`tool.failed.data` — §B.8 (Error Model §5.1)."""
+    """`tool.failed.data` — §B.8 (Error Model §5.1).
+
+    qol-permission-system-human-readable.md Step 3 — adds the
+    optional ``recovery_hint`` field. When the tool failed because
+    the authz provider denied it (``error.type == "authz.denied"``
+    OR the wrapped ``tool.unauthorized`` whose detail names a deny
+    rule), the engine populates this with the exact ``/perm allow
+    …`` chat command the user can type to un-block. The chat
+    renderer surfaces it inside the denied capsule; the framework
+    forwards the whole event payload to the model so the agent
+    sees the actionable text and stops flailing.
+
+    ``None`` for every non-authz failure — the field is purely a
+    convenience layer for the authz path; other tool failures
+    continue to surface through ``error.message`` alone.
+    """
 
     tool_call_id: str
     tool_name: str
     error: Error
+    recovery_hint: str | None = None
 
 
 class ConfigSetData(_DataModel):

@@ -1247,11 +1247,13 @@ def _rules_in(yaml_path: Path) -> list[dict[str, str]]:
 
 
 _PHASE_2_0_DEFAULT_WHATS: tuple[str, ...] = (
-    r"agent\.execute\..*",
-    r"tool\.read_file",
-    r"tool\.list_files",
-    r"tool\.write_file",
-    r"tool\.bash",
+    # qol-permission-system-human-readable.md Step 4 — defaults now
+    # use the new schema's qualified tool refs (`<bundle>/<name>`).
+    "agent.execute.*",
+    "kolsch/read_file",
+    "kolsch/list_files",
+    "kolsch/write_file",
+    "kolsch/bash",
 )
 
 
@@ -1277,7 +1279,7 @@ async def test_migration_replaces_allow_all_with_3_1_defaults(
     for default_what in _PHASE_2_0_DEFAULT_WHATS:
         assert default_what in whats, f"missing default rule: {default_what}"
     # …and the deny tail is last (first-match-wins floor).
-    assert rules[-1] == {"who": ".*", "what": ".*", "effect": "deny"}
+    assert rules[-1] == {"what": "*", "pattern": "*", "effect": "deny"}
 
     # Backup file written into .platform/ with the timestamped name.
     backups = sorted((tmp_path / ".platform").glob("platform.yaml.bak.*"))
@@ -1313,7 +1315,7 @@ async def test_migration_preserves_user_custom_rules_in_position(
     # Both customs present, in original relative order, and BEFORE
     # the default-deny tail.
     tail = migrated[-1]
-    assert tail == {"who": ".*", "what": ".*", "effect": "deny"}
+    assert tail == {"what": "*", "pattern": "*", "effect": "deny"}
     custom_positions = [migrated.index(c) for c in customs]
     assert custom_positions == sorted(custom_positions), (
         f"custom rules out of order: positions={custom_positions}"
@@ -1392,7 +1394,7 @@ async def test_migration_diff_then_migrate_shows_diff_and_migrates(
     assert "+++ after migration" in transcript
     # Migration ran after diff.
     rules = _rules_in(yaml_path)
-    assert rules[-1] == {"who": ".*", "what": ".*", "effect": "deny"}
+    assert rules[-1] == {"what": "*", "pattern": "*", "effect": "deny"}
     # Migration prompt fired twice (initial + after diff). The full
     # setup flow also fires Step C's provider prompt; filter to the
     # migration-specific calls by question text so the count is not

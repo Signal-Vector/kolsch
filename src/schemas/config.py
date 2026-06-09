@@ -130,23 +130,32 @@ class PermissionRule(BaseModel):
     """One ``permissions:`` entry — Phase 2.2 §1.1 + Schemas §A.11.4.
 
     Same shape as ``platform.yaml:authorization.config.rules``
-    entries. ``who`` matches the principal (e.g.
-    ``agent.ag_helper``); ``what`` matches the action OR target
-    (e.g. ``tool.bash``); ``effect`` is one of
-    ``allow`` / ``deny`` / ``prompt``.
+    entries.
 
-    Defined here (and NOT imported from :mod:`providers.authz`)
-    because the schemas layer must not depend on the providers
-    layer. Step 9's composition wires this through the existing
-    :class:`providers.authz.Rule` shape.
+    qol-permission-system-human-readable.md Step 2 — the canonical
+    shape is ``{what, pattern, effect}``. ``what`` is the tool's
+    fully-qualified ref (``kolsch/bash``) OR a system action
+    namespace (``agent.execute.*``) OR ``*``; ``pattern`` is a
+    glob matched against the target; ``effect`` is unchanged.
+
+    Legacy shape ``{id, who, what, effect}`` is still accepted
+    during the migration window — ``who`` is optional, and when
+    present flags the rule as legacy-regex (the authz provider's
+    compile step keys off this). Defined here (and NOT imported
+    from :mod:`providers.authz`) because the schemas layer must
+    not depend on the providers layer.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    id: str = ""
-    who: str
     what: str
+    pattern: str = "*"
     effect: Literal["allow", "deny", "prompt"]
+    # Legacy fields — deprecated; present-but-None on new-shape
+    # rules. ``who`` is the discriminator the authz provider uses
+    # to dispatch regex vs. glob matching.
+    id: str = ""
+    who: str | None = None
 
 
 class SubsystemConfig(BaseModel):

@@ -378,6 +378,14 @@ async def _step_b_skeleton(io: _SetupIO, *, non_interactive: bool) -> str:
         # Runs BEFORE the validation hook so the new skills are in the
         # catalog when validation walks it.
         _maybe_install_missing_kolsch_skills(io)
+        # qol-permission-system-human-readable.md Step 4 (carryover
+        # E-QOL-PERMSYS-002) — migrate platform.yaml's authz rules
+        # from the legacy `{id, who, what, effect}` regex shape to
+        # the new `{what, pattern, effect}` glob shape. Runs AFTER
+        # the kolsch-skills drop-in so the catalog walk has every
+        # tool the migrator's `tool.<name>` heuristic needs to
+        # resolve to `<bundle>/<name>`.
+        await _maybe_migrate_authz_rules_to_qol_schema(io)
         # Step 6 (skills-subsystem.md Draft 0.2 follow-up): advisory
         # skill validation. Warning-only — never blocks setup so a
         # user mid-editing a SKILL.md doesn't get stuck.
@@ -833,28 +841,33 @@ def _setup_platform_payload() -> dict[str, Any]:
 def _workspace_only_default_rules() -> list[dict[str, str]]:
     """The workspace-only default rules per Phase 2.0 patch §3.1.
 
-    The ``who``/``what`` convention follows Phase 1's authz spec
-    (``who`` = principal regex, ``what`` = action regex). The patch
-    example inverts these; the implementation honours the existing
-    convention. See Step 22 reviewer notes + the tests in
-    ``tests/component/authz/test_phase2_authz.py``.
+    qol-permission-system-human-readable.md Step 4 — emits the
+    new three-field schema ``{what, pattern, effect}`` directly.
+    ``what`` is the qualified tool ref (``kolsch/<name>``) for
+    builtin tools, the system action namespace
+    (``agent.execute.*``) for the engine pre-flight, and the
+    catch-all ``*`` for the default-deny tail. The old
+    ``{who, what, effect}`` legacy shape still loads via the
+    provider's compile dispatch (see
+    :class:`providers.authz.Rule`), but new workspaces start in
+    the canonical form so setup is idempotent on re-runs.
 
-    Includes an ``agent.execute.*`` allow at the top so the engine's
-    pre-flight authz check (``engine.engine:391``) passes — without
-    this the default-deny tail would block every exchange.
+    Includes an ``agent.execute.*`` allow at the top so the
+    engine's pre-flight authz check passes — without this the
+    default-deny tail would block every exchange.
     """
     return [
         # Pre-flight gate — the engine requires agent.execute.<id> to
         # run any exchange. Default to allow; users tighten by adding
         # a more specific deny before this rule.
-        {"who": ".*", "what": r"agent\.execute\..*", "effect": "allow"},
-        # The four Phase 2.0 builtins.
-        {"who": ".*", "what": r"tool\.read_file", "effect": "allow"},
-        {"who": ".*", "what": r"tool\.list_files", "effect": "allow"},
-        {"who": ".*", "what": r"tool\.write_file", "effect": "prompt"},
-        {"who": ".*", "what": r"tool\.bash", "effect": "prompt"},
+        {"what": "agent.execute.*", "pattern": "*", "effect": "allow"},
+        # The four Phase 2.0 builtins — owned by the kolsch bundle.
+        {"what": "kolsch/read_file", "pattern": "*", "effect": "allow"},
+        {"what": "kolsch/list_files", "pattern": "*", "effect": "allow"},
+        {"what": "kolsch/write_file", "pattern": "*", "effect": "prompt"},
+        {"what": "kolsch/bash", "pattern": "*", "effect": "prompt"},
         # Default-deny tail (protected — TOOL-R10).
-        {"who": ".*", "what": ".*", "effect": "deny"},
+        {"what": "*", "pattern": "*", "effect": "deny"},
     ]
 
 
@@ -1002,6 +1015,97 @@ def _maybe_migrate_authz_rules(
         io.out.write("  → keeping current rules; no changes written\n")
     else:  # "s" or any unrecognised default — defer
         io.out.write("  → deferred; will prompt again on the next setup run\n")
+
+
+async def _maybe_migrate_authz_rules_to_qol_schema(io: _SetupIO) -> None:
+    """Migrate ``platform.yaml`` rules to the QoL three-field schema.
+
+    qol-permission-system-human-readable.md Step 4 (carryover
+    E-QOL-PERMSYS-002). On `kolsch setup` re-run:
+
+    1. Build the catalog so the migrator can resolve
+       ``tool.<name>`` actions to ``<bundle>/<name>`` qualified
+       refs.
+    2. Run :func:`cli._migrations.authz_rules.migrate_authz_rules`
+       over the existing rule list.
+    3. For each rule that couldn't be migrated, emit a
+       :class:`errors.ConfigDeprecatedRegexRule` Recoverable
+       warning via stdout (the chat/server runtime swap stdout
+       for the Recoverable-event surface; setup is the CLI
+       caller and writes directly).
+    4. If anything migrated, atomically rewrite the YAML.
+
+    Silent no-op when:
+
+    - The workspace's rule list is already entirely new-shape
+      (no ``who`` field on any entry).
+    - The workspace is non-rule-based authz variant.
+
+    The function never raises — a per-rule failure produces a
+    warning line but doesn't abort setup. Migration is opt-out
+    via the existing "skip" path on the prior
+    (E-BUG-CHAT-001) prompt; this new path runs unconditionally
+    AFTER that prompt has resolved.
+    """
+    from assets import AssetManagement  # noqa: PLC0415
+    from cli._migrations.authz_rules import migrate_authz_rules  # noqa: PLC0415
+    from errors import ConfigDeprecatedRegexRule  # noqa: PLC0415
+
+    yaml_path = io.root / "platform.yaml"
+    if not yaml_path.is_file():
+        return
+    payload = _read_yaml(yaml_path)
+    authz = payload.get("authorization") or {}
+    if authz.get("variant") != "rule_based":
+        return
+    rules = (authz.get("config") or {}).get("rules") or []
+    if not rules:
+        return
+    # Skip when nothing has a `who` field — already migrated.
+    if not any(isinstance(r, dict) and "who" in r for r in rules):
+        return
+
+    am = AssetManagement(root=io.root)
+    try:
+        await am.initialize()
+        catalog = am.catalog()
+    except Exception as exc:  # noqa: BLE001 — never fatal at advisory layer
+        io.out.write(
+            f"  ⚠ authz schema migration skipped: catalog build failed ({exc})\n",
+        )
+        return
+
+    result = migrate_authz_rules(rules, catalog=catalog)
+    # Nothing changed (everything was unconvertible) → leave the YAML
+    # alone but still emit deprecation warnings so the user knows.
+    converted_count = sum(
+        1
+        for old, new in zip(rules, result.rules, strict=False)
+        if old != new
+    )
+    for entry in result.deprecated:
+        warn = ConfigDeprecatedRegexRule(
+            rule_index=entry.rule_index,
+            what=entry.what,
+            reason=entry.reason,
+        )
+        # PlatformError carries the message via `str(exc)` (super().__init__(message)).
+        io.out.write(f"  ⚠ {warn}\n")
+    if converted_count == 0:
+        return
+    backup = _backup_platform_yaml(yaml_path)
+    payload["authorization"]["config"]["rules"] = result.rules
+    yaml_path.write_text(
+        yaml.safe_dump(payload, sort_keys=False),
+        encoding="utf-8",
+    )
+    io.out.write(
+        f"  ✓ migrated {converted_count} authz rule(s) → new schema "
+        "(what / pattern / effect)\n",
+    )
+    io.out.write(
+        f"  ✓ backup written to {backup.relative_to(yaml_path.parent)}\n",
+    )
 
 
 def _maybe_install_missing_kolsch_skills(io: _SetupIO) -> None:

@@ -225,17 +225,29 @@ class _ObservedToolHandle:
             )
         except ToolUnauthorized as exc:
             err = Error.from_platform_error(exc)
+            # qol-permission-system-human-readable.md Step 3 — derive
+            # the exact `/perm allow` chat command from the matched
+            # rule's `what` + the in-flight args. The model + the
+            # chat renderer both see this hint; the user types it
+            # to un-block.
+            recovery_hint = _derive_authz_recovery_hint(
+                exc, arguments=call.arguments
+            )
             await self._emit(
                 type_=EventType.TOOL_FAILED,
                 data=ToolFailedData(
                     tool_call_id=tool_call_id,
                     tool_name=call.name,
                     error=err,
+                    recovery_hint=recovery_hint,
                 ).model_dump(mode="json"),
                 actor=Actor(kind="agent", id=self._agent_id),
             )
             # Diagnostic — return error payload so framework continues.
-            return {"error": err.model_dump(mode="json")}
+            payload = err.model_dump(mode="json")
+            if recovery_hint is not None:
+                payload["recovery_hint"] = recovery_hint
+            return {"error": payload}
         except PlatformError as exc:
             err = Error.from_platform_error(exc)
             await self._emit(
@@ -273,3 +285,106 @@ def _normalize_result(value: object) -> dict[str, Any]:
     if isinstance(value, dict):
         return value
     return {"value": value}
+
+
+# ---------------------------------------------------------------------------
+# qol-permission-system-human-readable.md Step 3 — denied recovery hint
+# ---------------------------------------------------------------------------
+
+
+_TARGET_ARG_PRIORITY = ("path", "command", "url")
+"""Same order as ``tools.dispatch._TARGET_ARG_PRIORITY``. Duplicated
+here (rather than imported) because the observer can't take a
+dependency on the dispatcher's internal helper — both modules read
+the convention from the same spec."""
+
+
+def _derive_authz_recovery_hint(
+    exc: ToolUnauthorized,
+    *,
+    arguments: dict[str, Any] | None,
+) -> str | None:
+    """Build the ``/perm allow <tool> <pattern>`` hint string.
+
+    Reads :attr:`ToolUnauthorized.detail`'s ``matched_rule`` to find
+    the qualified tool ref (or falls back to the legacy action
+    namespace ``tool.<name>`` when the matched rule's ``what`` is
+    in old shape). The suggested pattern is derived from the
+    in-flight arguments via the same convention the modal uses
+    (first whitespace-bounded token for bash; parent dir for file
+    tools; ``*`` otherwise). Returns ``None`` if there's nothing
+    actionable to surface (e.g., no rule matched — pure default
+    deny — in which case the user can use ``/perm allow
+    <ref> *``).
+
+    The pattern is intentionally **broad** by default (``*``); the
+    user can edit before submitting. The point of the hint is to
+    save them from looking up the qualified tool ref and the
+    slash-command grammar — not to guess their intent precisely.
+    """
+    detail = exc.detail or {}
+    tool_name = detail.get("tool_name") or ""
+    matched_rule = detail.get("matched_rule") or {}
+    if not isinstance(tool_name, str) or not tool_name:
+        return None
+
+    # Prefer the matched rule's `what` when it's the new
+    # qualified-ref shape (contains `/`); fall back to a legacy
+    # `tool.<name>` action namespace and ultimately to the bare
+    # tool name. Bare-name fallback isn't a valid /perm tool arg
+    # — we suppress the hint so we never tell the user to type
+    # `/perm allow bash` (which would fail validation).
+    what = matched_rule.get("what") if isinstance(matched_rule, dict) else None
+    if isinstance(what, str) and "/" in what:
+        tool_ref = what
+    else:
+        tool_ref = None
+
+    if tool_ref is None:
+        return None
+
+    pattern = _suggest_glob_pattern(tool_name=tool_name, arguments=arguments)
+    # Quote when the pattern contains whitespace so the slash
+    # parser splits the verb / ref / pattern correctly.
+    quoted = f'"{pattern}"' if " " in pattern else pattern
+    return f"/perm allow {tool_ref} {quoted}"
+
+
+def _suggest_glob_pattern(
+    *,
+    tool_name: str,
+    arguments: dict[str, Any] | None,
+) -> str:
+    """Mirror the modal's :func:`cli._modal.suggest_pattern`.
+
+    Same three heuristics in priority order:
+
+    1. bash with a command target: first whitespace-bounded
+       token → ``"<token> *"``.
+    2. file tools with a path target: parent-dir glob
+       ``"<parent>/*"``.
+    3. fallback: ``"*"``.
+
+    Kept independent of the modal so the engine can run without
+    importing chat code (Engine I1: engine doesn't depend on
+    cli/).
+    """
+    if not arguments:
+        return "*"
+    target: str | None = None
+    for attr in _TARGET_ARG_PRIORITY:
+        value = arguments.get(attr)
+        if isinstance(value, str):
+            target = value
+            break
+    if target is None:
+        return "*"
+    if tool_name == "bash":
+        first_token = target.strip().split(maxsplit=1)[0] if target.strip() else ""
+        if first_token:
+            return f"{first_token} *"
+    if tool_name in {"read_file", "write_file", "list_files"}:
+        parent, sep, _name = target.rpartition("/")
+        if sep:
+            return f"{parent}/*"
+    return "*"

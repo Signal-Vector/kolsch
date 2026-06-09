@@ -31,7 +31,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from enum import StrEnum
-from typing import TYPE_CHECKING, Literal, TextIO
+from typing import TYPE_CHECKING, Any, Literal, TextIO
 
 from prompt_toolkit.completion import Completer, Completion
 
@@ -524,10 +524,22 @@ async def _handler_tools(arg_text: str, ctx: SlashContext) -> ControlSignal:
     if ctx.authz is not None:
         rules = await ctx.authz.list_rules()
     principal = f"agent.{config.agent_id}"
+    # qol-permission-system-human-readable.md Step 4 — the
+    # rule-lookup helper handles both legacy regex AND new-shape
+    # glob rules; the lookup callable bridges the action namespace
+    # (`tool.bash`) and the qualified tool ref (`kolsch/bash`)
+    # used by new-shape `what:` fields. Absent when the authz
+    # variant doesn't expose the map.
+    tool_ref_lookup = getattr(ctx.authz, "lookup_tool_ref", None)
 
     ctx.stdout.write("tools available to this agent:\n")
     for name in tool_names:
-        rule = _governing_rule(rules, principal=principal, tool_name=name)
+        rule = _governing_rule(
+            rules,
+            principal=principal,
+            tool_name=name,
+            tool_ref_lookup=tool_ref_lookup,
+        )
         if rule is None:
             descriptor = "(no matching rule — default deny)"
         else:
@@ -592,6 +604,349 @@ async def _handler_skill(arg_text: str, ctx: SlashContext) -> ControlSignal:
         f"queued {ref} — force-load runs before your next message.\n"
     )
     return ControlSignal.CONTINUE
+
+
+async def _handler_perm(arg_text: str, ctx: SlashContext) -> ControlSignal:
+    """``/perm <verb> [<tool> <pattern>]`` —
+    qol-permission-system-human-readable.md Step 3 task 1.
+
+    Five verbs, sharing one handler so ``/perm`` keeps a single
+    completer + footer-hint entry:
+
+    - ``/perm allow  <tool> <pattern>``
+    - ``/perm deny   <tool> <pattern>``
+    - ``/perm prompt <tool> <pattern>``
+    - ``/perm remove <tool> <pattern>``
+    - ``/perm list``
+
+    ``<tool>`` must be the fully-qualified tool ref
+    (``kolsch/bash``) or a system action namespace
+    (``agent.execute.*``) or the catch-all ``*``. Bare names fail
+    here with a friendly slash-line rather than the Fatal
+    AuthzBareToolRef the provider would raise at next reload.
+    ``<pattern>`` is a glob; the same ``_PATTERN_REGEX_CHARS``
+    set is rejected as for YAML-loaded rules.
+
+    Allow/deny/prompt verbs land the new rule ABOVE the catch-all
+    AND ABOVE any conflict whose ``(what, pattern)`` would shadow
+    the user's intent. The output line names the position so the
+    user sees where it landed. Remove drops the rule by
+    ``(what, pattern)`` match (legacy rules can still be removed
+    by their rule id via ``kolsch permissions remove``).
+    """
+    if ctx.state is None:
+        ctx.stdout.write("/perm requires a chat runtime; not available here.\n")
+        return ControlSignal.CONTINUE
+    parts = arg_text.split(maxsplit=1)
+    if not parts:
+        ctx.stdout.write(_PERM_USAGE)
+        return ControlSignal.CONTINUE
+    verb = parts[0].lower()
+    rest = parts[1].strip() if len(parts) > 1 else ""
+
+    if verb == "list":
+        await _perm_list(ctx)
+        return ControlSignal.CONTINUE
+    if verb not in {"allow", "deny", "prompt", "remove"}:
+        ctx.stdout.write(
+            f"/perm: unknown verb {verb!r}; "
+            f"expected one of allow, deny, prompt, remove, list\n",
+        )
+        return ControlSignal.CONTINUE
+
+    tokens = _split_perm_args(rest)
+    if tokens is None:
+        ctx.stdout.write(_PERM_USAGE)
+        return ControlSignal.CONTINUE
+    tool, pattern = tokens
+    if not _validate_perm_tool(tool, ctx=ctx):
+        return ControlSignal.CONTINUE
+    if not _validate_perm_pattern(pattern, ctx=ctx):
+        return ControlSignal.CONTINUE
+
+    yaml_path = ctx.state.runtime.root / "platform.yaml"
+    if verb == "remove":
+        await _perm_remove(ctx, tool=tool, pattern=pattern, yaml_path=yaml_path)
+    else:
+        await _perm_upsert(
+            ctx,
+            verb=verb,
+            tool=tool,
+            pattern=pattern,
+            yaml_path=yaml_path,
+        )
+    return ControlSignal.CONTINUE
+
+
+_PERM_USAGE = (
+    "/perm <verb> <tool> <pattern>   verbs: allow | deny | prompt | remove\n"
+    "/perm list                       print every current rule\n"
+    "  example: /perm allow kolsch/bash \"find *\"\n"
+)
+
+
+def _split_perm_args(text: str) -> tuple[str, str] | None:
+    """Split a ``<tool> <pattern>`` arg string into two non-empty tokens.
+
+    Supports double-quoted patterns so multi-word globs like
+    ``"find * -name foo"`` survive: ``/perm allow kolsch/bash "find * -name foo"``.
+    Returns ``None`` when the input doesn't parse as two tokens.
+    """
+    text = text.strip()
+    if not text:
+        return None
+    head, _, tail = text.partition(" ")
+    if not tail:
+        return None
+    tail = tail.strip()
+    if tail.startswith('"'):
+        if not tail.endswith('"') or len(tail) < 2:
+            return None
+        return head, tail[1:-1]
+    return head, tail
+
+
+def _validate_perm_tool(tool: str, *, ctx: SlashContext) -> bool:
+    """``what`` validation mirroring
+    :meth:`providers.RuleBasedAuthorizationProvider._validate_what`.
+
+    - ``*`` → accept (catch-all).
+    - Contains ``.`` (e.g., ``agent.execute.*``) → accept.
+    - Contains ``/`` and the catalog has the qualified tool → accept.
+    - Otherwise → friendly slash-line error (no exception).
+
+    Returns ``True`` when valid; otherwise writes the error to
+    ``ctx.stdout`` and returns ``False``."""
+    if not tool:
+        ctx.stdout.write("/perm: tool is required\n")
+        return False
+    if tool == "*" or "." in tool:
+        return True
+    if "/" not in tool:
+        # Bare name — try to suggest the qualified form.
+        candidates = _qualified_candidates_for_bare(tool, ctx=ctx)
+        if candidates:
+            ctx.stdout.write(
+                f"/perm: {tool!r} is a bare tool name. "
+                f"Use the qualified form: {', '.join(candidates)}\n",
+            )
+        else:
+            ctx.stdout.write(
+                f"/perm: {tool!r} is a bare tool name and not in the catalog. "
+                "Use the qualified `<bundle>/<name>` form.\n",
+            )
+        return False
+    # Qualified form — confirm against catalog if accessible.
+    lookup = _action_to_tool_ref_map(ctx)
+    if lookup is None:
+        return True  # no catalog to check against; accept (best-effort)
+    qualified_refs = set(lookup.values())
+    if tool not in qualified_refs:
+        ctx.stdout.write(
+            f"/perm: tool ref {tool!r} not found in the catalog.\n",
+        )
+        return False
+    return True
+
+
+def _validate_perm_pattern(pattern: str, *, ctx: SlashContext) -> bool:
+    """Reject regex characters in the glob pattern — same set the
+    provider's ``_PATTERN_REGEX_CHARS`` rejects at YAML load.
+
+    Surfaces the bad characters in the error so the user can fix
+    in one keystroke."""
+    from providers.authz import _PATTERN_REGEX_CHARS  # noqa: PLC0415
+
+    if not pattern:
+        ctx.stdout.write(
+            "/perm: pattern is required (use `*` to match anything)\n",
+        )
+        return False
+    bad = [c for c in _PATTERN_REGEX_CHARS if c in pattern]
+    if bad:
+        ctx.stdout.write(
+            f"/perm: pattern {pattern!r} contains regex character(s) "
+            f"{bad} — patterns are globs (use `*` and `?` only).\n",
+        )
+        return False
+    return True
+
+
+def _qualified_candidates_for_bare(
+    bare: str,
+    *,
+    ctx: SlashContext,
+) -> list[str]:
+    """Look up qualified refs for ``bare`` from the runtime's authz
+    provider. Returns ``[]`` if nothing in the catalog matches."""
+    lookup = _action_to_tool_ref_map(ctx)
+    if lookup is None:
+        return []
+    return sorted(
+        ref for ref in lookup.values() if ref.rsplit("/", 1)[-1] == bare
+    )
+
+
+def _action_to_tool_ref_map(ctx: SlashContext) -> dict[str, str] | None:
+    """Best-effort access to the authz provider's action→tool_ref map.
+
+    Used by ``/perm`` validation. Returns ``None`` when the runtime
+    isn't available or the authz provider's a variant without the
+    accessor (custom variant in future)."""
+    if ctx.state is None:
+        return None
+    authz = ctx.state.runtime.authz
+    getter = getattr(authz, "_action_to_tool_ref", None)
+    if not isinstance(getter, dict):
+        return None
+    return getter
+
+
+_VERB_TO_EFFECT: dict[str, str] = {
+    "allow": "allow",
+    "deny": "deny",
+    "prompt": "prompt",
+}
+
+
+async def _perm_list(ctx: SlashContext) -> None:
+    """Render the current rule list."""
+    from providers import RuleBasedAuthorizationProvider  # noqa: PLC0415
+
+    assert ctx.state is not None  # guarded by caller
+    authz = ctx.state.runtime.authz
+    if not isinstance(authz, RuleBasedAuthorizationProvider):
+        ctx.stdout.write("/perm: authz variant doesn't support listing rules.\n")
+        return
+    rules = await authz.list_rules()
+    if not rules:
+        ctx.stdout.write("(no rules)\n")
+        return
+    ctx.stdout.write("rules (first-match-wins, top to bottom):\n")
+    for index, rule in enumerate(rules):
+        if rule.who is None:
+            ctx.stdout.write(
+                f"  {index:>2}  what={rule.what!r:<22}  "
+                f"pattern={rule.pattern!r:<14}  effect={rule.effect}\n",
+            )
+        else:
+            ctx.stdout.write(
+                f"  {index:>2}  what={rule.what!r:<22}  "
+                f"[legacy regex — please convert]  effect={rule.effect}\n",
+            )
+
+
+async def _perm_upsert(
+    ctx: SlashContext,
+    *,
+    verb: str,
+    tool: str,
+    pattern: str,
+    yaml_path: Any,
+) -> None:
+    """Insert/update an allow/deny/prompt rule.
+
+    Smart insertion: drops any prior new-shape rule with the same
+    ``(what, pattern)`` (replacing intent) then inserts above the
+    default-deny tail. The output names the final position so the
+    user can immediately verify where it landed."""
+    from cli.permissions import _write_back  # noqa: PLC0415
+    from providers import RuleBasedAuthorizationProvider, Rule  # noqa: PLC0415
+
+    assert ctx.state is not None  # guarded by caller
+    authz = ctx.state.runtime.authz
+    if not isinstance(authz, RuleBasedAuthorizationProvider):
+        ctx.stdout.write("/perm: authz variant doesn't support editing rules.\n")
+        return
+
+    effect = _VERB_TO_EFFECT[verb]
+    # Remove any existing new-shape rule with the same
+    # (what, pattern) so the user's intent isn't shadowed.
+    removed_index = await _remove_matching_new_rule(
+        authz, what=tool, pattern=pattern,
+    )
+    new_rule = Rule(what=tool, pattern=pattern, effect=effect)
+    inserted = await authz.add_rule(new_rule)
+    _write_back(yaml_path, await authz.list_rules())
+    position = await _position_of(authz, inserted.id)
+    landed = "above the catch-all" if position is not None else "<unknown>"
+    if removed_index is not None:
+        ctx.stdout.write(
+            f"/perm {verb}: replaced previous rule at position {removed_index}\n",
+        )
+    ctx.stdout.write(
+        f"/perm {verb}: added rule  what={tool!r}  pattern={pattern!r}  "
+        f"effect={effect}  ({landed}, position {position})\n",
+    )
+
+
+async def _perm_remove(
+    ctx: SlashContext,
+    *,
+    tool: str,
+    pattern: str,
+    yaml_path: Any,
+) -> None:
+    """Drop the new-shape rule matching ``(tool, pattern)``.
+
+    Legacy rules are intentionally not droppable here — they have a
+    stable rule id the user can use via
+    ``kolsch permissions remove <id>``. Refusing to drop them via
+    ``/perm remove`` also prevents accidentally clobbering a
+    hand-authored regex rule whose ``what`` happens to look like a
+    qualified ref."""
+    from cli.permissions import _write_back  # noqa: PLC0415
+    from providers import RuleBasedAuthorizationProvider  # noqa: PLC0415
+
+    assert ctx.state is not None
+    authz = ctx.state.runtime.authz
+    if not isinstance(authz, RuleBasedAuthorizationProvider):
+        ctx.stdout.write("/perm: authz variant doesn't support editing rules.\n")
+        return
+    removed = await _remove_matching_new_rule(authz, what=tool, pattern=pattern)
+    if removed is None:
+        ctx.stdout.write(
+            f"/perm remove: no rule with what={tool!r} pattern={pattern!r} "
+            "(legacy rules: use `kolsch permissions remove <id>`)\n",
+        )
+        return
+    _write_back(yaml_path, await authz.list_rules())
+    ctx.stdout.write(
+        f"/perm remove: dropped rule at position {removed}  "
+        f"what={tool!r}  pattern={pattern!r}\n",
+    )
+
+
+async def _remove_matching_new_rule(
+    authz: Any,
+    *,
+    what: str,
+    pattern: str,
+) -> int | None:
+    """Drop the FIRST new-shape rule whose ``(what, pattern)`` matches.
+
+    Returns the original index of the removed rule (so the caller
+    can report it) or ``None`` when nothing matched. Walks the rule
+    list once; matching is exact on the strings — globs aren't
+    expanded since we're operating on the rule itself, not an
+    invocation."""
+    rules = await authz.list_rules()
+    for index, rule in enumerate(rules):
+        if rule.who is not None:
+            continue  # never touch legacy rules from /perm
+        if rule.what == what and rule.pattern == pattern:
+            await authz.remove_rule(rule.id)
+            return index
+    return None
+
+
+async def _position_of(authz: Any, rule_id: str) -> int | None:
+    """Walk the in-memory rule list once to find a rule's index."""
+    rules = await authz.list_rules()
+    for index, rule in enumerate(rules):
+        if rule.id == rule_id:
+            return index
+    return None
 
 
 async def _handler_clear(arg_text: str, ctx: SlashContext) -> ControlSignal:
@@ -701,9 +1056,26 @@ COMMAND_REGISTRY: dict[str, SlashCommand] = {
         handler=_handler_skill,
         free_form_arg_hint="<bundle>/skills/<name>",
     ),
+    "/perm": SlashCommand(
+        name="/perm",
+        description="edit authorization rules (allow/deny/prompt/remove/list)",
+        usage=(
+            "/perm <verb> <tool> <pattern>   verbs: allow | deny | prompt | "
+            "remove ; or /perm list"
+        ),
+        handler=_handler_perm,
+        options=(
+            ("allow", "permit a tool invocation matching <tool> <pattern>"),
+            ("deny", "block a tool invocation matching <tool> <pattern>"),
+            ("prompt", "ask before a tool invocation matching <tool> <pattern>"),
+            ("remove", "drop the new-shape rule with this <tool> <pattern>"),
+            ("list", "print every current rule in evaluation order"),
+        ),
+    ),
 }
-"""Nine visible commands; ``/exit`` carries ``/quit`` as an alias.
-Patch §5 + ``/skill`` (skills-subsystem.md Draft 0.2 Step 3 follow-up)."""
+"""Ten visible commands; ``/exit`` carries ``/quit`` as an alias.
+Patch §5 + ``/skill`` (skills-subsystem.md Draft 0.2 Step 3 follow-up) +
+``/perm`` (qol-permission-system-human-readable.md Step 3)."""
 
 
 # ---------------------------------------------------------------------------
@@ -1002,34 +1374,56 @@ def _governing_rule(
     *,
     principal: str,
     tool_name: str,
+    tool_ref_lookup: Callable[[str], str | None] | None = None,
 ) -> Rule | None:
     """First-match-wins rule lookup mirroring the authz provider.
 
-    The authz provider's ``allow`` uses ``re.fullmatch`` on both
-    ``who`` and ``what`` (A-I1). This helper mirrors that exactly
-    so ``/tools`` shows the SAME rule the runtime would resolve at
-    dispatch time — no divergence.
+    Dispatches per-rule shape:
 
-    Action shape per agent-engine-contract / tools dispatch:
-    ``tool.<name>``. Principal at tool dispatch is
-    ``agent.<agent_id>`` (§1.8).
+    - **Legacy** rules (``who`` set): mirror ``re.fullmatch`` on
+      both ``who`` and ``what`` per A-I1.
+    - **New-shape** rules (``who is None``):
+      :func:`fnmatch.fnmatchcase` ``what`` against the action OR
+      the tool ref, mirroring
+      :meth:`providers.RuleBasedAuthorizationProvider._rule_matches`.
+
+    ``tool_ref_lookup`` resolves an action string to its qualified
+    tool ref (``tool.bash`` → ``kolsch/bash``). When None,
+    new-shape rules only match against the bare action (rules
+    written as ``what: kolsch/bash`` won't fire — same loss the
+    provider has when no catalog is supplied; ``/tools`` shows
+    "(no matching rule)" in that case).
 
     Returns ``None`` when no rule matches — the caller renders
     that as "(default deny)" because the authz provider's
     A-I3 invariant is default-deny when no rule matches.
     """
+    import fnmatch  # noqa: PLC0415
+
     action = f"tool.{tool_name}"
+    tool_ref = tool_ref_lookup(action) if tool_ref_lookup is not None else None
     for rule in rules:
-        try:
-            if re.fullmatch(rule.who, principal) and re.fullmatch(
-                rule.what,
-                action,
-            ):
-                return rule
-        except re.error:
-            # A malformed regex would have failed at provider load
-            # time; defensive only — never raise out of /tools.
+        if rule.who is not None:
+            # Legacy regex path.
+            try:
+                if re.fullmatch(rule.who, principal) and re.fullmatch(
+                    rule.what,
+                    action,
+                ):
+                    return rule
+            except re.error:
+                # A malformed regex would have failed at provider load
+                # time; defensive only — never raise out of /tools.
+                continue
             continue
+        # New-shape glob path: `what` matches action OR tool_ref.
+        what_pattern = rule.what
+        action_match = fnmatch.fnmatchcase(action, what_pattern)
+        tool_ref_match = tool_ref is not None and fnmatch.fnmatchcase(
+            tool_ref, what_pattern,
+        )
+        if action_match or tool_ref_match:
+            return rule
     return None
 
 

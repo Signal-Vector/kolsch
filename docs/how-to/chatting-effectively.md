@@ -140,13 +140,13 @@ When the agent wants to call `bash`, the default workspace rule
 set hits a `prompt`-effect rule and the four-choice modal pops:
 
 ```
-╭────────────────── Permission requested ──────────────────╮
-│  Tool:     bash                                          │
-│  Command:  rg "build_llm" src/                           │
-│  Matched rule:  rl_bash_any  (effect: prompt)            │
-│  [y] allow once       [n] deny once                      │
-│  [a] always allow     [d] always deny                    │
-╰──────────────────────────────────────────────────────────╯
+│ permission · 14:23:44                              [dark_orange3]
+│ bash(command='rg "build_llm" src/')  —  matched what='kolsch/bash' pattern='*' effect='prompt'
+│
+│ [y] once    [a] always allow this
+│ [n] deny once    [d] always deny
+│
+│ ▍
 ```
 
 - `[y]` — runs this exact call. Next call prompts again.
@@ -158,45 +158,48 @@ set hits a `prompt`-effect rule and the four-choice modal pops:
   matching calls don't even prompt.
 
 The chat's pattern suggestor pre-fills the `[a]`/`[d]` rule's
-`what` from the call. For `bash`, the default is the first
-whitespace-bounded token of the command:
+`pattern` from the call. For `bash`, the default is the first
+whitespace-bounded token of the command plus `*`:
 
-- `rg foo src/` → suggests `^rg .*$`
-- `ls -la` → suggests `^ls .*$`
-- `cat README.md` → suggests `^cat .*$`
+- `rg foo src/` → suggests `rg *`
+- `ls -la` → suggests `ls *`
+- `cat README.md` → suggests `cat *`
+
+(Patterns are **globs**, not regex — `*` means "any chars," `?`
+means "one char," everything else is literal.)
 
 You can edit the pattern before committing. **Take a second to
-think about it.** A too-broad pattern (`.*` would allow
-everything) is the same shape as a missing rule. A too-narrow
+think about it.** A too-broad pattern (`*` allows everything for
+that tool) is the same shape as a missing rule. A too-narrow
 pattern (the literal command) defeats the point — you'll just
 re-prompt on the next variation.
 
 ### Rules of thumb
 
 - **Read-only commands** (`rg`, `ls`, `cat`, `find`, `grep`) →
-  `[a]` with the default `^<cmd> .*$` is fine. The risk surface
+  `[a]` with the default `<cmd> *` is fine. The risk surface
   is bounded; the agent benefits from not interrupting.
 - **Anything that writes** (`rm`, `mv`, `chmod`, `git
   commit`/`push`, `sed -i`) → think before `[a]`. A narrower
-  pattern (`^git commit -m .*$`) is safer than `^git .*$`.
-  Often `[y]` (allow once) is the right call.
+  pattern (`git commit -m *`) is safer than `git *`. Often
+  `[y]` (allow once) is the right call.
 - **Network calls** (`curl`, `wget`, `ssh`, `nc`) → almost
   always `[y]` not `[a]`. The target URL or host matters more
   than the command name.
-- **The pattern is regex**, not glob. `^git\\s+commit` matches
-  `git commit` *and* `git  commit` (extra space) but NOT
-  `git-commit`. Escape dots if you mean a literal one.
+- **The pattern is a glob** — `*` is greedy on any chars,
+  including spaces. `git *` matches `git commit -m foo` and
+  `git push -f`; if that's too loose, pick the verb (`git
+  commit *`).
 
-If you regret an `[a]`, list the rules and remove the one you
-added:
+If you regret an `[a]`, undo it with `/perm`:
 
-```bash
-kolsch permissions list                            # find the rule id
-kolsch permissions remove rl_<id>                  # back to prompting
+```
+/perm list                              # find the (what, pattern) pair
+/perm remove kolsch/bash "rg *"         # back to prompting
 ```
 
-(Or just edit `platform.yaml`; the change applies on the next
-authz check.) For the full permissions story see
+(Or edit `platform.yaml`; the change applies on the next authz
+check.) For the full permissions story see
 [`permissions.md`](permissions.md).
 
 ### What the modal isn't
@@ -206,7 +209,46 @@ authz check.) For the full permissions story see
   always `[y]` after eyeballing the command.
 - **It isn't durable trust.** Rules you wrote when you were
   paying attention apply later when you aren't. Audit
-  occasionally with `kolsch permissions list`.
+  occasionally with `/perm list`.
+
+## Editing permissions inside chat: `/perm`
+
+When a tool is denied OR you just want to pre-authorize
+something, type the command instead of leaving the chat:
+
+```
+/perm allow  kolsch/bash "rg *"             # pre-authorize ripgrep
+/perm deny   kolsch/bash "rm -rf *"         # block the dangerous shape
+/perm prompt kolsch/write_file /etc/*       # always ask for system writes
+/perm remove kolsch/bash "rg *"             # undo a prior allow
+/perm list                                   # print every current rule
+```
+
+Two things make this useful mid-conversation:
+
+1. **The denied capsule prints the exact command to type.** When
+   a tool fails with `tool.unauthorized`, the chat surfaces a
+   permission capsule that names the matched rule and the
+   `/perm allow` command that would unblock the next attempt.
+   Copy, edit if you want a narrower pattern, hit enter.
+2. **The model sees the same hint.** The chat's `tool.failed`
+   event carries the `/perm` command in its `recovery_hint`
+   field; the agent surfaces it in its reply so you don't have
+   to scroll to find the panel.
+
+Three things to know:
+
+- **`<tool>` must be qualified.** `bash` alone is rejected with
+  a friendly error naming the qualified form (e.g.,
+  `kolsch/bash`). Use `/tools` to list refs the agent can call.
+- **`<pattern>` is a glob.** `^find .*$` is rejected at the
+  slash level — same character set the YAML rejects at load.
+- **Conflicts: `/perm allow` replaces an exact prior `(what,
+  pattern)`** rule instead of duplicating. Broader prior denies
+  still shadow your new allow (use `/perm list` to spot it).
+
+The slash command writes to the same `platform.yaml` the modal
+does; everything you change persists across chat exits.
 
 ## Cancelling and recovering
 

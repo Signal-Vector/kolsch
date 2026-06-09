@@ -678,11 +678,15 @@ the canonical "what each effect does" mapping for callers is
 
 | Code | Level | Detail | Where (typical) |
 |---|---|---|---|
-| `authz.denied` | Recoverable | `{tool, target, rule_id}` | Tools dispatcher when effect is `deny` |
+| `authz.denied` | Recoverable | `{tool, target, rule_id}` | Tools dispatcher when effect is `deny` (registered; the dispatcher actually wraps every authz denial as `tool.unauthorized` at the tool boundary — see "Wrapped at the tool boundary" below) |
 | `authz.prompt_unattended` | Recoverable | `{tool, target, rule_id, caller}` | Non-chat callers when effect is `prompt` (collapsed to deny) |
 | `authz.rule_invalid` | Fatal | `{position, reason}` | `kolsch permissions add` validating user input |
 | `authz.rule_not_found` | Fatal | `{id, available_ids}` | `kolsch permissions remove` for unknown id |
 | `authz.protected_rule` | Fatal | `{id, reason}` | `kolsch permissions remove rl_default_deny` (the default-deny tail is removal-protected) |
+| `authz.bare_tool_ref` | Fatal | `{rule_index, bare_name, candidates}` | Provider construction when a rule's `what` is a bare tool name (e.g., `bash` instead of `kolsch/bash`) — qol-permission-system-human-readable.md |
+| `authz.pattern_invalid` | Fatal | `{rule_index, pattern, forbidden_chars}` | Provider construction when a rule's `pattern` contains regex characters (`^`, `$`, `[`, …) — qol-permission-system-human-readable.md |
+| `authz.tool_ref_unknown` | Fatal | `{rule_index, tool_ref}` | Provider construction when a qualified `what` doesn't resolve to a catalogued tool |
+| `config.deprecated_regex_rule` | Recoverable | `{rule_index, what, reason}` | Setup-runner migration when a legacy regex rule can't be auto-converted; the rule stays in legacy form |
 | `file.access_denied` | Recoverable | `{path, allowed_paths}` | `read_file` / `write_file` / `list_files` when the path resolves outside `file_access.allowed_paths` |
 | `file.too_large` | Recoverable | `{path, size_bytes, max_bytes}` | `read_file` when the target exceeds the per-call `max_bytes` budget |
 | `file.not_found` | Recoverable | `{path}` | `read_file` / `list_files` when the path does not exist |
@@ -703,6 +707,32 @@ denied the call. `authz.prompt_unattended` means a rule asked to
 prompt the user but the caller is not interactive — replay sees
 the distinction so a future interactive run can answer the same
 question.
+
+**Wrapped at the tool boundary.** The tools dispatcher at
+`src/tools/dispatch.py` raises `ToolUnauthorized` (code
+`tool.unauthorized`) when the authz provider returns a denial —
+not `AuthzDenied` directly. The wrap is intentional: from the
+model's POV the failure is at the tool boundary
+(`tool.<name>` failed to invoke), not at the provider boundary.
+`AuthzDenied` is registered for completeness but never appears
+in `tool.failed` events; the renderer + the
+`recovery_hint` machinery key off `tool.unauthorized` because
+that's what crosses the wire. The QoL Step 4 doc cascade
+reconciles wording across both names; future cleanup may
+delete the unused `AuthzDenied` class altogether.
+
+**The QoL permission-system codes (Step 4).** The four codes
+above the line —
+`authz.bare_tool_ref` / `authz.pattern_invalid` /
+`authz.tool_ref_unknown` / `config.deprecated_regex_rule` —
+ship with `qol-permission-system-human-readable.md`. The first
+three are workspace-load Fatals: the user wrote a rule the
+schema rejects, the platform refuses to start, the error names
+the rule index + the specific input that failed validation.
+`config.deprecated_regex_rule` is Recoverable: it emits at
+`kolsch setup` re-run when a legacy regex rule can't be
+auto-converted; the rule stays in legacy form and `kolsch
+permissions list` marks it with `[legacy regex — please convert]`.
 
 **Path overlap with §4.11.** Phase 1's `file_access.denied` (in
 §4.11) and Phase 2.0's `file.access_denied` (here) are the same

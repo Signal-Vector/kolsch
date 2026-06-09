@@ -201,3 +201,145 @@ class AuthzProtectedRule(PlatformError):
             where=where,
             detail={"id": rule_id, "reason": reason},
         )
+
+
+# ---------------------------------------------------------------------------
+# qol-permission-system-human-readable.md Step 2 — schema migration
+# ---------------------------------------------------------------------------
+
+
+class AuthzBareToolRef(PlatformError):
+    """Rule's ``what`` is a bare tool name, not the qualified form.
+
+    QoL — human-readable permission system, decision 6: ``what`` must
+    name the tool by its fully-qualified ref (``<bundle>/<name>``)
+    even when no ambiguity exists. ``what: bash`` is rejected at
+    load with a clear error pointing the user at the qualified form
+    they should use.
+    """
+
+    code = "authz.bare_tool_ref"
+    level = Level.FATAL
+
+    def __init__(
+        self,
+        rule_index: int,
+        bare_name: str,
+        candidates: list[str],
+        *,
+        where: str = "authz.rule_based.validate",
+    ) -> None:
+        super().__init__(
+            message=(
+                f"Rule at index {rule_index}: `what: {bare_name!r}` is a "
+                f"bare tool name; use the fully-qualified form. "
+                f"Candidate(s): {candidates}"
+            ),
+            where=where,
+            detail={
+                "rule_index": rule_index,
+                "bare_name": bare_name,
+                "candidates": list(candidates),
+            },
+        )
+
+
+class AuthzPatternInvalid(PlatformError):
+    """Rule's ``pattern`` contains characters reserved for regex.
+
+    QoL — human-readable permission system, decision 3: ``pattern``
+    is a glob, not a regex. Characters that introduce regex semantics
+    (``[``, ``]``, ``^``, ``$``, ``\\``, ``(``, ``)``, ``+``, ``|``,
+    ``{``, ``}``) are rejected at config load so a legacy regex
+    pattern can't be silently miscompiled as a glob.
+    """
+
+    code = "authz.pattern_invalid"
+    level = Level.FATAL
+
+    def __init__(
+        self,
+        rule_index: int,
+        pattern: str,
+        forbidden_chars: list[str],
+        *,
+        where: str = "authz.rule_based.validate",
+    ) -> None:
+        super().__init__(
+            message=(
+                f"Rule at index {rule_index}: pattern {pattern!r} contains "
+                f"regex character(s) {forbidden_chars}; patterns are globs "
+                f"(use `*` for any-chars, `?` for one-char)"
+            ),
+            where=where,
+            detail={
+                "rule_index": rule_index,
+                "pattern": pattern,
+                "forbidden_chars": list(forbidden_chars),
+            },
+        )
+
+
+class AuthzToolRefUnknown(PlatformError):
+    """Rule's ``what`` is a qualified tool ref but no such tool exists.
+
+    QoL — human-readable permission system, decision 6: a slash-form
+    ``what`` (``kolsch/bash``) must resolve to a real tool in the
+    catalog. Missing tool → load failure with a clear name.
+    """
+
+    code = "authz.tool_ref_unknown"
+    level = Level.FATAL
+
+    def __init__(
+        self,
+        rule_index: int,
+        tool_ref: str,
+        *,
+        where: str = "authz.rule_based.validate",
+    ) -> None:
+        super().__init__(
+            message=(
+                f"Rule at index {rule_index}: `what: {tool_ref!r}` does not "
+                f"resolve to any catalogued tool"
+            ),
+            where=where,
+            detail={"rule_index": rule_index, "tool_ref": tool_ref},
+        )
+
+
+class ConfigDeprecatedRegexRule(PlatformError):
+    """A platform.yaml rule still uses the legacy regex shape.
+
+    QoL — human-readable permission system, decision 11: rules that
+    don't fit the migration heuristic (custom user regex with
+    character classes, lookahead, etc.) stay in legacy form during
+    the migration window. The platform loads them but emits this
+    Recoverable warning at workspace load so the user knows to
+    convert them.
+    """
+
+    code = "config.deprecated_regex_rule"
+    level = Level.RECOVERABLE
+
+    def __init__(
+        self,
+        rule_index: int,
+        what: str,
+        reason: str,
+        *,
+        where: str = "cli._migrations.authz_rules",
+    ) -> None:
+        super().__init__(
+            message=(
+                f"Rule at index {rule_index} kept in legacy regex form "
+                f"(what={what!r}): {reason}. Convert manually or via "
+                f"`/perm` slash commands."
+            ),
+            where=where,
+            detail={
+                "rule_index": rule_index,
+                "what": what,
+                "reason": reason,
+            },
+        )
