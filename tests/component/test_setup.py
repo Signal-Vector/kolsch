@@ -237,6 +237,73 @@ async def test_tc_ux_05_non_interactive_setup_initializes_workspace(
 
 
 # ===========================================================================
+# qol-workspace-root-listable — `.` belongs in file_access.allowed_paths
+# ===========================================================================
+
+
+async def test_fresh_setup_ships_workspace_root_in_allowed_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """qol-workspace-root-listable.md — a fresh setup ships `.`
+    as the first allowed_paths entry so list_files(path=".")
+    works in the workspace root."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    io_ = _make_test_io(root=tmp_path)
+    assert await run_setup(
+        argparse.Namespace(non_interactive=True, root=tmp_path),
+        io_,
+    ) == 0
+    platform_payload = yaml.safe_load(
+        (tmp_path / "platform.yaml").read_text()
+    )
+    allowed = platform_payload["file_access"]["allowed_paths"]
+    assert allowed[0] == ".", (
+        f"workspace root should be first in allowed_paths; got {allowed}"
+    )
+
+
+async def test_setup_rerun_adds_workspace_root_to_legacy_allowed_paths(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """qol-workspace-root-listable.md — a workspace authored before
+    the QoL (no `.` in allowed_paths) gains the entry on `kolsch setup`
+    re-run. Mirrors the authz-rules-migration pattern."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    # First setup writes a fresh workspace.
+    io_ = _make_test_io(root=tmp_path)
+    assert await run_setup(
+        argparse.Namespace(non_interactive=True, root=tmp_path),
+        io_,
+    ) == 0
+    # Simulate legacy state: strip `.` from allowed_paths.
+    yaml_path = tmp_path / "platform.yaml"
+    payload = yaml.safe_load(yaml_path.read_text())
+    payload["file_access"]["allowed_paths"] = [
+        p for p in payload["file_access"]["allowed_paths"] if p != "."
+    ]
+    yaml_path.write_text(yaml.safe_dump(payload, sort_keys=False))
+    # Re-run; the migrator should add `.` back at the front.
+    rerun_io = _make_test_io(root=tmp_path)
+    assert await run_setup(
+        argparse.Namespace(non_interactive=True, root=tmp_path),
+        rerun_io,
+    ) == 0
+    final = yaml.safe_load(yaml_path.read_text())
+    allowed = final["file_access"]["allowed_paths"]
+    assert allowed[0] == ".", (
+        f"migration should put `.` first; got {allowed}"
+    )
+    # Backup written under .platform/ (per _backup_platform_yaml at
+    # src/cli/_setup.py:949+).
+    backups = list((tmp_path / ".platform").glob("platform.yaml.bak.*"))
+    assert backups, "migration should have written a timestamped backup"
+
+
+# ===========================================================================
 # TC-UX-06 — idempotency
 # ===========================================================================
 

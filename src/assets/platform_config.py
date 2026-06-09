@@ -75,7 +75,12 @@ def default_platform_payload() -> dict[str, Any]:
         },
         "event_bus": {"backend": "in_process"},
         "file_access": {
+            # `.` resolves to the workspace root and lets `list_files(path=".")`
+            # answer "what's in my workspace?" — per `qol-workspace-root-listable.md`.
+            # Without it, default-deny fires on the natural workspace inspection;
+            # the fallback to `bash ls -la` only works because bash is broader.
             "allowed_paths": [
+                ".",
                 "data/",
                 "bundles/",
                 "sessions/",

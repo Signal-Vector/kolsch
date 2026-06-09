@@ -386,6 +386,11 @@ async def _step_b_skeleton(io: _SetupIO, *, non_interactive: bool) -> str:
         # tool the migrator's `tool.<name>` heuristic needs to
         # resolve to `<bundle>/<name>`.
         await _maybe_migrate_authz_rules_to_qol_schema(io)
+        # qol-workspace-root-listable.md — make `list_files(path=".")`
+        # work in the workspace root. Adds `.` to `file_access.allowed_paths`
+        # if missing so the natural workspace-inspection call doesn't
+        # default-deny.
+        _maybe_add_workspace_root_to_file_access(io)
         # Step 6 (skills-subsystem.md Draft 0.2 follow-up): advisory
         # skill validation. Warning-only — never blocks setup so a
         # user mid-editing a SKILL.md doesn't get stuck.
@@ -1102,6 +1107,51 @@ async def _maybe_migrate_authz_rules_to_qol_schema(io: _SetupIO) -> None:
     io.out.write(
         f"  ✓ migrated {converted_count} authz rule(s) → new schema "
         "(what / pattern / effect)\n",
+    )
+    io.out.write(
+        f"  ✓ backup written to {backup.relative_to(yaml_path.parent)}\n",
+    )
+
+
+def _maybe_add_workspace_root_to_file_access(io: _SetupIO) -> None:
+    """Add ``.`` to ``file_access.allowed_paths`` if missing.
+
+    qol-workspace-root-listable.md — the natural inspection call
+    ``list_files(path=".")`` default-denies on workspaces created
+    before the QoL landed because the default template only allowed
+    subdirectories (``data/``, ``bundles/``, ``sessions/``,
+    ``content/``, ``logs/``) plus ``platform.yaml``. Adding ``.``
+    at the front lets agents list the workspace root without
+    falling back to ``bash ls``.
+
+    Silent no-op when:
+    - ``platform.yaml`` is absent.
+    - ``file_access`` section is absent (catalog-resolved default
+      applies; nothing to migrate).
+    - ``.`` is already in ``allowed_paths`` (already migrated, or
+      hand-edited).
+    """
+    yaml_path = io.root / "platform.yaml"
+    if not yaml_path.is_file():
+        return
+    payload = _read_yaml(yaml_path)
+    file_access = payload.get("file_access")
+    if not isinstance(file_access, dict):
+        return
+    allowed = file_access.get("allowed_paths")
+    if not isinstance(allowed, list):
+        return
+    if "." in allowed:
+        return
+    backup = _backup_platform_yaml(yaml_path)
+    file_access["allowed_paths"] = [".", *allowed]
+    yaml_path.write_text(
+        yaml.safe_dump(payload, sort_keys=False),
+        encoding="utf-8",
+    )
+    io.out.write(
+        "  ✓ added '.' to file_access.allowed_paths — list_files(\".\") "
+        "now works in the workspace root\n",
     )
     io.out.write(
         f"  ✓ backup written to {backup.relative_to(yaml_path.parent)}\n",

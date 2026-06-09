@@ -1,5 +1,7 @@
 # QoL — `list_files(path=".")` should work in the workspace root
 
+**Status: shipped 2026-06-08** — default template at `src/assets/platform_config.py:78` now lists `.` first in `allowed_paths`; existing workspaces gain the entry on `kolsch setup` re-run via `_maybe_add_workspace_root_to_file_access` at `src/cli/_setup.py`. Two regression tests added to `tests/component/test_setup.py`.
+
 ## Context
 
 In session `ses_358e6f01-294c-40ff-87e8-5455f0fac8e6`, the
