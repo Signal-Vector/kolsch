@@ -1,5 +1,7 @@
 # QoL — `kolsch sessions list` column overhaul
 
+**Status: shipped** — closed by commit `317b9d8` ("tighten `kolsch sessions list` columns to id/started/last/name"). Verified during the 2026-06-08 audit.
+
 ## Context
 
 `kolsch sessions list` currently prints one line per session in `key=value`

@@ -1,5 +1,7 @@
 # Bug — LiteLLM rejects `openai/<non-openai-model>` from the OpenCode connector
 
+**Status: shipped** — closed by commit `f319fd3` ("route OpenCode build_llm via hosted_vllm/ for arbitrary LiteLLM models"). Verified during the 2026-06-08 audit.
+
 **Draft 0.1** *(investigation ticket, not a phase patch)*
 
 > Reported symptom: a user with OpenCode connected tries to run an

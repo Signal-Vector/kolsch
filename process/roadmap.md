@@ -11,102 +11,100 @@ phase changes status or new work is scheduled.
 
 ## Where we are right now
 
-| Phase | Status | Spec | Implementation |
-|---|---|---|---|
-| 1 — Single-agent foundation | shipped | various Phase 1 contracts in `docs/explanation/` | merged through May 28 |
-| 1.1 — LLM providers | spec'd + partially shipped | `phase1.1-llm-specs.md`, `phase1.1-llm-provider.md` | `build_llm` + OpenRouter/OpenCode connectors + `kolsch connect` family in main; bug-litellm-model-routing fix in progress |
-| 1.2 — Workspace + setup | spec'd + shipped (qol-setup absorbed) | `phase1.2-usability-specs.md`, `phase1.2-usability-build.md` | `kolsch setup`, `KOLSCH_WORKSPACE`, `platformdirs` default in main; bug-setup-test-run-failure-handling open. **qol-setup-evolution-and-defaults Steps 2-8 shipped**: shared migration utility (`src/cli/_migrations/`), platform.yaml + authz + bundle drift migrators, `defaults` block + resolver fallback, helper agent rewritten, orchestrator integration with KEEP-no-double-prompt regression coverage. Re-runs are now migration-aware end-to-end. |
-| 1.3 — Model fallback chains | spec only | `phase1.3-fallback-specs.md`, `phase1.3-fallback-build.md` | not built |
-| 2.0 — Tools + permissions | spec'd + partially shipped | `phase2.0-tools-specs.md`, `phase2.0-tools-build.md` | four builtin tools + `prompt` effect + workspace-only defaults in main; chat-permissions migration PRs uncommitted on working tree (E-BUG-CREWAI-002 merge gap) |
-| 2.1 — `kolsch chat` REPL | spec'd + partially shipped | `phase2.1-chat-specs.md`, `phase2.1-chat-build.md` | Step 24a scaffold only; 24b–24e not built |
-| 2.2 — Agent envelope | spec only (just drafted) | `phase2.2-agent-envelope-specs.md`, `phase2.2-agent-envelope-build.md` | not built |
-| Rename `pi-platform` → `kolsch` | mostly complete | `delegated-imagining-newell.md` in .claude/plans | applied to all new docs; legacy refs handled |
+*(Updated 2026-06-08 after the recent design + ship push. Status table refreshed to match shipped state.)*
+
+| Phase | Status | Implementation |
+|---|---|---|
+| 1 — Single-agent foundation | shipped | merged through May 28 |
+| 1.1 — LLM providers | shipped | `build_llm` + OpenRouter/OpenCode connectors + `kolsch connect` family; bug-litellm-model-routing fix shipped |
+| 1.2 — Workspace + setup | shipped | `kolsch setup`, `KOLSCH_WORKSPACE`, `platformdirs` default; `qol-setup-evolution-and-defaults` Steps 2-8 shipped (migration framework + per-artifact migrators + drift detector); `bug-model-line-placeholder-collides-with-jinja` fix shipped (`5411f85`) |
+| 1.3 — Model fallback chains | shipped | `c2b7dc2` — full Phase 1.3 implementation |
+| 2.0 — Tools + permissions | shipped | four builtin tools + `prompt` effect + workspace-only defaults; chat-permissions migration shipped (`ba4673f`); `qol-tool-permission-discovery-uniform-with-stacking` adds modal-on-no-rule + bundle-level permissions (`8351a55`); `qol-permission-system-human-readable` rewrites the rule grammar (three-field schema, glob, `/perm` slash) (`3c392e2`) |
+| 2.1 — `kolsch chat` REPL | shipped | All of 24a-24e (`91cf631`..`5c0018a`); deny/esc cancellation (`e7e1b35`); capsule layout (`f669246`); chat-deny + esc behaviors shipped |
+| 2.2 — Agent envelope | shipped | `ff70f6a` Phase 2.2 base + `edaf4bd` extends-parent render path with 28-case EXT-CORPUS |
+| 2.3 — Canonical kolsch bundle | **partially shipped** | bundle infrastructure + helper agent (as parent template) shipped; **OpenClaw + Pi reference agents still pending** |
+| 2.4 — Skills subsystem | shipped | `2f1727d` — `kolsch skills` CLI family + three canonical skills (`write-python-test`, `review-pr-diff`, `commit-from-staged`) + `/skill` slash + `--skill` flag for force-invoke. **2.4.2 (skill-creating skill) deferred to post-Phase-3.x** |
+| 2.5 — Tutorials and reference docs | **partially shipped** | `docs/tutorials/first-agent.md` exists; remaining tutorials (creating a bundle, writing an agent, writing a tool, writing a skill, connecting a provider) still to write. **No longer blocked** — every dependency phase has shipped |
 
 **Cross-cutting:**
-- ~8 bug docs in `process/bug-*.md`, mix of closed/open.
-- 3 QoL docs in `process/qol-*.md`, mix of shipped/spec'd.
-- F5 fix (renderer's `_THINKING_INDICATOR` removal) folded into `qol-chat-capsule-layout.md`; supersedes PR G2 of the CrewAI-stdout bug.
+- 15+ bug docs in `process/bug-*.md`, mostly closed.
+- 15+ QoL docs in `process/qol-*.md`, mostly shipped or stubbed.
+- Engine boundary classifier shipped (`bd1f529` + `9f3c0a6`); engine no longer surfaces transport timeouts as `platform.internal_error`.
+- Tool output truncation + persistence shipped (`2deacfe`): bash overflow → tmp file; `read_file` line-based pagination.
+- Opencode connector timeout bumped 30s → 180s (`652b72d`); session replay tool shipped (`497ef61`).
+- Unified ref convention shipped (`5d744f3`): `kolsch/bash` form; `workspace:` implicit default.
+- `schema_version` + `assembly_version` optional (`48df720`).
 
 ---
 
 ## What's left to reach a "usable product"
 
-Five remaining areas. Each is a phase or a phase family. Ordered by
-the suggested sequence (with dependencies called out below).
+After the recent ship push, only three pieces stand between the
+current state and the "minimum viable usable product" definition
+in the next section. Ordered by suggested sequence.
 
-### Phase 2.3 — Single `kolsch` bundle + drift detection
-**Status:** drift mechanism shipped via qol-setup; Phase 2.3 shrinks
-to "ship OpenClaw + Pi as additional canonical agents."
+### Phase 2.3 — Canonical kolsch bundle (OpenClaw + Pi remaining)
+**Status:** bundle infrastructure + helper agent shipped. Only
+the OpenClaw + Pi reference agents remain.
 
-Replaces Phase 1.2's `bundles/starter/` with a canonical
-`bundles/kolsch/` containing helper, OpenClaw, and Pi reference
-agents. On `kolsch setup` re-run, detect drift between local files
-and the canonical bundle; offer per-file `[k]eep / [c]anonical / [d]iff / [s]kip`
-choices with timestamped backups.
+**Shipped portion**:
+- `bundles/kolsch/` exists with `bundle.yaml` + `tools/` + `agents/helper.yaml`.
+- The drift-detection mechanism shipped in
+  [qol-setup-evolution-and-defaults.md](qol-setup-evolution-and-defaults.md)
+  Steps 2-8 — shared migration utility, three per-artifact
+  migrators (`platform.yaml` schema, authz rules, bundle drift),
+  orchestrator integration in `kolsch setup`.
+- `helper.yaml` rewritten as a Jinja-block parent template
+  (post-extends-parent fix) so child agents can fill `{% block
+  role %}` and `{% block special_instructions %}`.
 
-Depends on: 2.2 (the bundled agents use `extends:` and
-`context_files:` from Phase 2.2). Best landed AFTER 2.2 ships so
-the reference agents demonstrate the envelope.
-
-> **Status amended (shipped portion):** the drift-detection
-> mechanism is implemented in
-> [qol-setup-evolution-and-defaults.md](qol-setup-evolution-and-defaults.md)
-> Steps 2-8 — shared migration utility, three per-artifact
-> migrators (`platform.yaml` schema, authz rules, bundle
-> drift), orchestrator integration in `kolsch setup`. The
-> single-bundle rename (`starter` → `kolsch`) and the rewritten
-> helper agent landed alongside.
-> **Phase 2.3 remaining work:** ship OpenClaw + Pi as
-> additional canonical agents under `bundles/kolsch/agents/`.
-> They'll use the same envelope features (`extends:`,
-> `context_files:`, Jinja prompts) that helper now demonstrates;
-> the drift detector picks them up for free on the next setup
-> re-run after they ship.
+**Remaining**: author OpenClaw + Pi as additional canonical
+agents under `bundles/kolsch/agents/`. They use the same
+envelope features (`extends:`, `context_files:`, Jinja blocks)
+that helper now demonstrates; the drift detector picks them up
+on the next setup re-run. Estimated effort: ~1-2 days per
+agent.
 
 ### Phase 2.4 — Skills subsystem buildout
-**Status:** Phase 1 contracts in `docs/explanation/skills-subsystem.md`;
-mechanics shipped; no canonical skills exist; no test discipline yet.
+**Status: SHIPPED** at commit `2f1727d`.
 
-Three sub-phases likely:
-- **2.4.0** — Audit and harden the skills subsystem: confirm Phase 1's
-  contracts still hold, add missing tests, document the skill
-  authoring pattern. No new features; just verification.
-- **2.4.1** — Ship a small set of canonical skills as part of the
-  `bundles/kolsch/` bundle (Phase 2.3). What set? At minimum, the
-  ones that earned skills their own subsystem in the contracts:
-  prompt-extraction, response formatting, retry/recovery scaffolds.
-- **2.4.2** — "Skill-creating skill" / "skill author skill": a
-  meta-skill that helps a user create their own skills via
-  conversation. The agent uses it as a generator. Possible only
-  after 2.4.1 sets the pattern.
+Phase 2.4.0 + 2.4.1 work consolidated into a single ship:
+- `kolsch skills` CLI family: `list`, `show`, `which`, `new`,
+  `validate`, `install`, `remove`.
+- Three canonical skills shipped under `bundles/kolsch/skills/`:
+  `write-python-test`, `review-pr-diff`, `commit-from-staged`.
+- Force-invoke surface: `/skill <ref>` slash in chat;
+  `--skill <ref>` flag on `kolsch run`.
 
-Depends on: 2.0 (tools), 2.2 (agent envelope — skills' context
-injection), 2.3 (bundle structure).
+**Deferred to post-Phase-3.x**: Phase 2.4.2 — the
+"skill-creating skill" meta-capability. Depends on workflow
+patterns; tracked at `phase2.4-skills-build.md` Part 5.
 
 ### Phase 2.5 — Tutorials and reference docs
-**Status:** `docs/tutorials/first-agent.md` exists; rest of the
-content is empty.
+**Status:** `docs/tutorials/first-agent.md` exists; remaining
+tutorials still to write. **No longer blocked** — every
+dependency phase has shipped (1.x, 2.0, 2.1, 2.2, 2.4 all done;
+2.3's helper template + permissions system + skills CLI all
+landed).
 
-Documentation phase. Not code, but blocking for a "usable product."
 Tutorials needed:
 - **Creating your first bundle** — how to organize agents, tools, skills.
-- **Writing an agent** — extending the helper, customizing the prompt with the variable API, adding context_files.
+- **Writing an agent** — extending the helper, customizing the prompt with the variable API, adding context_files. (Recent: `docs/how-to/extending-an-agent.md` from the extends-parent fix demonstrates the inheritance side; tutorial form for the full authoring story still to write.)
 - **Writing a tool** — `@tool` decorator + permissions API; pattern from existing `bundles/kolsch/tools/*` as examples.
-- **Writing a skill** — once 2.4 lands; the pattern + authoring guide.
+- **Writing a skill** — pattern + authoring guide. Phase 2.4 ships three canonical skills as examples.
 - **Connecting an LLM provider** — already covered in `first-agent.md`'s step 8, but a standalone deep-dive.
 
 How-to guides (Diátaxis recipes) for specific tasks:
-- **Tightening permissions** for an agent.
-- **Sharing context across agents** via inheritance.
+- **Tightening permissions** for an agent. (Recent: `docs/how-to/permissions.md` updated by the human-readable permission system QoL.)
+- **Sharing context across agents** via inheritance. (Recent: `docs/how-to/extending-an-agent.md` covers this.)
 - **Resuming and replaying sessions.**
 - **Updating to a new kolsch version** — what `kolsch setup` re-run does, how the drift handling works.
 
 Reference docs are mostly in place via `docs/reference/` but need
 an audit pass for completeness.
 
-Depends on: 2.0–2.4 (each tutorial exercises one of those
-capabilities). Realistically rolls in parallel with the phase it
-documents.
+Sequencing: roll in parallel with Phase 2.3 OpenClaw + Pi
+authoring; the new agents become tutorial examples.
 
 ---
 
@@ -279,60 +277,45 @@ The line where a new user can:
 6. Compose simple workflows from agents.
 7. Recover from errors with helpful messages, not stack traces.
 
-Mapping to phases:
+Mapping to phases (current state):
 
-| Requirement | Needed phases |
+| Requirement | State |
 |---|---|
-| Install + setup in 5 min | 1.0, 1.1, 1.2 (mostly there; setup bugs being fixed) |
-| Working agent + real LLM | 1.1 + 1.2 + 2.0 (mostly there; 1.3 fallback nice-to-have) |
-| Conversation + tools | 2.0 + 2.1 + 2.2 (2.0 done; 2.1 partial; 2.2 spec'd) |
-| Permission discipline | 2.0 + 2.2 (composition layer) |
-| Tutorials | 2.5 |
-| Workflows | 3.0–3.5 |
-| Helpful errors | cross-cutting; bug-doc discipline addresses each issue |
+| Install + setup in 5 min | ✓ done (1.0, 1.1, 1.2 shipped) |
+| Working agent + real LLM | ✓ done (1.1 + 1.2 + 2.0 + 1.3 shipped) |
+| Conversation + tools | ✓ done (2.0 + 2.1 + 2.2 shipped) |
+| Permission discipline | ✓ done (2.0 + 2.2 + human-readable permission system QoL shipped) |
+| Skills authoring | ✓ done (Phase 2.4 shipped: CLI + three canonical skills + force-invoke) |
+| Tutorials | **partial** — first-agent.md done; full tutorial set still to write (Phase 2.5) |
+| Reference agents beyond helper | **partial** — Phase 2.3 OpenClaw + Pi still pending |
+| Workflows | **not started** — Phase 3.0-3.5 still undefined design surface |
+| Helpful errors | ✓ substantially improved this design push (engine boundary classifier; chat denial capsules; clear migration errors) |
 
-So the **minimum viable usable product** is **Phase 2 complete + Phase 2.5 tutorials + minimal Phase 3 (workflows)**:
+So the **minimum viable usable product** has shrunk to three
+concrete deliverables:
 
-- Phases 1.0 / 1.1 / 1.2 — done or close.
-- Phase 1.3 (fallback) — desirable for reliability but not blocking.
-- Phase 2.0 / 2.1 / 2.2 — completes the agent experience.
-- Phase 2.3 (bundle) — ships reference agents.
-- Phase 2.4.0 + 2.4.1 (skills basics) — completes the "everything works" story.
-- Phase 2.5 (tutorials) — without docs, users can't onboard.
-- Phase 3.0 + 3.1 (workflow basics) — enables the "compose multi-step" use case that justifies the platform existing.
+1. **Phase 2.3** — author OpenClaw + Pi reference agents (~1-2 days each).
+2. **Phase 2.5** — write the four remaining tutorials and the four how-to recipes (writing effort).
+3. **Phase 3.0 + 3.1** — workflow asset type + sequential execution (multi-week; the big undefined territory).
 
-Everything after that (memory, IDE, hosted, Textual polish) is
-**delight + scale**, not **usability**.
+Everything before this point is shipped. Everything after
+(Phase 4 memory buildout, Phase 5 IDE, Phase 6 Textual polish,
+Phase 7 hosted) is **delight + scale**, not **usability**.
 
 ---
 
 ## Suggested order
 
 ```
-Current ─ Phase 1.x bug closeouts (litellm routing, setup failure handling)
+Phases 1.x + 2.0 + 2.1 + 2.2 + 2.4 — all shipped ✓
    │
    ▼
-Phase 2.1 finish (Steps 24b–24e) + chat-permissions migration PRs
+Current ─ Phase 2.3 OpenClaw + Pi reference agents (~1-2 days each)
+   │      + Phase 2.5 tutorial set (writing effort; rolls in parallel)
+   │      + bug-crewai-output-leak-during-retries (independent; ship any time)
    │
    ▼
-Phase 2.2 (agent envelope; 15-step build plan)
-   │
-   ├──── Phase 2.5 (tutorials — rolls in parallel)
-   │
-   ▼
-Phase 2.3 (kolsch bundle with helper + OpenClaw + Pi using 2.2's envelope)
-   │
-   ▼
-Phase 2.4.0 (skills audit + hardening)
-   │
-   ▼
-Phase 2.4.1 (canonical skills shipped in kolsch bundle)
-   │
-   ▼
-Phase 1.3 (model fallback — reliability for production-grade use)
-   │
-   ▼
-       ─── MINIMUM USABLE PRODUCT line ───
+       ─── MINIMUM USABLE PRODUCT line ─── (after 2.3 + 2.5 land)
    │
    ▼
 Phase 3.0 (workflow asset type + parser)
@@ -341,7 +324,7 @@ Phase 3.0 (workflow asset type + parser)
 Phase 3.1 (sequential nodes — first runnable workflows)
    │
    ▼
-Phase 3.2 (multi-thread engine support)
+Phase 3.2 (multi-thread engine support — hardest sub-phase)
    │
    ▼
 Phase 3.3 + 3.4 (parallel/conditional + sub-workflows)
@@ -371,12 +354,42 @@ Phase 7 (hosted / multi-tenant)
 ```
 
 Reasonable parallelism opportunities:
-- Tutorials (Phase 2.5) roll in parallel with whatever phase is
-  shipping content for them.
+- Tutorials (Phase 2.5) roll in parallel with Phase 2.3 OpenClaw + Pi
+  authoring; the new agents become tutorial examples.
 - Phase 4 (memory) is largely independent of Phase 5 (IDE); can be
   scheduled flexibly.
 - Phase 6 (Textual polish) is fully independent of Phase 5 (IDE);
   pick based on user-feedback priority.
+
+## Deferred design work (stub specs filed)
+
+Small follow-ups captured during recent QoL closures. Each has a
+stub spec under `process/`; pick up when the trigger condition
+surfaces:
+
+- `qol-action-namespace-bundle-scoped.md` — migrate action
+  namespaces from `tool.bash` → `tool.kolsch.bash`. Trigger:
+  collision between two bundles shipping a tool with the same
+  name.
+- `qol-tool-permissions-binding-unused.md` — wire
+  `PermissionsBinding.bind(...)` so tool bodies can do
+  `ctx.permissions.check(...)`. Trigger: a tool author tries the
+  in-body API.
+- `qol-zero-config-first-run-experience.md` — decide what
+  `default_platform_payload.defaults.model` ships as. Trigger:
+  the next first-time UX conversation.
+- `qol-ship-canonical-kolsch-agents-as-package-resources.md` —
+  make `kolsch:agents/...` actually resolve. Trigger: cross-
+  install agent inheritance becomes desirable.
+- `qol-skills-jinja-variable-symmetric-with-tools.md` — symmetric
+  `{{ skills }}` Jinja var. Trigger: authors complain about the
+  post-append asymmetry.
+- `bug-framework-cancellation-mid-call-latency.md` +
+  `bug-mid-tool-cancellation-latency.md` — mid-tool Esc
+  responsiveness. Trigger: a user complains.
+
+None blocking. Stubs preserve design context so a future agent
+can pick up cold.
 
 ---
 

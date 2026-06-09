@@ -1,5 +1,7 @@
 # Bug — Echo response on real LLM provider
 
+**Status: shipped** — closed by commit `63689da` ("wire build_llm via llm_for_model — completes Phase 1.1 deferred adapter"). Verified 2026-06-08: recent session `ses_71600141` shows real LLM responses (not echo); zero `Echo:` substrings.
+
 **Draft 0.1** *(investigation ticket, not a phase patch)*
 
 > Reported symptom: a user ran the starter agent with a real LLM

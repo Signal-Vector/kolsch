@@ -1,5 +1,7 @@
 # Bug — `kolsch setup` mishandles failed test-run and picks an unverified model
 
+**Status: shipped** — closed by commit `8178adc` ("gate ready-banner + exit-code on test outcome; pick model from aliases over raw discovery; classify failure into actionable hint"). Verified during the 2026-06-08 audit.
+
 **Draft 0.1** *(investigation ticket, not a phase patch)*
 
 > Reported symptom: a user ran `kolsch setup` against a workspace

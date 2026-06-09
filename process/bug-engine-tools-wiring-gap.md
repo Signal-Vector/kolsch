@@ -1,5 +1,7 @@
 # Bug — Engine never binds declared tools to the framework; LLM gets no tools and hallucinates
 
+**Status: shipped** — 7-commit fix ending at `1875a70` ("make_llm_callable + tool descriptions — PR 3"). Verified during the 2026-06-08 audit.
+
 **Draft 0.2** *(replaces draft 0.1; splits the monolithic two-prompt
 fix into eight dependency-ordered sub-steps so each developer prompt
 is reviewable in one sitting and each reviewer has ≤6 checks. Coverage

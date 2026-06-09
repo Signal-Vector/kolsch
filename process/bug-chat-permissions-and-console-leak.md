@@ -1,5 +1,7 @@
 # Bug — Chat: permissions defaults missing + CrewAI stdout leaks past the renderer + user input echoed twice
 
+**Status: shipped** — closed by commit `ba4673f` (Phase 2.0 §3.1 workspace permissions migration); stdout-leak portion absorbed into `bug-crewai-stdout-leak-investigation.md` (also shipped). Verified during the 2026-06-08 audit.
+
 **Draft 0.1** *(investigation ticket. Three distinct symptoms in
 one chat session, two with shared root cause. One coordinated fix
 plan.)*

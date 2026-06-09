@@ -1,5 +1,7 @@
 # QoL — Chat capsule layout: side-bar accent for all messages
 
+**Status: shipped** — closed by commit `f669246` ("capsule rendering per qol-chat-capsule-layout.md"). Verified during the 2026-06-08 audit.
+
 ## Context
 
 The current `kolsch chat` renderer outputs prose-style headers

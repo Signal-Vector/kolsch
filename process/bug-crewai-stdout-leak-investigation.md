@@ -1,5 +1,7 @@
 # Bug — CrewAI stdout leak: detailed investigation
 
+**Status: shipped** — original `  …` ellipsis symptom closed by commits `aefe532` (G1 stdout/stderr wrap) + `cf4cd07` (G2 indicator-collapse). Investigation's own §5.6 sign-off confirms. **Note**: a different leak class (`❌ LLM Error` panels + `ERROR root:` lines on retries) emerged later and is tracked in the still-open `bug-crewai-output-leak-during-retries.md`.
+
 **Draft 0.2** *(restructured from 0.1: split into 9
 dependency-ordered steps with focused per-step developer +
 reviewer prompts. Supersedes Step D of

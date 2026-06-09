@@ -1,5 +1,7 @@
 # Bug — `kolsch sessions` (no subcommand) crashes with `AttributeError`, plus systemic CLI-surface coverage gap
 
+**Status: shipped** — closed by commit `74cd2bf` ("handle subcommand-without-op via help-and-exit; add CLI smoke-test layer"). Verified 2026-06-08: `kolsch sessions` now prints help cleanly with no AttributeError.
+
 **Draft 0.1** *(investigation ticket — addresses a specific crash AND
 the broader testing gap it surfaced)*
 
