@@ -57,11 +57,13 @@ async def test_agent_allow_wins_over_platform_deny(
     """Spec §1.2 / §3.8.1: agent permissions evaluate FIRST.
     Agent's ``allow`` for the same target overrides the
     platform's ``deny``."""
-    agent_rules = [AuthzRule(who=".*", what=r"tool\.bash", effect="allow")]
+    from providers.authz import PermissionLayer
+
+    agent_rules = (AuthzRule(who=".*", what=r"tool\.bash", effect="allow"),)
     result = await deny_bash_provider.allow(
         "agent.ag_helper",
         "tool.bash",
-        agent_permissions=agent_rules,
+        layers=(PermissionLayer(name="agent", rules=agent_rules),),
     )
     assert result.allowed is True
     assert result.effect is AuthzEffect.ALLOW
@@ -108,35 +110,35 @@ async def test_default_deny_when_both_layers_absent(
 async def test_agent_permissions_none_matches_pre_phase_2_2_behaviour(
     deny_bash_provider: RuleBasedAuthorizationProvider,
 ) -> None:
-    """Reviewer's check 3: ``agent_permissions=None`` (the
-    default) produces IDENTICAL behaviour to the pre-Phase-2.2
-    surface. Every existing caller continues to work
-    unchanged."""
-    result_none = await deny_bash_provider.allow(
-        "agent.ag_helper",
-        "tool.bash",
-        agent_permissions=None,
-    )
+    """Phase 3.0 Step 4 surface — ``layers=()`` (the default) produces
+    IDENTICAL behaviour to an explicitly-empty layer tuple."""
     result_default = await deny_bash_provider.allow(
         "agent.ag_helper",
         "tool.bash",
     )
-    assert result_none.allowed == result_default.allowed
-    assert result_none.effect == result_default.effect
-    assert result_none.matched_rule == result_default.matched_rule
+    result_explicit = await deny_bash_provider.allow(
+        "agent.ag_helper",
+        "tool.bash",
+        layers=(),
+    )
+    assert result_explicit.allowed == result_default.allowed
+    assert result_explicit.effect == result_default.effect
+    assert result_explicit.matched_rule == result_default.matched_rule
 
 
 @pytest.mark.asyncio
 async def test_empty_agent_permissions_list_matches_none(
     deny_bash_provider: RuleBasedAuthorizationProvider,
 ) -> None:
-    """``agent_permissions=[]`` is also indistinguishable from
-    ``None`` at the authz layer — an empty rule list contributes
-    nothing to the composed walk."""
+    """An empty-rules layer is indistinguishable from omitting the
+    layer entirely — an empty rule list contributes nothing to the
+    composed walk."""
+    from providers.authz import PermissionLayer
+
     result = await deny_bash_provider.allow(
         "agent.ag_helper",
         "tool.bash",
-        agent_permissions=[],
+        layers=(PermissionLayer(name="agent", rules=()),),
     )
     assert result.allowed is False
     assert "who_chain=platform" in result.reason
@@ -153,14 +155,16 @@ async def test_agent_first_match_wins(
 ) -> None:
     """Within the agent layer, first-match-wins per A-I2. A more
     specific allow EARLIER in the list overrides a deny later."""
-    agent_rules = [
+    from providers.authz import PermissionLayer
+
+    agent_rules = (
         AuthzRule(who=".*", what=r"tool\.bash", effect="allow"),
         AuthzRule(who=".*", what=r"tool\..*", effect="deny"),
-    ]
+    )
     result = await deny_bash_provider.allow(
         "agent.ag_helper",
         "tool.bash",
-        agent_permissions=agent_rules,
+        layers=(PermissionLayer(name="agent", rules=agent_rules),),
     )
     assert result.allowed is True
     assert "who_chain=agent" in result.reason

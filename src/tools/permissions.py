@@ -54,7 +54,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from errors import AuthzDenied, ToolPermissionsNoContext
-from providers.authz import AuthzEffect
+from providers.authz import AuthzEffect, PermissionLayer
 
 if TYPE_CHECKING:
     from contextvars import Token
@@ -113,11 +113,16 @@ async def check(who: str, what: str) -> AuthzEffect:
     if binding is None:
         raise ToolPermissionsNoContext(tool="<unbound>")
     _ = who  # accepted for API symmetry; binding.principal is canonical
+    layers: tuple[PermissionLayer, ...] = ()
+    if binding.agent_permissions:
+        layers = (
+            PermissionLayer(name="agent", rules=tuple(binding.agent_permissions)),
+        )
     result = await binding.provider.allow(
         binding.principal,
         what,
         target=what,
-        agent_permissions=list(binding.agent_permissions),
+        layers=layers,
     )
     return result.effect
 
@@ -137,11 +142,16 @@ async def require(who: str, what: str) -> None:
     if binding is None:
         raise ToolPermissionsNoContext(tool="<unbound>")
     _ = who
+    layers: tuple[PermissionLayer, ...] = ()
+    if binding.agent_permissions:
+        layers = (
+            PermissionLayer(name="agent", rules=tuple(binding.agent_permissions)),
+        )
     result = await binding.provider.allow(
         binding.principal,
         what,
         target=what,
-        agent_permissions=list(binding.agent_permissions),
+        layers=layers,
     )
     if result.effect is AuthzEffect.ALLOW:
         return

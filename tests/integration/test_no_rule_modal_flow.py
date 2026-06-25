@@ -234,15 +234,19 @@ async def test_agent_permission_overrides_bundle_and_platform() -> None:
         },
     )
     # Bundle: deny.
-    bundle_rules = [Rule(who=".*", what=r"tool\.bash", effect="deny")]
+    bundle_rules = (Rule(who=".*", what=r"tool\.bash", effect="deny"),)
     # Agent: allow — should win.
-    agent_rules = [Rule(who=".*", what=r"tool\.bash", effect="allow")]
+    agent_rules = (Rule(who=".*", what=r"tool\.bash", effect="allow"),)
+
+    from providers.authz import PermissionLayer
 
     result = await provider.allow(
         principal="agent.helper",
         action="tool.bash",
-        agent_permissions=agent_rules,
-        bundle_permissions=bundle_rules,
+        layers=(
+            PermissionLayer(name="agent", rules=agent_rules),
+            PermissionLayer(name="bundle", rules=bundle_rules),
+        ),
     )
     assert result.allowed is True
     assert "who_chain=agent" in result.reason
@@ -265,12 +269,14 @@ async def test_bundle_permission_overrides_platform() -> None:
             ],
         },
     )
-    bundle_rules = [Rule(who=".*", what=r"tool\.bash", effect="allow")]
+    bundle_rules = (Rule(who=".*", what=r"tool\.bash", effect="allow"),)
+
+    from providers.authz import PermissionLayer
 
     result = await provider.allow(
         principal="agent.helper",
         action="tool.bash",
-        bundle_permissions=bundle_rules,
+        layers=(PermissionLayer(name="bundle", rules=bundle_rules),),
     )
     assert result.allowed is True
     assert "who_chain=bundle" in result.reason

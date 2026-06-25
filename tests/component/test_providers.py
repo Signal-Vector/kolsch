@@ -366,7 +366,7 @@ async def test_allow_no_rule_no_callback_raises_default_deny() -> None:
     set with no callback registered preserves the Phase 2.0 default
     deny behaviour (the dispatcher raises ToolUnauthorized off this
     result)."""
-    from providers.authz import AuthzEffect  # noqa: PLC0415
+    from providers.authz import AuthzEffect
 
     provider = _authz([])
     result = await provider.allow("agent.x", "tool.bash")
@@ -381,7 +381,7 @@ async def test_allow_no_rule_with_callback_fires_with_rule_id_none() -> None:
     AND a prompt callback has been registered (chat mode), the
     callback fires with ``rule_id=None`` so the modal can render
     the no-covering-rule variant of the panel."""
-    from providers.authz import AuthzEffect  # noqa: PLC0415
+    from providers.authz import AuthzEffect
 
     provider = _authz([])
     seen: dict[str, object] = {}
@@ -416,7 +416,7 @@ async def test_allow_no_rule_with_callback_persists_rule_and_fires_hook() -> (
     above the default-deny tail AND fires the ``on_rule_added``
     hook so the chat's ``cli.permissions._write_back`` persists it
     to ``platform.yaml``."""
-    from providers.authz import AuthzEffect, Rule  # noqa: PLC0415
+    from providers.authz import AuthzEffect, Rule
 
     provider = _authz([])
     hook_called_with: list[list[Rule]] = []
@@ -456,16 +456,18 @@ async def test_allow_no_rule_with_callback_persists_rule_and_fires_hook() -> (
 async def test_priority_agent_layer_wins_over_bundle_layer() -> None:
     """Four-level stack: agent's allow rule wins over the bundle's
     deny rule for the same action."""
-    from providers.authz import Rule  # noqa: PLC0415
+    from providers.authz import PermissionLayer, Rule
 
     provider = _authz([])
-    agent_rules = [Rule(who=".*", what=r"tool\.bash", effect="allow")]
-    bundle_rules = [Rule(who=".*", what=r"tool\.bash", effect="deny")]
+    agent_rules = (Rule(who=".*", what=r"tool\.bash", effect="allow"),)
+    bundle_rules = (Rule(who=".*", what=r"tool\.bash", effect="deny"),)
     result = await provider.allow(
         "agent.x",
         "tool.bash",
-        agent_permissions=agent_rules,
-        bundle_permissions=bundle_rules,
+        layers=(
+            PermissionLayer(name="agent", rules=agent_rules),
+            PermissionLayer(name="bundle", rules=bundle_rules),
+        ),
     )
     assert result.allowed is True
     assert "who_chain=agent" in result.reason
@@ -475,13 +477,13 @@ async def test_priority_bundle_layer_wins_over_platform_layer() -> None:
     """Four-level stack: a bundle's allow rule wins over a platform
     deny rule for the same action."""
     provider = _authz([{"who": ".*", "what": r"tool\.bash", "effect": "deny"}])
-    from providers.authz import Rule  # noqa: PLC0415
+    from providers.authz import PermissionLayer, Rule
 
-    bundle_rules = [Rule(who=".*", what=r"tool\.bash", effect="allow")]
+    bundle_rules = (Rule(who=".*", what=r"tool\.bash", effect="allow"),)
     result = await provider.allow(
         "agent.x",
         "tool.bash",
-        bundle_permissions=bundle_rules,
+        layers=(PermissionLayer(name="bundle", rules=bundle_rules),),
     )
     assert result.allowed is True
     assert "who_chain=bundle" in result.reason

@@ -34,6 +34,7 @@ from errors import (
     ToolInvalidArguments,
     ToolUnauthorized,
 )
+from providers.authz import PermissionLayer
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -91,12 +92,27 @@ async def dispatch_tool(
     # so existing rules with action-namespace `what` patterns
     # still fire as before — see RuleBasedAuthorizationProvider.allow.
     target = _extract_target_from_args(validated_args)
+    # Phase 3.0 Step 4 (Round 4 item #7) — assemble the layers tuple
+    # in proximate-caller order. The current tool-dispatch wrapper
+    # only sees agent + bundle layers; the ``workflow`` layer is
+    # added by the workflow engine's tool-dispatch wrapper when it
+    # ships in Phase 3.1.
+    layers: tuple[PermissionLayer, ...] = ()
+    if agent_permissions:
+        layers = (
+            *layers,
+            PermissionLayer(name="agent", rules=tuple(agent_permissions)),
+        )
+    if bundle_permissions:
+        layers = (
+            *layers,
+            PermissionLayer(name="bundle", rules=tuple(bundle_permissions)),
+        )
     auth = await authz.allow(
         context.principal,
         defn.action_name,
         target=target,
-        agent_permissions=agent_permissions,
-        bundle_permissions=bundle_permissions,
+        layers=layers,
     )
     if not auth.allowed:
         raise ToolUnauthorized(

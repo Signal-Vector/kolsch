@@ -36,6 +36,8 @@ from tools.discovery import discover_tools_in_file
 from tools.dispatch import dispatch_tool
 from tools.registry import ToolRegistry, _MCPRegistration
 
+from providers.authz import PermissionLayer
+
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from pathlib import Path
@@ -262,11 +264,23 @@ class ToolsSubsystem:
         # §5.4 — `mcp.<server>.<tool>`. The dispatch order below
         # mirrors the standard tool flow as closely as the spec allows.
         action = invocation_name  # already in the right shape
+        # Phase 3.0 Step 4 — assemble the layers tuple from the
+        # registration's agent + bundle permission lists.
+        layers: tuple[PermissionLayer, ...] = ()
+        if agent_permissions:
+            layers = (
+                *layers,
+                PermissionLayer(name="agent", rules=tuple(agent_permissions)),
+            )
+        if bundle_permissions:
+            layers = (
+                *layers,
+                PermissionLayer(name="bundle", rules=tuple(bundle_permissions)),
+            )
         auth = await self._authz.allow(
             context.principal,
             action,
-            agent_permissions=agent_permissions,
-            bundle_permissions=bundle_permissions,
+            layers=layers,
         )
         if not auth.allowed:
             from errors import ToolUnauthorized  # noqa: PLC0415

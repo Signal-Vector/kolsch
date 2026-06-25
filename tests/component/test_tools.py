@@ -127,8 +127,8 @@ async def test_dispatch_order_is_validate_authz_secrets_sandbox_execute(
             *,
             target: str | None = None,
             callback: Any = None,
-            agent_permissions: Any = None,
-            bundle_permissions: Any = None,
+            layers: Any = (),
+            caller_chain: Any = (),
         ) -> Any:
             order.append("authz")
             return await _allow_all_authz().allow(
@@ -136,8 +136,8 @@ async def test_dispatch_order_is_validate_authz_secrets_sandbox_execute(
                 action,
                 target=target,
                 callback=callback,
-                agent_permissions=agent_permissions,
-                bundle_permissions=bundle_permissions,
+                layers=layers,
+                caller_chain=caller_chain,
             )
 
         async def list_rules(self) -> list[Any]:  # pragma: no cover

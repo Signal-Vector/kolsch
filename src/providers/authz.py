@@ -70,12 +70,13 @@ import fnmatch
 import hashlib
 import os
 import re
+from dataclasses import dataclass
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, Field
 
-from assets.refs import build_ref
+from assets.refs import build_ref, is_three_segment, parse_three_segment
 from errors import (
     AuthzBareToolRef,
     AuthzMalformedRule,
@@ -85,6 +86,11 @@ from errors import (
     ConfigInvalid,
 )
 from errors.assets import AssetsAmbiguousShorthand
+from workflows.errors import (
+    WorkflowFromAssetTypeError,
+    WorkflowFromNotFound,
+    WorkflowFromShapeError,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -145,14 +151,20 @@ def _build_action_to_tool_ref(catalog: AssetCatalog) -> dict[str, str]:
     """
     out: dict[str, str] = {}
     for entry in catalog.assets.values():
-        if entry.asset_type != "tool":
-            continue
-        # Catalog refs are 3-seg `<bundle>/<plural>/<name>`; tool refs
-        # in `what:` are 2-seg `<bundle>/<name>` (migration shim — the
-        # full-3-seg rewrite is queued at
-        # ``process/qol-refs-1seg-removal.md``).
-        name = entry.ref.rsplit("/", 1)[-1]
-        out[f"tool.{name}"] = f"{entry.bundle}/{name}"
+        if entry.asset_type == "tool":
+            # Catalog refs are 3-seg ``<bundle>/<plural>/<name>``; tool
+            # refs in ``what:`` are 2-seg ``<bundle>/<name>`` (migration
+            # shim — DO NOT touch per Phase 3.0 Step 4 guidance).
+            name = entry.ref.rsplit("/", 1)[-1]
+            out[f"tool.{name}"] = f"{entry.bundle}/{name}"
+        elif entry.asset_type == "node":
+            # Phase 3.0 Step 4 — workflow node actions land at
+            # ``node.<name>``; rules in ``what:`` carry the canonical
+            # 3-seg ``<bundle>/nodes/<name>`` ref. The action map
+            # bridges so a rule ``what: kolsch/nodes/bash`` fires on
+            # a ``node.bash`` invocation.
+            name = entry.ref.rsplit("/", 1)[-1]
+            out[f"node.{name}"] = entry.ref
     return out
 
 
@@ -205,11 +217,19 @@ class Rule(BaseModel):
     surface lets them keep working until then.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
     what: str
     pattern: str = "*"
     effect: Literal["allow", "deny", "prompt"]
+
+    # Phase 3.0 Step 4 — Round 4 item #13 — caller-chain ``from:``
+    # filter. When set, the rule fires only if at least one frame
+    # in the ``caller_chain`` matches ``from_`` (transitive; empty
+    # chain fails closed). Shape validation (3-seg + asset_type in
+    # ``agents``/``workflows`` + catalog existence) happens at
+    # rule-compile time inside the provider.
+    from_: str | None = Field(default=None, alias="from")
 
     # Legacy fields — presence of ``who`` flags the rule as legacy.
     id: str = ""
@@ -280,6 +300,64 @@ class AuthorizationResult(BaseModel):
 
 
 # ---------------------------------------------------------------------------
+# Phase 3.0 Step 4 — PermissionLayer + RuleBasedAuthorizationConfig
+# ---------------------------------------------------------------------------
+
+
+@dataclass(frozen=True, slots=True)
+class PermissionLayer:
+    """One named layer of rules fed to
+    :meth:`RuleBasedAuthorizationProvider.allow`.
+
+    Phase 3.0 Step 4 (Round 4 item #7) — the unified shape replacing
+    the prior per-layer keyword-only params (``workflow_permissions=``,
+    ``agent_permissions=``, ``bundle_permissions=``, ``platform_permissions=``).
+    The provider walks the ``layers`` tuple IN ORDER — first-match-wins
+    per layer; layer-tuple ordering is the engine's responsibility
+    (the workflow layer is included FIRST when the proximate caller is
+    a workflow node firing the action; OMITTED entirely when the
+    proximate caller is an embedded agent — structural escalation
+    prevention with no new rule field required).
+
+    ``name`` is the layer's display tag (``"workflow"`` /
+    ``"agent"`` / ``"bundle"`` / ``"platform"``); it surfaces in the
+    ``AuthorizationResult.reason`` and the future
+    ``policy.decision.made`` event payload's ``layer`` field.
+    """
+
+    name: str
+    rules: tuple[Rule, ...]
+
+
+class RuleBasedAuthorizationConfig(BaseModel):
+    """The Pydantic config for :class:`RuleBasedAuthorizationProvider`.
+
+    Phase 3.0 Step 4 (R3 #3 + Round 4 items #9 + #12 + Round 5 H1) —
+    introduces the typed config model so the ``audit_level`` knob has
+    a documented home. Existing platform.yaml workspaces continue to
+    work via :meth:`model_validate` against the raw dict.
+
+    ``audit_level`` (R3 #3 + Round 4 item #9 — typed as ``str``, NOT
+    ``Literal``) gates the engine's per-decision audit-event emission
+    in Phase 3.1+ (master spec §13.5):
+
+    - ``"rule_matched"`` (default — Round 4 item #12): persist only
+      decisions where an explicit rule fired.
+    - ``"all"``: persist every policy decision (compliance-driven
+      operators set this in ``platform.yaml`` / ``bundle.yaml``).
+
+    Arbitrary string values are accepted by the model; semantic
+    interpretation is the engine's responsibility — unknown values
+    collapse to ``"rule_matched"`` at the emit site.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    rules: list[dict[str, Any]] = Field(default_factory=list)
+    audit_level: str = "rule_matched"
+
+
+# ---------------------------------------------------------------------------
 # Prompt callback
 # ---------------------------------------------------------------------------
 
@@ -333,8 +411,8 @@ class AuthorizationProvider(Protocol):
         *,
         target: str | None = None,
         callback: PromptCallback | None = None,
-        agent_permissions: list[Rule] | None = None,
-        bundle_permissions: list[Rule] | None = None,
+        layers: tuple[PermissionLayer, ...] = (),
+        caller_chain: tuple[str, ...] = (),
     ) -> AuthorizationResult: ...
 
     async def list_rules(self) -> list[Rule]: ...
@@ -365,6 +443,7 @@ class _CompiledRule:
 
     __slots__ = (
         "effect",
+        "from_pattern",
         "is_legacy",
         "raw",
         "what",
@@ -381,6 +460,7 @@ class _CompiledRule:
         who_re: re.Pattern[str] | None = None,
         what_re: re.Pattern[str] | None = None,
         what: str | None = None,
+        from_pattern: str | None = None,
     ) -> None:
         self.effect = effect
         self.raw = raw
@@ -391,6 +471,9 @@ class _CompiledRule:
         # time; pre-compiled translation would help but fnmatch
         # already maintains its own LRU cache for translate().
         self.what = what
+        # Phase 3.0 Step 4 — Round 4 item #13 — the validated ``from:``
+        # glob (or ``None`` when the rule has no caller-chain filter).
+        self.from_pattern = from_pattern
 
 
 class RuleBasedAuthorizationProvider:
@@ -427,6 +510,11 @@ class RuleBasedAuthorizationProvider:
         self._action_to_tool_ref: dict[str, str] = (
             _build_action_to_tool_ref(catalog) if catalog is not None else {}
         )
+        # Phase 3.0 Step 4 (R3 #3 + Round 4 items #9 + #12) — store
+        # the typed config so the engine's tool-dispatch wrapper can
+        # read ``audit_level`` for the ``policy.decision.made`` event
+        # emission (Phase 3.1+). Defaults to ``"rule_matched"``.
+        self.audit_level: str = str(config.get("audit_level", "rule_matched"))
         self._rules: list[_CompiledRule] = [
             self._compile(index, entry) for index, entry in enumerate(raw_rules)
         ]
@@ -549,6 +637,14 @@ class RuleBasedAuthorizationProvider:
         # Validate `what` against the catalog (skipped when no
         # catalog supplied, e.g. tests).
         self._validate_what(index=index, what=what)
+        # Phase 3.0 Step 4 — Round 4 item #13 — STRICT ``from:`` validation
+        # at rule-compile time. None means the rule has no caller-chain
+        # filter; otherwise the helper raises a typed Workflow*
+        # exception on shape / asset_type / catalog-existence misses.
+        # Accept both the "from" YAML alias and the Python "from_" name
+        # so programmatic Rule(...) construction works without alias-by.
+        from_value = entry.get("from", entry.get("from_"))
+        self._validate_from(index=index, from_value=from_value)
         # Derive a stable id so the live-edit API + default-deny
         # tail detection still work for new-shape rules. The
         # catch-all (``what="*"``, ``pattern="*"``, ``effect="deny"``)
@@ -559,10 +655,67 @@ class RuleBasedAuthorizationProvider:
         rule_id = derive_rule_id(".*", f"{what}|{pattern}", effect)
         return _CompiledRule(
             effect=effect,
-            raw=Rule(id=rule_id, what=what, pattern=pattern, effect=effect),
+            raw=Rule(
+                id=rule_id,
+                what=what,
+                pattern=pattern,
+                effect=effect,
+                from_=from_value,
+            ),
             is_legacy=False,
             what=what,
+            from_pattern=from_value,
         )
+
+    def _validate_from(
+        self, *, index: int, from_value: str | None
+    ) -> None:
+        """Round 4 item #13 — STRICT ``from:`` validation.
+
+        Three hard-error classes (NO warning fallback — the R3 #6
+        :class:`WorkflowFromShapeWarning` is removed):
+
+        - non-3-seg shape → :class:`WorkflowFromShapeError`.
+        - 3-seg with an asset_type segment outside
+          ``{"agents", "workflows"}`` → :class:`WorkflowFromAssetTypeError`.
+        - 3-seg + valid asset_type but the target is absent from the
+          catalog → :class:`WorkflowFromNotFound`.
+
+        Glob patterns (``kolsch/agents/*``) skip the catalog
+        existence check — by design they cover an asset set, not a
+        single name. Shape (three slash-separated segments + a valid
+        asset_type) is still enforced.
+
+        When ``self._catalog`` is ``None`` the catalog-existence
+        check is skipped (mirrors :meth:`_validate_what` — tests
+        construct rule lists without a workspace on disk).
+        """
+        if from_value is None:
+            return
+        parts = from_value.split("/")
+        if len(parts) != 3 or not all(parts):
+            raise WorkflowFromShapeError(
+                file="<config>", line=index, from_ref=from_value
+            )
+        _bundle, segment, name = parts
+        if segment not in ("agents", "workflows"):
+            raise WorkflowFromAssetTypeError(
+                file="<config>",
+                line=index,
+                from_ref=from_value,
+                asset_type=segment,
+            )
+        # Skip catalog existence for glob patterns AND when no catalog
+        # was supplied (test path).
+        if self._catalog is None:
+            return
+        if "*" in name or "?" in name:
+            return
+        expected_type = "agent" if segment == "agents" else "workflow"
+        if self._catalog.lookup(from_value, expected_type=expected_type) is None:
+            raise WorkflowFromNotFound(
+                file="<config>", line=index, from_ref=from_value
+            )
 
     def _validate_what(self, *, index: int, what: str) -> None:
         """Per qol-permission-system-human-readable.md Step 2 task 3.
@@ -587,13 +740,44 @@ class RuleBasedAuthorizationProvider:
         if self._catalog is None:
             return  # legacy / test path — no catalog to validate against
         if "/" in what:
-            # Qualified slash form. Resolve against the catalog —
-            # rejects unknown tool refs with AuthzToolRefUnknown.
-            # Phase 3.0 Step 1 — the canonical 2-seg → 3-seg
-            # promotion routes through :func:`build_ref`. The full
-            # 3-seg-everywhere rewrite is queued at
-            # ``process/qol-refs-1seg-removal.md``; until then the
-            # rule grammar continues to accept 2-seg ``<bundle>/<name>``.
+            # Phase 3.0 Step 4 — accept BOTH the legacy 2-seg tool ref
+            # (``<bundle>/<name>``; migration shim — do not touch) AND
+            # the canonical 3-seg ref for tools / nodes / workflows /
+            # agents (``<bundle>/<plural>/<name>``). The 3-seg shape
+            # routes through :func:`parse_three_segment`; the plural
+            # segment dictates which ``expected_type`` the catalog
+            # lookup uses.
+            if is_three_segment(what):
+                bundle, segment, name = parse_three_segment(what)
+                # Map plural → singular asset_type for catalog lookup.
+                segment_to_type = {
+                    "tools": "tool",
+                    "nodes": "node",
+                    "workflows": "workflow",
+                    "agents": "agent",
+                }
+                if segment not in segment_to_type:
+                    raise AuthzMalformedRule(
+                        rule_index=index,
+                        error=(
+                            f"`what: {what!r}` is a 3-segment ref but the "
+                            f"middle segment {segment!r} is not one of "
+                            f"{sorted(segment_to_type)}"
+                        ),
+                    )
+                expected = segment_to_type[segment]
+                entry = self._catalog.lookup(what, expected_type=expected)
+                if entry is None:
+                    raise AuthzToolRefUnknown(
+                        rule_index=index,
+                        tool_ref=what,
+                    )
+                return
+            # Legacy 2-seg form (migration shim — Step 1 documented this
+            # path). The grammar promotes the 2-seg ref to the canonical
+            # 3-seg via :func:`build_ref` and resolves it against the
+            # catalog. The 2-seg form is reserved for TOOLS only —
+            # workflows / nodes / agents are 3-seg from day one.
             parts = what.split("/")
             if len(parts) != 2 or not all(parts):
                 raise AuthzMalformedRule(
@@ -645,92 +829,80 @@ class RuleBasedAuthorizationProvider:
         *,
         target: str | None = None,
         callback: PromptCallback | None = None,
-        agent_permissions: list[Rule] | None = None,
-        bundle_permissions: list[Rule] | None = None,
+        layers: tuple[PermissionLayer, ...] = (),
+        caller_chain: tuple[str, ...] = (),
     ) -> AuthorizationResult:
-        """Evaluate ``(principal, action[, target])`` against the rule list.
+        """Evaluate the action / target against the layered rule walk.
 
-        Phase 2.0 (TOOL-R3):
+        Phase 3.0 Step 4 (Round 4 item #7) — the per-layer kwargs
+        (``agent_permissions=``, ``bundle_permissions=``) are REPLACED
+        by a single ordered ``layers: tuple[PermissionLayer, ...]``.
+        The provider walks the tuple IN ORDER (first-match-wins per
+        layer); each layer's ``name`` lands in the result's
+        ``reason`` and (Phase 3.1+) the ``policy.decision.made`` event
+        payload's ``layer`` field.
 
-        - ``target`` is matched against the rule's ``what`` when
-          present; falls back to ``action`` otherwise. For file tools
-          ``target`` is the resolved absolute path; for ``bash`` it's
-          the command string.
+        **Engine-side layer-tuple construction contract** (documented
+        here; structural engine wiring lands in Phase 3.1): the engine
+        builds the ``layers`` tuple with
+        ``PermissionLayer(name="workflow", rules=...)`` FIRST when the
+        proximate caller frame is a workflow node firing the action.
+        When the proximate caller is an embedded agent (i.e. the
+        workflow invoked an ``agent`` node which is now invoking a
+        tool), the ``workflow`` layer is OMITTED from the tuple
+        entirely — structural escalation prevention with no new rule
+        field required. Principal strings (``user.local`` / ``system``)
+        stay engine telemetry; they NEVER feed the matcher.
+
+        ``caller_chain`` (keyword-only, tuple of refs) is the ordered
+        list of frames the action's call arrived through — proximate
+        first (``chain[0]`` is closest to the tool call), distal last.
+        Default ``()`` represents engine bootstrap (no agent / workflow
+        active). Rules with a ``from:`` filter fire only when ANY
+        frame in the chain matches the glob; an empty chain fails
+        closed for any ``from:``-filtered rule.
+
+        Phase 2.0 surface preserved:
+
+        - ``target`` is matched against the rule's ``pattern``
+          (or, for legacy rules, ``what`` regex); falls back to
+          ``action`` for legacy rules with no target.
         - ``callback`` is the chat-surface prompt resolver. When
           ``None`` (the default — used by ``kolsch run``, the server,
           tests), ``prompt`` collapses to ``deny`` so unattended
-          callers never hang. When supplied, the callback receives
-          ``(rule_id, action, target)`` and returns either a final
-          :class:`AuthzEffect` or ``(effect, persist_rule)`` — in the
-          tuple form the new rule is appended to the in-memory list
-          *before* this call returns so the next check in the same
-          exchange sees it.
+          callers never hang.
+        - When no rule matches in any layer AND a prompt callback
+          has been registered via :meth:`register_prompt_callback`,
+          fire the callback with ``rule_id=None`` so the modal can
+          render the "no covering rule yet" panel.
 
-        Phase 2.2 (ENV §3.8 / Step 9):
-
-        - ``agent_permissions`` (keyword-only) is the resolved
-          agent's per-agent rule list — composed agent-first,
-          platform-second, default-deny tail. ``None`` or ``[]``
-          is identical to the pre-Phase-2.2 surface (every existing
-          caller continues to work unchanged). When non-empty,
-          each :class:`Rule` is compiled in-place and walked
-          first-match-wins; if a match is found the rule returns
-          directly (PROMPT effects still resolve through the
-          callback). The :class:`AuthorizationResult` carries
-          a ``who_chain`` detail in its ``reason`` so debugging
-          can identify which layer matched.
-
-        QoL — uniform tool permission discovery (Step 2):
-
-        - ``bundle_permissions`` (keyword-only) is the tool's home
-          bundle's rule list (``bundle.yaml.permissions:``). Walked
-          between the agent layer and the platform layer; same
-          first-match-wins + PROMPT-via-callback semantics. ``None``
-          / ``[]`` keeps the three-layer Phase 2.2 behaviour.
-        - When no rule matches in any of the agent / bundle /
-          platform layers AND a prompt callback has been registered
-          via :meth:`register_prompt_callback` (chat mode), fire the
-          callback with ``rule_id=None`` so the modal can render the
-          "no covering rule yet — what would you like to do?" panel.
-          The callback's ``(effect, persist_rule)`` tuple persists
-          the new rule the same way the existing PROMPT-effect path
-          does. When no callback is registered (non-chat: ``kolsch
-          run``, server, tests), fall through to the existing
-          default-deny behaviour — :class:`errors.ToolUnauthorized`
-          at the dispatcher boundary, same as today.
+        **R3 #3 + Round 5 H1 — audit emission contract**: the engine
+        emits a ``policy.decision.made`` event (master spec §13.5,
+        renamed from the legacy ``authz.decision`` per Round 5 H1)
+        in workflow's tool-dispatch wrapper subject to the
+        :attr:`RuleBasedAuthorizationConfig.audit_level` setting
+        (``"all"`` / ``"rule_matched"``; default ``"rule_matched"``).
+        Payload: ``{action, target, effect, rule_id, layer,
+        caller_chain}``. Phase 3.0 ships the contract; Phase 3.1
+        implements the emission.
         """
-        # Phase 2.2 — walk agent permissions first. Per-call compile is
-        # acceptable because agent_permissions is small (single-digit
-        # rules typically) and the engine calls allow() once per tool
-        # invocation, not on a hot loop.
-        if agent_permissions:
-            agent_match = await self._match_against_rules(
-                rules=[self._compile_rule_record(r) for r in agent_permissions],
+        # Phase 3.0 Step 4 — walk layers in the order the caller
+        # supplied. The engine is responsible for putting the
+        # ``workflow`` layer FIRST when the proximate frame is a
+        # workflow node, OMITTING it when the proximate frame is an
+        # embedded agent (structural escalation prevention).
+        for layer in layers:
+            layer_match = await self._match_against_rules(
+                rules=[self._compile_rule_record(r) for r in layer.rules],
                 principal=principal,
                 action=action,
                 target=target,
                 callback=callback,
-                layer="agent",
+                layer=layer.name,
+                caller_chain=caller_chain,
             )
-            if agent_match is not None:
-                return agent_match
-
-        # Bundle permissions — same matching machinery as the agent
-        # layer. The dispatcher looks up the home bundle of the tool
-        # being invoked and passes its rules through; an agent in a
-        # different bundle invoking this tool still sees its home
-        # bundle's rules applied here.
-        if bundle_permissions:
-            bundle_match = await self._match_against_rules(
-                rules=[self._compile_rule_record(r) for r in bundle_permissions],
-                principal=principal,
-                action=action,
-                target=target,
-                callback=callback,
-                layer="bundle",
-            )
-            if bundle_match is not None:
-                return bundle_match
+            if layer_match is not None:
+                return layer_match
 
         # Platform rules — same matching logic as Phase 2.0.
         platform_match = await self._match_against_rules(
@@ -740,6 +912,7 @@ class RuleBasedAuthorizationProvider:
             target=target,
             callback=callback,
             layer="platform",
+            caller_chain=caller_chain,
         )
         if platform_match is not None:
             return platform_match
@@ -775,6 +948,7 @@ class RuleBasedAuthorizationProvider:
         target: str | None,
         callback: PromptCallback | None,
         layer: str,
+        caller_chain: tuple[str, ...] = (),
     ) -> AuthorizationResult | None:
         """Walk one layer's compiled rules first-match-wins. Returns
         :class:`AuthorizationResult` on match (PROMPT resolved
@@ -782,13 +956,17 @@ class RuleBasedAuthorizationProvider:
         rule fires so the caller can fall through to the next
         layer.
 
-        ``layer`` (``"agent"`` / ``"platform"``) is folded into the
-        result's ``reason`` (and into PROMPT's resolved reason via
-        :meth:`_resolve_prompt`) so debugging output identifies
-        which layer matched."""
+        ``layer`` (``"agent"`` / ``"platform"`` / ``"workflow"`` /
+        ``"bundle"``) is folded into the result's ``reason`` (and into
+        PROMPT's resolved reason via :meth:`_resolve_prompt`) so
+        debugging output identifies which layer matched.
+
+        ``caller_chain`` is threaded into :meth:`_rule_matches` so the
+        ``from:`` filter (Round 4 item #13) can short-circuit rules
+        whose caller-chain glob does not fire."""
         # The action→tool_ref map is built from the platform catalog
-        # at construction; per-layer rules (agent / bundle) inherit
-        # the same map.
+        # at construction; per-layer rules (agent / bundle / workflow)
+        # inherit the same map.
         tool_ref = self._action_to_tool_ref.get(action)
         for compiled in rules:
             if not self._rule_matches(
@@ -797,6 +975,7 @@ class RuleBasedAuthorizationProvider:
                 action=action,
                 target=target,
                 tool_ref=tool_ref,
+                caller_chain=caller_chain,
             ):
                 continue
             effect = AuthzEffect(compiled.effect)
@@ -824,8 +1003,26 @@ class RuleBasedAuthorizationProvider:
         action: str,
         target: str | None,
         tool_ref: str | None,
+        caller_chain: tuple[str, ...] = (),
     ) -> bool:
-        """Per-rule match decision. Dispatches on shape."""
+        """Per-rule match decision. Dispatches on shape.
+
+        Phase 3.0 Step 4 (Round 4 item #13) — the FIRST check is the
+        ``from:`` caller-chain glob: a rule with ``from_pattern`` set
+        fires only when AT LEAST ONE frame of ``caller_chain`` matches
+        the glob (transitive). An empty ``caller_chain`` fails closed
+        for any rule with ``from_pattern`` set — engine bootstrap
+        cannot be ``from:``-scoped to an agent or workflow that hasn't
+        started yet.
+        """
+        if compiled.from_pattern is not None:
+            if not caller_chain:
+                return False
+            if not any(
+                fnmatch.fnmatchcase(frame, compiled.from_pattern)
+                for frame in caller_chain
+            ):
+                return False
         if compiled.is_legacy:
             # Phase 2.0 / A-I1 semantics: re.fullmatch against
             # `who` AND (`what` against target OR action).
@@ -1276,11 +1473,17 @@ class RuleBasedAuthorizationProvider:
                 pattern=rule.pattern,
                 forbidden_chars=forbidden,
             )
+        # Phase 3.0 Step 4 — Round 4 item #13 — STRICT ``from:`` validation
+        # for the in-process record path too (the YAML path runs the
+        # same check inside :meth:`_compile_new_shape`). Programmatic
+        # callers can opt out by leaving ``rule.from_`` unset.
+        self._validate_from(index=-1, from_value=rule.from_)
         return _CompiledRule(
             effect=rule.effect,
             raw=rule,
             is_legacy=False,
             what=rule.what,
+            from_pattern=rule.from_,
         )
 
 
@@ -1334,16 +1537,16 @@ class AllowAllTestAuthorizationProvider:
         *,
         target: str | None = None,
         callback: PromptCallback | None = None,
-        agent_permissions: list[Rule] | None = None,
-        bundle_permissions: list[Rule] | None = None,
+        layers: tuple[PermissionLayer, ...] = (),
+        caller_chain: tuple[str, ...] = (),
     ) -> AuthorizationResult:
         _ = (
             principal,
             action,
             target,
             callback,
-            agent_permissions,
-            bundle_permissions,
+            layers,
+            caller_chain,
         )
         return AuthorizationResult(
             allowed=True,
