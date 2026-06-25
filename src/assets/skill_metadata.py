@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-import yaml
+from _yamlio import YAMLError, load
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -46,8 +46,8 @@ def parse_skill_frontmatter(skill_md: Path) -> dict[str, Any]:
 
     frontmatter = "\n".join(lines[1:end])
     try:
-        payload = yaml.safe_load(frontmatter)
-    except yaml.YAMLError:
+        payload = load(frontmatter)
+    except YAMLError:
         return {}
     if not isinstance(payload, dict):
         return {}

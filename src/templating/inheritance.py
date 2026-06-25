@@ -45,7 +45,6 @@ import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import yaml
 from jinja2 import DictLoader, Environment, StrictUndefined
 from jinja2.exceptions import (
     TemplateAssertionError,
@@ -54,6 +53,7 @@ from jinja2.exceptions import (
 )
 from jinja2.nodes import Extends
 
+from _yamlio import load
 from assets.refs import resolve_shorthand
 from errors import (
     AssetsInvalidRef,
@@ -161,7 +161,7 @@ def resolve_extends_chain(
                 path=str(current_path),
                 resolved=str(current_path),
             ) from exc
-        payload: dict[str, Any] = yaml.safe_load(text) or {}
+        payload: dict[str, Any] = load(text) or {}
         chain.append(payload)
 
         extends_ref = payload.get("extends")
@@ -219,7 +219,7 @@ def resolve_parent_chain_from_extends(
             raise ConfigAgentInheritanceCycle(cycle=cycle_trail)
         visited.add(resolved_path)
         cycle_trail.append(str(resolved_path))
-        payload: dict[str, Any] = yaml.safe_load(
+        payload: dict[str, Any] = load(
             resolved_path.read_text(encoding="utf-8")
         ) or {}
         chain.append(payload)

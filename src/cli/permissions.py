@@ -21,8 +21,7 @@ import sys
 from pathlib import Path
 from typing import Any, TextIO
 
-import yaml
-
+from _yamlio import dump, load
 from errors import (
     AuthzProtectedRule,
     AuthzRuleInvalid,
@@ -272,7 +271,7 @@ def _read_authz_config(yaml_path: Path) -> dict[str, Any]:
     """
     if not yaml_path.is_file():
         return {"rules": []}
-    payload = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
+    payload = load(yaml_path.read_text(encoding="utf-8")) or {}
     if not isinstance(payload, dict):
         return {"rules": []}
     authz = payload.get("authorization") or {}
@@ -293,7 +292,7 @@ def _write_back(yaml_path: Path, rules: list[Rule]) -> None:
     """
     payload: dict[str, Any] = {}
     if yaml_path.is_file():
-        existing = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
+        existing = load(yaml_path.read_text(encoding="utf-8"))
         if isinstance(existing, dict):
             payload = existing
 
@@ -308,7 +307,7 @@ def _write_back(yaml_path: Path, rules: list[Rule]) -> None:
         authz["config"] = cfg
     cfg["rules"] = [_rule_to_dict(r) for r in rules]
 
-    serialized = yaml.safe_dump(payload, sort_keys=False)
+    serialized = dump(payload)
     temp = yaml_path.with_name(f"{yaml_path.name}.tmp.{os.getpid()}")
     try:
         encoded = serialized.encode("utf-8")

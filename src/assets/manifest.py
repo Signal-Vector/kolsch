@@ -11,9 +11,9 @@ from __future__ import annotations
 import re
 from typing import TYPE_CHECKING
 
-import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
+from _yamlio import YAMLError, load
 from schemas import PermissionRule
 
 if TYPE_CHECKING:
@@ -59,8 +59,8 @@ def load_manifest(bundle_dir: Path) -> BundleManifest | None:
     if not path.exists():
         return None
     try:
-        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except yaml.YAMLError:
+        payload = load(path.read_text(encoding="utf-8"))
+    except YAMLError:
         return None
     if not isinstance(payload, dict):
         return None

@@ -15,7 +15,15 @@ dependencies = [
     "pydantic>=2.7,<3",
     # YAML parsing for platform.yaml, bundle.yaml, agent .yaml,
     # SKILL.md frontmatter. Asset Management uses it at startup.
-    "pyyaml>=6.0,<7",
+    # Phase 3.0 Step 0 migrated off PyYAML to ruamel.yaml — fixes
+    # the Norway-bug (PyYAML coerced unquoted ``no``/``yes``/``on``/
+    # ``off`` to booleans) and unlocks line-info-aware loading needed
+    # by the workflow parser. The single chokepoint is ``src/_yaml.py``;
+    # every other module imports ``load`` / ``dump`` from there.
+    # ``ruamel.yaml.clib`` is the optional C extension that ruamel
+    # falls back to a pure-Python parser without.
+    "ruamel.yaml>=0.18,<1",
+    "ruamel.yaml.clib>=0.2.8",
     # Step 13 — CLI + API entry surfaces. FastAPI for the HTTP surface;
     # uvicorn as the production ASGI server. No CrewAI / litellm here —
     # the engine's runtime is still framework-agnostic.
@@ -110,6 +118,13 @@ packages = [
 [tool.hatch.build.targets.wheel.force-include]
 "docs" = "src/kolsch/docs"
 "AGENTS.md" = "src/kolsch/AGENTS.md"
+# Phase 3.0 Step 0 — the ruamel.yaml chokepoint lives as a single
+# module at the src root; force-include keeps it discoverable in
+# installed wheels (the editable install already finds it via the
+# src/ .pth entry). Named ``_yamlio`` (not ``_yaml``) to avoid
+# colliding with PyYAML's site-packages compatibility stub package
+# ``_yaml/`` — PyYAML stays as a transitive dep of crewai et al.
+"src/_yamlio.py" = "_yamlio.py"
 
 # ---------------------------------------------------------------------------
 # Dependency groups — installed via `uv sync --group <name>` (or all groups
@@ -120,7 +135,6 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "pre-commit>=3.7",
-    "types-pyyaml>=6.0",
 ]
 test = [
     "pytest>=8",

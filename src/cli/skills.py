@@ -28,8 +28,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
-import yaml
-
+from _yamlio import dump, load
 from assets.skill_metadata import parse_skill_frontmatter
 from errors import AssetsNotFound, WorkspaceNotInitialized
 from platform_runtime import bootstrap_runtime
@@ -554,21 +553,19 @@ making it trigger-rich before enabling on an agent."""
 def _render_skill_md(name: str, description: str) -> str:
     """Render the SKILL.md text for a new skill.
 
-    Serialises the frontmatter via ``yaml.safe_dump`` so any
+    Serialises the frontmatter via the ``_yamlio`` helper so any
     characters that would otherwise need quoting (colons, quotes,
     newlines) round-trip cleanly through
     :func:`assets.skill_metadata.parse_skill_frontmatter`. The body
     is plain Markdown — no template variables beyond ``name``.
     """
-    import yaml  # noqa: PLC0415
-
     frontmatter = {
         "name": name,
         "description": description,
         "allowed-tools": [],
         "disable-model-invocation": False,
     }
-    yaml_block = yaml.safe_dump(frontmatter, sort_keys=False, default_flow_style=False)
+    yaml_block = dump(frontmatter)
     body = _SKILL_BODY_TEMPLATE.format(name=name)
     return f"---\n{yaml_block}---\n{body}"
 
@@ -668,7 +665,7 @@ def _cmd_remove(
     The dependent-agent walk reads each agent YAML once (the
     catalog stores only paths for agents, not parsed metadata, so
     this is a re-parse, not a cache miss — see Step 8 escalation
-    note). Cost is O(N) on agent count with a single ``yaml.safe_load``
+    note). Cost is O(N) on agent count with a single ``_yamlio.load``
     per agent; the cost lives at the right tier for a one-shot CLI
     verb (~ms for a workspace's typical handful of agents).
     """
@@ -1338,7 +1335,7 @@ def _install_into_new_bundle(
     staged_bundle.mkdir(parents=True, exist_ok=True)
     bundle_yaml = staged_bundle / "bundle.yaml"
     bundle_yaml.write_text(
-        yaml.safe_dump(
+        dump(
             {
                 "name": final_bundle_name,
                 "version": "0.1.0",
@@ -1347,7 +1344,6 @@ def _install_into_new_bundle(
                     f"the {skill_name} skill."
                 ),
             },
-            sort_keys=False,
         ),
         encoding="utf-8",
     )
@@ -1567,11 +1563,11 @@ def _read_enabled_skill_refs_from_agent_yaml(path: Path) -> list[str]:
     YAML (``kolsch run`` against this agent fails loudly via the
     validator).
     """
-    import yaml  # noqa: PLC0415
+    from _yamlio import YAMLError  # noqa: PLC0415
 
     try:
-        payload = yaml.safe_load(path.read_text(encoding="utf-8")) or {}
-    except (yaml.YAMLError, OSError):
+        payload = load(path.read_text(encoding="utf-8")) or {}
+    except (YAMLError, OSError):
         return []
     if not isinstance(payload, dict):
         return []

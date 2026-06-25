@@ -30,8 +30,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TextIO
 
-import yaml
-
+from _yamlio import dump, load
 from assets.platform_config import default_platform_payload as _stock_defaults
 
 if TYPE_CHECKING:
@@ -404,7 +403,7 @@ async def _step_b_skeleton(io: _SetupIO, *, non_interactive: bool) -> str:
         io.out.write(f"  ✓ {name}/\n")
 
     yaml_path.write_text(
-        yaml.safe_dump(_setup_platform_payload(), sort_keys=False),
+        dump(_setup_platform_payload()),
         encoding="utf-8",
     )
     io.out.write("  ✓ platform.yaml\n")
@@ -577,7 +576,7 @@ def _write_defaults_model(yaml_path: Path, model: str | dict[str, str]) -> None:
         defaults = {}
     defaults["model"] = model
     payload["defaults"] = defaults
-    yaml_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    yaml_path.write_text(dump(payload), encoding="utf-8")
 
 
 def _announce_picked_model(io: _SetupIO, model: str | dict[str, str]) -> None:
@@ -814,7 +813,7 @@ def _step_f_banner_failure(io: _SetupIO, result: _StepEResult) -> None:
 def _read_yaml(path: Path) -> dict[str, Any]:
     if not path.is_file():
         return {}
-    raw = yaml.safe_load(path.read_text(encoding="utf-8"))
+    raw = load(path.read_text(encoding="utf-8"))
     return raw if isinstance(raw, dict) else {}
 
 
@@ -1013,7 +1012,7 @@ def _maybe_migrate_authz_rules(
         backup = _backup_platform_yaml(yaml_path)
         new_rules = _migrate_rules_preserving_customs(rules)
         payload["authorization"]["config"]["rules"] = new_rules
-        yaml_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+        yaml_path.write_text(dump(payload), encoding="utf-8")
         io.out.write("  ✓ migrated authorization rules → §3.1 defaults\n")
         io.out.write(f"  ✓ backup written to {backup.relative_to(yaml_path.parent)}\n")
     elif choice == "k":
@@ -1101,7 +1100,7 @@ async def _maybe_migrate_authz_rules_to_qol_schema(io: _SetupIO) -> None:
     backup = _backup_platform_yaml(yaml_path)
     payload["authorization"]["config"]["rules"] = result.rules
     yaml_path.write_text(
-        yaml.safe_dump(payload, sort_keys=False),
+        dump(payload),
         encoding="utf-8",
     )
     io.out.write(
@@ -1146,7 +1145,7 @@ def _maybe_add_workspace_root_to_file_access(io: _SetupIO) -> None:
     backup = _backup_platform_yaml(yaml_path)
     file_access["allowed_paths"] = [".", *allowed]
     yaml_path.write_text(
-        yaml.safe_dump(payload, sort_keys=False),
+        dump(payload),
         encoding="utf-8",
     )
     io.out.write(
@@ -1261,10 +1260,9 @@ async def _maybe_warn_invalid_skills(io: _SetupIO) -> None:
 
 def _print_migration_diff(io: _SetupIO, current_rules: list[dict[str, Any]]) -> None:
     """Show a unified diff of the rules block (current → migrated)."""
-    before = yaml.safe_dump({"rules": current_rules}, sort_keys=False).splitlines()
-    after = yaml.safe_dump(
+    before = dump({"rules": current_rules}).splitlines()
+    after = dump(
         {"rules": _migrate_rules_preserving_customs(current_rules)},
-        sort_keys=False,
     ).splitlines()
     diff = difflib.unified_diff(
         before, after, fromfile="current", tofile="after migration", lineterm=""

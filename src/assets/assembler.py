@@ -11,8 +11,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-import yaml
-
+from _yamlio import YAMLError, load
 from assets.refs import parse_ref
 from errors import (
     AssetsInvalidRef,
@@ -46,8 +45,8 @@ def load_agent_definition(agent_path: Path) -> dict[str, Any]:
     rule: no non-PlatformError exception may escape a public method.
     """
     try:
-        payload = yaml.safe_load(agent_path.read_text(encoding="utf-8"))
-    except yaml.YAMLError as exc:
+        payload = load(agent_path.read_text(encoding="utf-8"))
+    except YAMLError as exc:
         raise ConfigInvalid(
             validation_errors=[
                 {

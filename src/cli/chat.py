@@ -764,14 +764,14 @@ def _load_model_aliases(root: Path) -> dict[str, str]:
     ``--model`` startup flag both rely on this for alias
     resolution.
     """
-    import yaml  # noqa: PLC0415
+    from _yamlio import YAMLError, load  # noqa: PLC0415
 
     yaml_path = root / "platform.yaml"
     if not yaml_path.is_file():
         return {}
     try:
-        payload = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
-    except yaml.YAMLError:
+        payload = load(yaml_path.read_text(encoding="utf-8")) or {}
+    except YAMLError:
         return {}
     if not isinstance(payload, dict):
         return {}

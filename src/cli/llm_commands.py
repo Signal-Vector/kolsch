@@ -26,8 +26,7 @@ from getpass import getpass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TextIO
 
-import yaml
-
+from _yamlio import dump, load
 from errors import (
     LlmConnectorUnknown,
     LlmDiscoveryFailed,
@@ -107,7 +106,7 @@ def _load_platform_yaml(root: Path) -> dict[str, Any]:
     path = root / "platform.yaml"
     if not path.exists():
         return {}
-    payload = yaml.safe_load(path.read_text(encoding="utf-8"))
+    payload = load(path.read_text(encoding="utf-8"))
     if payload is None:
         return {}
     if not isinstance(payload, dict):
@@ -127,7 +126,7 @@ def _write_platform_yaml_atomic(root: Path, payload: dict[str, Any]) -> None:
     tmp = path.with_suffix(path.suffix + ".tmp")
     try:
         with tmp.open("w", encoding="utf-8") as f:
-            yaml.safe_dump(payload, f, sort_keys=False)
+            f.write(dump(payload))
             f.flush()
             os.fsync(f.fileno())
         tmp.replace(path)

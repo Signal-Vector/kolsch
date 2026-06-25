@@ -18,8 +18,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-import yaml
-
+from _yamlio import YAMLError, dump, load
 from errors import ConfigInvalid
 
 if TYPE_CHECKING:
@@ -122,8 +121,8 @@ def load_or_create(root: Path) -> dict[str, Any]:
 
 def _load_existing(path: Path) -> dict[str, Any]:
     try:
-        payload = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except yaml.YAMLError as exc:
+        payload = load(path.read_text(encoding="utf-8"))
+    except YAMLError as exc:
         raise ConfigInvalid(
             validation_errors=[
                 {
@@ -194,7 +193,7 @@ def _validate_section_shape(payload: dict[str, Any]) -> None:
 
 def _write_yaml(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
+    path.write_text(dump(payload), encoding="utf-8")
 
 
 def is_known_section(name: str) -> bool:
