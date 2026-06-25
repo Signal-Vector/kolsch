@@ -302,9 +302,14 @@ class IterativeExecutor:
 
                 ctx = self._build_ctx(inv_id=inv_id, node_def=node_def)
                 try:
-                    output = await self._registry.get(
+                    runner = self._registry.get(
                         _node_type_ref(node_def), node_name=node_name
-                    ).run(
+                    )
+                    # Per-node modifiers — apply retry FIRST so the
+                    # timeout deadline bounds the WHOLE retry budget
+                    # (not just the final attempt).
+                    runner = _apply_node_modifiers(runner, node_def=node_def)
+                    output = await runner.run(
                         node_name=node_name,
                         node_def=node_def,
                         bound_inputs=bound_inputs,
@@ -566,6 +571,31 @@ class IterativeExecutor:
 def _is_jinja_marked(value: Any) -> bool:  # noqa: ANN401
     """Round 6 J5/β — Jinja iff string containing ``"{{"``."""
     return isinstance(value, str) and "{{" in value
+
+
+def _apply_node_modifiers(
+    runner: NodeRunner, *, node_def: Any  # noqa: ANN401
+) -> NodeRunner:
+    """Apply per-node ``retry`` + ``timeout_seconds`` modifiers.
+
+    Order matters: retry wraps the INNER runner; timeout wraps the
+    retry'd runner. The result is that ``timeout_seconds`` bounds
+    the WHOLE retry budget (initial + all retries + backoffs), not
+    just the final attempt. Master spec §8.1 retry rule 3.
+    """
+    retries = int(getattr(node_def, "retry", 0) or 0)
+    if retries > 0:
+        from workflows.builtins.retry import with_retry  # noqa: PLC0415
+
+        runner = with_retry(runner, retries=retries)
+    timeout_seconds = getattr(node_def, "timeout_seconds", None)
+    if timeout_seconds is not None and float(timeout_seconds) > 0:
+        from workflows.builtins.timeout import with_timeout  # noqa: PLC0415
+
+        runner = with_timeout(
+            runner, timeout_seconds=float(timeout_seconds)
+        )
+    return runner
 
 
 def _node_type_ref(node_def: Any) -> str:  # noqa: ANN401

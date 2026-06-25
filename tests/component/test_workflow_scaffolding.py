@@ -537,6 +537,7 @@ def test_workflows_all_parity_with_module_namespace() -> None:
     # Exclude submodule re-exports (importable via dotted path) and the
     # ``annotations`` shim from ``from __future__ import annotations``.
     submodules = {
+        "builtins",
         "catalog",
         "catalog_node",
         "context",
