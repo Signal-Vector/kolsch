@@ -36,12 +36,17 @@ Public surface (R3 #6 dual):
 
 from __future__ import annotations
 
+import importlib.util
+import inspect
+import typing
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 from jinja2 import nodes as jinja_nodes
+from pydantic import BaseModel
 
 from workflows.catalog_node import CatalogNodeDef
+from workflows.context import NodeContext
 from workflows.errors import (
     WorkflowBindCollision,
     WorkflowBranchMissingArm,
@@ -54,7 +59,12 @@ from workflows.errors import (
     WorkflowInvalidTimeout,
     WorkflowJinjaRefUnknown,
     WorkflowMapperWorkerNotAddressable,
+    WorkflowNodeImportFailed,
+    WorkflowNodeMissingRun,
+    WorkflowNodeNotDecorated,
     WorkflowNodeNotDefined,
+    WorkflowNodeReturnTypeInvalid,
+    WorkflowNodeSignatureInvalid,
     WorkflowTimeoutShadowsNode,
     WorkflowUnreachableNode,
     WorkflowValidationError,
@@ -165,6 +175,16 @@ on-disk file). YAML-origin callers pass through ``load_workflow``
 which records the real path on its own error sites."""
 
 
+# Master spec §5.3 — ``run`` MUST accept 2 or 3 positional params
+# (Inputs, NodeContext, optional Config). Named constants here so
+# the §7.6 signature check reads intent rather than literal magic
+# numbers (ruff PLR2004).
+_MIN_RUN_PARAMS = 2
+_MAX_RUN_PARAMS = 3
+# Master spec §5.4 — the ``tuple[bool, BaseModel]`` return shape.
+_TUPLE_RETURN_LEN = 2
+
+
 def validate_workflow(
     workflow: Workflow,
     catalog: AssetCatalog,
@@ -182,30 +202,39 @@ def validate_workflow(
     4. ``_check_jinja_refs`` (§7.2) — graph-reachability predecessor
        closure; Jinja-AST walk on Jinja-marked strings.
     5. ``_check_type_specific`` (§7.4).
-    6. ``_check_authz`` (§7.7) — STRICT ``from:`` validation per
+    6. ``_check_catalog_node_defs`` (§7.6) — authored Python node
+       introspection (import / decorator / signature / return-type).
+    7. ``_check_authz`` (§7.7) — STRICT ``from:`` validation per
        Round 4 item #13.
-    7. ``_check_timeouts`` (R3 #2) — positive int + shadowing warning.
+    8. ``_check_timeouts`` (R3 #2) — positive int + shadowing warning.
 
     Within each layer, all findings accumulate; the layer never
     short-circuits. Across layers, run all layers in best-effort
-    mode and accumulate; the raise wrapper handles fail-fast
-    semantics with the "Related issues" tail.
+    mode and accumulate; :func:`validate_workflow_or_raise` adds the
+    AC 5.12 "Related issues" tail when raising.
     """
     errors: list[WorkflowValidationError] = []
     warnings: list[WorkflowValidationWarning] = []
 
-    for check in (
-        _check_extends_policy,
-        _check_structural,
-        _check_branching,
-        _check_jinja_refs,
-        _check_type_specific,
-        _check_authz,
-        _check_timeouts,
+    for layer_name, check in (
+        ("extends-policy", _check_extends_policy),
+        ("structural", _check_structural),
+        ("branching", _check_branching),
+        ("jinja-refs", _check_jinja_refs),
+        ("type-specific", _check_type_specific),
+        ("catalog-node-defs", _check_catalog_node_defs),
+        ("authz", _check_authz),
+        ("timeouts", _check_timeouts),
     ):
         layer_errors, layer_warnings = check(
             workflow=workflow, catalog=catalog, file=file
         )
+        # Tag each error with its originating layer via __notes__ so
+        # raise consumers can group findings (AC 5.12). Notes do not
+        # affect equality / type checks; tests using exc.exceptions
+        # see the same instances regardless.
+        for err in layer_errors:
+            err.add_note(f"layer: {layer_name}")
         errors.extend(layer_errors)
         warnings.extend(layer_warnings)
 
@@ -228,16 +257,57 @@ def validate_workflow_or_raise(
     errors, raises stdlib :class:`ExceptionGroup` (per R3 #6 — no
     custom ``WorkflowValidationErrorGroup`` class). Warnings are
     silent in the raise path.
+
+    AC 5.12 — "Related issues" tail: when more than one validation
+    layer contributed an error, attach a single ``__notes__`` line to
+    the raised exception (or ExceptionGroup) summarising the other
+    layers' findings. Layer tags are pre-attached during
+    :func:`validate_workflow` (each error carries a ``layer: <name>``
+    note); this wrapper rolls them up into one human-readable summary
+    so single-error raises still tell the operator *"by the way,
+    there's also a schema error you'll hit next"*.
     """
     result = validate_workflow(workflow, catalog, file=file)
     if not result.errors:
         return
+    tail = _related_issues_tail(result.errors)
     if len(result.errors) == 1:
-        raise result.errors[0]
-    raise ExceptionGroup(
+        single = result.errors[0]
+        if tail is not None:
+            single.add_note(tail)
+        raise single
+    group = ExceptionGroup(
         "Workflow validation failed",
         list(result.errors),
     )
+    if tail is not None:
+        group.add_note(tail)
+    raise group
+
+
+def _related_issues_tail(
+    errors: tuple[WorkflowValidationError, ...],
+) -> str | None:
+    """Build the AC 5.12 "Related issues" summary line.
+
+    Walks the per-error ``__notes__`` attached during validation,
+    counts how many findings each layer contributed, and returns a
+    one-line summary when more than one layer fired. Returns ``None``
+    when all findings come from a single layer (no tail needed).
+    """
+    counts: dict[str, int] = {}
+    for err in errors:
+        for note in getattr(err, "__notes__", ()):
+            if note.startswith("layer: "):
+                layer = note.removeprefix("layer: ")
+                counts[layer] = counts.get(layer, 0) + 1
+                break
+    if len(counts) <= 1:
+        return None
+    items = ", ".join(
+        f"{layer} ({n})" for layer, n in sorted(counts.items())
+    )
+    return f"Related issues across layers: {items}."
 
 
 # ---------------------------------------------------------------------------
@@ -868,6 +938,266 @@ def _check_type_specific(
     _ = workflow
     _ = file
     return errors, warnings
+
+
+# ---------------------------------------------------------------------------
+# §7.6 — Authored Python node introspection (Round 4 item #3).
+# ---------------------------------------------------------------------------
+
+
+def _check_catalog_node_defs(
+    *,
+    workflow: Workflow,
+    catalog: AssetCatalog,
+    file: str,
+) -> tuple[list[WorkflowValidationError], list[WorkflowValidationWarning]]:
+    """Master spec §7.6 — authored Python node introspection.
+
+    For every :class:`CatalogNodeDef` in ``workflow.nodes`` whose
+    catalog entry is NOT a virtual built-in (``metadata["builtin"]``
+    is not ``True``):
+
+    1. Resolve the catalog entry via
+       :meth:`AssetCatalog.lookup` with ``expected_type="node"``.
+    2. Import the entry's ``path`` via :mod:`importlib.util` — failure
+       (missing file, ``SyntaxError``, ``ImportError`` etc.) raises
+       :class:`WorkflowNodeImportFailed`.
+    3. The module MUST expose a top-level ``run`` symbol; otherwise
+       :class:`WorkflowNodeMissingRun`.
+    4. ``run`` MUST be decorated with ``@node`` (sentinel
+       ``_kolsch_node`` set by :mod:`workflows.decorator`); otherwise
+       :class:`WorkflowNodeNotDecorated`.
+    5. ``run``'s signature MUST match master spec §5.3 (param 1 is a
+       :class:`pydantic.BaseModel` subclass; param 2 is
+       :class:`NodeContext` exactly; optional param 3 is a BaseModel
+       subclass; no further parameters); otherwise
+       :class:`WorkflowNodeSignatureInvalid`.
+    6. ``run``'s return annotation MUST match master spec §5.4
+       (``BaseModel`` subclass, ``bool``, or
+       ``tuple[bool, BaseModel subclass]``); otherwise
+       :class:`WorkflowNodeReturnTypeInvalid`.
+
+    Built-in entries (``kolsch/nodes/<name>``) are skipped — their
+    Pydantic implementations live in :mod:`workflows.parser` and need
+    no on-disk introspection. Entries whose ``path`` is empty are also
+    skipped defensively (the same marker the catalog uses for
+    virtuals — see :func:`workflows.catalog.builtin_node_entries`).
+
+    Secret-existence validation (the §7.6 4th bullet) is deferred to
+    Phase 3.1 when the workflow gate threads a secrets provider; at
+    Phase 3.0 the validator only sees ``secrets_needed`` as a list of
+    names with no resolver to ask.
+    """
+    errors: list[WorkflowValidationError] = []
+    warnings: list[WorkflowValidationWarning] = []
+
+    for node_name, node in workflow.nodes.items():
+        if not isinstance(node, CatalogNodeDef):
+            continue
+        ref = node.type
+        entry = catalog.lookup(ref, expected_type="node")
+        if entry is None:
+            # The catalog has no node entry for this ref — surface as
+            # WorkflowNodeImportFailed since the §7.6 check can't
+            # proceed without the catalog-resolved path. (The Step 3
+            # catalog scan honors WorkflowBuiltinShadowed for reserved
+            # slots; reaching this branch with a None entry means the
+            # ref is genuinely missing from the catalog.)
+            errors.append(
+                WorkflowNodeImportFailed(
+                    file=file,
+                    line=0,
+                    ref=ref,
+                    reason=f"node {ref!r} is not in the catalog",
+                )
+            )
+            continue
+        if entry.metadata.get("builtin") is True or not entry.path:
+            continue
+        module = _import_node_module(entry.path)
+        if isinstance(module, Exception):
+            errors.append(
+                WorkflowNodeImportFailed(
+                    file=file, line=0, ref=ref, reason=str(module)
+                )
+            )
+            continue
+        run_fn = getattr(module, "run", None)
+        if run_fn is None:
+            errors.append(WorkflowNodeMissingRun(file=file, line=0, ref=ref))
+            continue
+        if getattr(run_fn, "_kolsch_node", None) is None:
+            errors.append(WorkflowNodeNotDecorated(file=file, line=0, ref=ref))
+            continue
+        sig_error = _check_run_signature(file=file, ref=ref, run_fn=run_fn)
+        if sig_error is not None:
+            errors.append(sig_error)
+            continue
+        ret_error = _check_run_return_type(file=file, ref=ref, run_fn=run_fn)
+        if ret_error is not None:
+            errors.append(ret_error)
+            continue
+        _ = node_name  # reserved for future per-node error tagging
+
+    return errors, warnings
+
+
+def _import_node_module(path: str) -> Any:  # noqa: ANN401
+    """Best-effort import the authored node module from ``path``.
+
+    Returns the loaded module on success or the original
+    :class:`Exception` (NOT a re-raise) on failure so the caller can
+    fold the reason into :class:`WorkflowNodeImportFailed`. Modules
+    are loaded under a synthetic ``_kolsch_node_<id>`` name to avoid
+    polluting :data:`sys.modules` with bundle-internal namespaces;
+    full cleanup discipline lands in the Phase 3.1 executor.
+
+    Return type is ``Any`` (ANN401 acknowledged): the success branch
+    yields :class:`types.ModuleType` while the failure branch yields
+    the captured :class:`Exception`. Narrowing to a union here would
+    leak type-checker noise to every caller; the caller's
+    ``isinstance(module, Exception)`` discriminates cleanly.
+    """
+    try:
+        spec = importlib.util.spec_from_file_location(
+            f"_kolsch_node_{abs(hash(path))}", path
+        )
+        if spec is None or spec.loader is None:
+            return ImportError(f"could not load spec for {path!r}")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+    except (
+        ImportError,
+        SyntaxError,
+        FileNotFoundError,
+        AttributeError,
+        TypeError,
+        ValueError,
+    ) as exc:
+        return exc
+    return module
+
+
+# PLR0911 / ANN401 acknowledged: §5.3 has five independent
+# violation modes (parameter count, positional-only kinds, param-1
+# annotation, param-2 annotation, optional param-3 annotation), each
+# with an early-return for the SPECIFIC reason string. Collapsing
+# into a single exit would lose the per-failure ``reason`` text. The
+# ``run_fn`` parameter is intrinsically ``Any`` — it's a
+# user-authored function we just inspect, not call.
+def _check_run_signature(  # noqa: PLR0911
+    *, file: str, ref: str, run_fn: Any  # noqa: ANN401
+) -> WorkflowNodeSignatureInvalid | None:
+    """Verify ``run`` matches master spec §5.3 signature rules.
+
+    Returns ``None`` on success or :class:`WorkflowNodeSignatureInvalid`
+    with a one-sentence reason on failure.
+    """
+    try:
+        sig = inspect.signature(run_fn)
+        hints = typing.get_type_hints(run_fn)
+    except (TypeError, NameError) as exc:
+        return WorkflowNodeSignatureInvalid(
+            file=file, line=0, ref=ref, reason=f"unreadable signature: {exc}"
+        )
+    params = list(sig.parameters.values())
+    if len(params) < _MIN_RUN_PARAMS or len(params) > _MAX_RUN_PARAMS:
+        return WorkflowNodeSignatureInvalid(
+            file=file,
+            line=0,
+            ref=ref,
+            reason=(
+                f"expected {_MIN_RUN_PARAMS} or {_MAX_RUN_PARAMS} "
+                f"parameters, got {len(params)}"
+            ),
+        )
+    for p in params:
+        if p.kind not in (
+            inspect.Parameter.POSITIONAL_OR_KEYWORD,
+            inspect.Parameter.POSITIONAL_ONLY,
+        ):
+            return WorkflowNodeSignatureInvalid(
+                file=file,
+                line=0,
+                ref=ref,
+                reason=f"parameter {p.name!r} must be positional",
+            )
+    inputs_ann = hints.get(params[0].name)
+    if not isinstance(inputs_ann, type) or not issubclass(
+        inputs_ann, BaseModel
+    ):
+        return WorkflowNodeSignatureInvalid(
+            file=file,
+            line=0,
+            ref=ref,
+            reason=(
+                f"param 1 ({params[0].name!r}) must be annotated with a "
+                "pydantic.BaseModel subclass"
+            ),
+        )
+    ctx_ann = hints.get(params[1].name)
+    if ctx_ann is not NodeContext:
+        return WorkflowNodeSignatureInvalid(
+            file=file,
+            line=0,
+            ref=ref,
+            reason=(
+                f"param 2 ({params[1].name!r}) must be annotated exactly "
+                "as NodeContext"
+            ),
+        )
+    if len(params) == _MAX_RUN_PARAMS:
+        config_ann = hints.get(params[2].name)
+        if not isinstance(config_ann, type) or not issubclass(
+            config_ann, BaseModel
+        ):
+            return WorkflowNodeSignatureInvalid(
+                file=file,
+                line=0,
+                ref=ref,
+                reason=(
+                    f"optional param 3 ({params[2].name!r}) must be a "
+                    "pydantic.BaseModel subclass"
+                ),
+            )
+    return None
+
+
+def _check_run_return_type(
+    *, file: str, ref: str, run_fn: Any  # noqa: ANN401 — user fn
+) -> WorkflowNodeReturnTypeInvalid | None:
+    """Verify ``run``'s return annotation matches master spec §5.4.
+
+    Accepted: ``BaseModel`` subclass, ``bool``, or
+    ``tuple[bool, BaseModel subclass]``.
+    """
+    try:
+        hints = typing.get_type_hints(run_fn)
+    except (TypeError, NameError):
+        # Already caught by _check_run_signature in practice.
+        return None
+    ret_ann = hints.get("return")
+    if ret_ann is None:
+        return WorkflowNodeReturnTypeInvalid(
+            file=file, line=0, ref=ref, return_type="<missing>"
+        )
+    if isinstance(ret_ann, type) and issubclass(ret_ann, BaseModel):
+        return None
+    if ret_ann is bool:
+        return None
+    origin = typing.get_origin(ret_ann)
+    args = typing.get_args(ret_ann)
+    if (
+        origin is tuple
+        and len(args) == _TUPLE_RETURN_LEN
+        and args[0] is bool
+        and isinstance(args[1], type)
+        and issubclass(args[1], BaseModel)
+    ):
+        return None
+    return WorkflowNodeReturnTypeInvalid(
+        file=file, line=0, ref=ref, return_type=repr(ret_ann)
+    )
 
 
 # ---------------------------------------------------------------------------

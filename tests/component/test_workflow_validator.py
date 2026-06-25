@@ -35,7 +35,12 @@ from workflows.errors import (
     WorkflowFromShapeError,
     WorkflowInvalidTimeout,
     WorkflowJinjaRefUnknown,
+    WorkflowNodeImportFailed,
+    WorkflowNodeMissingRun,
+    WorkflowNodeNotDecorated,
     WorkflowNodeNotDefined,
+    WorkflowNodeReturnTypeInvalid,
+    WorkflowNodeSignatureInvalid,
     WorkflowTimeoutShadowsNode,
     WorkflowUnreachableNode,
     WorkflowValidationError,
@@ -869,6 +874,279 @@ class TestEveryErrorClassTriggered:
             WorkflowFromAssetTypeError,
             WorkflowFromNotFound,
             WorkflowExtendsPolicyForbidden,
+            # §7.6 introspection classes (AC 5.6 / 5.9).
+            WorkflowNodeImportFailed,
+            WorkflowNodeMissingRun,
+            WorkflowNodeNotDecorated,
+            WorkflowNodeSignatureInvalid,
+            WorkflowNodeReturnTypeInvalid,
         }
         # Spot-check at least one trigger exists per class.
-        assert len(triggered) == 11
+        assert len(triggered) == 16
+
+
+# ---------------------------------------------------------------------------
+# AC 5.6 — §7.6 authored Python node introspection.
+# ---------------------------------------------------------------------------
+
+
+def _seed_catalog_with_node(
+    *,
+    bundle: str,
+    name: str,
+    path: str,
+    builtin: bool = False,
+) -> AssetCatalog:
+    """Build a catalog containing one node entry pointing at ``path``.
+
+    ``builtin=True`` mirrors the virtual built-in registration done by
+    :func:`workflows.catalog.builtin_node_entries`; the validator skips
+    those entries so authoring an in-place .py would not be picked up.
+    """
+    cat = AssetCatalog()
+    ref = f"{bundle}/nodes/{name}"
+    cat.assets[ref] = AssetEntry(
+        ref=ref,
+        asset_type="node",
+        bundle=bundle,
+        path=path,
+        metadata={"builtin": True} if builtin else {},
+    )
+    return cat
+
+
+def _wf_with_catalog_node(*, ref: str) -> Workflow:
+    return _wf(
+        {
+            "nodes": {"n": {"type": ref}},
+            "graph": {"edges": []},
+        }
+    )
+
+
+_GOOD_NODE_SOURCE = """
+from pydantic import BaseModel
+from workflows import node, NodeContext
+
+class Inputs(BaseModel):
+    msg: str
+
+class Outputs(BaseModel):
+    echoed: str
+
+@node()
+def run(inputs: Inputs, ctx: NodeContext) -> Outputs:
+    return Outputs(echoed=inputs.msg)
+"""
+
+
+class TestCatalogNodeDefIntrospection:
+    """AC 5.6 — every §7.6 failure mode raises the right exception."""
+
+    def test_happy_path_clean(self, tmp_path: Path) -> None:
+        node_file = tmp_path / "echo.py"
+        node_file.write_text(_GOOD_NODE_SOURCE)
+        cat = _seed_catalog_with_node(
+            bundle="acme", name="echo", path=str(node_file)
+        )
+        wf = _wf_with_catalog_node(ref="acme/nodes/echo")
+        result = validate_workflow(wf, cat, file="wf.yaml")
+        assert result.is_valid, [type(e).__name__ for e in result.errors]
+
+    def test_builtin_entry_is_skipped(self, tmp_path: Path) -> None:
+        """The 14 reserved ``kolsch/nodes/<name>`` slots route to their
+        specific Pydantic *NodeDef classes (BashNodeDef, MapNodeDef,
+        etc.) at parse time, NOT CatalogNodeDef — so §7.6 never even
+        loops over them. This test exercises the defensive
+        ``metadata['builtin']=True`` skip on a non-reserved ref whose
+        catalog entry happens to be marked builtin (e.g. a future
+        bundle that injects its own virtual entries the same way the
+        kolsch built-ins do)."""
+        cat = _seed_catalog_with_node(
+            bundle="acme", name="virtual", path="", builtin=True
+        )
+        wf = _wf_with_catalog_node(ref="acme/nodes/virtual")
+        result = validate_workflow(wf, cat, file="wf.yaml")
+        assert result.is_valid, [type(e).__name__ for e in result.errors]
+
+    def test_import_failed_raises(self, tmp_path: Path) -> None:
+        node_file = tmp_path / "broken.py"
+        node_file.write_text("def this is not valid python(\n")
+        cat = _seed_catalog_with_node(
+            bundle="acme", name="broken", path=str(node_file)
+        )
+        wf = _wf_with_catalog_node(ref="acme/nodes/broken")
+        with pytest.raises(WorkflowNodeImportFailed):
+            validate_workflow_or_raise(wf, cat, file="wf.yaml")
+
+    def test_missing_node_in_catalog_raises_import_failed(
+        self, tmp_path: Path
+    ) -> None:
+        """A CatalogNodeDef whose ref isn't in the catalog surfaces as
+        WorkflowNodeImportFailed (the §7.6 check can't proceed)."""
+        cat = AssetCatalog()
+        wf = _wf_with_catalog_node(ref="acme/nodes/missing")
+        result = validate_workflow(wf, cat, file="wf.yaml")
+        assert any(
+            isinstance(e, WorkflowNodeImportFailed) for e in result.errors
+        )
+
+    def test_missing_run_raises(self, tmp_path: Path) -> None:
+        node_file = tmp_path / "no_run.py"
+        node_file.write_text("def other(): pass\n")
+        cat = _seed_catalog_with_node(
+            bundle="acme", name="no_run", path=str(node_file)
+        )
+        wf = _wf_with_catalog_node(ref="acme/nodes/no_run")
+        with pytest.raises(WorkflowNodeMissingRun):
+            validate_workflow_or_raise(wf, cat, file="wf.yaml")
+
+    def test_undecorated_run_raises(self, tmp_path: Path) -> None:
+        node_file = tmp_path / "undecorated.py"
+        node_file.write_text(
+            "def run(inputs, ctx):\n    return None\n"
+        )
+        cat = _seed_catalog_with_node(
+            bundle="acme", name="undecorated", path=str(node_file)
+        )
+        wf = _wf_with_catalog_node(ref="acme/nodes/undecorated")
+        with pytest.raises(WorkflowNodeNotDecorated):
+            validate_workflow_or_raise(wf, cat, file="wf.yaml")
+
+    def test_bad_signature_too_few_params_raises(
+        self, tmp_path: Path
+    ) -> None:
+        node_file = tmp_path / "thin.py"
+        node_file.write_text(
+            "from workflows import node\n@node()\ndef run(only_one): return None\n"
+        )
+        cat = _seed_catalog_with_node(
+            bundle="acme", name="thin", path=str(node_file)
+        )
+        wf = _wf_with_catalog_node(ref="acme/nodes/thin")
+        with pytest.raises(WorkflowNodeSignatureInvalid):
+            validate_workflow_or_raise(wf, cat, file="wf.yaml")
+
+    def test_bad_signature_wrong_ctx_type_raises(
+        self, tmp_path: Path
+    ) -> None:
+        node_file = tmp_path / "wrong_ctx.py"
+        node_file.write_text(
+            "from pydantic import BaseModel\n"
+            "from workflows import node\n"
+            "class I(BaseModel):\n    msg: str\n"
+            "@node()\n"
+            "def run(i: I, ctx: str) -> I:\n"
+            "    return i\n"
+        )
+        cat = _seed_catalog_with_node(
+            bundle="acme", name="wrong_ctx", path=str(node_file)
+        )
+        wf = _wf_with_catalog_node(ref="acme/nodes/wrong_ctx")
+        with pytest.raises(WorkflowNodeSignatureInvalid):
+            validate_workflow_or_raise(wf, cat, file="wf.yaml")
+
+    def test_bad_return_type_raises(self, tmp_path: Path) -> None:
+        node_file = tmp_path / "bad_ret.py"
+        node_file.write_text(
+            "from pydantic import BaseModel\n"
+            "from workflows import node, NodeContext\n"
+            "class I(BaseModel):\n    msg: str\n"
+            "@node()\n"
+            "def run(i: I, ctx: NodeContext) -> str:\n"
+            "    return i.msg\n"
+        )
+        cat = _seed_catalog_with_node(
+            bundle="acme", name="bad_ret", path=str(node_file)
+        )
+        wf = _wf_with_catalog_node(ref="acme/nodes/bad_ret")
+        with pytest.raises(WorkflowNodeReturnTypeInvalid):
+            validate_workflow_or_raise(wf, cat, file="wf.yaml")
+
+    def test_tuple_return_type_accepted(self, tmp_path: Path) -> None:
+        node_file = tmp_path / "tuple_ret.py"
+        node_file.write_text(
+            "from pydantic import BaseModel\n"
+            "from workflows import node, NodeContext\n"
+            "class I(BaseModel):\n    msg: str\n"
+            "class O(BaseModel):\n    out: str\n"
+            "@node()\n"
+            "def run(i: I, ctx: NodeContext) -> tuple[bool, O]:\n"
+            "    return True, O(out=i.msg)\n"
+        )
+        cat = _seed_catalog_with_node(
+            bundle="acme", name="tuple_ret", path=str(node_file)
+        )
+        wf = _wf_with_catalog_node(ref="acme/nodes/tuple_ret")
+        result = validate_workflow(wf, cat, file="wf.yaml")
+        assert result.is_valid, [type(e).__name__ for e in result.errors]
+
+
+# ---------------------------------------------------------------------------
+# AC 5.12 — "Related issues" tail across layers.
+# ---------------------------------------------------------------------------
+
+
+class TestRelatedIssuesTail:
+    """AC 5.12 — when more than one validation layer contributes an
+    error, the raise wrapper attaches a single ``__notes__`` line
+    summarising the cross-layer findings."""
+
+    def test_single_layer_no_tail(self) -> None:
+        """When all errors come from one layer, no tail is added."""
+        wf = _wf(
+            {
+                "nodes": {
+                    "a": {"type": "kolsch/nodes/bash", "command": "ls"},
+                },
+                "graph": {"edges": [{"from": "a", "to": "nonexistent"}]},
+            }
+        )
+        try:
+            validate_workflow_or_raise(wf, AssetCatalog(), file="t.yaml")
+            pytest.fail("expected raise")
+        except WorkflowNodeNotDefined as e:
+            tail_notes = [
+                n
+                for n in getattr(e, "__notes__", [])
+                if "Related issues" in n
+            ]
+            assert tail_notes == [], tail_notes
+
+    def test_multi_layer_attaches_related_issues_note(self) -> None:
+        """Structural + timeouts findings → tail naming both layers."""
+        wf = _wf(
+            {
+                "timeout_seconds": -5,  # timeouts layer
+                "nodes": {
+                    "a": {"type": "kolsch/nodes/bash", "command": "a"},
+                    "b": {"type": "kolsch/nodes/bash", "command": "b"},
+                    "orphan": {"type": "kolsch/nodes/bash", "command": "x"},
+                },
+                # structural: edge a→b leaves 'orphan' with no incoming
+                # edge and no path from the start, tripping
+                # WorkflowUnreachableNode.
+                "graph": {"edges": [{"from": "a", "to": "b"}]},
+            }
+        )
+        result = validate_workflow(wf, AssetCatalog(), file="t.yaml")
+        # Two distinct layers contributed: 'structural' (orphan) +
+        # 'timeouts' (negative timeout).
+        assert len(result.errors) >= 2
+        layer_tags = {
+            n.removeprefix("layer: ")
+            for e in result.errors
+            for n in getattr(e, "__notes__", [])
+            if n.startswith("layer: ")
+        }
+        assert {"structural", "timeouts"}.issubset(layer_tags), layer_tags
+        # _or_raise wraps in ExceptionGroup AND attaches the tail.
+        with pytest.raises(ExceptionGroup) as ei:
+            validate_workflow_or_raise(wf, AssetCatalog(), file="t.yaml")
+        group_notes = getattr(ei.value, "__notes__", [])
+        related = [n for n in group_notes if "Related issues" in n]
+        assert len(related) == 1, group_notes
+        assert "structural" in related[0]
+        assert "timeouts" in related[0]
+
+
