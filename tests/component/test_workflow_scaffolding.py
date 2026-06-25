@@ -545,7 +545,10 @@ def test_workflows_all_parity_with_module_namespace() -> None:
         "ids",
         "jinja_env",
         "labels",
+        "module_isolation",
         "parser",
+        "run",
+        "run_store",
         "validator",
     }
     skip = submodules | {"annotations"}
