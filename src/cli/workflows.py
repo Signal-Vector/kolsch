@@ -44,34 +44,61 @@ __all__ = ["add_workflows_subparser", "cmd_workflows"]
 # ---------------------------------------------------------------------------
 
 
+def _build_format_parent() -> argparse.ArgumentParser:
+    """Tiny parent parser that defines ``--format`` once.
+
+    Step 6 AC 6.7 — ``--format`` must be accepted at BOTH the group
+    level (``workflows --format json list``) AND the subcommand level
+    (``workflows list --format json``). Argparse subparsers do NOT
+    inherit parent flags by default; the canonical fix is to define
+    the flag on a ``parents=[…]`` parser shared by every parser in
+    the tree. ``add_help=False`` keeps the helper from injecting a
+    second ``-h``.
+    """
+    parent = argparse.ArgumentParser(add_help=False)
+    parent.add_argument(
+        "--format",
+        dest="format",
+        choices=("text", "json"),
+        # ``SUPPRESS`` prevents the parent's argparse pass from
+        # writing ``format=None`` over a value that the group-level
+        # pass already set. The dispatcher applies the ``"text"``
+        # default via ``getattr(args, "format", "text") or "text"``.
+        default=argparse.SUPPRESS,
+        help="Output format (default: text).",
+    )
+    return parent
+
+
 def add_workflows_subparser(
     sub: argparse._SubParsersAction[Any],
 ) -> argparse.ArgumentParser:
     """Register the ``kolsch workflows`` subparser tree."""
+    fmt_parent = _build_format_parent()
     workflows: argparse.ArgumentParser = sub.add_parser(
         "workflows",
         help="Manage workflow assets (list, show, validate, cancel, run).",
-    )
-    workflows.add_argument(
-        "--format",
-        dest="format",
-        choices=("text", "json"),
-        default="text",
-        help="Output format (default: text).",
+        parents=[fmt_parent],
     )
     workflows_sub = workflows.add_subparsers(
         dest="workflows_command", metavar="<op>"
     )
 
-    workflows_sub.add_parser("list", help="List catalogued workflows.")
+    workflows_sub.add_parser(
+        "list", help="List catalogued workflows.", parents=[fmt_parent]
+    )
 
     show = workflows_sub.add_parser(
-        "show", help="Print a workflow's parsed structure."
+        "show",
+        help="Print a workflow's parsed structure.",
+        parents=[fmt_parent],
     )
     show.add_argument("ref", help="Catalog ref (e.g. acme/workflows/triage).")
 
     validate = workflows_sub.add_parser(
-        "validate", help="Run the Step 5 run-start validation gate."
+        "validate",
+        help="Run the Step 5 run-start validation gate.",
+        parents=[fmt_parent],
     )
     validate.add_argument("ref", help="Catalog ref.")
 
@@ -82,12 +109,14 @@ def add_workflows_subparser(
             "Phase 3.0 ships flag-write only; executor cooperation lands "
             "in Phase 3.1."
         ),
+        parents=[fmt_parent],
     )
     cancel.add_argument("run_id", help="Workflow run id.")
 
     run = workflows_sub.add_parser(
         "run",
         help="STUB — workflow execution ships in Phase 3.1.",
+        parents=[fmt_parent],
     )
     run.add_argument("ref", help="Catalog ref.")
 
@@ -99,7 +128,12 @@ def add_workflows_subparser(
 # ---------------------------------------------------------------------------
 
 
-async def cmd_workflows(
+# PLR0911 acknowledged: the dispatcher has one return per leaf
+# subcommand (5) plus the no-op and unknown-op error paths. Each
+# return tunnels the leaf's own exit code; collapsing into a mapping
+# would lose the type-checker visibility of each leaf's signature
+# differences (args.ref vs args.run_id vs no positional).
+async def cmd_workflows(  # noqa: PLR0911
     args: argparse.Namespace,
     *,
     out: TextIO = sys.stdout,

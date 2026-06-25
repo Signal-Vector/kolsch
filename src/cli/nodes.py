@@ -31,24 +31,42 @@ __all__ = ["add_nodes_subparser", "cmd_nodes"]
 # ---------------------------------------------------------------------------
 
 
+def _build_format_parent() -> argparse.ArgumentParser:
+    """Tiny parent parser that defines ``--format`` once.
+
+    Step 6 AC 6.7 — see :func:`cli.workflows._build_format_parent` for
+    the rationale. Kept local rather than imported across modules so
+    each CLI group owns its surface.
+    """
+    parent = argparse.ArgumentParser(add_help=False)
+    parent.add_argument(
+        "--format",
+        dest="format",
+        choices=("text", "json"),
+        # ``SUPPRESS`` prevents the subparser's argparse pass from
+        # writing ``format=None`` over a value the group-level pass
+        # already set. The dispatcher applies the ``"text"`` default.
+        default=argparse.SUPPRESS,
+        help="Output format (default: text).",
+    )
+    return parent
+
+
 def add_nodes_subparser(
     sub: argparse._SubParsersAction[Any],
 ) -> argparse.ArgumentParser:
     """Register the ``kolsch nodes`` subparser tree."""
+    fmt_parent = _build_format_parent()
     nodes: argparse.ArgumentParser = sub.add_parser(
         "nodes",
         help="Discover node assets (list, show).",
-    )
-    nodes.add_argument(
-        "--format",
-        dest="format",
-        choices=("text", "json"),
-        default="text",
-        help="Output format (default: text).",
+        parents=[fmt_parent],
     )
     nodes_sub = nodes.add_subparsers(dest="nodes_command", metavar="<op>")
 
-    list_cmd = nodes_sub.add_parser("list", help="List catalogued nodes.")
+    list_cmd = nodes_sub.add_parser(
+        "list", help="List catalogued nodes.", parents=[fmt_parent]
+    )
     list_cmd.add_argument(
         "--bundle",
         dest="bundle",
@@ -57,7 +75,9 @@ def add_nodes_subparser(
     )
 
     show = nodes_sub.add_parser(
-        "show", help="Print a node's catalog entry + introspection."
+        "show",
+        help="Print a node's catalog entry + introspection.",
+        parents=[fmt_parent],
     )
     show.add_argument("ref", help="Catalog ref (e.g. acme/nodes/echo).")
 

@@ -35,7 +35,13 @@ class EnvelopeStatus:
 _STATUS = EnvelopeStatus()
 
 
-def render(
+# PLR0913 acknowledged: the envelope schema (master spec §14.3) is
+# {command, status, data, errors, warnings} — five fields plus the
+# ``fmt`` discriminator and the ``text_body`` carve-out for callers
+# that want a pre-rendered text payload when ``fmt="text"``. Each
+# kwarg is part of the contract; collapsing behind a dataclass would
+# only shuffle the arity.
+def render(  # noqa: PLR0913
     *,
     command: str,
     fmt: str = "text",
@@ -158,7 +164,11 @@ def _public_attrs(exc: BaseException) -> dict[str, Any]:
             continue
         try:
             value = getattr(exc, name)
-        except Exception:  # noqa: BLE001 — defensive
+        except Exception:  # noqa: BLE001, S112 — defensive
+            # ``getattr`` can raise from descriptor side-effects on
+            # exotic exception subclasses (property fget that errors,
+            # __getattr__ that lazy-imports, etc.). Logging would be
+            # noise — the field is simply absent from ``attrs``.
             continue
         if callable(value):
             continue

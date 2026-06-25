@@ -141,6 +141,109 @@ class TestList:
 
 
 # ---------------------------------------------------------------------------
+# AC 6.7 — --format accepted at group OR subcommand level
+# ---------------------------------------------------------------------------
+
+
+class TestFormatPlacement:
+    """AC 6.7 — ``--format`` is honored at BOTH the group level
+    (``workflows --format json list``) AND the subcommand level
+    (``workflows list --format json``)."""
+
+    def _workspace_with_one_workflow(self, tmp_path: Path) -> Path:
+        ws = _make_workspace(tmp_path)
+        _write_workflow_bundle(
+            ws,
+            "demo",
+            {
+                "nodes": {
+                    "h": {"type": "kolsch/nodes/bash", "command": "echo"}
+                },
+                "graph": {"edges": []},
+            },
+        )
+        return ws
+
+    def test_format_at_subcommand_level_workflows(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        ws = self._workspace_with_one_workflow(tmp_path)
+        rc, out, _ = _run_cli(
+            [
+                "--root",
+                str(ws),
+                "workflows",
+                "list",
+                "--format",
+                "json",
+            ],
+            capsys=capsys,
+        )
+        assert rc == 0
+        envelope = json.loads(out)
+        assert envelope["command"] == "workflows list"
+        assert envelope["status"] == "ok"
+
+    def test_format_at_group_level_workflows(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        ws = self._workspace_with_one_workflow(tmp_path)
+        rc, out, _ = _run_cli(
+            [
+                "--root",
+                str(ws),
+                "workflows",
+                "--format",
+                "json",
+                "list",
+            ],
+            capsys=capsys,
+        )
+        assert rc == 0
+        envelope = json.loads(out)
+        assert envelope["command"] == "workflows list"
+        assert envelope["status"] == "ok"
+
+    def test_format_at_subcommand_level_nodes(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        ws = _make_workspace(tmp_path)
+        rc, out, _ = _run_cli(
+            ["--root", str(ws), "nodes", "list", "--format", "json"],
+            capsys=capsys,
+        )
+        assert rc == 0
+        envelope = json.loads(out)
+        assert envelope["command"] == "nodes list"
+        assert envelope["status"] == "ok"
+
+    def test_format_at_group_level_nodes(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        ws = _make_workspace(tmp_path)
+        rc, out, _ = _run_cli(
+            ["--root", str(ws), "nodes", "--format", "json", "list"],
+            capsys=capsys,
+        )
+        assert rc == 0
+        envelope = json.loads(out)
+        assert envelope["command"] == "nodes list"
+        assert envelope["status"] == "ok"
+
+    def test_format_default_is_text(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        """Neither placement → text default preserved."""
+        ws = self._workspace_with_one_workflow(tmp_path)
+        rc, out, _ = _run_cli(
+            ["--root", str(ws), "workflows", "list"], capsys=capsys
+        )
+        assert rc == 0
+        # Text output is tab-separated, not JSON.
+        assert not out.startswith("{")
+
+
+# ---------------------------------------------------------------------------
 # AC 6.2 — show
 # ---------------------------------------------------------------------------
 
