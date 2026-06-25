@@ -1,0 +1,25 @@
+# expected_error: WorkflowExtendsPolicyForbidden
+#
+# Round 6 S5 — ``policy:`` blocks are NOT mergeable across
+# ``extends:``. An extended workflow's ``policy:`` applies only when
+# invoked DIRECTLY; extenders that try to inherit it raise this
+# hard error at validation time. Shared policy patterns belong in
+# ``bundle.yaml`` / ``platform.yaml``, not workflow YAMLs.
+#
+# Implementation: the target ``acme/workflows/extends-policy-target``
+# is registered into the seed catalog by ``workflows_test.py``; its
+# YAML lives at ``_targets/extends-policy-target.yaml`` and declares
+# a non-empty ``policy:`` block. The validator's
+# ``_check_extends_policy`` walks ``workflow.extends``, parses the
+# extended file, and raises this error when it finds policy rules.
+description: "Child workflow that tries to inherit a parent's policy."
+
+extends:
+  - acme/workflows/extends-policy-target
+
+nodes:
+  greet:
+    type: kolsch/nodes/noop
+
+graph:
+  edges: []

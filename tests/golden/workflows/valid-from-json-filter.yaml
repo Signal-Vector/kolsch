@@ -1,0 +1,34 @@
+# expected: valid
+#
+# Round 7 CV1 — end-to-end smoke for the core ``from_json`` Jinja
+# filter (registered in ``src/workflows/jinja_env.py`` via
+# ``_register_builtin_filters`` per Step 1 AC 1.22).
+#
+# The upstream ``fetch`` node emits a JSON document on stdout; the
+# downstream ``consume`` node references it via
+# ``{{ nodes.fetch.stdout | from_json }}`` in a Jinja-evaluated
+# ``command:`` field. The validator's AST walk extracts the
+# ``nodes.fetch.stdout`` reference, sees it's in ``consume``'s
+# predecessor closure, and accepts. The filter's ACTUAL evaluation
+# (returning a native dict) lives in the Phase 3.1 executor — but
+# the filter must be registered at the singleton TODAY so author
+# YAMLs that use it parse + validate cleanly.
+#
+# Companion test: ``tests/security/test_jinja_sandbox_escape.py``
+# (Step 1) exercises the filter at the ``JINJA_ENV`` singleton level.
+description: "Smoke for the from_json Jinja filter."
+
+nodes:
+  fetch:
+    type: kolsch/nodes/bash
+    command: 'echo ''{"first_name":"Ada"}'''
+    description: "emit a small JSON document"
+  consume:
+    type: kolsch/nodes/bash
+    command: "echo {{ (nodes.fetch.stdout | from_json).first_name }}"
+    description: "consume the parsed value"
+
+graph:
+  edges:
+    - from: fetch
+      to: consume

@@ -1,0 +1,16 @@
+# Target of ``invalid-extends-policy-forbidden.yaml``. NOT a fixture
+# itself (lives under ``_targets/`` so the test driver's ``*.yaml``
+# top-level glob skips it). Registered into the seed catalog at the
+# ref ``acme/workflows/extends-policy-target`` so the validator's
+# ``_check_extends_policy`` can resolve it via the catalog and parse
+# the file off disk.
+description: "Library workflow with a non-empty policy block."
+
+policy:
+  - what: kolsch/tools/bash
+    pattern: "*"
+    effect: allow
+
+nodes:
+  base:
+    type: kolsch/nodes/noop

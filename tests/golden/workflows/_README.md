@@ -56,3 +56,37 @@ anything.
 - `workflows.NodeContext.for_test(**overrides)` is the canonical entry
   point for tests that construct a :class:`workflows.NodeContext`
   (Round 7 A7-1).
+
+## The `_targets/` subdirectory
+
+Some fixtures need a sibling on-disk YAML that the validator parses
+through the catalog (the test driver registers the path into the
+seed catalog). Those targets live under `_targets/` so the
+discovery glob `FIXTURE_DIR.glob("*.yaml")` (non-recursive) skips
+them. Today this houses:
+
+- `_targets/extends-policy-target.yaml` — the parent that
+  `invalid-extends-policy-forbidden.yaml` extends. Declares a
+  non-empty `policy:` block so the validator's
+  `_check_extends_policy` walk can raise on it.
+
+## Coverage notes — classes covered elsewhere
+
+Step 7 AC 7.2 wants every `WorkflowValidationError` subclass to have
+a `*.yaml` fixture. A handful of classes either don't fire from a
+pure-YAML validator pass (their trigger surface lives in catalog
+scan, runtime execution, or Phase 3.1 resolvers) or are covered by
+dedicated Python tests outside the golden suite:
+
+| Class | Coverage location | Why not a YAML fixture |
+| --- | --- | --- |
+| `WorkflowBuiltinShadowed` | `tests/component/test_workflow_catalog.py` | Fires at `AssetCatalog.scan()` time (Step 3), not during workflow YAML validation. |
+| `WorkflowJinjaSecurityError` | `tests/security/test_jinja_sandbox_escape.py` | Fires at Jinja **render** time. The validator only parses the AST; the sandbox doesn't engage until the Phase 3.1 executor renders values. |
+| `WorkflowBindTypeMismatch` | (Phase 3.1) | Runtime-only — fires when a rendered bind value fails the receiver's Pydantic strict check at node-fire time. |
+| `WorkflowExtendsCycle` / `WorkflowExtendsDepthExceeded` / `WorkflowExtendsUnresolved` | (Phase 3.1) | The extends resolver lives in the Phase 3.1 engine; Phase 3.0's `_check_extends_policy` covers only the policy-shadowing case. |
+| `WorkflowCallCycle` | (Phase 3.1) | Sub-workflow call-graph cycle detection lives in the engine. |
+| `WorkflowNodeImportFailed` / `WorkflowNodeMissingRun` / `WorkflowNodeNotDecorated` / `WorkflowNodeSignatureInvalid` / `WorkflowNodeReturnTypeInvalid` | `tests/component/test_workflow_validator.py::TestCatalogNodeDefIntrospection` | These §7.6 classes need an authored `.py` file alongside the YAML; the Python tests construct fixtures inline via `tmp_path`. |
+| `WorkflowAmbiguousStart` / `WorkflowNoStartNode` / `WorkflowDuplicateNode` / `WorkflowDuplicateEdge` / `WorkflowMapperWorkerMissingField` | (Phase 3.1) | The Phase 3.0 validator gates the structural checks it implements today (DAG via reachability, bind-key collision, branch arms, etc.); these specific shapes weren't required to ship at v1. Pydantic dict-key uniqueness covers a chunk of `WorkflowDuplicateNode` automatically. |
+
+When any of the above classes graduate to a YAML fixture, add a row
+to the table above and remove it from the deferred set.

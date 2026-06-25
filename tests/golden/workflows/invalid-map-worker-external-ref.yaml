@@ -1,0 +1,35 @@
+# expected_error: WorkflowMapperWorkerNotAddressable
+#
+# Master spec §7.2 — a node OUTSIDE a ``map`` cannot reference one of
+# the map's workers via ``nodes.<worker>.<field>``. Workers live
+# inside the map's parallel-fan-out and have no externally-visible
+# identity in the engine graph; only the map node itself is
+# addressable.
+#
+# Here, ``downstream`` reaches into the map's worker ``shaper`` via a
+# Jinja expression in its ``command:``. The validator's
+# ``_check_jinja_refs`` walks the AST, sees that ``shaper`` is in
+# ``map_apply_targets``, and that ``downstream`` is NOT inside the
+# same map — raising the hard error.
+description: "External Jinja ref into a map worker."
+
+nodes:
+  m:
+    type: kolsch/nodes/map
+    over: "{{ [1, 2, 3] }}"
+    apply: shaper
+    item_as: x
+  shaper:
+    type: kolsch/nodes/bash
+    command: "echo {{ x }}"
+    description: "worker invoked by m"
+  downstream:
+    type: kolsch/nodes/bash
+    # External ref into the map's worker — illegal.
+    command: "echo {{ nodes.shaper.stdout }}"
+    description: "outside-the-map consumer (illegal)"
+
+graph:
+  edges:
+    - from: m
+      to: downstream

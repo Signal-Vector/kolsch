@@ -101,6 +101,17 @@ def _seed_catalog() -> AssetCatalog:
         path="",  # virtual marker so _check_catalog_node_defs skips import
         metadata={"builtin": True},
     )
+    # ``invalid-extends-policy-forbidden.yaml`` extends this target —
+    # register the on-disk path so ``_check_extends_policy`` can parse
+    # the actual policy: block and raise WorkflowExtendsPolicyForbidden.
+    extends_target = FIXTURE_DIR / "_targets" / "extends-policy-target.yaml"
+    cat.assets["acme/workflows/extends-policy-target"] = AssetEntry(
+        ref="acme/workflows/extends-policy-target",
+        asset_type="workflow",
+        bundle="acme",
+        path=str(extends_target),
+        metadata={},
+    )
     return cat
 
 
