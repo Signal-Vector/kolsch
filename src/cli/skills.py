@@ -29,6 +29,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
 from _yamlio import dump, load
+from assets.refs import build_ref
 from assets.skill_metadata import parse_skill_frontmatter
 from errors import AssetsNotFound, WorkspaceNotInitialized
 from platform_runtime import bootstrap_runtime
@@ -1616,14 +1617,19 @@ def _get_catalog_entry_sync(am: AssetManagement, ref: str) -> AssetEntry:
     Raises :class:`AssetsNotFound` on a miss.
     """
     # _catalog access is intentional — the public list/get APIs would
-    # work equally well; this avoids the async hop.
+    # work equally well; this avoids the async hop. All catalog reads
+    # below route through the Round 5 H3 chokepoint
+    # ``AssetCatalog.lookup`` so this resolver stays disciplined
+    # alongside the rest of the codebase; only the 1-seg fallback
+    # iterates entries (no ref to look up — it's a whole-catalog
+    # scan by trailing name).
     catalog = am._catalog  # noqa: SLF001 — read-only catalog access
     if catalog is None:
         msg = "AssetManagement not initialized"
         raise RuntimeError(msg)
     # Direct lookup — handles legacy 3-segment refs that match a
     # catalog key verbatim.
-    entry = catalog.assets.get(ref)
+    entry = catalog.lookup(ref)
     if entry is not None:
         return entry
     # Fallback for 2-segment <bundle>/<name> or 1-segment <name>.
@@ -1634,8 +1640,8 @@ def _get_catalog_entry_sync(am: AssetManagement, ref: str) -> AssetEntry:
     parts = ref.split("/")
     if len(parts) == 2:
         bundle, name = parts
-        for plural in ("tools", "skills", "agents", "prompts"):
-            candidate = catalog.assets.get(f"{bundle}/{plural}/{name}")
+        for asset_type in ("tool", "skill", "agent", "prompt"):
+            candidate = catalog.lookup(build_ref(bundle, asset_type, name))
             if candidate is not None:
                 return candidate
     elif len(parts) == 1:
