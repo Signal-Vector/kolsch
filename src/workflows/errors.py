@@ -34,6 +34,7 @@ from typing import Any, ClassVar
 
 __all__ = [
     "NodeTimeoutExceeded",
+    "NodeTypeNotImplemented",
     "WorkflowAmbiguousStart",
     "WorkflowBindCollision",
     "WorkflowBindTypeMismatch",
@@ -1322,6 +1323,46 @@ class NodeTimeoutExceeded(WorkflowRuntimeError):
                 problem=(
                     f"node {node!r} (invocation {invocation_id!r}) exceeded "
                     f"its {limit}s timeout"
+                ),
+            )
+        )
+
+
+class NodeTypeNotImplemented(WorkflowRuntimeError):
+    """Phase 3.1 Step 1 — dispatch hit a node type whose runtime
+    ships in a later sub-phase.
+
+    The Phase 3.1 executor only implements three runtime node types
+    (``bash``, ``noop``, authored Python ``@node``). Every other
+    built-in dispatch goes through :class:`workflows.executor.RunnerRegistry`
+    which raises this exception with the phase number that ships the
+    runner (per ``process/phase3.x-roadmap.md`` §18.2). The
+    ``caller_message`` names the phase explicitly so end users can
+    tell whether to wait or pursue a workaround.
+    """
+
+    caller_message: ClassVar[str] = (
+        "This kind of workflow step is not yet implemented. "
+        "Check the docs for the phase that ships it, or contact your engineer."
+    )
+    identifying_names_keys: ClassVar[tuple[str, ...]] = (
+        "node",
+        "type_ref",
+        "phase",
+    )
+
+    def __init__(
+        self, *, node: str, type_ref: str, phase: str
+    ) -> None:
+        self.node = node
+        self.type_ref = type_ref
+        self.phase = phase
+        super().__init__(
+            _runtime_str(
+                self,
+                problem=(
+                    f"node {node!r} uses type {type_ref!r} whose runtime "
+                    f"ships in Phase {phase}"
                 ),
             )
         )

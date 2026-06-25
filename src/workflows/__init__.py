@@ -19,6 +19,7 @@ from workflows.context import NodeContext
 from workflows.decorator import NodeDefinition, get_node_definition, node
 from workflows.errors import (
     NodeTimeoutExceeded,
+    NodeTypeNotImplemented,
     WorkflowAmbiguousStart,
     WorkflowBindCollision,
     WorkflowBindTypeMismatch,
@@ -116,6 +117,7 @@ __all__: list[str] = [
     "NodeContext",
     "NodeDefinition",
     "NodeTimeoutExceeded",
+    "NodeTypeNotImplemented",
     "ToolCallId",
     "TraceId",
     "ValidationResult",

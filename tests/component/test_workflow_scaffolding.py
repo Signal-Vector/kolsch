@@ -542,6 +542,7 @@ def test_workflows_all_parity_with_module_namespace() -> None:
         "context",
         "decorator",
         "errors",
+        "executor",
         "ids",
         "jinja_env",
         "labels",

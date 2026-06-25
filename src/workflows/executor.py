@@ -1,0 +1,580 @@
+"""Sequential iterative executor — Phase 3.1 Step 1 (skeleton).
+
+Master spec §8.1 §8.2.1 §8.3 + the Phase 3.1 build doc Step 1
+prompt. Implements the algorithm and the framing events; defers
+real node dispatch to Step 2 (built-in ``bash``/``noop``) + Step 3
+(authored Python ``@node``). Cancel-flag polling lands in Step 4;
+per-run ``sys.modules`` cleanup lands in Step 3. The TODOs at the
+relevant call sites mark the seam.
+
+Public surface:
+
+- :class:`NodeRunner` — Protocol every runner satisfies.
+- :class:`RunnerRegistry` — maps a node ``type:`` ref to its runner;
+  unmapped built-ins raise :class:`NodeTypeNotImplemented` carrying
+  the phase number that ships them.
+- :class:`IterativeExecutor` — the algorithm itself; consumes the
+  typed :class:`Workflow` directly (never touches raw YAML).
+
+NO recursion. The worklist is iterative; sub-workflow nesting (Phase
+3.7) reuses the same iterative shape per-child.
+"""
+
+from __future__ import annotations
+
+import logging
+import uuid
+from collections import deque
+from collections.abc import Mapping
+from typing import TYPE_CHECKING, Any, Protocol
+
+from assets.refs import is_three_segment, parse_three_segment
+from workflows.catalog_node import BUILTIN_TYPE_NAMES
+from workflows.context import NodeContext
+from workflows.errors import NodeTypeNotImplemented
+from workflows.ids import InvocationId
+from workflows.jinja_env import JINJA_ENV
+from workflows.run import WorkflowRunStatus
+
+if TYPE_CHECKING:
+    from assets.catalog import AssetCatalog
+    from workflows.parser import EdgeDef, Workflow
+    from workflows.run import WorkflowRun
+    from workflows.run_store import WorkflowRunStore
+
+__all__ = [
+    "BUILTIN_PHASE_MAP",
+    "IterativeExecutor",
+    "NodeRunner",
+    "RunnerRegistry",
+]
+
+
+# ---------------------------------------------------------------------------
+# Built-in name → phase mapping (per process/phase3.x-roadmap.md §18.2).
+# Phase 3.1 (this phase) implements bash + noop; everything else defers
+# to a later sub-phase. The map drives RunnerRegistry's
+# NodeTypeNotImplemented payload so the error message names the phase
+# that ships the runner.
+# ---------------------------------------------------------------------------
+
+
+BUILTIN_PHASE_MAP: Mapping[str, str] = {
+    "bash": "3.1",
+    "noop": "3.1",
+    "agent": "3.2",
+    "branch": "3.3",
+    "filter": "3.6",
+    "compute": "3.6",
+    "user_input": "3.4",
+    "read_file": "3.5",
+    "write_file": "3.5",
+    "list_files": "3.5",
+    "set_state": "3.5",
+    "delete_state": "3.5",
+    "map": "3.7",
+    "workflow": "3.7",
+}
+
+
+# ---------------------------------------------------------------------------
+# NodeRunner protocol + RunnerRegistry.
+# ---------------------------------------------------------------------------
+
+
+class NodeRunner(Protocol):
+    """The contract every node-type runner satisfies.
+
+    The executor invokes :meth:`run` per node invocation. Runners
+    return the node's captured output as a dict; the executor wraps
+    it in the ``workflow.node.completed`` event payload and stores
+    it under ``captured[node_name]`` for downstream Jinja references.
+    """
+
+    async def run(
+        self,
+        *,
+        node_name: str,
+        node_def: Any,  # noqa: ANN401 — NodeDefUnion is a Pydantic alias
+        bound_inputs: dict[str, Any],
+        state: dict[str, Any],
+        ctx: NodeContext,
+    ) -> dict[str, Any]:
+        ...
+
+
+class RunnerRegistry:
+    """Maps a node ``type:`` ref to its :class:`NodeRunner`.
+
+    Phase 3.1 Step 1 ships the SKELETON — Steps 2 + 3 register
+    ``bash``/``noop`` + the catalog-node runner. Unregistered
+    built-ins (every other 14 reserved slot) raise
+    :class:`NodeTypeNotImplemented` carrying the phase that ships
+    the runner (per :data:`BUILTIN_PHASE_MAP`).
+
+    Authored-Python node refs (any non-``kolsch/nodes/`` 3-seg ref)
+    that have no explicit registration also raise — the
+    catalog-node runner (Step 3) installs as a generic fallback for
+    those.
+    """
+
+    def __init__(self) -> None:
+        self._runners: dict[str, NodeRunner] = {}
+
+    def register(self, type_ref: str, runner: NodeRunner) -> None:
+        """Register a runner for a 3-segment ``type:`` ref."""
+        self._runners[type_ref] = runner
+
+    def get(self, type_ref: str, *, node_name: str) -> NodeRunner:
+        """Return the runner; raise :class:`NodeTypeNotImplemented`
+        when no runner is mapped.
+
+        ``node_name`` is the workflow's per-invocation node name —
+        woven into the raised exception so the failure event names
+        the offending node, not just the type ref.
+        """
+        runner = self._runners.get(type_ref)
+        if runner is not None:
+            return runner
+        phase = _phase_for_type_ref(type_ref)
+        raise NodeTypeNotImplemented(
+            node=node_name, type_ref=type_ref, phase=phase
+        )
+
+
+def _phase_for_type_ref(type_ref: str) -> str:
+    """Best-effort phase lookup for the failure message.
+
+    Built-in reserved slots get their phase from :data:`BUILTIN_PHASE_MAP`.
+    Authored Python nodes (any other 3-seg ref) fall through to
+    ``"3.1"`` — the Step 3 catalog-node runner is what's missing
+    when those refs reach the registry without a default fallback.
+    """
+    if is_three_segment(type_ref):
+        bundle, segment, name = parse_three_segment(type_ref)
+        if bundle == "kolsch" and segment == "nodes" and name in BUILTIN_TYPE_NAMES:
+            return BUILTIN_PHASE_MAP.get(name, "3.x")
+    return "3.1"
+
+
+# ---------------------------------------------------------------------------
+# IterativeExecutor.
+# ---------------------------------------------------------------------------
+
+
+class IterativeExecutor:
+    """Sequential worklist-based executor.
+
+    Construction is cheap — the executor records its dependencies and
+    waits for :meth:`run` to be invoked. The algorithm is the SEVEN
+    steps from master spec §8.1, but Phase 3.1 Step 1 only ships
+    framing events + the worklist; real node dispatch lives in
+    Steps 2 + 3, cancel polling in Step 4, full event-emission
+    contract (caller_chain / trace_id propagation / policy.decision.made)
+    in Step 5.
+
+    The constructor takes the registry explicitly so tests can
+    inject fake runners without monkey-patching a module-level
+    default.
+    """
+
+    def __init__(
+        self,
+        *,
+        workflow: Workflow,
+        run: WorkflowRun,
+        store: WorkflowRunStore,
+        registry: RunnerRegistry,
+        catalog: AssetCatalog,
+    ) -> None:
+        self._workflow = workflow
+        self._run = run
+        self._store = store
+        self._registry = registry
+        self._catalog = catalog
+        # Captured outputs keyed by node name — written under each node
+        # invocation's ``workflow.node.completed`` event, read by
+        # downstream Jinja ``{{ nodes.<X>.<Y> }}`` references.
+        self._captured: dict[str, dict[str, Any]] = {}
+        # State dict — initialised from the run's inputs in :meth:`run`.
+        self._state: dict[str, Any] = {}
+        # Bookkeeping for "completion" per AND-strict rule 1 (skip
+        # counts as completion). Used by the worklist to know when a
+        # downstream node's predecessors have all reached a terminal
+        # decision.
+        self._completed_or_skipped: set[str] = set()
+
+    # ------------------------------------------------------------------
+    # Public entry point.
+    # ------------------------------------------------------------------
+
+    async def run(self) -> WorkflowRunStatus:
+        """Walk the worklist; return the terminal status.
+
+        Per master spec §8.1, this is the seven-step algorithm. The
+        Phase 3.1 Step 1 implementation emits framing events,
+        evaluates ``when:`` gates, renders ``binds:`` per Round 6
+        J5/β, dispatches via the registry, and captures outputs.
+        Failures bubble out as terminal ``workflow.run.failed``.
+        """
+        # TODO(step-4): write `os.getpid()` to RunDirectory.pid_path here.
+        # TODO(step-3): snapshot sys.modules; cleanup in the ``finally``.
+
+        run_id = self._run.run_id
+        # Step 1 of the algorithm — run-start gate. The Phase 3.0
+        # validator is the gate; the executor never enters the
+        # worklist with an invalid workflow.
+        from workflows.validator import validate_workflow_or_raise  # noqa: PLC0415
+
+        validate_workflow_or_raise(
+            self._workflow, self._catalog, file=self._run.workflow_ref
+        )
+
+        # Step 2 — initialise the state dict from workflow inputs.
+        self._state = dict(self._run.inputs)
+
+        # Step 3 — compute the topological worklist + per-node
+        # predecessor closure (graph reachability).
+        topo, predecessors = self._compute_topology()
+
+        # Emit ``workflow.run.started``.
+        self._store.append_event(
+            run_id,
+            {
+                "kind": "workflow.run.started",
+                "payload": {
+                    "workflow_ref": self._workflow_ref(),
+                    "inputs": dict(self._run.inputs),
+                    "trace_id": str(self._run.trace_id),
+                },
+            },
+        )
+
+        terminal_status: WorkflowRunStatus
+        try:
+            # Step 4 — walk the worklist; each node either dispatches,
+            # is skipped via ``when: false``, or fails.
+            for node_name in topo:
+                # Skip downstream nodes whose predecessors didn't all
+                # reach a "completed or skipped" decision. The
+                # validated DAG guarantees topo order respects the
+                # predecessor relation, so a False here means a
+                # short-circuit fired earlier in the walk.
+                if not predecessors[node_name].issubset(
+                    self._completed_or_skipped
+                ):
+                    # No way for the node to fire — mark it skipped so
+                    # downstream consumers also defer cleanly.
+                    self._completed_or_skipped.add(node_name)
+                    continue
+
+                node_def = self._workflow.nodes[node_name]
+                # ``when:`` gate — Round 6 J5/β: a string with ``{{``
+                # is Jinja; everything else (including bare booleans)
+                # passes through literally.
+                if not self._when_holds(node_def):
+                    # AND-strict rule 1: skip counts as completion.
+                    self._completed_or_skipped.add(node_name)
+                    continue
+
+                # Render this node's bound inputs from inbound edges.
+                bound_inputs = self._render_bound_inputs(node_name)
+
+                # Mint a fresh invocation id; emit ``workflow.node.started``.
+                inv_id = InvocationId(f"inv_{uuid.uuid4()}")
+                self._store.append_event(
+                    run_id,
+                    {
+                        "kind": "workflow.node.started",
+                        "payload": {
+                            "node_name": node_name,
+                            "invocation_id": str(inv_id),
+                            "type": _node_type_ref(node_def),
+                            "inputs": bound_inputs,
+                        },
+                    },
+                )
+
+                ctx = self._build_ctx(inv_id=inv_id, node_def=node_def)
+                try:
+                    output = await self._registry.get(
+                        _node_type_ref(node_def), node_name=node_name
+                    ).run(
+                        node_name=node_name,
+                        node_def=node_def,
+                        bound_inputs=bound_inputs,
+                        state=self._state,
+                        ctx=ctx,
+                    )
+                except Exception as exc:  # noqa: BLE001 — record + abort
+                    self._store.append_event(
+                        run_id,
+                        {
+                            "kind": "workflow.node.failed",
+                            "payload": {
+                                "node_name": node_name,
+                                "invocation_id": str(inv_id),
+                                "error_class": type(exc).__name__,
+                                "message": str(exc),
+                            },
+                        },
+                    )
+                    self._store.append_event(
+                        run_id,
+                        {
+                            "kind": "workflow.run.failed",
+                            "payload": {
+                                "reason": (
+                                    f"node {node_name!r} raised "
+                                    f"{type(exc).__name__}"
+                                ),
+                            },
+                        },
+                    )
+                    return WorkflowRunStatus.FAILED
+
+                # Successful invocation — capture, mark complete.
+                self._captured[node_name] = dict(output)
+                self._completed_or_skipped.add(node_name)
+                self._store.append_event(
+                    run_id,
+                    {
+                        "kind": "workflow.node.completed",
+                        "payload": {
+                            "node_name": node_name,
+                            "invocation_id": str(inv_id),
+                            "output": dict(output),
+                        },
+                    },
+                )
+
+                # TODO(step-4): poll RunDirectory.cancel_flag_path here at the
+                # node boundary; on detection, emit ``workflow.run.aborted``
+                # and return WorkflowRunStatus.ABORTED.
+
+            # Step 5 — assemble terminal-keyed outputs.
+            outputs = self._assemble_terminal_outputs(topo)
+            self._store.append_event(
+                run_id,
+                {
+                    "kind": "workflow.run.completed",
+                    "payload": {"outputs": outputs},
+                },
+            )
+            terminal_status = WorkflowRunStatus.SUCCEEDED
+        finally:
+            # TODO(step-3): cleanup_bundle_imports here.
+            pass
+        return terminal_status
+
+    # ------------------------------------------------------------------
+    # Topology + predecessor closure.
+    # ------------------------------------------------------------------
+
+    def _compute_topology(self) -> tuple[list[str], dict[str, set[str]]]:
+        """Kahn's algorithm + predecessor BFS.
+
+        Returns ``(topo_order, predecessors)``. The DAG invariant was
+        validated upstream by Step 5's validator, so the Kahn walk
+        never stalls on a cycle.
+        """
+        node_names = list(self._workflow.nodes)
+        graph_edges: list[EdgeDef] = (
+            list(self._workflow.graph.edges)
+            if self._workflow.graph is not None
+            else []
+        )
+
+        incoming: dict[str, list[str]] = {n: [] for n in node_names}
+        outgoing: dict[str, list[str]] = {n: [] for n in node_names}
+        for edge in graph_edges:
+            if edge.from_ in incoming and edge.to in incoming:
+                incoming[edge.to].append(edge.from_)
+                outgoing[edge.from_].append(edge.to)
+
+        in_degree = {n: len(incoming[n]) for n in node_names}
+        queue: deque[str] = deque(
+            n for n in node_names if in_degree[n] == 0
+        )
+        topo: list[str] = []
+        while queue:
+            current = queue.popleft()
+            topo.append(current)
+            for nxt in outgoing[current]:
+                in_degree[nxt] -= 1
+                if in_degree[nxt] == 0:
+                    queue.append(nxt)
+
+        # Predecessor closure: BFS back from each node along inbound
+        # edges.
+        predecessors: dict[str, set[str]] = {}
+        for node_name in node_names:
+            seen: set[str] = set()
+            walk = list(incoming[node_name])
+            while walk:
+                src = walk.pop()
+                if src in seen:
+                    continue
+                seen.add(src)
+                walk.extend(incoming[src])
+            predecessors[node_name] = seen
+        return topo, predecessors
+
+    # ------------------------------------------------------------------
+    # `when:` gate evaluation.
+    # ------------------------------------------------------------------
+
+    def _when_holds(self, node_def: Any) -> bool:  # noqa: ANN401
+        """Evaluate the node-level ``when:`` modifier.
+
+        Per Round 6 J5/β: ``None`` → no gate (always fires). A bare
+        YAML literal evaluates as Python truthiness. A Jinja-marked
+        string is rendered against the current capture + state +
+        inputs scope; the rendered value's truthiness is the gate.
+        """
+        when_value = getattr(node_def, "when", None)
+        if when_value is None:
+            return True
+        if _is_jinja_marked(when_value):
+            rendered = self._render_jinja(when_value)
+            return bool(rendered)
+        return bool(when_value)
+
+    # ------------------------------------------------------------------
+    # binds: rendering.
+    # ------------------------------------------------------------------
+
+    def _render_bound_inputs(self, node_name: str) -> dict[str, Any]:
+        """Merge every inbound edge's rendered ``binds:`` into one dict.
+
+        The validator's :class:`WorkflowBindCollision` check
+        guarantees no two inbound edges share a bind key, so the
+        merge is conflict-free.
+        """
+        bound: dict[str, Any] = {}
+        if self._workflow.graph is None:
+            return bound
+        for edge in self._workflow.graph.edges:
+            if edge.to != node_name:
+                continue
+            for key, value in edge.binds.items():
+                bound[key] = (
+                    self._render_jinja(value)
+                    if _is_jinja_marked(value)
+                    else value
+                )
+        return bound
+
+    def _render_jinja(self, expression: str) -> Any:  # noqa: ANN401
+        """Render a Jinja-marked string under :data:`JINJA_ENV`.
+
+        The scope exposes ``nodes`` (captured outputs), ``state``
+        (mutable workflow state), and ``inputs`` (workflow inputs)
+        per master spec §8.3 + §6.4.
+        """
+        template = JINJA_ENV.from_string(expression)
+        return template.render(
+            nodes=self._captured,
+            state=self._state,
+            inputs=dict(self._run.inputs),
+        )
+
+    # ------------------------------------------------------------------
+    # NodeContext factory.
+    # ------------------------------------------------------------------
+
+    def _build_ctx(
+        self, *, inv_id: InvocationId, node_def: Any  # noqa: ANN401
+    ) -> NodeContext:
+        """Mint a per-invocation :class:`NodeContext`.
+
+        Phase 3.1 Step 1 plumbs the bare minimum: workflow_run_id +
+        invocation_id + workspace_root + state + bundle (resolved
+        from the node's ``type:`` ref). Step 5 wires the real
+        ``emit_fn`` against the JSONL append surface; Step 1 gives
+        runners a no-op so framing tests don't need to mock the
+        emission path.
+        """
+        type_ref = _node_type_ref(node_def)
+        bundle = (
+            parse_three_segment(type_ref)[0]
+            if is_three_segment(type_ref)
+            else "kolsch"
+        )
+        run_id = self._run.run_id
+
+        def _emit_fn(
+            bundle_: str,
+            subkind: str,
+            payload: Mapping[str, Any],
+        ) -> None:
+            # Author-emitted node events land here in Step 5. At Step 1
+            # we record nothing — the framing-event tests don't depend
+            # on author emissions and avoiding a write here keeps the
+            # runner's NodeContext free of side effects.
+            _ = (bundle_, subkind, payload)
+
+        return NodeContext(
+            workflow_run_id=str(run_id),
+            invocation_id=str(inv_id),
+            workspace_root=self._store.runs_root.parent,
+            log=logging.getLogger(f"workflows.{run_id}"),
+            secrets={},
+            state=self._state,
+            bundle=bundle,
+            emit_fn=_emit_fn,
+        )
+
+    # ------------------------------------------------------------------
+    # Helpers.
+    # ------------------------------------------------------------------
+
+    def _workflow_ref(self) -> str:
+        return self._run.workflow_ref
+
+    def _assemble_terminal_outputs(
+        self, topo: list[str]
+    ) -> dict[str, dict[str, Any] | None]:
+        """Master spec §6.6 — the workflow output is a dict keyed by
+        terminal node names. Terminals that DIDN'T fire (skipped or
+        unreachable on a branch that wasn't taken) contribute ``None``.
+        """
+        if self._workflow.graph is None:
+            # Node libraries have no graph; nothing to assemble.
+            return {n: self._captured.get(n) for n in topo}
+        outgoing: dict[str, list[str]] = {n: [] for n in topo}
+        for edge in self._workflow.graph.edges:
+            if edge.from_ in outgoing:
+                outgoing[edge.from_].append(edge.to)
+        return {
+            n: self._captured.get(n)
+            for n in topo
+            if not outgoing[n]
+        }
+
+
+# ---------------------------------------------------------------------------
+# Module-level helpers.
+# ---------------------------------------------------------------------------
+
+
+def _is_jinja_marked(value: Any) -> bool:  # noqa: ANN401
+    """Round 6 J5/β — Jinja iff string containing ``"{{"``."""
+    return isinstance(value, str) and "{{" in value
+
+
+def _node_type_ref(node_def: Any) -> str:  # noqa: ANN401
+    """Return the node's 3-seg ``type:`` ref.
+
+    The ``copy_of:`` shape carries no ``type:`` — Step 5 resolves it
+    by inheriting from the source node. Phase 3.1 Step 1 doesn't
+    materialise the inheritance yet, so a ``copy_of:`` node falls
+    through to the catalog-node generic case (Step 3 wires that).
+    """
+    type_value = getattr(node_def, "type", None)
+    if isinstance(type_value, str):
+        return type_value
+    # ``CopyOfNodeDef`` — defer to a synthetic ref the registry will
+    # report as "not implemented" until Step 5's copy_of resolution
+    # lands.
+    return "<copy_of>"
