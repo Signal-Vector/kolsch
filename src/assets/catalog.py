@@ -37,7 +37,9 @@ from errors import (
 _log = logging.getLogger("assets")
 
 _RESERVED_BUNDLE_NAMES: frozenset[str] = frozenset({"core"})
-_ASSET_TYPES: frozenset[str] = frozenset({"tool", "skill", "agent", "prompt"})
+_ASSET_TYPES: frozenset[str] = frozenset(
+    {"tool", "skill", "agent", "prompt", "workflow", "node"}
+)
 
 
 class AssetEntry(BaseModel):
@@ -194,17 +196,51 @@ def scan(root: Path) -> AssetCatalog:
         if len(refs) > 1:
             raise AssetsDuplicateName(bundle=bundle, name=name, refs=refs)
 
+    # --- Pass 5: register virtual kolsch/nodes/<name> built-in slots ---
+    _register_builtin_nodes(assets)
+
     return AssetCatalog(bundles=manifests, assets=assets)
 
 
+def _register_builtin_nodes(assets: dict[str, AssetEntry]) -> None:
+    """Phase 3.0 Step 3 — inject the 14 reserved
+    ``kolsch/nodes/<name>`` virtual built-in entries.
+
+    Registered unconditionally so :meth:`AssetCatalog.lookup` resolves
+    ``kolsch/nodes/bash`` uniformly with authored Python-node refs.
+    User-authored files at these slots already raised
+    :class:`workflows.errors.WorkflowBuiltinShadowed` inside
+    ``discover_nodes`` during Pass 4; reaching this point means there
+    are no on-disk collisions to deconflict.
+    """
+    from workflows.catalog import builtin_node_entries  # noqa: PLC0415
+
+    for entry in builtin_node_entries():
+        assets[entry.ref] = entry
+
+
 def _scan_bundle_assets(manifest: BundleManifest) -> list[AssetEntry]:
-    """Walk a bundle's four asset subdirectories and produce entries."""
+    """Walk a bundle's six asset subdirectories and produce entries.
+
+    Phase 3.0 Step 3 adds ``workflows/`` and ``nodes/`` via
+    :mod:`workflows.catalog`. Local import (PLC0415-disabled at
+    the call site) keeps the dependency one-way — the workflows
+    package depends on assets.catalog for the :class:`AssetEntry`
+    shape; the reverse edge would create an import cycle.
+    """
+    from workflows.catalog import (  # noqa: PLC0415
+        discover_nodes,
+        discover_workflows,
+    )
+
     bundle_dir = Path(manifest.path)
     entries: list[AssetEntry] = []
     entries.extend(_scan_tools(manifest.name, bundle_dir))
     entries.extend(_scan_skills(manifest.name, bundle_dir))
     entries.extend(_scan_agents(manifest.name, bundle_dir))
     entries.extend(_scan_prompts(manifest.name, bundle_dir))
+    entries.extend(discover_workflows(manifest))
+    entries.extend(discover_nodes(manifest))
     return entries
 
 

@@ -115,8 +115,13 @@ def test_scan_allows_different_names_in_same_bundle(tmp_path: Path) -> None:
         skills=["review"],
     )
     catalog = scan(tmp_path)
-    assert {a.bundle for a in catalog.assets.values()} == {"acme"}
-    assert {a.ref.rsplit("/", 1)[-1] for a in catalog.assets.values()} == {
+    # Phase 3.0 Step 3 — also drops the 14 virtual ``kolsch/nodes/<name>``
+    # built-in node entries into ``catalog.assets``. Filter on the
+    # ``builtin`` metadata marker so this test stays focused on the
+    # on-disk acme bundle.
+    on_disk = [a for a in catalog.assets.values() if not a.metadata.get("builtin")]
+    assert {a.bundle for a in on_disk} == {"acme"}
+    assert {a.ref.rsplit("/", 1)[-1] for a in on_disk} == {
         "helper",
         "bash",
         "review",

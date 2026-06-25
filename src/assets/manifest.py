@@ -45,6 +45,13 @@ class BundleManifest(BaseModel):
     required_env_vars: list[str] = Field(default_factory=list)
     dependencies: list[str] = Field(default_factory=list)
     permissions: list[PermissionRule] = Field(default_factory=list)
+    # Phase 3.0 Step 3 — auto-discovery opt-out list. Entries are
+    # paths relative to the bundle root (e.g. ``"nodes/draft_echo.py"``,
+    # ``"workflows/wip.yaml"``). Listed files are skipped during
+    # workflow/node discovery; tools / agents / skills scanners do not
+    # currently consult this list. Used for in-progress drafts,
+    # deprecated assets, or files reserved for tests.
+    exclude: list[str] = Field(default_factory=list)
     path: str
 
 

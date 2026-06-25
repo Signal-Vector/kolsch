@@ -170,7 +170,15 @@ async def test_catalog_build_registers_expected_assets(
     am = AssetManagement(root=platform_root)
     await am.initialize()
 
-    refs = {a.ref for a in am.list_assets()}
+    # Phase 3.0 Step 3 — the catalog also registers 14 virtual
+    # ``kolsch/nodes/<name>`` built-in node entries unconditionally.
+    # Filter them out so the assertion stays focused on the
+    # user-authored assets under test.
+    refs = {
+        a.ref
+        for a in am.list_assets()
+        if not a.metadata.get("builtin")
+    }
     assert refs == {
         "acme/tools/web_search",
         "acme/skills/literature-review",
