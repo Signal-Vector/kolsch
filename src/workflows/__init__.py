@@ -64,6 +64,14 @@ from workflows.errors import (
 from workflows.ids import InvocationId, ToolCallId, TraceId, WorkflowRunId
 from workflows.labels import display_label
 
+# Note: workflows.validator is NOT re-exported here — it depends on
+# workflows.parser which depends on providers.authz which depends on
+# workflows.errors. Importing the validator at package-init time would
+# cycle. Callers import directly:
+#
+#     from workflows.validator import validate_workflow, validate_workflow_or_raise
+#
+
 __all__: list[str] = [
     "InvocationId",
     # decorator + context
