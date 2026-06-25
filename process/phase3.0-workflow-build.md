@@ -1369,7 +1369,7 @@ Refactor `RuleBasedAuthorizationProvider.allow()` to take a single `layers: tupl
 4.4. Three-segment workflow refs (`<bundle>/workflows/<name>`) validate against catalog for asset_type="workflow" via `parse_three_segment` + `catalog.lookup`.
 4.5. Action `node.<name>` matches `<bundle>/nodes/<name>` refs via the action map (routed through `parse_three_segment`).
 4.6. Two-segment tool refs (`kolsch/bash`) continue to work unchanged.
-4.7. Three-segment tool refs (`<bundle>/tools/<name>`) are accepted (future-proofing).
+4.7. Three-segment tool refs (`<bundle>/tools/<name>`) are **accepted at compile time** (future-proofing): a rule with `what: kolsch/tools/bash` compiles cleanly against a catalog containing that tool. Functional firing on a `tool.<name>` action invocation continues to flow through the 2-seg `<bundle>/<name>` shim — the action map (`_build_action_to_tool_ref`) maps `tool.bash → kolsch/bash`, NOT `kolsch/tools/bash`. The 3-seg form lives in YAML for forward-compatibility; full functional 3-seg tool firing is queued at `process/qol-action-namespace-bundle-scoped.md` (alongside the bundle-scoped action namespace rename).
 4.8. PROMPT effect + modal callback continue to work for the new `workflow` layer (per master spec §13.3).
 4.9. **`Rule.from_` field**: `Rule(**{"what": "...", "from": "kolsch/agents/triage", "effect": "allow"})` parses (via alias); `rule.from_` is the string. Default `None`.
 4.10. **`caller_chain` kwarg**: `allow(..., caller_chain=("a/agents/x",))` accepted; default `()`.

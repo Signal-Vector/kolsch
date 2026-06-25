@@ -131,6 +131,16 @@ class AuthzEffect(StrEnum):
     PROMPT = "prompt"
 
 
+# Canonical segment counts for the two ref grammars in use today.
+# Three-segment ``<bundle>/<plural>/<name>`` is the new universal form
+# (Phase 3.0 R3 #5); two-segment ``<bundle>/<name>`` is the legacy
+# tool-ref migration shim (qol-prefix-defaults-and-unified-refs.md).
+# Named constants here so the segment-count checks read intent rather
+# than literal magic numbers (ruff PLR2004).
+_THREE_SEG_PARTS = 3
+_TWO_SEG_PARTS = 2
+
+
 def _build_action_to_tool_ref(catalog: AssetCatalog) -> dict[str, str]:
     """Build the ``action → tool_ref`` map used by the new-shape matcher.
 
@@ -404,7 +414,13 @@ class AuthorizationProvider(Protocol):
     unattended callers never hang.
     """
 
-    async def allow(
+    # PLR0913 acknowledged: this is the unified Phase 3.0 Step 4 surface
+    # — the per-layer kwargs that previously fanned out across multiple
+    # methods collapsed into ``layers`` / ``caller_chain`` here, and the
+    # Phase 2.0 ``target`` / ``callback`` kwargs are part of the same
+    # decision call. A dataclass-shaped request would only shuffle the
+    # argument count behind another constructor.
+    async def allow(  # noqa: PLR0913
         self,
         principal: str,
         action: str,
@@ -451,7 +467,12 @@ class _CompiledRule:
         "who_re",
     )
 
-    def __init__(
+    # PLR0913 — the compiled-rule shape carries every match input
+    # the matcher needs (effect, raw record, legacy/new-shape regex
+    # vs glob pieces, the optional from: caller-chain pattern). All
+    # fields are required for one or the other matcher path; pushing
+    # them behind a dataclass would only shuffle the arity.
+    def __init__(  # noqa: PLR0913
         self,
         effect: Literal["allow", "deny", "prompt"],
         raw: Rule,
@@ -693,7 +714,7 @@ class RuleBasedAuthorizationProvider:
         if from_value is None:
             return
         parts = from_value.split("/")
-        if len(parts) != 3 or not all(parts):
+        if len(parts) != _THREE_SEG_PARTS or not all(parts):
             raise WorkflowFromShapeError(
                 file="<config>", line=index, from_ref=from_value
             )
@@ -779,7 +800,7 @@ class RuleBasedAuthorizationProvider:
             # catalog. The 2-seg form is reserved for TOOLS only —
             # workflows / nodes / agents are 3-seg from day one.
             parts = what.split("/")
-            if len(parts) != 2 or not all(parts):
+            if len(parts) != _TWO_SEG_PARTS or not all(parts):
                 raise AuthzMalformedRule(
                     rule_index=index,
                     error=(
@@ -822,7 +843,9 @@ class RuleBasedAuthorizationProvider:
             candidates=candidates,
         )
 
-    async def allow(
+    # PLR0913 — see Protocol.allow above for the rationale; this
+    # implementation mirrors the unified surface.
+    async def allow(  # noqa: PLR0913
         self,
         principal: str,
         action: str,
@@ -939,7 +962,11 @@ class RuleBasedAuthorizationProvider:
             reason="no rule matched; default deny (who_chain=default)",
         )
 
-    async def _match_against_rules(
+    # PLR0913 — internal helper shared by every layer walk; carries
+    # the full match context (rule list, principal, action/target,
+    # callback, layer tag, caller_chain). Splitting would just move
+    # the parameters to an intermediate object.
+    async def _match_against_rules(  # noqa: PLR0913
         self,
         *,
         rules: list[_CompiledRule],
