@@ -10,7 +10,12 @@ Eleven phases of `kolsch-engine`. Each ships independently and carries an explic
 
 ## 18.2 Phases
 
-### 3.0 — Parser & validator (no execution)
+### 3.0 — Parser & validator (no execution) — ✅ Complete
+
+**Status:** Shipped on branch `fix/agent-id-derive-from-ref` across 7
+sequential commits (Step 0 → Step 7). Verification gate met: 41 YAML
+fixtures discovered + asserted by `tests/golden/workflows_test.py`;
+~1,600 tests passing across the suite.
 
 Spec: `process/phase3.0-workflow-build.md` (see also `process/phase3.0-workflow-spec.md` for the master Phase 3.0 workflow design).
 
@@ -22,9 +27,14 @@ Spec: `process/phase3.0-workflow-build.md` (see also `process/phase3.0-workflow-
 
 **Effort**: ~1-2 weeks.
 
-### 3.1 — Minimum executor (bash + authored Python + noop)
+### 3.1 — Minimum executor (bash + authored Python + noop) — 🟡 Next
 
-Spec: `process/phase3.1-minimum-executor-spec.md` (to be written).
+**Status:** Spec exists at `process/phase3.1-executor-spec.md`; the
+step-by-step build plan (`process/phase3.1-executor-build.md`,
+mirroring `phase3.0-workflow-build.md`'s shape) is NOT yet written.
+Step 0 of Phase 3.1 is to author that build plan.
+
+Spec: `process/phase3.1-executor-spec.md`.
 
 **Scope**: sequential executor (no modifiers, no branching, no condition gates). Walks the graph topologically and invokes nodes. Node types: `bash` (routing through existing `kolsch/bash` tool), `noop`, AND the catalog-ref dispatcher for authored Python nodes (`type: <bundle>/nodes/<name>` — full `@node` introspection + signature dispatch). Module-loading discipline (`sys.modules` cleanup filtered by `bundles/` prefix). Iterative graph traversal (no Python recursion). The `kolsch-engine.LocalController` per-host coordination concerns (PID tracking, `cancel.flag` poll loop, JSONL append, orphan sweep) land in this phase — the Phase 3.1 designer picks the LocalController module layout. CLI: `run`, `events`.
 
