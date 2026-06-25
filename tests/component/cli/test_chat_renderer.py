@@ -118,7 +118,7 @@ async def test_tc_chat_01_basic_exchange_routes_through_engine(
     of the engine event stream) is what makes the two consistent.
     """
     runtime = await bootstrap_runtime(root=chat_workspace)
-    config = await runtime.build_resolved_config("kolsch/helper")
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
     session = await runtime.store.create_session(
         str(config.agent_id),
         name="tc-chat-01",
@@ -318,7 +318,7 @@ async def test_input_loop_does_not_explicitly_echo_user_input(
     assertion.
     """
     runtime = await bootstrap_runtime(root=chat_workspace)
-    config = await runtime.build_resolved_config("kolsch/helper")
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
     session = await runtime.store.create_session(
         str(config.agent_id),
         name="step-e-regression",

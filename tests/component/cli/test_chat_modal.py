@@ -494,7 +494,7 @@ async def test_cmd_chat_clears_modal_callback_on_clean_exit(
         rc = await chat.cmd_chat(
             argparse.Namespace(
                 root=chat_workspace,
-                agent_ref="kolsch/helper",
+                agent_ref="kolsch/agents/helper",
                 session=None,
                 model=None,
             ),
@@ -565,7 +565,7 @@ async def test_cmd_chat_clears_modal_callback_even_when_loop_raises(
                 await chat.cmd_chat(
                     argparse.Namespace(
                         root=chat_workspace,
-                        agent_ref="kolsch/helper",
+                        agent_ref="kolsch/agents/helper",
                         session=None,
                         model=None,
                     ),

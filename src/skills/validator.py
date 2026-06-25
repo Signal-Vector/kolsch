@@ -58,19 +58,10 @@ def make_standard_validator(asset_management: AssetManagement) -> ConfigValidato
             return ValidationResult(ok=False, errors=errors)
 
         # Snapshot the catalogued skill refs once per call. Reads off
-        # the immutable post-initialize catalog (Am-I7). The catalog
-        # stores 3-segment refs (<bundle>/skills/<name>); the new
-        # convention accepts 1/2-seg input forms so we route each
-        # ref through ``resolve_shorthand`` per
-        # qol-prefix-defaults-and-unified-refs.md Step 2.
-        from assets.refs import resolve_shorthand  # noqa: PLC0415
-        from errors import (  # noqa: PLC0415
-            AssetsAmbiguousShorthand,
-            AssetsInvalidRef,
-            AssetsNotFound,
-        )
-
-        catalog = asset_management._catalog  # noqa: SLF001
+        # the immutable post-initialize catalog (Am-I7). Phase 3.0
+        # Step 1B — refs are now canonical 3-segment only; lookup
+        # routes through the catalog chokepoint (Round 5 H3).
+        catalog = asset_management.catalog()
         seen: set[str] = set()
         for index, entry in enumerate(enabled):
             if not isinstance(entry, dict) or "ref" not in entry:
@@ -111,9 +102,7 @@ def make_standard_validator(asset_management: AssetManagement) -> ConfigValidato
                 )
                 continue
             seen.add(ref)
-            try:
-                resolve_shorthand(catalog, ref, "skill")
-            except (AssetsInvalidRef, AssetsNotFound, AssetsAmbiguousShorthand):
+            if catalog.lookup(ref, expected_type="skill") is None:
                 errors.append(
                     ValidationError(
                         layer=3,

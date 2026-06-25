@@ -331,7 +331,7 @@ async def test_tc_chat_05_input_loop_exits_on_slash_exit(
     """
     out = _io.StringIO()
     runtime = await bootstrap_runtime(root=chat_workspace)
-    config = await runtime.build_resolved_config("kolsch/helper")
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
     session = await runtime.store.create_session(
         str(config.agent_id),
         name="tc-chat-05",
@@ -418,7 +418,7 @@ async def test_tc_chat_12_tools_lists_helper_agents_four_declared_tools(
     chat_workspace: Path,
 ) -> None:
     """TC-CHAT-12: ``/tools`` lists exactly the tools the agent has
-    access to. The shipped ``kolsch/helper`` declares four
+    access to. The shipped ``kolsch/agents/helper`` declares four
     refs in its ``subsystems.tools.config.declared`` block
     (``read_file``, ``write_file``, ``list_files``, ``bash``); the
     output names all four and contains none beyond.
@@ -433,7 +433,7 @@ async def test_tc_chat_12_tools_lists_helper_agents_four_declared_tools(
     first-match-wins.)
     """
     runtime = await bootstrap_runtime(root=chat_workspace)
-    config = await runtime.build_resolved_config("kolsch/helper")
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
     out = _io.StringIO()
     ctx = SlashContext(
         stdout=out,
@@ -508,7 +508,7 @@ async def test_tools_handler_surfaces_matching_rule_id(
     from providers import RuleBasedAuthorizationProvider
 
     runtime = await bootstrap_runtime(root=chat_workspace)
-    config = await runtime.build_resolved_config("kolsch/helper")
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
     out = _io.StringIO()
     # Custom authz with a rule that matches every agent + every
     # tool — first match wins, so /tools surfaces this rule's id.

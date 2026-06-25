@@ -12,7 +12,7 @@ Wires the migration shim against a real on-disk workspace bootstrap:
    actual ``allow()`` paths.
 
 This catches integration regressions the unit tests miss:
-- ``parse_ref`` / catalog key shape drift.
+- ``parse_three_segment`` / catalog key shape drift.
 - ``AssetManagement.catalog()`` accessor wiring.
 - Action→tool_ref map building from a real scan.
 """

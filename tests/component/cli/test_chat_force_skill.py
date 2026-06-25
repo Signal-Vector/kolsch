@@ -241,7 +241,7 @@ async def test_new_session_drops_pending_force_skill(chat_workspace: Path) -> No
     from platform_runtime import bootstrap_runtime
 
     runtime = await bootstrap_runtime(root=chat_workspace)
-    config = await runtime.build_resolved_config("kolsch/helper")
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
     session = await runtime.store.create_session(
         str(config.agent_id), name="force-skill-new-pre"
     )
@@ -258,7 +258,7 @@ async def test_new_session_drops_pending_force_skill(chat_workspace: Path) -> No
     state.pending_force_skill.append("kolsch/some-ref")
 
     out = _io.StringIO()
-    await _open_new_session(state, stdout=out, agent_ref="kolsch/helper")
+    await _open_new_session(state, stdout=out, agent_ref="kolsch/agents/helper")
 
     assert state.pending_force_skill == []
     # Sanity: the session actually shifted.
@@ -276,7 +276,7 @@ async def test_switch_session_drops_pending_force_skill(
     from platform_runtime import bootstrap_runtime
 
     runtime = await bootstrap_runtime(root=chat_workspace)
-    config = await runtime.build_resolved_config("kolsch/helper")
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
     session_a = await runtime.store.create_session(
         str(config.agent_id), name="force-skill-switch-a"
     )

@@ -20,10 +20,8 @@ import yaml
 
 from assets import AssetManagement
 from errors import (
-    AssetsAmbiguousShorthand,
     AssetsBundleNameMismatch,
     AssetsDuplicateBundleName,
-    AssetsInvalidRef,
     AssetsNotFound,
     AssetsReservedBundleName,
     ConfigInvalid,
@@ -232,11 +230,13 @@ async def test_reserved_bundle_name_core_rejected(
 
 
 # ---------------------------------------------------------------------------
-# TC-ASM-05 / TC-ASM-06 — shorthand resolution
+# TC-ASM-05 — resolve_ref returns the 3-segment catalog key
+# (Phase 3.0 Step 1B — shorthand resolution removed; ref grammar
+# is strict 3-seg only)
 # ---------------------------------------------------------------------------
 
 
-async def test_unambiguous_shorthand_resolves(platform_root: Path) -> None:
+async def test_resolve_ref_returns_catalog_key(platform_root: Path) -> None:
     _write_platform_yaml(platform_root)
     _write_bundle(
         platform_root,
@@ -247,35 +247,23 @@ async def test_unambiguous_shorthand_resolves(platform_root: Path) -> None:
     am = AssetManagement(root=platform_root)
     await am.initialize()
 
-    resolved = await am.resolve_ref("web_search", asset_type="tool")
+    resolved = await am.resolve_ref("acme/tools/web_search", asset_type="tool")
     assert resolved == "acme/tools/web_search"
 
 
-async def test_ambiguous_shorthand_raises_with_all_candidates(
-    platform_root: Path,
-) -> None:
+async def test_resolve_ref_unknown_raises_not_found(platform_root: Path) -> None:
     _write_platform_yaml(platform_root)
     _write_bundle(
         platform_root,
         dir_name="acme",
         tools={"web_search": "def main(): pass\n"},
     )
-    _write_bundle(
-        platform_root,
-        dir_name="scholarly",
-        tools={"web_search": "def main(): pass\n"},
-    )
 
     am = AssetManagement(root=platform_root)
     await am.initialize()
 
-    with pytest.raises(AssetsAmbiguousShorthand) as exc_info:
-        await am.resolve_ref("web_search", asset_type="tool")
-    candidates = exc_info.value.detail["candidates"]
-    assert set(candidates) == {
-        "acme/tools/web_search",
-        "scholarly/tools/web_search",
-    }
+    with pytest.raises(AssetsNotFound):
+        await am.resolve_ref("acme/tools/missing", asset_type="tool")
 
 
 # ---------------------------------------------------------------------------
@@ -517,7 +505,10 @@ async def test_invalid_ref_raises(platform_root: Path) -> None:
     _write_platform_yaml(platform_root)
     am = AssetManagement(root=platform_root)
     await am.initialize()
-    with pytest.raises(AssetsInvalidRef):
+    # Phase 3.0 Step 1B — non-3-seg input fails the catalog
+    # shape-check inside ``AssetCatalog.lookup`` and surfaces as
+    # :class:`AssetsNotFound` (no shorthand fallback to attempt).
+    with pytest.raises(AssetsNotFound):
         await am.get_asset("no-slashes")
 
 

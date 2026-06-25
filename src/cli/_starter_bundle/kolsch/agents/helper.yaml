@@ -84,7 +84,7 @@ subsystems:
     variant: standard
     config:
       declared:
-        - ref: kolsch/read_file
-        - ref: kolsch/write_file
-        - ref: kolsch/list_files
-        - ref: kolsch/bash
+        - ref: kolsch/tools/read_file
+        - ref: kolsch/tools/write_file
+        - ref: kolsch/tools/list_files
+        - ref: kolsch/tools/bash

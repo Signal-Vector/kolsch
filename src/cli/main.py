@@ -323,7 +323,7 @@ def _add_chat_subparser(sub: argparse._SubParsersAction[Any]) -> None:
         nargs="?",
         default=None,
         help=(
-            "Agent ref (e.g. kolsch/helper). Defaults to "
+            "Agent ref (e.g. kolsch/agents/helper). Defaults to "
             "the configured starter agent."
         ),
     )

@@ -111,7 +111,7 @@ def add_skills_subparser(
     )
     which.add_argument(
         "agent_ref",
-        help="Agent ref (e.g. kolsch/helper).",
+        help="Agent ref (e.g. kolsch/agents/helper).",
     )
     which.add_argument(
         "--json",

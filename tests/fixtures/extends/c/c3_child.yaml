@@ -1,4 +1,4 @@
-extends: x/c3_parent
+extends: x/agents/c3_parent
 name: c3_child
 description: |
   C3 child — extends a parent with no blocks. Jinja silently

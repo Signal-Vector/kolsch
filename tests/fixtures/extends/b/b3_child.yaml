@@ -1,4 +1,4 @@
-extends: x/b3_parent
+extends: x/agents/b3_parent
 name: b3_child
 description: B3 child — replaces the tools list (RFC 7386 wholesale override).
 subsystems:

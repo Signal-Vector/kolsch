@@ -1,4 +1,4 @@
-extends: x/b4_parent
+extends: x/agents/b4_parent
 name: b4_child
 description: B4 child — writes fresh prompt without {% extends parent %}.
 prompt: CHILD_FRESH_BODY

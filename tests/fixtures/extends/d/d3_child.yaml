@@ -1,4 +1,4 @@
-extends: x/d3_parent
+extends: x/agents/d3_parent
 name: d3_child
 description: |
   D3 child — writes a fresh prompt (no {% extends parent %}).

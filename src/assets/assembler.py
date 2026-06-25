@@ -12,9 +12,8 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from _yamlio import YAMLError, load
-from assets.refs import parse_ref
+from assets.refs import is_three_segment, parse_three_segment
 from errors import (
-    AssetsInvalidRef,
     AssetsPromptLoadFailed,
     ConfigInvalid,
     ConfigUnknownAlias,
@@ -115,7 +114,7 @@ def _load_prompt_item(item: Any, catalog: AssetCatalog) -> Any:  # noqa: ANN401
 
     Ref detection is structural, not heuristic. An item only counts
     as a ref when it parses as a full three-segment
-    ``<bundle>/<asset-type>/<name>`` AND its asset-type segment is
+    ``<bundle>/<plural>/<name>`` AND its middle segment is
     ``prompts``. Anything else (free-form text, urls, accidental
     slashes) passes through as inline content. This avoids the
     "contains a slash = treat as ref" footgun where
@@ -131,26 +130,15 @@ def _load_prompt_item(item: Any, catalog: AssetCatalog) -> Any:  # noqa: ANN401
         # decide whether to accept it.
         return item
 
-    try:
-        _bundle, asset_type, _name = parse_ref(item)
-    except AssetsInvalidRef:
-        # Not shaped like a ref — treat as inline content. 2-seg
-        # refs without field_asset_type land here by design; if
-        # the agent author wants a 2-seg prompt ref they declare
-        # it via a future Phase-2 path. Today's detection stays
-        # conservative to preserve the inline-content footgun
-        # guard documented above.
+    if not is_three_segment(item):
+        # Not shaped like a 3-seg catalog ref — treat as inline content.
         return item
-    # parse_ref returns the *singular* asset type (per the
-    # qol-prefix-defaults-and-unified-refs.md grammar refactor);
-    # the catalog still stores PLURAL middle-segment keys so the
-    # subsequent `catalog.assets.get(item)` lookup uses the
-    # original 3-seg input as the catalog key.
-    if asset_type != "prompt":
+    _bundle, segment, _name = parse_three_segment(item)
+    if segment != "prompts":
         return item  # references some other asset type; not for us.
 
-    entry = catalog.assets.get(item)
-    if entry is None or entry.asset_type != "prompt":
+    entry = catalog.lookup(item, expected_type="prompt")
+    if entry is None:
         raise AssetsPromptLoadFailed(
             ref=item,
             reason="prompt ref does not resolve to a catalogued prompt",

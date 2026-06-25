@@ -1,11 +1,11 @@
 """Phase 3.0 Step 1 — refs unification tests (R3 #5 + Round 5 H3).
 
 Covers ``build_ref`` / ``parse_three_segment`` / ``is_three_segment``
-+ ``AssetCatalog.lookup`` + the chokepoint discipline. The full
-codemod that removes 1-seg ``resolve_shorthand`` callers lives in
-``process/qol-refs-1seg-removal.md`` and ships in a follow-up
-commit; Step 1 lands the chokepoint API + the inline-f-string
-cleanup in ``catalog.py`` / ``authz.py`` / ``observers.py``.
++ ``AssetCatalog.lookup`` + the chokepoint discipline. Step 1A
+landed the chokepoint API and the inline-f-string cleanup in
+``catalog.py`` / ``authz.py`` / ``observers.py``; Step 1B removed
+the legacy ``parse_ref`` / ``resolve_shorthand`` parsers and
+codemoded all 1/2-seg ref sites to canonical 3-seg.
 """
 
 from __future__ import annotations

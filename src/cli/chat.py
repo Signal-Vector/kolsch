@@ -98,11 +98,10 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-_DEFAULT_AGENT_REF = "kolsch/helper"
+_DEFAULT_AGENT_REF = "kolsch/agents/helper"
 """Fallback when ``<agent_ref>`` is omitted and
 ``platform.yaml``'s ``defaults.starter_agent`` is unset.
-Phase 2.1 patch §1.1; migrated to the 2-segment canonical
-form per qol-prefix-defaults-and-unified-refs.md."""
+Phase 3.0 Step 1B — 3-segment canonical form."""
 
 
 # ---------------------------------------------------------------------------

@@ -264,7 +264,7 @@ class ConfigDeprecatedRefForm(PlatformError):
         canonical_form: str,
         *,
         location: str = "",
-        where: str = "assets.refs.parse_ref",
+        where: str = "templating.context_files.resolve_path",
     ) -> None:
         super().__init__(
             message=(

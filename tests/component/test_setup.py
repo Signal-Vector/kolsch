@@ -660,7 +660,7 @@ def test_tc_ux_10_end_to_end_run_against_setup_workspace(
             "--root",
             str(tmp_path),
             "run",
-            "kolsch/helper",
+            "kolsch/agents/helper",
             "--input",
             "content=hello",
         ]

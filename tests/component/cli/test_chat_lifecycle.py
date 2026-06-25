@@ -71,7 +71,7 @@ if TYPE_CHECKING:
 async def _build_state(workspace: Path) -> tuple[ChatSessionState, PlatformRuntime]:
     """Construct a ChatSessionState bound to a fresh runtime + session."""
     runtime = await bootstrap_runtime(root=workspace)
-    config = await runtime.build_resolved_config("kolsch/helper")
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
     session = await runtime.store.create_session(
         str(config.agent_id),
         name="lifecycle-test",
@@ -116,7 +116,7 @@ async def test_tc_chat_13_new_creates_fresh_session_and_keeps_old(
     assert state.pending_clear is True
 
     # Drive the loop's lifecycle helper directly.
-    await chat._open_new_session(state, stdout=out, agent_ref="kolsch/helper")
+    await chat._open_new_session(state, stdout=out, agent_ref="kolsch/agents/helper")
     new_id = state.session_id
     assert new_id != original_id, "/new should switch to a different session id"
 
@@ -403,7 +403,7 @@ async def test_switch_session_loads_and_replays_via_renderer(
     """
     # Create a session with an exchange.
     runtime = await bootstrap_runtime(root=chat_workspace)
-    config = await runtime.build_resolved_config("kolsch/helper")
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
     session_a = await runtime.store.create_session(
         str(config.agent_id),
         name="session-a",
@@ -477,7 +477,7 @@ async def test_tc_chat_07_resume_replays_existing_session_via_renderer(
     """
     # Step 1: create a session with one exchange.
     runtime = await bootstrap_runtime(root=chat_workspace)
-    config = await runtime.build_resolved_config("kolsch/helper")
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
     session = await runtime.store.create_session(
         str(config.agent_id),
         name="prior-session",
@@ -507,7 +507,7 @@ async def test_tc_chat_07_resume_replays_existing_session_via_renderer(
         rc = await chat.cmd_chat(
             argparse.Namespace(
                 root=chat_workspace,
-                agent_ref="kolsch/helper",
+                agent_ref="kolsch/agents/helper",
                 session=str(session.session_id),
                 model=None,
             ),
@@ -540,7 +540,7 @@ async def test_resume_unknown_session_exits_nonzero(
         rc = await chat.cmd_chat(
             argparse.Namespace(
                 root=chat_workspace,
-                agent_ref="kolsch/helper",
+                agent_ref="kolsch/agents/helper",
                 session="ses_does_not_exist",
                 model=None,
             ),
@@ -570,7 +570,7 @@ async def test_cmd_chat_with_valid_model_override_works(
         rc = await chat.cmd_chat(
             argparse.Namespace(
                 root=chat_workspace,
-                agent_ref="kolsch/helper",
+                agent_ref="kolsch/agents/helper",
                 session=None,
                 model="anthropic/claude-haiku-4-5",
             ),
@@ -590,7 +590,7 @@ async def test_input_loop_lifecycle_signals_drive_loop(
     processed the new-session signal — assert state changes."""
 
     runtime = await bootstrap_runtime(root=chat_workspace)
-    config = await runtime.build_resolved_config("kolsch/helper")
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
     session = await runtime.store.create_session(
         str(config.agent_id),
         name="loop-lifecycle",
@@ -613,7 +613,7 @@ async def test_input_loop_lifecycle_signals_drive_loop(
             config=config,
             thread_id=threads[0].thread_id,
             session_id=session.session_id,
-            agent_ref="kolsch/helper",
+            agent_ref="kolsch/agents/helper",
         )
     assert rc == 0
     rendered = out.getvalue()
@@ -636,7 +636,7 @@ async def test_input_loop_session_switch_via_slash(
     """
 
     runtime = await bootstrap_runtime(root=chat_workspace)
-    config = await runtime.build_resolved_config("kolsch/helper")
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
     # Source session — has an exchange.
     source = await runtime.store.create_session(
         str(config.agent_id),
@@ -676,7 +676,7 @@ async def test_input_loop_session_switch_via_slash(
             config=config,
             thread_id=current_threads[0].thread_id,
             session_id=current.session_id,
-            agent_ref="kolsch/helper",
+            agent_ref="kolsch/agents/helper",
         )
     assert rc == 0
     rendered = out.getvalue()
@@ -702,7 +702,7 @@ async def test_cmd_chat_invalid_model_override_exits_nonzero(
         rc = await chat.cmd_chat(
             argparse.Namespace(
                 root=chat_workspace,
-                agent_ref="kolsch/helper",
+                agent_ref="kolsch/agents/helper",
                 session=None,
                 model="not-a-real-alias",
             ),
@@ -742,7 +742,7 @@ async def test_tc_chat_08_pre_cancelled_token_emits_engine_cancelled_failed_even
     from engine import CancelToken, ExecutionContext
 
     runtime = await bootstrap_runtime(root=chat_workspace)
-    config = await runtime.build_resolved_config("kolsch/helper")
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
     session = await runtime.store.create_session(
         str(config.agent_id), name="cancel-test"
     )
@@ -834,7 +834,7 @@ async def test_tc_chat_09_failing_tool_renders_red_block(
         raise ToolExecutionFailed(tool_name="always_fail", error_class="RuntimeError")
 
     runtime = await bootstrap_runtime(root=chat_workspace)
-    config = await runtime.build_resolved_config("kolsch/helper")
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
     # Register the failing tool with the same agent_id the engine
     # will use; the engine's pre-flight re-registers builtins but
     # leaves the tool we add here in place (register_for_agent
@@ -1033,7 +1033,7 @@ async def test_snapshot_recent_session_ids_returns_pairs(
     """Live snapshot helper returns (id, label) pairs sorted
     most-recent-first per the store's default ``order=desc``."""
     runtime = await bootstrap_runtime(root=chat_workspace)
-    config = await runtime.build_resolved_config("kolsch/helper")
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
     a = await runtime.store.create_session(str(config.agent_id), name="alpha")
     b = await runtime.store.create_session(str(config.agent_id), name="beta")
     snapshot = await chat._snapshot_recent_session_ids(runtime)
@@ -1145,7 +1145,7 @@ def test_cli_smoke_chat_with_session_resume(chat_workspace: Path) -> None:
             "-m",
             "cli",
             "run",
-            "kolsch/helper",
+            "kolsch/agents/helper",
             "--input",
             "content=hello-from-smoke",
         ],
@@ -1187,7 +1187,7 @@ def test_cli_smoke_chat_with_session_resume(chat_workspace: Path) -> None:
             "-m",
             "cli",
             "chat",
-            "kolsch/helper",
+            "kolsch/agents/helper",
             "--session",
             session_id,
         ],

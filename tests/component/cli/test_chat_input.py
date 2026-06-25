@@ -174,7 +174,7 @@ async def test_run_input_loop_routes_messages_to_engine(
     from platform_runtime import bootstrap_runtime
 
     runtime = await bootstrap_runtime(root=chat_workspace)
-    config = await runtime.build_resolved_config("kolsch/helper")
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
     session = await runtime.store.create_session(
         str(config.agent_id),
         name="test-run-input-loop",
@@ -294,7 +294,7 @@ async def test_cmd_chat_in_process_runs_against_initialized_workspace(
         rc = await chat.cmd_chat(
             argparse.Namespace(
                 root=root,
-                agent_ref="kolsch/helper",
+                agent_ref="kolsch/agents/helper",
                 session=None,
                 model=None,
             ),

@@ -10,10 +10,10 @@ One entry per Part-4 ID (A1..K2, 24 total). Each case names:
   pairs. The runner copies each from
   ``tests/fixtures/extends/<category>/<fixture_filename>`` to
   ``<workspace>/<dst>``.
-- ``target_agent_ref`` — the 2-segment ref the runner passes to
-  :meth:`AssetManagement.build_resolved_config`. Always
-  ``x/<agent_name>`` since fixtures live under the synthetic ``x``
-  bundle.
+- ``target_agent_ref`` — the 3-segment catalog ref the runner
+  passes to :meth:`AssetManagement.build_resolved_config`. Always
+  ``x/agents/<agent_name>`` since fixtures live under the synthetic
+  ``x`` bundle.
 - ``expected_outcome`` — one of:
     - ``loads_with_render``: build_resolved_config succeeds AND
       the render produces output.
@@ -78,7 +78,7 @@ CASES: tuple[FixtureCase, ...] = (
         case_id="A1",
         category="a",
         files=(("a1_plain.yaml", _agent("a1_plain.yaml")),),
-        target_agent_ref="x/a1_plain",
+        target_agent_ref="x/agents/a1_plain",
         expected_outcome="loads_with_render",
         expected_render_contains=("You are a plain agent.",),
     ),
@@ -86,7 +86,7 @@ CASES: tuple[FixtureCase, ...] = (
         case_id="A2",
         category="a",
         files=(("a2_jinja.yaml", _agent("a2_jinja.yaml")),),
-        target_agent_ref="x/a2_jinja",
+        target_agent_ref="x/agents/a2_jinja",
         expected_outcome="loads_with_render",
         expected_render_contains=("You are a2", "tool_a"),
         notes="Render context populated with two synthetic ToolItems.",
@@ -101,7 +101,7 @@ CASES: tuple[FixtureCase, ...] = (
             ("b1_parent.yaml", _agent("b1_parent.yaml")),
             ("b1_child.yaml", _agent("b1_child.yaml")),
         ),
-        target_agent_ref="x/b1_child",
+        target_agent_ref="x/agents/b1_child",
         expected_outcome="loads_with_render",
         expected_render_contains=("You are b1_child",),
     ),
@@ -112,7 +112,7 @@ CASES: tuple[FixtureCase, ...] = (
             ("b2_parent.yaml", _agent("b2_parent.yaml")),
             ("b2_child.yaml", _agent("b2_child.yaml")),
         ),
-        target_agent_ref="x/b2_child",
+        target_agent_ref="x/agents/b2_child",
         expected_outcome="loads_with_render",
         expected_render_contains=("Parent body",),
         notes="Field-only check: resolved model == child's; prompt inherited.",
@@ -124,7 +124,7 @@ CASES: tuple[FixtureCase, ...] = (
             ("b3_parent.yaml", _agent("b3_parent.yaml")),
             ("b3_child.yaml", _agent("b3_child.yaml")),
         ),
-        target_agent_ref="x/b3_child",
+        target_agent_ref="x/agents/b3_child",
         expected_outcome="loads_with_render",
         expected_render_contains=("Parent body",),
         notes=(
@@ -139,7 +139,7 @@ CASES: tuple[FixtureCase, ...] = (
             ("b4_parent.yaml", _agent("b4_parent.yaml")),
             ("b4_child.yaml", _agent("b4_child.yaml")),
         ),
-        target_agent_ref="x/b4_child",
+        target_agent_ref="x/agents/b4_child",
         expected_outcome="loads_with_render",
         expected_render_contains=("CHILD_FRESH_BODY",),
         expected_render_excludes=("PARENT_BODY_SHOULD_BE_IGNORED",),
@@ -154,7 +154,7 @@ CASES: tuple[FixtureCase, ...] = (
             ("c1_parent.yaml", _agent("c1_parent.yaml")),
             ("c1_child.yaml", _agent("c1_child.yaml")),
         ),
-        target_agent_ref="x/c1_child",
+        target_agent_ref="x/agents/c1_child",
         expected_outcome="loads_with_render",
         expected_render_contains=("Header", "OVERRIDDEN-ROLE", "Footer"),
         expected_render_excludes=("parent-default-role",),
@@ -166,7 +166,7 @@ CASES: tuple[FixtureCase, ...] = (
             ("c2_parent.yaml", _agent("c2_parent.yaml")),
             ("c2_child.yaml", _agent("c2_child.yaml")),
         ),
-        target_agent_ref="x/c2_child",
+        target_agent_ref="x/agents/c2_child",
         expected_outcome="loads_with_render",
         expected_render_contains=("Header", "parent-default-role", "Footer"),
     ),
@@ -177,7 +177,7 @@ CASES: tuple[FixtureCase, ...] = (
             ("c3_parent.yaml", _agent("c3_parent.yaml")),
             ("c3_child.yaml", _agent("c3_child.yaml")),
         ),
-        target_agent_ref="x/c3_child",
+        target_agent_ref="x/agents/c3_child",
         expected_outcome="loads_with_render",
         expected_render_contains=("Plain parent prompt with no blocks.",),
         expected_render_excludes=("silently discarded",),
@@ -190,7 +190,7 @@ CASES: tuple[FixtureCase, ...] = (
             ("c4_parent.yaml", _agent("c4_parent.yaml")),
             ("c4_child.yaml", _agent("c4_child.yaml")),
         ),
-        target_agent_ref="x/c4_child",
+        target_agent_ref="x/agents/c4_child",
         expected_outcome="loads_with_render",
         expected_render_contains=(
             "OVERRIDDEN-ROLE",
@@ -203,7 +203,7 @@ CASES: tuple[FixtureCase, ...] = (
         case_id="C5",
         category="c",
         files=(("c5_orphan.yaml", _agent("c5_orphan.yaml")),),
-        target_agent_ref="x/c5_orphan",
+        target_agent_ref="x/agents/c5_orphan",
         expected_outcome="error_at_load",
         expected_error_code="config.extends_template_without_inheritance",
         notes=(
@@ -221,7 +221,7 @@ CASES: tuple[FixtureCase, ...] = (
             ("d1_parent.yaml", _agent("d1_parent.yaml")),
             ("d1_child.yaml", _agent("d1_child.yaml")),
         ),
-        target_agent_ref="x/d1_child",
+        target_agent_ref="x/agents/d1_child",
         expected_outcome="loads_with_render",
         expected_render_contains=("Header", "HERE", "Footer"),
     ),
@@ -232,7 +232,7 @@ CASES: tuple[FixtureCase, ...] = (
             ("d2_parent.yaml", _agent("d2_parent.yaml")),
             ("d2_child.yaml", _agent("d2_child.yaml")),
         ),
-        target_agent_ref="x/d2_child",
+        target_agent_ref="x/agents/d2_child",
         expected_outcome="error_at_load",
         expected_error_code="config.required_block_missing",
     ),
@@ -243,7 +243,7 @@ CASES: tuple[FixtureCase, ...] = (
             ("d3_parent.yaml", _agent("d3_parent.yaml")),
             ("d3_child.yaml", _agent("d3_child.yaml")),
         ),
-        target_agent_ref="x/d3_child",
+        target_agent_ref="x/agents/d3_child",
         expected_outcome="loads_with_render",
         expected_render_contains=("Fresh child prompt",),
         expected_render_excludes=("Header", "Footer"),
@@ -264,7 +264,7 @@ CASES: tuple[FixtureCase, ...] = (
             ("e1_b.yaml", _agent("e1_b.yaml")),
             ("e1_a.yaml", _agent("e1_a.yaml")),
         ),
-        target_agent_ref="x/e1_a",
+        target_agent_ref="x/agents/e1_a",
         expected_outcome="loads_with_render",
         expected_render_contains=(
             "ROOT_HEADER",
@@ -281,7 +281,7 @@ CASES: tuple[FixtureCase, ...] = (
             ("e2_b.yaml", _agent("e2_b.yaml")),
             ("e2_a.yaml", _agent("e2_a.yaml")),
         ),
-        target_agent_ref="x/e2_a",
+        target_agent_ref="x/agents/e2_a",
         expected_outcome="loads_with_render",
         expected_render_contains=("Root body",),
         notes=(
@@ -297,7 +297,7 @@ CASES: tuple[FixtureCase, ...] = (
         case_id="F1",
         category="f",
         files=(("f1_self.yaml", _agent("f1_self.yaml")),),
-        target_agent_ref="x/f1_self",
+        target_agent_ref="x/agents/f1_self",
         expected_outcome="error_at_load",
         expected_error_code="config.agent_inheritance_cycle",
     ),
@@ -308,7 +308,7 @@ CASES: tuple[FixtureCase, ...] = (
             ("f2_a.yaml", _agent("f2_a.yaml")),
             ("f2_b.yaml", _agent("f2_b.yaml")),
         ),
-        target_agent_ref="x/f2_a",
+        target_agent_ref="x/agents/f2_a",
         expected_outcome="error_at_load",
         expected_error_code="config.agent_inheritance_cycle",
     ),
@@ -316,7 +316,7 @@ CASES: tuple[FixtureCase, ...] = (
         case_id="F3",
         category="f",
         files=(("f3_orphan.yaml", _agent("f3_orphan.yaml")),),
-        target_agent_ref="x/f3_orphan",
+        target_agent_ref="x/agents/f3_orphan",
         expected_outcome="error_at_load",
         expected_error_code="config.parent_agent_not_found",
     ),
@@ -324,7 +324,7 @@ CASES: tuple[FixtureCase, ...] = (
         case_id="F4",
         category="f",
         files=(("f4_no_prefix.yaml", _agent("f4_no_prefix.yaml")),),
-        target_agent_ref="x/f4_no_prefix",
+        target_agent_ref="x/agents/f4_no_prefix",
         expected_outcome="error_at_load",
         expected_error_code="config.parent_agent_not_found",
         notes=(
@@ -337,7 +337,7 @@ CASES: tuple[FixtureCase, ...] = (
         case_id="F5",
         category="f",
         files=(("f5_kolsch_no_agent.yaml", _agent("f5_kolsch.yaml")),),
-        target_agent_ref="x/f5_kolsch",
+        target_agent_ref="x/agents/f5_kolsch",
         expected_outcome="error_at_load",
         expected_error_code="config.parent_agent_not_found",
         notes=(
@@ -356,7 +356,7 @@ CASES: tuple[FixtureCase, ...] = (
             ("g1_agent.yaml", _agent("g1_agent.yaml")),
             ("g1_skill.md", _skill("g1_skill")),
         ),
-        target_agent_ref="x/g1_agent",
+        target_agent_ref="x/agents/g1_agent",
         expected_outcome="loads_with_render",
         expected_render_contains=("G1 agent body",),
         notes=(
@@ -374,7 +374,7 @@ CASES: tuple[FixtureCase, ...] = (
             ("g3_child.yaml", _agent("g3_child.yaml")),
             ("g3_skill.md", _skill("g3_skill")),
         ),
-        target_agent_ref="x/g3_child",
+        target_agent_ref="x/agents/g3_child",
         expected_outcome="loads_with_render",
         expected_render_contains=("Parent body",),
         notes=(
@@ -389,7 +389,7 @@ CASES: tuple[FixtureCase, ...] = (
         case_id="H1",
         category="h",
         files=(("h1_empty_tools.yaml", _agent("h1_empty_tools.yaml")),),
-        target_agent_ref="x/h1_empty_tools",
+        target_agent_ref="x/agents/h1_empty_tools",
         expected_outcome="loads_with_render",
         expected_render_contains=("Tools:",),
         notes=(
@@ -403,7 +403,7 @@ CASES: tuple[FixtureCase, ...] = (
         case_id="H2",
         category="h",
         files=(("h2_typo.yaml", _agent("h2_typo.yaml")),),
-        target_agent_ref="x/h2_typo",
+        target_agent_ref="x/agents/h2_typo",
         expected_outcome="error_at_load",
         expected_error_code="config.template_render_failed",
     ),
@@ -417,7 +417,7 @@ CASES: tuple[FixtureCase, ...] = (
             ("i1_agent.yaml", _agent("i1_agent.yaml")),
             ("i1_doc.md", "i1_doc.md"),
         ),
-        target_agent_ref="x/i1_agent",
+        target_agent_ref="x/agents/i1_agent",
         expected_outcome="loads_with_render",
         expected_render_contains=("Docs:", "I1 Fixture Doc"),
     ),
@@ -431,7 +431,7 @@ CASES: tuple[FixtureCase, ...] = (
             ("k1_parent.yaml", _agent("k1_parent.yaml")),
             ("k1_child.yaml", _agent("k1_child.yaml")),
         ),
-        target_agent_ref="x/k1_child",
+        target_agent_ref="x/agents/k1_child",
         expected_outcome="loads_with_render",
         expected_render_contains=("name-from-block=k1_child",),
         expected_render_excludes=("parent-default",),
@@ -444,7 +444,7 @@ CASES: tuple[FixtureCase, ...] = (
             ("k2_parent.yaml", _agent("k2_parent.yaml")),
             ("k2_child.yaml", _agent("k2_child.yaml")),
         ),
-        target_agent_ref="x/k2_child",
+        target_agent_ref="x/agents/k2_child",
         expected_outcome="loads_with_render",
         expected_render_contains=("PARENT_PART + CHILD_PART",),
         notes="{{ super() }} additive composition — the only additive path kolsch has.",

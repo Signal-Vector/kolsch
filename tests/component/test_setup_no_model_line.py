@@ -125,7 +125,7 @@ async def test_default_selection_writes_fake_to_defaults_model(
     am = AssetManagement(root=tmp_path)
     await am.initialize()
     cfg = await am.build_resolved_config(
-        "kolsch/helper",
+        "kolsch/agents/helper",
         subsystem_validators={"tools": {"standard": _accept_anything}},
     )
     assert cfg.model.provider == "fake"
@@ -186,7 +186,7 @@ async def test_non_default_selection_writes_picked_model(
     am = AssetManagement(root=tmp_path)
     await am.initialize()
     cfg = await am.build_resolved_config(
-        "kolsch/helper",
+        "kolsch/agents/helper",
         subsystem_validators={"tools": {"standard": _accept_anything}},
     )
     assert cfg.model.provider == "openrouter"

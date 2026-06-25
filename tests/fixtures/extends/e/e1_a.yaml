@@ -1,4 +1,4 @@
-extends: x/e1_b
+extends: x/agents/e1_b
 name: e1_leaf
 description: E1 leaf (A) — fills the deepest block; should traverse B → C.
 prompt: |

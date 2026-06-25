@@ -168,7 +168,7 @@ async def test_bundle_allow_rule_passes_through_in_non_chat_context(
     runtime = await bootstrap_runtime(
         root=root, llm=_make_fake_llm_callable(fake)
     )
-    config = await runtime.build_resolved_config("kolsch/helper")
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
     session = await runtime.store.create_session(
         str(config.agent_id), name="permdisc-int-01"
     )
@@ -236,7 +236,7 @@ async def test_bundle_deny_rule_wins_over_platform_allow(
     runtime = await bootstrap_runtime(
         root=root, llm=_make_fake_llm_callable(fake)
     )
-    config = await runtime.build_resolved_config("kolsch/helper")
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
     session = await runtime.store.create_session(
         str(config.agent_id), name="permdisc-int-02"
     )

@@ -296,7 +296,7 @@ async def test_scenario_1_deny_once_stops_exchange_end_to_end(
     )
 
     runtime = await bootstrap_runtime(root=root, llm=_make_fake_llm_callable(fake))
-    config = await runtime.build_resolved_config("kolsch/helper")
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
 
     # Wire the modal with a scripted [n] AND a per-session state
     # carrying the active CancelToken (mirrors what _run_input_loop
@@ -419,7 +419,7 @@ async def test_scenario_2_deny_always_persists_rule_and_restart_auto_denies(
     runtime_a = await bootstrap_runtime(
         root=root, llm=_make_fake_llm_callable(fake_a),
     )
-    config_a = await runtime_a.build_resolved_config("kolsch/helper")
+    config_a = await runtime_a.build_resolved_config("kolsch/agents/helper")
 
     cancel_a = CancelToken()
     state_a = SimpleNamespace(active_cancel=cancel_a, last_cancel_reason=None)
@@ -500,7 +500,7 @@ async def test_scenario_2_deny_always_persists_rule_and_restart_auto_denies(
     runtime_b = await bootstrap_runtime(
         root=root, llm=_make_fake_llm_callable(fake_b),
     )
-    config_b = await runtime_b.build_resolved_config("kolsch/helper")
+    config_b = await runtime_b.build_resolved_config("kolsch/agents/helper")
 
     cancel_b = CancelToken()
     state_b = SimpleNamespace(active_cancel=cancel_b, last_cancel_reason=None)
@@ -657,7 +657,7 @@ async def test_scenario_3_esc_during_streaming_cancels_at_cycle_boundary(
         return response
 
     runtime = await bootstrap_runtime(root=root, llm=_cancelling_llm)
-    config = await runtime.build_resolved_config("kolsch/helper")
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
 
     session = await runtime.store.create_session(
         str(config.agent_id), name="scenario-3-esc",
@@ -774,7 +774,7 @@ async def test_scenario_4_ctrl_c_still_cancels_and_stamps_reason(
         return response
 
     runtime = await bootstrap_runtime(root=root, llm=_ctrl_c_simulator)
-    config = await runtime.build_resolved_config("kolsch/helper")
+    config = await runtime.build_resolved_config("kolsch/agents/helper")
     session = await runtime.store.create_session(
         str(config.agent_id), name="scenario-4-ctrl-c",
     )

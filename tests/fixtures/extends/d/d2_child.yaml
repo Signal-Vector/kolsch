@@ -1,4 +1,4 @@
-extends: x/d2_parent
+extends: x/agents/d2_parent
 name: d2_child
 description: |
   D2 child — extends parent but does NOT override the required

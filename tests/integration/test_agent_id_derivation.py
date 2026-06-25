@@ -205,7 +205,7 @@ def _accept_anything(_body: dict[str, Any]) -> ValidationResult:
 
 
 async def test_tc_agentid_04_starter_helper_keeps_explicit_id(tmp_path: Path) -> None:
-    """``kolsch/helper`` resolves to ``ag_helper`` (the explicit
+    """``kolsch/agents/helper`` resolves to ``ag_helper`` (the explicit
     YAML value), NOT the derived ``ag_kolsch_helper`` — protects every
     historical event log, authz rule, and memory binding that pins
     ``ag_helper``.
@@ -245,7 +245,7 @@ async def test_tc_agentid_04_starter_helper_keeps_explicit_id(tmp_path: Path) ->
     am = AssetManagement(root=tmp_path)
     await am.initialize()
     cfg = await am.build_resolved_config(
-        "kolsch/helper",
+        "kolsch/agents/helper",
         subsystem_validators={"tools": {"standard": _accept_anything}},
     )
 

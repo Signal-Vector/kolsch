@@ -19,8 +19,7 @@ from assets.assembler import (
     pre_resolve_prompts,
 )
 from assets.platform_config import load_or_create
-from assets.refs import parse_ref, resolve_shorthand
-from errors import AssetsNotFound, ConfigDeprecatedRefForm
+from errors import AssetsNotFound
 from kernel import resolve_and_validate
 from schemas import ResolvedAgentConfig, derive_agent_id
 
@@ -31,14 +30,6 @@ if TYPE_CHECKING:
 
 
 _log = logging.getLogger("assets")
-
-
-def _log_deprecated_ref(warning: ConfigDeprecatedRefForm) -> None:
-    """Surface a deprecation warning at agent-load via the assets
-    logger. Centralised so every caller path emits at the same
-    level / format.
-    """
-    _log.warning("%s", warning)
 
 
 class AssetManagement:
@@ -164,50 +155,36 @@ class AssetManagement:
         *,
         field_asset_type: str | None = None,
     ) -> AssetEntry:
-        """Look up an asset by ref. Accepts the three catalog-ref
-        forms (1 / 2 / 3-segment) when ``field_asset_type`` is
-        supplied; falls back to the legacy 3-segment-only lookup
-        when ``field_asset_type`` is ``None``.
+        """Look up an asset by 3-segment ref.
 
-        ``field_asset_type`` is the singular asset type
-        ('tool' / 'skill' / 'agent' / 'prompt') the caller knows
-        from the field context (e.g. an agent ref under
-        ``extends:`` → 'agent'). When the input is a legacy
-        3-segment ref or an explicit ``workspace:`` prefix is
-        used elsewhere, the resolver emits a
-        :class:`ConfigDeprecatedRefForm` via the assets logger.
+        Phase 3.0 Step 1B — refs are canonical 3-segment only
+        (``<bundle>/<plural>/<name>``); the 1/2-segment shorthand
+        forms have been removed. ``field_asset_type`` is the
+        singular asset type ('tool' / 'skill' / 'agent' / 'prompt')
+        the caller knows from the field context; when supplied it
+        guards the lookup so a ref pointing at the wrong asset
+        type surfaces as :class:`AssetsNotFound`.
         """
         _, catalog = self._require_initialized()
-        if field_asset_type is not None:
-            canonical = resolve_shorthand(
-                catalog,
-                ref,
-                field_asset_type,
-                emit_warning=_log_deprecated_ref,
-            )
-            # Round 5 H3 — route through .lookup; ``canonical`` is
-            # the resolver's already-checked 3-seg key, so
-            # expected_type is redundant but harmless.
-            entry = catalog.lookup(canonical, expected_type=field_asset_type)
-            if entry is None:
-                raise AssetsNotFound(ref=ref, asset_type=field_asset_type)
-            return entry
-        # Backward-compat: 3-seg-only shape validation + direct
-        # lookup. Callers without a field context fall through here.
-        parse_ref(ref)
-        entry = catalog.lookup(ref)
+        entry = catalog.lookup(ref, expected_type=field_asset_type)
         if entry is None:
-            raise AssetsNotFound(ref=ref)
+            raise AssetsNotFound(ref=ref, asset_type=field_asset_type)
         return entry
 
     async def resolve_ref(self, ref: str, asset_type: str) -> str:
+        """Validate a 3-segment ref against the catalog; return it.
+
+        Phase 3.0 Step 1B — under the strict 3-seg convention this
+        is a shape-check + presence-check; the returned string is
+        always identical to the input. Raises
+        :class:`AssetsNotFound` when no catalog entry of
+        ``asset_type`` matches.
+        """
         _, catalog = self._require_initialized()
-        return resolve_shorthand(
-            catalog,
-            ref,
-            asset_type,
-            emit_warning=_log_deprecated_ref,
-        )
+        entry = catalog.lookup(ref, expected_type=asset_type)
+        if entry is None:
+            raise AssetsNotFound(ref=ref, asset_type=asset_type)
+        return ref
 
     # --- layer assembly (spec §6) -------------------------------------
 
@@ -232,11 +209,10 @@ class AssetManagement:
         """
         platform_cfg, catalog = self._require_initialized()
 
-        # Step 1 — load the agent's definition partial. The agent
-        # ref may arrive in any of the three input forms (1 / 2 /
-        # 3-segment); pass field_asset_type="agent" so
-        # get_asset routes through resolve_shorthand and emits a
-        # deprecation warning for legacy 3-segment input.
+        # Step 1 — load the agent's definition partial. Phase 3.0
+        # Step 1B — agent_ref must be a 3-segment catalog ref
+        # (``<bundle>/agents/<name>``); ``field_asset_type="agent"``
+        # guards the lookup against an asset-type mismatch.
         agent_entry = await self.get_asset(agent_ref, field_asset_type="agent")
         if agent_entry.asset_type != "agent":
             raise AssetsNotFound(ref=agent_ref, asset_type="agent")
@@ -299,9 +275,10 @@ class AssetManagement:
         # derived baseline.
         #
         # Use the resolved AssetEntry rather than re-parsing
-        # agent_ref — the input may be 1 / 2 / 3-segment, but
-        # entry.ref is always the canonical 3-segment internal
-        # key (qol-prefix-defaults-and-unified-refs.md).
+        # agent_ref. The entry's bundle and name are authoritative
+        # — Phase 3.0 Step 1B refs are 3-segment canonical, but
+        # reading from the entry keeps the call site decoupled
+        # from the ref grammar.
         bundle = agent_entry.bundle
         agent_name = agent_entry.ref.rsplit("/", 1)[-1]
         partials: list[dict[str, Any]] = [

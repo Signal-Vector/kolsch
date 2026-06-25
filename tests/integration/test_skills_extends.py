@@ -121,7 +121,7 @@ async def test_tc_skill_comp_01_extends_replaces_skills_enabled_list(
                     "skills": {
                         "variant": "standard",
                         "config": {
-                            "enabled": [{"ref": "myskills/skill-a"}],
+                            "enabled": [{"ref": "myskills/skills/skill-a"}],
                         },
                     }
                 },
@@ -138,7 +138,7 @@ async def test_tc_skill_comp_01_extends_replaces_skills_enabled_list(
                     "skills": {
                         "variant": "standard",
                         "config": {
-                            "enabled": [{"ref": "myskills/skill-b"}],
+                            "enabled": [{"ref": "myskills/skills/skill-b"}],
                         },
                     }
                 },
@@ -148,10 +148,10 @@ async def test_tc_skill_comp_01_extends_replaces_skills_enabled_list(
     )
 
     runtime = await bootstrap_runtime(root=tmp_path, llm=_stub_llm)
-    resolved = await runtime.build_resolved_config("myskills/child")
+    resolved = await runtime.build_resolved_config("myskills/agents/child")
 
     skills_block = resolved.subsystems["skills"].config
-    assert skills_block["enabled"] == [{"ref": "myskills/skill-b"}], (
+    assert skills_block["enabled"] == [{"ref": "myskills/skills/skill-b"}], (
         "Child's enabled list must replace parent's wholesale (Phase 2.2 §8.2). "
         f"Got: {skills_block['enabled']!r}"
     )
@@ -180,7 +180,7 @@ async def test_tc_skill_comp_02_extends_inherits_skills_when_child_omits(
                     "skills": {
                         "variant": "standard",
                         "config": {
-                            "enabled": [{"ref": "myskills/skill-a"}],
+                            "enabled": [{"ref": "myskills/skills/skill-a"}],
                         },
                     }
                 },
@@ -202,10 +202,10 @@ async def test_tc_skill_comp_02_extends_inherits_skills_when_child_omits(
     )
 
     runtime = await bootstrap_runtime(root=tmp_path, llm=_stub_llm)
-    resolved = await runtime.build_resolved_config("myskills/child_silent")
+    resolved = await runtime.build_resolved_config("myskills/agents/child_silent")
 
     skills_block = resolved.subsystems["skills"].config
-    assert skills_block["enabled"] == [{"ref": "myskills/skill-a"}], (
+    assert skills_block["enabled"] == [{"ref": "myskills/skills/skill-a"}], (
         "Silent child must inherit parent's enabled list (Phase 2.2 §8.2). "
         f"Got: {skills_block['enabled']!r}"
     )

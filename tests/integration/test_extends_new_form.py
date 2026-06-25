@@ -3,7 +3,7 @@
 
 Two end-to-end scenarios against ``build_resolved_config``:
 
-1. New canonical form: ``extends: kolsch/helper`` resolves to
+1. New canonical form: ``extends: kolsch/agents/helper`` resolves to
    the kolsch bundle's helper agent in the workspace via
    catalog lookup. No deprecation warning fires.
 
@@ -99,9 +99,9 @@ def _write_workspace(root: Path, *, extends_value: str) -> None:
 
 
 async def test_extends_new_catalog_ref_form(tmp_path: Path) -> None:
-    """``extends: kolsch/helper`` (2-segment catalog ref)
+    """``extends: kolsch/agents/helper`` (3-segment catalog ref)
     resolves correctly; no deprecation warning fires."""
-    _write_workspace(tmp_path, extends_value="kolsch/helper")
+    _write_workspace(tmp_path, extends_value="kolsch/agents/helper")
     am = AssetManagement(root=tmp_path)
     await am.initialize()
 

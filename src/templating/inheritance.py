@@ -54,10 +54,8 @@ from jinja2.exceptions import (
 from jinja2.nodes import Extends
 
 from _yamlio import load
-from assets.refs import resolve_shorthand
+from assets.refs import is_three_segment
 from errors import (
-    AssetsInvalidRef,
-    AssetsNotFound,
     ConfigAgentInheritanceCycle,
     ConfigParentAgentNotFound,
     ConfigRequiredBlockMissing,
@@ -76,38 +74,31 @@ def _resolve_extends_to_path(
 ) -> Path:
     """Resolve an ``extends:`` ref to a parent-agent YAML path.
 
-    Order (per qol-prefix-defaults-and-unified-refs.md):
+    Order (Phase 3.0 Step 1B):
 
     1. **Prefixed file paths** (contain ``:``) — ``kolsch:`` and
        ``workspace:`` route through
        :func:`templating.context_files.resolve_path`.
-    2. **Catalog refs** — 1-segment ``<name>`` or 2-segment
-       ``<bundle>/<name>`` — when ``catalog`` is provided, try
-       resolving via :func:`assets.refs.resolve_shorthand` against
-       ``asset_type="agent"``; success returns the catalog entry's
-       file path.
+    2. **3-segment catalog refs** (``<bundle>/agents/<name>``) — when
+       ``catalog`` is provided, look up the entry as an agent and
+       return its on-disk path.
     3. **Plain paths** — anything else falls back to
        ``resolve_path`` (workspace-rooted file path).
 
-    ``catalog`` is optional so legacy callers (and unit tests that
-    don't need catalog resolution) still work; without it the
-    function behaves as plain ``resolve_path``.
+    ``catalog`` is optional so unit tests that don't need catalog
+    resolution still work; without it the function behaves as
+    plain ``resolve_path``.
     """
     # Prefixed file path branch wins first (contains `:`).
     if ":" in extends_ref:
         return resolve_path(extends_ref, workspace_root)
 
-    # Catalog-ref branch — try to resolve when the input shape
-    # looks like a catalog ref AND we have a catalog to query.
-    if catalog is not None:
-        try:
-            canonical = resolve_shorthand(catalog, extends_ref, "agent")
-        except (AssetsInvalidRef, AssetsNotFound):
-            canonical = None
-        if canonical is not None:
-            entry = catalog.assets.get(canonical)
-            if entry is not None:
-                return Path(entry.path)
+    # Catalog-ref branch — only the 3-segment canonical form is a
+    # catalog ref. Other shapes fall through to the path branch.
+    if catalog is not None and is_three_segment(extends_ref):
+        entry = catalog.lookup(extends_ref, expected_type="agent")
+        if entry is not None:
+            return Path(entry.path)
 
     # Fallback — plain path under the workspace root.
     return resolve_path(extends_ref, workspace_root)
@@ -133,10 +124,9 @@ def resolve_extends_chain(
     merge.
 
     ``catalog`` enables catalog-ref resolution for ``extends:``
-    values (e.g. ``extends: kolsch/helper`` → catalog lookup for
-    agent ``kolsch/agents/helper``). When omitted, only the
-    file-path forms (``kolsch:`` / ``workspace:`` / plain) are
-    supported.
+    values (e.g. ``extends: kolsch/agents/helper`` → catalog lookup
+    for the agent). When omitted, only the file-path forms
+    (``kolsch:`` / ``workspace:`` / plain) are supported.
 
     :raises ConfigParentAgentNotFound: when an ``extends:``
         reference points at a missing file.
