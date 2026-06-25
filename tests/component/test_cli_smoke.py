@@ -153,6 +153,8 @@ _TOP_LEVEL_SUBCOMMANDS: tuple[str, ...] = (
     "permissions",
     "skills",
     "chat",
+    "workflows",
+    "nodes",
 )
 
 

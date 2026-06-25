@@ -305,6 +305,20 @@ def _build_parser() -> argparse.ArgumentParser:
     # Phase 2.1 Step 24a — kolsch chat (streaming REPL).
     _add_chat_subparser(sub)
 
+    # Phase 3.0 Step 6 — kolsch workflows {list, show, validate, cancel, run}.
+    from cli.workflows import add_workflows_subparser  # noqa: PLC0415
+
+    workflows_parser = add_workflows_subparser(sub)
+    if workflows_parser is not None:
+        _PARSER_REGISTRY["workflows"] = workflows_parser
+
+    # Phase 3.0 Step 6 (Round 7 L7-12) — kolsch nodes {list, show}.
+    from cli.nodes import add_nodes_subparser  # noqa: PLC0415
+
+    nodes_parser = add_nodes_subparser(sub)
+    if nodes_parser is not None:
+        _PARSER_REGISTRY["nodes"] = nodes_parser
+
     return parser
 
 
@@ -752,6 +766,19 @@ async def _cmd_setup(args: argparse.Namespace) -> int:
     return await run_setup(args, make_default_setup_io(root=args.root))
 
 
+async def _cmd_workflows(args: argparse.Namespace) -> int:
+    from cli.workflows import cmd_workflows  # noqa: PLC0415
+
+    # Resolve sys.stdout/sys.stderr at call time so capsys redirects work.
+    return await cmd_workflows(args, out=sys.stdout, err=sys.stderr)
+
+
+async def _cmd_nodes(args: argparse.Namespace) -> int:
+    from cli.nodes import cmd_nodes  # noqa: PLC0415
+
+    return await cmd_nodes(args, out=sys.stdout, err=sys.stderr)
+
+
 _DISPATCH = {
     "run": _cmd_run,
     "sessions": _cmd_sessions,
@@ -766,6 +793,8 @@ _DISPATCH = {
     "permissions": _cmd_permissions,
     "skills": _cmd_skills,
     "chat": _cmd_chat,
+    "workflows": _cmd_workflows,
+    "nodes": _cmd_nodes,
 }
 
 
