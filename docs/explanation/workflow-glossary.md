@@ -23,7 +23,7 @@ The same glossary appears at the top of `docs/workflows.md`.
 ## 21. Reference Map
 
 Companion documents:
-- `phase3.0-workflow-prior-art-memo.md` — research synthesis informing this spec.
+- `phase3.0-prior-art-memo.md` — research synthesis informing this spec.
 - `docs/explanation/workflows-contract.md` (to be authored in Phase 3.0) — the formal user-facing contract.
 - `docs/how-to/authoring-a-workflow.md` (to be authored in Phase 3.1+) — author guide; expanded as new capabilities land.
 - `docs/reference/schemas.md` — workflow YAML schema entry added during Phase 3.0.

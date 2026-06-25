@@ -108,5 +108,5 @@ Conflicts exit non-zero; operator hand-resolves each.
 - Master workflow spec `process/phase3.0-workflow-spec.md` §13.1 — the locked 3-seg-only rule
 - Master workflow spec §4.0.1 — the built-in dispatch via `kolsch/nodes/<name>`
 - Master workflow spec §6.4 — edge structure is `{from, to, binds, branch}`. The edge `ref:` field is **REMOVED** per Phase 3.0's multi-input redesign (Round 4 item #11). Earlier drafts of this QoL also included an edge `ref:` rename codemod; that scope is now moot — there is no edge `ref:` field left to migrate. Only the 1-seg → 3-seg upgrade scope remains.
-- Parser-validator spec `process/phase3.0-parser-validator-spec.md` Step 1 — `resolve_shorthand` removal
+- Parser-validator spec `process/phase3.0-workflow-build.md` Step 1 — `resolve_shorthand` removal
 - The cross-cutting CLI convention: `process/qol-cli-format-output-rollout.md`

@@ -1170,6 +1170,6 @@ Authored Python nodes are unit-testable because the `NodeContext` is a plain dat
 ## Further reading
 
 - Master design spec — [`process/phase3.0-workflow-spec.md`](../process/phase3.0-workflow-spec.md)
-- Implementation spec — [`process/phase3.0-parser-validator-spec.md`](../process/phase3.0-parser-validator-spec.md)
+- Implementation spec — [`process/phase3.0-workflow-build.md`](../process/phase3.0-workflow-build.md)
 - Migration codemod — [`process/qol-refs-1seg-removal.md`](../process/qol-refs-1seg-removal.md)
 - Cross-cutting CLI format convention — [`process/qol-cli-format-output-rollout.md`](../process/qol-cli-format-output-rollout.md)

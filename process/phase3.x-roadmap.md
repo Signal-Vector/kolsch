@@ -12,7 +12,7 @@ Eleven phases of `kolsch-engine`. Each ships independently and carries an explic
 
 ### 3.0 — Parser & validator (no execution)
 
-Spec: `process/phase3.0-parser-validator-spec.md` (see also `process/phase3.0-workflow-spec.md` for the master Phase 3.0 workflow design).
+Spec: `process/phase3.0-workflow-build.md` (see also `process/phase3.0-workflow-spec.md` for the master Phase 3.0 workflow design).
 
 **Scope**: (Step 0) migrate kolsch from PyYAML to ruamel.yaml via a new helper module `src/_yaml.py` exporting `load(text)` and `dump(data) -> str` backed by `ruamel.yaml.YAML(typ='safe')`. Replace `yaml.safe_load` / `yaml.safe_dump` call sites across ~10 src/ files (`templating/inheritance.py`, `cli/_setup.py`, `cli/skills.py`, `cli/llm_commands.py`, `cli/permissions.py`, `cli/chat.py`, `assets/manifest.py`, `assets/assembler.py`, `assets/platform_config.py`, `assets/skill_metadata.py`). `pyproject.toml`: remove `pyyaml` + `types-pyyaml`; add `ruamel.yaml` + `ruamel.yaml.clib`. ~1-2 days; prereq to Step 1. Test golden refresh wave expected (the Norway-bug fix may shift outputs). (Step 1+) asset registration with auto-discovery from `bundles/<bundle>/workflows/*.yaml` and `bundles/<bundle>/nodes/*.py`; YAML parser; `extends:` chain resolution with cycle detection + depth-16 cap; full run-start validation gate (structural checks, bind type checks, Python node introspection via `@node` decorator). CLI: `list`, `show`, `validate`.
 

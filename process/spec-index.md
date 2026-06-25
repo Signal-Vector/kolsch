@@ -39,8 +39,8 @@ Each entry's status was verified by reading the spec file + checking git log + f
 | `process/phase2.2-agent-envelope-specs.md` | 2.2 | Shipped | Draft | high | Patch spec for per-agent permissions, Jinja-templated prompts, @tool summary, context files, and extends: inheritance. |
 | `process/phase2.2-step15-capture.md` | 2.2 | Shipped | In progress | high | Captured-artifact deliverable: three engine executions exercising the full Phase 2.2 envelope surface. |
 | `process/phase2.4-skills-build.md` | 2.4 | Shipped | Draft | high | Three-sub-phase build plan wrapping user-facing surface around the Phase 1 skills subsystem mechanics. |
-| `process/phase3.0-parser-validator-spec.md` | 3.0 | Draft | Draft | high | Phase 3.0 spec for the YAML parser, asset catalog integration, run-start validator, and workflows list/show/validate CLI. |
-| `process/phase3.0-workflow-prior-art-memo.md` | 3.0 | Draft | Draft | high | Research memo surveying five systems against conditionals, loops, triggers, and fork UX open questions. |
+| `process/phase3.0-workflow-build.md` | 3.0 | Draft | Draft | high | Phase 3.0 spec for the YAML parser, asset catalog integration, run-start validator, and workflows list/show/validate CLI. |
+| `process/phase3.0-prior-art-memo.md` | 3.0 | Draft | Draft | high | Research memo surveying five systems against conditionals, loops, triggers, and fork UX open questions. |
 | `process/phase3.0-workflow-spec.md` | 3.0 | Draft | Draft | high | Master Phase 3.0 workflow design spec across 21 sections covering locked decisions through Round 7. |
 | `process/phase3.1-executor-spec.md` | 3.1 | Draft | Draft | high | Sequential executor spec: algorithm, AND-strict completion, module loading, iterative traversal, state, cancellation, orphan recovery. |
 | `process/phase3.4-user-input-spec.md` | 3.4 | Draft | Draft | high | user_input node pause/resume mechanics for CLI and chat, including nested pauses and resume authentication. |

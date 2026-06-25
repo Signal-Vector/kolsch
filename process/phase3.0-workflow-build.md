@@ -34,7 +34,7 @@ The verification gate is a fixture suite: ~20 workflow YAML files covering every
 
 Related docs:
 - `/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-spec.md` — the full design spec (locked decisions across 21 sections).
-- `/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-prior-art-memo.md` — research synthesis.
+- `/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-prior-art-memo.md` — research synthesis.
 - `docs/explanation/tools-subsystem.md` — the `@tool` pattern that `@node` mirrors.
 - `docs/explanation/asset-management-contract.md` — the asset catalog mechanics being extended.
 
@@ -274,7 +274,7 @@ Ship Phase 3.0 of the kolsch workflow system through 7 sequential Coder/Reviewer
 
 **Authoritative references:**
 
-- THIS spec: `/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-parser-validator-spec.md` — the multi-step plan you're driving. Contains the 7 Step sections.
+- THIS spec: `/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-build.md` — the multi-step plan you're driving. Contains the 7 Step sections.
 - Master design spec: `/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-spec.md` — 21 sections of locked decisions. Cite by section number when making calls.
 
 **The 7 steps (preceded by prereq Step 0):**
@@ -292,7 +292,7 @@ Ship Phase 3.0 of the kolsch workflow system through 7 sequential Coder/Reviewer
 
 **Flow per step:**
 
-1. Hand the Coder the section titled **"Step N — Coder Prompt"** from this spec verbatim. Include the spec file path: `/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-parser-validator-spec.md`. Coder reads it + the master spec sections it references.
+1. Hand the Coder the section titled **"Step N — Coder Prompt"** from this spec verbatim. Include the spec file path: `/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-build.md`. Coder reads it + the master spec sections it references.
 2. Coder implements + replies "Step N Complete — [summary]", "Blocked — ...", or "Decision needed — ...".
 3. On Complete: hand the Reviewer the section titled **"Step N — Reviewer Prompt"** verbatim. Reviewer verifies + replies "Step N Approved" or "Changes requested — ...".
 4. On Approved: advance to Step N+1. On Changes requested: send the change list back to the Coder.
@@ -357,7 +357,7 @@ Migrate kolsch from `PyYAML` to `ruamel.yaml` via a new central helper module `s
 
 **Authoritative references — read BEFORE coding:**
 
-1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-parser-validator-spec.md`** — THIS spec. Step 0 prereq context.
+1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-build.md`** — THIS spec. Step 0 prereq context.
 2. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-spec.md`** — master design spec §12.3 (mention of ruamel.yaml).
 3. **ruamel.yaml docs** — `YAML(typ='safe')` is the closest analog to `yaml.safe_load` / `yaml.safe_dump`.
 
@@ -432,7 +432,7 @@ Migrate kolsch from `PyYAML` to `ruamel.yaml` via a new central helper module `s
 **What was built in Step 0:** central `src/_yaml.py` helper; 9 src/ files migrated from PyYAML to ruamel.yaml; pyproject.toml dependency swap; test goldens refreshed.
 
 **Authoritative references — read BEFORE reviewing:**
-1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-parser-validator-spec.md`** — re-read Step 0.
+1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-build.md`** — re-read Step 0.
 2. **ruamel.yaml docs** — confirm `YAML(typ='safe')` is the safe-loader equivalent.
 
 **Acceptance criteria to verify (Step 0):** Verify each of 0.1–0.6.
@@ -485,7 +485,7 @@ Stand up the `src/workflows/` package skeleton (exception hierarchy, `NodeContex
 
 **Authoritative references — read BEFORE coding:**
 
-1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-parser-validator-spec.md`** — THIS spec. Read the Background, Scope, Technical Context, and Phase-level Acceptance Criteria sections for context. Then read this Step 1 section end-to-end.
+1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-build.md`** — THIS spec. Read the Background, Scope, Technical Context, and Phase-level Acceptance Criteria sections for context. Then read this Step 1 section end-to-end.
 
 2. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-spec.md`** — master design spec. For Step 1 you need:
    - **§5.2 Decorator surface** — the `@node` signature
@@ -828,7 +828,7 @@ Stand up the `src/workflows/` package skeleton (exception hierarchy, `NodeContex
 
 **Authoritative references — read BEFORE reviewing:**
 
-1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-parser-validator-spec.md`** — THIS spec. Re-read the Step 1 section for the exact acceptance criteria.
+1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-build.md`** — THIS spec. Re-read the Step 1 section for the exact acceptance criteria.
 2. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-spec.md`** — master design spec. Read §5.2 (decorator surface), §5.5 (`NodeContext`), §12.1 (full exception hierarchy), §12.2 (conventions).
 3. **`src/tools/decorator.py`** — the `@tool` pattern that `@node` should mirror.
 
@@ -938,7 +938,7 @@ The 14 built-in node types are (R3 #9 renames applied): **bash, agent, workflow,
 
 **Authoritative references — read BEFORE coding:**
 
-1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-parser-validator-spec.md`** — THIS spec. Read Step 2 end-to-end. Note the boundary between parsing (shape) and validation (semantics) — do not cross it.
+1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-build.md`** — THIS spec. Read Step 2 end-to-end. Note the boundary between parsing (shape) and validation (semantics) — do not cross it.
 
 2. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-spec.md`** — master design spec. For Step 2 you need:
    - **§6.1 Top-level structure** — the `Workflow` shape
@@ -1082,7 +1082,7 @@ The 14 built-in node types are (R3 #9 renames applied): **bash, agent, workflow,
 
 **Authoritative references — read BEFORE reviewing:**
 
-1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-parser-validator-spec.md`** — re-read Step 2.
+1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-build.md`** — re-read Step 2.
 2. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-spec.md`** — §6.1, §6.2, §6.3, §6.4 (YAML reference), §4 (all 14 built-in node type configs).
 3. **`src/schemas/config.py`** — confirm `IOSpec` is reused, not duplicated.
 
@@ -1167,7 +1167,7 @@ Auto-discover and register `workflows/*.yaml` + `nodes/*.py` files in the asset 
 
 **Authoritative references — read BEFORE coding:**
 
-1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-parser-validator-spec.md`** — Step 3.
+1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-build.md`** — Step 3.
 2. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-spec.md`** — §3.2 (asset-catalog registration), §16 (asset catalog integration).
 3. **`src/assets/catalog.py`** — existing asset catalog. Find how `tools` and `agents` register; mirror for workflows and nodes.
 
@@ -1238,7 +1238,7 @@ Auto-discover and register `workflows/*.yaml` + `nodes/*.py` files in the asset 
 **What was built in Step 3:** asset catalog discovery for `workflows/*.yaml` and `nodes/*.py`, three-segment refs, `bundle.yaml` `exclude:` honored.
 
 **Authoritative references — read BEFORE reviewing:**
-1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-parser-validator-spec.md`** — Step 3.
+1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-build.md`** — Step 3.
 2. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-spec.md`** — §3.2, §16.
 3. **`src/assets/catalog.py`** — confirm the new asset types are wired without breaking existing patterns.
 
@@ -1289,7 +1289,7 @@ Refactor `RuleBasedAuthorizationProvider.allow()` to take a single `layers: tupl
 
 **Authoritative references — read BEFORE coding:**
 
-1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-parser-validator-spec.md`** — Step 4.
+1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-build.md`** — Step 4.
 2. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-spec.md`** — §13.1 (node/workflow refs, three-segment form), §13.2 (layer order, walks first; engine-side layer selection by proximate caller), §13.1.1 (tool-ref migration consideration), §13.3 (`from:` field + caller chain construction).
 3. **`src/providers/authz.py`** — entire file. Pay special attention to:
    - Lines 633-693: `allow()` method with existing `agent_permissions` / `bundle_permissions` keyword-only params. **Round 4 item #7**: REPLACE the per-layer kwargs with a single `layers: tuple[PermissionLayer, ...]` kwarg. Introduce `PermissionLayer` value object. Also add `caller_chain: tuple[str, ...] = ()` kwarg.
@@ -1414,7 +1414,7 @@ Refactor `RuleBasedAuthorizationProvider.allow()` to take a single `layers: tupl
 **What was built in Step 4:** `RuleBasedAuthorizationProvider.allow()` refactored to take `layers: tuple[PermissionLayer, ...]` (Round 4 item #7 — replaces per-layer kwargs); `PermissionLayer` value object introduced (`@dataclass(frozen=True, slots=True)` with `name`/`rules` fields); NO `WorkflowCatalogProtocol` introduced (per Round 4 item #7 YAGNI lock). Three-segment node + workflow refs validate via `parse_three_segment` + `catalog.lookup`. `Rule.from_` field with STRICT 3-seg + asset-type + catalog-existence validation (Round 4 item #13 — `WorkflowFromShapeError` / `WorkflowFromAssetTypeError` / `WorkflowFromNotFound` as HARD ERRORS; the R3 #6 `WorkflowFromShapeWarning` is REMOVED). `caller_chain: tuple[str, ...] = ()` kwarg on `allow()`; `_rule_matches` gains a caller-chain glob check as its FIRST step (fail-closed on empty chain). `audit_level: str = "rule_matched"` (Round 4 items #9 + #12 — typed as `str` not `Literal`; default `rule_matched`). Engine-side layer-tuple-construction contract documented (proximate caller frame determines whether `workflow` layer is included and where). Legacy two-segment tool refs and migration shim untouched.
 
 **Authoritative references — read BEFORE reviewing:**
-1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-parser-validator-spec.md`** — Step 4.
+1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-build.md`** — Step 4.
 2. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-spec.md`** — §13.1, §13.1.1, §13.2, §13.3.
 3. **`src/providers/authz.py`** before + after — verify the migration shim is unchanged AND that all three-segment ref construction is via `build_ref` / parsing via `parse_three_segment` (refs unification).
 
@@ -1483,7 +1483,7 @@ Note: "predecessor" = any graph-reachable transitive ancestor (Round 4 item #11 
 
 **Authoritative references — read BEFORE coding:**
 
-1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-parser-validator-spec.md`** — Step 5.
+1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-build.md`** — Step 5.
 2. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-spec.md`** — §7 (every sub-section, in order):
    - **§7.1 Structural** — DAG, start (single-start rule preserved), reachability, multi-input edges ARE permitted (Round 4 item #11 — single-input rule DROPPED; `WorkflowMultiInputForbidden` REMOVED), **bind-key collision across multiple edges to the same target** (`WorkflowBindCollision` — Round 4 item #11 NEW; no two edges to the same target node may bind the same key), **unreachable nodes** (raise `WorkflowUnreachableNode` — defined but no incoming edge from start AND not a mapper `apply:` target), **`copy_of:` source reachability** (the source MUST be graph-reachable; no "template-only" status). PRE-PASS: walk ALL YAML node-name references (`edge.from`, `edge.to`, `copy_of:` source, `map.apply:` target — the `edge.ref` entry source is GONE per Round 4 item #11); any name not in `workflow.nodes` raises `WorkflowNodeNotDefined` (renamed from `WorkflowUnknownNodeRef`).
    - **§7.2 Schema** — bind sources resolve, type-compat. **`nodes.<X>.<field>` references ARE pre-validated** (the prior carve-out is GONE) via Jinja-AST walk + **graph-reachability predecessor closure** (Round 4 item #11; NOT edge-level `ref:` which no longer exists) + output-schema field check. Raise `WorkflowJinjaRefUnknown` with `reason: str` (Round 4 item #9 — typed as `str`; documented values `not_predecessor` / `unknown_field` / `not_declared`) per the order locked above. Raise `WorkflowMapperWorkerNotAddressable` when an external reference targets a mapper worker.
@@ -1618,7 +1618,7 @@ Note: "predecessor" = any graph-reachable transitive ancestor (Round 4 item #11 
 **What was built in Step 5:** the run-start validation gate. Dual public surface (`validate_workflow -> ValidationResult` + `validate_workflow_or_raise`) covering master spec §7.1–§7.7 PLUS the new Jinja-AST `nodes.<X>.<field>` pre-validation (prior carve-out gone) via **graph-reachability predecessor closure** (Round 4 item #11 — NOT edge-`ref:` lookup; the field no longer exists), `copy_of:` reachability, unreachable-node detection, mapper-worker addressability, `WorkflowNodeNotDefined` pre-pass for unresolved YAML node-name refs, **`WorkflowBindCollision`** check for two edges to the same target binding the same key (Round 4 item #11 NEW), **STRICT `from:` validation** with three hard errors (Round 4 item #13: `WorkflowFromShapeError` / `WorkflowFromAssetTypeError` / `WorkflowFromNotFound`), accumulation within layer via stdlib `ExceptionGroup` + fail-fast across layers with "Related issues" tail. Per-rule unit tests covering every error class — including the R3 + Round 4 new ones. NO state-collision check (per polish-pass Decision P5 — state mutations are by design). NO `WorkflowMultiInputForbidden` (Round 4 item #11 REMOVED). NO `WorkflowFromShapeWarning` (Round 4 item #13 REMOVED).
 
 **Authoritative references — read BEFORE reviewing:**
-1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-parser-validator-spec.md`** — Step 5.
+1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-build.md`** — Step 5.
 2. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-spec.md`** — §7 (all sub-sections), §12.1 (exception hierarchy).
 
 **Acceptance criteria to verify (Step 5):** Verify each of 5.1–5.16. PAY EXTRA ATTENTION to:
@@ -1689,7 +1689,7 @@ Implement the `kolsch workflows ...` CLI subcommand group. **Five commands**: `l
 
 **Authoritative references — read BEFORE coding:**
 
-1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-parser-validator-spec.md`** — Step 6.
+1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-build.md`** — Step 6.
 2. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-spec.md`** — §14 (CLI surface).
 3. **`src/cli/`** — existing CLI structure. Find how `kolsch agents`, `kolsch tools`, etc. are mounted; mirror.
 
@@ -1841,7 +1841,7 @@ podman-compose exec dev uv run kolsch --root /tmp/kolsch-wf-test nodes show kols
 **What was built in Step 6:** `kolsch workflows list/show/validate/cancel/run-stub` commands wired to catalog + parser + validator. All 5 commands accept `--format text|json` per the cross-cutting CLI convention (master spec §14.3 + §14.4). `src/cli/_format.py:render()` is the single shared helper where text vs json branching happens; `render_exception(exc)` is the single generic JSON formatter (R3 #11). `validate` uses `validate_workflow_or_raise` (R3 #6); JSON envelope includes both `errors` AND `warnings` arrays + per-error `caller_message` (R3 #8). `cancel` (R3 #1) writes a sidecar `cancel.flag`; Phase 3.1 wires executor cooperation + orphan sweep.
 
 **Authoritative references — read BEFORE reviewing:**
-1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-parser-validator-spec.md`** — Step 6.
+1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-build.md`** — Step 6.
 2. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-spec.md`** — §14 (including §14.3 envelope + §14.4 exception JSON shape).
 
 **Acceptance criteria to verify (Step 6):** Verify each of 6.1–6.11. PAY EXTRA ATTENTION to 6.4 — the `run` stub MUST NOT execute anything; if it does, scope creep into Phase 3.1. Also 6.8 — confirm `--format json` produces a well-formed envelope for both success and failure cases on all 5 `workflows` commands. Also 6.5 — confirm `cancel` writes ONLY the sidecar flag and does NOT signal any process or attempt to cooperate with an executor (Phase 3.1 territory). Also 6.10/6.11 (Round 7 L7-12) — confirm `kolsch nodes list/show` are wired symmetrically with `kolsch workflows list/show`, share the `_format.py:render()` helper, and `nodes show <ref>` re-uses Step 5's validator introspection on failure paths (NOT a re-implementation).
@@ -1909,7 +1909,7 @@ Write ~25-35 workflow YAML fixtures at `tests/golden/workflows/` covering every 
 
 **Authoritative references — read BEFORE coding:**
 
-1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-parser-validator-spec.md`** — Step 7. Note the fixture list in the Technical Context's "File layout to create".
+1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-build.md`** — Step 7. Note the fixture list in the Technical Context's "File layout to create".
 2. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-spec.md`** — §4 (catalog — for fixture-by-node-type coverage of the FINAL 14 BUILT-IN types; the 8 dropped aggregations get an "invalid" fixture proving they're rejected with a helpful fix-path; the dropped `python` discriminator also gets an "invalid" fixture proving the catalog-ref path is required), §7 (validator rules — for fixture-by-rule coverage), §12.1 (error classes — for fixture-by-error coverage including the new ones), §12.3 (error message contract — fixtures assert the `<file>:<line>` and literal `"Fix: "` tokens), §13 (permissions — fixtures cover `from:` field).
 
 **What to implement:**
@@ -2054,7 +2054,7 @@ Write ~25-35 workflow YAML fixtures at `tests/golden/workflows/` covering every 
 **What was built in Step 7:** ~25-35 fixture YAMLs covering every error class (including the R3 renamed: `WorkflowBindMustBeJinja`/`WorkflowJinjaRefUnknown`/`WorkflowBranchMissingArm`; R3 new: `WorkflowInvalidRef`/`WorkflowBuiltinShadowed`/`WorkflowInvalidTimeout`; `WorkflowNodeNotDefined` with surviving 4 trigger cases; **Round 4 NEW**: `WorkflowBindCollision` (item #11), `WorkflowFromShapeError` / `WorkflowFromAssetTypeError` / `WorkflowFromNotFound` (item #13)). Every BUILT-IN node type (the final 14 with R3 #9 renames: `map`/`set_state`/`delete_state`) plus the `CatalogNodeDef` path for authored Python nodes (Round 4 item #3 renamed). The renames (`copy_of:`, edge `when:`). **Round 4 item #11 fixtures**: `valid-multi-input-fan-in.yaml`, `invalid-bind-collision.yaml`, `invalid-bind-type-mismatch.yaml`, `invalid-edge-ref-rejected.yaml`. **Round 4 item #13 fixtures**: 3 invalid `from:` fixtures (`shape` / `asset-type` / `not-found`). Refs unification, multi-error accumulation via stdlib `ExceptionGroup`, R3 #5 fixtures (`invalid-1seg-rejected.yaml`, `invalid-builtin-shadowed.yaml`), R3 #2 timeout fixtures (valid + invalid + shadowing warning), the single-node-runnable fixture (`valid-single-node-runnable.yaml` per polish-pass Decision P3), a multi-write state-evolves fixture, R3 #7 `description:` fixture. **Round 4 item #1**: top-of-file YAML annotation block locked; `tests/golden/workflows/_README.md` documents the convention; `tests/workflows/conftest.py:make_workflow(**overrides)` helper ships. Golden test runner; starter bundle (uses `type: kolsch/nodes/echo`). R3 #1 cancel CLI tests. Strict-no-code Fix-portion assertion enforced on every YAML-origin error fixture (per master spec §12.3 + polish-pass Decision P4). R3 #12 — every `docs_anchor` referenced in error messages resolves to an actual anchor in `docs/workflows.md`. NO `WorkflowMultiInputForbidden` fixture (Round 4 item #11 REMOVED). NO `WorkflowFromShapeWarning` fixture (Round 4 item #13 REMOVED).
 
 **Authoritative references — read BEFORE reviewing:**
-1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-parser-validator-spec.md`** — Step 7. Note the minimum coverage set in the Coder Prompt.
+1. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-build.md`** — Step 7. Note the minimum coverage set in the Coder Prompt.
 2. **`/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-spec.md`** — §4 (14 built-in node types + CatalogNodeRef path), §7 (validator rules), §12.1 (error classes including the new ones), §12.3 (error message contract), §13 (permissions + `from:`).
 
 **Acceptance criteria to verify (Step 7):** Verify each of 7.1–7.30. The CRITICAL coverage checks:

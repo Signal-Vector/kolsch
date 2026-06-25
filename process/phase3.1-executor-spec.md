@@ -3,7 +3,7 @@
 **Intro.** This spec covers Phase 3.1 — the sequential executor. Depends on Phase 3.0 (parser + validator) having shipped.
 
 Related docs:
-- `/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-parser-validator-spec.md` — the Phase 3.0 parser + run-start validator that this executor builds on.
+- `/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-build.md` — the Phase 3.0 parser + run-start validator that this executor builds on.
 - `/Users/andrecohen/Desktop/SV/Projects/kolsch/process/phase3.0-workflow-spec.md` — the master design spec (Phase 3.0 locked decisions across 21 sections).
 - `docs/explanation/workflow-event-log.md` — author-facing explanation of the event-log conventions referenced below (event kinds, common fields, capture rules, cross-JSONL correlation).
 

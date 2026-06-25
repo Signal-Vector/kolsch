@@ -91,4 +91,4 @@ The migration is tedious but uncontroversial.
 
 - Master workflow spec `process/phase3.0-workflow-spec.md` §14.3, §14.4 — the locked format contract
 - Master workflow spec `process/phase3.0-workflow-spec.md` §12.3 — strict single-line error message format (referenced for the `summary` and `fix` fields of the §14.4 JSON shape)
-- Parser-validator spec `process/phase3.0-parser-validator-spec.md` Step 6 — the first consumer of the contract (`workflows` commands)
+- Parser-validator spec `process/phase3.0-workflow-build.md` Step 6 — the first consumer of the contract (`workflows` commands)
