@@ -18,8 +18,11 @@ dependencies = [
     # Phase 3.0 Step 0 migrated off PyYAML to ruamel.yaml — fixes
     # the Norway-bug (PyYAML coerced unquoted ``no``/``yes``/``on``/
     # ``off`` to booleans) and unlocks line-info-aware loading needed
-    # by the workflow parser. The single chokepoint is ``src/_yaml.py``;
-    # every other module imports ``load`` / ``dump`` from there.
+    # by the workflow parser. The single chokepoint is ``src/_yamlio.py``
+    # (named ``_yamlio`` rather than ``_yaml`` to avoid colliding with
+    # PyYAML's site-packages compatibility stub package ``_yaml/`` —
+    # PyYAML remains a transitive dep of crewai et al.); every other
+    # module imports ``load`` / ``dump`` from there.
     # ``ruamel.yaml.clib`` is the optional C extension that ruamel
     # falls back to a pure-Python parser without.
     "ruamel.yaml>=0.18,<1",
