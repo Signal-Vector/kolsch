@@ -22,7 +22,6 @@ from errors import (
     AssetsInvalidRef,
     AssetsNotFound,
     AssetsPromptLoadFailed,
-    AssetsReservedBundleName,
     AuthzBareToolRef,
     AuthzDenied,
     AuthzMalformedRule,
@@ -285,7 +284,6 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
         "refs": ["acme/agents/butler", "acme/tools/butler"],
     },
     AssetsBundleNameMismatch: {"directory": "foo", "manifest_name": "bar"},
-    AssetsReservedBundleName: {"name": "core"},
     AssetsNotFound: {"ref": "acme/tools/missing"},
     AssetsInvalidRef: {"ref": "no slashes"},
     AssetsAmbiguousShorthand: {

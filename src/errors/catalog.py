@@ -56,7 +56,6 @@ CATALOG: dict[str, Level] = {
     "assets.duplicate_bundle_name": Level.FATAL,
     "assets.duplicate_name": Level.FATAL,
     "assets.bundle_name_mismatch": Level.FATAL,
-    "assets.reserved_bundle_name": Level.FATAL,
     "assets.not_found": Level.FATAL,
     "assets.invalid_ref": Level.FATAL,
     "assets.ambiguous_shorthand": Level.FATAL,

@@ -31,12 +31,10 @@ from errors import (
     AssetsBundleNameMismatch,
     AssetsDuplicateBundleName,
     AssetsDuplicateName,
-    AssetsReservedBundleName,
 )
 
 _log = logging.getLogger("assets")
 
-_RESERVED_BUNDLE_NAMES: frozenset[str] = frozenset({"core"})
 _ASSET_TYPES: frozenset[str] = frozenset(
     {"tool", "skill", "agent", "prompt", "workflow", "node"}
 )
@@ -117,8 +115,6 @@ def scan(root: Path) -> AssetCatalog:
     """Walk ``root/bundles/`` and build the catalog.
 
     Raises:
-        AssetsReservedBundleName: a bundle uses the reserved ``core``
-            name (Am-I3).
         AssetsDuplicateBundleName: two bundles share a manifest name
             (Am-I2). Detected BEFORE the directory-name match check
             so a same-named pair surfaces as a duplicate rather than
@@ -138,8 +134,6 @@ def scan(root: Path) -> AssetCatalog:
     for bundle_dir in sorted(bundles_dir.iterdir()):
         if not bundle_dir.is_dir():
             continue
-        if bundle_dir.name in _RESERVED_BUNDLE_NAMES:
-            raise AssetsReservedBundleName(name=bundle_dir.name)
         if not is_valid_bundle_name(bundle_dir.name):
             _log.warning(
                 "Skipping bundle directory %s: invalid name "

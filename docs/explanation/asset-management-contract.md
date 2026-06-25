@@ -17,8 +17,10 @@
 - **Bundle format**: directory with a `bundle.yaml` manifest. Not an
   industry standard for whole bundles (none exists). Skills inside
   bundles follow the Agent Skills standard (agentskills.io).
-- **No reserved bundle names** except `core` (platform-shipped assets;
-  v1 ships none). Users create their own bundles with their own names.
+- **No reserved bundle names.** The platform ships its built-in
+  assets under the `kolsch` bundle name (no special enforcement —
+  same uniqueness rules as any other bundle). Users create their
+  own bundles with their own names.
 - **Platform root = current working directory.** The user runs the
   CLI in some directory; that directory IS the platform installation.
   No environment variable. No magic `~/<platform>/` path.
@@ -586,15 +588,23 @@ agent's configuration (partial AgentConfig).
 directory, referenced from an agent's PromptSpec. The file's stem is
 the prompt's name.
 
-### 4.4 The `core` reserved bundle
+### 4.4 The `kolsch` platform-shipped bundle
 
-The bundle name `core` is reserved for platform-shipped assets. v1 ships
-no core assets — the four builtin tools (`read`, `write`, `edit`, `bash`)
-are registered directly by the Tools subsystem at platform startup, not
-shipped as a bundle. The `core` name is reserved against future use.
+The platform ships its built-in assets under the bundle name
+`kolsch`. There is no name *reservation* — `kolsch` participates in
+the standard uniqueness rules (a second bundle named `kolsch` would
+trip `AssetsDuplicateBundleName` like any other duplicate). The
+four builtin tools (`read`, `write`, `edit`, `bash`) are registered
+directly by the Tools subsystem at platform startup, not shipped as
+bundle files. The 14 built-in workflow node types (`kolsch/nodes/<name>`)
+are virtual entries injected at catalog scan time (Phase 3.0 Step 3);
+authoring a file at one of those reserved slots
+(e.g., `bundles/kolsch/nodes/bash.py`) trips
+`WorkflowBuiltinShadowed`.
 
-A bundle directory named `bundles/core/` would conflict with this
-reservation and is rejected at catalog build.
+Phase 3.0 R3 #5 dropped a previously-speculative `core` reservation
+that anticipated a `core/principals/*` ref family; that design was
+abandoned and no bundle directory name is reserved today.
 
 ---
 
@@ -797,10 +807,16 @@ is a fatal startup error.
 No two bundles in the bundles directory may share a name. Duplicate
 names are a fatal startup error.
 
-### Am-I3 — Reserved names
+### Am-I3 — Reserved names (retired)
 
-The bundle name `core` is reserved. A bundle directory named `core/`
-is rejected at catalog build.
+No bundle directory name is reserved. A previously-documented `core`
+reservation was speculative for a `core/principals/*` ref family that
+was abandoned in Phase 3.0 R3 #5. The platform-shipped bundle name is
+`kolsch`; it participates in the standard uniqueness rule (Am-I2)
+with no special enforcement. Within the `kolsch` bundle, the 14
+built-in workflow node slots `kolsch/nodes/<name>` are protected at
+catalog scan time by `WorkflowBuiltinShadowed` (Phase 3.0 Step 3) —
+that protection is per-slot, not per-bundle-name.
 
 ### Am-I4 — Pre-resolution of prompt content
 
@@ -884,10 +900,15 @@ responsibility.
    §2 for the actual UX; this contract just specifies what the layout
    looks like once present.
 
-5. **The `core` reserved bundle's future contents.** If the platform
-   ever ships baseline assets (default agents, default prompts), they
-   live in `core`. v1 ships none; reservation prevents conflicts when
-   they arrive.
+5. **Platform-shipped baseline assets live in `kolsch`.** The
+   `kolsch` bundle is the home for any default agents, prompts, or
+   tools the platform ships. v1 ships only the four builtin tools
+   (registered directly by the Tools subsystem, not as bundle files)
+   plus 14 virtual workflow node slots `kolsch/nodes/<name>`
+   (injected at catalog scan time per Phase 3.0 Step 3); future
+   baseline assets land in `bundles/kolsch/`. No bundle-name
+   reservation enforces this; the standard uniqueness rule (Am-I2)
+   does.
 
 6. **Hot reload.** Adding a bundle mid-session is not supported in v1.
    A user adds a bundle by stopping the platform, copying the bundle

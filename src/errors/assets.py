@@ -85,25 +85,6 @@ class AssetsBundleNameMismatch(PlatformError):
         )
 
 
-class AssetsReservedBundleName(PlatformError):
-    """A bundle uses the reserved ``core`` name. Am-I3."""
-
-    code = "assets.reserved_bundle_name"
-    level = Level.FATAL
-
-    def __init__(
-        self,
-        name: str,
-        *,
-        where: str = "assets.catalog.build",
-    ) -> None:
-        super().__init__(
-            message=f"Bundle name {name!r} is reserved by the platform",
-            where=where,
-            detail={"name": name},
-        )
-
-
 class AssetsNotFound(PlatformError):
     """A ref or shorthand does not resolve to any catalog entry."""
 

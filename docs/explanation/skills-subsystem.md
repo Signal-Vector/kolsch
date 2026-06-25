@@ -208,7 +208,9 @@ The platform scans for skills in:
 ```
 <bundle>/skills/         — each installed bundle's skills directory
 local/skills/            — the user's local un-packaged skills
-core/skills/             — reserved; platform-provided skills (v1 has none)
+kolsch/skills/           — platform-shipped skills (live inside the
+                           `kolsch` bundle — no name reservation, just
+                           the same uniqueness rule as any other bundle)
 ```
 
 For each `<dir>/skills/`, the platform looks for subdirectories

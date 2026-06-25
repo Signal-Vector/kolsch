@@ -17,7 +17,6 @@ from errors.assets import (
     AssetsInvalidRef,
     AssetsNotFound,
     AssetsPromptLoadFailed,
-    AssetsReservedBundleName,
 )
 from errors.authz import (
     AuthzBareToolRef,
@@ -153,7 +152,6 @@ __all__ = [
     "AssetsInvalidRef",
     "AssetsNotFound",
     "AssetsPromptLoadFailed",
-    "AssetsReservedBundleName",
     "AuthzBareToolRef",
     "AuthzDenied",
     "AuthzMalformedRule",

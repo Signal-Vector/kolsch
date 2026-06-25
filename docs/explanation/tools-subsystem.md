@@ -266,10 +266,15 @@ If the agent wants no built-in tools, the list is empty.
 
 Each `declared` entry is a reference to a declared tool by namespaced
 path (Option B asset references). The format is
-`<package>/tools/<tool-name>`. Reserved packages:
+`<package>/tools/<tool-name>`. Conventional packages:
 - `local` — tools defined in the user's own (un-packaged) `tools/`
   directory.
-- `core` — system tools (reserved; v1 has none beyond the builtins).
+- `kolsch` — platform-shipped tools. The four builtin tools (`read`,
+  `write`, `edit`, `bash`) are registered by the Tools subsystem at
+  startup and are not bundle files; bundle-resident platform tools
+  would live under `bundles/kolsch/tools/`. No bundle-name
+  reservation enforces this — `kolsch` participates in the standard
+  uniqueness rule like any other bundle.
 
 The platform's tool discovery scans known tool directories (per Part 5
 below) and the agent's config enables which ones to use.

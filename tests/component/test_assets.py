@@ -23,7 +23,6 @@ from errors import (
     AssetsBundleNameMismatch,
     AssetsDuplicateBundleName,
     AssetsNotFound,
-    AssetsReservedBundleName,
     ConfigInvalid,
 )
 from schemas import ResolvedAgentConfig
@@ -222,19 +221,22 @@ async def test_bundle_name_mismatch_is_fatal(platform_root: Path) -> None:
 
 
 # ---------------------------------------------------------------------------
-# TC-ASM-04 — reserved name `core` rejected
+# TC-ASM-04 — `core` is NOT a reserved bundle name (Phase 3.0 R3 #5)
+# The platform-shipped bundle is `kolsch`; `core` was speculative for the
+# dropped `core/principals/*` design and carries no special meaning.
 # ---------------------------------------------------------------------------
 
 
-async def test_reserved_bundle_name_core_rejected(
-    platform_root: Path,
-) -> None:
+async def test_bundle_name_core_is_accepted(platform_root: Path) -> None:
     _write_platform_yaml(platform_root)
     _write_bundle(platform_root, dir_name="core")
 
     am = AssetManagement(root=platform_root)
-    with pytest.raises(AssetsReservedBundleName):
-        await am.initialize()
+    await am.initialize()
+    # Catalog initializes cleanly — no reserved-name exception fires.
+    assert any(
+        m.name == "core" for m in am._catalog.bundles.values()  # noqa: SLF001
+    )
 
 
 # ---------------------------------------------------------------------------
