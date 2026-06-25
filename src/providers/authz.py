@@ -75,6 +75,7 @@ from typing import TYPE_CHECKING, Any, Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict
 
+from assets.refs import build_ref
 from errors import (
     AuthzBareToolRef,
     AuthzMalformedRule,
@@ -147,7 +148,9 @@ def _build_action_to_tool_ref(catalog: AssetCatalog) -> dict[str, str]:
         if entry.asset_type != "tool":
             continue
         # Catalog refs are 3-seg `<bundle>/<plural>/<name>`; tool refs
-        # in `what:` are 2-seg `<bundle>/<name>`.
+        # in `what:` are 2-seg `<bundle>/<name>` (migration shim — the
+        # full-3-seg rewrite is queued at
+        # ``process/qol-refs-1seg-removal.md``).
         name = entry.ref.rsplit("/", 1)[-1]
         out[f"tool.{name}"] = f"{entry.bundle}/{name}"
     return out
@@ -586,6 +589,11 @@ class RuleBasedAuthorizationProvider:
         if "/" in what:
             # Qualified slash form. Resolve against the catalog —
             # rejects unknown tool refs with AuthzToolRefUnknown.
+            # Phase 3.0 Step 1 — the canonical 2-seg → 3-seg
+            # promotion routes through :func:`build_ref`. The full
+            # 3-seg-everywhere rewrite is queued at
+            # ``process/qol-refs-1seg-removal.md``; until then the
+            # rule grammar continues to accept 2-seg ``<bundle>/<name>``.
             parts = what.split("/")
             if len(parts) != 2 or not all(parts):
                 raise AuthzMalformedRule(
@@ -596,9 +604,9 @@ class RuleBasedAuthorizationProvider:
                     ),
                 )
             bundle, name = parts
-            canonical = f"{bundle}/tools/{name}"
-            entry = self._catalog.assets.get(canonical)
-            if entry is None or entry.asset_type != "tool":
+            canonical = build_ref(bundle, "tool", name)
+            entry = self._catalog.lookup(canonical, expected_type="tool")
+            if entry is None:
                 raise AuthzToolRefUnknown(
                     rule_index=index,
                     tool_ref=what,

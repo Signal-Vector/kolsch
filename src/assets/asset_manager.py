@@ -185,11 +185,17 @@ class AssetManagement:
                 field_asset_type,
                 emit_warning=_log_deprecated_ref,
             )
-            return catalog.assets[canonical]
+            # Round 5 H3 — route through .lookup; ``canonical`` is
+            # the resolver's already-checked 3-seg key, so
+            # expected_type is redundant but harmless.
+            entry = catalog.lookup(canonical, expected_type=field_asset_type)
+            if entry is None:
+                raise AssetsNotFound(ref=ref, asset_type=field_asset_type)
+            return entry
         # Backward-compat: 3-seg-only shape validation + direct
         # lookup. Callers without a field context fall through here.
         parse_ref(ref)
-        entry = catalog.assets.get(ref)
+        entry = catalog.lookup(ref)
         if entry is None:
             raise AssetsNotFound(ref=ref)
         return entry

@@ -25,6 +25,7 @@ from assets.manifest import (
     is_valid_bundle_name,
     load_manifest,
 )
+from assets.refs import build_ref, parse_three_segment
 from assets.skill_metadata import parse_skill_frontmatter
 from errors import (
     AssetsBundleNameMismatch,
@@ -52,12 +53,62 @@ class AssetEntry(BaseModel):
 
 
 class AssetCatalog(BaseModel):
-    """Built once at startup; immutable thereafter (Am-I7)."""
+    """Built once at startup; immutable thereafter (Am-I7).
+
+    Phase 3.0 Step 1 (Round 5 H3) — :meth:`lookup` is the chokepoint
+    for **external** catalog reads. Direct ``catalog.assets[ref]``
+    subscript access is permitted ONLY inside this module; all
+    other call sites (``src/workflows/*``, ``src/providers/authz.py``,
+    ``src/cli/*``, ``src/assets/asset_manager.py``, etc.) route
+    through ``catalog.lookup(ref, expected_type=...)``. A custom
+    ruff lint rule (queued, see ``process/qol-refs-1seg-removal.md``)
+    will enforce this on future commits; for now the discipline is
+    documentary + reviewer-grep enforced.
+    """
 
     model_config = ConfigDict(frozen=False, extra="forbid")
 
     bundles: dict[str, BundleManifest] = Field(default_factory=dict)
     assets: dict[str, AssetEntry] = Field(default_factory=dict)
+
+    def lookup(
+        self, ref: str, expected_type: str | None = None
+    ) -> AssetEntry | None:
+        """Resolve a 3-segment ref to its :class:`AssetEntry`, or ``None``.
+
+        Phase 3.0 Step 1 (Round 5 H3) — the documented chokepoint for
+        catalog access. Combines shape validation (via
+        :func:`assets.refs.parse_three_segment`) and dict-get into one
+        well-typed call. ``None`` is returned in every "not found"
+        scenario so callers can write
+        ``entry = catalog.lookup(ref, expected_type="agent")``
+        and check truthiness without juggling multiple exception
+        classes:
+
+        - ``ref`` is not a 3-seg string → ``None`` (shape miss).
+        - ``ref`` shape is valid but the catalog has no entry → ``None``.
+        - ``ref`` resolves but its ``asset_type`` differs from
+          ``expected_type`` → ``None``.
+
+        Args:
+            ref: 3-segment catalog ref (``<bundle>/<plural>/<name>``).
+            expected_type: optional singular asset type guard
+                (``tool``/``skill``/``agent``/``prompt``/``workflow``/
+                ``node``).
+
+        Returns:
+            The matching :class:`AssetEntry` or ``None``.
+        """
+        try:
+            parse_three_segment(ref)
+        except ValueError:
+            return None
+        entry = self.assets.get(ref)
+        if entry is None:
+            return None
+        if expected_type is not None and entry.asset_type != expected_type:
+            return None
+        return entry
 
 
 def scan(root: Path) -> AssetCatalog:
@@ -173,7 +224,7 @@ def _scan_tools(bundle: str, bundle_dir: Path) -> list[AssetEntry]:
         # registration time) expands per-decorator at that point.
         out.append(
             AssetEntry(
-                ref=f"{bundle}/tools/{stem}",
+                ref=build_ref(bundle, "tool", stem),
                 asset_type="tool",
                 bundle=bundle,
                 path=str(path.resolve()),
@@ -214,7 +265,7 @@ def _scan_skills(bundle: str, bundle_dir: Path) -> list[AssetEntry]:
         metadata = parse_skill_frontmatter(skill_md)
         out.append(
             AssetEntry(
-                ref=f"{bundle}/skills/{skill_dir.name}",
+                ref=build_ref(bundle, "skill", skill_dir.name),
                 asset_type="skill",
                 bundle=bundle,
                 path=str(skill_md.resolve()),
@@ -232,7 +283,7 @@ def _scan_agents(bundle: str, bundle_dir: Path) -> list[AssetEntry]:
     for path in sorted(agents_dir.glob("*.yaml")):
         out.append(
             AssetEntry(
-                ref=f"{bundle}/agents/{path.stem}",
+                ref=build_ref(bundle, "agent", path.stem),
                 asset_type="agent",
                 bundle=bundle,
                 path=str(path.resolve()),
@@ -252,7 +303,7 @@ def _scan_prompts(bundle: str, bundle_dir: Path) -> list[AssetEntry]:
             continue
         out.append(
             AssetEntry(
-                ref=f"{bundle}/prompts/{path.stem}",
+                ref=build_ref(bundle, "prompt", path.stem),
                 asset_type="prompt",
                 bundle=bundle,
                 path=str(path.resolve()),
