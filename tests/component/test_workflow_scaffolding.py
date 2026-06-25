@@ -536,7 +536,16 @@ def test_workflows_all_is_list_and_non_empty() -> None:
 def test_workflows_all_parity_with_module_namespace() -> None:
     # Exclude submodule re-exports (importable via dotted path) and the
     # ``annotations`` shim from ``from __future__ import annotations``.
-    submodules = {"context", "decorator", "errors", "ids", "jinja_env", "labels"}
+    submodules = {
+        "catalog_node",
+        "context",
+        "decorator",
+        "errors",
+        "ids",
+        "jinja_env",
+        "labels",
+        "parser",
+    }
     skip = submodules | {"annotations"}
     public_names = {
         name
