@@ -620,6 +620,7 @@ def _extract_nodes_refs(expression: str) -> list[tuple[str, str | None]]:
         return []
 
     pairs: list[tuple[str, str | None]] = []
+    nodes_x_y_sources: set[str] = set()
     for getattr_node in ast.find_all(jinja_nodes.Getattr):
         # Outer form: Getattr(node=Getattr(node=Name('nodes'), attr=X), attr=Y).
         outer_attr = getattr_node.attr
@@ -630,6 +631,7 @@ def _extract_nodes_refs(expression: str) -> list[tuple[str, str | None]]:
             and inner.node.name == "nodes"
         ):
             pairs.append((inner.attr, outer_attr))
+            nodes_x_y_sources.add(inner.attr)
             continue
         # Inner form alone: Getattr(node=Name('nodes'), attr=X) → (X, None).
         if (
@@ -637,7 +639,15 @@ def _extract_nodes_refs(expression: str) -> list[tuple[str, str | None]]:
             and getattr_node.node.name == "nodes"
         ):
             pairs.append((outer_attr, None))
-    return pairs
+    # Dedupe: when the same Jinja expression already produced a
+    # ``(X, Y)`` pair, drop the inner ``(X, None)`` that
+    # :meth:`Template.find_all` also surfaces. The bare ``nodes.X``
+    # access is only meaningful when no field traversal was authored.
+    return [
+        (x, y)
+        for (x, y) in pairs
+        if not (y is None and x in nodes_x_y_sources)
+    ]
 
 
 def _output_field_set(node: Any) -> frozenset[str] | None:

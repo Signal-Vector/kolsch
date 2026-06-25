@@ -1,0 +1,77 @@
+# expected: valid
+# Master spec §4 — exercises every built-in node type with valid config.
+nodes:
+  read_step:
+    type: kolsch/nodes/read_file
+    path: "/tmp/in.txt"
+  write_step:
+    type: kolsch/nodes/write_file
+    path: "/tmp/out.txt"
+    content: "hello"
+  list_step:
+    type: kolsch/nodes/list_files
+    path: "/tmp"
+  set_step:
+    type: kolsch/nodes/set_state
+    keys:
+      ready: true
+  delete_step:
+    type: kolsch/nodes/delete_state
+    keys: ["ready"]
+  filter_step:
+    type: kolsch/nodes/filter
+    over: "{{ inputs.items }}"
+    condition: "{{ item.ok }}"
+  map_step:
+    type: kolsch/nodes/map
+    apply: worker
+    over: "{{ inputs.items }}"
+    item_as: row
+  worker:
+    type: kolsch/nodes/noop
+  branch_step:
+    type: kolsch/nodes/branch
+    condition: "{{ true }}"
+  compute_step:
+    type: kolsch/nodes/compute
+    value: "{{ 1 + 1 }}"
+  user_step:
+    type: kolsch/nodes/user_input
+    prompt: "ready?"
+  agent_step:
+    type: kolsch/nodes/agent
+    agent: kolsch/agents/triage
+  subwf:
+    type: kolsch/nodes/workflow
+    ref: acme/workflows/triage
+  cmd_step:
+    type: kolsch/nodes/bash
+    command: "echo hi"
+graph:
+  edges:
+    - from: read_step
+      to: write_step
+    - from: write_step
+      to: list_step
+    - from: list_step
+      to: set_step
+    - from: set_step
+      to: delete_step
+    - from: delete_step
+      to: filter_step
+    - from: filter_step
+      to: map_step
+    - from: map_step
+      to: branch_step
+    - from: branch_step
+      to: compute_step
+      branch: true
+    - from: branch_step
+      to: user_step
+      branch: false
+    - from: compute_step
+      to: agent_step
+    - from: agent_step
+      to: subwf
+    - from: subwf
+      to: cmd_step

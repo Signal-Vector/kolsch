@@ -1,0 +1,11 @@
+# expected_error: WorkflowValidationError
+# Round 5 H1 — the OLD `permissions:` key is rejected; use `policy:`.
+permissions:
+  - what: kolsch/bash
+    pattern: "*"
+    effect: allow
+nodes:
+  a:
+    type: kolsch/nodes/noop
+graph:
+  edges: []

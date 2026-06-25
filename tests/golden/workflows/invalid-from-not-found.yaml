@@ -1,0 +1,12 @@
+# expected_error: WorkflowFromNotFound
+# Round 4 item #13 — 3-seg + valid asset_type + catalog miss → hard error.
+policy:
+  - what: kolsch/bash
+    pattern: "*"
+    from: kolsch/agents/nonexistent
+    effect: allow
+nodes:
+  a:
+    type: kolsch/nodes/noop
+graph:
+  edges: []

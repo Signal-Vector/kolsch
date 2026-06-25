@@ -1,0 +1,12 @@
+# expected_error: WorkflowFromShapeError
+# Round 4 item #13 — non-3-seg from: → hard error.
+policy:
+  - what: kolsch/bash
+    pattern: "*"
+    from: random
+    effect: allow
+nodes:
+  a:
+    type: kolsch/nodes/noop
+graph:
+  edges: []

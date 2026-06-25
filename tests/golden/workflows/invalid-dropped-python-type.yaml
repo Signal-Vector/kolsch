@@ -1,0 +1,5 @@
+# expected_error: WorkflowInvalidRef
+# R3 #5 — the `python` discriminator is gone; authored Python nodes use 3-seg.
+nodes:
+  run_step:
+    type: python

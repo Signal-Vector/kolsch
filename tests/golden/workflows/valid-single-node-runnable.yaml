@@ -1,0 +1,7 @@
+# expected: valid
+# Polish-pass Decision P3 — a single node + empty edges resolves to kind=workflow.
+nodes:
+  greet:
+    type: kolsch/nodes/noop
+graph:
+  edges: []

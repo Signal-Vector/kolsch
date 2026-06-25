@@ -1,0 +1,6 @@
+# expected_error: WorkflowInvalidRef
+# R3 #5 — bare 1-seg type: is rejected.
+nodes:
+  greet:
+    type: bash
+    command: "echo hi"

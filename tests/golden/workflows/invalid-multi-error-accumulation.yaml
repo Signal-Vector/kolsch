@@ -1,0 +1,13 @@
+# expected_errors: WorkflowNodeNotDefined, WorkflowNodeNotDefined, WorkflowNodeNotDefined
+# Three sibling-independent failures → stdlib ExceptionGroup with len==3.
+nodes:
+  a:
+    type: kolsch/nodes/noop
+graph:
+  edges:
+    - from: x
+      to: a
+    - from: y
+      to: a
+    - from: z
+      to: a

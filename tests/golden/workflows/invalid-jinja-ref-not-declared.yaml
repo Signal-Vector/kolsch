@@ -1,0 +1,12 @@
+# expected_error: WorkflowJinjaRefUnknown
+# Authored Python node (CatalogNodeDef) — output schema unknown at Phase 3.0.
+nodes:
+  upstream:
+    type: acme/nodes/echo
+  use:
+    type: kolsch/nodes/compute
+    value: "{{ nodes.upstream.result }}"
+graph:
+  edges:
+    - from: upstream
+      to: use

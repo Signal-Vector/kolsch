@@ -1,0 +1,4 @@
+# expected_error: WorkflowNodeNotDefined
+nodes:
+  derived:
+    copy_of: ghost

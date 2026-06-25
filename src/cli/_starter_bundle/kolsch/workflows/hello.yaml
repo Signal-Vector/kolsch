@@ -1,0 +1,22 @@
+# Phase 3.0 starter workflow.
+#
+# Demonstrates the canonical 3-segment ``type:`` form (R3 #5) and the
+# common ``description:`` modifier (R3 #7). Authored Python nodes are
+# referenced via ``type: <bundle>/nodes/<name>`` (Round 4 item #3).
+description: "Starter workflow that greets and echoes."
+
+nodes:
+  greet:
+    type: kolsch/nodes/bash
+    command: "echo Hello, {{ inputs.name | default('world') }}!"
+    description: "shell greeting"
+  echo_step:
+    type: kolsch/nodes/echo
+    description: "authored python node from the starter bundle"
+
+graph:
+  edges:
+    - from: greet
+      to: echo_step
+      binds:
+        message: "{{ nodes.greet.stdout }}"

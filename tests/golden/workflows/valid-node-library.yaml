@@ -1,0 +1,8 @@
+# expected: valid
+# Master spec §6.2 — absence of `graph:` makes this a node library.
+nodes:
+  greet:
+    type: kolsch/nodes/bash
+    command: "echo hi"
+  noop_node:
+    type: kolsch/nodes/noop

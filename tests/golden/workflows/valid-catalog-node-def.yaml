@@ -1,0 +1,8 @@
+# expected: valid
+# Round 4 item #3 — authored Python node via type: <bundle>/nodes/<name>.
+nodes:
+  echo_step:
+    type: acme/nodes/echo
+    description: "authored python node"
+graph:
+  edges: []

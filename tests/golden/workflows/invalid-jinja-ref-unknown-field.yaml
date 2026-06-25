@@ -1,0 +1,12 @@
+# expected_error: WorkflowJinjaRefUnknown
+nodes:
+  fetch:
+    type: kolsch/nodes/bash
+    command: "echo hi"
+  use:
+    type: kolsch/nodes/compute
+    value: "{{ nodes.fetch.bogus_field }}"
+graph:
+  edges:
+    - from: fetch
+      to: use

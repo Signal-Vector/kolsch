@@ -1,0 +1,9 @@
+# expected_warning: WorkflowTimeoutShadowsNode
+# R3 #2 — per-node timeout > workflow-level → warning (not error).
+timeout_seconds: 30
+nodes:
+  slow:
+    type: kolsch/nodes/noop
+    timeout_seconds: 60
+graph:
+  edges: []

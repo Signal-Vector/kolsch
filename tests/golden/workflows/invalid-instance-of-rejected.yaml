@@ -1,0 +1,5 @@
+# expected_error: WorkflowValidationError
+# Round 4 — instance_of: was renamed to copy_of:; legacy key is rejected.
+nodes:
+  derived:
+    instance_of: foo

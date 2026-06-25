@@ -1,0 +1,9 @@
+# expected: valid
+# R3 #2 — workflow-level + per-node timeout_seconds (both positive).
+timeout_seconds: 60
+nodes:
+  fast:
+    type: kolsch/nodes/noop
+    timeout_seconds: 30
+graph:
+  edges: []

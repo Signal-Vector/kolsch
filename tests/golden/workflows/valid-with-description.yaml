@@ -1,0 +1,14 @@
+# expected: valid
+# R3 #7 — description: is a common modifier on every node type.
+nodes:
+  greet:
+    type: kolsch/nodes/bash
+    command: "echo hi"
+    description: "greet the user"
+  noop_node:
+    type: kolsch/nodes/noop
+    description: "marker for fan-out"
+graph:
+  edges:
+    - from: greet
+      to: noop_node

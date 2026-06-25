@@ -1,0 +1,12 @@
+# expected_error: WorkflowUnreachableNode
+nodes:
+  a:
+    type: kolsch/nodes/noop
+  b:
+    type: kolsch/nodes/noop
+  orphan:
+    type: kolsch/nodes/noop
+graph:
+  edges:
+    - from: a
+      to: b

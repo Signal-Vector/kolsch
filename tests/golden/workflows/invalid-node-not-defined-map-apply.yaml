@@ -1,0 +1,7 @@
+# expected_error: WorkflowNodeNotDefined
+nodes:
+  iterate:
+    type: kolsch/nodes/map
+    apply: ghost
+    over: "[]"
+    item_as: x

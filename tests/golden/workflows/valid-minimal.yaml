@@ -1,0 +1,7 @@
+# expected: valid
+nodes:
+  greet:
+    type: kolsch/nodes/bash
+    command: "echo Hello"
+graph:
+  edges: []

@@ -1,0 +1,12 @@
+# expected_error: WorkflowBranchMissingArm
+nodes:
+  decide:
+    type: kolsch/nodes/branch
+    condition: "{{ true }}"
+  yes_handler:
+    type: kolsch/nodes/noop
+graph:
+  edges:
+    - from: decide
+      to: yes_handler
+      branch: true

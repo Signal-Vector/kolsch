@@ -1,0 +1,8 @@
+# expected_error: WorkflowInvalidTimeout
+# R3 #2 — non-positive timeout_seconds is rejected.
+timeout_seconds: -5
+nodes:
+  a:
+    type: kolsch/nodes/noop
+graph:
+  edges: []

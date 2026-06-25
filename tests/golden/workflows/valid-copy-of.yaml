@@ -1,0 +1,13 @@
+# expected: valid
+# R3 #9 / Round 4 item #11 — copy_of: replaces instance_of.
+nodes:
+  fetch_a:
+    type: kolsch/nodes/bash
+    command: "curl A"
+  fetch_b:
+    copy_of: fetch_a
+    command: "curl B"
+graph:
+  edges:
+    - from: fetch_a
+      to: fetch_b

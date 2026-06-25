@@ -1,0 +1,13 @@
+# expected: valid
+# Round 4 item #11 — edge-level `when:` (renamed from `condition:`).
+nodes:
+  a:
+    type: kolsch/nodes/bash
+    command: "echo hi"
+  b:
+    type: kolsch/nodes/noop
+graph:
+  edges:
+    - from: a
+      to: b
+      when: "{{ nodes.a.stdout }}"

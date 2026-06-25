@@ -1,0 +1,12 @@
+# expected_error: WorkflowFromAssetTypeError
+# Round 4 item #13 — 3-seg with wrong asset_type → hard error.
+policy:
+  - what: kolsch/bash
+    pattern: "*"
+    from: kolsch/nodes/parse
+    effect: allow
+nodes:
+  a:
+    type: kolsch/nodes/noop
+graph:
+  edges: []

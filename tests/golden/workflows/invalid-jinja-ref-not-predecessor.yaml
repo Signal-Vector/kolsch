@@ -1,0 +1,19 @@
+# expected_error: WorkflowJinjaRefUnknown
+# Round 4 item #11 — predecessor closure is graph-reachability based.
+# `parallel_branch` is reachable from the start node but is NOT a
+# predecessor of `use` (no edge a -> parallel_branch -> ... -> use chain).
+nodes:
+  a:
+    type: kolsch/nodes/noop
+  parallel_branch:
+    type: kolsch/nodes/bash
+    command: "echo hi"
+  use:
+    type: kolsch/nodes/compute
+    value: "{{ nodes.parallel_branch.stdout }}"
+graph:
+  edges:
+    - from: a
+      to: parallel_branch
+    - from: a
+      to: use

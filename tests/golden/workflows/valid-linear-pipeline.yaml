@@ -1,0 +1,15 @@
+# expected: valid
+nodes:
+  fetch:
+    type: kolsch/nodes/bash
+    command: "echo data"
+  transform:
+    type: kolsch/nodes/compute
+    value: "{{ inputs.data | upper }}"
+    description: "uppercase the body"
+graph:
+  edges:
+    - from: fetch
+      to: transform
+      binds:
+        data: "{{ nodes.fetch.stdout }}"

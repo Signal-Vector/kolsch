@@ -1,0 +1,7 @@
+# expected_error: WorkflowInvalidTimeout
+nodes:
+  a:
+    type: kolsch/nodes/noop
+    timeout_seconds: 0
+graph:
+  edges: []

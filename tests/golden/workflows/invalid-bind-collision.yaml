@@ -1,0 +1,21 @@
+# expected_error: WorkflowBindCollision
+# Round 4 item #11 — two edges into the same target binding the SAME key.
+# Use bare YAML literal binds so no Jinja-AST walk runs (we're only
+# exercising the bind-collision check, not the predecessor closure).
+nodes:
+  a:
+    type: kolsch/nodes/noop
+  b:
+    type: kolsch/nodes/noop
+  merge:
+    type: kolsch/nodes/noop
+graph:
+  edges:
+    - from: a
+      to: merge
+      binds:
+        x: 1
+    - from: b
+      to: merge
+      binds:
+        x: 2

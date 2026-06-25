@@ -1,0 +1,23 @@
+# expected: valid
+# Round 4 item #11 — multi-input edges are the canonical fan-in mechanism.
+# Different bind keys per edge → no collision.
+nodes:
+  fetch_a:
+    type: kolsch/nodes/bash
+    command: "echo A"
+  fetch_b:
+    type: kolsch/nodes/bash
+    command: "echo B"
+  merge:
+    type: kolsch/nodes/compute
+    value: "{{ inputs.body_a }}\n{{ inputs.body_b }}"
+graph:
+  edges:
+    - from: fetch_a
+      to: merge
+      binds:
+        body_a: "{{ nodes.fetch_a.stdout }}"
+    - from: fetch_b
+      to: merge
+      binds:
+        body_b: "{{ nodes.fetch_b.stdout }}"

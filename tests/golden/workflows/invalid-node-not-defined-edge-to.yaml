@@ -1,0 +1,8 @@
+# expected_error: WorkflowNodeNotDefined
+nodes:
+  a:
+    type: kolsch/nodes/noop
+graph:
+  edges:
+    - from: a
+      to: ghost

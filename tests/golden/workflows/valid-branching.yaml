@@ -1,0 +1,17 @@
+# expected: valid
+nodes:
+  decide:
+    type: kolsch/nodes/branch
+    condition: "{{ true }}"
+  yes_handler:
+    type: kolsch/nodes/noop
+  no_handler:
+    type: kolsch/nodes/noop
+graph:
+  edges:
+    - from: decide
+      to: yes_handler
+      branch: true
+    - from: decide
+      to: no_handler
+      branch: false

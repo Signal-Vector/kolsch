@@ -1,0 +1,17 @@
+# expected: valid
+# Round 6 J5/β — binds: accept YAML literals OR Jinja-marked strings.
+nodes:
+  fetch:
+    type: kolsch/nodes/bash
+    command: "echo hi"
+  step:
+    type: kolsch/nodes/noop
+graph:
+  edges:
+    - from: fetch
+      to: step
+      binds:
+        count: 5
+        flag: true
+        url: "https://example.com"
+        rendered: "{{ nodes.fetch.stdout }}"

@@ -1,0 +1,5 @@
+# expected_error: WorkflowInvalidRef
+# R3 #5 — the 8 aggregations are gone; type: sum is now a 1-seg → rejected.
+nodes:
+  total:
+    type: sum

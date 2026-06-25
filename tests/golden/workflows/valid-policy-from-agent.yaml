@@ -1,0 +1,13 @@
+# expected: valid
+# Round 4 item #13 — from: agents/<name> with catalog hit validates cleanly.
+# Round 5 H1 — top-level field is policy: (not permissions:).
+policy:
+  - what: kolsch/bash
+    pattern: "*"
+    from: kolsch/agents/triage
+    effect: allow
+nodes:
+  greet:
+    type: kolsch/nodes/noop
+graph:
+  edges: []

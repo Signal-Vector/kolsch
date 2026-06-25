@@ -1,0 +1,22 @@
+# expected: valid
+# Polish-pass Decision P5 — multiple set_state writes to the same key are
+# the canonical pattern for evolving state. NO collision check.
+nodes:
+  init:
+    type: kolsch/nodes/set_state
+    keys:
+      attempts: 0
+  step1:
+    type: kolsch/nodes/set_state
+    keys:
+      attempts: 1
+  step2:
+    type: kolsch/nodes/set_state
+    keys:
+      attempts: 2
+graph:
+  edges:
+    - from: init
+      to: step1
+    - from: step1
+      to: step2
