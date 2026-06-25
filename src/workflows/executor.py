@@ -63,15 +63,20 @@ BUILTIN_PHASE_MAP: Mapping[str, str] = {
     "bash": "3.1",
     "noop": "3.1",
     "agent": "3.2",
-    "branch": "3.3",
-    "filter": "3.6",
-    "compute": "3.6",
     "user_input": "3.4",
     "read_file": "3.5",
     "write_file": "3.5",
     "list_files": "3.5",
     "set_state": "3.5",
     "delete_state": "3.5",
+    # Phase 3.6 ships the BRANCH NODE TYPE (alongside filter + compute)
+    # per ``process/phase3.x-roadmap.md`` §3.6. Phase 3.3 ships the
+    # ORTHOGONAL edge-level ``branch:`` field + bash-exit-code routing;
+    # that's a graph-edge construct, not a runtime node type, so it
+    # does NOT live in this runner-phase map.
+    "branch": "3.6",
+    "filter": "3.6",
+    "compute": "3.6",
     "map": "3.7",
     "workflow": "3.7",
 }
