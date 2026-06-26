@@ -469,24 +469,6 @@ def _executor_source() -> str:
 
 
 class TestStepOwnershipGuards:
-    def test_executor_does_not_import_sys(self) -> None:
-        """Step 3 owns ``sys.modules`` cleanup. The Step 1 executor
-        must not import ``sys`` at all — the discipline plumbing
-        lands later."""
-        text = _executor_source()
-        # The actual import statement is the discriminator. Docstring
-        # mentions of "sys.modules" describing the Step 3 seam don't
-        # count.
-        assert "\nimport sys" not in text
-        assert "from sys " not in text
-
-    def test_executor_does_not_call_cleanup_or_snapshot(self) -> None:
-        """Step 3's :mod:`workflows.module_isolation` helpers must
-        not be invoked from the Step 1 executor body."""
-        text = _executor_source()
-        assert "cleanup_bundle_imports(" not in text
-        assert "snapshot_sys_modules(" not in text
-
     def test_executor_does_not_check_cancel_flag_existence(self) -> None:
         """Step 4 owns ``cancel.flag`` polling. The Step 1 executor
         must not invoke ``.exists()`` on the cancel flag path or

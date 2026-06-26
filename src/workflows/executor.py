@@ -125,10 +125,24 @@ class RunnerRegistry:
 
     def __init__(self) -> None:
         self._runners: dict[str, NodeRunner] = {}
+        self._catalog_runner: NodeRunner | None = None
 
     def register(self, type_ref: str, runner: NodeRunner) -> None:
         """Register a runner for a 3-segment ``type:`` ref."""
         self._runners[type_ref] = runner
+
+    def set_catalog_runner(self, runner: NodeRunner) -> None:
+        """Install the generic fallback for non-built-in 3-seg refs.
+
+        Phase 3.1 Step 3 — when set, ``get`` returns this runner for
+        any 3-seg ``<bundle>/nodes/<name>`` ref that (a) isn't an
+        explicit registration AND (b) isn't a reserved built-in slot
+        (those still raise :class:`NodeTypeNotImplemented` via
+        :data:`BUILTIN_PHASE_MAP`). The
+        :class:`workflows.builtins.CatalogNodeRunner` is the
+        canonical caller.
+        """
+        self._catalog_runner = runner
 
     def get(self, type_ref: str, *, node_name: str) -> NodeRunner:
         """Return the runner; raise :class:`NodeTypeNotImplemented`
@@ -141,10 +155,27 @@ class RunnerRegistry:
         runner = self._runners.get(type_ref)
         if runner is not None:
             return runner
+        # Authored-Python fallback: any 3-seg ref that isn't a
+        # reserved built-in slot routes to the catalog runner when
+        # one is installed.
+        if self._catalog_runner is not None and not _is_builtin_slot(type_ref):
+            return self._catalog_runner
         phase = _phase_for_type_ref(type_ref)
         raise NodeTypeNotImplemented(
             node=node_name, type_ref=type_ref, phase=phase
         )
+
+
+def _is_builtin_slot(type_ref: str) -> bool:
+    """``True`` iff ``type_ref`` is a reserved ``kolsch/nodes/<name>`` slot."""
+    if not is_three_segment(type_ref):
+        return False
+    bundle, segment, name = parse_three_segment(type_ref)
+    return (
+        bundle == "kolsch"
+        and segment == "nodes"
+        and name in BUILTIN_TYPE_NAMES
+    )
 
 
 def _phase_for_type_ref(type_ref: str) -> str:
@@ -223,17 +254,30 @@ class IterativeExecutor:
         Failures bubble out as terminal ``workflow.run.failed``.
         """
         # TODO(step-4): write `os.getpid()` to RunDirectory.pid_path here.
-        # TODO(step-3): snapshot sys.modules; cleanup in the ``finally``.
+        from workflows.module_isolation import (  # noqa: PLC0415
+            cleanup_bundle_imports,
+            snapshot_sys_modules,
+        )
 
         run_id = self._run.run_id
         # Step 1 of the algorithm — run-start gate. The Phase 3.0
         # validator is the gate; the executor never enters the
         # worklist with an invalid workflow.
-        from workflows.validator import validate_workflow_or_raise  # noqa: PLC0415
+        from workflows.validator import (  # noqa: PLC0415
+            validate_workflow_or_raise,
+        )
 
         validate_workflow_or_raise(
             self._workflow, self._catalog, file=self._run.workflow_ref
         )
+
+        # Phase 3.1 Step 3 — capture the pre-run ``sys.modules`` key
+        # set so the cleanup step at run end only removes entries
+        # that loaded WHILE this run was active AND lie under the
+        # workspace's ``bundles/`` tree. Third-party packages are
+        # already in the snapshot, so they survive the cleanup
+        # filter even if a node module re-imports them.
+        sys_modules_snapshot = snapshot_sys_modules()
 
         # Step 2 — initialise the state dict from workflow inputs.
         self._state = dict(self._run.inputs)
@@ -373,8 +417,17 @@ class IterativeExecutor:
             )
             terminal_status = WorkflowRunStatus.SUCCEEDED
         finally:
-            # TODO(step-3): cleanup_bundle_imports here.
-            pass
+            # Phase 3.1 Step 3 — module-isolation cleanup runs on
+            # EVERY terminal state (succeeded / failed / timed_out /
+            # aborted) so a subsequent run starts from a clean
+            # ``sys.modules`` for the workspace's ``bundles/`` tree.
+            # Third-party packages survive (the snapshot already
+            # contains them; the cleanup's ``if name in before:
+            # continue`` guard short-circuits before deletion).
+            cleanup_bundle_imports(
+                before=sys_modules_snapshot,
+                workspace_root=self._store.runs_root.parent,
+            )
         return terminal_status
 
     # ------------------------------------------------------------------
