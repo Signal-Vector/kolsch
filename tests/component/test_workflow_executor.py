@@ -26,6 +26,7 @@ from typing import Any
 import pytest
 
 from assets.catalog import AssetCatalog
+from schemas import SessionId
 from workflows.errors import NodeTypeNotImplemented
 from workflows.executor import (
     BUILTIN_PHASE_MAP,
@@ -373,6 +374,111 @@ class TestNodeFailure:
         assert ("second", "workflow.node.failed") in kinds
         # Run-level failure event is last.
         assert kinds[-1] == (None, "workflow.run.failed")
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.2 §11.6.3 — agent node payload extension
+# ---------------------------------------------------------------------------
+
+
+class _SpawningRunner:
+    """A runner that stamps ``ctx.spawned_session_id`` like ``AgentRunner``
+    does, so the executor's payload builder can be exercised without
+    standing up the full Phase 3.2 wiring (engine + session store +
+    config builder). Mirrors the
+    ``object.__setattr__(ctx, "spawned_session_id", ...)`` pattern the
+    real runner uses to mutate the frozen :class:`NodeContext`.
+    """
+
+    def __init__(self, spawned_session_id: str, output: dict[str, Any]) -> None:
+        self._sid = spawned_session_id
+        self._output = output
+
+    async def run(
+        self,
+        *,
+        node_name: str,
+        node_def: Any,
+        bound_inputs: dict[str, Any],
+        state: dict[str, Any],
+        ctx: Any,
+    ) -> dict[str, Any]:
+        _ = (node_name, node_def, bound_inputs, state)
+        object.__setattr__(ctx, "spawned_session_id", SessionId(self._sid))
+        return dict(self._output)
+
+
+class TestSpawnedSessionIdPayload:
+    async def test_agent_node_payload_carries_spawned_session_id(
+        self, tmp_path: Path
+    ) -> None:
+        wf = _wf(
+            {
+                "nodes": {
+                    "classify": {
+                        "type": "kolsch/nodes/agent",
+                        "agent": "demo/agents/classifier",
+                    }
+                }
+            }
+        )
+        sid = (
+            "ses_11111111-2222-3333-4444-555555555555"
+        )
+        runner = _SpawningRunner(sid, {"label": "ok"})
+        registry = RunnerRegistry()
+        registry.register("kolsch/nodes/agent", runner)
+        ex, store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
+
+        await ex.run()
+        events = list(store.read_events(run.run_id))
+        completed = next(
+            e
+            for e in events
+            if e["kind"] == "workflow.node.completed"
+            and e["payload"].get("node_name") == "classify"
+        )
+        assert completed["payload"].get("spawned_session_id") == sid
+        # Output still rides along — the extension is additive.
+        assert completed["payload"]["output"] == {"label": "ok"}
+
+    async def test_non_agent_node_payload_omits_spawned_session_id(
+        self, tmp_path: Path
+    ) -> None:
+        """AC 3.5 — non-agent completed payloads are byte-identical to
+        the pre-3.2 shape. A misbehaving future runner that forgets to
+        clear ``ctx.spawned_session_id`` STILL can't pollute the
+        payload because the gate is on ``node_def.type``, not on the
+        attribute's presence."""
+        sid = (
+            "ses_99999999-8888-7777-6666-555555555555"
+        )
+        wf = _wf(
+            {
+                "nodes": {
+                    "rogue_noop": {"type": "kolsch/nodes/noop"},
+                }
+            }
+        )
+        runner = _SpawningRunner(sid, {"trivial": "yes"})
+        registry = RunnerRegistry()
+        registry.register("kolsch/nodes/noop", runner)
+        ex, store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
+
+        await ex.run()
+        events = list(store.read_events(run.run_id))
+        completed = next(
+            e
+            for e in events
+            if e["kind"] == "workflow.node.completed"
+            and e["payload"].get("node_name") == "rogue_noop"
+        )
+        assert "spawned_session_id" not in completed["payload"]
+        assert set(completed["payload"].keys()) == {
+            "node_name",
+            "invocation_id",
+            "output",
+        }
 
 
 # ---------------------------------------------------------------------------

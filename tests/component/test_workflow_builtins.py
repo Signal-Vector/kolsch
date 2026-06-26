@@ -20,7 +20,7 @@ from __future__ import annotations
 import asyncio
 import importlib.util
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
@@ -28,8 +28,11 @@ from assets.catalog import AssetCatalog
 from providers.authz import RuleBasedAuthorizationProvider
 from providers.sandbox import NativeSandboxProvider
 from providers.secrets import DotenvSecretsProvider
+from store import SqliteBackend
+from store.session_store import SessionStore
 from tools.decorator import get_tool_definition
 from workflows.builtins import (
+    AgentRunner,
     BashRunner,
     NoopRunner,
     register_builtins,
@@ -42,6 +45,10 @@ from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from engine import AgentEngine
+    from schemas import ResolvedAgentConfig
 
 # ---------------------------------------------------------------------------
 # Bash tool fixture — load the starter bundle bash.py via importlib so the
@@ -421,7 +428,8 @@ class TestRegisteredVsDeferred:
         assert isinstance(
             registry.get("kolsch/nodes/noop", node_name="n"), NoopRunner
         )
-        # Deferred types still raise.
+        # Deferred types still raise — including ``agent`` when no
+        # engine + session_store + config_builder triple is supplied.
         for name, expected_phase in (
             ("agent", "3.2"),
             ("user_input", "3.4"),
@@ -433,3 +441,85 @@ class TestRegisteredVsDeferred:
             with pytest.raises(NodeTypeNotImplemented) as exc_info:
                 registry.get(f"kolsch/nodes/{name}", node_name="n")
             assert exc_info.value.phase == expected_phase
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.2 §8.5.1 — AgentRunner registers when the engine triple is supplied
+# ---------------------------------------------------------------------------
+
+
+class TestAgentRunnerRegistration:
+    def test_agent_runner_registers_when_triple_supplied(
+        self, tmp_path: Path, bash_defn: Any
+    ) -> None:
+        """Phase 3.2 §8.5.1 + AC 3.1/3.3 — when ``engine`` +
+        ``session_store`` + ``config_builder`` (and ``catalog``) are
+        all provided, ``register_builtins`` installs an
+        :class:`AgentRunner` against ``kolsch/nodes/agent`` and the
+        slot stops raising :class:`NodeTypeNotImplemented`.
+        """
+        workspace = _make_workspace(tmp_path)
+        platform_dir = workspace / ".platform"
+        platform_dir.mkdir(exist_ok=True)
+        # SqliteBackend.initialize() is async but no DB I/O happens
+        # unless a session is created. The .get() check below just
+        # walks the registry, so a sync construct is enough.
+        store = SessionStore(
+            root=workspace, backend=SqliteBackend(platform_dir / "entities.db")
+        )
+
+        async def _builder(_ref: str) -> ResolvedAgentConfig:
+            raise AssertionError("unused")
+
+        registry = RunnerRegistry()
+        register_builtins(
+            registry,
+            bash_defn=bash_defn,
+            authz=RuleBasedAuthorizationProvider(
+                config={
+                    "rules": [{"who": ".*", "what": ".*", "effect": "allow"}],
+                },
+            ),
+            secrets=DotenvSecretsProvider(root=workspace, config={"path": ".env"}),
+            sandbox=NativeSandboxProvider(config={}),
+            catalog=AssetCatalog(),
+            engine=cast("AgentEngine", object()),
+            session_store=store,
+            config_builder=_builder,
+        )
+        resolved = registry.get("kolsch/nodes/agent", node_name="classify")
+        assert isinstance(resolved, AgentRunner)
+
+    def test_agent_slot_still_raises_when_engine_missing(
+        self, tmp_path: Path, bash_defn: Any
+    ) -> None:
+        """Triple is intentionally all-or-nothing — passing only some
+        of the kwargs (e.g. forgot ``config_builder``) leaves the
+        ``kolsch/nodes/agent`` slot DEFERRED so the gap surfaces
+        loudly instead of installing a half-built runner.
+        """
+        workspace = _make_workspace(tmp_path)
+        platform_dir = workspace / ".platform"
+        platform_dir.mkdir(exist_ok=True)
+        store = SessionStore(
+            root=workspace, backend=SqliteBackend(platform_dir / "entities.db")
+        )
+
+        registry = RunnerRegistry()
+        register_builtins(
+            registry,
+            bash_defn=bash_defn,
+            authz=RuleBasedAuthorizationProvider(
+                config={
+                    "rules": [{"who": ".*", "what": ".*", "effect": "allow"}],
+                },
+            ),
+            secrets=DotenvSecretsProvider(root=workspace, config={"path": ".env"}),
+            sandbox=NativeSandboxProvider(config={}),
+            catalog=AssetCatalog(),
+            session_store=store,
+            # engine= and config_builder= deliberately OMITTED
+        )
+        with pytest.raises(NodeTypeNotImplemented) as exc_info:
+            registry.get("kolsch/nodes/agent", node_name="n")
+        assert exc_info.value.phase == "3.2"

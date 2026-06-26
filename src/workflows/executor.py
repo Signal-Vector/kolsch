@@ -420,7 +420,11 @@ class IterativeExecutor:
                 self._last_event_id = started_id
                 self._node_started_event_id[inv_id] = started_id
 
-                ctx = self._build_ctx(inv_id=inv_id, node_def=node_def)
+                ctx = self._build_ctx(
+                    inv_id=inv_id,
+                    node_def=node_def,
+                    parent_event_id=started_id,
+                )
                 try:
                     runner = self._registry.get(
                         _node_type_ref(node_def), node_name=node_name
@@ -474,6 +478,26 @@ class IterativeExecutor:
                 # Successful invocation — capture, mark complete.
                 self._captured[node_name] = dict(output)
                 self._completed_or_skipped.add(node_name)
+                # Phase 3.2 §11.6.3 — agent nodes attach the spawned
+                # session id so consumers can navigate from the
+                # workflow event view to the spawned session's JSONL.
+                # The runner stamps ``ctx.spawned_session_id`` before
+                # returning; the gate on ``node_def.type`` is the
+                # defensive belt-and-braces guarantee that a future
+                # runner that forgets to clear the attribute can't
+                # pollute non-agent payloads.
+                completed_payload: dict[str, Any] = {
+                    "node_name": node_name,
+                    "invocation_id": str(inv_id),
+                    "output": dict(output),
+                }
+                if (
+                    _node_type_ref(node_def) == "kolsch/nodes/agent"
+                    and ctx.spawned_session_id is not None
+                ):
+                    completed_payload["spawned_session_id"] = str(
+                        ctx.spawned_session_id
+                    )
                 self._last_event_id = emit_event(
                     self._store,
                     WorkflowNodeCompletedEvent(
@@ -484,11 +508,7 @@ class IterativeExecutor:
                         ),
                         invocation_id=inv_id,
                         node_name=node_name,
-                        payload={
-                            "node_name": node_name,
-                            "invocation_id": str(inv_id),
-                            "output": dict(output),
-                        },
+                        payload=completed_payload,
                     ),
                 )
 
@@ -654,7 +674,11 @@ class IterativeExecutor:
     # ------------------------------------------------------------------
 
     def _build_ctx(
-        self, *, inv_id: InvocationId, node_def: Any  # noqa: ANN401
+        self,
+        *,
+        inv_id: InvocationId,
+        node_def: Any,  # noqa: ANN401
+        parent_event_id: Any = None,  # noqa: ANN401 — typed EventId in workflows.context
     ) -> NodeContext:
         """Mint a per-invocation :class:`NodeContext`.
 
@@ -663,7 +687,9 @@ class IterativeExecutor:
         from the node's ``type:`` ref). Step 5 wires the real
         ``emit_fn`` against the JSONL append surface; Step 1 gives
         runners a no-op so framing tests don't need to mock the
-        emission path.
+        emission path. Phase 3.2 threads ``parent_event_id`` so the
+        agent runner can stamp the spawned session's ``spawned_by``
+        payload with the originating ``workflow.node.started`` id.
         """
         type_ref = _node_type_ref(node_def)
         bundle = (
@@ -693,6 +719,9 @@ class IterativeExecutor:
             state=self._state,
             bundle=bundle,
             emit_fn=_emit_fn,
+            parent_event_id=parent_event_id,
+            trace_id=self._run.trace_id,
+            caller_chain=tuple(getattr(self._run, "caller_chain", ()) or ()),
         )
 
     # ------------------------------------------------------------------

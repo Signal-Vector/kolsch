@@ -558,6 +558,14 @@ async def _cmd_run(  # noqa: PLR0913
         secrets=runtime.secrets,
         sandbox=runtime.sandbox,
         catalog=catalog,
+        # Phase 3.2 — install the agent runner against
+        # ``kolsch/nodes/agent``. The CLI bootstrap already constructs
+        # a shared ``AgentEngine`` for chat; reuse the same instance
+        # here so agents invoked from a workflow run hit the same
+        # framework + LLM pipeline as chat-spawned ones.
+        engine=runtime.engine,
+        session_store=runtime.store,
+        config_builder=runtime.build_resolved_config,
     )
     executor = IterativeExecutor(
         workflow=workflow,
