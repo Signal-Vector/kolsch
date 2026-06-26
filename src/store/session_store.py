@@ -24,6 +24,7 @@ from schemas import (
     Event,
     EventId,
     EventType,
+    FromWorkflowRun,
     Session,
     SessionId,
     Thread,
@@ -111,6 +112,7 @@ class SessionStore:
         initial_agent_id: str,
         *,
         name: str | None = None,
+        from_workflow_run: FromWorkflowRun | None = None,
     ) -> Session:
         """Create a session AND its default thread, then write `session.opened`.
 
@@ -121,6 +123,15 @@ class SessionStore:
         part of session creation. Additional threads (Phase 2) are
         created explicitly via :meth:`create_thread` and remain a
         no-event operation.
+
+        ``from_workflow_run`` is the Phase 3.2 parent pointer set by
+        ``AgentRunner`` when an ``agent:`` workflow node spawns the
+        session. When non-None it populates ``Session.from_workflow_run``
+        AND injects a ``spawned_by`` entry into the ``session.opened``
+        event's ``data`` payload per
+        ``docs/explanation/workflow-event-log.md`` line 62. Chat- and
+        API-spawned sessions leave it ``None`` and the payload is
+        byte-identical to the pre-3.2 shape.
         """
         agent_id = AgentId(initial_agent_id)
         session_id = _new_session_id()
@@ -135,6 +146,7 @@ class SessionStore:
             archived=False,
             created_at=now,
             updated_at=now,
+            from_workflow_run=from_workflow_run,
         )
         await self._backend.insert_session(session)
 
@@ -146,16 +158,24 @@ class SessionStore:
         )
         await self._backend.insert_thread(default_thread)
 
+        data: dict[str, object] = {
+            "session_id": session_id,
+            "initial_agent": {"id": agent_id, "name": agent_id},
+        }
+        if from_workflow_run is not None:
+            data["spawned_by"] = {
+                "from_workflow_run_id": str(from_workflow_run.workflow_run_id),
+                "from_invocation_id": str(from_workflow_run.invocation_id),
+                "from_workflow_event_id": str(from_workflow_run.event_id),
+            }
+
         opener = Event(
             event_id=_new_event_id(),
             parent_event_id=None,
             thread_id=thread_id,
             session_id=session_id,
             type=EventType.SESSION_OPENED,
-            data={
-                "session_id": session_id,
-                "initial_agent": {"id": agent_id, "name": agent_id},
-            },
+            data=data,
             actor=Actor(kind="system"),
             created_at=now,
         )

@@ -23,7 +23,7 @@ from schemas.config import (
     RuntimeSpec,
     SubsystemConfig,
 )
-from schemas.entities import Actor, ContentRef, Session, Thread
+from schemas.entities import Actor, ContentRef, FromWorkflowRun, Session, Thread
 from schemas.error import Error
 from schemas.events import (
     AgentMessageData,
@@ -73,6 +73,7 @@ __all__ = [
     "Event",
     "EventId",
     "EventType",
+    "FromWorkflowRun",
     "IOSpec",
     "MemoryDeletedData",
     "MemoryItemId",

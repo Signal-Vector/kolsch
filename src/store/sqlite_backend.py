@@ -16,24 +16,28 @@ stays unblocked (spec §I10).
 from __future__ import annotations
 
 import asyncio
+import json
 import sqlite3
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Literal
 
-from schemas import AgentId, Session, SessionId, Thread, ThreadId
+from schemas import AgentId, FromWorkflowRun, Session, SessionId, Thread, ThreadId
+from schemas.identifiers import EventId
+from workflows.ids import InvocationId, WorkflowRunId
 
 if TYPE_CHECKING:
     from pathlib import Path
 
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS sessions (
-    session_id  TEXT PRIMARY KEY,
-    agent_id    TEXT NOT NULL,
-    name        TEXT NOT NULL,
-    starred     INTEGER NOT NULL DEFAULT 0,
-    archived    INTEGER NOT NULL DEFAULT 0,
-    created_at  TEXT NOT NULL,
-    updated_at  TEXT NOT NULL
+    session_id        TEXT PRIMARY KEY,
+    agent_id          TEXT NOT NULL,
+    name              TEXT NOT NULL,
+    starred           INTEGER NOT NULL DEFAULT 0,
+    archived          INTEGER NOT NULL DEFAULT 0,
+    created_at        TEXT NOT NULL,
+    updated_at        TEXT NOT NULL,
+    from_workflow_run TEXT
 );
 
 CREATE TABLE IF NOT EXISTS threads (
@@ -60,6 +64,31 @@ def _row_to_session(row: sqlite3.Row) -> Session:
         archived=bool(row["archived"]),
         created_at=datetime.fromisoformat(row["created_at"]),
         updated_at=datetime.fromisoformat(row["updated_at"]),
+        from_workflow_run=_decode_from_workflow_run(row["from_workflow_run"]),
+    )
+
+
+def _encode_from_workflow_run(value: FromWorkflowRun | None) -> str | None:
+    if value is None:
+        return None
+    return json.dumps(
+        {
+            "workflow_run_id": str(value.workflow_run_id),
+            "invocation_id": str(value.invocation_id),
+            "event_id": str(value.event_id),
+        },
+        separators=(",", ":"),
+    )
+
+
+def _decode_from_workflow_run(raw: str | None) -> FromWorkflowRun | None:
+    if raw is None:
+        return None
+    payload = json.loads(raw)
+    return FromWorkflowRun(
+        workflow_run_id=WorkflowRunId(payload["workflow_run_id"]),
+        invocation_id=InvocationId(payload["invocation_id"]),
+        event_id=EventId(payload["event_id"]),
     )
 
 
@@ -107,6 +136,15 @@ class SqliteBackend:
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA foreign_keys = ON")
         conn.executescript(_SCHEMA)
+        # Additive migration for DBs created before Phase 3.2 — the
+        # CREATE TABLE above is a no-op when the table already exists,
+        # so a fresh `from_workflow_run` column has to be patched in
+        # via ALTER TABLE.
+        existing_cols = {
+            row["name"] for row in conn.execute("PRAGMA table_info(sessions)")
+        }
+        if "from_workflow_run" not in existing_cols:
+            conn.execute("ALTER TABLE sessions ADD COLUMN from_workflow_run TEXT")
         self._conn = conn
 
     async def close(self) -> None:
@@ -139,8 +177,9 @@ class SqliteBackend:
         conn = self._require_conn()
         conn.execute(
             "INSERT INTO sessions "
-            "(session_id, agent_id, name, starred, archived, created_at, updated_at) "
-            "VALUES (?, ?, ?, ?, ?, ?, ?)",
+            "(session_id, agent_id, name, starred, archived, "
+            "created_at, updated_at, from_workflow_run) "
+            "VALUES (?, ?, ?, ?, ?, ?, ?, ?)",
             (
                 session.session_id,
                 session.agent_id,
@@ -149,6 +188,7 @@ class SqliteBackend:
                 int(session.archived),
                 session.created_at.isoformat(),
                 session.updated_at.isoformat(),
+                _encode_from_workflow_run(session.from_workflow_run),
             ),
         )
 

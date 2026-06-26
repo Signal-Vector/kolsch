@@ -52,7 +52,7 @@ Spec: `process/phase3.1-executor-spec.md`. Build plan:
 
 ### 3.2 — Agent integration
 
-Spec: `process/phase3.2-agent-integration-spec.md` (to be written).
+Spec: `process/phase3.2-agent-integration-spec.md`. Build plan: `process/phase3.2-agent-integration-build.md`.
 
 **Scope**: `agent` node type. Threads through existing CrewAI engine via the asset catalog's agent invocation path. Per-invocation `outputs:` override using existing `IOSpec` grammar from `src/schemas/config.py:58`. Child-session creation with `from_workflow_run:` pointer.
 

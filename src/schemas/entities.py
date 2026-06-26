@@ -22,9 +22,25 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
-from schemas.identifiers import AgentId, SessionId, ThreadId
+from schemas.identifiers import AgentId, EventId, SessionId, ThreadId
+from workflows.ids import InvocationId, WorkflowRunId
 
 _SHA256_HEX = re.compile(r"^[0-9a-fA-F]{64}$")
+
+
+class FromWorkflowRun(BaseModel):
+    """Parent pointer on sessions spawned by workflow agent nodes.
+
+    Populated by ``AgentRunner`` in Phase 3.2; surfaces in the
+    ``session.opened`` event's ``spawned_by`` payload per
+    ``docs/explanation/workflow-event-log.md`` line 62.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    workflow_run_id: WorkflowRunId
+    invocation_id: InvocationId
+    event_id: EventId  # workflow.node.started event that spawned this session
 
 
 class Session(BaseModel):
@@ -45,6 +61,7 @@ class Session(BaseModel):
     archived: bool = False
     created_at: datetime
     updated_at: datetime
+    from_workflow_run: FromWorkflowRun | None = None
 
 
 class Thread(BaseModel):
