@@ -73,6 +73,14 @@ def _serialise(event: Event) -> bytes:
     byte-identical output.
     """
     payload = event.model_dump(mode="json")
+    # Phase 3.2 §11.6.4 — ``trace_id`` is additive on the envelope.
+    # Strip it from the on-disk row when absent so chat / API sessions
+    # (which leave it ``None``) produce JSONL lines byte-identical to
+    # the pre-3.2 shape — the golden snapshots committed before this
+    # field landed stay valid. Spawned-from-workflow sessions DO carry
+    # it and the key surfaces in their lines verbatim.
+    if payload.get("trace_id") is None:
+        payload.pop("trace_id", None)
     return (
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         + b"\n"

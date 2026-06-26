@@ -133,11 +133,16 @@ class AgentRunner:
         # ``ref`` is the 3-segment user-facing handle and would fail
         # the ``AgentId`` shape check. Deterministic ``name=`` so
         # spawned sessions are easy to spot in ``kolsch sessions list``
-        # — Step 1 Reviewer AC for AC 1.5.
+        # — Step 1 Reviewer AC for AC 1.5. ``trace_id`` is threaded so
+        # the spawned session's ``session.opened`` event correlates
+        # with the workflow run from the very first event; subsequent
+        # engine-emitted events inherit it via :class:`ExecutionContext`
+        # (master spec §11.6.4).
         session = await self._session_store.create_session(
             str(resolved.agent_id),
             name=f"{ctx.workflow_run_id}::{node_name}",
             from_workflow_run=fwr,
+            trace_id=str(ctx.trace_id) if ctx.trace_id is not None else None,
         )
         # ``NodeContext`` is frozen to keep authored nodes from
         # mutating it; the runner sets the engine-side outbound field

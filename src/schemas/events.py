@@ -379,3 +379,12 @@ class Event(BaseModel):
     actor: Actor
     created_at: datetime
     content_ref: ContentRef | None = None
+    # Phase 3.2 §11.6.4 — the chain-spanning trace id. Set by the agent
+    # engine when its :class:`ExecutionContext` carries one (workflow-
+    # spawned agent invocations); ``None`` for chat / API surfaces that
+    # haven't opted in. Typed loosely as ``str`` (not ``TraceId``) to
+    # keep ``schemas/`` free of an upward dependency on ``workflows/``
+    # — :class:`workflows.ids.TraceId` is a ``str`` subclass so typed
+    # values still pass through transparently, while plain strings
+    # read off legacy JSONL rows validate without a prefix-check raise.
+    trace_id: str | None = None

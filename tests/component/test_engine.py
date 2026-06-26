@@ -348,6 +348,71 @@ async def test_tc_eng_01_simple_exchange_golden_sequence(tmp_path: Path) -> None
 
 
 # ===========================================================================
+# Phase 3.2 §11.6.4 — trace_id propagates from ExecutionContext to every
+# event the engine emits (cross-JSONL correlation for workflow-spawned
+# agent invocations).
+# ===========================================================================
+
+
+async def test_execution_context_trace_id_stamped_on_every_engine_event(
+    tmp_path: Path,
+) -> None:
+    """The agent runner sets ``ExecutionContext.trace_id`` from the
+    workflow run's ``trace_id``. The engine's ``_emit`` chokepoint
+    stamps it on every Event so the spawned session's JSONL and the
+    originating workflow's JSONL share a single trace_id across all
+    events. Master spec §11.6.4."""
+    from workflows.ids import TraceId
+
+    trace_id = TraceId(f"tr_{uuid4()}")
+
+    fake = FakeLLM(script=[TextResponse(text="Done.")])
+    engine, store, _am = await _build_engine(tmp_path, fake)
+    session = await store.create_session(
+        "ag_test",
+        name="trace-test",
+        trace_id=str(trace_id),
+    )
+    threads = await store.list_threads(session.session_id)
+    ctx = ExecutionContext(
+        thread_id=threads[0].thread_id,
+        trigger={"kind": "user_message", "content": "ping."},
+        trace_id=trace_id,
+    )
+
+    await engine.execute(_config(), ctx)
+
+    events = [e async for e in store.read_path_to_leaf(ctx.thread_id)]
+    assert events  # sanity — exchange produced events
+    for event in events:
+        assert event.trace_id == str(trace_id), (
+            f"event {event.type} carries trace_id={event.trace_id!r}, "
+            f"expected {trace_id!r}"
+        )
+
+
+async def test_execution_context_trace_id_none_preserves_legacy_shape(
+    tmp_path: Path,
+) -> None:
+    """Chat / API callers leave ``trace_id`` ``None``; existing
+    behaviour is unchanged and the on-disk JSONL omits the key
+    entirely (verified separately by the simple-exchange golden test).
+    Here we just assert the in-memory Event field stays ``None`` so
+    consumers of the API don't observe an accidental promotion."""
+    fake = FakeLLM(script=[TextResponse(text="Done.")])
+    engine, store, _am = await _build_engine(tmp_path, fake)
+    ctx = await _new_session_context(store)  # no trace_id
+
+    await engine.execute(_config(), ctx)
+
+    events = [e async for e in store.read_path_to_leaf(ctx.thread_id)]
+    for event in events:
+        assert event.trace_id is None, (
+            f"event {event.type} unexpectedly carries trace_id={event.trace_id!r}"
+        )
+
+
+# ===========================================================================
 # TC-ENG-02 — Tool-call exchange golden sequence
 # ===========================================================================
 

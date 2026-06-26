@@ -113,6 +113,7 @@ class SessionStore:
         *,
         name: str | None = None,
         from_workflow_run: FromWorkflowRun | None = None,
+        trace_id: str | None = None,
     ) -> Session:
         """Create a session AND its default thread, then write `session.opened`.
 
@@ -132,6 +133,15 @@ class SessionStore:
         ``docs/explanation/workflow-event-log.md`` line 62. Chat- and
         API-spawned sessions leave it ``None`` and the payload is
         byte-identical to the pre-3.2 shape.
+
+        ``trace_id`` (Phase 3.2 §11.6.4) is stamped on the
+        ``session.opened`` event envelope so the spawned session's very
+        first event correlates with the workflow run that spawned it.
+        Every subsequent event the agent engine emits inherits the same
+        trace_id via :class:`engine.ExecutionContext` (the engine's
+        ``_emit`` chokepoint stamps it on every emitted Event). Chat /
+        API callers leave it ``None`` and the envelope field stays
+        ``None``.
         """
         agent_id = AgentId(initial_agent_id)
         session_id = _new_session_id()
@@ -178,6 +188,7 @@ class SessionStore:
             data=data,
             actor=Actor(kind="system"),
             created_at=now,
+            trace_id=trace_id,
         )
         await asyncio.to_thread(
             append_event_sync,

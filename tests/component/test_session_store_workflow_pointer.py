@@ -20,7 +20,7 @@ from schemas import (
     FromWorkflowRun,
 )
 from store import EntityBackend, SessionStore, SqliteBackend
-from workflows.ids import InvocationId, WorkflowRunId
+from workflows.ids import InvocationId, TraceId, WorkflowRunId
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
@@ -152,3 +152,39 @@ async def test_create_session_with_pointer_injects_spawned_by_payload(
         "from_workflow_event_id",
     ):
         assert isinstance(spawned_by[key], str)
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.2 §11.6.4 — trace_id propagation into the session.opened envelope
+# ---------------------------------------------------------------------------
+
+
+async def test_create_session_with_trace_id_stamps_session_opened_envelope(
+    tmp_path: Path,
+    store: SessionStore,
+) -> None:
+    """The ``trace_id`` kwarg lands on the ``session.opened`` event
+    envelope so the spawned session's very first event correlates
+    with the workflow run that spawned it. Master spec §11.6.4."""
+    trace_id = TraceId(f"tr_{uuid4()}")
+    session = await store.create_session(
+        "ag_test",
+        name="workflow-spawned",
+        trace_id=str(trace_id),
+    )
+
+    first = _read_first_event(tmp_path, session.session_id)
+    assert first["type"] == "session.opened"
+    assert first["trace_id"] == str(trace_id)
+
+
+async def test_create_session_without_trace_id_omits_envelope_key(
+    tmp_path: Path,
+    store: SessionStore,
+) -> None:
+    """Chat / API sessions leave ``trace_id`` ``None``; the JSONL row
+    must omit the key entirely so on-disk shape stays byte-identical
+    to the pre-3.2 envelope."""
+    session = await store.create_session("ag_test", name="chat-session")
+    first = _read_first_event(tmp_path, session.session_id)
+    assert "trace_id" not in first

@@ -410,7 +410,15 @@ class _Exchange:
         thread = await self.engine._store.get_thread(self.context.thread_id)
         self.session_id = str(thread.session_id)
 
-        auth = await self.engine._authz.allow(principal, action)
+        # Phase 3.2 §13.x — pass the proximate-first caller_chain so
+        # workflow-spawned invocations surface the workflow→agent frame
+        # in the authz audit decision. Chat / API surfaces leave the
+        # chain empty and existing behaviour is unchanged.
+        auth = await self.engine._authz.allow(
+            principal,
+            action,
+            caller_chain=self.context.caller_chain,
+        )
         if not auth.allowed:
             raise AgentUnauthorized(
                 agent_id=self.agent_id,
@@ -1318,7 +1326,17 @@ class _Exchange:
         actor: Actor,
         event_id_override: EventId | None = None,
     ) -> Event:
-        """Append + publish + queue. Serialized per thread."""
+        """Append + publish + queue. Serialized per thread.
+
+        Phase 3.2 §11.6.4 — every event the engine emits carries the
+        :attr:`ExecutionContext.trace_id` set by the caller (the workflow
+        agent runner stamps it from the workflow run's ``trace_id``).
+        Chat / API surfaces leave it ``None`` and the envelope field
+        stays ``None``; the cross-JSONL correlation is opt-in at the
+        ``ExecutionContext`` level, but the engine's stamping is
+        unconditional so a callsite that DOES set it can't accidentally
+        forget to surface it.
+        """
         async with self._lock:
             leaf = await self.engine._store.get_leaf(self.context.thread_id)
             event = Event(
@@ -1330,6 +1348,11 @@ class _Exchange:
                 data=data,
                 actor=actor,
                 created_at=datetime.now(UTC),
+                trace_id=(
+                    str(self.context.trace_id)
+                    if self.context.trace_id is not None
+                    else None
+                ),
             )
             appended = await self.engine._store.append_event(
                 self.context.thread_id,

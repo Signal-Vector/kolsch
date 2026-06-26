@@ -136,6 +136,14 @@ def normalize_events(events: list[Event]) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     for event in events:
         raw = event.model_dump(mode="json")
+        # Phase 3.2 §11.6.4 — ``trace_id`` is additive on the envelope;
+        # the on-disk JSONL omits the key when ``None`` (per
+        # ``src/store/jsonl.py:_render_event``). Mirror that here so
+        # goldens committed before this field landed stay byte-stable
+        # for chat / API sessions, and only carry the key when a real
+        # trace_id is actually set.
+        if raw.get("trace_id") is None:
+            raw.pop("trace_id", None)
         normalized = _normalize_value(raw, id_map, counters)
         assert isinstance(normalized, dict)
         out.append(normalized)
