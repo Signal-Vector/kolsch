@@ -18,6 +18,7 @@ from __future__ import annotations
 from workflows.context import NodeContext
 from workflows.decorator import NodeDefinition, get_node_definition, node
 from workflows.errors import (
+    AgentRefUnresolved,
     NodeTimeoutExceeded,
     NodeTypeNotImplemented,
     WorkflowAmbiguousStart,
@@ -112,6 +113,7 @@ def __dir__() -> list[str]:  # PEP 562 module-level hook
 
 
 __all__: list[str] = [
+    "AgentRefUnresolved",
     "InvocationId",
     # decorator + context
     "NodeContext",

@@ -1328,6 +1328,30 @@ class NodeTimeoutExceeded(WorkflowRuntimeError):
         )
 
 
+class AgentRefUnresolved(WorkflowRuntimeError):
+    """Phase 3.2 — the catalog could not resolve an ``agent:`` ref.
+
+    The Phase 3.0 validator already enforces that every ``agent:`` ref
+    on an agent node resolves at validation time; this runtime guard is
+    the safety net for validator drift (e.g., an asset deleted between
+    validate and run). Surfaces from
+    :class:`workflows.builtins.agent.AgentRunner` and remaps to
+    :class:`WorkflowNodeFailed` at the executor boundary.
+    """
+
+    caller_message: ClassVar[str] = (
+        "A workflow step references an agent that isn't installed. "
+        "Contact your engineer."
+    )
+    identifying_names_keys: ClassVar[tuple[str, ...]] = ("ref",)
+
+    def __init__(self, *, ref: str) -> None:
+        self.ref = ref
+        super().__init__(
+            _runtime_str(self, problem=f"agent ref {ref!r} could not be resolved")
+        )
+
+
 class NodeTypeNotImplemented(WorkflowRuntimeError):
     """Phase 3.1 Step 1 — dispatch hit a node type whose runtime
     ships in a later sub-phase.

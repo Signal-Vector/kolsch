@@ -11,6 +11,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from schemas import ThreadId
+from workflows.ids import TraceId
 
 if TYPE_CHECKING:
     from schemas import Event
@@ -69,6 +70,19 @@ class ExecutionContext(BaseModel):
     thread_id: ThreadId
     trigger: dict[str, Any]
     cancellation: CancelToken | None = None
+    # Phase 3.2 — workflow→agent trace propagation (master spec §11.6.4).
+    # When set by a caller (the workflow agent runner), the engine
+    # threads this id into every event it emits so the spawned session's
+    # JSONL and the originating workflow's JSONL share a single
+    # ``trace_id`` across all events. ``None`` defaults preserve
+    # backward-compat with chat / API / sub-agent callers; those paths
+    # are unaffected until they opt in.
+    trace_id: TraceId | None = None
+    # Phase 3.2 — proximate-first caller chain (master spec §13.x).
+    # The workflow agent runner prepends the agent's ref before passing
+    # it in so authz audit events record the workflow→agent frame.
+    # ``()`` default preserves backward-compat with existing callers.
+    caller_chain: tuple[str, ...] = Field(default_factory=tuple)
 
 
 # ---------------------------------------------------------------------------

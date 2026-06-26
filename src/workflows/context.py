@@ -21,7 +21,11 @@ import tempfile
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from schemas import EventId, SessionId
+    from workflows.ids import TraceId
 
 __all__ = ["NodeContext"]
 
@@ -61,6 +65,29 @@ class NodeContext:
     state: Mapping[str, Any]
     bundle: str
     emit_fn: Callable[[str, str, Mapping[str, Any]], None] = field(repr=False)
+    # Phase 3.2 — the executor-emitted ``workflow.node.started`` id for
+    # this invocation. Runners that spawn child entities (the agent
+    # runner) thread it into their parent-pointer payloads
+    # (``FromWorkflowRun.event_id`` per master spec §11.6.1). ``None``
+    # only when a runner constructs a NodeContext outside the executor's
+    # worklist (e.g. unit tests via :meth:`for_test`).
+    parent_event_id: EventId | None = None
+    # Phase 3.2 — the workflow run's trace_id (master spec §11.6.4).
+    # Inherited UNCHANGED by every spawned session's events so the two
+    # JSONLs cross-correlate exactly. ``None`` only outside the
+    # executor's worklist.
+    trace_id: TraceId | None = None
+    # Phase 3.2 — the workflow run's caller_chain (master spec §13.x).
+    # The agent runner prepends the agent's ref before passing into the
+    # engine so authz audit events record the workflow→agent frame.
+    # Proximate first; default ``()`` for root-level invocations.
+    caller_chain: tuple[str, ...] = field(default_factory=tuple)
+    # Phase 3.2 — set by ``AgentRunner`` to the session it spawned, read
+    # by the executor's ``workflow.node.completed`` payload builder
+    # (master spec §11.6.3). Frozen dataclass — runners mutate via
+    # ``object.__setattr__`` so the "authored nodes cannot mutate
+    # context" invariant still holds for the public surface.
+    spawned_session_id: SessionId | None = None
 
     def emit(self, subkind: str, payload: Mapping[str, Any]) -> None:
         """Emit a custom workflow event.
