@@ -1,22 +1,36 @@
-# Phase 3.0 starter workflow.
+# Phase 3.1 Step 6 starter workflow.
 #
-# Demonstrates the canonical 3-segment ``type:`` form (R3 #5) and the
-# common ``description:`` modifier (R3 #7). Authored Python nodes are
-# referenced via ``type: <bundle>/nodes/<name>`` (Round 4 item #3).
-description: "Starter workflow that greets and echoes."
+# A two-node linear pipeline that runs end-to-end on a fresh
+# ``kolsch setup --non-interactive`` workspace without any authz
+# prompts. Demonstrates: workflow inputs → edge bind rendering →
+# authored Python ``@node`` dispatch.
+#
+# - ``ready``: a built-in ``noop`` root node that fires immediately
+#   so the graph has a starting frame.
+# - ``greet``: an authored-Python ``@node`` (``kolsch/nodes/echo``,
+#   shipped in the starter bundle at ``nodes/echo.py``). The edge
+#   from ``ready`` carries ``binds: { message: ... }`` referencing
+#   the workflow input.
+#
+# Author note: bash workflows execute too (see component tests), but
+# the starter ``platform.yaml`` maps ``kolsch/bash`` to ``prompt``,
+# which collapses to ``deny`` on the headless ``kolsch workflows
+# run`` surface. The bash demo will return once the workflow layer
+# wires the workflow's ``policy:`` field through the tool dispatcher
+# (tracked separately).
+description: "Starter workflow — workflow input piped to an authored @node."
 
 nodes:
+  ready:
+    type: kolsch/nodes/noop
+    description: "structural root node — fires immediately"
   greet:
-    type: kolsch/nodes/bash
-    command: "echo Hello, {{ inputs.name | default('world') }}!"
-    description: "shell greeting"
-  echo_step:
     type: kolsch/nodes/echo
-    description: "authored python node from the starter bundle"
+    description: "authored python node — echoes the workflow input"
 
 graph:
   edges:
-    - from: greet
-      to: echo_step
+    - from: ready
+      to: greet
       binds:
-        message: "{{ nodes.greet.stdout }}"
+        message: "{{ inputs.message | default('Hello, world!') }}"
