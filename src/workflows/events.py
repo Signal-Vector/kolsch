@@ -24,8 +24,8 @@ inspect ``event["kind"]`` and ``event["payload"]["..."]`` still pass.
 
 from __future__ import annotations
 
-import time
 import uuid
+from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
@@ -115,20 +115,17 @@ class WorkflowEvent(BaseModel):
     kind: WorkflowEventKind
     workflow_run_id: WorkflowRunId
     trace_id: TraceId
-    # Master spec §11 lists ``ts`` as a common-field but doesn't pin
-    # its encoding. The workflow engine encodes ``ts`` as an integer
-    # millisecond offset from the Unix epoch (UTC) — the same shape
-    # ``Date.now()`` returns in JS and ``System.currentTimeMillis()``
-    # returns in JVM. Reasons:
-    #
-    # - constant-width, sortable, diff-friendly in JSONL;
-    # - no timezone ambiguity;
-    # - integer arithmetic for "duration between two events" without
-    #   pulling a datetime parser;
-    # - the volatile-field canonicaliser at
-    #   :mod:`tests.golden.runs_test` collapses every ``ts`` to ``0``
-    #   so goldens stay stable.
-    ts: int = Field(default_factory=lambda: int(time.time() * 1000))
+    # Master spec §11 lists ``ts`` as a common envelope field. The
+    # repo-wide convention (Phase 1 ``schemas.Event.created_at``,
+    # ``WorkflowRun.created_at``, ``MemoryItem.created_at``, session
+    # entities) is a Pydantic ``datetime`` field serialised to
+    # ISO-8601 by ``model_dump(mode="json")``. ``ts`` follows the
+    # same convention so a JSONL consumer doesn't need a second
+    # decoder for workflow events. The volatile-field canonicaliser
+    # at :mod:`tests.golden.runs_test` collapses every ``ts`` to the
+    # literal ``<TS>`` placeholder, matching the Phase 1 helper at
+    # :mod:`tests.golden._helpers`.
+    ts: datetime = Field(default_factory=lambda: datetime.now(UTC))
     payload: dict[str, Any] = Field(default_factory=dict)
 
 

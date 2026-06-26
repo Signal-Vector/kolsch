@@ -4,9 +4,11 @@ Conventions match handbook §8.4 + Step 4 #7's byte-stable JSONL:
 
 - Each event is JSON-dumped with ``sort_keys=True`` and
   ``separators=(",", ":")`` so byte equality holds across runs.
-- IDs (``ev_``, ``cl_``, ``tc_``, ``th_``, ``ses_``, ``mem_``) are
-  rewritten to per-prefix sequential sentinels (``ev_001``,
-  ``cl_001``, …) in first-seen order.
+- IDs are rewritten to per-prefix sequential sentinels (``ev_001``,
+  ``cl_001``, …) in first-seen order. The covered prefixes are
+  every UUID4-backed logging id minted anywhere in the runtime —
+  see :data:`PREFIX_UUID_RE`. ``ag_`` ids are user-named (stable
+  across runs by construction) and intentionally NOT canonicalised.
 - ISO-8601 timestamps anywhere in any string field collapse to the
   literal ``<TS>``.
 
@@ -18,6 +20,11 @@ Use :func:`assert_matches_golden` from tests:
 Pass ``UPDATE_GOLDEN=1`` in the environment to regenerate goldens
 after a deliberate behavior change; CI runs without it and diffs
 against the committed file.
+
+Phase 3.1 Step 6 — the public :func:`canonicalize_text` /
+:func:`Canonicaliser` surface is reused by
+``tests/golden/runs_test.py`` so workflow goldens and session
+goldens share one substitution implementation.
 """
 
 from __future__ import annotations
@@ -36,16 +43,58 @@ if TYPE_CHECKING:
 _GOLDEN_DIR = Path(__file__).parent
 _UPDATE_ENV = "UPDATE_GOLDEN"
 
-# Matches `<prefix>_<uuid>` for the engine's id prefixes.
-_PREFIX_UUID_RE = re.compile(
-    r"(ev|cl|tc|th|ses|mem)_"
+# Every UUID4-backed logging id prefix from :mod:`schemas.identifiers`
+# + :mod:`workflows.ids`. ``ag_`` is intentionally excluded — agent
+# ids are user-named (``ag_<bundle>_<name>``), so they are stable
+# across runs and act as part of the structural shape rather than
+# volatile noise.
+PREFIX_UUID_RE = re.compile(
+    r"(ev|ses|th|cl|mem|wrk|tr|inv|tc)_"
     r"[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}",
 )
 
 # ISO-8601 UTC timestamps as Pydantic serializes them.
-_ISO_DT_RE = re.compile(
+ISO_DT_RE = re.compile(
     r"\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d+)?(?:Z|[+-]\d{2}:\d{2})",
 )
+
+
+def canonicalize_text(text: str) -> str:
+    """Run the volatile-field substitutions over an arbitrary string.
+
+    Stateless wrapper — every call resets the id counters. For event-
+    sequence comparisons that need the same id to map to the same
+    sentinel ACROSS multiple inputs, use :class:`Canonicaliser`.
+    """
+    return Canonicaliser().sub(text)
+
+
+class Canonicaliser:
+    """Stateful per-id-occurrence sentinel allocator.
+
+    A canonicaliser carries its own ``id_map`` + per-prefix counter,
+    so threading one instance through multiple :meth:`sub` calls
+    keeps the sentinel numbering stable across the whole stream.
+    """
+
+    def __init__(self) -> None:
+        self.id_map: dict[str, str] = {}
+        self.counters: dict[str, int] = {}
+
+    def sub(self, text: str) -> str:
+        text = PREFIX_UUID_RE.sub(self._replace_prefixed, text)
+        return ISO_DT_RE.sub("<TS>", text)
+
+    def _fresh(self, prefix: str) -> str:
+        self.counters[prefix] = self.counters.get(prefix, 0) + 1
+        return f"{prefix}_{self.counters[prefix]:03d}"
+
+    def _replace_prefixed(self, match: re.Match[str]) -> str:
+        full = match.group(0)
+        prefix = match.group(1)
+        if full not in self.id_map:
+            self.id_map[full] = self._fresh(prefix)
+        return self.id_map[full]
 
 
 def _normalize_string(
@@ -53,19 +102,13 @@ def _normalize_string(
     id_map: dict[str, str],
     counters: dict[str, int],
 ) -> str:
-    def _fresh(prefix: str) -> str:
-        counters[prefix] = counters.get(prefix, 0) + 1
-        return f"{prefix}_{counters[prefix]:03d}"
-
-    def _replace_prefixed(match: re.Match[str]) -> str:
-        full = match.group(0)
-        prefix = match.group(1)
-        if full not in id_map:
-            id_map[full] = _fresh(prefix)
-        return id_map[full]
-
-    out = _PREFIX_UUID_RE.sub(_replace_prefixed, text)
-    return _ISO_DT_RE.sub("<TS>", out)
+    # Adapter that lets the existing :func:`_normalize_value` recursion
+    # keep its (id_map, counters) accumulator while delegating the
+    # actual substitution to the shared :class:`Canonicaliser` regex.
+    can = Canonicaliser()
+    can.id_map = id_map
+    can.counters = counters
+    return can.sub(text)
 
 
 def _normalize_value(

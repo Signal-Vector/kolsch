@@ -6,20 +6,16 @@ asserts semantic equality with a stored golden under
 ``tests/golden/runs/``. Volatile fields are canonicalised before
 comparison so a fresh test run never re-emits a churning diff.
 
-Canonical volatile-field substitution table (Round 7 A7-3):
+Canonical volatile-field substitution table — delegated to the
+shared :class:`tests.golden._helpers.Canonicaliser` so workflow
+goldens and session goldens use the same convention:
 
-    ts          → 0                 integer ms placeholder
-    ev_<uuid>   → "ev_0", "ev_1"…   per-occurrence counter, prefix preserved
-    wrk_<uuid>  → "wrk_0"…          per-occurrence counter
-    tr_<uuid>   → "tr_0"…           per-occurrence counter
-    inv_<uuid>  → "inv_0"…          per-occurrence counter
-    tc_<uuid>   → "tc_0"…           per-occurrence counter
+    ISO-8601 ts          → "<TS>"
+    <prefix>_<uuid>      → "<prefix>_001"…    per-prefix 3-digit counter
 
-ID sentinels are bare strings (``ev_0`` not ``<ev_0>``); the prefix
-plus integer suffix already mark the value as a placeholder. ``ts``
-is encoded by the executor as integer milliseconds since the Unix
-epoch (see :class:`workflows.events.WorkflowEvent`); the canonicaliser
-collapses every emit to ``0`` so goldens stay stable.
+Prefixes covered: ``ev|ses|th|cl|mem|wrk|tr|inv|tc`` (every
+UUID4-backed id minted in the runtime). ``ag_`` ids are user-named
+and stable, so they pass through verbatim.
 
 The sentinels increment in **order of first occurrence in the JSONL
 text** so two events sharing the same id resolve to the same sentinel
@@ -33,11 +29,12 @@ Updating goldens: run a fixture, copy the printed-on-failure
 from __future__ import annotations
 
 import json
-import re
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
+
+from tests.golden._helpers import canonicalize_text
 
 if TYPE_CHECKING:
     from collections.abc import Callable
@@ -51,37 +48,13 @@ from workflows.run_store import WorkflowRunStore
 # Canonicaliser
 # ---------------------------------------------------------------------------
 
-_PREFIX_PATTERN = re.compile(
-    r"\b(ev|wrk|tr|inv|tc)_[0-9a-fA-F-]{8,}\b"
-)
-_TS_PATTERN = re.compile(
-    r'"ts":\s*\d+'
-)
-
-
 def canonicalize_jsonl(text: str) -> str:
-    """Replace volatile id + timestamp fields with stable sentinels.
-
-    See module docstring for the substitution table. The result is a
-    stable string suitable for ``==`` comparison against a golden
-    file.
-    """
-    counters: dict[str, int] = {}
-    seen: dict[str, str] = {}
-
-    def _sub_id(match: re.Match[str]) -> str:
-        token = match.group(0)
-        if token in seen:
-            return seen[token]
-        prefix = match.group(1)
-        idx = counters.get(prefix, 0)
-        sentinel = f"{prefix}_{idx}"
-        counters[prefix] = idx + 1
-        seen[token] = sentinel
-        return sentinel
-
-    text = _PREFIX_PATTERN.sub(_sub_id, text)
-    return _TS_PATTERN.sub('"ts":0', text)
+    """Thin shim — delegates to the shared
+    :func:`tests.golden._helpers.canonicalize_text`. Kept as a named
+    surface so the fixture code reads naturally, and so an in-test
+    monkeypatch on the workflow-specific name doesn't reach across
+    into Phase 1 goldens."""
+    return canonicalize_text(text)
 
 
 # ---------------------------------------------------------------------------
@@ -346,17 +319,17 @@ def test_canonicaliser_assigns_sentinels_in_first_occurrence_order() -> None:
         {
             "event_id": "ev_aaaaaaaa-1111-1111-1111-111111111111",
             "workflow_run_id": "wrk_bbbbbbbb-2222-2222-2222-222222222222",
-            "ts": 1761436800000,
+            "ts": "2026-06-26T15:33:10.119266Z",
         }
     )
     canonical = canonicalize_jsonl(text)
-    assert '"event_id": "ev_0"' in canonical
-    assert '"workflow_run_id": "wrk_0"' in canonical
-    assert '"ts": 0' in canonical or '"ts":0' in canonical
+    assert '"event_id": "ev_001"' in canonical
+    assert '"workflow_run_id": "wrk_001"' in canonical
+    assert "<TS>" in canonical
 
 
 def test_canonicaliser_reuses_sentinel_for_same_id() -> None:
     text = '"ev_aaaaaaaa-1111-1111-1111-111111111111" "ev_aaaaaaaa-1111-1111-1111-111111111111"'
     canonical = canonicalize_jsonl(text)
-    assert canonical.count("ev_0") == 2
-    assert "ev_1" not in canonical
+    assert canonical.count("ev_001") == 2
+    assert "ev_002" not in canonical

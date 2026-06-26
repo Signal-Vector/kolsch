@@ -18,6 +18,7 @@ own config strings before they reach ``dispatch_tool``).
 
 from __future__ import annotations
 
+import uuid
 from typing import TYPE_CHECKING, Any
 
 from errors import ToolUnauthorized
@@ -35,14 +36,15 @@ if TYPE_CHECKING:
 __all__ = ["BashRunner"]
 
 
-# Synthetic session/thread ids the workflow's tool dispatch uses.
-# The ToolContext model REQUIRES these fields; the bash tool itself
-# does not consult them. Phase 3.7 will mint real ses_/th_ ids when
-# sub-workflow invocation lands; Phase 3.1 ships fixed UUID4 sentinels
-# so dispatched tools see a stable identity surface.
+# ``ToolContext`` requires an ``agent_id``; the bash tool itself
+# ignores it. ``ag_`` ids are user-named (not UUID-backed), so we
+# carry a stable synthetic agent id naming the workflow-executor
+# dispatcher. ``ses_`` and ``th_`` MUST be UUID4-backed per
+# :mod:`workflows.ids` — minted fresh per :meth:`BashRunner.run` so
+# two concurrent workflow bash dispatches never collide on the
+# identity surface (Phase 3.7 will swap these for real per-run /
+# per-sub-workflow ids).
 _SYNTHETIC_AGENT = AgentId("ag_workflow_executor")
-_SYNTHETIC_SESSION = SessionId("ses_00000000-0000-4000-8000-000000000000")
-_SYNTHETIC_THREAD = ThreadId("th_00000000-0000-4000-8000-000000000001")
 
 
 class BashRunner:
@@ -104,8 +106,8 @@ class BashRunner:
 
         tool_ctx = ToolContext(
             agent_id=_SYNTHETIC_AGENT,
-            session_id=_SYNTHETIC_SESSION,
-            thread_id=_SYNTHETIC_THREAD,
+            session_id=SessionId(f"ses_{uuid.uuid4()}"),
+            thread_id=ThreadId(f"th_{uuid.uuid4()}"),
             principal=f"workflow.{ctx.workflow_run_id}",
             secrets={},
             workspace_root=ctx.workspace_root,
