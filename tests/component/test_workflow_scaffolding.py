@@ -548,6 +548,7 @@ def test_workflows_all_parity_with_module_namespace() -> None:
         "jinja_env",
         "labels",
         "module_isolation",
+        "orphan_sweep",
         "parser",
         "run",
         "run_store",

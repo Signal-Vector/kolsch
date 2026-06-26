@@ -469,16 +469,6 @@ def _executor_source() -> str:
 
 
 class TestStepOwnershipGuards:
-    def test_executor_does_not_check_cancel_flag_existence(self) -> None:
-        """Step 4 owns ``cancel.flag`` polling. The Step 1 executor
-        must not invoke ``.exists()`` on the cancel flag path or
-        emit ``workflow.run.aborted``."""
-        text = _executor_source()
-        # Real reads invoke .exists() on the path. The docstring
-        # mention is fine; this string isn't.
-        assert "cancel_flag_path.exists" not in text
-        assert '"workflow.run.aborted"' not in text
-
     def test_executor_source_is_iterative_not_recursive(self) -> None:
         text = _executor_source()
         # The executor never calls ``await self.run()`` recursively.

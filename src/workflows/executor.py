@@ -23,6 +23,7 @@ NO recursion. The worklist is iterative; sub-workflow nesting (Phase
 from __future__ import annotations
 
 import logging
+import os
 import uuid
 from collections import deque
 from collections.abc import Mapping
@@ -32,7 +33,7 @@ from assets.refs import is_three_segment, parse_three_segment
 from workflows.catalog_node import BUILTIN_TYPE_NAMES
 from workflows.context import NodeContext
 from workflows.errors import NodeTypeNotImplemented
-from workflows.ids import InvocationId
+from workflows.ids import InvocationId, WorkflowRunId
 from workflows.jinja_env import JINJA_ENV
 from workflows.run import WorkflowRunStatus
 
@@ -253,13 +254,21 @@ class IterativeExecutor:
         J5/β, dispatches via the registry, and captures outputs.
         Failures bubble out as terminal ``workflow.run.failed``.
         """
-        # TODO(step-4): write `os.getpid()` to RunDirectory.pid_path here.
         from workflows.module_isolation import (  # noqa: PLC0415
             cleanup_bundle_imports,
             snapshot_sys_modules,
         )
 
         run_id = self._run.run_id
+        run_dir = self._store.directory(run_id)
+        # Phase 3.1 Step 4 — write the executor's PID atomically so
+        # the engine-startup orphan sweep can decide whether a
+        # ``status=running`` JSONL was left behind by a crashed run.
+        # ``tmp + rename`` guarantees a partial write never surfaces.
+        run_dir.root.mkdir(parents=True, exist_ok=True)
+        tmp_pid = run_dir.pid_path.with_suffix(".tmp")
+        tmp_pid.write_text(str(os.getpid()), encoding="utf-8")
+        tmp_pid.replace(run_dir.pid_path)
         # Step 1 of the algorithm — run-start gate. The Phase 3.0
         # validator is the gate; the executor never enters the
         # worklist with an invalid workflow.
@@ -301,6 +310,12 @@ class IterativeExecutor:
 
         terminal_status: WorkflowRunStatus
         try:
+            # Phase 3.1 Step 4 — pre-walk cancel poll. An operator who
+            # writes ``cancel.flag`` BEFORE the first node fires sees
+            # the run abort cleanly without dispatching anything.
+            if run_dir.cancel_flag_path.exists():
+                self._emit_aborted(run_id)
+                return WorkflowRunStatus.ABORTED
             # Step 4 — walk the worklist; each node either dispatches,
             # is skipped via ``when: false``, or fails.
             for node_name in topo:
@@ -402,9 +417,16 @@ class IterativeExecutor:
                     },
                 )
 
-                # TODO(step-4): poll RunDirectory.cancel_flag_path here at the
-                # node boundary; on detection, emit ``workflow.run.aborted``
-                # and return WorkflowRunStatus.ABORTED.
+                # Phase 3.1 Step 4 — cooperative cancellation. The
+                # ``cancel.flag`` sentinel is the CLI / operator's
+                # signal for "stop after the current node finishes".
+                # We check it AFTER ``workflow.node.completed`` is
+                # emitted so the JSONL records the last successful
+                # node before the run aborts (master spec §11.2).
+                if run_dir.cancel_flag_path.exists():
+                    self._emit_aborted(run_id)
+                    terminal_status = WorkflowRunStatus.ABORTED
+                    return terminal_status
 
             # Step 5 — assemble terminal-keyed outputs.
             outputs = self._assemble_terminal_outputs(topo)
@@ -594,6 +616,24 @@ class IterativeExecutor:
 
     def _workflow_ref(self) -> str:
         return self._run.workflow_ref
+
+    def _emit_aborted(self, run_id: WorkflowRunId) -> None:
+        """Append the terminal ``workflow.run.aborted`` event.
+
+        Phase 3.1 Step 4 — invoked on cooperative cancellation when the
+        ``cancel.flag`` sentinel is observed (either pre-walk or at a
+        node boundary). ``reason: user_cancel`` is the master spec
+        §11.3 vocabulary for an operator-initiated abort; the
+        sub-workflow / fork engines will add their own reasons in
+        Phase 3.7 without disturbing this contract.
+        """
+        self._store.append_event(
+            run_id,
+            {
+                "kind": "workflow.run.aborted",
+                "payload": {"reason": "user_cancel"},
+            },
+        )
 
     def _assemble_terminal_outputs(
         self, topo: list[str]

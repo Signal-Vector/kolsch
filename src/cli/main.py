@@ -73,8 +73,39 @@ def main(argv: Sequence[str] | None = None) -> int:
         return _EXIT_MISSING_WORKSPACE
     args.root = resolved_root
 
+    # Phase 3.1 Step 4 — engine-startup orphan sweep. Any ``workflows``
+    # or ``nodes`` invocation reconciles ``runs/<wrk_id>/`` JSONLs whose
+    # executor PID is dead, so the run index never reports a stale
+    # ``running`` row from a crashed process. The sweep is a no-op when
+    # the workspace has no ``runs/`` dir yet.
+    if args.command in {"workflows", "nodes"}:
+        _run_orphan_sweep(args.root)
+
     handler = _DISPATCH[args.command]
     return asyncio.run(handler(args))
+
+
+def _run_orphan_sweep(root: Path) -> None:
+    """Reconcile orphaned runs; log reconciled IDs at INFO.
+
+    Failures here MUST NOT crash the CLI — a corrupt JSONL or filesystem
+    glitch in one run shouldn't block the operator's actual command.
+    """
+    try:
+        from workflows.orphan_sweep import sweep  # noqa: PLC0415
+        from workflows.run_store import WorkflowRunStore  # noqa: PLC0415
+
+        store = WorkflowRunStore(root)
+        reconciled = sweep(store)
+    except Exception:  # noqa: BLE001 — sweep must not crash CLI
+        _log.exception("orphan sweep failed; continuing")
+        return
+    if reconciled:
+        _log.info(
+            "orphan sweep reconciled %d run(s): %s",
+            len(reconciled),
+            ", ".join(str(r) for r in reconciled),
+        )
 
 
 # ---------------------------------------------------------------------------
