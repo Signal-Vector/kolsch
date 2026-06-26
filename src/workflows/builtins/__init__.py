@@ -17,7 +17,7 @@ Public surface:
 
 Built-in slots beyond ``bash`` + ``noop`` continue to raise
 :class:`workflows.errors.NodeTypeNotImplemented` via the registry's
-phase-numbered default lookup; Steps 3.2–3.7 register their runners
+phase-numbered default lookup; Steps 3.2-3.7 register their runners
 as they ship.
 """
 
@@ -49,7 +49,12 @@ __all__ = [
 ]
 
 
-def register_builtins(
+# PLR0913 acknowledged: the six injectables (registry + bash tool
+# definition + the three platform providers + the optional catalog
+# fallback) are intrinsic to the wiring surface. Collapsing into a
+# bundle dataclass would only shuffle the argument count behind
+# another constructor; the call site already passes them by keyword.
+def register_builtins(  # noqa: PLR0913
     registry: RunnerRegistry,
     *,
     bash_defn: ToolDefinition,
