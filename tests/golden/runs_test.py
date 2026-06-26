@@ -8,12 +8,18 @@ comparison so a fresh test run never re-emits a churning diff.
 
 Canonical volatile-field substitution table (Round 7 A7-3):
 
-    ts          → "<ts>"            timestamp string
-    ev_<uuid>   → "<ev_0>"…         per-occurrence sentinel
-    wrk_<uuid>  → "<wrk_0>"…        per-occurrence sentinel
-    tr_<uuid>   → "<tr_0>"…         per-occurrence sentinel
-    inv_<uuid>  → "<inv_0>"…        per-occurrence sentinel
-    tc_<uuid>   → "<tc_0>"…         per-occurrence sentinel
+    ts          → "<ts>"            timestamp placeholder
+    ev_<uuid>   → "ev_0", "ev_1"…   per-occurrence counter, prefix preserved
+    wrk_<uuid>  → "wrk_0"…          per-occurrence counter
+    tr_<uuid>   → "tr_0"…           per-occurrence counter
+    inv_<uuid>  → "inv_0"…          per-occurrence counter
+    tc_<uuid>   → "tc_0"…           per-occurrence counter
+
+ID sentinels are bare (``ev_0`` not ``<ev_0>``) so the canonical
+JSONL stays a syntactically valid stand-in for a real run's log —
+the prefix + integer suffix already mark the value as a sentinel
+without needing decorative brackets. ``<ts>`` keeps its brackets
+because no natural prefix encodes "this is a timestamp placeholder".
 
 The sentinels increment in **order of first occurrence in the JSONL
 text** so two events sharing the same id resolve to the same sentinel
@@ -69,7 +75,7 @@ def canonicalize_jsonl(text: str) -> str:
             return seen[token]
         prefix = match.group(1)
         idx = counters.get(prefix, 0)
-        sentinel = f"<{prefix}_{idx}>"
+        sentinel = f"{prefix}_{idx}"
         counters[prefix] = idx + 1
         seen[token] = sentinel
         return sentinel
@@ -344,13 +350,13 @@ def test_canonicaliser_assigns_sentinels_in_first_occurrence_order() -> None:
         }
     )
     canonical = canonicalize_jsonl(text)
-    assert "<ev_0>" in canonical
-    assert "<wrk_0>" in canonical
-    assert "<ts>" in canonical
+    assert '"event_id": "ev_0"' in canonical
+    assert '"workflow_run_id": "wrk_0"' in canonical
+    assert '"ts": "<ts>"' in canonical
 
 
 def test_canonicaliser_reuses_sentinel_for_same_id() -> None:
     text = '"ev_aaaaaaaa-1111-1111-1111-111111111111" "ev_aaaaaaaa-1111-1111-1111-111111111111"'
     canonical = canonicalize_jsonl(text)
-    assert canonical.count("<ev_0>") == 2
-    assert "<ev_1>" not in canonical
+    assert canonical.count("ev_0") == 2
+    assert "ev_1" not in canonical
