@@ -115,10 +115,34 @@ def add_workflows_subparser(
 
     run = workflows_sub.add_parser(
         "run",
-        help="STUB — workflow execution ships in Phase 3.1.",
+        help="Execute a workflow end-to-end.",
         parents=[fmt_parent],
     )
-    run.add_argument("ref", help="Catalog ref.")
+    run.add_argument("ref", help="Catalog ref (e.g. acme/workflows/triage).")
+    run.add_argument(
+        "--input",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help="Initial workflow input; repeatable.",
+    )
+    run.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help=(
+            "Print the resolved topological plan + per-node binds "
+            "preview and exit 0 without firing the executor."
+        ),
+    )
+    run.add_argument(
+        "--follow",
+        action="store_true",
+        help=(
+            "Tail ``events.jsonl`` while the run executes; one JSON "
+            "line per event until terminal."
+        ),
+    )
 
     return workflows
 
@@ -163,7 +187,16 @@ async def cmd_workflows(  # noqa: PLR0911
     if op == "cancel":
         return _cmd_cancel(args.root, args.run_id, fmt=fmt, out=out, err=err)
     if op == "run":
-        return _cmd_run_stub(args.ref, fmt=fmt, out=out, err=err)
+        return await _cmd_run(
+            root=args.root,
+            ref=args.ref,
+            input_pairs=list(getattr(args, "input", None) or []),
+            dry_run=bool(getattr(args, "dry_run", False)),
+            follow=bool(getattr(args, "follow", False)),
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
 
     err.write(f"unknown workflows op {op!r}\n")
     return 1
@@ -432,24 +465,292 @@ def _cmd_cancel(
 
 
 # ---------------------------------------------------------------------------
-# run — STUB
+# run — Phase 3.1 Step 5 live executor wire-up
 # ---------------------------------------------------------------------------
 
 
-_RUN_STUB_MESSAGE = (
-    "Workflow execution is not implemented in Phase 3.0. "
-    "Ships in Phase 3.1."
-)
-
-
-def _cmd_run_stub(
-    ref: str,
+# PLR0913 acknowledged: the live ``run`` command surface is wide on
+# purpose — ref, --input, --dry-run, --follow, --format, plus the
+# captured out/err streams. Collapsing into an args object would only
+# shift the parameter count behind another constructor; the dispatcher
+# already passes them by keyword.
+async def _cmd_run(  # noqa: PLR0913
     *,
+    root: Path,
+    ref: str,
+    input_pairs: list[str],
+    dry_run: bool,
+    follow: bool,
     fmt: str,
     out: TextIO,
     err: TextIO,
 ) -> int:
-    _ = ref
+    """Live ``kolsch workflows run <ref>`` handler.
+
+    Three modes:
+
+    - ``--dry-run`` prints the resolved topological plan + per-node
+      raw ``binds`` preview and exits 0 without touching the executor
+      (no JSONL written, no module imports).
+    - ``--follow`` runs the executor concurrently with a JSONL tail
+      that prints one line per event until the terminal event lands.
+    - Default blocks until terminal; prints the final outputs JSON on
+      success or the error envelope on failure.
+    """
+    from pathlib import Path as _Path  # noqa: PLC0415
+
+    from platform_runtime import bootstrap_runtime  # noqa: PLC0415
+
+    runtime = await bootstrap_runtime(root=root)
+    catalog = runtime.asset_management.catalog()
+
+    entry = catalog.lookup(ref, expected_type="workflow")
+    if entry is None:
+        return _emit_unknown_ref(
+            command="workflows run", ref=ref, fmt=fmt, out=out, err=err
+        )
+    try:
+        workflow = load_workflow(_Path(entry.path))
+    except WorkflowError as exc:
+        return _emit_error_envelope(
+            command="workflows run",
+            errors=[exc],
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
+
+    inputs = _parse_input_pairs(input_pairs)
+
+    if dry_run:
+        # AC 5.5 — print the plan WITHOUT touching the executor.
+        # ``sys.modules`` is never mutated; no JSONL written; no
+        # provider call.
+        topo = _compute_dry_run_topology(workflow)
+        return _emit_dry_run_plan(
+            workflow=workflow,
+            ref=entry.ref,
+            topo=topo,
+            inputs=inputs,
+            fmt=fmt,
+            out=out,
+        )
+
+    # Live executor wiring.
+    from tools.builtins import make_bash  # noqa: PLC0415
+    from tools.decorator import get_tool_definition  # noqa: PLC0415
+    from workflows.builtins import register_builtins  # noqa: PLC0415
+    from workflows.executor import (  # noqa: PLC0415
+        IterativeExecutor,
+        RunnerRegistry,
+    )
+    from workflows.run_store import WorkflowRunStore  # noqa: PLC0415
+
+    store = WorkflowRunStore(root)
+    run = store.create(workflow_ref=entry.ref, inputs=inputs)
+    bash_fn = make_bash(policy=runtime.path_policy, root=root)
+    bash_defn = get_tool_definition(bash_fn)
+    registry = RunnerRegistry()
+    register_builtins(
+        registry,
+        bash_defn=bash_defn,
+        authz=runtime.authz,
+        secrets=runtime.secrets,
+        sandbox=runtime.sandbox,
+        catalog=catalog,
+    )
+    executor = IterativeExecutor(
+        workflow=workflow,
+        run=run,
+        store=store,
+        registry=registry,
+        catalog=catalog,
+    )
+
+    if follow:
+        return await _run_with_follow(
+            executor=executor,
+            store=store,
+            run_id=run.run_id,
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
+    return await _run_blocking(
+        executor=executor,
+        store=store,
+        run_id=run.run_id,
+        fmt=fmt,
+        out=out,
+        err=err,
+    )
+
+
+def _parse_input_pairs(pairs: list[str]) -> dict[str, str]:
+    """Parse ``--input KEY=VALUE`` repeats into a dict.
+
+    Validation matches the ``kolsch run`` CLI surface: missing ``=``
+    is a hard fail (``SystemExit``) so a malformed flag never
+    silently drops state into the executor.
+    """
+    out: dict[str, str] = {}
+    for item in pairs:
+        if "=" not in item:
+            msg = f"--input must be KEY=VALUE; got {item!r}"
+            raise SystemExit(msg)
+        key, value = item.split("=", 1)
+        out[key] = value
+    return out
+
+
+def _compute_dry_run_topology(workflow: Any) -> list[str]:  # noqa: ANN401
+    """Kahn's algorithm replicated here for the dry-run path.
+
+    Duplicates :meth:`workflows.executor.IterativeExecutor._compute_topology`
+    so the dry-run never imports the executor module (which would in
+    turn load :mod:`workflows.module_isolation` + bundle plumbing —
+    breaking AC 5.5).
+    """
+    from collections import deque  # noqa: PLC0415
+
+    node_names = list(workflow.nodes)
+    edges = (
+        list(workflow.graph.edges) if workflow.graph is not None else []
+    )
+    incoming: dict[str, list[str]] = {n: [] for n in node_names}
+    outgoing: dict[str, list[str]] = {n: [] for n in node_names}
+    for edge in edges:
+        if edge.from_ in incoming and edge.to in incoming:
+            incoming[edge.to].append(edge.from_)
+            outgoing[edge.from_].append(edge.to)
+    in_degree = {n: len(incoming[n]) for n in node_names}
+    queue: deque[str] = deque(n for n in node_names if in_degree[n] == 0)
+    topo: list[str] = []
+    while queue:
+        current = queue.popleft()
+        topo.append(current)
+        for nxt in outgoing[current]:
+            in_degree[nxt] -= 1
+            if in_degree[nxt] == 0:
+                queue.append(nxt)
+    return topo
+
+
+def _emit_dry_run_plan(  # noqa: PLR0913 — six explicit kw args; collapsing them into an args object would only shift the count
+    *,
+    workflow: Any,  # noqa: ANN401
+    ref: str,
+    topo: list[str],
+    inputs: dict[str, str],
+    fmt: str,
+    out: TextIO,
+) -> int:
+    """Render the dry-run plan as text or JSON."""
+    plan = [
+        {
+            "node": name,
+            "type": getattr(
+                workflow.nodes[name], "type", "<copy_of>"
+            ),
+            "binds": _node_binds_preview(workflow.nodes[name]),
+            "when": getattr(workflow.nodes[name], "when", None),
+        }
+        for name in topo
+    ]
+    if fmt == "json":
+        out.write(
+            render(
+                command="workflows run",
+                fmt=fmt,
+                data={
+                    "workflow_ref": ref,
+                    "dry_run": True,
+                    "inputs": inputs,
+                    "plan": plan,
+                },
+            )
+        )
+        out.write("\n")
+        return 0
+    lines = [
+        f"dry-run plan: {ref}",
+        f"inputs: {inputs or '-'}",
+        f"topo ({len(plan)} nodes):",
+    ]
+    for step in plan:
+        lines.append(f"  {step['node']}\t{step['type']}")
+        if step["binds"]:
+            lines.append(f"    binds: {step['binds']}")
+        if step["when"] is not None:
+            lines.append(f"    when:  {step['when']!r}")
+    out.write(
+        render(
+            command="workflows run",
+            fmt=fmt,
+            text_body="\n".join(lines) + "\n",
+        )
+    )
+    return 0
+
+
+def _node_binds_preview(node_def: Any) -> dict[str, Any]:  # noqa: ANN401
+    """Return the node's ``binds`` mapping in its raw, unrendered form.
+
+    Jinja-marked values (``"{{ ... }}"``) are reported verbatim so the
+    operator can see exactly what would render at runtime.
+    """
+    binds = getattr(node_def, "binds", None) or {}
+    if isinstance(binds, dict):
+        return dict(binds)
+    return {}
+
+
+async def _run_blocking(  # noqa: PLR0913 — six explicit kw args; shared with _run_with_follow
+    *,
+    executor: Any,  # noqa: ANN401
+    store: Any,  # noqa: ANN401
+    run_id: Any,  # noqa: ANN401
+    fmt: str,
+    out: TextIO,
+    err: TextIO,
+) -> int:
+    """Default mode — block until terminal; print final outputs.
+
+    Exit 0 on ``succeeded``; 1 on ``failed`` / ``timed_out`` /
+    ``aborted``. The JSONL has the authoritative event log; we
+    extract the terminal event's payload here for the user-visible
+    summary.
+    """
+    from workflows.run import WorkflowRunStatus  # noqa: PLC0415
+
+    status = await executor.run()
+    payload = _terminal_payload(store, run_id)
+    if status == WorkflowRunStatus.SUCCEEDED:
+        if fmt == "json":
+            out.write(
+                render(
+                    command="workflows run",
+                    fmt=fmt,
+                    data={
+                        "run_id": str(run_id),
+                        "status": status.value,
+                        "outputs": payload.get("outputs", {}),
+                    },
+                )
+            )
+            out.write("\n")
+        else:
+            out.write(f"run {run_id} {status.value}\n")
+            outputs = payload.get("outputs") or {}
+            if outputs:
+                import json as _json  # noqa: PLC0415
+
+                out.write(
+                    _json.dumps(outputs, sort_keys=True, default=str) + "\n"
+                )
+        return 0
+    # Non-success terminal.
+    reason = payload.get("reason", "(no reason recorded)")
     if fmt == "json":
         out.write(
             render(
@@ -458,16 +759,85 @@ def _cmd_run_stub(
                 status="error",
                 errors=[
                     {
-                        "class": "NotImplemented",
-                        "summary": _RUN_STUB_MESSAGE,
+                        "class": "WorkflowRunFailed",
+                        "summary": (
+                            f"run {run_id} ended {status.value}: {reason}"
+                        ),
                     }
                 ],
             )
         )
         out.write("\n")
     else:
-        err.write(_RUN_STUB_MESSAGE + "\n")
+        err.write(f"run {run_id} {status.value}: {reason}\n")
     return 1
+
+
+async def _run_with_follow(  # noqa: PLR0913 — six explicit kw args; shared with _run_blocking
+    *,
+    executor: Any,  # noqa: ANN401
+    store: Any,  # noqa: ANN401
+    run_id: Any,  # noqa: ANN401
+    fmt: str,
+    out: TextIO,
+    err: TextIO,
+) -> int:
+    """``--follow`` mode — concurrent executor + JSONL tail printer.
+
+    The executor coroutine runs as a task; the tail iterator polls
+    the JSONL and prints one JSON line per event. Termination is
+    driven by the tail: it stops yielding once a terminal
+    ``workflow.run.*`` event lands. Then we await the executor for
+    its terminal status.
+    """
+    import asyncio  # noqa: PLC0415
+
+    from workflows.run import WorkflowRunStatus  # noqa: PLC0415
+
+    exec_task = asyncio.create_task(executor.run())
+    try:
+        await asyncio.to_thread(_drain_tail_to_writer, store, run_id, out)
+    finally:
+        # If the tail printer raised, still let the executor finish so
+        # the JSONL terminates cleanly.
+        status: WorkflowRunStatus = await exec_task
+    if status == WorkflowRunStatus.SUCCEEDED:
+        return 0
+    payload = _terminal_payload(store, run_id)
+    if fmt != "json":
+        reason = payload.get("reason", "(no reason recorded)")
+        err.write(f"run {run_id} {status.value}: {reason}\n")
+    # Surface a non-zero exit so shell pipelines reflect failure.
+    return 1
+
+
+def _drain_tail_to_writer(store: Any, run_id: Any, out: TextIO) -> None:  # noqa: ANN401
+    """Synchronous-thread JSONL tail printer.
+
+    Runs inside :func:`asyncio.to_thread` so the ``time.sleep`` polls
+    in :meth:`WorkflowRunStore.tail` don't block the event loop.
+    """
+    import json as _json  # noqa: PLC0415
+
+    for event in store.tail(run_id):
+        out.write(_json.dumps(event, sort_keys=True, default=str))
+        out.write("\n")
+        out.flush()
+
+
+def _terminal_payload(store: Any, run_id: Any) -> dict[str, Any]:  # noqa: ANN401
+    """Read the run's last ``workflow.run.*`` event and return its payload."""
+    terminal_kinds = {
+        "workflow.run.completed",
+        "workflow.run.failed",
+        "workflow.run.timed_out",
+        "workflow.run.aborted",
+    }
+    last: dict[str, Any] = {}
+    for event in store.read_events(run_id):
+        if event.get("kind") in terminal_kinds:
+            last = event.get("payload") or {}
+    return last
 
 
 # ---------------------------------------------------------------------------

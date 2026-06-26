@@ -543,6 +543,7 @@ def test_workflows_all_parity_with_module_namespace() -> None:
         "context",
         "decorator",
         "errors",
+        "events",
         "executor",
         "ids",
         "jinja_env",
@@ -551,6 +552,7 @@ def test_workflows_all_parity_with_module_namespace() -> None:
         "orphan_sweep",
         "parser",
         "run",
+        "run_context",
         "run_store",
         "validator",
     }

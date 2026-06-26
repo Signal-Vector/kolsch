@@ -862,8 +862,8 @@ class RuleBasedAuthorizationProvider:
         by a single ordered ``layers: tuple[PermissionLayer, ...]``.
         The provider walks the tuple IN ORDER (first-match-wins per
         layer); each layer's ``name`` lands in the result's
-        ``reason`` and (Phase 3.1+) the ``policy.decision.made`` event
-        payload's ``layer`` field.
+        ``reason`` and the ``policy.decision.made`` event payload's
+        ``layer`` field.
 
         **Engine-side layer-tuple construction contract** (documented
         here; structural engine wiring lands in Phase 3.1): the engine
@@ -885,30 +885,48 @@ class RuleBasedAuthorizationProvider:
         frame in the chain matches the glob; an empty chain fails
         closed for any ``from:``-filtered rule.
 
-        Phase 2.0 surface preserved:
-
-        - ``target`` is matched against the rule's ``pattern``
-          (or, for legacy rules, ``what`` regex); falls back to
-          ``action`` for legacy rules with no target.
-        - ``callback`` is the chat-surface prompt resolver. When
-          ``None`` (the default — used by ``kolsch run``, the server,
-          tests), ``prompt`` collapses to ``deny`` so unattended
-          callers never hang.
-        - When no rule matches in any layer AND a prompt callback
-          has been registered via :meth:`register_prompt_callback`,
-          fire the callback with ``rule_id=None`` so the modal can
-          render the "no covering rule yet" panel.
-
-        **R3 #3 + Round 5 H1 — audit emission contract**: the engine
-        emits a ``policy.decision.made`` event (master spec §13.5,
-        renamed from the legacy ``authz.decision`` per Round 5 H1)
-        in workflow's tool-dispatch wrapper subject to the
-        :attr:`RuleBasedAuthorizationConfig.audit_level` setting
-        (``"all"`` / ``"rule_matched"``; default ``"rule_matched"``).
-        Payload: ``{action, target, effect, rule_id, layer,
-        caller_chain}``. Phase 3.0 ships the contract; Phase 3.1
-        implements the emission.
+        Phase 3.1 Step 5 — after the rule walk resolves, a
+        ``policy.decision.made`` event is appended to the active
+        workflow run's JSONL (master spec §13.5) subject to the
+        :attr:`audit_level` field (``"all"`` emits every decision;
+        ``"rule_matched"``, the default, emits only when a rule
+        fired). Non-workflow callers (chat, ``kolsch run``, tests)
+        observe no emission because no workflow-run contextvar is
+        active.
         """
+        result = await self._compute_decision(
+            principal=principal,
+            action=action,
+            target=target,
+            callback=callback,
+            layers=layers,
+            caller_chain=caller_chain,
+        )
+        # Phase 3.1 Step 5 — emit ``policy.decision.made`` into the
+        # current workflow run's JSONL when one is active. The
+        # contextvar gate means non-workflow callers (chat, CLI run,
+        # tests) see zero overhead.
+        _maybe_emit_policy_decision(
+            audit_level=self.audit_level,
+            result=result,
+            action=action,
+            target=target,
+            caller_chain=caller_chain,
+        )
+        return result
+
+    # PLR0913 — preserved from the prior ``allow`` signature.
+    async def _compute_decision(  # noqa: PLR0913
+        self,
+        *,
+        principal: str,
+        action: str,
+        target: str | None,
+        callback: PromptCallback | None,
+        layers: tuple[PermissionLayer, ...],
+        caller_chain: tuple[str, ...],
+    ) -> AuthorizationResult:
+        """Inner rule walk — see :meth:`allow` for the full contract."""
         # Phase 3.0 Step 4 — walk layers in the order the caller
         # supplied. The engine is responsible for putting the
         # ``workflow`` layer FIRST when the proximate frame is a
@@ -1512,6 +1530,65 @@ class RuleBasedAuthorizationProvider:
             what=rule.what,
             from_pattern=rule.from_,
         )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.1 Step 5 — policy.decision.made emission
+# ---------------------------------------------------------------------------
+
+
+def _maybe_emit_policy_decision(
+    *,
+    audit_level: str,
+    result: AuthorizationResult,
+    action: str,
+    target: str | None,
+    caller_chain: tuple[str, ...],
+) -> None:
+    """Append a ``policy.decision.made`` event to the active workflow
+    run, subject to ``audit_level``.
+
+    Master spec §13.5 + Round 5 H1 — payload carries
+    ``{action, target, effect, rule_id, caller_chain}``. A v1
+    ``layer`` field is intentionally omitted: the layer name is
+    folded into :attr:`AuthorizationResult.reason` today; hoisting a
+    typed ``layer`` to the result requires a wider schema change
+    tracked separately.
+
+    No-op when no workflow run is active on this async task — chat,
+    CLI run, and tests that don't construct a run see zero overhead.
+    """
+    from workflows.events import (  # noqa: PLC0415 — break import cycle
+        PolicyDecisionMadeEvent,
+        emit_event,
+    )
+    from workflows.run_context import (  # noqa: PLC0415
+        current_workflow_run_context,
+    )
+
+    ctx = current_workflow_run_context()
+    if ctx is None:
+        return
+    normalised = audit_level if audit_level in {"all", "rule_matched"} else (
+        "rule_matched"
+    )
+    if normalised == "rule_matched" and result.matched_rule is None:
+        return
+    emit_event(
+        ctx.store,
+        PolicyDecisionMadeEvent(
+            workflow_run_id=ctx.run_id,
+            trace_id=ctx.trace_id,
+            parent_event_id=None,
+            payload={
+                "action": action,
+                "target": target,
+                "effect": result.effect.value,
+                "rule_id": result.rule_id,
+                "caller_chain": list(caller_chain),
+            },
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -36,12 +36,20 @@ from workflows.errors import (
 def _make_workspace(tmp_path: Path) -> Path:
     for sub in ("bundles", "sessions", "content", "logs", "data", ".platform"):
         (tmp_path / sub).mkdir(exist_ok=True)
+    # Phase 3.1 Step 5 — ``run`` is now live, so the workspace's
+    # platform.yaml needs an authz rule that lets the bash node fire.
+    # The ``*|*`` glob is the catch-all "allow everything in tests";
+    # production workspaces ship the rule_matched default-deny tail.
     (tmp_path / "platform.yaml").write_text(
         textwrap.dedent(
             """\
             secrets: {variant: dotenv, config: {path: .env}}
             sandbox: {variant: native, config: {}}
-            authorization: {variant: rule_based, config: {rules: []}}
+            authorization:
+              variant: rule_based
+              config:
+                rules:
+                  - {what: "*", pattern: "*", effect: "allow"}
             storage: {entity_backend: sqlite, entity_path: .platform/entities.db}
             event_bus: {backend: in_process}
             file_access: {allowed_paths: []}
@@ -458,28 +466,69 @@ class TestValidate:
 
 
 # ---------------------------------------------------------------------------
-# AC 6.4 — run stub
+# Phase 3.1 Step 5 — live ``run`` command
 # ---------------------------------------------------------------------------
 
 
-class TestRunStub:
-    def test_run_emits_phase_3_1_message_to_stderr(
+class TestRunLive:
+    def test_run_unknown_ref_emits_workflow_not_found(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         workspace = _make_workspace(tmp_path)
         _write_workflow_bundle(workspace, "demo")
         rc, _, err = _run_cli(
-            ["--root", str(workspace), "workflows", "run", "any/ref"],
+            ["--root", str(workspace), "workflows", "run", "nope/none"],
             capsys=capsys,
         )
         assert rc == 1
-        assert "Phase 3.1" in err
+        assert "unknown" in err.lower() or "not found" in err.lower()
 
-    def test_run_json_envelope(
+    def test_run_dry_run_prints_plan_and_writes_no_jsonl(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         workspace = _make_workspace(tmp_path)
-        _write_workflow_bundle(workspace, "demo")
+        _write_workflow_bundle(
+            workspace,
+            "demo",
+            {
+                "nodes": {
+                    "a": {"type": "kolsch/nodes/noop"},
+                    "b": {"type": "kolsch/nodes/noop"},
+                },
+                "graph": {"edges": [{"from": "a", "to": "b"}]},
+            },
+        )
+        rc, out, _ = _run_cli(
+            [
+                "--root",
+                str(workspace),
+                "workflows",
+                "run",
+                "demo/workflows/hello",
+                "--dry-run",
+            ],
+            capsys=capsys,
+        )
+        assert rc == 0
+        assert "dry-run plan" in out
+        assert "a\t" in out
+        assert "b\t" in out
+        # AC 5.5 — no JSONL written for the dry-run path.
+        runs_dir = workspace / "runs"
+        assert not runs_dir.exists() or not any(runs_dir.iterdir())
+
+    def test_run_dry_run_json_envelope(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        workspace = _make_workspace(tmp_path)
+        _write_workflow_bundle(
+            workspace,
+            "demo",
+            {
+                "nodes": {"a": {"type": "kolsch/nodes/noop"}},
+                "graph": {"edges": []},
+            },
+        )
         rc, out, _ = _run_cli(
             [
                 "--root",
@@ -488,15 +537,82 @@ class TestRunStub:
                 "--format",
                 "json",
                 "run",
-                "any/ref",
+                "demo/workflows/hello",
+                "--dry-run",
             ],
             capsys=capsys,
         )
-        assert rc == 1
+        assert rc == 0
         envelope = json.loads(out)
-        assert envelope["status"] == "error"
-        assert envelope["errors"][0]["class"] == "NotImplemented"
-        assert "Phase 3.1" in envelope["errors"][0]["summary"]
+        assert envelope["status"] == "ok"
+        assert envelope["data"]["dry_run"] is True
+        assert envelope["data"]["workflow_ref"] == "demo/workflows/hello"
+        plan = envelope["data"]["plan"]
+        assert [step["node"] for step in plan] == ["a"]
+
+    def test_run_blocks_until_terminal_and_returns_outputs(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        workspace = _make_workspace(tmp_path)
+        _write_workflow_bundle(
+            workspace,
+            "demo",
+            {
+                "nodes": {
+                    "first": {
+                        "type": "kolsch/nodes/bash",
+                        "command": "echo hello",
+                    },
+                },
+                "graph": {"edges": []},
+            },
+        )
+        rc, out, _ = _run_cli(
+            [
+                "--root",
+                str(workspace),
+                "workflows",
+                "--format",
+                "json",
+                "run",
+                "demo/workflows/hello",
+            ],
+            capsys=capsys,
+        )
+        assert rc == 0
+        envelope = json.loads(out)
+        assert envelope["status"] == "ok"
+        assert envelope["data"]["status"] == "succeeded"
+        outputs = envelope["data"]["outputs"]
+        assert "first" in outputs
+        # Bash node returns {stdout, stderr, exit_code}.
+        assert outputs["first"]["exit_code"] == 0
+
+    def test_run_invalid_input_pair_exits_nonzero(
+        self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
+    ) -> None:
+        workspace = _make_workspace(tmp_path)
+        _write_workflow_bundle(
+            workspace,
+            "demo",
+            {
+                "nodes": {"a": {"type": "kolsch/nodes/noop"}},
+                "graph": {"edges": []},
+            },
+        )
+        with pytest.raises(SystemExit):
+            _run_cli(
+                [
+                    "--root",
+                    str(workspace),
+                    "workflows",
+                    "run",
+                    "demo/workflows/hello",
+                    "--input",
+                    "malformed",
+                ],
+                capsys=capsys,
+            )
 
 
 # ---------------------------------------------------------------------------

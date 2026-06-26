@@ -33,6 +33,16 @@ from assets.refs import is_three_segment, parse_three_segment
 from workflows.catalog_node import BUILTIN_TYPE_NAMES
 from workflows.context import NodeContext
 from workflows.errors import NodeTypeNotImplemented
+from workflows.events import (
+    WorkflowNodeCompletedEvent,
+    WorkflowNodeFailedEvent,
+    WorkflowNodeStartedEvent,
+    WorkflowRunAbortedEvent,
+    WorkflowRunCompletedEvent,
+    WorkflowRunFailedEvent,
+    WorkflowRunStartedEvent,
+    emit_event,
+)
 from workflows.ids import InvocationId, WorkflowRunId
 from workflows.jinja_env import JINJA_ENV
 from workflows.run import WorkflowRunStatus
@@ -240,12 +250,20 @@ class IterativeExecutor:
         # downstream node's predecessors have all reached a terminal
         # decision.
         self._completed_or_skipped: set[str] = set()
+        # Phase 3.1 Step 5 — causal-parent chain. The most recent
+        # emitted event id becomes the default ``parent_event_id`` for
+        # the next event. Per-invocation node.started ids are also
+        # stashed so node.completed / node.failed correctly point at
+        # the matching node.started even when intermediate events
+        # (e.g. workflow.tool.called) reset ``_last_event_id``.
+        self._last_event_id: Any = None
+        self._node_started_event_id: dict[InvocationId, Any] = {}
 
     # ------------------------------------------------------------------
     # Public entry point.
     # ------------------------------------------------------------------
 
-    async def run(self) -> WorkflowRunStatus:
+    async def run(self) -> WorkflowRunStatus:  # noqa: PLR0915 — sequential algorithm; splitting hides the §8.1 ordering
         """Walk the worklist; return the terminal status.
 
         Per master spec §8.1, this is the seven-step algorithm. The
@@ -257,6 +275,10 @@ class IterativeExecutor:
         from workflows.module_isolation import (  # noqa: PLC0415
             cleanup_bundle_imports,
             snapshot_sys_modules,
+        )
+        from workflows.run_context import (  # noqa: PLC0415
+            WorkflowRunContext,
+            set_workflow_run_context,
         )
 
         run_id = self._run.run_id
@@ -288,6 +310,20 @@ class IterativeExecutor:
         # filter even if a node module re-imports them.
         sys_modules_snapshot = snapshot_sys_modules()
 
+        # Phase 3.1 Step 5 — publish the run context so sub-systems
+        # (authz's ``policy.decision.made`` emitter, the tool
+        # dispatcher's ``workflow.tool.called`` emitter) can append to
+        # this run's JSONL without threading the run id through their
+        # public APIs. The token is reset in the ``finally:`` block so
+        # a failed run doesn't leak its handle.
+        run_context_token = set_workflow_run_context(
+            WorkflowRunContext(
+                run_id=run_id,
+                trace_id=self._run.trace_id,
+                store=self._store,
+            )
+        )
+
         # Step 2 — initialise the state dict from workflow inputs.
         self._state = dict(self._run.inputs)
 
@@ -295,17 +331,23 @@ class IterativeExecutor:
         # predecessor closure (graph reachability).
         topo, predecessors = self._compute_topology()
 
-        # Emit ``workflow.run.started``.
-        self._store.append_event(
-            run_id,
-            {
-                "kind": "workflow.run.started",
-                "payload": {
+        # Phase 3.1 Step 5 — emit ``workflow.run.started`` via the
+        # typed envelope. The envelope hoists ``workflow_run_id`` +
+        # ``trace_id`` to the top level (master spec §11.3); the
+        # ``payload`` keeps the legacy keys for backward compat with
+        # Step 1-4 tests.
+        self._last_event_id = emit_event(
+            self._store,
+            WorkflowRunStartedEvent(
+                workflow_run_id=run_id,
+                trace_id=self._run.trace_id,
+                parent_event_id=None,
+                payload={
                     "workflow_ref": self._workflow_ref(),
                     "inputs": dict(self._run.inputs),
                     "trace_id": str(self._run.trace_id),
                 },
-            },
+            ),
         )
 
         terminal_status: WorkflowRunStatus
@@ -345,19 +387,38 @@ class IterativeExecutor:
                 bound_inputs = self._render_bound_inputs(node_name)
 
                 # Mint a fresh invocation id; emit ``workflow.node.started``.
+                # Master spec §11.3 — node-scoped events carry
+                # ``invocation_id`` + ``node_name`` at the envelope
+                # top level; payload also holds the legacy keys for
+                # back-compat with Step 1-4 readers.
                 inv_id = InvocationId(f"inv_{uuid.uuid4()}")
-                self._store.append_event(
-                    run_id,
-                    {
-                        "kind": "workflow.node.started",
-                        "payload": {
+                started_id = emit_event(
+                    self._store,
+                    WorkflowNodeStartedEvent(
+                        workflow_run_id=run_id,
+                        trace_id=self._run.trace_id,
+                        parent_event_id=self._last_event_id,
+                        invocation_id=inv_id,
+                        node_name=node_name,
+                        payload={
                             "node_name": node_name,
                             "invocation_id": str(inv_id),
                             "type": _node_type_ref(node_def),
                             "inputs": bound_inputs,
+                            # Master spec §11.3 caller_chain carrier:
+                            # the workflow run's own caller_chain (the
+                            # frames it was invoked through). v1 ships
+                            # the empty tuple — the chain is
+                            # populated by Phase 3.7 sub-workflow /
+                            # fork wiring.
+                            "caller_chain": list(
+                                getattr(self._run, "caller_chain", ()) or ()
+                            ),
                         },
-                    },
+                    ),
                 )
+                self._last_event_id = started_id
+                self._node_started_event_id[inv_id] = started_id
 
                 ctx = self._build_ctx(inv_id=inv_id, node_def=node_def)
                 try:
@@ -376,45 +437,59 @@ class IterativeExecutor:
                         ctx=ctx,
                     )
                 except Exception as exc:  # noqa: BLE001 — record + abort
-                    self._store.append_event(
-                        run_id,
-                        {
-                            "kind": "workflow.node.failed",
-                            "payload": {
+                    failed_id = emit_event(
+                        self._store,
+                        WorkflowNodeFailedEvent(
+                            workflow_run_id=run_id,
+                            trace_id=self._run.trace_id,
+                            parent_event_id=self._node_started_event_id.get(
+                                inv_id
+                            ),
+                            invocation_id=inv_id,
+                            node_name=node_name,
+                            payload={
                                 "node_name": node_name,
                                 "invocation_id": str(inv_id),
                                 "error_class": type(exc).__name__,
                                 "message": str(exc),
                             },
-                        },
+                        ),
                     )
-                    self._store.append_event(
-                        run_id,
-                        {
-                            "kind": "workflow.run.failed",
-                            "payload": {
+                    self._last_event_id = emit_event(
+                        self._store,
+                        WorkflowRunFailedEvent(
+                            workflow_run_id=run_id,
+                            trace_id=self._run.trace_id,
+                            parent_event_id=failed_id,
+                            payload={
                                 "reason": (
                                     f"node {node_name!r} raised "
                                     f"{type(exc).__name__}"
                                 ),
                             },
-                        },
+                        ),
                     )
                     return WorkflowRunStatus.FAILED
 
                 # Successful invocation — capture, mark complete.
                 self._captured[node_name] = dict(output)
                 self._completed_or_skipped.add(node_name)
-                self._store.append_event(
-                    run_id,
-                    {
-                        "kind": "workflow.node.completed",
-                        "payload": {
+                self._last_event_id = emit_event(
+                    self._store,
+                    WorkflowNodeCompletedEvent(
+                        workflow_run_id=run_id,
+                        trace_id=self._run.trace_id,
+                        parent_event_id=self._node_started_event_id.get(
+                            inv_id
+                        ),
+                        invocation_id=inv_id,
+                        node_name=node_name,
+                        payload={
                             "node_name": node_name,
                             "invocation_id": str(inv_id),
                             "output": dict(output),
                         },
-                    },
+                    ),
                 )
 
                 # Phase 3.1 Step 4 — cooperative cancellation. The
@@ -430,12 +505,14 @@ class IterativeExecutor:
 
             # Step 5 — assemble terminal-keyed outputs.
             outputs = self._assemble_terminal_outputs(topo)
-            self._store.append_event(
-                run_id,
-                {
-                    "kind": "workflow.run.completed",
-                    "payload": {"outputs": outputs},
-                },
+            self._last_event_id = emit_event(
+                self._store,
+                WorkflowRunCompletedEvent(
+                    workflow_run_id=run_id,
+                    trace_id=self._run.trace_id,
+                    parent_event_id=self._last_event_id,
+                    payload={"outputs": outputs},
+                ),
             )
             terminal_status = WorkflowRunStatus.SUCCEEDED
         finally:
@@ -450,6 +527,14 @@ class IterativeExecutor:
                 before=sys_modules_snapshot,
                 workspace_root=self._store.runs_root.parent,
             )
+            # Phase 3.1 Step 5 — release the run-context contextvar so
+            # subsequent operations on this event loop don't observe
+            # a stale handle.
+            from workflows.run_context import (  # noqa: PLC0415
+                reset_workflow_run_context,
+            )
+
+            reset_workflow_run_context(run_context_token)
         return terminal_status
 
     # ------------------------------------------------------------------
@@ -627,12 +712,14 @@ class IterativeExecutor:
         sub-workflow / fork engines will add their own reasons in
         Phase 3.7 without disturbing this contract.
         """
-        self._store.append_event(
-            run_id,
-            {
-                "kind": "workflow.run.aborted",
-                "payload": {"reason": "user_cancel"},
-            },
+        self._last_event_id = emit_event(
+            self._store,
+            WorkflowRunAbortedEvent(
+                workflow_run_id=run_id,
+                trace_id=self._run.trace_id,
+                parent_event_id=self._last_event_id,
+                payload={"reason": "user_cancel"},
+            ),
         )
 
     def _assemble_terminal_outputs(
