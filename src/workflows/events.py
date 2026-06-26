@@ -24,8 +24,8 @@ inspect ``event["kind"]`` and ``event["payload"]["..."]`` still pass.
 
 from __future__ import annotations
 
+import time
 import uuid
-from datetime import UTC, datetime
 from enum import StrEnum
 from typing import TYPE_CHECKING, Any, ClassVar, Literal
 
@@ -115,7 +115,20 @@ class WorkflowEvent(BaseModel):
     kind: WorkflowEventKind
     workflow_run_id: WorkflowRunId
     trace_id: TraceId
-    ts: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    # Master spec §11 lists ``ts`` as a common-field but doesn't pin
+    # its encoding. The workflow engine encodes ``ts`` as an integer
+    # millisecond offset from the Unix epoch (UTC) — the same shape
+    # ``Date.now()`` returns in JS and ``System.currentTimeMillis()``
+    # returns in JVM. Reasons:
+    #
+    # - constant-width, sortable, diff-friendly in JSONL;
+    # - no timezone ambiguity;
+    # - integer arithmetic for "duration between two events" without
+    #   pulling a datetime parser;
+    # - the volatile-field canonicaliser at
+    #   :mod:`tests.golden.runs_test` collapses every ``ts`` to ``0``
+    #   so goldens stay stable.
+    ts: int = Field(default_factory=lambda: int(time.time() * 1000))
     payload: dict[str, Any] = Field(default_factory=dict)
 
 

@@ -8,18 +8,18 @@ comparison so a fresh test run never re-emits a churning diff.
 
 Canonical volatile-field substitution table (Round 7 A7-3):
 
-    ts          → "<ts>"            timestamp placeholder
+    ts          → 0                 integer ms placeholder
     ev_<uuid>   → "ev_0", "ev_1"…   per-occurrence counter, prefix preserved
     wrk_<uuid>  → "wrk_0"…          per-occurrence counter
     tr_<uuid>   → "tr_0"…           per-occurrence counter
     inv_<uuid>  → "inv_0"…          per-occurrence counter
     tc_<uuid>   → "tc_0"…           per-occurrence counter
 
-ID sentinels are bare (``ev_0`` not ``<ev_0>``) so the canonical
-JSONL stays a syntactically valid stand-in for a real run's log —
-the prefix + integer suffix already mark the value as a sentinel
-without needing decorative brackets. ``<ts>`` keeps its brackets
-because no natural prefix encodes "this is a timestamp placeholder".
+ID sentinels are bare strings (``ev_0`` not ``<ev_0>``); the prefix
+plus integer suffix already mark the value as a placeholder. ``ts``
+is encoded by the executor as integer milliseconds since the Unix
+epoch (see :class:`workflows.events.WorkflowEvent`); the canonicaliser
+collapses every emit to ``0`` so goldens stay stable.
 
 The sentinels increment in **order of first occurrence in the JSONL
 text** so two events sharing the same id resolve to the same sentinel
@@ -55,7 +55,7 @@ _PREFIX_PATTERN = re.compile(
     r"\b(ev|wrk|tr|inv|tc)_[0-9a-fA-F-]{8,}\b"
 )
 _TS_PATTERN = re.compile(
-    r'"ts":\s*"[^"]+"'
+    r'"ts":\s*\d+'
 )
 
 
@@ -81,7 +81,7 @@ def canonicalize_jsonl(text: str) -> str:
         return sentinel
 
     text = _PREFIX_PATTERN.sub(_sub_id, text)
-    return _TS_PATTERN.sub('"ts": "<ts>"', text)
+    return _TS_PATTERN.sub('"ts":0', text)
 
 
 # ---------------------------------------------------------------------------
@@ -346,13 +346,13 @@ def test_canonicaliser_assigns_sentinels_in_first_occurrence_order() -> None:
         {
             "event_id": "ev_aaaaaaaa-1111-1111-1111-111111111111",
             "workflow_run_id": "wrk_bbbbbbbb-2222-2222-2222-222222222222",
-            "ts": "2026-06-26T00:00:00Z",
+            "ts": 1761436800000,
         }
     )
     canonical = canonicalize_jsonl(text)
     assert '"event_id": "ev_0"' in canonical
     assert '"workflow_run_id": "wrk_0"' in canonical
-    assert '"ts": "<ts>"' in canonical
+    assert '"ts": 0' in canonical or '"ts":0' in canonical
 
 
 def test_canonicaliser_reuses_sentinel_for_same_id() -> None:
