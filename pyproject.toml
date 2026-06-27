@@ -424,9 +424,14 @@ addopts = [
     "-ra",
     "--strict-markers",
     "--strict-config",
-    "--cov",
-    "--cov-report=term-missing",
-    "--cov-report=xml",
+    # Coverage is INTENTIONALLY not in the default addopts. The
+    # `--cov` instrumentation roughly triples wall-time on this
+    # suite (empirically: 62s → 20s on a 31-test file), and the
+    # `coverage.report.fail_under = 85` floor (below) makes
+    # partial-suite runs fail when working on one file. CI runs
+    # coverage explicitly:
+    #   uv run pytest --cov --cov-report=xml --cov-report=term
+    # Local devs invoke `uv run pytest` for fast iteration.
     # Exclude E2E tests from the default `pytest` run — they cost
     # tokens, need real LLM keys, and run on a separate (nightly /
     # pre-release) schedule per + compose.test.yml.

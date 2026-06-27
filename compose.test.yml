@@ -69,6 +69,9 @@ services:
         uv run ruff format --check .
         uv run mypy .
         uv run pytest \
+            --cov \
+            --cov-report=xml \
+            --cov-report=term \
             tests/unit \
             tests/component \
             tests/integration \
