@@ -1,0 +1,33 @@
+schema_version: "0.1"
+assembly_version: "1"
+agent_id: ag_greeter
+name: greeter
+description: |
+  Phase 3.2 starter agent — invoked from `kolsch/workflows/hello-agent`
+  as the canonical workflow→agent demo. Single-shot so the workflow
+  drives it once with bound inputs and consumes a typed output dict;
+  no conversational state, no tools. Copy this file as a template
+  when authoring your own workflow-invoked agents.
+
+# model: intentionally omitted — resolves from `platform.yaml`'s
+# `defaults.model` via the kernel's defaults composition.
+
+# Single-shot mode: the engine wraps the model's final text as
+# `{"text": "..."}` on the `agent.message` event. Downstream workflow
+# nodes consume the value via `{{ nodes.<this_node>.text }}`. To
+# enforce richer typed outputs, override `outputs:` per-invocation on
+# the workflow's agent node (the workflow-side override reshapes the
+# consumed shape without changing the agent's declaration).
+io:
+  mode: single_shot
+  inputs:
+    context:
+      type: str
+  outputs:
+    text:
+      type: str
+
+prompt: |
+  You receive a short string in `context` and produce a friendly
+  one-sentence greeting that reflects it. Answer with just the
+  greeting — no preamble, no quotes.

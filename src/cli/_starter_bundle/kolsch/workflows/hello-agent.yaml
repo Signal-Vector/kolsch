@@ -1,0 +1,49 @@
+# Phase 3.2 starter — workflow → agent end-to-end demo.
+#
+# A three-node `noop → bash → agent` pipeline that proves the
+# workflow→agent boundary works on a fresh workspace:
+#
+# - `ready`: a `noop` root node so the bash node's bound input has an
+#   inbound edge to render against (per-node `command:` Jinja rendering
+#   sees `bound_inputs` + `state`, NOT the workflow's top-level
+#   `inputs` directly — bind through an edge to surface them).
+# - `prep`: a `bash` node that echoes the bound greeting, producing
+#   stdout that the next node consumes via `binds:`.
+# - `classify`: invokes `kolsch/agents/greeter` (single-shot), passing
+#   the bash node's stdout as the agent's `context` input.
+#
+# Run it with:
+#
+#     kolsch workflows run kolsch/workflows/hello-agent \
+#         --input greeting=hi
+#
+# The spawned agent session's JSONL carries `spawned_by` on its
+# `session.opened` event pointing back to this run's
+# `workflow.node.started` event for `classify`; both JSONLs share the
+# same `trace_id`. See `docs/explanation/workflow-event-log.md` §11.6
+# for the cross-JSONL linkage shape.
+description: "Workflow → agent demo — bash node feeds a single-shot agent."
+
+nodes:
+  ready:
+    type: kolsch/nodes/noop
+    description: "structural root node — fires immediately"
+  prep:
+    type: kolsch/nodes/bash
+    command: "echo '{{ inputs.greeting }}, world'"
+    description: "Compose the agent's context line from the workflow input."
+  classify:
+    type: kolsch/nodes/agent
+    agent: kolsch/agents/greeter
+    description: "Invoke the single-shot agent with the upstream stdout."
+
+graph:
+  edges:
+    - from: ready
+      to: prep
+      binds:
+        greeting: "{{ inputs.greeting | default('hi') }}"
+    - from: prep
+      to: classify
+      binds:
+        context: "{{ nodes.prep.stdout }}"
