@@ -608,6 +608,17 @@ async def _cmd_run(  # noqa: PLR0913
         make_list_files(policy=runtime.path_policy, root=root)
     )
     registry = RunnerRegistry()
+
+    # Phase 3.7 — the WorkflowSubRunner needs to construct nested
+    # ``IterativeExecutor`` instances per child sub-workflow call.
+    # Wiring a factory here (rather than importing IterativeExecutor
+    # inside ``builtins/``) keeps the dependency direction clean:
+    # ``builtins/`` already imports from the executor module for the
+    # :class:`RunnerRegistry`; the reverse would close a circular
+    # import that the factory seam sidesteps.
+    def _executor_factory(**kwargs: Any) -> IterativeExecutor:
+        return IterativeExecutor(**kwargs)
+
     register_builtins(
         registry,
         bash_defn=bash_defn,
@@ -626,6 +637,9 @@ async def _cmd_run(  # noqa: PLR0913
         read_file_defn=read_file_defn,
         write_file_defn=write_file_defn,
         list_files_defn=list_files_defn,
+        # Phase 3.7 — sub-workflow runner triple.
+        workflow_store=store,
+        executor_factory=_executor_factory,
     )
     executor = IterativeExecutor(
         workflow=workflow,
@@ -764,6 +778,13 @@ async def _cmd_resume(  # noqa: PLR0913 — five explicit kw args; mirrors _cmd_
         make_list_files(policy=runtime.path_policy, root=root)
     )
     registry = RunnerRegistry()
+
+    # Phase 3.7 — same factory wiring as ``_cmd_run`` so a resumed
+    # workflow that fires a downstream sub-workflow node can still
+    # construct nested executors.
+    def _executor_factory(**kwargs: Any) -> IterativeExecutor:
+        return IterativeExecutor(**kwargs)
+
     register_builtins(
         registry,
         bash_defn=bash_defn,
@@ -777,6 +798,8 @@ async def _cmd_resume(  # noqa: PLR0913 — five explicit kw args; mirrors _cmd_
         read_file_defn=read_file_defn,
         write_file_defn=write_file_defn,
         list_files_defn=list_files_defn,
+        workflow_store=store,
+        executor_factory=_executor_factory,
     )
     executor = IterativeExecutor(
         workflow=workflow,

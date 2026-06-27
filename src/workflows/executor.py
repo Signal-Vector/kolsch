@@ -41,6 +41,7 @@ from workflows.errors import (
     BashNonZeroExit,
     NodeTypeNotImplemented,
     WorkflowBindTypeMismatch,
+    WorkflowExtendsDepthExceeded,
     WorkflowInputInvalid,
     WorkflowNodeFailed,
     WorkflowPausedForInput,
@@ -261,7 +262,37 @@ class IterativeExecutor:
         store: WorkflowRunStore,
         registry: RunnerRegistry,
         catalog: AssetCatalog,
+        _call_depth: int = 0,
+        _call_chain: tuple[str, ...] = (),
     ) -> None:
+        # Phase 3.7 — nested-executor depth cap (shared with ``extends:``;
+        # same error class, same limit). The check at CONSTRUCTION (not
+        # at ``run`` time) is load-bearing: a nested executor that would
+        # exceed depth must never begin work, so a Phase 3.7 sub-workflow
+        # runner attempting to mint child N+1 fails immediately and the
+        # parent's runner can surface a clean failure.
+        if _call_depth > 16:
+            raise WorkflowExtendsDepthExceeded(
+                file=run.workflow_ref,
+                line=0,
+                depth=_call_depth,
+                limit=16,
+            )
+        self._call_depth = _call_depth
+        # Phase 3.7 — the "effective" call chain INCLUDES this run's own
+        # workflow ref so :class:`workflows.builtins.workflow_sub.WorkflowSubRunner`
+        # catches direct A→A recursion on the first would-be call (an
+        # empty chain would only catch it on the second indirection,
+        # leaving one extra frame of work executed). When the caller
+        # passes a non-empty chain it's a nested executor — the
+        # ``WorkflowSubRunner`` already appended the child ref via
+        # ``_call_chain=(*ctx.call_chain, child_ref)`` and we honour
+        # that verbatim. Root entry points (CLI, tests, scripts)
+        # continue to pass nothing and the auto-include kicks in.
+        if _call_chain:
+            self._call_chain = _call_chain
+        else:
+            self._call_chain = (run.workflow_ref,)
         self._workflow = workflow
         self._run = run
         self._store = store
@@ -1009,6 +1040,19 @@ class IterativeExecutor:
                 completed_payload["spawned_session_id"] = str(
                     ctx.spawned_session_id
                 )
+            # Phase 3.7 §11.2 — workflow nodes attach the spawned
+            # child run id so consumers can navigate from the parent's
+            # workflow event view to the child's JSONL. Mirrors the
+            # Phase 3.2 ``spawned_session_id`` shape for agent nodes;
+            # gated by BOTH ``type == "kolsch/nodes/workflow"`` AND
+            # ``spawned_run_id is not None`` so a future runner that
+            # forgets to clear the attribute can't pollute non-workflow
+            # payloads.
+            if (
+                _node_type_ref(node_def) == "kolsch/nodes/workflow"
+                and ctx.spawned_run_id is not None
+            ):
+                completed_payload["child_run_id"] = str(ctx.spawned_run_id)
             # Phase 3.5 §11.3 — completion chains to the LAST
             # in-invocation event (the last ``workflow.state.mutated``
             # for state-mutating nodes; the node's own started event
@@ -1104,13 +1148,40 @@ class IterativeExecutor:
         Returns ``(topo_order, predecessors)``. The DAG invariant was
         validated upstream by Step 5's validator, so the Kahn walk
         never stalls on a cycle.
+
+        Phase 3.7 — nodes referenced ONLY as ``map.apply:`` workers are
+        excluded from the worklist. Their lifecycle is owned by the
+        :class:`workflows.builtins.map.MapRunner` (which dispatches
+        the worker's runner per iteration); the Phase 3.0 validator's
+        §7.1 reachability check already exempts these "library" nodes
+        from the reachable-from-start requirement, so excluding them
+        here keeps the topo aligned with the validator's expectations.
+        A node that is BOTH a map worker AND a graph participant
+        (referenced by an edge) still fires per its graph position —
+        the exclusion is "only-worker" not "any-worker."
         """
-        node_names = list(self._workflow.nodes)
+        all_node_names = list(self._workflow.nodes)
         graph_edges: list[EdgeDef] = (
             list(self._workflow.graph.edges)
             if self._workflow.graph is not None
             else []
         )
+
+        # Map.apply targets that don't otherwise participate in the
+        # edge graph are worker templates — the map runner dispatches
+        # them per iteration and the worklist must not fire them
+        # independently.
+        edge_participants: set[str] = set()
+        for edge in graph_edges:
+            edge_participants.add(edge.from_)
+            edge_participants.add(edge.to)
+        map_worker_only: set[str] = {
+            getattr(node_def, "apply", None)
+            for node_def in self._workflow.nodes.values()
+            if hasattr(node_def, "apply")
+            and isinstance(getattr(node_def, "apply", None), str)
+        } - edge_participants
+        node_names = [n for n in all_node_names if n not in map_worker_only]
 
         incoming: dict[str, list[str]] = {n: [] for n in node_names}
         outgoing: dict[str, list[str]] = {n: [] for n in node_names}
@@ -1598,6 +1669,14 @@ class IterativeExecutor:
             workflow_inputs=dict(self._run.inputs),
             render_jinja_callback=_render_jinja_for_runner,
             emit_workflow_event_callback=_emit_workflow_event,
+            # Phase 3.7 — thread the executor's nesting metadata into
+            # the per-invocation context so runners (the workflow-sub
+            # runner first; map's worker dispatch second) can introspect
+            # depth + chain + the parent workflow object without
+            # back-referencing the executor.
+            call_depth=self._call_depth,
+            call_chain=self._call_chain,
+            workflow=self._workflow,
         )
 
     # ------------------------------------------------------------------

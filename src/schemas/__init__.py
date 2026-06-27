@@ -23,7 +23,14 @@ from schemas.config import (
     RuntimeSpec,
     SubsystemConfig,
 )
-from schemas.entities import Actor, ContentRef, FromWorkflowRun, Session, Thread
+from schemas.entities import (
+    Actor,
+    ContentRef,
+    FromWorkflowRun,
+    ParentRunPointer,
+    Session,
+    Thread,
+)
 from schemas.error import Error
 from schemas.events import (
     AgentMessageData,
@@ -83,6 +90,7 @@ __all__ = [
     "ModelRequestData",
     "ModelResponseData",
     "ModelSpec",
+    "ParentRunPointer",
     "PermissionRule",
     "PrefixedId",
     "PromptSpec",

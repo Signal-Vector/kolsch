@@ -39,12 +39,14 @@ from workflows.builtins.compute import ComputeRunner
 from workflows.builtins.delete_state import DeleteStateRunner
 from workflows.builtins.filter import FilterRunner
 from workflows.builtins.list_files import ListFilesRunner
+from workflows.builtins.map import MapRunner
 from workflows.builtins.noop import NoopRunner
 from workflows.builtins.read_file import ReadFileRunner
 from workflows.builtins.retry import with_retry
 from workflows.builtins.set_state import SetStateRunner
 from workflows.builtins.timeout import with_timeout
 from workflows.builtins.user_input import UserInputRunner
+from workflows.builtins.workflow_sub import WorkflowSubRunner
 from workflows.builtins.write_file import WriteFileRunner
 
 if TYPE_CHECKING:
@@ -58,7 +60,8 @@ if TYPE_CHECKING:
     from schemas import ResolvedAgentConfig
     from store import SessionStore
     from tools.decorator import ToolDefinition
-    from workflows.executor import RunnerRegistry
+    from workflows.executor import IterativeExecutor, RunnerRegistry
+    from workflows.run_store import WorkflowRunStore
 
 __all__ = [
     "AgentRunner",
@@ -69,10 +72,12 @@ __all__ = [
     "DeleteStateRunner",
     "FilterRunner",
     "ListFilesRunner",
+    "MapRunner",
     "NoopRunner",
     "ReadFileRunner",
     "SetStateRunner",
     "UserInputRunner",
+    "WorkflowSubRunner",
     "WriteFileRunner",
     "register_builtins",
     "with_retry",
@@ -96,6 +101,10 @@ def register_builtins(  # noqa: PLR0913 — wide-by-design wiring surface; see d
     read_file_defn: ToolDefinition | None = None,
     write_file_defn: ToolDefinition | None = None,
     list_files_defn: ToolDefinition | None = None,
+    workflow_store: WorkflowRunStore | None = None,
+    executor_factory: (
+        Callable[..., IterativeExecutor] | None
+    ) = None,
 ) -> None:
     """Register the Phase 3.1 + 3.2 runtime node types against ``registry``.
 
@@ -147,6 +156,11 @@ def register_builtins(  # noqa: PLR0913 — wide-by-design wiring surface; see d
     registry.register("kolsch/nodes/branch", BranchRunner())
     registry.register("kolsch/nodes/filter", FilterRunner())
     registry.register("kolsch/nodes/compute", ComputeRunner())
+    # Phase 3.7 Step 2 — map runner. Dependency-free at registration
+    # (the registry reference is captured so the runner can dispatch
+    # its worker's runner per iteration). Registered unconditionally
+    # so a workflow using ``kolsch/nodes/map`` resolves immediately.
+    registry.register("kolsch/nodes/map", MapRunner(registry=registry))
     # Phase 3.5 Step 2 — file-IO runners. Each requires a
     # :class:`ToolDefinition` built from the in-engine
     # ``tools.builtins.make_<n>`` factory (closure over policy + root
@@ -200,5 +214,28 @@ def register_builtins(  # noqa: PLR0913 — wide-by-design wiring surface; see d
                 session_store=session_store,
                 config_builder=config_builder,
                 engine=engine,
+            ),
+        )
+    # Phase 3.7 Step 1 — sub-workflow runner. Needs the catalog
+    # (child-ref resolution), the workflow run store (child run
+    # creation), an executor factory (nested executor construction —
+    # the lambda seam exists to avoid a circular import between
+    # ``builtins/`` and ``executor.py``), and the registry itself
+    # (passed back into the nested executor). Absent the full quartet
+    # the slot keeps raising
+    # :class:`workflows.errors.NodeTypeNotImplemented(phase="3.7")`
+    # so callers that don't yet wire composition fail fast.
+    if (
+        catalog is not None
+        and workflow_store is not None
+        and executor_factory is not None
+    ):
+        registry.register(
+            "kolsch/nodes/workflow",
+            WorkflowSubRunner(
+                catalog=catalog,
+                store=workflow_store,
+                executor_factory=executor_factory,
+                registry=registry,
             ),
         )

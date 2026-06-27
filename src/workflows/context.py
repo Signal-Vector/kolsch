@@ -18,15 +18,18 @@ from __future__ import annotations
 
 import logging
 import tempfile
+import uuid
 from collections.abc import Awaitable, Callable, Mapping
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+from workflows.ids import InvocationId
 
 if TYPE_CHECKING:
     from schemas import EventId, SessionId
     from workflows.events import WorkflowEvent
-    from workflows.ids import TraceId
+    from workflows.ids import TraceId, WorkflowRunId
 
 __all__ = ["NodeContext"]
 
@@ -130,6 +133,72 @@ class NodeContext:
     emit_workflow_event_callback: (
         Callable[[WorkflowEvent], Awaitable[EventId]] | None
     ) = field(default=None, repr=False)
+    # Phase 3.7 — set by :class:`workflows.builtins.workflow_sub.WorkflowSubRunner`
+    # to the child workflow run it spawned, read by the executor's
+    # ``workflow.node.completed`` payload builder so consumers can
+    # navigate from a parent's workflow-node event to the child run's
+    # JSONL. Mirrors :attr:`spawned_session_id` for agent nodes. Frozen
+    # dataclass — the runner mutates via ``object.__setattr__`` so the
+    # "authored nodes cannot mutate context" invariant still holds for
+    # the public surface.
+    spawned_run_id: WorkflowRunId | None = None
+    # Phase 3.7 — depth + ordered ref chain of workflow→workflow calls
+    # from the root entry point to (and including) this run's workflow
+    # ref. The :class:`WorkflowSubRunner` reads ``call_chain`` to detect
+    # cycles (ref repetition) BEFORE the catalog lookup, and reads
+    # ``call_depth`` to choose the child executor's ``_call_depth``
+    # constructor kwarg. Root invocations carry ``call_depth=0`` and
+    # ``call_chain=()``; nested invocations inherit + extend.
+    call_depth: int = 0
+    call_chain: tuple[str, ...] = ()
+    # Phase 3.7 — the parent :class:`workflows.parser.Workflow` so the
+    # :class:`workflows.builtins.map.MapRunner` can resolve its
+    # ``apply:`` worker by name in the same workflow. Typed ``Any`` to
+    # avoid the executor-→parser import cycle at runtime.
+    workflow: Any = None
+    # Phase 3.7 — per-iteration tracking for ``map`` workers. The map
+    # runner stamps ``parent_invocation_id`` (= the map node's invocation
+    # id) and a 0-based ``iteration_index`` / total on each worker's
+    # NodeContext so the per-iteration ``workflow.node.started`` /
+    # ``_completed`` events carry the iteration context for forensics
+    # (master spec §11.3). All three are ``None`` outside a map worker.
+    parent_invocation_id: InvocationId | None = None
+    iteration_index: int | None = None
+    iteration_total: int | None = None
+
+    def derive_for_iteration(
+        self,
+        *,
+        parent_invocation_id: InvocationId,
+        iteration_index: int,
+        iteration_total: int,
+    ) -> NodeContext:
+        """Return a per-iteration copy with a fresh ``invocation_id``.
+
+        Phase 3.7 — used by :class:`workflows.builtins.map.MapRunner`
+        to mint a NodeContext for each iteration's worker dispatch.
+        The copy carries:
+
+        - a fresh ``invocation_id`` (``inv_<uuid>``) so the worker's
+          per-iteration ``workflow.node.started`` / ``_completed``
+          events have a distinct identifier;
+        - ``parent_invocation_id`` set to the map node's invocation id
+          so forensics can correlate iterations back to the map fire;
+        - 0-based ``iteration_index`` + ``iteration_total`` for
+          ordering forensics.
+
+        Every other field (workspace_root, log, secrets, state,
+        bundle, callbacks, trace_id, caller_chain, workflow_inputs,
+        spawned_session_id/run_id, call_depth/call_chain, workflow) is
+        inherited verbatim from ``self``.
+        """
+        return replace(
+            self,
+            invocation_id=f"inv_{uuid.uuid4()}",
+            parent_invocation_id=parent_invocation_id,
+            iteration_index=iteration_index,
+            iteration_total=iteration_total,
+        )
 
     async def emit_workflow_event(self, event: WorkflowEvent) -> EventId:
         """Append ``event`` to the run's JSONL via the executor hook.

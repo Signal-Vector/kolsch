@@ -444,13 +444,16 @@ class TestRegisteredVsDeferred:
         # are absent (Phase 3.5 made registration conditional on the
         # caller threading a tool definition through). Phase 3.6
         # registers ``branch`` / ``filter`` / ``compute`` unconditionally
-        # (pure Jinja, no provider deps).
+        # (pure Jinja, no provider deps); Phase 3.7 registers ``map``
+        # unconditionally (also pure-Python, just needs the registry
+        # back-reference for worker dispatch). ``workflow`` keeps its
+        # gate — it needs the ``workflow_store`` + ``executor_factory``
+        # pair which only the CLI bootstrap can supply.
         for name, expected_phase in (
             ("agent", "3.2"),
             ("read_file", "3.5"),
             ("write_file", "3.5"),
             ("list_files", "3.5"),
-            ("map", "3.7"),
             ("workflow", "3.7"),
         ):
             with pytest.raises(NodeTypeNotImplemented) as exc_info:

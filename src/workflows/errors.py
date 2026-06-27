@@ -34,6 +34,7 @@ from typing import Any, ClassVar
 
 __all__ = [
     "BashNonZeroExit",
+    "ChildWorkflowFailed",
     "NodeTimeoutExceeded",
     "NodeTypeNotImplemented",
     "WorkflowAmbiguousStart",
@@ -1394,6 +1395,40 @@ class AgentRefUnresolved(WorkflowRuntimeError):
         self.ref = ref
         super().__init__(
             _runtime_str(self, problem=f"agent ref {ref!r} could not be resolved")
+        )
+
+
+class ChildWorkflowFailed(WorkflowRuntimeError):
+    """Phase 3.7 — a sub-workflow run reached a non-success terminal.
+
+    Wrapped by :class:`workflows.builtins.workflow_sub.WorkflowSubRunner`
+    inside :class:`WorkflowNodeFailed(cause=)` whenever a child run's
+    status is ``failed`` / ``aborted`` / ``timed_out``. The two-field
+    identifying surface (``run_id``, ``status``) lets operators read
+    the parent's ``workflow.node.failed`` envelope and pivot directly
+    to the child's JSONL by id.
+
+    The pause shape (``waiting_for_input``) is NOT a failure — the
+    child's pause re-raises :class:`WorkflowPausedForInput` through
+    the runner verbatim per Phase 3.4 discipline (master spec §10.1).
+    """
+
+    caller_message: ClassVar[str] = (
+        "A sub-workflow step failed. Share the run ID with your engineer."
+    )
+    identifying_names_keys: ClassVar[tuple[str, ...]] = ("run_id", "status")
+
+    def __init__(self, *, run_id: str, status: str = "failed") -> None:
+        self.run_id = run_id
+        self.status = status
+        super().__init__(
+            _runtime_str(
+                self,
+                problem=(
+                    f"child workflow run {run_id!r} terminated with "
+                    f"status {status!r}"
+                ),
+            )
         )
 
 

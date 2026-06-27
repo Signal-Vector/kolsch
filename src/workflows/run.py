@@ -30,6 +30,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from schemas.entities import ParentRunPointer
 from workflows.ids import TraceId, WorkflowRunId
 
 __all__ = [
@@ -89,6 +90,12 @@ class WorkflowRun(BaseModel):
     # ``timed_out`` so the CLI can render a one-line "what happened"
     # without re-reading the JSONL tail.
     reason: str | None = None
+    # Phase 3.7 — set on child runs spawned by a ``kolsch/nodes/workflow``
+    # node in a parent. ``None`` for root runs (the CLI's ``workflows
+    # run`` entry point). Mirrors :class:`schemas.entities.FromWorkflowRun`
+    # for agent sessions: the parent-pointer plumbing for cross-JSONL
+    # forensics is identical across composition surfaces.
+    parent: ParentRunPointer | None = None
 
 
 @dataclass(frozen=True, slots=True)

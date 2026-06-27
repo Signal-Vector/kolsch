@@ -43,6 +43,27 @@ class FromWorkflowRun(BaseModel):
     event_id: EventId  # workflow.node.started event that spawned this session
 
 
+class ParentRunPointer(BaseModel):
+    """Phase 3.7 — parent-workflow pointer on child workflow runs.
+
+    Mirrors :class:`FromWorkflowRun` (Phase 3.2's agent-session
+    pointer). The shape is intentionally identical so cross-JSONL
+    forensics tools can handle both uniformly: ``workflow_run_id``
+    identifies the spawning workflow run, ``invocation_id`` the
+    specific ``kolsch/nodes/workflow`` node-invocation inside it.
+
+    Set by :class:`workflows.builtins.workflow_sub.WorkflowSubRunner`
+    (Phase 3.7 Step 1) when minting a child run; persisted on the
+    child's ``WorkflowRun.parent`` field and round-tripped through
+    ``runs/<wrk_id>/meta.json``.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    workflow_run_id: WorkflowRunId
+    invocation_id: InvocationId
+
+
 class Session(BaseModel):
     """A session entity record — Module API Reference §3.2, Schemas §C.
 

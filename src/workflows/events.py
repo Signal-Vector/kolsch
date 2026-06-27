@@ -43,6 +43,10 @@ __all__ = [
     "PolicyDecisionMadeEvent",
     "WorkflowEvent",
     "WorkflowEventKind",
+    "WorkflowNodeCalledWorkflowCompletedEvent",
+    "WorkflowNodeCalledWorkflowCompletedPayload",
+    "WorkflowNodeCalledWorkflowEvent",
+    "WorkflowNodeCalledWorkflowPayload",
     "WorkflowNodeCompletedEvent",
     "WorkflowNodeEmittedEvent",
     "WorkflowNodeFailedEvent",
@@ -99,6 +103,16 @@ class WorkflowEventKind(StrEnum):
     # source of truth for resume reconstruction (Phase 3.4 replay
     # extension) and fork replay (Phase 3.8). Master spec §10.2.
     STATE_MUTATED = "workflow.state.mutated"
+    # Phase 3.7 §11.1 — parent-side forensics markers around a
+    # ``kolsch/nodes/workflow`` invocation. The pair brackets the
+    # child run's lifecycle in the PARENT's JSONL: ``CALLED_WORKFLOW``
+    # fires before the child run is started (carries the child's
+    # ``workflow_run_id`` + ``workflow_ref``); ``CALLED_WORKFLOW_COMPLETED``
+    # fires after the child returns / pauses / fails (carries the
+    # child's terminal-ish status). Together they let consumers
+    # navigate parent→child JSONLs without re-deriving the linkage.
+    CALLED_WORKFLOW = "workflow.node.called_workflow"
+    CALLED_WORKFLOW_COMPLETED = "workflow.node.called_workflow_completed"
 
 
 def new_event_id() -> EventId:
@@ -307,6 +321,78 @@ class WorkflowStateMutatedEvent(WorkflowEvent):
         WorkflowEventKind.STATE_MUTATED
     )
     payload: WorkflowStateMutatedPayload
+
+
+class WorkflowNodeCalledWorkflowPayload(BaseModel):
+    """Payload for :class:`WorkflowNodeCalledWorkflowEvent` — Phase 3.7 §11.1.
+
+    Frozen + ``extra="forbid"`` so a typo'd payload field is a
+    construction-time error rather than a silently-dropped JSONL
+    line. Emitted by the parent's executor BEFORE the workflow
+    node's runner returns, after the child run has been minted.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        frozen=True, extra="forbid"
+    )
+
+    node_name: str
+    invocation_id: str
+    child_workflow_run_id: str
+    child_workflow_ref: str
+
+
+class WorkflowNodeCalledWorkflowEvent(NodeScopedWorkflowEvent):
+    """``workflow.node.called_workflow`` — Phase 3.7 §11.1.
+
+    Parent-side forensics marker emitted between the workflow node's
+    own ``workflow.node.started`` and ``workflow.node.completed``.
+    Carries the child run's identifying fields so cross-JSONL
+    navigation works without re-deriving the parent→child linkage.
+    """
+
+    kind: Literal[WorkflowEventKind.CALLED_WORKFLOW] = (
+        WorkflowEventKind.CALLED_WORKFLOW
+    )
+    payload: WorkflowNodeCalledWorkflowPayload
+
+
+class WorkflowNodeCalledWorkflowCompletedPayload(BaseModel):
+    """Payload for :class:`WorkflowNodeCalledWorkflowCompletedEvent` —
+    Phase 3.7 §11.1.
+
+    ``child_status`` is the child run's terminal-ish status string:
+    ``"succeeded"`` / ``"failed"`` / ``"waiting_for_input"`` /
+    ``"aborted"`` / ``"timed_out"`` (the
+    :class:`workflows.run.WorkflowRunStatus` lowercased values).
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        frozen=True, extra="forbid"
+    )
+
+    node_name: str
+    invocation_id: str
+    child_workflow_run_id: str
+    child_status: str
+
+
+class WorkflowNodeCalledWorkflowCompletedEvent(NodeScopedWorkflowEvent):
+    """``workflow.node.called_workflow_completed`` — Phase 3.7 §11.1.
+
+    Parent-side bookend to :class:`WorkflowNodeCalledWorkflowEvent`.
+    Emitted by the workflow runner AFTER the child run reaches a
+    terminal-ish status (succeeded / failed / waiting_for_input /
+    aborted / timed_out). For pause cascade, the parent emits this
+    with ``child_status="waiting_for_input"`` then re-raises
+    :class:`workflows.errors.WorkflowPausedForInput` so the parent's
+    executor catches it and pauses.
+    """
+
+    kind: Literal[WorkflowEventKind.CALLED_WORKFLOW_COMPLETED] = (
+        WorkflowEventKind.CALLED_WORKFLOW_COMPLETED
+    )
+    payload: WorkflowNodeCalledWorkflowCompletedPayload
 
 
 class PolicyDecisionMadeEvent(WorkflowEvent):
