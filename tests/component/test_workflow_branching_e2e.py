@@ -250,3 +250,247 @@ def test_non_branching_starter_unchanged(
                 f"non-branching node {ev['payload'].get('node_name')!r} "
                 f"leaked a branch_value payload field"
             )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.6 Step 2 — triage walkthrough end-to-end
+#
+# Drives ``kolsch/workflows/triage-tickets`` against a real engine
+# + scripted LLM. The classifier returns "urgent" or "normal" per
+# scenario; the Phase 3.6 ``branch`` runner captures
+# ``{value: bool}``; Phase 3.3's edge dispatcher routes to the
+# matching arm; the un-fired arm emits ``workflow.node.pruned``.
+# Cross-JSONL trace_id linkage (Phase 3.2 §11.6.4 carryover) is
+# verified separately to confirm branching doesn't break the
+# spawned-session correlation.
+#
+# The static-runner counterpart at
+# ``tests/golden/runs/triage-{urgent,normal}.jsonl`` pins the exact
+# JSONL byte shape; this suite covers the dynamic case where the
+# real agent runner spawns sessions through the engine.
+# ---------------------------------------------------------------------------
+
+
+import shutil  # noqa: E402, PLC0415
+
+from tests.component.test_workflow_agent_runner_e2e import (  # noqa: E402
+    _PERMISSIVE_PLATFORM_YAML,
+    _ScriptedLLM,
+    _build_engine_with_llm,
+)
+from workflows.builtins import register_builtins  # noqa: E402
+from workflows.executor import IterativeExecutor, RunnerRegistry  # noqa: E402
+from workflows.parser import Workflow  # noqa: E402
+from workflows.run import WorkflowRunStatus  # noqa: E402
+from workflows.run_store import WorkflowRunStore  # noqa: E402
+
+
+def _scaffold_triage_workspace(root: "Path") -> None:
+    """Lay down a workspace seeded with the actual starter ``kolsch``
+    bundle (so the e2e test exercises the same YAMLs the operator
+    runs). Mirrors the pattern in
+    ``test_workflow_user_input_e2e._make_workspace_with_starter``.
+    """
+    for sub in (
+        "bundles",
+        "sessions",
+        "content",
+        "logs",
+        "data",
+        ".platform",
+    ):
+        (root / sub).mkdir(parents=True, exist_ok=True)
+    (root / "platform.yaml").write_text(
+        _PERMISSIVE_PLATFORM_YAML, encoding="utf-8"
+    )
+    (root / ".env").write_text("", encoding="utf-8")
+    repo_root = __import__("pathlib").Path(__file__).resolve().parents[2]
+    starter_src = (
+        repo_root / "src" / "cli" / "_starter_bundle" / "kolsch"
+    )
+    shutil.copytree(starter_src, root / "bundles" / "kolsch")
+    # The starter bundle ships without ``bundle.yaml`` (laid down by
+    # ``kolsch setup`` separately); add it so AssetManagement's
+    # discovery accepts the bundle.
+    (root / "bundles" / "kolsch" / "bundle.yaml").write_text(
+        'name: kolsch\nversion: "0.1"\ndescription: phase3.6-e2e\n',
+        encoding="utf-8",
+    )
+
+
+async def _drive_triage(
+    root: "Path",
+    *,
+    classify_reply: str,
+    handler_reply: str,
+) -> tuple[WorkflowRunStatus, "Path", object]:
+    """Drive the triage workflow once with a scripted LLM.
+
+    Returns ``(status, events_path, session_store)``. The scripted
+    LLM returns ``classify_reply`` first (→ ``{text: classify_reply}``
+    captured by the classifier node → workflow's ``label`` bind →
+    branch condition) then ``handler_reply`` (consumed by whichever
+    responder agent fires).
+    """
+    import yaml  # noqa: PLC0415
+
+    from files import PathPolicy  # noqa: PLC0415
+    from tools.builtins import (  # noqa: PLC0415
+        make_bash,
+        make_list_files,
+        make_read_file,
+        make_write_file,
+    )
+    from tools.decorator import get_tool_definition  # noqa: PLC0415
+
+    _scaffold_triage_workspace(root)
+
+    llm = _ScriptedLLM(texts=[classify_reply, handler_reply])
+    engine, store, am = await _build_engine_with_llm(root, llm=llm)
+    catalog = am.catalog()
+
+    workflow_text = (
+        root / "bundles" / "kolsch" / "workflows" / "triage-tickets.yaml"
+    ).read_text(encoding="utf-8")
+    workflow = Workflow.model_validate(yaml.safe_load(workflow_text))
+
+    run_store = WorkflowRunStore(root)
+    run = run_store.create(
+        workflow_ref="kolsch/workflows/triage-tickets",
+        inputs={"ticket_text": "any"},
+    )
+
+    policy = PathPolicy(
+        allowed_paths=["data/", "bundles/"], denied_paths=[".env"]
+    )
+    registry = RunnerRegistry()
+    register_builtins(
+        registry,
+        bash_defn=get_tool_definition(
+            make_bash(policy=policy, root=root)
+        ),
+        # Reuse the engine's already-built providers — bypassing
+        # ``bootstrap_runtime`` keeps the test lean and matches the
+        # in-process construction agent-runner e2e uses.
+        authz=engine._authz,  # noqa: SLF001
+        secrets=engine._secrets,  # noqa: SLF001
+        sandbox=engine._sandbox,  # noqa: SLF001
+        catalog=catalog,
+        engine=engine,
+        session_store=store,
+        config_builder=am.build_resolved_config,
+        read_file_defn=get_tool_definition(
+            make_read_file(policy=policy, root=root)
+        ),
+        write_file_defn=get_tool_definition(
+            make_write_file(policy=policy, root=root)
+        ),
+        list_files_defn=get_tool_definition(
+            make_list_files(policy=policy, root=root)
+        ),
+    )
+    executor = IterativeExecutor(
+        workflow=workflow,
+        run=run,
+        store=run_store,
+        registry=registry,
+        catalog=catalog,
+    )
+    status = await executor.run()
+    events_path = run_store.directory(run.run_id).events_path
+    return status, events_path, store
+
+
+def _branch_value_of(
+    events: list[dict[str, object]], *, node_name: str
+) -> object:
+    completed = [
+        e
+        for e in events
+        if e["kind"] == "workflow.node.completed"
+        and e.get("node_name") == node_name
+    ]
+    assert len(completed) == 1, f"expected one completion for {node_name!r}"
+    return completed[0]["payload"].get("branch_value")
+
+
+def _pruned_nodes(events: list[dict[str, object]]) -> set[str]:
+    return {
+        str(e["node_name"])
+        for e in events
+        if e["kind"] == "workflow.node.pruned"
+    }
+
+
+def _fired_nodes(events: list[dict[str, object]]) -> set[str]:
+    return {
+        str(e["node_name"])
+        for e in events
+        if e["kind"] == "workflow.node.started"
+    }
+
+
+class TestPhase36TriageBothArms:
+    async def test_urgent_arm_fires_normal_pruned(
+        self, tmp_path: "Path"
+    ) -> None:
+        status, events_path, _store = await _drive_triage(
+            tmp_path,
+            classify_reply="urgent",
+            handler_reply="Acked urgent ticket",
+        )
+        assert status == WorkflowRunStatus.SUCCEEDED
+        events = _read_jsonl(events_path)
+        assert _branch_value_of(events, node_name="is_urgent") is True
+        assert "urgent_handler" in _fired_nodes(events)
+        assert _pruned_nodes(events) == {"normal_handler"}
+
+    async def test_normal_arm_fires_urgent_pruned(
+        self, tmp_path: "Path"
+    ) -> None:
+        status, events_path, _store = await _drive_triage(
+            tmp_path,
+            classify_reply="normal",
+            handler_reply="Acked normal ticket",
+        )
+        assert status == WorkflowRunStatus.SUCCEEDED
+        events = _read_jsonl(events_path)
+        assert _branch_value_of(events, node_name="is_urgent") is False
+        assert "normal_handler" in _fired_nodes(events)
+        assert _pruned_nodes(events) == {"urgent_handler"}
+
+
+class TestPhase36TriageCrossJsonlLinkage:
+    async def test_spawned_sessions_share_workflow_trace_id(
+        self, tmp_path: "Path"
+    ) -> None:
+        """Spawned agent sessions inherit the workflow's ``trace_id``
+        unchanged — Phase 3.2 §11.6.4. The branching context shouldn't
+        break the linkage; both the classifier and the firing responder
+        produce sessions whose events carry the same ``tr_*`` id as
+        the workflow JSONL. The pruned handler does NOT spawn a
+        session (the cascade short-circuits before agent runner
+        construction).
+        """
+        status, events_path, _store = await _drive_triage(
+            tmp_path,
+            classify_reply="urgent",
+            handler_reply="Acked urgent ticket",
+        )
+        assert status == WorkflowRunStatus.SUCCEEDED
+        workflow_events = _read_jsonl(events_path)
+        workflow_trace_id = workflow_events[0]["trace_id"]
+        assert isinstance(workflow_trace_id, str)
+        assert workflow_trace_id.startswith("tr_")
+
+        session_paths = sorted(
+            (tmp_path / "sessions").glob("ses_*.jsonl")
+        )
+        assert len(session_paths) == 2  # classifier + urgent_responder
+        for sp in session_paths:
+            for event in _read_jsonl(sp):
+                assert event.get("trace_id") == workflow_trace_id, (
+                    f"trace_id mismatch in {sp.name}: "
+                    f"event={event.get('event_id')} "
+                    f"trace={event.get('trace_id')}"
+                )

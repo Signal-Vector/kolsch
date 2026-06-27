@@ -1,0 +1,27 @@
+schema_version: "0.1"
+assembly_version: "1"
+agent_id: ag_classifier
+name: classifier
+description: |
+  Phase 3.6 starter — classifies a ticket's text as "urgent" or
+  "normal". Invoked from ``kolsch/workflows/triage-tickets`` as the
+  branch source; the workflow binds the classifier's text output to
+  the branch's ``label`` input.
+
+# model: intentionally omitted — resolves from `platform.yaml`'s
+# `defaults.model` (the fake provider in starter scaffolds echoes the
+# input back, which is enough for the branch wiring to fire).
+
+io:
+  mode: single_shot
+  inputs:
+    ticket_text:
+      type: str
+  outputs:
+    text:
+      type: str
+
+prompt: |
+  You receive a short ticket description in ``ticket_text``. Reply
+  with a SINGLE word — either ``urgent`` or ``normal`` — and nothing
+  else. No punctuation, no preamble, no quotes.

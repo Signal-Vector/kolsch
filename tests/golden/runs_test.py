@@ -854,6 +854,147 @@ def _build_file_access_denied(
     return workflow, registry, {}
 
 
+def _build_triage(
+    tmp_path: Path,
+    *,
+    classify_label: str,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Phase 3.6 §6.0.1 — triage walkthrough.
+
+    Builds the canonical ``classify → is_urgent → urgent/normal_handler``
+    pipeline. The agent runner is a node-keyed static stub: ``classify``
+    returns ``{text: classify_label}`` (which the workflow's edge bind
+    pulls into ``inputs.label`` for the branch condition), and each
+    responder returns a deterministic acknowledgement so the
+    captured-output payload is stable across hosts.
+
+    The ``branch:`` runner is exercised end-to-end —
+    ``compute_branch_value`` reads its ``{value: bool}`` capture, the
+    edge dispatcher routes the matching arm, and the other arm emits
+    ``workflow.node.pruned`` via the Phase 3.3 cascade.
+    """
+    from workflows.builtins.branch import BranchRunner  # noqa: PLC0415
+
+    workflow = Workflow.model_validate(
+        {
+            "nodes": {
+                "classify": {
+                    "type": "kolsch/nodes/agent",
+                    "agent": "kolsch/agents/classifier",
+                },
+                "is_urgent": {
+                    "type": "kolsch/nodes/branch",
+                    "condition": "{{ inputs.label == 'urgent' }}",
+                },
+                "urgent_handler": {
+                    "type": "kolsch/nodes/agent",
+                    "agent": "kolsch/agents/urgent_responder",
+                },
+                "normal_handler": {
+                    "type": "kolsch/nodes/agent",
+                    "agent": "kolsch/agents/normal_responder",
+                },
+            },
+            "graph": {
+                "edges": [
+                    {
+                        "from": "classify",
+                        "to": "is_urgent",
+                        "binds": {
+                            "label": "{{ nodes.classify.text }}",
+                        },
+                    },
+                    {
+                        "from": "is_urgent",
+                        "to": "urgent_handler",
+                        "branch": True,
+                    },
+                    {
+                        "from": "is_urgent",
+                        "to": "normal_handler",
+                        "branch": False,
+                    },
+                ]
+            },
+        }
+    )
+
+    class _NodeKeyedAgent:
+        """Static agent runner keyed by node name.
+
+        Mirrors the engine's single_shot wrapping shape
+        (``{text: "..."}``) so the workflow's edge-bound
+        ``{{ nodes.classify.text }}`` resolves the same way it would
+        with a real :class:`AgentRunner`.
+        """
+
+        def __init__(self, by_node: dict[str, dict[str, Any]]) -> None:
+            self._by_node = by_node
+
+        async def run(
+            self,
+            *,
+            node_name: str,
+            node_def: Any,
+            bound_inputs: dict[str, Any],
+            state: dict[str, Any],
+            ctx: Any,
+        ) -> dict[str, Any]:
+            _ = (node_def, bound_inputs, state, ctx)
+            return dict(self._by_node[node_name])
+
+    registry = RunnerRegistry()
+    registry.register("kolsch/nodes/branch", BranchRunner())
+    registry.register(
+        "kolsch/nodes/agent",
+        _NodeKeyedAgent(
+            {
+                "classify": {"text": classify_label},
+                "urgent_handler": {"text": "Acked urgent ticket"},
+                "normal_handler": {"text": "Acked normal ticket"},
+            }
+        ),
+    )
+    # Mark the agent refs as catalog entries so the validator's
+    # ``catalog-node-defs`` pass accepts them. ``builtin=True``
+    # short-circuits the importlib introspection; the static runner
+    # carries the load.
+    from assets.catalog import AssetEntry  # noqa: PLC0415
+
+    catalog = AssetCatalog(
+        assets={
+            ref: AssetEntry(
+                ref=ref,
+                asset_type="agent",
+                bundle="kolsch",
+                path="",
+                metadata={"builtin": True},
+            )
+            for ref in (
+                "kolsch/agents/classifier",
+                "kolsch/agents/urgent_responder",
+                "kolsch/agents/normal_responder",
+            )
+        }
+    )
+    _ = tmp_path
+    return workflow, registry, {"catalog": catalog}
+
+
+def _build_triage_urgent(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Triage with classifier returning ``urgent`` — true arm fires."""
+    return _build_triage(tmp_path, classify_label="urgent")
+
+
+def _build_triage_normal(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Triage with classifier returning ``normal`` — false arm fires."""
+    return _build_triage(tmp_path, classify_label="normal")
+
+
 def _build_state_resume(
     tmp_path: Path,
 ) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
@@ -1015,6 +1156,9 @@ _FIXTURES: tuple[
     ),
     ("file-roundtrip", _build_file_roundtrip, "succeeded"),
     ("file-access-denied", _build_file_access_denied, "failed"),
+    # Phase 3.6 — triage walkthrough (both branch arms).
+    ("triage-urgent", _build_triage_urgent, "succeeded"),
+    ("triage-normal", _build_triage_normal, "succeeded"),
 )
 
 

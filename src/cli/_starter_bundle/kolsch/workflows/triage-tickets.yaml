@@ -1,0 +1,58 @@
+# Phase 3.6 starter — the master spec §6.0.1 triage walkthrough.
+#
+# Classify a ticket's text via an agent, branch on the classification,
+# and route to one of two responder agents. Exercises the Phase 3.6
+# branch runner end-to-end: ``is_urgent`` captures ``{value: bool}``;
+# the edge dispatcher picks the matching outgoing arm; the un-fired
+# arm emits ``workflow.node.pruned`` via Phase 3.3's cascade.
+#
+# Run with:
+#
+#     kolsch workflows run kolsch/workflows/triage-tickets \
+#         --input ticket_text="server down, urgent"
+#     # → urgent_handler fires; normal_handler pruned
+#
+#     kolsch workflows run kolsch/workflows/triage-tickets \
+#         --input ticket_text="add a button"
+#     # → normal_handler fires; urgent_handler pruned
+#
+# Author note: each agent is single_shot; the engine wraps the LLM's
+# reply as ``{text: "..."}`` regardless of the agent's IOSpec.outputs
+# field name (engine convention — see ``src/engine/observers.py``).
+# The branch reads ``inputs.label`` populated by the edge bind, which
+# pulls from ``nodes.classify.text``. With the fake-LLM default in
+# ``platform.yaml``, the engine echoes the input back, so the
+# classify step's output mirrors ``ticket_text`` — fine for the smoke
+# test, but real classification requires a real provider.
+description: "Triage walkthrough — classify → branch → urgent/normal handler."
+
+nodes:
+  classify:
+    type: kolsch/nodes/agent
+    agent: kolsch/agents/classifier
+    description: "Read ticket_text; output a one-word classification."
+  is_urgent:
+    type: kolsch/nodes/branch
+    condition: "{{ inputs.label == 'urgent' }}"
+    description: "Branch on the classifier's verdict."
+  urgent_handler:
+    type: kolsch/nodes/agent
+    agent: kolsch/agents/urgent_responder
+    description: "Handle the urgent path — separate session per Phase 3.2."
+  normal_handler:
+    type: kolsch/nodes/agent
+    agent: kolsch/agents/normal_responder
+    description: "Handle the normal path."
+
+graph:
+  edges:
+    - from: classify
+      to: is_urgent
+      binds:
+        label: "{{ nodes.classify.text }}"
+    - from: is_urgent
+      to: urgent_handler
+      branch: true
+    - from: is_urgent
+      to: normal_handler
+      branch: false

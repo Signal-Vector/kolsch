@@ -1,0 +1,20 @@
+schema_version: "0.1"
+assembly_version: "1"
+agent_id: ag_normal_responder
+name: normal_responder
+description: |
+  Phase 3.6 starter — fires on the non-urgent arm of the
+  ``kolsch/workflows/triage-tickets`` walkthrough. Single-shot so
+  the branch dispatch consumes a typed ``{text: ...}`` reply.
+
+io:
+  mode: single_shot
+  inputs: {}
+  outputs:
+    text:
+      type: str
+
+prompt: |
+  A non-urgent ticket arrived. Write a brief one-sentence
+  acknowledgement noting it's queued for normal handling. No
+  preamble.
