@@ -87,9 +87,19 @@ class BashRunner:
         # Per-node Jinja rendering of the bash config. The executor
         # already rendered the inbound edge binds; this runner now
         # renders the node's own command + cwd + env fields against
-        # the same scope (inputs / state / nodes).
+        # the same scope (inputs / state).
+        #
+        # Phase 3.3 §6.4 — ``inputs.*`` is the workflow-level inputs
+        # mapping overlay'd with this node's edge-bound ``bound_inputs``
+        # (edge wins on conflict), matching the executor's
+        # ``_render_jinja(..., inputs_overlay=bound_inputs)``
+        # composition so a bash command and an authored Python @node
+        # see the SAME ``inputs.*`` namespace at any given receiver.
         scope = {
-            "inputs": dict(bound_inputs),
+            "inputs": {
+                **dict(getattr(ctx, "workflow_inputs", {}) or {}),
+                **dict(bound_inputs),
+            },
             "state": dict(state),
         }
         rendered_command = _render(node_def.command, scope)

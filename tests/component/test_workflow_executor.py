@@ -252,11 +252,20 @@ class TestWhenGate:
 
 class TestBindsRendering:
     async def test_literal_binds_pass_through(self, tmp_path: Path) -> None:
+        # Receiver is ``kolsch/nodes/agent`` (``AgentInputs``
+        # ``extra='allow'``); Phase 3.3 Step 0's strict-mode bind
+        # validation rejects unknown keys against ``NoopInputs``
+        # (``extra='forbid'``). The Phase 3.1 bind-rendering contract
+        # is unchanged — only the receiver type swaps to one whose
+        # input model permits the test keys.
         wf = _wf(
             {
                 "nodes": {
                     "a": {"type": "kolsch/nodes/noop"},
-                    "b": {"type": "kolsch/nodes/noop"},
+                    "b": {
+                        "type": "kolsch/nodes/agent",
+                        "agent": "demo/agents/x",
+                    },
                 },
                 "graph": {
                     "edges": [
@@ -273,26 +282,34 @@ class TestBindsRendering:
                 },
             }
         )
-        capture = CapturingRunner({})
+        noop_capture = CapturingRunner({})
+        agent_capture = CapturingRunner({})
         registry = RunnerRegistry()
-        registry.register("kolsch/nodes/noop", capture)
+        registry.register("kolsch/nodes/noop", noop_capture)
+        registry.register("kolsch/nodes/agent", agent_capture)
         ex, _, _ = _make_executor(tmp_path, workflow=wf, registry=registry)
         await ex.run()
-        # First call was ``a`` (no binds), second call was ``b``.
-        assert capture.calls[1] == {
-            "count": 5,
-            "flag": True,
-            "tag": "literal",
-        }
+        assert agent_capture.calls == [
+            {
+                "count": 5,
+                "flag": True,
+                "tag": "literal",
+            }
+        ]
 
     async def test_jinja_marked_binds_render_against_captured_outputs(
         self, tmp_path: Path
     ) -> None:
+        # Receiver is ``kolsch/nodes/agent`` for the same reason as
+        # ``test_literal_binds_pass_through``.
         wf = _wf(
             {
                 "nodes": {
                     "fetch": {"type": "kolsch/nodes/bash", "command": "echo x"},
-                    "use": {"type": "kolsch/nodes/noop"},
+                    "use": {
+                        "type": "kolsch/nodes/agent",
+                        "agent": "demo/agents/x",
+                    },
                 },
                 "graph": {
                     "edges": [
@@ -311,7 +328,7 @@ class TestBindsRendering:
             StaticRunner({"stdout": "hello", "stderr": "", "exit_code": 0}),
         )
         capture = CapturingRunner({})
-        registry.register("kolsch/nodes/noop", capture)
+        registry.register("kolsch/nodes/agent", capture)
         ex, _, _ = _make_executor(tmp_path, workflow=wf, registry=registry)
         await ex.run()
         assert capture.calls[0] == {"upstream": "hello"}

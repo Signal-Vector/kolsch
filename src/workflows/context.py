@@ -65,6 +65,15 @@ class NodeContext:
     state: Mapping[str, Any]
     bundle: str
     emit_fn: Callable[[str, str, Mapping[str, Any]], None] = field(repr=False)
+    # Phase 3.3 §6.4 — workflow-level inputs (the baseline for the
+    # ``inputs.*`` Jinja namespace). Built-in runners that render
+    # their config strings (e.g. bash ``command:``) merge this with
+    # the receiver's edge-bound ``bound_inputs`` so the namespace
+    # matches the executor's ``_render_jinja(..., inputs_overlay=)``
+    # composition: workflow inputs first, edge-bound overlay second
+    # (edge wins on conflict). Empty mapping at construction outside
+    # the executor's worklist (e.g. ``for_test``).
+    workflow_inputs: Mapping[str, Any] = field(default_factory=dict)
     # Phase 3.2 — the executor-emitted ``workflow.node.started`` id for
     # this invocation. Runners that spawn child entities (the agent
     # runner) thread it into their parent-pointer payloads

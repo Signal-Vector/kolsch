@@ -29,10 +29,13 @@ from collections import deque
 from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, Protocol
 
+from pydantic import ValidationError
+
 from assets.refs import is_three_segment, parse_three_segment
+from workflows._inputs_models import inputs_model_for
 from workflows.catalog_node import BUILTIN_TYPE_NAMES
 from workflows.context import NodeContext
-from workflows.errors import NodeTypeNotImplemented
+from workflows.errors import NodeTypeNotImplemented, WorkflowBindTypeMismatch
 from workflows.events import (
     WorkflowNodeCompletedEvent,
     WorkflowNodeFailedEvent,
@@ -426,6 +429,21 @@ class IterativeExecutor:
                     parent_event_id=started_id,
                 )
                 try:
+                    # Phase 3.3 §6.4.4 — strict-mode bind validation
+                    # against the receiver's typed ``Inputs(BaseModel)``.
+                    # Mismatch raises ``WorkflowBindTypeMismatch``
+                    # BEFORE the runner is invoked; the catch arm
+                    # below emits ``workflow.node.failed`` and the
+                    # run aborts via the existing Phase 3.1 failure
+                    # path. ``inputs_model_for`` returns ``None`` for
+                    # authored Python @nodes in Step 0 — Phase 3.3
+                    # Step 1 wires the catalog runner's introspected
+                    # model in alongside the branching dispatcher.
+                    self._validate_bound_inputs_strict(
+                        node_name=node_name,
+                        node_def=node_def,
+                        bound_inputs=bound_inputs,
+                    )
                     runner = self._registry.get(
                         _node_type_ref(node_def), node_name=node_name
                     )
@@ -631,6 +649,59 @@ class IterativeExecutor:
         return bool(when_value)
 
     # ------------------------------------------------------------------
+    # Strict-mode bind validation — Phase 3.3 §6.4.4.
+    # ------------------------------------------------------------------
+
+    def _validate_bound_inputs_strict(
+        self,
+        *,
+        node_name: str,
+        node_def: Any,  # noqa: ANN401 — NodeDefUnion is a Pydantic alias
+        bound_inputs: dict[str, Any],
+    ) -> None:
+        """Validate ``bound_inputs`` against the receiver's typed
+        ``Inputs(BaseModel)`` under ``strict=True``.
+
+        Phase 3.3 Step 0 — built-in receivers only; authored Python
+        @nodes return ``None`` from ``inputs_model_for`` and skip this
+        check (Step 1 wires their catalog-introspected model). On
+        Pydantic ``ValidationError``, the FIRST sub-error populates
+        the raised :class:`WorkflowBindTypeMismatch` for actionable
+        diagnostics; remaining sub-errors are surfaced via
+        ``__cause__`` (Pydantic's standard error tree).
+        """
+        inputs_model = inputs_model_for(node_def)
+        if inputs_model is None:
+            return
+        try:
+            inputs_model.model_validate(bound_inputs, strict=True)
+        except ValidationError as exc:
+            errors = exc.errors()
+            first = errors[0] if errors else {"loc": (), "type": "unknown"}
+            loc = first.get("loc") or ()
+            bind_key = str(loc[0]) if loc else "<unknown>"
+            expected = str(first.get("type", "unknown"))
+            if bind_key in bound_inputs:
+                actual = type(bound_inputs[bind_key]).__name__
+            elif bind_key == "<unknown>":
+                actual = type(bound_inputs).__name__
+            else:
+                actual = "missing"
+            # The parser doesn't attach ruamel.yaml source positions
+            # to NodeDef (loader uses ``typ='safe'``), so the
+            # receiver's file/line fall back to the run's workflow
+            # ref + line 0 per the Step 0 build doc. The fix-path
+            # message names the offending bind regardless.
+            raise WorkflowBindTypeMismatch(
+                file=str(self._run.workflow_ref),
+                line=0,
+                node=node_name,
+                bind=bind_key,
+                expected_type=expected,
+                actual_type=actual,
+            ) from exc
+
+    # ------------------------------------------------------------------
     # binds: rendering.
     # ------------------------------------------------------------------
 
@@ -655,18 +726,34 @@ class IterativeExecutor:
                 )
         return bound
 
-    def _render_jinja(self, expression: str) -> Any:  # noqa: ANN401
+    def _render_jinja(  # noqa: ANN401 — Jinja returns Any-shaped values
+        self,
+        expression: str,
+        *,
+        inputs_overlay: dict[str, Any] | None = None,
+    ) -> Any:
         """Render a Jinja-marked string under :data:`JINJA_ENV`.
 
         The scope exposes ``nodes`` (captured outputs), ``state``
         (mutable workflow state), and ``inputs`` (workflow inputs)
         per master spec §8.3 + §6.4.
+
+        Phase 3.3 §6.4.1 — ``inputs_overlay`` is the receiver's
+        edge-bound ``binds:`` dict; its keys overlay onto workflow-level
+        inputs so a receiver's CONFIG STRINGS (e.g. bash
+        ``command: "echo {{ inputs.greeting }}"``) see edge-bound
+        keys via the SAME ``inputs.*`` namespace authored Python
+        @nodes consume via the typed ``Inputs`` model. ``None``
+        preserves Phase 3.1 behavior (workflow-level inputs only).
         """
         template = JINJA_ENV.from_string(expression)
         return template.render(
             nodes=self._captured,
             state=self._state,
-            inputs=dict(self._run.inputs),
+            inputs={
+                **dict(self._run.inputs),
+                **(inputs_overlay or {}),
+            },
         )
 
     # ------------------------------------------------------------------
@@ -722,6 +809,7 @@ class IterativeExecutor:
             parent_event_id=parent_event_id,
             trace_id=self._run.trace_id,
             caller_chain=tuple(getattr(self._run, "caller_chain", ()) or ()),
+            workflow_inputs=dict(self._run.inputs),
         )
 
     # ------------------------------------------------------------------
