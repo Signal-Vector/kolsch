@@ -1,8 +1,7 @@
 # compose.test.yml — the commit gate and CI (handbook §8.2.2, §9.2).
 #
 # Deliberately the opposite of compose.dev.yml: clean rebuild, source
-# COPIED in (not mounted), fresh Postgres + Redis services, runs the
-# full gate.
+# COPIED in (not mounted), runs the full gate.
 #
 # Run with:
 #   podman compose -f compose.test.yml down -v
@@ -11,45 +10,23 @@
 #       --abort-on-container-exit --exit-code-from app
 #
 # CI runs the same flow. "Passes at commit" == "passes in CI."
+#
+# Phase 2 backend-swap note: a postgres + redis service pair previously
+# lived here to back `test_tc_int_07_backend_swap_is_transparent` (an
+# unconditionally-skipped test that probes for `store.postgres_backend`
+# and `bus.redis` modules that don't ship in v1). The services and
+# their env vars (AGENT_PLATFORM_TEST_POSTGRES_DSN /
+# AGENT_PLATFORM_TEST_REDIS_URL) were removed to drop the per-run
+# container startup cost. Restore them when the Phase 2 backends land
+# (the test's skipif probe + scaffolded body remain in place).
 
 services:
-  postgres:
-    image: docker.io/library/postgres:16-alpine
-    environment:
-      POSTGRES_USER: agent
-      POSTGRES_PASSWORD: agent
-      POSTGRES_DB: agent
-    # Healthcheck so the `app` service can wait for readiness without
-    # racy sleeps.
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U agent -d agent"]
-      interval: 2s
-      timeout: 3s
-      retries: 30
-
-  redis:
-    image: docker.io/library/redis:7-alpine
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 2s
-      timeout: 3s
-      retries: 30
-
   app:
     build:
       context: .
       dockerfile: Containerfile
     image: kolsch-test:latest
-    depends_on:
-      postgres:
-        condition: service_healthy
-      redis:
-        condition: service_healthy
     environment:
-      # Test-side connection strings for the backend-variant component
-      # tests. The default tier (SQLite + in-process bus) ignores these.
-      AGENT_PLATFORM_TEST_POSTGRES_DSN: postgresql://agent:agent@postgres:5432/agent
-      AGENT_PLATFORM_TEST_REDIS_URL: redis://redis:6379
       # testcontainers + Podman compatibility (handbook §8.2.3).
       TESTCONTAINERS_RYUK_DISABLED: "true"
     working_dir: /workspace
