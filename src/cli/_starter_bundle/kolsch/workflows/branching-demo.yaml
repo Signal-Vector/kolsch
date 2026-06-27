@@ -1,0 +1,44 @@
+# Phase 3.3 Step 3 starter — bash exit-code branching demo.
+#
+# A three-node workflow that demonstrates the edge-level ``branch:``
+# field driving runtime dispatch off bash's ``exit_code``. The
+# ``check`` node runs an arbitrary command; if it exits zero the
+# ``on_success`` arm fires and ``on_failure`` is pruned, and vice
+# versa.
+#
+# Run it with:
+#
+#     kolsch workflows run kolsch/workflows/branching-demo \
+#         --input check_cmd="true"   # exits 0 → on_success fires
+#     kolsch workflows run kolsch/workflows/branching-demo \
+#         --input check_cmd="false"  # exits 1 → on_failure fires
+#
+# The workflow JSONL records the ``branch_value`` on ``check``'s
+# ``workflow.node.completed`` event and emits a
+# ``workflow.node.pruned`` event for the unfired arm (master spec
+# §11.1). See ``docs/explanation/workflow-event-log.md`` for the
+# pruning forensics shape.
+description: "Bash exit-code branching demo — branch: true/false arms."
+
+nodes:
+  check:
+    type: kolsch/nodes/bash
+    command: "{{ inputs.check_cmd }}"
+    description: "structural branch source — exit_code drives dispatch"
+  on_success:
+    type: kolsch/nodes/bash
+    command: "echo 'check passed'"
+    description: "fires when check exits zero"
+  on_failure:
+    type: kolsch/nodes/bash
+    command: "echo 'check failed (recovered)'"
+    description: "fires when check exits non-zero"
+
+graph:
+  edges:
+    - from: check
+      to: on_success
+      branch: true
+    - from: check
+      to: on_failure
+      branch: false
