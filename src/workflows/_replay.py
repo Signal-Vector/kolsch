@@ -31,9 +31,17 @@ Phase 3.4 replays:
   :class:`workflows.errors.WorkflowResumeRejected` rather than
   silently restore inconsistent state.
 
+Phase 3.5 adds:
+
+- ``workflow.state.mutated`` — apply ``set`` / ``delete`` ops to
+  ``executor._state`` in JSONL order. The last event wins for any
+  key with multiple writes (master spec §4.3.1 "evolving variable"
+  pattern). ``delete`` on an absent key is silent — matches
+  ``DeleteStateRunner`` semantics so replay is faithful to the
+  original run.
+
 Future phases will extend the replay table as new event kinds land
-(``set_state`` / ``delete_state`` in Phase 3.5 mutate ``_state``;
-nested ``workflow.run.resumed`` in Phase 3.7 sub-workflows). The
+(nested ``workflow.run.resumed`` in Phase 3.7 sub-workflows). The
 contract is forward-compatible: unknown event kinds are ignored.
 """
 
@@ -108,6 +116,16 @@ def replay_into(
             executor._pruned.add(str(node_name))
             executor._completed_or_skipped.add(str(node_name))
             started[str(node_name)] = None
+        elif kind == "workflow.state.mutated":
+            payload = event.get("payload") or {}
+            key = payload.get("key")
+            op = payload.get("op")
+            if key is None or op not in ("set", "delete"):
+                continue
+            if op == "set":
+                executor._state[str(key)] = payload.get("value")
+            else:
+                executor._state.pop(str(key), None)
         elif kind == "workflow.node.failed":
             # Defensive — the resume entry's status check rejects
             # failed runs first; this guards against a future code

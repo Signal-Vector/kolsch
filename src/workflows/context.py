@@ -18,13 +18,14 @@ from __future__ import annotations
 
 import logging
 import tempfile
-from collections.abc import Callable, Mapping
+from collections.abc import Awaitable, Callable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
     from schemas import EventId, SessionId
+    from workflows.events import WorkflowEvent
     from workflows.ids import TraceId
 
 __all__ = ["NodeContext"]
@@ -109,6 +110,44 @@ class NodeContext:
     render_jinja_callback: (
         Callable[[str, Mapping[str, Any] | None], Any] | None
     ) = field(default=None, repr=False)
+    # Phase 3.5 Step 0 — hook into the executor's JSONL append + last-
+    # event-id bookkeeping so runners can emit fully-typed
+    # :class:`WorkflowEvent` envelopes (the new
+    # ``workflow.state.mutated`` kind first; future kinds may opt in).
+    # The callback is bound at :meth:`IterativeExecutor._build_ctx`
+    # construction; ``None`` outside the executor's worklist (e.g.
+    # :meth:`NodeContext.for_test`).
+    #
+    # Naming note: the existing public :meth:`emit` takes the
+    # author-facing ``(subkind, payload)`` shape and wraps the wire
+    # kind as ``node.<bundle>.<subkind>`` — its surface is locked.
+    # The Phase 3.5 build spec's example ``ctx.emit(event)`` would
+    # collide with that signature, so the runner-facing hook is
+    # exposed as :meth:`emit_workflow_event` instead. Same hook
+    # semantics, distinct method name. Recorded in
+    # ``process/phase3.5-file-io-state-build.md`` under "Decisions
+    # made during Step 0".
+    emit_workflow_event_callback: (
+        Callable[[WorkflowEvent], Awaitable[EventId]] | None
+    ) = field(default=None, repr=False)
+
+    async def emit_workflow_event(self, event: WorkflowEvent) -> EventId:
+        """Append ``event`` to the run's JSONL via the executor hook.
+
+        Phase 3.5 — used by ``SetStateRunner`` / ``DeleteStateRunner``
+        to emit ``workflow.state.mutated`` events between the node's
+        ``started`` and ``completed`` markers. Returns the minted
+        event id so callers can chain subsequent emissions.
+
+        Raises :class:`RuntimeError` when no callback is bound — i.e.,
+        when called on a :meth:`for_test` context that didn't pass
+        one in. Production contexts (built by
+        :meth:`IterativeExecutor._build_ctx`) always have a callback.
+        """
+        if self.emit_workflow_event_callback is None:
+            msg = "NodeContext has no emit_workflow_event callback bound"
+            raise RuntimeError(msg)
+        return await self.emit_workflow_event_callback(event)
 
     def render_jinja(
         self,

@@ -90,6 +90,23 @@ Related docs:
 - `delete_state` is silent on absent keys.
 - Output narrowing per spec — drop tool fields the spec doesn't promise.
 
+**Decisions made during Step 0:**
+
+- **`NodeContext.emit_workflow_event` (NOT `emit`)** — the spec example
+  shows `await ctx.emit(WorkflowStateMutatedEvent(...))`, but
+  `NodeContext.emit(subkind: str, payload: Mapping)` is an existing
+  author-facing API (wraps the wire kind as `node.<bundle>.<subkind>`,
+  used by authored Python `@node`s). The runner-facing hook is therefore
+  exposed as **`emit_workflow_event(event)`** instead of overloading the
+  existing surface. Same semantics as the spec example; distinct method
+  name. Steps 1+ use `await ctx.emit_workflow_event(WorkflowStateMutatedEvent(...))`.
+- **`_last_event_id` advances on each `emit_workflow_event` call** so
+  the next CROSS-node event (next `workflow.node.started`) chains to
+  the latest in-invocation emission. The per-invocation chain
+  semantics for `workflow.node.completed` (master spec §11.3 — chain
+  to last `state.mutated`) ship alongside the state runners in Step 1;
+  Step 0 only ships the plumbing.
+
 ---
 
 ## Technical Context

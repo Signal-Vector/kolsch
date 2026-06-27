@@ -56,6 +56,8 @@ __all__ = [
     "WorkflowRunResumedEvent",
     "WorkflowRunStartedEvent",
     "WorkflowRunTimedOutEvent",
+    "WorkflowStateMutatedEvent",
+    "WorkflowStateMutatedPayload",
     "WorkflowToolCalledEvent",
     "emit_event",
     "new_event_id",
@@ -90,6 +92,13 @@ class WorkflowEventKind(StrEnum):
     NODE_EMITTED = "workflow.node.emitted"
     TOOL_CALLED = "workflow.tool.called"
     POLICY_DECISION_MADE = "policy.decision.made"
+    # Phase 3.5 §11.1 — emitted by the state-mutation runners
+    # (``set_state`` / ``delete_state``) ONCE PER affected key,
+    # ordered BETWEEN the node's ``workflow.node.started`` and
+    # ``workflow.node.completed`` events. The JSONL sequence is the
+    # source of truth for resume reconstruction (Phase 3.4 replay
+    # extension) and fork replay (Phase 3.8). Master spec §10.2.
+    STATE_MUTATED = "workflow.state.mutated"
 
 
 def new_event_id() -> EventId:
@@ -261,6 +270,43 @@ class WorkflowToolCalledEvent(NodeScopedWorkflowEvent):
     """
 
     kind: Literal[WorkflowEventKind.TOOL_CALLED] = WorkflowEventKind.TOOL_CALLED
+
+
+class WorkflowStateMutatedPayload(BaseModel):
+    """Payload for :class:`WorkflowStateMutatedEvent` — Phase 3.5 §11.1.
+
+    Frozen + ``extra="forbid"`` so a typo'd payload field is a
+    construction-time error rather than a silently-dropped JSONL
+    line. ``value`` is ``None`` for ``"delete"`` ops and the rendered
+    Jinja result (or YAML literal) for ``"set"`` ops; the executor's
+    state dict is typed ``Any`` at v1 (master spec §2) so no further
+    narrowing applies here.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        frozen=True, extra="forbid"
+    )
+
+    key: str
+    op: Literal["set", "delete"]
+    value: Any | None = None
+
+
+class WorkflowStateMutatedEvent(WorkflowEvent):
+    """``workflow.state.mutated`` — Phase 3.5 §11.1.
+
+    NOT node-scoped at the envelope top level: the master spec
+    treats state as a workflow-run-scoped concern (mutations belong
+    to the run's state history, not specifically to the emitting
+    node's invocation). The emitting node is still recoverable via
+    the ``parent_event_id`` chain back to that node's
+    ``workflow.node.started`` event.
+    """
+
+    kind: Literal[WorkflowEventKind.STATE_MUTATED] = (
+        WorkflowEventKind.STATE_MUTATED
+    )
+    payload: WorkflowStateMutatedPayload
 
 
 class PolicyDecisionMadeEvent(WorkflowEvent):

@@ -63,6 +63,8 @@ from workflows.run import WorkflowRunStatus
 
 if TYPE_CHECKING:
     from assets.catalog import AssetCatalog
+    from schemas.identifiers import EventId
+    from workflows.events import WorkflowEvent
     from workflows.parser import EdgeDef, Workflow
     from workflows.run import RunDirectory, WorkflowRun
     from workflows.run_store import WorkflowRunStore
@@ -1527,6 +1529,21 @@ class IterativeExecutor:
                 ),
             )
 
+        # Phase 3.5 Step 0 — hook for runners that need to emit
+        # fully-typed :class:`WorkflowEvent` envelopes. The state
+        # runners use this for ``workflow.state.mutated``. We update
+        # ``_last_event_id`` so the next CROSS-node event (typically
+        # the next ``workflow.node.started``) chains to the latest
+        # in-invocation emission, not to the started event of THIS
+        # invocation. The per-invocation chain semantics for
+        # ``workflow.node.completed`` (master spec §11.3 — chain to
+        # last ``state.mutated``) land alongside the state runners
+        # in Step 1; Step 0 only ships the plumbing.
+        async def _emit_workflow_event(event: WorkflowEvent) -> EventId:
+            new_id = emit_event(self._store, event)
+            self._last_event_id = new_id
+            return new_id
+
         return NodeContext(
             workflow_run_id=str(run_id),
             invocation_id=str(inv_id),
@@ -1541,6 +1558,7 @@ class IterativeExecutor:
             caller_chain=tuple(getattr(self._run, "caller_chain", ()) or ()),
             workflow_inputs=dict(self._run.inputs),
             render_jinja_callback=_render_jinja_for_runner,
+            emit_workflow_event_callback=_emit_workflow_event,
         )
 
     # ------------------------------------------------------------------
