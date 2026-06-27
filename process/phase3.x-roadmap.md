@@ -144,7 +144,33 @@ Spec: `process/phase3.5-file-io-state-spec.md`. Build plan: `process/phase3.5-fi
 
 **Effort**: ~1 week.
 
-### 3.6 — Branch node + filter + compute + NativeEnvironment
+### 3.6 — Branch node + filter + compute + NativeEnvironment — ✅ Done (`37554b4`)
+
+**Status:** Shipped across Steps 0–2 of
+`process/phase3.6-branch-filter-compute-build.md` (Step 0 `cc1fd87`,
+Step 1 `c9dadf6`, Step 2 `37554b4`). The 6 Phase-level Integration
+Tests pass under `uv run pytest tests/`
+(`tests/component/test_workflow_compute_recipes.py` covers Phase
+Test 2 — 8 aggregation recipes each asserting both value AND type;
+`tests/component/test_workflow_native_env.py` covers Phase Test 4 —
+NativeEnvironment typed-vs-string regression including the bash
+command-string non-regression and the filter → compute typed chain;
+`tests/component/test_workflow_filter.py` covers Phase Tests 3 + 5;
+`tests/component/test_workflow_branching_e2e.py` covers Phase Test 1
+end-to-end; Phase Test 6 is the full-suite regression). Two new
+goldens (`tests/golden/runs/triage-{urgent,normal}.jsonl`) pin the
+JSONL shape across both branch arms — `branch_value` on
+`is_urgent.completed`, `workflow.node.pruned` on the un-fired
+handler, terminal-keyed final outputs with one arm `null`.
+
+Decision logged during Step 0: the build doc's filter example used
+bare `{{ item > 5 }}` for per-element bindings, but Phase 3.3's
+`inputs_overlay` mechanism puts bind values under `inputs.<key>`.
+Tests use `{{ inputs.item }}` / `{{ inputs.ticket.urgent }}` to match
+the existing namespace contract. Same goes for the master spec
+§6.0.1 sketch (`{{ label == 'urgent' }}`) — real workflows use
+`inputs.<key>`, and the shipped `triage-tickets.yaml` follows that
+convention.
 
 Spec: `process/phase3.6-branch-filter-compute-spec.md`. Build plan: `process/phase3.6-branch-filter-compute-build.md`.
 
