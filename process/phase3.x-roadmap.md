@@ -85,7 +85,7 @@ Spec: `process/phase3.3-modifiers-branching-spec.md`. Build plan: `process/phase
 
 **Effort**: ~1 week (runtime wiring only; no parser/validator/error-class changes).
 
-### 3.4 — User_input with CLI pause/resume — ✅ Done (commit pending)
+### 3.4 — User_input with CLI pause/resume — ✅ Done (`1cdaec9`)
 
 **Status:** Shipped across Steps 0–3 of
 `process/phase3.4-user-input-build.md`. The 7 Phase-level Integration
