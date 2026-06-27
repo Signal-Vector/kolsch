@@ -33,6 +33,7 @@ from __future__ import annotations
 from typing import Any, ClassVar
 
 __all__ = [
+    "BashNonZeroExit",
     "NodeTimeoutExceeded",
     "NodeTypeNotImplemented",
     "WorkflowAmbiguousStart",
@@ -1179,6 +1180,48 @@ class WorkflowInputInvalid(WorkflowRuntimeError):
         self.reason = reason
         super().__init__(
             _runtime_str(self, problem=f"input to {ref!r} is invalid: {reason}")
+        )
+
+
+class BashNonZeroExit(WorkflowRuntimeError):
+    """Phase 3.3 — sentinel for ``kolsch/nodes/bash`` non-zero exits.
+
+    Raised by :class:`workflows.builtins.bash.BashRunner` when the
+    dispatched bash command finishes with ``exit_code != 0``. The
+    executor catches this exception at the worklist's runner-invoke
+    arm and decides:
+
+    - If the bash node has at least one outgoing edge with
+      ``branch: not None``: success-of-the-false-arm semantics —
+      the captured output flows through the normal completion path
+      and the branch dispatcher routes to the ``branch: false`` edge.
+    - Otherwise: re-raise so the existing failure path emits
+      ``workflow.node.failed`` + ``workflow.run.failed`` per Phase
+      3.1's abort-on-failure rule.
+
+    The exception carries the captured ``{stdout, stderr, exit_code}``
+    dict so the executor can use it as the node's output when the
+    branching success path applies (master spec §8.5.5).
+    """
+
+    caller_message: ClassVar[str] = (
+        "A bash workflow step exited non-zero. "
+        "Share the run ID with your engineer."
+    )
+    identifying_names_keys: ClassVar[tuple[str, ...]] = ("node",)
+
+    def __init__(self, *, node: str, captured: dict[str, Any]) -> None:
+        self.node = node
+        self.captured = captured
+        exit_code = captured.get("exit_code", "?")
+        super().__init__(
+            _runtime_str(
+                self,
+                problem=(
+                    f"bash node {node!r} exited with "
+                    f"exit_code={exit_code}"
+                ),
+            )
         )
 
 

@@ -543,19 +543,45 @@ def _check_branching(
     catalog: AssetCatalog,
     file: str,
 ) -> tuple[list[WorkflowValidationError], list[WorkflowValidationWarning]]:
-    """Master spec §7.3 — branching invariants on branch nodes."""
-    _ = catalog
+    """Master spec §7.3 — branching invariants on branch-capable sources.
+
+    Phase 3.3 extends the branchable set per master spec §2.5 / §4.1.1
+    / §5.4: ``kolsch/nodes/branch``, ``kolsch/nodes/bash`` (the exit
+    code drives dispatch), and authored Python ``@node`` modules whose
+    introspected return annotation is ``bool`` or ``tuple[bool,
+    BaseModel]`` are ALL valid sources for edges carrying
+    ``branch:``. Authored Python whose return type is a plain
+    ``BaseModel`` is NOT branchable — ``branch:`` edges from such
+    nodes raise ``WorkflowBranchOnNonBranchable`` as before.
+
+    ``WorkflowBranchMissingArm`` continues to apply only to
+    :class:`BranchNodeDef` — the branch node type's contract requires
+    both arms wired (master spec §4.6.3). Bash + authored Python may
+    legitimately use only one arm (e.g. a guarded retry that prunes
+    the failure path); the runtime treats the missing arm as "no
+    edges fire" without complaint.
+    """
     errors: list[WorkflowValidationError] = []
     warnings: list[WorkflowValidationWarning] = []
 
     if workflow.graph is None:
         return errors, warnings
 
-    branchable_names = {
-        n
-        for n, node in workflow.nodes.items()
-        if isinstance(node, BranchNodeDef)
-    }
+    branchable_names: set[str] = set()
+    require_both_arms: set[str] = set()
+    for name, node in workflow.nodes.items():
+        if isinstance(node, BranchNodeDef):
+            branchable_names.add(name)
+            require_both_arms.add(name)
+            continue
+        if isinstance(node, BashNodeDef):
+            branchable_names.add(name)
+            continue
+        if isinstance(node, CatalogNodeDef) and _is_branchable_catalog_node(
+            node=node, catalog=catalog
+        ):
+            branchable_names.add(name)
+
     edges_by_source: dict[str, list[EdgeDef]] = {}
     for edge in workflow.graph.edges:
         edges_by_source.setdefault(edge.from_, []).append(edge)
@@ -573,7 +599,7 @@ def _check_branching(
                         )
                     )
 
-    for branch_node in branchable_names:
+    for branch_node in require_both_arms:
         outbound = edges_by_source.get(branch_node, [])
         branch_values = {e.branch for e in outbound if e.branch is not None}
         for required in (True, False):
@@ -588,6 +614,47 @@ def _check_branching(
                 )
 
     return errors, warnings
+
+
+def _is_branchable_catalog_node(
+    *, node: CatalogNodeDef, catalog: AssetCatalog
+) -> bool:
+    """``True`` iff this authored Python ``@node``'s introspected
+    return annotation is ``bool`` or ``tuple[bool, BaseModel]``.
+
+    Defensive on every failure mode — a missing catalog entry,
+    import failure, or unreadable signature returns ``False`` so the
+    branching check defers to the per-node failure paths in
+    :func:`_check_authored_nodes`; the user gets the more specific
+    diagnostic there.
+    """
+    entry = catalog.lookup(node.type, expected_type="node")
+    if entry is None or not entry.path:
+        return False
+    if entry.metadata.get("builtin") is True:
+        return False
+    module = _import_node_module(entry.path)
+    if isinstance(module, Exception):
+        return False
+    run_fn = getattr(module, "run", None)
+    if run_fn is None or getattr(run_fn, "_kolsch_node", None) is None:
+        return False
+    try:
+        hints = typing.get_type_hints(run_fn)
+    except (TypeError, NameError):
+        return False
+    ret = hints.get("return")
+    if ret is bool:
+        return True
+    origin = typing.get_origin(ret)
+    args = typing.get_args(ret)
+    return (
+        origin is tuple
+        and len(args) == _TUPLE_RETURN_LEN
+        and args[0] is bool
+        and isinstance(args[1], type)
+        and issubclass(args[1], BaseModel)
+    )
 
 
 # ---------------------------------------------------------------------------

@@ -33,9 +33,15 @@ from pydantic import ValidationError
 
 from assets.refs import is_three_segment, parse_three_segment
 from workflows._inputs_models import inputs_model_for
+from workflows.branching import compute_branch_value
 from workflows.catalog_node import BUILTIN_TYPE_NAMES
 from workflows.context import NodeContext
-from workflows.errors import NodeTypeNotImplemented, WorkflowBindTypeMismatch
+from workflows.errors import (
+    BashNonZeroExit,
+    NodeTypeNotImplemented,
+    WorkflowBindTypeMismatch,
+    WorkflowNodeFailed,
+)
 from workflows.events import (
     WorkflowNodeCompletedEvent,
     WorkflowNodeFailedEvent,
@@ -158,6 +164,18 @@ class RunnerRegistry:
         """
         self._catalog_runner = runner
 
+    @property
+    def catalog_runner(self) -> NodeRunner | None:
+        """Read-only accessor for the installed fallback runner.
+
+        Phase 3.3 Step 1 — the executor's strict-mode bind-validation
+        hook reads it to delegate authored Python ``Inputs(BaseModel)``
+        introspection to the catalog runner (master spec §6.4.4).
+        ``None`` when no fallback was installed; built-in receivers
+        skip the catalog lookup either way.
+        """
+        return self._catalog_runner
+
     def get(self, type_ref: str, *, node_name: str) -> NodeRunner:
         """Return the runner; raise :class:`NodeTypeNotImplemented`
         when no runner is mapped.
@@ -261,6 +279,16 @@ class IterativeExecutor:
         # (e.g. workflow.tool.called) reset ``_last_event_id``.
         self._last_event_id: Any = None
         self._node_started_event_id: dict[InvocationId, Any] = {}
+        # Phase 3.3 Step 1 — edges suppressed by branch dispatch.
+        # ``(source, target)`` tuples accumulate as branchable nodes
+        # complete: each outgoing edge whose ``branch:`` field doesn't
+        # match the source's computed branch value is recorded here so
+        # ``_render_bound_inputs`` skips it and the worklist's
+        # "all-inbound-pruned" check can mark single-level prune
+        # targets as skipped without emitting started/completed
+        # events. Cascade beyond the immediate target is Step 2's
+        # responsibility — see TODO(step-2) in the worklist body.
+        self._pruned_edges: set[tuple[str, str]] = set()
 
     # ------------------------------------------------------------------
     # Public entry point.
@@ -377,6 +405,23 @@ class IterativeExecutor:
                     self._completed_or_skipped.add(node_name)
                     continue
 
+                # Phase 3.3 Step 1 — single-level prune detection.
+                # When every inbound edge to this node was suppressed
+                # by an upstream branch-dispatch step, the node MUST
+                # not fire. We mark it as decided-via-completion so
+                # AND-strict's downstream check keeps working, but
+                # emit NO ``workflow.node.started`` /
+                # ``workflow.node.completed`` pair — pruning is
+                # structurally distinct from a normal completion.
+                # TODO(step-2): cascade through this node's outgoing
+                # edges so descendants without other fired inbounds
+                # are also pruned (Step 2 ships the reverse-
+                # reachability cascade + the ``workflow.node.pruned``
+                # event emission).
+                if self._all_inbound_pruned(node_name):
+                    self._completed_or_skipped.add(node_name)
+                    continue
+
                 node_def = self._workflow.nodes[node_name]
                 # ``when:`` gate — Round 6 J5/β: a string with ``{{``
                 # is Jinja; everything else (including bare booleans)
@@ -451,13 +496,30 @@ class IterativeExecutor:
                     # timeout deadline bounds the WHOLE retry budget
                     # (not just the final attempt).
                     runner = _apply_node_modifiers(runner, node_def=node_def)
-                    output = await runner.run(
-                        node_name=node_name,
-                        node_def=node_def,
-                        bound_inputs=bound_inputs,
-                        state=self._state,
-                        ctx=ctx,
-                    )
+                    try:
+                        output = await runner.run(
+                            node_name=node_name,
+                            node_def=node_def,
+                            bound_inputs=bound_inputs,
+                            state=self._state,
+                            ctx=ctx,
+                        )
+                    except BashNonZeroExit as bash_exc:
+                        # Phase 3.3 §8.5.5 — branchable bash semantics.
+                        # When the bash node carries at least one
+                        # outgoing edge with ``branch: not None`` the
+                        # non-zero exit is success-of-the-false-arm:
+                        # surface the captured dict as the node's
+                        # output and let the branch dispatcher route
+                        # to ``branch: false`` edges. Without any
+                        # ``branch:`` edge the non-zero exit
+                        # propagates to the existing failure path so
+                        # Phase 3.1's abort-on-failure rule still
+                        # holds for plain bash usage.
+                        if self._bash_treats_nonzero_as_success(node_name):
+                            output = bash_exc.captured
+                        else:
+                            raise
                 except Exception as exc:  # noqa: BLE001 — record + abort
                     failed_id = emit_event(
                         self._store,
@@ -496,6 +558,19 @@ class IterativeExecutor:
                 # Successful invocation — capture, mark complete.
                 self._captured[node_name] = dict(output)
                 self._completed_or_skipped.add(node_name)
+                # Phase 3.3 §6.5 / §6.6 — branch dispatch. Compute
+                # the source's branch value (``None`` for non-
+                # branchable types) and record any outgoing edge
+                # whose ``branch:`` field doesn't match as pruned.
+                # Step 1 surfaces only the suppression — Step 2 ships
+                # the cascade through descendants + the
+                # ``workflow.node.pruned`` event emission.
+                branch_value = compute_branch_value(node_def, output)
+                self._dispatch_branch(
+                    node_name=node_name,
+                    branch_value=branch_value,
+                    inv_id=inv_id,
+                )
                 # Phase 3.2 §11.6.3 — agent nodes attach the spawned
                 # session id so consumers can navigate from the
                 # workflow event view to the spawned session's JSONL.
@@ -509,6 +584,24 @@ class IterativeExecutor:
                     "invocation_id": str(inv_id),
                     "output": dict(output),
                 }
+                # Phase 3.3 §11.1 — branch_value lands in the payload
+                # ONLY when the node is actually USED as branchable
+                # (carries at least one outgoing edge with
+                # ``branch: not None``). Structurally branchable
+                # nodes (e.g. plain non-branching bash) suppress the
+                # field so non-branching workflows produce
+                # byte-identical JSONLs vs. Phase 3.1 — the master
+                # spec's no-regressions promise. Forensics readers
+                # rely on presence-or-absence to decide whether the
+                # node's outgoing edges were filtered.
+                if (
+                    branch_value is not None
+                    and any(
+                        edge.branch is not None
+                        for edge in self._outgoing_edges(node_name)
+                    )
+                ):
+                    completed_payload["branch_value"] = branch_value
                 if (
                     _node_type_ref(node_def) == "kolsch/nodes/agent"
                     and ctx.spawned_session_id is not None
@@ -670,7 +763,9 @@ class IterativeExecutor:
         diagnostics; remaining sub-errors are surfaced via
         ``__cause__`` (Pydantic's standard error tree).
         """
-        inputs_model = inputs_model_for(node_def)
+        inputs_model = inputs_model_for(
+            node_def, catalog_runner=self._registry.catalog_runner
+        )
         if inputs_model is None:
             return
         try:
@@ -711,12 +806,20 @@ class IterativeExecutor:
         The validator's :class:`WorkflowBindCollision` check
         guarantees no two inbound edges share a bind key, so the
         merge is conflict-free.
+
+        Phase 3.3 — pruned edges (those suppressed by upstream
+        branch dispatch, recorded in ``_pruned_edges``) are SKIPPED.
+        The receiver therefore sees only the fired inbound edges'
+        binds; downstream Jinja that references a pruned edge's
+        bind key resolves to ``Undefined`` (master spec §6.4.3).
         """
         bound: dict[str, Any] = {}
         if self._workflow.graph is None:
             return bound
         for edge in self._workflow.graph.edges:
             if edge.to != node_name:
+                continue
+            if (edge.from_, edge.to) in self._pruned_edges:
                 continue
             for key, value in edge.binds.items():
                 bound[key] = (
@@ -725,6 +828,98 @@ class IterativeExecutor:
                     else value
                 )
         return bound
+
+    # ------------------------------------------------------------------
+    # Branch dispatch + pruning bookkeeping — Phase 3.3 §6.5 / §6.6.
+    # ------------------------------------------------------------------
+
+    def _outgoing_edges(self, node_name: str) -> list[EdgeDef]:
+        """Return this node's outgoing graph edges (possibly empty)."""
+        if self._workflow.graph is None:
+            return []
+        return [
+            edge
+            for edge in self._workflow.graph.edges
+            if edge.from_ == node_name
+        ]
+
+    def _all_inbound_pruned(self, node_name: str) -> bool:
+        """``True`` iff ``node_name`` has at least one inbound graph
+        edge AND every one was suppressed by upstream branch dispatch.
+
+        Single-level test only — Step 1 doesn't cascade. A node whose
+        only inbound is from a node that itself was pruned (rather
+        than from a pruned edge) will currently slip through this
+        check; Step 2 fixes that via the
+        :class:`WorkflowNodePrunedEvent`-emitting cascade.
+        """
+        if self._workflow.graph is None:
+            return False
+        inbound = [
+            edge
+            for edge in self._workflow.graph.edges
+            if edge.to == node_name
+        ]
+        if not inbound:
+            return False
+        return all(
+            (edge.from_, edge.to) in self._pruned_edges for edge in inbound
+        )
+
+    def _dispatch_branch(
+        self,
+        *,
+        node_name: str,
+        branch_value: bool | None,
+        inv_id: InvocationId,
+    ) -> None:
+        """Filter the source's outgoing edges by their ``branch:`` field.
+
+        Master spec §6.6:
+
+        - ``branch_value is None`` (non-branchable source): every
+          outgoing edge fires unconditionally (validator guarantees
+          no edge here carries ``branch:``).
+        - ``branch_value is True``: edges with ``edge.branch in
+          (True, None)`` fire; ``False`` arms are pruned.
+        - ``branch_value is False``: edges with ``edge.branch in
+          (False, None)`` fire; ``True`` arms are pruned.
+
+        Pruned edges are added to ``_pruned_edges`` so
+        ``_render_bound_inputs`` skips them and the next-step
+        ``_all_inbound_pruned`` check can suppress the immediate
+        target. Step 2 will cascade past the target. The defensive
+        raise covers the case where a non-branchable source has a
+        ``branch:`` edge in the graph (the validator already blocks
+        this at parse time — this is the runtime belt-and-braces).
+        """
+        for edge in self._outgoing_edges(node_name):
+            if edge.branch is None:
+                continue
+            if branch_value is None:
+                raise WorkflowNodeFailed(
+                    node=node_name,
+                    invocation_id=str(inv_id),
+                    cause=ValueError(
+                        f"node {node_name!r} has branch edge to "
+                        f"{edge.to!r} but produced no branch value"
+                    ),
+                )
+            if edge.branch != branch_value:
+                self._pruned_edges.add((edge.from_, edge.to))
+
+    def _bash_treats_nonzero_as_success(self, node_name: str) -> bool:
+        """``True`` iff this bash node carries at least one outgoing
+        edge with ``branch: not None``.
+
+        Phase 3.3 §8.5.5 — a branchable bash node treats non-zero
+        exit as success-of-the-false-arm; a non-branching bash node
+        retains Phase 3.1's abort-on-failure semantics.
+        """
+        for edge in self._outgoing_edges(node_name):
+            if edge.branch is not None:
+                return True
+        return False
 
     def _render_jinja(  # noqa: ANN401 — Jinja returns Any-shaped values
         self,

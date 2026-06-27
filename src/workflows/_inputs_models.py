@@ -1,13 +1,14 @@
-"""Receiver ``Inputs(BaseModel)`` lookup — Phase 3.3 Step 0.
+"""Receiver ``Inputs(BaseModel)`` lookup — Phase 3.3 Steps 0 + 1.
 
 Maps a parsed ``NodeDef`` to the Pydantic ``Inputs`` model the
 executor validates the rendered ``bound_inputs`` dict against under
-``strict=True`` (master spec §6.4 + Phase 3.3 build doc Step 0).
+``strict=True`` (master spec §6.4 + Phase 3.3 build doc Step 0 / Step 1).
 
-Authored Python ``@node`` modules return ``None`` here in Step 0 —
-Step 1 of Phase 3.3 wires the
+Built-ins dispatch by ``node_def.type`` against the locked table
+below. Authored Python ``@node`` modules defer to the
 :class:`workflows.builtins.catalog_node_runner.CatalogNodeRunner`'s
-introspected input model in alongside the branching dispatcher work.
+introspected input model — Step 1 wires the lookup via the optional
+``catalog_runner`` kwarg threaded by the executor.
 """
 
 from __future__ import annotations
@@ -56,24 +57,42 @@ _BUILTIN_TO_INPUTS: dict[str, type] = {
 }
 
 
-def inputs_model_for(node_def: object) -> type[BaseModel] | None:
+def inputs_model_for(
+    node_def: object,
+    *,
+    catalog_runner: object | None = None,
+) -> type[BaseModel] | None:
     """Return the receiver's typed ``Inputs(BaseModel)`` model, or
-    ``None`` when no runtime strict-mode validation applies yet.
+    ``None`` when no runtime strict-mode validation applies.
 
     Built-ins dispatch by ``node_def.type`` against the locked table
-    above. Authored Python ``@node`` modules return ``None`` here —
-    Phase 3.3 Step 1 wires the
-    :class:`workflows.builtins.catalog_node_runner.CatalogNodeRunner`
-    introspected input model alongside the branching dispatcher. The
-    catalog runner ALREADY validates ``bound_inputs`` against the
-    declared input model at run time (non-strict), so the Step 0 gap
-    doesn't leave authored nodes wholly unchecked — only the strict
-    contract waits one step.
+    above. Authored Python ``@node`` modules defer to ``catalog_runner``
+    (typically a
+    :class:`workflows.builtins.catalog_node_runner.CatalogNodeRunner`)
+    whose ``inputs_model_for`` method imports the on-disk module +
+    introspects the ``@node`` ``run`` signature for the first
+    parameter's Pydantic annotation.
 
-    ``copy_of`` nodes resolve their ``type:`` at run-start; until that
-    machinery lands they fall through to ``None``.
+    Returns ``None`` when:
+
+    - The ``node_def`` has no ``type:`` attribute (``copy_of:`` nodes
+      whose run-start resolution hasn't landed yet).
+    - The catalog runner is absent (callers that don't wire
+      authored-Python validation — bash-only tests, scripts).
+    - The catalog runner's introspection returned no Pydantic input
+      model (the ``@node`` parameter has no annotation or isn't a
+      ``BaseModel`` subclass; the validator already rejected
+      non-conforming signatures at run-start).
     """
     type_ref = getattr(node_def, "type", None)
     if not isinstance(type_ref, str):
         return None
-    return _BUILTIN_TO_INPUTS.get(type_ref)
+    builtin = _BUILTIN_TO_INPUTS.get(type_ref)
+    if builtin is not None:
+        return builtin
+    if catalog_runner is None:
+        return None
+    lookup = getattr(catalog_runner, "inputs_model_for", None)
+    if lookup is None:
+        return None
+    return lookup(type_ref)

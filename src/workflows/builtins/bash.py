@@ -24,7 +24,7 @@ from typing import TYPE_CHECKING, Any
 from errors import ToolUnauthorized
 from schemas.identifiers import AgentId, SessionId, ThreadId
 from tools.decorator import ToolContext
-from workflows.errors import WorkflowNodeFailed
+from workflows.errors import BashNonZeroExit, WorkflowNodeFailed
 from workflows.jinja_env import JINJA_ENV
 
 if TYPE_CHECKING:
@@ -148,11 +148,21 @@ class BashRunner:
         # / duration / timed_out fields are dropped from the captured
         # dict so downstream nodes see a stable contract. Future
         # versions may surface the extras under a separate namespace.
-        return {
+        captured = {
             "stdout": str(result.get("stdout", "")),
             "stderr": str(result.get("stderr", "")),
             "exit_code": int(result.get("exit_code", 0)),
         }
+        # Phase 3.3 — non-zero exits are NEVER silently swallowed.
+        # The runner raises :class:`BashNonZeroExit` carrying the
+        # captured dict so the executor can decide whether to (a)
+        # surface success-of-the-false-branch (when the node has at
+        # least one ``branch:`` outgoing edge) or (b) abort the run
+        # per Phase 3.1's existing failure path (when the node has
+        # no ``branch:`` edges). Master spec §8.5.5.
+        if captured["exit_code"] != 0:
+            raise BashNonZeroExit(node=node_name, captured=captured)
+        return captured
 
 
 def _render(value: str, scope: dict[str, Any]) -> str:

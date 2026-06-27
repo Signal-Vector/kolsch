@@ -129,6 +129,31 @@ class CatalogNodeRunner:
 
         return _coerce_return(type_ref=type_ref, result=result)
 
+    def inputs_model_for(self, type_ref: str) -> type[BaseModel] | None:
+        """Return the ``@node``'s introspected ``Inputs(BaseModel)``,
+        or ``None`` when the catalog entry can't be resolved or its
+        ``run`` signature isn't typed with a Pydantic model.
+
+        Phase 3.3 Step 1 — invoked by
+        :func:`workflows._inputs_models.inputs_model_for` for
+        authored Python receivers so the executor's strict-mode
+        bind-validation hook (master spec §6.4.4) covers them too.
+        Caches via ``_resolve``'s import cache — repeat lookups for
+        the same ref don't re-import.
+        """
+        entry = self._catalog.lookup(type_ref, expected_type="node")
+        if entry is None or not entry.path:
+            return None
+        if entry.metadata.get("builtin") is True:
+            return None
+        try:
+            _, _, inputs_model = self._resolve(
+                type_ref=type_ref, entry_path=entry.path
+            )
+        except Exception:  # noqa: BLE001 — defensive; raise path runs at dispatch
+            return None
+        return inputs_model
+
     def _resolve(
         self,
         *,
