@@ -106,6 +106,32 @@ Documentation follows the [Diátaxis](https://diataxis.fr/) framework:
 - **`docs/how-to/`** — task guides (added during implementation).
 - **`docs/tutorials/`** — learning paths (added during implementation).
 
+## Development
+
+### Running tests
+
+`scripts/test.sh` is the canonical entry point — it splits the suites
+by their parallelism profile so each one runs in the cheapest way:
+
+```bash
+./scripts/test.sh fast   # tests/unit only, serial (~1s)
+./scripts/test.sh slow   # component + integration + golden, -n auto (~32s)
+./scripts/test.sh all    # fast then slow (~34s total for ~1,900 tests)
+./scripts/test.sh cov    # CI-style invocation with coverage on
+```
+
+Why split: `tests/unit` is fast serial and xdist adds ~2s of worker
+startup overhead. `tests/component` is dominated by ~10 CLI-chat tests
+where each takes 15-40s, and parallelism is a 12× win there. A single
+`-n auto` over both is the worst of both.
+
+Extra args pass through to pytest, so `./scripts/test.sh fast -k some_name`
+and `./scripts/test.sh slow tests/component/test_foo.py` both work.
+
+Coverage is **not** in the default pytest `addopts` (it triples wall
+time and the `fail_under=85` floor makes partial-suite runs fail).
+The `cov` mode adds it back when you want to reproduce CI numbers.
+
 ## License
 
 TBD.
