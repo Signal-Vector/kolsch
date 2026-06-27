@@ -550,11 +550,22 @@ class IterativeExecutor:
             )
         )
 
+        # Initialise state from the workflow inputs BEFORE replay
+        # walks the JSONL so the Phase 3.5
+        # ``workflow.state.mutated`` events land on top of the
+        # baseline (replay applies set / delete ops directly to
+        # ``self._state``). Reversing the order — overwriting AFTER
+        # replay — would wipe every pre-pause mutation; resumed
+        # workflows would render ``state.*`` references against the
+        # bare inputs dict.
+        self._state = dict(self._run.inputs)
+
         # AC 1.2 — replay historical events to rebuild executor state.
         # The replay populates ``_captured`` / ``_pruned`` /
-        # ``_completed_or_skipped`` AND surfaces the open-invocations
-        # map (the paused user_input's node_name → invocation_id
-        # entry is the marker we cross-check against the sidecar).
+        # ``_completed_or_skipped`` / ``_state`` AND surfaces the
+        # open-invocations map (the paused user_input's
+        # node_name → invocation_id entry is the marker we cross-check
+        # against the sidecar).
         events = list(self._store.read_events(run_id))
         open_invocations = replay_into(self, events)
 
@@ -571,11 +582,6 @@ class IterativeExecutor:
                 run_id=str(run_id),
                 status="inconsistent_state",
             )
-
-        # Initialise state from the workflow inputs — Phase 3.5
-        # set_state / delete_state replay will extend this; Phase
-        # 3.4 just restores the baseline.
-        self._state = dict(self._run.inputs)
 
         # AC 1.6 — chain the resumed event to the last pre-pause
         # event in the JSONL so the cross-process event chain is

@@ -1,0 +1,53 @@
+# Phase 3.5 starter — multi-write state evolution.
+#
+# Three sequential `set_state` writes to the same key (`attempts`)
+# produce three `workflow.state.mutated` events with values 0, 1, 2.
+# The final `report` node reads `{{ state.attempts }}` (= 2) and
+# `{{ state.status }}` (= "pending") to prove downstream visibility
+# of the evolved state — master spec §4.3.1 "evolving variable"
+# pattern.
+#
+# Run with:
+#
+#     kolsch workflows run kolsch/workflows/state-evolves
+#     # → succeeded; report.stdout = "attempts=2 status=pending\n"
+#     cat <root>/runs/wrk_*/events.jsonl | grep workflow.state.mutated
+#     # → three events for `attempts` (values 0, 1, 2)
+#     #   plus one event for `status` (value "pending")
+#
+# Author note: uses bash for the final `report` node. On a fresh
+# starter workspace the `platform.yaml` maps `kolsch/bash` to
+# `prompt`, which collapses to `deny` headlessly — swap `report` for
+# `kolsch/nodes/echo` if you want a no-auth headless smoke test.
+description: "Demonstrate multi-write state evolution (master spec §4.3.1)."
+
+nodes:
+  init:
+    type: kolsch/nodes/set_state
+    description: "Seed initial state — two literal values."
+    keys:
+      attempts: 0
+      status: pending
+  bump1:
+    type: kolsch/nodes/set_state
+    description: "Increment via Jinja that reads the live state dict."
+    keys:
+      attempts: "{{ state.attempts + 1 }}"
+  bump2:
+    type: kolsch/nodes/set_state
+    description: "Second increment — proves multi-write is canonical."
+    keys:
+      attempts: "{{ state.attempts + 1 }}"
+  report:
+    type: kolsch/nodes/bash
+    description: "Read the evolved state and print a one-line summary."
+    command: "echo 'attempts={{ state.attempts }} status={{ state.status }}'"
+
+graph:
+  edges:
+    - from: init
+      to: bump1
+    - from: bump1
+      to: bump2
+    - from: bump2
+      to: report

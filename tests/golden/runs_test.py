@@ -633,6 +633,298 @@ def _build_user_input_rejected_resume(
     }
 
 
+def _build_state_evolves(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Phase 3.5 §4.3.1 — three sequential writes to ``attempts``.
+
+    The canonical "evolving variable" pattern. Three
+    ``workflow.state.mutated`` events land between started/completed
+    pairs with values 0, 1, 2; the final completion event's
+    ``parent_event_id`` chains to the LAST state-mutated event per
+    master spec §11.3.
+    """
+    from workflows.builtins.set_state import SetStateRunner  # noqa: PLC0415
+
+    workflow = Workflow.model_validate(
+        {
+            "nodes": {
+                "init": {
+                    "type": "kolsch/nodes/set_state",
+                    "keys": {"attempts": 0},
+                },
+                "bump1": {
+                    "type": "kolsch/nodes/set_state",
+                    "keys": {"attempts": "{{ state.attempts + 1 }}"},
+                },
+                "bump2": {
+                    "type": "kolsch/nodes/set_state",
+                    "keys": {"attempts": "{{ state.attempts + 1 }}"},
+                },
+            },
+            "graph": {
+                "edges": [
+                    {"from": "init", "to": "bump1"},
+                    {"from": "bump1", "to": "bump2"},
+                ]
+            },
+        }
+    )
+    registry = RunnerRegistry()
+    registry.register("kolsch/nodes/set_state", SetStateRunner())
+    _ = tmp_path
+    return workflow, registry, {}
+
+
+def _build_delete_state_idempotent(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Phase 3.5 §4.3.2 — ``delete_state`` of an absent key.
+
+    Silent on absent state; event STILL emitted (forensic + replay
+    parity). The golden pins the ``{key, op: "delete", value: null}``
+    payload shape.
+    """
+    from workflows.builtins.delete_state import (  # noqa: PLC0415
+        DeleteStateRunner,
+    )
+
+    workflow = Workflow.model_validate(
+        {
+            "nodes": {
+                "drop": {
+                    "type": "kolsch/nodes/delete_state",
+                    "keys": ["foo"],
+                },
+            }
+        }
+    )
+    registry = RunnerRegistry()
+    registry.register("kolsch/nodes/delete_state", DeleteStateRunner())
+    _ = tmp_path
+    return workflow, registry, {}
+
+
+def _build_file_roundtrip(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Phase 3.5 §4.2 — write → read → list against a real workspace.
+
+    The runner registry threads the real file-IO tool factories so
+    the JSONL exercises the full dispatch pipeline (PathPolicy +
+    atomic write + read-back + listing). The ``list`` node uses a
+    pattern that matches only the written file so the golden's
+    ``entries`` payload stays deterministic across hosts (no
+    leakage from sibling tmp dirs).
+    """
+    from files import PathPolicy  # noqa: PLC0415
+    from providers.authz import (  # noqa: PLC0415
+        RuleBasedAuthorizationProvider,
+    )
+    from providers.sandbox import NativeSandboxProvider  # noqa: PLC0415
+    from providers.secrets import DotenvSecretsProvider  # noqa: PLC0415
+    from tools.builtins import (  # noqa: PLC0415
+        make_bash,
+        make_list_files,
+        make_read_file,
+        make_write_file,
+    )
+    from tools.decorator import get_tool_definition  # noqa: PLC0415
+    from workflows.builtins import register_builtins  # noqa: PLC0415
+
+    workflow = Workflow.model_validate(
+        {
+            "nodes": {
+                "write": {
+                    "type": "kolsch/nodes/write_file",
+                    "path": "out.txt",
+                    "content": "hello",
+                },
+                "read": {
+                    "type": "kolsch/nodes/read_file",
+                    "path": "out.txt",
+                },
+                "list": {
+                    "type": "kolsch/nodes/list_files",
+                    "path": ".",
+                    "pattern": "out.txt",
+                },
+            },
+            "graph": {
+                "edges": [
+                    {"from": "write", "to": "read"},
+                    {"from": "read", "to": "list"},
+                ]
+            },
+        }
+    )
+    policy = PathPolicy(allowed_paths=["."])
+    catalog = AssetCatalog()
+    registry = RunnerRegistry()
+    register_builtins(
+        registry,
+        bash_defn=get_tool_definition(
+            make_bash(policy=policy, root=tmp_path)
+        ),
+        authz=RuleBasedAuthorizationProvider(
+            config={
+                "rules": [
+                    {"who": ".*", "what": ".*", "effect": "allow"}
+                ]
+            },
+            catalog=catalog,
+        ),
+        secrets=DotenvSecretsProvider(
+            root=tmp_path, config={"path": ".env"}
+        ),
+        sandbox=NativeSandboxProvider(config={}),
+        catalog=catalog,
+        read_file_defn=get_tool_definition(
+            make_read_file(policy=policy, root=tmp_path)
+        ),
+        write_file_defn=get_tool_definition(
+            make_write_file(policy=policy, root=tmp_path)
+        ),
+        list_files_defn=get_tool_definition(
+            make_list_files(policy=policy, root=tmp_path)
+        ),
+    )
+    return workflow, registry, {}
+
+
+def _build_file_access_denied(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Phase 3.5 §4.2 + §12 — denied path surfaces as
+    ``WorkflowFileAccessDenied``; run aborts via the existing failure
+    path. The golden pins ``error_class`` + run.failed terminal.
+    """
+    from files import PathPolicy  # noqa: PLC0415
+    from providers.authz import (  # noqa: PLC0415
+        RuleBasedAuthorizationProvider,
+    )
+    from providers.sandbox import NativeSandboxProvider  # noqa: PLC0415
+    from providers.secrets import DotenvSecretsProvider  # noqa: PLC0415
+    from tools.builtins import (  # noqa: PLC0415
+        make_bash,
+        make_read_file,
+    )
+    from tools.decorator import get_tool_definition  # noqa: PLC0415
+    from workflows.builtins import register_builtins  # noqa: PLC0415
+
+    workflow = Workflow.model_validate(
+        {
+            "nodes": {
+                "read": {
+                    "type": "kolsch/nodes/read_file",
+                    "path": "/etc/passwd",
+                },
+            }
+        }
+    )
+    # ``allowed_paths`` restricted to the workspace data subdir; the
+    # absolute path resolves outside → FileAccessDenied → remapped to
+    # WorkflowFileAccessDenied → run.failed.
+    policy = PathPolicy(allowed_paths=["data/"])
+    (tmp_path / "data").mkdir()
+    catalog = AssetCatalog()
+    registry = RunnerRegistry()
+    register_builtins(
+        registry,
+        bash_defn=get_tool_definition(
+            make_bash(policy=policy, root=tmp_path)
+        ),
+        authz=RuleBasedAuthorizationProvider(
+            config={
+                "rules": [
+                    {"who": ".*", "what": ".*", "effect": "allow"}
+                ]
+            },
+            catalog=catalog,
+        ),
+        secrets=DotenvSecretsProvider(
+            root=tmp_path, config={"path": ".env"}
+        ),
+        sandbox=NativeSandboxProvider(config={}),
+        catalog=catalog,
+        read_file_defn=get_tool_definition(
+            make_read_file(policy=policy, root=tmp_path)
+        ),
+    )
+    return workflow, registry, {}
+
+
+def _build_state_resume(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Phase 3.5 — pause + resume preserves state via JSONL replay.
+
+    Pipeline: ``stash`` (set_state attempts=5) → ``ask`` (pause) →
+    ``echo`` (catalog node — captures bound ``{{ state.attempts }}``
+    post-replay). Exercises the
+    ``_replay.py:workflow.state.mutated`` arm + the ordering bug
+    fixed alongside Step 3 (resume now initialises ``_state`` BEFORE
+    replay rather than overwriting after).
+    """
+    from workflows.builtins.set_state import SetStateRunner  # noqa: PLC0415
+    from workflows.builtins.user_input import UserInputRunner  # noqa: PLC0415
+
+    workflow = Workflow.model_validate(
+        {
+            "nodes": {
+                "stash": {
+                    "type": "kolsch/nodes/set_state",
+                    "keys": {"attempts": 5},
+                },
+                "ask": {
+                    "type": "kolsch/nodes/user_input",
+                    "prompt": "Confirm?",
+                },
+                "echo": {"type": "demo/nodes/echo"},
+            },
+            "graph": {
+                "edges": [
+                    {"from": "stash", "to": "ask"},
+                    {
+                        "from": "ask",
+                        "to": "echo",
+                        "binds": {"message": "{{ state.attempts }}"},
+                    },
+                ]
+            },
+        }
+    )
+    registry = RunnerRegistry()
+    registry.register("kolsch/nodes/set_state", SetStateRunner())
+    registry.register("kolsch/nodes/user_input", UserInputRunner())
+    # Static echo runner — mirrors what CatalogNodeRunner would
+    # produce. ``message`` lands in bound_inputs and is echoed back;
+    # asserting it == 5 in the golden proves state replay restored
+    # ``state.attempts`` before the bind rendered.
+    registry.register(
+        "demo/nodes/echo",
+        _StaticRunner({"message": 5}),
+    )
+    from assets.catalog import AssetEntry  # noqa: PLC0415
+
+    catalog = AssetCatalog(
+        assets={
+            "demo/nodes/echo": AssetEntry(
+                ref="demo/nodes/echo",
+                asset_type="node",
+                bundle="demo",
+                path="",
+                metadata={"builtin": True},
+            )
+        }
+    )
+    _ = tmp_path
+    return workflow, registry, {
+        "catalog": catalog,
+        "resume_responses": [{"response": "ok"}],
+    }
+
+
 def _build_branching_multi_input(
     tmp_path: Path,
 ) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
@@ -714,6 +1006,15 @@ _FIXTURES: tuple[
         _build_branching_multi_input,
         "succeeded",
     ),
+    # Phase 3.5 — state + file-IO goldens.
+    ("state-evolves", _build_state_evolves, "succeeded"),
+    (
+        "delete-state-idempotent",
+        _build_delete_state_idempotent,
+        "succeeded",
+    ),
+    ("file-roundtrip", _build_file_roundtrip, "succeeded"),
+    ("file-access-denied", _build_file_access_denied, "failed"),
 )
 
 
@@ -823,6 +1124,8 @@ _PAUSE_RESUME_FIXTURES: tuple[
         # The bad-input resume is rejected; the run stays paused.
         "waiting_for_input",
     ),
+    # Phase 3.5 — state preserved across pause/resume via replay.
+    ("state-resume.workflow", _build_state_resume, "succeeded"),
 )
 
 

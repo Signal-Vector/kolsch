@@ -1,0 +1,46 @@
+# Phase 3.5 starter — file-IO roundtrip.
+#
+# Three nodes: `write` lays a file down using `{{ inputs.body }}`,
+# `read` reads it back, `list` enumerates the workspace root. The
+# workflow proves each file-IO runner: writing the rendered content,
+# reading content into a downstream `{{ nodes.read.content }}`
+# scope, and listing entries as leaf names.
+#
+# Run with:
+#
+#     kolsch workflows run kolsch/workflows/file-roundtrip \
+#       --input filename=hello.txt --input body=greetings
+#     # → succeeded
+#     cat <root>/hello.txt    # → "greetings"
+#
+# Author note: `read_file` output narrows to `{content}` only — the
+# tool's pagination metadata (`lines_returned`, `next_offset`,
+# `truncated`) is dropped at the workflow boundary. Authors needing
+# the richer shape call the tool from an agent context.
+description: "Write a file, read it back, list the workspace — Phase 3.5 §4.2."
+
+# Workflow inputs are supplied at run time via `--input filename=...
+# --input body=...`. The Workflow schema doesn't declare them at v1;
+# the executor populates `_state` from the run's inputs dict and
+# exposes `{{ inputs.* }}` in every node's Jinja scope.
+nodes:
+  write:
+    type: kolsch/nodes/write_file
+    description: "Render content + path via Jinja and atomic-write."
+    path: "{{ inputs.filename }}"
+    content: "{{ inputs.body }}"
+  read:
+    type: kolsch/nodes/read_file
+    description: "Read the file just written; expose content downstream."
+    path: "{{ inputs.filename }}"
+  list:
+    type: kolsch/nodes/list_files
+    description: "Enumerate the workspace root — proves leaf-name narrowing."
+    path: "."
+
+graph:
+  edges:
+    - from: write
+      to: read
+    - from: read
+      to: list
