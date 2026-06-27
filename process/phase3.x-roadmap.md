@@ -50,7 +50,7 @@ Spec: `process/phase3.1-executor-spec.md`. Build plan:
 
 **Effort**: ~2 weeks.
 
-### 3.2 — Agent integration
+### 3.2 — Agent integration ✅ Done (commit pending)
 
 Spec: `process/phase3.2-agent-integration-spec.md`. Build plan: `process/phase3.2-agent-integration-build.md`.
 
@@ -62,17 +62,28 @@ Spec: `process/phase3.2-agent-integration-spec.md`. Build plan: `process/phase3.
 
 **Effort**: ~1-2 weeks.
 
-### 3.3 — Modifiers + branching execution
+### 3.3 — Branching runtime + multi-input bind validation — ✅ Done (`e35169c`)
 
-Spec: `process/phase3.3-modifiers-branching-spec.md` (to be written).
+**Status:** Shipped across Steps 0–3 of
+`process/phase3.3-modifiers-branching-build.md` (Step 0 `89101db`,
+Step 1 `36b1cfd`, Step 2 `6248899`, Step 3 `e35169c`). The 6
+Phase-level Integration Tests pass under `uv run pytest tests/`; the
+manual smoke (`kolsch setup --non-interactive` → `workflows run
+kolsch/workflows/branching-demo --input check_cmd={true,false}`)
+succeeds end-to-end with the expected JSONL shape (branch_value
+payload + workflow.node.pruned events + pruned-terminal null outputs).
 
-**Scope**: node-level `when:` gate modifier (Jinja gate); node-level `retry:` (with `tenacity` adopted as the retry library); MULTI-INPUT edge handling — AND-strict trigger semantics + `inputs.<key>` namespace at receivers + `WorkflowBindCollision` parse-time check + `WorkflowBindTypeMismatch` runtime check (Pydantic strict mode); edge-level `branch:` field. Bash branches on `exit_code`; authored Python nodes branch when return type is `bool` or `tuple[bool, BaseModel]`. Validator rules for branching invariants (both true/false branches required when branching used; no branch on non-branchable nodes).
+Spec: `process/phase3.3-modifiers-branching-spec.md`. Build plan: `process/phase3.3-modifiers-branching-build.md`.
 
-**Verification gate**: workflows with `when:` gates skip nodes correctly. `retry:` retries the configured number of times then propagates failure. Multi-input fan-in: a receiver with two incoming edges fires only after both sources complete; bind-key collisions surface as `WorkflowBindCollision`; type mismatches at fire time surface as `WorkflowBindTypeMismatch`. Cross-graph references to non-ancestors fire `WorkflowJinjaRefUnknown(reason="not_predecessor")`. Bash branch-on-non-zero fires the false-branch edges instead of aborting. Validator errors fire for every branching invariant violation.
+**Note on scope reconciliation:** Phase 3.1 shipped more of this entry's original scope than initially planned — `when:` gate evaluation (`src/workflows/executor.py:617`), `retry:` modifier via a bare loop (`src/workflows/builtins/retry.py`, tenacity intentionally NOT introduced), multi-input edge STRUCTURE + AND-strict semantics (executor.py:369-375), parse-time `WorkflowBindCollision` (validator.py:516-530), and validator branching invariants (validator.py:540-590) all landed with the executor. Phase 3.3's remaining surface is purely the RUNTIME wiring those pieces left unfinished.
 
-**Why separate**: modifiers genuinely change executor behavior. Branching has subtle rules (dynamic abort behavior for bash). Bundle them so the executor's "extended" behavior arrives coherently.
+**Scope**: runtime branch dispatch — the executor reads `edge.branch` at fire time, computes the source's branch value (bash `exit_code == 0`; authored Python `bool` or `tuple[bool, BaseModel]`), and filters outgoing edges. Pruning cascade via reverse-reachability + the new `workflow.node.pruned` event (the SINGLE addition to master spec §11.1). Bash success-vs-failure revision: non-zero exit is success when at least one outgoing edge carries `branch:`, abort-as-before otherwise. The `inputs.*` Jinja namespace at receivers — `_render_jinja(..., inputs_overlay=)` so a receiver's config strings see edge-bound `binds:` keys. Runtime strict-mode bind validation raising `WorkflowBindTypeMismatch` (class already exists at `src/workflows/errors.py:490-528`; never previously raised).
 
-**Effort**: ~1-2 weeks.
+**Verification gate**: bash branch-on-non-zero fires the false-branch edges instead of aborting; authored Python `bool` / `tuple[bool, BaseModel]` returns drive edge dispatch; multi-input receiver's config interpolates `{{ inputs.<bind_key> }}` correctly; type mismatches at fire time surface as `WorkflowBindTypeMismatch`; pruned nodes emit `workflow.node.pruned`; partial fan-in (one fired + one pruned inbound edge) fires the receiver with the fired edge's binds only.
+
+**Why separate**: branching has subtle rules (dynamic abort behavior for bash, cascade semantics for partial fan-in, multi-input bind validation under strict mode). The runtime-only nature makes the scope tight and the test surface focused.
+
+**Effort**: ~1 week (runtime wiring only; no parser/validator/error-class changes).
 
 ### 3.4 — User_input with CLI pause/resume
 
