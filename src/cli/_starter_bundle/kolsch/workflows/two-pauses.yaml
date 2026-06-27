@@ -1,0 +1,47 @@
+# Phase 3.4 fixture — sequential pause/resume.
+#
+# An `ask1 → between → ask2 → done` pipeline that pauses TWICE.
+# Run-resume-run-resume cycle proves the JSONL spans THREE process
+# invocations as one continuous event stream and the resume entry
+# point handles repeated pauses correctly.
+#
+# Run with:
+#
+#     kolsch workflows run kolsch/workflows/two-pauses
+#     # → waiting_for_input
+#     kolsch workflows resume <run_id> --input response=alpha
+#     # → waiting_for_input
+#     kolsch workflows resume <run_id> --input response=beta
+#     # → succeeded; final outputs include "done": {"message": "alpha+beta"}
+#
+# Author note: uses authored Python `kolsch/nodes/echo` instead of
+# bash so the starter `platform.yaml`'s `kolsch/bash → prompt → deny`
+# default doesn't block the headless smoke test.
+description: "Sequential-pause demo — two user_input nodes in series."
+
+nodes:
+  ask1:
+    type: kolsch/nodes/user_input
+    prompt: "First answer?"
+  between:
+    type: kolsch/nodes/echo
+    description: "Echoes the first answer between the two pauses."
+  ask2:
+    type: kolsch/nodes/user_input
+    prompt: "Second answer?"
+  done:
+    type: kolsch/nodes/echo
+    description: "Final node — its captured message blends both responses."
+
+graph:
+  edges:
+    - from: ask1
+      to: between
+      binds:
+        message: "{{ nodes.ask1.response }}"
+    - from: between
+      to: ask2
+    - from: ask2
+      to: done
+      binds:
+        message: "{{ nodes.ask1.response }}+{{ nodes.ask2.response }}"

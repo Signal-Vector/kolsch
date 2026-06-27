@@ -85,7 +85,21 @@ Spec: `process/phase3.3-modifiers-branching-spec.md`. Build plan: `process/phase
 
 **Effort**: ~1 week (runtime wiring only; no parser/validator/error-class changes).
 
-### 3.4 — User_input with CLI pause/resume
+### 3.4 — User_input with CLI pause/resume — ✅ Done (commit pending)
+
+**Status:** Shipped across Steps 0–3 of
+`process/phase3.4-user-input-build.md`. The 7 Phase-level Integration
+Tests pass under `uv run pytest tests/` (`tests/component/test_workflow_user_input_e2e.py`
+covers Phase Tests 1–6 end-to-end; Phase Test 7 is the full-suite
+regression). Three pause/resume goldens
+(`tests/golden/runs/user-input-{single-pause,sequential-pauses,rejected-resume}.workflow.jsonl`)
+pin the JSONL shape across the cross-process pause boundary. Manual
+smoke (`kolsch setup --non-interactive` → `workflows run
+kolsch/workflows/hello-paused` pauses → `workflows resume <run_id>
+--input response=world` succeeds) succeeds end-to-end with the
+expected JSONL continuity (one `workflow.run.resumed` event between
+the user_input's `started` and `completed`; `waiting_at` sidecar
+cleaned up at terminal).
 
 Spec: `process/phase3.4-user-input-spec.md`. Build plan: `process/phase3.4-user-input-build.md`.
 

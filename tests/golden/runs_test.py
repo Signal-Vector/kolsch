@@ -425,6 +425,214 @@ def _build_branching_python(
     return workflow, registry, {"catalog": catalog}
 
 
+def _build_user_input_single_pause(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Phase 3.4 — single ``user_input`` pause + resume to terminal.
+
+    A two-node ``ask → echo`` pipeline that pauses on ``ask``,
+    resumes with ``{response: "world"}``, and continues to
+    ``succeeded``. The downstream ``echo`` node consumes the
+    resumed response via ``{{ nodes.ask.response }}`` so the
+    golden's payload covers the cross-process replay path.
+    """
+    workflow = Workflow.model_validate(
+        {
+            "nodes": {
+                "ask": {
+                    "type": "kolsch/nodes/user_input",
+                    "prompt": "What would you like to say?",
+                },
+                "echo": {"type": "demo/nodes/echo"},
+            },
+            "graph": {
+                "edges": [
+                    {
+                        "from": "ask",
+                        "to": "echo",
+                        "binds": {
+                            "message": "{{ nodes.ask.response }}",
+                        },
+                    }
+                ]
+            },
+        }
+    )
+    from workflows.builtins.user_input import UserInputRunner  # noqa: PLC0415
+
+    registry = RunnerRegistry()
+    registry.register(
+        "kolsch/nodes/user_input", UserInputRunner()
+    )
+    # ``demo/nodes/echo`` mirrors the catalog-runner's BaseModel-
+    # returning shape — see :func:`_build_authored_python_basemodel`.
+    registry.register(
+        "demo/nodes/echo",
+        _StaticRunner({"message": "world"}),
+    )
+    from assets.catalog import AssetEntry  # noqa: PLC0415
+
+    catalog = AssetCatalog(
+        assets={
+            "demo/nodes/echo": AssetEntry(
+                ref="demo/nodes/echo",
+                asset_type="node",
+                bundle="demo",
+                path="",
+                metadata={"builtin": True},
+            )
+        }
+    )
+    _ = tmp_path
+    return workflow, registry, {
+        "catalog": catalog,
+        "resume_responses": [{"response": "world"}],
+    }
+
+
+def _build_user_input_sequential_pauses(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Phase 3.4 — two sequential ``user_input`` pauses.
+
+    ``ask1 → between → ask2 → done``. Each pause writes a fresh
+    ``waiting_at`` sidecar; each resume completes the open
+    invocation and re-enters the worklist. The final ``done`` node
+    captures a combined payload.
+    """
+    workflow = Workflow.model_validate(
+        {
+            "nodes": {
+                "ask1": {
+                    "type": "kolsch/nodes/user_input",
+                    "prompt": "First?",
+                },
+                "between": {"type": "demo/nodes/echo"},
+                "ask2": {
+                    "type": "kolsch/nodes/user_input",
+                    "prompt": "Second?",
+                },
+                "done": {"type": "demo/nodes/echo"},
+            },
+            "graph": {
+                "edges": [
+                    {
+                        "from": "ask1",
+                        "to": "between",
+                        "binds": {
+                            "message": "{{ nodes.ask1.response }}",
+                        },
+                    },
+                    {"from": "between", "to": "ask2"},
+                    {
+                        "from": "ask2",
+                        "to": "done",
+                        "binds": {
+                            "message": (
+                                "{{ nodes.ask1.response }}+"
+                                "{{ nodes.ask2.response }}"
+                            ),
+                        },
+                    },
+                ]
+            },
+        }
+    )
+    from workflows.builtins.user_input import UserInputRunner  # noqa: PLC0415
+
+    registry = RunnerRegistry()
+    registry.register(
+        "kolsch/nodes/user_input", UserInputRunner()
+    )
+
+    # Per-node-name echo runner so ``between`` and ``done`` surface
+    # distinct captured payloads in the golden.
+    class _NamedEchoRunner:
+        def __init__(self, by_node: dict[str, dict[str, Any]]) -> None:
+            self._by_node = by_node
+
+        async def run(
+            self,
+            *,
+            node_name: str,
+            node_def: Any,
+            bound_inputs: dict[str, Any],
+            state: dict[str, Any],
+            ctx: Any,
+        ) -> dict[str, Any]:
+            _ = (node_def, bound_inputs, state, ctx)
+            return dict(self._by_node[node_name])
+
+    registry.register(
+        "demo/nodes/echo",
+        _NamedEchoRunner(
+            {
+                "between": {"message": "alpha"},
+                "done": {"message": "alpha+beta"},
+            }
+        ),
+    )
+    from assets.catalog import AssetEntry  # noqa: PLC0415
+
+    catalog = AssetCatalog(
+        assets={
+            "demo/nodes/echo": AssetEntry(
+                ref="demo/nodes/echo",
+                asset_type="node",
+                bundle="demo",
+                path="",
+                metadata={"builtin": True},
+            )
+        }
+    )
+    _ = tmp_path
+    return workflow, registry, {
+        "catalog": catalog,
+        "resume_responses": [
+            {"response": "alpha"},
+            {"response": "beta"},
+        ],
+    }
+
+
+def _build_user_input_rejected_resume(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Phase 3.4 — paused run with a rejected (bad-input) resume.
+
+    The bad resume raises ``WorkflowInputInvalid`` BEFORE any
+    events are appended; the golden therefore matches the paused
+    run's JSONL byte-for-byte (canonicalised), proving the
+    rejection is non-mutating.
+    """
+    workflow = Workflow.model_validate(
+        {
+            "nodes": {
+                "ask": {
+                    "type": "kolsch/nodes/user_input",
+                    "prompt": "?",
+                }
+            }
+        }
+    )
+    from workflows.builtins.user_input import UserInputRunner  # noqa: PLC0415
+
+    registry = RunnerRegistry()
+    registry.register(
+        "kolsch/nodes/user_input", UserInputRunner()
+    )
+    _ = tmp_path
+    return workflow, registry, {
+        # Bad resume — ``WorkflowInputInvalid`` is raised; the
+        # harness asserts the JSONL is unchanged afterward.
+        "resume_responses": [{"wrong_key": "x"}],
+        "expect_resume_exception": "WorkflowInputInvalid",
+        # The run stays paused — terminal status is
+        # ``waiting_for_input``.
+        "final_status_override": "waiting_for_input",
+    }
+
+
 def _build_branching_multi_input(
     tmp_path: Path,
 ) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
@@ -582,6 +790,155 @@ async def test_workflow_run_matches_golden(
         f"--- expected ({golden_path}) ---\n{expected}"
         f"--- actual ---\n{actual}"
     )
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.4 — pause/resume goldens
+# ---------------------------------------------------------------------------
+
+
+_PAUSE_RESUME_FIXTURES: tuple[
+    tuple[
+        str,
+        Callable[
+            [Path], tuple[Workflow, RunnerRegistry, dict[str, Any]]
+        ],
+        str,
+    ],
+    ...,
+] = (
+    (
+        "user-input-single-pause.workflow",
+        _build_user_input_single_pause,
+        "succeeded",
+    ),
+    (
+        "user-input-sequential-pauses.workflow",
+        _build_user_input_sequential_pauses,
+        "succeeded",
+    ),
+    (
+        "user-input-rejected-resume.workflow",
+        _build_user_input_rejected_resume,
+        # The bad-input resume is rejected; the run stays paused.
+        "waiting_for_input",
+    ),
+)
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "builder", "expected_status"),
+    _PAUSE_RESUME_FIXTURES,
+    ids=[name for name, *_ in _PAUSE_RESUME_FIXTURES],
+)
+async def test_workflow_pause_resume_matches_golden(
+    fixture_name: str,
+    builder: Callable[
+        [Path], tuple[Workflow, RunnerRegistry, dict[str, Any]]
+    ],
+    expected_status: str,
+    tmp_path: Path,
+) -> None:
+    """Pause + resume each fixture; canonicalize; diff vs golden.
+
+    The harness drives the cross-process lifecycle in a single
+    process:
+
+    1. Construct an executor for the initial run; ``await ex.run()``
+       which pauses at the first ``user_input``.
+    2. For each resume response in ``extras["resume_responses"]``,
+       construct a FRESH executor pointed at the same run (mirrors
+       the CLI's per-process model) and ``await fresh.resume(...)``.
+    3. If ``extras["expect_resume_exception"]`` is set, assert the
+       LAST resume raised that exception class and read the JSONL
+       directly (no further resume).
+    4. Canonicalise the JSONL and diff against the golden.
+
+    Same canonicalisation table as the run-only goldens — the JSONL
+    spans multiple process invocations but is one continuous file.
+    """
+    from workflows.errors import WorkflowInputInvalid  # noqa: PLC0415
+
+    exception_map: dict[str, type[Exception]] = {
+        "WorkflowInputInvalid": WorkflowInputInvalid,
+    }
+
+    workflow, registry, extras = builder(tmp_path)
+    catalog = extras.get("catalog") or AssetCatalog()
+    resume_responses = list(
+        extras.get("resume_responses") or []
+    )
+    expect_exc_name = extras.get("expect_resume_exception")
+    final_status_override = extras.get("final_status_override")
+
+    store = WorkflowRunStore(tmp_path)
+    run = store.create(workflow_ref="demo/workflows/x", inputs={})
+
+    ex = IterativeExecutor(
+        workflow=workflow,
+        run=run,
+        store=store,
+        registry=registry,
+        catalog=catalog,
+    )
+    initial_status = await ex.run()
+    assert initial_status.value == "waiting_for_input", (
+        f"fixture {fixture_name!r} expected initial pause; "
+        f"got {initial_status.value}"
+    )
+
+    last_status = initial_status
+    for index, response in enumerate(resume_responses):
+        is_last = index == len(resume_responses) - 1
+        fresh_run = store.read(run.run_id)
+        fresh_executor = IterativeExecutor(
+            workflow=workflow,
+            run=fresh_run,
+            store=store,
+            registry=registry,
+            catalog=catalog,
+        )
+        if is_last and expect_exc_name is not None:
+            exc_cls = exception_map[expect_exc_name]
+            with pytest.raises(exc_cls):
+                await fresh_executor.resume(response=response)
+            # The rejection is non-mutating; status stays as it was.
+            last_status = await _read_status(store, run.run_id)
+            break
+        last_status = await fresh_executor.resume(response=response)
+
+    expected_value = final_status_override or expected_status
+    assert last_status.value == expected_value, (
+        f"fixture {fixture_name!r} expected terminal "
+        f"{expected_value!r}; got {last_status.value!r}"
+    )
+
+    actual_raw = store.directory(run.run_id).events_path.read_text(
+        encoding="utf-8"
+    )
+    actual = canonicalize_jsonl(actual_raw)
+
+    golden_path = _GOLDEN_DIR / f"{fixture_name}.jsonl"
+    if not golden_path.exists():
+        msg = (
+            f"Missing pause/resume golden for fixture "
+            f"{fixture_name!r}.\nTo create it, write the following "
+            f"text to {golden_path}:\n\n{actual}"
+        )
+        raise AssertionError(msg)
+    expected = golden_path.read_text(encoding="utf-8")
+    assert actual == expected, (
+        f"Golden mismatch for {fixture_name!r}.\n"
+        f"--- expected ({golden_path}) ---\n{expected}"
+        f"--- actual ---\n{actual}"
+    )
+
+
+async def _read_status(
+    store: WorkflowRunStore, run_id: Any  # noqa: ANN401
+) -> Any:  # noqa: ANN401
+    """Re-read the run's current status from the store."""
+    return store.read(run_id).status
 
 
 # Sanity check on the canonicaliser itself.

@@ -420,6 +420,8 @@ class TestRegisteredVsDeferred:
     def test_register_builtins_only_installs_bash_and_noop(
         self, tmp_path: Path, bash_defn: Any
     ) -> None:
+        from workflows.builtins import UserInputRunner  # noqa: PLC0415
+
         registry = _make_registry(tmp_path, bash_defn)
         # Sanity: bash + noop resolve.
         assert isinstance(
@@ -428,11 +430,18 @@ class TestRegisteredVsDeferred:
         assert isinstance(
             registry.get("kolsch/nodes/noop", node_name="n"), NoopRunner
         )
+        # Phase 3.4 Step 0 — ``user_input`` is now wired by
+        # register_builtins (no provider deps; raises a typed pause
+        # signal that the executor's worklist catches separately from
+        # the failure path).
+        assert isinstance(
+            registry.get("kolsch/nodes/user_input", node_name="n"),
+            UserInputRunner,
+        )
         # Deferred types still raise — including ``agent`` when no
         # engine + session_store + config_builder triple is supplied.
         for name, expected_phase in (
             ("agent", "3.2"),
-            ("user_input", "3.4"),
             ("read_file", "3.5"),
             ("branch", "3.6"),
             ("compute", "3.6"),

@@ -1,0 +1,41 @@
+# Phase 3.4 starter — pause / resume demo via `user_input`.
+#
+# A two-node `ask → echo` pipeline that pauses on `ask` and resumes
+# when the operator provides `--input response=<text>`. Proves the
+# JSONL spans the pre-pause + post-resume processes as one continuous
+# event stream.
+#
+# Run it with:
+#
+#     kolsch workflows run kolsch/workflows/hello-paused
+#
+#     # prints: run wrk_<uuid> waiting_for_input
+#     #         resume with: kolsch workflows resume wrk_<uuid> --input response=<text>
+#
+#     kolsch workflows resume wrk_<uuid> --input response=world
+#
+#     # prints: run wrk_<uuid> succeeded
+#     #         {"echo": {"message": "world"}}
+#
+# Author note: uses authored Python `kolsch/nodes/echo` instead of
+# `kolsch/nodes/bash` because the starter `platform.yaml` maps
+# `kolsch/bash` to `prompt`, which collapses to `deny` on the
+# headless `kolsch workflows run` surface. See master spec §10 for
+# the pause / resume contract.
+description: "Pause/resume demo — workflow stops at user_input, resumes via CLI."
+
+nodes:
+  ask:
+    type: kolsch/nodes/user_input
+    prompt: "What would you like to say?"
+    description: "Pause — the workflow exits cleanly and waits for resume."
+  echo:
+    type: kolsch/nodes/echo
+    description: "Post-resume node — surfaces the resumed response in final outputs."
+
+graph:
+  edges:
+    - from: ask
+      to: echo
+      binds:
+        message: "{{ nodes.ask.response }}"

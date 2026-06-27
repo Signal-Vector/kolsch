@@ -37,6 +37,7 @@ from workflows.builtins.catalog_node_runner import CatalogNodeRunner
 from workflows.builtins.noop import NoopRunner
 from workflows.builtins.retry import with_retry
 from workflows.builtins.timeout import with_timeout
+from workflows.builtins.user_input import UserInputRunner
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -56,6 +57,7 @@ __all__ = [
     "BashRunner",
     "CatalogNodeRunner",
     "NoopRunner",
+    "UserInputRunner",
     "register_builtins",
     "with_retry",
     "with_timeout",
@@ -104,6 +106,11 @@ def register_builtins(  # noqa: PLR0913 — wide-by-design wiring surface; see d
         ),
     )
     registry.register("kolsch/nodes/noop", NoopRunner())
+    # Phase 3.4 — ``user_input`` has no constructor dependencies; the
+    # runner reads the per-node Jinja renderer through ``ctx`` and
+    # raises ``WorkflowPausedForInput`` which the executor's worklist
+    # catches separately from the failure path.
+    registry.register("kolsch/nodes/user_input", UserInputRunner())
     if catalog is not None:
         registry.set_catalog_runner(CatalogNodeRunner(catalog=catalog))
     if (

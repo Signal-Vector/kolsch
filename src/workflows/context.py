@@ -97,6 +97,43 @@ class NodeContext:
     # ``object.__setattr__`` so the "authored nodes cannot mutate
     # context" invariant still holds for the public surface.
     spawned_session_id: SessionId | None = None
+    # Phase 3.4 — hook into the executor's Jinja renderer so runners
+    # (the ``user_input`` runner first; ``bash`` and others may opt in
+    # later) can render config strings against the SAME ``nodes`` /
+    # ``state`` / ``inputs`` scope the executor uses for ``binds:``
+    # rendering. The callback is bound at :meth:`IterativeExecutor._build_ctx`
+    # construction; ``None`` outside the executor's worklist (e.g.
+    # :meth:`NodeContext.for_test`). The positional second argument is
+    # the receiver's edge-bound ``bound_inputs`` (per master spec §6.4.1
+    # — overlays onto workflow-level inputs in the ``inputs.*`` namespace).
+    render_jinja_callback: (
+        Callable[[str, Mapping[str, Any] | None], Any] | None
+    ) = field(default=None, repr=False)
+
+    def render_jinja(
+        self,
+        expression: str,
+        *,
+        inputs_overlay: Mapping[str, Any] | None = None,
+    ) -> Any:  # noqa: ANN401 — Jinja returns Any-shaped values
+        """Render ``expression`` via the executor's Jinja environment.
+
+        Phase 3.4 — the ``user_input`` runner uses this to render the
+        node's ``prompt:`` field BEFORE raising
+        :class:`workflows.errors.WorkflowPausedForInput` so the pause
+        signal carries the user-visible prompt. ``inputs_overlay``
+        threads the receiver's edge-bound ``bound_inputs`` into the
+        ``inputs.*`` namespace (master spec §6.4.1).
+
+        Raises :class:`RuntimeError` when no renderer is bound — i.e.,
+        when called on a :meth:`for_test` context that didn't pass one
+        in. Production contexts (built by
+        :meth:`IterativeExecutor._build_ctx`) always have a renderer.
+        """
+        if self.render_jinja_callback is None:
+            msg = "NodeContext has no Jinja renderer bound"
+            raise RuntimeError(msg)
+        return self.render_jinja_callback(expression, inputs_overlay)
 
     def emit(self, subkind: str, payload: Mapping[str, Any]) -> None:
         """Emit a custom workflow event.

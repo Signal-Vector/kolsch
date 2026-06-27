@@ -123,3 +123,16 @@ class RunDirectory:
         :meth:`WorkflowRunStore.list` reads cheaply without parsing
         the events file."""
         return self.root / "meta.json"
+
+    @property
+    def waiting_at_path(self) -> Path:
+        """Phase 3.4 — the paused-run open invocation marker.
+
+        Written atomically by the executor's pause handler with the
+        open ``user_input`` node's invocation_id. The presence of
+        this sidecar AND a ``status=waiting_for_input`` meta is the
+        on-disk pause contract; Step 1's resume entry point reads it
+        to identify the open invocation without walking the JSONL
+        backwards. Removed at terminal status on resume (Step 1).
+        """
+        return self.root / "waiting_at"

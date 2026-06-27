@@ -70,6 +70,8 @@ __all__ = [
     "WorkflowNodeReturnTypeInvalid",
     "WorkflowNodeSignatureInvalid",
     "WorkflowNotRunnable",
+    "WorkflowPausedForInput",
+    "WorkflowResumeRejected",
     "WorkflowRuntimeError",
     "WorkflowSecretUnresolved",
     "WorkflowTimeoutExceeded",
@@ -1395,6 +1397,37 @@ class AgentRefUnresolved(WorkflowRuntimeError):
         )
 
 
+class WorkflowResumeRejected(WorkflowRuntimeError):
+    """Phase 3.4 — resume against a run not in ``waiting_for_input``.
+
+    Raised by :meth:`workflows.executor.IterativeExecutor.resume` (and
+    the ``kolsch workflows resume`` CLI) when the targeted run's
+    status is anything other than ``waiting_for_input``. The status
+    gate is the boundary between "this run is asleep on the disk
+    waiting for an answer" (resumable) and every other state
+    (running, terminal, pending) where a resume is undefined.
+    """
+
+    caller_message: ClassVar[str] = (
+        "This workflow can't be resumed right now — it isn't paused. "
+        "Check the run's status with 'kolsch workflows show'."
+    )
+    identifying_names_keys: ClassVar[tuple[str, ...]] = ("run_id", "status")
+
+    def __init__(self, *, run_id: str, status: str) -> None:
+        self.run_id = run_id
+        self.status = status
+        super().__init__(
+            _runtime_str(
+                self,
+                problem=(
+                    f"workflow run {run_id!r} cannot be resumed "
+                    f"(status={status!r}; expected 'waiting_for_input')"
+                ),
+            )
+        )
+
+
 class NodeTypeNotImplemented(WorkflowRuntimeError):
     """Phase 3.1 Step 1 — dispatch hit a node type whose runtime
     ships in a later sub-phase.
@@ -1432,6 +1465,41 @@ class NodeTypeNotImplemented(WorkflowRuntimeError):
                     f"ships in Phase {phase}"
                 ),
             )
+        )
+
+
+# ---------------------------------------------------------------------------
+# Control-flow signals — NOT WorkflowError subclasses.
+# ---------------------------------------------------------------------------
+
+
+class WorkflowPausedForInput(Exception):  # noqa: N818 — control-flow signal, not an error
+    """Phase 3.4 — the user_input runner's pause signal.
+
+    NOT a :class:`WorkflowError` subclass: pause is normal control
+    flow, not a failure. The executor's failure path (which emits
+    ``workflow.node.failed`` + ``workflow.run.failed``) does NOT
+    handle this — the worklist catches it separately, persists the
+    open invocation marker, flips the run status to
+    ``waiting_for_input``, and exits cleanly. The matching
+    ``workflow.node.started`` event for this invocation is already on
+    disk; the ABSENCE of a corresponding completion event IS the
+    pause marker (master spec §10.1).
+    """
+
+    def __init__(
+        self,
+        *,
+        node_name: str,
+        invocation_id: str,
+        prompt: str,
+    ) -> None:
+        self.node_name = node_name
+        self.invocation_id = invocation_id
+        self.prompt = prompt
+        super().__init__(
+            f"workflow pause for input at node {node_name!r} "
+            f"(invocation {invocation_id!r})"
         )
 
 

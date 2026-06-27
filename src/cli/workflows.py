@@ -1,6 +1,6 @@
 """``kolsch workflows`` CLI — Phase 3.0 Step 6.
 
-Five subcommands:
+Six subcommands:
 
 - ``list`` — print catalog entries with ``asset_type="workflow"``.
 - ``show <ref>`` — print parsed-workflow structure.
@@ -8,7 +8,9 @@ Five subcommands:
   :func:`workflows.validator.validate_workflow_or_raise`.
 - ``cancel <run_id>`` — R3 #1 — atomically write a sidecar
   ``cancel.flag`` into the run directory.
-- ``run <ref>`` — STUB at Phase 3.0; ships in Phase 3.1.
+- ``run <ref>`` — execute a workflow end-to-end (Phase 3.1).
+- ``resume <run_id>`` — resume a ``waiting_for_input`` run with
+  ``--input response=<text>`` (Phase 3.4 Step 2).
 
 All commands accept ``--format text|json``. The JSON envelope follows
 master spec §14.3; per-error objects follow §14.4 + R3 #8 + R3 #11
@@ -77,7 +79,10 @@ def add_workflows_subparser(
     fmt_parent = _build_format_parent()
     workflows: argparse.ArgumentParser = sub.add_parser(
         "workflows",
-        help="Manage workflow assets (list, show, validate, cancel, run).",
+        help=(
+            "Manage workflow assets "
+            "(list, show, validate, cancel, run, resume)."
+        ),
         parents=[fmt_parent],
     )
     workflows_sub = workflows.add_subparsers(
@@ -144,6 +149,31 @@ def add_workflows_subparser(
         ),
     )
 
+    # Phase 3.4 Step 2 — ``kolsch workflows resume <run_id> --input
+    # response=<text>``. Reuses ``_parse_input_pairs`` (the same KEY=VALUE
+    # grammar ``run`` consumes). The CLI gates on the run's status:
+    # rejects with exit 1 + ``WorkflowResumeRejected`` if the run isn't
+    # ``waiting_for_input``.
+    resume = workflows_sub.add_parser(
+        "resume",
+        help="Resume a paused workflow run with the user's response.",
+        parents=[fmt_parent],
+    )
+    resume.add_argument(
+        "run_id", help="Workflow run id (wrk_*) in waiting_for_input state."
+    )
+    resume.add_argument(
+        "--input",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help=(
+            "Resume input pair; the user_input runner's output schema "
+            "is ``{response: str}`` so the canonical shape is "
+            "``--input response=<text>``. Repeatable."
+        ),
+    )
+
     return workflows
 
 
@@ -153,7 +183,7 @@ def add_workflows_subparser(
 
 
 # PLR0911 acknowledged: the dispatcher has one return per leaf
-# subcommand (5) plus the no-op and unknown-op error paths. Each
+# subcommand (6) plus the no-op and unknown-op error paths. Each
 # return tunnels the leaf's own exit code; collapsing into a mapping
 # would lose the type-checker visibility of each leaf's signature
 # differences (args.ref vs args.run_id vs no positional).
@@ -170,7 +200,7 @@ async def cmd_workflows(  # noqa: PLR0911
     if op is None:
         err.write(
             "usage: kolsch workflows <op>\n"
-            "ops: list, show, validate, cancel, run\n"
+            "ops: list, show, validate, cancel, run, resume\n"
         )
         return 1
 
@@ -193,6 +223,15 @@ async def cmd_workflows(  # noqa: PLR0911
             input_pairs=list(getattr(args, "input", None) or []),
             dry_run=bool(getattr(args, "dry_run", False)),
             follow=bool(getattr(args, "follow", False)),
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
+    if op == "resume":
+        return await _cmd_resume(
+            root=args.root,
+            run_id_str=args.run_id,
+            input_pairs=list(getattr(args, "input", None) or []),
             fmt=fmt,
             out=out,
             err=err,
@@ -594,6 +633,141 @@ async def _cmd_run(  # noqa: PLR0913
     )
 
 
+# ---------------------------------------------------------------------------
+# resume — Phase 3.4 Step 2 CLI for paused-run continuation
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_resume(  # noqa: PLR0913 — five explicit kw args; mirrors _cmd_run's shape
+    *,
+    root: Path,
+    run_id_str: str,
+    input_pairs: list[str],
+    fmt: str,
+    out: TextIO,
+    err: TextIO,
+) -> int:
+    """Live ``kolsch workflows resume <run_id>`` handler.
+
+    Loads the paused run, builds an executor pointed at the same
+    workflow + store, awaits :meth:`IterativeExecutor.resume` with
+    the parsed response dict, and renders the terminal envelope. The
+    status-gate exception (``WorkflowResumeRejected``) and bind
+    validation (``WorkflowInputInvalid``) both surface as exit 1 +
+    the standard error envelope; an actual resume that reaches
+    terminal status exits 0 on ``succeeded`` and 1 on
+    ``failed`` / ``aborted`` / ``timed_out``. A re-pause
+    (``waiting_for_input`` returned from :meth:`resume` because the
+    workflow has another ``user_input`` node downstream) is NOT a
+    failure — exit 0 with a "resume again with..." hint.
+    """
+    from pathlib import Path as _Path  # noqa: PLC0415
+
+    from platform_runtime import bootstrap_runtime  # noqa: PLC0415
+
+    response = _parse_input_pairs(input_pairs)
+
+    runtime = await bootstrap_runtime(root=root)
+    catalog = runtime.asset_management.catalog()
+
+    from workflows.ids import WorkflowRunId  # noqa: PLC0415
+    from workflows.run_store import WorkflowRunStore  # noqa: PLC0415
+
+    store = WorkflowRunStore(root)
+    try:
+        run = store.read(WorkflowRunId(run_id_str))
+    except (FileNotFoundError, ValueError):
+        # ``ValueError`` covers a malformed ``wrk_<not-a-uuid>``
+        # surface (``WorkflowRunId`` validates the UUID body). Both
+        # shapes are user-input errors; surface the same
+        # "run not found" envelope.
+        return _emit_run_not_found(
+            command="workflows resume",
+            run_id=run_id_str,
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
+
+    entry = catalog.lookup(run.workflow_ref, expected_type="workflow")
+    if entry is None:
+        return _emit_unknown_ref(
+            command="workflows resume",
+            ref=run.workflow_ref,
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
+    try:
+        workflow = load_workflow(_Path(entry.path))
+    except WorkflowError as exc:
+        return _emit_error_envelope(
+            command="workflows resume",
+            errors=[exc],
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
+
+    # Live executor wiring — mirrors ``_cmd_run`` so the resume process
+    # has the same builtin runner set (the resume may continue into
+    # bash / agent / catalog-node nodes downstream of the user_input).
+    from tools.builtins import make_bash  # noqa: PLC0415
+    from tools.decorator import get_tool_definition  # noqa: PLC0415
+    from workflows.builtins import register_builtins  # noqa: PLC0415
+    from workflows.errors import (  # noqa: PLC0415
+        WorkflowInputInvalid,
+        WorkflowResumeRejected,
+    )
+    from workflows.executor import (  # noqa: PLC0415
+        IterativeExecutor,
+        RunnerRegistry,
+    )
+
+    bash_fn = make_bash(policy=runtime.path_policy, root=root)
+    bash_defn = get_tool_definition(bash_fn)
+    registry = RunnerRegistry()
+    register_builtins(
+        registry,
+        bash_defn=bash_defn,
+        authz=runtime.authz,
+        secrets=runtime.secrets,
+        sandbox=runtime.sandbox,
+        catalog=catalog,
+        engine=runtime.engine,
+        session_store=runtime.store,
+        config_builder=runtime.build_resolved_config,
+    )
+    executor = IterativeExecutor(
+        workflow=workflow,
+        run=run,
+        store=store,
+        registry=registry,
+        catalog=catalog,
+    )
+
+    try:
+        status = await executor.resume(response=response)
+    except (WorkflowResumeRejected, WorkflowInputInvalid) as exc:
+        return _emit_error_envelope(
+            command="workflows resume",
+            errors=[exc],
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
+
+    return _render_terminal_for_command(
+        command="workflows resume",
+        store=store,
+        run_id=run.run_id,
+        status=status,
+        fmt=fmt,
+        out=out,
+        err=err,
+    )
+
+
 def _parse_input_pairs(pairs: list[str]) -> dict[str, str]:
     """Parse ``--input KEY=VALUE`` repeats into a dict.
 
@@ -722,22 +896,58 @@ async def _run_blocking(  # noqa: PLR0913 — six explicit kw args; shared with 
     out: TextIO,
     err: TextIO,
 ) -> int:
-    """Default mode — block until terminal; print final outputs.
+    """Default mode — block until terminal OR pause; render the result.
 
-    Exit 0 on ``succeeded``; 1 on ``failed`` / ``timed_out`` /
-    ``aborted``. The JSONL has the authoritative event log; we
-    extract the terminal event's payload here for the user-visible
-    summary.
+    Delegates rendering to :func:`_render_terminal_for_command` so the
+    same envelope shape is shared with ``_cmd_resume``. The Phase 3.4
+    ``waiting_for_input`` status returned from :meth:`IterativeExecutor.run`
+    (initial pause) is rendered as exit 0 + a "resume with..." hint so
+    the operator's terminal pipeline reflects success-of-pause.
+    """
+    status = await executor.run()
+    return _render_terminal_for_command(
+        command="workflows run",
+        store=store,
+        run_id=run_id,
+        status=status,
+        fmt=fmt,
+        out=out,
+        err=err,
+    )
+
+
+def _render_terminal_for_command(  # noqa: PLR0913 — seven explicit kw args; shared rendering for run + resume
+    *,
+    command: str,
+    store: Any,  # noqa: ANN401
+    run_id: Any,  # noqa: ANN401
+    status: Any,  # noqa: ANN401 — WorkflowRunStatus
+    fmt: str,
+    out: TextIO,
+    err: TextIO,
+) -> int:
+    """Render the post-executor envelope for ``run`` / ``resume``.
+
+    Four shapes:
+
+    - ``succeeded`` → exit 0 + outputs (JSON or text).
+    - ``waiting_for_input`` → exit 0 + "resume with ..." hint. The
+      Phase 3.4 pause is a legitimate non-terminal outcome for the
+      CLI; treating it as failure would force the operator to read
+      the run id from a non-zero pipeline.
+    - ``failed`` / ``timed_out`` / ``aborted`` → exit 1 + error
+      envelope; ``reason`` lifted from the terminal event payload.
+    - ``pending`` / ``running`` (defensive) → exit 1 + unknown-state
+      envelope; should never happen in practice.
     """
     from workflows.run import WorkflowRunStatus  # noqa: PLC0415
 
-    status = await executor.run()
     payload = _terminal_payload(store, run_id)
     if status == WorkflowRunStatus.SUCCEEDED:
         if fmt == "json":
             out.write(
                 render(
-                    command="workflows run",
+                    command=command,
                     fmt=fmt,
                     data={
                         "run_id": str(run_id),
@@ -757,12 +967,33 @@ async def _run_blocking(  # noqa: PLR0913 — six explicit kw args; shared with 
                     _json.dumps(outputs, sort_keys=True, default=str) + "\n"
                 )
         return 0
-    # Non-success terminal.
+    if status == WorkflowRunStatus.WAITING_FOR_INPUT:
+        hint = (
+            f"kolsch workflows resume {run_id} --input response=<text>"
+        )
+        if fmt == "json":
+            out.write(
+                render(
+                    command=command,
+                    fmt=fmt,
+                    data={
+                        "run_id": str(run_id),
+                        "status": status.value,
+                        "resume_with": hint,
+                    },
+                )
+            )
+            out.write("\n")
+        else:
+            out.write(f"run {run_id} {status.value}\n")
+            out.write(f"resume with: {hint}\n")
+        return 0
+    # Failed / aborted / timed_out terminal.
     reason = payload.get("reason", "(no reason recorded)")
     if fmt == "json":
         out.write(
             render(
-                command="workflows run",
+                command=command,
                 fmt=fmt,
                 status="error",
                 errors=[
@@ -871,6 +1102,36 @@ def _emit_unknown_ref(
                 errors=[
                     {
                         "class": "WorkflowNotFound",
+                        "summary": msg,
+                    }
+                ],
+            )
+        )
+        out.write("\n")
+    else:
+        err.write(msg + "\n")
+    return 1
+
+
+def _emit_run_not_found(
+    *,
+    command: str,
+    run_id: str,
+    fmt: str,
+    out: TextIO,
+    err: TextIO,
+) -> int:
+    """Phase 3.4 Step 2 — render the missing-run envelope for ``resume``."""
+    msg = f"workflow run {run_id!r} not found"
+    if fmt == "json":
+        out.write(
+            render(
+                command=command,
+                fmt=fmt,
+                status="error",
+                errors=[
+                    {
+                        "class": "WorkflowRunNotFound",
                         "summary": msg,
                     }
                 ],

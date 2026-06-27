@@ -53,6 +53,7 @@ __all__ = [
     "WorkflowRunAbortedEvent",
     "WorkflowRunCompletedEvent",
     "WorkflowRunFailedEvent",
+    "WorkflowRunResumedEvent",
     "WorkflowRunStartedEvent",
     "WorkflowRunTimedOutEvent",
     "WorkflowToolCalledEvent",
@@ -76,6 +77,10 @@ class WorkflowEventKind(StrEnum):
     RUN_FAILED = "workflow.run.failed"
     RUN_TIMED_OUT = "workflow.run.timed_out"
     RUN_ABORTED = "workflow.run.aborted"
+    # Phase 3.4 — first event emitted on every resume process; chained
+    # to the JSONL's last pre-pause event via ``parent_event_id`` so
+    # the cross-process event chain is unbroken (master spec §10.2).
+    RUN_RESUMED = "workflow.run.resumed"
     NODE_STARTED = "workflow.node.started"
     NODE_COMPLETED = "workflow.node.completed"
     NODE_FAILED = "workflow.node.failed"
@@ -171,6 +176,24 @@ class WorkflowRunTimedOutEvent(WorkflowEvent):
 
 class WorkflowRunAbortedEvent(WorkflowEvent):
     kind: Literal[WorkflowEventKind.RUN_ABORTED] = WorkflowEventKind.RUN_ABORTED
+
+
+class WorkflowRunResumedEvent(WorkflowEvent):
+    """``workflow.run.resumed`` — Phase 3.4 §10.2.
+
+    Emitted as the FIRST event of every resume process, BEFORE the
+    paused ``user_input`` node's completion event. ``parent_event_id``
+    chains to the last event in the JSONL at pause time (typically the
+    paused user_input node's :class:`WorkflowNodeStartedEvent`) so the
+    cross-process event chain is unbroken.
+
+    Payload carries ``resumed_at_invocation_id`` so forensics readers
+    can correlate the resume directly to the open invocation it
+    completes, without walking the JSONL backwards. Phase 3.9's chat
+    capsule consumes this event to visually mark resumed runs.
+    """
+
+    kind: Literal[WorkflowEventKind.RUN_RESUMED] = WorkflowEventKind.RUN_RESUMED
 
 
 class WorkflowNodeStartedEvent(NodeScopedWorkflowEvent):

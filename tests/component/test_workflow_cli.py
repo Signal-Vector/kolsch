@@ -687,12 +687,12 @@ class TestCancel:
 
 
 # ---------------------------------------------------------------------------
-# AC 6.6 — --help lists five subcommands
+# AC 6.6 — --help lists all subcommands (Phase 3.4 added ``resume``)
 # ---------------------------------------------------------------------------
 
 
 class TestHelpListsAllCommands:
-    def test_help_mentions_all_five_subcommands(
+    def test_help_mentions_all_six_subcommands(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         workspace = _make_workspace(tmp_path)
@@ -703,7 +703,7 @@ class TestHelpListsAllCommands:
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
         combined = captured.out + captured.err
-        for cmd in ("list", "show", "validate", "cancel", "run"):
+        for cmd in ("list", "show", "validate", "cancel", "run", "resume"):
             assert cmd in combined
 
 

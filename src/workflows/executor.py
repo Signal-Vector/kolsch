@@ -36,11 +36,15 @@ from workflows._inputs_models import inputs_model_for
 from workflows.branching import compute_branch_value
 from workflows.catalog_node import BUILTIN_TYPE_NAMES
 from workflows.context import NodeContext
+from workflows._replay import replay_into
 from workflows.errors import (
     BashNonZeroExit,
     NodeTypeNotImplemented,
     WorkflowBindTypeMismatch,
+    WorkflowInputInvalid,
     WorkflowNodeFailed,
+    WorkflowPausedForInput,
+    WorkflowResumeRejected,
 )
 from workflows.events import (
     WorkflowNodeCompletedEvent,
@@ -49,6 +53,7 @@ from workflows.events import (
     WorkflowRunAbortedEvent,
     WorkflowRunCompletedEvent,
     WorkflowRunFailedEvent,
+    WorkflowRunResumedEvent,
     WorkflowRunStartedEvent,
     emit_event,
 )
@@ -59,7 +64,7 @@ from workflows.run import WorkflowRunStatus
 if TYPE_CHECKING:
     from assets.catalog import AssetCatalog
     from workflows.parser import EdgeDef, Workflow
-    from workflows.run import WorkflowRun
+    from workflows.run import RunDirectory, WorkflowRun
     from workflows.run_store import WorkflowRunStore
 
 __all__ = [
@@ -398,294 +403,20 @@ class IterativeExecutor:
             if run_dir.cancel_flag_path.exists():
                 self._emit_aborted(run_id)
                 return WorkflowRunStatus.ABORTED
-            # Step 4 — walk the worklist; each node either dispatches,
-            # is skipped via ``when: false``, or fails.
-            for node_name in topo:
-                # Skip downstream nodes whose predecessors didn't all
-                # reach a "completed or skipped" decision. The
-                # validated DAG guarantees topo order respects the
-                # predecessor relation, so a False here means a
-                # short-circuit fired earlier in the walk.
-                if not predecessors[node_name].issubset(
-                    self._completed_or_skipped
-                ):
-                    # No way for the node to fire — mark it skipped so
-                    # downstream consumers also defer cleanly.
-                    self._completed_or_skipped.add(node_name)
-                    continue
-
-                # Phase 3.3 Step 2 — pruned nodes (marked by the
-                # cascade triggered when their last unblocked inbound
-                # was suppressed) skip directly without emitting any
-                # ``workflow.node.*`` framing. The cascade already
-                # added the node to ``_completed_or_skipped`` AND
-                # ``_pruned`` and emitted the
-                # ``workflow.node.pruned`` event when appropriate.
-                if node_name in self._pruned:
-                    continue
-
-                node_def = self._workflow.nodes[node_name]
-                # ``when:`` gate — Round 6 J5/β: a string with ``{{``
-                # is Jinja; everything else (including bare booleans)
-                # passes through literally.
-                if not self._when_holds(node_def):
-                    # AND-strict rule 1: skip counts as completion.
-                    self._completed_or_skipped.add(node_name)
-                    # Phase 3.3 Step 2 — ``when:``-skip cascade
-                    # symmetry with branch-not-taken. The skipped
-                    # node never produced a captured output, so
-                    # every outgoing edge is structurally pruned
-                    # (the downstream's ``_render_bound_inputs``
-                    # must skip these stale bind RHSs — they'd
-                    # otherwise reference ``nodes.<skipped>.X``
-                    # against an absent capture). The cascade then
-                    # walks descendants whose only path was through
-                    # this node. No completion event was emitted
-                    # for the skipped source so cascaded prune
-                    # events have no parent_event_id to chain to —
-                    # the cascade emits no events for when-skip
-                    # subgraphs (preserves Phase 3.1's "skip is
-                    # silent" convention for when-gates).
-                    for edge in self._outgoing_edges(node_name):
-                        self._pruned_edges.add((edge.from_, edge.to))
-                    self._cascade_prune(
-                        source=node_name,
-                        source_completion_event_id=None,
-                        branch_value=None,
-                    )
-                    continue
-
-                # Render this node's bound inputs from inbound edges.
-                bound_inputs = self._render_bound_inputs(node_name)
-
-                # Mint a fresh invocation id; emit ``workflow.node.started``.
-                # Master spec §11.3 — node-scoped events carry
-                # ``invocation_id`` + ``node_name`` at the envelope
-                # top level; payload also holds the legacy keys for
-                # back-compat with Step 1-4 readers.
-                inv_id = InvocationId(f"inv_{uuid.uuid4()}")
-                started_id = emit_event(
-                    self._store,
-                    WorkflowNodeStartedEvent(
-                        workflow_run_id=run_id,
-                        trace_id=self._run.trace_id,
-                        parent_event_id=self._last_event_id,
-                        invocation_id=inv_id,
-                        node_name=node_name,
-                        payload={
-                            "node_name": node_name,
-                            "invocation_id": str(inv_id),
-                            "type": _node_type_ref(node_def),
-                            "inputs": bound_inputs,
-                            # Master spec §11.3 caller_chain carrier:
-                            # the workflow run's own caller_chain (the
-                            # frames it was invoked through). v1 ships
-                            # the empty tuple — the chain is
-                            # populated by Phase 3.7 sub-workflow /
-                            # fork wiring.
-                            "caller_chain": list(
-                                getattr(self._run, "caller_chain", ()) or ()
-                            ),
-                        },
-                    ),
-                )
-                self._last_event_id = started_id
-                self._node_started_event_id[inv_id] = started_id
-
-                ctx = self._build_ctx(
-                    inv_id=inv_id,
-                    node_def=node_def,
-                    parent_event_id=started_id,
-                )
-                try:
-                    # Phase 3.3 §6.4.4 — strict-mode bind validation
-                    # against the receiver's typed ``Inputs(BaseModel)``.
-                    # Mismatch raises ``WorkflowBindTypeMismatch``
-                    # BEFORE the runner is invoked; the catch arm
-                    # below emits ``workflow.node.failed`` and the
-                    # run aborts via the existing Phase 3.1 failure
-                    # path. ``inputs_model_for`` returns ``None`` for
-                    # authored Python @nodes in Step 0 — Phase 3.3
-                    # Step 1 wires the catalog runner's introspected
-                    # model in alongside the branching dispatcher.
-                    self._validate_bound_inputs_strict(
-                        node_name=node_name,
-                        node_def=node_def,
-                        bound_inputs=bound_inputs,
-                    )
-                    runner = self._registry.get(
-                        _node_type_ref(node_def), node_name=node_name
-                    )
-                    # Per-node modifiers — apply retry FIRST so the
-                    # timeout deadline bounds the WHOLE retry budget
-                    # (not just the final attempt).
-                    runner = _apply_node_modifiers(runner, node_def=node_def)
-                    try:
-                        output = await runner.run(
-                            node_name=node_name,
-                            node_def=node_def,
-                            bound_inputs=bound_inputs,
-                            state=self._state,
-                            ctx=ctx,
-                        )
-                    except BashNonZeroExit as bash_exc:
-                        # Phase 3.3 §8.5.5 — branchable bash semantics.
-                        # When the bash node carries at least one
-                        # outgoing edge with ``branch: not None`` the
-                        # non-zero exit is success-of-the-false-arm:
-                        # surface the captured dict as the node's
-                        # output and let the branch dispatcher route
-                        # to ``branch: false`` edges. Without any
-                        # ``branch:`` edge the non-zero exit
-                        # propagates to the existing failure path so
-                        # Phase 3.1's abort-on-failure rule still
-                        # holds for plain bash usage.
-                        if self._bash_treats_nonzero_as_success(node_name):
-                            output = bash_exc.captured
-                        else:
-                            raise
-                except Exception as exc:  # noqa: BLE001 — record + abort
-                    failed_id = emit_event(
-                        self._store,
-                        WorkflowNodeFailedEvent(
-                            workflow_run_id=run_id,
-                            trace_id=self._run.trace_id,
-                            parent_event_id=self._node_started_event_id.get(
-                                inv_id
-                            ),
-                            invocation_id=inv_id,
-                            node_name=node_name,
-                            payload={
-                                "node_name": node_name,
-                                "invocation_id": str(inv_id),
-                                "error_class": type(exc).__name__,
-                                "message": str(exc),
-                            },
-                        ),
-                    )
-                    self._last_event_id = emit_event(
-                        self._store,
-                        WorkflowRunFailedEvent(
-                            workflow_run_id=run_id,
-                            trace_id=self._run.trace_id,
-                            parent_event_id=failed_id,
-                            payload={
-                                "reason": (
-                                    f"node {node_name!r} raised "
-                                    f"{type(exc).__name__}"
-                                ),
-                            },
-                        ),
-                    )
-                    return WorkflowRunStatus.FAILED
-
-                # Successful invocation — capture, mark complete.
-                self._captured[node_name] = dict(output)
-                self._completed_or_skipped.add(node_name)
-                # Phase 3.3 §6.5 / §6.6 — branch dispatch. Compute
-                # the source's branch value (``None`` for non-
-                # branchable types) and record any outgoing edge
-                # whose ``branch:`` field doesn't match as pruned.
-                # Step 1 surfaces only the suppression — Step 2 ships
-                # the cascade through descendants + the
-                # ``workflow.node.pruned`` event emission.
-                branch_value = compute_branch_value(node_def, output)
-                self._dispatch_branch(
-                    node_name=node_name,
-                    branch_value=branch_value,
-                    inv_id=inv_id,
-                )
-                # Phase 3.2 §11.6.3 — agent nodes attach the spawned
-                # session id so consumers can navigate from the
-                # workflow event view to the spawned session's JSONL.
-                # The runner stamps ``ctx.spawned_session_id`` before
-                # returning; the gate on ``node_def.type`` is the
-                # defensive belt-and-braces guarantee that a future
-                # runner that forgets to clear the attribute can't
-                # pollute non-agent payloads.
-                completed_payload: dict[str, Any] = {
-                    "node_name": node_name,
-                    "invocation_id": str(inv_id),
-                    "output": dict(output),
-                }
-                # Phase 3.3 §11.1 — branch_value lands in the payload
-                # ONLY when the node is actually USED as branchable
-                # (carries at least one outgoing edge with
-                # ``branch: not None``). Structurally branchable
-                # nodes (e.g. plain non-branching bash) suppress the
-                # field so non-branching workflows produce
-                # byte-identical JSONLs vs. Phase 3.1 — the master
-                # spec's no-regressions promise. Forensics readers
-                # rely on presence-or-absence to decide whether the
-                # node's outgoing edges were filtered.
-                if (
-                    branch_value is not None
-                    and any(
-                        edge.branch is not None
-                        for edge in self._outgoing_edges(node_name)
-                    )
-                ):
-                    completed_payload["branch_value"] = branch_value
-                if (
-                    _node_type_ref(node_def) == "kolsch/nodes/agent"
-                    and ctx.spawned_session_id is not None
-                ):
-                    completed_payload["spawned_session_id"] = str(
-                        ctx.spawned_session_id
-                    )
-                completion_id = emit_event(
-                    self._store,
-                    WorkflowNodeCompletedEvent(
-                        workflow_run_id=run_id,
-                        trace_id=self._run.trace_id,
-                        parent_event_id=self._node_started_event_id.get(
-                            inv_id
-                        ),
-                        invocation_id=inv_id,
-                        node_name=node_name,
-                        payload=completed_payload,
-                    ),
-                )
-                self._last_event_id = completion_id
-                self._node_completed_event_id[node_name] = completion_id
-
-                # Phase 3.3 Step 2 — pruning cascade from the
-                # branch-dispatch source. Every downstream node whose
-                # only path to firing was through a pruned arm of THIS
-                # source (or a descendant of it that also pruned)
-                # lands in ``_pruned`` and emits
-                # ``workflow.node.pruned`` chained to this completion
-                # event. The cascade is a no-op for non-branchable
-                # sources (they pruned no edges).
-                self._cascade_prune(
-                    source=node_name,
-                    source_completion_event_id=completion_id,
-                    branch_value=branch_value,
-                )
-
-                # Phase 3.1 Step 4 — cooperative cancellation. The
-                # ``cancel.flag`` sentinel is the CLI / operator's
-                # signal for "stop after the current node finishes".
-                # We check it AFTER ``workflow.node.completed`` is
-                # emitted so the JSONL records the last successful
-                # node before the run aborts (master spec §11.2).
-                if run_dir.cancel_flag_path.exists():
-                    self._emit_aborted(run_id)
-                    terminal_status = WorkflowRunStatus.ABORTED
-                    return terminal_status
-
-            # Step 5 — assemble terminal-keyed outputs.
-            outputs = self._assemble_terminal_outputs(topo)
-            self._last_event_id = emit_event(
-                self._store,
-                WorkflowRunCompletedEvent(
-                    workflow_run_id=run_id,
-                    trace_id=self._run.trace_id,
-                    parent_event_id=self._last_event_id,
-                    payload={"outputs": outputs},
-                ),
+            # Phase 3.4 Step 1 — the worklist body lives in
+            # :meth:`_continue_worklist` so both initial-run and
+            # resume share the SAME dispatch loop (the resume path
+            # populates ``_captured`` / ``_pruned`` / ``_completed_or_skipped``
+            # from JSONL replay, emits the user_input completion,
+            # then calls into this same method which skips already-
+            # decided nodes via the early-continue check at the top
+            # of the loop).
+            terminal_status = await self._continue_worklist(
+                run_id=run_id,
+                run_dir=run_dir,
+                topo=topo,
+                predecessors=predecessors,
             )
-            terminal_status = WorkflowRunStatus.SUCCEEDED
         finally:
             # Phase 3.1 Step 3 — module-isolation cleanup runs on
             # EVERY terminal state (succeeded / failed / timed_out /
@@ -707,6 +438,628 @@ class IterativeExecutor:
 
             reset_workflow_run_context(run_context_token)
         return terminal_status
+
+    # ------------------------------------------------------------------
+    # Resume entry point — Phase 3.4 Step 1 (master spec §10.2).
+    # ------------------------------------------------------------------
+
+    async def resume(
+        self, *, response: dict[str, Any]
+    ) -> WorkflowRunStatus:
+        """Resume a paused run with the user's response.
+
+        Master spec §10.2 — the entry point the CLI's ``kolsch
+        workflows resume`` command invokes. Loads JSONL events,
+        replays them into ``_captured`` / ``_pruned`` /
+        ``_completed_or_skipped``, locates the open ``user_input``
+        invocation via the ``waiting_at`` sidecar, validates the
+        response shape, emits the cross-process
+        ``workflow.run.resumed`` + the paused node's
+        ``workflow.node.completed``, then re-enters the worklist via
+        :meth:`_continue_worklist`. The worklist's early-skip check
+        on ``_completed_or_skipped`` ensures already-completed nodes
+        don't re-fire.
+
+        Validation order matters — bad response shape must NOT
+        trigger a status flip to ``running``. The operator's retry
+        with a corrected ``--input response=...`` must find the run
+        still in ``waiting_for_input`` so the gate at the top of
+        this method admits the retry.
+        """
+        from workflows.module_isolation import (  # noqa: PLC0415
+            cleanup_bundle_imports,
+            snapshot_sys_modules,
+        )
+        from workflows.run_context import (  # noqa: PLC0415
+            WorkflowRunContext,
+            reset_workflow_run_context,
+            set_workflow_run_context,
+        )
+
+        run_id = self._run.run_id
+        run_dir = self._store.directory(run_id)
+
+        # AC 1.4 — status gate. The currently-paused run is the only
+        # resumable shape; succeeded / failed / running / aborted /
+        # timed_out / pending all reject.
+        if self._run.status != WorkflowRunStatus.WAITING_FOR_INPUT:
+            raise WorkflowResumeRejected(
+                run_id=str(run_id),
+                status=str(self._run.status),
+            )
+
+        # AC 1.5 — validate response shape BEFORE any side effects.
+        # The user_input runner's output schema is locked at
+        # ``{response: str}`` (master spec §4.1.3); missing key or
+        # wrong type → ``WorkflowInputInvalid`` with the run still
+        # in ``waiting_for_input`` so the operator's retry succeeds.
+        if "response" not in response or not isinstance(
+            response["response"], str
+        ):
+            raise WorkflowInputInvalid(
+                ref=str(run_id),
+                reason=(
+                    "resume response must include a 'response' string; "
+                    f"received keys {list(response.keys())!r}"
+                ),
+            )
+
+        # Read the open-invocation sidecar before any further side
+        # effects so a missing / unreadable sidecar surfaces as
+        # ``WorkflowResumeRejected(status='inconsistent_state')``
+        # rather than a half-applied resume.
+        if not run_dir.waiting_at_path.exists():
+            raise WorkflowResumeRejected(
+                run_id=str(run_id),
+                status="inconsistent_state",
+            )
+        waiting_invocation_id = run_dir.waiting_at_path.read_text(
+            encoding="utf-8"
+        ).strip()
+
+        # Phase 3.4 — fresh module-isolation snapshot for the resume
+        # process. The pre-pause process's snapshot is gone; this
+        # resume's cleanup at terminal status removes only modules
+        # loaded WHILE the resume process is active.
+        sys_modules_snapshot = snapshot_sys_modules()
+
+        # Phase 3.1 Step 5 — publish run context for the resume
+        # process so the tool dispatcher / authz emitters append to
+        # this run's JSONL.
+        run_context_token = set_workflow_run_context(
+            WorkflowRunContext(
+                run_id=run_id,
+                trace_id=self._run.trace_id,
+                store=self._store,
+            )
+        )
+
+        # AC 1.2 — replay historical events to rebuild executor state.
+        # The replay populates ``_captured`` / ``_pruned`` /
+        # ``_completed_or_skipped`` AND surfaces the open-invocations
+        # map (the paused user_input's node_name → invocation_id
+        # entry is the marker we cross-check against the sidecar).
+        events = list(self._store.read_events(run_id))
+        open_invocations = replay_into(self, events)
+
+        open_node: str | None = None
+        for node_name, inv in open_invocations.items():
+            if inv == waiting_invocation_id:
+                open_node = node_name
+                break
+        if open_node is None:
+            # Reset run context before raising so we don't leak the
+            # contextvar across the rejection.
+            reset_workflow_run_context(run_context_token)
+            raise WorkflowResumeRejected(
+                run_id=str(run_id),
+                status="inconsistent_state",
+            )
+
+        # Initialise state from the workflow inputs — Phase 3.5
+        # set_state / delete_state replay will extend this; Phase
+        # 3.4 just restores the baseline.
+        self._state = dict(self._run.inputs)
+
+        # AC 1.6 — chain the resumed event to the last pre-pause
+        # event in the JSONL so the cross-process event chain is
+        # unbroken.
+        last_pre_pause_event_id = self._last_event_id_from_events(
+            events
+        )
+        self._last_event_id = last_pre_pause_event_id
+
+        # Compute topology BEFORE flipping status / emitting events
+        # so a topology error (shouldn't happen for an already-
+        # validated workflow but belt-and-braces) surfaces cleanly.
+        topo, predecessors = self._compute_topology()
+
+        # All gates passed — flip status back to RUNNING. The
+        # meta.json status guides :meth:`WorkflowRunStore.read` to
+        # report ``running`` for the resume process's lifetime; the
+        # final terminal event in the JSONL takes precedence at
+        # terminal time.
+        self._store.update_status(
+            run_id, WorkflowRunStatus.RUNNING
+        )
+
+        # Phase 3.4 Step 2 — atomically refresh the PID sidecar so
+        # the orphan sweep + ``ps``-style introspection see the
+        # resume process, not the (long-exited) pre-pause process.
+        # The pre-pause PID was left intact during the pause arm
+        # (the orphan sweep gated on the ``waiting_for_input``
+        # status so the stale PID wasn't reconciled); now that the
+        # resume process is actively running, the PID slot is its
+        # responsibility again.
+        run_dir.root.mkdir(parents=True, exist_ok=True)
+        tmp_pid = run_dir.pid_path.with_suffix(".tmp")
+        tmp_pid.write_text(str(os.getpid()), encoding="utf-8")
+        tmp_pid.replace(run_dir.pid_path)
+
+        terminal_status: WorkflowRunStatus
+        try:
+            # Emit ``workflow.run.resumed`` — chained to the JSONL
+            # tail event (typically the paused user_input's
+            # ``workflow.node.started``).
+            resumed_id = emit_event(
+                self._store,
+                WorkflowRunResumedEvent(
+                    workflow_run_id=run_id,
+                    trace_id=self._run.trace_id,
+                    parent_event_id=last_pre_pause_event_id,
+                    payload={
+                        "resumed_at_invocation_id": (
+                            waiting_invocation_id
+                        ),
+                    },
+                ),
+            )
+            self._last_event_id = resumed_id
+
+            # Emit ``workflow.node.completed`` for the paused
+            # user_input — payload's ``output`` carries the operator
+            # response verbatim (the dict the CLI parsed from
+            # ``--input k=v`` pairs).
+            completed_payload: dict[str, Any] = {
+                "node_name": open_node,
+                "invocation_id": waiting_invocation_id,
+                "output": dict(response),
+            }
+            completion_id = emit_event(
+                self._store,
+                WorkflowNodeCompletedEvent(
+                    workflow_run_id=run_id,
+                    trace_id=self._run.trace_id,
+                    parent_event_id=resumed_id,
+                    invocation_id=InvocationId(
+                        waiting_invocation_id
+                    ),
+                    node_name=open_node,
+                    payload=completed_payload,
+                ),
+            )
+            self._last_event_id = completion_id
+            self._node_completed_event_id[open_node] = completion_id
+            self._captured[open_node] = dict(response)
+            self._completed_or_skipped.add(open_node)
+
+            # Re-enter the worklist. The early-skip check on
+            # ``_completed_or_skipped`` short-circuits every node
+            # we replayed (and the user_input we just completed);
+            # the dispatch picks up at the first downstream node.
+            terminal_status = await self._continue_worklist(
+                run_id=run_id,
+                run_dir=run_dir,
+                topo=topo,
+                predecessors=predecessors,
+            )
+        finally:
+            cleanup_bundle_imports(
+                before=sys_modules_snapshot,
+                workspace_root=self._store.runs_root.parent,
+            )
+            reset_workflow_run_context(run_context_token)
+        return terminal_status
+
+    @staticmethod
+    def _last_event_id_from_events(
+        events: list[dict[str, Any]],
+    ) -> Any:  # noqa: ANN401 — EventId envelope field
+        """Return the ``event_id`` of the last event in ``events``.
+
+        Master spec §11.2 — ``parent_event_id`` chains form the
+        causal-parent backbone. The resume process emits its first
+        event (``workflow.run.resumed``) chained to whatever was the
+        JSONL tail at pause time (typically the paused user_input
+        node's ``workflow.node.started``).
+        """
+        if not events:
+            return None
+        return events[-1].get("event_id")
+
+    # ------------------------------------------------------------------
+    # Worklist body — shared by initial-run and resume paths.
+    # ------------------------------------------------------------------
+
+    async def _continue_worklist(  # noqa: PLR0915, PLR0912 — sequential algorithm; splitting hides the §8.1 ordering
+        self,
+        *,
+        run_id: WorkflowRunId,
+        run_dir: RunDirectory,
+        topo: list[str],
+        predecessors: dict[str, set[str]],
+    ) -> WorkflowRunStatus:
+        """Walk the worklist; return the terminal status.
+
+        Extracted from :meth:`run` so :meth:`resume` shares the same
+        dispatch loop. The only behavioural addition vs. the
+        original inline body is the early-skip check on
+        ``_completed_or_skipped`` at the top of the loop: it's a
+        no-op for initial-run flow (the set is empty at start) and
+        the load-bearing guard for resume (the replay pre-populates
+        the set with every completed + pruned node, plus the
+        just-completed user_input).
+        """
+        for node_name in topo:
+            # Phase 3.4 Step 1 — resume support. Skip nodes whose
+            # decision is already recorded (replayed from the JSONL
+            # OR completed by the resume entry's user_input emission).
+            # For initial-run the set is empty so this never fires.
+            if node_name in self._completed_or_skipped:
+                continue
+
+            # Skip downstream nodes whose predecessors didn't all
+            # reach a "completed or skipped" decision. The
+            # validated DAG guarantees topo order respects the
+            # predecessor relation, so a False here means a
+            # short-circuit fired earlier in the walk.
+            if not predecessors[node_name].issubset(
+                self._completed_or_skipped
+            ):
+                # No way for the node to fire — mark it skipped so
+                # downstream consumers also defer cleanly.
+                self._completed_or_skipped.add(node_name)
+                continue
+
+            # Phase 3.3 Step 2 — pruned nodes (marked by the
+            # cascade triggered when their last unblocked inbound
+            # was suppressed) skip directly without emitting any
+            # ``workflow.node.*`` framing. The cascade already
+            # added the node to ``_completed_or_skipped`` AND
+            # ``_pruned`` and emitted the
+            # ``workflow.node.pruned`` event when appropriate.
+            if node_name in self._pruned:
+                continue
+
+            node_def = self._workflow.nodes[node_name]
+            # ``when:`` gate — Round 6 J5/β: a string with ``{{``
+            # is Jinja; everything else (including bare booleans)
+            # passes through literally.
+            if not self._when_holds(node_def):
+                # AND-strict rule 1: skip counts as completion.
+                self._completed_or_skipped.add(node_name)
+                # Phase 3.3 Step 2 — ``when:``-skip cascade
+                # symmetry with branch-not-taken. The skipped
+                # node never produced a captured output, so
+                # every outgoing edge is structurally pruned
+                # (the downstream's ``_render_bound_inputs``
+                # must skip these stale bind RHSs — they'd
+                # otherwise reference ``nodes.<skipped>.X``
+                # against an absent capture). The cascade then
+                # walks descendants whose only path was through
+                # this node. No completion event was emitted
+                # for the skipped source so cascaded prune
+                # events have no parent_event_id to chain to —
+                # the cascade emits no events for when-skip
+                # subgraphs (preserves Phase 3.1's "skip is
+                # silent" convention for when-gates).
+                for edge in self._outgoing_edges(node_name):
+                    self._pruned_edges.add((edge.from_, edge.to))
+                self._cascade_prune(
+                    source=node_name,
+                    source_completion_event_id=None,
+                    branch_value=None,
+                )
+                continue
+
+            # Render this node's bound inputs from inbound edges.
+            bound_inputs = self._render_bound_inputs(node_name)
+
+            # Mint a fresh invocation id; emit ``workflow.node.started``.
+            # Master spec §11.3 — node-scoped events carry
+            # ``invocation_id`` + ``node_name`` at the envelope
+            # top level; payload also holds the legacy keys for
+            # back-compat with Step 1-4 readers.
+            inv_id = InvocationId(f"inv_{uuid.uuid4()}")
+            started_id = emit_event(
+                self._store,
+                WorkflowNodeStartedEvent(
+                    workflow_run_id=run_id,
+                    trace_id=self._run.trace_id,
+                    parent_event_id=self._last_event_id,
+                    invocation_id=inv_id,
+                    node_name=node_name,
+                    payload={
+                        "node_name": node_name,
+                        "invocation_id": str(inv_id),
+                        "type": _node_type_ref(node_def),
+                        "inputs": bound_inputs,
+                        # Master spec §11.3 caller_chain carrier:
+                        # the workflow run's own caller_chain (the
+                        # frames it was invoked through). v1 ships
+                        # the empty tuple — the chain is
+                        # populated by Phase 3.7 sub-workflow /
+                        # fork wiring.
+                        "caller_chain": list(
+                            getattr(self._run, "caller_chain", ()) or ()
+                        ),
+                    },
+                ),
+            )
+            self._last_event_id = started_id
+            self._node_started_event_id[inv_id] = started_id
+
+            ctx = self._build_ctx(
+                inv_id=inv_id,
+                node_def=node_def,
+                parent_event_id=started_id,
+            )
+            try:
+                # Phase 3.3 §6.4.4 — strict-mode bind validation
+                # against the receiver's typed ``Inputs(BaseModel)``.
+                # Mismatch raises ``WorkflowBindTypeMismatch``
+                # BEFORE the runner is invoked; the catch arm
+                # below emits ``workflow.node.failed`` and the
+                # run aborts via the existing Phase 3.1 failure
+                # path. ``inputs_model_for`` returns ``None`` for
+                # authored Python @nodes in Step 0 — Phase 3.3
+                # Step 1 wires the catalog runner's introspected
+                # model in alongside the branching dispatcher.
+                self._validate_bound_inputs_strict(
+                    node_name=node_name,
+                    node_def=node_def,
+                    bound_inputs=bound_inputs,
+                )
+                runner = self._registry.get(
+                    _node_type_ref(node_def), node_name=node_name
+                )
+                # Per-node modifiers — apply retry FIRST so the
+                # timeout deadline bounds the WHOLE retry budget
+                # (not just the final attempt).
+                runner = _apply_node_modifiers(runner, node_def=node_def)
+                try:
+                    output = await runner.run(
+                        node_name=node_name,
+                        node_def=node_def,
+                        bound_inputs=bound_inputs,
+                        state=self._state,
+                        ctx=ctx,
+                    )
+                except BashNonZeroExit as bash_exc:
+                    # Phase 3.3 §8.5.5 — branchable bash semantics.
+                    # When the bash node carries at least one
+                    # outgoing edge with ``branch: not None`` the
+                    # non-zero exit is success-of-the-false-arm:
+                    # surface the captured dict as the node's
+                    # output and let the branch dispatcher route
+                    # to ``branch: false`` edges. Without any
+                    # ``branch:`` edge the non-zero exit
+                    # propagates to the existing failure path so
+                    # Phase 3.1's abort-on-failure rule still
+                    # holds for plain bash usage.
+                    if self._bash_treats_nonzero_as_success(node_name):
+                        output = bash_exc.captured
+                    else:
+                        raise
+            except WorkflowPausedForInput as pause:
+                # Phase 3.4 — pause discipline (master spec §10.1).
+                # The ``user_input`` runner raised the typed pause
+                # signal AFTER the executor already emitted the
+                # matching ``workflow.node.started`` event for
+                # ``inv_id``. Per the spec, the absence of a
+                # completion event in the JSONL IS the pause
+                # marker. We DO NOT emit ``workflow.node.failed``
+                # (this is normal control flow, not failure) and
+                # we DO NOT emit ``workflow.run.failed`` /
+                # ``workflow.run.completed`` (resume continues the
+                # JSONL as one continuous stream across
+                # processes).
+                #
+                # Two on-disk side effects:
+                #
+                # 1. ``waiting_at`` sidecar — the open invocation
+                #    id, written atomically via ``tmp + rename``
+                #    so resume can identify the open invocation
+                #    without walking the JSONL backwards. For a
+                #    SECOND pause (sequential user_input nodes),
+                #    this OVERWRITES the previous sidecar.
+                # 2. ``meta.json`` status flips to
+                #    ``waiting_for_input`` so :meth:`read` (and
+                #    the orphan sweep) observe the paused state.
+                #
+                # Module-isolation cleanup runs in the caller's
+                # ``finally:`` arm — paused processes exit cleanly
+                # and the next process (resume OR a new run on a
+                # different workflow) starts from a fresh
+                # ``sys.modules`` slate.
+                tmp_wait = run_dir.waiting_at_path.with_suffix(
+                    ".tmp"
+                )
+                tmp_wait.write_text(
+                    pause.invocation_id, encoding="utf-8"
+                )
+                tmp_wait.replace(run_dir.waiting_at_path)
+                self._store.update_status(
+                    run_id, WorkflowRunStatus.WAITING_FOR_INPUT
+                )
+                return WorkflowRunStatus.WAITING_FOR_INPUT
+            except Exception as exc:  # noqa: BLE001 — record + abort
+                failed_id = emit_event(
+                    self._store,
+                    WorkflowNodeFailedEvent(
+                        workflow_run_id=run_id,
+                        trace_id=self._run.trace_id,
+                        parent_event_id=self._node_started_event_id.get(
+                            inv_id
+                        ),
+                        invocation_id=inv_id,
+                        node_name=node_name,
+                        payload={
+                            "node_name": node_name,
+                            "invocation_id": str(inv_id),
+                            "error_class": type(exc).__name__,
+                            "message": str(exc),
+                        },
+                    ),
+                )
+                self._last_event_id = emit_event(
+                    self._store,
+                    WorkflowRunFailedEvent(
+                        workflow_run_id=run_id,
+                        trace_id=self._run.trace_id,
+                        parent_event_id=failed_id,
+                        payload={
+                            "reason": (
+                                f"node {node_name!r} raised "
+                                f"{type(exc).__name__}"
+                            ),
+                        },
+                    ),
+                )
+                self._cleanup_waiting_at(run_dir)
+                return WorkflowRunStatus.FAILED
+
+            # Successful invocation — capture, mark complete.
+            self._captured[node_name] = dict(output)
+            self._completed_or_skipped.add(node_name)
+            # Phase 3.3 §6.5 / §6.6 — branch dispatch. Compute
+            # the source's branch value (``None`` for non-
+            # branchable types) and record any outgoing edge
+            # whose ``branch:`` field doesn't match as pruned.
+            # Step 1 surfaces only the suppression — Step 2 ships
+            # the cascade through descendants + the
+            # ``workflow.node.pruned`` event emission.
+            branch_value = compute_branch_value(node_def, output)
+            self._dispatch_branch(
+                node_name=node_name,
+                branch_value=branch_value,
+                inv_id=inv_id,
+            )
+            # Phase 3.2 §11.6.3 — agent nodes attach the spawned
+            # session id so consumers can navigate from the
+            # workflow event view to the spawned session's JSONL.
+            # The runner stamps ``ctx.spawned_session_id`` before
+            # returning; the gate on ``node_def.type`` is the
+            # defensive belt-and-braces guarantee that a future
+            # runner that forgets to clear the attribute can't
+            # pollute non-agent payloads.
+            completed_payload: dict[str, Any] = {
+                "node_name": node_name,
+                "invocation_id": str(inv_id),
+                "output": dict(output),
+            }
+            # Phase 3.3 §11.1 — branch_value lands in the payload
+            # ONLY when the node is actually USED as branchable
+            # (carries at least one outgoing edge with
+            # ``branch: not None``). Structurally branchable
+            # nodes (e.g. plain non-branching bash) suppress the
+            # field so non-branching workflows produce
+            # byte-identical JSONLs vs. Phase 3.1 — the master
+            # spec's no-regressions promise. Forensics readers
+            # rely on presence-or-absence to decide whether the
+            # node's outgoing edges were filtered.
+            if (
+                branch_value is not None
+                and any(
+                    edge.branch is not None
+                    for edge in self._outgoing_edges(node_name)
+                )
+            ):
+                completed_payload["branch_value"] = branch_value
+            if (
+                _node_type_ref(node_def) == "kolsch/nodes/agent"
+                and ctx.spawned_session_id is not None
+            ):
+                completed_payload["spawned_session_id"] = str(
+                    ctx.spawned_session_id
+                )
+            completion_id = emit_event(
+                self._store,
+                WorkflowNodeCompletedEvent(
+                    workflow_run_id=run_id,
+                    trace_id=self._run.trace_id,
+                    parent_event_id=self._node_started_event_id.get(
+                        inv_id
+                    ),
+                    invocation_id=inv_id,
+                    node_name=node_name,
+                    payload=completed_payload,
+                ),
+            )
+            self._last_event_id = completion_id
+            self._node_completed_event_id[node_name] = completion_id
+
+            # Phase 3.3 Step 2 — pruning cascade from the
+            # branch-dispatch source. Every downstream node whose
+            # only path to firing was through a pruned arm of THIS
+            # source (or a descendant of it that also pruned)
+            # lands in ``_pruned`` and emits
+            # ``workflow.node.pruned`` chained to this completion
+            # event. The cascade is a no-op for non-branchable
+            # sources (they pruned no edges).
+            self._cascade_prune(
+                source=node_name,
+                source_completion_event_id=completion_id,
+                branch_value=branch_value,
+            )
+
+            # Phase 3.1 Step 4 — cooperative cancellation. The
+            # ``cancel.flag`` sentinel is the CLI / operator's
+            # signal for "stop after the current node finishes".
+            # We check it AFTER ``workflow.node.completed`` is
+            # emitted so the JSONL records the last successful
+            # node before the run aborts (master spec §11.2).
+            if run_dir.cancel_flag_path.exists():
+                self._emit_aborted(run_id)
+                self._cleanup_waiting_at(run_dir)
+                return WorkflowRunStatus.ABORTED
+
+        # Step 5 — assemble terminal-keyed outputs.
+        outputs = self._assemble_terminal_outputs(topo)
+        self._last_event_id = emit_event(
+            self._store,
+            WorkflowRunCompletedEvent(
+                workflow_run_id=run_id,
+                trace_id=self._run.trace_id,
+                parent_event_id=self._last_event_id,
+                payload={"outputs": outputs},
+            ),
+        )
+        # Phase 3.4 Step 1 — successful terminal post-resume: the
+        # ``waiting_at`` sidecar from the prior pause is stale; the
+        # JSONL now carries a terminal event so the sidecar is no
+        # longer the on-disk marker for anything. The cleanup is a
+        # no-op for initial-run flow (no sidecar was ever written).
+        self._cleanup_waiting_at(run_dir)
+        return WorkflowRunStatus.SUCCEEDED
+
+    @staticmethod
+    def _cleanup_waiting_at(run_dir: RunDirectory) -> None:
+        """Remove the ``waiting_at`` sidecar if present.
+
+        Phase 3.4 Step 1 — invoked from every terminal-status path
+        in :meth:`_continue_worklist`. A sidecar present at terminal
+        time is stale (the run finished, so the pause it marked is
+        no longer awaiting input). The check + unlink is idempotent;
+        a race with the orphan sweep or a concurrent operator action
+        surfacing a ``FileNotFoundError`` is benign.
+        """
+        if not run_dir.waiting_at_path.exists():
+            return
+        try:
+            run_dir.waiting_at_path.unlink()
+        except FileNotFoundError:
+            pass
 
     # ------------------------------------------------------------------
     # Topology + predecessor closure.
@@ -1155,6 +1508,25 @@ class IterativeExecutor:
             # runner's NodeContext free of side effects.
             _ = (bundle_, subkind, payload)
 
+        # Phase 3.4 — expose the executor's Jinja renderer to runners
+        # via :meth:`NodeContext.render_jinja`. The ``user_input``
+        # runner is the first consumer (rendering its ``prompt:``
+        # against the same scope ``binds:`` rendering uses); later
+        # phases may opt in. Wrapping in a closure keeps the
+        # NodeContext free of an executor back-reference.
+        def _render_jinja_for_runner(
+            expression: str,
+            inputs_overlay: Mapping[str, Any] | None,
+        ) -> Any:
+            return self._render_jinja(
+                expression,
+                inputs_overlay=(
+                    dict(inputs_overlay)
+                    if inputs_overlay is not None
+                    else None
+                ),
+            )
+
         return NodeContext(
             workflow_run_id=str(run_id),
             invocation_id=str(inv_id),
@@ -1168,6 +1540,7 @@ class IterativeExecutor:
             trace_id=self._run.trace_id,
             caller_chain=tuple(getattr(self._run, "caller_chain", ()) or ()),
             workflow_inputs=dict(self._run.inputs),
+            render_jinja_callback=_render_jinja_for_runner,
         )
 
     # ------------------------------------------------------------------

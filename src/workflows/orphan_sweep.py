@@ -30,6 +30,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 from workflows.ids import WorkflowRunId
+from workflows.run import WorkflowRunStatus
 
 if TYPE_CHECKING:
     from workflows.run_store import WorkflowRunStore
@@ -73,6 +74,15 @@ def sweep(store: WorkflowRunStore) -> list[WorkflowRunId]:
             continue
         if not _is_started_without_terminal(run_dir.events_path):
             continue
+        # Phase 3.4 Step 2 — paused runs are NOT orphans, even when
+        # their PID is stale. The pause arm exited the executor
+        # process cleanly (the PID file points at a long-dead PID)
+        # and the next resume process writes a fresh PID. The status
+        # check MUST come before :func:`_pid_alive` — checking PID
+        # liveness on a paused run would reconcile it to ``failed``
+        # because the pre-pause PID is, by design, dead.
+        if _is_paused(store, run_id):
+            continue
         if _pid_alive(run_dir.pid_path):
             continue
         # Orphan. Append the synthetic terminal event so the JSONL
@@ -113,6 +123,23 @@ def _is_started_without_terminal(events_path: Path) -> bool:
     except OSError:
         return False
     return has_started
+
+
+def _is_paused(store: WorkflowRunStore, run_id: WorkflowRunId) -> bool:
+    """Phase 3.4 Step 2 — ``True`` iff the run is ``waiting_for_input``.
+
+    Reads through :meth:`WorkflowRunStore.read` so the same
+    meta.json + JSONL-tail composition the rest of the platform
+    consumes is what the sweep observes. A read failure (corrupt
+    meta, race with cleanup) returns ``False`` so the sweep falls
+    through to its existing PID-aliveness check rather than
+    silently absolving a corrupted run.
+    """
+    try:
+        run = store.read(run_id)
+    except (FileNotFoundError, OSError, ValueError):
+        return False
+    return run.status == WorkflowRunStatus.WAITING_FOR_INPUT
 
 
 def _pid_alive(pid_path: Path) -> bool:

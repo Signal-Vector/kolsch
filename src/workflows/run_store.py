@@ -135,6 +135,32 @@ class WorkflowRunStore:
             )
         return run
 
+    def update_status(
+        self, run_id: WorkflowRunId, status: WorkflowRunStatus
+    ) -> None:
+        """Phase 3.4 — atomically update the run's ``meta.json`` status.
+
+        The pause handler (Step 0) writes ``waiting_for_input`` so
+        :meth:`read` returns the paused status (the JSONL has no
+        terminal event yet, so the tail scan falls through to the
+        meta sidecar's status). The resume handler (Step 1) will
+        flip it back to ``running``. The four terminal statuses
+        flow through the JSONL terminal events and don't need this
+        path — the tail scan in :meth:`read` overrides any meta
+        status when a terminal event is present.
+
+        Atomic via ``tmp + rename`` so an interrupted write never
+        leaves a corrupt sidecar.
+        """
+        run_dir = self._directory(run_id)
+        if not run_dir.meta_path.exists():
+            msg = f"workflow run not found: {run_id}"
+            raise FileNotFoundError(msg)
+        meta = json.loads(run_dir.meta_path.read_text(encoding="utf-8"))
+        meta["status"] = str(status)
+        run = WorkflowRun.model_validate(meta)
+        self._write_meta(run_dir, run)
+
     # ------------------------------------------------------------------
     # event append / read
     # ------------------------------------------------------------------
