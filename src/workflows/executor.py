@@ -279,22 +279,31 @@ class IterativeExecutor:
         # (e.g. workflow.tool.called) reset ``_last_event_id``.
         self._last_event_id: Any = None
         self._node_started_event_id: dict[InvocationId, Any] = {}
+        # Phase 3.3 Step 2 — per-node ``workflow.node.completed`` id
+        # so the pruning cascade can chain ``workflow.node.pruned``
+        # events back to their upstream source's completion event
+        # (master spec §11.2 ordering rule).
+        self._node_completed_event_id: dict[str, Any] = {}
         # Phase 3.3 Step 1 — edges suppressed by branch dispatch.
         # ``(source, target)`` tuples accumulate as branchable nodes
         # complete: each outgoing edge whose ``branch:`` field doesn't
         # match the source's computed branch value is recorded here so
-        # ``_render_bound_inputs`` skips it and the worklist's
-        # "all-inbound-pruned" check can mark single-level prune
-        # targets as skipped without emitting started/completed
-        # events. Cascade beyond the immediate target is Step 2's
-        # responsibility — see TODO(step-2) in the worklist body.
+        # ``_render_bound_inputs`` skips it.
         self._pruned_edges: set[tuple[str, str]] = set()
+        # Phase 3.3 Step 2 — pruned node names (reverse-reachability
+        # cascade target). A node lands here when EVERY one of its
+        # inbound edges is either ``(source, target) in _pruned_edges``
+        # OR sourced from a node already in ``_pruned``. Pruned
+        # nodes are added to ``_completed_or_skipped`` at the same
+        # moment so the existing AND-strict downstream check treats
+        # them as decided.
+        self._pruned: set[str] = set()
 
     # ------------------------------------------------------------------
     # Public entry point.
     # ------------------------------------------------------------------
 
-    async def run(self) -> WorkflowRunStatus:  # noqa: PLR0915 — sequential algorithm; splitting hides the §8.1 ordering
+    async def run(self) -> WorkflowRunStatus:  # noqa: PLR0915, PLR0912 — sequential algorithm; splitting hides the §8.1 ordering
         """Walk the worklist; return the terminal status.
 
         Per master spec §8.1, this is the seven-step algorithm. The
@@ -405,21 +414,14 @@ class IterativeExecutor:
                     self._completed_or_skipped.add(node_name)
                     continue
 
-                # Phase 3.3 Step 1 — single-level prune detection.
-                # When every inbound edge to this node was suppressed
-                # by an upstream branch-dispatch step, the node MUST
-                # not fire. We mark it as decided-via-completion so
-                # AND-strict's downstream check keeps working, but
-                # emit NO ``workflow.node.started`` /
-                # ``workflow.node.completed`` pair — pruning is
-                # structurally distinct from a normal completion.
-                # TODO(step-2): cascade through this node's outgoing
-                # edges so descendants without other fired inbounds
-                # are also pruned (Step 2 ships the reverse-
-                # reachability cascade + the ``workflow.node.pruned``
-                # event emission).
-                if self._all_inbound_pruned(node_name):
-                    self._completed_or_skipped.add(node_name)
+                # Phase 3.3 Step 2 — pruned nodes (marked by the
+                # cascade triggered when their last unblocked inbound
+                # was suppressed) skip directly without emitting any
+                # ``workflow.node.*`` framing. The cascade already
+                # added the node to ``_completed_or_skipped`` AND
+                # ``_pruned`` and emitted the
+                # ``workflow.node.pruned`` event when appropriate.
+                if node_name in self._pruned:
                     continue
 
                 node_def = self._workflow.nodes[node_name]
@@ -429,6 +431,28 @@ class IterativeExecutor:
                 if not self._when_holds(node_def):
                     # AND-strict rule 1: skip counts as completion.
                     self._completed_or_skipped.add(node_name)
+                    # Phase 3.3 Step 2 — ``when:``-skip cascade
+                    # symmetry with branch-not-taken. The skipped
+                    # node never produced a captured output, so
+                    # every outgoing edge is structurally pruned
+                    # (the downstream's ``_render_bound_inputs``
+                    # must skip these stale bind RHSs — they'd
+                    # otherwise reference ``nodes.<skipped>.X``
+                    # against an absent capture). The cascade then
+                    # walks descendants whose only path was through
+                    # this node. No completion event was emitted
+                    # for the skipped source so cascaded prune
+                    # events have no parent_event_id to chain to —
+                    # the cascade emits no events for when-skip
+                    # subgraphs (preserves Phase 3.1's "skip is
+                    # silent" convention for when-gates).
+                    for edge in self._outgoing_edges(node_name):
+                        self._pruned_edges.add((edge.from_, edge.to))
+                    self._cascade_prune(
+                        source=node_name,
+                        source_completion_event_id=None,
+                        branch_value=None,
+                    )
                     continue
 
                 # Render this node's bound inputs from inbound edges.
@@ -609,7 +633,7 @@ class IterativeExecutor:
                     completed_payload["spawned_session_id"] = str(
                         ctx.spawned_session_id
                     )
-                self._last_event_id = emit_event(
+                completion_id = emit_event(
                     self._store,
                     WorkflowNodeCompletedEvent(
                         workflow_run_id=run_id,
@@ -621,6 +645,22 @@ class IterativeExecutor:
                         node_name=node_name,
                         payload=completed_payload,
                     ),
+                )
+                self._last_event_id = completion_id
+                self._node_completed_event_id[node_name] = completion_id
+
+                # Phase 3.3 Step 2 — pruning cascade from the
+                # branch-dispatch source. Every downstream node whose
+                # only path to firing was through a pruned arm of THIS
+                # source (or a descendant of it that also pruned)
+                # lands in ``_pruned`` and emits
+                # ``workflow.node.pruned`` chained to this completion
+                # event. The cascade is a no-op for non-branchable
+                # sources (they pruned no edges).
+                self._cascade_prune(
+                    source=node_name,
+                    source_completion_event_id=completion_id,
+                    branch_value=branch_value,
                 )
 
                 # Phase 3.1 Step 4 — cooperative cancellation. The
@@ -843,15 +883,21 @@ class IterativeExecutor:
             if edge.from_ == node_name
         ]
 
-    def _all_inbound_pruned(self, node_name: str) -> bool:
-        """``True`` iff ``node_name`` has at least one inbound graph
-        edge AND every one was suppressed by upstream branch dispatch.
+    def _all_inbound_blocked(self, node_name: str) -> bool:
+        """``True`` iff every one of ``node_name``'s inbound graph
+        edges is structurally suppressed.
 
-        Single-level test only — Step 1 doesn't cascade. A node whose
-        only inbound is from a node that itself was pruned (rather
-        than from a pruned edge) will currently slip through this
-        check; Step 2 fixes that via the
-        :class:`WorkflowNodePrunedEvent`-emitting cascade.
+        An inbound edge is blocked when:
+
+        - The edge itself was pruned by upstream branch dispatch
+          (``(source, target) in _pruned_edges``), OR
+        - The edge's source is decided-but-unfired: it lives in
+          ``_completed_or_skipped`` but NOT in ``_captured`` (a
+          ``when:``-skipped source OR a previously cascaded prune).
+
+        Returns ``False`` for nodes with no inbound graph edges
+        (the start node is never blocked) so the cascade's seed
+        check doesn't spuriously prune roots.
         """
         if self._workflow.graph is None:
             return False
@@ -862,8 +908,15 @@ class IterativeExecutor:
         ]
         if not inbound:
             return False
-        return all(
-            (edge.from_, edge.to) in self._pruned_edges for edge in inbound
+        return all(self._inbound_edge_blocked(edge) for edge in inbound)
+
+    def _inbound_edge_blocked(self, edge: EdgeDef) -> bool:
+        """One-edge predicate used by :meth:`_all_inbound_blocked`."""
+        if (edge.from_, edge.to) in self._pruned_edges:
+            return True
+        return (
+            edge.from_ in self._completed_or_skipped
+            and edge.from_ not in self._captured
         )
 
     def _dispatch_branch(
@@ -886,12 +939,12 @@ class IterativeExecutor:
           (False, None)`` fire; ``True`` arms are pruned.
 
         Pruned edges are added to ``_pruned_edges`` so
-        ``_render_bound_inputs`` skips them and the next-step
-        ``_all_inbound_pruned`` check can suppress the immediate
-        target. Step 2 will cascade past the target. The defensive
-        raise covers the case where a non-branchable source has a
-        ``branch:`` edge in the graph (the validator already blocks
-        this at parse time — this is the runtime belt-and-braces).
+        ``_render_bound_inputs`` skips them and Step 2's cascade
+        (run from the worklist immediately after dispatch) can
+        suppress descendants. The defensive raise covers the case
+        where a non-branchable source has a ``branch:`` edge in the
+        graph (the validator already blocks this at parse time —
+        this is the runtime belt-and-braces).
         """
         for edge in self._outgoing_edges(node_name):
             if edge.branch is None:
@@ -916,17 +969,127 @@ class IterativeExecutor:
         exit as success-of-the-false-arm; a non-branching bash node
         retains Phase 3.1's abort-on-failure semantics.
         """
-        for edge in self._outgoing_edges(node_name):
-            if edge.branch is not None:
-                return True
-        return False
+        return any(
+            edge.branch is not None
+            for edge in self._outgoing_edges(node_name)
+        )
 
-    def _render_jinja(  # noqa: ANN401 — Jinja returns Any-shaped values
+    def _cascade_prune(
+        self,
+        *,
+        source: str,
+        source_completion_event_id: Any,  # noqa: ANN401 — EventId | None
+        branch_value: bool | None,
+    ) -> None:
+        """Reverse-reachability cascade — master spec §6.6.
+
+        Walks downstream from ``source``. A descendant ``n`` is
+        pruned IFF every inbound edge to ``n`` is structurally
+        blocked (per :meth:`_all_inbound_blocked`). Pruned nodes are
+        added to ``_pruned`` AND ``_completed_or_skipped`` so the
+        AND-strict downstream check treats them as decided; their
+        outgoing edges are added to ``_pruned_edges`` so any partial-
+        fan-in receivers downstream of the cascade skip the dead
+        binds during :meth:`_render_bound_inputs`.
+
+        When ``source_completion_event_id`` is non-``None`` (the
+        branch-not-taken cascade), each pruned descendant emits a
+        :class:`WorkflowNodePrunedEvent` carrying ``upstream_source``
+        + ``branch_value`` chained to the source's completion event.
+        The ``when:``-skip cascade calls in with ``None`` (no
+        completion was emitted for the skipped source); the cascade
+        still prunes structurally but emits NO events — preserving
+        Phase 3.1's "skip is silent" convention for when-gates.
+
+        The cascade STOPS at any node with at least one fired inbound
+        (multi-input partial-fan-in case) — that node fires with the
+        fired edges' binds only. The membership check on ``_pruned``
+        + ``_captured`` + ``_completed_or_skipped`` guarantees idempotence
+        on cyclic invocation (the validator already rejects cycles,
+        but the iterative seed expansion is cycle-safe regardless).
+        """
+        seen: set[str] = set()
+        candidates: list[str] = [
+            edge.to for edge in self._outgoing_edges(source)
+        ]
+        while candidates:
+            node_name = candidates.pop()
+            if node_name in seen:
+                continue
+            seen.add(node_name)
+            if (
+                node_name in self._pruned
+                or node_name in self._captured
+            ):
+                continue
+            if not self._all_inbound_blocked(node_name):
+                continue
+            self._pruned.add(node_name)
+            self._completed_or_skipped.add(node_name)
+            for edge in self._outgoing_edges(node_name):
+                self._pruned_edges.add((edge.from_, edge.to))
+            if (
+                source_completion_event_id is not None
+                and branch_value is not None
+            ):
+                self._emit_pruned_event(
+                    node_name=node_name,
+                    upstream_source=source,
+                    branch_value=branch_value,
+                    parent_event_id=source_completion_event_id,
+                )
+            candidates.extend(
+                edge.to for edge in self._outgoing_edges(node_name)
+            )
+
+    def _emit_pruned_event(
+        self,
+        *,
+        node_name: str,
+        upstream_source: str,
+        branch_value: bool,
+        parent_event_id: Any,  # noqa: ANN401 — EventId envelope field
+    ) -> None:
+        """Append a :class:`WorkflowNodePrunedEvent` to the run JSONL.
+
+        Master spec §11.2 ordering — the pruned event chains directly
+        to the upstream source's :class:`WorkflowNodeCompletedEvent`
+        so consumers can walk the prune subtree without re-parsing
+        the graph. ``invocation_id`` is a fresh ``inv_<uuid>``
+        sentinel — the node never produced a real invocation, but
+        the :class:`schemas.identifiers.PrefixedId` shape requires
+        a UUID-backed body, and the ``kind`` field
+        (``workflow.node.pruned``) is the discriminator consumers
+        actually read. ``_last_event_id`` is bumped to the pruned
+        event so the next emitted event (typically the run-completed
+        terminal) chains through it.
+        """
+        from workflows.events import WorkflowNodePrunedEvent  # noqa: PLC0415
+
+        pruned_inv = InvocationId(f"inv_{uuid.uuid4()}")
+        self._last_event_id = emit_event(
+            self._store,
+            WorkflowNodePrunedEvent(
+                workflow_run_id=self._run.run_id,
+                trace_id=self._run.trace_id,
+                parent_event_id=parent_event_id,
+                invocation_id=pruned_inv,
+                node_name=node_name,
+                payload={
+                    "node_name": node_name,
+                    "reason": "branch_not_taken",
+                    "upstream_source": upstream_source,
+                    "branch_value": branch_value,
+                },
+            ),
+        )
+
+    def _render_jinja(
         self,
         expression: str,
         *,
         inputs_overlay: dict[str, Any] | None = None,
-    ) -> Any:
+    ) -> Any:  # noqa: ANN401 — Jinja returns Any-shaped values
         """Render a Jinja-marked string under :data:`JINJA_ENV`.
 
         The scope exposes ``nodes`` (captured outputs), ``state``

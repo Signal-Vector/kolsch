@@ -47,6 +47,7 @@ __all__ = [
     "WorkflowNodeEmittedEvent",
     "WorkflowNodeFailedEvent",
     "WorkflowNodeLoggedEvent",
+    "WorkflowNodePrunedEvent",
     "WorkflowNodeStartedEvent",
     "WorkflowNodeTimedOutEvent",
     "WorkflowRunAbortedEvent",
@@ -61,12 +62,13 @@ __all__ = [
 
 
 class WorkflowEventKind(StrEnum):
-    """The 13-value executor-emitted event vocabulary — master spec §11.1.
+    """The executor-emitted event vocabulary — master spec §11.1.
 
-    ``model.request.sent`` is the 14th caller-chain carrier per the
-    Phase 3.1 build doc, but it's emitted by the agent runtime
-    (Phase 3.2), NOT the workflow engine. This enum covers only the
-    13 the workflow engine owns.
+    ``model.request.sent`` is the agent-emitted caller-chain carrier
+    per the Phase 3.1 build doc; it lives in the agent runtime
+    (Phase 3.2) so this enum covers only the workflow-engine-owned
+    kinds. Phase 3.3 adds :attr:`NODE_PRUNED` per master spec §11.1
+    extension.
     """
 
     RUN_STARTED = "workflow.run.started"
@@ -78,6 +80,7 @@ class WorkflowEventKind(StrEnum):
     NODE_COMPLETED = "workflow.node.completed"
     NODE_FAILED = "workflow.node.failed"
     NODE_TIMED_OUT = "workflow.node.timed_out"
+    NODE_PRUNED = "workflow.node.pruned"
     NODE_LOGGED = "workflow.node.logged"
     NODE_EMITTED = "workflow.node.emitted"
     TOOL_CALLED = "workflow.tool.called"
@@ -190,6 +193,33 @@ class WorkflowNodeTimedOutEvent(NodeScopedWorkflowEvent):
     kind: Literal[WorkflowEventKind.NODE_TIMED_OUT] = (
         WorkflowEventKind.NODE_TIMED_OUT
     )
+
+
+class WorkflowNodePrunedEvent(NodeScopedWorkflowEvent):
+    """``workflow.node.pruned`` — Phase 3.3 §11.1 extension.
+
+    Emitted when a node is structurally suppressed because every
+    inbound edge was suppressed by upstream branch dispatch (master
+    spec §6.6 reverse-reachability cascade). The payload carries
+    ``{node_name, reason: "branch_not_taken", upstream_source,
+    branch_value}`` so JSONL forensics can correlate the prune back
+    to the branchable source whose decision caused the cascade.
+
+    Ordering rule per master spec §11.2 — pruned events follow the
+    source's :class:`WorkflowNodeCompletedEvent` in the JSONL; when
+    a single source prunes multiple descendants the events are
+    contiguous. The ``parent_event_id`` chains to that source's
+    completion id so consumers can walk the prune subtree without
+    re-parsing the graph.
+
+    The node-scoped envelope hoists ``invocation_id`` + ``node_name``
+    to the top level for consistency with the rest of the
+    ``workflow.node.*`` family; ``invocation_id`` is a fresh sentinel
+    (``inv_pruned_<uuid>``) since a pruned node never produced a
+    real invocation.
+    """
+
+    kind: Literal[WorkflowEventKind.NODE_PRUNED] = WorkflowEventKind.NODE_PRUNED
 
 
 class WorkflowNodeLoggedEvent(NodeScopedWorkflowEvent):
