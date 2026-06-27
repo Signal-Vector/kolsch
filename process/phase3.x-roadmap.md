@@ -87,7 +87,7 @@ Spec: `process/phase3.3-modifiers-branching-spec.md`. Build plan: `process/phase
 
 ### 3.4 — User_input with CLI pause/resume
 
-Spec: `process/phase3.4-user-input-pause-resume-spec.md` (to be written).
+Spec: `process/phase3.4-user-input-spec.md`. Build plan: `process/phase3.4-user-input-build.md`.
 
 **Scope**: `user_input` node type. Pause mechanism: status flips to `waiting_for_input`; JSONL ends with the user_input node's `workflow.node.started` event but no completion event. CLI `resume` command completes the open invocation with the user-supplied response.
 
@@ -99,9 +99,9 @@ Spec: `process/phase3.4-user-input-pause-resume-spec.md` (to be written).
 
 ### 3.5 — File IO + state mutators
 
-Spec: `process/phase3.5-file-io-state-spec.md` (to be written).
+Spec: `process/phase3.5-file-io-state-spec.md`. Build plan: `process/phase3.5-file-io-state-build.md`.
 
-**Scope**: 3 file-IO leaves (`read_file`, `write_file`, `list_files` — each 1:1 with the existing tool surfaces, routing through the `file_access` subsystem); 2 state leaves (`set_state`, `delete_state`). State dict initialized from workflow inputs at run start; mutations captured as events.
+**Scope**: 3 file-IO leaves (`read_file`, `write_file`, `list_files` — each routing through `dispatch_tool(...)` against the kolsch starter-bundle tool of the same name, inheriting the existing `check_path_allowed` discipline from `src/files/__init__.py`); 2 state leaves (`set_state`, `delete_state`). NEW event kind `workflow.state.mutated` (the source of truth for resume + fork replay; payload `{key, op: "set"|"delete", value}`). Phase 3.4 replay extension to apply state events on resume.
 
 **Verification gate**: workflows read/write files within the workspace; `file_access` denials are enforced and surface as `WorkflowFileAccessDenied`. State mutations are captured events that replay correctly (on fork; tested in 3.8). Jinja `state.*` scope works for any node's config reading state.
 
@@ -111,9 +111,11 @@ Spec: `process/phase3.5-file-io-state-spec.md` (to be written).
 
 ### 3.6 — Branch node + filter + compute + NativeEnvironment
 
-Spec: `process/phase3.6-branch-filter-compute-spec.md` (to be written).
+Spec: `process/phase3.6-branch-filter-compute-spec.md`. Build plan: `process/phase3.6-branch-filter-compute-build.md`.
 
-**Scope**: `branch` node type. `filter` (the sole leaf list-reducer). `compute` (general-purpose Jinja expression; subsumes the 8 dropped aggregations via stock Jinja filters). Adopt `jinja2.nativetypes.NativeEnvironment` for all config-field interpolation.
+**Note on scope reconciliation:** Phase 3.3 shipped `WorkflowJinjaEnvironment(ImmutableSandboxedEnvironment)` with `NativeCodeGenerator` + `native_concat` at `src/workflows/jinja_env.py:56-66` — NativeEnvironment is already universal. Parser models (`BranchNodeDef`/`FilterNodeDef`/`ComputeNodeDef`), Inputs models, `_BUILTIN_TO_INPUTS` entries, `BUILTIN_PHASE_MAP`, and validator branching invariants for the dedicated branch node all landed earlier. Phase 3.6 is runtime-only: three small Jinja-driven runners + a one-case extension to `compute_branch_value` for the `kolsch/nodes/branch` node type.
+
+**Scope**: `branch` runtime (`BranchRunner` — renders `condition:` Jinja, returns `{value: bool}`); `filter` runtime (`FilterRunner` — renders `over:` to list, iterates with `item_as` scope, returns `{result: list[T]}`); `compute` runtime (`ComputeRunner` — renders `value:` Jinja, returns `{value: <any>}`). One-line `compute_branch_value` extension for the branch node type. Triage walkthrough (`bundles/kolsch/workflows/triage-tickets.yaml`) end-to-end. Verification of all 8 aggregation recipes as `compute.value:` expressions returning correctly-typed results. NativeEnvironment string-field non-regression coverage.
 
 **Verification gate**: workflows that branch + filter + compute work end-to-end with NativeEnvironment preserving Python types through Jinja expressions (no JSON roundtripping in `over:` expressions). The end-to-end "triage tickets" pipeline example from the spec walkthrough runs and produces correct results. The 8 aggregation recipes (sum/count/min/max/sort/flatten/any/all) all expressible as `compute.value:` Jinja and pass tests.
 
@@ -123,9 +125,9 @@ Spec: `process/phase3.6-branch-filter-compute-spec.md` (to be written).
 
 ### 3.7 — Composition (map + workflow)
 
-Spec: `process/phase3.7-composition-spec.md` (to be written).
+Spec: `process/phase3.7-composition-spec.md`. Build plan: `process/phase3.7-composition-build.md`.
 
-**Scope**: `map` node type with iteration machinery, worker-by-name resolution, and `item_as:` binding. `workflow` node type with sub-workflow nesting, cycle detection (transitive self-call → `WorkflowCallCycle`), depth-16 cap, child-run lifecycle, parent-pointer tracking.
+**Scope**: `map` node type — sequential iteration; worker resolved by name in same workflow via `apply:`; per-iteration events carry `parent_invocation_id` + `iteration_index`; rendered `with:` constants overlay; output `{results: list[<worker output dict>]}`. `workflow` node type — sub-workflow nesting; mirrors Phase 3.2's parent-pointer pattern (new `WorkflowRun.parent: ParentRunPointer | None`); child runs inherit `trace_id` unchanged; child state isolated (NO inheritance from parent — LOCKS the previously-deferred Phase 3.5 question); cycle detection via `WorkflowCallCycle` (already extant); depth-16 cap shared with `extends:` (same `WorkflowExtendsDepthExceeded` class). Two new event kinds `workflow.node.called_workflow` + `_completed` for parent-side forensics. `workflow.node.completed.child_run_id` payload extension. NEW `ChildWorkflowFailed` error class. Pause cascade — child pause raises `WorkflowPausedForInput` which bubbles through the workflow runner so the parent pauses too; operator-driven resume cascade (`resume <leaf>` then `resume <parent>`). `_replay.py` extension for new event kinds + nested resume detection. Orphan-sweep distinction (`reason="orphaned_child"` for children whose parent crashed).
 
 **Verification gate**: map iterates a worker over a list and produces `results: list[T]`. `filter` and `compute` consume map outputs cleanly. Sub-workflow runs created with `parent: { workflow_run_id, invocation_id }` pointer. Cycle detected and rejected at run-start gate. Workflow-call exceeding depth 16 fails clearly.
 
@@ -135,9 +137,9 @@ Spec: `process/phase3.7-composition-spec.md` (to be written).
 
 ### 3.8 — Fork mechanism
 
-Spec: `process/phase3.8-fork-spec.md` (to be written).
+Spec: `process/phase3.8-fork-spec.md`. Build plan: `process/phase3.8-fork-build.md`.
 
-**Scope**: fork-from-event implementation. Engine: load parent run's event log up to fork_event_id; replay captured outputs into new run's state; apply `--input` overrides; begin execution from fork point. New `workflow_run` with `forked_from: { run_id, fork_event_id }`. State mutations replay deterministically. Cross-JSONL navigation when fork spans sub-workflow boundaries. CLI: `fork`.
+**Scope**: fork-from-event implementation, structurally "replay + new entry point" — reuses Phase 3.4's `_replay.py` (+ Phase 3.5/3.7 extensions) for parent-event replay and Phase 3.4's `_continue_worklist` for execution. NEW `WorkflowRun.forked_from: ForkedFrom | None` field (symmetric with Phase 3.7's `parent` pointer and Phase 3.2's `from_workflow_run` on sessions). NEW event kind `workflow.run.forked_from` (mirrors Phase 3.4's `workflow.run.resumed` pattern) emitted as first event of forked JSONL. NEW `IterativeExecutor.start_from_fork(*, fork_event_id, input_overrides)` entry point. NEW CLI commands: `kolsch workflows fork <run_id> --at <event_id> [--input k=v]...` AND the prerequisite `kolsch workflows events <run_id>` (operators need it to discover event_ids; Phase 3.0 §14.1 mentioned it but it never shipped). Fork-point legality check: event_id must exist in the parent's `events.jsonl`; spawned-session events are rejected with a guidance message. `--input` overrides replace the fork-point node's captured output keys (per spec §9.1). `WorkflowRunNotFound` raised when parent JSONL deleted. Sub-workflow fork handling rides on existing `_captured` replay — fork AFTER a workflow-call node reuses captured child outputs; fork BEFORE spawns a fresh child run.
 
 **Verification gate**: fork a completed run from any event; new run continues from that point with same captured upstream state; original run remains immutable. Fork a paused run (still in `waiting_for_input`). Fork across a sub-workflow boundary correctly resolves the child's captured outputs.
 
@@ -147,9 +149,9 @@ Spec: `process/phase3.8-fork-spec.md` (to be written).
 
 ### 3.9 — Chat surface
 
-Spec: `process/phase3.9-chat-surface-spec.md` (to be written).
+Spec: `process/phase3.9-chat-surface-spec.md`. Build plan: `process/phase3.9-chat-surface-build.md`.
 
-**Scope**: `/workflow <ref> with k=v ...` and `/fork <event_id> with k=v ...` slashes. Chat capsule rendering for node invocations + sub-workflow nesting (collapsible capsules) + branch-not-taken visual mute. user_input pause/resume in chat (next message becomes the response). Modal callback integration so policy prompts triggered by workflow-invoked actions fire the existing chat modal.
+**Scope**: `/workflow <ref> with k=v ...` and `/fork <event_id> with k=v ...` slashes (new `SlashCommand` entries in `src/cli/_slash.py:COMMAND_REGISTRY`). Chat capsule rendering for node invocations via NEW `src/cli/_workflow_capsules.py:WorkflowCapsuleRenderer` — header from `display_label(node_def, type_label)` (the SOLE call site per spec §15.4); body shows captured output at `workflow.node.completed`; failure body shows `caller_message` (NOT `str(exc)`); `workflow.node.pruned` events render muted. Sub-workflow nesting via cross-JSONL trace_id correlation — child renderer spawned at `workflow.node.called_workflow` events. user_input pause/resume in chat: post-pause inline-prompt capsule + `ChatSessionState.expecting_user_input_response` flag + next non-slash message → `executor.resume(response={"response": text})`; slash escape preserves pause. NEW `ChatSessionState.pending_workflow_run_id` field tracks the active run; `/fork` gates on it. Shared `parse_input_pairs` factored to `src/workflows/_args.py` so slash + CLI share. Modal callback integration is transitive (the existing modal wires through authz subsystem); no new code. NO new event kinds; NO new runtime behavior — surface phase only.
 
 **Verification gate**: workflow runnable from `/workflow` slash. Capsules render correctly per node type. user_input chat reply resumes the workflow on the SAME turn (user types response → engine advances → next capsule appears). Modal fires for `prompt:` policy rules on actions originating from a workflow node.
 
