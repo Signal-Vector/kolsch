@@ -576,7 +576,12 @@ async def _cmd_run(  # noqa: PLR0913
         )
 
     # Live executor wiring.
-    from tools.builtins import make_bash  # noqa: PLC0415
+    from tools.builtins import (  # noqa: PLC0415
+        make_bash,
+        make_list_files,
+        make_read_file,
+        make_write_file,
+    )
     from tools.decorator import get_tool_definition  # noqa: PLC0415
     from workflows.builtins import register_builtins  # noqa: PLC0415
     from workflows.executor import (  # noqa: PLC0415
@@ -589,6 +594,19 @@ async def _cmd_run(  # noqa: PLR0913
     run = store.create(workflow_ref=entry.ref, inputs=inputs)
     bash_fn = make_bash(policy=runtime.path_policy, root=root)
     bash_defn = get_tool_definition(bash_fn)
+    # Phase 3.5 Step 2 — file-IO tool defs for the three file-IO
+    # runners. Each factory closes over policy + root so the underlying
+    # tool checks file access; the runners construct a ToolContext with
+    # ``path_policy=None`` (matches the bash runner's wiring).
+    read_file_defn = get_tool_definition(
+        make_read_file(policy=runtime.path_policy, root=root)
+    )
+    write_file_defn = get_tool_definition(
+        make_write_file(policy=runtime.path_policy, root=root)
+    )
+    list_files_defn = get_tool_definition(
+        make_list_files(policy=runtime.path_policy, root=root)
+    )
     registry = RunnerRegistry()
     register_builtins(
         registry,
@@ -605,6 +623,9 @@ async def _cmd_run(  # noqa: PLR0913
         engine=runtime.engine,
         session_store=runtime.store,
         config_builder=runtime.build_resolved_config,
+        read_file_defn=read_file_defn,
+        write_file_defn=write_file_defn,
+        list_files_defn=list_files_defn,
     )
     executor = IterativeExecutor(
         workflow=workflow,
@@ -712,7 +733,12 @@ async def _cmd_resume(  # noqa: PLR0913 — five explicit kw args; mirrors _cmd_
     # Live executor wiring — mirrors ``_cmd_run`` so the resume process
     # has the same builtin runner set (the resume may continue into
     # bash / agent / catalog-node nodes downstream of the user_input).
-    from tools.builtins import make_bash  # noqa: PLC0415
+    from tools.builtins import (  # noqa: PLC0415
+        make_bash,
+        make_list_files,
+        make_read_file,
+        make_write_file,
+    )
     from tools.decorator import get_tool_definition  # noqa: PLC0415
     from workflows.builtins import register_builtins  # noqa: PLC0415
     from workflows.errors import (  # noqa: PLC0415
@@ -726,6 +752,17 @@ async def _cmd_resume(  # noqa: PLR0913 — five explicit kw args; mirrors _cmd_
 
     bash_fn = make_bash(policy=runtime.path_policy, root=root)
     bash_defn = get_tool_definition(bash_fn)
+    # Phase 3.5 Step 2 — mirror ``_cmd_run``: resumes downstream of
+    # ``user_input`` may hit file-IO nodes.
+    read_file_defn = get_tool_definition(
+        make_read_file(policy=runtime.path_policy, root=root)
+    )
+    write_file_defn = get_tool_definition(
+        make_write_file(policy=runtime.path_policy, root=root)
+    )
+    list_files_defn = get_tool_definition(
+        make_list_files(policy=runtime.path_policy, root=root)
+    )
     registry = RunnerRegistry()
     register_builtins(
         registry,
@@ -737,6 +774,9 @@ async def _cmd_resume(  # noqa: PLR0913 — five explicit kw args; mirrors _cmd_
         engine=runtime.engine,
         session_store=runtime.store,
         config_builder=runtime.build_resolved_config,
+        read_file_defn=read_file_defn,
+        write_file_defn=write_file_defn,
+        list_files_defn=list_files_defn,
     )
     executor = IterativeExecutor(
         workflow=workflow,

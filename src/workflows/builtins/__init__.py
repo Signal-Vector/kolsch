@@ -35,11 +35,14 @@ from workflows.builtins.agent import AgentRunner
 from workflows.builtins.bash import BashRunner
 from workflows.builtins.catalog_node_runner import CatalogNodeRunner
 from workflows.builtins.delete_state import DeleteStateRunner
+from workflows.builtins.list_files import ListFilesRunner
 from workflows.builtins.noop import NoopRunner
+from workflows.builtins.read_file import ReadFileRunner
 from workflows.builtins.retry import with_retry
 from workflows.builtins.set_state import SetStateRunner
 from workflows.builtins.timeout import with_timeout
 from workflows.builtins.user_input import UserInputRunner
+from workflows.builtins.write_file import WriteFileRunner
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -59,9 +62,12 @@ __all__ = [
     "BashRunner",
     "CatalogNodeRunner",
     "DeleteStateRunner",
+    "ListFilesRunner",
     "NoopRunner",
+    "ReadFileRunner",
     "SetStateRunner",
     "UserInputRunner",
+    "WriteFileRunner",
     "register_builtins",
     "with_retry",
     "with_timeout",
@@ -81,6 +87,9 @@ def register_builtins(  # noqa: PLR0913 — wide-by-design wiring surface; see d
     config_builder: (
         Callable[[str], Awaitable[ResolvedAgentConfig]] | None
     ) = None,
+    read_file_defn: ToolDefinition | None = None,
+    write_file_defn: ToolDefinition | None = None,
+    list_files_defn: ToolDefinition | None = None,
 ) -> None:
     """Register the Phase 3.1 + 3.2 runtime node types against ``registry``.
 
@@ -122,6 +131,44 @@ def register_builtins(  # noqa: PLR0913 — wide-by-design wiring surface; see d
     # without the caller threading more wiring (master spec §4.3).
     registry.register("kolsch/nodes/set_state", SetStateRunner())
     registry.register("kolsch/nodes/delete_state", DeleteStateRunner())
+    # Phase 3.5 Step 2 — file-IO runners. Each requires a
+    # :class:`ToolDefinition` built from the in-engine
+    # ``tools.builtins.make_<n>`` factory (closure over policy + root
+    # so the tool checks file access without ToolContext carrying
+    # path_policy — matches the bash runner's wiring). Each kwarg
+    # defaults to ``None`` so bash-only test callers stay
+    # byte-identical; absent the kwarg the slot keeps raising
+    # :class:`workflows.errors.NodeTypeNotImplemented(phase="3.5")`.
+    if read_file_defn is not None:
+        registry.register(
+            "kolsch/nodes/read_file",
+            ReadFileRunner(
+                tool_defn=read_file_defn,
+                authz=authz,
+                secrets=secrets,
+                sandbox=sandbox,
+            ),
+        )
+    if write_file_defn is not None:
+        registry.register(
+            "kolsch/nodes/write_file",
+            WriteFileRunner(
+                tool_defn=write_file_defn,
+                authz=authz,
+                secrets=secrets,
+                sandbox=sandbox,
+            ),
+        )
+    if list_files_defn is not None:
+        registry.register(
+            "kolsch/nodes/list_files",
+            ListFilesRunner(
+                tool_defn=list_files_defn,
+                authz=authz,
+                secrets=secrets,
+                sandbox=sandbox,
+            ),
+        )
     if catalog is not None:
         registry.set_catalog_runner(CatalogNodeRunner(catalog=catalog))
     if (
