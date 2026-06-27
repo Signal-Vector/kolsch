@@ -111,7 +111,28 @@ Spec: `process/phase3.4-user-input-spec.md`. Build plan: `process/phase3.4-user-
 
 **Effort**: ~1 week.
 
-### 3.5 — File IO + state mutators
+### 3.5 — File IO + state mutators — ✅ Done (`bf66125`)
+
+**Status:** Shipped across Steps 0–3 of
+`process/phase3.5-file-io-state-build.md` (Step 0 `502638f`,
+Step 1 `af61314`, Step 2 `434339a`, Step 3 `bf66125`). The 6
+Phase-level Integration Tests pass under `uv run pytest tests/`
+(`tests/component/test_workflow_state_e2e.py` covers Phase Tests 3–5;
+`tests/component/test_workflow_file_io.py` covers Phase Tests 1–2;
+Phase Test 6 is the full-suite regression). Five new goldens
+(`tests/golden/runs/{state-evolves,delete-state-idempotent,file-roundtrip,file-access-denied}.jsonl`
++ `state-resume.workflow.jsonl`) pin the JSONL shape — including
+the master spec §11.3 chain rule (state-mutating nodes'
+`workflow.node.completed` chains to the LAST `workflow.state.mutated`
+event) and the output-narrowing contract (`{content}` /
+`{bytes_written}` / `{entries: list[str]}`).
+
+Bug surfaced during Step 3 wire-up: `IterativeExecutor.resume` was
+overwriting `_state = dict(self._run.inputs)` AFTER `replay_into(...)`,
+silently wiping every pre-pause state mutation. Fixed in Step 3 by
+initialising state from inputs FIRST so the replay's set/delete ops
+overlay correctly. Without the fix, resumed workflows would render
+`state.*` against the bare inputs dict.
 
 Spec: `process/phase3.5-file-io-state-spec.md`. Build plan: `process/phase3.5-file-io-state-build.md`.
 
