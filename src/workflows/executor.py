@@ -286,6 +286,20 @@ class IterativeExecutor:
         # (e.g. workflow.tool.called) reset ``_last_event_id``.
         self._last_event_id: Any = None
         self._node_started_event_id: dict[InvocationId, Any] = {}
+        # Phase 3.5 Step 1 — per-invocation "last emitted in-chain
+        # event id." Initialised to the node's started event id at
+        # node-fire time; advanced by every
+        # :meth:`NodeContext.emit_workflow_event` call (currently the
+        # state runners emitting ``workflow.state.mutated``). Read by
+        # the node's ``workflow.node.completed`` emit so the chain
+        # rule per master spec §11.3 holds: a state-mutating node's
+        # completion chains to the LAST ``workflow.state.mutated``
+        # event, not back to its own started event. Non-state nodes
+        # never advance the per-invocation pointer, so completion
+        # still chains to started — Phase 3.1's contract is preserved
+        # for the existing built-ins (master spec no-regressions
+        # promise on byte-identical JSONLs for non-state workflows).
+        self._invocation_last_event_id: dict[InvocationId, Any] = {}
         # Phase 3.3 Step 2 — per-node ``workflow.node.completed`` id
         # so the pruning cascade can chain ``workflow.node.pruned``
         # events back to their upstream source's completion event
@@ -800,6 +814,10 @@ class IterativeExecutor:
             )
             self._last_event_id = started_id
             self._node_started_event_id[inv_id] = started_id
+            # Phase 3.5 Step 1 — seed the per-invocation chain pointer
+            # at the started event id. State runners advance it via
+            # ``ctx.emit_workflow_event``; completion reads it.
+            self._invocation_last_event_id[inv_id] = started_id
 
             ctx = self._build_ctx(
                 inv_id=inv_id,
@@ -985,13 +1003,20 @@ class IterativeExecutor:
                 completed_payload["spawned_session_id"] = str(
                     ctx.spawned_session_id
                 )
+            # Phase 3.5 §11.3 — completion chains to the LAST
+            # in-invocation event (the last ``workflow.state.mutated``
+            # for state-mutating nodes; the node's own started event
+            # otherwise — ``_invocation_last_event_id`` is seeded with
+            # started_id at fire time and only advanced by
+            # ``ctx.emit_workflow_event``).
             completion_id = emit_event(
                 self._store,
                 WorkflowNodeCompletedEvent(
                     workflow_run_id=run_id,
                     trace_id=self._run.trace_id,
-                    parent_event_id=self._node_started_event_id.get(
-                        inv_id
+                    parent_event_id=self._invocation_last_event_id.get(
+                        inv_id,
+                        self._node_started_event_id.get(inv_id),
                     ),
                     invocation_id=inv_id,
                     node_name=node_name,
@@ -1529,19 +1554,27 @@ class IterativeExecutor:
                 ),
             )
 
-        # Phase 3.5 Step 0 — hook for runners that need to emit
-        # fully-typed :class:`WorkflowEvent` envelopes. The state
-        # runners use this for ``workflow.state.mutated``. We update
-        # ``_last_event_id`` so the next CROSS-node event (typically
-        # the next ``workflow.node.started``) chains to the latest
-        # in-invocation emission, not to the started event of THIS
-        # invocation. The per-invocation chain semantics for
-        # ``workflow.node.completed`` (master spec §11.3 — chain to
-        # last ``state.mutated``) land alongside the state runners
-        # in Step 1; Step 0 only ships the plumbing.
+        # Phase 3.5 — hook for runners that need to emit fully-typed
+        # :class:`WorkflowEvent` envelopes. The state runners use
+        # this for ``workflow.state.mutated``. We advance two chain
+        # pointers per emission:
+        #
+        # 1. ``_last_event_id`` — drives cross-node chain (the next
+        #    ``workflow.node.started`` chains to the latest emit).
+        # 2. ``_invocation_last_event_id[inv_id]`` — drives the
+        #    per-invocation chain so the matching
+        #    ``workflow.node.completed`` correctly chains to the
+        #    LAST in-invocation emission (master spec §11.3).
+        #
+        # ``_node_started_event_id[inv_id]`` is NOT advanced: it's
+        # the parent for ``workflow.node.failed`` (which chains to
+        # the started event by contract — a partial mutation that
+        # raised an exception still surfaces as "this invocation
+        # failed", not "the last partial mutation failed").
         async def _emit_workflow_event(event: WorkflowEvent) -> EventId:
             new_id = emit_event(self._store, event)
             self._last_event_id = new_id
+            self._invocation_last_event_id[inv_id] = new_id
             return new_id
 
         return NodeContext(

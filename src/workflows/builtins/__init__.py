@@ -34,8 +34,10 @@ from typing import TYPE_CHECKING
 from workflows.builtins.agent import AgentRunner
 from workflows.builtins.bash import BashRunner
 from workflows.builtins.catalog_node_runner import CatalogNodeRunner
+from workflows.builtins.delete_state import DeleteStateRunner
 from workflows.builtins.noop import NoopRunner
 from workflows.builtins.retry import with_retry
+from workflows.builtins.set_state import SetStateRunner
 from workflows.builtins.timeout import with_timeout
 from workflows.builtins.user_input import UserInputRunner
 
@@ -56,7 +58,9 @@ __all__ = [
     "AgentRunner",
     "BashRunner",
     "CatalogNodeRunner",
+    "DeleteStateRunner",
     "NoopRunner",
+    "SetStateRunner",
     "UserInputRunner",
     "register_builtins",
     "with_retry",
@@ -111,6 +115,13 @@ def register_builtins(  # noqa: PLR0913 — wide-by-design wiring surface; see d
     # raises ``WorkflowPausedForInput`` which the executor's worklist
     # catches separately from the failure path.
     registry.register("kolsch/nodes/user_input", UserInputRunner())
+    # Phase 3.5 Step 1 — state-mutation runners. Both are dependency-
+    # free (they read ``ctx`` for the executor's render/emit hooks);
+    # registering them here means a workflow using ``set_state`` /
+    # ``delete_state`` works as soon as ``register_builtins`` runs,
+    # without the caller threading more wiring (master spec §4.3).
+    registry.register("kolsch/nodes/set_state", SetStateRunner())
+    registry.register("kolsch/nodes/delete_state", DeleteStateRunner())
     if catalog is not None:
         registry.set_catalog_runner(CatalogNodeRunner(catalog=catalog))
     if (
