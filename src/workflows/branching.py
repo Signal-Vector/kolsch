@@ -20,6 +20,7 @@ __all__ = ["compute_branch_value"]
 
 
 _BASH_TYPE_REF = "kolsch/nodes/bash"
+_BRANCH_TYPE_REF = "kolsch/nodes/branch"
 
 
 def compute_branch_value(
@@ -31,6 +32,10 @@ def compute_branch_value(
     Master spec §6.5:
 
     - ``kolsch/nodes/bash``: ``True`` iff ``captured["exit_code"] == 0``.
+    - ``kolsch/nodes/branch`` (Phase 3.6): ``captured["value"]`` —
+      the :class:`workflows.builtins.branch.BranchRunner` coerces its
+      ``condition:`` to ``bool`` before storing, so the guard below
+      is for completeness rather than defence.
     - Authored Python ``@node`` returning ``bool`` or
       ``tuple[bool, BaseModel]``: the bool lives at ``captured["value"]``
       per master spec §4.0 line 217 (the
@@ -49,6 +54,16 @@ def compute_branch_value(
     type_ref = getattr(node_def, "type", None)
     if type_ref == _BASH_TYPE_REF:
         return bool(captured.get("exit_code") == 0)
+    if type_ref == _BRANCH_TYPE_REF:
+        # Symmetric with the authored-Python path below: both branchable
+        # source types capture their bool under ``value``. Keeping the
+        # case explicit makes the master-spec §6.5 mapping legible and
+        # leaves room for future per-type capture-key drift without
+        # touching the catch-all arm.
+        value = captured.get("value")
+        if isinstance(value, bool):
+            return value
+        return None
     value = captured.get("value")
     if isinstance(value, bool):
         return value

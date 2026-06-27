@@ -33,8 +33,11 @@ from typing import TYPE_CHECKING
 
 from workflows.builtins.agent import AgentRunner
 from workflows.builtins.bash import BashRunner
+from workflows.builtins.branch import BranchRunner
 from workflows.builtins.catalog_node_runner import CatalogNodeRunner
+from workflows.builtins.compute import ComputeRunner
 from workflows.builtins.delete_state import DeleteStateRunner
+from workflows.builtins.filter import FilterRunner
 from workflows.builtins.list_files import ListFilesRunner
 from workflows.builtins.noop import NoopRunner
 from workflows.builtins.read_file import ReadFileRunner
@@ -60,8 +63,11 @@ if TYPE_CHECKING:
 __all__ = [
     "AgentRunner",
     "BashRunner",
+    "BranchRunner",
     "CatalogNodeRunner",
+    "ComputeRunner",
     "DeleteStateRunner",
+    "FilterRunner",
     "ListFilesRunner",
     "NoopRunner",
     "ReadFileRunner",
@@ -131,6 +137,16 @@ def register_builtins(  # noqa: PLR0913 — wide-by-design wiring surface; see d
     # without the caller threading more wiring (master spec §4.3).
     registry.register("kolsch/nodes/set_state", SetStateRunner())
     registry.register("kolsch/nodes/delete_state", DeleteStateRunner())
+    # Phase 3.6 Step 0 — branch / filter / compute runners. All three
+    # are dependency-free (pure Jinja evaluation against the
+    # executor's render hook); registered unconditionally so a
+    # workflow using any of these types resolves immediately. The
+    # branch runner is the second branchable source after bash; its
+    # ``{value: bool}`` capture is read by
+    # :func:`workflows.branching.compute_branch_value`.
+    registry.register("kolsch/nodes/branch", BranchRunner())
+    registry.register("kolsch/nodes/filter", FilterRunner())
+    registry.register("kolsch/nodes/compute", ComputeRunner())
     # Phase 3.5 Step 2 — file-IO runners. Each requires a
     # :class:`ToolDefinition` built from the in-engine
     # ``tools.builtins.make_<n>`` factory (closure over policy + root

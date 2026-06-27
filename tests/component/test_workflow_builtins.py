@@ -439,13 +439,19 @@ class TestRegisteredVsDeferred:
             UserInputRunner,
         )
         # Deferred types still raise — including ``agent`` when no
-        # engine + session_store + config_builder triple is supplied.
+        # engine + session_store + config_builder triple is supplied,
+        # and the file-IO trio when their respective ``*_defn`` kwargs
+        # are absent (Phase 3.5 made registration conditional on the
+        # caller threading a tool definition through). Phase 3.6
+        # registers ``branch`` / ``filter`` / ``compute`` unconditionally
+        # (pure Jinja, no provider deps).
         for name, expected_phase in (
             ("agent", "3.2"),
             ("read_file", "3.5"),
-            ("branch", "3.6"),
-            ("compute", "3.6"),
+            ("write_file", "3.5"),
+            ("list_files", "3.5"),
             ("map", "3.7"),
+            ("workflow", "3.7"),
         ):
             with pytest.raises(NodeTypeNotImplemented) as exc_info:
                 registry.get(f"kolsch/nodes/{name}", node_name="n")
