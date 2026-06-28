@@ -1,0 +1,48 @@
+# Phase 3.10 — canonical auto-mode fan-out example.
+#
+# Three sibling bash nodes (alpha, beta, gamma) each sleep 200ms; a
+# downstream noop confluence joins them. Under ``concurrency: auto``
+# the three siblings run in parallel — wall-clock is ~200ms rather
+# than ~600ms.
+#
+# Run it with:
+#
+#   kolsch workflows run kolsch/workflows/parallel-fan-out-demo
+#
+# The envelope reports ``concurrency_mode: auto`` and
+# ``peak_in_flight: 3``. Replay (fork) inherits the parent's event
+# ordering verbatim per master spec §16.5.1.
+description: "Three sibling bash nodes dispatched concurrently under auto mode."
+concurrency: auto
+
+nodes:
+  start:
+    type: kolsch/nodes/noop
+    description: "Fan-out point."
+  alpha:
+    type: kolsch/nodes/bash
+    command: "sleep 0.2 && echo alpha"
+  beta:
+    type: kolsch/nodes/bash
+    command: "sleep 0.2 && echo beta"
+  gamma:
+    type: kolsch/nodes/bash
+    command: "sleep 0.2 && echo gamma"
+  done:
+    type: kolsch/nodes/noop
+    description: "Confluence after the three concurrent branches."
+
+graph:
+  edges:
+    - from: start
+      to: alpha
+    - from: start
+      to: beta
+    - from: start
+      to: gamma
+    - from: alpha
+      to: done
+    - from: beta
+      to: done
+    - from: gamma
+      to: done

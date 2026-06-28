@@ -1198,6 +1198,46 @@ def _ext_compose_registry(
     return registry
 
 
+def _build_parallel_map_demo(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Phase 3.10 §16.3 — ``parallel: true`` map over a 3-element list.
+
+    Locks the iteration interleaving in the JSONL under the
+    concurrent dispatch path: every per-iteration ``started`` event
+    appears BEFORE any per-iteration ``completed`` event because the
+    compute worker has no internal awaits and the event-loop's
+    cooperative scheduling pumps each task to its first ``await
+    ctx.emit_workflow_event`` before resuming the next. Also locks
+    the index-ordered ``results`` payload on the map node's own
+    ``workflow.node.completed`` event regardless of completion
+    interleaving (master spec §16.3 contract).
+    """
+    workflow = Workflow.model_validate(
+        {
+            "nodes": {
+                "echo_one": {
+                    "type": "kolsch/nodes/compute",
+                    "value": "{{ inputs.item }}",
+                },
+                "fan_out": {
+                    "type": "kolsch/nodes/map",
+                    "apply": "echo_one",
+                    "over": [1, 2, 3],
+                    "item_as": "item",
+                    "parallel": True,
+                    "concurrency": 3,
+                },
+            },
+            "graph": {"edges": []},
+        }
+    )
+    store = WorkflowRunStore(tmp_path)
+    catalog = _ext_compose_catalog(tmp_path=tmp_path, refs={})
+    registry = _ext_compose_registry(catalog=catalog, store=store)
+    return workflow, registry, {"catalog": catalog}
+
+
 def _build_composition_map(
     tmp_path: Path,
 ) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
@@ -1415,6 +1455,8 @@ _FIXTURES: tuple[
         _build_composition_depth_exceeded,
         "failed",
     ),
+    # Phase 3.10 — parallel map iteration golden.
+    ("parallel-map-demo", _build_parallel_map_demo, "succeeded"),
 )
 
 

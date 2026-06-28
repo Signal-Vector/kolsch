@@ -1,4 +1,4 @@
-"""``kolsch/nodes/map`` runner — Phase 3.7 §4.6.2.
+"""``kolsch/nodes/map`` runner — Phase 3.7 §4.6.2 + Phase 3.10 §16.3.
 
 Sequential fan-out over a list. The map node references a WORKER
 node defined in the SAME workflow via ``apply:``; for every element
@@ -6,6 +6,18 @@ in ``over:`` the runner dispatches the worker's runner directly with
 a per-iteration scope ``{**bound_inputs, **rendered_with, item_as:
 element}``, collects the worker's captured output dict, and returns
 ``{"results": [...]}``.
+
+Phase 3.10 §16.3 — ``parallel: true`` on a :class:`MapNodeDef`
+opts into the concurrent iteration path. Iterations dispatch via
+``asyncio.create_task`` + ``asyncio.wait``; ``concurrency: N`` (the
+optional integer) gates dispatch on an :class:`asyncio.Semaphore`.
+First-failure-cancels-siblings semantics match the executor's
+auto-mode worklist (master spec §16.2.2 / §16.3.1) — siblings emit
+``workflow.node.failed`` with ``error_class="asyncio.CancelledError"``
+and ``reason="sibling_failure"`` in payload. The run-start gate
+already rejects ``parallel: true`` maps whose workers transitively
+write state (master spec §16.3), so the parallel path trusts that
+disjoint-write invariants hold.
 
 Two iteration events land in the parent's JSONL per iteration:
 ``workflow.node.started`` and ``workflow.node.completed`` for the
@@ -18,13 +30,13 @@ the executor's worklist body (Phase 3.1) — the runner is responsible
 for the iteration-level pair only.
 
 Failure semantics: a worker raising mid-iteration aborts the map
-(sequential, no continue-on-error at v1). The runner emits the
-failing iteration's ``workflow.node.failed`` event, then re-raises
-so the parent executor's existing failure path emits the map node's
-own ``workflow.node.failed``. Partial ``results`` are NOT
-persisted — the map node's ``completed`` never fires, so downstream
-nodes don't observe a half-populated list. (Future QoL:
-``on_error: continue | skip | route_to`` per master spec §1.2.)
+(no continue-on-error at v1). The runner emits the failing
+iteration's ``workflow.node.failed`` event, then re-raises so the
+parent executor's existing failure path emits the map node's own
+``workflow.node.failed``. Partial ``results`` are NOT persisted —
+the map node's ``completed`` never fires, so downstream nodes
+don't observe a half-populated list. (Future QoL: ``on_error:
+continue | skip | route_to`` per master spec §1.2.)
 
 Rendering schedule: ``over:`` and ``with:`` constants are each
 rendered ONCE at map fire-time (per spec §4.6.2 — constants).
@@ -36,6 +48,7 @@ strings (which the worker's runner renders per fire).
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError
@@ -153,113 +166,299 @@ class MapRunner:
         if not rendered_over:
             return {"results": []}
 
-        # Step 5 — sequential iteration. Each iteration:
-        #
-        # 1. Builds the worker's input overlay: bound_inputs (the
-        #    map's own edges' binds) overlaid with rendered_with
-        #    constants overlaid with the item under ``item_as``.
-        # 2. Runs strict-mode bind validation against the worker's
-        #    typed ``Inputs(BaseModel)`` (Phase 3.3 §6.4.4 contract).
-        # 3. Mints a fresh per-iteration NodeContext (distinct
-        #    ``invocation_id`` so events don't collide).
-        # 4. Emits the worker's ``started`` event on the parent's
-        #    JSONL, chained to the prior in-invocation event.
-        # 5. Dispatches the worker's ``run`` synchronously.
-        # 6. Emits the worker's ``completed`` event.
-        # 7. Appends the worker's captured output dict to ``results``.
         total = len(rendered_over)
+
+        # Phase 3.10 §16.3 — dispatch fork. ``parallel: true`` opts
+        # into concurrent iteration; ``parallel: false`` (the
+        # default) is the Phase 3.7 sequential contract.
+        if getattr(node_def, "parallel", False):
+            results = await self._run_parallel(
+                node_def=node_def,
+                worker_def=worker_def,
+                worker_runner=worker_runner,
+                rendered_over=rendered_over,
+                rendered_with=rendered_with,
+                bound_inputs=bound_inputs,
+                state=state,
+                ctx=ctx,
+                total=total,
+            )
+        else:
+            results = await self._run_sequential(
+                node_def=node_def,
+                worker_def=worker_def,
+                worker_runner=worker_runner,
+                rendered_over=rendered_over,
+                rendered_with=rendered_with,
+                bound_inputs=bound_inputs,
+                state=state,
+                ctx=ctx,
+                total=total,
+            )
+        return {"results": results}
+
+    async def _run_sequential(  # noqa: PLR0913 — passes through the run() context
+        self,
+        *,
+        node_def: MapNodeDef,
+        worker_def: Any,
+        worker_runner: Any,
+        rendered_over: list[Any],
+        rendered_with: dict[str, Any],
+        bound_inputs: dict[str, Any],
+        state: dict[str, Any],
+        ctx: NodeContext,
+        total: int,
+    ) -> list[dict[str, Any]]:
+        """Phase 3.7 sequential iteration — unchanged from pre-3.10.
+
+        For every element in ``rendered_over``, run a worker
+        invocation via :meth:`_run_one_iteration` and accumulate the
+        captured outputs. A failing iteration re-raises after the
+        per-iteration ``workflow.node.failed`` event lands; partial
+        results are dropped (the parent executor's failure path
+        owns the map node's own failed emit).
+        """
         results: list[dict[str, Any]] = []
         for index, element in enumerate(rendered_over):
-            iteration_overlay = {
-                **bound_inputs,
-                **rendered_with,
-                node_def.item_as: element,
-            }
-
-            # Strict-mode bind validation per Phase 3.3 §6.4.4. The
-            # worker's ``Inputs(BaseModel)`` validates the overlay
-            # under ``strict=True``; mismatch raises
-            # :class:`WorkflowBindTypeMismatch` so the map (and the
-            # run) abort at the first bad iteration.
-            self._validate_iteration_overlay_strict(
-                worker_name=node_def.apply,
+            captured = await self._run_one_iteration(
+                node_def=node_def,
                 worker_def=worker_def,
-                iteration_overlay=iteration_overlay,
+                worker_runner=worker_runner,
+                element=element,
+                index=index,
+                total=total,
+                rendered_with=rendered_with,
+                bound_inputs=bound_inputs,
+                state=state,
+                ctx=ctx,
             )
+            results.append(captured)
+        return results
 
-            iter_ctx = ctx.derive_for_iteration(
-                parent_invocation_id=InvocationId(ctx.invocation_id),
-                iteration_index=index,
-                iteration_total=total,
-            )
+    async def _run_parallel(  # noqa: PLR0913, PLR0915 — concurrent algorithm
+        self,
+        *,
+        node_def: MapNodeDef,
+        worker_def: Any,
+        worker_runner: Any,
+        rendered_over: list[Any],
+        rendered_with: dict[str, Any],
+        bound_inputs: dict[str, Any],
+        state: dict[str, Any],
+        ctx: NodeContext,
+        total: int,
+    ) -> list[dict[str, Any]]:
+        """Phase 3.10 §16.3 — concurrent iteration.
 
-            iter_started_id = await ctx.emit_workflow_event(
-                WorkflowNodeStartedEvent(
-                    workflow_run_id=WorkflowRunId(ctx.workflow_run_id),
-                    trace_id=ctx.trace_id,
-                    parent_event_id=ctx.parent_event_id,
-                    invocation_id=InvocationId(iter_ctx.invocation_id),
-                    node_name=node_def.apply,
-                    payload={
-                        "node_name": node_def.apply,
-                        "invocation_id": str(iter_ctx.invocation_id),
-                        "type": getattr(worker_def, "type", "<copy_of>"),
-                        "inputs": dict(iteration_overlay),
-                        "caller_chain": list(ctx.caller_chain or ()),
-                        # Phase 3.7 §11.3 — iteration correlation.
-                        "parent_invocation_id": str(ctx.invocation_id),
-                        "iteration_index": index,
-                        "iteration_total": total,
-                    },
-                )
-            )
-            # Stamp the iteration's ``parent_event_id`` so any event
-            # the worker emits (state mutations, agent spawn, etc.)
-            # chains back to its own started event, not the map's.
-            object.__setattr__(iter_ctx, "parent_event_id", iter_started_id)
+        Each iteration runs as an :class:`asyncio.Task`; the optional
+        ``node_def.concurrency`` integer caps in-flight workers via
+        :class:`asyncio.Semaphore`. The ``results`` list preserves
+        index order (``results[i]`` is iteration ``i``'s captured
+        output) regardless of completion order — per-task results
+        land in a dict keyed by index and the dict is flattened
+        before return.
 
-            try:
-                output = await worker_runner.run(
-                    node_name=node_def.apply,
-                    node_def=worker_def,
-                    bound_inputs=iteration_overlay,
-                    state=state,
-                    ctx=iter_ctx,
-                )
-            except Exception as exc:
-                # Emit the failed iteration's marker BEFORE re-raising
-                # so the JSONL records WHICH iteration broke. The
-                # parent executor's failure path then emits the map
-                # node's own ``workflow.node.failed`` and the run
-                # aborts. Partial ``results`` are dropped on the
-                # floor — they only become observable via the map's
-                # ``completed`` event, which never fires here.
-                await ctx.emit_workflow_event(
-                    WorkflowNodeFailedEvent(
-                        workflow_run_id=WorkflowRunId(
-                            ctx.workflow_run_id
-                        ),
-                        trace_id=ctx.trace_id,
-                        parent_event_id=iter_started_id,
-                        invocation_id=InvocationId(
-                            iter_ctx.invocation_id
-                        ),
-                        node_name=node_def.apply,
-                        payload={
-                            "node_name": node_def.apply,
-                            "invocation_id": str(iter_ctx.invocation_id),
-                            "error_class": type(exc).__name__,
-                            "message": str(exc),
-                            "parent_invocation_id": str(ctx.invocation_id),
-                            "iteration_index": index,
-                        },
+        First-failure-cancels-siblings: when any task raises (other
+        than a sibling cancellation), the remaining in-flight tasks
+        are cancelled. Each cancelled task's
+        :meth:`_run_one_iteration` catches :class:`asyncio.CancelledError`
+        AFTER its ``started`` event has been emitted and writes a
+        sibling-failed event with ``reason="sibling_failure"`` before
+        propagating. Iterations cancelled BEFORE acquiring the
+        semaphore never emit any events (they never ran any code).
+        """
+        # Optional semaphore — gates per-task dispatch.
+        semaphore: asyncio.Semaphore | None = None
+        if node_def.concurrency is not None and node_def.concurrency > 0:
+            semaphore = asyncio.Semaphore(node_def.concurrency)
+
+        async def _bounded(index: int, element: Any) -> dict[str, Any]:
+            if semaphore is not None:
+                async with semaphore:
+                    return await self._run_one_iteration(
+                        node_def=node_def,
+                        worker_def=worker_def,
+                        worker_runner=worker_runner,
+                        element=element,
+                        index=index,
+                        total=total,
+                        rendered_with=rendered_with,
+                        bound_inputs=bound_inputs,
+                        state=state,
+                        ctx=ctx,
+                        cancel_reason="sibling_failure",
                     )
-                )
-                raise
+            return await self._run_one_iteration(
+                node_def=node_def,
+                worker_def=worker_def,
+                worker_runner=worker_runner,
+                element=element,
+                index=index,
+                total=total,
+                rendered_with=rendered_with,
+                bound_inputs=bound_inputs,
+                state=state,
+                ctx=ctx,
+                cancel_reason="sibling_failure",
+            )
 
-            captured = dict(output) if isinstance(output, dict) else {}
+        # Spawn every iteration as its own task; track by index.
+        tasks: dict[asyncio.Task[dict[str, Any]], int] = {}
+        for index, element in enumerate(rendered_over):
+            task = asyncio.create_task(_bounded(index, element))
+            tasks[task] = index
+
+        results: dict[int, dict[str, Any]] = {}
+        first_failure_exc: BaseException | None = None
+        outstanding = dict(tasks)
+        try:
+            while outstanding:
+                done, _pending = await asyncio.wait(
+                    list(outstanding.keys()),
+                    return_when=asyncio.FIRST_COMPLETED,
+                )
+                for task in done:
+                    index = outstanding.pop(task)
+                    exc = task.exception()
+                    if exc is None:
+                        results[index] = task.result()
+                        continue
+                    if first_failure_exc is None:
+                        first_failure_exc = exc
+                if first_failure_exc is not None:
+                    # Cancel every still-outstanding task; their
+                    # per-iteration cancellation arm emits the
+                    # sibling-failed event before propagating.
+                    for task in outstanding:
+                        task.cancel()
+                    # Drain the cancelled tasks so their per-iter
+                    # arms get to fire before we re-raise.
+                    for task in list(outstanding.keys()):
+                        try:
+                            await task
+                        except BaseException:  # noqa: BLE001 — drain
+                            pass
+                        outstanding.pop(task, None)
+                    break
+        finally:
+            # Safety net — if anything escapes the loop with tasks
+            # still live, cancel + drain so we don't leak coroutines.
+            for task in list(outstanding.keys()):
+                if not task.done():
+                    task.cancel()
+            for task in list(outstanding.keys()):
+                try:
+                    await task
+                except BaseException:  # noqa: BLE001 — drain
+                    pass
+                outstanding.pop(task, None)
+
+        if first_failure_exc is not None:
+            # Re-raise the original exception so the parent
+            # executor's failure path emits the MAP node's own
+            # ``workflow.node.failed`` with that error_class.
+            raise first_failure_exc
+
+        # Flatten in index order — master spec §16.3 contract.
+        return [results[i] for i in range(total)]
+
+    async def _run_one_iteration(  # noqa: PLR0913 — shared per-iteration helper
+        self,
+        *,
+        node_def: MapNodeDef,
+        worker_def: Any,
+        worker_runner: Any,
+        element: Any,
+        index: int,
+        total: int,
+        rendered_with: dict[str, Any],
+        bound_inputs: dict[str, Any],
+        state: dict[str, Any],
+        ctx: NodeContext,
+        cancel_reason: str = "sibling_failure",
+    ) -> dict[str, Any]:
+        """Phase 3.7 §4.6.2.1 step 5 — one iteration's body.
+
+        Mirrors the sequential body but extracted so the parallel
+        path (Phase 3.10 §16.3) can reuse it under ``asyncio.Task``.
+        The structure is:
+
+        1. Build the worker's input overlay.
+        2. Strict-mode bind validation against the worker's typed
+           ``Inputs(BaseModel)``.
+        3. Mint per-iteration ``NodeContext`` + emit ``started``.
+        4. Dispatch the worker; emit ``completed`` on success or
+           ``failed`` on exception. ``asyncio.CancelledError`` is
+           treated as a sibling-cancellation event (``error_class``
+           = ``"asyncio.CancelledError"`` + ``reason`` =
+           ``cancel_reason``); other exceptions carry their own
+           ``error_class``.
+        5. Return the worker's captured output dict.
+        """
+        iteration_overlay = {
+            **bound_inputs,
+            **rendered_with,
+            node_def.item_as: element,
+        }
+
+        # Strict-mode bind validation per Phase 3.3 §6.4.4. Mismatch
+        # raises BEFORE the iteration's started event so a bad bind
+        # surfaces as the map node's own failure, not a per-iteration
+        # one (matching the sequential body's contract).
+        self._validate_iteration_overlay_strict(
+            worker_name=node_def.apply,
+            worker_def=worker_def,
+            iteration_overlay=iteration_overlay,
+        )
+
+        iter_ctx = ctx.derive_for_iteration(
+            parent_invocation_id=InvocationId(ctx.invocation_id),
+            iteration_index=index,
+            iteration_total=total,
+        )
+
+        iter_started_id = await ctx.emit_workflow_event(
+            WorkflowNodeStartedEvent(
+                workflow_run_id=WorkflowRunId(ctx.workflow_run_id),
+                trace_id=ctx.trace_id,
+                parent_event_id=ctx.parent_event_id,
+                invocation_id=InvocationId(iter_ctx.invocation_id),
+                node_name=node_def.apply,
+                payload={
+                    "node_name": node_def.apply,
+                    "invocation_id": str(iter_ctx.invocation_id),
+                    "type": getattr(worker_def, "type", "<copy_of>"),
+                    "inputs": dict(iteration_overlay),
+                    "caller_chain": list(ctx.caller_chain or ()),
+                    # Phase 3.7 §11.3 — iteration correlation.
+                    "parent_invocation_id": str(ctx.invocation_id),
+                    "iteration_index": index,
+                    "iteration_total": total,
+                },
+            )
+        )
+        # Stamp the iteration's ``parent_event_id`` so any event the
+        # worker emits (state mutations, agent spawn, etc.) chains
+        # back to its own started event, not the map's.
+        object.__setattr__(iter_ctx, "parent_event_id", iter_started_id)
+
+        try:
+            output = await worker_runner.run(
+                node_name=node_def.apply,
+                node_def=worker_def,
+                bound_inputs=iteration_overlay,
+                state=state,
+                ctx=iter_ctx,
+            )
+        except asyncio.CancelledError:
+            # Phase 3.10 §16.3.1 — sibling cancellation. Emit the
+            # cancelled iteration's failed event so the JSONL
+            # forensics view records WHICH iteration was aborted.
+            # ``reason`` defaults to ``"sibling_failure"`` (the
+            # only cancel surface inside a parallel map at v1).
             await ctx.emit_workflow_event(
-                WorkflowNodeCompletedEvent(
+                WorkflowNodeFailedEvent(
                     workflow_run_id=WorkflowRunId(ctx.workflow_run_id),
                     trace_id=ctx.trace_id,
                     parent_event_id=iter_started_id,
@@ -268,15 +467,59 @@ class MapRunner:
                     payload={
                         "node_name": node_def.apply,
                         "invocation_id": str(iter_ctx.invocation_id),
-                        "output": captured,
+                        "error_class": "asyncio.CancelledError",
+                        "reason": cancel_reason,
                         "parent_invocation_id": str(ctx.invocation_id),
                         "iteration_index": index,
                     },
                 )
             )
-            results.append(captured)
+            raise
+        except Exception as exc:
+            # First-failure path — emit the failed iteration's
+            # marker BEFORE re-raising so the JSONL records WHICH
+            # iteration broke. The parent executor's failure path
+            # then emits the map node's own ``workflow.node.failed``
+            # and the run aborts. Partial ``results`` are dropped
+            # on the floor — they only become observable via the
+            # map's ``completed`` event, which never fires here.
+            await ctx.emit_workflow_event(
+                WorkflowNodeFailedEvent(
+                    workflow_run_id=WorkflowRunId(ctx.workflow_run_id),
+                    trace_id=ctx.trace_id,
+                    parent_event_id=iter_started_id,
+                    invocation_id=InvocationId(iter_ctx.invocation_id),
+                    node_name=node_def.apply,
+                    payload={
+                        "node_name": node_def.apply,
+                        "invocation_id": str(iter_ctx.invocation_id),
+                        "error_class": type(exc).__name__,
+                        "message": str(exc),
+                        "parent_invocation_id": str(ctx.invocation_id),
+                        "iteration_index": index,
+                    },
+                )
+            )
+            raise
 
-        return {"results": results}
+        captured = dict(output) if isinstance(output, dict) else {}
+        await ctx.emit_workflow_event(
+            WorkflowNodeCompletedEvent(
+                workflow_run_id=WorkflowRunId(ctx.workflow_run_id),
+                trace_id=ctx.trace_id,
+                parent_event_id=iter_started_id,
+                invocation_id=InvocationId(iter_ctx.invocation_id),
+                node_name=node_def.apply,
+                payload={
+                    "node_name": node_def.apply,
+                    "invocation_id": str(iter_ctx.invocation_id),
+                    "output": captured,
+                    "parent_invocation_id": str(ctx.invocation_id),
+                    "iteration_index": index,
+                },
+            )
+        )
+        return captured
 
     @staticmethod
     def _validate_iteration_overlay_strict(

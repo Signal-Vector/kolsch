@@ -370,9 +370,9 @@ Spec: `process/phase3.9-chat-surface-spec.md`. Build plan: `process/phase3.9-cha
 
 **Effort**: ~2-3 weeks.
 
-### 3.10 — Concurrent executor
+### 3.10 — Concurrent executor — ✅ Done (commit pending)
 
-Spec: `process/phase3.10-concurrent-executor-spec.md` (to be written).
+Spec: `process/phase3.10-concurrent-executor-spec.md`.
 
 **Scope**: parallel fan-out execution for branches that don't share state writes. Switch from `sys.modules` cleanup to per-run module prefix (parallel-safe imports). Map gains optional parallel iteration. Determinism rules documented: event-ordering policy, write-conflict resolution policy for state mutations.
 

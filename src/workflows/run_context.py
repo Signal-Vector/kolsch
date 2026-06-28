@@ -28,6 +28,7 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from workflows.ids import TraceId, WorkflowRunId
+    from workflows.module_isolation import RunModuleNamespace
     from workflows.run_store import WorkflowRunStore
 
 __all__ = [
@@ -40,11 +41,23 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class WorkflowRunContext:
-    """The handle a sub-system reads to emit into the active run."""
+    """The handle a sub-system reads to emit into the active run.
+
+    Phase 3.10 §16.4 — :attr:`module_ns` carries the per-run
+    ``sys.modules`` namespace handle. The
+    :class:`workflows.builtins.catalog_node_runner.CatalogNodeRunner`
+    reads it via :func:`current_workflow_run_context` to register
+    authored Python node modules under a run-id-tagged
+    ``sys.modules`` key, keeping two concurrent runs of the same
+    workflow from racing on a shared module instance. ``None`` (the
+    default) preserves the Phase 3.1 behavior — useful for test
+    paths that exercise the runner without the executor's lifecycle.
+    """
 
     run_id: WorkflowRunId
     trace_id: TraceId
     store: WorkflowRunStore
+    module_ns: RunModuleNamespace | None = None
 
 
 _current_run_context: ContextVar[WorkflowRunContext | None] = ContextVar(

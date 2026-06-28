@@ -22,11 +22,13 @@ NO recursion. The worklist is iterative; sub-workflow nesting (Phase
 
 from __future__ import annotations
 
+import asyncio
 import logging
 import os
 import uuid
 from collections import deque
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import ValidationError
@@ -237,6 +239,25 @@ def _phase_for_type_ref(type_ref: str) -> str:
     return "3.1"
 
 
+@dataclass(slots=True)
+class _PendingNode:
+    """Phase 3.10 §16.2.1 — one node's pre-dispatch handle.
+
+    Carries the bookkeeping the concurrent worklist needs to resume
+    a node's post-dispatch flow (capture, emit completed, cascade
+    prune) after the spawned task settles. The ``ctx`` carries the
+    per-invocation chain pointer + spawned-session/run handles that
+    the success path reads when building the completion payload.
+    """
+
+    node_name: str
+    node_def: Any
+    inv_id: InvocationId
+    started_event_id: Any
+    bound_inputs: dict[str, Any]
+    ctx: NodeContext
+
+
 # ---------------------------------------------------------------------------
 # IterativeExecutor.
 # ---------------------------------------------------------------------------
@@ -369,6 +390,40 @@ class IterativeExecutor:
         self._resumed_open_workflow_invocations: dict[
             str, tuple[InvocationId, WorkflowRunId]
         ] = {}
+        # Phase 3.10 §16.4 — per-run ``sys.modules`` namespace handle.
+        # Published via :class:`WorkflowRunContext` at run start so
+        # the catalog node runner registers authored Python modules
+        # under a run-id-tagged key. Cleanup at run end runs from
+        # every ``finally:`` arm alongside the Phase 3.1
+        # ``cleanup_bundle_imports`` discipline (both fire during the
+        # migration window per master spec §16.4 / build doc AC 2.5).
+        from workflows.module_isolation import (  # noqa: PLC0415
+            RunModuleNamespace,
+        )
+
+        self._module_ns = RunModuleNamespace(run_id=str(run.run_id))
+        # Phase 3.10 §16.5 — JSONL emission lock. Acquired around
+        # every ``emit_event`` call site that fires under concurrent
+        # dispatch so the file's line framing stays intact when two
+        # in-flight tasks would otherwise write simultaneously. The
+        # sequential path acquires this lock too (via
+        # :meth:`_emit_workflow_event`) — the lock is uncontended,
+        # JSONL byte output is byte-identical to Phase 3.9.
+        self._emit_lock = asyncio.Lock()
+        # Phase 3.10 §16.2.1 — state-mutation lock held around any
+        # ``set_state`` / ``delete_state`` invocation under
+        # ``auto``-mode so the resulting ``workflow.state.mutated``
+        # event stream is total-ordered per master spec §11.3. The
+        # validator's run-start gate already guarantees no two
+        # concurrent siblings touch the same key; this lock keeps the
+        # JSONL ordering deterministic across multiple disjoint
+        # mutators.
+        self._state_mutation_lock = asyncio.Lock()
+        # Phase 3.10 §16.9 — high-water mark of concurrent in-flight
+        # node invocations observed during the run. Reported on
+        # ``workflow.run.completed.payload.peak_in_flight`` and in
+        # the CLI envelope. Sequential runs always report ``1``.
+        self._peak_in_flight: int = 1
 
     # ------------------------------------------------------------------
     # Public entry point.
@@ -426,12 +481,16 @@ class IterativeExecutor:
         # dispatcher's ``workflow.tool.called`` emitter) can append to
         # this run's JSONL without threading the run id through their
         # public APIs. The token is reset in the ``finally:`` block so
-        # a failed run doesn't leak its handle.
+        # a failed run doesn't leak its handle. Phase 3.10 §16.4 —
+        # ``module_ns`` rides along on the context so
+        # :class:`CatalogNodeRunner` registers authored Python imports
+        # under this run's prefix.
         run_context_token = set_workflow_run_context(
             WorkflowRunContext(
                 run_id=run_id,
                 trace_id=self._run.trace_id,
                 store=self._store,
+                module_ns=self._module_ns,
             )
         )
 
@@ -446,18 +505,25 @@ class IterativeExecutor:
         # typed envelope. The envelope hoists ``workflow_run_id`` +
         # ``trace_id`` to the top level (master spec §11.3); the
         # ``payload`` keeps the legacy keys for backward compat with
-        # Step 1-4 tests.
+        # Step 1-4 tests. Phase 3.10 §16.9 — ``concurrency_mode`` is
+        # added to the payload ONLY when the workflow opts into
+        # ``auto`` so sequential JSONL stays byte-identical to Phase
+        # 3.9; the CLI envelope defaults to ``sequential`` when the
+        # field is absent.
+        started_payload: dict[str, Any] = {
+            "workflow_ref": self._workflow_ref(),
+            "inputs": dict(self._run.inputs),
+            "trace_id": str(self._run.trace_id),
+        }
+        if self._workflow.concurrency == "auto":
+            started_payload["concurrency_mode"] = "auto"
         self._last_event_id = emit_event(
             self._store,
             WorkflowRunStartedEvent(
                 workflow_run_id=run_id,
                 trace_id=self._run.trace_id,
                 parent_event_id=None,
-                payload={
-                    "workflow_ref": self._workflow_ref(),
-                    "inputs": dict(self._run.inputs),
-                    "trace_id": str(self._run.trace_id),
-                },
+                payload=started_payload,
             ),
         )
 
@@ -484,6 +550,10 @@ class IterativeExecutor:
                 predecessors=predecessors,
             )
         finally:
+            # Phase 3.10 §16.4 — per-run prefix cleanup. Removes only
+            # this run's prefix-tagged entries; two concurrent runs
+            # see distinct cleanups.
+            self._module_ns.cleanup_for_run()
             # Phase 3.1 Step 3 — module-isolation cleanup runs on
             # EVERY terminal state (succeeded / failed / timed_out /
             # aborted) so a subsequent run starts from a clean
@@ -491,6 +561,8 @@ class IterativeExecutor:
             # Third-party packages survive (the snapshot already
             # contains them; the cleanup's ``if name in before:
             # continue`` guard short-circuits before deletion).
+            # Both cleanups run during the migration window per
+            # build doc AC 2.5.
             cleanup_bundle_imports(
                 before=sys_modules_snapshot,
                 workspace_root=self._store.runs_root.parent,
@@ -585,12 +657,16 @@ class IterativeExecutor:
 
         # Phase 3.1 Step 5 — publish run context for the resume
         # process so the tool dispatcher / authz emitters append to
-        # this run's JSONL.
+        # this run's JSONL. Phase 3.10 §16.4 — ``module_ns`` rides
+        # along so a resume process loads its authored Python nodes
+        # under the same prefix it would have under the initial-run
+        # path.
         run_context_token = set_workflow_run_context(
             WorkflowRunContext(
                 run_id=run_id,
                 trace_id=self._run.trace_id,
                 store=self._store,
+                module_ns=self._module_ns,
             )
         )
 
@@ -797,6 +873,10 @@ class IterativeExecutor:
                 predecessors=predecessors,
             )
         finally:
+            # Phase 3.10 §16.4 — per-run prefix cleanup (alongside
+            # the Phase 3.1 bundle cleanup; both fire during the
+            # migration window per AC 2.5).
+            self._module_ns.cleanup_for_run()
             cleanup_bundle_imports(
                 before=sys_modules_snapshot,
                 workspace_root=self._store.runs_root.parent,
@@ -931,11 +1011,16 @@ class IterativeExecutor:
         # Publish the run context for the fork process. Sub-systems
         # (authz, tool dispatcher) append to THIS run's JSONL — not
         # the parent's — so the run id binding here is critical.
+        # Phase 3.10 §16.4 — ``module_ns`` rides along so authored
+        # Python nodes load under the FORKED run's prefix, not the
+        # parent's; the parent's prefix-tagged entries already
+        # belong to the parent process's cleanup.
         run_context_token = set_workflow_run_context(
             WorkflowRunContext(
                 run_id=run_id,
                 trace_id=self._run.trace_id,
                 store=self._store,
+                module_ns=self._module_ns,
             )
         )
 
@@ -1047,6 +1132,10 @@ class IterativeExecutor:
                 predecessors=predecessors,
             )
         finally:
+            # Phase 3.10 §16.4 — per-run prefix cleanup (alongside
+            # the Phase 3.1 bundle cleanup; both fire during the
+            # migration window per AC 2.5).
+            self._module_ns.cleanup_for_run()
             cleanup_bundle_imports(
                 before=sys_modules_snapshot,
                 workspace_root=self._store.runs_root.parent,
@@ -1076,7 +1165,19 @@ class IterativeExecutor:
         the load-bearing guard for resume (the replay pre-populates
         the set with every completed + pruned node, plus the
         just-completed user_input).
+
+        Phase 3.10 §16.2 dispatch fork — ``auto``-mode workflows
+        route through :meth:`_continue_worklist_concurrent` instead;
+        the body below remains the byte-identical sequential path
+        for every Phase 3.1 — Phase 3.9 contract.
         """
+        if self._workflow.concurrency == "auto":
+            return await self._continue_worklist_concurrent(
+                run_id=run_id,
+                run_dir=run_dir,
+                topo=topo,
+                predecessors=predecessors,
+            )
         for node_name in topo:
             # Phase 3.4 Step 1 — resume support. Skip nodes whose
             # decision is already recorded (replayed from the JSONL
@@ -1171,6 +1272,37 @@ class IterativeExecutor:
                 # also holds the legacy keys for back-compat with
                 # Step 1-4 readers.
                 inv_id = InvocationId(f"inv_{uuid.uuid4()}")
+                started_payload: dict[str, Any] = {
+                    "node_name": node_name,
+                    "invocation_id": str(inv_id),
+                    "type": _node_type_ref(node_def),
+                    "inputs": bound_inputs,
+                    # Master spec §11.3 caller_chain carrier:
+                    # the workflow run's own caller_chain
+                    # (the frames it was invoked through).
+                    # v1 ships the empty tuple — the chain
+                    # is populated by Phase 3.7 sub-workflow
+                    # / fork wiring.
+                    "caller_chain": list(
+                        getattr(self._run, "caller_chain", ()) or ()
+                    ),
+                }
+                # Phase 3.10 §16.3 — map nodes carry concurrency_mode +
+                # concurrency on their own started payload so JSONL
+                # consumers can identify sequential-vs-parallel
+                # iteration without re-reading the source workflow.
+                # The per-iteration started events (emitted by the map
+                # runner itself) continue to carry §11.3
+                # parent_invocation_id + iteration_index per Phase 3.7.
+                if started_payload["type"] == "kolsch/nodes/map":
+                    started_payload["concurrency_mode"] = (
+                        "parallel"
+                        if getattr(node_def, "parallel", False)
+                        else "sequential"
+                    )
+                    started_payload["concurrency"] = getattr(
+                        node_def, "concurrency", None
+                    )
                 started_id = emit_event(
                     self._store,
                     WorkflowNodeStartedEvent(
@@ -1179,21 +1311,7 @@ class IterativeExecutor:
                         parent_event_id=self._last_event_id,
                         invocation_id=inv_id,
                         node_name=node_name,
-                        payload={
-                            "node_name": node_name,
-                            "invocation_id": str(inv_id),
-                            "type": _node_type_ref(node_def),
-                            "inputs": bound_inputs,
-                            # Master spec §11.3 caller_chain carrier:
-                            # the workflow run's own caller_chain
-                            # (the frames it was invoked through).
-                            # v1 ships the empty tuple — the chain
-                            # is populated by Phase 3.7 sub-workflow
-                            # / fork wiring.
-                            "caller_chain": list(
-                                getattr(self._run, "caller_chain", ()) or ()
-                            ),
-                        },
+                        payload=started_payload,
                     ),
                 )
                 self._last_event_id = started_id
@@ -1459,15 +1577,22 @@ class IterativeExecutor:
                 self._cleanup_waiting_at(run_dir)
                 return WorkflowRunStatus.ABORTED
 
-        # Step 5 — assemble terminal-keyed outputs.
+        # Step 5 — assemble terminal-keyed outputs. Phase 3.10 §16.9 —
+        # ``peak_in_flight`` is added to the payload ONLY when the
+        # workflow opts into ``auto`` so sequential JSONL stays
+        # byte-identical to Phase 3.9; the CLI envelope defaults to
+        # ``1`` when the field is absent.
         outputs = self._assemble_terminal_outputs(topo)
+        completed_payload: dict[str, Any] = {"outputs": outputs}
+        if self._workflow.concurrency == "auto":
+            completed_payload["peak_in_flight"] = self._peak_in_flight
         self._last_event_id = emit_event(
             self._store,
             WorkflowRunCompletedEvent(
                 workflow_run_id=run_id,
                 trace_id=self._run.trace_id,
                 parent_event_id=self._last_event_id,
-                payload={"outputs": outputs},
+                payload=completed_payload,
             ),
         )
         # Phase 3.4 Step 1 — successful terminal post-resume: the
@@ -1477,6 +1602,488 @@ class IterativeExecutor:
         # no-op for initial-run flow (no sidecar was ever written).
         self._cleanup_waiting_at(run_dir)
         return WorkflowRunStatus.SUCCEEDED
+
+    # ------------------------------------------------------------------
+    # Phase 3.10 §16.2.1 — concurrent worklist for ``auto`` mode.
+    # ------------------------------------------------------------------
+
+    async def _continue_worklist_concurrent(  # noqa: PLR0915, PLR0912 — concurrent algorithm; splitting hides the §16.2.1 ordering
+        self,
+        *,
+        run_id: WorkflowRunId,
+        run_dir: RunDirectory,
+        topo: list[str],
+        predecessors: dict[str, set[str]],
+    ) -> WorkflowRunStatus:
+        """Phase 3.10 §16.2.1 — fan-out ready nodes via ``asyncio.gather``.
+
+        Mirrors the sequential :meth:`_continue_worklist` body's per-node
+        contract (when-gate, bind render, started/completed framing,
+        cascade prune) but dispatches every ready node as a task and
+        awaits the FIRST completion before recomputing the ready set.
+        The run-start gate's :func:`workflows.validator._check_concurrency_invariants`
+        already rejected workflows where this is unsafe, so the body
+        below trusts that disjoint-write invariants hold.
+
+        The dispatch loop's invariants:
+
+        - ``cancel.flag`` is polled at the TOP of every iteration (NOT
+          inside per-node tasks). On detection: every in-flight task
+          is cancelled, ``workflow.run.aborted`` is emitted, sibling
+          cancellations land their own ``workflow.node.failed`` with
+          ``reason="user_cancel"``.
+        - First failure wins: when an in-flight task raises, the
+          remaining tasks are cancelled and emit
+          ``workflow.node.failed`` with ``reason="sibling_failure"``;
+          the run terminates as ``FAILED`` with the original cause on
+          the ``workflow.run.failed`` event.
+        - State-mutating runners (``set_state`` / ``delete_state``)
+          serialise via :attr:`_state_mutation_lock` so the
+          ``workflow.state.mutated`` stream is total-ordered in the
+          JSONL (master spec §11.3 / §16.2.1).
+        """
+        in_flight: dict[asyncio.Task[dict[str, Any]], _PendingNode] = {}
+        try:
+            while True:
+                # cancel.flag at the TOP of every iteration — once per
+                # completed batch, not once per node (master spec §16.6).
+                if run_dir.cancel_flag_path.exists():
+                    await self._cancel_in_flight_and_emit_failed(
+                        in_flight=in_flight,
+                        run_id=run_id,
+                        reason="user_cancel",
+                    )
+                    async with self._emit_lock:
+                        self._emit_aborted(run_id)
+                    self._cleanup_waiting_at(run_dir)
+                    return WorkflowRunStatus.ABORTED
+
+                # Compute ready set: nodes whose preds are all decided,
+                # not already completed/pruned/in-flight.
+                in_flight_names = {
+                    pending.node_name for pending in in_flight.values()
+                }
+                ready_now: list[str] = []
+                for node_name in topo:
+                    if node_name in self._completed_or_skipped:
+                        continue
+                    if node_name in in_flight_names:
+                        continue
+                    if node_name in self._pruned:
+                        continue
+                    if not predecessors[node_name].issubset(
+                        self._completed_or_skipped
+                    ):
+                        continue
+                    ready_now.append(node_name)
+
+                # Dispatch every ready node as a task.
+                for node_name in ready_now:
+                    pending = await self._prepare_concurrent_dispatch(
+                        node_name=node_name, run_id=run_id
+                    )
+                    if pending is None:
+                        # when-gate skipped or pruned — already updated
+                        # the bookkeeping; no task to spawn.
+                        continue
+                    task = asyncio.create_task(
+                        self._invoke_node_runner_for_dispatch(pending)
+                    )
+                    in_flight[task] = pending
+                    if len(in_flight) > self._peak_in_flight:
+                        self._peak_in_flight = len(in_flight)
+
+                # Nothing left to do? Terminal success.
+                if not in_flight:
+                    break
+
+                # Await first task to complete (success OR failure).
+                # Master spec §16.6 — ``cancel.flag`` is polled at
+                # gather-loop boundaries. A short timeout keeps the
+                # flag observably responsive even when every in-flight
+                # task is long-running (bash subprocesses, agent
+                # calls) and would otherwise defer the next check
+                # until at least one task completes. The timeout
+                # loops back to the cancel.flag check; if no task
+                # completed in that window, the loop simply
+                # re-checks the flag and re-dispatches as needed.
+                done, _pending_set = await asyncio.wait(
+                    list(in_flight.keys()),
+                    return_when=asyncio.FIRST_COMPLETED,
+                    timeout=0.1,
+                )
+                if not done:
+                    # No completions yet; loop back to the cancel.flag
+                    # check at the top so a long-running batch stays
+                    # cancellable.
+                    continue
+
+                # First failure cancels siblings — master spec §16.2.2.
+                first_failure: tuple[_PendingNode, BaseException] | None = None
+                for task in done:
+                    pending = in_flight.pop(task)
+                    exc = task.exception()
+                    if exc is None:
+                        output = task.result()
+                        await self._finalize_concurrent_success(
+                            pending=pending, output=output, run_id=run_id
+                        )
+                        continue
+                    if first_failure is None:
+                        first_failure = (pending, exc)
+                    # Defer cancellation of siblings until after this
+                    # for-loop so we don't process them in this batch.
+
+                if first_failure is not None:
+                    failing_pending, failing_exc = first_failure
+                    await self._emit_node_failure_concurrent(
+                        pending=failing_pending,
+                        exc=failing_exc,
+                        run_id=run_id,
+                    )
+                    await self._cancel_in_flight_and_emit_failed(
+                        in_flight=in_flight,
+                        run_id=run_id,
+                        reason="sibling_failure",
+                    )
+                    await self._emit_run_failed_concurrent(
+                        node_name=failing_pending.node_name,
+                        exc=failing_exc,
+                        run_id=run_id,
+                    )
+                    self._cleanup_waiting_at(run_dir)
+                    return WorkflowRunStatus.FAILED
+
+            # Terminal success — emit run.completed (always carries
+            # peak_in_flight under auto mode per master spec §16.9).
+            outputs = self._assemble_terminal_outputs(topo)
+            completed_payload: dict[str, Any] = {
+                "outputs": outputs,
+                "peak_in_flight": self._peak_in_flight,
+            }
+            async with self._emit_lock:
+                self._last_event_id = emit_event(
+                    self._store,
+                    WorkflowRunCompletedEvent(
+                        workflow_run_id=run_id,
+                        trace_id=self._run.trace_id,
+                        parent_event_id=self._last_event_id,
+                        payload=completed_payload,
+                    ),
+                )
+            self._cleanup_waiting_at(run_dir)
+            return WorkflowRunStatus.SUCCEEDED
+        except BaseException:
+            # Safety net — any uncaught exception out of the dispatch
+            # loop (e.g. a programming bug) must cancel orphaned tasks
+            # so asyncio doesn't complain about pending futures at
+            # shutdown.
+            for task in list(in_flight):
+                if not task.done():
+                    task.cancel()
+            for task in list(in_flight):
+                try:
+                    await task
+                except BaseException:  # noqa: BLE001 — drain only
+                    pass
+            raise
+
+    async def _prepare_concurrent_dispatch(
+        self,
+        *,
+        node_name: str,
+        run_id: WorkflowRunId,
+    ) -> _PendingNode | None:
+        """Pre-dispatch logic for one node — mirrors the sequential
+        body's lines from when-gate through ``workflow.node.started``.
+
+        Returns ``None`` when the node was when-skipped or pruned (the
+        bookkeeping has been updated and no task should spawn); returns
+        a :class:`_PendingNode` carrying the inv_id + ctx + bound
+        inputs needed to invoke the runner.
+        """
+        node_def = self._workflow.nodes[node_name]
+
+        if not self._when_holds(node_def):
+            # AND-strict rule 1 — when-skip cascades the same way the
+            # sequential body does (silent — no events for when-skip
+            # subgraphs, per Phase 3.3 Step 2 convention).
+            self._completed_or_skipped.add(node_name)
+            for edge in self._outgoing_edges(node_name):
+                self._pruned_edges.add((edge.from_, edge.to))
+            self._cascade_prune(
+                source=node_name,
+                source_completion_event_id=None,
+                branch_value=None,
+            )
+            return None
+
+        bound_inputs = self._render_bound_inputs(node_name)
+
+        # Mint invocation id, emit started event under the emit lock.
+        inv_id = InvocationId(f"inv_{uuid.uuid4()}")
+        started_payload: dict[str, Any] = {
+            "node_name": node_name,
+            "invocation_id": str(inv_id),
+            "type": _node_type_ref(node_def),
+            "inputs": bound_inputs,
+            "caller_chain": list(
+                getattr(self._run, "caller_chain", ()) or ()
+            ),
+        }
+        async with self._emit_lock:
+            started_id = emit_event(
+                self._store,
+                WorkflowNodeStartedEvent(
+                    workflow_run_id=run_id,
+                    trace_id=self._run.trace_id,
+                    parent_event_id=self._last_event_id,
+                    invocation_id=inv_id,
+                    node_name=node_name,
+                    payload=started_payload,
+                ),
+            )
+        self._last_event_id = started_id
+        self._node_started_event_id[inv_id] = started_id
+        self._invocation_last_event_id[inv_id] = started_id
+
+        ctx = self._build_ctx(
+            inv_id=inv_id,
+            node_def=node_def,
+            parent_event_id=started_id,
+            is_resume_mode=False,
+            recorded_child_run_id=None,
+        )
+        return _PendingNode(
+            node_name=node_name,
+            node_def=node_def,
+            inv_id=inv_id,
+            started_event_id=started_id,
+            bound_inputs=bound_inputs,
+            ctx=ctx,
+        )
+
+    async def _invoke_node_runner_for_dispatch(
+        self, pending: _PendingNode
+    ) -> dict[str, Any]:
+        """Run the node's runner under the appropriate locks. Raises on
+        any non-success path (catalog runner exceptions, BashNonZeroExit
+        when the bash node isn't branchable, generic runner failure)."""
+        # Strict-mode bind validation happens BEFORE the runner runs
+        # so a mismatch still surfaces as ``WorkflowBindTypeMismatch``
+        # carried by the failure path (mirrors the sequential body).
+        self._validate_bound_inputs_strict(
+            node_name=pending.node_name,
+            node_def=pending.node_def,
+            bound_inputs=pending.bound_inputs,
+        )
+        runner = self._registry.get(
+            _node_type_ref(pending.node_def),
+            node_name=pending.node_name,
+        )
+        runner = _apply_node_modifiers(runner, node_def=pending.node_def)
+
+        touches_state = _node_type_ref(pending.node_def) in (
+            "kolsch/nodes/set_state",
+            "kolsch/nodes/delete_state",
+        )
+
+        async def _run_body() -> dict[str, Any]:
+            try:
+                return await runner.run(
+                    node_name=pending.node_name,
+                    node_def=pending.node_def,
+                    bound_inputs=pending.bound_inputs,
+                    state=self._state,
+                    ctx=pending.ctx,
+                )
+            except BashNonZeroExit as bash_exc:
+                if self._bash_treats_nonzero_as_success(pending.node_name):
+                    return bash_exc.captured
+                raise
+
+        if touches_state:
+            # Phase 3.10 §16.2.1 — state-mutation lock serialises the
+            # ``workflow.state.mutated`` event stream so JSONL ordering
+            # stays deterministic across multiple disjoint mutators.
+            async with self._state_mutation_lock:
+                return await _run_body()
+        return await _run_body()
+
+    async def _finalize_concurrent_success(
+        self,
+        *,
+        pending: _PendingNode,
+        output: dict[str, Any],
+        run_id: WorkflowRunId,
+    ) -> None:
+        """Mirror the sequential body's post-success block: capture,
+        branch dispatch, emit ``workflow.node.completed``, cascade
+        prune. Runs serially in the main loop (the task is done; we
+        own the bookkeeping mutations here)."""
+        self._captured[pending.node_name] = dict(output)
+        self._completed_or_skipped.add(pending.node_name)
+
+        branch_value = compute_branch_value(pending.node_def, output)
+        self._dispatch_branch(
+            node_name=pending.node_name,
+            branch_value=branch_value,
+            inv_id=pending.inv_id,
+        )
+
+        completed_payload: dict[str, Any] = {
+            "node_name": pending.node_name,
+            "invocation_id": str(pending.inv_id),
+            "output": dict(output),
+        }
+        if branch_value is not None and any(
+            edge.branch is not None
+            for edge in self._outgoing_edges(pending.node_name)
+        ):
+            completed_payload["branch_value"] = branch_value
+        if (
+            _node_type_ref(pending.node_def) == "kolsch/nodes/agent"
+            and pending.ctx.spawned_session_id is not None
+        ):
+            completed_payload["spawned_session_id"] = str(
+                pending.ctx.spawned_session_id
+            )
+        if (
+            _node_type_ref(pending.node_def) == "kolsch/nodes/workflow"
+            and pending.ctx.spawned_run_id is not None
+        ):
+            completed_payload["child_run_id"] = str(
+                pending.ctx.spawned_run_id
+            )
+
+        async with self._emit_lock:
+            completion_id = emit_event(
+                self._store,
+                WorkflowNodeCompletedEvent(
+                    workflow_run_id=run_id,
+                    trace_id=self._run.trace_id,
+                    parent_event_id=self._invocation_last_event_id.get(
+                        pending.inv_id,
+                        self._node_started_event_id.get(pending.inv_id),
+                    ),
+                    invocation_id=pending.inv_id,
+                    node_name=pending.node_name,
+                    payload=completed_payload,
+                ),
+            )
+        self._last_event_id = completion_id
+        self._node_completed_event_id[pending.node_name] = completion_id
+
+        self._cascade_prune(
+            source=pending.node_name,
+            source_completion_event_id=completion_id,
+            branch_value=branch_value,
+        )
+
+    async def _emit_node_failure_concurrent(
+        self,
+        *,
+        pending: _PendingNode,
+        exc: BaseException,
+        run_id: WorkflowRunId,
+    ) -> None:
+        """Emit ``workflow.node.failed`` for the node whose task raised.
+        Mirrors the sequential body's failure-path emit; ``parent_event_id``
+        chains to the node's started event (Phase 3.1 contract)."""
+        async with self._emit_lock:
+            failed_id = emit_event(
+                self._store,
+                WorkflowNodeFailedEvent(
+                    workflow_run_id=run_id,
+                    trace_id=self._run.trace_id,
+                    parent_event_id=self._node_started_event_id.get(
+                        pending.inv_id
+                    ),
+                    invocation_id=pending.inv_id,
+                    node_name=pending.node_name,
+                    payload={
+                        "node_name": pending.node_name,
+                        "invocation_id": str(pending.inv_id),
+                        "error_class": type(exc).__name__,
+                        "message": str(exc),
+                    },
+                ),
+            )
+        self._last_event_id = failed_id
+
+    async def _cancel_in_flight_and_emit_failed(
+        self,
+        *,
+        in_flight: dict[asyncio.Task[dict[str, Any]], _PendingNode],
+        run_id: WorkflowRunId,
+        reason: str,
+    ) -> None:
+        """Cancel every still-pending task, await its settlement, and
+        emit ``workflow.node.failed`` with ``error_class="asyncio.CancelledError"``
+        + the supplied ``reason`` for each.
+
+        Master spec §16.2.2 / §16.6 — siblings of the failing/aborting
+        node MUST surface their cancellation in the JSONL so the
+        forensics view stays complete; silently dropping them would
+        leave open ``workflow.node.started`` events with no matching
+        terminator.
+        """
+        pending_items = list(in_flight.items())
+        for task, _ in pending_items:
+            task.cancel()
+        for task, pending in pending_items:
+            try:
+                await task
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001 — drain
+                pass
+            async with self._emit_lock:
+                cancelled_id = emit_event(
+                    self._store,
+                    WorkflowNodeFailedEvent(
+                        workflow_run_id=run_id,
+                        trace_id=self._run.trace_id,
+                        parent_event_id=self._node_started_event_id.get(
+                            pending.inv_id
+                        ),
+                        invocation_id=pending.inv_id,
+                        node_name=pending.node_name,
+                        payload={
+                            "node_name": pending.node_name,
+                            "invocation_id": str(pending.inv_id),
+                            "error_class": "asyncio.CancelledError",
+                            "reason": reason,
+                        },
+                    ),
+                )
+            self._last_event_id = cancelled_id
+            in_flight.pop(task, None)
+
+    async def _emit_run_failed_concurrent(
+        self,
+        *,
+        node_name: str,
+        exc: BaseException,
+        run_id: WorkflowRunId,
+    ) -> None:
+        """Emit ``workflow.run.failed`` carrying the original exception
+        as the cause. Master spec §16.9 — under auto mode, the payload
+        carries ``peak_in_flight``."""
+        payload: dict[str, Any] = {
+            "reason": (
+                f"node {node_name!r} raised {type(exc).__name__}"
+            ),
+            "peak_in_flight": self._peak_in_flight,
+        }
+        async with self._emit_lock:
+            self._last_event_id = emit_event(
+                self._store,
+                WorkflowRunFailedEvent(
+                    workflow_run_id=run_id,
+                    trace_id=self._run.trace_id,
+                    parent_event_id=self._last_event_id,
+                    payload=payload,
+                ),
+            )
 
     @staticmethod
     def _cleanup_waiting_at(run_dir: RunDirectory) -> None:
@@ -2009,7 +2616,11 @@ class IterativeExecutor:
         # raised an exception still surfaces as "this invocation
         # failed", not "the last partial mutation failed").
         async def _emit_workflow_event(event: WorkflowEvent) -> EventId:
-            new_id = emit_event(self._store, event)
+            # Phase 3.10 §16.5 — JSONL line framing under concurrent
+            # dispatch. The lock is uncontended in sequential mode
+            # so JSONL byte output is byte-identical to Phase 3.9.
+            async with self._emit_lock:
+                new_id = emit_event(self._store, event)
             self._last_event_id = new_id
             self._invocation_last_event_id[inv_id] = new_id
             return new_id

@@ -213,36 +213,6 @@ nodes:
         load_workflow(_write(tmp_path / "wf.yaml", yaml_text))
 
 
-# ---------------------------------------------------------------------------
-# AC 0.5 — No runtime behavior change yet.
-# ---------------------------------------------------------------------------
-
-
-def test_executor_has_no_concurrency_references() -> None:
-    """AC 0.5 — Step 0 ships parser + errors only. The executor must
-    not yet reference the new fields; Step 3 wires runtime."""
-    src = (
-        Path(__file__).resolve().parent.parent.parent / "src" / "workflows"
-    )
-    text = (src / "executor.py").read_text(encoding="utf-8")
-    # Allow the existing 'concurrent' word used in docstrings about
-    # Phase 3.4 pause/resume; the field name `self._workflow.concurrency`
-    # would be the smoking gun.
-    assert "self._workflow.concurrency" not in text
-    assert "_continue_worklist_concurrent" not in text
-
-
-def test_map_runtime_has_no_parallel_references() -> None:
-    """AC 0.5 — the map runtime must not yet reference ``parallel``
-    or ``concurrency`` fields."""
-    src = (
-        Path(__file__).resolve().parent.parent.parent
-        / "src"
-        / "workflows"
-        / "builtins"
-        / "map.py"
-    )
-    text = src.read_text(encoding="utf-8")
-    assert "node_def.parallel" not in text
-    assert "node_def.concurrency" not in text
-    assert "_run_parallel" not in text
+# Step 0 + Step 1 + Step 3 + Step 4 — runtime guards lifted as each
+# step shipped its surgical change. The MapNodeDef field shape is
+# now exercised by tests in test_workflow_parallel_map.py.

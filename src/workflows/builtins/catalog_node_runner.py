@@ -1,4 +1,4 @@
-"""Authored Python ``@node`` runtime — Phase 3.1 Step 3.
+"""Authored Python ``@node`` runtime — Phase 3.1 Step 3 + Phase 3.10 §16.4.
 
 Routes every ``type: <bundle>/nodes/<name>`` ref that is NOT a
 reserved built-in slot through this runner. The catalog entry's
@@ -16,7 +16,12 @@ shapes:
 
 Module isolation is the executor's responsibility (Step 3 wires
 ``snapshot_sys_modules`` / ``cleanup_bundle_imports`` around the
-worklist walk) — this runner only imports + invokes.
+worklist walk) — this runner only imports + invokes. Phase 3.10
+§16.4 adds per-run sys.modules namespacing: when the active
+:class:`workflows.run_context.WorkflowRunContext` carries a
+:class:`workflows.module_isolation.RunModuleNamespace`, the import
+key is wrapped with that namespace's prefix so two concurrent runs
+loading the same module observe distinct module instances.
 """
 
 from __future__ import annotations
@@ -167,7 +172,10 @@ class CatalogNodeRunner:
         executor instance don't re-import. The executor's
         module-isolation cleanup at run end (Step 3) removes the
         bundle modules from ``sys.modules`` so a subsequent run
-        picks up fresh code.
+        picks up fresh code. Phase 3.10 §16.4 — when the active
+        :class:`WorkflowRunContext` carries a ``module_ns``, the
+        import key is wrapped with the run-specific prefix so
+        concurrent runs each see a distinct module instance.
         """
         cached = self._cache.get(type_ref)
         if cached is not None:
@@ -194,10 +202,27 @@ def _import_module(*, type_ref: str, entry_path: str) -> Any:  # noqa: ANN401
     """Load the authored node module via :mod:`importlib.util`.
 
     The synthetic module name embeds the ref so concurrent runs
-    targeting different bundles never share a key. The executor's
-    bundle-prefix cleanup strips these on terminal state.
+    targeting different bundles never share a key. Phase 3.10 §16.4
+    additionally wraps the key with the active run's
+    :class:`workflows.module_isolation.RunModuleNamespace` prefix
+    (when one is published on the contextvar) so two concurrent
+    runs loading the SAME ref each see a distinct module instance.
+    The executor's bundle-prefix cleanup + per-run prefix cleanup
+    both strip these on terminal state.
     """
-    module_name = f"_kolsch_node_{type_ref.replace('/', '_')}"
+    from workflows.run_context import (  # noqa: PLC0415
+        current_workflow_run_context,
+    )
+
+    canonical = f"_kolsch_node_{type_ref.replace('/', '_')}"
+    run_ctx = current_workflow_run_context()
+    if run_ctx is not None and run_ctx.module_ns is not None:
+        module_name = run_ctx.module_ns.wrap_module_name(canonical)
+    else:
+        # Fallback for test paths that exercise the runner directly
+        # without the executor's lifecycle — preserves Phase 3.1
+        # behavior byte-for-byte.
+        module_name = canonical
     spec = importlib.util.spec_from_file_location(
         module_name, Path(entry_path)
     )

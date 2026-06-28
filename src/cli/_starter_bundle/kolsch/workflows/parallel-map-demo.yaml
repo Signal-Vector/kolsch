@@ -1,0 +1,32 @@
+# Phase 3.10 — canonical parallel-map example.
+#
+# A single map node fans out over a 10-element list. The worker is
+# a small bash node that sleeps 100ms then echoes the index;
+# ``concurrency: 5`` gates the worker dispatch via a semaphore so at
+# most 5 iterations run in parallel (two batches of 5 -> ~200ms
+# wall-clock vs. ~1s for the sequential variant).
+#
+# Run it with:
+#
+#   kolsch workflows run kolsch/workflows/parallel-map-demo
+#
+# Observe results.length == 10 and results[i].stdout contains "i\n"
+# in index order regardless of completion order.
+description: "Parallel map over a 10-element list with a semaphore-bounded worker."
+
+nodes:
+  print_index:
+    type: kolsch/nodes/bash
+    command: "sleep 0.1 && echo {{ inputs.index }}"
+    description: "Worker — sleeps 100ms then echoes the iteration index."
+  fan_out:
+    type: kolsch/nodes/map
+    apply: print_index
+    over: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9]
+    item_as: index
+    parallel: true
+    concurrency: 5
+    description: "Parallel fan-out, max 5 iterations in flight."
+
+graph:
+  edges: []

@@ -1497,6 +1497,7 @@ def _render_terminal_for_command(  # noqa: PLR0913 — seven explicit kw args; s
     from workflows.run import WorkflowRunStatus  # noqa: PLC0415
 
     payload = _terminal_payload(store, run_id)
+    mode, peak = _concurrency_envelope(store, run_id)
     if status == WorkflowRunStatus.SUCCEEDED:
         if fmt == "json":
             out.write(
@@ -1507,6 +1508,8 @@ def _render_terminal_for_command(  # noqa: PLR0913 — seven explicit kw args; s
                         "run_id": str(run_id),
                         "status": status.value,
                         "outputs": payload.get("outputs", {}),
+                        "concurrency_mode": mode,
+                        "peak_in_flight": peak,
                     },
                 )
             )
@@ -1520,6 +1523,8 @@ def _render_terminal_for_command(  # noqa: PLR0913 — seven explicit kw args; s
                 out.write(
                     _json.dumps(outputs, sort_keys=True, default=str) + "\n"
                 )
+            out.write(f"concurrency_mode: {mode}\n")
+            out.write(f"peak_in_flight: {peak}\n")
         return 0
     if status == WorkflowRunStatus.WAITING_FOR_INPUT:
         hint = (
@@ -1616,6 +1621,36 @@ def _drain_tail_to_writer(store: Any, run_id: Any, out: TextIO) -> None:  # noqa
         out.write(_json.dumps(event, sort_keys=True, default=str))
         out.write("\n")
         out.flush()
+
+
+def _concurrency_envelope(store: Any, run_id: Any) -> tuple[str, int]:  # noqa: ANN401
+    """Phase 3.10 §16.9 — surface ``concurrency_mode`` + ``peak_in_flight``.
+
+    Defaults to ``("sequential", 1)`` so pre-Phase-3.10 runs (and
+    Phase 3.10 ``sequential``-mode runs which omit both fields for
+    byte-identity) render the expected sequential envelope row.
+    """
+    mode = "sequential"
+    peak = 1
+    try:
+        events = list(store.read_events(run_id))
+    except FileNotFoundError:
+        return mode, peak
+    for event in events:
+        payload = event.get("payload") or {}
+        kind = event.get("kind")
+        if kind == "workflow.run.started":
+            field = payload.get("concurrency_mode")
+            if isinstance(field, str):
+                mode = field
+        elif kind in (
+            "workflow.run.completed",
+            "workflow.run.failed",
+        ):
+            field = payload.get("peak_in_flight")
+            if isinstance(field, int) and field > 0:
+                peak = field
+    return mode, peak
 
 
 def _terminal_payload(store: Any, run_id: Any) -> dict[str, Any]:  # noqa: ANN401

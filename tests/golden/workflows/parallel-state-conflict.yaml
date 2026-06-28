@@ -1,0 +1,29 @@
+# expected_error: WorkflowParallelStateConflict
+# Phase 3.10 §16.2 — two sibling parallel branches under
+# `concurrency: auto` both writing to `state.counter`. The run-start
+# gate rejects with WorkflowParallelStateConflict naming both nodes
+# plus the shared state key.
+concurrency: auto
+nodes:
+  start:
+    type: kolsch/nodes/noop
+  bump_a:
+    type: kolsch/nodes/set_state
+    keys:
+      counter: 1
+  bump_b:
+    type: kolsch/nodes/set_state
+    keys:
+      counter: 2
+  done:
+    type: kolsch/nodes/noop
+graph:
+  edges:
+    - from: start
+      to: bump_a
+    - from: start
+      to: bump_b
+    - from: bump_a
+      to: done
+    - from: bump_b
+      to: done

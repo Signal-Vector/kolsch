@@ -862,15 +862,39 @@ Ship per-run module isolation.
 
 2. **`CatalogNodeRunner` extension**:
 
+   > **Amendment (post-Step-2 review).** The original wording of
+   > this section said to register the module under BOTH the
+   > canonical and run-prefixed keys. That contradicts master spec
+   > §16.4: *"The original `bundles.kolsch.nodes.transform` key is
+   > NEVER written to during a run."* Writing the synthetic
+   > canonical key (`_kolsch_node_<safe_ref>`) from two concurrent
+   > runs would race for that single key and defeat the per-run
+   > isolation invariant the prefix exists to protect. The spec is
+   > authoritative; the build-doc-prescribed dual-key write is
+   > superseded by the EITHER/OR scheme below. Phase 3.1
+   > back-compat is preserved by `cleanup_bundle_imports`'s
+   > `__file__`-based discrimination, NOT by the canonical key
+   > being present.
+
    - On a fresh import of a bundle module (when resolving a 3-seg
-     ref `<bundle>/nodes/<name>`), import the module under its
-     canonical name, then ALSO register it under the run-prefixed
-     key via `sys.modules[ns.wrap_module_name(canonical)] = module`.
-   - On subsequent imports during the SAME run, prefer the
-     prefixed key (the runner caches the runner-instance under
-     the prefixed key so it stays distinct across runs).
-   - The canonical-name `sys.modules` entry remains for back-compat
-     with the Phase 3.1 cleanup; both paths coexist.
+     ref `<bundle>/nodes/<name>`):
+     - If a per-run `RunModuleNamespace` is published on the
+       active `WorkflowRunContext`, register the loaded module
+       ONLY under the prefixed key
+       `sys.modules[ns.wrap_module_name(canonical)] = module`.
+     - Otherwise (test-direct paths exercising the runner without
+       the executor lifecycle), register ONLY under the synthetic
+       canonical key `_kolsch_node_<safe_ref>` — the Phase 3.1
+       fallback.
+   - Within a run, subsequent imports of the same ref hit the
+     prefixed key directly; two concurrent runs each have their
+     own copy and never overwrite each other.
+   - Phase 3.1's `cleanup_bundle_imports` continues to remove
+     prefixed entries on terminal status because it discriminates
+     by `module.__file__` being under `workspace_root / "bundles"`,
+     not by `sys.modules` key name. Phase 3.10's
+     `RunModuleNamespace.cleanup_for_run` removes the same entries
+     by key prefix — both cleanups fire defensively.
 
 3. **`IterativeExecutor.__init__` extension**:
 
@@ -898,8 +922,12 @@ Ship per-run module isolation.
      loading the same bundle node module: each run sees a distinct
      module instance under a distinct `sys.modules` key; after
      cleanup, neither run's keys remain.
-   - **Sequential run still works** — a single run loads + cleans
-     up correctly under both the prefixed and canonical keys.
+   - **Sequential run still works** — a single run with no
+     active per-run namespace loads under the synthetic canonical
+     key (Phase 3.1 fallback); a single run with the executor's
+     namespace active loads under the prefixed key only.
+     `cleanup_bundle_imports` removes the entry either way via
+     its `__file__`-based discriminator.
    - **Cleanup removes only this run's keys** — load run A's
      module; load run B's module; cleanup A → A's keys gone, B's
      keys remain.
@@ -912,7 +940,11 @@ Ship per-run module isolation.
 2.1. `RunModuleNamespace` class shipped with documented prefix
      format.
 2.2. `CatalogNodeRunner` registers loaded modules under the
-     prefixed key.
+     prefixed key when a per-run `RunModuleNamespace` is active;
+     falls back to the synthetic canonical key when none is
+     published (preserves Phase 3.1 test-direct behavior). The
+     canonical key is NEVER written when a namespace is active
+     (master spec §16.4).
 2.3. `IterativeExecutor.__init__` constructs `_module_ns`.
 2.4. `run` / `resume` / `start_from_fork` `finally:` arms call
      `cleanup_for_run()`.

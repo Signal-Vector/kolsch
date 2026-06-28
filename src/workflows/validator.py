@@ -38,6 +38,7 @@ from __future__ import annotations
 
 import importlib.util
 import inspect
+import re
 import typing
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
@@ -56,6 +57,7 @@ from workflows.errors import (
     WorkflowFromAssetTypeError,
     WorkflowFromNotFound,
     WorkflowFromShapeError,
+    WorkflowInvalidConcurrency,
     WorkflowInvalidTimeout,
     WorkflowJinjaRefUnknown,
     WorkflowMapperWorkerNotAddressable,
@@ -65,6 +67,7 @@ from workflows.errors import (
     WorkflowNodeNotDefined,
     WorkflowNodeReturnTypeInvalid,
     WorkflowNodeSignatureInvalid,
+    WorkflowParallelStateConflict,
     WorkflowTimeoutShadowsNode,
     WorkflowUnreachableNode,
     WorkflowValidationError,
@@ -225,6 +228,7 @@ def validate_workflow(
         ("catalog-node-defs", _check_catalog_node_defs),
         ("authz", _check_authz),
         ("timeouts", _check_timeouts),
+        ("concurrency", _check_concurrency_invariants),
     ):
         layer_errors, layer_warnings = check(
             workflow=workflow, catalog=catalog, file=file
@@ -1403,5 +1407,422 @@ def _check_timeouts(
             )
 
     return errors, warnings
+
+
+# ---------------------------------------------------------------------------
+# Phase 3.10 §16.2 / §16.3 — concurrency invariants.
+# ---------------------------------------------------------------------------
+
+
+# Master spec §16.2 — conservative ``state.<key>`` reference scanner.
+# Matches a literal ``state.``-dot prefix followed by a Python identifier.
+# Over-matches by design: any string containing the substring (a stray
+# log line such as ``"state.foo updated"``) WILL register as a state
+# read. The gate's contract is to REJECT possibly-unsafe workflows; a
+# false positive is on-spec, a false negative would be a correctness bug.
+_STATE_REF_RE: re.Pattern[str] = re.compile(
+    r"state\.([a-zA-Z_][a-zA-Z_0-9]*)"
+)
+
+
+def _collect_parallel_branch_groups(
+    workflow: Workflow,
+) -> list[tuple[str, list[set[str]]]]:
+    """Decompose every fan-out point in ``workflow`` into its parallel
+    branches — Phase 3.10 §16.2 / build §1.
+
+    Returns one ``(fan_out_node, branches)`` entry per fan-out point.
+    A fan-out point is a node with two or more *distinct* outgoing
+    edges WHERE NONE carry a ``branch:`` selector (branch edges are
+    exclusive — only one fires per dispatch — so they are NOT a
+    concurrency surface).
+
+    Each branch is the connected forward subgraph rooted at one of the
+    fan-out's outgoing-edge targets, walked along non-branch edges
+    only, stopping at the next confluence (a node with two or more
+    non-branch incoming edges). The confluence node itself is
+    EXCLUDED from the branch (the post-confluence subgraph belongs to
+    a different analysis frame).
+
+    Nested fan-outs are NOT collapsed here — they are surfaced as
+    their own ``(fan_out_node, branches)`` entry, which gets its own
+    pair-wise conflict pass.
+    """
+    if workflow.graph is None:
+        return []
+
+    node_names = set(workflow.nodes.keys())
+    non_branch_outgoing: dict[str, set[str]] = {n: set() for n in node_names}
+    non_branch_incoming_count: dict[str, int] = dict.fromkeys(node_names, 0)
+    for edge in workflow.graph.edges:
+        if edge.branch is not None:
+            continue
+        if edge.from_ not in node_names or edge.to not in node_names:
+            continue
+        if edge.to not in non_branch_outgoing[edge.from_]:
+            non_branch_outgoing[edge.from_].add(edge.to)
+            non_branch_incoming_count[edge.to] += 1
+
+    groups: list[tuple[str, list[set[str]]]] = []
+    for node_name in workflow.nodes:
+        targets = non_branch_outgoing.get(node_name, set())
+        if len(targets) < 2:
+            continue
+        branches = [
+            _walk_parallel_branch(
+                start=target,
+                outgoing=non_branch_outgoing,
+                incoming_count=non_branch_incoming_count,
+            )
+            for target in sorted(targets)
+        ]
+        groups.append((node_name, branches))
+    return groups
+
+
+def _walk_parallel_branch(
+    *,
+    start: str,
+    outgoing: dict[str, set[str]],
+    incoming_count: dict[str, int],
+) -> set[str]:
+    """BFS forward from ``start`` along non-branch edges. Stops
+    descending through any node that is a confluence (non-branch
+    ``incoming_count > 1``) other than the starting node itself."""
+    visited: set[str] = set()
+    queue: list[str] = [start]
+    while queue:
+        node = queue.pop()
+        if node in visited:
+            continue
+        # Confluence nodes terminate the branch (the branch ENDS at
+        # the confluence; the confluence belongs to no branch).
+        if node != start and incoming_count.get(node, 0) > 1:
+            continue
+        visited.add(node)
+        for nxt in outgoing.get(node, set()):
+            if nxt not in visited:
+                queue.append(nxt)
+    return visited
+
+
+def _branch_state_write_set(
+    workflow: Workflow, branch: set[str]
+) -> dict[str, str]:
+    """Collect every ``state.<key>`` mutated by the branch — Phase
+    3.10 §16.2 / build §2.
+
+    Returns a mapping ``state_key -> node_name`` so the gate can
+    identify *which* node touched the conflicting key when raising
+    :class:`WorkflowParallelStateConflict`.
+
+    Sequential maps (``parallel: false``) recurse into the worker
+    node; parallel maps (``parallel: true``) are inspected separately
+    by :func:`_check_parallel_map_workers` and contribute no writes
+    here (a parallel map that writes state was already rejected).
+    Sub-workflow nodes are OPAQUE per Phase 3.7 — child state is
+    isolated, so a parent branch's write set does not include the
+    child's writes.
+    """
+    writes: dict[str, str] = {}
+    visited_workers: set[str] = set()
+
+    def _collect_from_node(node_name: str) -> None:
+        node = workflow.nodes.get(node_name)
+        if node is None:
+            return
+        if isinstance(node, SetStateNodeDef):
+            for key in node.keys:
+                writes.setdefault(str(key), node_name)
+            return
+        if isinstance(node, DeleteStateNodeDef):
+            for key in node.keys:
+                writes.setdefault(str(key), node_name)
+            return
+        if isinstance(node, MapNodeDef):
+            # Parallel maps that survive validation have no state
+            # writes (the gate rejects them otherwise). Sequential
+            # maps contribute their worker's writes transitively.
+            if getattr(node, "parallel", False):
+                return
+            worker = node.apply
+            if worker in visited_workers:
+                return
+            visited_workers.add(worker)
+            _collect_from_node(worker)
+            return
+        # All other node types (bash, agent, sub-workflow, etc.) do
+        # not mutate state at this layer. Sub-workflow opacity is
+        # explicit per Phase 3.7 — its internal mutations belong to
+        # the child run, not the parent.
+
+    for node_name in branch:
+        _collect_from_node(node_name)
+    return writes
+
+
+def _branch_state_read_set(
+    workflow: Workflow, branch: set[str]
+) -> dict[str, str]:
+    """Conservative scan for ``state.<key>`` references in every
+    Jinja-evaluable string field of every node in ``branch`` — Phase
+    3.10 §16.2 / build §3.
+
+    Returns a mapping ``state_key -> node_name`` for the first node
+    in the branch found to reference the key. Sequential maps recurse
+    into their worker; sub-workflows are opaque (the child's reads
+    don't leak to the parent's read set).
+    """
+    reads: dict[str, str] = {}
+    visited_workers: set[str] = set()
+
+    def _scan_value(value: Any, owner: str) -> None:  # noqa: ANN401
+        if isinstance(value, str):
+            for match in _STATE_REF_RE.finditer(value):
+                reads.setdefault(match.group(1), owner)
+            return
+        if isinstance(value, list):
+            for item in value:
+                _scan_value(item, owner)
+            return
+        if isinstance(value, dict):
+            for inner in value.values():
+                _scan_value(inner, owner)
+
+    def _scan_node(node_name: str) -> None:
+        node = workflow.nodes.get(node_name)
+        if node is None:
+            return
+        # Common ``when:`` modifier across all node types.
+        when_value = getattr(node, "when", None)
+        if when_value is not None:
+            _scan_value(when_value, node_name)
+        for value in _type_specific_jinja_values(node):
+            _scan_value(value, node_name)
+        # SetState's ``keys:`` values are scanned by the type-specific
+        # helper above; DeleteState only carries key names, not values.
+        if isinstance(node, MapNodeDef):
+            if getattr(node, "parallel", False):
+                return
+            worker = node.apply
+            if worker in visited_workers:
+                return
+            visited_workers.add(worker)
+            _scan_node(worker)
+
+    for node_name in branch:
+        _scan_node(node_name)
+    return reads
+
+
+def _walk_worker_descendants(
+    workflow: Workflow, start: str
+) -> list[str]:
+    """Return the transitive worker subgraph rooted at ``start`` —
+    used by :func:`_check_parallel_map_workers` to find state
+    mutators inside a ``parallel: true`` map's worker chain.
+
+    Sub-workflow nodes terminate the walk (their children are
+    isolated; the gate does not peer into them). Sequential maps
+    recurse into their own worker; parallel maps inside the chain
+    are flagged separately by the outer pass.
+    """
+    visited: list[str] = []
+    seen: set[str] = set()
+
+    def _recurse(node_name: str) -> None:
+        if node_name in seen:
+            return
+        seen.add(node_name)
+        node = workflow.nodes.get(node_name)
+        if node is None:
+            return
+        visited.append(node_name)
+        if isinstance(node, MapNodeDef):
+            _recurse(node.apply)
+        # WorkflowNodeDef → opaque; do not recurse into ``ref:``.
+
+    _recurse(start)
+    return visited
+
+
+def _check_parallel_map_workers(
+    *,
+    workflow: Workflow,
+    file: str,
+) -> list[WorkflowValidationError]:
+    """Reject every ``parallel: true`` map whose worker chain reaches
+    a ``set_state`` / ``delete_state`` node — Phase 3.10 §16.3 / build §5.
+
+    Also rejects non-positive ``concurrency:`` integers with
+    :class:`WorkflowInvalidConcurrency`. Sequential maps and the
+    ``concurrency:`` field on sequential maps are out of scope here.
+    """
+    errors: list[WorkflowValidationError] = []
+    for node_name, node in workflow.nodes.items():
+        if not isinstance(node, MapNodeDef):
+            continue
+        # Validate ``concurrency:`` positivity regardless of
+        # ``parallel:`` — a ``concurrency:`` knob on a sequential map
+        # is meaningless but harmless; a non-positive value is still
+        # a config error.
+        if node.concurrency is not None and (
+            not isinstance(node.concurrency, int)
+            or isinstance(node.concurrency, bool)
+            or node.concurrency <= 0
+        ):
+            errors.append(
+                WorkflowInvalidConcurrency(
+                    file=file,
+                    line=0,
+                    node=node_name,
+                    value=node.concurrency,
+                )
+            )
+        if not node.parallel:
+            continue
+        for descendant in _walk_worker_descendants(workflow, node.apply):
+            descendant_node = workflow.nodes.get(descendant)
+            if isinstance(
+                descendant_node, (SetStateNodeDef, DeleteStateNodeDef)
+            ):
+                # Name the first state key the descendant writes so
+                # the error message points at the conflicting surface.
+                keys_iter: Any = (
+                    descendant_node.keys
+                    if isinstance(descendant_node, DeleteStateNodeDef)
+                    else list(descendant_node.keys)
+                )
+                first_key = next(iter(keys_iter), "<unknown>")
+                errors.append(
+                    WorkflowParallelStateConflict(
+                        file=file,
+                        line=0,
+                        node_a=node_name,
+                        node_b=descendant,
+                        state_key=str(first_key),
+                    )
+                )
+                break
+    return errors
+
+
+def _check_concurrency_invariants(
+    *,
+    workflow: Workflow,
+    catalog: AssetCatalog,
+    file: str,
+) -> tuple[list[WorkflowValidationError], list[WorkflowValidationWarning]]:
+    """Phase 3.10 §16.2 / §16.3 — run-start gate static analysis for
+    concurrent execution safety.
+
+    Three independent sub-passes, ALL findings accumulated (the
+    layer never short-circuits):
+
+    1. ``parallel: true`` map worker subgraph reaches a state mutator
+       → :class:`WorkflowParallelStateConflict`.
+    2. ``concurrency:`` integer ``<= 0`` →
+       :class:`WorkflowInvalidConcurrency`.
+    3. (``auto`` mode only) sibling parallel branches whose
+       state-write or state-read sets overlap →
+       :class:`WorkflowParallelStateConflict`.
+
+    ``sequential``-mode workflows skip the third sub-pass entirely —
+    the branches do NOT execute concurrently, so no conflict is
+    possible. Sub-passes 1 and 2 still run because they reject
+    structural misuse independent of the workflow-level mode.
+    """
+    _ = catalog
+    errors: list[WorkflowValidationError] = []
+    warnings: list[WorkflowValidationWarning] = []
+
+    # Sub-pass 1 + 2 — parallel map worker walk + positive concurrency.
+    errors.extend(_check_parallel_map_workers(workflow=workflow, file=file))
+
+    # Sub-pass 3 — sibling branch conflict, ``auto`` mode only.
+    if workflow.concurrency != "auto":
+        return errors, warnings
+    if workflow.graph is None:
+        return errors, warnings
+
+    seen_pairs: set[tuple[str, str, str]] = set()
+    for _fan_out_node, branches in _collect_parallel_branch_groups(workflow):
+        # Pre-compute per-branch write/read sets once; pair-check
+        # below. Each set is ``{state_key: owning_node_name}`` so the
+        # raised error can name the actual offending node (not just
+        # the branch root).
+        sets: list[tuple[dict[str, str], dict[str, str]]] = [
+            (
+                _branch_state_write_set(workflow, branch),
+                _branch_state_read_set(workflow, branch),
+            )
+            for branch in branches
+        ]
+        for i, (writes_a, reads_a) in enumerate(sets):
+            for j in range(i + 1, len(sets)):
+                writes_b, reads_b = sets[j]
+                # Write-write, then write-read in each direction.
+                for key, owner_a in writes_a.items():
+                    if key in writes_b:
+                        _record_conflict(
+                            errors=errors,
+                            seen=seen_pairs,
+                            file=file,
+                            node_a=owner_a,
+                            node_b=writes_b[key],
+                            state_key=key,
+                        )
+                    if key in reads_b:
+                        _record_conflict(
+                            errors=errors,
+                            seen=seen_pairs,
+                            file=file,
+                            node_a=owner_a,
+                            node_b=reads_b[key],
+                            state_key=key,
+                        )
+                for key, owner_b in writes_b.items():
+                    if key in reads_a:
+                        _record_conflict(
+                            errors=errors,
+                            seen=seen_pairs,
+                            file=file,
+                            node_a=reads_a[key],
+                            node_b=owner_b,
+                            state_key=key,
+                        )
+
+    return errors, warnings
+
+
+def _record_conflict(
+    *,
+    errors: list[WorkflowValidationError],
+    seen: set[tuple[str, str, str]],
+    file: str,
+    node_a: str,
+    node_b: str,
+    state_key: str,
+) -> None:
+    """Append a :class:`WorkflowParallelStateConflict` finding, deduping
+    so the same pair-key combination only surfaces once even when the
+    write-write and write-read passes both match."""
+    pair_key = (
+        node_a if node_a < node_b else node_b,
+        node_b if node_a < node_b else node_a,
+        state_key,
+    )
+    if pair_key in seen:
+        return
+    seen.add(pair_key)
+    errors.append(
+        WorkflowParallelStateConflict(
+            file=file,
+            line=0,
+            node_a=node_a,
+            node_b=node_b,
+            state_key=state_key,
+        )
+    )
 
 

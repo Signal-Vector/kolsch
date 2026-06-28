@@ -1,0 +1,40 @@
+# Phase 3.10 — negative-test fixture for the run-start gate.
+#
+# Two sibling ``set_state`` nodes both write ``state.counter`` under
+# ``concurrency: auto``. The validator's
+# :func:`_check_concurrency_invariants` pass rejects this with
+# :class:`WorkflowParallelStateConflict` naming both nodes plus the
+# shared state key.
+#
+# Run it with:
+#
+#   kolsch workflows run kolsch/workflows/parallel-state-conflict
+#
+# Expect the run-start gate to fail before the worklist dispatches.
+description: "Negative example — two sibling state writers conflict at the gate."
+concurrency: auto
+
+nodes:
+  start:
+    type: kolsch/nodes/noop
+  bump_a:
+    type: kolsch/nodes/set_state
+    keys:
+      counter: 1
+  bump_b:
+    type: kolsch/nodes/set_state
+    keys:
+      counter: 2
+  done:
+    type: kolsch/nodes/noop
+
+graph:
+  edges:
+    - from: start
+      to: bump_a
+    - from: start
+      to: bump_b
+    - from: bump_a
+      to: done
+    - from: bump_b
+      to: done
