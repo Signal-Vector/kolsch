@@ -73,6 +73,7 @@ __all__ = [
     "WorkflowNotRunnable",
     "WorkflowPausedForInput",
     "WorkflowResumeRejected",
+    "WorkflowRunNotFound",
     "WorkflowRuntimeError",
     "WorkflowSecretUnresolved",
     "WorkflowTimeoutExceeded",
@@ -1458,6 +1459,36 @@ class WorkflowResumeRejected(WorkflowRuntimeError):
                 problem=(
                     f"workflow run {run_id!r} cannot be resumed "
                     f"(status={status!r}; expected 'waiting_for_input')"
+                ),
+            )
+        )
+
+
+class WorkflowRunNotFound(WorkflowRuntimeError):
+    """Phase 3.8 — target run's meta or events.jsonl is missing.
+
+    Raised by :meth:`workflows.executor.IterativeExecutor.start_from_fork`
+    (and the ``kolsch workflows fork`` / ``events`` CLI handlers) when
+    the targeted run cannot be loaded — either its meta sidecar was
+    never created, or its ``events.jsonl`` has been deleted out from
+    under us. Distinct from :class:`WorkflowResumeRejected` (which
+    fires for a run that exists but isn't in the right status).
+    """
+
+    caller_message: ClassVar[str] = (
+        "The workflow run you're looking for is no longer available. "
+        "Share the run ID with your engineer."
+    )
+    identifying_names_keys: ClassVar[tuple[str, ...]] = ("run_id",)
+
+    def __init__(self, *, run_id: str) -> None:
+        self.run_id = run_id
+        super().__init__(
+            _runtime_str(
+                self,
+                problem=(
+                    f"workflow run {run_id!r} not found or its events log "
+                    "has been deleted"
                 ),
             )
         )

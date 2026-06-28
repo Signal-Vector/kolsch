@@ -79,6 +79,29 @@ class ParentRunPointer(BaseModel):
     invocation_id: "InvocationId"
 
 
+class ForkedFrom(BaseModel):
+    """Phase 3.8 — parent-run pointer on forked workflow runs.
+
+    Mirrors the shape of :class:`ParentRunPointer` (Phase 3.7's
+    sub-workflow pointer) and :class:`FromWorkflowRun` (Phase 3.2's
+    agent-session pointer). The three patterns are intentionally
+    symmetric so cross-JSONL forensics tools can handle all three
+    parent-pointer surfaces uniformly.
+
+    ``run_id`` identifies the workflow run being forked from;
+    ``fork_event_id`` pins the event in that run's ``events.jsonl``
+    at which the fork is rooted. A forked run can also carry
+    ``parent`` (if it was originally spawned by a sub-workflow node)
+    — the two fields are independent.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    # String forward refs — see ``_resolve_forward_refs`` below.
+    run_id: "WorkflowRunId"
+    fork_event_id: EventId
+
+
 def _resolve_forward_refs() -> None:
     """Rebind the ``WorkflowRunId`` / ``InvocationId`` forward refs.
 
@@ -102,6 +125,7 @@ def _resolve_forward_refs() -> None:
     }
     FromWorkflowRun.model_rebuild(_types_namespace=namespace)
     ParentRunPointer.model_rebuild(_types_namespace=namespace)
+    ForkedFrom.model_rebuild(_types_namespace=namespace)
 
 
 # The module-level call deliberately swallows ``ImportError`` so the

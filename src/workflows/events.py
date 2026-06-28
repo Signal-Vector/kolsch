@@ -57,6 +57,8 @@ __all__ = [
     "WorkflowRunAbortedEvent",
     "WorkflowRunCompletedEvent",
     "WorkflowRunFailedEvent",
+    "WorkflowRunForkedFromEvent",
+    "WorkflowRunForkedFromPayload",
     "WorkflowRunResumedEvent",
     "WorkflowRunStartedEvent",
     "WorkflowRunTimedOutEvent",
@@ -113,6 +115,13 @@ class WorkflowEventKind(StrEnum):
     # navigate parent→child JSONLs without re-deriving the linkage.
     CALLED_WORKFLOW = "workflow.node.called_workflow"
     CALLED_WORKFLOW_COMPLETED = "workflow.node.called_workflow_completed"
+    # Phase 3.8 §11.1 — emitted as the FIRST event of every forked run's
+    # JSONL (mirrors Phase 3.4's ``RUN_RESUMED`` discipline: a new kind
+    # rather than a payload extension on ``RUN_STARTED`` so event-stream
+    # consumers' switch statements stay clean). The forked run shares
+    # the parent's ``trace_id``; the parent run id + fork event id live
+    # in :class:`WorkflowRunForkedFromPayload`.
+    RUN_FORKED_FROM = "workflow.run.forked_from"
 
 
 def new_event_id() -> EventId:
@@ -217,6 +226,45 @@ class WorkflowRunResumedEvent(WorkflowEvent):
     """
 
     kind: Literal[WorkflowEventKind.RUN_RESUMED] = WorkflowEventKind.RUN_RESUMED
+
+
+class WorkflowRunForkedFromPayload(BaseModel):
+    """Payload for :class:`WorkflowRunForkedFromEvent` — Phase 3.8 §11.1.
+
+    Frozen + ``extra="forbid"`` so a typo'd payload field is a
+    construction-time error rather than a silently-dropped JSONL line.
+    ``input_overrides`` carries the ``--input k=v`` pairs the operator
+    passed to ``kolsch workflows fork``; an empty dict means no
+    overrides were applied at the fork point.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(
+        frozen=True, extra="forbid"
+    )
+
+    forked_from_run_id: str
+    fork_event_id: str
+    input_overrides: dict[str, Any] = Field(default_factory=dict)
+
+
+class WorkflowRunForkedFromEvent(WorkflowEvent):
+    """``workflow.run.forked_from`` — Phase 3.8 §11.1.
+
+    Emitted as the FIRST event of every forked run's JSONL (before any
+    replay-driven completion events the executor synthesizes on
+    resume-from-fork). Mirrors :class:`WorkflowRunResumedEvent`'s
+    discipline — a new kind rather than a payload extension on
+    ``RUN_STARTED`` so event-stream consumers can switch on ``kind``
+    without inspecting payload shape. ``parent_event_id`` is ``None``
+    on this envelope (it IS the JSONL's first event); the cross-JSONL
+    link to the parent run is the payload's ``forked_from_run_id`` +
+    ``fork_event_id`` pair plus the inherited ``trace_id``.
+    """
+
+    kind: Literal[WorkflowEventKind.RUN_FORKED_FROM] = (
+        WorkflowEventKind.RUN_FORKED_FROM
+    )
+    payload: WorkflowRunForkedFromPayload
 
 
 class WorkflowNodeStartedEvent(NodeScopedWorkflowEvent):

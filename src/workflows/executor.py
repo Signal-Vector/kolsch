@@ -36,7 +36,7 @@ from workflows._inputs_models import inputs_model_for
 from workflows.branching import compute_branch_value
 from workflows.catalog_node import BUILTIN_TYPE_NAMES
 from workflows.context import NodeContext
-from workflows._replay import replay_into
+from workflows._replay import find_event_by_id, replay_into
 from workflows.errors import (
     BashNonZeroExit,
     NodeTypeNotImplemented,
@@ -46,6 +46,8 @@ from workflows.errors import (
     WorkflowNodeFailed,
     WorkflowPausedForInput,
     WorkflowResumeRejected,
+    WorkflowRunNotFound,
+    WorkflowRuntimeError,
 )
 from workflows.events import (
     WorkflowNodeCompletedEvent,
@@ -54,6 +56,8 @@ from workflows.events import (
     WorkflowRunAbortedEvent,
     WorkflowRunCompletedEvent,
     WorkflowRunFailedEvent,
+    WorkflowRunForkedFromEvent,
+    WorkflowRunForkedFromPayload,
     WorkflowRunResumedEvent,
     WorkflowRunStartedEvent,
     emit_event,
@@ -815,6 +819,240 @@ class IterativeExecutor:
         if not events:
             return None
         return events[-1].get("event_id")
+
+    # ------------------------------------------------------------------
+    # Fork entry point — Phase 3.8 Step 1 (master spec §9).
+    # ------------------------------------------------------------------
+
+    async def start_from_fork(  # noqa: PLR0915, PLR0912 — fork is structurally replay+continue; splitting hides the §9.1 ordering
+        self,
+        *,
+        fork_event_id: str,
+        input_overrides: dict[str, Any] | None = None,
+    ) -> WorkflowRunStatus:
+        """Fork a workflow run from a specific event in a parent run.
+
+        Master spec §9.1 — the entry point ``kolsch workflows fork``
+        invokes. Mirrors :meth:`resume` structurally: replay parent
+        events to rebuild ``_captured`` / ``_state`` / ``_pruned`` /
+        ``_completed_or_skipped``, then re-enter :meth:`_continue_worklist`
+        so the SAME dispatch loop services initial-run / resume /
+        fork. The differences vs. resume:
+
+        - The parent's JSONL is read (not this run's). The forked run's
+          JSONL starts EMPTY; this method writes its first event.
+        - The first event written is :class:`WorkflowRunForkedFromEvent`
+          (NOT ``workflow.run.started`` — the forked run inherits the
+          parent's started baseline by replaying it). The new event
+          kind keeps event-stream consumers' switch statements clean
+          (mirrors Phase 3.4's ``workflow.run.resumed`` discipline).
+        - ``input_overrides`` replace the fork-point node's captured
+          output keys (or workflow-level inputs when forking at the
+          ``workflow.run.started`` event).
+
+        Side-effect discipline: upstream side effects (bash writes,
+        external API calls, sub-workflow runs) are NOT undone. The
+        forked run starts with the filesystem / external services in
+        whatever state the parent's pre-fork prefix left them (spec
+        §9.2). This is a locked decision — fork-and-undo lives in
+        deferred scope.
+        """
+        from workflows.module_isolation import (  # noqa: PLC0415
+            cleanup_bundle_imports,
+            snapshot_sys_modules,
+        )
+        from workflows.run_context import (  # noqa: PLC0415
+            WorkflowRunContext,
+            reset_workflow_run_context,
+            set_workflow_run_context,
+        )
+
+        overrides: dict[str, Any] = dict(input_overrides or {})
+        run_id = self._run.run_id
+        run_dir = self._store.directory(run_id)
+
+        # Sanity — the caller (``_cmd_fork`` in Phase 3.8 Step 2)
+        # constructs this run with ``forked_from`` populated. A bare
+        # call without that pointer is a programming error, not an
+        # operator-input error; surface as ``ValueError`` rather than
+        # a WorkflowRuntimeError so the dispatcher's exception arms
+        # don't accidentally render it as a CLI envelope.
+        if self._run.forked_from is None:
+            msg = (
+                "start_from_fork requires WorkflowRun.forked_from to be "
+                "set; construct the run via WorkflowRunStore.create("
+                "forked_from=ForkedFrom(...))"
+            )
+            raise ValueError(msg)
+
+        parent_id = WorkflowRunId(
+            str(self._run.forked_from.run_id)
+        )
+        parent_dir = self._store.directory(parent_id)
+
+        # Two distinct missing-parent shapes both raise the same
+        # ``WorkflowRunNotFound`` per spec §9.5:
+        #  - meta.json gone → store.read raises FileNotFoundError
+        #  - events.jsonl gone (meta still present) → silent empty
+        #    iterator from read_events; the operator's fork_event_id
+        #    would otherwise look like a "not found" miss. Explicit
+        #    check upfront makes the error precise.
+        try:
+            self._store.read(parent_id)
+        except FileNotFoundError as exc:
+            raise WorkflowRunNotFound(run_id=str(parent_id)) from exc
+        if not parent_dir.events_path.exists():
+            raise WorkflowRunNotFound(run_id=str(parent_id))
+
+        # Read parent's events; locate the fork point. The slice is
+        # inclusive — replay_into walks the fork event itself so a
+        # fork at a ``workflow.node.completed`` correctly populates
+        # ``_captured[node]`` from that event's payload.
+        parent_events = list(self._store.read_events(parent_id))
+        lookup = find_event_by_id(parent_events, fork_event_id)
+        if lookup is None:
+            msg = (
+                f"fork_event_id {fork_event_id!r} not found in parent run "
+                f"{str(parent_id)!r}'s events.jsonl. If you copied this id "
+                f"from a chat capsule or agent session, fork at the "
+                f"workflow-level event preceding the agent invocation "
+                f"instead — spawned-session events (model.request.sent, "
+                f"session.*) cannot be fork points (spec §9.5)."
+            )
+            raise WorkflowRuntimeError(msg)
+        events_to_replay, fork_event = lookup
+
+        # Mirror :meth:`run` / :meth:`resume` — fresh
+        # ``sys.modules`` snapshot scoped to this process so the
+        # cleanup at terminal status only removes what THIS process
+        # loaded under ``bundles/``.
+        sys_modules_snapshot = snapshot_sys_modules()
+
+        # Publish the run context for the fork process. Sub-systems
+        # (authz, tool dispatcher) append to THIS run's JSONL — not
+        # the parent's — so the run id binding here is critical.
+        run_context_token = set_workflow_run_context(
+            WorkflowRunContext(
+                run_id=run_id,
+                trace_id=self._run.trace_id,
+                store=self._store,
+            )
+        )
+
+        # Seed ``_state`` from the forked run's inputs BEFORE replay
+        # so :func:`replay_into` applies ``workflow.state.mutated``
+        # ops on top of the baseline. Same ordering invariant as
+        # :meth:`resume`.
+        self._state = dict(self._run.inputs)
+
+        # Replay the parent's prefix into THIS executor's private
+        # fields. Phase 3.4/3.5/3.7 handlers are reused verbatim;
+        # the resulting state is byte-equivalent to whatever the
+        # parent's executor held at the fork point — minus any
+        # in-memory bookkeeping that the JSONL doesn't capture
+        # (which by design IS the recoverable state).
+        replay_into(self, events_to_replay)
+
+        # Apply ``--input`` overrides per the spec §9.1 contract:
+        # "replaces captured outputs at the fork point". The fork
+        # event identifies WHICH node owns the captured output to
+        # mutate. Two valid shapes:
+        #   - fork at ``workflow.node.completed``: replace keys in
+        #     ``_captured[<node>]`` (preserves untouched keys).
+        #   - fork at ``workflow.run.started``: replace
+        #     workflow-level inputs (and ``_state`` since state was
+        #     initialized from inputs above).
+        # Any other fork-event kind with overrides raises — the
+        # operator probably wanted to fork at a completion event.
+        fork_event_kind = fork_event.get("kind")
+        if fork_event_kind == "workflow.node.completed":
+            target_node = fork_event.get("node_name") or fork_event.get(
+                "payload", {}
+            ).get("node_name")
+            if overrides:
+                if target_node is None:
+                    msg = (
+                        f"fork event {fork_event_id!r} (kind "
+                        f"{fork_event_kind!r}) has no resolvable "
+                        "node_name; cannot route --input overrides"
+                    )
+                    raise WorkflowRuntimeError(msg)
+                bucket = self._captured.setdefault(str(target_node), {})
+                for key, value in overrides.items():
+                    bucket[key] = value
+        elif fork_event_kind == "workflow.run.started":
+            for key, value in overrides.items():
+                self._run.inputs[key] = value
+                self._state[key] = value
+        elif overrides:
+            msg = (
+                "--input overrides require forking at a "
+                "workflow.node.completed or workflow.run.started event; "
+                f"fork event {fork_event_id!r} is kind "
+                f"{fork_event_kind!r}"
+            )
+            raise WorkflowRuntimeError(msg)
+
+        # Compute topology BEFORE flipping status. Same ordering as
+        # :meth:`resume` — a defensive topology error surfaces with
+        # the run still in PENDING (the CLI's error envelope is the
+        # right place for that, not a half-flipped status).
+        topo, predecessors = self._compute_topology()
+
+        # Flip status → RUNNING. The on-disk JSONL has no events yet,
+        # so :meth:`WorkflowRunStore.read`'s tail scan returns no
+        # terminal status; the meta sidecar's status governs.
+        self._store.update_status(run_id, WorkflowRunStatus.RUNNING)
+
+        # PID sidecar — atomic. The fork is a fresh process per Phase
+        # 3.1 Step 4 + Phase 3.4 Step 2 discipline; the orphan sweep
+        # will see THIS process if the fork crashes.
+        run_dir.root.mkdir(parents=True, exist_ok=True)
+        tmp_pid = run_dir.pid_path.with_suffix(".tmp")
+        tmp_pid.write_text(str(os.getpid()), encoding="utf-8")
+        tmp_pid.replace(run_dir.pid_path)
+
+        terminal_status: WorkflowRunStatus
+        try:
+            # Emit ``workflow.run.forked_from`` as the FIRST event on
+            # the forked JSONL. ``parent_event_id`` is None — this IS
+            # the chain root for the forked run. The cross-JSONL link
+            # to the parent run lives in the payload (forked_from_run_id
+            # + fork_event_id) plus the inherited trace_id.
+            forked_id = emit_event(
+                self._store,
+                WorkflowRunForkedFromEvent(
+                    workflow_run_id=run_id,
+                    trace_id=self._run.trace_id,
+                    parent_event_id=None,
+                    payload=WorkflowRunForkedFromPayload(
+                        forked_from_run_id=str(parent_id),
+                        fork_event_id=fork_event_id,
+                        input_overrides=dict(overrides),
+                    ),
+                ),
+            )
+            self._last_event_id = forked_id
+
+            # Re-enter the worklist. The replay populated
+            # ``_completed_or_skipped`` with every replayed completion
+            # + prune; the early-skip check at the top of
+            # ``_continue_worklist`` short-circuits those nodes, and
+            # dispatch picks up at the first downstream node whose
+            # predecessors are all decided.
+            terminal_status = await self._continue_worklist(
+                run_id=run_id,
+                run_dir=run_dir,
+                topo=topo,
+                predecessors=predecessors,
+            )
+        finally:
+            cleanup_bundle_imports(
+                before=sys_modules_snapshot,
+                workspace_root=self._store.runs_root.parent,
+            )
+            reset_workflow_run_context(run_context_token)
+        return terminal_status
 
     # ------------------------------------------------------------------
     # Worklist body — shared by initial-run and resume paths.

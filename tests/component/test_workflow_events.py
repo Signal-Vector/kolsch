@@ -125,15 +125,16 @@ class TestEnvelopeShape:
         # Payload back-compat — Step 1-4 readers still work.
         assert node_started["payload"]["node_name"] == "a"
 
-    def test_event_kind_enum_lists_18_kinds(self) -> None:
+    def test_event_kind_enum_lists_19_kinds(self) -> None:
         """AC 5.1 — the StrEnum vocabulary covers the 13 Phase 3.1
         kinds plus the Phase 3.3 ``workflow.node.pruned`` extension
         plus the Phase 3.4 ``workflow.run.resumed`` extension
         plus the Phase 3.5 ``workflow.state.mutated`` extension
         plus the Phase 3.7 ``workflow.node.called_workflow`` /
         ``workflow.node.called_workflow_completed`` extensions
+        plus the Phase 3.8 ``workflow.run.forked_from`` extension
         documented in master spec §11.1."""
-        assert len(list(WorkflowEventKind)) == 18
+        assert len(list(WorkflowEventKind)) == 19
         assert WorkflowEventKind.NODE_PRUNED.value == "workflow.node.pruned"
         assert WorkflowEventKind.RUN_RESUMED.value == "workflow.run.resumed"
         assert (
@@ -147,6 +148,10 @@ class TestEnvelopeShape:
         assert (
             WorkflowEventKind.CALLED_WORKFLOW_COMPLETED.value
             == "workflow.node.called_workflow_completed"
+        )
+        assert (
+            WorkflowEventKind.RUN_FORKED_FROM.value
+            == "workflow.run.forked_from"
         )
 
 

@@ -67,7 +67,35 @@ from workflows.errors import WorkflowResumeRejected
 if TYPE_CHECKING:
     from workflows.executor import IterativeExecutor
 
-__all__ = ["replay_into"]
+__all__ = ["find_event_by_id", "replay_into"]
+
+
+def find_event_by_id(
+    events: Iterable[dict[str, Any]],
+    target_id: str,
+) -> tuple[list[dict[str, Any]], dict[str, Any]] | None:
+    """Walk ``events`` and return the prefix up to (and including)
+    ``target_id`` plus the matching event itself.
+
+    Used by Phase 3.8's fork (:meth:`workflows.executor.IterativeExecutor.start_from_fork`)
+    to truncate the parent run's JSONL at the chosen fork point — the
+    returned prefix is then replayed verbatim through
+    :func:`replay_into`, restoring ``_captured`` / ``_state`` /
+    ``_pruned`` / ``_completed_or_skipped`` to the parent's state at
+    that moment.
+
+    Returns ``None`` when ``target_id`` is absent from the iterable.
+    The caller raises :class:`workflows.errors.WorkflowRuntimeError`
+    with a fork-point-not-found message; the helper itself stays
+    side-effect-free so it's reusable from non-fork callers (e.g.,
+    forensics tools that need an event prefix).
+    """
+    collected: list[dict[str, Any]] = []
+    for event in events:
+        collected.append(event)
+        if event.get("event_id") == target_id:
+            return collected, event
+    return None
 
 
 def replay_into(

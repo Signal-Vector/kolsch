@@ -30,7 +30,7 @@ from typing import Any, ClassVar
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from schemas.entities import ParentRunPointer
+from schemas.entities import ForkedFrom, ParentRunPointer
 from workflows.ids import TraceId, WorkflowRunId
 
 __all__ = [
@@ -96,6 +96,11 @@ class WorkflowRun(BaseModel):
     # for agent sessions: the parent-pointer plumbing for cross-JSONL
     # forensics is identical across composition surfaces.
     parent: ParentRunPointer | None = None
+    # Phase 3.8 — set on runs created by ``kolsch workflows fork``. Carries
+    # the parent run id + the event id at which the fork is rooted.
+    # Independent of :attr:`parent`: a run can have either, both, or
+    # neither (a forked sub-workflow run carries both).
+    forked_from: ForkedFrom | None = None
 
 
 @dataclass(frozen=True, slots=True)

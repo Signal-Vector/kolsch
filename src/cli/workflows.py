@@ -1,6 +1,6 @@
 """``kolsch workflows`` CLI — Phase 3.0 Step 6.
 
-Six subcommands:
+Eight subcommands:
 
 - ``list`` — print catalog entries with ``asset_type="workflow"``.
 - ``show <ref>`` — print parsed-workflow structure.
@@ -11,6 +11,14 @@ Six subcommands:
 - ``run <ref>`` — execute a workflow end-to-end (Phase 3.1).
 - ``resume <run_id>`` — resume a ``waiting_for_input`` run with
   ``--input response=<text>`` (Phase 3.4 Step 2).
+- ``events <run_id>`` — list the run's events.jsonl entries so
+  operators can discover ``event_id`` candidates for ``workflows
+  fork --at <event_id>`` (Phase 3.8 Step 0).
+- ``fork <run_id> --at <event_id>`` — create a forked run rooted at
+  ``<event_id>`` of ``<run_id>``'s JSONL; replays the parent's
+  pre-fork prefix, then executes downstream. ``--input k=v``
+  overrides patch the fork-point node's captured output (Phase 3.8
+  Step 2).
 
 All commands accept ``--format text|json``. The JSON envelope follows
 master spec §14.3; per-error objects follow §14.4 + R3 #8 + R3 #11
@@ -31,7 +39,11 @@ from typing import TYPE_CHECKING, Any, TextIO
 
 from assets import AssetManagement
 from cli._format import render, render_exception
-from workflows.errors import WorkflowError, WorkflowValidationError
+from workflows.errors import (
+    WorkflowError,
+    WorkflowRunNotFound,
+    WorkflowValidationError,
+)
 from workflows.parser import load_workflow
 from workflows.validator import validate_workflow_or_raise
 
@@ -81,7 +93,7 @@ def add_workflows_subparser(
         "workflows",
         help=(
             "Manage workflow assets "
-            "(list, show, validate, cancel, run, resume)."
+            "(list, show, validate, cancel, run, resume, events, fork)."
         ),
         parents=[fmt_parent],
     )
@@ -174,6 +186,73 @@ def add_workflows_subparser(
         ),
     )
 
+    # Phase 3.8 Step 0 — ``kolsch workflows events <run_id>``: list the
+    # JSONL events for a run so operators can discover candidate
+    # ``event_id`` values to pass to ``workflows fork --at <event_id>``
+    # (Phase 3.8 Step 2). Text + json formats both supported.
+    events = workflows_sub.add_parser(
+        "events",
+        help="List events in a workflow run's events.jsonl.",
+        parents=[fmt_parent],
+    )
+    events.add_argument(
+        "run_id", help="Workflow run id (wrk_*) whose events to list."
+    )
+
+    # Phase 3.8 Step 2 — ``kolsch workflows fork <run_id> --at
+    # <event_id> [--input k=v]...`` (master spec §9 + §14.1). The
+    # ``--help`` description explicitly notes the side-effect
+    # discipline (spec §9.2): upstream side effects produced by the
+    # parent's pre-fork prefix (bash writes, sub-workflow runs,
+    # external API calls) are NOT undone by fork. Operators rely on
+    # this guidance for non-trivial pipelines.
+    fork_p = workflows_sub.add_parser(
+        "fork",
+        help=(
+            "Fork a workflow run from a specific event "
+            "(--at <event_id>)."
+        ),
+        description=(
+            "Create a forked workflow run rooted at <event_id> of "
+            "<parent_run_id>'s events.jsonl. The forked run replays "
+            "every parent event up to (and including) the fork point, "
+            "then executes from there. Use 'kolsch workflows events "
+            "<run_id>' to discover candidate event ids.\n\n"
+            "Side-effect discipline (spec §9.2): upstream side "
+            "effects produced by the parent's pre-fork prefix are NOT "
+            "undone. A bash node that wrote a file or a sub-workflow "
+            "that called an external service stays as it was — the "
+            "fork starts with the world in whatever state the parent "
+            "left it. Choose a fork point whose downstream is safe to "
+            "re-execute against that state."
+        ),
+        parents=[fmt_parent],
+    )
+    fork_p.add_argument(
+        "run_id", help="Parent workflow run id (wrk_*) to fork from."
+    )
+    fork_p.add_argument(
+        "--at",
+        required=True,
+        dest="fork_event_id",
+        metavar="EVENT_ID",
+        help=(
+            "Event id (ev_*) in the parent's events.jsonl at which to "
+            "fork. Required."
+        ),
+    )
+    fork_p.add_argument(
+        "--input",
+        action="append",
+        default=[],
+        metavar="KEY=VALUE",
+        help=(
+            "Override the fork-point node's captured output (or "
+            "workflow inputs when forking at workflow.run.started). "
+            "Repeatable. Other fork-event kinds reject --input."
+        ),
+    )
+
     return workflows
 
 
@@ -200,7 +279,7 @@ async def cmd_workflows(  # noqa: PLR0911
     if op is None:
         err.write(
             "usage: kolsch workflows <op>\n"
-            "ops: list, show, validate, cancel, run, resume\n"
+            "ops: list, show, validate, cancel, run, resume, events, fork\n"
         )
         return 1
 
@@ -231,6 +310,24 @@ async def cmd_workflows(  # noqa: PLR0911
         return await _cmd_resume(
             root=args.root,
             run_id_str=args.run_id,
+            input_pairs=list(getattr(args, "input", None) or []),
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
+    if op == "events":
+        return _cmd_events(
+            root=args.root,
+            run_id_str=args.run_id,
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
+    if op == "fork":
+        return await _cmd_fork(
+            root=args.root,
+            parent_run_id_str=args.run_id,
+            fork_event_id=args.fork_event_id,
             input_pairs=list(getattr(args, "input", None) or []),
             fmt=fmt,
             out=out,
@@ -829,6 +926,453 @@ async def _cmd_resume(  # noqa: PLR0913 — five explicit kw args; mirrors _cmd_
         out=out,
         err=err,
     )
+
+
+# ---------------------------------------------------------------------------
+# fork — Phase 3.8 Step 2 CLI handler (master spec §9 + §14.1)
+# ---------------------------------------------------------------------------
+
+
+async def _cmd_fork(  # noqa: PLR0913 — seven explicit kw args; mirrors _cmd_resume's shape
+    *,
+    root: Path,
+    parent_run_id_str: str,
+    fork_event_id: str,
+    input_pairs: list[str],
+    fmt: str,
+    out: TextIO,
+    err: TextIO,
+) -> int:
+    """Live ``kolsch workflows fork <run_id> --at <event_id>`` handler.
+
+    Mirrors :func:`_cmd_resume`'s shape: load the parent run, build an
+    executor pointed at the SAME workflow + store, mint a forked
+    :class:`WorkflowRun` whose ``forked_from`` pointer encodes the
+    fork target, then await :meth:`IterativeExecutor.start_from_fork`
+    with the parsed ``--input`` overrides.
+
+    Sub-workflow fork semantics (spec §9.3) are handled transitively
+    by the executor's replay: forking AFTER a workflow-call node
+    rehydrates the captured child output (no new child run created);
+    forking BEFORE the workflow-call node causes the forked run's
+    worklist to fire the workflow node fresh (spawning a NEW child).
+    No special-case code lives here.
+
+    Success envelope per spec §14.3: ``{new_run_id, parent_run_id,
+    fork_event_id, status}``. JSON exit code matches the terminal
+    status: 0 for ``succeeded`` and ``waiting_for_input``, 1 for
+    every failure shape.
+    """
+    from pathlib import Path as _Path  # noqa: PLC0415
+
+    from platform_runtime import bootstrap_runtime  # noqa: PLC0415
+
+    overrides = _parse_input_pairs(input_pairs)
+
+    runtime = await bootstrap_runtime(root=root)
+    catalog = runtime.asset_management.catalog()
+
+    from schemas.entities import ForkedFrom  # noqa: PLC0415
+    from workflows.errors import (  # noqa: PLC0415
+        WorkflowInputInvalid,
+        WorkflowResumeRejected,
+        WorkflowRuntimeError,
+    )
+    from workflows.ids import WorkflowRunId  # noqa: PLC0415
+    from workflows.run_store import WorkflowRunStore  # noqa: PLC0415
+
+    store = WorkflowRunStore(root)
+    try:
+        parent_run = store.read(WorkflowRunId(parent_run_id_str))
+    except (FileNotFoundError, ValueError):
+        # ValueError covers a malformed ``wrk_<not-a-uuid>``; both
+        # surfaces are operator input errors. Same envelope as
+        # :func:`_cmd_resume`.
+        return _emit_error_envelope(
+            command="workflows fork",
+            errors=[WorkflowRunNotFound(run_id=parent_run_id_str)],
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
+
+    entry = catalog.lookup(parent_run.workflow_ref, expected_type="workflow")
+    if entry is None:
+        return _emit_unknown_ref(
+            command="workflows fork",
+            ref=parent_run.workflow_ref,
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
+    try:
+        workflow = load_workflow(_Path(entry.path))
+    except WorkflowError as exc:
+        return _emit_error_envelope(
+            command="workflows fork",
+            errors=[exc],
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
+
+    # Mint the forked run BEFORE we discover whether the fork point
+    # is valid: a forked-but-empty run is a clean state for the
+    # operator to retry against (the existing meta.json captures the
+    # forked_from pointer; the JSONL is empty). The status flip and
+    # the first event emit only happen inside start_from_fork.
+    forked_run = store.create(
+        workflow_ref=parent_run.workflow_ref,
+        inputs=dict(parent_run.inputs),
+        trace_id=parent_run.trace_id,
+        forked_from=ForkedFrom(
+            run_id=parent_run.run_id,
+            fork_event_id=fork_event_id,
+        ),
+    )
+
+    # Live executor wiring — mirrors ``_cmd_run`` / ``_cmd_resume`` so
+    # the fork process has the SAME builtin runner set. A fork
+    # downstream of the fork point may hit any node type the workflow
+    # uses (bash, agent, sub-workflow, file IO, state, branching).
+    from tools.builtins import (  # noqa: PLC0415
+        make_bash,
+        make_list_files,
+        make_read_file,
+        make_write_file,
+    )
+    from tools.decorator import get_tool_definition  # noqa: PLC0415
+    from workflows.builtins import register_builtins  # noqa: PLC0415
+    from workflows.executor import (  # noqa: PLC0415
+        IterativeExecutor,
+        RunnerRegistry,
+    )
+
+    bash_fn = make_bash(policy=runtime.path_policy, root=root)
+    bash_defn = get_tool_definition(bash_fn)
+    read_file_defn = get_tool_definition(
+        make_read_file(policy=runtime.path_policy, root=root)
+    )
+    write_file_defn = get_tool_definition(
+        make_write_file(policy=runtime.path_policy, root=root)
+    )
+    list_files_defn = get_tool_definition(
+        make_list_files(policy=runtime.path_policy, root=root)
+    )
+    registry = RunnerRegistry()
+
+    def _executor_factory(**kwargs: Any) -> IterativeExecutor:
+        return IterativeExecutor(**kwargs)
+
+    register_builtins(
+        registry,
+        bash_defn=bash_defn,
+        authz=runtime.authz,
+        secrets=runtime.secrets,
+        sandbox=runtime.sandbox,
+        catalog=catalog,
+        engine=runtime.engine,
+        session_store=runtime.store,
+        config_builder=runtime.build_resolved_config,
+        read_file_defn=read_file_defn,
+        write_file_defn=write_file_defn,
+        list_files_defn=list_files_defn,
+        workflow_store=store,
+        executor_factory=_executor_factory,
+    )
+    executor = IterativeExecutor(
+        workflow=workflow,
+        run=forked_run,
+        store=store,
+        registry=registry,
+        catalog=catalog,
+    )
+
+    try:
+        status = await executor.start_from_fork(
+            fork_event_id=fork_event_id,
+            input_overrides=overrides,
+        )
+    except WorkflowRunNotFound as exc:
+        return _emit_error_envelope(
+            command="workflows fork",
+            errors=[exc],
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
+    except (
+        WorkflowRuntimeError,
+        WorkflowInputInvalid,
+        WorkflowResumeRejected,
+        WorkflowError,
+    ) as exc:
+        # Render every fork-time error through the same envelope so
+        # operators see ``WorkflowRuntimeError`` / ``WorkflowInputInvalid``
+        # / etc. uniformly. ``WorkflowError`` is the catchall — keep it
+        # last so the more-specific arms still bind first.
+        return _emit_error_envelope(
+            command="workflows fork",
+            errors=[exc],
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
+
+    return _render_fork_terminal(
+        store=store,
+        forked_run_id=forked_run.run_id,
+        parent_run_id=parent_run.run_id,
+        fork_event_id=fork_event_id,
+        status=status,
+        fmt=fmt,
+        out=out,
+        err=err,
+    )
+
+
+def _render_fork_terminal(  # noqa: PLR0913 — eight explicit kw args; fork-specific shape
+    *,
+    store: Any,  # noqa: ANN401
+    forked_run_id: Any,  # noqa: ANN401
+    parent_run_id: Any,  # noqa: ANN401
+    fork_event_id: str,
+    status: Any,  # noqa: ANN401 — WorkflowRunStatus
+    fmt: str,
+    out: TextIO,
+    err: TextIO,
+) -> int:
+    """Render the post-fork envelope per spec §14.3.
+
+    Differs from :func:`_render_terminal_for_command` by also
+    surfacing the parent run id + fork event id so operators can
+    correlate the fork without re-reading meta.json. Same exit-code
+    discipline:
+
+    - ``succeeded`` → 0 with the success envelope + final outputs.
+    - ``waiting_for_input`` → 0 with the ``resume_with`` hint; a
+      forked run can pause downstream of its fork point on a
+      user_input node (transitively correct via Phase 3.4).
+    - terminal failure → 1 with the error envelope.
+    """
+    from workflows.run import WorkflowRunStatus  # noqa: PLC0415
+
+    payload = _terminal_payload(store, forked_run_id)
+    base_data: dict[str, Any] = {
+        "new_run_id": str(forked_run_id),
+        "parent_run_id": str(parent_run_id),
+        "fork_event_id": fork_event_id,
+        "status": status.value,
+    }
+
+    if status == WorkflowRunStatus.SUCCEEDED:
+        if fmt == "json":
+            out.write(
+                render(
+                    command="workflows fork",
+                    fmt=fmt,
+                    data={
+                        **base_data,
+                        "outputs": payload.get("outputs", {}),
+                    },
+                )
+            )
+            out.write("\n")
+        else:
+            out.write(
+                f"forked run {forked_run_id} {status.value}\n"
+            )
+            out.write(
+                f"forked from: {parent_run_id} at {fork_event_id}\n"
+            )
+            outputs = payload.get("outputs") or {}
+            if outputs:
+                import json as _json  # noqa: PLC0415
+
+                out.write(
+                    _json.dumps(outputs, sort_keys=True, default=str)
+                    + "\n"
+                )
+        return 0
+
+    if status == WorkflowRunStatus.WAITING_FOR_INPUT:
+        hint = (
+            f"kolsch workflows resume {forked_run_id} --input "
+            "response=<text>"
+        )
+        if fmt == "json":
+            out.write(
+                render(
+                    command="workflows fork",
+                    fmt=fmt,
+                    data={**base_data, "resume_with": hint},
+                )
+            )
+            out.write("\n")
+        else:
+            out.write(
+                f"forked run {forked_run_id} {status.value}\n"
+            )
+            out.write(
+                f"forked from: {parent_run_id} at {fork_event_id}\n"
+            )
+            out.write(f"resume with: {hint}\n")
+        return 0
+
+    # Failed / aborted / timed_out / (defensively) pending / running.
+    reason = payload.get("reason", "(no reason recorded)")
+    if fmt == "json":
+        out.write(
+            render(
+                command="workflows fork",
+                fmt=fmt,
+                status="error",
+                errors=[
+                    {
+                        "class": "WorkflowRunFailed",
+                        "summary": (
+                            f"forked run {forked_run_id} ended "
+                            f"{status.value}: {reason}"
+                        ),
+                    }
+                ],
+            )
+        )
+        out.write("\n")
+    else:
+        err.write(
+            f"forked run {forked_run_id} {status.value}: {reason}\n"
+        )
+    return 1
+
+
+# ---------------------------------------------------------------------------
+# events — Phase 3.8 Step 0 CLI for listing a run's JSONL events
+# ---------------------------------------------------------------------------
+
+
+# How wide to render the payload preview column. Wider would push the
+# table past one terminal line for typical 120-col operators; narrower
+# would truncate meaningful identifiers like ``response='...'``.
+_EVENT_PAYLOAD_PREVIEW_WIDTH = 50
+
+
+def _cmd_events(
+    *,
+    root: Path,
+    run_id_str: str,
+    fmt: str,
+    out: TextIO,
+    err: TextIO,
+) -> int:
+    """``kolsch workflows events <run_id>`` handler.
+
+    Lists every JSONL event for ``run_id`` with its ``event_id``,
+    ``kind``, ``ts``, and a brief payload preview. Operators consume
+    this to discover candidate ``event_id`` values for ``workflows
+    fork --at <event_id>`` (Phase 3.8 Step 2).
+
+    A run with an empty ``events.jsonl`` (e.g., freshly minted, never
+    executed) returns an empty list cleanly — that's an honest state,
+    not an error.
+    """
+    from workflows.ids import WorkflowRunId  # noqa: PLC0415
+    from workflows.run_store import WorkflowRunStore  # noqa: PLC0415
+
+    store = WorkflowRunStore(root)
+    try:
+        # ``read`` confirms the run is real before we attempt to walk
+        # its JSONL; without this gate, a missing run would silently
+        # yield an empty event list.
+        store.read(WorkflowRunId(run_id_str))
+    except (FileNotFoundError, ValueError):
+        return _emit_error_envelope(
+            command="workflows events",
+            errors=[WorkflowRunNotFound(run_id=run_id_str)],
+            fmt=fmt,
+            out=out,
+            err=err,
+        )
+
+    rows = [
+        {
+            "event_id": event.get("event_id", ""),
+            "kind": event.get("kind", ""),
+            "ts": event.get("ts", ""),
+            "payload_preview": _preview_payload(event.get("payload", {})),
+        }
+        for event in store.read_events(WorkflowRunId(run_id_str))
+    ]
+
+    if fmt == "json":
+        out.write(
+            render(
+                command="workflows events",
+                fmt=fmt,
+                data={"run_id": run_id_str, "events": rows},
+            )
+        )
+        out.write("\n")
+        return 0
+
+    if not rows:
+        out.write(
+            render(
+                command="workflows events",
+                fmt=fmt,
+                text_body=f"(no events for run {run_id_str})\n",
+            )
+        )
+        return 0
+
+    lines = ["event_id\tkind\tts\tpayload"]
+    for row in rows:
+        lines.append(
+            f"{row['event_id']}\t{row['kind']}\t{row['ts']}\t"
+            f"{row['payload_preview']}"
+        )
+    out.write(
+        render(
+            command="workflows events",
+            fmt=fmt,
+            text_body="\n".join(lines) + "\n",
+        )
+    )
+    return 0
+
+
+def _preview_payload(payload: Any) -> str:  # noqa: ANN401
+    """Render a single-line, length-bounded preview of a payload dict.
+
+    Operators scan this column to disambiguate near-identical events
+    (e.g., two ``workflow.node.completed`` rows for different nodes).
+    The format is a deliberately compact ``k=v, k=v`` rendering; any
+    value longer than ``_EVENT_PAYLOAD_PREVIEW_WIDTH`` is truncated
+    with a trailing ellipsis so the whole row stays scannable.
+    """
+    if not isinstance(payload, dict) or not payload:
+        return ""
+    parts: list[str] = []
+    for key, value in payload.items():
+        rendered = _shorten(str(value), _EVENT_PAYLOAD_PREVIEW_WIDTH)
+        parts.append(f"{key}={rendered}")
+    preview = ", ".join(parts)
+    return _shorten(preview, _EVENT_PAYLOAD_PREVIEW_WIDTH)
+
+
+def _shorten(text: str, width: int) -> str:
+    """Truncate ``text`` to ``width`` chars with a trailing ellipsis.
+
+    Newlines and tabs in payload values would corrupt the table layout;
+    collapse them to spaces before truncating so a multi-line value
+    renders as one row.
+    """
+    flattened = text.replace("\n", " ").replace("\t", " ")
+    if len(flattened) <= width:
+        return flattened
+    if width <= 3:
+        return flattened[:width]
+    return flattened[: width - 3] + "..."
 
 
 def _parse_input_pairs(pairs: list[str]) -> dict[str, str]:

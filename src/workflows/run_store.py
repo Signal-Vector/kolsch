@@ -33,7 +33,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
-from schemas.entities import ParentRunPointer
+from schemas.entities import ForkedFrom, ParentRunPointer
 from workflows.ids import TraceId, WorkflowRunId
 from workflows.run import RunDirectory, WorkflowRun, WorkflowRunStatus
 
@@ -77,6 +77,7 @@ class WorkflowRunStore:
         inputs: dict[str, Any] | None = None,
         trace_id: TraceId | None = None,
         parent: ParentRunPointer | None = None,
+        forked_from: ForkedFrom | None = None,
     ) -> WorkflowRun:
         """Mint a fresh run + write its meta sidecar.
 
@@ -90,6 +91,12 @@ class WorkflowRunStore:
         a parent run. Root entry points pass ``None``. Persisted in
         ``meta.json`` as a nested dict and round-tripped on
         :meth:`read`.
+
+        ``forked_from`` (Phase 3.8) is the parent-run pointer when
+        this run is being created by ``kolsch workflows fork``. The
+        two parent-pointer kwargs are INDEPENDENT — a forked
+        sub-workflow run can carry both. Persisted in ``meta.json``
+        as a nested dict alongside ``parent``.
 
         Returns the materialised :class:`WorkflowRun`. The JSONL is
         NOT touched here — :class:`workflows.executor.IterativeExecutor`
@@ -108,6 +115,7 @@ class WorkflowRunStore:
             inputs=dict(inputs) if inputs else {},
             created_at=datetime.now(UTC),
             parent=parent,
+            forked_from=forked_from,
         )
         run_dir = self._directory(run_id)
         run_dir.root.mkdir(parents=True, exist_ok=True)
