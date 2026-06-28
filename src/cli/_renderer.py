@@ -84,6 +84,16 @@ _CAPSULE_PALETTE: dict[str, str] = {
     "tool": "cyan3",
     "tool-dim": "cyan3 dim",
     "code": "cyan",
+    # Phase 3.9 — workflow-event capsules. The renderer in
+    # ``cli._workflow_capsules`` looks up these keys when emitting
+    # capsules from a workflow's JSONL tail. ``workflow_muted`` is
+    # used for branch-not-taken / pruned events; ``workflow_paused``
+    # for the inline ``user_input`` prompt; ``workflow_failed`` for
+    # the ``caller_message`` failure surface.
+    "workflow": "cyan",
+    "workflow_muted": "bright_black",
+    "workflow_paused": "yellow",
+    "workflow_failed": "red",
 }
 
 

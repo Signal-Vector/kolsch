@@ -153,6 +153,35 @@ class ChatSessionState:
     pre-flight ``SkillForcedNotEnabled`` (which would also kill the
     just-typed user message)."""
 
+    pending_workflow_run_id: str | None = None
+    """The workflow_run currently bound to this chat session.
+
+    Phase 3.9 — set by ``/workflow <ref>`` immediately after the run
+    is minted; read by ``/fork <event_id>`` to find the parent run;
+    read by the user_input chat-resume path to know which run to
+    resume when the next non-slash message lands.
+
+    At v1 there is exactly ONE pending workflow per chat session;
+    a second ``/workflow`` silently overwrites this pointer (any
+    paused first run stays in the store and remains resumable via
+    ``kolsch workflows resume``). Persistence across chat-process
+    restarts is deferred (the operator re-binds by reissuing
+    ``/workflow``)."""
+
+    expecting_user_input_response: bool = False
+    """Set when the bound workflow_run has paused on a ``user_input``
+    node and the next non-slash message should resume it.
+
+    Phase 3.9 Step 2 owns the input-loop branch that consults this
+    flag. ``True`` after the executor returns
+    ``WorkflowRunStatus.WAITING_FOR_INPUT``; the next non-slash
+    message routes to ``executor.resume(response={"response": text})``
+    and clears the flag. Operator escape: any state-changing slash
+    command (``/workflow``, ``/fork``, ``/new``, ``/model``) clears
+    the flag while leaving the workflow paused (resume later via the
+    CLI). Info-only commands (``/help``) do NOT clear the flag — see
+    spec §15.2 operator-escape rule."""
+
 
 @dataclass(frozen=True)
 class SlashContext:

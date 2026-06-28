@@ -96,11 +96,12 @@ Related docs:
 
 **Decisions explicitly locked (do NOT relitigate):**
 
-- **No streaming.** Capsules at `workflow.node.completed` only.
+- **No streaming.** Capsules at `workflow.node.completed` only. The §15.2.2 running-node indicator (one dim line on `workflow.node.started`) is NOT streaming — it is emitted once and never updated.
 - **No new event kinds.** Phase 3.9 consumes existing events.
 - **`display_label` is the SOLE label source.** Per spec §15.4. Chat does NOT reimplement the 3-step fallback.
 - **`caller_message` is the failure surface.** Per spec §15.5. Engineer-targeted `str(exc)` stays in logs/CLI; chat is end-user-facing.
-- **Inline `user_input` prompt is a one-liner.** Per spec §15.2.1. No multi-line prompt rendering.
+- **Inline `user_input` capsule shape per spec §15.2.1.** Header = `display_label(node)`; body line 1 = rendered `prompt:` field; body line 2 (when present) = `→ binds to inputs.<var_name>` in dim text. NO `(awaiting your response)` placeholder.
+- **Running-node indicator per spec §15.2.2.** One dim `▸ <label>…` line per `workflow.node.started`. Persists in scrollback unchanged; the matching completion capsule lands beneath. Not a capsule; no event_id subscript; no timestamp.
 - **Sub-workflow nesting is visual indent + cross-JSONL correlation by `trace_id`.** No new event kinds for nesting; the parent's `workflow.node.called_workflow` event carries `child_workflow_run_id` which the chat uses to tail the child JSONL.
 - **`pending_workflow_run_id` is the targeting mechanism.** Set by `/workflow`; consumed by `/fork` and the user_input resume path. There's exactly one pending workflow per chat session at v1.
 - **Operator escape from `expecting_user_input_response`**: typing any slash command BEFORE replying clears the expectation flag. The workflow remains paused; the operator can resume later via the CLI `kolsch workflows resume` OR by typing the response inline. This matches spec §15.2.1's "user's next message becomes the resume" but acknowledges operator escape.
@@ -367,19 +368,26 @@ Ship the shared helpers + the renderer skeleton. NO slash commands yet.
 5. **`src/cli/_workflow_capsules.py`** — renderer skeleton:
 
    ```python
+   _RUNNING_GLYPH = "▸"   # ▸
+   _ELLIPSIS = "…"        # …
+
    class WorkflowCapsuleRenderer:
        """Consumes a workflow-run's event stream; emits one capsule per event.
 
        Phase 3.9: capsules render at workflow.node.completed (success),
-       workflow.node.pruned (muted), workflow.node.started for user_input
-       (inline prompt), workflow.node.failed (caller_message), and
-       workflow.run.* (run-level framing). All other events are silent.
+       workflow.node.pruned (muted), workflow.node.failed (caller_message),
+       and workflow.run.* (run-level framing). workflow.node.started emits
+       the one-line running indicator (spec §15.2.2) — NOT a capsule.
+       workflow.node.started for a user_input node is paired with the
+       pause capsule rendered post-executor by the chat loop, not here.
+       All other events are silent.
        """
 
        def __init__(self, *, console, store, run_id: WorkflowRunId, indent_depth: int = 0):
            self._console = console
            self._store = store
            self._run_id = run_id
+           self._indent_depth = indent_depth
            self._indent = "  " * indent_depth  # for sub-workflow nesting
            self._child_renderers: dict[str, "WorkflowCapsuleRenderer"] = {}  # by child_run_id
 
@@ -395,7 +403,9 @@ Ship the shared helpers + the renderer skeleton. NO slash commands yet.
 
        async def _dispatch(self, event: dict) -> None:
            kind = event.get("kind", "")
-           if kind == "workflow.node.completed":
+           if kind == "workflow.node.started":
+               self._render_running_indicator(event)        # §15.2.2
+           elif kind == "workflow.node.completed":
                self._render_completed_capsule(event)
            elif kind == "workflow.node.pruned":
                self._render_pruned_capsule(event)
@@ -405,6 +415,18 @@ Ship the shared helpers + the renderer skeleton. NO slash commands yet.
                # Phase 3.7 — sub-workflow event. Spawn a child renderer.
                await self._spawn_child_renderer(event)
            # ... etc.
+
+       def _render_running_indicator(self, event: dict) -> None:
+           """Spec §15.2.2 — one dim ``▸ <label>…`` line per started node.
+
+           Look up the node_def + type_label; call ``display_label(...)``;
+           print one line `f"{self._indent}{_RUNNING_GLYPH} {label}{_ELLIPSIS}"`
+           in the `"dim"` style. No timestamp, no event_id subscript, no
+           capsule border. The line persists in scrollback unchanged;
+           the matching `_render_completed_capsule` / `_render_failed_capsule`
+           / `_render_pruned_capsule` lands beneath it.
+           """
+           ...
 
        def _render_completed_capsule(self, event):
            # Look up the node_def in the parsed workflow to get the type-label.
@@ -427,6 +449,9 @@ Ship the shared helpers + the renderer skeleton. NO slash commands yet.
    - **One completed event:** renderer emits one capsule with the right header/body/subscript.
    - **Display label:** the header uses `display_label(node_def, type_label=...)`.
    - **Pruned event:** muted color capsule with body "(not taken)".
+   - **Running indicator (§15.2.2):** a `workflow.node.started` event emits ONE dim line `▸ <label>…` ABOVE the matching completion capsule; the line is not a capsule (no `│` bar, no timestamp); the captured stdout for a started+completed pair shows the indicator line followed by the capsule, in order.
+   - **Indicator + indent:** with `indent_depth=1`, the indicator line is prefixed with two spaces; matches the indented capsules in the sub-workflow nesting test.
+   - **Pruned has no preceding indicator:** a `workflow.node.pruned` event without a preceding `workflow.node.started` produces only the muted capsule — no spurious indicator line.
 
 **Step 0 Acceptance Criteria:**
 
@@ -435,8 +460,9 @@ Ship the shared helpers + the renderer skeleton. NO slash commands yet.
 0.3. `ChatSessionState.pending_workflow_run_id` + `expecting_user_input_response` fields added; defaults preserve backward compat.
 0.4. `_CAPSULE_PALETTE` has the four new entries.
 0.5. `WorkflowCapsuleRenderer` skeleton exists; emits one capsule per `workflow.node.completed` / `pruned` / `failed` event; uses `display_label`.
-0.6. NO slash commands yet (grep `COMMAND_REGISTRY` for `/workflow` → 0 matches; grep for `/fork` → 0 matches).
-0.7. No regressions.
+0.6. `WorkflowCapsuleRenderer._render_running_indicator` emits one dim `▸ <label>…` line per `workflow.node.started` event per spec §15.2.2 — single line, no `│` bar, no timestamp, no event_id subscript; indent honors `indent_depth`.
+0.7. NO slash commands yet (grep `COMMAND_REGISTRY` for `/workflow` → 0 matches; grep for `/fork` → 0 matches).
+0.8. No regressions.
 
 **Self-check before handoff:**
 
@@ -548,9 +574,14 @@ Ship `/workflow` end-to-end.
    ```
 
 3. **`WorkflowCapsuleRenderer` completion** in `src/cli/_workflow_capsules.py`:
-   - Fill in `_render_completed_capsule`, `_render_pruned_capsule`, `_render_failed_capsule`.
-   - For sub-workflows (`workflow.node.called_workflow`): spawn a child `WorkflowCapsuleRenderer` with `indent_depth+1`; await its `render()` concurrently with the parent's tail; ensure child capsules appear BENEATH the parent's workflow-node capsule.
-   - For user_input pauses: render the inline prompt capsule (use `display_label(node_def) + ": " + prompt_text` as the header; body = "(awaiting your response)").
+   - Fill in `_render_running_indicator`, `_render_completed_capsule`, `_render_pruned_capsule`, `_render_failed_capsule`.
+   - **Running indicator (§15.2.2):** `_render_running_indicator` prints one line `f"{indent}▸ {display_label(node_def, type_label)}…"` in `dim` style. Single `console.print(Text(..., style="dim"))` call. No bar, no timestamp, no event_id subscript. The line persists in scrollback; the matching completion / failure / pruned capsule lands beneath it.
+   - For sub-workflows (`workflow.node.called_workflow`): spawn a child `WorkflowCapsuleRenderer` with `indent_depth+1`; await its `render()` concurrently with the parent's tail; ensure child capsules appear BENEATH the parent's workflow-node capsule. Children emit their own indented `▸ <label>…` lines.
+   - For user_input pauses (§15.2.1): the indicator fires from `_render_running_indicator` on the user_input node's `workflow.node.started`. The pause capsule itself is rendered by the chat loop AFTER the executor returns `WAITING_FOR_INPUT` (Step 2 owns the chat-side render); the renderer here does NOT synthesize the pause capsule from the JSONL — it only emits the indicator. The pause capsule shape (locked in spec §15.2.1):
+     - **Header:** `display_label(node_def, type_label)` — the node's identity. NO prompt text in the header.
+     - **Body line 1:** the rendered `prompt:` text from the executor's `WorkflowPausedForInput.prompt` (already Jinja-rendered by `src/workflows/builtins/user_input.py:46-57`).
+     - **Body line 2 (when the node binds an input variable):** dim `→ binds to inputs.<var_name>`.
+     - **No `(awaiting your response)` placeholder** — the chat's `:> ` input prompt is the unmistakable "your turn" cue.
    - Event_id subscript: dim text below each capsule's header showing `ev_<short_id>` (truncate `ev_<uuid>` to first 8 chars for compactness; full id shown in title-bar hover or `--verbose` flag — defer to Step 3).
 
 4. **`caller_message` rendering** in failure capsules:
@@ -573,13 +604,14 @@ Ship `/workflow` end-to-end.
 1.2. `parse_slash_workflow_args` correctly splits ref + inputs.
 1.3. Catalog resolve via `lookup(ref, expected_type="workflow")`; missing ref → user-friendly error.
 1.4. `WorkflowCapsuleRenderer` emits capsules with header = `display_label(node_def, type_label)`, body = captured output or `caller_message`, event_id subscript in dim text.
-1.5. Failed nodes render `caller_message`, NOT `str(exc)`.
-1.6. Pruned events render muted color + body "(not taken)".
-1.7. Sub-workflow capsules render INDENTED beneath the parent's workflow-node capsule.
-1.8. `pending_workflow_run_id` set on successful `/workflow` invocation.
-1.9. Modal callback fires correctly when a workflow-invoked action triggers a policy prompt (manual smoke OR integration test).
-1.10. NO `/fork` yet (Step 3). NO user_input chat resume yet (Step 2 — the post-run pause detection MAY set `expecting_user_input_response=True` but no resume path).
-1.11. No regressions: existing chat-with-agent flows unchanged.
+1.5. `workflow.node.started` produces ONE dim `▸ <label>…` line ABOVE the matching completion / failure / pruned-target capsule per spec §15.2.2; the line is not a capsule (no `│` bar, no timestamp); it persists in scrollback unchanged.
+1.6. Failed nodes render `caller_message`, NOT `str(exc)`.
+1.7. Pruned events render muted color + body "(not taken)"; no preceding indicator (pruned nodes never emit `workflow.node.started`).
+1.8. Sub-workflow capsules render INDENTED beneath the parent's workflow-node capsule; child indicators indent at the same depth as child capsules.
+1.9. `pending_workflow_run_id` set on successful `/workflow` invocation.
+1.10. Modal callback fires correctly when a workflow-invoked action triggers a policy prompt (manual smoke OR integration test).
+1.11. NO `/fork` yet (Step 3). NO user_input chat resume yet (Step 2 — the post-run pause detection MAY set `expecting_user_input_response=True` but no resume path).
+1.12. No regressions: existing chat-with-agent flows unchanged.
 
 **Self-check before handoff:**
 
@@ -594,8 +626,9 @@ Ship `/workflow` end-to-end.
 Verify each AC. PAY EXTRA ATTENTION to:
 
 - AC 1.4 — `display_label` is the SOLE label source. Grep `_workflow_capsules.py` for any inline label fallback logic (per-instance description check, type-level label check). The ONLY call site should be `display_label(...)`.
-- AC 1.5 — `caller_message` lookup. The failed event's `error_class` is a STRING; the renderer must look up the actual class to read its ClassVar `caller_message`. A typo'd class name should fall back to the generic message gracefully.
-- AC 1.7 — sub-workflow indentation. Run a test workflow that calls a sub-workflow; visually inspect the output; confirm child capsules appear BENEATH and INDENTED relative to the parent's workflow-node capsule.
+- AC 1.5 — running indicator shape per spec §15.2.2. Read `_render_running_indicator` source: it MUST be a single `console.print(Text(..., style="dim"))` of the form `▸ <label>…`. NO `│` bar prefix (that would make it look like a capsule). NO timestamp. NO event_id subscript. NO Rich `Live` / carriage-return tricks. Grep the test output of a started+completed pair: the indicator line and the capsule must both appear, in order, both present.
+- AC 1.6 — `caller_message` lookup. The failed event's `error_class` is a STRING; the renderer must look up the actual class to read its ClassVar `caller_message`. A typo'd class name should fall back to the generic message gracefully.
+- AC 1.8 — sub-workflow indentation. Run a test workflow that calls a sub-workflow; visually inspect the output; confirm child capsules appear BENEATH and INDENTED relative to the parent's workflow-node capsule. Confirm child indicators indent at the same depth as child capsules.
 
 ---
 
@@ -697,7 +730,7 @@ Ship the chat resume path.
 
 **Step 2 Acceptance Criteria:**
 
-2.1. Post-pause, chat renders an inline prompt capsule (header = `display_label(user_input_node)`, body = `(awaiting your response)` or the rendered prompt).
+2.1. Post-pause, chat renders an inline prompt capsule per spec §15.2.1: header = `display_label(user_input_node)`; body line 1 = rendered `prompt:` text; body line 2 (when the node binds a variable) = dim `→ binds to inputs.<var_name>`; NO `(awaiting your response)` placeholder.
 2.2. `expecting_user_input_response = True` after pause; `False` after resume OR slash-escape.
 2.3. Non-slash next message routes to `executor.resume(response={"response": text})`.
 2.4. Slash next message clears the flag and dispatches normally (workflow stays paused).

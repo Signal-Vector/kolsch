@@ -39,6 +39,7 @@ from typing import TYPE_CHECKING, Any, TextIO
 
 from assets import AssetManagement
 from cli._format import render, render_exception
+from workflows._args import parse_input_pairs
 from workflows.errors import (
     WorkflowError,
     WorkflowRunNotFound,
@@ -162,7 +163,7 @@ def add_workflows_subparser(
     )
 
     # Phase 3.4 Step 2 — ``kolsch workflows resume <run_id> --input
-    # response=<text>``. Reuses ``_parse_input_pairs`` (the same KEY=VALUE
+    # response=<text>``. Reuses ``_input_pairs_or_exit`` (the same KEY=VALUE
     # grammar ``run`` consumes). The CLI gates on the run's status:
     # rejects with exit 1 + ``WorkflowResumeRejected`` if the run isn't
     # ``waiting_for_input``.
@@ -656,7 +657,7 @@ async def _cmd_run(  # noqa: PLR0913
             err=err,
         )
 
-    inputs = _parse_input_pairs(input_pairs)
+    inputs = _input_pairs_or_exit(input_pairs)
 
     if dry_run:
         # AC 5.5 — print the plan WITHOUT touching the executor.
@@ -797,7 +798,7 @@ async def _cmd_resume(  # noqa: PLR0913 — five explicit kw args; mirrors _cmd_
 
     from platform_runtime import bootstrap_runtime  # noqa: PLC0415
 
-    response = _parse_input_pairs(input_pairs)
+    response = _input_pairs_or_exit(input_pairs)
 
     runtime = await bootstrap_runtime(root=root)
     catalog = runtime.asset_management.catalog()
@@ -967,7 +968,7 @@ async def _cmd_fork(  # noqa: PLR0913 — seven explicit kw args; mirrors _cmd_r
 
     from platform_runtime import bootstrap_runtime  # noqa: PLC0415
 
-    overrides = _parse_input_pairs(input_pairs)
+    overrides = _input_pairs_or_exit(input_pairs)
 
     runtime = await bootstrap_runtime(root=root)
     catalog = runtime.asset_management.catalog()
@@ -1375,21 +1376,23 @@ def _shorten(text: str, width: int) -> str:
     return flattened[: width - 3] + "..."
 
 
-def _parse_input_pairs(pairs: list[str]) -> dict[str, str]:
-    """Parse ``--input KEY=VALUE`` repeats into a dict.
+def _input_pairs_or_exit(pairs: list[str]) -> dict[str, Any]:
+    """Adapter — wraps :func:`workflows._args.parse_input_pairs` so a
+    malformed ``--input`` flag exits the CLI process rather than
+    raising ``ValueError`` into argparse internals.
 
-    Validation matches the ``kolsch run`` CLI surface: missing ``=``
-    is a hard fail (``SystemExit``) so a malformed flag never
-    silently drops state into the executor.
+    Phase 3.9 Step 0 factored the underlying parser to the workflows
+    package so the chat slash handlers can reuse it without inheriting
+    the CLI's ``SystemExit`` convention. The CLI's contract — a bad
+    flag is a hard exit with a clear message — is preserved here.
     """
-    out: dict[str, str] = {}
-    for item in pairs:
-        if "=" not in item:
-            msg = f"--input must be KEY=VALUE; got {item!r}"
-            raise SystemExit(msg)
-        key, value = item.split("=", 1)
-        out[key] = value
-    return out
+    try:
+        return parse_input_pairs(pairs)
+    except ValueError as exc:
+        # The shared parser uses the more generic "input pair" phrasing;
+        # the CLI flag is ``--input``, so rewrite for the user's surface.
+        msg = str(exc).replace("input pair must be", "--input must be")
+        raise SystemExit(msg) from exc
 
 
 def _compute_dry_run_topology(workflow: Any) -> list[str]:  # noqa: ANN401
