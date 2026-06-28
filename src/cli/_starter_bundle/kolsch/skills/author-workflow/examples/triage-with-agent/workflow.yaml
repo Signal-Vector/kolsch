@@ -1,0 +1,35 @@
+description: Classify a ticket, branch on the verdict, print URGENT or NORMAL.
+
+nodes:
+  classify:
+    type: kolsch/nodes/agent
+    agent: kolsch/agents/classifier
+    description: Read the ticket text; output a one-word classification.
+
+  is_urgent:
+    type: kolsch/nodes/branch
+    description: Branch on the classifier's verdict.
+    condition: "{{ inputs.label == 'urgent' }}"
+
+  urgent_marker:
+    type: kolsch/nodes/bash
+    description: Print URGENT on the urgent arm.
+    command: "echo URGENT"
+
+  normal_marker:
+    type: kolsch/nodes/bash
+    description: Print NORMAL on the normal arm.
+    command: "echo NORMAL"
+
+graph:
+  edges:
+    - from: classify
+      to: is_urgent
+      binds:
+        label: "{{ nodes.classify.text }}"
+    - from: is_urgent
+      to: urgent_marker
+      branch: true
+    - from: is_urgent
+      to: normal_marker
+      branch: false

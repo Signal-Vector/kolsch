@@ -1,0 +1,1 @@
+Build a workflow that, given a list of urls, fetches each one in parallel (just curl -sI -o /dev/null for now), then joins the results. Use auto-mode concurrency.

@@ -1,0 +1,26 @@
+description: Fan out a HEAD-fetch over a list of urls in parallel; collect the results.
+concurrency: auto
+
+nodes:
+  fetch_each:
+    type: kolsch/nodes/map
+    description: Fan out a HEAD probe over each url; workers run in parallel.
+    over: "{{ inputs.urls }}"
+    apply: probe
+    item_as: url
+    parallel: true
+
+  probe:
+    type: kolsch/nodes/bash
+    description: HEAD-probe one url and echo its exit code.
+    command: "curl -sI -o /dev/null -w '{{ inputs.url }} %{http_code}\\n' '{{ inputs.url }}'"
+
+  summarise:
+    type: kolsch/nodes/bash
+    description: Echo the per-url result lines collected by the map.
+    command: "echo {{ nodes.fetch_each.results | length }} fetched"
+
+graph:
+  edges:
+    - from: fetch_each
+      to: summarise

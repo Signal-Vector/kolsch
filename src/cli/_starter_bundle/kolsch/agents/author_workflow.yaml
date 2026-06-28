@@ -1,0 +1,112 @@
+schema_version: "0.1"
+assembly_version: "1"
+agent_id: ag_author_workflow
+name: author_workflow
+description: |
+  Generates and iteratively refines workflow YAML and authored Python
+  @node files from natural-language briefs. Reads the workspace asset
+  catalog to discover existing components, writes new files into the
+  configured target bundle, and validates every draft against the
+  run-start gate before declaring success.
+
+# model: intentionally omitted — resolved from `platform.yaml`'s
+# `defaults.model` via the kernel's defaults composition.
+
+io: { mode: conversational }
+
+# Phase 3.11 §17.5 — context files inlined into the system prompt at
+# agent-load. The two `kolsch:` paths resolve via
+# `importlib.resources.files("kolsch")` against the installed kolsch
+# package — no per-workspace setup required.
+context_files:
+  - path: kolsch:docs/explanation/workflow-foundation.md
+    summary: Locked cross-phase foundation decisions for workflow design.
+    primary: true
+  - path: kolsch:docs/workflows.md
+    summary: |
+      Day-to-day author reference for workflow YAML — node-type
+      catalog, fan-in semantics, error-format index, anchored sections
+      the validator's "Fix:" messages deep-link into.
+    primary: true
+
+# Phase 3.11 §17.5 — per-agent permission rules. The default kolsch
+# `bash` policy is `prompt`; reaffirm it here so an operator who has
+# widened the workspace-level rule still sees the confirmation modal
+# for this meta-agent specifically. The two new validation tools are
+# pure read; they fall under the kolsch default (allow) policy.
+permissions:
+  - who: ".*"
+    what: "tool\\.bash"
+    effect: prompt
+
+# Phase 3.11 §17.5 — one skill carries the bulk of the authoring
+# knowledge so the prompt stays small. Updating the skill updates the
+# meta-agent without re-shipping this file.
+subsystems:
+  skills:
+    variant: standard
+    config:
+      enabled:
+        - ref: kolsch/skills/author-workflow
+  tools:
+    variant: standard
+    config:
+      declared:
+        - ref: kolsch/tools/read_file
+        - ref: kolsch/tools/write_file
+        - ref: kolsch/tools/list_files
+        - ref: kolsch/tools/bash
+        - ref: kolsch/tools/validate_workflow
+        - ref: kolsch/tools/introspect_node
+
+prompt: |
+  You are {{ agent.name }}, a workflow-authoring assistant for the
+  Kolsch engine.
+
+  Your job is to help the author write VALID Kolsch workflow YAML
+  (and any authored Python @node files the workflow needs) from a
+  natural-language brief. Your contract is simple: every workflow
+  you declare ready PASSES the run-start gate.
+
+  ## How you work
+
+  Read the `kolsch/skills/author-workflow` skill BEFORE drafting
+  your first workflow. The skill carries the YAML grammar, the
+  error-class table, the iteration recipe, the canonical examples,
+  and the "where to write" target-bundle rule.
+
+  Your loop, for both from-scratch authoring and amendments:
+
+  1. Discover what already exists in the catalog. Use `bash` to call
+     `kolsch workflows list`, `kolsch agents list`, `kolsch nodes
+     list` — reuse beats re-invent.
+  2. Sketch the graph (which nodes, which edges) and the binds.
+  3. Write the YAML (and any new `@node` Python files) with
+     `write_file`. New files land in the configured target bundle —
+     NEVER the `kolsch` package bundle (read-only by convention).
+  4. If you wrote any `@node` files, call `introspect_node` on each
+     to confirm the signature BEFORE the workflow validator runs.
+  5. Call `validate_workflow` on the draft.
+  6. If `is_valid: false`: READ the first error's `error_class`,
+     consult the skill's error-class table, fix the root cause,
+     re-validate. Cap at 5 attempts per the skill's recipe; if you
+     hit the cap, surface the closest draft + remaining errors and
+     ask the author for a directional hint.
+  7. When `is_valid: true`, write any final files, surface the
+     workflow's ref, and remind the author they can run it with
+     `/workflow <ref>`. Do NOT invoke the engine on their behalf.
+
+  ## Tools at your disposal
+
+  {% for t in tools %}
+  - **{{ t.name }}**: {{ t.summary }}
+  {% endfor %}
+
+  ## Your documentation
+
+  {{ docs }}
+
+  Be concise. If the brief is ambiguous (missing inputs, unclear
+  termination condition, undefined output) ask ONE clarifying
+  question before drafting. Never declare a workflow ready without
+  a green `validate_workflow` call.

@@ -1,0 +1,1 @@
+Build a workflow that takes a ticket_text input, classifies it as urgent or normal, and prints "URGENT" or "NORMAL" to stdout.

@@ -1,0 +1,29 @@
+description: Print the current date, list the workspace root, write a one-line summary.
+
+nodes:
+  stamp:
+    type: kolsch/nodes/bash
+    description: Capture the current date as ISO-8601.
+    command: "date -u +%Y-%m-%dT%H:%M:%SZ"
+
+  inventory:
+    type: kolsch/nodes/bash
+    description: Count entries at the workspace root.
+    command: "ls -1 | wc -l | tr -d ' '"
+
+  summarise:
+    type: kolsch/nodes/write_file
+    description: Write a one-line summary to disk.
+    path: "out/summary.txt"
+    content: "snapshot at {{ inputs.when }}: {{ inputs.entry_count }} entries\n"
+
+graph:
+  edges:
+    - from: stamp
+      to: summarise
+      binds:
+        when: "{{ nodes.stamp.stdout | trim }}"
+    - from: inventory
+      to: summarise
+      binds:
+        entry_count: "{{ nodes.inventory.stdout | trim }}"
