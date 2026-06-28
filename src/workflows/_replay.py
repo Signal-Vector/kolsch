@@ -40,9 +40,20 @@ Phase 3.5 adds:
   ``DeleteStateRunner`` semantics so replay is faithful to the
   original run.
 
-Future phases will extend the replay table as new event kinds land
-(nested ``workflow.run.resumed`` in Phase 3.7 sub-workflows). The
-contract is forward-compatible: unknown event kinds are ignored.
+Phase 3.7 adds:
+
+- ``workflow.node.called_workflow`` — records the parent-side
+  ``{invocation_id: child_run_id}`` marker on the executor so the
+  resume cascade can identify which workflow-node invocation spawned
+  which child without re-walking the JSONL. The event itself doesn't
+  mutate any worklist state (the workflow node is OPEN until its
+  matching ``workflow.node.completed`` lands).
+- ``workflow.node.called_workflow_completed`` — pure forensics
+  marker; replay ignores it (the open-invocation slot is closed by
+  the matching ``workflow.node.completed``, not by this).
+
+Unknown event kinds are silently ignored — forward-compat with future
+event-log extensions.
 """
 
 from __future__ import annotations
@@ -126,6 +137,32 @@ def replay_into(
                 executor._state[str(key)] = payload.get("value")
             else:
                 executor._state.pop(str(key), None)
+        elif kind == "workflow.node.called_workflow":
+            # Phase 3.7 — record the parent-side spawn marker so the
+            # resume cascade can map an open workflow-node invocation
+            # to its child run without re-walking the JSONL. The
+            # open-invocations bookkeeping is NOT touched here — the
+            # workflow node remains open until its matching
+            # ``workflow.node.completed`` event lands; that pre-existing
+            # path (above) is what closes the slot.
+            payload = event.get("payload") or {}
+            invocation_id = (
+                event.get("invocation_id") or payload.get("invocation_id")
+            )
+            child_run_id = payload.get("child_workflow_run_id")
+            if invocation_id is None or child_run_id is None:
+                continue
+            executor._workflow_node_child_runs[str(invocation_id)] = str(
+                child_run_id
+            )
+        elif kind == "workflow.node.called_workflow_completed":
+            # Phase 3.7 — forensics marker only. The slot is closed by
+            # the matching ``workflow.node.completed`` (when the parent
+            # eventually harvested), not by this event. For paused
+            # workflow nodes this event always carries
+            # ``child_status="waiting_for_input"`` and the slot stays
+            # open across resume.
+            pass
         elif kind == "workflow.node.failed":
             # Defensive — the resume entry's status check rejects
             # failed runs first; this guards against a future code

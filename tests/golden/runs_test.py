@@ -1123,6 +1123,253 @@ def _build_branching_multi_input(
     return workflow, registry, {}
 
 
+# ---------------------------------------------------------------------------
+# Phase 3.7 — composition goldens (sub-workflow + map).
+#
+# Each fixture below writes the supporting workflows to disk under
+# ``tmp_path/bundles/`` and threads an :class:`AssetCatalog` with the
+# child entries through ``extras["catalog"]`` so the existing harness
+# uses it when constructing the executor + :class:`WorkflowSubRunner`.
+# Goldens capture the ROOT run's JSONL — the cross-trace correlation
+# is verifiable because the child's run_id appears verbatim in the
+# parent's ``child_run_id`` payload field.
+# ---------------------------------------------------------------------------
+
+
+def _ext_compose_write_workflow(path: Path, content: str) -> None:
+    """Helper — write a sibling workflow YAML to disk."""
+    import textwrap as _tw  # noqa: PLC0415
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(_tw.dedent(content).lstrip(), encoding="utf-8")
+
+
+def _ext_compose_catalog(
+    *, tmp_path: Path, refs: dict[str, str]
+) -> "AssetCatalog":
+    """Build an AssetCatalog pointing at the on-disk workflow YAMLs
+    declared in ``refs`` (``{ref: yaml_contents}``)."""
+    from assets.catalog import AssetCatalog, AssetEntry  # noqa: PLC0415
+
+    assets: dict[str, AssetEntry] = {}
+    for ref, content in refs.items():
+        bundle, _kind, name = ref.split("/")
+        path = (
+            tmp_path / "bundles" / bundle / "workflows" / f"{name}.yaml"
+        )
+        _ext_compose_write_workflow(path, content)
+        assets[ref] = AssetEntry(
+            ref=ref,
+            asset_type="workflow",
+            bundle=bundle,
+            path=str(path),
+        )
+    return AssetCatalog(assets=assets)
+
+
+def _ext_compose_registry(
+    *, catalog: "AssetCatalog", store: WorkflowRunStore
+) -> RunnerRegistry:
+    """Build a registry pre-wired for sub-workflow + map dispatch."""
+    from workflows.builtins.compute import ComputeRunner  # noqa: PLC0415
+    from workflows.builtins.map import MapRunner  # noqa: PLC0415
+    from workflows.builtins.noop import NoopRunner  # noqa: PLC0415
+    from workflows.builtins.workflow_sub import (  # noqa: PLC0415
+        WorkflowSubRunner,
+    )
+
+    registry = RunnerRegistry()
+    registry.register("kolsch/nodes/noop", NoopRunner())
+    registry.register("kolsch/nodes/compute", ComputeRunner())
+    registry.register("kolsch/nodes/map", MapRunner(registry=registry))
+
+    def _factory(**kwargs: Any) -> IterativeExecutor:
+        return IterativeExecutor(**kwargs)
+
+    registry.register(
+        "kolsch/nodes/workflow",
+        WorkflowSubRunner(
+            catalog=catalog,
+            store=store,
+            executor_factory=_factory,
+            registry=registry,
+        ),
+    )
+    return registry
+
+
+def _build_composition_map(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Phase 3.7 — ``map`` over a 3-element list with a compute worker.
+
+    Locks: per-iteration ``workflow.node.started`` / ``_completed``
+    payload shape (``parent_invocation_id`` + ``iteration_index`` +
+    ``iteration_total``), the map node's collected
+    ``{results: [...]}`` output, and the worker-only-node-skip
+    behavior in ``_compute_topology`` (the worker doesn't fire as a
+    standalone topo root).
+    """
+    workflow = Workflow.model_validate(
+        {
+            "nodes": {
+                "echo_one": {
+                    "type": "kolsch/nodes/compute",
+                    "value": "{{ inputs.item }}",
+                },
+                "fan_out": {
+                    "type": "kolsch/nodes/map",
+                    "apply": "echo_one",
+                    "over": [1, 2, 3],
+                    "item_as": "item",
+                },
+            },
+            "graph": {"edges": []},
+        }
+    )
+    store = WorkflowRunStore(tmp_path)
+    catalog = _ext_compose_catalog(tmp_path=tmp_path, refs={})
+    registry = _ext_compose_registry(catalog=catalog, store=store)
+    return workflow, registry, {"catalog": catalog}
+
+
+def _build_composition_nesting(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Phase 3.7 — parent calls a one-node child.
+
+    Locks: ``workflow.node.called_workflow`` + ``_completed`` event
+    pair shape, the ``child_run_id`` payload extension on the parent's
+    ``workflow.node.completed``, and ``trace_id`` inheritance across
+    the parent / child JSONLs (the canonicaliser maps both to the
+    same sentinel because they share the literal id string).
+    """
+    workflow = Workflow.model_validate(
+        {
+            "nodes": {
+                "sub": {
+                    "type": "kolsch/nodes/workflow",
+                    "ref": "demo/workflows/child",
+                },
+            },
+        }
+    )
+    child_yaml = """
+    nodes:
+      only:
+        type: kolsch/nodes/compute
+        value: "leaf-output"
+    graph:
+      edges: []
+    """
+    store = WorkflowRunStore(tmp_path)
+    catalog = _ext_compose_catalog(
+        tmp_path=tmp_path,
+        refs={"demo/workflows/child": child_yaml},
+    )
+    registry = _ext_compose_registry(catalog=catalog, store=store)
+    return workflow, registry, {"catalog": catalog}
+
+
+def _build_composition_cycle(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Phase 3.7 — a workflow that calls itself.
+
+    Locks: the cycle-detection envelope's wire shape — the parent's
+    ``workflow.node.failed`` payload's ``error_class``
+    (``WorkflowCallCycle``) and message including the chain.
+    Detection fires BEFORE ``called_workflow`` is emitted (the runner
+    short-circuits early), so the JSONL stays compact:
+    ``run.started → node.started(loop) → node.failed(loop) →
+    run.failed``.
+
+    The cycle check uses the executor's auto-included call_chain
+    entry (``self._call_chain = (run.workflow_ref,)`` for root runs).
+    The harness sets ``workflow_ref="demo/workflows/x"`` so the
+    workflow node's ``ref:`` must match for the cycle to fire.
+    """
+    workflow = Workflow.model_validate(
+        {
+            "nodes": {
+                "loop": {
+                    "type": "kolsch/nodes/workflow",
+                    "ref": "demo/workflows/x",
+                },
+            },
+        }
+    )
+    store = WorkflowRunStore(tmp_path)
+    catalog = _ext_compose_catalog(tmp_path=tmp_path, refs={})
+    registry = _ext_compose_registry(catalog=catalog, store=store)
+    return workflow, registry, {"catalog": catalog}
+
+
+def _build_composition_depth_exceeded(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Phase 3.7 — chain of 17 workflows hits the depth-16 cap.
+
+    The deepest nested-executor construction raises
+    ``WorkflowExtendsDepthExceeded(depth=17, limit=16)``. The root's
+    JSONL captures the failure CASCADE — each intermediate parent
+    sees its child fail and propagates as ``ChildWorkflowFailed``.
+    The JSONL spans 17 ``called_workflow`` markers + 17
+    ``called_workflow_completed`` (failed) markers, plus the
+    nested node.started / node.failed pairs. Compact enough for a
+    golden, and locks the cross-level failure envelope shape.
+    """
+    depth = 17
+    refs: dict[str, str] = {}
+    for i in range(depth + 1):
+        ref = f"demo/workflows/w{i}"
+        if i < depth:
+            content = (
+                f"""
+                nodes:
+                  next:
+                    type: kolsch/nodes/workflow
+                    ref: demo/workflows/w{i + 1}
+                """
+            )
+        else:
+            content = """
+            nodes:
+              done:
+                type: kolsch/nodes/compute
+                value: "leaf"
+            graph:
+              edges: []
+            """
+        refs[ref] = content
+    # The entry workflow IS w0 — but the harness's fixed
+    # ``workflow_ref="demo/workflows/x"`` means the executor's
+    # auto-included call_chain is ``("demo/workflows/x",)``, not
+    # ``("demo/workflows/w0",)``. The depth cap fires regardless of
+    # the chain's first entry because each sub-workflow appends a new
+    # ref; what we lock is the ENVELOPE shape, not the specific chain
+    # contents. The entry workflow IS w0's content though.
+    entry_yaml = refs["demo/workflows/w0"]
+    workflow = Workflow.model_validate(
+        {
+            "nodes": {
+                "next": {
+                    "type": "kolsch/nodes/workflow",
+                    "ref": "demo/workflows/w1",
+                },
+            },
+        }
+    )
+    _ = entry_yaml
+    # Drop w0 from the catalog (it's the in-memory entry) and keep
+    # w1..w17 on disk.
+    refs.pop("demo/workflows/w0")
+    store = WorkflowRunStore(tmp_path)
+    catalog = _ext_compose_catalog(tmp_path=tmp_path, refs=refs)
+    registry = _ext_compose_registry(catalog=catalog, store=store)
+    return workflow, registry, {"catalog": catalog}
+
+
 _FIXTURES: tuple[
     tuple[
         str,
@@ -1159,6 +1406,15 @@ _FIXTURES: tuple[
     # Phase 3.6 — triage walkthrough (both branch arms).
     ("triage-urgent", _build_triage_urgent, "succeeded"),
     ("triage-normal", _build_triage_normal, "succeeded"),
+    # Phase 3.7 — composition (sub-workflow + map).
+    ("composition-map", _build_composition_map, "succeeded"),
+    ("composition-nesting", _build_composition_nesting, "succeeded"),
+    ("composition-cycle", _build_composition_cycle, "failed"),
+    (
+        "composition-depth-exceeded",
+        _build_composition_depth_exceeded,
+        "failed",
+    ),
 )
 
 

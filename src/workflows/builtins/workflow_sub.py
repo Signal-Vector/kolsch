@@ -119,6 +119,22 @@ class WorkflowSubRunner:
 
         child_ref = node_def.ref
 
+        # Phase 3.7 Step 3 — operator-driven resume cascade. The
+        # executor's resume entry detected this workflow-node
+        # invocation as the OPEN pause point and pre-populated
+        # ``ctx.recorded_child_run_id`` from the replayed
+        # ``called_workflow`` marker. We DON'T spawn a new child here
+        # — we read the existing child's status off disk and either
+        # harvest its terminal output, raise a still-paused error, or
+        # propagate a child failure.
+        if ctx.is_resume_mode and ctx.recorded_child_run_id is not None:
+            return await self._resume_cascade(
+                node_name=node_name,
+                child_ref=child_ref,
+                child_run_id=ctx.recorded_child_run_id,
+                ctx=ctx,
+            )
+
         # Step 1 — cycle detection BEFORE the catalog lookup. The
         # auto-include in ``IterativeExecutor.__init__`` guarantees
         # ``ctx.call_chain`` carries this run's workflow_ref as the
@@ -297,6 +313,109 @@ class WorkflowSubRunner:
                 status=str(status),
             ),
         )
+
+    async def _resume_cascade(
+        self,
+        *,
+        node_name: str,
+        child_ref: str,
+        child_run_id: WorkflowRunId,
+        ctx: NodeContext,
+    ) -> dict[str, Any]:
+        """Phase 3.7 §4.6.1.3 — operator-driven resume cascade.
+
+        Called when the parent is resuming an OPEN workflow-node
+        invocation that previously paused waiting for its child. The
+        child's status is read off disk; three terminal arms:
+
+        - ``SUCCEEDED`` → harvest the child's terminal output dict
+          from its JSONL's ``workflow.run.completed.payload.outputs``
+          and return it. The parent's worklist body emits the
+          ``workflow.node.completed`` event with this dict.
+        - ``WAITING_FOR_INPUT`` → the leaf is still paused. The
+          operator must resume the leaf FIRST. Raise a
+          :class:`WorkflowNodeFailed` whose ``cause`` is an explicit
+          ValueError so the executor's failure path surfaces a
+          clear "resume <leaf> first" hint.
+        - ``FAILED`` / ``ABORTED`` / ``TIMED_OUT`` → wrap in
+          :class:`ChildWorkflowFailed` and propagate via
+          ``WorkflowNodeFailed``, matching the initial-spawn path's
+          failure semantics so downstream tooling reads the same
+          envelope shape across spawn and resume.
+
+        Stamps ``ctx.spawned_run_id`` so the parent's
+        ``workflow.node.completed`` payload still carries
+        ``child_run_id`` (parity with the initial-spawn path; the
+        forensics view of resumed runs matches the live-run view).
+        """
+        object.__setattr__(ctx, "spawned_run_id", child_run_id)
+        child_run = self._store.read(child_run_id)
+
+        if child_run.status == WorkflowRunStatus.WAITING_FOR_INPUT:
+            await self._emit_called_completed(
+                ctx=ctx,
+                node_name=node_name,
+                child_run_id=str(child_run_id),
+                child_status=str(WorkflowRunStatus.WAITING_FOR_INPUT),
+            )
+            raise WorkflowNodeFailed(
+                node=node_name,
+                invocation_id=str(ctx.invocation_id),
+                cause=ValueError(
+                    f"child workflow run {child_run_id!r} is still "
+                    f"paused; resume it first with "
+                    f"`kolsch workflows resume {child_run_id}` "
+                    f"before resuming the parent"
+                ),
+            )
+
+        if child_run.status == WorkflowRunStatus.SUCCEEDED:
+            await self._emit_called_completed(
+                ctx=ctx,
+                node_name=node_name,
+                child_run_id=str(child_run_id),
+                child_status=str(WorkflowRunStatus.SUCCEEDED),
+            )
+            return self._harvest_from_child_jsonl(child_run_id)
+
+        # FAILED / ABORTED / TIMED_OUT — propagate as node failure.
+        await self._emit_called_completed(
+            ctx=ctx,
+            node_name=node_name,
+            child_run_id=str(child_run_id),
+            child_status=str(child_run.status),
+        )
+        raise WorkflowNodeFailed(
+            node=node_name,
+            invocation_id=str(ctx.invocation_id),
+            cause=ChildWorkflowFailed(
+                run_id=str(child_run_id),
+                status=str(child_run.status),
+            ),
+        )
+
+    def _harvest_from_child_jsonl(
+        self, child_run_id: WorkflowRunId
+    ) -> dict[str, Any]:
+        """Walk the child's JSONL for its terminal-output dict.
+
+        Phase 3.7 — at resume the child's :class:`IterativeExecutor`
+        is long-gone (it ran in a different process); its in-memory
+        ``_captured`` + ``_pruned`` aren't accessible. The child's
+        ``workflow.run.completed`` event's payload carries the same
+        terminal-keyed output dict that
+        :func:`workflows._terminal.compute_terminal_output_dict`
+        produced at child run-end (the executor's
+        ``_assemble_terminal_outputs`` writes it there). Returning
+        that dict gives the parent's downstream consumers the same
+        ``nodes.<workflow_node>.<terminal>.<key>`` shape regardless
+        of whether the parent harvested live (initial spawn) or via
+        resume cascade.
+        """
+        for event in self._store.read_events(child_run_id):
+            if event.get("kind") == "workflow.run.completed":
+                return dict(event.get("payload", {}).get("outputs", {}))
+        return {}
 
     async def _emit_called_completed(
         self,

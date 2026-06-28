@@ -1,0 +1,42 @@
+# Phase 3.7 starter — sub-workflow demo with pause / resume cascade.
+#
+# A 3-node parent that calls ``kolsch/workflows/hello-paused`` as a
+# child via ``kolsch/nodes/workflow``. The child pauses on its
+# ``user_input`` node; the parent's pause cascade fires too. To
+# resume:
+#
+#   kolsch workflows run kolsch/workflows/nested-greeting --input name=Alice
+#   # prints: run wrk_<parent_id> waiting_for_input ...
+#   # both <parent_id> AND <leaf_id> are recorded under runs/
+#
+#   kolsch workflows resume <leaf_id> --input response=hi
+#   # leaf completes; parent is still WAITING_FOR_INPUT.
+#
+#   kolsch workflows resume <parent_id>
+#   # parent re-checks its child, harvests the terminal output,
+#   # completes via the wrap node.
+#
+# The operator-driven two-step cascade is the v1 user-facing contract
+# (master spec §4.6.1.3); a future QoL may auto-cascade.
+description: "Sub-workflow demo with pause/resume cascade."
+
+nodes:
+  prep:
+    type: kolsch/nodes/compute
+    value: "preparing greeting for {{ inputs.name }}"
+    description: "Pre-call setup — captured for forensics."
+  sub:
+    type: kolsch/nodes/workflow
+    ref: kolsch/workflows/hello-paused
+    description: "Spawns a child workflow that pauses for user input."
+  wrap:
+    type: kolsch/nodes/compute
+    value: "wrapped: {{ nodes.sub.echo.message }}"
+    description: "Reads the child's terminal output via nodes.sub.<terminal>.<key>."
+
+graph:
+  edges:
+    - from: prep
+      to: sub
+    - from: sub
+      to: wrap

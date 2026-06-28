@@ -18,12 +18,24 @@ from __future__ import annotations
 
 import re
 from datetime import datetime
-from typing import Literal
+from typing import TYPE_CHECKING, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from schemas.identifiers import AgentId, EventId, SessionId, ThreadId
-from workflows.ids import InvocationId, WorkflowRunId
+
+if TYPE_CHECKING:
+    # Forward-referenced from string annotations on the Pydantic
+    # models below. ``workflows.ids`` is imported lazily in
+    # :func:`_resolve_forward_refs` to break the import cycle:
+    #
+    #   workflows.ids → schemas.identifiers → schemas/__init__.py
+    #     → schemas.entities → workflows.ids
+    #
+    # The cycle existed since Phase 3.2's :class:`FromWorkflowRun`;
+    # the lazy resolution defers the actual rebind until both modules
+    # are fully loaded.
+    from workflows.ids import InvocationId, WorkflowRunId
 
 _SHA256_HEX = re.compile(r"^[0-9a-fA-F]{64}$")
 
@@ -38,8 +50,10 @@ class FromWorkflowRun(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    workflow_run_id: WorkflowRunId
-    invocation_id: InvocationId
+    # String forward refs — see ``_resolve_forward_refs`` below for
+    # the lazy import that breaks the schemas↔workflows.ids cycle.
+    workflow_run_id: "WorkflowRunId"
+    invocation_id: "InvocationId"
     event_id: EventId  # workflow.node.started event that spawned this session
 
 
@@ -60,8 +74,47 @@ class ParentRunPointer(BaseModel):
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    workflow_run_id: WorkflowRunId
-    invocation_id: InvocationId
+    # String forward refs — see ``_resolve_forward_refs`` below.
+    workflow_run_id: "WorkflowRunId"
+    invocation_id: "InvocationId"
+
+
+def _resolve_forward_refs() -> None:
+    """Rebind the ``WorkflowRunId`` / ``InvocationId`` forward refs.
+
+    The cycle:
+    ``workflows.ids → schemas.identifiers → schemas/__init__.py →
+    schemas.entities → workflows.ids`` (mid-init).
+    Defining the Pydantic fields as string forward refs above and
+    calling ``model_rebuild`` AFTER ``workflows.ids`` has finished
+    loading breaks the cycle without changing the on-disk schema.
+
+    Called once at module-import time below; safe because Python's
+    import machinery serialises module loads — when ``schemas`` is
+    fully loaded (the import that triggered this module's load has
+    returned), ``workflows.ids`` is also fully loaded.
+    """
+    import workflows.ids as _wf_ids  # noqa: PLC0415
+
+    namespace = {
+        "WorkflowRunId": _wf_ids.WorkflowRunId,
+        "InvocationId": _wf_ids.InvocationId,
+    }
+    FromWorkflowRun.model_rebuild(_types_namespace=namespace)
+    ParentRunPointer.model_rebuild(_types_namespace=namespace)
+
+
+# The module-level call deliberately swallows ``ImportError`` so the
+# initial cycle-busting load (when ``workflows.ids`` triggers
+# ``schemas/__init__.py`` mid-init) doesn't crash; the eager retry
+# happens via :func:`_eager_resolve_when_workflows_loaded` below.
+try:
+    _resolve_forward_refs()
+except (ImportError, AttributeError):
+    # Pre-cycle: workflows.ids hasn't finished loading yet. The retry
+    # at the bottom of ``workflows.ids`` calls back into us once it's
+    # done.
+    pass
 
 
 class Session(BaseModel):

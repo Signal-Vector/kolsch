@@ -24,12 +24,10 @@ from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from workflows.ids import InvocationId
-
 if TYPE_CHECKING:
     from schemas import EventId, SessionId
     from workflows.events import WorkflowEvent
-    from workflows.ids import TraceId, WorkflowRunId
+    from workflows.ids import InvocationId, TraceId, WorkflowRunId
 
 __all__ = ["NodeContext"]
 
@@ -165,6 +163,18 @@ class NodeContext:
     parent_invocation_id: InvocationId | None = None
     iteration_index: int | None = None
     iteration_total: int | None = None
+    # Phase 3.7 Step 3 — resume-cascade markers. ``is_resume_mode`` is
+    # ``True`` only when the executor is re-dispatching an OPEN
+    # workflow-node invocation that paused waiting for a child run to
+    # terminate (the parent's own ``waiting_at`` pointed at this
+    # invocation). ``recorded_child_run_id`` carries the child run id
+    # recovered from the prior ``workflow.node.called_workflow`` event
+    # in the parent's JSONL, so the
+    # :class:`workflows.builtins.workflow_sub.WorkflowSubRunner`'s
+    # resume branch can read the child's status without re-walking the
+    # JSONL itself. Both ``None`` on initial-run dispatch.
+    is_resume_mode: bool = False
+    recorded_child_run_id: WorkflowRunId | None = None
 
     def derive_for_iteration(
         self,

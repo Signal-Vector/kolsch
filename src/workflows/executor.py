@@ -350,6 +350,21 @@ class IterativeExecutor:
         # moment so the existing AND-strict downstream check treats
         # them as decided.
         self._pruned: set[str] = set()
+        # Phase 3.7 — replay populates this mapping with the
+        # parent-side spawn marker per workflow-node invocation. The
+        # resume entry uses it to find the child_run_id for an open
+        # workflow-node pause without re-walking the JSONL.
+        self._workflow_node_child_runs: dict[str, str] = {}
+        # Phase 3.7 — resume-cascade state. When the resume entry
+        # detects a paused workflow node (vs the Phase 3.4 user_input
+        # case), it records ``{node_name: (open_inv_id, child_run_id)}``
+        # so the worklist's per-node dispatch re-fires the
+        # WorkflowSubRunner with the ORIGINAL invocation id (instead of
+        # minting a fresh one) and stamps ``ctx.is_resume_mode`` so
+        # the runner branches into the resume cascade.
+        self._resumed_open_workflow_invocations: dict[
+            str, tuple[InvocationId, WorkflowRunId]
+        ] = {}
 
     # ------------------------------------------------------------------
     # Public entry point.
@@ -535,26 +550,20 @@ class IterativeExecutor:
                 status=str(self._run.status),
             )
 
-        # AC 1.5 — validate response shape BEFORE any side effects.
-        # The user_input runner's output schema is locked at
-        # ``{response: str}`` (master spec §4.1.3); missing key or
-        # wrong type → ``WorkflowInputInvalid`` with the run still
-        # in ``waiting_for_input`` so the operator's retry succeeds.
-        if "response" not in response or not isinstance(
-            response["response"], str
-        ):
-            raise WorkflowInputInvalid(
-                ref=str(run_id),
-                reason=(
-                    "resume response must include a 'response' string; "
-                    f"received keys {list(response.keys())!r}"
-                ),
-            )
-
         # Read the open-invocation sidecar before any further side
         # effects so a missing / unreadable sidecar surfaces as
         # ``WorkflowResumeRejected(status='inconsistent_state')``
         # rather than a half-applied resume.
+        #
+        # Phase 3.7 note: response validation moved BELOW the
+        # sidecar/replay step so we can branch on the open node's
+        # type. ``user_input`` pauses still require ``{response: str}``;
+        # sub-workflow pauses (operator-driven cascade) accept any
+        # response shape since there's no user message to deliver —
+        # the parent is only re-checking its child's status. The
+        # status flip to ``RUNNING`` happens AFTER validation, so a
+        # malformed user_input response still leaves the run paused
+        # for retry (the original Phase 3.4 AC 1.5 invariant).
         if not run_dir.waiting_at_path.exists():
             raise WorkflowResumeRejected(
                 run_id=str(run_id),
@@ -614,6 +623,33 @@ class IterativeExecutor:
                 status="inconsistent_state",
             )
 
+        # Phase 3.7 — determine whether the paused node is a
+        # ``user_input`` (validate response shape; existing path) or a
+        # ``kolsch/nodes/workflow`` (operator-driven cascade; the
+        # parent re-checks the child's status without a response).
+        open_node_def = self._workflow.nodes.get(open_node)
+        open_node_type = _node_type_ref(open_node_def) if open_node_def else ""
+        is_workflow_node_pause = (
+            open_node_type == "kolsch/nodes/workflow"
+        )
+
+        if not is_workflow_node_pause:
+            # AC 1.5 — validate response shape BEFORE any side effects
+            # that would flip the status. Bad shape → retry-friendly
+            # ``WorkflowInputInvalid`` with the run still in
+            # ``waiting_for_input``.
+            if "response" not in response or not isinstance(
+                response["response"], str
+            ):
+                reset_workflow_run_context(run_context_token)
+                raise WorkflowInputInvalid(
+                    ref=str(run_id),
+                    reason=(
+                        "resume response must include a 'response' string; "
+                        f"received keys {list(response.keys())!r}"
+                    ),
+                )
+
         # AC 1.6 — chain the resumed event to the last pre-pause
         # event in the JSONL so the cross-process event chain is
         # unbroken.
@@ -669,32 +705,82 @@ class IterativeExecutor:
             )
             self._last_event_id = resumed_id
 
-            # Emit ``workflow.node.completed`` for the paused
-            # user_input — payload's ``output`` carries the operator
-            # response verbatim (the dict the CLI parsed from
-            # ``--input k=v`` pairs).
-            completed_payload: dict[str, Any] = {
-                "node_name": open_node,
-                "invocation_id": waiting_invocation_id,
-                "output": dict(response),
-            }
-            completion_id = emit_event(
-                self._store,
-                WorkflowNodeCompletedEvent(
-                    workflow_run_id=run_id,
-                    trace_id=self._run.trace_id,
-                    parent_event_id=resumed_id,
-                    invocation_id=InvocationId(
-                        waiting_invocation_id
+            if is_workflow_node_pause:
+                # Phase 3.7 — sub-workflow pause cascade. We do NOT
+                # emit a completion event here; the parent's
+                # WorkflowSubRunner will re-fire under the worklist
+                # (with ``ctx.is_resume_mode=True`` + the recorded
+                # child_run_id) and either harvest the child's output
+                # (the runner emits the trailing
+                # ``called_workflow_completed`` then returns the
+                # harvested dict, and the worklist body emits
+                # ``workflow.node.completed`` per its usual path) OR
+                # raise (the executor's failure path emits
+                # ``workflow.node.failed``).
+                #
+                # Record the open invocation so ``_continue_worklist``
+                # reuses the original invocation_id instead of minting
+                # a fresh one (preserves the cross-process chain — the
+                # JSONL already carries the original
+                # ``workflow.node.started`` event for this invocation).
+                recorded_child = self._workflow_node_child_runs.get(
+                    waiting_invocation_id
+                )
+                if recorded_child is None:
+                    # Inconsistent: the open node is a workflow node
+                    # but no ``called_workflow`` marker was replayed.
+                    # Either the pause happened BEFORE the child was
+                    # spawned (impossible — the runner emits
+                    # ``called_workflow`` before the nested executor
+                    # starts) OR the JSONL was edited. Reject loudly.
+                    reset_workflow_run_context(run_context_token)
+                    raise WorkflowResumeRejected(
+                        run_id=str(run_id),
+                        status="inconsistent_state",
+                    )
+                self._resumed_open_workflow_invocations[open_node] = (
+                    InvocationId(waiting_invocation_id),
+                    WorkflowRunId(recorded_child),
+                )
+                # Seed the per-invocation chain pointer at the
+                # resumed-event id so the runner's first emit chains
+                # back through the resume boundary.
+                self._invocation_last_event_id[
+                    InvocationId(waiting_invocation_id)
+                ] = resumed_id
+            else:
+                # Emit ``workflow.node.completed`` for the paused
+                # user_input — payload's ``output`` carries the
+                # operator response verbatim (the dict the CLI parsed
+                # from ``--input k=v`` pairs).
+                completed_payload: dict[str, Any] = {
+                    "node_name": open_node,
+                    "invocation_id": waiting_invocation_id,
+                    "output": dict(response),
+                }
+                completion_id = emit_event(
+                    self._store,
+                    WorkflowNodeCompletedEvent(
+                        workflow_run_id=run_id,
+                        trace_id=self._run.trace_id,
+                        parent_event_id=resumed_id,
+                        invocation_id=InvocationId(
+                            waiting_invocation_id
+                        ),
+                        node_name=open_node,
+                        payload=completed_payload,
                     ),
-                    node_name=open_node,
-                    payload=completed_payload,
-                ),
-            )
-            self._last_event_id = completion_id
-            self._node_completed_event_id[open_node] = completion_id
-            self._captured[open_node] = dict(response)
-            self._completed_or_skipped.add(open_node)
+                )
+                self._last_event_id = completion_id
+                self._node_completed_event_id[open_node] = completion_id
+                self._captured[open_node] = dict(response)
+                self._completed_or_skipped.add(open_node)
+            # For the workflow-node pause case we DELIBERATELY leave
+            # ``_completed_or_skipped`` / ``_captured`` untouched for
+            # ``open_node`` — the worklist below will re-fire the
+            # workflow node (via the ``_resumed_open_workflow_invocations``
+            # marker) and that re-fire is what produces the captured
+            # output + completion event.
 
             # Re-enter the worklist. The early-skip check on
             # ``_completed_or_skipped`` short-circuits every node
@@ -818,48 +904,82 @@ class IterativeExecutor:
             # Render this node's bound inputs from inbound edges.
             bound_inputs = self._render_bound_inputs(node_name)
 
-            # Mint a fresh invocation id; emit ``workflow.node.started``.
-            # Master spec §11.3 — node-scoped events carry
-            # ``invocation_id`` + ``node_name`` at the envelope
-            # top level; payload also holds the legacy keys for
-            # back-compat with Step 1-4 readers.
-            inv_id = InvocationId(f"inv_{uuid.uuid4()}")
-            started_id = emit_event(
-                self._store,
-                WorkflowNodeStartedEvent(
-                    workflow_run_id=run_id,
-                    trace_id=self._run.trace_id,
-                    parent_event_id=self._last_event_id,
-                    invocation_id=inv_id,
-                    node_name=node_name,
-                    payload={
-                        "node_name": node_name,
-                        "invocation_id": str(inv_id),
-                        "type": _node_type_ref(node_def),
-                        "inputs": bound_inputs,
-                        # Master spec §11.3 caller_chain carrier:
-                        # the workflow run's own caller_chain (the
-                        # frames it was invoked through). v1 ships
-                        # the empty tuple — the chain is
-                        # populated by Phase 3.7 sub-workflow /
-                        # fork wiring.
-                        "caller_chain": list(
-                            getattr(self._run, "caller_chain", ()) or ()
-                        ),
-                    },
-                ),
+            # Phase 3.7 — sub-workflow resume cascade. When the resume
+            # entry recorded this node as an OPEN workflow-node
+            # invocation (the parent was paused waiting for a child
+            # to terminate), reuse the original invocation_id + skip
+            # the fresh ``workflow.node.started`` emission (the
+            # pre-pause process already wrote that event into the
+            # JSONL). The WorkflowSubRunner branches on
+            # ``ctx.is_resume_mode`` to read the child's status
+            # instead of spawning a new child.
+            resume_marker = self._resumed_open_workflow_invocations.pop(
+                node_name, None
             )
-            self._last_event_id = started_id
-            self._node_started_event_id[inv_id] = started_id
+            if resume_marker is not None:
+                inv_id, recorded_child_run_id = resume_marker
+                # The per-invocation chain pointer was seeded at the
+                # resumed-event id in :meth:`resume`; do not overwrite.
+                started_id = self._node_started_event_id.get(
+                    inv_id, self._last_event_id
+                )
+                is_resume_mode = True
+                recorded_child = recorded_child_run_id
+            else:
+                # Mint a fresh invocation id; emit
+                # ``workflow.node.started``. Master spec §11.3 —
+                # node-scoped events carry ``invocation_id`` +
+                # ``node_name`` at the envelope top level; payload
+                # also holds the legacy keys for back-compat with
+                # Step 1-4 readers.
+                inv_id = InvocationId(f"inv_{uuid.uuid4()}")
+                started_id = emit_event(
+                    self._store,
+                    WorkflowNodeStartedEvent(
+                        workflow_run_id=run_id,
+                        trace_id=self._run.trace_id,
+                        parent_event_id=self._last_event_id,
+                        invocation_id=inv_id,
+                        node_name=node_name,
+                        payload={
+                            "node_name": node_name,
+                            "invocation_id": str(inv_id),
+                            "type": _node_type_ref(node_def),
+                            "inputs": bound_inputs,
+                            # Master spec §11.3 caller_chain carrier:
+                            # the workflow run's own caller_chain
+                            # (the frames it was invoked through).
+                            # v1 ships the empty tuple — the chain
+                            # is populated by Phase 3.7 sub-workflow
+                            # / fork wiring.
+                            "caller_chain": list(
+                                getattr(self._run, "caller_chain", ()) or ()
+                            ),
+                        },
+                    ),
+                )
+                self._last_event_id = started_id
+                self._node_started_event_id[inv_id] = started_id
+                is_resume_mode = False
+                recorded_child = None
             # Phase 3.5 Step 1 — seed the per-invocation chain pointer
             # at the started event id. State runners advance it via
             # ``ctx.emit_workflow_event``; completion reads it.
-            self._invocation_last_event_id[inv_id] = started_id
+            # Phase 3.7 — for sub-workflow resume the pointer was
+            # already seeded at the resumed-event id in :meth:`resume`
+            # so the runner's first emit chains to the resume
+            # boundary (not back to the pre-pause started event).
+            if not is_resume_mode:
+                self._invocation_last_event_id[inv_id] = started_id
 
             ctx = self._build_ctx(
                 inv_id=inv_id,
                 node_def=node_def,
-                parent_event_id=started_id,
+                parent_event_id=self._invocation_last_event_id.get(
+                    inv_id, started_id
+                ),
+                is_resume_mode=is_resume_mode,
+                recorded_child_run_id=recorded_child,
             )
             try:
                 # Phase 3.3 §6.4.4 — strict-mode bind validation
@@ -1581,6 +1701,8 @@ class IterativeExecutor:
         inv_id: InvocationId,
         node_def: Any,  # noqa: ANN401
         parent_event_id: Any = None,  # noqa: ANN401 — typed EventId in workflows.context
+        is_resume_mode: bool = False,
+        recorded_child_run_id: WorkflowRunId | None = None,
     ) -> NodeContext:
         """Mint a per-invocation :class:`NodeContext`.
 
@@ -1677,6 +1799,13 @@ class IterativeExecutor:
             call_depth=self._call_depth,
             call_chain=self._call_chain,
             workflow=self._workflow,
+            # Phase 3.7 Step 3 — resume-cascade markers. ``True`` only
+            # when this dispatch is the re-fire of an open workflow
+            # node from a paused parent; the WorkflowSubRunner reads
+            # both fields together to skip the spawn arm and read the
+            # child's status instead.
+            is_resume_mode=is_resume_mode,
+            recorded_child_run_id=recorded_child_run_id,
         )
 
     # ------------------------------------------------------------------

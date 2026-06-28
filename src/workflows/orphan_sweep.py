@@ -18,6 +18,14 @@ liveness probe that doesn't actually send a signal. A
 :class:`PermissionError` means the PID exists but belongs to another
 user (still alive — don't reconcile).
 
+Phase 3.7 — an orphaned child run (one whose ``WorkflowRun.parent``
+is set) gets ``reason="orphaned_child"`` instead of ``"orphaned"`` so
+operators can distinguish runs killed mid-flight by their parent's
+crash from top-level runs killed by a user signal / host reboot.
+Both reasons land in the same ``workflow.run.failed`` event slot;
+downstream forensics can pivot to ``WorkflowRun.parent`` to find the
+spawning frame.
+
 The sweep is wired into ``cli.main.main`` so every ``workflows`` /
 ``nodes`` invocation reconciles before dispatching.
 """
@@ -87,16 +95,39 @@ def sweep(store: WorkflowRunStore) -> list[WorkflowRunId]:
             continue
         # Orphan. Append the synthetic terminal event so the JSONL
         # tail scan + run index reconcile to ``failed`` on the next
-        # ``store.read`` / ``store.list``.
+        # ``store.read`` / ``store.list``. Phase 3.7 — child runs
+        # whose parent is dead get ``orphaned_child`` so operators
+        # can distinguish them from top-level orphans.
+        reason = (
+            "orphaned_child"
+            if _has_parent_pointer(store, run_id)
+            else "orphaned"
+        )
         store.append_event(
             run_id,
             {
                 "kind": "workflow.run.failed",
-                "payload": {"reason": "orphaned"},
+                "payload": {"reason": reason},
             },
         )
         reconciled.append(run_id)
     return reconciled
+
+
+def _has_parent_pointer(
+    store: WorkflowRunStore, run_id: WorkflowRunId
+) -> bool:
+    """Phase 3.7 — ``True`` iff the run's meta records a parent.
+
+    Read failure (corrupt meta, race with cleanup) falls back to
+    ``False`` — the sweep then writes the generic ``orphaned`` reason
+    rather than dropping the reconciliation entirely.
+    """
+    try:
+        run = store.read(run_id)
+    except (FileNotFoundError, OSError, ValueError):
+        return False
+    return run.parent is not None
 
 
 def _is_started_without_terminal(events_path: Path) -> bool:

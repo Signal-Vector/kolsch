@@ -226,6 +226,63 @@ def test_mixed_batch_reconciles_only_orphans(tmp_path: Path) -> None:
 # ---------------------------------------------------------------------------
 
 
+def test_phase_3_7_child_orphan_uses_orphaned_child_reason(
+    tmp_path: Path,
+) -> None:
+    """Phase 3.7 — a child run (parent pointer is set) whose PID is
+    dead reconciles with ``reason="orphaned_child"`` so operators can
+    distinguish parent-crash orphans from top-level orphans.
+    """
+    from schemas.entities import ParentRunPointer  # noqa: PLC0415
+    from workflows.ids import (  # noqa: PLC0415
+        InvocationId,
+        WorkflowRunId,
+    )
+
+    store = WorkflowRunStore(tmp_path)
+    parent_ptr = ParentRunPointer(
+        workflow_run_id=WorkflowRunId(
+            "wrk_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        ),
+        invocation_id=InvocationId(
+            "inv_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        ),
+    )
+    child_run = store.create(
+        workflow_ref="demo/workflows/child",
+        inputs={},
+        parent=parent_ptr,
+    )
+    _seed_started_no_terminal(
+        store, run_id=child_run.run_id, pid=_pick_dead_pid()
+    )
+
+    reconciled = sweep(store)
+    assert reconciled == [child_run.run_id]
+
+    events = list(store.read_events(child_run.run_id))
+    assert events[-1]["kind"] == "workflow.run.failed"
+    # The differentiating bit — child orphans get a distinct reason.
+    assert events[-1]["payload"]["reason"] == "orphaned_child"
+
+
+def test_top_level_orphan_keeps_orphaned_reason(tmp_path: Path) -> None:
+    """Phase 3.7 — top-level runs (no parent pointer) keep the
+    pre-existing ``orphaned`` reason; only child runs get the new
+    ``orphaned_child`` variant."""
+    store = WorkflowRunStore(tmp_path)
+    root_run = store.create(workflow_ref="demo/workflows/root", inputs={})
+    _seed_started_no_terminal(
+        store, run_id=root_run.run_id, pid=_pick_dead_pid()
+    )
+
+    reconciled = sweep(store)
+    assert reconciled == [root_run.run_id]
+
+    events = list(store.read_events(root_run.run_id))
+    assert events[-1]["payload"]["reason"] == "orphaned"
+
+
 def test_repeat_sweep_is_idempotent(tmp_path: Path) -> None:
     """Once a synthetic ``workflow.run.failed`` lands, the JSONL has a
     terminal event — the next sweep must not append a second one."""
