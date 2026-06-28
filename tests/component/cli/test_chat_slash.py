@@ -49,11 +49,12 @@ if TYPE_CHECKING:
 # ===========================================================================
 
 
-def test_registry_has_ten_visible_commands_per_patch_5() -> None:
+def test_registry_has_eleven_visible_commands_per_patch_5() -> None:
     """Patch §5 + skills-build + qol-permission-system-human-readable.md
-    Step 3 add ``/skill`` then ``/perm``. ``/exit`` and ``/quit`` still
-    share one entry via ``aliases``."""
-    assert len(COMMAND_REGISTRY) == 10
+    Step 3 add ``/skill`` then ``/perm``; Phase 3.9 Step 1 adds
+    ``/workflow``. ``/exit`` and ``/quit`` still share one entry via
+    ``aliases``."""
+    assert len(COMMAND_REGISTRY) == 11
     expected = {
         "/help",
         "/exit",
@@ -65,6 +66,7 @@ def test_registry_has_ten_visible_commands_per_patch_5() -> None:
         "/session",
         "/skill",
         "/perm",
+        "/workflow",
     }
     assert set(COMMAND_REGISTRY.keys()) == expected
 
@@ -79,7 +81,7 @@ def test_registry_real_handlers_match_phase_2_1_step_24e_set() -> None:
     entry now has a real handler. No placeholders remain;
     ``/quit`` continues to share ``/exit``'s handler via the
     aliases tuple (it has no entry of its own). Phase 2.4
-    skills-build adds ``/skill`` alongside the original eight."""
+    skills-build adds ``/skill``; Phase 3.9 Step 1 adds ``/workflow``."""
     implemented = {
         name for name, cmd in COMMAND_REGISTRY.items() if cmd.handler is not None
     }
@@ -94,6 +96,7 @@ def test_registry_real_handlers_match_phase_2_1_step_24e_set() -> None:
         "/session",
         "/skill",
         "/perm",
+        "/workflow",
     }
     # No placeholder rows remain.
     placeholders = {
@@ -224,12 +227,12 @@ def _completions_for(text: str) -> list[str]:
     ]
 
 
-def test_tc_chat_15_completer_lists_all_ten_commands_after_slash() -> None:
-    """TC-CHAT-15 (first form): typing ``/`` yields all ten
-    visible commands (eight Step 24e + ``/skill`` from phase
-    2.4 + ``/perm`` from qol-permission-system-human-readable.md
-    Step 3). Aliases (``/quit``) are NOT in the popup — the
-    registry's ``aliases`` field is invisible by design."""
+def test_tc_chat_15_completer_lists_all_eleven_commands_after_slash() -> None:
+    """TC-CHAT-15 (first form): typing ``/`` yields every visible
+    command (eight Step 24e + ``/skill`` from phase 2.4 + ``/perm``
+    from qol-permission-system-human-readable.md Step 3 + ``/workflow``
+    from Phase 3.9 Step 1). Aliases (``/quit``) are NOT in the popup —
+    the registry's ``aliases`` field is invisible by design."""
     completions = _completions_for("/")
     assert set(completions) == {
         "/help",
@@ -242,6 +245,7 @@ def test_tc_chat_15_completer_lists_all_ten_commands_after_slash() -> None:
         "/session",
         "/skill",
         "/perm",
+        "/workflow",
     }
 
 

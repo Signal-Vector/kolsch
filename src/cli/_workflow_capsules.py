@@ -38,6 +38,7 @@ engineer-targeted single-line form stays on the CLI / JSONL surfaces.
 
 from __future__ import annotations
 
+import asyncio
 from typing import TYPE_CHECKING, Any
 
 from rich.console import Console
@@ -50,7 +51,9 @@ from workflows.labels import display_label
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
 
+    from workflows.ids import WorkflowRunId
     from workflows.parser import Workflow
+    from workflows.run_store import WorkflowRunStore
 
 
 __all__ = ["WorkflowCapsuleRenderer"]
@@ -108,26 +111,123 @@ class WorkflowCapsuleRenderer:
         workflow: Workflow | None = None,
         type_label_for: Callable[[Any], str | None] | None = None,
         indent_depth: int = 0,
+        store: WorkflowRunStore | None = None,
+        child_workflow_loader: (
+            Callable[[str], Workflow | None] | None
+        ) = None,
     ) -> None:
         self._console = console
         self._workflow = workflow
         self._type_label_for = type_label_for or (lambda _node_def: None)
         self._indent_depth = indent_depth
         self._indent = "  " * indent_depth
+        # Phase 3.9 Step 1 — store + loader are needed for the async
+        # tail entry point (production path). Step 0 tests pass events
+        # directly via ``render_events`` and don't touch these.
+        self._store = store
+        self._child_workflow_loader = child_workflow_loader
+        # Pending child-workflow renderer tasks. When a
+        # ``workflow.node.called_workflow`` event lands we spawn a
+        # child renderer (one indent deeper) tailing the child run's
+        # JSONL; we keep the task here so the parent can await it
+        # before its own tail terminates.
+        self._child_tasks: list[asyncio.Task[None]] = []
 
     # ------------------------------------------------------------------
-    # Entry point — Step 0 synchronous; Step 1 will add an async variant
-    # that wraps the JSONL tail.
+    # Entry points.
     # ------------------------------------------------------------------
 
     def render_events(self, events: Iterable[dict[str, Any]]) -> None:
         """Walk an iterable of event dicts; emit one render per event.
 
-        Used directly by Step 0 tests. Step 1 builds the async tail
-        variant on top of this same dispatch table.
+        Used by Step 0 unit tests (pre-built event lists) and by the
+        async tail loop (one event at a time). Step 1 builds the
+        :meth:`render_run` async path on top of this same dispatch.
         """
         for event in events:
             self._dispatch(event)
+
+    async def render_run(
+        self,
+        run_id: WorkflowRunId,
+        *,
+        done_event: asyncio.Event | None = None,
+        poll_seconds: float = 0.05,
+    ) -> None:
+        """Tail the run's JSONL on the event loop; emit one render
+        per event; await child sub-workflow renderers; return when
+        a terminal ``workflow.run.*`` event lands OR ``done_event``
+        is set.
+
+        The :paramref:`done_event` parameter is the WAITING_FOR_INPUT
+        escape hatch. A paused run NEVER emits a terminal
+        ``workflow.run.*`` event (it ends mid-stream, awaiting resume),
+        so a naive tail would block forever. The slash handler sets
+        ``done_event`` after the executor coroutine returns; the
+        loop body does one final drain after seeing it set, then
+        exits cleanly. Synchronous file appends in the executor's
+        ``emit_event`` mean all events are visible on disk by the
+        time the executor task completes.
+
+        Sub-workflow nesting: when a ``workflow.node.called_workflow``
+        event lands, the renderer spawns a child
+        :class:`WorkflowCapsuleRenderer` at ``indent_depth+1`` tailing
+        the child run's JSONL. The parent awaits the child task in
+        its own ``render_run`` so child capsules complete before the
+        parent's tail returns.
+        """
+        if self._store is None:
+            msg = (
+                "render_run requires a WorkflowRunStore; pass store=... at "
+                "construction"
+            )
+            raise ValueError(msg)
+        import json  # noqa: PLC0415
+
+        from workflows.run_store import _terminal_event_kinds  # noqa: PLC0415
+
+        terminal_kinds = _terminal_event_kinds()
+        run_dir = self._store.directory(run_id)
+        offset = 0
+        try:
+            while True:
+                hit_terminal = False
+                if run_dir.events_path.exists():
+                    # Note: we use ``readline()`` in a while loop rather
+                    # than ``for line in fh:`` because Python disables
+                    # ``fh.tell()`` once the file is in iterator mode
+                    # (``OSError: telling position disabled by next()
+                    # call``). The polled-resume pattern requires
+                    # ``tell()`` to capture the next-read offset.
+                    with run_dir.events_path.open(
+                        "r", encoding="utf-8"
+                    ) as fh:
+                        fh.seek(offset)
+                        while True:
+                            line = fh.readline()
+                            if not line:
+                                break
+                            stripped = line.strip()
+                            if not stripped:
+                                continue
+                            event = json.loads(stripped)
+                            await self._adispatch(event)
+                            if event.get("kind") in terminal_kinds:
+                                hit_terminal = True
+                                break
+                        offset = fh.tell()
+                if hit_terminal:
+                    break
+                # Check the done signal AFTER the drain so the final
+                # batch of events emitted just before the executor
+                # returned is captured. With ``done_event`` set the
+                # next iteration's file scan is the final one.
+                if done_event is not None and done_event.is_set():
+                    break
+                await asyncio.sleep(poll_seconds)
+        finally:
+            for child_task in self._child_tasks:
+                await child_task
 
     # ------------------------------------------------------------------
     # Dispatch.
@@ -144,9 +244,54 @@ class WorkflowCapsuleRenderer:
         elif kind == "workflow.node.failed":
             self._render_failed_capsule(event)
         # All other kinds are silent at v1 (no run-level framing, no
-        # tool.* capsules, no state.mutated render). Step 1 / Step 3
-        # may add `workflow.node.called_workflow` handling for nested
-        # sub-workflow renderers.
+        # tool.* capsules, no state.mutated render).
+        # ``workflow.node.called_workflow`` (sub-workflow spawn) is
+        # handled only in the async path :meth:`_adispatch` because
+        # spawning a child renderer needs the event loop.
+
+    async def _adispatch(self, event: dict[str, Any]) -> None:
+        """Async-side dispatch — handles the same events plus
+        ``workflow.node.called_workflow`` which spawns a child renderer
+        (one indent deeper) tailing the named child run."""
+        kind = event.get("kind", "")
+        if kind == "workflow.node.called_workflow":
+            self._spawn_child_renderer(event)
+            return
+        self._dispatch(event)
+
+    def _spawn_child_renderer(self, event: dict[str, Any]) -> None:
+        """Phase 3.7 — ``workflow.node.called_workflow`` carries the
+        ``child_workflow_run_id`` of the sub-workflow's run. Tail the
+        child JSONL in a fresh :class:`WorkflowCapsuleRenderer` whose
+        ``indent_depth`` is one deeper so child capsules nest
+        visually under the parent's ``workflow:`` node.
+        """
+        if self._store is None:
+            return
+        payload = event.get("payload") or {}
+        child_run_id_str = payload.get("child_workflow_run_id")
+        if not isinstance(child_run_id_str, str) or not child_run_id_str:
+            return
+        from workflows.ids import WorkflowRunId  # noqa: PLC0415
+
+        child_run_id = WorkflowRunId(child_run_id_str)
+        child_workflow: Workflow | None = None
+        if self._child_workflow_loader is not None:
+            try:
+                child_workflow = self._child_workflow_loader(child_run_id_str)
+            except Exception:  # noqa: BLE001 — best-effort lookup; renderer falls back to the stub label path on any error
+                child_workflow = None
+        child_renderer = WorkflowCapsuleRenderer(
+            console=self._console,
+            workflow=child_workflow,
+            type_label_for=self._type_label_for,
+            indent_depth=self._indent_depth + 1,
+            store=self._store,
+            child_workflow_loader=self._child_workflow_loader,
+        )
+        self._child_tasks.append(
+            asyncio.create_task(child_renderer.render_run(child_run_id))
+        )
 
     # ------------------------------------------------------------------
     # Per-kind handlers.

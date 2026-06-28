@@ -673,78 +673,22 @@ async def _cmd_run(  # noqa: PLR0913
             out=out,
         )
 
-    # Live executor wiring.
-    from tools.builtins import (  # noqa: PLC0415
-        make_bash,
-        make_list_files,
-        make_read_file,
-        make_write_file,
-    )
-    from tools.decorator import get_tool_definition  # noqa: PLC0415
-    from workflows.builtins import register_builtins  # noqa: PLC0415
-    from workflows.executor import (  # noqa: PLC0415
-        IterativeExecutor,
-        RunnerRegistry,
+    # Live executor wiring. Phase 3.9 Step 1 factored the per-call
+    # construction into :func:`cli._workflow_runtime.build_workflow_executor`
+    # so the chat ``/workflow`` slash handler shares this exact wiring.
+    from cli._workflow_runtime import (  # noqa: PLC0415
+        build_workflow_executor,
     )
     from workflows.run_store import WorkflowRunStore  # noqa: PLC0415
 
     store = WorkflowRunStore(root)
     run = store.create(workflow_ref=entry.ref, inputs=inputs)
-    bash_fn = make_bash(policy=runtime.path_policy, root=root)
-    bash_defn = get_tool_definition(bash_fn)
-    # Phase 3.5 Step 2 — file-IO tool defs for the three file-IO
-    # runners. Each factory closes over policy + root so the underlying
-    # tool checks file access; the runners construct a ToolContext with
-    # ``path_policy=None`` (matches the bash runner's wiring).
-    read_file_defn = get_tool_definition(
-        make_read_file(policy=runtime.path_policy, root=root)
-    )
-    write_file_defn = get_tool_definition(
-        make_write_file(policy=runtime.path_policy, root=root)
-    )
-    list_files_defn = get_tool_definition(
-        make_list_files(policy=runtime.path_policy, root=root)
-    )
-    registry = RunnerRegistry()
-
-    # Phase 3.7 — the WorkflowSubRunner needs to construct nested
-    # ``IterativeExecutor`` instances per child sub-workflow call.
-    # Wiring a factory here (rather than importing IterativeExecutor
-    # inside ``builtins/``) keeps the dependency direction clean:
-    # ``builtins/`` already imports from the executor module for the
-    # :class:`RunnerRegistry`; the reverse would close a circular
-    # import that the factory seam sidesteps.
-    def _executor_factory(**kwargs: Any) -> IterativeExecutor:
-        return IterativeExecutor(**kwargs)
-
-    register_builtins(
-        registry,
-        bash_defn=bash_defn,
-        authz=runtime.authz,
-        secrets=runtime.secrets,
-        sandbox=runtime.sandbox,
-        catalog=catalog,
-        # Phase 3.2 — install the agent runner against
-        # ``kolsch/nodes/agent``. The CLI bootstrap already constructs
-        # a shared ``AgentEngine`` for chat; reuse the same instance
-        # here so agents invoked from a workflow run hit the same
-        # framework + LLM pipeline as chat-spawned ones.
-        engine=runtime.engine,
-        session_store=runtime.store,
-        config_builder=runtime.build_resolved_config,
-        read_file_defn=read_file_defn,
-        write_file_defn=write_file_defn,
-        list_files_defn=list_files_defn,
-        # Phase 3.7 — sub-workflow runner triple.
-        workflow_store=store,
-        executor_factory=_executor_factory,
-    )
-    executor = IterativeExecutor(
+    executor = build_workflow_executor(
+        root=root,
+        runtime=runtime,
         workflow=workflow,
         run=run,
         store=store,
-        registry=registry,
-        catalog=catalog,
     )
 
     if follow:

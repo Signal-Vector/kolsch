@@ -1011,6 +1011,142 @@ async def _handler_clear(arg_text: str, ctx: SlashContext) -> ControlSignal:
 
 
 # ---------------------------------------------------------------------------
+# /workflow — Phase 3.9 Step 1
+# ---------------------------------------------------------------------------
+
+
+async def _handler_workflow(arg_text: str, ctx: SlashContext) -> ControlSignal:
+    """``/workflow <ref> [with k=v ...]`` — invoke a workflow inline.
+
+    Phase 3.9 Step 1. Parses args via
+    :func:`cli._workflow_slash_args.parse_slash_workflow_args`; resolves
+    the catalog ref; mints a fresh :class:`WorkflowRun`; constructs the
+    executor via :func:`cli._workflow_runtime.build_workflow_executor`;
+    spawns the executor as a task; runs the
+    :class:`cli._workflow_capsules.WorkflowCapsuleRenderer` against the
+    JSONL tail until the run reaches a terminal status OR pauses for
+    user input. The pending workflow_run id is stashed on
+    :attr:`ChatSessionState.pending_workflow_run_id` so a subsequent
+    ``/fork`` (Step 3) or the user_input chat-resume path (Step 2) can
+    find it.
+
+    The handler ALWAYS returns ``ControlSignal.CONTINUE`` so chat keeps
+    going. Parse errors / catalog misses / load failures surface as
+    one-line errors on ``ctx.stdout``.
+    """
+    import asyncio  # noqa: PLC0415
+    from pathlib import Path  # noqa: PLC0415
+
+    from rich.console import Console  # noqa: PLC0415
+
+    from cli._workflow_capsules import WorkflowCapsuleRenderer  # noqa: PLC0415
+    from cli._workflow_runtime import build_workflow_executor  # noqa: PLC0415
+    from cli._workflow_slash_args import (  # noqa: PLC0415
+        parse_slash_workflow_args,
+    )
+    from workflows.errors import WorkflowError  # noqa: PLC0415
+    from workflows.parser import load_workflow  # noqa: PLC0415
+    from workflows.run import WorkflowRunStatus  # noqa: PLC0415
+    from workflows.run_store import WorkflowRunStore  # noqa: PLC0415
+
+    if ctx.state is None:
+        ctx.stdout.write(
+            "/workflow requires a chat runtime; not available here.\n"
+        )
+        return ControlSignal.CONTINUE
+    state = ctx.state
+    runtime = state.runtime
+
+    try:
+        ref, inputs = parse_slash_workflow_args(arg_text)
+    except ValueError as exc:
+        ctx.stdout.write(f"/workflow: {exc}\n")
+        return ControlSignal.CONTINUE
+
+    catalog = runtime.asset_management.catalog()
+    entry = catalog.lookup(ref, expected_type="workflow")
+    if entry is None:
+        ctx.stdout.write(f"/workflow: workflow {ref!r} not found in catalog.\n")
+        return ControlSignal.CONTINUE
+
+    try:
+        workflow = load_workflow(Path(entry.path))
+    except WorkflowError as exc:
+        # ``caller_message`` is the chat-facing surface per spec §15.5.
+        message = getattr(exc, "caller_message", None) or str(exc)
+        ctx.stdout.write(f"/workflow: {message}\n")
+        return ControlSignal.CONTINUE
+
+    store = WorkflowRunStore(runtime.root)
+    run = store.create(workflow_ref=entry.ref, inputs=inputs)
+    state.pending_workflow_run_id = str(run.run_id)
+
+    executor = build_workflow_executor(
+        root=runtime.root,
+        runtime=runtime,
+        workflow=workflow,
+        run=run,
+        store=store,
+    )
+
+    console = Console(
+        file=ctx.stdout, force_terminal=False, highlight=False
+    )
+
+    def _load_child_workflow(_child_run_id: str) -> Any:
+        # Cross-JSONL workflow lookup for nested capsule labels is
+        # cheap-by-design — the child run's meta carries its
+        # ``workflow_ref``; we resolve via the catalog and load the
+        # YAML. Failures fall back to the stub label path inside the
+        # renderer.
+        from workflows.ids import WorkflowRunId  # noqa: PLC0415
+
+        try:
+            child_run = store.read(WorkflowRunId(_child_run_id))
+        except (FileNotFoundError, ValueError):
+            return None
+        child_entry = catalog.lookup(
+            child_run.workflow_ref, expected_type="workflow"
+        )
+        if child_entry is None:
+            return None
+        try:
+            return load_workflow(Path(child_entry.path))
+        except WorkflowError:
+            return None
+
+    renderer = WorkflowCapsuleRenderer(
+        console=console,
+        workflow=workflow,
+        store=store,
+        child_workflow_loader=_load_child_workflow,
+    )
+
+    done_event = asyncio.Event()
+    executor_task = asyncio.create_task(executor.run())
+
+    async def _await_executor() -> WorkflowRunStatus:
+        try:
+            return await executor_task
+        finally:
+            done_event.set()
+
+    exec_wrapper = asyncio.create_task(_await_executor())
+    try:
+        await renderer.render_run(run.run_id, done_event=done_event)
+    finally:
+        status = await exec_wrapper
+
+    if status == WorkflowRunStatus.WAITING_FOR_INPUT:
+        # Step 2 wires the chat-resume input loop branch; Step 1
+        # arms the flag so the next message can be routed correctly
+        # once Step 2 ships.
+        state.expecting_user_input_response = True
+
+    return ControlSignal.CONTINUE
+
+
+# ---------------------------------------------------------------------------
 # COMMAND_REGISTRY — the single source of truth
 # ---------------------------------------------------------------------------
 
@@ -1101,10 +1237,18 @@ COMMAND_REGISTRY: dict[str, SlashCommand] = {
             ("list", "print every current rule in evaluation order"),
         ),
     ),
+    "/workflow": SlashCommand(
+        name="/workflow",
+        description="invoke a workflow inline (capsules stream as nodes complete)",
+        usage="/workflow <ref> [with key=value ...]",
+        handler=_handler_workflow,
+        free_form_arg_hint="<workflow ref> [with key=value ...]",
+    ),
 }
-"""Ten visible commands; ``/exit`` carries ``/quit`` as an alias.
+"""Eleven visible commands; ``/exit`` carries ``/quit`` as an alias.
 Patch §5 + ``/skill`` (skills-subsystem.md Draft 0.2 Step 3 follow-up) +
-``/perm`` (qol-permission-system-human-readable.md Step 3)."""
+``/perm`` (qol-permission-system-human-readable.md Step 3) +
+``/workflow`` (Phase 3.9 Step 1)."""
 
 
 # ---------------------------------------------------------------------------
