@@ -343,13 +343,23 @@ class WorkflowNodeDef(_BaseNodeDef):
 
 
 class MapNodeDef(_BaseNodeDef):
-    """``kolsch/nodes/map`` — fan-out over a list (spec §4.6.2)."""
+    """``kolsch/nodes/map`` — fan-out over a list (spec §4.6.2).
+
+    Phase 3.10 §16.3 — ``parallel: false`` (default) is the Phase 3.7
+    sequential iteration contract. ``parallel: true`` opts into the
+    concurrent worker dispatch; ``concurrency: int | None`` caps the
+    number of in-flight iterations (``None`` means unbounded). The
+    parser accepts non-positive ``concurrency:`` for shape only —
+    the run-start gate raises :class:`WorkflowInvalidConcurrency`.
+    """
 
     type: Literal["kolsch/nodes/map"]
     apply: str
     over: Any
     item_as: str
     with_: dict[str, Any] = Field(default_factory=dict, alias="with")
+    parallel: bool = False
+    concurrency: int | None = None
 
 
 class BranchNodeDef(_BaseNodeDef):
@@ -594,6 +604,11 @@ class Workflow(BaseModel):
     extends: list[str] = Field(default_factory=list)
     policy: list[Rule] = Field(default_factory=list)
     timeout_seconds: int | None = None
+    # Phase 3.10 §16.2 — workflow-level concurrency mode. ``sequential``
+    # (the default) is the Phase 3.1 — Phase 3.7 behavior preserved
+    # byte-for-byte; ``auto`` opts into the concurrent worklist (the
+    # run-start gate enforces safety invariants; see §16.2.1).
+    concurrency: Literal["sequential", "auto"] = "sequential"
     nodes: dict[str, NodeDef] = Field(default_factory=dict)
     graph: GraphDef | None = None
 

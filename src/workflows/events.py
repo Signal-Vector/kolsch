@@ -56,11 +56,13 @@ __all__ = [
     "WorkflowNodeTimedOutEvent",
     "WorkflowRunAbortedEvent",
     "WorkflowRunCompletedEvent",
+    "WorkflowRunCompletedPayload",
     "WorkflowRunFailedEvent",
     "WorkflowRunForkedFromEvent",
     "WorkflowRunForkedFromPayload",
     "WorkflowRunResumedEvent",
     "WorkflowRunStartedEvent",
+    "WorkflowRunStartedPayload",
     "WorkflowRunTimedOutEvent",
     "WorkflowStateMutatedEvent",
     "WorkflowStateMutatedPayload",
@@ -186,8 +188,43 @@ class NodeScopedWorkflowEvent(WorkflowEvent):
 # ---------------------------------------------------------------------------
 
 
+class WorkflowRunStartedPayload(BaseModel):
+    """Typed payload for :class:`WorkflowRunStartedEvent` — Phase 3.10 §16.1.
+
+    Declared in Phase 3.10 Step 0 to anchor the new ``concurrency_mode``
+    field. ``extra="allow"`` so existing payload keys (``workflow_ref``,
+    ``inputs``, ``trace_id``) round-trip cleanly when loaded from a
+    pre-Phase-3.10 JSONL row; ``concurrency_mode`` defaults to ``None``
+    for the same reason. Phase 3.10 Step 3 wires runtime emission of
+    the field; the event class's ``payload`` field stays
+    ``dict[str, Any]`` at Step 0 (no runtime change).
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+
+    concurrency_mode: Literal["sequential", "auto"] | None = None
+
+
 class WorkflowRunStartedEvent(WorkflowEvent):
     kind: Literal[WorkflowEventKind.RUN_STARTED] = WorkflowEventKind.RUN_STARTED
+
+
+class WorkflowRunCompletedPayload(BaseModel):
+    """Typed payload for :class:`WorkflowRunCompletedEvent` — Phase 3.10 §16.1.
+
+    Declared in Phase 3.10 Step 0 to anchor the new ``peak_in_flight``
+    field (master spec §16.9 — the maximum number of concurrent
+    in-flight node invocations observed during the run, a forensics
+    aid for authors tuning their workflows). ``extra="allow"`` so
+    existing payload keys (``outputs``) round-trip cleanly when loaded
+    from a pre-Phase-3.10 JSONL row; ``peak_in_flight`` defaults to
+    ``None`` for the same reason. Phase 3.10 Step 3 wires runtime
+    emission of the field.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+
+    peak_in_flight: int | None = None
 
 
 class WorkflowRunCompletedEvent(WorkflowEvent):

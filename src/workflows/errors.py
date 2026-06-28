@@ -56,8 +56,10 @@ __all__ = [
     "WorkflowFromNotFound",
     "WorkflowFromShapeError",
     "WorkflowInputInvalid",
+    "WorkflowInvalidConcurrency",
     "WorkflowInvalidRef",
     "WorkflowInvalidTimeout",
+    "WorkflowParallelStateConflict",
     "WorkflowJinjaRefUnknown",
     "WorkflowJinjaSecurityError",
     "WorkflowMapperWorkerMissingField",
@@ -943,6 +945,106 @@ class WorkflowInvalidTimeout(WorkflowValidationError):
                 fix=(
                     f"set timeout_seconds at {scope} to a positive number, or "
                     "remove the field entirely (see docs/workflows#timeout)"
+                ),
+            )
+        )
+
+
+class WorkflowParallelStateConflict(WorkflowValidationError):
+    """Phase 3.10 §16.4 / §16.8 — two concurrent branches fight over
+    a state key, or a ``parallel: true`` map transitively writes state.
+
+    Raised by the run-start gate when an ``auto``-mode workflow has
+    two parallel-eligible nodes whose state-write/read sets overlap,
+    OR when a ``parallel: true`` map's worker subgraph reaches a
+    ``set_state`` / ``delete_state`` node. The fix-path message names
+    both colliding nodes and the shared state key so authors can
+    serialise the offending pair via an explicit edge.
+    """
+
+    caller_message: ClassVar[str] = (
+        "The workflow tries to run two nodes in parallel that fight "
+        "over the same state key. Fix: add an explicit edge to "
+        "serialise them, set concurrency: sequential, or remove the "
+        "state write from one of them."
+    )
+    identifying_names_keys: ClassVar[tuple[str, ...]] = (
+        "node_a",
+        "node_b",
+        "state_key",
+    )
+
+    def __init__(
+        self,
+        *,
+        file: str,
+        line: int,
+        node_a: str,
+        node_b: str,
+        state_key: str,
+    ) -> None:
+        self.file = file
+        self.line = line
+        self.node_a = node_a
+        self.node_b = node_b
+        self.state_key = state_key
+        super().__init__(
+            _yaml_origin_str(
+                self,
+                file=file,
+                line=line,
+                problem=(
+                    f"nodes {node_a!r} and {node_b!r} can run in parallel "
+                    f"and both touch state key {state_key!r}"
+                ),
+                fix=(
+                    "add an edge serialising the two nodes, set "
+                    "'concurrency: sequential', or remove the state "
+                    "write from one of them (see docs/workflows#concurrency)"
+                ),
+            )
+        )
+
+
+class WorkflowInvalidConcurrency(WorkflowValidationError):
+    """Phase 3.10 §16.8 — ``concurrency:`` integer is non-positive.
+
+    Raised by the run-start gate for any ``concurrency:`` field on a
+    map node that is set but not a positive integer. Distinct from
+    :class:`WorkflowInvalidTimeout` (which covers ``timeout_seconds``).
+    """
+
+    caller_message: ClassVar[str] = (
+        "The workflow declares a concurrency bound that is not a "
+        "positive integer."
+    )
+    identifying_names_keys: ClassVar[tuple[str, ...]] = ("node", "value")
+
+    def __init__(
+        self,
+        *,
+        file: str,
+        line: int,
+        node: str,
+        value: Any,
+    ) -> None:
+        self.file = file
+        self.line = line
+        self.node = node
+        self.value = value
+        super().__init__(
+            _yaml_origin_str(
+                self,
+                file=file,
+                line=line,
+                problem=(
+                    f"concurrency at node {node!r} is {value!r} which is "
+                    "not a positive integer"
+                ),
+                fix=(
+                    f"set concurrency at {node!r} to a positive integer, "
+                    "or remove the field entirely "
+                    "(see docs/workflows#concurrency)"
                 ),
             )
         )
