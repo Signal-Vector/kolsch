@@ -184,7 +184,85 @@ Spec: `process/phase3.6-branch-filter-compute-spec.md`. Build plan: `process/pha
 
 **Effort**: ~1-2 weeks.
 
-### 3.7 — Composition (map + workflow)
+### 3.7 — Composition (map + workflow) — ✅ Done (`4f451e3`)
+
+**Status:** Shipped across Steps 0–3 of
+`process/phase3.7-composition-build.md` (Steps 0+1+2 squashed into
+`e8ec361`, Step 3 `4f451e3`). The 8 Phase-level Integration Tests
+pass under `uv run pytest tests/` via
+`tests/component/test_workflow_composition_e2e.py` (3-level nesting,
+self-call cycle, depth-17 rejected, two-step operator-driven resume
+cascade with the still-paused error path, map happy / non-list,
+parent↔child state isolation, no-regressions). Per-step coverage:
+`test_workflow_composition_prereq.py` (Step 0 plumbing — 18 tests),
+`test_workflow_sub_runner.py` (Step 1 lifecycle — 15 tests),
+`test_workflow_map.py` (Step 2 — 13 tests). Four composition
+goldens (`tests/golden/runs/composition-{map,nesting,cycle,depth-exceeded}.jsonl`)
+pin the JSONL shape including the new `workflow.node.called_workflow`
++ `_completed` event kinds, the `child_run_id` payload extension on
+`workflow.node.completed`, and the per-iteration
+`parent_invocation_id` + `iteration_index` + `iteration_total`
+payload fields. The nested-pause golden was deferred — would require
+extending the pause/resume golden harness for the leaf→parent
+two-run cascade; the e2e test
+(`test_nested_pause_resume_cascade`) covers that scenario behaviorally.
+
+Two starter workflows ship: `nested-greeting.yaml` (parent calls
+`hello-paused` as a sub-workflow; the operator drives the two-step
+`resume <leaf>` → `resume <parent>` cascade) and `parallel-tickets.yaml`
+(map over a `tickets` input dispatching `kolsch/agents/classifier`,
+with a downstream `compute` recipe counting urgent results via
+`| selectattr | list | length`).
+
+Decisions logged during Step 0:
+- `_call_chain` auto-includes `self._run.workflow_ref` at the
+  executor so the runner's cycle check catches direct A→A on the
+  first would-be call (an empty chain would only catch it after one
+  extra indirection).
+- The build doc's `ctx.emit(WorkflowNodeCalledWorkflowEvent(...))`
+  sketch collided with the existing author-facing
+  `ctx.emit(subkind, payload)` surface; the runner uses
+  Phase 3.5's `ctx.emit_workflow_event(event)` hook for typed
+  envelopes instead.
+- Pre-existing `schemas.entities → workflows.ids` import cycle
+  (since Phase 3.2's `FromWorkflowRun`) surfaced under
+  test-order-dependent loads after Step 0 added top-level
+  `workflows.ids` imports to `workflows.context`; fixed by switching
+  the Pydantic field types to string forward refs with a lazy
+  `model_rebuild` seam triggered from the bottom of `workflows.ids`.
+
+Decisions logged during Step 1:
+- The executor's `run()` returns `WAITING_FOR_INPUT` rather than
+  re-raising the pause; the runner translates that return value
+  into a synthesised `WorkflowPausedForInput` so the parent's
+  outer worklist still catches it at the same Phase 3.4 catch arm.
+  Keeps the executor's API backward-compatible with the Phase 3.4
+  CLI which reads the return value.
+
+Decisions logged during Step 2:
+- `_compute_topology` now skips nodes referenced ONLY as
+  `map.apply:` workers (not present in the edge graph) — the
+  Phase 3.0 validator already exempts these "library" nodes from
+  reachability; the executor must mirror the exemption or workers
+  fire as standalone topo roots.
+- Strict-mode iteration overlay validation uses the worker's
+  receiver `Inputs(BaseModel)` so an overlay key (`item_as`, `with:`
+  keys, plus inherited `bound_inputs`) that violates the receiver's
+  `extra="forbid"` policy raises `WorkflowBindTypeMismatch` at the
+  first bad iteration.
+
+Decisions logged during Step 3:
+- Resume entry detects the open node's type before validating the
+  response shape — workflow-node pauses skip the `{response: str}`
+  validation (no user message to deliver) and skip the
+  `workflow.node.completed` emission for the paused node (the
+  worklist re-fires the workflow node with the ORIGINAL
+  invocation_id and `ctx.is_resume_mode=True` so the runner's
+  `_resume_cascade` branch harvests the child's terminal output).
+- The harvest reads `workflow.run.completed.payload.outputs` from
+  the child's JSONL directly rather than re-running
+  `compute_terminal_output_dict` over a re-replayed child executor —
+  the on-disk dict already matches the same shape.
 
 Spec: `process/phase3.7-composition-spec.md`. Build plan: `process/phase3.7-composition-build.md`.
 
