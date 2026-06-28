@@ -550,6 +550,199 @@ async def test_sequential_pauses_resume_cycle(chat_workspace: Path) -> None:
 
 
 # ===========================================================================
+# Phase Test 5 — /fork at an event_id reroutes the run
+# ===========================================================================
+
+
+async def test_slash_fork_at_event_reroutes(chat_workspace: Path) -> None:
+    """Phase Test 5: run ``fork-demo`` with ``seed=urgent`` (the
+    urgent arm fires); pick the ``classify`` node's completion event
+    id from the parent JSONL; ``/fork <event_id> with value=normal``
+    re-runs from the classify point with the override → the forked
+    run takes the OTHER branch (handle_normal fires; handle_urgent
+    pruned).
+    """
+    from workflows.ids import WorkflowRunId
+    from workflows.run_store import WorkflowRunStore
+
+    state, runtime = await _build_state(chat_workspace)
+    out = _io.StringIO()
+    ctx = _make_ctx(state=state, runtime=runtime, stdout=out)
+
+    # Parent run.
+    await dispatch_slash(
+        "/workflow kolsch/workflows/fork-demo with seed=urgent", ctx
+    )
+    assert state.pending_workflow_run_id is not None
+    assert "URGENT" in out.getvalue()  # urgent-arm handler ran.
+
+    # Find classify's completion event id from the parent JSONL.
+    store = WorkflowRunStore(runtime.root)
+    parent_run_id = WorkflowRunId(state.pending_workflow_run_id)
+    classify_event_id: str | None = None
+    for event in store.read_events(parent_run_id):
+        if (
+            event.get("kind") == "workflow.node.completed"
+            and event.get("node_name") == "classify"
+        ):
+            classify_event_id = str(event.get("event_id"))
+            break
+    assert classify_event_id is not None, "expected classify completion event"
+
+    # Fork at classify, OVERRIDE value=normal — handle_normal should
+    # fire on the fork. Use the 8-char SHORT form to exercise the
+    # prefix-resolution path (`_resolve_event_id_prefix`).
+    short_event_id = classify_event_id[: len("ev_") + 8]
+    out_fork = _io.StringIO()
+    fork_ctx = _make_ctx(state=state, runtime=runtime, stdout=out_fork)
+    signal = await dispatch_slash(
+        f"/fork {short_event_id} with value=normal", fork_ctx
+    )
+    assert signal is ControlSignal.CONTINUE
+    rendered = out_fork.getvalue()
+    # Forked run now takes the normal arm; the urgent arm is pruned.
+    assert "normal: urgent issue" in rendered or "normal:" in rendered
+    # The pruned-arm capsule for handle_urgent appears (muted).
+    assert "(not taken)" in rendered
+
+    # pending_workflow_run_id updated to the FORK (chained-fork
+    # support — verified explicitly in the chained-fork test).
+    assert state.pending_workflow_run_id != str(parent_run_id)
+
+
+# ===========================================================================
+# Phase Test 6 — /fork without pending run
+# ===========================================================================
+
+
+async def test_fork_without_pending_errors(chat_workspace: Path) -> None:
+    """Phase Test 6: ``/fork ev_xxx`` with no prior ``/workflow`` →
+    one-line error; chat continues; no run minted."""
+    state, runtime = await _build_state(chat_workspace)
+    out = _io.StringIO()
+    ctx = _make_ctx(state=state, runtime=runtime, stdout=out)
+
+    assert state.pending_workflow_run_id is None
+    signal = await dispatch_slash("/fork ev_abcd1234", ctx)
+    assert signal is ControlSignal.CONTINUE
+    rendered = out.getvalue()
+    assert "no active workflow_run" in rendered
+    # Still no pending — the failed dispatch didn't accidentally arm it.
+    assert state.pending_workflow_run_id is None
+
+
+# ===========================================================================
+# Chained-fork — /fork after /fork targets the previous FORK
+# ===========================================================================
+
+
+async def test_chained_fork_targets_previous_fork(chat_workspace: Path) -> None:
+    """AC 3.5: after ``/fork``, ``pending_workflow_run_id`` points at
+    the forked run; a SECOND ``/fork`` forks the FORK (not the
+    original parent). This verifies the chained-fork pointer
+    transition explicitly.
+    """
+    from workflows.ids import WorkflowRunId
+    from workflows.run_store import WorkflowRunStore
+
+    state, runtime = await _build_state(chat_workspace)
+    out = _io.StringIO()
+    ctx = _make_ctx(state=state, runtime=runtime, stdout=out)
+
+    await dispatch_slash(
+        "/workflow kolsch/workflows/fork-demo with seed=urgent", ctx
+    )
+    parent_run_id = state.pending_workflow_run_id
+    assert parent_run_id is not None
+
+    # First fork.
+    store = WorkflowRunStore(runtime.root)
+    classify_event_id: str | None = None
+    for event in store.read_events(WorkflowRunId(parent_run_id)):
+        if (
+            event.get("kind") == "workflow.node.completed"
+            and event.get("node_name") == "classify"
+        ):
+            classify_event_id = str(event.get("event_id"))
+            break
+    assert classify_event_id is not None
+    await dispatch_slash(
+        f"/fork {classify_event_id} with value=normal",
+        _make_ctx(state=state, runtime=runtime, stdout=_io.StringIO()),
+    )
+    first_fork_id = state.pending_workflow_run_id
+    assert first_fork_id != parent_run_id
+
+    # Pick a downstream event from the FIRST FORK's JSONL. The fork's
+    # JSONL contains ``workflow.run.forked_from`` + the events for
+    # nodes that fired DOWNSTREAM of the fork point (classify was
+    # replayed into in-memory state and is NOT re-emitted on the
+    # fork's JSONL). The ``route`` branch node lands here as a fresh
+    # completion event we can pin the chained fork against.
+    first_fork_route_event_id: str | None = None
+    for event in store.read_events(WorkflowRunId(first_fork_id)):
+        if (
+            event.get("kind") == "workflow.node.completed"
+            and event.get("node_name") == "route"
+        ):
+            first_fork_route_event_id = str(event.get("event_id"))
+            break
+    assert first_fork_route_event_id is not None, (
+        "expected the first fork's JSONL to contain a route completion"
+    )
+
+    # Second fork — re-root from the FIRST FORK's route event. No
+    # override needed; just verify the chained-fork pointer updates.
+    await dispatch_slash(
+        f"/fork {first_fork_route_event_id}",
+        _make_ctx(state=state, runtime=runtime, stdout=_io.StringIO()),
+    )
+    second_fork_id = state.pending_workflow_run_id
+    assert second_fork_id != first_fork_id
+    assert second_fork_id != parent_run_id
+
+    # The second fork's parent pointer in its meta should be the
+    # FIRST FORK (not the original).
+    second_fork_run = store.read(WorkflowRunId(second_fork_id))
+    assert second_fork_run.forked_from is not None
+    assert str(second_fork_run.forked_from.run_id) == first_fork_id
+
+
+# ===========================================================================
+# /fork — bad args paths
+# ===========================================================================
+
+
+async def test_fork_bad_event_id_surfaces_friendly_error(
+    chat_workspace: Path,
+) -> None:
+    """A garbage event_id (no prefix match in the parent JSONL)
+    surfaces a one-line error; chat continues. The forked run is
+    still minted on disk (per Phase 3.8 discipline — the operator
+    gets a clean retry state), but the handler does NOT update
+    pending_workflow_run_id when prefix resolution fails."""
+    state, runtime = await _build_state(chat_workspace)
+    out = _io.StringIO()
+    ctx = _make_ctx(state=state, runtime=runtime, stdout=out)
+
+    await dispatch_slash(
+        "/workflow kolsch/workflows/fork-demo with seed=urgent", ctx
+    )
+    parent_pending = state.pending_workflow_run_id
+    assert parent_pending is not None
+
+    out_fork = _io.StringIO()
+    fork_ctx = _make_ctx(state=state, runtime=runtime, stdout=out_fork)
+    signal = await dispatch_slash(
+        "/fork ev_does_not_exist_anywhere", fork_ctx
+    )
+    assert signal is ControlSignal.CONTINUE
+    assert "does not uniquely match" in out_fork.getvalue()
+    # pending stays on the parent — no fork minted for this attempt.
+    assert state.pending_workflow_run_id == parent_pending
+
+
+# ===========================================================================
 # Error paths
 # ===========================================================================
 

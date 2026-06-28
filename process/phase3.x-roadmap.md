@@ -360,7 +360,7 @@ Spec: `process/phase3.8-fork-spec.md`. Build plan: `process/phase3.8-fork-build.
 
 **Effort**: ~3-4 weeks.
 
-### 3.9 — Chat surface
+### 3.9 — Chat surface — DONE (Step 0 `0ed2df4`, Step 1 `e39076e`, Step 2 `59c9be5`, Step 3 pending commit)
 
 Spec: `process/phase3.9-chat-surface-spec.md`. Build plan: `process/phase3.9-chat-surface-build.md`.
 

@@ -59,15 +59,25 @@ async def execute_workflow_with_renderer(
     workflow: Workflow,
     run: Any,  # noqa: ANN401 — WorkflowRun; avoids the type import at module level
     resume_response: dict[str, Any] | None = None,
+    fork_event_id: str | None = None,
+    input_overrides: dict[str, Any] | None = None,
 ) -> WorkflowRunStatus:
-    """Run or resume a workflow with the chat capsule renderer attached.
+    """Run, resume, or fork a workflow with the chat capsule
+    renderer attached.
 
-    When ``resume_response`` is ``None``, runs from the start
-    (``executor.run()``); otherwise resumes the open invocation
-    (``executor.resume(response=resume_response)``).
+    Mode is determined by which kwargs are set (caller picks
+    EXACTLY one):
+
+    - Neither ``resume_response`` nor ``fork_event_id`` → fresh start:
+      ``executor.run()``.
+    - ``resume_response`` set → ``executor.resume(response=...)``.
+    - ``fork_event_id`` set → ``executor.start_from_fork(
+      fork_event_id=..., input_overrides=...)``; the caller is
+      responsible for minting the forked :class:`WorkflowRun` with a
+      ``forked_from`` pointer before invoking this helper.
 
     Returns the executor's terminal status (or ``WAITING_FOR_INPUT``
-    if a downstream user_input pauses again). The caller updates
+    if a downstream user_input pauses). The caller updates
     :attr:`ChatSessionState.expecting_user_input_response` based on
     the returned status — this helper only RENDERS the pause capsule;
     it does not arm the flag.
@@ -110,10 +120,15 @@ async def execute_workflow_with_renderer(
     )
 
     done_event = asyncio.Event()
-    if resume_response is None:
-        executor_coro = executor.run()
-    else:
+    if fork_event_id is not None:
+        executor_coro = executor.start_from_fork(
+            fork_event_id=fork_event_id,
+            input_overrides=input_overrides,
+        )
+    elif resume_response is not None:
         executor_coro = executor.resume(response=resume_response)
+    else:
+        executor_coro = executor.run()
     executor_task = asyncio.create_task(executor_coro)
 
     async def _await_executor() -> Any:  # noqa: ANN401 — WorkflowRunStatus, hidden from module imports

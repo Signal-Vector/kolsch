@@ -1103,6 +1103,189 @@ async def _handler_workflow(arg_text: str, ctx: SlashContext) -> ControlSignal:
 
 
 # ---------------------------------------------------------------------------
+# /fork — Phase 3.9 Step 3
+# ---------------------------------------------------------------------------
+
+
+async def _handler_fork(arg_text: str, ctx: SlashContext) -> ControlSignal:
+    """``/fork <event_id> [with k=v ...]`` — fork the chat's pending
+    workflow_run at the named event.
+
+    Phase 3.9 Step 3. Gates on
+    :attr:`ChatSessionState.pending_workflow_run_id` (set by the most
+    recent ``/workflow`` or ``/fork`` invocation). Reuses the Phase 3.8
+    fork machinery: mints a new :class:`WorkflowRun` whose
+    ``forked_from`` pointer encodes the parent run + fork event id;
+    invokes :meth:`IterativeExecutor.start_from_fork` with operator-
+    supplied ``input_overrides``; renders capsules from the forked
+    run's JSONL. After a successful fork, ``pending_workflow_run_id``
+    points at the FORKED run so a subsequent ``/fork`` targets the
+    fork (chained-fork support, AC 3.5).
+
+    The handler ALWAYS returns ``ControlSignal.CONTINUE`` so chat keeps
+    going. Error paths (no pending run, bad args, missing event, load
+    failure) surface as one-line errors on ``ctx.stdout``.
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from schemas.entities import ForkedFrom  # noqa: PLC0415
+
+    from cli._workflow_chat_runner import (  # noqa: PLC0415
+        execute_workflow_with_renderer,
+    )
+    from cli._workflow_slash_args import (  # noqa: PLC0415
+        parse_slash_fork_args,
+    )
+    from workflows.errors import (  # noqa: PLC0415
+        WorkflowError,
+        WorkflowInputInvalid,
+        WorkflowResumeRejected,
+        WorkflowRunNotFound,
+        WorkflowRuntimeError,
+    )
+    from workflows.ids import WorkflowRunId  # noqa: PLC0415
+    from workflows.parser import load_workflow  # noqa: PLC0415
+    from workflows.run import WorkflowRunStatus  # noqa: PLC0415
+    from workflows.run_store import WorkflowRunStore  # noqa: PLC0415
+
+    if ctx.state is None:
+        ctx.stdout.write(
+            "/fork requires a chat runtime; not available here.\n"
+        )
+        return ControlSignal.CONTINUE
+    state = ctx.state
+    if not state.pending_workflow_run_id:
+        ctx.stdout.write(
+            "/fork: no active workflow_run in this chat; "
+            "run /workflow <ref> first.\n"
+        )
+        return ControlSignal.CONTINUE
+
+    try:
+        event_id, overrides = parse_slash_fork_args(arg_text)
+    except ValueError as exc:
+        ctx.stdout.write(f"/fork: {exc}\n")
+        return ControlSignal.CONTINUE
+
+    runtime = state.runtime
+    store = WorkflowRunStore(runtime.root)
+    try:
+        parent_run = store.read(WorkflowRunId(state.pending_workflow_run_id))
+    except (FileNotFoundError, ValueError) as exc:
+        ctx.stdout.write(f"/fork: parent run not found: {exc}\n")
+        return ControlSignal.CONTINUE
+
+    # Resolve event_id — chat-rendered subscripts truncate to the
+    # short ``ev_<first_8>`` form for visual compactness, but
+    # ``executor.start_from_fork`` matches on the full id. Accept the
+    # short form by scanning the parent's events for a unique prefix
+    # match. A full id matches itself by prefix; zero matches surfaces
+    # the start_from_fork error path naturally.
+    resolved_event_id = _resolve_event_id_prefix(
+        store, parent_run.run_id, event_id
+    )
+    if resolved_event_id is None:
+        ctx.stdout.write(
+            f"/fork: event_id {event_id!r} does not uniquely match any "
+            f"event in run {parent_run.run_id}.\n"
+        )
+        return ControlSignal.CONTINUE
+    event_id = resolved_event_id
+
+    catalog = runtime.asset_management.catalog()
+    entry = catalog.lookup(parent_run.workflow_ref, expected_type="workflow")
+    if entry is None:
+        ctx.stdout.write(
+            f"/fork: workflow {parent_run.workflow_ref!r} not in catalog.\n"
+        )
+        return ControlSignal.CONTINUE
+    try:
+        workflow = load_workflow(Path(entry.path))
+    except WorkflowError as exc:
+        message = getattr(exc, "caller_message", None) or str(exc)
+        ctx.stdout.write(f"/fork: {message}\n")
+        return ControlSignal.CONTINUE
+
+    # Mint the forked run BEFORE the fork-point validity is known —
+    # an empty forked run is a clean retry state (mirrors
+    # ``cli.workflows._cmd_fork``'s discipline).
+    forked_run = store.create(
+        workflow_ref=parent_run.workflow_ref,
+        inputs=dict(parent_run.inputs),
+        trace_id=parent_run.trace_id,
+        forked_from=ForkedFrom(
+            run_id=parent_run.run_id,
+            fork_event_id=event_id,
+        ),
+    )
+    # Chained-fork support (AC 3.5) — point pending at the FORK so a
+    # subsequent ``/fork`` re-roots from this fork's events.
+    state.pending_workflow_run_id = str(forked_run.run_id)
+
+    try:
+        status = await execute_workflow_with_renderer(
+            state=state,
+            stdout=ctx.stdout,
+            store=store,
+            workflow=workflow,
+            run=forked_run,
+            fork_event_id=event_id,
+            input_overrides=overrides,
+        )
+    except WorkflowRunNotFound as exc:
+        message = getattr(exc, "caller_message", None) or str(exc)
+        ctx.stdout.write(f"/fork: {message}\n")
+        return ControlSignal.CONTINUE
+    except (
+        WorkflowRuntimeError,
+        WorkflowInputInvalid,
+        WorkflowResumeRejected,
+        WorkflowError,
+    ) as exc:
+        message = getattr(exc, "caller_message", None) or str(exc)
+        ctx.stdout.write(f"/fork: {message}\n")
+        return ControlSignal.CONTINUE
+
+    if status == WorkflowRunStatus.WAITING_FOR_INPUT:
+        state.expecting_user_input_response = True
+
+    return ControlSignal.CONTINUE
+
+
+def _resolve_event_id_prefix(
+    store: Any,  # noqa: ANN401 — WorkflowRunStore
+    run_id: Any,  # noqa: ANN401 — WorkflowRunId
+    candidate: str,
+) -> str | None:
+    """Resolve a possibly-short event_id against the parent run's JSONL.
+
+    Chat-rendered capsule subscripts show the short ``ev_<first_8>``
+    form so 39-character UUIDs don't dominate the visual layout.
+    Operators paste this short form into ``/fork``; this helper
+    walks the parent's events and finds the unique event whose id
+    STARTS WITH the candidate. Returns the full id on a unique match;
+    ``None`` when zero or multiple events match (the handler turns
+    that into a friendly error).
+
+    A candidate that is already a full id matches itself uniquely
+    (every event id is a unique prefix of itself in a single run's
+    JSONL), so the helper is a no-op for that case.
+    """
+    try:
+        events = list(store.read_events(run_id))
+    except Exception:  # noqa: BLE001 — store API typed Any here
+        return None
+    matches = [
+        str(event.get("event_id") or "")
+        for event in events
+        if str(event.get("event_id") or "").startswith(candidate)
+    ]
+    if len(matches) != 1:
+        return None
+    return matches[0]
+
+
+# ---------------------------------------------------------------------------
 # COMMAND_REGISTRY — the single source of truth
 # ---------------------------------------------------------------------------
 
@@ -1202,11 +1385,18 @@ COMMAND_REGISTRY: dict[str, SlashCommand] = {
         handler=_handler_workflow,
         free_form_arg_hint="<workflow ref> [with key=value ...]",
     ),
+    "/fork": SlashCommand(
+        name="/fork",
+        description="fork the current workflow_run at a specific event",
+        usage="/fork <event_id> [with key=value ...]",
+        handler=_handler_fork,
+        free_form_arg_hint="<event_id> [with key=value ...]",
+    ),
 }
-"""Eleven visible commands; ``/exit`` carries ``/quit`` as an alias.
+"""Twelve visible commands; ``/exit`` carries ``/quit`` as an alias.
 Patch §5 + ``/skill`` (skills-subsystem.md Draft 0.2 Step 3 follow-up) +
 ``/perm`` (qol-permission-system-human-readable.md Step 3) +
-``/workflow`` (Phase 3.9 Step 1)."""
+``/workflow`` (Phase 3.9 Step 1) + ``/fork`` (Phase 3.9 Step 3)."""
 
 
 # ---------------------------------------------------------------------------
