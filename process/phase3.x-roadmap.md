@@ -274,7 +274,81 @@ Spec: `process/phase3.7-composition-spec.md`. Build plan: `process/phase3.7-comp
 
 **Effort**: ~2 weeks.
 
-### 3.8 — Fork mechanism
+### 3.8 — Fork mechanism — ✅ Done (`d200125`)
+
+**Status:** Shipped across Steps 0–3 of
+`process/phase3.8-fork-build.md` (Steps 0+1+2 squashed into
+`40477f8`, Step 3 `d200125`). The 9 Phase-level Integration Tests
+pass under `uv run pytest tests/` via
+`tests/component/test_workflow_fork_e2e.py` (events command,
+fork-at-completed, fork-at-started, invalid event_id, spawned-session
+guidance, parent JSONL deleted, --input override flipping the branch,
+sub-workflow fork reuse-vs-respawn, full-suite regression).
+Per-step coverage:
+`test_workflow_fork_prereq.py` (Step 0 plumbing — 16 tests),
+`test_workflow_events_cli.py` (Step 0 events command — 7 tests),
+`test_workflow_fork_executor.py` (Step 1 executor entry — 16 tests),
+`test_workflow_fork_cli.py` (Step 2 CLI handler — 13 tests).
+Four paired goldens
+(`tests/golden/runs/fork-{at-completed,at-started,with-input-override,subworkflow-after}.{parent,fork}.jsonl`)
+pin the JSONL shape across BOTH parent and fork files —
+canonicalised through one `Canonicaliser` instance so `trace_id`
+inheritance is visible (parent's `tr_001` appears on every fork
+event), and the fork JSONL's first event is always
+`workflow.run.forked_from` with `parent_event_id=null`.
+
+One starter ships: `fork-demo.yaml` (`classify → route →
+handle_urgent / handle_normal` — a four-node branchable pipeline
+ideal for fork experimentation; compute-only so it runs cleanly on
+a fresh `kolsch setup --non-interactive` workspace).
+
+Decisions logged during Step 0:
+- `WorkflowRunNotFound` shipped here even though `src/cli/workflows.py`
+  already synthesised the JSON envelope class name string for resume
+  failures (Phase 3.4); fork needs a real exception class so the
+  executor + render_exception machinery handle it uniformly.
+- `kolsch workflows events` was originally promised in Phase 3.0
+  §14.1 but never shipped; bundled with fork because operators
+  need it to discover candidate event ids before forking.
+
+Decisions logged during Step 1:
+- `--input` override scope is per-node captured outputs at the
+  fork point (per spec §9.1's "replaces captured outputs at the
+  fork point"). Merge semantics ADD new keys and REPLACE existing
+  ones; untouched keys survive — verified by both the executor test
+  `test_override_merge_adds_new_keys_preserves_untouched` and the
+  `fork-with-input-override.fork.jsonl` golden.
+- Two distinct missing-parent shapes (meta.json gone vs events.jsonl
+  gone) both raise `WorkflowRunNotFound` so operators see one
+  consistent envelope; the events.jsonl check is explicit because
+  `read_events` silently yields nothing when the file is absent,
+  which would otherwise surface as "fork_event_id not found".
+- `start_from_fork` raises plain `ValueError` (not a `WorkflowError`)
+  when `forked_from` is unset — programming-error guard against
+  callers that bypass `_cmd_fork`; the CLI's exception arms don't
+  accidentally render it as a CLI envelope.
+
+Decisions logged during Step 2:
+- `_cmd_fork` mints the forked `WorkflowRun` BEFORE calling
+  `start_from_fork`; if the fork point is invalid the forked run
+  exists with an empty JSONL — a clean state for the operator to
+  retry against (better than mutating-then-rolling-back).
+- The CLI surface accepts every `--input` value as a string (mirrors
+  `run` / `resume`); the Jinja NativeEnvironment in compute coerces
+  bare-string expressions to native types on re-render, so
+  `--input value=99` on a compute node still produces `int 99`
+  downstream.
+
+Decisions logged during Step 3:
+- `fork-demo.yaml` uses compute nodes (not bash from the build doc's
+  sketch) because bash collapses to `deny` headlessly under the
+  starter policy; compute keeps the smoke chain working on a fresh
+  `setup --non-interactive` workspace.
+- Goldens are paired (parent + fork) rather than fork-only, because
+  the `trace_id` inheritance invariant is only visible by comparing
+  both files. The shared `Canonicaliser` instance threading is the
+  load-bearing piece — a split canonicaliser would mask the very
+  correlation the goldens are meant to lock.
 
 Spec: `process/phase3.8-fork-spec.md`. Build plan: `process/phase3.8-fork-build.md`.
 
