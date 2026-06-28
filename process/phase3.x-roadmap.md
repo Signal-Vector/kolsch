@@ -370,7 +370,7 @@ Spec: `process/phase3.9-chat-surface-spec.md`. Build plan: `process/phase3.9-cha
 
 **Effort**: ~2-3 weeks.
 
-### 3.10 — Concurrent executor — ✅ Done (commit pending)
+### 3.10 — Concurrent executor — ✅ Done (Step 0 `c7ddecd`, Steps 1-4 `290706f`)
 
 Spec: `process/phase3.10-concurrent-executor-spec.md`.
 
