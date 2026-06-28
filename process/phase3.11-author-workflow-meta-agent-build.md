@@ -540,9 +540,23 @@ Ship the two new tools. NO agent or skill yet.
    ```
 
    - `_safe_introspect(path)` wraps the existing
-     `workflows.catalog_node` introspection helper. Loads the
-     module under the per-run prefix per Phase 3.10's
-     `RunModuleNamespace` discipline.
+     `workflows.catalog_node` introspection helper.
+
+     > **Amendment (post-Step-0 review).** The original wording
+     > said "Loads the module under the per-run prefix per Phase
+     > 3.10's `RunModuleNamespace` discipline." That doesn't fit:
+     > the introspection tool is invoked from chat (or any
+     > non-workflow context), so there is no active
+     > `WorkflowRunContext` from which to derive a
+     > `RunModuleNamespace`. The ship-side implementation uses a
+     > synthetic per-path `sys.modules` key
+     > (`_kolsch_introspect_<hash>_<stem>`) which achieves the
+     > same goal — two concurrent introspections of different
+     > files don't collide; re-introspecting the same path is
+     > idempotent — without requiring a run id. Phase 3.10's
+     > namespace remains the discipline for in-workflow imports;
+     > this is the equivalent discipline for the pure-read,
+     > out-of-workflow surface.
    - The Pydantic `Inputs` / `Outputs` schemas are returned via
      `Model.model_json_schema()` so the agent can read them.
 
