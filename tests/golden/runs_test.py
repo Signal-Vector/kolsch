@@ -1644,6 +1644,339 @@ async def _read_status(
     return store.read(run_id).status
 
 
+# ---------------------------------------------------------------------------
+# Phase 3.8 — fork goldens.
+#
+# Each fork fixture builds a parent workflow + registry plus enough
+# metadata for the harness to:
+#
+#   1. Run the parent to ``succeeded``.
+#   2. Locate the chosen fork-event in the parent's events.jsonl.
+#   3. Mint a fresh forked :class:`WorkflowRun` carrying
+#      :class:`ForkedFrom`; construct a NEW executor over it.
+#   4. Invoke :meth:`IterativeExecutor.start_from_fork` with any
+#      configured ``input_overrides``.
+#
+# Both the parent's JSONL and the fork's JSONL are then canonicalised
+# through ONE :class:`Canonicaliser` instance so shared ids
+# (notably ``trace_id``) resolve to identical sentinels in both
+# golden files — the same paired-golden discipline Phase 3.2's
+# workflow→agent cross-JSONL test relies on.
+# ---------------------------------------------------------------------------
+
+
+def _build_fork_pipeline(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """A → B → C pipeline built from ``kolsch/nodes/compute``.
+
+    Each step's output schema is ``{value: <rendered>}``. The pipeline
+    is the canonical fork-experimentation shape: forking at B's
+    completion replays A + B and runs only C; forking at A's
+    completion replays only A and runs B + C; forking at
+    ``workflow.run.started`` re-runs everything.
+    """
+    from workflows.builtins.compute import ComputeRunner  # noqa: PLC0415
+
+    workflow = Workflow.model_validate(
+        {
+            "nodes": {
+                "A": {"type": "kolsch/nodes/compute", "value": 10},
+                "B": {
+                    "type": "kolsch/nodes/compute",
+                    "value": "{{ inputs.upstream * 2 }}",
+                },
+                "C": {
+                    "type": "kolsch/nodes/compute",
+                    "value": "{{ inputs.v }}",
+                },
+            },
+            "graph": {
+                "edges": [
+                    {
+                        "from": "A",
+                        "to": "B",
+                        "binds": {"upstream": "{{ nodes.A.value }}"},
+                    },
+                    {
+                        "from": "B",
+                        "to": "C",
+                        "binds": {"v": "{{ nodes.B.value }}"},
+                    },
+                ]
+            },
+        }
+    )
+    registry = RunnerRegistry()
+    registry.register("kolsch/nodes/compute", ComputeRunner())
+    _ = tmp_path
+    return workflow, registry, {}
+
+
+def _build_fork_at_completed(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Fork at B's ``workflow.node.completed``. No overrides.
+
+    The forked run replays A + B and runs only C (which sees B's
+    replayed ``value=20`` via the edge bind).
+    """
+    workflow, registry, _ = _build_fork_pipeline(tmp_path)
+    return workflow, registry, {
+        "fork_at_kind": "workflow.node.completed",
+        "fork_at_node_name": "B",
+        "input_overrides": {},
+    }
+
+
+def _build_fork_at_started(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Fork at the parent's ``workflow.run.started`` event.
+
+    The forked run inherits the parent's started baseline via replay
+    but populates nothing in ``_completed_or_skipped``; the worklist
+    re-fires every node.
+    """
+    workflow, registry, _ = _build_fork_pipeline(tmp_path)
+    return workflow, registry, {
+        "fork_at_kind": "workflow.run.started",
+        "fork_at_node_name": None,
+        "input_overrides": {},
+    }
+
+
+def _build_fork_with_input_override(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Fork at B's completed; override ``value`` to 99.
+
+    C consumes ``v: {{ nodes.B.value }}`` so the bind renders to 99
+    on the fork, vs the parent's 20. Locks the merge-override
+    semantics on the forked JSONL.
+    """
+    workflow, registry, _ = _build_fork_pipeline(tmp_path)
+    return workflow, registry, {
+        "fork_at_kind": "workflow.node.completed",
+        "fork_at_node_name": "B",
+        "input_overrides": {"value": 99},
+    }
+
+
+def _build_fork_subworkflow_after(
+    tmp_path: Path,
+) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
+    """Parent: prep → sub (workflow-call) → wrap. Fork AFTER ``sub``.
+
+    Spec §9.3 — forking at ``sub``'s ``workflow.node.completed``
+    reuses the parent's captured child output. The forked run runs
+    only ``wrap``; NO new child run is spawned. The golden locks the
+    fork JSONL's absence of any ``workflow.node.called_workflow``
+    event (replay handled the cross-JSONL link in-memory; the fork
+    never re-emits the spawn marker).
+    """
+    workflow = Workflow.model_validate(
+        {
+            "nodes": {
+                "prep": {
+                    "type": "kolsch/nodes/compute",
+                    "value": "prep-done",
+                },
+                "sub": {
+                    "type": "kolsch/nodes/workflow",
+                    "ref": "demo/workflows/child",
+                },
+                "wrap": {
+                    "type": "kolsch/nodes/compute",
+                    "value": "wrap-done",
+                },
+            },
+            "graph": {
+                "edges": [
+                    {"from": "prep", "to": "sub"},
+                    {"from": "sub", "to": "wrap"},
+                ]
+            },
+        }
+    )
+    child_yaml = """
+    nodes:
+      only:
+        type: kolsch/nodes/compute
+        value: "leaf-output"
+    graph:
+      edges: []
+    """
+    store = WorkflowRunStore(tmp_path)
+    catalog = _ext_compose_catalog(
+        tmp_path=tmp_path,
+        refs={"demo/workflows/child": child_yaml},
+    )
+    registry = _ext_compose_registry(catalog=catalog, store=store)
+    return workflow, registry, {
+        "catalog": catalog,
+        "fork_at_kind": "workflow.node.completed",
+        "fork_at_node_name": "sub",
+        "input_overrides": {},
+    }
+
+
+_FORK_FIXTURES: tuple[
+    tuple[
+        str,
+        Callable[
+            [Path], tuple[Workflow, RunnerRegistry, dict[str, Any]]
+        ],
+    ],
+    ...,
+] = (
+    ("fork-at-completed", _build_fork_at_completed),
+    ("fork-at-started", _build_fork_at_started),
+    ("fork-with-input-override", _build_fork_with_input_override),
+    ("fork-subworkflow-after", _build_fork_subworkflow_after),
+)
+
+
+def _find_fork_event_id(
+    events: list[dict[str, Any]],
+    *,
+    kind: str,
+    node_name: str | None,
+) -> str:
+    for event in events:
+        if event.get("kind") != kind:
+            continue
+        if node_name is None:
+            return event["event_id"]
+        en = event.get("node_name") or event.get("payload", {}).get(
+            "node_name"
+        )
+        if en == node_name:
+            return event["event_id"]
+    msg = (
+        f"no event matching kind={kind!r} node_name={node_name!r}; "
+        f"available kinds: {sorted({e['kind'] for e in events})}"
+    )
+    raise AssertionError(msg)
+
+
+@pytest.mark.parametrize(
+    ("fixture_name", "builder"),
+    _FORK_FIXTURES,
+    ids=[name for name, *_ in _FORK_FIXTURES],
+)
+async def test_workflow_fork_matches_paired_goldens(
+    fixture_name: str,
+    builder: Callable[
+        [Path], tuple[Workflow, RunnerRegistry, dict[str, Any]]
+    ],
+    tmp_path: Path,
+) -> None:
+    """Phase 3.8 — paired (parent, fork) goldens for fork scenarios.
+
+    The same :class:`Canonicaliser` instance is threaded through
+    BOTH JSONL files so shared ids (``trace_id`` always; the
+    parent's ``workflow_run_id`` when the fork carries it in the
+    ``forked_from_run_id`` payload field) resolve to identical
+    sentinels in both goldens. Reviewer note from the build doc:
+    canonicalisation MUST share state across the pair.
+    """
+    from schemas.entities import ForkedFrom  # noqa: PLC0415
+
+    workflow, registry, extras = builder(tmp_path)
+    catalog = extras.get("catalog") or AssetCatalog()
+    fork_at_kind: str = extras["fork_at_kind"]
+    fork_at_node_name: str | None = extras["fork_at_node_name"]
+    overrides: dict[str, Any] = extras.get("input_overrides") or {}
+
+    store = WorkflowRunStore(tmp_path)
+    parent_run = store.create(
+        workflow_ref="demo/workflows/x", inputs={}
+    )
+    parent_ex = IterativeExecutor(
+        workflow=workflow,
+        run=parent_run,
+        store=store,
+        registry=registry,
+        catalog=catalog,
+    )
+    parent_status = await parent_ex.run()
+    assert parent_status.value == "succeeded"
+
+    parent_events = list(store.read_events(parent_run.run_id))
+    fork_event_id = _find_fork_event_id(
+        parent_events,
+        kind=fork_at_kind,
+        node_name=fork_at_node_name,
+    )
+
+    # Mint the forked run + fresh executor pointed at the same
+    # workflow + store. This is the same shape the CLI uses.
+    forked_run = store.create(
+        workflow_ref=parent_run.workflow_ref,
+        inputs=dict(parent_run.inputs),
+        trace_id=parent_run.trace_id,
+        forked_from=ForkedFrom(
+            run_id=parent_run.run_id,
+            fork_event_id=fork_event_id,
+        ),
+    )
+    fork_ex = IterativeExecutor(
+        workflow=workflow,
+        run=forked_run,
+        store=store,
+        registry=registry,
+        catalog=catalog,
+    )
+    fork_status = await fork_ex.start_from_fork(
+        fork_event_id=fork_event_id,
+        input_overrides=overrides,
+    )
+    assert fork_status.value in ("succeeded", "waiting_for_input")
+
+    parent_raw = store.directory(parent_run.run_id).events_path.read_text(
+        encoding="utf-8"
+    )
+    fork_raw = store.directory(forked_run.run_id).events_path.read_text(
+        encoding="utf-8"
+    )
+
+    canon = Canonicaliser()
+    parent_actual = canon.sub(parent_raw)
+    fork_actual = canon.sub(fork_raw)
+
+    pairs = (
+        (f"{fixture_name}.parent", parent_actual),
+        (f"{fixture_name}.fork", fork_actual),
+    )
+    missing: list[str] = []
+    for name, actual in pairs:
+        golden_path = _GOLDEN_DIR / f"{name}.jsonl"
+        if not golden_path.exists():
+            missing.append(f"# write to {golden_path}\n{actual}")
+    if missing:
+        msg = "Missing paired fork goldens.\n" + "\n---\n".join(missing)
+        raise AssertionError(msg)
+
+    for name, actual in pairs:
+        golden_path = _GOLDEN_DIR / f"{name}.jsonl"
+        expected = golden_path.read_text(encoding="utf-8")
+        assert actual == expected, (
+            f"Golden mismatch for {name!r}.\n"
+            f"--- expected ({golden_path}) ---\n{expected}"
+            f"--- actual ---\n{actual}"
+        )
+
+    # The fork golden's first event MUST be workflow.run.forked_from
+    # with parent_event_id=None — same first-event invariant that
+    # workflow.run.resumed has for Phase 3.4 (verified inline so a
+    # missing leading event surfaces here, not buried in a diff).
+    first_fork_line = fork_raw.splitlines()[0]
+    first_event = json.loads(first_fork_line)
+    assert first_event["kind"] == "workflow.run.forked_from"
+    assert first_event["parent_event_id"] is None
+
+
 # Sanity check on the canonicaliser itself.
 def test_canonicaliser_assigns_sentinels_in_first_occurrence_order() -> None:
     text = json.dumps(

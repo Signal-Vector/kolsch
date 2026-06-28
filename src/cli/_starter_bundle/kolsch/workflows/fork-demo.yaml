@@ -1,0 +1,61 @@
+# Phase 3.8 starter — fork experimentation playground.
+#
+# A four-node branchable pipeline ideal for ``kolsch workflows fork``
+# experimentation. Walk-through:
+#
+#   1. Run the parent with an "urgent" seed:
+#        kolsch workflows run kolsch/workflows/fork-demo \
+#            --input seed="urgent issue"
+#      → classify=urgent, route=true, handle_urgent fires,
+#        handle_normal pruned.
+#
+#   2. Inspect the events to find the classify completion id:
+#        kolsch workflows events <run_id>
+#
+#   3. Fork at that id, OVERRIDING the classification to "normal":
+#        kolsch workflows fork <run_id> \
+#            --at <classify_completed_id> --input value=normal
+#      → forked run replays classify with value=normal; route flips;
+#        handle_normal now fires; handle_urgent now pruned.
+#
+# Both runs share the same trace_id; the original is untouched. The
+# fork's events.jsonl starts with ``workflow.run.forked_from`` and
+# contains ONLY the events that fired downstream of the fork point.
+#
+# All four nodes are ``kolsch/nodes/compute`` so the workflow runs
+# end-to-end on a fresh ``kolsch setup --non-interactive`` workspace
+# without any authz prompts (the bash variant of this pipeline
+# collapses to ``deny`` headlessly under the starter policy — same
+# trade-off the other compute-based starters take).
+description: "Fork experimentation playground — classify → branch → handlers."
+
+nodes:
+  classify:
+    type: kolsch/nodes/compute
+    description: "Decide urgency from the seed string."
+    value: "{{ 'urgent' if 'urgent' in inputs.seed else 'normal' }}"
+  route:
+    type: kolsch/nodes/branch
+    description: "Branch on the classifier's verdict."
+    condition: "{{ inputs.label == 'urgent' }}"
+  handle_urgent:
+    type: kolsch/nodes/compute
+    description: "Urgent-arm handler — fires when the branch is true."
+    value: "URGENT: {{ inputs.seed }}"
+  handle_normal:
+    type: kolsch/nodes/compute
+    description: "Normal-arm handler — fires when the branch is false."
+    value: "normal: {{ inputs.seed }}"
+
+graph:
+  edges:
+    - from: classify
+      to: route
+      binds:
+        label: "{{ nodes.classify.value }}"
+    - from: route
+      to: handle_urgent
+      branch: true
+    - from: route
+      to: handle_normal
+      branch: false
