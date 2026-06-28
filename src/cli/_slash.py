@@ -290,6 +290,17 @@ class SlashCommand:
     lands (e.g., ``"24c"``, ``"24d"``). Surfaced in the
     placeholder message so the user knows when to expect it."""
 
+    state_changing: bool = True
+    """Whether dispatching this command should clear
+    ``ChatSessionState.expecting_user_input_response`` (Phase 3.9
+    Step 2). Default ``True`` — most slash commands change session
+    state in some way that breaks a pending pause's resume expectation
+    (``/workflow`` starts a new run, ``/fork`` forks one, ``/new``
+    opens a fresh session, ``/model`` swaps the active model). Set
+    ``False`` for info-only commands (``/help``, ``/tools``) so the
+    operator can look something up mid-pause without losing the
+    resume expectation."""
+
 
 # ---------------------------------------------------------------------------
 # Handlers — only /help, /exit, /quit, /clear are real in 24b
@@ -1020,12 +1031,10 @@ async def _handler_workflow(arg_text: str, ctx: SlashContext) -> ControlSignal:
 
     Phase 3.9 Step 1. Parses args via
     :func:`cli._workflow_slash_args.parse_slash_workflow_args`; resolves
-    the catalog ref; mints a fresh :class:`WorkflowRun`; constructs the
-    executor via :func:`cli._workflow_runtime.build_workflow_executor`;
-    spawns the executor as a task; runs the
-    :class:`cli._workflow_capsules.WorkflowCapsuleRenderer` against the
-    JSONL tail until the run reaches a terminal status OR pauses for
-    user input. The pending workflow_run id is stashed on
+    the catalog ref; mints a fresh :class:`WorkflowRun`; delegates the
+    executor+renderer wiring to
+    :func:`cli._workflow_chat_runner.execute_workflow_with_renderer`.
+    The pending workflow_run id is stashed on
     :attr:`ChatSessionState.pending_workflow_run_id` so a subsequent
     ``/fork`` (Step 3) or the user_input chat-resume path (Step 2) can
     find it.
@@ -1034,13 +1043,11 @@ async def _handler_workflow(arg_text: str, ctx: SlashContext) -> ControlSignal:
     going. Parse errors / catalog misses / load failures surface as
     one-line errors on ``ctx.stdout``.
     """
-    import asyncio  # noqa: PLC0415
     from pathlib import Path  # noqa: PLC0415
 
-    from rich.console import Console  # noqa: PLC0415
-
-    from cli._workflow_capsules import WorkflowCapsuleRenderer  # noqa: PLC0415
-    from cli._workflow_runtime import build_workflow_executor  # noqa: PLC0415
+    from cli._workflow_chat_runner import (  # noqa: PLC0415
+        execute_workflow_with_renderer,
+    )
     from cli._workflow_slash_args import (  # noqa: PLC0415
         parse_slash_workflow_args,
     )
@@ -1081,66 +1088,15 @@ async def _handler_workflow(arg_text: str, ctx: SlashContext) -> ControlSignal:
     run = store.create(workflow_ref=entry.ref, inputs=inputs)
     state.pending_workflow_run_id = str(run.run_id)
 
-    executor = build_workflow_executor(
-        root=runtime.root,
-        runtime=runtime,
+    status = await execute_workflow_with_renderer(
+        state=state,
+        stdout=ctx.stdout,
+        store=store,
         workflow=workflow,
         run=run,
-        store=store,
     )
-
-    console = Console(
-        file=ctx.stdout, force_terminal=False, highlight=False
-    )
-
-    def _load_child_workflow(_child_run_id: str) -> Any:
-        # Cross-JSONL workflow lookup for nested capsule labels is
-        # cheap-by-design — the child run's meta carries its
-        # ``workflow_ref``; we resolve via the catalog and load the
-        # YAML. Failures fall back to the stub label path inside the
-        # renderer.
-        from workflows.ids import WorkflowRunId  # noqa: PLC0415
-
-        try:
-            child_run = store.read(WorkflowRunId(_child_run_id))
-        except (FileNotFoundError, ValueError):
-            return None
-        child_entry = catalog.lookup(
-            child_run.workflow_ref, expected_type="workflow"
-        )
-        if child_entry is None:
-            return None
-        try:
-            return load_workflow(Path(child_entry.path))
-        except WorkflowError:
-            return None
-
-    renderer = WorkflowCapsuleRenderer(
-        console=console,
-        workflow=workflow,
-        store=store,
-        child_workflow_loader=_load_child_workflow,
-    )
-
-    done_event = asyncio.Event()
-    executor_task = asyncio.create_task(executor.run())
-
-    async def _await_executor() -> WorkflowRunStatus:
-        try:
-            return await executor_task
-        finally:
-            done_event.set()
-
-    exec_wrapper = asyncio.create_task(_await_executor())
-    try:
-        await renderer.render_run(run.run_id, done_event=done_event)
-    finally:
-        status = await exec_wrapper
 
     if status == WorkflowRunStatus.WAITING_FOR_INPUT:
-        # Step 2 wires the chat-resume input loop branch; Step 1
-        # arms the flag so the next message can be routed correctly
-        # once Step 2 ships.
         state.expecting_user_input_response = True
 
     return ControlSignal.CONTINUE
@@ -1157,6 +1113,7 @@ COMMAND_REGISTRY: dict[str, SlashCommand] = {
         description="show available commands or describe one",
         usage="/help [<command>]   list all commands or print one's hint",
         handler=_handler_help,
+        state_changing=False,
     ),
     "/exit": SlashCommand(
         name="/exit",
@@ -1203,6 +1160,7 @@ COMMAND_REGISTRY: dict[str, SlashCommand] = {
         description="list tools available to this agent",
         usage="/tools   list this agent's tools + the rules governing each",
         handler=_handler_tools,
+        state_changing=False,
     ),
     "/session": SlashCommand(
         name="/session",
@@ -1274,6 +1232,16 @@ async def dispatch_slash(text: str, ctx: SlashContext) -> ControlSignal:
     ``CONTINUE``. Placeholder commands (``handler is None``) print
     a "not yet implemented (Step <NN>)" message and return
     ``CONTINUE``. Real handlers receive ``(arg_text, ctx)``.
+
+    Phase 3.9 Step 2 — when ``ctx.state.expecting_user_input_response``
+    is set (a workflow is paused waiting for a chat reply), a
+    state-changing slash command clears the flag (the operator chose
+    to redirect away from the paused workflow; the run stays paused
+    on disk and is resumable via ``kolsch workflows resume``). An
+    info-only slash command (``/help``, ``/tools``) leaves the flag
+    armed so the operator can look something up mid-pause and then
+    keep typing the resume response. Unknown commands behave like
+    info-only for this purpose — there is no state change to record.
     """
     stripped = text.lstrip()
     head, _, tail = stripped.partition(" ")
@@ -1288,6 +1256,16 @@ async def dispatch_slash(text: str, ctx: SlashContext) -> ControlSignal:
             f"{command.name} is not yet implemented (lands in Step {step}).\n"
         )
         return ControlSignal.CONTINUE
+    # Defensive ``getattr`` — some component tests (``/perm``, etc.)
+    # duck-type a minimal ``_StubState`` carrying only ``.runtime`` and
+    # cast it to ``ChatSessionState``. They don't carry the Phase 3.9
+    # fields; the flag check must not crash on them.
+    if (
+        ctx.state is not None
+        and getattr(ctx.state, "expecting_user_input_response", False)
+        and command.state_changing
+    ):
+        ctx.state.expecting_user_input_response = False
     return await command.handler(arg_text, ctx)
 
 

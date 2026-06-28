@@ -345,6 +345,51 @@ class WorkflowCapsuleRenderer:
             body_lines=body_lines,
         )
 
+    def render_pause_capsule(self, node_name: str) -> None:
+        """Spec §15.2.1 — render the inline ``user_input`` pause capsule.
+
+        The chat handler calls this AFTER the executor returns
+        :attr:`WorkflowRunStatus.WAITING_FOR_INPUT`. The capsule is
+        rendered SYNCHRONOUSLY (the executor task has already returned
+        — there's nothing to await). Shape:
+
+        - Header = ``display_label(node_def, type_label)``.
+        - Body line 1 = ``node_def.prompt`` from the parsed workflow.
+          For prompts that contain Jinja markers (``{{ ... }}``) the
+          operator sees the unrendered template; the rendered form on
+          ``WorkflowPausedForInput.prompt`` is dropped by the
+          executor catch and is not on disk at v1 (spec §15.2.1).
+        - Body line 2 = dim ``→ <node_name>`` for forensics + sequential-
+          pause disambiguation. Always rendered.
+        - No ``(awaiting your response)`` placeholder — the chat's
+          ``:> `` input prompt is the cue.
+        """
+        node_def = self._lookup_node_def(node_name)
+        label = (
+            display_label(
+                node_def, self._type_label_for(node_def)
+            )
+            if node_def is not None
+            else display_label(_NodeNameStub(node_name))
+        )
+        prompt_text = (
+            str(getattr(node_def, "prompt", "")) if node_def is not None else ""
+        )
+        body_lines: list[str] = []
+        if prompt_text:
+            body_lines.append(prompt_text)
+        body_lines.append(f"→ {node_name}")
+        # Use the workflow_paused palette entry; the dim style on the
+        # node_name line is applied via Rich Text in the indented path
+        # below (the non-indent path delegates to ``_capsule`` which
+        # doesn't support per-line styling — accept that for the unin-
+        # dented surface; the dim arrow line still renders legibly).
+        self._capsule_with_indent(
+            source="workflow_paused",
+            label=label,
+            body_lines=body_lines,
+        )
+
     def _render_failed_capsule(self, event: dict[str, Any]) -> None:
         """Spec §15.5 — render the failing error class's
         ``caller_message`` ClassVar (NOT ``str(exc)``).

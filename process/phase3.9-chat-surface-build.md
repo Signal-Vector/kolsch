@@ -100,7 +100,7 @@ Related docs:
 - **No new event kinds.** Phase 3.9 consumes existing events.
 - **`display_label` is the SOLE label source.** Per spec §15.4. Chat does NOT reimplement the 3-step fallback.
 - **`caller_message` is the failure surface.** Per spec §15.5. Engineer-targeted `str(exc)` stays in logs/CLI; chat is end-user-facing.
-- **Inline `user_input` capsule shape per spec §15.2.1.** Header = `display_label(node)`; body line 1 = rendered `prompt:` field; body line 2 (when present) = `→ binds to inputs.<var_name>` in dim text. NO `(awaiting your response)` placeholder.
+- **Inline `user_input` capsule shape per spec §15.2.1.** Header = `display_label(node)`; body line 1 = `node_def.prompt` text from the parsed workflow (raw template — Jinja markers in prompts show unrendered at v1 per spec note); body line 2 = dim `→ <node_name>` for forensics. NO `(awaiting your response)` placeholder.
 - **Running-node indicator per spec §15.2.2.** One dim `▸ <label>…` line per `workflow.node.started`. Persists in scrollback unchanged; the matching completion capsule lands beneath. Not a capsule; no event_id subscript; no timestamp.
 - **Sub-workflow nesting is visual indent + cross-JSONL correlation by `trace_id`.** No new event kinds for nesting; the parent's `workflow.node.called_workflow` event carries `child_workflow_run_id` which the chat uses to tail the child JSONL.
 - **`pending_workflow_run_id` is the targeting mechanism.** Set by `/workflow`; consumed by `/fork` and the user_input resume path. There's exactly one pending workflow per chat session at v1.
@@ -579,8 +579,8 @@ Ship `/workflow` end-to-end.
    - For sub-workflows (`workflow.node.called_workflow`): spawn a child `WorkflowCapsuleRenderer` with `indent_depth+1`; await its `render()` concurrently with the parent's tail; ensure child capsules appear BENEATH the parent's workflow-node capsule. Children emit their own indented `▸ <label>…` lines.
    - For user_input pauses (§15.2.1): the indicator fires from `_render_running_indicator` on the user_input node's `workflow.node.started`. The pause capsule itself is rendered by the chat loop AFTER the executor returns `WAITING_FOR_INPUT` (Step 2 owns the chat-side render); the renderer here does NOT synthesize the pause capsule from the JSONL — it only emits the indicator. The pause capsule shape (locked in spec §15.2.1):
      - **Header:** `display_label(node_def, type_label)` — the node's identity. NO prompt text in the header.
-     - **Body line 1:** the rendered `prompt:` text from the executor's `WorkflowPausedForInput.prompt` (already Jinja-rendered by `src/workflows/builtins/user_input.py:46-57`).
-     - **Body line 2 (when the node binds an input variable):** dim `→ binds to inputs.<var_name>`.
+     - **Body line 1:** `node_def.prompt` from the parsed workflow (raw template; the rendered form on `WorkflowPausedForInput.prompt` is dropped by the executor catch and is not on disk at v1).
+     - **Body line 2:** dim `→ <node_name>` — always shown; the workflow's node identifier disambiguates sequential pauses.
      - **No `(awaiting your response)` placeholder** — the chat's `:> ` input prompt is the unmistakable "your turn" cue.
    - Event_id subscript: dim text below each capsule's header showing `ev_<short_id>` (truncate `ev_<uuid>` to first 8 chars for compactness; full id shown in title-bar hover or `--verbose` flag — defer to Step 3).
 
@@ -730,10 +730,10 @@ Ship the chat resume path.
 
 **Step 2 Acceptance Criteria:**
 
-2.1. Post-pause, chat renders an inline prompt capsule per spec §15.2.1: header = `display_label(user_input_node)`; body line 1 = rendered `prompt:` text; body line 2 (when the node binds a variable) = dim `→ binds to inputs.<var_name>`; NO `(awaiting your response)` placeholder.
-2.2. `expecting_user_input_response = True` after pause; `False` after resume OR slash-escape.
+2.1. Post-pause, chat renders an inline prompt capsule per spec §15.2.1: header = `display_label(user_input_node)`; body line 1 = `node_def.prompt` text from the parsed workflow; body line 2 = dim `→ <node_name>`; NO `(awaiting your response)` placeholder.
+2.2. `expecting_user_input_response = True` after pause; `False` after resume OR state-changing slash escape. INFO-ONLY slash commands (`/help`, `/tools`) do NOT clear the flag — operator can look something up mid-pause and then keep typing the resume response (spec §15.2 operator-escape refinement).
 2.3. Non-slash next message routes to `executor.resume(response={"response": text})`.
-2.4. Slash next message clears the flag and dispatches normally (workflow stays paused).
+2.4. State-changing slash next message (default for new commands; explicit `state_changing=True` on `SlashCommand`) clears the flag and dispatches normally (workflow stays paused on disk; resume via CLI). Info-only slash (`state_changing=False`) dispatches without clearing — the flag is still armed when the dispatcher returns.
 2.5. Resume continues from the paused invocation; downstream capsules appear.
 2.6. Sequential pauses handled correctly (pause-resume-pause-resume).
 2.7. No regressions.

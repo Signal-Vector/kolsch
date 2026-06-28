@@ -447,6 +447,16 @@ async def _run_input_loop(  # noqa: PLR0913, PLR0912, PLR0915 — loop owns all 
         except KeyboardInterrupt:
             stdout.write("\n")
             continue
+        # Phase 3.9 Step 2 — when a workflow is paused waiting for a
+        # chat reply, a non-slash message is the resume response. A
+        # slash command falls through to the dispatcher, which clears
+        # the resume-expectation flag for state-changing commands and
+        # leaves it armed for info-only ones (``/help``, ``/tools``).
+        if state.expecting_user_input_response and not is_slash_command(text):
+            await _resume_pending_workflow(
+                state, stdout=stdout, response_text=text
+            )
+            continue
         if is_slash_command(text):
             signal = await dispatch_slash(text, slash_ctx)
             # Apply pending state transitions BEFORE checking
@@ -629,6 +639,83 @@ async def _watch_esc_during_streaming(
         raise
     except Exception:  # noqa: BLE001 — raw_mode/attach failures should not crash chat
         return
+
+
+async def _resume_pending_workflow(
+    state: ChatSessionState,
+    *,
+    stdout: TextIO,
+    response_text: str,
+) -> None:
+    """Phase 3.9 Step 2 — resume the chat's pending workflow_run with
+    the operator's text reply.
+
+    Loads the run from disk, rebuilds the executor + capsule renderer,
+    awaits :meth:`IterativeExecutor.resume` while tailing the JSONL,
+    and re-arms :attr:`ChatSessionState.expecting_user_input_response`
+    if the workflow pauses again on a downstream ``user_input``
+    (sequential pauses are fully supported per Step 2 ACs).
+
+    No-op when ``pending_workflow_run_id`` is unexpectedly absent
+    (the input-loop branch already gated on
+    ``expecting_user_input_response`` so this should never fire — the
+    guard is defense-in-depth).
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from cli._workflow_chat_runner import (  # noqa: PLC0415
+        execute_workflow_with_renderer,
+    )
+    from workflows.errors import WorkflowError  # noqa: PLC0415
+    from workflows.ids import WorkflowRunId  # noqa: PLC0415
+    from workflows.parser import load_workflow  # noqa: PLC0415
+    from workflows.run import WorkflowRunStatus  # noqa: PLC0415
+    from workflows.run_store import WorkflowRunStore  # noqa: PLC0415
+
+    if not state.pending_workflow_run_id:
+        # Should never happen — the input-loop branch is gated on the
+        # expectation flag. If the flag is True but the pointer is
+        # missing, clear the flag so the chat doesn't get stuck.
+        state.expecting_user_input_response = False
+        return
+
+    runtime = state.runtime
+    store = WorkflowRunStore(runtime.root)
+    try:
+        run = store.read(WorkflowRunId(state.pending_workflow_run_id))
+    except (FileNotFoundError, ValueError) as exc:
+        stdout.write(f"resume failed: {exc}\n")
+        state.expecting_user_input_response = False
+        state.pending_workflow_run_id = None
+        return
+
+    catalog = runtime.asset_management.catalog()
+    entry = catalog.lookup(run.workflow_ref, expected_type="workflow")
+    if entry is None:
+        stdout.write(
+            f"resume failed: workflow {run.workflow_ref!r} not in catalog.\n"
+        )
+        state.expecting_user_input_response = False
+        return
+    try:
+        workflow = load_workflow(Path(entry.path))
+    except WorkflowError as exc:
+        message = getattr(exc, "caller_message", None) or str(exc)
+        stdout.write(f"resume failed: {message}\n")
+        state.expecting_user_input_response = False
+        return
+
+    status = await execute_workflow_with_renderer(
+        state=state,
+        stdout=stdout,
+        store=store,
+        workflow=workflow,
+        run=run,
+        resume_response={"response": response_text},
+    )
+    state.expecting_user_input_response = (
+        status == WorkflowRunStatus.WAITING_FOR_INPUT
+    )
 
 
 async def _open_new_session(

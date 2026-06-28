@@ -379,6 +379,177 @@ async def test_pending_workflow_run_id_set_after_dispatch(
 
 
 # ===========================================================================
+# Phase Test 3 — pause + resume
+# ===========================================================================
+
+
+async def test_user_input_pause_renders_inline_prompt_and_arms_flag(
+    chat_workspace: Path,
+) -> None:
+    """Phase Test 3 (first half): the hello-paused workflow pauses on
+    its ``ask`` node; the rendered output carries the inline pause
+    capsule per spec §15.2.1 (header = display_label, body = prompt
+    text, body = → <node_name>); ``expecting_user_input_response`` is
+    armed.
+    """
+    state, runtime = await _build_state(chat_workspace)
+    out = _io.StringIO()
+    ctx = _make_ctx(state=state, runtime=runtime, stdout=out)
+
+    signal = await dispatch_slash(
+        "/workflow kolsch/workflows/hello-paused", ctx
+    )
+    assert signal is ControlSignal.CONTINUE
+
+    rendered = out.getvalue()
+    # Spec §15.2.1 body line 1 — the raw prompt text from the parsed
+    # workflow ("What would you like to say?" per the starter YAML).
+    assert "What would you like to say?" in rendered
+    # Spec §15.2.1 body line 2 — the workflow's node identifier.
+    assert "→ ask" in rendered
+    # NO placeholder per spec §15.2.1.
+    assert "(awaiting your response)" not in rendered
+
+    # The resume-expectation flag is armed for the next non-slash
+    # message.
+    assert state.expecting_user_input_response is True
+
+
+async def test_user_input_chat_resume_completes_workflow(
+    chat_workspace: Path,
+) -> None:
+    """Phase Test 3 (second half): after the pause, a non-slash next
+    message resumes the workflow via ``executor.resume`` and the run
+    completes. The expectation flag is cleared.
+    """
+    from cli.chat import _resume_pending_workflow
+
+    state, runtime = await _build_state(chat_workspace)
+    out = _io.StringIO()
+    ctx = _make_ctx(state=state, runtime=runtime, stdout=out)
+
+    await dispatch_slash(
+        "/workflow kolsch/workflows/hello-paused", ctx
+    )
+    assert state.expecting_user_input_response is True
+
+    # Operator types "world" — drives the resume helper directly
+    # (mirrors what the input loop would do for a non-slash message
+    # while the flag is armed).
+    out_resume = _io.StringIO()
+    await _resume_pending_workflow(
+        state, stdout=out_resume, response_text="world"
+    )
+
+    # Flag cleared; resume rendered downstream capsules; "world"
+    # surfaced in the echo node's output.
+    assert state.expecting_user_input_response is False
+    rendered = out_resume.getvalue()
+    assert "world" in rendered
+
+
+# ===========================================================================
+# Phase Test 4 — slash escape semantics
+# ===========================================================================
+
+
+async def test_help_during_pause_preserves_resume_expectation(
+    chat_workspace: Path,
+) -> None:
+    """Phase Test 4 — adapted: ``/help`` is INFO-ONLY
+    (``state_changing=False``) per spec §15.2 amendment; dispatching
+    it mid-pause runs the help handler AND leaves
+    ``expecting_user_input_response`` armed.
+
+    Earlier drafts had every slash command clear the flag; the
+    refinement makes info lookups safe during a pause (operator can
+    look up a command, then keep typing the resume response without
+    losing the resumption).
+    """
+    state, runtime = await _build_state(chat_workspace)
+    out = _io.StringIO()
+    ctx = _make_ctx(state=state, runtime=runtime, stdout=out)
+
+    await dispatch_slash(
+        "/workflow kolsch/workflows/hello-paused", ctx
+    )
+    assert state.expecting_user_input_response is True
+
+    # Dispatch /help (info-only) — the flag must remain armed.
+    out_help = _io.StringIO()
+    help_ctx = _make_ctx(state=state, runtime=runtime, stdout=out_help)
+    signal = await dispatch_slash("/help", help_ctx)
+    assert signal is ControlSignal.CONTINUE
+    assert "slash commands" in out_help.getvalue()
+    assert state.expecting_user_input_response is True
+
+
+async def test_state_changing_slash_during_pause_clears_resume_flag(
+    chat_workspace: Path,
+) -> None:
+    """State-changing slash commands (``state_changing=True``, the
+    default) clear ``expecting_user_input_response`` so a subsequent
+    non-slash message does NOT silently get fed back into the paused
+    workflow.
+    """
+    state, runtime = await _build_state(chat_workspace)
+    out = _io.StringIO()
+    ctx = _make_ctx(state=state, runtime=runtime, stdout=out)
+
+    await dispatch_slash(
+        "/workflow kolsch/workflows/hello-paused", ctx
+    )
+    assert state.expecting_user_input_response is True
+
+    # Dispatch another /workflow (state-changing default) — the flag
+    # must clear. The paused first run stays in the store and is
+    # resumable via ``kolsch workflows resume``.
+    out_two = _io.StringIO()
+    ctx_two = _make_ctx(state=state, runtime=runtime, stdout=out_two)
+    await dispatch_slash("/workflow kolsch/workflows/hello", ctx_two)
+    assert state.expecting_user_input_response is False
+
+
+# ===========================================================================
+# Sequential pauses — two-pauses.yaml
+# ===========================================================================
+
+
+async def test_sequential_pauses_resume_cycle(chat_workspace: Path) -> None:
+    """``two-pauses.yaml`` pauses twice; the chat handles both
+    pause-resume cycles independently. After the second resume the
+    workflow completes and the flag clears."""
+    from cli.chat import _resume_pending_workflow
+
+    state, runtime = await _build_state(chat_workspace)
+    out = _io.StringIO()
+    ctx = _make_ctx(state=state, runtime=runtime, stdout=out)
+
+    await dispatch_slash(
+        "/workflow kolsch/workflows/two-pauses", ctx
+    )
+    assert state.expecting_user_input_response is True
+
+    # First resume — workflow pauses again at the second user_input.
+    out_first = _io.StringIO()
+    await _resume_pending_workflow(
+        state, stdout=out_first, response_text="alpha"
+    )
+    assert state.expecting_user_input_response is True
+    # Second-pause capsule rendered.
+    assert "Second answer?" in out_first.getvalue()
+
+    # Second resume — workflow completes; the flag clears.
+    out_second = _io.StringIO()
+    await _resume_pending_workflow(
+        state, stdout=out_second, response_text="beta"
+    )
+    assert state.expecting_user_input_response is False
+    # Final node's output blends both responses per the YAML.
+    assert "alpha+beta" in out_second.getvalue()
+
+
+# ===========================================================================
 # Error paths
 # ===========================================================================
 
