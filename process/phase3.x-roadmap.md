@@ -50,7 +50,7 @@ Spec: `process/phase3.1-executor-spec.md`. Build plan:
 
 **Effort**: ~2 weeks.
 
-### 3.2 — Agent integration ✅ Done (commit pending)
+### 3.2 — Agent integration — ✅ Done (Step 0 `94c9dbe`, Steps 1-2 `5a5aa8e`, Step 3 `bf8771e`, Step 4 `1e54e01`, follow-up `0e77710`)
 
 Spec: `process/phase3.2-agent-integration-spec.md`. Build plan: `process/phase3.2-agent-integration-build.md`.
 
@@ -360,7 +360,7 @@ Spec: `process/phase3.8-fork-spec.md`. Build plan: `process/phase3.8-fork-build.
 
 **Effort**: ~3-4 weeks.
 
-### 3.9 — Chat surface — DONE (Step 0 `0ed2df4`, Step 1 `e39076e`, Step 2 `59c9be5`, Step 3 `54d5d70`)
+### 3.9 — Chat surface — ✅ Done (Step 0 `0ed2df4`, Step 1 `e39076e`, Step 2 `59c9be5`, Step 3 `54d5d70`)
 
 Spec: `process/phase3.9-chat-surface-spec.md`. Build plan: `process/phase3.9-chat-surface-build.md`.
 
