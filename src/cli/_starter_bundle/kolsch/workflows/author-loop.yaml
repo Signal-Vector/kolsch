@@ -1,0 +1,43 @@
+# Phase 3.11 — wrapper workflow that pairs the `author_workflow`
+# meta-agent with a `user_input → agent → user_input` loop so authors
+# can iterate on a workflow draft via the workflow surface (vs.
+# opening a chat session directly).
+#
+# Run it with:
+#
+#   kolsch workflows run kolsch/workflows/author-loop
+#
+# The first user_input gathers the brief (e.g. "Build a workflow that
+# classifies a ticket"). The meta-agent runs once with that brief; its
+# final agent.message carries the produced workflow's ref. The second
+# user_input gives the author one round of amendments before the run
+# terminates — empty response completes the run.
+#
+# For a longer multi-turn iteration, run the meta-agent directly via
+# `kolsch chat --agent kolsch/agents/author_workflow`; the chat
+# surface preserves history across turns without needing to
+# materialise a workflow for every round.
+description: |
+  Wrap the author_workflow agent in a user_input -> agent -> user_input
+  loop so authors can iterate on a workflow draft via the workflow
+  surface.
+
+nodes:
+  get_brief:
+    type: kolsch/nodes/user_input
+    prompt: "Describe the workflow you want to build."
+  author:
+    type: kolsch/nodes/agent
+    agent: kolsch/agents/author_workflow
+  follow_up:
+    type: kolsch/nodes/user_input
+    prompt: "Any changes? Press enter to finish."
+
+graph:
+  edges:
+    - from: get_brief
+      to: author
+      binds:
+        brief: "{{ nodes.get_brief.response }}"
+    - from: author
+      to: follow_up

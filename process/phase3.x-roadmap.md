@@ -380,15 +380,20 @@ Spec: `process/phase3.10-concurrent-executor-spec.md`.
 
 **Effort**: ~3-4 weeks.
 
-### 3.11 — `author_workflow` meta-agent
+### 3.11 — `author_workflow` meta-agent — ✅ Done (Step 0 `e07ac18`, Step 1 `66b8051`, Step 2 `59bfc40`, Step 3 pending)
 
-Spec: `process/phase3.11-author-workflow-meta-agent-spec.md` (to be written).
+Spec: `process/phase3.11-author-workflow-meta-agent-spec.md`. Build plan: `process/phase3.11-author-workflow-meta-agent-build.md`.
 
 **Scope**: asset that generates workflow YAML + Python node files from natural-language requests. Validates the produced workflow against the run-start gate during authoring (iterative refinement loop: agent generates → engine validates → agent revises). Author iteration via chat.
 
 **Verification gate**: agent produces a workflow that validates against the run-start gate. Author can request a modification ("add a step that emails the result") and the agent produces a valid updated workflow. The generated workflow runs end-to-end.
 
 **Effort**: ~2 weeks.
+
+**Closes the v1 engine roadmap.** Phase 3.0 → Phase 3.11 ships the full
+catalog (14 built-in node types + authored Python @node), the
+executor (sequential + concurrent), composition (sub-workflow + map),
+fork-from-event, the chat surface, and the LLM-driven authoring loop.
 
 ## 18.3 Dependency graph
 

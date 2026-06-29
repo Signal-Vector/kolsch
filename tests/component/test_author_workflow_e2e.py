@@ -908,3 +908,219 @@ async def test_validation_driven_revision(tmp_path: Path) -> None:
     assert status == "succeeded", f"workflow run status: {status}"
 
     assert not fake.script
+
+
+# ===========================================================================
+# Phase Test 5 — MAX_ATTEMPTS cap (Step 3)
+# ===========================================================================
+
+
+# A draft referencing a non-existent built-in slot. Every attempt
+# will fail the same way under `validate_workflow` — perfect for
+# verifying the iteration loop caps at 5 without making a 6th call.
+_PT5_DRAFT_TEMPLATE = """\
+description: Attempt {attempt} — uses a non-existent built-in (intentional).
+
+nodes:
+  bad:
+    type: kolsch/nodes/quantum_compute
+    description: "attempt #{attempt}"
+
+graph:
+  edges: []
+"""
+
+
+async def test_max_attempts_cap(tmp_path: Path) -> None:
+    """Phase Test 5 — five draft → validate cycles all return errors
+    (the type ref doesn't exist). The agent surfaces the closest
+    draft + remaining errors WITHOUT a sixth validate call.
+
+    The cap (5) is enforced by the skill's iteration recipe — the
+    test verifies the scripted sequence matches that contract
+    exactly (5 validates, then escalation text).
+    """
+    workspace = _make_workspace(tmp_path)
+    target_yaml = (
+        workspace / "bundles" / _TARGET_BUNDLE / "workflows" / "doomed.yaml"
+    )
+
+    scripted: list[FakeLLMResponse] = []
+    for attempt in range(1, 6):
+        scripted.append(
+            ToolCallResponse(
+                tool="write_file",
+                args={
+                    "path": str(target_yaml),
+                    "content": _PT5_DRAFT_TEMPLATE.format(attempt=attempt),
+                },
+            )
+        )
+        scripted.append(
+            ToolCallResponse(
+                tool="validate_workflow",
+                args={"yaml_path": str(target_yaml)},
+            )
+        )
+    scripted.append(
+        TextResponse(
+            text=(
+                "Hit MAX_ATTEMPTS (5) without a green validation. "
+                "Closest draft is at my-bundle/workflows/doomed. "
+                "Remaining error: kolsch/nodes/quantum_compute is not "
+                "a known catalog ref. Direction needed: should this be "
+                "a new authored @node, or did you mean a different "
+                "built-in type?"
+            )
+        )
+    )
+
+    fake, events, _am = await _run_author_workflow_session(
+        workspace,
+        brief="Use a node type called kolsch/nodes/quantum_compute.",
+        scripted_responses=scripted,
+    )
+
+    # AC 3.1 — exactly 5 validate_workflow calls; the 6th attempt
+    # is replaced by the escalation text.
+    validate_calls = [
+        name for name, _ in _tool_call_sequence(events)
+        if name == "validate_workflow"
+    ]
+    assert len(validate_calls) == 5, (
+        f"expected 5 validate_workflow calls (MAX_ATTEMPTS); got "
+        f"{len(validate_calls)}"
+    )
+
+    # Every validate result must be is_valid: false — the test fails
+    # closed if any earlier draft accidentally passed.
+    validate_results = [
+        e for e in events
+        if e.type == EventType.TOOL_RESULT
+        and e.data.get("tool_name") == "validate_workflow"
+    ]
+    assert all(
+        r.data["result"]["is_valid"] is False for r in validate_results
+    ), "every validate call must return is_valid: false in this scenario"
+
+    # The final agent message includes the cap-reached escalation.
+    final = _final_agent_message(events) or ""
+    assert "MAX_ATTEMPTS" in final or "5" in final
+    assert "doomed" in final
+    assert "Direction needed" in final or "different" in final
+
+    # Script fully consumed — confirms no 6th attempt slipped in.
+    assert not fake.script
+
+
+# ===========================================================================
+# Phase Test 6 — target-bundle isolation (Step 3)
+# ===========================================================================
+
+
+def _snapshot_bundle(root: Path) -> dict[str, bytes]:
+    """Capture every author-controlled file under ``root`` as
+    ``{relpath: content-bytes}``.
+
+    Used to verify the ``kolsch`` package bundle is byte-identical
+    before and after the meta-agent runs (AC 3.2 — the package
+    bundle is read-only by convention). Skips ``__pycache__`` —
+    Python writes per-import bytecode there with embedded mtimes,
+    which churns on every test run and is NOT an authored mutation.
+    """
+    snapshot: dict[str, bytes] = {}
+    for path in root.rglob("*"):
+        if not path.is_file():
+            continue
+        if "__pycache__" in path.parts:
+            continue
+        rel = path.relative_to(root).as_posix()
+        snapshot[rel] = path.read_bytes()
+    return snapshot
+
+
+async def test_writes_to_target_bundle_only(tmp_path: Path) -> None:
+    """Phase Test 6 — set ``author_workflow.target_bundle: my-bundle``
+    in ``platform.yaml``; drive Phase Test 1's brief; verify EVERY
+    ``write_file`` invocation lands under ``bundles/my-bundle/`` AND
+    the ``bundles/kolsch/`` bundle is byte-identical before/after.
+    """
+    workspace = _make_workspace(tmp_path)
+
+    # Patch platform.yaml to declare the target bundle explicitly.
+    pyaml = workspace / "platform.yaml"
+    pyaml.write_text(
+        pyaml.read_text(encoding="utf-8")
+        + "\nauthor_workflow:\n  target_bundle: my-bundle\n",
+        encoding="utf-8",
+    )
+
+    kolsch_bundle = workspace / "bundles" / "kolsch"
+    before = _snapshot_bundle(kolsch_bundle)
+
+    target_yaml = (
+        workspace / "bundles" / _TARGET_BUNDLE / "workflows" / "triage.yaml"
+    )
+
+    scripted = [
+        ToolCallResponse(
+            tool="validate_workflow",
+            args={"workflow_ref": "kolsch/workflows/hello-agent"},
+        ),
+        ToolCallResponse(
+            tool="write_file",
+            args={"path": str(target_yaml), "content": _PT1_WORKFLOW_YAML},
+        ),
+        ToolCallResponse(
+            tool="validate_workflow",
+            args={"yaml_path": str(target_yaml)},
+        ),
+        TextResponse(
+            text=(
+                "Workflow ready at my-bundle/workflows/triage. "
+                "Try it: /workflow my-bundle/workflows/triage"
+            )
+        ),
+    ]
+
+    fake, events, _am = await _run_author_workflow_session(
+        workspace,
+        brief="Build a workflow that classifies a ticket.",
+        scripted_responses=scripted,
+    )
+
+    # AC 3.2 — every write_file invocation targets bundles/my-bundle/.
+    # No accidental writes into bundles/kolsch/ or anywhere else.
+    write_calls = [
+        (name, args) for name, args in _tool_call_sequence(events)
+        if name == "write_file"
+    ]
+    assert write_calls, "expected at least one write_file invocation"
+    kolsch_prefix = (workspace / "bundles" / "kolsch").as_posix()
+    target_prefix = (workspace / "bundles" / _TARGET_BUNDLE).as_posix()
+    for _name, args in write_calls:
+        path = args.get("path", "")
+        assert not path.startswith(kolsch_prefix), (
+            f"write_file targeted the kolsch package bundle: {path}"
+        )
+        assert path.startswith(target_prefix), (
+            f"write_file targeted outside the configured target "
+            f"bundle: {path} (expected prefix {target_prefix!r})"
+        )
+
+    # AC 3.2 — the kolsch bundle is byte-identical (file set + content).
+    after = _snapshot_bundle(kolsch_bundle)
+    assert set(after) == set(before), (
+        f"kolsch bundle file set changed: "
+        f"added={set(after) - set(before)} "
+        f"removed={set(before) - set(after)}"
+    )
+    for rel, content in before.items():
+        assert after[rel] == content, (
+            f"kolsch bundle file {rel!r} mutated; write to the "
+            "package bundle is a P0 violation"
+        )
+
+    # Sanity — the target file IS where we expect it.
+    assert target_yaml.is_file()
+    assert not fake.script

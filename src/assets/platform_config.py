@@ -46,6 +46,15 @@ _KNOWN_SECTIONS: frozenset[str] = frozenset(
         # workspace's purpose. Surfaced in agent prompts via
         # `{{ workspace.summary }}` and `{{ platform.workspace_summary }}`.
         "workspace_summary",
+        # Phase 3.11 §17.1 — meta-agent settings. The only knob today
+        # is ``target_bundle: <name>`` controlling which bundle the
+        # ``author_workflow`` agent writes new files into. When the
+        # key is absent, the agent's skill resolves the target to the
+        # workspace's first non-``kolsch`` bundle (the primary user
+        # bundle); if only ``kolsch`` exists, the agent escalates to
+        # the author. No default is written at setup time — leaving
+        # the section absent IS the documented "auto-resolve" mode.
+        "author_workflow",
     }
 )
 
