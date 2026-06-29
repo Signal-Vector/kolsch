@@ -380,7 +380,7 @@ Spec: `process/phase3.10-concurrent-executor-spec.md`.
 
 **Effort**: ~3-4 weeks.
 
-### 3.11 — `author_workflow` meta-agent — ✅ Done (Step 0 `e07ac18`, Step 1 `66b8051`, Step 2 `59bfc40`, Step 3 pending)
+### 3.11 — `author_workflow` meta-agent — ✅ Done (Step 0 `e07ac18`, Step 1 `66b8051`, Step 2 `59bfc40`, Step 3 `adf37eb`)
 
 Spec: `process/phase3.11-author-workflow-meta-agent-spec.md`. Build plan: `process/phase3.11-author-workflow-meta-agent-build.md`.
 
