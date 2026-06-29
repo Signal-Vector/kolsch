@@ -899,9 +899,28 @@ Ship the four §17.10 verification tests via a scripted harness.
 2.3. Each test asserts BOTH the agent's tool-call sequence AND
      the produced workflow's runnability via
      `kolsch workflows run`.
-2.4. Scripted responses live under
-     `tests/component/fixtures/author_workflow/` so they're
-     easy to update when the skill or prompt changes.
+2.4. Scripted responses are organised so they remain easy to
+     update when the skill or prompt changes.
+
+     > **Amendment (post-Step-2 review).** Original wording
+     > required an external fixtures directory at
+     > `tests/component/fixtures/author_workflow/`. The Step 2
+     > implementation inlines the scripted workflow YAMLs, the
+     > authored `@node` module, the two collision drafts, and
+     > the per-scenario `ToolCallResponse` lists as module-level
+     > constants in `tests/component/test_author_workflow_e2e.py`
+     > (the `_PT1_WORKFLOW_YAML` / `_PT2_WORKFLOW_YAML` /
+     > `_PT3_NODE_PY` / `_PT4_DRAFT1` / `_PT4_DRAFT2` family).
+     > This matches the precedent set by Phase 3.9's
+     > `test_chat_workflow_slash.py`, which inlines scripted
+     > user messages alongside their assertions for the same
+     > reason: the fixtures and the tool-call-sequence
+     > assertions are tightly coupled (the test verifies the
+     > exact bytes the agent wrote), so splitting them across
+     > files introduces cross-file diff burden without payoff.
+     > Externalising remains a valid future refactor if the
+     > skill/prompt iteration cadence ever justifies the
+     > coupling cost.
 2.5. No regressions.
 
 **Self-check before handoff:**
