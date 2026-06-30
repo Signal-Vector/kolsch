@@ -1,23 +1,17 @@
-"""Phase 2.2 template-variable objects.
+"""Template-variable objects bound into the Jinja render context.
 
-Each module ships one of the six standardized top-level variables
-the engine binds at pre-flight step 5.6.6 (the original five from
-``process/phase2.2-agent-envelope-specs.md`` §4 plus ``skills``
-added by ``qol-skills-jinja-variable-symmetric-with-tools.md``):
-
-- :mod:`templating.vars.tools` — :class:`ToolsVar` + :class:`ToolItem`.
-- :mod:`templating.vars.docs` — :class:`DocsVar` + :class:`DocItem` (Step 4).
-- :mod:`templating.vars.workspace` — :class:`WorkspaceVar` (Step 5).
-- :mod:`templating.vars.agent` — :class:`AgentVar` (Step 6).
-- :mod:`templating.vars._platform` — :class:`PlatformVar` (Step 7).
-- :mod:`templating.vars.skills` — :class:`SkillsVar` + :class:`SkillItem`
-  (qol-skills-jinja-variable-symmetric-with-tools).
+Each module ships one of the six standardised top-level variables
+the engine binds at agent-load: `templating.vars.tools` (`ToolsVar`,
+`ToolItem`), `templating.vars.docs` (`DocsVar`, `DocItem`),
+`templating.vars.workspace` (`WorkspaceVar`), `templating.vars.agent`
+(`AgentVar`), `templating.vars._platform` (`PlatformVar`), and
+`templating.vars.skills` (`SkillsVar`, `SkillItem`).
 
 Each variable object is a pure presentation projection — the engine
-constructs them from the resolved agent config + active workspace
-state at pre-flight time, and the render harness
-(:mod:`templating.render`) consumes them through ordinary Jinja
-attribute / method access.
+constructs them from the resolved agent config and active workspace
+state at agent-load time, and the render harness
+(`templating.render`) consumes them through ordinary Jinja attribute
+and method access.
 """
 
 from templating.vars._platform import (

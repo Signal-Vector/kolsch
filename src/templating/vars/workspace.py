@@ -1,21 +1,13 @@
-"""The ``workspace`` template variable — Phase 2.2 Step 5 (spec
-§4.4 + Part 7).
+"""The `workspace` template variable — single-object workspace projection.
 
-Single-object — NO list-shaped methods (the Step 5 reviewer
-prompt's load-bearing check). Attributes:
+Single-object — no list-shaped methods. Attributes: `path`
+(absolute workspace root as a string), `summary` (text from
+`platform.yaml:workspace_summary` or `None` when unset; an attribute,
+not a method — the difference from list-shaped `.summary()` methods
+is intentional), `allowed_paths` and `denied_paths` (string lists
+from `platform.yaml:file_access`).
 
-- :attr:`WorkspaceVar.path` — absolute workspace root as a string.
-- :attr:`WorkspaceVar.summary` — text from
-  ``platform.yaml:workspace_summary`` (Phase 2.2 §7) or ``None``
-  when unset. NOT a method — ``workspace.summary`` is an
-  attribute access; collides with the spec §4.2 list-shaped
-  ``.summary()`` method on purpose so the difference between
-  single-object and list-shaped variables is unambiguous.
-- :attr:`WorkspaceVar.allowed_paths` /
-  :attr:`WorkspaceVar.denied_paths` — string lists from
-  ``platform.yaml:file_access``.
-
-``__str__`` produces the default rendering per spec §4.4:
+`__str__` produces the default rendering:
 
 ```
 ## Active workspace
@@ -27,14 +19,9 @@ You can read from: <allowed_paths joined>
 You cannot access: <denied_paths joined>
 ```
 
-When ``summary`` is ``None``, the summary block is omitted —
-no fallback prose per spec §4.4's "the summary block is omitted
-(no fallback prose)" note.
-
-``slots=True`` makes the dataclass reject unknown attribute
-access cleanly (the Step 5 reviewer's check 4 — typo'd
-attributes like ``workspace.allowd_paths`` raise
-:class:`AttributeError`).
+When `summary` is `None`, the summary block is omitted with no
+fallback prose. `slots=True` makes typo'd attributes (e.g.
+`workspace.allowd_paths`) raise `AttributeError` cleanly.
 """
 
 from __future__ import annotations
@@ -44,7 +31,11 @@ from dataclasses import dataclass
 
 @dataclass(slots=True)
 class WorkspaceVar:
-    """The ``workspace`` template variable."""
+    """The `workspace` template variable — single-object projection.
+
+    See the module docstring for the field surface and the
+    `__str__` rendering shape.
+    """
 
     path: str
     summary: str | None
@@ -52,19 +43,15 @@ class WorkspaceVar:
     denied_paths: list[str]
 
     def __str__(self) -> str:
-        """Default rendering — spec §4.4.
+        """Render the default `## Active workspace` block.
 
-        Composition:
-
-        - ``## Active workspace`` header.
-        - The summary content (blank line on each side) ONLY when
-          :attr:`summary` is non-``None``.
-        - ``Path: <path>`` line.
-        - ``You can read from: <allowed_paths>`` — empty list
-          renders as ``You can read from: `` (a defensible empty
-          line; an agent with no read-allowed paths is a real
-          edge case the rendering can surface as-is).
-        - ``You cannot access: <denied_paths>`` — same shape.
+        Composition: the header, the summary content (blank line on
+        each side) only when `summary` is non-`None`, the `Path:`
+        line, the `You can read from:` line, and the `You cannot
+        access:` line. Empty `allowed_paths` / `denied_paths` render
+        as a defensible empty trailing value rather than being
+        omitted — an agent with no read-allowed paths is a real edge
+        case the rendering surfaces as-is.
         """
         parts: list[str] = ["## Active workspace"]
         if self.summary is not None:

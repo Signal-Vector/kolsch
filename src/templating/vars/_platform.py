@@ -1,38 +1,26 @@
-"""The ``platform`` template variable — Phase 2.2 Step 7 (spec
-§4.4).
+"""The `platform` template variable — single-object platform projection.
 
-Module name has an underscore prefix to avoid clashing with the
-stdlib ``platform`` module (the build plan Step 7 reviewer's
-check 4). The class is still exported as :class:`PlatformVar`;
-the engine binds the instance to ``platform`` in the Jinja
-context.
+The module name has an underscore prefix to avoid clashing with the
+stdlib `platform` module. The class is still exported as
+[`PlatformVar`][templating.vars._platform.PlatformVar]; the engine
+binds the instance to `platform` in the Jinja context.
 
-## Sub-objects
+`PlatformVar` is single-object with five attributes, some of which
+are themselves objects:
+[`providers`][templating.vars._platform.ProvidersVar] (list-shaped
+over `ProviderConfig`),
+[`authorization`][templating.vars._platform.AuthorizationVar]
+(single-object), `workspace_summary` (`str | None`, mirroring
+[`WorkspaceVar.summary`][templating.vars.workspace.WorkspaceVar]),
+[`file_access`][templating.vars._platform.FileAccessVar]
+(single-object), and
+[`aliases`][templating.vars._platform.AliasesVar] (dict-shaped over
+`platform.yaml:model_aliases`).
 
-Spec §4.4's ``platform`` is single-object with five attributes,
-some of which are themselves objects:
-
-- :attr:`PlatformVar.providers` — :class:`ProvidersVar`
-  (list-shaped over :class:`llm.protocol.ProviderConfig`).
-- :attr:`PlatformVar.authorization` — :class:`AuthorizationVar`
-  (single-object with ``variant`` + ``rules``).
-- :attr:`PlatformVar.workspace_summary` — same text as
-  :attr:`templating.vars.workspace.WorkspaceVar.summary` (str |
-  None).
-- :attr:`PlatformVar.file_access` — :class:`FileAccessVar`
-  (single-object with ``allowed_paths`` + ``denied_paths``).
-- :attr:`PlatformVar.aliases` — :class:`AliasesVar` (dict-shaped
-  over ``platform.yaml:model_aliases``).
-
-:class:`ProvidersVar` exposes the standardized method family
-(``.list()`` / ``.summary()`` / ``.names()`` / ``.get()`` /
-``.count``) plus the four Pythonic protocols, mirroring
-:class:`templating.vars.tools.ToolsVar` exactly so authors learn
-one convention.
-
-:class:`AliasesVar` is dict-shaped — exposes ``.get(name)`` and
-``__contains__`` only; iteration yields the alias names. Spec
-§4.4 doesn't mandate the full method family for aliases.
+`ProvidersVar` mirrors
+[`ToolsVar`][templating.vars.tools.ToolsVar] exactly so authors
+learn one convention. `AliasesVar` is dict-shaped (`.get(name)` and
+`__contains__` only); iteration yields the alias names.
 """
 
 from __future__ import annotations
@@ -53,13 +41,13 @@ if TYPE_CHECKING:
 
 
 class ProvidersVar:
-    """The ``platform.providers`` collection — spec §4.4 + §4.2 +
-    §4.3.
+    """The `platform.providers` collection — list-shaped over `ProviderConfig`.
 
-    Wraps ``list[ProviderConfig]``. Exposes the standardized
-    method family AND the four Pythonic protocols, indexed by
-    each provider's ``name`` field (the user-facing key from
-    ``platform.yaml:llm_providers``).
+    Wraps `list[ProviderConfig]` and exposes the standardised
+    method family plus the four Pythonic protocols, indexed by each
+    provider's `name` field (the user-facing key from
+    `platform.yaml:llm_providers`). Mirrors
+    [`ToolsVar`][templating.vars.tools.ToolsVar] in shape.
     """
 
     __slots__ = ("_by_name", "_items")
@@ -71,45 +59,46 @@ class ProvidersVar:
         }
 
     def list(self) -> str:
-        """Each provider as ``- <name> (<type>)`` block. Empty
-        for an empty list."""
+        """Render each provider as `- <name> (<type>)`."""
         return "\n".join(
             f"- {item.name} ({item.type})" for item in self._items
         )
 
     def summary(self) -> str:
-        """One-line per provider: ``<name>: <type>``. Matches the
-        standardized .summary() shape from spec §4.2."""
+        """Render one line per provider: `<name>: <type>`."""
         return "\n".join(f"{item.name}: {item.type}" for item in self._items)
 
     def names(self) -> str:
-        """Comma-separated provider names — spec §4.4 example:
-        ``"openrouter, opencode"``."""
+        """Comma-separated provider names (e.g. `"openrouter, opencode"`)."""
         return ", ".join(item.name for item in self._items)
 
     def get(self, name: str) -> ProviderConfig | None:
-        """Look up by provider name; ``None`` for unknown."""
+        """Look up by provider name; `None` for unknown."""
         return self._by_name.get(name)
 
     @property
     def count(self) -> int:
+        """The number of providers in the variable."""
         return len(self._items)
 
     def __str__(self) -> str:
+        """`{{ platform.providers }}` defaults to `list`."""
         return self.list()
 
     def __iter__(self) -> Iterator[ProviderConfig]:
+        """Iterate over providers in declaration order."""
         return iter(self._items)
 
     def __len__(self) -> int:
+        """Return `count`."""
         return len(self._items)
 
     def __getitem__(self, name: str) -> ProviderConfig | None:
-        """Spec §4.3 subscript = .get() (returns None for
-        missing, NOT raises)."""
+        """Return the provider for `name` or `None` — `get`-equivalent."""
         return self.get(name)
 
     def __contains__(self, name: object) -> bool:
+        """Membership check by provider name."""
         return name in self._by_name
 
 
@@ -120,7 +109,7 @@ class ProvidersVar:
 
 @dataclass(slots=True)
 class AuthorizationVar:
-    """The ``platform.authorization`` sub-object — spec §4.4."""
+    """The `platform.authorization` sub-object — variant and rule list."""
 
     variant: str
     rules: list[Rule] = field(default_factory=list)
@@ -133,7 +122,7 @@ class AuthorizationVar:
 
 @dataclass(slots=True)
 class FileAccessVar:
-    """The ``platform.file_access`` sub-object — spec §4.4."""
+    """The `platform.file_access` sub-object — allowed and denied path lists."""
 
     allowed_paths: list[str] = field(default_factory=list)
     denied_paths: list[str] = field(default_factory=list)
@@ -145,12 +134,11 @@ class FileAccessVar:
 
 
 class AliasesVar:
-    """The ``platform.aliases`` collection — spec §4.4.
+    """The `platform.aliases` collection — dict-shaped over model aliases.
 
-    Dict-shaped: exposes :meth:`get` and :meth:`__contains__`
-    only; iteration yields the alias names (the keys). The spec
-    doesn't extend the full standardized method family to
-    aliases because canonical refs are not meaningful as a
+    Exposes `get` and `__contains__` only; iteration yields the
+    alias names (the keys). The full standardised method family is
+    skipped because canonical refs aren't meaningful as a
     user-facing list.
     """
 
@@ -160,20 +148,23 @@ class AliasesVar:
         self._aliases: dict[str, str] = dict(aliases)
 
     def get(self, name: str) -> str | None:
-        """Return the canonical ref for ``name``, or ``None``."""
+        """Return the canonical ref for `name`, or `None`."""
         return self._aliases.get(name)
 
     def __getitem__(self, name: str) -> str | None:
-        """Spec §4.3 subscript = .get()."""
+        """Return the canonical ref for `name` or `None` — `get`-equivalent."""
         return self.get(name)
 
     def __contains__(self, name: object) -> bool:
+        """Membership check by alias name."""
         return name in self._aliases
 
     def __iter__(self) -> Iterator[str]:
+        """Iterate over alias names (the keys) in insertion order."""
         return iter(self._aliases)
 
     def __len__(self) -> int:
+        """Return the number of aliases."""
         return len(self._aliases)
 
 
@@ -184,7 +175,10 @@ class AliasesVar:
 
 @dataclass(slots=True)
 class PlatformVar:
-    """The ``platform`` template variable — spec §4.4."""
+    """The `platform` template variable — single-object platform projection.
+
+    See the module docstring for the field surface.
+    """
 
     providers: ProvidersVar
     authorization: AuthorizationVar
@@ -194,8 +188,7 @@ class PlatformVar:
     _workspace_path: str = ""
 
     def __str__(self) -> str:
-        """Default rendering — spec §4.4:
-        ``Workspace: <path> · Providers: <names> · <N> rules``."""
+        """Render `Workspace: <path> · Providers: <names> · <N> rules`."""
         return (
             f"Workspace: {self._workspace_path} · "
             f"Providers: {self.providers.names()} · "

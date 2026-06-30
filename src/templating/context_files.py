@@ -1,41 +1,27 @@
-"""``context_files`` resolution + loading — Phase 2.2 Step 12
-(spec §6).
+"""Context-file resolution and loading for agent prompts.
 
 Two pure-ish functions:
+[`resolve_path`][templating.context_files.resolve_path] maps a path
+reference to an absolute `pathlib.Path` (accepting `kolsch:<rel>` for
+package resources, `workspace:<rel>` as a deprecated form, and plain
+`<rel>` workspace-rooted by default), and
+[`load_context_file`][templating.context_files.load_context_file]
+reads the file at the resolved path subject to a 64 KiB cap and
+returns a populated
+[`DocItem`][templating.vars.docs.DocItem].
 
-- :func:`resolve_path` — maps a path reference to an absolute
-  :class:`pathlib.Path`. Accepts ``kolsch:<rel>`` (package
-  resource), ``workspace:<rel>`` (deprecated; emits
-  :class:`errors.ConfigDeprecatedRefForm`), and plain
-  ``<rel>`` (workspace-rooted by default per
-  qol-prefix-defaults-and-unified-refs.md).
-- :func:`load_context_file` — reads the file at the resolved
-  path subject to the 64 KiB cap, returning a fully-populated
-  :class:`templating.vars.docs.DocItem`. Raises
-  :class:`errors.ContextFileNotFound` /
-  :class:`errors.ContextFileTooLarge` as appropriate.
+**`kolsch:` resolution.** The wheel ships `docs/` and `AGENTS.md` as
+package data under the `kolsch` umbrella; an editable install ships
+only the empty `src/kolsch/` package. The resolver probes
+`importlib.resources.files` first; if the resource is absent and the
+runtime is an editable install, it falls back to the repo root
+discovered via the `kolsch` package's `__file__`. Same lookup surface;
+same paths land; the dispatch is invisible to agent authors.
 
-## `kolsch:` resolution — wheel-vs-source-tree dispatch
-
-Per the E-2.2-001 A3 / pyproject.toml inline note, the wheel
-ships ``docs/`` and ``AGENTS.md`` as package data under the
-``kolsch`` umbrella; an editable install ships only the empty
-``src/kolsch/`` package. The resolver probes
-:func:`importlib.resources.files` first; if the resource is
-absent AND the runtime is an editable install,
-:func:`_repo_root_for_kolsch_prefix` falls back to the repo root
-discovered via the ``kolsch`` package's ``__file__``. Same lookup
-surface; same paths land; the dispatch is invisible to agent
-authors.
-
-``workspace:`` resolution is straightforward — ``<root> / <rel>``.
-
-## Size cap (Phase 2.2 §6.4)
-
-Each context file is capped at 64 KiB. The cap is enforced via
-:meth:`pathlib.Path.stat` BEFORE reading the file, so a 100 MiB
-file doesn't get pulled into memory just to be rejected. The
-:class:`errors.ContextFileTooLarge` error carries the actual
+**Size cap.** Each context file is capped at 64 KiB. The cap is
+enforced via `pathlib.Path.stat` before reading, so a 100 MiB file
+doesn't get pulled into memory just to be rejected.
+[`ContextFileTooLarge`][errors.ContextFileTooLarge] carries the actual
 size and the cap so the message is actionable.
 """
 
@@ -62,13 +48,15 @@ _log = logging.getLogger("templating.context_files")
 
 
 def _log_deprecated_ref(warning: ConfigDeprecatedRefForm) -> None:
-    """Default emit_warning sink — log at WARNING level so the
-    deprecation surfaces in `kolsch run -v` and pytest captures.
-    Per qol-prefix-defaults-and-unified-refs.md Step 2.
+    """Default `emit_warning` sink — log the deprecation at WARNING level.
+
+    Surfaces in `kolsch run -v` and pytest log captures so the
+    `workspace:` prefix deprecation isn't silent for operators.
     """
     _log.warning("%s", warning)
 
-# Phase 2.2 §6.4 — 64 KiB cap on context files.
+
+# 64 KiB cap on a single context file's payload.
 DEFAULT_MAX_BYTES = 65_536
 
 
@@ -83,23 +71,24 @@ def resolve_path(
     *,
     emit_warning: Callable[[ConfigDeprecatedRefForm], None] | None = None,
 ) -> Path:
-    """Resolve a ``context_files[].path`` / ``extends:`` value
-    to an absolute :class:`pathlib.Path`.
+    """Resolve a `context_files[].path` or `extends:` value to an absolute path.
 
-    Per qol-prefix-defaults-and-unified-refs.md Step 2:
+    Three prefix forms, in order: `kolsch:<rel>` is a kolsch-package
+    resource lookup; `workspace:<rel>` is a workspace-root lookup that
+    emits a [`ConfigDeprecatedRefForm`][errors.ConfigDeprecatedRefForm]
+    warning since the prefix is now implicit; and a plain `<rel>`
+    resolves under the workspace root as the canonical form.
 
-    - **``kolsch:<rel>``** — kolsch-package resource lookup
-      (unchanged).
-    - **``workspace:<rel>``** — workspace-root lookup; emits a
-      :class:`ConfigDeprecatedRefForm` warning since the
-      ``workspace:`` prefix is now implicit.
-    - **Plain ``<rel>``** — workspace-root lookup. Was rejected
-      with ``config.context_file_unprefixed`` (Fatal) under the
-      old strict prefix rule; now the canonical form.
+    Args:
+        prefixed_path: The reference string from the agent YAML.
+        workspace_root: The workspace root for plain and `workspace:`
+            forms.
+        emit_warning: Deprecation-warning sink. Defaults to logging at
+            WARNING level via the module logger; tests pass a
+            list-append to assert the warning fires.
 
-    ``emit_warning`` is the deprecation-warning sink; defaults to
-    logging at WARNING level via the module logger. Tests pass a
-    list-append to assert the warning fires.
+    Returns:
+        The resolved absolute `pathlib.Path`.
     """
     sink = emit_warning if emit_warning is not None else _log_deprecated_ref
     if prefixed_path.startswith("kolsch:"):
@@ -121,19 +110,13 @@ def resolve_path(
 
 
 def _resolve_kolsch_resource(relative: str) -> Path:
-    """Resolve ``kolsch:<relative>`` to an absolute path that
-    works in both wheel and editable-install contexts.
+    """Resolve `kolsch:<relative>` to an absolute path.
 
-    Strategy (per E-2.2-001 A3):
-
-    1. Probe :func:`importlib.resources.files("kolsch")` and join
-       the relative path. If the result is a :class:`pathlib.Path`
-       (it is in editable mode) or a :class:`importlib.abc
-       .Traversable` backed by a filesystem entry that EXISTS,
-       return it.
-    2. Otherwise (editable install where the umbrella is empty),
-       fall back to repo root discovered via the ``kolsch``
-       package's ``__file__.parent`` ↓ ``..``.
+    Works in both wheel and editable-install contexts. Probes
+    `importlib.resources.files("kolsch")` first; if the resource is
+    absent (editable install where the umbrella is empty), falls back
+    to the repo root discovered via the `kolsch` package's
+    `__file__.parent`.
     """
     pkg_root: Traversable = importlib.resources.files("kolsch")
     candidate = pkg_root / relative
@@ -164,21 +147,25 @@ def load_context_file(
     *,
     max_bytes: int = DEFAULT_MAX_BYTES,
 ) -> DocItem:
-    """Resolve + read a single context file; return a populated
-    :class:`DocItem`.
+    """Resolve and read a single context file; return a populated `DocItem`.
 
-    Errors:
+    The `summary` fallback (first non-empty line of file content) is
+    applied here when `ContextFileSpec.summary` is `None`. Plain paths
+    resolve under the workspace root; `workspace:` is accepted but
+    emits [`ConfigDeprecatedRefForm`][errors.ConfigDeprecatedRefForm]
+    via the module logger.
 
-    - :class:`ContextFileNotFound` — resolved path doesn't exist.
-    - :class:`ContextFileTooLarge` — file exceeds ``max_bytes``.
+    Args:
+        spec: The `context_files[]` entry.
+        workspace_root: Workspace root for path resolution.
+        max_bytes: Per-file payload cap.
 
-    The ``summary`` fallback (first non-empty line of file) is
-    applied here when :attr:`ContextFileSpec.summary` is ``None``.
+    Returns:
+        A populated [`DocItem`][templating.vars.docs.DocItem].
 
-    Post qol-prefix-defaults-and-unified-refs.md Step 2: plain
-    paths resolve under the workspace root; ``workspace:`` is
-    accepted but emits :class:`ConfigDeprecatedRefForm` via the
-    module logger.
+    Raises:
+        ContextFileNotFound: The resolved path does not exist.
+        ContextFileTooLarge: The file exceeds `max_bytes`.
     """
     resolved = resolve_path(spec.path, workspace_root)
     if not resolved.is_file():
@@ -202,8 +189,10 @@ def load_context_file(
 
 
 def _first_non_empty_line(content: str) -> str:
-    """The :class:`ContextFileSpec.summary` fallback — Phase 2.2
-    §6.1. Empty input → empty string (no exception)."""
+    """The `ContextFileSpec.summary` fallback — first non-empty line.
+
+    Empty input returns the empty string (no exception).
+    """
     for line in content.splitlines():
         if line.strip():
             return line.strip()

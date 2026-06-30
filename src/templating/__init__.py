@@ -1,17 +1,13 @@
-"""Phase 2.2 templating subsystem.
+"""The templating subsystem — prompt rendering with Jinja2.
 
-- Step 2 (this commit): :func:`templating.render.render_prompt` —
-  the pure Jinja2 render harness with StrictUndefined.
-- Steps 3–7 (subsequent commits): the five variable objects
-  (``ToolsVar`` / ``DocsVar`` / ``WorkspaceVar`` / ``AgentVar`` /
-  ``PlatformVar``).
-- Step 12 (subsequent commit): the ``kolsch:`` / ``workspace:``
-  context-file resolver.
-- Step 13 (subsequent commit): the ``extends:`` chain resolver
-  with cycle detection.
-
-Each step ships its module in isolation; the engine pre-flight
-wires them together at Step 14.
+Public surface: [`render_prompt`][templating.render.render_prompt], the
+pure Jinja2 render harness with `StrictUndefined`. The variable objects
+(`tools`, `docs`, `workspace`, `agent`, `platform`, `skills`) live in
+[`templating.vars`][templating.vars]; the `context_files` resolver and
+the `extends:` chain resolver live in
+[`templating.context_files`][templating.context_files] and
+[`templating.inheritance`][templating.inheritance]. The engine's
+pre-flight wires them together at agent-load time.
 """
 
 from templating.render import render_prompt
