@@ -84,9 +84,10 @@ class ToolContext(BaseModel):
 
 
 class ToolResult(BaseModel):
-    """The return shape of
-    [`ToolsSubsystem.invoke_tool`][tools.subsystem.ToolsSubsystem.invoke_tool].
+    """The return shape of `ToolsSubsystem.invoke_tool`.
 
+    Returned by
+    [`ToolsSubsystem.invoke_tool`][tools.subsystem.ToolsSubsystem.invoke_tool].
     `result` is whatever the tool returned, captured verbatim.
     `metadata` carries optional latency / cost diagnostics the
     dispatch flow attaches.

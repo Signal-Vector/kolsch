@@ -105,7 +105,7 @@ def _parse_line(raw: str, *, session_id: SessionId, line_number: int) -> Event:
 
 
 def _find_last_newline(path: Path, size: int) -> int | None:
-    """Return the byte offset of the last `\\n` in `path`, or `None`."""
+    r"""Return the byte offset of the last `\n` in `path`, or `None`."""
     chunk_size = 4096
     with path.open("rb") as f:
         offset = max(0, size - chunk_size)

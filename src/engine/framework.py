@@ -127,7 +127,8 @@ class LLMHandle(Protocol):
     actually saw.
     """
 
-    async def __call__(self, request: LLMRequest) -> LLMResponse: ...
+    async def __call__(self, request: LLMRequest) -> LLMResponse:
+        """Drive the configured LLM driver with `request` and return the reply."""
 
 
 class ToolHandle(Protocol):
@@ -146,7 +147,8 @@ class ToolHandle(Protocol):
     name: str
     schema: dict[str, Any]
 
-    async def __call__(self, call: ToolCall) -> Any: ...
+    async def __call__(self, call: ToolCall) -> Any:
+        """Route `call` through the Tools subsystem and return the tool's result."""
 
 
 class Framework(Protocol):
@@ -194,7 +196,8 @@ class Framework(Protocol):
         max_iterations: int | None = None,
         cancellation: Callable[[], bool] | None = None,
         cancel_token: Any = None,
-    ) -> str: ...
+    ) -> str:
+        """Drive one exchange to completion and return the agent's final text."""
 
 
 # ---------------------------------------------------------------------------

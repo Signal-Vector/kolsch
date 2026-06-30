@@ -60,9 +60,10 @@ if TYPE_CHECKING:
 
 
 class ReconstructionResult(BaseModel):
-    """Outcome of
-    [`SessionStore.reconstruct_from_filesystem`][store.SessionStore.reconstruct_from_filesystem].
+    """Outcome of filesystem-driven session reconstruction.
 
+    Returned by
+    [`SessionStore.reconstruct_from_filesystem`][store.SessionStore.reconstruct_from_filesystem].
     Counts sessions and threads found versus reconstructed, plus
     warnings (for example, JSONL files missing a `session.opened`
     event).

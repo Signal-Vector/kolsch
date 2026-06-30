@@ -65,7 +65,8 @@ class Prompter(Protocol):
     tests pass a stub that returns canned answers.
     """
 
-    def ask(self, field: PromptField) -> str: ...
+    def ask(self, field: PromptField) -> str:
+        """Read the value for one prompt field and return it."""
 
 
 class StdinPrompter:

@@ -131,7 +131,8 @@ class NodeRunner(Protocol):
         bound_inputs: dict[str, Any],
         state: dict[str, Any],
         ctx: NodeContext,
-    ) -> dict[str, Any]: ...
+    ) -> dict[str, Any]:
+        """Execute one node invocation and return its captured output."""
 
 
 class RunnerRegistry:

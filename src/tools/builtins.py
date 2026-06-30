@@ -63,11 +63,15 @@ _BASH_OUTPUT_TRUNCATE_BYTES = 64 * 1024  # 64 KiB per stream
 
 
 class ReadArgs(BaseModel):
+    """Argument shape for the legacy `read` builtin."""
+
     path: str
     encoding: str = "utf-8"
 
 
 class WriteArgs(BaseModel):
+    """Argument shape for the legacy `write` builtin."""
+
     path: str
     content: str
     create_parents: bool = True
@@ -75,6 +79,8 @@ class WriteArgs(BaseModel):
 
 
 class EditArgs(BaseModel):
+    """Argument shape for the legacy `edit` builtin."""
+
     path: str
     old_str: str
     new_str: str
@@ -82,6 +88,8 @@ class EditArgs(BaseModel):
 
 
 class BashArgs(BaseModel):
+    """Argument shape for the legacy `bash` builtin."""
+
     command: str
     cwd: str | None = None
     timeout_seconds: int = Field(default=60, ge=1)
@@ -279,6 +287,8 @@ def make_bash(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]
 
 
 class ReadFileArgs(BaseModel):
+    """Argument shape for the canonical `read_file` builtin."""
+
     path: str
     offset: int = Field(default=0, ge=0)
     limit: int = Field(default=_DEFAULT_READ_LINE_LIMIT, ge=1)
@@ -286,12 +296,16 @@ class ReadFileArgs(BaseModel):
 
 
 class WriteFileArgs(BaseModel):
+    """Argument shape for the canonical `write_file` builtin."""
+
     path: str
     content: str
     create_parents: bool = True
 
 
 class ListFilesArgs(BaseModel):
+    """Argument shape for the canonical `list_files` builtin."""
+
     path: str = "."
     glob: str = "*"
     max_entries: int = Field(default=_DEFAULT_LIST_MAX_ENTRIES, ge=1)
@@ -299,6 +313,8 @@ class ListFilesArgs(BaseModel):
 
 
 class BashV2Args(BaseModel):
+    """Argument shape for the canonical `bash_v2` builtin."""
+
     command: str
     cwd: str | None = None
     timeout_seconds: int = Field(default=_DEFAULT_BASH_TIMEOUT_SECONDS, ge=1)

@@ -1,4 +1,4 @@
-"""`kolsch chat` — streaming REPL.
+r"""`kolsch chat` — streaming REPL.
 
 Each user submission becomes an
 [`ExecutionContext`][engine.context.ExecutionContext] whose
@@ -18,7 +18,7 @@ architecturally — see `tests/component/cli/test_chat_input.py`.
 
 - **Enter** submits the current input.
 - **Ctrl-J** inserts a newline. Universal — every terminal sends
-  `\\n` for Ctrl-J. Shift-Enter on iTerm2 / kitty / Alacritty
+  `\n` for Ctrl-J. Shift-Enter on iTerm2 / kitty / Alacritty
   *also* sends Ctrl-J under default settings, so this single
   binding covers the "primary Shift-Enter" requirement on the
   terminals that distinguish it.
@@ -338,9 +338,9 @@ def _build_key_bindings() -> KeyBindings:
 
     @kb.add("c-j")
     def _newline_ctrl_j(event: Any) -> None:  # noqa: ANN401
-        """Ctrl-J inserts a literal newline.
+        r"""Ctrl-J inserts a literal newline.
 
-        Universal because every terminal sends `\\n` for Ctrl-J.
+        Universal because every terminal sends `\n` for Ctrl-J.
         On iTerm2 / kitty / Alacritty with default settings,
         Shift-Enter is delivered as Ctrl-J — this binding covers
         the "primary Shift-Enter" requirement on those terminals.

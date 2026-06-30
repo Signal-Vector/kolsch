@@ -758,9 +758,10 @@ def _find_agents_enabling_ref(am: AssetManagement, skill_ref: str) -> list[str]:
 
 
 def _bundle_has_no_remaining_assets(bundle_dir: Path) -> bool:
-    """True iff every asset subdir under ``bundle_dir`` is empty
-    (or absent). Excludes ``bundle.yaml`` itself — that's the
-    manifest, not an asset.
+    """Return True iff every asset subdir under ``bundle_dir`` is empty.
+
+    "Empty" includes "absent". Excludes ``bundle.yaml`` itself — that's
+    the manifest, not an asset.
     """
     for sub in ("skills", "agents", "tools", "prompts"):
         candidate = bundle_dir / sub
@@ -1310,9 +1311,10 @@ def _install_into_new_bundle(
     skill_name: str,
     scratch: Path,
 ) -> None:
-    """Stage a fresh single-skill bundle under ``scratch`` then move
-    it into place with one rename so a half-built tree never appears
-    under ``bundles/``.
+    """Stage a fresh single-skill bundle under ``scratch``, then atomic-rename.
+
+    Moves the staged tree into place with one rename so a half-built
+    tree never appears under ``bundles/``.
     """
     import shutil  # noqa: PLC0415
 
@@ -1684,9 +1686,9 @@ def _truncate(text: str, limit: int) -> str:
 
 
 def _read_skill_body(skill_md: Path) -> str:
-    """Return everything after the YAML frontmatter block.
+    r"""Return everything after the YAML frontmatter block.
 
-    The SKILL.md format is ``---\\nYAML\\n---\\nbody``. When the
+    The SKILL.md format is ``---\nYAML\n---\nbody``. When the
     delimiter pair is missing or malformed (rare; the catalog
     accepted the file so the path exists), return the whole file
     so the user still sees the content.

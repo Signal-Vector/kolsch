@@ -374,9 +374,9 @@ def _session_view(session: object) -> _SessionView:
 
 
 def _sse_format(*, event: str, data: str) -> bytes:
-    """Render one SSE message.
+    r"""Render one SSE message.
 
-    Wire shape: `event: <event>\\ndata: <data>\\n\\n`. Multi-line data
+    Wire shape: `event: <event>\ndata: <data>\n\n`. Multi-line data
     splits across multiple `data:` lines per the W3C SSE spec; we keep
     the data on one line because `json.dumps` already does.
     """

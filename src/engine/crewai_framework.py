@@ -113,6 +113,11 @@ class CrewAIFramework:
         cancellation: Callable[[], bool] | None = None,
         cancel_token: Any = None,
     ) -> str:
+        """Drive one CrewAI exchange to completion and return the final text.
+
+        Implements [`Framework`][engine.framework.Framework] over the
+        wrapped CrewAI library.
+        """
         # Capture the main event loop. Inside Crew.kickoff_async,
         # CrewAI runs the sync executor on a worker thread; our
         # BaseLLM.call and BaseTool._run live in that thread and must

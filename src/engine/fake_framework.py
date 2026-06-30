@@ -45,6 +45,12 @@ class FakeFramework:
         cancellation: Callable[[], bool] | None = None,
         cancel_token: Any = None,
     ) -> str:
+        """Drive one deterministic exchange to completion and return the final text.
+
+        Implements [`Framework`][engine.framework.Framework] without an
+        external LLM — every reply comes from the engine-supplied
+        `llm` seam, which test code wires to a fake driver.
+        """
         # The engine's Assembly Procedure supplies `history` for
         # multi-turn exchanges (prior user/assistant/tool turns
         # already materialized in the log). For first-exchange runs

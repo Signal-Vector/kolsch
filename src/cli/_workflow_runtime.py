@@ -47,9 +47,9 @@ def build_workflow_executor(
     run: WorkflowRun,
     store: WorkflowRunStore,
 ) -> IterativeExecutor:
-    """Construct a fully-wired
-    [`IterativeExecutor`][workflows.executor.IterativeExecutor].
+    """Construct a fully-wired `IterativeExecutor`.
 
+    Returns an [`IterativeExecutor`][workflows.executor.IterativeExecutor].
     The wiring matches what `cli.workflows._cmd_run` ships: bash +
     file-IO tool definitions, the runtime's authz / secrets / sandbox /
     engine / session-store / config builder plumbed into

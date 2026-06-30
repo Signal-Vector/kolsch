@@ -1,4 +1,4 @@
-"""The `docs` template variable — context-file projection for prompts.
+r"""The `docs` template variable — context-file projection for prompts.
 
 Two types: [`DocItem`][templating.vars.docs.DocItem] is one context
 file's projection (path, summary, primary flag, content, size), and
@@ -16,7 +16,7 @@ tiers — primary blocks first, then an "Also available" bullet list
 for secondaries.
 
 **Markdown layout.** Each primary renders as
-`### <path>\\n<content>`, separated by `\\n\\n---\\n\\n` (a
+`### <path>\n<content>`, separated by `\n\n---\n\n` (a
 horizontal rule between blocks, not trailing — leaves the last
 primary clean). Secondaries render as a `## Also available` header
 followed by a `- **<path>** — <summary>` bullet list. An empty doc
@@ -103,7 +103,7 @@ class DocsVar:
     # ---- Two-tier partition -----------------------------------------------
 
     def primaries(self) -> str:
-        """Render primary blocks: `### <path>\\n<content>` between horizontal rules.
+        r"""Render primary blocks: `### <path>\n<content>` between horizontal rules.
 
         The rule sits between blocks (not after) so the last primary
         stays clean.
@@ -206,7 +206,7 @@ class DocsVar:
 
     @staticmethod
     def _render_primaries(items: list[DocItem]) -> str:
-        """Render primaries as `### <path>\\n<content>` blocks joined by `---`.
+        r"""Render primaries as `### <path>\n<content>` blocks joined by `---`.
 
         Empty input produces the empty string so callers can safely
         concatenate.

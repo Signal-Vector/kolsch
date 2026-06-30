@@ -114,12 +114,12 @@ class ReadFileArgs(BaseModel):
     args_schema=ReadFileArgs,
 )
 async def read_file(args: ReadFileArgs, ctx: ToolContext) -> dict[str, Any]:
-    """Read `args.path` and return a paginated, numbered view.
+    r"""Read `args.path` and return a paginated, numbered view.
 
     Returns:
         `{content, lines_returned, total_lines, next_offset,
         truncated}`. `content` is the requested slice rendered as
-        `"<N>\\t<line>\\n"` rows.
+        `"<N>\t<line>\n"` rows.
 
     Raises:
         FileAccessDenied: Path resolves outside the allowed scope.

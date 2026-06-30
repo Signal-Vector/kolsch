@@ -88,7 +88,7 @@ class ToolsVar:
     # ---- Standardised method family ----------------------------------------
 
     def list(self) -> str:
-        """Render each tool as a `### <name>(<signature>)\\n<description>` block.
+        r"""Render each tool as a `### <name>(<signature>)\n<description>` block.
 
         Blocks are separated by a blank line so they render as
         independent markdown sections in the system prompt. Returns

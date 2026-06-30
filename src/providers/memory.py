@@ -97,8 +97,10 @@ class RetrievalResult(BaseModel):
 
 
 class FilterExpression(BaseModel):
-    """Query shape consumed by
-    [`MemoryContext.list_items`][providers.memory.MemoryContext]."""
+    """Query shape consumed by `MemoryContext.list_items`.
+
+    See [`MemoryContext.list_items`][providers.memory.MemoryContext].
+    """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -241,9 +243,9 @@ def _item_matches_any_tag(item_tags: list[str], patterns: list[str]) -> bool:
 
 
 def _item_from_event(event_data: dict[str, Any], created_at: datetime) -> MemoryItem:
-    """Reconstruct a [`MemoryItem`][providers.memory.MemoryItem] from a
-    `memory.written` event.
+    """Reconstruct a [`MemoryItem`][providers.memory.MemoryItem] from an event.
 
+    Hydrates from a `memory.written` event payload.
     The envelope's `created_at` is authoritative — the engine stamps
     it when emitting, and we trust it for cache ordering. The data
     payload carries `item_id` / `agent_id` / `tags` / etc.
@@ -270,16 +272,20 @@ class MemoryContext(Protocol):
         self,
         content: dict[str, Any],
         metadata: dict[str, Any] | None = None,
-    ) -> MemoryItem: ...
+    ) -> MemoryItem:
+        """Write a new memory item and return the persisted record."""
 
-    async def retrieve(self, query: RetrievalQuery) -> RetrievalResult: ...
+    async def retrieve(self, query: RetrievalQuery) -> RetrievalResult:
+        """Retrieve memory items matching `query`."""
 
     async def list_items(
         self,
         filters: FilterExpression | None = None,
-    ) -> list[MemoryItem]: ...
+    ) -> list[MemoryItem]:
+        """List items in the bound session, optionally narrowed by `filters`."""
 
-    async def delete(self, item_id: str) -> None: ...
+    async def delete(self, item_id: str) -> None:
+        """Delete the item by id. Idempotent on unknown ids."""
 
 
 class RecentBufferMemoryContext:

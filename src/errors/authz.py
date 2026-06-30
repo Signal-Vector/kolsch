@@ -246,10 +246,10 @@ class AuthzBareToolRef(PlatformError):
 
 
 class AuthzPatternInvalid(PlatformError):
-    """Raised when a rule's `pattern` contains characters reserved for regex.
+    r"""Raised when a rule's `pattern` contains characters reserved for regex.
 
     `pattern` is a glob, not a regex. Characters that introduce
-    regex semantics (`[`, `]`, `^`, `$`, `\\`, `(`, `)`, `+`, `|`,
+    regex semantics (`[`, `]`, `^`, `$`, `\`, `(`, `)`, `+`, `|`,
     `{`, `}`) are rejected at config load so a legacy regex pattern
     can't be silently miscompiled as a glob.
     """

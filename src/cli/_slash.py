@@ -796,11 +796,12 @@ def _catalog_tool_refs(ctx: SlashContext) -> set[str] | None:
 
 
 def _validate_perm_pattern(pattern: str, *, ctx: SlashContext) -> bool:
-    """Reject regex characters in the glob pattern — same set the
-    provider's ``_PATTERN_REGEX_CHARS`` rejects at YAML load.
+    """Reject regex characters in the glob pattern.
 
-    Surfaces the bad characters in the error so the user can fix
-    in one keystroke."""
+    Same set the provider's ``_PATTERN_REGEX_CHARS`` rejects at YAML
+    load. Surfaces the bad characters in the error so the user can fix
+    in one keystroke.
+    """
     from providers.authz import _PATTERN_REGEX_CHARS  # noqa: PLC0415
 
     if not pattern:
@@ -1004,14 +1005,14 @@ async def _position_of(authz: Any, rule_id: str) -> int | None:
 
 
 async def _handler_clear(arg_text: str, ctx: SlashContext) -> ControlSignal:
-    """`/clear` — clear visible scrollback; session + event log untouched.
+    r"""`/clear` — clear visible scrollback; session + event log untouched.
 
     The distinction from `/new`: `/clear` is a display-only
     operation. Subsequent `kolsch sessions events <id>` against
     the same session still returns every event from before the
     `/clear`.
 
-    Implementation: write the ANSI sequence `\\x1b[H\\x1b[2J\\x1b[3J`
+    Implementation: write the ANSI sequence `\x1b[H\x1b[2J\x1b[3J`
     — cursor home + clear screen + clear scrollback buffer (xterm
     extension supported by every modern terminal we target).
     """

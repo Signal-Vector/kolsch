@@ -263,9 +263,10 @@ class AuthorizationResult(BaseModel):
 
 @dataclass(frozen=True, slots=True)
 class PermissionLayer:
-    """One named layer of rules fed to
-    [`RuleBasedAuthorizationProvider.allow`][providers.authz.RuleBasedAuthorizationProvider.allow].
+    """One named layer of rules fed to the rule-based authz provider.
 
+    Consumed by
+    [`RuleBasedAuthorizationProvider.allow`][providers.authz.RuleBasedAuthorizationProvider.allow].
     The provider walks the `layers` tuple in order — first-match-wins
     per layer. Layer-tuple ordering is the engine's responsibility:
     the workflow layer is included FIRST when the proximate caller is
@@ -336,7 +337,8 @@ if TYPE_CHECKING:
             rule_id: str | None,
             action: str,
             target: str | None,
-        ) -> AuthzEffect | tuple[AuthzEffect, Rule]: ...
+        ) -> AuthzEffect | tuple[AuthzEffect, Rule]:
+            """Resolve a `prompt` rule and optionally append a new rule."""
 
 
 # ---------------------------------------------------------------------------
@@ -369,9 +371,11 @@ class AuthorizationProvider(Protocol):
         callback: PromptCallback | None = None,
         layers: tuple[PermissionLayer, ...] = (),
         caller_chain: tuple[str, ...] = (),
-    ) -> AuthorizationResult: ...
+    ) -> AuthorizationResult:
+        """Resolve the authz decision for `(principal, action, target)`."""
 
-    async def list_rules(self) -> list[Rule]: ...
+    async def list_rules(self) -> list[Rule]:
+        """Return the provider's full rule list in walk order."""
 
 
 # ---------------------------------------------------------------------------
@@ -1254,9 +1258,9 @@ class RuleBasedAuthorizationProvider:
         )
 
     def _insert_at_tail(self, rule: Rule) -> Rule:
-        """Insert `rule` immediately before the default-deny tail
-        (or at the very end when no tail is present).
+        """Insert `rule` immediately before the default-deny tail.
 
+        Falls back to appending at the very end when no tail is present.
         The no-rule callback path uses this position — it's the same
         spot `kolsch permissions add` picks when no
         `before`/`after`/`first` is supplied — so persisted rules
@@ -1377,8 +1381,9 @@ class RuleBasedAuthorizationProvider:
     # -- Helpers --------------------------------------------------------
 
     def _tail_index(self) -> int:
-        """Return the insertion index that lands *before* the
-        default-deny tail (if present) or at the end of the list.
+        """Return the insertion index that lands before the default-deny tail.
+
+        Returns the end of the list when no default-deny tail is present.
         """
         for index, compiled in enumerate(self._rules):
             if compiled.raw.id == DEFAULT_DENY_RULE_ID:

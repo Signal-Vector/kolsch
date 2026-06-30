@@ -59,6 +59,11 @@ class InProcessEventBus:
         self._closed = False
 
     async def publish(self, event: Event) -> None:
+        """Publish an event and deliver it to every matching subscriber.
+
+        Best-effort — transport failures are logged and swallowed.
+        Publish-after-close is a no-op rather than an error.
+        """
         if self._closed:
             return  # treat publish-after-close as no-op, not an error.
         try:
@@ -114,6 +119,12 @@ class InProcessEventBus:
         handler: Callable[[Event], Awaitable[None]],
         filters: dict[str, object] | None = None,
     ) -> SubscriptionId:
+        """Register `handler` for events matching `topic_pattern`.
+
+        See `bus.patterns` for the pattern grammar. `filters` is
+        AND-applied alongside the topic match. Raises `RuntimeError`
+        if the bus is closed.
+        """
         if self._closed:
             msg = "EventBus is closed"
             raise RuntimeError(msg)
@@ -129,14 +140,17 @@ class InProcessEventBus:
         return sub_id
 
     async def unsubscribe(self, subscription_id: SubscriptionId) -> None:
-        # Idempotent; unknown handles are silently ignored rather than
-        # raising.
+        """Remove the subscription. Idempotent; unknown handles are no-ops."""
         async with self._lock:
             self._subscriptions.pop(subscription_id, None)
 
     async def close(self) -> None:
-        # Drop all subscriptions and mark closed; subsequent publish
-        # calls become no-ops, subsequent subscribe calls raise.
+        """Release backend resources. Idempotent.
+
+        Drops all subscriptions and marks the bus closed; subsequent
+        `publish` calls become no-ops, subsequent `subscribe` calls
+        raise.
+        """
         async with self._lock:
             self._subscriptions.clear()
             self._closed = True

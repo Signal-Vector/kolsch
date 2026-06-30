@@ -101,7 +101,7 @@ def suggest_pattern(*, tool: str, target: str | None) -> str:
 
 
 def _glob_to_legacy_regex(pattern: str, *, action: str) -> str:
-    """Fallback used when the modal can't resolve a qualified tool ref.
+    r"""Fallback used when the modal can't resolve a qualified tool ref.
 
     The new-shape persist path writes a glob `pattern` paired with
     a qualified `what`. When no qualified ref is available (no
@@ -109,7 +109,7 @@ def _glob_to_legacy_regex(pattern: str, *, action: str) -> str:
     — that path expects a regex in `what` matched against action OR
     target. Re-build the equivalent regex by escaping the glob's
     non-`*` chars and translating `*` → `.*`. Empty / star-only
-    patterns degrade to the action namespace (`^tool\\.<name>$`) so
+    patterns degrade to the action namespace (`^tool\.<name>$`) so
     the fallback is at least scoped to this tool.
     """
     import re as _re  # noqa: PLC0415
@@ -169,9 +169,9 @@ PromptCallbackReturn = AuthzEffect | tuple[AuthzEffect, Rule]
 
 
 class ApprovalModal:
-    """The chat-surface
-    [`PromptCallback`][providers.authz.PromptCallback] implementation.
+    """The chat-surface `PromptCallback` implementation.
 
+    Implements [`PromptCallback`][providers.authz.PromptCallback].
     Construct one per chat session; register with
     `RuleBasedAuthorizationProvider.register_prompt_callback` before
     the input loop starts and clear it on exit. The chat lifecycle

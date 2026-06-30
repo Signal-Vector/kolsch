@@ -38,6 +38,7 @@ class EchoLLMDriver:
         self._prefix = prefix
 
     async def __call__(self, request: LLMRequest) -> LLMResponse:
+        """Return the configured prefix followed by the last user message."""
         last_user = ""
         for msg in reversed(request.messages):
             if msg.role == "user":

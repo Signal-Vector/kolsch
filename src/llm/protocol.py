@@ -78,9 +78,10 @@ class Credentials:
 
 @dataclass(frozen=True)
 class ValidationResult:
-    """The outcome of
-    [`ProviderConnector.validate_credentials`][llm.protocol.ProviderConnector.validate_credentials].
+    """The outcome of a credential validation check.
 
+    Returned by
+    [`ProviderConnector.validate_credentials`][llm.protocol.ProviderConnector.validate_credentials].
     `ok=True` means the credentials work; `ok=False` populates
     `reason`. `metadata` carries optional provider-specific info — for
     example, `{"credits_remaining": 1247}` from OpenRouter.

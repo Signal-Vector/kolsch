@@ -58,6 +58,7 @@ class PlatformError(Exception):
     level: ClassVar[Level] = Level.FATAL
 
     def __init_subclass__(cls, **kwargs: object) -> None:
+        """Validate the subclass `code` and `level` against the error catalog."""
         super().__init_subclass__(**kwargs)
         # Validate against the catalog at class-definition time so
         # drift between code and catalog surfaces at import, not as a

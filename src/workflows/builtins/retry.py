@@ -58,7 +58,6 @@ def with_retry(
     Raises:
         ValueError: `retries` is negative.
     """
-
     if retries < 0:
         msg = f"retries must be non-negative; got {retries}"
         raise ValueError(msg)

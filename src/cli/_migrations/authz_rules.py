@@ -1,4 +1,4 @@
-"""Authz-rules in-place migration.
+r"""Authz-rules in-place migration.
 
 Converts the legacy rule shape `{id, who, what, effect}` (regex
 `what` matched against action OR target) to the current shape
@@ -8,7 +8,7 @@ no I/O — the caller reads / writes `platform.yaml`.
 
 Migration heuristics (in priority order; first match wins):
 
-1. `what: tool\\.<name>` (legacy action-namespace pin) →
+1. `what: tool\.<name>` (legacy action-namespace pin) →
    `what: <home_bundle>/tools/<name>, pattern: "*"`. `home_bundle`
    is resolved by walking the catalog for a tool entry whose final
    segment matches `<name>`. Zero hits or two-plus hits make the
@@ -18,9 +18,9 @@ Migration heuristics (in priority order; first match wins):
 2. `what: ^<cmd> .*$` (legacy bash-suggest output) →
    `what: <bash_bundle>/tools/bash, pattern: "<cmd> *"`. Same
    fallback when the workspace has no `bash` tool.
-3. `what: agent\\.execute\\..*` (engine pre-flight allow) →
+3. `what: agent\.execute\..*` (engine pre-flight allow) →
    `what: "agent.execute.*", pattern: "*"`. Trailing glob mirrors
-   the original regex's `\\..*` clause.
+   the original regex's `\..*` clause.
 4. `what: .*` (legacy catch-all) → `what: "*", pattern: "*"`.
 5. `what: <bundle>/<name>` (the deprecated 2-seg new-shape form) →
    `what: <bundle>/tools/<name>` (3-seg). Catalog must confirm the
@@ -96,7 +96,7 @@ def migrate_authz_rules(
     *,
     catalog: AssetCatalog | None = None,
 ) -> MigrationResult:
-    """Convert a legacy rule list to the new shape.
+    r"""Convert a legacy rule list to the new shape.
 
     Rules already in the new shape (no `who` field) pass through
     untouched — including `id`-less entries the user may have
@@ -107,7 +107,7 @@ def migrate_authz_rules(
     Args:
         rules: YAML-loaded rule dicts.
         catalog: Optional asset catalog. Required for the
-            `tool\\.<name>` and `^<cmd> .*$` branches; absent
+            `tool\.<name>` and `^<cmd> .*$` branches; absent
             catalog forces those rules into the deprecated bucket.
     """
     converted: list[dict[str, Any]] = []
