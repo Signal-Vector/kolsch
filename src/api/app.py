@@ -1,16 +1,13 @@
 """FastAPI app factory.
 
-Two entry points:
-
-- :func:`build_app` — takes a pre-built :class:`PlatformRuntime`.
-  Used by tests + by the CLI's ``kolsch server`` (which builds the
-  runtime itself).
-- :func:`make_app` — resolves the workspace via Phase 1.2's
-  :func:`platform_runtime.resolve_workspace`, bootstraps a runtime,
-  builds the app. Raises :class:`WorkspaceNotInitialized` when the
-  resolved workspace has no ``platform.yaml``. The intended entry
-  for uvicorn factory-mode deployments — no friendly-print layer
-  here; the operator gets the typed error per Phase 1.2 patch §1.4.
+Two entry points cover the two callers. [`build_app`][api.app.build_app]
+takes a pre-built `PlatformRuntime` and is what tests plus the CLI's
+`kolsch server` use — both build the runtime themselves.
+[`make_app`][api.app.make_app] resolves the workspace, bootstraps a
+runtime, then delegates to `build_app`; it raises
+[`WorkspaceNotInitialized`][errors.WorkspaceNotInitialized] when the
+resolved workspace has no `platform.yaml` so the operator sees a typed
+error rather than a confusing later `FileNotFoundError`.
 """
 
 from __future__ import annotations
@@ -36,11 +33,18 @@ if TYPE_CHECKING:
 
 
 def build_app(runtime: PlatformRuntime) -> FastAPI:
-    """Build the FastAPI app bound to ``runtime``.
+    """Build the FastAPI app bound to `runtime`.
 
-    Tests call this with a tmp-path-bootstrapped runtime + drive via
-    :class:`fastapi.testclient.TestClient` so the entire surface is
+    Tests call this with a tmp-path-bootstrapped runtime and drive the
+    app via `fastapi.testclient.TestClient` so the entire surface is
     exercised in-process without a network roundtrip.
+
+    Args:
+        runtime: The composition root the routes resolve against. All
+            handlers close over this instance.
+
+    Returns:
+        A `FastAPI` app with every default route registered.
     """
     app = FastAPI(
         title="Agent Platform",
@@ -56,12 +60,27 @@ def build_app(runtime: PlatformRuntime) -> FastAPI:
 
 
 async def make_app(root: Path | None = None) -> FastAPI:
-    """Resolve the workspace, bootstrap a runtime, return the app.
+    """Resolve the workspace, bootstrap a runtime, and return the app.
 
-    Phase 1.2 (UX-R7 / patch §1.3) — the entry uvicorn factory mode
-    targets. Raises :class:`WorkspaceNotInitialized` when the
-    resolved path has no ``platform.yaml`` so the operator sees a
-    typed error rather than a confusing later FileNotFoundError.
+    The entry uvicorn factory mode targets. Unlike
+    [`build_app`][api.app.build_app], which trusts the caller to have
+    built a runtime, this factory does the full resolve-then-bootstrap
+    dance and surfaces an actionable error when the workspace is
+    missing its `platform.yaml`.
+
+    Args:
+        root: Optional explicit workspace root. When `None`, the
+            workspace is resolved from the `KOLSCH_WORKSPACE`
+            environment variable or the current working directory.
+
+    Returns:
+        A `FastAPI` app bound to a freshly bootstrapped runtime.
+
+    Raises:
+        WorkspaceNotInitialized: The resolved path has no
+            `platform.yaml`. The error payload records whether the
+            workspace env var was set so the operator can tell whether
+            their override took effect.
     """
     resolved = resolve_workspace(root)
     if not workspace_is_initialized(resolved):

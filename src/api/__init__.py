@@ -1,33 +1,20 @@
-"""FastAPI surface for the v1 default tier — Step 13.
+"""FastAPI surface for the v1 default tier.
 
-Per v1-scope §2.4: HTTP entry point for clients that want to drive
-agents from outside the CLI (IDE, browser, scripts). Same engine,
-same store, same composition root (:func:`platform_runtime.bootstrap_runtime`).
-No logic duplicated with :mod:`cli`.
+The HTTP entry point for clients that drive agents from outside the
+CLI (IDE, browser, scripts). Shares the engine, store, and composition
+root with `cli` — no logic is duplicated; the surface differs only in
+transport.
 
-Routes (see ``api.routes`` for full shapes):
+Two factories are exposed:
+[`build_app`][api.app.build_app] takes a pre-built `PlatformRuntime`
+and is what tests use; [`make_app`][api.app.make_app] resolves the
+workspace, bootstraps a runtime, and builds the app — the intended
+entry point for uvicorn factory-mode deployments where no Python
+caller has already built a runtime.
 
-- ``POST /sessions`` — create a session.
-- ``GET  /sessions`` — list sessions (filter by starred/archived).
-- ``GET  /sessions/{session_id}/events`` — fetch events for a session.
-- ``POST /agents/{agent_ref:path}/execute`` — sync exchange.
-- ``POST /agents/{agent_ref:path}/execute_stream`` — SSE stream of
-  events (one event-per-message), terminator after the final event.
-
-Boundary validation: ``file_ref`` inputs in execute calls are run
-through :func:`files.validate_file_ref` + :func:`files.check_path_allowed`
-before the engine sees them (Fh-I8).
-
-Two factories:
-
-- :func:`build_app` — takes a pre-built :class:`PlatformRuntime`.
-  What tests use (build a tmp-rooted runtime, hand it in).
-- :func:`make_app` — resolves the workspace via Phase 1.2's
-  :func:`platform_runtime.resolve_workspace`, bootstraps a runtime,
-  builds the app. Raises :class:`WorkspaceNotInitialized` if the
-  resolved path has no ``platform.yaml``. The intended entry point
-  for uvicorn factory-mode deployments where no Python caller has
-  already built a runtime.
+See the [file handling contract](../../docs/explanation/file-handling.md)
+for the `file_ref` boundary validation applied to invocation inputs
+before the engine sees them.
 """
 
 from api.app import build_app, make_app

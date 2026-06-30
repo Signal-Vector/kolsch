@@ -1,13 +1,14 @@
-"""FastAPI route handlers — Step 13.
+"""FastAPI route handlers for the v1 default-tier HTTP surface.
 
-All routes share the runtime injected at :func:`api.app.build_app`
-time. Request/response shapes are Pydantic models declared inline
-so the auto-generated OpenAPI schema reflects them.
+All routes share the runtime injected at
+[`build_app`][api.app.build_app] time. Request and response shapes are
+Pydantic models declared inline so the auto-generated OpenAPI schema
+reflects them.
 
 Streaming uses Server-Sent Events (SSE) over
-:meth:`AgentEngine.execute_stream` — one event-per-SSE-message,
-terminated by a synthetic ``event: done`` line after the final
-engine event.
+[`AgentEngine.execute_stream`][engine.AgentEngine.execute_stream] —
+one event-per-SSE-message, terminated by a synthetic `event: done`
+line after the final engine event.
 """
 
 from __future__ import annotations
@@ -50,10 +51,11 @@ class _CreateSessionRequest(BaseModel):
 
 
 class _UpdateSessionRequest(BaseModel):
-    """PATCH /sessions/{id} — partial update of UI-state fields.
+    """Partial update of UI-state fields for `PATCH /sessions/{id}`.
 
-    All fields optional; only present keys are applied (Module API
-    Reference §3.2.4 — entity_backend.update_session).
+    All fields are optional; only present keys are applied. See the
+    [module API reference](../../docs/reference/module-api-reference.md)
+    for the underlying `entity_backend.update_session` contract.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -105,10 +107,15 @@ class _ExecuteResponse(BaseModel):
 
 
 def register_routes(app: FastAPI, runtime: PlatformRuntime) -> None:
-    """Bind every route on ``app`` to ``runtime``.
+    """Bind every default route on `app` to `runtime`.
 
-    Split out so a custom app (with extra middleware / extra routes)
-    can still call this to wire the default surface.
+    Split out from [`build_app`][api.app.build_app] so a custom app
+    (with extra middleware or extra routes) can still call this to
+    wire the default surface.
+
+    Args:
+        app: The FastAPI app to mount routes on.
+        runtime: The composition root every handler closes over.
     """
 
     @app.get("/health")
@@ -165,7 +172,7 @@ def register_routes(app: FastAPI, runtime: PlatformRuntime) -> None:
         except ValueError as exc:
             raise HTTPException(status_code=400, detail=str(exc)) from exc
         # store.delete_session is idempotent — already-deleted is a
-        # no-op (Module API Reference §3.2.3). Returns no body.
+        # no-op. Returns no body.
         await runtime.store.delete_session(sid)
 
     @app.get("/sessions/{session_id}/events")
@@ -275,10 +282,11 @@ async def _prepare_context(
     agent_ref: str,
     req: _ExecuteRequest,
 ) -> ExecutionContext:
-    """Validate inputs + build the engine's ExecutionContext.
+    """Validate request inputs and build the engine's `ExecutionContext`.
 
-    file_ref inputs are validated at this boundary per Fh-I8 — the
-    engine trusts inputs once they cross this seam.
+    `file_ref` inputs on the invocation are validated at this boundary
+    — see the [file handling contract](../../docs/explanation/file-handling.md).
+    The engine trusts inputs once they cross this seam.
     """
     try:
         session_id = SessionId(req.session_id)
@@ -342,10 +350,13 @@ async def _prepare_context(
 
 
 def _looks_like_file_ref(key: str) -> bool:
-    """Heuristic — input keys ending in ``_file`` / ``_path`` / ``_ref``
-    are treated as file references for boundary validation. Phase 1
-    convention; richer typespec dispatch lands when ``IOSpec.inputs``
-    surfaces the file_ref type at the API layer (Phase 2)."""
+    """Return `True` for input keys treated as file references.
+
+    Boundary-validation heuristic: keys ending in `_file`, `_path`, or
+    `_ref` are treated as file references. A richer typespec-driven
+    dispatch will replace this once `IOSpec.inputs` surfaces the
+    `file_ref` type at the API layer.
+    """
     return key.endswith(("_file", "_path", "_ref"))
 
 
@@ -365,9 +376,9 @@ def _session_view(session: object) -> _SessionView:
 def _sse_format(*, event: str, data: str) -> bytes:
     """Render one SSE message.
 
-    Spec: ``event: <event>\\ndata: <data>\\n\\n``. Multi-line data
-    splits across multiple ``data:`` lines per the W3C SSE spec; we
-    keep the data on one line because ``json.dumps`` already does.
+    Wire shape: `event: <event>\\ndata: <data>\\n\\n`. Multi-line data
+    splits across multiple `data:` lines per the W3C SSE spec; we keep
+    the data on one line because `json.dumps` already does.
     """
     lines = [f"event: {event}", f"data: {data}", "", ""]
     return ("\n".join(lines)).encode("utf-8")
