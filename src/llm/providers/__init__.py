@@ -1,12 +1,13 @@
-"""Reference connectors — register every provider once, here.
+"""Reference providers — register every provider once, here.
 
 Adding a provider is two steps:
 
-1. Create ``src/llm/providers/<name>.py`` exporting a class that
-   implements :class:`llm.ProviderConnector`.
-2. Add a line below: ``register(<NameConnector>.type_name, <NameConnector>)``.
+1. Create `src/llm/providers/<name>.py` exporting a class that
+   implements [`ProviderConnector`][llm.protocol.ProviderConnector].
+2. Add a line below:
+   `register(<NameConnector>.type_name, <NameConnector>)`.
 
-That's it. The registry takes care of the rest.
+The registry takes care of the rest.
 """
 
 from llm.providers.opencode import OpenCodeConnector

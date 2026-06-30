@@ -1,102 +1,90 @@
-"""OpenCode connector — patch Part 5 reference implementation.
+"""OpenCode provider — OpenAI-compatible reference implementation.
 
-OpenAI-compatible REST shape (Bearer auth, ``/v1/models`` for discovery).
+OpenAI-compatible REST shape (Bearer auth, `/v1/models` for discovery).
 The base URL is configurable; the catalog endpoint returns model IDs
-only (no parameter metadata), so :meth:`discover_models` yields
-:class:`ModelEntry` records with every parameter field set to ``None``.
-The CLI's augmentation loop fills those in from a metadata source
-(OpenRouter today) when one is connected.
+only (no parameter metadata), so
+[`discover_models`][llm.providers.opencode.OpenCodeConnector.discover_models]
+yields [`ModelEntry`][llm.protocol.ModelEntry] records with every
+parameter field set to `None`. The CLI's augmentation loop fills those
+in from a metadata source (OpenRouter today) when one is connected.
 
-This connector is also the reference template for any OpenAI-compatible
+This provider is also the reference template for any OpenAI-compatible
 provider (OpenAI itself, forks, third-party hosted shims). The four
-methods stay near-identical; only ``type_name`` and
-:meth:`auth_prompt_spec` change.
+methods stay near-identical; only `type_name` and `auth_prompt_spec`
+change.
 
-## CrewAI Routing Choice — `hosted_vllm/<model_id>`
+**CrewAI routing.**
+[`build_llm`][llm.providers.opencode.OpenCodeConnector.build_llm]
+constructs `crewai.LLM(model=f"hosted_vllm/{model_id}", ...)`. The
+prefix is deliberately NOT `openai/` even though OpenCode is
+OpenAI-compatible at the wire level. CrewAI's native `openai/`
+provider validates the model part against OpenAI's canonical model
+list (`gpt-4*`, `gpt-3.5-*`, `o1-*`, ...); for non-canonical model
+names like `qwen3.6-plus` the validator returns False and CrewAI
+tries to fall back to LiteLLM. With LiteLLM not installed (no
+`crewai[litellm]` extra in `pyproject.toml`) the fallback raises
+`ImportError`.
 
-*(Bug-fix: docs/process/bug-litellm-model-routing.md, H1+H2.)*
+`hosted_vllm` is the only native provider that pairs (a) a permissive
+model-name validator — `_validate_model_in_constants` returns `True`
+for any string when the provider is `hosted_vllm`, with the comment
+"vLLM serves any model" in CrewAI's source — and (b) the same
+OpenAI-compat client class `OpenAICompatibleCompletion` that the
+`openai/` route would have used had validation passed. It accepts
+`base_url`, `api_key`, and `timeout` with identical names, so the
+kwargs the OpenCode provider produces pass through unchanged.
 
-:meth:`build_llm` constructs ``crewai.LLM(model=f"hosted_vllm/{model_id}",
-…)``. The prefix is **deliberately not** ``openai/`` even though
-OpenCode IS OpenAI-compatible at the wire level. The rationale:
+The prefix name is misleading. `hosted_vllm` is CrewAI's idiom for
+"OpenAI-compatible endpoint serving arbitrary models" — it reflects
+CrewAI's history (originally added for vLLM deployments), not
+OpenCode's underlying implementation. An OpenCode endpoint is not
+literally a vLLM server; it is any OpenAI-compatible HTTP shim. The
+prefix is the right choice for this provider because of the validator
+plus client behaviour, not because OpenCode runs vLLM. Future
+contributors: do NOT "fix" this back to `openai/` — the alternative
+is adding the ~100 MB `litellm` extra and passing
+`custom_llm_provider="openai"` to bypass the same validator, which is
+strictly worse.
 
-CrewAI 1.14.6's native ``openai/`` provider validates the
-``model_part`` against OpenAI's canonical model list (``gpt-4*``,
-``gpt-3.5-*``, ``o1-*``, …). For non-canonical model names like
-``qwen3.6-plus`` the validator returns False and CrewAI tries to
-fall back to LiteLLM; with LiteLLM not installed (no
-``crewai[litellm]`` extra in ``pyproject.toml``) the fallback
-raises ``ImportError("Unable to initialize LLM with model
-'openai/<x>'. The model did not match any supported native
-provider…")``. See ``crewai/llm.py:412-428`` in the installed
-version.
+OpenRouter's provider (sibling file) uses `openrouter/<model>` because
+that prefix has an analogously permissive validator; the lesson
+generalises — see `src/llm/providers/README.md` for the rule that
+lets future providers (Llama-local, Bedrock, Anthropic, OpenAI
+canonical) pick the right route on first try.
 
-``hosted_vllm`` is the only native provider that pairs (a) a
-permissive model-name validator — ``_validate_model_in_constants``
-returns ``True`` for any string when the provider is
-``hosted_vllm``, with the literal comment "vLLM serves any model"
-(``crewai/llm.py:483-485``) — and (b) the same OpenAI-compat client
-class ``OpenAICompatibleCompletion`` that the ``openai/`` route
-would have used had validation passed
-(``crewai/llm.py:595-609``). It accepts ``base_url``, ``api_key``,
-and ``timeout`` with identical names (the parent
-``OpenAICompletion`` class), so the kwargs the OpenCode connector
-already produced pass through unchanged.
-
-**The prefix name is misleading.** ``hosted_vllm`` is CrewAI's
-idiom for "OpenAI-compatible endpoint serving arbitrary models" —
-it reflects CrewAI's history (originally added for vLLM
-deployments), not OpenCode's underlying implementation. An OpenCode
-endpoint is not literally a vLLM server; it's any OpenAI-compatible
-HTTP shim. The prefix is the right choice for this connector
-because of the validator + client behaviour, not because OpenCode
-runs vLLM. Future contributors: do NOT "fix" this back to
-``openai/`` — the alternative is adding the ~100 MB ``litellm``
-extra and passing ``custom_llm_provider="openai"`` to bypass the
-same validator, which is strictly worse.
-
-OpenRouter's connector (sibling file) uses ``openrouter/<model>``
-because that prefix has an analogously permissive validator (also
-in ``crewai/llm.py:493-495``); the lesson generalises — see
-``src/llm/providers/README.md`` for the rule that lets future
-connectors (Llama-local, Bedrock, Anthropic, OpenAI canonical)
-pick the right route on first try.
-
-## Error Classification (Phase 1.3, FB-R10)
-
+**Error classification.**
 Every provider response the connector might see maps to exactly one
-catalogued ``model.*`` code. The mapping is the basis of the engine's
-fallback decision (see Error Model §4.15 + Phase 1.3 patch §2.2);
-adding a new branch here without updating the trigger table breaks
-the AGENTS.md FB-R10 hard rule.
+catalogued `model.*` code. The mapping is the basis of the engine's
+fallback decision; adding a new branch here without updating the
+trigger table breaks an AGENTS.md hard rule.
 
-- HTTP 429 → ``model.rate_limited`` (Recoverable).
-- HTTP 5xx (500-599) → ``model.server_error`` (Recoverable).
-- ``httpx.TimeoutException`` family → ``model.timeout`` (Recoverable).
-- HTTP 400 with body markers (``context_length`` / ``context_window``
-  / ``too long`` / ``maximum context``) → ``model.context_overflow``
+- HTTP 429 -> `model.rate_limited` (Recoverable).
+- HTTP 5xx (500-599) -> `model.server_error` (Recoverable).
+- `httpx.TimeoutException` family -> `model.timeout` (Recoverable).
+- HTTP 400 with body markers (`context_length` / `context_window` /
+  `too long` / `maximum context`) -> `model.context_overflow`
   (Recoverable).
-- HTTP 401 or 403 → ``model.authentication_failed`` (Fatal).
-- HTTP 400 (any other body) → ``model.bad_request`` (Fatal).
+- HTTP 401 or 403 -> `model.authentication_failed` (Fatal).
+- HTTP 400 (any other body) -> `model.bad_request` (Fatal).
 
 OpenAI-compatible providers return a JSON error body of shape
-``{"error": {"message": ..., "code": ..., "type": ...}}``; the
-overflow detection scans both ``error.message`` and ``error.code``
-for the documented markers. Bodies that don't parse as JSON fall
-through to the status-only branches.
+`{"error": {"message": ..., "code": ..., "type": ...}}`; the overflow
+detection scans both `error.message` and `error.code` for the
+documented markers. Bodies that don't parse as JSON fall through to
+the status-only branches.
 
 Other HTTP statuses (200 with a malformed body, 3xx redirects, etc.)
-are NOT covered here — they are the response-parsing layer's
-problem and surface as :class:`errors.ModelMalformedResponse` (also
-Recoverable). Truly out-of-band failures (DNS resolution, connection
-refused) raise ``httpx.HTTPError`` subclasses; this connector wraps
-them as ``model.timeout`` since they prevent first-byte response.
+are NOT covered here — they are the response-parsing layer's problem
+and surface as `errors.ModelMalformedResponse` (also Recoverable).
+Truly out-of-band failures (DNS resolution, connection refused) raise
+`httpx.HTTPError` subclasses; this provider wraps them as
+`model.timeout` since they prevent a first-byte response.
 
-The classification helper :func:`classify_http_response` is a pure
-function — testable in isolation. A future commit wires it into the
-call layer that wraps ``crewai.LLM`` invocation; today the engine
-exercises the same mapping through the Fake-LLM test path
-(see :mod:`engine._fallback`).
+The classification helper
+[`classify_http_response`][llm.providers._errors.classify_http_response]
+is pure and testable in isolation. A future commit wires it into the
+call layer that wraps `crewai.LLM` invocation; today the engine
+exercises the same mapping through the Fake-LLM test path.
 """
 
 from __future__ import annotations
@@ -120,24 +108,25 @@ from llm.providers._errors import (
     classify_transport_error,
 )
 
-# bug-chat-opencode-qwen-timeout-investigation.md Step 3 — the
-# original 30s default sat below the observed long-tail of opencode
-# responses (replay of session ses_abae69a7 showed 12 successful
-# calls between 30 and 56s, with two reaching 112-113s). Users on
-# affected models (qwen3.6-plus + others) saw a 32% timeout rate
-# at 30s; bumping to 180s drops it to 0% in the same session
-# (Step 2 H1 probe, Step 3 post-fix replay). Override per-provider
-# via `llm_providers.<name>.timeout_seconds` in platform.yaml.
+# The 30s default sits below the observed long-tail of opencode
+# responses (replay showed 12 successful calls between 30 and 56s,
+# with two reaching 112-113s). Users on affected models saw a 32%
+# timeout rate at 30s; bumping to 180s drops it to 0% in the same
+# session. Override per-provider via
+# `llm_providers.<name>.timeout_seconds` in platform.yaml.
 _DEFAULT_TIMEOUT_SECONDS = 180.0
 _HTTP_CLIENT_ERROR_MIN = 400
 
 
 class OpenCodeConnector:
-    """Reference :class:`ProviderConnector` for OpenCode.
+    """The OpenCode provider — OpenAI-compatible REST.
 
     Stateless. Construct with `transport=httpx.MockTransport(...)` in
     tests to bypass real HTTP; production uses the registry's
-    `cls()` no-arg path.
+    no-argument `cls()` path.
+
+    Attributes:
+        type_name: The registry key — `"opencode"`.
     """
 
     type_name: ClassVar[str] = "opencode"
@@ -147,9 +136,10 @@ class OpenCodeConnector:
         *,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
+        """Construct with an optional injected transport for tests."""
         self._transport = transport
 
-    # ---- Phase 1.3 error classification (FB-R10) --------------------------
+    # ---- Error classification ---------------------------------------------
 
     classify_http_response = staticmethod(classify_http_response)
     classify_transport_error = staticmethod(classify_transport_error)
@@ -157,7 +147,7 @@ class OpenCodeConnector:
     # ---- Protocol surface --------------------------------------------------
 
     def auth_prompt_spec(self) -> AuthPromptSpec:
-        """Two prompts: base URL + API key."""
+        """Return the two prompts: base URL and API key."""
         return AuthPromptSpec(
             provider_label="OpenCode",
             intro="OpenCode uses OpenAI-compatible API key authentication.",
@@ -183,7 +173,11 @@ class OpenCodeConnector:
         credentials: Credentials,
         base_url: str | None,
     ) -> ValidationResult:
-        """GET `{base_url}/models` — 200 → ok; any failure → ok=False."""
+        """Verify credentials by GET `{base_url}/models`.
+
+        200 -> `ok=True`. Any failure (network error or non-2xx) ->
+        `ok=False` with a reason summarising the failure.
+        """
         url = self._models_url(base_url, credentials)
         token = credentials.values.get("api_key", "")
         try:
@@ -211,10 +205,14 @@ class OpenCodeConnector:
         credentials: Credentials,
         base_url: str | None,
     ) -> list[ModelEntry]:
-        """GET `{base_url}/models` and yield one `ModelEntry(id=...)`
-        per `data[].id`. Parameter fields stay ``None`` — OpenCode
-        does not expose them. Network/parse failure raises
-        :class:`LlmDiscoveryFailed`."""
+        """Fetch the catalog by GET `{base_url}/models`.
+
+        Yields one `ModelEntry(id=...)` per `data[].id` entry. Parameter
+        fields stay `None` — OpenCode does not expose them.
+
+        Raises:
+            LlmDiscoveryFailed: Network failure or unparseable body.
+        """
         url = self._models_url(base_url, credentials)
         token = credentials.values.get("api_key", "")
         try:
@@ -253,9 +251,11 @@ class OpenCodeConnector:
         provider_config: ProviderConfig,
         api_key: str | None,
     ) -> crewai.LLM:
-        """Construct a `crewai.LLM` pointed at OpenCode via CrewAI's
-        ``hosted_vllm`` route — see the module docstring for the
-        routing-choice rationale (bug-litellm-model-routing.md)."""
+        """Construct a `crewai.LLM` pointed at OpenCode.
+
+        Routes through CrewAI's `hosted_vllm` prefix — see the module
+        docstring for the routing-choice rationale.
+        """
         return crewai.LLM(
             model=f"hosted_vllm/{model_id}",
             api_key=api_key,
@@ -270,8 +270,7 @@ class OpenCodeConnector:
     # ---- Internals ---------------------------------------------------------
 
     def _client(self) -> httpx.AsyncClient:
-        """Return an `httpx.AsyncClient` honouring the test transport
-        when one was injected."""
+        """Return an `httpx.AsyncClient` honouring the injected test transport."""
         kwargs: dict[str, Any] = {"timeout": _DEFAULT_TIMEOUT_SECONDS}
         if self._transport is not None:
             kwargs["transport"] = self._transport
@@ -279,9 +278,12 @@ class OpenCodeConnector:
 
     @staticmethod
     def _models_url(base_url: str | None, credentials: Credentials) -> str:
-        """`{base_url}/models` — falls back to `credentials.values['base_url']`
-        when the explicit arg is None (the connect-flow path, where
-        platform.yaml hasn't been written yet)."""
+        """Build the `/models` URL, falling back to `credentials.values['base_url']`.
+
+        The credentials fallback covers the connect-flow path, where
+        platform.yaml hasn't been written yet so the explicit
+        `base_url` argument is `None`.
+        """
         effective = base_url or credentials.values.get("base_url") or ""
         effective = effective.rstrip("/")
         if not effective:

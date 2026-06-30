@@ -1,22 +1,22 @@
-"""Shared HTTP-response → ``model.*`` mapping helpers.
+"""Shared HTTP-response to `model.*` error mapping helpers.
 
-The four reference connectors (OpenCode, OpenRouter, plus the four
-planned ones) speak OpenAI-compatible JSON error bodies. The mapping
-from HTTP status + body to a catalogued ``model.*`` PlatformError is
-the same shape across all of them; concentrating it here means a new
-connector that picks up the same shape doesn't reimplement the
-classification and can't drift from the canonical Phase 1.3 §4.15
-table.
+The reference providers (OpenCode, OpenRouter, plus planned siblings)
+speak OpenAI-compatible JSON error bodies. The mapping from HTTP
+status plus body to a catalogued `model.*` PlatformError is the same
+shape across all of them; concentrating it here means a new provider
+that picks up the same shape doesn't reimplement the classification
+and can't drift from the canonical error-model table.
 
-Every public function here is PURE — no I/O, no time, no env. Tests
-exercise the branches in isolation without the connector machinery
-(see :mod:`tests.component.llm.test_provider_errors`).
+Every public function here is pure — no I/O, no time, no env. Tests
+exercise the branches in isolation without the provider machinery
+(`tests.component.llm.test_provider_errors`).
 
 When a provider deviates from the OpenAI-compat shape (Bedrock's
-sigv4 wrap, Anthropic's distinct error code field), the connector
-adds its own helper that falls back to :func:`classify_http_response`
-for the shared status-code branches. Document any deviation in the
-connector's module docstring per the AGENTS.md FB-R10 hard rule.
+sigv4 wrap, Anthropic's distinct error code field), the provider
+module adds its own helper that falls back to
+[`classify_http_response`][llm.providers._errors.classify_http_response]
+for the shared status-code branches. Any deviation must be documented
+in that provider's module docstring.
 """
 
 from __future__ import annotations
@@ -62,22 +62,31 @@ def classify_http_response(
     provider: str,
     model: str,
 ) -> PlatformError | None:
-    """Map one HTTP response to a catalogued ``model.*`` PlatformError.
+    """Map one HTTP response to a catalogued `model.*` PlatformError.
 
-    Returns ``None`` for 2xx and other non-error statuses (the
-    connector's response-parsing layer takes over). Returns a typed
-    error otherwise:
+    Returns `None` for 2xx and other non-error statuses (the
+    provider's response-parsing layer takes over). Otherwise returns
+    a typed error:
 
-    - 429 → :class:`ModelRateLimited`
-    - 500-599 → :class:`ModelServerError`
-    - 401/403 → :class:`ModelAuthenticationFailed`
-    - 400 with context-overflow markers in body →
-      :class:`ModelContextOverflow`
-    - 400 otherwise → :class:`ModelBadRequest`
+    - 429 -> `ModelRateLimited`
+    - 500-599 -> `ModelServerError`
+    - 401/403 -> `ModelAuthenticationFailed`
+    - 400 with context-overflow markers in body -> `ModelContextOverflow`
+    - 400 otherwise -> `ModelBadRequest`
 
-    The mapping is exhaustive over the documented Phase 1.3 §4.15
-    surface; new ``model.*`` codes added later must add a branch
-    here in the SAME change that introduces them (AGENTS.md FB-R10).
+    The mapping is exhaustive over the documented `model.*` surface;
+    new codes added later must add a branch here in the same change
+    that introduces them.
+
+    Args:
+        status_code: HTTP status code from the provider's response.
+        body: The raw response body (may be empty).
+        provider: The provider name to stamp on the resulting error.
+        model: The model id to stamp on the resulting error.
+
+    Returns:
+        The matched `PlatformError`, or `None` when the status isn't
+        an error class this helper handles.
     """
     if status_code == _HTTP_RATE_LIMIT:
         return ModelRateLimited(provider=provider, model=model)
@@ -110,18 +119,24 @@ def classify_transport_error(
     model: str,
     timeout_seconds: float,
 ) -> PlatformError | None:
-    """Map a transport-level exception (httpx.* family) to a
-    catalogued ``model.*`` PlatformError.
+    """Map a transport-level exception to a catalogued `model.*` error.
 
-    Returns :class:`ModelTimeout` for any ``httpx.TimeoutException``
-    subclass; returns :class:`ModelTimeout` (not ``model.server_error``)
-    for transport failures that prevent a first-byte response (DNS
-    failure, connection refused, etc.) — the user-visible effect is
-    identical to a timeout.
+    Treats both `httpx.TimeoutException` subclasses and connect-time
+    failures (DNS, connection refused) as `ModelTimeout` — the
+    user-visible effect is identical to a timeout when no first byte
+    has arrived. Returns `None` for unrecognised transport failures so
+    the caller can let them propagate to the engine boundary's
+    `PlatformInternalError` wrap.
 
-    Returns ``None`` if `exc` is not a recognised transport failure,
-    so the caller can let it propagate to the engine boundary's
-    :class:`PlatformInternalError` wrap.
+    Args:
+        exc: The transport exception raised inside the provider call.
+        provider: The provider name to stamp on the resulting error.
+        model: The model id to stamp on the resulting error.
+        timeout_seconds: The configured timeout, surfaced in the error.
+
+    Returns:
+        `ModelTimeout` for timeouts and connect-time failures, `None`
+        otherwise.
     """
     import httpx  # noqa: PLC0415
 
@@ -130,7 +145,7 @@ def classify_transport_error(
             provider=provider, model=model, timeout_seconds=timeout_seconds
         )
     if isinstance(exc, (httpx.ConnectError, httpx.NetworkError)):
-        # No first byte received → treat as timeout per the connector
+        # No first byte received -> treat as timeout per the provider
         # docstring's "out-of-band failures" branch.
         return ModelTimeout(
             provider=provider, model=model, timeout_seconds=timeout_seconds
@@ -149,8 +164,8 @@ def _is_context_overflow_body(body: str) -> bool:
 def _extract_error_message(body: str) -> str | None:
     """Pull the human-readable message out of an OpenAI-compat error body.
 
-    Best-effort: returns ``None`` if the body isn't JSON or doesn't
-    follow the shape. The caller substitutes a default.
+    Best-effort: returns `None` when the body isn't JSON or doesn't
+    follow the documented shape. The caller substitutes a default.
     """
     if not body:
         return None

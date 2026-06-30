@@ -1,22 +1,21 @@
-"""Protocols + value types — Module API Reference §11.5.2 / §11.5.3 / §11.5.5.
+"""Protocols and value types for the LLM provider seam.
 
 Two Protocols:
 
-- :class:`ProviderConnector` — every provider implements this. Four
-  required methods: ``auth_prompt_spec``, ``validate_credentials``,
-  ``discover_models``, ``build_llm`` (per-connector LLM construction).
-- :class:`MetadataSourceConnector` — opt-in extension for connectors
-  that ALSO serve as a cross-provider metadata source. Today only
-  OpenRouter implements this; the engine treats one or any number
-  uniformly via the registry's
-  :func:`registry.connected_metadata_sources`.
+- [`ProviderConnector`][llm.protocol.ProviderConnector] — every
+  provider implements this. Four required methods:
+  `auth_prompt_spec`, `validate_credentials`, `discover_models`,
+  `build_llm` (per-provider LLM construction).
+- [`MetadataSourceConnector`][llm.protocol.MetadataSourceConnector] —
+  opt-in extension for providers that ALSO serve as a cross-provider
+  metadata source. Today only OpenRouter implements this; the engine
+  treats one or any number uniformly via
+  [`connected_metadata_sources`][llm.registry.connected_metadata_sources].
 
-Supporting dataclasses are all ``@dataclass(frozen=True)`` per the
-spec — these are passed across the auth/discovery seam and must
-not mutate.
-
-``ProviderConfig`` is also defined here so connectors don't depend on
-Asset Management directly.
+The supporting dataclasses are all `@dataclass(frozen=True)` — they
+cross the auth/discovery seam and must not mutate.
+[`ProviderConfig`][llm.protocol.ProviderConfig] also lives here so
+providers don't depend on Asset Management directly.
 """
 
 from __future__ import annotations
@@ -29,13 +28,19 @@ if TYPE_CHECKING:
 
 
 # ---------------------------------------------------------------------------
-# Auth prompt — the CLI walks this; no interactive code in the connector
+# Auth prompt — the CLI walks this; no interactive code in the provider
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True)
 class PromptField:
-    """One field the CLI prompts the user for during `kolsch connect`."""
+    """One field the CLI prompts the user for during `kolsch connect`.
+
+    The CLI walks an
+    [`AuthPromptSpec`][llm.protocol.AuthPromptSpec]'s field list; each
+    `PromptField` describes one input (label, kind, optional default
+    and choice list). The provider never reads stdin itself.
+    """
 
     name: str
     label: str
@@ -47,7 +52,13 @@ class PromptField:
 
 @dataclass(frozen=True)
 class AuthPromptSpec:
-    """Declarative auth prompt — the CLI walks this to interact."""
+    """Declarative auth prompt the CLI walks during `kolsch connect`.
+
+    The provider returns one of these from
+    [`ProviderConnector.auth_prompt_spec`][llm.protocol.ProviderConnector.auth_prompt_spec];
+    the CLI renders the prompts and collects responses into a
+    [`Credentials`][llm.protocol.Credentials] payload it hands back.
+    """
 
     provider_label: str
     intro: str
@@ -56,8 +67,10 @@ class AuthPromptSpec:
 
 @dataclass(frozen=True)
 class Credentials:
-    """Result of prompting. Opaque to the platform; passed back to the
-    connector for validation and (where applicable) LLM construction.
+    """The result of prompting the user.
+
+    Opaque to the platform; passed back to the provider for validation
+    and (where applicable) LLM construction.
     """
 
     values: dict[str, str] = field(default_factory=dict)
@@ -65,10 +78,12 @@ class Credentials:
 
 @dataclass(frozen=True)
 class ValidationResult:
-    """Outcome of `validate_credentials`. ``ok=True`` means credentials
-    work; ``ok=False`` populates ``reason``. ``metadata`` carries
-    optional connector-specific info (e.g., ``{"credits_remaining":
-    1247}`` for OpenRouter).
+    """The outcome of
+    [`ProviderConnector.validate_credentials`][llm.protocol.ProviderConnector.validate_credentials].
+
+    `ok=True` means the credentials work; `ok=False` populates
+    `reason`. `metadata` carries optional provider-specific info — for
+    example, `{"credits_remaining": 1247}` from OpenRouter.
     """
 
     ok: bool
@@ -83,8 +98,11 @@ class ValidationResult:
 
 @dataclass(frozen=True)
 class ModelPricing:
-    """Per-million-token pricing — populated by providers/sources that
-    expose it (OpenRouter does; most others don't)."""
+    """Per-million-token pricing for one model.
+
+    Populated by providers and metadata sources that expose pricing
+    (OpenRouter does; most others don't).
+    """
 
     prompt_per_million: float
     completion_per_million: float
@@ -92,8 +110,12 @@ class ModelPricing:
 
 @dataclass(frozen=True)
 class ModelEntry:
-    """One model from a provider's catalog. ``id`` always populated;
-    parameter fields ``None`` when unknown."""
+    """One model from a provider's catalog.
+
+    `id` is always populated; the parameter fields are `None` when the
+    provider didn't expose them. The CLI's augmentation loop fills the
+    gaps from a connected metadata source.
+    """
 
     id: str
     context_length: int | None = None
@@ -102,9 +124,12 @@ class ModelEntry:
     pricing: ModelPricing | None = None
 
     def has_missing_fields(self) -> bool:
-        """True when any parameter field is unset — used by the
-        augmentation loop in the CLI's connect/refresh flow to decide
-        whether a metadata-source lookup is worth running."""
+        """Return `True` when any parameter field is unset.
+
+        Used by the augmentation loop in the CLI's connect / refresh
+        flow to decide whether a metadata-source lookup is worth
+        running.
+        """
         return (
             self.context_length is None
             or self.supports_tools is None
@@ -115,8 +140,11 @@ class ModelEntry:
 
 @dataclass(frozen=True)
 class ModelMetadata:
-    """Same shape as :class:`ModelEntry`'s parameter fields, no ``id``.
-    What :func:`MetadataSourceConnector.lookup_model_metadata` returns.
+    """Parameter metadata for one model, without an `id`.
+
+    Mirrors the parameter fields of
+    [`ModelEntry`][llm.protocol.ModelEntry]. Returned by
+    [`MetadataSourceConnector.lookup_model_metadata`][llm.protocol.MetadataSourceConnector.lookup_model_metadata].
     """
 
     context_length: int | None = None
@@ -132,12 +160,13 @@ class ModelMetadata:
 
 @dataclass(frozen=True)
 class ProviderConfig:
-    """One entry from platform.yaml's `llm_providers` section, plus
-    the dictionary key (`name`).
+    """One entry from `platform.yaml`'s `llm_providers` section.
 
-    Connectors receive this in `build_llm` and may read connector-
-    specific fields (e.g. OpenRouter's `serves_as_metadata_source`)
-    out of `extras`.
+    Carries the dictionary key as `name`, the canonical fields the
+    seam uses (`type`, `api_key_secret`, `base_url`, `timeout_seconds`),
+    and provider-specific keys under `extras` — for example,
+    OpenRouter's `serves_as_metadata_source`. Providers receive this
+    in `build_llm` and may read from `extras` directly.
     """
 
     name: str
@@ -155,21 +184,28 @@ class ProviderConfig:
 
 
 class ProviderConnector(Protocol):
-    """The shape every provider implements. Lives in
-    `src/llm/providers/<name>.py`.
+    """The shape every LLM provider implements.
 
-    Five questions (one per method); see `src/llm/providers/README.md`.
+    One implementation per provider, living in
+    `src/llm/providers/<name>.py`. Four required methods —
+    `auth_prompt_spec`, `validate_credentials`, `discover_models`,
+    `build_llm` — answer the five questions documented in
+    `src/llm/providers/README.md`.
+
+    Attributes:
+        type_name: The string used in `platform.yaml`'s `type` field
+            and in the registry. Distinct from the dictionary key (the
+            user-facing provider name); usually they match.
     """
 
     type_name: ClassVar[str]
-    """The string used in platform.yaml's `type` field and in the
-    registry. Distinct from the dictionary key (user-facing provider
-    name); usually they match."""
 
     def auth_prompt_spec(self) -> AuthPromptSpec:
-        """Describe what to ask the user during `kolsch connect`. The
-        CLI walks this spec; no interactive code lives in the
-        connector itself."""
+        """Describe what to ask the user during `kolsch connect`.
+
+        The CLI walks the returned spec; no interactive code lives in
+        the provider itself.
+        """
         ...
 
     async def validate_credentials(
@@ -199,8 +235,12 @@ class ProviderConnector(Protocol):
 
 
 class MetadataSourceConnector(ProviderConnector, Protocol):
-    """A connector that can also look up metadata for OTHER providers'
-    models. Today only OpenRouter implements this."""
+    """A provider that can also look up metadata for OTHER providers' models.
+
+    Today only OpenRouter implements this. The CLI's augmentation loop
+    consults every connected provider matching this Protocol to fill in
+    parameter fields the upstream catalog left unset.
+    """
 
     async def lookup_model_metadata(
         self,
@@ -208,13 +248,14 @@ class MetadataSourceConnector(ProviderConnector, Protocol):
         model_id: str,
         credentials: Credentials | None = None,
     ) -> ModelMetadata | None:
-        """Try to resolve metadata for a `(provider, model_id)` pair.
+        """Resolve metadata for a `(provider, model_id)` pair.
 
-        Returns the metadata if known, ``None`` if the source has no
+        Returns the metadata when known, `None` when the source has no
         entry. Implementations translate the platform's
         `(provider, model_id)` tuple into whatever identifier the
-        source uses (e.g., OpenRouter prefixes Anthropic models with
-        ``anthropic/``)."""
+        source uses — for example, OpenRouter prefixes Anthropic
+        models with `anthropic/`.
+        """
         ...
 
 
@@ -224,10 +265,11 @@ class MetadataSourceConnector(ProviderConnector, Protocol):
 
 
 def is_metadata_source(connector: ProviderConnector) -> bool:
-    """True when `connector` implements :class:`MetadataSourceConnector`.
+    """Return `True` when `connector` implements `MetadataSourceConnector`.
 
-    Used by :func:`registry.connected_metadata_sources` to pick out
-    the connectors whose catalog the connect-flow augmentation loop
-    should consult.
+    Used by
+    [`connected_metadata_sources`][llm.registry.connected_metadata_sources]
+    to pick out the providers whose catalog the connect-flow
+    augmentation loop should consult.
     """
     return callable(getattr(connector, "lookup_model_metadata", None))

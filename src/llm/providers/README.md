@@ -230,9 +230,9 @@ shape.
 `hosted_vllm/` is misleadingly named: it isn't only for vLLM
 deployments. It's CrewAI's standing idiom for "OpenAI-compatible
 endpoint serving arbitrary model IDs." OpenCode uses it; the
-planned Llama-local connector (Phase 1.1 §9.4 llama.cpp/vLLM
-branch) should use it; any future OpenAI-compatible shim should
-use it unless its catalogue is canonical OpenAI.
+planned Llama-local connector (llama.cpp / vLLM branch) should
+use it; any future OpenAI-compatible shim should use it unless
+its catalogue is canonical OpenAI.
 
 If a future contributor "fixes" `hosted_vllm/` back to `openai/`
 on a connector serving non-OpenAI models, the failure mode is the
@@ -265,7 +265,7 @@ module docstring explains the choice inline.
 - **Don't take initiative beyond the connector's Protocol
   surface.** No orchestration. No retries (that's the engine's
   domain). No model selection logic. The connector answers the
-  five questions in §1.2 and nothing more.
+  five questions in section 1.2 and nothing more.
 
 ---
 
@@ -275,8 +275,6 @@ module docstring explains the choice inline.
 - **Protocol shapes:** `src/llm/protocol.py`.
 - **Reference implementations:** `opencode.py` (basic shape),
   `openrouter.py` (provider + metadata-source shape).
-- **Error catalog:** `docs/explanation/error-model.md` §4.13.
-- **Success criteria:** `docs/process/development-testing-handbook.md`
-  §10.12.
-- **Test cases:** `docs/process/test-catalog.md` Part 9.5
-  (TC-LLM-01..10).
+- **Error catalog:** `docs/explanation/error-model.md`.
+- **Success criteria:** `docs/process/development-testing-handbook.md`.
+- **Test cases:** `docs/process/test-catalog.md` Part 9.5.

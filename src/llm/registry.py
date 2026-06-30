@@ -1,15 +1,16 @@
-"""Connector registry — Module API Reference §11.5.4.
+"""Provider registry — one process-global map of type name to class.
 
-One process-global map of connector type names → connector classes.
-Connectors register themselves in :mod:`llm.providers.__init__` at
-import time; adding a new provider is one line there + one new file
-under :mod:`llm.providers`.
+Providers register themselves in `llm.providers.__init__` at import
+time; adding a new provider is one line there plus one new file under
+`llm.providers`.
 
-The registry is the ONLY place the rest of the platform looks up a
-connector by name — the engine's :func:`llm.build_llm`, the CLI's
-``connect`` / ``refresh`` / ``disconnect`` / ``providers``
-commands, and the augmentation loop's
-:func:`connected_metadata_sources` all route through here.
+The registry is the only place the rest of the platform looks up a
+provider by name — the engine's
+[`build_llm`][llm.build_llm.build_llm], the CLI's `connect` /
+`refresh` / `disconnect` / `providers` commands, and the augmentation
+loop's
+[`connected_metadata_sources`][llm.registry.connected_metadata_sources]
+all route through here.
 """
 
 from __future__ import annotations
@@ -36,12 +37,17 @@ def register(
     type_name: str,
     connector_cls: type[ProviderConnector],
 ) -> None:
-    """Register a connector class under its `type_name`.
+    """Register a provider class under its `type_name`.
 
-    Raises :class:`LlmConnectorDuplicate` (Fatal) if `type_name` is
-    already registered — TC-LLM-09 pins this. Each connector module
-    must register exactly once; importing the same module twice would
-    otherwise silently last-write-wins.
+    Each provider module must register exactly once; importing the
+    same module twice would otherwise silently last-write-wins.
+
+    Args:
+        type_name: The string used in `platform.yaml`'s `type` field.
+        connector_cls: The provider class.
+
+    Raises:
+        LlmConnectorDuplicate: `type_name` is already registered.
     """
     if type_name in _REGISTRY:
         raise LlmConnectorDuplicate(type_name=type_name)
@@ -49,12 +55,20 @@ def register(
 
 
 def get(type_name: str) -> ProviderConnector:
-    """Return a connector INSTANCE for `type_name`.
+    """Return a provider instance for `type_name`.
 
-    Raises :class:`LlmConnectorUnknown` (Fatal) if no connector is
-    registered for the type — this is what surfaces when
-    platform.yaml's `llm_providers.<X>.type` doesn't match any
-    connector.
+    Raised when `platform.yaml`'s `llm_providers.<X>.type` doesn't
+    match any registered provider — this is what surfaces a typo'd
+    provider type to the user.
+
+    Args:
+        type_name: The registered provider type string.
+
+    Returns:
+        A freshly-constructed provider instance.
+
+    Raises:
+        LlmConnectorUnknown: No provider is registered for the type.
     """
     cls = _REGISTRY.get(type_name)
     if cls is None:
@@ -66,27 +80,34 @@ def get(type_name: str) -> ProviderConnector:
 
 
 def known_types() -> list[str]:
-    """All registered connector types, sorted. Used by the CLI's
-    ``providers`` listing and by the unknown-provider error message
-    in ``connect`` / ``disconnect``."""
+    """Return all registered provider types, sorted.
+
+    Used by the CLI's `providers` listing and by the unknown-provider
+    error message in `connect` and `disconnect`.
+    """
     return sorted(_REGISTRY)
 
 
 def connected_metadata_sources(
     llm_providers_config: dict[str, ProviderConfig] | None = None,
 ) -> list[MetadataSourceConnector]:
-    """Instantiate every connected provider whose connector implements
-    :class:`MetadataSourceConnector`.
+    """Instantiate every connected provider that is also a metadata source.
 
-    `llm_providers_config` is the parsed `llm_providers` map from
-    platform.yaml. When ``None`` (the default for module-level use),
-    returns an empty list — the augmentation loop needs the live
-    config to know which connectors are actually connected.
-
-    Today only OpenRouter implements MetadataSourceConnector; this
-    function returns 0 or 1 instances. Returning a list keeps the
-    augmentation loop in the CLI symmetric for the day a second
+    Today only OpenRouter implements
+    [`MetadataSourceConnector`][llm.protocol.MetadataSourceConnector];
+    this function returns zero or one instances. The list shape keeps
+    the CLI's augmentation loop symmetric for the day a second
     metadata source ever exists.
+
+    Args:
+        llm_providers_config: The parsed `llm_providers` map from
+            `platform.yaml`. `None` (the default for module-level use)
+            returns an empty list — the augmentation loop needs the
+            live config to know which providers are actually
+            connected.
+
+    Returns:
+        Provider instances implementing `MetadataSourceConnector`.
     """
     if not llm_providers_config:
         return []
@@ -102,13 +123,14 @@ def connected_metadata_sources(
 
 
 def _registered() -> Iterable[tuple[str, type[ProviderConnector]]]:
-    """Read-only iteration helper for tests. Not part of the public
-    surface."""
+    """Read-only iteration helper for tests. Not part of the public surface."""
     return list(_REGISTRY.items())
 
 
 def _clear_for_tests() -> None:
-    """Drop all registrations. Tests that exercise the
-    duplicate-registration guard or build a custom registry use
-    this. NOT part of the public surface."""
+    """Drop all registrations. Test-only — not part of the public surface.
+
+    Used by tests that exercise the duplicate-registration guard or
+    build a custom registry.
+    """
     _REGISTRY.clear()

@@ -1,15 +1,12 @@
-"""The `build_llm` helper — Module API Reference §11.5.1.
+"""The `build_llm` helper — the bridge from `ModelSpec` to `crewai.LLM`.
 
-Bridge from `ModelSpec` to a usable `crewai.LLM`. Consults the
-connector registry, resolves the API key via Secrets, and dispatches
-to the connector's `build_llm` method.
+Consults the provider registry, resolves the API key via the Secrets
+provider, and dispatches to the matched provider's `build_llm` method.
+Adding a new provider does not change this function — provider-specific
+concerns live entirely inside the provider class.
 
-About 30 lines of substance. Adding a provider does not change this
-function — provider-specific concerns live entirely in the
-connector's `build_llm` method.
-
-Engine pre-flight step 6 calls this per exchange (see
-`docs/explanation/agent-engine-contract.md` §2.1).
+The engine's pre-flight calls this per exchange. See the
+[agent engine contract](../../docs/explanation/agent-engine-contract.md).
 """
 
 from __future__ import annotations
@@ -40,32 +37,37 @@ async def build_llm(
     *,
     configured_providers: list[str] | None = None,
 ) -> crewai.LLM:
-    """Construct a configured `crewai.LLM`.
+    """Construct a configured `crewai.LLM` for the given model spec.
 
-    Preconditions:
-    - `spec` is canonical-form `{provider, model}` (alias expansion
-      and string-form normalization already happened in the resolver
-      — see Schemas §A.4.1).
-    - `provider_config` is the entry from platform.yaml's
-      `llm_providers[spec.provider]`, OR ``None`` when the provider
-      is absent (in which case we raise
-      :class:`LlmProviderNotConfigured`).
-    - `secrets` provides the resolved API key when the connector
-      needs one.
+    Expects `spec` in canonical `{provider, model}` form — alias
+    expansion and string normalisation have already run in the
+    resolver. `provider_config` is the entry from `platform.yaml`'s
+    `llm_providers[spec.provider]`, or `None` when the provider is
+    absent (which raises `LlmProviderNotConfigured`). `secrets`
+    resolves the API key when the provider needs one.
 
-    Postconditions:
-    - Returns a configured `crewai.LLM` the engine can hold for the
-      exchange's lifetime.
+    Args:
+        spec: Canonical model spec — `{provider, model}` already
+            normalised.
+        provider_config: The platform.yaml entry for `spec.provider`,
+            or `None` when the provider isn't configured.
+        secrets: Secrets provider used to resolve `api_key_secret`
+            when set.
+        configured_providers: Sibling provider names for the
+            `LlmProviderNotConfigured` error's suggestion list.
+
+    Returns:
+        A configured `crewai.LLM` the engine holds for the exchange's
+        lifetime.
 
     Raises:
-    - :class:`LlmProviderNotConfigured` (Fatal) — `provider_config`
-      is ``None``.
-    - :class:`LlmSecretMissing` (Fatal) — `api_key_secret` configured
-      but not resolvable; `SecretNotFound` chained as ``__cause__``.
-    - :class:`LlmClientInitFailed` (Fatal) — connector's `build_llm`
-      raised during construction.
-    - :class:`LlmConnectorUnknown` (Fatal) — `provider_config.type`
-      not in the registry.
+        LlmProviderNotConfigured: `provider_config` is `None`.
+        LlmSecretMissing: `api_key_secret` configured but not
+            resolvable; `SecretNotFound` chained as `__cause__`.
+        LlmClientInitFailed: The provider's `build_llm` raised during
+            construction.
+        LlmConnectorUnknown: `provider_config.type` is not in the
+            registry.
     """
     provider_name = spec.provider
 
@@ -78,7 +80,7 @@ async def build_llm(
     # registry.get raises LlmConnectorUnknown if the type is missing.
     connector = registry.get(provider_config.type)
 
-    # Resolve the API key when the connector wants one. Null-key
+    # Resolve the API key when the provider wants one. Null-key
     # providers (Llama-local) skip this entire branch.
     api_key: str | None = None
     if provider_config.api_key_secret:
@@ -97,7 +99,7 @@ async def build_llm(
             api_key,
         )
     except PlatformError:
-        # Already typed (e.g., connector raises a domain-specific
+        # Already typed (e.g., provider raises a domain-specific
         # error). Bubble up unchanged.
         raise
     except Exception as exc:

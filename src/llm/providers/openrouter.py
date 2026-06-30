@@ -1,53 +1,54 @@
-"""OpenRouter connector — patch Part 6 reference implementation.
+"""OpenRouter provider — the provider-plus-metadata-source reference.
 
-The provider-and-metadata-source shape. Implements
-:class:`ProviderConnector` (so it can route real calls) AND
-:class:`MetadataSourceConnector` (so the connect-flow augmentation
-loop can use its catalog to fill in parameter metadata for other
-providers' models).
+Implements both
+[`ProviderConnector`][llm.protocol.ProviderConnector] (so it can route
+real calls) and
+[`MetadataSourceConnector`][llm.protocol.MetadataSourceConnector] (so
+the connect-flow augmentation loop can use its catalog to fill in
+parameter metadata for other providers' models).
 
-The OpenRouter API has two relevant endpoints:
+Two endpoints carry the surface:
 
-- ``GET /api/v1/auth/key`` — verifies the API key + returns the
-  remaining credit balance. Used by :meth:`validate_credentials`.
-- ``GET /api/v1/models`` — public catalog (no key required, but a
-  key gets higher rate limits). Used by :meth:`discover_models` AND
-  cached for :meth:`lookup_model_metadata`.
+- `GET /api/v1/auth/key` verifies the API key and returns the
+  remaining credit balance. Used by `validate_credentials`.
+- `GET /api/v1/models` is the public catalog (no key required, but a
+  key gets higher rate limits). Used by `discover_models` AND cached
+  for `lookup_model_metadata`.
 
-Catalog cache is per-instance: a single connector instance reused
-across an augmentation loop only hits ``/api/v1/models`` once.
+Catalog cache is per-instance: a single provider instance reused
+across an augmentation loop only hits `/api/v1/models` once.
 
-## Error Classification (Phase 1.3, FB-R10)
-
+**Error classification.**
 OpenRouter PROXIES many providers; the same HTTP semantics apply on
 the wire but the underlying provider's quirks are flattened into a
-unified OpenAI-compat error body. The status-code mapping is
-identical to OpenCode's; the body-keyword scan also catches
-provider-specific overflow markers (Anthropic's
-``invalid_request_error.code = context_window_exceeded`` and
-OpenAI's ``context_length_exceeded`` both flatten to the same
-keywords in OpenRouter's relay body).
+unified OpenAI-compat error body. The status-code mapping is identical
+to OpenCode's; the body-keyword scan also catches provider-specific
+overflow markers (Anthropic's
+`invalid_request_error.code = context_window_exceeded` and OpenAI's
+`context_length_exceeded` both flatten to the same keywords in
+OpenRouter's relay body).
 
-- HTTP 429 → ``model.rate_limited`` (Recoverable).
-- HTTP 5xx → ``model.server_error`` (Recoverable).
-- ``httpx.TimeoutException`` / transport-down →
-  ``model.timeout`` (Recoverable).
-- HTTP 400 with body keyword ``context_*`` / ``too long`` /
-  ``maximum context`` → ``model.context_overflow`` (Recoverable).
-- HTTP 401 or 403 → ``model.authentication_failed`` (Fatal).
-- HTTP 400 otherwise → ``model.bad_request`` (Fatal).
+- HTTP 429 -> `model.rate_limited` (Recoverable).
+- HTTP 5xx -> `model.server_error` (Recoverable).
+- `httpx.TimeoutException` / transport-down -> `model.timeout`
+  (Recoverable).
+- HTTP 400 with body keyword `context_*` / `too long` / `maximum
+  context` -> `model.context_overflow` (Recoverable).
+- HTTP 401 or 403 -> `model.authentication_failed` (Fatal).
+- HTTP 400 otherwise -> `model.bad_request` (Fatal).
 
-Because OpenRouter is a proxy, an upstream provider's 5xx may
-surface as either ``model.server_error`` (if OpenRouter returns the
-same 5xx) or ``model.bad_request`` (if OpenRouter wraps it). The
-conservative reading: 5xx-at-the-wire is always Recoverable; the
-non-5xx wrap is Fatal because the chain's other entries likely
-route through different providers anyway.
+Because OpenRouter is a proxy, an upstream provider's 5xx may surface
+as either `model.server_error` (if OpenRouter returns the same 5xx)
+or `model.bad_request` (if OpenRouter wraps it). The conservative
+reading: 5xx-at-the-wire is always Recoverable; the non-5xx wrap is
+Fatal because the chain's other entries likely route through
+different providers anyway.
 
-The classification helper :func:`classify_http_response` is shared
-with the other OpenAI-compat connectors via
-:mod:`llm.providers._errors` so a new provider that picks up the
-same shape doesn't reimplement it.
+The classification helper
+[`classify_http_response`][llm.providers._errors.classify_http_response]
+is shared with the other OpenAI-compat providers via
+`llm.providers._errors` so a new provider that picks up the same
+shape doesn't reimplement it.
 """
 
 from __future__ import annotations
@@ -80,7 +81,15 @@ _PER_MILLION = 1_000_000
 
 
 class OpenRouterConnector:
-    """Reference :class:`MetadataSourceConnector` for OpenRouter."""
+    """The OpenRouter provider — proxy and cross-provider metadata source.
+
+    Implements [`MetadataSourceConnector`][llm.protocol.MetadataSourceConnector]
+    so the CLI's augmentation loop can fill in parameter metadata for
+    OTHER providers' models from OpenRouter's catalog.
+
+    Attributes:
+        type_name: The registry key — `"openrouter"`.
+    """
 
     type_name: ClassVar[str] = "openrouter"
 
@@ -89,6 +98,7 @@ class OpenRouterConnector:
         *,
         transport: httpx.AsyncBaseTransport | None = None,
     ) -> None:
+        """Construct with an optional injected transport for tests."""
         self._transport = transport
         # Per-instance catalog cache for lookup_model_metadata. Populated
         # lazily on first call; keyed by the resolved OpenRouter model
@@ -96,7 +106,7 @@ class OpenRouterConnector:
         # fetched"; an empty dict means "fetched, no entries".
         self._catalog: dict[str, ModelEntry] | None = None
 
-    # ---- Phase 1.3 error classification (FB-R10) --------------------------
+    # ---- Error classification ---------------------------------------------
 
     classify_http_response = staticmethod(classify_http_response)
     classify_transport_error = staticmethod(classify_transport_error)
@@ -104,7 +114,7 @@ class OpenRouterConnector:
     # ---- ProviderConnector surface ----------------------------------------
 
     def auth_prompt_spec(self) -> AuthPromptSpec:
-        """One prompt: API key (base URL is canonical)."""
+        """Return the single API-key prompt (base URL is canonical)."""
         return AuthPromptSpec(
             provider_label="OpenRouter",
             intro=(
@@ -130,7 +140,12 @@ class OpenRouterConnector:
         credentials: Credentials,
         base_url: str | None,
     ) -> ValidationResult:
-        """GET `{base_url}/auth/key` — 200 → ok + credits in metadata."""
+        """Verify credentials by GET `{base_url}/auth/key`.
+
+        200 -> `ok=True` with `credits_remaining` in `metadata` when
+        the response includes both limit and usage. Any failure ->
+        `ok=False` with a reason.
+        """
         url = f"{self._base(base_url)}/auth/key"
         token = credentials.values.get("api_key", "")
         try:
@@ -168,8 +183,11 @@ class OpenRouterConnector:
         credentials: Credentials,
         base_url: str | None,
     ) -> list[ModelEntry]:
-        """GET `{base_url}/models` and yield one populated `ModelEntry`
-        per `data[]` item."""
+        """Fetch the catalog by GET `{base_url}/models`.
+
+        Yields one populated `ModelEntry` per `data[]` item. Populates
+        the per-instance cache as a side effect.
+        """
         entries = await self._fetch_catalog(credentials, base_url)
         # `_fetch_catalog` populates the per-instance cache as a side
         # effect; return it as a list in the order the API returned.
@@ -201,18 +219,26 @@ class OpenRouterConnector:
         model_id: str,
         credentials: Credentials | None = None,
     ) -> ModelMetadata | None:
-        """Translate `(provider, model_id)` into an OpenRouter ID
-        and look up metadata in the cached catalog.
+        """Look up metadata for `(provider, model_id)` in the cached catalog.
 
         Default mapping is `{provider}/{model_id}` — the form
         OpenRouter uses for its canonical first-party integrations
-        (anthropic/claude-opus-4-7, openai/gpt-4o, …). For providers
-        without a canonical OpenRouter ID (custom OpenAI-compat
-        shims), this returns ``None``.
+        (`anthropic/claude-opus-4-7`, `openai/gpt-4o`, ...). For
+        providers without a canonical OpenRouter ID (custom
+        OpenAI-compat shims), this returns `None`.
 
-        Returns the matched metadata, or ``None`` when the catalog
-        has no entry (the caller decides whether that's a soft miss
-        or worth surfacing)."""
+        Args:
+            provider: The platform-side provider name.
+            model_id: The model id on that provider.
+            credentials: Optional credentials; populated when the
+                catalog hasn't been fetched yet and the caller wants
+                a key included in the request.
+
+        Returns:
+            The matched metadata, or `None` when the catalog has no
+            entry (the caller decides whether that's a soft miss or
+            worth surfacing).
+        """
         if self._catalog is None:
             await self._fetch_catalog(credentials or Credentials(), None)
         if self._catalog is None:
@@ -237,8 +263,11 @@ class OpenRouterConnector:
         credentials: Credentials,
         base_url: str | None,
     ) -> dict[str, ModelEntry]:
-        """Populate `self._catalog` from `/models`. Raises
-        :class:`LlmDiscoveryFailed` on network/parse failure."""
+        """Populate `self._catalog` from `/models`.
+
+        Raises:
+            LlmDiscoveryFailed: Network failure or unparseable body.
+        """
         url = f"{self._base(base_url)}/models"
         headers: dict[str, str] = {}
         token = credentials.values.get("api_key")
@@ -273,7 +302,7 @@ class OpenRouterConnector:
 
     @staticmethod
     def _parse_entry(raw: dict[str, Any]) -> ModelEntry | None:
-        """Map one `/models` row to a populated :class:`ModelEntry`."""
+        """Map one `/models` row to a populated `ModelEntry`."""
         model_id = raw.get("id")
         if not isinstance(model_id, str) or not model_id:
             return None
@@ -300,9 +329,11 @@ class OpenRouterConnector:
 
     @staticmethod
     def _parse_pricing(raw: object) -> ModelPricing | None:
-        """OpenRouter quotes per-token costs as strings. Convert to
-        per-million floats; return ``None`` when either field is
-        missing/unparseable."""
+        """Parse OpenRouter's per-token pricing into per-million floats.
+
+        OpenRouter quotes per-token costs as strings; returns `None`
+        when either field is missing or unparseable.
+        """
         if not isinstance(raw, dict):
             return None
         prompt_raw = raw.get("prompt")
@@ -323,9 +354,11 @@ class OpenRouterConnector:
 
     @staticmethod
     def _compute_credits_remaining(data: dict[str, Any]) -> float | None:
-        """`/auth/key` returns `{"limit": X, "usage": Y, ...}` (X may be
-        null for unlimited keys). Return `limit - usage` when both are
-        present, else ``None``."""
+        """Compute `limit - usage` from `/auth/key`'s response data.
+
+        Returns `None` when either field is missing or non-numeric
+        (the `limit` field may be `null` for unlimited keys).
+        """
         limit = data.get("limit")
         usage = data.get("usage")
         if not isinstance(limit, (int, float)):
@@ -335,8 +368,7 @@ class OpenRouterConnector:
         return float(limit) - float(usage)
 
     def _client(self) -> httpx.AsyncClient:
-        """Return an `httpx.AsyncClient` honouring the test transport
-        when one was injected."""
+        """Return an `httpx.AsyncClient` honouring the injected test transport."""
         kwargs: dict[str, Any] = {"timeout": _DEFAULT_TIMEOUT_SECONDS}
         if self._transport is not None:
             kwargs["transport"] = self._transport
@@ -344,4 +376,5 @@ class OpenRouterConnector:
 
     @staticmethod
     def _base(base_url: str | None) -> str:
+        """Return the base URL, falling back to OpenRouter's canonical."""
         return (base_url or _DEFAULT_BASE_URL).rstrip("/")

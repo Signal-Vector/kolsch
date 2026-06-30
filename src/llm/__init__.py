@@ -1,26 +1,33 @@
-"""LLM Provider Configuration — Phase 1.1.
+"""LLM provider configuration and the bridge to `crewai.LLM`.
 
-Per `docs/explanation/llm-providers.md` + Module API Reference §11.5.
+Implements the LLM Providers subsystem — the seam between an agent's
+`ModelSpec` and a configured `crewai.LLM`. Two reference providers ship
+today (OpenCode + OpenRouter); additional providers (Anthropic, OpenAI,
+Bedrock, Llama) plug in through the same Protocol.
 
-The bridge between the agent's `ModelSpec` and a usable `crewai.LLM`.
-v1.1 ships two reference connectors (OpenCode + OpenRouter); four
-others (Anthropic, OpenAI, Bedrock, Llama) land as later patches via
-the same Protocol.
+The public surface re-exports:
 
-Public surface:
+- [`build_llm`][llm.build_llm.build_llm] — async helper that turns a
+  `ModelSpec` plus provider config plus a secrets provider into a
+  configured `crewai.LLM`. Called by the engine's pre-flight per
+  exchange.
+- [`ProviderConnector`][llm.protocol.ProviderConnector] and
+  [`MetadataSourceConnector`][llm.protocol.MetadataSourceConnector] —
+  the Protocols every provider implements.
+- The supporting dataclasses
+  ([`AuthPromptSpec`][llm.protocol.AuthPromptSpec],
+  [`PromptField`][llm.protocol.PromptField],
+  [`Credentials`][llm.protocol.Credentials],
+  [`ValidationResult`][llm.protocol.ValidationResult],
+  [`ModelEntry`][llm.protocol.ModelEntry],
+  [`ModelMetadata`][llm.protocol.ModelMetadata],
+  [`ModelPricing`][llm.protocol.ModelPricing],
+  [`ProviderConfig`][llm.protocol.ProviderConfig]).
+- `llm.registry` — explicit registration and lookup. Providers
+  register themselves in `llm.providers` at import time.
 
-- :func:`build_llm` — async helper that turns a ``ModelSpec`` +
-  provider config + Secrets provider into a configured
-  ``crewai.LLM``. Engine pre-flight step 6 calls this per exchange.
-- :class:`ProviderConnector` / :class:`MetadataSourceConnector` — the
-  Protocols every provider implements.
-- The supporting dataclasses (:class:`AuthPromptSpec`,
-  :class:`PromptField`, :class:`Credentials`,
-  :class:`ValidationResult`, :class:`ModelEntry`,
-  :class:`ModelMetadata`, :class:`ModelPricing`,
-  :class:`ProviderConfig`).
-- :mod:`llm.registry` — explicit registration + lookup. Connectors
-  register themselves in :mod:`llm.providers` at import time.
+For the full subsystem contract, see the
+[LLM providers explanation](../../docs/explanation/llm-providers.md).
 """
 
 from llm.build_llm import build_llm
