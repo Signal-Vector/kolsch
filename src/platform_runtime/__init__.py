@@ -1,19 +1,13 @@
-"""Platform runtime — the shared composition root for the CLI + API.
+"""Platform runtime — the shared composition root for the CLI and API.
 
-Per the v1-scope §2.4 entry surfaces: both ``kolsch`` (CLI) and
-the FastAPI server need the same subsystem wiring. Centralising it
-here means there is one place that knows how to stand up the v1
-default tier (SQLite + in-process bus + dotenv secrets + native
-sandbox + FakeFramework + EchoLLM) with zero external services.
+The CLI (`kolsch`) and the FastAPI server both need the same subsystem
+wiring. Centralising it here means there is one place that knows how
+to stand up the v1 default tier (SQLite entity backend + in-process
+event bus + dotenv secrets + native sandbox + FakeFramework +
+EchoLLMDriver) with zero external services required.
 
-Public surface:
-
-- :class:`PlatformRuntime` — holds the wired subsystems + engine.
-- :func:`bootstrap_runtime` — async factory that builds a
-  :class:`PlatformRuntime` from a platform root.
-- :func:`resolve_workspace`, :func:`workspace_is_initialized` —
-  Phase 1.2 (UX-R7) workspace-resolution helpers. The single point
-  of truth for "where does this `kolsch` invocation operate?".
+See the [v1 scope](../../docs/explanation/v1-scope.md) for the
+default-tier contract this module implements.
 """
 
 from platform_runtime.runtime import PlatformRuntime, bootstrap_runtime

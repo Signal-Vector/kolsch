@@ -1,15 +1,19 @@
-"""PlatformRuntime — the shared composition root.
+"""The shared composition root — `PlatformRuntime` and `bootstrap_runtime`.
 
-One place that knows how to instantiate every Phase 1 subsystem +
-wire them into an :class:`engine.AgentEngine`. The CLI and the API
-each construct one of these at startup and route their commands
-through it.
+One place that knows how to instantiate every subsystem and wire them
+into an [`AgentEngine`][engine.AgentEngine]. The CLI and the API each
+construct one of these at startup and route their commands through it.
 
-Default tier (v1-scope §2.4): SQLite entity backend + in-process
-event bus + dotenv secrets + native sandbox + rule-based authz +
-recent-buffer memory + FakeFramework + EchoLLM. **Zero external
-services required.** Real production frameworks (CrewAIFramework)
-and providers (real LLMs, Postgres, Redis) are opt-in upgrades.
+The default tier — SQLite entity backend, in-process event bus,
+dotenv secrets, native sandbox, rule-based authz, recent-buffer memory,
+`FakeFramework`, and `EchoLLMDriver` — runs end-to-end with zero
+external services. Production frameworks (`CrewAIFramework`) and
+real-LLM providers are opt-in upgrades injected at bootstrap.
+
+See the [v1 scope](../../docs/explanation/v1-scope.md) for the
+default-tier contract and the
+[agent engine contract](../../docs/explanation/agent-engine-contract.md)
+for the engine-side wiring.
 """
 
 from __future__ import annotations
@@ -55,18 +59,18 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class PlatformRuntime:
-    """The bundle of wired subsystems + engine the CLI + API consume.
+    """The bundle of wired subsystems and engine the CLI and API consume.
 
-    Frozen because once built, the composition shouldn't shift under
-    a running process. Construct via :func:`bootstrap_runtime`.
+    Frozen because once built, the composition shouldn't shift under a
+    running process. Construct via
+    [`bootstrap_runtime`][platform_runtime.runtime.bootstrap_runtime].
 
-    ``subsystem_validators`` is the Layer 3 dispatch dict per the
-    Kernel contract (§4.1) — keyed by subsystem name, then variant
-    name. Both CLI and API MUST pass this through
-    :meth:`build_resolved_config` so wildcard write_tags, unknown
-    variants, etc. fail at config-resolution time (Steps 8/10/11
-    landed the validators specifically to surface these errors here,
-    not at runtime).
+    `subsystem_validators` is the Layer 3 validator dispatch dict —
+    keyed by subsystem name, then variant name — defined by the
+    [kernel resolver contract](../../docs/explanation/kernel-resolver-contract.md).
+    Both CLI and API route config builds through `build_resolved_config`
+    so wildcard write_tags, unknown variants, and missing skill refs
+    fail at config-resolution time rather than mid-exchange.
     """
 
     root: Path
@@ -90,16 +94,24 @@ class PlatformRuntime:
         agent_ref: str,
         call_overrides: dict[str, Any] | None = None,
     ) -> ResolvedAgentConfig:
-        """Wrap :meth:`AssetManagement.build_resolved_config` with the
-        runtime's Layer 3 validators pre-wired.
+        """Resolve an agent's config with the runtime's validators wired.
 
-        Centralising the validator dispatch here closes the Step 13
-        review #1 gap — CLI and API were calling
-        ``asset_management.build_resolved_config`` directly without
-        validators, so memory's wildcard-write_tag (MEM I5), tools'
-        unknown-builtin checks, and skills' ref-existence checks were
-        all silently skipped on the production paths. Routing every
-        config build through this method makes that impossible.
+        Wraps
+        [`AssetManagement.build_resolved_config`][assets.AssetManagement.build_resolved_config]
+        and pins `subsystem_validators` so wildcard write_tags,
+        unknown builtin tools, and missing skill refs surface at
+        config-resolution time. CLI and API callers MUST route through
+        this method rather than the bare asset-management call so the
+        Layer 3 validators always fire.
+
+        Args:
+            agent_ref: The catalog ref of the agent to resolve.
+            call_overrides: Per-call overrides merged on top of the
+                resolved config — `None` for no overrides.
+
+        Returns:
+            The resolved agent config, ready to hand to
+            [`AgentEngine.execute`][engine.AgentEngine.execute].
         """
         return await self.asset_management.build_resolved_config(
             agent_ref,
@@ -114,12 +126,29 @@ async def bootstrap_runtime(
     framework: Framework | None = None,
     llm: Callable[[LLMRequest], Awaitable[LLMResponse]] | None = None,
 ) -> PlatformRuntime:
-    """Stand up the v1 default tier rooted at ``root``.
+    """Stand up the default-tier `PlatformRuntime` rooted at `root`.
 
-    ``framework`` and ``llm`` default to :class:`FakeFramework` +
-    :class:`EchoLLMDriver` so a fresh install runs end-to-end without
-    any LLM keys. Production callers (Step 13+ deployments) inject
-    :class:`CrewAIFramework` and a real-LLM callable here.
+    `framework` and `llm` default to
+    [`FakeFramework`][engine.FakeFramework] and
+    [`EchoLLMDriver`][engine.dev_llm.EchoLLMDriver] so a fresh install
+    runs end-to-end without any LLM credentials. Production callers
+    inject `CrewAIFramework` and a real-LLM callable.
+
+    Args:
+        root: The workspace root — every subsystem's on-disk state
+            (entities DB, JSONL store, dotenv secrets) sits beneath
+            this path.
+        framework: Optional framework override. Defaults to
+            `FakeFramework` so tests and the no-credentials tutorial
+            path don't require CrewAI.
+        llm: Optional explicit LLM callable. When set, takes priority
+            over the per-model factory wired from `llm_providers`
+            config — test paths that pin a single callable continue
+            to work unchanged.
+
+    Returns:
+        A fully wired `PlatformRuntime` ready to serve CLI or API
+        callers.
     """
     am = AssetManagement(root=root)
     await am.initialize()
@@ -131,9 +160,8 @@ async def bootstrap_runtime(
 
     secrets = DotenvSecretsProvider(root=root, config=secrets_cfg.get("config", {}))
     sandbox = NativeSandboxProvider(config=sandbox_cfg.get("config", {}))
-    # qol-permission-system-human-readable.md Step 2 — pass the
-    # catalog so the provider can validate qualified tool refs in
-    # rule `what:` fields AND build the action→tool_ref map so
+    # Pass the catalog so the provider can validate qualified tool refs
+    # in rule `what:` fields AND build the action→tool_ref map so
     # `what: kolsch/bash` matches the `tool.bash` action namespace.
     authz = RuleBasedAuthorizationProvider(
         config=authz_cfg.get("config", {}),
@@ -162,14 +190,13 @@ async def bootstrap_runtime(
 
     chosen_framework = framework or FakeFramework()
 
-    # Phase 1.1 — load the `llm_providers` section (if present) into
-    # the engine so pre-flight step 5.5 can dispatch to build_llm
-    # when an exchange needs a fresh client. Importing
-    # :mod:`llm.providers` here also triggers connector registration
-    # for the two reference providers (OpenCode, OpenRouter).
-    # NOTE: cannot bind `import llm.providers` to a name that shadows
-    # this function's `llm` parameter; the import-by-name form is
-    # enough — the side-effect is what we want.
+    # Load the `llm_providers` section (if present) into the engine so
+    # pre-flight can dispatch to build_llm when an exchange needs a
+    # fresh client. Importing `llm.providers` here also triggers
+    # connector registration for the reference providers (OpenCode,
+    # OpenRouter). The import-by-name form avoids binding `llm` as a
+    # local name that would shadow this function's `llm` parameter —
+    # the side-effect is what we want.
     importlib.import_module("llm.providers")
     from llm import ProviderConfig  # noqa: PLC0415
 
@@ -202,23 +229,20 @@ async def bootstrap_runtime(
             models=list(raw.get("models") or []),
         )
 
-    # Phase 1.1 deferred work (bug-echo-on-real-provider, hypotheses
-    # H1+H3) — wire build_llm via `llm_for_model=` so an agent whose
-    # ModelSpec points at a real provider actually reaches the real
-    # provider. Decision tree:
+    # Wire build_llm via `llm_for_model=` so an agent whose ModelSpec
+    # points at a real provider actually reaches that provider.
+    # Decision tree:
     #
-    # - Caller passed `llm=` explicitly (test path) → honour it,
-    #   skip the factory. Pre-existing tests that pin a single
-    #   callable continue to work unchanged.
+    # - Caller passed `llm=` explicitly (test path) → honour it, skip
+    #   the factory. Pre-existing tests that pin a single callable
+    #   continue to work unchanged.
     # - Otherwise and `llm_providers_config` is populated → wire
     #   `llm_for_model=` to the per-spec factory (`provider == "fake"`
     #   still gets EchoLLMDriver from inside the factory, preserving
-    #   the no-creds tutorial behaviour the bug ticket's AC #3
-    #   requires).
-    # - Otherwise (no providers AND no explicit llm=) → fall back to
-    #   EchoLLMDriver across the board, matching the original
-    #   v1-default-tier "fresh install runs end-to-end without
-    #   credentials" guarantee.
+    #   the no-credentials tutorial behaviour).
+    # - Otherwise (no providers AND no explicit `llm=`) → fall back to
+    #   EchoLLMDriver across the board, matching the default-tier
+    #   "fresh install runs end-to-end without credentials" guarantee.
     chosen_llm: Callable[[LLMRequest], Awaitable[LLMResponse]] | None = llm
     chosen_llm_for_model: (
         Callable[[ModelSpec], Awaitable[Callable[[LLMRequest], Awaitable[LLMResponse]]]]
@@ -250,10 +274,10 @@ async def bootstrap_runtime(
         llm_providers_config=llm_providers_config,
     )
 
-    # Per-subsystem Layer 3 validators (kernel §4.1 dispatch shape:
-    # subsystem name → variant name → validator). Adding a new
-    # subsystem variant here is the one-line lever to make its
-    # validator fire on every build_resolved_config call.
+    # Per-subsystem Layer 3 validators — dispatch shape: subsystem
+    # name → variant name → validator. Adding a new subsystem variant
+    # here is the one-line lever to make its validator fire on every
+    # `build_resolved_config` call.
     subsystem_validators: dict[str, dict[str, ConfigValidator]] = {
         "memory": {"recent_buffer": validate_recent_buffer_config},
         "tools": {"standard": validate_standard_config},
