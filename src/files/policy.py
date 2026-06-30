@@ -1,26 +1,25 @@
-"""Path-access policy — spec docs/explanation/file-handling.md Part 4.
+"""Path-access policy plus `file_ref` shape validation.
 
-The path policy gates which filesystem paths the platform's
-file-touching code may reach. It is consulted by the builtin tools
-(``read``, ``write``, ``edit``) at invocation time and by the engine's
-``execute`` boundary when validating ``file_ref`` inputs (Fh-I8).
+Implements the policy half of the file-access subsystem per
+[file handling](../../docs/explanation/file-handling.md). The policy
+gates which filesystem paths the platform's file-touching code may
+reach: consulted by the builtin tools (`read`, `write`, `edit`) at
+invocation time and by the engine's `execute` boundary when
+validating `file_ref` inputs.
 
-Two lists per spec §4.1:
-- ``allowed_paths`` — prefixes the platform may touch.
-- ``denied_paths`` — prefixes the platform MUST NOT touch.
+Two lists drive the decision — `allowed_paths` (prefixes the platform
+may touch) and `denied_paths` (prefixes the platform MUST NOT touch).
+Evaluation order is denies-then-allows-then-default-deny; paths are
+normalised via `Path.resolve` before policy evaluation so symlink
+escape is prevented.
 
-Evaluation order is denies-then-allows-then-default-deny (Fh-I3).
-Paths are normalised via :meth:`pathlib.Path.resolve` BEFORE policy
-evaluation (Fh-I4) so symlink-based escape is prevented.
-
-Two write-side concerns sit alongside the read-path policy:
-
-- :func:`assert_writable_destination` — refuses any write target
-  under ``content/`` regardless of policy (Fh-I5 / Fh-I9 — only the
-  engine writes there).
-- :func:`validate_file_ref` — sanity-checks the ``file_ref`` string
-  per spec §1 (non-empty, no null bytes) before any path policy
-  evaluation runs.
+Two write-side guards sit alongside the read-path policy:
+[`assert_writable_destination`][files.policy.assert_writable_destination]
+refuses any write target under `content/` regardless of policy (the
+content sidecar is engine-owned), and
+[`validate_file_ref`][files.policy.validate_file_ref] sanity-checks
+the `file_ref` string (non-empty, no null bytes) before any path
+policy evaluation runs.
 """
 
 from __future__ import annotations
@@ -44,10 +43,11 @@ _FILE_ACCESS_SECTION = "file_access"
 
 
 class PathPolicy(BaseModel):
-    """The parsed ``file_access`` section of ``platform.yaml``.
+    """The parsed `file_access` section of `platform.yaml`.
 
     Both lists hold path prefixes — relative to the platform root or
-    absolute. Empty lists are valid (everything default-denied).
+    absolute. Empty lists are valid; with neither list populated, every
+    path falls through to default-deny.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -57,11 +57,23 @@ class PathPolicy(BaseModel):
 
 
 def load_policy(config_section: dict[str, Any]) -> PathPolicy:
-    """Build a :class:`PathPolicy` from the ``file_access`` config dict.
+    """Parse the `file_access` config dict into a `PathPolicy`.
 
-    Malformed shapes (wrong types, unknown fields) raise
-    :class:`FileAccessPolicyLoadFailed` (Fatal — the platform refuses
-    to start with a broken file-access policy).
+    The platform bootstrap calls this once at startup; downstream
+    consumers receive the frozen `PathPolicy` and never re-parse.
+
+    Args:
+        config_section: The `file_access` section of `platform.yaml`,
+            already YAML-decoded into a dict.
+
+    Returns:
+        The validated `PathPolicy`.
+
+    Raises:
+        FileAccessPolicyLoadFailed: The dict failed Pydantic
+            validation (wrong types, unknown fields). Fatal — the
+            platform refuses to start with a broken file-access
+            policy.
     """
     try:
         return PathPolicy.model_validate(config_section)
@@ -78,12 +90,11 @@ def load_policy(config_section: dict[str, Any]) -> PathPolicy:
 
 
 def _resolve_against_root(path: str | Path, root: Path) -> Path:
-    """Make the path absolute (relative to ``root`` if needed) and
-    normalise symlinks + ``..`` segments per spec §4.2 step 1.
+    """Make the path absolute and normalise symlinks plus `..` segments.
 
-    Uses ``Path.resolve(strict=False)`` so non-existent paths are
-    still normalisable — important for checking *write* targets that
-    don't exist yet.
+    Uses `Path.resolve(strict=False)` so non-existent paths are still
+    normalisable — important for checking *write* targets that don't
+    exist yet.
     """
     candidate = Path(path)
     if not candidate.is_absolute():
@@ -92,7 +103,7 @@ def _resolve_against_root(path: str | Path, root: Path) -> Path:
 
 
 def _is_under(child: Path, parent: Path) -> bool:
-    """Return True when ``child`` equals ``parent`` or sits under it."""
+    """Return `True` when `child` equals `parent` or sits under it."""
     try:
         child.relative_to(parent)
     except ValueError:
@@ -106,16 +117,25 @@ def is_path_allowed(
     policy: PathPolicy,
     root: Path,
 ) -> tuple[bool, str | None]:
-    """Spec §4.2 / Module API Reference signature.
+    """Evaluate the policy and return a `(allowed, reason)` pair.
 
-    Returns ``(True, None)`` when the path is permitted, or
-    ``(False, reason)`` otherwise. The ``reason`` string is a short
-    human-readable summary suitable for diagnostics; consumers that
-    need the structured rule + resolved path call
-    :func:`check_path_allowed` (or :func:`evaluate_path`) instead.
+    The boolean form for callers that want to branch on the outcome
+    without catching an exception. Use
+    [`check_path_allowed`][files.policy.check_path_allowed] when a
+    typed `FileAccessDenied` raise is the right shape.
 
     Pure: no side effects beyond the symlink resolution implicit in
-    :meth:`pathlib.Path.resolve`.
+    `Path.resolve`.
+
+    Args:
+        path: The candidate path. Absolute or relative to `root`.
+        policy: The loaded `PathPolicy`.
+        root: The platform root, used to resolve relative paths.
+
+    Returns:
+        `(True, None)` when permitted; `(False, reason)` otherwise.
+        The reason is a short human-readable summary suitable for
+        diagnostics.
     """
     decision = evaluate_path(path, policy=policy, root=root)
     if decision.allowed:
@@ -129,14 +149,24 @@ def check_path_allowed(
     policy: PathPolicy,
     root: Path,
 ) -> None:
-    """Raise :class:`FileAccessDenied` if the path is not allowed.
+    """Evaluate the policy and raise on denial.
 
-    Convenience for callers (the builtin tools, the engine input
-    validator) that want the typed-PlatformError raise rather than
-    the ``(bool, reason)`` tuple. The raised error carries
-    ``matched_rule`` (the structured deny/allow rule that fired, or
-    ``None`` for default-deny) per spec §4.11 + Error-Model A-I5
-    explainability.
+    The raise-form companion to
+    [`is_path_allowed`][files.policy.is_path_allowed]. Used by the
+    builtin tools and by the engine's input validator — both want a
+    typed `PlatformError` flowing through rather than a `(bool,
+    reason)` tuple they have to unpack.
+
+    Args:
+        path: The candidate path. Absolute or relative to `root`.
+        policy: The loaded `PathPolicy`.
+        root: The platform root, used to resolve relative paths.
+
+    Raises:
+        FileAccessDenied: The path is not permitted. The error
+            carries `matched_rule` (the structured deny/allow rule
+            that fired, or `None` for default-deny) so explainability
+            consumers can attribute the denial.
     """
     decision = evaluate_path(path, policy=policy, root=root)
     if decision.allowed:
@@ -156,10 +186,10 @@ def check_path_allowed(
 class _PathDecision(BaseModel):
     """The structured outcome of one policy evaluation.
 
-    Internal — exposed via the tuple-returning :func:`is_path_allowed`
-    and the raising :func:`check_path_allowed`. Carries the structured
-    rule that fired (or ``None`` for default-deny) and the resolved
-    absolute path so callers' error messages can be precise.
+    Internal — exposed via the tuple-returning `is_path_allowed` and
+    the raising `check_path_allowed`. Carries the rule that fired
+    (`None` for default-deny) so callers' error messages can attribute
+    the decision.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -175,10 +205,29 @@ def evaluate_path(
     policy: PathPolicy,
     root: Path,
 ) -> _PathDecision:
+    """Resolve `path` against `root` and apply the policy.
+
+    The structured-decision primitive both
+    [`is_path_allowed`][files.policy.is_path_allowed] and
+    [`check_path_allowed`][files.policy.check_path_allowed] are built
+    on. Denies are evaluated first; a path that matches both a deny
+    and an allow rule is denied. Anything that matches neither falls
+    through to default-deny.
+
+    Args:
+        path: The candidate path. Absolute or relative to `root`.
+        policy: The loaded `PathPolicy`.
+        root: The platform root, used to resolve relative paths.
+
+    Returns:
+        The `_PathDecision` carrying the boolean outcome, a
+        diagnostic reason, and the matched rule (or `None` for
+        default-deny).
+    """
     resolved = _resolve_against_root(path, root)
 
-    # Fh-I3 — denies are evaluated FIRST. A path that matches both a
-    # deny and an allow rule is denied; the deny pattern fires.
+    # Denies are evaluated FIRST. A path that matches both a deny and
+    # an allow rule is denied; the deny pattern fires.
     for denied in policy.denied_paths:
         denied_abs = _resolve_against_root(denied, root)
         if _is_under(resolved, denied_abs):
@@ -205,54 +254,59 @@ def evaluate_path(
 
 
 # ---------------------------------------------------------------------------
-# Write-side guard — Fh-I5: tools never write to content/
+# Write-side guard — tools never write to content/
 # ---------------------------------------------------------------------------
 
 
 def assert_writable_destination(path: str, *, root: Path) -> None:
-    """Refuse a write target that resolves under ``<root>/content/``.
+    """Refuse a write target that resolves under `<root>/content/`.
 
-    Spec Fh-I5 + Fh-I9 — the content/ sidecar store is engine-owned.
-    Tools that write persistent outputs land in ``data/``; tools that
-    target the content store would invariably violate the engine's
-    sole-writer invariant and the hash-naming convention. This guard
-    refuses regardless of the path policy (the default policy
-    actually *allows* reads under ``content/``).
+    The `content/` sidecar store is engine-owned: tools writing there
+    would violate the engine's sole-writer invariant and the
+    hash-naming convention. Tools that need to persist outputs land
+    in `data/` instead. This guard runs in addition to the path
+    policy — read access to `content/` is still gated by the regular
+    policy, only writes are refused here.
 
-    Note: read access to ``content/`` is still gated by the regular
-    path policy — only writes are guarded here.
+    Args:
+        path: The candidate write target. Absolute or relative to
+            `root`.
+        root: The platform root, used to resolve relative paths.
+
+    Raises:
+        FileAccessDenied: The path resolves under `<root>/content/`.
     """
     resolved = _resolve_against_root(path, root)
     content_dir = (root / "content").resolve(strict=False)
     if _is_under(resolved, content_dir):
         raise FileAccessDenied(
             path=path,
-            reason=(
-                "tools may not write to content/ (Fh-I5); only the engine writes there"
-            ),
+            reason=("tools may not write to content/; only the engine writes there"),
         )
 
 
 # ---------------------------------------------------------------------------
-# file_ref validation — spec §1
+# file_ref shape validation
 # ---------------------------------------------------------------------------
 
 
 def validate_file_ref(value: str) -> None:
-    """Sanity-check a ``file_ref`` string per spec §1.
+    """Sanity-check a `file_ref` string before policy evaluation.
 
-    The TypeSpec value ``file_ref`` is a plain str at runtime
-    (Fh-I1). This helper enforces the minimal invariants that path
-    policy can't catch alone:
+    The TypeSpec `file_ref` is a plain `str` at runtime. This helper
+    enforces the minimal invariants the path policy can't catch on
+    its own: the value must be non-empty and free of embedded null
+    bytes (the kernel's path-handling code may otherwise pass them
+    through quietly). The policy check via
+    [`check_path_allowed`][files.policy.check_path_allowed] is a
+    separate, later step.
 
-    - non-empty
-    - no embedded null bytes (the kernel's path-handling code may
-      pass them through quietly otherwise)
+    Args:
+        value: The `file_ref` string to validate.
 
-    Raises :class:`errors.FileAccessInvalidFileRef` — a typed
-    PlatformError per the handbook hard rule "no non-PlatformError
-    escapes a public method." The policy check
-    (``check_path_allowed``) is a separate, later step.
+    Raises:
+        FileAccessInvalidFileRef: `value` is empty or contains a
+            null byte.
     """
     if not value:
         raise FileAccessInvalidFileRef(value=value, reason="empty file_ref")
