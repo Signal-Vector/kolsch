@@ -17,6 +17,21 @@ repos:
         args: ["--fix"]
       - id: ruff-format
 
+  - repo: local
+    hooks:
+      - id: no-spec-citations
+        name: No spec citations in src/
+        entry: bash -c '! grep -rn --include="*.py" "§" src/'
+        language: system
+        pass_filenames: false
+        description: |
+          The § character is reserved for spec citations, which are
+          banned in src/ .py files by
+          docs/process/documentation-conventions.md. Link to
+          docs/explanation/*.md or docs/reference/*.md by markdown path
+          instead — those survive renumbering. Restricted to .py files
+          so stale __pycache__/*.pyc bytecode doesn't trip the hook.
+
   - repo: https://github.com/pre-commit/mirrors-mypy
     rev: v1.11.2
     hooks:
