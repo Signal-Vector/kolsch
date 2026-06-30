@@ -1,24 +1,21 @@
-"""Authorization provider errors — spec §4.9 + §4.16 (Phase 2.0).
+"""Authorization provider errors.
 
-Phase 1 surface (§4.9): authorization *denial* is NOT an error (it
-is a structured ``AuthorizationResult``); only configuration problems
-produce errors. Both Phase 1 codes are Fatal, raised at init.
+A run-time authorization denial is not itself an error — it's a
+structured `AuthorizationResult`. Only configuration problems and
+prompt-effect collapse produce typed errors. See the
+[error model](../../docs/explanation/error-model.md) for the
+classification contract.
 
-Phase 2.0 surface (§4.16, TOOL-R5): the ``prompt`` effect and the
-live-edit CLI introduce six new codes:
-
-- ``authz.denied`` (Recoverable) — the tools dispatcher's surface
-  for a rule-based denial. The model sees this in its tool-result
+- `AuthzDenied` (Recoverable) — the tools dispatcher's surface for
+  a rule-based denial. The model sees this in its tool-result
   payload.
-- ``authz.prompt_unattended`` (Recoverable) — non-chat callers
-  collapse ``prompt`` to deny and emit this so replay shows the
-  question that would have been asked.
-- ``authz.rule_invalid`` (Fatal) — CLI ``permissions add``
-  validation failure.
-- ``authz.rule_not_found`` (Fatal) — CLI ``permissions remove`` /
-  ``show`` for an unknown id.
-- ``authz.protected_rule`` (Fatal) — ``permissions remove
-  rl_default_deny`` (the tail is removal-protected).
+- `AuthzPromptUnattended` (Recoverable) — a non-chat caller
+  collapsed a `prompt` rule to deny; the envelope records the
+  caller so replay can show the question that would have been
+  asked.
+- `AuthzMalformedRule` / `AuthzRegexInvalid` / `AuthzRuleInvalid` /
+  `AuthzRuleNotFound` / `AuthzProtectedRule` (Fatal) — config-time
+  surfaces from rule load and the live-edit CLI.
 """
 
 from errors.base import PlatformError
@@ -26,7 +23,7 @@ from errors.level import Level
 
 
 class AuthzMalformedRule(PlatformError):
-    """A rule entry is malformed (missing fields, wrong shape)."""
+    """Raised when a rule entry is malformed (missing fields or wrong shape)."""
 
     code = "authz.malformed_rule"
     level = Level.FATAL
@@ -46,7 +43,7 @@ class AuthzMalformedRule(PlatformError):
 
 
 class AuthzRegexInvalid(PlatformError):
-    """A regex in `who` or `what` failed to compile (TC-AUZ-05)."""
+    """Raised when a regex in `who` or `what` failed to compile."""
 
     code = "authz.regex_invalid"
     level = Level.FATAL
@@ -76,12 +73,12 @@ class AuthzRegexInvalid(PlatformError):
 
 
 # ---------------------------------------------------------------------------
-# Phase 2.0 (TOOL-R5) — error-model §4.16
+# Dispatcher and live-edit CLI surfaces
 # ---------------------------------------------------------------------------
 
 
 class AuthzDenied(PlatformError):
-    """Tools dispatcher denied a call per a rule's ``deny`` effect."""
+    """Raised when the tools dispatcher denied a call per a rule's `deny` effect."""
 
     code = "authz.denied"
     level = Level.RECOVERABLE
@@ -106,10 +103,11 @@ class AuthzDenied(PlatformError):
 
 
 class AuthzPromptUnattended(PlatformError):
-    """Non-chat caller collapsed a ``prompt`` rule to deny.
+    """Raised when a non-chat caller collapsed a `prompt` rule to deny.
 
     Recoverable — the model sees the deny in its tool-result payload
-    and reacts. The detail records the caller for replay analysis.
+    and reacts. The envelope's `detail.caller` records the
+    originating caller for replay analysis.
     """
 
     code = "authz.prompt_unattended"
@@ -141,7 +139,7 @@ class AuthzPromptUnattended(PlatformError):
 
 
 class AuthzRuleInvalid(PlatformError):
-    """``kolsch permissions add`` rejected the user-supplied rule."""
+    """Raised when `kolsch permissions add` rejected the user-supplied rule."""
 
     code = "authz.rule_invalid"
     level = Level.FATAL
@@ -161,7 +159,7 @@ class AuthzRuleInvalid(PlatformError):
 
 
 class AuthzRuleNotFound(PlatformError):
-    """``kolsch permissions {remove, show}`` for an unknown rule id."""
+    """Raised when `kolsch permissions {remove,show}` names an unknown rule id."""
 
     code = "authz.rule_not_found"
     level = Level.FATAL
@@ -184,7 +182,11 @@ class AuthzRuleNotFound(PlatformError):
 
 
 class AuthzProtectedRule(PlatformError):
-    """``kolsch permissions remove rl_default_deny`` — TOOL-R10."""
+    """Raised when the user tries to remove a removal-protected rule.
+
+    The default-deny tail rule is intentionally protected so a typo
+    can't accidentally disable the safety net.
+    """
 
     code = "authz.protected_rule"
     level = Level.FATAL
@@ -204,18 +206,17 @@ class AuthzProtectedRule(PlatformError):
 
 
 # ---------------------------------------------------------------------------
-# qol-permission-system-human-readable.md Step 2 — schema migration
+# Permission-system schema migration — qualified-ref enforcement
 # ---------------------------------------------------------------------------
 
 
 class AuthzBareToolRef(PlatformError):
-    """Rule's ``what`` is a bare tool name, not the qualified form.
+    """Raised when a rule's `what` is a bare tool name rather than the qualified form.
 
-    QoL — human-readable permission system, decision 6: ``what`` must
-    name the tool by its fully-qualified ref (``<bundle>/<name>``)
-    even when no ambiguity exists. ``what: bash`` is rejected at
-    load with a clear error pointing the user at the qualified form
-    they should use.
+    Rules must name the tool by its fully-qualified ref
+    (`<bundle>/<name>`) even when no ambiguity exists.
+    `what: bash` is rejected at load with a clear error pointing the
+    user at the qualified form they should use.
     """
 
     code = "authz.bare_tool_ref"
@@ -245,13 +246,12 @@ class AuthzBareToolRef(PlatformError):
 
 
 class AuthzPatternInvalid(PlatformError):
-    """Rule's ``pattern`` contains characters reserved for regex.
+    """Raised when a rule's `pattern` contains characters reserved for regex.
 
-    QoL — human-readable permission system, decision 3: ``pattern``
-    is a glob, not a regex. Characters that introduce regex semantics
-    (``[``, ``]``, ``^``, ``$``, ``\\``, ``(``, ``)``, ``+``, ``|``,
-    ``{``, ``}``) are rejected at config load so a legacy regex
-    pattern can't be silently miscompiled as a glob.
+    `pattern` is a glob, not a regex. Characters that introduce
+    regex semantics (`[`, `]`, `^`, `$`, `\\`, `(`, `)`, `+`, `|`,
+    `{`, `}`) are rejected at config load so a legacy regex pattern
+    can't be silently miscompiled as a glob.
     """
 
     code = "authz.pattern_invalid"
@@ -281,11 +281,11 @@ class AuthzPatternInvalid(PlatformError):
 
 
 class AuthzToolRefUnknown(PlatformError):
-    """Rule's ``what`` is a qualified tool ref but no such tool exists.
+    """Raised when a rule's `what` is a qualified tool ref but no such tool exists.
 
-    QoL — human-readable permission system, decision 6: a slash-form
-    ``what`` (``kolsch/bash``) must resolve to a real tool in the
-    catalog. Missing tool → load failure with a clear name.
+    A slash-form `what` (`kolsch/bash`) must resolve to a real tool
+    in the catalog; a missing tool fails the load with a clear name
+    rather than silently never matching.
     """
 
     code = "authz.tool_ref_unknown"
@@ -309,14 +309,13 @@ class AuthzToolRefUnknown(PlatformError):
 
 
 class ConfigDeprecatedRegexRule(PlatformError):
-    """A platform.yaml rule still uses the legacy regex shape.
+    """Raised when a platform.yaml rule still uses the legacy regex shape.
 
-    QoL — human-readable permission system, decision 11: rules that
-    don't fit the migration heuristic (custom user regex with
-    character classes, lookahead, etc.) stay in legacy form during
-    the migration window. The platform loads them but emits this
-    Recoverable warning at workspace load so the user knows to
-    convert them.
+    Recoverable — rules that don't fit the migration heuristic
+    (custom user regex with character classes, lookahead, etc.) stay
+    in legacy form during the migration window. The platform loads
+    them but emits this warning at workspace load so the user knows
+    to convert them.
     """
 
     code = "config.deprecated_regex_rule"
@@ -346,18 +345,16 @@ class ConfigDeprecatedRegexRule(PlatformError):
 
 
 class ConfigDeprecatedRuleForm(PlatformError):
-    """A platform.yaml rule uses the deprecated 2-seg ``<bundle>/<name>`` form.
+    """Raised when a platform.yaml rule uses the deprecated 2-seg form.
 
-    qol-action-namespace-bundle-scoped.md Step 2 — the 2-seg shape
-    shipped by the human-readable QoL is superseded by the 3-seg
-    catalog ref ``<bundle>/tools/<name>``. The startup migration
-    shim auto-rewrites these where the bundle owns a catalogued
-    tool of that name; entries that can't be auto-rewritten (no
-    catalog, ambiguous bundle, ref points at a non-tool asset)
-    survive in 2-seg form and emit this Recoverable warning so
-    the user knows to convert them. The platform still loads the
-    2-seg form during the migration window — warning-only for at
-    least one minor version.
+    Recoverable — the 2-seg shape is superseded by the 3-seg catalog
+    ref `<bundle>/tools/<name>`. The startup migration shim
+    auto-rewrites these where the bundle owns a catalogued tool of
+    that name; entries that can't be auto-rewritten (no catalog,
+    ambiguous bundle, ref points at a non-tool asset) survive in
+    2-seg form and emit this warning so the user knows to convert
+    them. The platform still loads the 2-seg form during the
+    migration window — warning-only for at least one minor version.
     """
 
     code = "config.deprecated_rule_form"

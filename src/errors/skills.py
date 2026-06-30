@@ -1,4 +1,10 @@
-"""Skills subsystem errors — spec §4.10."""
+"""Skills subsystem errors.
+
+All four classes are Fatal — a missing, malformed, or unauthorized
+skill prevents an exchange from running cleanly. See the
+[error model](../../docs/explanation/error-model.md) for the
+classification contract.
+"""
 
 from typing import Any
 
@@ -7,7 +13,7 @@ from errors.level import Level
 
 
 class SkillNotFound(PlatformError):
-    """A skill ref does not resolve to a catalogued asset."""
+    """Raised when a skill ref does not resolve to a catalogued asset."""
 
     code = "skill.not_found"
     level = Level.FATAL
@@ -26,7 +32,7 @@ class SkillNotFound(PlatformError):
 
 
 class SkillMalformed(PlatformError):
-    """A SKILL.md file could not be parsed."""
+    """Raised when a SKILL.md file could not be parsed."""
 
     code = "skill.malformed"
     level = Level.FATAL
@@ -46,7 +52,7 @@ class SkillMalformed(PlatformError):
 
 
 class SkillFrontmatterInvalid(PlatformError):
-    """A SKILL.md's frontmatter failed schema validation."""
+    """Raised when a SKILL.md's frontmatter failed schema validation."""
 
     code = "skill.frontmatter_invalid"
     level = Level.FATAL
@@ -72,7 +78,7 @@ class SkillFrontmatterInvalid(PlatformError):
 
 
 class SkillForcedNotEnabled(PlatformError):
-    """A force-invoke targeted a skill not in the agent's enabled list."""
+    """Raised when a force-invoke targeted a skill not in the agent's enabled list."""
 
     code = "skill.forced_not_enabled"
     level = Level.FATAL

@@ -1,4 +1,11 @@
-"""Tools subsystem errors — spec §4.5 (incl. MCP)."""
+"""Tools subsystem errors, including MCP-side surfaces.
+
+Tool execution and authorization failures live at Diagnostic so the
+model adapts and the exchange continues; setup-time and dispatcher
+binding failures are Fatal. See the
+[error model](../../docs/explanation/error-model.md) for the
+classification contract.
+"""
 
 from typing import Any
 
@@ -7,15 +14,13 @@ from errors.level import Level
 
 
 class ToolPermissionsNoContext(PlatformError):
-    """A tool called :func:`tools.permissions.check` /
-    :func:`tools.permissions.require` outside the engine's
-    dispatcher binding — Phase 2.2 error-model §4.18.
+    """Raised when a tool calls `tools.permissions` outside the dispatcher binding.
 
     Indicates a developer mistake — typically a unit test that
-    imported the tool function directly and exercised it
-    without going through the dispatcher. Fatal so the test
-    harness gets a clear pointer to set up an authz fixture
-    instead of silently treating every check as DENY.
+    imported the tool function directly and exercised it without
+    going through the dispatcher. Fatal so the test harness gets a
+    clear pointer to set up an authz fixture instead of silently
+    treating every check as deny.
     """
 
     code = "tool.permissions_no_context"
@@ -40,7 +45,11 @@ class ToolPermissionsNoContext(PlatformError):
 
 
 class ToolUnauthorized(PlatformError):
-    """Authorization denied a tool call (Diagnostic — exchange continues)."""
+    """Raised when authorization denied a tool call.
+
+    Diagnostic — the model sees the denial in its tool-result payload
+    and the exchange continues.
+    """
 
     code = "tool.unauthorized"
     level = Level.DIAGNOSTIC
@@ -67,7 +76,7 @@ class ToolUnauthorized(PlatformError):
 
 
 class ToolNotFound(PlatformError):
-    """A declared or referenced tool does not exist in the agent's catalog."""
+    """Raised when a declared or referenced tool isn't in the agent's catalog."""
 
     code = "tool.not_found"
     level = Level.FATAL
@@ -87,30 +96,17 @@ class ToolNotFound(PlatformError):
 
 
 class ConfigUnknownTool(PlatformError):
-    """An agent's ``subsystems.tools.config.declared`` lists a ref the
-    asset catalog doesn't resolve.
+    """Raised when an agent's declared tools list a ref the asset catalog can't resolve.
 
-    Raised at engine pre-flight by ``_register_tools_with_subsystem``
-    when the asset-management lookup for a declared ref returns
-    ``assets.not_found``. The chain is:
-
-    1. Agent config declares ``tools.config.declared: [{ref: "X/tools/Y"}]``.
-    2. Engine pre-flight resolves each ref via
-       ``AssetManagement.get_asset(ref)``.
-    3. ``AssetsNotFound`` is caught and re-raised as this typed
-       ``config.unknown_tool`` so the user sees a clear "agent config
-       names a tool you don't have" rather than the generic
-       "asset not found".
-
-    Lives in the tools error module rather than the kernel module
-    because it concerns the Tools subsystem's view of the catalog;
-    the kernel itself doesn't enumerate tools.
-
-    Per bug-engine-tools-wiring-gap.md acceptance criterion 4 — a
-    declared tool ref that doesn't resolve MUST fail loudly, not
-    silently at first use. Phase 2.x coordinator resolution: enforce
-    at engine pre-flight (option (b)); validator-side enforcement
-    (option (a) — agent-load-time) is tracked as FUL-1.
+    Surfaces at engine pre-flight when the asset-management lookup
+    for a declared ref returns
+    [`AssetsNotFound`][errors.assets.AssetsNotFound]; the engine
+    catches it and re-raises as `ConfigUnknownTool` so the user
+    sees a clear "agent config names a tool you don't have" rather
+    than a generic "asset not found". Lives in this module rather
+    than `errors.kernel` because the failure is the Tools
+    subsystem's view of the catalog; the kernel itself doesn't
+    enumerate tools.
     """
 
     code = "config.unknown_tool"
@@ -139,7 +135,12 @@ class ConfigUnknownTool(PlatformError):
 
 
 class ToolSetupFailed(PlatformError):
-    """A tool failed to register (e.g., decorator parse, missing secret)."""
+    """Raised when a tool failed to register.
+
+    Covers decorator parse failures, missing secrets the tool
+    declares, and any other condition that prevents the Tools
+    subsystem from registering the tool definition.
+    """
 
     code = "tool.setup_failed"
     level = Level.FATAL
@@ -159,7 +160,7 @@ class ToolSetupFailed(PlatformError):
 
 
 class ToolInvalidArguments(PlatformError):
-    """Arguments failed the tool's Pydantic args_schema (TC-TLS-02)."""
+    """Raised when arguments failed the tool's Pydantic `args_schema`."""
 
     code = "tool.invalid_arguments"
     level = Level.DIAGNOSTIC
@@ -185,7 +186,7 @@ class ToolInvalidArguments(PlatformError):
 
 
 class ToolExecutionFailed(PlatformError):
-    """The tool function raised during execution (TC-TLS-04)."""
+    """Raised when the tool function raised during execution."""
 
     code = "tool.execution_failed"
     level = Level.DIAGNOSTIC
@@ -205,7 +206,7 @@ class ToolExecutionFailed(PlatformError):
 
 
 class ToolTimeout(PlatformError):
-    """The tool exceeded its execution budget."""
+    """Raised when the tool exceeded its execution budget."""
 
     code = "tool.timeout"
     level = Level.DIAGNOSTIC
@@ -228,7 +229,12 @@ class ToolTimeout(PlatformError):
 
 
 class McpServerUnreachable(PlatformError):
-    """An MCP server could not be reached (spawn/connect failure)."""
+    """Raised when an MCP server could not be reached.
+
+    Covers both spawn failures (the server process didn't start) and
+    connect failures (the transport couldn't attach to a running
+    server).
+    """
 
     code = "mcp.server_unreachable"
     level = Level.DIAGNOSTIC
@@ -251,7 +257,7 @@ class McpServerUnreachable(PlatformError):
 
 
 class McpUpstreamError(PlatformError):
-    """An MCP server returned a tool-level failure."""
+    """Raised when an MCP server returned a tool-level failure."""
 
     code = "mcp.upstream_error"
     level = Level.DIAGNOSTIC
@@ -276,7 +282,7 @@ class McpUpstreamError(PlatformError):
 
 
 class McpProtocolError(PlatformError):
-    """An MCP server's response did not match the protocol."""
+    """Raised when an MCP server's response did not match the protocol."""
 
     code = "mcp.protocol_error"
     level = Level.DIAGNOSTIC

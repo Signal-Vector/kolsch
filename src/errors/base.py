@@ -1,17 +1,17 @@
-"""PlatformError base + WrappedError + iteration helpers — spec §3.1-3.4.
+"""PlatformError base class, WrappedError, and the subclass registry.
 
-Design notes:
+Implements the canonical error envelope and the class-time catalog
+guard every concrete subclass relies on. See the
+[error model](../../docs/explanation/error-model.md) for the contract.
 
-- Every concrete subclass declares ``code`` and ``level`` as class
-  attributes; the catalog (Part 4) is the registry. ``__init_subclass__``
-  validates at definition time that ``code`` is catalogued and that
-  ``level`` agrees with the catalog entry. Drift fails at import, not
-  at runtime (E-I2, E-I3).
-- ``to_dict`` walks ``__cause__`` recursively; a non-platform cause is
-  itself wrapped in a ``WrappedError`` envelope (E-I5).
-- Concrete subclasses register themselves in a module-level list so
-  test/inspection helpers can iterate without scanning ``__subclasses__``
-  (which is O(N) and order-undefined).
+`__init_subclass__` validates at class-definition time that the
+declared `code` is registered in `CATALOG` and that `level` agrees
+with the catalog entry; drift fails at import, not at runtime.
+`to_dict` walks `__cause__` recursively, wrapping any non-platform
+cause in a `WrappedError` envelope so serialized output stays
+canonical. Concrete subclasses self-register in a module-level list so
+test and inspection helpers can iterate without scanning
+`__subclasses__` (O(N), order-undefined).
 """
 
 from __future__ import annotations
@@ -34,25 +34,24 @@ _REGISTERED_SUBCLASSES: list[type[PlatformError]] = []
 class PlatformError(Exception):
     """Base class for every error raised across module boundaries.
 
-    Subclasses MUST set ``code`` (a catalogued string from §4) and
-    ``level`` (the catalogue's assigned :class:`Level`). The
-    ``__init_subclass__`` hook enforces both.
+    Subclasses set `code` (a catalogued string registered in
+    `CATALOG`) and `level` (the catalogue's assigned `Level`);
+    `__init_subclass__` enforces both at class-definition time.
 
-    The constructor signature is the canonical one used by the spec
-    example (§3.1):
+    The constructor signature is the canonical one:
 
-    .. code-block:: python
-
-        raise SecretNotFound(name="MY_KEY")
-        # internally:
-        super().__init__(
-            message="Secret 'MY_KEY' is not available",
-            where="secrets.dotenv.resolve",
-            detail={"name": "MY_KEY"},
-        )
+    ```python
+    raise SecretNotFound(name="MY_KEY")
+    # internally:
+    super().__init__(
+        message="Secret 'MY_KEY' is not available",
+        where="secrets.dotenv.resolve",
+        detail={"name": "MY_KEY"},
+    )
+    ```
 
     Subclasses typically expose a domain-shaped constructor and call
-    ``super().__init__`` with the canonical message + populated detail.
+    `super().__init__` with the canonical message and populated detail.
     """
 
     code: ClassVar[str] = "platform.unknown"
@@ -60,9 +59,9 @@ class PlatformError(Exception):
 
     def __init_subclass__(cls, **kwargs: object) -> None:
         super().__init_subclass__(**kwargs)
-        # Validate against the catalog (E-I2, E-I3). The check runs at
-        # class-definition time so drift between code and catalog
-        # surfaces at import, not as a deferred test failure.
+        # Validate against the catalog at class-definition time so
+        # drift between code and catalog surfaces at import, not as a
+        # deferred test failure.
         if cls.code not in CATALOG:
             msg = (
                 f"{cls.__name__}.code={cls.code!r} is not registered in the "
@@ -87,7 +86,7 @@ class PlatformError(Exception):
         detail: dict[str, Any] | None = None,
     ) -> None:
         if not where:
-            # E-I6 — empty `where` is a contract violation.
+            # Empty `where` is a contract violation.
             msg = "PlatformError.where must be a non-empty string"
             raise ValueError(msg)
         super().__init__(message)
@@ -95,12 +94,12 @@ class PlatformError(Exception):
         self.detail: dict[str, Any] = detail if detail is not None else {}
 
     def to_dict(self) -> dict[str, Any]:
-        """Serialize to the canonical Error envelope (spec §2.1).
+        """Serialize to the canonical Error envelope.
 
-        The ``cause`` field is recursive: a ``PlatformError`` cause
-        nests its own envelope; a non-platform cause is wrapped via
-        :meth:`WrappedError.from_exception` so the serialized output
-        never contains raw stdlib/third-party exception data (E-I5).
+        The `cause` field is recursive: a `PlatformError` cause nests
+        its own envelope; a non-platform cause is wrapped via
+        `WrappedError.from_exception` so the serialized output never
+        contains raw stdlib or third-party exception data.
         """
         return {
             "type": self.code,
@@ -112,12 +111,12 @@ class PlatformError(Exception):
 
 
 class WrappedError(PlatformError):
-    """Generic wrapper for non-platform exceptions — spec §3.4.
+    """Generic wrapper for non-platform exceptions.
 
-    Default level is :attr:`Level.DIAGNOSTIC` per the spec reference
-    implementation. When a wrapped exception must surface at Fatal
-    severity (the engine-boundary safety net), raise
-    :class:`PlatformInternalError` instead.
+    Default level is Diagnostic. When a wrapped exception must surface
+    at Fatal severity — the engine-boundary safety net —
+    [`PlatformInternalError`][errors.engine.PlatformInternalError] is
+    the right tool instead.
     """
 
     code = "platform.wrapped"
@@ -128,8 +127,17 @@ class WrappedError(PlatformError):
         """Wrap an arbitrary exception in the canonical envelope.
 
         The original exception's type and args are captured in
-        ``detail``; the caller may still inspect ``__cause__`` for the
-        in-process object if needed.
+        `detail`; the in-process object is preserved on `__cause__`
+        for callers that want to inspect it directly.
+
+        Args:
+            exc: The exception to wrap.
+            where: Dotted-string locator of the call site doing the
+                wrapping.
+
+        Returns:
+            A `WrappedError` whose `detail` carries the original
+            exception's type and args.
         """
         return cls(
             message=f"{type(exc).__name__}: {exc}",
@@ -148,8 +156,8 @@ def _serialize_cause(
 ) -> dict[str, Any] | None:
     """Render `cause` as a nested envelope, wrapping non-platform ones.
 
-    Lives outside :meth:`PlatformError.to_dict` so the recursion is
-    explicit and free of partial-construction state.
+    Lives outside `PlatformError.to_dict` so the recursion is explicit
+    and free of partial-construction state.
     """
     if cause is None:
         return None
@@ -160,13 +168,13 @@ def _serialize_cause(
 
 
 def iter_error_classes() -> Iterator[type[PlatformError]]:
-    """Yield every concrete PlatformError subclass that has been imported.
+    """Yield every concrete `PlatformError` subclass that has been imported.
 
-    The base class itself is excluded. Order is registration order
-    (i.e. the order in which the subclass modules were imported).
+    The base class itself is excluded. Order is registration order —
+    the order in which the subclass modules were imported. The return
+    value is a snapshot iterator so callers can safely consume during
+    imports that would extend the registry.
     """
-    # Return a snapshot iterator so callers can safely consume during
-    # imports that would extend the registry.
     return iter(list(_REGISTERED_SUBCLASSES))
 
 

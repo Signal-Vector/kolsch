@@ -1,20 +1,19 @@
-"""Error severity levels — spec §1.1-1.3.
+"""Error severity levels — Diagnostic, Recoverable, Fatal.
 
-Three levels, each with a load-bearing behavioural meaning:
+The level is assigned to each error *type*, never chosen at runtime —
+the same type at different severities in different code paths is a
+contract violation. See the
+[error model](../../docs/explanation/error-model.md) for the contract
+and the engine-side fan-out each level drives.
 
-- ``DIAGNOSTIC`` — the model sees a `tool.failed` (or equivalent)
-  event and adapts. The exchange continues. Never raises out of
-  ``execute``.
-- ``RECOVERABLE`` — the platform retries up to
-  ``RuntimeSpec.max_retries``. If a retry succeeds the exchange
-  continues; if the budget is exhausted, escalates to ``FATAL``.
-- ``FATAL`` — the exchange ends. ``execute`` raises
-  ``AgentExecutionError`` carrying ``thread.exchange_failed``;
-  ``execute_stream`` yields the failed event and ends.
-
-The level is assigned to each error *type* (spec §1.4) — never chosen
-at runtime. Implementations MUST NOT emit the same type at different
-levels in different code paths (E-I3).
+- `DIAGNOSTIC` — the model sees a `tool.failed` (or equivalent) event
+  and adapts. The exchange continues; nothing raises out of `execute`.
+- `RECOVERABLE` — the platform retries up to `RuntimeSpec.max_retries`.
+  A successful retry continues the exchange; an exhausted budget
+  escalates to `FATAL`.
+- `FATAL` — the exchange ends. `execute` raises `AgentExecutionError`
+  carrying the `thread.exchange_failed` event; `execute_stream` yields
+  the failed event and ends.
 """
 
 from enum import StrEnum
@@ -23,9 +22,9 @@ from enum import StrEnum
 class Level(StrEnum):
     """The three error severity levels.
 
-    Inherits from :class:`enum.StrEnum` so envelopes serialize the
-    value directly (e.g., JSON encoders emit ``"fatal"`` rather than
-    ``"Level.FATAL"``). Behaves like a ``str`` everywhere a string is
+    Inherits from `enum.StrEnum` so envelopes serialize the value
+    directly — JSON encoders emit `"fatal"` rather than `"Level.FATAL"`
+    — and the value behaves like a `str` everywhere a string is
     expected.
     """
 

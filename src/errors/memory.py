@@ -1,11 +1,15 @@
-"""Memory provider errors — spec §4.6."""
+"""Memory provider errors.
+
+See the [error model](../../docs/explanation/error-model.md) for the
+Diagnostic / Recoverable / Fatal classification each class lives under.
+"""
 
 from errors.base import PlatformError
 from errors.level import Level
 
 
 class MemoryWriteDisabled(PlatformError):
-    """`write_tag` is not configured for the bound context (TC-MEM-04)."""
+    """Raised when `write_tag` is not configured for the bound context."""
 
     code = "memory.write_disabled"
     level = Level.DIAGNOSTIC
@@ -25,7 +29,7 @@ class MemoryWriteDisabled(PlatformError):
 
 
 class MemoryItemNotFound(PlatformError):
-    """No memory item with the given id in the bound session."""
+    """Raised when no memory item with the given id exists in the bound session."""
 
     code = "memory.item_not_found"
     level = Level.DIAGNOSTIC
@@ -45,7 +49,7 @@ class MemoryItemNotFound(PlatformError):
 
 
 class MemorySessionUnbound(PlatformError):
-    """A memory operation ran against a session that was never bound."""
+    """Raised when a memory operation ran against a session that was never bound."""
 
     code = "memory.session_unbound"
     level = Level.FATAL
@@ -64,7 +68,11 @@ class MemorySessionUnbound(PlatformError):
 
 
 class MemoryCompactionFailed(PlatformError):
-    """The compaction model call failed (recoverable; engine may retry)."""
+    """Raised when the compaction model call failed.
+
+    Recoverable — the engine may retry compaction against another
+    model in the fallback chain.
+    """
 
     code = "memory.compaction_failed"
     level = Level.RECOVERABLE
@@ -92,7 +100,7 @@ class MemoryCompactionFailed(PlatformError):
 
 
 class MemoryInvalidTag(PlatformError):
-    """`write_tag` contained a wildcard or violated tag rules (TC-MEM-05)."""
+    """Raised when `write_tag` contained a wildcard or violated tag rules."""
 
     code = "memory.invalid_tag"
     level = Level.FATAL

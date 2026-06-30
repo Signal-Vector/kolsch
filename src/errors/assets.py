@@ -1,9 +1,11 @@
-"""Asset Management errors — Module API Reference §2 raises.
+"""Asset Management errors.
 
-These codes are referenced by the Asset Management contract but the
-error catalog (spec §4) does not yet enumerate them. Registered in
-:mod:`errors.catalog` and surfaced here as concrete PlatformError
-subclasses so callers can raise + match on them like any other.
+These codes are referenced by the Asset Management contract,
+registered in `errors.catalog`, and surfaced here as concrete
+`PlatformError` subclasses so callers can raise and match on them
+like any other catalogued error. See the
+[error model](../../docs/explanation/error-model.md) for the
+classification contract.
 """
 
 from errors.base import PlatformError
@@ -11,7 +13,7 @@ from errors.level import Level
 
 
 class AssetsDuplicateBundleName(PlatformError):
-    """Two bundles share the same name. Spec Am-I2 — fatal."""
+    """Raised when two bundles share the same name."""
 
     code = "assets.duplicate_bundle_name"
     level = Level.FATAL
@@ -31,14 +33,13 @@ class AssetsDuplicateBundleName(PlatformError):
 
 
 class AssetsDuplicateName(PlatformError):
-    """Two assets in the same bundle share a name across asset types.
+    """Raised when two assets in the same bundle share a name across asset types.
 
-    Under the new 2-segment ref convention
-    (qol-prefix-defaults-and-unified-refs.md), ``<bundle>/<name>``
-    must resolve to a unique catalog entry. A bundle that ships
-    both ``tools/butler.py`` and ``agents/butler.yaml`` cannot
-    disambiguate which one ``<bundle>/butler`` means; surfaces
-    at catalog scan time so the failure is loud and early.
+    Under the 2-segment ref convention, `<bundle>/<name>` must resolve
+    to a unique catalog entry. A bundle that ships both
+    `tools/butler.py` and `agents/butler.yaml` cannot disambiguate
+    which one `<bundle>/butler` means; the duplicate surfaces at
+    catalog scan time so the failure is loud and early.
     """
 
     code = "assets.duplicate_name"
@@ -63,7 +64,7 @@ class AssetsDuplicateName(PlatformError):
 
 
 class AssetsBundleNameMismatch(PlatformError):
-    """A bundle's manifest name disagrees with its directory. Am-I1."""
+    """Raised when a bundle's manifest name disagrees with its directory."""
 
     code = "assets.bundle_name_mismatch"
     level = Level.FATAL
@@ -86,7 +87,7 @@ class AssetsBundleNameMismatch(PlatformError):
 
 
 class AssetsNotFound(PlatformError):
-    """A ref or shorthand does not resolve to any catalog entry."""
+    """Raised when a ref or shorthand does not resolve to any catalog entry."""
 
     code = "assets.not_found"
     level = Level.FATAL
@@ -110,7 +111,7 @@ class AssetsNotFound(PlatformError):
 
 
 class AssetsInvalidRef(PlatformError):
-    """A ref string does not parse as ``<bundle>/<asset-type>/<name>``."""
+    """Raised when a ref string does not parse as `<bundle>/<asset-type>/<name>`."""
 
     code = "assets.invalid_ref"
     level = Level.FATAL
@@ -129,10 +130,10 @@ class AssetsInvalidRef(PlatformError):
 
 
 class AssetsAmbiguousShorthand(PlatformError):
-    """A shorthand matches more than one asset. Am-I6.
+    """Raised when a shorthand matches more than one asset.
 
-    The detail lists every candidate ref so the caller's error
-    message can quote them verbatim (Module API Reference §2.1).
+    The envelope's `detail.candidates` lists every matching ref so
+    the caller's error message can quote them verbatim.
     """
 
     code = "assets.ambiguous_shorthand"
@@ -158,7 +159,7 @@ class AssetsAmbiguousShorthand(PlatformError):
 
 
 class AssetsPromptLoadFailed(PlatformError):
-    """A prompt ref could not be loaded from disk during pre-resolution."""
+    """Raised when a prompt ref could not be loaded from disk during pre-resolution."""
 
     code = "assets.prompt_load_failed"
     level = Level.FATAL

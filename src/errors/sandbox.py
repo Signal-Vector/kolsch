@@ -1,7 +1,10 @@
-"""Sandbox provider errors — spec §4.8.
+"""Sandbox provider errors.
 
-Policy validation errors are Fatal (config problem prevents setup);
-runtime denial / resource-exceeded are Diagnostic (the model can adapt).
+Policy validation errors are Fatal — a malformed policy prevents
+setup. Runtime denial and resource-exceeded errors are Diagnostic so
+the model can adapt and the exchange continues. See the
+[error model](../../docs/explanation/error-model.md) for the
+classification contract.
 """
 
 from typing import Any
@@ -11,7 +14,7 @@ from errors.level import Level
 
 
 class SandboxPolicyInvalid(PlatformError):
-    """The sandbox policy itself is malformed (Fatal — config issue)."""
+    """Raised when the sandbox policy itself is malformed."""
 
     code = "sandbox.policy_invalid"
     level = Level.FATAL
@@ -31,7 +34,7 @@ class SandboxPolicyInvalid(PlatformError):
 
 
 class SandboxExecutionDenied(PlatformError):
-    """The sandbox denied execution at runtime."""
+    """Raised when the sandbox denied execution at runtime."""
 
     code = "sandbox.execution_denied"
     level = Level.DIAGNOSTIC
@@ -50,7 +53,7 @@ class SandboxExecutionDenied(PlatformError):
 
 
 class SandboxResourceExceeded(PlatformError):
-    """A sandboxed call exceeded a configured resource limit."""
+    """Raised when a sandboxed call exceeded a configured resource limit."""
 
     code = "sandbox.resource_exceeded"
     level = Level.DIAGNOSTIC

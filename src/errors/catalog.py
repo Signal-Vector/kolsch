@@ -1,58 +1,53 @@
-"""The Error Type Catalog — spec §4.1-4.12.
+"""The Error Type Catalog — every catalogued code mapped to its level.
 
-A normative registry mapping every catalogued error code to its
-assigned level. New error types are added by amending this map and
-the corresponding class file. Implementations MUST use these codes
-and MUST NOT invent ad-hoc strings (E-I2).
+A normative registry: subsystems use these codes and never invent
+ad-hoc strings. New error types are added by amending this map and the
+corresponding class file. See the
+[error model](../../docs/explanation/error-model.md) for the contract
+this registry implements.
 
-Iteration helpers live in :mod:`errors.base` so the catalog has no
+Iteration helpers live in `errors.base` so the catalog has no
 import-time dependency on the class hierarchy.
 """
 
 from errors.level import Level
 
 CATALOG: dict[str, Level] = {
-    # ----- §4.1 Kernel / Resolver --------------------------------------
+    # ----- Kernel / Resolver -------------------------------------------
     "config.invalid": Level.FATAL,
     "config.unknown_variant": Level.FATAL,
     "config.version_mismatch": Level.FATAL,
     "config.merge_failed": Level.FATAL,
-    # Phase 2.2 (ENV-R6, §4.18) — Jinja render failure surfaced by
-    # templating.render.render_prompt. Listed here alongside other
-    # config.* kernel codes; further §4.18 codes (context.*,
-    # config.required_block_missing, etc.) land as subsequent
-    # Phase 2.2 steps ship them.
+    # Jinja render failure surfaced by templating.render.render_prompt.
     "config.template_render_failed": Level.FATAL,
-    # Phase 2.2 Step 8 (ENV-R6, §4.18) — agent declares a
-    # context_file or extends: path without the kolsch: /
-    # workspace: prefix.
+    # Agent declares a context_file or extends: path without the
+    # kolsch: / workspace: prefix.
     "config.context_file_unprefixed": Level.FATAL,
-    # qol-prefix-defaults-and-unified-refs.md Step 2 — a config
-    # envelope ref uses the legacy 3-segment form or an explicit
-    # workspace: prefix; Recoverable warning, not a load failure.
+    # Config envelope ref uses the legacy 3-segment form or an
+    # explicit workspace: prefix; Recoverable warning, not a load
+    # failure.
     "config.deprecated_ref_form": Level.RECOVERABLE,
-    # Phase 2.2 Step 12 (ENV-R6, §4.18) — context file resolution errors.
+    # Context file resolution errors.
     "context.file_not_found": Level.FATAL,
     "context.file_too_large": Level.FATAL,
-    # Phase 2.2 Step 13 (ENV-R6, §4.18) — agent inheritance errors.
+    # Agent inheritance errors.
     "config.agent_inheritance_cycle": Level.FATAL,
     "config.parent_agent_not_found": Level.FATAL,
     "config.required_block_missing": Level.FATAL,
     "config.extends_template_without_inheritance": Level.FATAL,
-    # Phase 2.2 Step 10 (ENV-R6, §4.18) — tool's permissions API
-    # invoked outside the engine's dispatcher binding.
+    # Tool's permissions API invoked outside the engine's dispatcher
+    # binding.
     "tool.permissions_no_context": Level.FATAL,
-    # ----- §4.2 Session/Run Store --------------------------------------
+    # ----- Session/Run Store -------------------------------------------
     "session.not_found": Level.FATAL,
     "thread.not_found": Level.FATAL,
     "store.lock_timeout": Level.FATAL,
     "store.write_failed": Level.FATAL,
     "store.corrupt_log": Level.FATAL,
-    # ----- Asset Management (extension to spec §4.1) -------------------
+    # ----- Asset Management --------------------------------------------
     # Asset Management's contract surfaces these codes in its Module
-    # API Reference §2 method raises but the error catalog (§4) does
-    # not yet enumerate them. Added here so PlatformError subclasses
-    # in `errors.assets` can register cleanly; flag for spec amendment.
+    # API Reference; registered here so PlatformError subclasses in
+    # `errors.assets` can register cleanly.
     "assets.duplicate_bundle_name": Level.FATAL,
     "assets.duplicate_name": Level.FATAL,
     "assets.bundle_name_mismatch": Level.FATAL,
@@ -60,12 +55,12 @@ CATALOG: dict[str, Level] = {
     "assets.invalid_ref": Level.FATAL,
     "assets.ambiguous_shorthand": Level.FATAL,
     "assets.prompt_load_failed": Level.FATAL,
-    # ----- §4.3 Event Bus ----------------------------------------------
+    # ----- Event Bus ---------------------------------------------------
     # Bus errors are Diagnostic because the bus is best-effort — losing
     # a bus message must not fail an exchange.
     "bus.publish_failed": Level.DIAGNOSTIC,
     "bus.unavailable": Level.DIAGNOSTIC,
-    # ----- §4.4 Agent Engine -------------------------------------------
+    # ----- Agent Engine ------------------------------------------------
     "agent.unauthorized": Level.FATAL,
     "agent.capability_mismatch": Level.FATAL,
     "model.retry_exhausted": Level.FATAL,
@@ -74,11 +69,10 @@ CATALOG: dict[str, Level] = {
     "exchange.cancelled": Level.FATAL,
     "exchange.timeout": Level.FATAL,
     "assembly.procedure_failed": Level.FATAL,
-    # platform.internal_error appears in both §4.4 and §4.12 — one code,
-    # one class (PlatformInternalError, defined in engine.py since the
-    # engine boundary is where it is most often raised).
+    # One code, one class: PlatformInternalError lives in engine.py
+    # since the engine boundary is where it is most often raised.
     "platform.internal_error": Level.FATAL,
-    # ----- §4.5 Tools --------------------------------------------------
+    # ----- Tools -------------------------------------------------------
     "tool.unauthorized": Level.DIAGNOSTIC,
     "tool.not_found": Level.FATAL,
     "tool.setup_failed": Level.FATAL,
@@ -88,50 +82,45 @@ CATALOG: dict[str, Level] = {
     "mcp.server_unreachable": Level.DIAGNOSTIC,
     "mcp.upstream_error": Level.DIAGNOSTIC,
     "mcp.protocol_error": Level.DIAGNOSTIC,
-    # Bug-engine-tools-wiring-gap.md: raised by engine pre-flight
-    # when a declared tool ref doesn't resolve in the asset catalog.
-    # Naming `config.*` rather than `tool.*` because it's a config
-    # validity failure — the agent's tools.config.declared lists a
-    # ref that doesn't exist.
+    # Raised by engine pre-flight when a declared tool ref doesn't
+    # resolve in the asset catalog. Named `config.*` rather than
+    # `tool.*` because it's a config validity failure — the agent's
+    # tools.config.declared lists a ref that doesn't exist.
     "config.unknown_tool": Level.FATAL,
-    # ----- §4.6 Memory -------------------------------------------------
+    # ----- Memory ------------------------------------------------------
     "memory.write_disabled": Level.DIAGNOSTIC,
     "memory.item_not_found": Level.DIAGNOSTIC,
     "memory.session_unbound": Level.FATAL,
     "memory.compaction_failed": Level.RECOVERABLE,
     "memory.invalid_tag": Level.FATAL,
-    # ----- §4.7 Secrets ------------------------------------------------
+    # ----- Secrets -----------------------------------------------------
     "secret.not_found": Level.FATAL,
     "secret.read_failed": Level.FATAL,
-    # ----- §4.8 Sandbox ------------------------------------------------
+    # ----- Sandbox -----------------------------------------------------
     "sandbox.policy_invalid": Level.FATAL,
     "sandbox.execution_denied": Level.DIAGNOSTIC,
     "sandbox.resource_exceeded": Level.DIAGNOSTIC,
-    # ----- §4.9 Authorization ------------------------------------------
+    # ----- Authorization -----------------------------------------------
     "authz.malformed_rule": Level.FATAL,
     "authz.regex_invalid": Level.FATAL,
-    # ----- §4.10 Skills ------------------------------------------------
+    # ----- Skills ------------------------------------------------------
     "skill.not_found": Level.FATAL,
     "skill.malformed": Level.FATAL,
     "skill.frontmatter_invalid": Level.FATAL,
     "skill.forced_not_enabled": Level.FATAL,
-    # ----- §4.11 File Handling -----------------------------------------
+    # ----- File Handling -----------------------------------------------
     "file_access.denied": Level.DIAGNOSTIC,
     "file_access.path_normalization_failed": Level.DIAGNOSTIC,
     "file_access.policy_load_failed": Level.FATAL,
-    # `invalid_file_ref` is not in the spec §4.11 catalog but is
-    # needed at the file_ref input boundary (Fh-I8) so the validator
-    # raises a PlatformError rather than a bare ValueError (handbook
-    # hard rule). Flag for spec amendment alongside the asset error
-    # codes also added downstream.
+    # Needed at the file_ref input boundary so the validator raises a
+    # PlatformError rather than a bare ValueError.
     "file_access.invalid_file_ref": Level.DIAGNOSTIC,
-    # ----- §4.12 Generic platform --------------------------------------
-    # platform.wrapped's level is documented as "(varies)"; the
-    # default-instance level is DIAGNOSTIC, matching the spec §3.4
-    # reference implementation. When a wrapped exception must surface
-    # at Fatal severity, raise `PlatformInternalError` instead.
+    # ----- Generic platform --------------------------------------------
+    # platform.wrapped's default instance is Diagnostic; when a wrapped
+    # exception must surface at Fatal severity, raise
+    # `PlatformInternalError` instead.
     "platform.wrapped": Level.DIAGNOSTIC,
-    # ----- §4.13 LLM Configuration -------------------------
+    # ----- LLM Configuration -------------------------------------------
     "llm.provider_not_configured": Level.FATAL,
     "llm.secret_missing": Level.FATAL,
     "llm.client_init_failed": Level.FATAL,
@@ -139,18 +128,15 @@ CATALOG: dict[str, Level] = {
     "llm.connector_unknown": Level.FATAL,
     "llm.discovery_failed": Level.RECOVERABLE,
     "llm.validation_failed": Level.FATAL,
-    # `llm.connector_duplicate` is NOT in the §4.13 spec table but is
-    # surfaced by registry.register() when a connector type registers
-    # twice (TC-LLM-09). Added so the registry can raise a typed
-    # PlatformError; flag for spec amendment alongside the other
-    # post-spec catalog additions above.
+    # Surfaced by registry.register() when a connector type registers
+    # twice; the registry would otherwise silently last-write-wins.
     "llm.connector_duplicate": Level.FATAL,
-    # ----- §4.14 Workspace --------------------------
+    # ----- Workspace ---------------------------------------------------
     "workspace.not_initialized": Level.FATAL,
     "workspace.permission_denied": Level.FATAL,
     "setup.aborted": Level.RECOVERABLE,
     "setup.starter_exists": Level.RECOVERABLE,
-    # ----- §4.15 Model Fallback ---------------------
+    # ----- Model Fallback ----------------------------------------------
     # Four Recoverable codes — drive the fallback loop.
     "model.rate_limited": Level.RECOVERABLE,
     "model.server_error": Level.RECOVERABLE,
@@ -161,33 +147,32 @@ CATALOG: dict[str, Level] = {
     "model.bad_request": Level.FATAL,
     # Engine fallback-loop terminus.
     "llm.all_models_failed": Level.FATAL,
-    # Layer 1 validator warning surface — Diagnostic in the v1.3
-    # taxonomy since the Error Model doesn't yet have a Warning tier
-    # (flagged in Phase 1.3 Step 19 review for follow-up).
+    # Layer 1 validator warning surface — Diagnostic since the Error
+    # Model doesn't yet have a Warning tier.
     "config.fallback_duplicate": Level.DIAGNOSTIC,
-    # ----- §4.16 Tools & Permissions --------------
+    # ----- Tools & Permissions -----------------------------------------
     # Five authz.* codes for the prompt-effect dispatch and the live-
-    # edit CLI; two new file.* codes for the Phase 2.0 builtin tools
-    # (file_access.denied from §4.11 covers the access-denied surface
-    # for both Phase 1 and Phase 2.0 builtins).
+    # edit CLI; two file.* codes for the builtin file tools
+    # (file_access.denied above covers the access-denied surface).
     "authz.denied": Level.RECOVERABLE,
     "authz.prompt_unattended": Level.RECOVERABLE,
     "authz.rule_invalid": Level.FATAL,
     "authz.rule_not_found": Level.FATAL,
     "authz.protected_rule": Level.FATAL,
-    # qol-permission-system-human-readable.md Step 2 — schema migration.
+    # Permission-system schema migration: human-readable rule form.
     "authz.bare_tool_ref": Level.FATAL,
     "authz.pattern_invalid": Level.FATAL,
     "authz.tool_ref_unknown": Level.FATAL,
     "config.deprecated_regex_rule": Level.RECOVERABLE,
-    # qol-action-namespace-bundle-scoped.md Step 2 — 2-seg rule form deprecation.
+    # 2-seg rule form deprecation: the bundle-scoped action namespace
+    # migration uses the 3-seg catalog ref form.
     "config.deprecated_rule_form": Level.RECOVERABLE,
     "file.too_large": Level.RECOVERABLE,
     "file.not_found": Level.RECOVERABLE,
-    # QoL tool-output-truncation-and-persistence §9.6 — read_file
-    # raises this when a single line exceeds max_bytes (binary
-    # masquerading as text). Distinct from file.too_large which is
-    # no longer raised by read_file under the new line-based shape.
+    # read_file raises this when a single line exceeds max_bytes
+    # (typically a binary file masquerading as text). Distinct from
+    # file.too_large, which is no longer raised by read_file under the
+    # line-based shape.
     "file.line_too_long": Level.RECOVERABLE,
 }
 
@@ -198,5 +183,5 @@ def list_catalog_codes() -> set[str]:
 
 
 def get_catalog_level(code: str) -> Level | None:
-    """Return the registered level for a code, or ``None`` if unknown."""
+    """Return the registered level for a code, or `None` if unknown."""
     return CATALOG.get(code)

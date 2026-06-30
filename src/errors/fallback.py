@@ -1,37 +1,35 @@
-"""Model fallback errors — spec §4.15 (Phase 1.3, FB-R5).
+"""Model fallback errors.
 
-Eight error classes mapped 1:1 to the §4.15 catalog table. The
-classification (Recoverable vs Fatal) is load-bearing — the engine's
-``is_fallback_triggering`` predicate (see :mod:`engine._fallback`)
-consults the level to decide whether to walk the chain. Adding a
-new ``model.*`` code without declaring its level breaks the
-AGENTS.md hard rule (FB-R10).
+Eight classes that drive the engine's fallback loop. Classification
+(Recoverable vs Fatal) is load-bearing — the engine's
+`is_fallback_triggering` predicate (see `engine._fallback`) consults
+the level to decide whether to walk the chain. See the
+[error model](../../docs/explanation/error-model.md) for the
+classification contract.
 
 Recoverable — drive fallback:
 
-- :class:`ModelRateLimited` — HTTP 429.
-- :class:`ModelServerError` — HTTP 5xx.
-- :class:`ModelTimeout` — provider unresponsive.
-- :class:`ModelContextOverflow` — request exceeds the model's
-  window; a larger-context model may handle it.
+- `ModelRateLimited` — HTTP 429.
+- `ModelServerError` — HTTP 5xx.
+- `ModelTimeout` — provider unresponsive.
+- `ModelContextOverflow` — request exceeds the model's window; a
+  larger-context model may handle it.
 
 Fatal — abort without consulting the chain:
 
-- :class:`ModelAuthenticationFailed` — HTTP 401/403; same key
-  fails everywhere.
-- :class:`ModelBadRequest` — HTTP 400; the request itself is
-  broken.
+- `ModelAuthenticationFailed` — HTTP 401/403; the same key fails
+  everywhere.
+- `ModelBadRequest` — HTTP 400; the request itself is broken.
 
 Engine-loop terminus:
 
-- :class:`LlmAllModelsFailed` — chain exhausted; the cause chain
-  on the emitted ``thread.exchange_failed`` references the
-  ``attempts`` field.
+- `LlmAllModelsFailed` — chain exhausted; the cause chain on the
+  emitted `thread.exchange_failed` references the `attempts` field.
 
 Layer-1 validator warning:
 
-- :class:`ConfigFallbackDuplicate` — Diagnostic (warning surface)
-  for repeats in the chain; not an error.
+- `ConfigFallbackDuplicate` — Diagnostic surface for repeats in the
+  chain; not a failure.
 """
 
 from __future__ import annotations
@@ -43,8 +41,11 @@ from errors.level import Level
 
 
 class ModelRateLimited(PlatformError):
-    """Provider returned HTTP 429 (rate limit). Recoverable — the
-    engine's fallback loop walks to the next chain entry."""
+    """Raised when the provider returned HTTP 429.
+
+    Recoverable — the engine's fallback loop walks to the next chain
+    entry.
+    """
 
     code = "model.rate_limited"
     level = Level.RECOVERABLE
@@ -68,8 +69,11 @@ class ModelRateLimited(PlatformError):
 
 
 class ModelServerError(PlatformError):
-    """Provider returned HTTP 5xx. Recoverable — likely transient
-    infrastructure failure; another provider may succeed."""
+    """Raised when the provider returned HTTP 5xx.
+
+    Recoverable — likely a transient infrastructure failure; another
+    provider may succeed.
+    """
 
     code = "model.server_error"
     level = Level.RECOVERABLE
@@ -96,8 +100,10 @@ class ModelServerError(PlatformError):
 
 
 class ModelTimeout(PlatformError):
-    """Provider did not respond within the configured timeout.
-    Recoverable — another provider may answer."""
+    """Raised when the provider did not respond within the configured timeout.
+
+    Recoverable — another provider may answer.
+    """
 
     code = "model.timeout"
     level = Level.RECOVERABLE
@@ -125,8 +131,10 @@ class ModelTimeout(PlatformError):
 
 
 class ModelContextOverflow(PlatformError):
-    """Request exceeded the model's context window. Recoverable —
-    a different model may have a larger window."""
+    """Raised when the request exceeded the model's context window.
+
+    Recoverable — a different model may have a larger window.
+    """
 
     code = "model.context_overflow"
     level = Level.RECOVERABLE
@@ -158,8 +166,10 @@ class ModelContextOverflow(PlatformError):
 
 
 class ModelAuthenticationFailed(PlatformError):
-    """Provider rejected credentials (HTTP 401/403). Fatal — the
-    same key would fail against the next chain entry too."""
+    """Raised when the provider rejected credentials (HTTP 401/403).
+
+    Fatal — the same key would fail against the next chain entry too.
+    """
 
     code = "model.authentication_failed"
     level = Level.FATAL
@@ -187,8 +197,10 @@ class ModelAuthenticationFailed(PlatformError):
 
 
 class ModelBadRequest(PlatformError):
-    """Provider returned HTTP 400 — the request itself is malformed.
-    Fatal — the chain won't help; the request is broken."""
+    """Raised when the provider returned HTTP 400.
+
+    Fatal — the chain won't help; the request itself is malformed.
+    """
 
     code = "model.bad_request"
     level = Level.FATAL
@@ -218,13 +230,12 @@ class ModelBadRequest(PlatformError):
 
 
 class LlmAllModelsFailed(PlatformError):
-    """Every model in the fallback chain (primary + each entry)
-    returned a Recoverable error. The exchange ends.
+    """Raised when every model in the fallback chain returned Recoverable.
 
-    ``detail.attempts`` is the full ordered list of attempts the
-    engine tried, one entry per attempt:
-    ``[{"model": {provider, model}, "error_code": str, "detail": dict}, ...]``.
-    Replay reconstructs the full failure trail from this field.
+    The exchange ends. `detail.attempts` is the full ordered list of
+    attempts the engine tried — one entry per attempt with shape
+    `{"model": {provider, model}, "error_code": str, "detail": dict}`
+    — so replay can reconstruct the full failure trail.
     """
 
     code = "llm.all_models_failed"
@@ -253,17 +264,14 @@ class LlmAllModelsFailed(PlatformError):
 
 
 class ConfigFallbackDuplicate(PlatformError):
-    """An entry in ``fallback_models`` is the same canonical
-    ``{provider, model}`` as the primary or another chain entry.
+    """Raised when a `fallback_models` entry repeats the primary or another entry.
 
     Diagnostic, not Fatal — the user may have intentionally listed
-    the same model twice (e.g., to retry the primary). Surfaces at
-    `kolsch run` startup so the user sees the pattern rather than
-    silently in logs.
-
-    Maps to ``config.fallback_duplicate`` per Error Model §4.15.
-    Phase 1.3 chose ``Diagnostic`` since the catalog has no Warning
-    tier; if one lands later, this class moves.
+    the same model twice (for example, to retry the primary).
+    Surfaces at `kolsch run` startup so the duplication is visible
+    rather than buried in logs. The class lives at Diagnostic since
+    the error model doesn't yet have a Warning tier; if one lands
+    later, this class moves.
     """
 
     code = "config.fallback_duplicate"

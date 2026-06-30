@@ -1,7 +1,9 @@
-"""Secrets provider errors — spec §4.7.
+"""Secrets provider errors.
 
-Secrets are Fatal because a missing/unreadable secret means a tool
-that needs it cannot be set up; the agent can't run.
+Both classes are Fatal — a missing or unreadable secret means a tool
+that needs it cannot be set up and the agent cannot run. See the
+[error model](../../docs/explanation/error-model.md) for the
+classification contract.
 """
 
 from errors.base import PlatformError
@@ -9,7 +11,7 @@ from errors.level import Level
 
 
 class SecretNotFound(PlatformError):
-    """The named secret is not available (TC-SEC-03)."""
+    """Raised when the named secret is not available."""
 
     code = "secret.not_found"
     level = Level.FATAL
@@ -28,7 +30,7 @@ class SecretNotFound(PlatformError):
 
 
 class SecretReadFailed(PlatformError):
-    """The secrets source could not be read (e.g., .env file unreadable)."""
+    """Raised when the secrets source could not be read."""
 
     code = "secret.read_failed"
     level = Level.FATAL

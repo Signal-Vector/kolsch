@@ -1,7 +1,9 @@
-"""Event Bus errors — spec §4.3.
+"""Event Bus errors.
 
-Both bus errors are Diagnostic because the bus is best-effort —
-losing a bus message must not fail an exchange (spec §4.3 note).
+Both classes are Diagnostic because the bus is best-effort — losing a
+bus message must not fail an exchange. See the
+[error model](../../docs/explanation/error-model.md) for the
+classification contract.
 """
 
 from errors.base import PlatformError
@@ -9,7 +11,7 @@ from errors.level import Level
 
 
 class BusPublishFailed(PlatformError):
-    """The bus transport rejected or dropped a publish."""
+    """Raised when the bus transport rejected or dropped a publish."""
 
     code = "bus.publish_failed"
     level = Level.DIAGNOSTIC
@@ -29,7 +31,7 @@ class BusPublishFailed(PlatformError):
 
 
 class BusUnavailable(PlatformError):
-    """The bus backend is not reachable (e.g., Redis is down)."""
+    """Raised when the bus backend is not reachable."""
 
     code = "bus.unavailable"
     level = Level.DIAGNOSTIC

@@ -1,12 +1,16 @@
-"""Errors — PlatformError hierarchy and the registered error catalog.
+"""The PlatformError hierarchy and the registered error catalog.
 
-Re-exports every concrete subclass so callers can write::
+Re-exports every concrete subclass so callers can write:
 
-    from errors import ToolUnauthorized, SecretNotFound, Level
+```python
+from errors import ToolUnauthorized, SecretNotFound, Level
+```
 
-Per the Error Model spec, every error raised across module boundaries
-is a PlatformError subclass whose ``code`` is registered in :data:`CATALOG`
-(Part 4) and whose ``level`` is intrinsic to the type (E-I3).
+Every error raised across a module boundary is a `PlatformError`
+subclass whose `code` is registered in `CATALOG` and whose `level` is
+intrinsic to the type. See the
+[error model](../../docs/explanation/error-model.md) for the canonical
+contract.
 """
 
 from errors.assets import (

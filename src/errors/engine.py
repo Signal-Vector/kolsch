@@ -1,8 +1,11 @@
-"""Agent Engine errors — spec §4.4 (also hosts platform.internal_error).
+"""Agent Engine errors, plus the catalogued `platform.internal_error` safety net.
 
-The engine boundary is where most Fatal-level escalations land:
-authz denial at pre-flight, retry-budget exhaustion, cancellation,
-timeout, and the safety net for any otherwise-unhandled exception.
+The engine boundary is where most Fatal-level escalations land —
+authorization denial at pre-flight, retry-budget exhaustion,
+cancellation, timeout, and the safety net for any otherwise-unhandled
+exception. See the
+[error model](../../docs/explanation/error-model.md) for the
+classification contract.
 """
 
 from typing import Any
@@ -12,7 +15,7 @@ from errors.level import Level
 
 
 class AgentUnauthorized(PlatformError):
-    """Authorization denied the agent at engine pre-flight."""
+    """Raised when authorization denied the agent at engine pre-flight."""
 
     code = "agent.unauthorized"
     level = Level.FATAL
@@ -39,7 +42,7 @@ class AgentUnauthorized(PlatformError):
 
 
 class CapabilityMismatch(PlatformError):
-    """The engine does not support a capability the config requires."""
+    """Raised when the engine does not support a capability the config requires."""
 
     code = "agent.capability_mismatch"
     level = Level.FATAL
@@ -63,7 +66,7 @@ class CapabilityMismatch(PlatformError):
 
 
 class ModelRetryExhausted(PlatformError):
-    """All retry attempts for a model call failed (TC-ENG-05)."""
+    """Raised when every retry attempt for a model call failed."""
 
     code = "model.retry_exhausted"
     level = Level.FATAL
@@ -77,15 +80,15 @@ class ModelRetryExhausted(PlatformError):
         super().__init__(
             message=f"All {len(attempts)} model-call attempts failed",
             where=where,
-            # Attempts are sibling failures captured as Error envelopes
-            # (spec §5.2), not a `cause` chain — preserve the per-attempt
-            # detail without conflating them with the wrapping fatal.
+            # Attempts are sibling failures captured as Error envelopes,
+            # not a `cause` chain — preserve the per-attempt detail
+            # without conflating them with the wrapping fatal.
             detail={"attempts": list(attempts)},
         )
 
 
 class ModelMalformedResponse(PlatformError):
-    """The model returned a response the engine could not parse."""
+    """Raised when the model returned a response the engine could not parse."""
 
     code = "model.malformed_response"
     level = Level.RECOVERABLE
@@ -105,7 +108,7 @@ class ModelMalformedResponse(PlatformError):
 
 
 class ModelUpstreamError(PlatformError):
-    """The model provider returned a transport-level failure."""
+    """Raised when the model provider returned a transport-level failure."""
 
     code = "model.upstream_error"
     level = Level.RECOVERABLE
@@ -130,7 +133,7 @@ class ModelUpstreamError(PlatformError):
 
 
 class ExchangeCancelled(PlatformError):
-    """The exchange was cancelled via CancelToken (TC-ENG-09)."""
+    """Raised when the exchange was cancelled via `CancelToken`."""
 
     code = "exchange.cancelled"
     level = Level.FATAL
@@ -149,7 +152,7 @@ class ExchangeCancelled(PlatformError):
 
 
 class ExchangeTimeout(PlatformError):
-    """The exchange exceeded its budget."""
+    """Raised when the exchange exceeded its budget."""
 
     code = "exchange.timeout"
     level = Level.FATAL
@@ -175,7 +178,7 @@ class ExchangeTimeout(PlatformError):
 
 
 class AssemblyProcedureFailed(PlatformError):
-    """The Assembly Procedure (Schemas §B.5) failed at the named step."""
+    """Raised when the Assembly Procedure failed at the named step."""
 
     code = "assembly.procedure_failed"
     level = Level.FATAL
@@ -200,12 +203,12 @@ class AssemblyProcedureFailed(PlatformError):
 
 
 class PlatformInternalError(PlatformError):
-    """The engine-boundary safety net (§4.4 / §4.12).
+    """Raised at the engine boundary when an unhandled exception escapes.
 
-    Anything that reaches the engine boundary as a non-PlatformError
-    exception is wrapped in this class at Fatal severity. The original
-    exception's type and args are captured in ``detail``; the in-process
-    object is preserved on ``__cause__``.
+    Fatal safety net — anything that reaches the engine boundary as a
+    non-`PlatformError` exception is wrapped in this class. The
+    original exception's type and args are captured in `detail`; the
+    in-process object is preserved on `__cause__`.
     """
 
     code = "platform.internal_error"
@@ -224,7 +227,8 @@ class PlatformInternalError(PlatformError):
             "args": list(args),
         }
         if traceback is not None:
-            # Optional per spec §4.12 + Open Item §8.2.
+            # Optional per the error model — present only when the
+            # boundary captured a traceback.
             detail["traceback"] = traceback
         super().__init__(
             message=f"Internal platform error: {original_type}",
@@ -240,7 +244,18 @@ class PlatformInternalError(PlatformError):
         where: str = "engine.execute.boundary",
         traceback: str | None = None,
     ) -> "PlatformInternalError":
-        """Construct from an arbitrary exception (engine-boundary use)."""
+        """Construct from an arbitrary exception caught at the engine boundary.
+
+        Args:
+            exc: The unhandled exception that reached the boundary.
+            where: Dotted-string locator of the boundary call site.
+            traceback: Optional formatted traceback to attach to
+                `detail.traceback`.
+
+        Returns:
+            A `PlatformInternalError` whose `detail` carries the
+            original exception's type and args.
+        """
         return cls(
             original_type=f"{type(exc).__module__}.{type(exc).__name__}",
             args=list(exc.args),

@@ -1,4 +1,10 @@
-"""File-handling errors — spec §4.11."""
+"""File-handling errors.
+
+Most surfaces are Diagnostic so the model adapts to the failure;
+policy-load failures are Fatal because they prevent bootstrap. See
+the [error model](../../docs/explanation/error-model.md) for the
+classification contract.
+"""
 
 from typing import Any
 
@@ -7,7 +13,7 @@ from errors.level import Level
 
 
 class FileAccessDenied(PlatformError):
-    """The path policy denied access (TC-FIL-02..05)."""
+    """Raised when the path policy denied access to a file."""
 
     code = "file_access.denied"
     level = Level.DIAGNOSTIC
@@ -32,7 +38,7 @@ class FileAccessDenied(PlatformError):
 
 
 class FileAccessPathNormalizationFailed(PlatformError):
-    """Path normalization (realpath / symlink resolution) failed."""
+    """Raised when path normalization (realpath / symlink resolution) failed."""
 
     code = "file_access.path_normalization_failed"
     level = Level.DIAGNOSTIC
@@ -52,9 +58,9 @@ class FileAccessPathNormalizationFailed(PlatformError):
 
 
 class FileAccessInvalidFileRef(PlatformError):
-    """A `file_ref` value failed shape validation (spec §1 + Fh-I1).
+    """Raised when a `file_ref` value failed shape validation.
 
-    Raised before policy evaluation runs — empty strings and null
+    Surfaces before policy evaluation runs — empty strings and null
     bytes in path data are caller bugs that the policy can't catch
     by itself.
     """
@@ -77,7 +83,7 @@ class FileAccessInvalidFileRef(PlatformError):
 
 
 class FileAccessPolicyLoadFailed(PlatformError):
-    """The file-access policy failed to load at platform bootstrap."""
+    """Raised when the file-access policy failed to load at platform bootstrap."""
 
     code = "file_access.policy_load_failed"
     level = Level.FATAL
@@ -99,12 +105,12 @@ class FileAccessPolicyLoadFailed(PlatformError):
 
 
 # ---------------------------------------------------------------------------
-# Phase 2.0 (TOOL-R5) — error-model §4.16 file.* codes
+# Builtin file-tool surfaces — file.* codes
 # ---------------------------------------------------------------------------
 
 
 class FileTooLarge(PlatformError):
-    """``read_file`` refused a target exceeding ``max_bytes``."""
+    """Raised when `read_file` refused a target exceeding `max_bytes`."""
 
     code = "file.too_large"
     level = Level.RECOVERABLE
@@ -132,7 +138,7 @@ class FileTooLarge(PlatformError):
 
 
 class FileNotFound(PlatformError):
-    """``read_file`` / ``list_files`` — path does not exist."""
+    """Raised when `read_file` or `list_files` targeted a path that doesn't exist."""
 
     code = "file.not_found"
     level = Level.RECOVERABLE
@@ -151,16 +157,14 @@ class FileNotFound(PlatformError):
 
 
 class FileLineTooLong(PlatformError):
-    """``read_file`` — a single line exceeds the byte cap.
+    """Raised when a single line in `read_file`'s target exceeds the byte cap.
 
-    Raised by the QoL line-based ``read_file`` when any line's
-    UTF-8 byte length is greater than ``max_bytes``. Distinct from
-    :class:`FileTooLarge` (which was raised on whole-file overflow
-    pre-QoL): under the new soft-truncation model a file larger
-    than the line budget paginates cleanly; only a single pathological
-    line — usually a binary file masquerading as text — trips this
-    guard. Per ``process/qol-tool-output-truncation-and-persistence.md``
-    §9.6.
+    Surfaces from the line-based `read_file` when any line's UTF-8
+    byte length is greater than `max_bytes`. Distinct from
+    `FileTooLarge` — under the soft-truncation model a file larger
+    than the line budget paginates cleanly; only a single
+    pathological line, usually a binary file masquerading as text,
+    trips this guard.
     """
 
     code = "file.line_too_long"

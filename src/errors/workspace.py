@@ -1,19 +1,22 @@
-"""Workspace + setup errors — spec §4.14 (Phase 1.2, UX-R6).
+"""Workspace and setup errors.
 
-Four error classes:
+Two Fatal classes that block bootstrap and two Recoverable classes
+that flag setup-time conditions a human can resolve. See the
+[error model](../../docs/explanation/error-model.md) for the
+classification contract.
 
-- :class:`WorkspaceNotInitialized` (Fatal) — a non-setup command was
-  pointed at a path with no ``platform.yaml``. The CLI intercepts this
-  before bootstrap and emits the friendly "run ``kolsch setup``" message
-  per Phase 1.2 patch §1.4; the class is still raised by API entry
-  points that don't have a friendly-print layer.
-- :class:`WorkspacePermissionDenied` (Fatal) — `kolsch setup` step B or
-  the runtime bootstrap couldn't create / write a workspace path.
-- :class:`SetupAborted` (Recoverable) — informational; user Ctrl-C'd
-  out of `kolsch setup`. Never blocks anything; the next setup run
-  picks up where the previous one left off.
-- :class:`SetupStarterExists` (Recoverable) — step D's target file
-  already exists and the user declined overwrite.
+- `WorkspaceNotInitialized` (Fatal) — a non-setup command was pointed
+  at a path with no `platform.yaml`. The CLI intercepts this before
+  bootstrap and emits a friendly "run `kolsch setup`" message; the
+  class is still raised by API entry points that don't have a
+  friendly-print layer.
+- `WorkspacePermissionDenied` (Fatal) — `kolsch setup` or the runtime
+  bootstrap couldn't create or write a workspace path.
+- `SetupAborted` (Recoverable) — the user Ctrl-C'd out of
+  `kolsch setup`. Informational; the next setup run picks up where
+  the previous one left off.
+- `SetupStarterExists` (Recoverable) — the starter-agent file already
+  exists and the user declined overwrite.
 """
 
 from __future__ import annotations
@@ -23,8 +26,11 @@ from errors.level import Level
 
 
 class WorkspaceNotInitialized(PlatformError):
-    """The resolved workspace has no ``platform.yaml`` — the path is
-    not a Kolsch workspace yet."""
+    """Raised when the resolved workspace has no `platform.yaml`.
+
+    The path exists but isn't a Kolsch workspace yet; the friendly
+    remediation is to run `kolsch setup` against it.
+    """
 
     code = "workspace.not_initialized"
     level = Level.FATAL
@@ -46,8 +52,11 @@ class WorkspaceNotInitialized(PlatformError):
 
 
 class WorkspacePermissionDenied(PlatformError):
-    """A workspace path was not writable — surfaced by `kolsch setup`
-    step B and by the runtime when writing to ``.platform/`` fails."""
+    """Raised when a workspace path was not writable.
+
+    Surfaced by `kolsch setup` and by the runtime when writing to
+    `.platform/` fails.
+    """
 
     code = "workspace.permission_denied"
     level = Level.FATAL
@@ -70,8 +79,10 @@ class WorkspacePermissionDenied(PlatformError):
 
 
 class SetupAborted(PlatformError):
-    """User Ctrl-C'd out of `kolsch setup`. Informational only — the
-    next setup run resumes from the same place."""
+    """Raised when the user Ctrl-C'd out of `kolsch setup`.
+
+    Informational — the next setup run resumes from the same place.
+    """
 
     code = "setup.aborted"
     level = Level.RECOVERABLE
@@ -91,8 +102,7 @@ class SetupAborted(PlatformError):
 
 
 class SetupStarterExists(PlatformError):
-    """Step D's target starter-agent file already exists and the user
-    declined overwrite."""
+    """Raised when the starter-agent file exists and the user declined overwrite."""
 
     code = "setup.starter_exists"
     level = Level.RECOVERABLE

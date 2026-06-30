@@ -1,11 +1,17 @@
-"""Session/Run Store errors — spec §4.2."""
+"""Session/Run Store errors.
+
+All five classes are Fatal — store failures break the persistence
+contract every other subsystem depends on. See the
+[error model](../../docs/explanation/error-model.md) for the
+classification contract.
+"""
 
 from errors.base import PlatformError
 from errors.level import Level
 
 
 class SessionNotFound(PlatformError):
-    """No session entity record exists for the given id."""
+    """Raised when no session entity record exists for the given id."""
 
     code = "session.not_found"
     level = Level.FATAL
@@ -24,7 +30,7 @@ class SessionNotFound(PlatformError):
 
 
 class ThreadNotFound(PlatformError):
-    """No thread entity record exists for the given id."""
+    """Raised when no thread entity record exists for the given id."""
 
     code = "thread.not_found"
     level = Level.FATAL
@@ -43,7 +49,7 @@ class ThreadNotFound(PlatformError):
 
 
 class StoreLockTimeout(PlatformError):
-    """Failed to acquire the JSONL append lock within the budget."""
+    """Raised when the JSONL append lock could not be acquired in budget."""
 
     code = "store.lock_timeout"
     level = Level.FATAL
@@ -69,7 +75,7 @@ class StoreLockTimeout(PlatformError):
 
 
 class StoreWriteFailed(PlatformError):
-    """Filesystem write failed during event append or session create."""
+    """Raised when a filesystem write failed during event append or session create."""
 
     code = "store.write_failed"
     level = Level.FATAL
@@ -89,7 +95,12 @@ class StoreWriteFailed(PlatformError):
 
 
 class StoreCorruptLog(PlatformError):
-    """A JSONL line failed to parse; names the line number (TC-STR-08)."""
+    """Raised when a JSONL line failed to parse.
+
+    The envelope's `detail.line_number` names the offending line so
+    callers can point a human at the corruption without re-scanning
+    the file.
+    """
 
     code = "store.corrupt_log"
     level = Level.FATAL

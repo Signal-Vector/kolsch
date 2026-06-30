@@ -1,4 +1,12 @@
-"""Kernel / Resolver errors — spec §4.1."""
+"""Kernel and resolver errors.
+
+Configuration load and inheritance failures, plus the agent-load-time
+context-file and template-render surfaces. All classes here are Fatal
+except `config.deprecated_ref_form`, which is Recoverable so the
+agent still loads. See the
+[error model](../../docs/explanation/error-model.md) for the
+classification contract.
+"""
 
 from typing import Any
 
@@ -7,7 +15,11 @@ from errors.level import Level
 
 
 class ConfigInvalid(PlatformError):
-    """Resolved config failed validation; carries every error found."""
+    """Raised when resolved config failed validation.
+
+    The envelope's `detail.validation_errors` carries every error the
+    validator found so the caller can present the full list.
+    """
 
     code = "config.invalid"
     level = Level.FATAL
@@ -29,7 +41,7 @@ class ConfigInvalid(PlatformError):
 
 
 class ConfigUnknownVariant(PlatformError):
-    """A subsystem named a variant with no registered validator."""
+    """Raised when a subsystem named a variant with no registered validator."""
 
     code = "config.unknown_variant"
     level = Level.FATAL
@@ -49,7 +61,7 @@ class ConfigUnknownVariant(PlatformError):
 
 
 class ConfigVersionMismatch(PlatformError):
-    """`schema_version` or `assembly_version` is out of the supported set."""
+    """Raised when `schema_version` or `assembly_version` is unsupported."""
 
     code = "config.version_mismatch"
     level = Level.FATAL
@@ -69,7 +81,11 @@ class ConfigVersionMismatch(PlatformError):
 
 
 class ConfigMergeFailed(PlatformError):
-    """Internal merge failed — should not happen for validated input."""
+    """Raised when an internal merge failed.
+
+    Should not happen for validated input — a hit indicates a
+    resolver bug rather than a user config issue.
+    """
 
     code = "config.merge_failed"
     level = Level.FATAL
@@ -89,8 +105,7 @@ class ConfigMergeFailed(PlatformError):
 
 
 class ConfigAgentInheritanceCycle(PlatformError):
-    """An ``extends:`` chain loops back on itself — Phase 2.2
-    error-model §4.18 / spec §8.6."""
+    """Raised when an `extends:` chain loops back on itself."""
 
     code = "config.agent_inheritance_cycle"
     level = Level.FATAL
@@ -109,8 +124,7 @@ class ConfigAgentInheritanceCycle(PlatformError):
 
 
 class ConfigParentAgentNotFound(PlatformError):
-    """An ``extends:`` reference resolves to a non-existent file
-    — Phase 2.2 error-model §4.18."""
+    """Raised when an `extends:` reference resolves to a non-existent file."""
 
     code = "config.parent_agent_not_found"
     level = Level.FATAL
@@ -132,9 +146,11 @@ class ConfigParentAgentNotFound(PlatformError):
 
 
 class ConfigRequiredBlockMissing(PlatformError):
-    """A child agent uses ``{% extends parent %}`` and does not
-    override a parent's ``{% block X required %}`` — Phase 2.2
-    error-model §4.18 / spec §8.4."""
+    """Raised when a child agent fails to override a parent's required block.
+
+    Surfaces when the child's `{% extends parent %}` template does
+    not provide a `{% block X required %}` the parent declared.
+    """
 
     code = "config.required_block_missing"
     level = Level.FATAL
@@ -156,9 +172,12 @@ class ConfigRequiredBlockMissing(PlatformError):
 
 
 class ConfigExtendsTemplateWithoutInheritance(PlatformError):
-    """A child agent's prompt uses ``{% extends parent %}`` but
-    the agent YAML has no ``extends:`` field — Phase 2.2
-    error-model §4.18 / spec §8.9."""
+    """Raised when a prompt uses `{% extends parent %}` without an `extends:` field.
+
+    The template-level inheritance directive requires the YAML-level
+    `extends:` to declare which parent agent supplies the base
+    template; without it the resolver has nowhere to look.
+    """
 
     code = "config.extends_template_without_inheritance"
     level = Level.FATAL
@@ -180,12 +199,11 @@ class ConfigExtendsTemplateWithoutInheritance(PlatformError):
 
 
 class ContextFileNotFound(PlatformError):
-    """A ``context_files[].path`` resolved to a non-existent file
-    — Phase 2.2 error-model §4.18.
+    """Raised when a `context_files[].path` resolves to a non-existent file.
 
     Surfaces at agent-load when the resolver maps
-    ``kolsch:foo.md`` / ``workspace:foo.md`` to an absolute path
-    that does not exist.
+    `kolsch:foo.md` or `workspace:foo.md` to an absolute path that
+    doesn't exist.
     """
 
     code = "context.file_not_found"
@@ -208,12 +226,10 @@ class ContextFileNotFound(PlatformError):
 
 
 class ContextFileTooLarge(PlatformError):
-    """A ``context_files[]`` file exceeds the 64 KiB cap — Phase
-    2.2 error-model §4.18.
+    """Raised when a `context_files[]` file exceeds the 64 KiB cap.
 
-    Surfaces at agent-load. The 64 KiB cap prevents accidental
-    "the whole architecture doc is in every exchange" inflation
-    (Phase 2.2 §6.4).
+    Surfaces at agent-load. The cap prevents accidental "the whole
+    architecture doc is in every exchange" inflation.
     """
 
     code = "context.file_too_large"
@@ -241,18 +257,13 @@ class ContextFileTooLarge(PlatformError):
 
 
 class ConfigDeprecatedRefForm(PlatformError):
-    """A ref appears in a config envelope in a deprecated form
-    (3-segment ``<bundle>/<asset_type>/<name>`` or explicit
-    ``workspace:`` prefix). Recoverable — the agent still loads;
-    the canonical 2-segment / unprefixed form is recommended.
+    """Raised when a config envelope ref uses a deprecated form.
 
-    Surfaces at agent-load via the resolver's ``emit_warning``
-    callback. Collected, logged, and (when the engine emits a
-    ``config.set`` event under the new ref convention) visible
+    Recoverable — the agent still loads; the canonical 2-segment /
+    unprefixed form is recommended. Surfaces at agent-load via the
+    resolver's `emit_warning` callback, then logged and visible
     alongside the resolved config so authors can locate the
     deprecated entry by JSON-pointer.
-
-    Per qol-prefix-defaults-and-unified-refs.md Step 2.
     """
 
     code = "config.deprecated_ref_form"
@@ -282,14 +293,12 @@ class ConfigDeprecatedRefForm(PlatformError):
 
 
 class ConfigContextFileUnprefixed(PlatformError):
-    """A ``context_files[].path`` or ``extends:`` value lacks the
-    required ``kolsch:`` / ``workspace:`` prefix — Phase 2.2
-    error-model §4.18.
+    """Raised when a `context_files[].path` or `extends:` value is unprefixed.
 
-    Spec §6.2 forbids plain paths in agent envelope path
-    references so authors must be explicit about which root
-    they mean — no silent surprises across source-tree dev,
-    installed-wheel, and per-workspace contexts.
+    Agent envelope path references must be explicit about which root
+    they mean — `kolsch:` or `workspace:` — so the meaning doesn't
+    silently shift across source-tree dev, installed-wheel, and
+    per-workspace contexts. Plain paths are rejected.
     """
 
     code = "config.context_file_unprefixed"
@@ -304,7 +313,7 @@ class ConfigContextFileUnprefixed(PlatformError):
         super().__init__(
             message=(
                 f"path {path!r} lacks a kolsch: or workspace: prefix — "
-                f"plain paths are rejected per Phase 2.2 §6.2"
+                f"plain paths are rejected"
             ),
             where=where,
             detail={"path": path},
@@ -312,17 +321,16 @@ class ConfigContextFileUnprefixed(PlatformError):
 
 
 class ConfigTemplateRenderFailed(PlatformError):
-    """Jinja render of an agent's ``prompt:`` template raised — Phase 2.2
-    error-model §4.18.
+    """Raised when Jinja render of an agent's `prompt:` template raised.
 
-    Raised by :func:`templating.render.render_prompt` when the Jinja
-    engine surfaces an ``UndefinedError`` (typo'd variable name under
-    StrictUndefined), a ``TemplateSyntaxError`` (malformed
-    ``{{ }} / {% %}`` syntax), or any other rendering failure. The
-    ``template`` detail identifies the source the engine was rendering
-    (usually the agent's YAML path); ``reason`` is the underlying
-    Jinja exception's ``str(...)`` projection — keep it human-readable
-    so the agent author can locate the bad reference quickly.
+    Surfaces from `templating.render.render_prompt` on any rendering
+    failure — `UndefinedError` (a typo'd variable name under
+    StrictUndefined), `TemplateSyntaxError` (malformed `{{ }}` or
+    `{% %}` syntax), or anything else the engine raises. The
+    `template` detail identifies the source the engine was rendering
+    (usually the agent's YAML path); `reason` is the underlying
+    Jinja exception's `str(...)` projection — kept human-readable so
+    the agent author can locate the bad reference quickly.
     """
 
     code = "config.template_render_failed"

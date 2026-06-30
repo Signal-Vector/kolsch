@@ -1,14 +1,11 @@
-"""LLM Provider Configuration errors — spec §4.13 (Phase 1.1).
+"""LLM provider configuration errors.
 
-Seven catalog codes from `docs/explanation/error-model.md` §4.13, plus
-:class:`LlmConnectorDuplicate` for the registry's duplicate-registration
-guard (catalog-listed as ``llm.connector_duplicate`` — flagged for spec
-amendment alongside the other post-spec additions).
-
-The Fatal codes here all surface from the engine's pre-flight step 6
-``build_llm`` call; the Recoverable code surfaces from the CLI's
-``connect`` / ``refresh`` flows when a provider's discovery endpoint is
-transiently unreachable.
+The Fatal classes here all surface from the engine's pre-flight
+`build_llm` call; the Recoverable `LlmDiscoveryFailed` surfaces from
+the CLI's `connect` and `refresh` flows when a provider's discovery
+endpoint is transiently unreachable. See the
+[error model](../../docs/explanation/error-model.md) for the
+classification contract.
 """
 
 from __future__ import annotations
@@ -18,7 +15,7 @@ from errors.level import Level
 
 
 class LlmProviderNotConfigured(PlatformError):
-    """Agent's ModelSpec names a provider absent from `llm_providers`."""
+    """Raised when the ModelSpec names a provider not in `llm_providers`."""
 
     code = "llm.provider_not_configured"
     level = Level.FATAL
@@ -45,8 +42,12 @@ class LlmProviderNotConfigured(PlatformError):
 
 
 class LlmSecretMissing(PlatformError):
-    """Provider config names an api_key_secret the Secrets provider
-    cannot resolve. Chains :class:`SecretNotFound` as ``__cause__``."""
+    """Raised when an api_key_secret named in provider config cannot be resolved.
+
+    Chains [`SecretNotFound`][errors.secrets.SecretNotFound] as
+    `__cause__` so the secrets-side failure surfaces verbatim through
+    the envelope's nested `cause`.
+    """
 
     code = "llm.secret_missing"
     level = Level.FATAL
@@ -69,7 +70,7 @@ class LlmSecretMissing(PlatformError):
 
 
 class LlmClientInitFailed(PlatformError):
-    """Connector's `build_llm` raised during client construction."""
+    """Raised when a connector's `build_llm` raised during client construction."""
 
     code = "llm.client_init_failed"
     level = Level.FATAL
@@ -92,7 +93,7 @@ class LlmClientInitFailed(PlatformError):
 
 
 class ConfigUnknownAlias(PlatformError):
-    """Agent config references a model alias absent from `model_aliases`."""
+    """Raised when agent config references a model alias absent from `model_aliases`."""
 
     code = "config.unknown_alias"
     level = Level.FATAL
@@ -118,7 +119,7 @@ class ConfigUnknownAlias(PlatformError):
 
 
 class LlmConnectorUnknown(PlatformError):
-    """Provider config's `type` does not match any registered connector."""
+    """Raised when a provider config's `type` matches no registered connector."""
 
     code = "llm.connector_unknown"
     level = Level.FATAL
@@ -144,7 +145,7 @@ class LlmConnectorUnknown(PlatformError):
 
 
 class LlmDiscoveryFailed(PlatformError):
-    """Connector's `discover_models` raised during CLI connect/refresh."""
+    """Raised when a connector's `discover_models` raised during CLI connect/refresh."""
 
     code = "llm.discovery_failed"
     level = Level.RECOVERABLE
@@ -164,7 +165,7 @@ class LlmDiscoveryFailed(PlatformError):
 
 
 class LlmValidationFailed(PlatformError):
-    """Connector's `validate_credentials` returned ok=False during connect."""
+    """Raised when `validate_credentials` returned ok=False during connect."""
 
     code = "llm.validation_failed"
     level = Level.FATAL
@@ -186,12 +187,11 @@ class LlmValidationFailed(PlatformError):
 
 
 class LlmConnectorDuplicate(PlatformError):
-    """`registry.register(...)` called twice for the same `type_name`.
+    """Raised when `registry.register(...)` is called twice for the same `type_name`.
 
-    NOT in the §4.13 spec table but needed for TC-LLM-09's
-    duplicate-registration guard. Added at registry-init time when a
-    provider module is imported twice; otherwise the registry would
-    silently last-write-wins.
+    Surfaces at registry-init time when a provider module is imported
+    twice; without the guard the registry would silently
+    last-write-wins.
     """
 
     code = "llm.connector_duplicate"
