@@ -1,26 +1,26 @@
-"""Workflow run persistence — Phase 3.1 Step 0.
+"""Workflow run persistence — the on-disk store for `runs/<wrk_id>/`.
 
-The :class:`WorkflowRunStore` is the per-workspace API for the
-``runs/<wrk_id>/`` directories. It mints fresh run IDs, writes the
-meta sidecar, and exposes the JSONL append + read + tail surfaces
-the executor (Step 1+) consumes.
+[`WorkflowRunStore`][workflows.run_store.WorkflowRunStore] is the
+per-workspace API for the `runs/<wrk_id>/` directories. It mints fresh
+run IDs, writes the meta sidecar, and exposes the JSONL append /
+read / tail surfaces the executor consumes.
 
-Per the master spec §8.4 sidecar layout:
+Sidecar layout:
 
-::
+```text
+runs/<wrk_id>/
+├── meta.json         # serialised WorkflowRun snapshot (this module)
+├── events.jsonl      # append-only event log (this module)
+├── pid               # executor PID (executor-owned)
+└── cancel.flag       # operator sentinel (CLI-owned)
+```
 
-    runs/<wrk_id>/
-    ├── meta.json         # serialised WorkflowRun snapshot (this module)
-    ├── events.jsonl      # append-only event log (this module)
-    ├── pid               # executor PID (Step 4)
-    └── cancel.flag       # operator sentinel (Phase 3.0 Step 6 + Step 4)
+This module owns `meta.json` and `events.jsonl` and the read / write
+surfaces over them. `pid` and `cancel.flag` are owned by the executor
+and CLI; this module only exposes their PATHS via
+[`RunDirectory`][workflows.run.RunDirectory].
 
-This module owns ``meta.json`` + ``events.jsonl`` and the read /
-write surfaces over them. ``pid`` + ``cancel.flag`` are owned by
-the executor and CLI; this module only exposes their PATHS via
-:class:`RunDirectory`.
-
-NO executor logic here — pure data + filesystem plumbing.
+NO executor logic here — pure data and filesystem plumbing.
 """
 
 from __future__ import annotations
@@ -40,22 +40,22 @@ from workflows.run import RunDirectory, WorkflowRun, WorkflowRunStatus
 __all__ = ["WorkflowRunStore"]
 
 
-# Polling interval for :meth:`WorkflowRunStore.tail`. 100ms is the
-# spec-stated default — small enough to feel live in ``--follow``,
-# large enough to keep CPU below noise.
+# Polling interval for `WorkflowRunStore.tail`. 100ms is the default
+# — small enough to feel live in `--follow`, large enough to keep CPU
+# below noise.
 _TAIL_POLL_SECONDS = 0.1
 
 
 class WorkflowRunStore:
-    """Per-workspace API for ``runs/<wrk_id>/`` directories.
+    """Per-workspace API for `runs/<wrk_id>/` directories.
 
     Construction is cheap (just records the workspace root); the
-    ``runs/`` directory is created lazily on the first :meth:`create`.
+    `runs/` directory is created lazily on the first `create`.
 
     All methods operate against the on-disk filesystem — no in-memory
-    caching. The executor reads + writes through this store; the
-    orphan sweep (Step 4) walks :meth:`list` to identify
-    ``status=running`` runs whose PIDs are dead.
+    caching. The executor reads and writes through this store; the
+    orphan sweep walks `list` to identify `status=running` runs whose
+    PIDs are dead.
     """
 
     def __init__(self, workspace_root: Path) -> None:
@@ -64,6 +64,7 @@ class WorkflowRunStore:
 
     @property
     def runs_root(self) -> Path:
+        """The `runs/` directory under the workspace root."""
         return self._runs_root
 
     # ------------------------------------------------------------------
@@ -79,33 +80,43 @@ class WorkflowRunStore:
         parent: ParentRunPointer | None = None,
         forked_from: ForkedFrom | None = None,
     ) -> WorkflowRun:
-        """Mint a fresh run + write its meta sidecar.
+        """Mint a fresh run and write its meta sidecar.
 
-        ``trace_id`` defaults to a freshly-minted ``tr_<uuid>`` for
-        root entry points; callers nested inside an existing trace
+        `trace_id` defaults to a freshly-minted `tr_<uuid>` for root
+        entry points; callers nested inside an existing trace
         (sub-workflow, fork) pass the parent's trace id verbatim so
-        the chain-spanning ID flows through (master spec §11.3).
+        the chain-spanning ID flows through.
 
-        ``parent`` (Phase 3.7) is the parent-run pointer when this
-        run is being spawned by a ``kolsch/nodes/workflow`` node in
-        a parent run. Root entry points pass ``None``. Persisted in
-        ``meta.json`` as a nested dict and round-tripped on
-        :meth:`read`.
+        `parent` is the parent-run pointer when this run is being
+        spawned by a `kolsch/nodes/workflow` node in a parent run.
+        Root entry points pass `None`. Persisted in `meta.json` as a
+        nested dict and round-tripped on `read`.
 
-        ``forked_from`` (Phase 3.8) is the parent-run pointer when
-        this run is being created by ``kolsch workflows fork``. The
-        two parent-pointer kwargs are INDEPENDENT — a forked
-        sub-workflow run can carry both. Persisted in ``meta.json``
-        as a nested dict alongside ``parent``.
+        `forked_from` is the parent-run pointer when this run is
+        being created by `kolsch workflows fork`. The two
+        parent-pointer kwargs are INDEPENDENT — a forked sub-workflow
+        run can carry both. Persisted in `meta.json` as a nested dict
+        alongside `parent`.
 
-        Returns the materialised :class:`WorkflowRun`. The JSONL is
-        NOT touched here — :class:`workflows.executor.IterativeExecutor`
-        emits ``workflow.run.started`` as the first event when it
-        begins the run (Step 1).
+        The JSONL is NOT touched here — the executor emits
+        `workflow.run.started` as the first event when it begins the
+        run.
+
+        Args:
+            workflow_ref: The 3-seg ref of the workflow being run.
+            inputs: Optional input dict — defaults to empty.
+            trace_id: Optional caller-supplied trace id; defaults to
+                a freshly-minted one.
+            parent: Optional sub-workflow parent pointer.
+            forked_from: Optional fork parent pointer.
+
+        Returns:
+            The materialised
+            [`WorkflowRun`][workflows.run.WorkflowRun].
         """
         run_id = WorkflowRunId(f"wrk_{uuid.uuid4()}")
-        resolved_trace_id = trace_id if trace_id is not None else TraceId(
-            f"tr_{uuid.uuid4()}"
+        resolved_trace_id = (
+            trace_id if trace_id is not None else TraceId(f"tr_{uuid.uuid4()}")
         )
         run = WorkflowRun(
             run_id=run_id,
@@ -123,13 +134,22 @@ class WorkflowRunStore:
         return run
 
     def read(self, run_id: WorkflowRunId) -> WorkflowRun:
-        """Reconstruct the :class:`WorkflowRun` for an existing run.
+        """Reconstruct the run record for an existing run.
 
-        Reads the ``meta.json`` sidecar for the unchanging fields,
-        then walks the JSONL tail for the live status / reason. If
-        the JSONL has no terminal event, status remains whatever the
-        meta sidecar recorded (which Step 1+ will set to ``running``
-        at start time).
+        Reads the `meta.json` sidecar for the unchanging fields, then
+        walks the JSONL tail for the live status / reason. If the
+        JSONL has no terminal event, status remains whatever the
+        meta sidecar recorded (the executor sets it to `running` at
+        start time).
+
+        Args:
+            run_id: The run to read.
+
+        Returns:
+            The reconstructed run.
+
+        Raises:
+            FileNotFoundError: No `meta.json` exists for `run_id`.
         """
         run_dir = self._directory(run_id)
         if not run_dir.meta_path.exists():
@@ -137,12 +157,10 @@ class WorkflowRunStore:
             raise FileNotFoundError(msg)
         meta = json.loads(run_dir.meta_path.read_text(encoding="utf-8"))
         run = WorkflowRun.model_validate(meta)
-        # Walk the JSONL tail for the most recent ``workflow.run.*``
+        # Walk the JSONL tail for the most recent `workflow.run.*`
         # event; if one of the terminal kinds is present, lift the
         # status from there.
-        tail_status, tail_reason = _scan_jsonl_for_terminal_status(
-            run_dir.events_path
-        )
+        tail_status, tail_reason = _scan_jsonl_for_terminal_status(run_dir.events_path)
         if tail_status is not None:
             run = run.model_copy(
                 update={
@@ -152,22 +170,26 @@ class WorkflowRunStore:
             )
         return run
 
-    def update_status(
-        self, run_id: WorkflowRunId, status: WorkflowRunStatus
-    ) -> None:
-        """Phase 3.4 — atomically update the run's ``meta.json`` status.
+    def update_status(self, run_id: WorkflowRunId, status: WorkflowRunStatus) -> None:
+        """Atomically update the run's `meta.json` status.
 
-        The pause handler (Step 0) writes ``waiting_for_input`` so
-        :meth:`read` returns the paused status (the JSONL has no
-        terminal event yet, so the tail scan falls through to the
-        meta sidecar's status). The resume handler (Step 1) will
-        flip it back to ``running``. The four terminal statuses
-        flow through the JSONL terminal events and don't need this
-        path — the tail scan in :meth:`read` overrides any meta
-        status when a terminal event is present.
+        The pause handler writes `waiting_for_input` so `read`
+        returns the paused status (the JSONL has no terminal event
+        yet, so the tail scan falls through to the meta sidecar's
+        status). The resume handler flips it back to `running`. The
+        four terminal statuses flow through the JSONL terminal events
+        and don't need this path — the tail scan in `read` overrides
+        any meta status when a terminal event is present.
 
-        Atomic via ``tmp + rename`` so an interrupted write never
-        leaves a corrupt sidecar.
+        Atomic via `tmp + rename` so an interrupted write never leaves
+        a corrupt sidecar.
+
+        Args:
+            run_id: The run to update.
+            status: The new status to record.
+
+        Raises:
+            FileNotFoundError: No `meta.json` exists for `run_id`.
         """
         run_dir = self._directory(run_id)
         if not run_dir.meta_path.exists():
@@ -182,16 +204,16 @@ class WorkflowRunStore:
     # event append / read
     # ------------------------------------------------------------------
 
-    def append_event(
-        self, run_id: WorkflowRunId, event: dict[str, Any]
-    ) -> None:
-        """Append-only JSONL write with a trailing newline.
+    def append_event(self, run_id: WorkflowRunId, event: dict[str, Any]) -> None:
+        """Append a single event to the run's JSONL with a trailing newline.
 
-        The caller is responsible for the event's shape (kind +
-        common fields per master spec §11.3); Step 5 wires the
-        Pydantic envelopes in. At Step 0 the contract is just:
-        valid JSON + one line per event + atomic-enough for the
-        sequential-executor regime.
+        The caller is responsible for the event's shape (kind + common
+        fields). The contract is: valid JSON, one line per event,
+        atomic-enough for the sequential-executor regime.
+
+        Args:
+            run_id: The run whose JSONL to append to.
+            event: The event payload.
         """
         run_dir = self._directory(run_id)
         run_dir.root.mkdir(parents=True, exist_ok=True)
@@ -200,14 +222,19 @@ class WorkflowRunStore:
             fh.write(line)
             fh.write("\n")
 
-    def read_events(
-        self, run_id: WorkflowRunId
-    ) -> Iterator[dict[str, Any]]:
+    def read_events(self, run_id: WorkflowRunId) -> Iterator[dict[str, Any]]:
         """Yield one parsed dict per JSONL line.
 
-        Returns an empty iterator when the run exists but has no
-        events yet (a pending run). Raises :class:`FileNotFoundError`
-        when the run directory itself is missing.
+        Args:
+            run_id: The run to read.
+
+        Yields:
+            One parsed event dict per JSONL line.
+
+        Raises:
+            FileNotFoundError: The run directory itself is missing.
+                When the run exists but has no events yet (a pending
+                run), the iterator is simply empty.
         """
         run_dir = self._directory(run_id)
         if not run_dir.root.exists():
@@ -228,15 +255,21 @@ class WorkflowRunStore:
         *,
         poll_seconds: float = _TAIL_POLL_SECONDS,
     ) -> Iterator[dict[str, Any]]:
-        """Tail the JSONL like ``tail -f``.
+        """Tail the JSONL like `tail -f`.
 
-        Polls every ``poll_seconds`` (default 100ms) until the run
+        Polls every `poll_seconds` (default 100ms) until the run
         reaches a terminal status (see
-        :meth:`WorkflowRunStatus.terminal_set`). Yields events in
-        append order; terminates after yielding the terminal
-        ``workflow.run.*`` event.
+        [`WorkflowRunStatus.terminal_set`][workflows.run.WorkflowRunStatus.terminal_set]).
+        Yields events in append order; terminates after yielding the
+        terminal `workflow.run.*` event. Used by the CLI's `--follow`
+        flag.
 
-        Used by the CLI ``--follow`` flag (Step 5).
+        Args:
+            run_id: The run to tail.
+            poll_seconds: Poll interval between file checks.
+
+        Yields:
+            One event dict per appended JSONL line, in append order.
         """
         run_dir = self._directory(run_id)
         offset = 0
@@ -261,11 +294,14 @@ class WorkflowRunStore:
     # ------------------------------------------------------------------
 
     def list(self) -> list[WorkflowRun]:
-        """Enumerate runs under ``runs/``, newest first.
+        """Enumerate runs under `runs/`, newest first.
 
-        Each row is reconstructed via :meth:`read` so the returned
-        status reflects any terminal event that landed in the JSONL.
-        Sort order is ``created_at`` descending; ties broken by id.
+        Each row is reconstructed via `read` so the returned status
+        reflects any terminal event that landed in the JSONL. Sort
+        order is `created_at` descending; ties broken by id.
+
+        Returns:
+            All runs in the store, newest first.
         """
         if not self._runs_root.exists():
             return []
@@ -289,10 +325,10 @@ class WorkflowRunStore:
     # ------------------------------------------------------------------
 
     def directory(self, run_id: WorkflowRunId) -> RunDirectory:
-        """Return the :class:`RunDirectory` for a given run id.
+        """Return the [`RunDirectory`][workflows.run.RunDirectory] for a given run id.
 
-        Public so the executor (Step 4) can read the PID + cancel
-        flag paths through the same value object the store uses.
+        Public so the executor can read the PID and cancel-flag paths
+        through the same value object the store uses.
         """
         return self._directory(run_id)
 
@@ -303,13 +339,9 @@ class WorkflowRunStore:
     def _directory(self, run_id: WorkflowRunId) -> RunDirectory:
         return RunDirectory(root=self._runs_root / str(run_id))
 
-    def _write_meta(
-        self, run_dir: RunDirectory, run: WorkflowRun
-    ) -> None:
+    def _write_meta(self, run_dir: RunDirectory, run: WorkflowRun) -> None:
         tmp = run_dir.meta_path.with_suffix(".json.tmp")
-        tmp.write_text(
-            run.model_dump_json(indent=2), encoding="utf-8"
-        )
+        tmp.write_text(run.model_dump_json(indent=2), encoding="utf-8")
         tmp.replace(run_dir.meta_path)
 
 
@@ -335,8 +367,8 @@ def _scan_jsonl_for_terminal_status(
 ) -> tuple[WorkflowRunStatus | None, str | None]:
     """Read the JSONL bottom-up and return the first terminal status.
 
-    Returns ``(None, None)`` when the file is missing OR contains no
-    terminal ``workflow.run.*`` event yet.
+    Returns `(None, None)` when the file is missing OR contains no
+    terminal `workflow.run.*` event yet.
     """
     if not events_path.exists():
         return (None, None)

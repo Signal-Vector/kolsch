@@ -1,37 +1,35 @@
-"""Run-start workflow validation gate — Phase 3.0 Step 5.
+"""Run-start workflow validation gate.
 
-Covers master spec §7.1-§7.7 PLUS:
+Covers structural validation plus:
 
-- Cross-graph ``nodes.<X>.<field>`` pre-validation via Jinja-AST walk
-  + graph-reachability predecessor closure (Round 4 item #11 — NOT
-  edge-level ``ref:``, which no longer exists).
-- ``WorkflowNodeNotDefined`` pre-pass for unresolved YAML node-name
-  references in ``edge.from`` / ``edge.to`` / ``copy_of:`` source /
-  ``map.apply:`` target.
-- ``WorkflowBindCollision`` (Round 4 item #11) when two edges to the
-  same target bind the same key.
-- ``WorkflowBindMustBeJinja`` is GONE (Round 6 J5/β — binds RHS
-  accepts YAML literals OR Jinja-marked strings; literals pass
-  through).
-- ``WorkflowInvalidTimeout`` (R3 #2) for non-positive
-  ``timeout_seconds`` at workflow OR per-node scope.
-- ``WorkflowTimeoutShadowsNode`` warning when a per-node timeout
-  exceeds the workflow-level timeout (Round 6).
-- ``WorkflowFromShapeError`` / ``WorkflowFromAssetTypeError`` /
-  ``WorkflowFromNotFound`` (Round 4 item #13) — STRICT HARD ERRORS
-  when ``policy:`` rules declare a malformed ``from:`` field.
-- ``WorkflowExtendsPolicyForbidden`` (Round 6 S5) when an extended
-  workflow declares non-empty ``policy:`` rules.
+- Cross-graph `nodes.<X>.<field>` pre-validation via Jinja-AST walk +
+  graph-reachability predecessor closure.
+- `WorkflowNodeNotDefined` pre-pass for unresolved YAML node-name
+  references in `edge.from` / `edge.to` / `copy_of:` source /
+  `map.apply:` target.
+- `WorkflowBindCollision` when two edges to the same target bind the
+  same key.
+- `WorkflowInvalidTimeout` for non-positive `timeout_seconds` at
+  workflow OR per-node scope.
+- `WorkflowTimeoutShadowsNode` warning when a per-node timeout
+  exceeds the workflow-level timeout.
+- `WorkflowFromShapeError` / `WorkflowFromAssetTypeError` /
+  `WorkflowFromNotFound` — strict hard errors when `policy:` rules
+  declare a malformed `from:` field.
+- `WorkflowExtendsPolicyForbidden` when an extended workflow
+  declares non-empty `policy:` rules.
 
-Public surface (R3 #6 dual):
+**Public surface (dual).**
 
-- :func:`validate_workflow` returns :class:`ValidationResult`. NEVER
-  raises on validation failure (only on internal contract violations).
-- :func:`validate_workflow_or_raise` raises on errors (warnings are
-  silent in the raise path). Single error → raises the specific
-  ``WorkflowValidationError`` subclass; multiple errors → raises
-  stdlib :class:`ExceptionGroup[WorkflowValidationError]` (NO custom
-  ``WorkflowValidationErrorGroup`` — per R3 #6).
+- `validate_workflow` returns
+  [`ValidationResult`][workflows.validator.ValidationResult]. NEVER
+  raises on validation failure (only on internal contract
+  violations).
+- `validate_workflow_or_raise` raises on errors (warnings are silent
+  in the raise path). Single error → raises the specific
+  [`WorkflowValidationError`][workflows.errors.WorkflowValidationError]
+  subclass; multiple errors → raises stdlib
+  `ExceptionGroup[WorkflowValidationError]`.
 """
 
 from __future__ import annotations
@@ -105,7 +103,7 @@ __all__ = [
 
 
 # ---------------------------------------------------------------------------
-# Output-schema table for built-in node types (master spec §4.0).
+# Output-schema table for built-in node types.
 # ---------------------------------------------------------------------------
 
 
@@ -123,14 +121,14 @@ _BUILTIN_OUTPUT_FIELDS: dict[type, frozenset[str]] = {
     BranchNodeDef: frozenset({"value"}),
     ComputeNodeDef: frozenset({"value"}),
 }
-"""Map from NodeDef class → known output keys per master spec §4.0.
+"""Map from NodeDef class → known output keys.
 
 Agent and sub-workflow nodes have variable output schemas (depend on
 the resolved asset's declared outputs); they are treated as "open"
-for the field-existence check — any field passes. CatalogNodeDef
-(authored Python nodes) is similarly "open" at v1; proper
-introspection lands when the Phase 3.1 executor wires up the
-@node-decorated `run` registration.
+for the field-existence check — any field passes. `CatalogNodeDef`
+(authored Python nodes) is similarly "open"; proper introspection
+lands when the executor wires up the `@node`-decorated `run`
+registration.
 """
 
 
@@ -142,18 +140,18 @@ _OPEN_OUTPUT_CLASSES: tuple[type, ...] = (
 
 
 # ---------------------------------------------------------------------------
-# ValidationResult — R3 #6 structured return shape.
+# ValidationResult.
 # ---------------------------------------------------------------------------
 
 
 @dataclass(frozen=True, slots=True)
 class ValidationResult:
-    """Structured return shape from :func:`validate_workflow`.
+    """Structured return shape from `validate_workflow`.
 
-    R3 #6 — the structured API NEVER raises on validation failure;
-    callers inspect ``errors`` / ``warnings`` and decide what to do.
-    The thin wrapper :func:`validate_workflow_or_raise` adapts this
-    into a raise-on-error surface for callers that prefer it.
+    The structured API NEVER raises on validation failure; callers
+    inspect `errors` / `warnings` and decide what to do. The thin
+    wrapper `validate_workflow_or_raise` adapts this into a
+    raise-on-error surface for callers that prefer it.
     """
 
     errors: tuple[WorkflowValidationError, ...] = field(default_factory=tuple)
@@ -161,8 +159,11 @@ class ValidationResult:
 
     @property
     def is_valid(self) -> bool:
-        """``True`` iff no errors were collected. Warnings do NOT
-        affect validity — they surface non-blocking advice."""
+        """Return `True` iff no errors were collected.
+
+        Warnings do NOT affect validity — they surface non-blocking
+        advice.
+        """
         return not self.errors
 
 
@@ -172,19 +173,19 @@ class ValidationResult:
 
 
 _FILE_PLACEHOLDER = "<workflow>"
-"""Source-file placeholder used by error constructors when the
-validator runs against an in-memory :class:`Workflow` model (no
-on-disk file). YAML-origin callers pass through ``load_workflow``
-which records the real path on its own error sites."""
+"""Source-file placeholder used by error constructors when the validator runs against an in-memory `Workflow` model.
+
+YAML-origin callers pass through `load_workflow` which records the
+real path on its own error sites.
+"""
 
 
-# Master spec §5.3 — ``run`` MUST accept 2 or 3 positional params
-# (Inputs, NodeContext, optional Config). Named constants here so
-# the §7.6 signature check reads intent rather than literal magic
-# numbers (ruff PLR2004).
+# `run` MUST accept 2 or 3 positional params (Inputs, NodeContext,
+# optional Config). Named constants here so the signature check reads
+# intent rather than literal magic numbers (ruff PLR2004).
 _MIN_RUN_PARAMS = 2
 _MAX_RUN_PARAMS = 3
-# Master spec §5.4 — the ``tuple[bool, BaseModel]`` return shape.
+# The `tuple[bool, BaseModel]` return shape.
 _TUPLE_RETURN_LEN = 2
 
 
@@ -194,27 +195,35 @@ def validate_workflow(
     *,
     file: str = _FILE_PLACEHOLDER,
 ) -> ValidationResult:
-    """Run all §7.1-§7.7 checks on ``workflow``; return findings.
+    """Run every validation layer on `workflow` and return findings.
 
-    Layered execution (R3 #6 accumulation rules):
+    **Layered execution.**
 
-    1. ``_check_extends_policy`` (master spec §7.5 / Round 6 S5).
-    2. ``_check_structural`` (§7.1) — pre-pass for unresolved node
-       names; DAG + start + reachability; bind-key collision.
-    3. ``_check_branching`` (§7.3).
-    4. ``_check_jinja_refs`` (§7.2) — graph-reachability predecessor
-       closure; Jinja-AST walk on Jinja-marked strings.
-    5. ``_check_type_specific`` (§7.4).
-    6. ``_check_catalog_node_defs`` (§7.6) — authored Python node
+    1. `_check_extends_policy` — forbid `policy:` inheritance.
+    2. `_check_structural` — pre-pass for unresolved node names; DAG
+       + start + reachability; bind-key collision.
+    3. `_check_branching`.
+    4. `_check_jinja_refs` — graph-reachability predecessor closure;
+       Jinja-AST walk on Jinja-marked strings.
+    5. `_check_type_specific`.
+    6. `_check_catalog_node_defs` — authored Python node
        introspection (import / decorator / signature / return-type).
-    7. ``_check_authz`` (§7.7) — STRICT ``from:`` validation per
-       Round 4 item #13.
-    8. ``_check_timeouts`` (R3 #2) — positive int + shadowing warning.
+    7. `_check_authz` — strict `from:` validation.
+    8. `_check_timeouts` — positive int + shadowing warning.
+    9. `_check_concurrency_invariants`.
 
     Within each layer, all findings accumulate; the layer never
-    short-circuits. Across layers, run all layers in best-effort
-    mode and accumulate; :func:`validate_workflow_or_raise` adds the
-    AC 5.12 "Related issues" tail when raising.
+    short-circuits. Across layers, run every layer in best-effort
+    mode and accumulate; `validate_workflow_or_raise` adds the
+    "Related issues" tail when raising.
+
+    Args:
+        workflow: The parsed workflow to validate.
+        catalog: The asset catalog used for ref resolution.
+        file: The source file path used in error messages.
+
+    Returns:
+        The accumulated [`ValidationResult`][workflows.validator.ValidationResult].
     """
     errors: list[WorkflowValidationError] = []
     warnings: list[WorkflowValidationWarning] = []
@@ -254,22 +263,31 @@ def validate_workflow_or_raise(
     *,
     file: str = _FILE_PLACEHOLDER,
 ) -> None:
-    """Thin raise wrapper around :func:`validate_workflow`.
+    """Thin raise wrapper around `validate_workflow`.
 
-    On a clean result, returns ``None``. On a single error, raises the
-    specific :class:`WorkflowValidationError` subclass. On multiple
-    errors, raises stdlib :class:`ExceptionGroup` (per R3 #6 — no
-    custom ``WorkflowValidationErrorGroup`` class). Warnings are
-    silent in the raise path.
+    On a clean result, returns `None`. On a single error, raises the
+    specific
+    [`WorkflowValidationError`][workflows.errors.WorkflowValidationError]
+    subclass. On multiple errors, raises stdlib `ExceptionGroup`.
+    Warnings are silent in the raise path.
 
-    AC 5.12 — "Related issues" tail: when more than one validation
-    layer contributed an error, attach a single ``__notes__`` line to
-    the raised exception (or ExceptionGroup) summarising the other
+    **Related issues tail.** When more than one validation layer
+    contributed an error, attaches a single `__notes__` line to the
+    raised exception (or `ExceptionGroup`) summarising the other
     layers' findings. Layer tags are pre-attached during
-    :func:`validate_workflow` (each error carries a ``layer: <name>``
-    note); this wrapper rolls them up into one human-readable summary
-    so single-error raises still tell the operator *"by the way,
-    there's also a schema error you'll hit next"*.
+    `validate_workflow` (each error carries a `layer: <name>` note);
+    this wrapper rolls them up into one human-readable summary so
+    single-error raises still tell the operator "by the way, there's
+    also a schema error you'll hit next".
+
+    Args:
+        workflow: The parsed workflow to validate.
+        catalog: The asset catalog used for ref resolution.
+        file: The source file path used in error messages.
+
+    Raises:
+        WorkflowValidationError: A single validation finding.
+        ExceptionGroup: Multiple validation findings.
     """
     result = validate_workflow(workflow, catalog, file=file)
     if not result.errors:
@@ -292,11 +310,11 @@ def validate_workflow_or_raise(
 def _related_issues_tail(
     errors: tuple[WorkflowValidationError, ...],
 ) -> str | None:
-    """Build the AC 5.12 "Related issues" summary line.
+    """Build the "Related issues" summary line.
 
-    Walks the per-error ``__notes__`` attached during validation,
+    Walks the per-error `__notes__` attached during validation,
     counts how many findings each layer contributed, and returns a
-    one-line summary when more than one layer fired. Returns ``None``
+    one-line summary when more than one layer fired. Returns `None`
     when all findings come from a single layer (no tail needed).
     """
     counts: dict[str, int] = {}
@@ -308,14 +326,12 @@ def _related_issues_tail(
                 break
     if len(counts) <= 1:
         return None
-    items = ", ".join(
-        f"{layer} ({n})" for layer, n in sorted(counts.items())
-    )
+    items = ", ".join(f"{layer} ({n})" for layer, n in sorted(counts.items()))
     return f"Related issues across layers: {items}."
 
 
 # ---------------------------------------------------------------------------
-# §7.5 — Extends + composition (Round 6 S5: forbid policy inheritance).
+# Extends + composition: forbid policy inheritance.
 # ---------------------------------------------------------------------------
 
 
@@ -325,15 +341,15 @@ def _check_extends_policy(
     catalog: AssetCatalog,
     file: str,
 ) -> tuple[list[WorkflowValidationError], list[WorkflowValidationWarning]]:
-    """Round 6 S5 — an extended workflow's ``policy:`` does NOT merge
-    across ``extends:``. If ANY extended workflow (transitive) carries
-    non-empty ``policy:`` rules, raise :class:`WorkflowExtendsPolicyForbidden`.
+    """Forbid `policy:` inheritance across `extends:`.
 
-    Implementation: walk ``workflow.extends`` refs; for each, resolve
-    via the catalog and parse the YAML to inspect the ``policy:``
-    field. Cycle / depth detection is the engine's responsibility at
-    extends resolution time (Phase 3.1); the validator only catches
-    the policy-shadowing case here.
+    An extended workflow's `policy:` does NOT merge across `extends:`.
+    If ANY extended workflow (transitive) carries non-empty `policy:`
+    rules, raise
+    [`WorkflowExtendsPolicyForbidden`][workflows.errors.WorkflowExtendsPolicyForbidden].
+    Cycle / depth detection is the engine's responsibility at extends
+    resolution time; the validator only catches the policy-shadowing
+    case here.
     """
     errors: list[WorkflowValidationError] = []
     warnings: list[WorkflowValidationWarning] = []
@@ -361,16 +377,14 @@ def _check_extends_policy(
         policy_rules = raw.get("policy") or []
         if isinstance(policy_rules, list) and policy_rules:
             errors.append(
-                WorkflowExtendsPolicyForbidden(
-                    file=file, line=0, extended_ref=ref
-                )
+                WorkflowExtendsPolicyForbidden(file=file, line=0, extended_ref=ref)
             )
 
     return errors, warnings
 
 
 # ---------------------------------------------------------------------------
-# §7.1 — Structural checks.
+# Structural checks.
 # ---------------------------------------------------------------------------
 
 
@@ -380,7 +394,7 @@ def _check_structural(
     catalog: AssetCatalog,
     file: str,
 ) -> tuple[list[WorkflowValidationError], list[WorkflowValidationWarning]]:
-    """Master spec §7.1 — graph shape + bind-key collision."""
+    """Graph shape and bind-key collision."""
     _ = catalog  # unused at this layer; signature kept uniform.
     errors: list[WorkflowValidationError] = []
     warnings: list[WorkflowValidationWarning] = []
@@ -389,8 +403,8 @@ def _check_structural(
     edges = list(workflow.graph.edges) if workflow.graph is not None else []
 
     # --- Pre-pass: every YAML node-name ref resolves --------------------
-    # Round 4 item #11 — `edge.ref` is GONE; the trigger surfaces are
-    # edge.from / edge.to / copy_of:source / map.apply:target.
+    # `edge.ref` is GONE; the trigger surfaces are edge.from / edge.to /
+    # copy_of:source / map.apply:target.
     for idx, edge in enumerate(edges):
         if edge.from_ not in node_names:
             errors.append(
@@ -436,8 +450,8 @@ def _check_structural(
     if errors:
         return errors, warnings
 
-    # --- Reachability (§7.1 — defined node MUST be reachable from start
-    # OR be a map.apply: target) -----------------------------------------
+    # --- Reachability: every defined node MUST be reachable from start
+    # OR be a map.apply: target -----------------------------------------
     # When the workflow has no `graph:` (node library), reachability is
     # not enforced.
     if workflow.graph is None:
@@ -450,9 +464,7 @@ def _check_structural(
         outgoing[edge.from_].append(edge.to)
 
     map_apply_targets: set[str] = {
-        node.apply
-        for node in workflow.nodes.values()
-        if isinstance(node, MapNodeDef)
+        node.apply for node in workflow.nodes.values() if isinstance(node, MapNodeDef)
     }
     copy_of_sources: set[str] = {
         node.copy_of
@@ -466,11 +478,7 @@ def _check_structural(
     # the orphan would be its own BFS root and would falsely pass the
     # reachability check.
     if edges:
-        real_starts = [
-            n
-            for n in node_names
-            if not incoming[n] and outgoing[n]
-        ]
+        real_starts = [n for n in node_names if not incoming[n] and outgoing[n]]
         if not real_starts:
             # Fallback: take every zero-incoming node (handles the
             # single-node workflow + odd single-edge shapes).
@@ -493,9 +501,7 @@ def _check_structural(
             continue
         if node_name in map_apply_targets:
             continue  # map workers don't appear in the edge graph
-        errors.append(
-            WorkflowUnreachableNode(file=file, line=0, node=node_name)
-        )
+        errors.append(WorkflowUnreachableNode(file=file, line=0, node=node_name))
 
     # ``copy_of:`` source must be graph-reachable (no template-only nodes).
     for node_name, node in workflow.nodes.items():
@@ -504,13 +510,9 @@ def _check_structural(
         if node.copy_of in copy_of_sources and node.copy_of not in reachable:
             # The source is referenced by a copy_of: but isn't itself
             # graph-reachable. Surface it as unreachable.
-            errors.append(
-                WorkflowUnreachableNode(
-                    file=file, line=0, node=node.copy_of
-                )
-            )
+            errors.append(WorkflowUnreachableNode(file=file, line=0, node=node.copy_of))
 
-    # --- Bind-key collision across multi-input edges (Round 4 item #11) -
+    # --- Bind-key collision across multi-input edges --------------------
     edges_by_target: dict[str, list[EdgeDef]] = {n: [] for n in node_names}
     for edge in edges:
         edges_by_target.setdefault(edge.to, []).append(edge)
@@ -537,7 +539,7 @@ def _check_structural(
 
 
 # ---------------------------------------------------------------------------
-# §7.3 — Branching.
+# Branching.
 # ---------------------------------------------------------------------------
 
 
@@ -547,23 +549,21 @@ def _check_branching(
     catalog: AssetCatalog,
     file: str,
 ) -> tuple[list[WorkflowValidationError], list[WorkflowValidationWarning]]:
-    """Master spec §7.3 — branching invariants on branch-capable sources.
+    """Branching invariants on branch-capable sources.
 
-    Phase 3.3 extends the branchable set per master spec §2.5 / §4.1.1
-    / §5.4: ``kolsch/nodes/branch``, ``kolsch/nodes/bash`` (the exit
-    code drives dispatch), and authored Python ``@node`` modules whose
-    introspected return annotation is ``bool`` or ``tuple[bool,
-    BaseModel]`` are ALL valid sources for edges carrying
-    ``branch:``. Authored Python whose return type is a plain
-    ``BaseModel`` is NOT branchable — ``branch:`` edges from such
-    nodes raise ``WorkflowBranchOnNonBranchable`` as before.
+    The branchable set is `kolsch/nodes/branch`, `kolsch/nodes/bash`
+    (the exit code drives dispatch), and authored Python `@node`
+    modules whose introspected return annotation is `bool` or
+    `tuple[bool, BaseModel]`. Authored Python whose return type is a
+    plain `BaseModel` is NOT branchable — `branch:` edges from such
+    nodes raise `WorkflowBranchOnNonBranchable`.
 
-    ``WorkflowBranchMissingArm`` continues to apply only to
-    :class:`BranchNodeDef` — the branch node type's contract requires
-    both arms wired (master spec §4.6.3). Bash + authored Python may
-    legitimately use only one arm (e.g. a guarded retry that prunes
-    the failure path); the runtime treats the missing arm as "no
-    edges fire" without complaint.
+    `WorkflowBranchMissingArm` applies only to
+    [`BranchNodeDef`][workflows.parser.BranchNodeDef] — the branch
+    node type's contract requires both arms wired. Bash and authored
+    Python may legitimately use only one arm (e.g. a guarded retry
+    that prunes the failure path); the runtime treats the missing
+    arm as "no edges fire" without complaint.
     """
     errors: list[WorkflowValidationError] = []
     warnings: list[WorkflowValidationWarning] = []
@@ -620,17 +620,15 @@ def _check_branching(
     return errors, warnings
 
 
-def _is_branchable_catalog_node(
-    *, node: CatalogNodeDef, catalog: AssetCatalog
-) -> bool:
-    """``True`` iff this authored Python ``@node``'s introspected
-    return annotation is ``bool`` or ``tuple[bool, BaseModel]``.
+def _is_branchable_catalog_node(*, node: CatalogNodeDef, catalog: AssetCatalog) -> bool:
+    """Return `True` iff this authored Python `@node` is branchable.
 
-    Defensive on every failure mode — a missing catalog entry,
-    import failure, or unreadable signature returns ``False`` so the
-    branching check defers to the per-node failure paths in
-    :func:`_check_authored_nodes`; the user gets the more specific
-    diagnostic there.
+    "Branchable" means the introspected return annotation is `bool`
+    or `tuple[bool, BaseModel]`. Defensive on every failure mode — a
+    missing catalog entry, import failure, or unreadable signature
+    returns `False` so the branching check defers to the per-node
+    failure paths in `_check_catalog_node_defs`; the user gets the
+    more specific diagnostic there.
     """
     entry = catalog.lookup(node.type, expected_type="node")
     if entry is None or not entry.path:
@@ -662,28 +660,31 @@ def _is_branchable_catalog_node(
 
 
 # ---------------------------------------------------------------------------
-# §7.2 — Schema / cross-graph ``nodes.<X>.<field>`` pre-validation.
+# Schema / cross-graph `nodes.<X>.<field>` pre-validation.
 # ---------------------------------------------------------------------------
 
 
 def _is_jinja_marked(value: Any) -> bool:
-    """Round 6 J5/β — a value is Jinja iff it is a string containing
-    ``"{{"``. Pure YAML literals (non-string, or string without that
-    marker) skip Jinja parsing."""
+    """Return `True` iff `value` is a Jinja-marked string.
+
+    A value is Jinja iff it is a string containing `"{{"`. Pure YAML
+    literals (non-string, or string without that marker) skip Jinja
+    parsing.
+    """
     return isinstance(value, str) and "{{" in value
 
 
 def _extract_nodes_refs(expression: str) -> list[tuple[str, str | None]]:
-    """Parse a Jinja expression via the singleton sandbox env and
-    return ``(X, Y)`` pairs for every ``nodes.<X>.<Y>`` access.
+    """Return `(X, Y)` pairs for every `nodes.<X>.<Y>` access in `expression`.
 
-    ``Y`` may be ``None`` when the access form is just ``nodes.<X>``
-    (rare but legal; treated as "the field is unspecified — pass").
+    Parses via the singleton sandbox env. `Y` may be `None` when the
+    access form is just `nodes.<X>` (rare but legal; treated as "the
+    field is unspecified — pass").
 
     Returns an empty list if the expression fails to parse — the
-    sandbox + JinjaSecurityError surface is the executor's concern;
-    we don't want a parse-time failure here to mask other validator
-    findings.
+    sandbox plus `JinjaSecurityError` surface is the executor's
+    concern; we don't want a parse-time failure here to mask other
+    validator findings.
     """
     try:
         ast = JINJA_ENV.parse(expression)
@@ -710,21 +711,20 @@ def _extract_nodes_refs(expression: str) -> list[tuple[str, str | None]]:
             and getattr_node.node.name == "nodes"
         ):
             pairs.append((outer_attr, None))
-    # Dedupe: when the same Jinja expression already produced a
-    # ``(X, Y)`` pair, drop the inner ``(X, None)`` that
-    # :meth:`Template.find_all` also surfaces. The bare ``nodes.X``
-    # access is only meaningful when no field traversal was authored.
-    return [
-        (x, y)
-        for (x, y) in pairs
-        if not (y is None and x in nodes_x_y_sources)
-    ]
+    # Dedupe: when the same Jinja expression already produced a `(X,
+    # Y)` pair, drop the inner `(X, None)` that
+    # `Template.find_all` also surfaces. The bare `nodes.X` access is
+    # only meaningful when no field traversal was authored.
+    return [(x, y) for (x, y) in pairs if not (y is None and x in nodes_x_y_sources)]
 
 
 def _output_field_set(node: Any) -> frozenset[str] | None:
-    """Return the known output-field set for a node, or ``None`` when
-    the schema is unconstrained (agent / sub-workflow / authored
-    Python) and the field-existence check should pass-through."""
+    """Return the known output-field set for a node.
+
+    Returns `None` when the schema is unconstrained (agent /
+    sub-workflow / authored Python) and the field-existence check
+    should pass-through.
+    """
     if isinstance(node, _OPEN_OUTPUT_CLASSES):
         return None
     cls = type(node)
@@ -737,13 +737,11 @@ def _check_jinja_refs(
     catalog: AssetCatalog,
     file: str,
 ) -> tuple[list[WorkflowValidationError], list[WorkflowValidationWarning]]:
-    """Master spec §7.2 — pre-validate ``nodes.<X>.<field>`` references
-    in every Jinja-marked string field.
+    """Pre-validate `nodes.<X>.<field>` references in every Jinja-marked string field.
 
-    Walks the Jinja AST via the singleton sandbox env (Round 6 S1);
-    the predecessor relationship is computed from graph-reachability
-    (Round 4 item #11 — NOT edge-level ``ref:``, which no longer
-    exists).
+    Walks the Jinja AST via the singleton sandbox env; the
+    predecessor relationship is computed from graph-reachability (NOT
+    edge-level `ref:`, which no longer exists).
     """
     _ = catalog
     errors: list[WorkflowValidationError] = []
@@ -754,9 +752,7 @@ def _check_jinja_refs(
 
     node_names = set(workflow.nodes.keys())
     map_apply_targets: set[str] = {
-        node.apply
-        for node in workflow.nodes.values()
-        if isinstance(node, MapNodeDef)
+        node.apply for node in workflow.nodes.values() if isinstance(node, MapNodeDef)
     }
 
     # Predecessor closure via BFS back from each node along inbound edges.
@@ -778,11 +774,10 @@ def _check_jinja_refs(
 
     # --- Walk per-edge `binds:` + per-edge `when:` ---------------------
     for edge in workflow.graph.edges:
-        # Round 4 item #11 — the parent special case applies: in an
-        # edge's binds:, `nodes.<edge.from>.<field>` is allowed
-        # implicitly even though the source isn't yet a "transitive
-        # ancestor" of the target (binds is literally for parent→target
-        # wiring).
+        # The parent special case applies: in an edge's binds:,
+        # `nodes.<edge.from>.<field>` is allowed implicitly even
+        # though the source isn't yet a "transitive ancestor" of the
+        # target (binds is literally for parent→target wiring).
         implicit_parent = {edge.from_}
         target = workflow.nodes.get(edge.to)
         consuming_preds = predecessors.get(edge.to, set())
@@ -882,24 +877,24 @@ def _check_value_for_refs(
     workflow: Workflow,
     map_apply_targets: set[str],
 ) -> list[WorkflowValidationError]:
-    """Inspect ``value`` for ``nodes.<X>.<Y>`` refs and return any
-    findings.
+    """Inspect `value` for `nodes.<X>.<Y>` refs and return any findings.
 
-    Round 6 J5/β — only Jinja-marked strings are walked; pure YAML
-    literals pass through.
+    Only Jinja-marked strings are walked; pure YAML literals pass
+    through.
 
-    Locked check order (per Step 5 prompt + master spec §7.2):
+    **Check order.**
 
-    1. ``X`` exists in ``workflow.nodes``? → ``WorkflowNodeNotDefined``.
-    2. ``X`` in consumer's predecessor closure → ``WorkflowJinjaRefUnknown(reason="not_predecessor")``.
-       The ``binds:`` parent special case is folded into
-       ``consuming_preds`` upstream.
-    3. ``X`` is a map worker referenced from outside the map →
-       ``WorkflowMapperWorkerNotAddressable``.
-    4. ``X``'s output schema is known? → if not,
-       ``WorkflowJinjaRefUnknown(reason="not_declared")``.
-    5. ``Y`` in ``X``'s output fields? → if not,
-       ``WorkflowJinjaRefUnknown(reason="unknown_field")``.
+    1. `X` exists in `workflow.nodes`? → `WorkflowNodeNotDefined`.
+    2. `X` in consumer's predecessor closure →
+       `WorkflowJinjaRefUnknown(reason="not_predecessor")`. The
+       `binds:` parent special case is folded into `consuming_preds`
+       upstream.
+    3. `X` is a map worker referenced from outside the map →
+       `WorkflowMapperWorkerNotAddressable`.
+    4. `X`'s output schema is known? → if not,
+       `WorkflowJinjaRefUnknown(reason="not_declared")`.
+    5. `Y` in `X`'s output fields? → if not,
+       `WorkflowJinjaRefUnknown(reason="unknown_field")`.
     """
     findings: list[WorkflowValidationError] = []
     if not _is_jinja_marked(value):
@@ -916,9 +911,8 @@ def _check_value_for_refs(
                 )
             )
             continue
-        if (
-            x_name in map_apply_targets
-            and not _is_inside_same_map(workflow, consuming_node, x_name)
+        if x_name in map_apply_targets and not _is_inside_same_map(
+            workflow, consuming_node, x_name
         ):
             findings.append(
                 WorkflowMapperWorkerNotAddressable(
@@ -975,8 +969,11 @@ def _check_value_for_refs(
 def _is_inside_same_map(
     workflow: Workflow, consuming_node: str, worker_name: str
 ) -> bool:
-    """Worker references are only legal from the same ``map`` node
-    (which targets the worker via ``apply:``)."""
+    """Return `True` iff `consuming_node` is the map that targets `worker_name`.
+
+    Worker references are only legal from the same `map` node (which
+    targets the worker via `apply:`).
+    """
     for node in workflow.nodes.values():
         if isinstance(node, MapNodeDef) and node.apply == worker_name:
             # consuming_node must BE this map node — workers don't have
@@ -986,7 +983,7 @@ def _is_inside_same_map(
 
 
 # ---------------------------------------------------------------------------
-# §7.4 — Type-specific checks.
+# Type-specific checks.
 # ---------------------------------------------------------------------------
 
 
@@ -996,33 +993,25 @@ def _check_type_specific(
     catalog: AssetCatalog,
     file: str,
 ) -> tuple[list[WorkflowValidationError], list[WorkflowValidationWarning]]:
-    """Master spec §7.4 — per-type sanity beyond shape parsing.
+    """Per-type sanity beyond shape parsing.
 
-    For Phase 3.0 the per-type checks are mostly delegated to Step 2's
-    Pydantic parsing (each ``*NodeDef`` class encodes the required
-    fields). Two checks land here:
-
-    - Sub-workflow ``workflow:`` refs resolve to a runnable workflow
-      in the catalog (when one is supplied).
-    - Built-in node-type slot validation: a ``type: kolsch/nodes/<x>``
-      where ``x`` is not in the 14-name set never reaches the parser
-      (it would have lived in ``CatalogNodeDef``), so this layer
-      just verifies the catalog has an entry for any non-built-in
-      node ref.
+    Per-type shape is delegated to the parser's Pydantic models (each
+    `*NodeDef` class encodes the required fields). Future per-type
+    checks land here.
     """
     _ = catalog
     errors: list[WorkflowValidationError] = []
     warnings: list[WorkflowValidationWarning] = []
-    # No additional type-specific checks at Phase 3.0; Step 2's parser
-    # covers shape. Future Phase 3.x QoL: tighten built-in input
-    # schemas + cross-reference subworkflow output keys.
+    # No additional type-specific checks; the parser covers shape.
+    # Future QoL: tighten built-in input schemas + cross-reference
+    # subworkflow output keys.
     _ = workflow
     _ = file
     return errors, warnings
 
 
 # ---------------------------------------------------------------------------
-# §7.6 — Authored Python node introspection (Round 4 item #3).
+# Authored Python node introspection.
 # ---------------------------------------------------------------------------
 
 
@@ -1032,42 +1021,42 @@ def _check_catalog_node_defs(
     catalog: AssetCatalog,
     file: str,
 ) -> tuple[list[WorkflowValidationError], list[WorkflowValidationWarning]]:
-    """Master spec §7.6 — authored Python node introspection.
+    """Authored Python node introspection.
 
-    For every :class:`CatalogNodeDef` in ``workflow.nodes`` whose
-    catalog entry is NOT a virtual built-in (``metadata["builtin"]``
-    is not ``True``):
+    For every
+    [`CatalogNodeDef`][workflows.catalog_node.CatalogNodeDef] in
+    `workflow.nodes` whose catalog entry is NOT a virtual built-in
+    (`metadata["builtin"]` is not `True`):
 
     1. Resolve the catalog entry via
-       :meth:`AssetCatalog.lookup` with ``expected_type="node"``.
-    2. Import the entry's ``path`` via :mod:`importlib.util` — failure
-       (missing file, ``SyntaxError``, ``ImportError`` etc.) raises
-       :class:`WorkflowNodeImportFailed`.
-    3. The module MUST expose a top-level ``run`` symbol; otherwise
-       :class:`WorkflowNodeMissingRun`.
-    4. ``run`` MUST be decorated with ``@node`` (sentinel
-       ``_kolsch_node`` set by :mod:`workflows.decorator`); otherwise
-       :class:`WorkflowNodeNotDecorated`.
-    5. ``run``'s signature MUST match master spec §5.3 (param 1 is a
-       :class:`pydantic.BaseModel` subclass; param 2 is
-       :class:`NodeContext` exactly; optional param 3 is a BaseModel
-       subclass; no further parameters); otherwise
-       :class:`WorkflowNodeSignatureInvalid`.
-    6. ``run``'s return annotation MUST match master spec §5.4
-       (``BaseModel`` subclass, ``bool``, or
-       ``tuple[bool, BaseModel subclass]``); otherwise
-       :class:`WorkflowNodeReturnTypeInvalid`.
+       [`AssetCatalog.lookup`][assets.catalog.AssetCatalog.lookup]
+       with `expected_type="node"`.
+    2. Import the entry's `path` via `importlib.util` — failure
+       (missing file, `SyntaxError`, `ImportError` etc.) raises
+       `WorkflowNodeImportFailed`.
+    3. The module MUST expose a top-level `run` symbol; otherwise
+       `WorkflowNodeMissingRun`.
+    4. `run` MUST be decorated with `@node` (sentinel `_kolsch_node`
+       set by `workflows.decorator`); otherwise
+       `WorkflowNodeNotDecorated`.
+    5. `run`'s signature MUST match the authored-node contract (param
+       1 is a `pydantic.BaseModel` subclass; param 2 is
+       [`NodeContext`][workflows.context.NodeContext] exactly;
+       optional param 3 is a `BaseModel` subclass; no further
+       parameters); otherwise `WorkflowNodeSignatureInvalid`.
+    6. `run`'s return annotation MUST be one of `BaseModel` subclass,
+       `bool`, or `tuple[bool, BaseModel subclass]`; otherwise
+       `WorkflowNodeReturnTypeInvalid`.
 
-    Built-in entries (``kolsch/nodes/<name>``) are skipped — their
-    Pydantic implementations live in :mod:`workflows.parser` and need
-    no on-disk introspection. Entries whose ``path`` is empty are also
+    Built-in entries (`kolsch/nodes/<name>`) are skipped — their
+    Pydantic implementations live in `workflows.parser` and need no
+    on-disk introspection. Entries whose `path` is empty are also
     skipped defensively (the same marker the catalog uses for
-    virtuals — see :func:`workflows.catalog.builtin_node_entries`).
+    virtuals).
 
-    Secret-existence validation (the §7.6 4th bullet) is deferred to
-    Phase 3.1 when the workflow gate threads a secrets provider; at
-    Phase 3.0 the validator only sees ``secrets_needed`` as a list of
-    names with no resolver to ask.
+    Secret-existence validation is deferred until the workflow gate
+    threads a secrets provider; the validator only sees
+    `secrets_needed` as a list of names with no resolver to ask.
     """
     errors: list[WorkflowValidationError] = []
     warnings: list[WorkflowValidationWarning] = []
@@ -1079,11 +1068,11 @@ def _check_catalog_node_defs(
         entry = catalog.lookup(ref, expected_type="node")
         if entry is None:
             # The catalog has no node entry for this ref — surface as
-            # WorkflowNodeImportFailed since the §7.6 check can't
-            # proceed without the catalog-resolved path. (The Step 3
-            # catalog scan honors WorkflowBuiltinShadowed for reserved
-            # slots; reaching this branch with a None entry means the
-            # ref is genuinely missing from the catalog.)
+            # `WorkflowNodeImportFailed` since the check can't proceed
+            # without the catalog-resolved path. (The catalog scan
+            # honors `WorkflowBuiltinShadowed` for reserved slots;
+            # reaching this branch with a `None` entry means the ref
+            # is genuinely missing from the catalog.)
             errors.append(
                 WorkflowNodeImportFailed(
                     file=file,
@@ -1098,9 +1087,7 @@ def _check_catalog_node_defs(
         module = _import_node_module(entry.path)
         if isinstance(module, Exception):
             errors.append(
-                WorkflowNodeImportFailed(
-                    file=file, line=0, ref=ref, reason=str(module)
-                )
+                WorkflowNodeImportFailed(file=file, line=0, ref=ref, reason=str(module))
             )
             continue
         run_fn = getattr(module, "run", None)
@@ -1124,20 +1111,20 @@ def _check_catalog_node_defs(
 
 
 def _import_node_module(path: str) -> Any:  # noqa: ANN401
-    """Best-effort import the authored node module from ``path``.
+    """Best-effort import the authored node module from `path`.
 
-    Returns the loaded module on success or the original
-    :class:`Exception` (NOT a re-raise) on failure so the caller can
-    fold the reason into :class:`WorkflowNodeImportFailed`. Modules
-    are loaded under a synthetic ``_kolsch_node_<id>`` name to avoid
-    polluting :data:`sys.modules` with bundle-internal namespaces;
-    full cleanup discipline lands in the Phase 3.1 executor.
+    Returns the loaded module on success or the original `Exception`
+    (NOT a re-raise) on failure so the caller can fold the reason
+    into `WorkflowNodeImportFailed`. Modules are loaded under a
+    synthetic `_kolsch_node_<id>` name to avoid polluting
+    `sys.modules` with bundle-internal namespaces; full cleanup
+    discipline lives in the executor.
 
-    Return type is ``Any`` (ANN401 acknowledged): the success branch
-    yields :class:`types.ModuleType` while the failure branch yields
-    the captured :class:`Exception`. Narrowing to a union here would
-    leak type-checker noise to every caller; the caller's
-    ``isinstance(module, Exception)`` discriminates cleanly.
+    Return type is `Any` (ANN401 acknowledged): the success branch
+    yields `types.ModuleType` while the failure branch yields the
+    captured `Exception`. Narrowing to a union here would leak
+    type-checker noise to every caller; the caller's
+    `isinstance(module, Exception)` discriminates cleanly.
     """
     try:
         spec = importlib.util.spec_from_file_location(
@@ -1159,20 +1146,23 @@ def _import_node_module(path: str) -> Any:  # noqa: ANN401
     return module
 
 
-# PLR0911 / ANN401 acknowledged: §5.3 has five independent
-# violation modes (parameter count, positional-only kinds, param-1
-# annotation, param-2 annotation, optional param-3 annotation), each
-# with an early-return for the SPECIFIC reason string. Collapsing
-# into a single exit would lose the per-failure ``reason`` text. The
-# ``run_fn`` parameter is intrinsically ``Any`` — it's a
-# user-authored function we just inspect, not call.
+# PLR0911 / ANN401 acknowledged: the signature check has five
+# independent violation modes (parameter count, positional-only kinds,
+# param-1 annotation, param-2 annotation, optional param-3
+# annotation), each with an early-return for the SPECIFIC reason
+# string. Collapsing into a single exit would lose the per-failure
+# `reason` text. The `run_fn` parameter is intrinsically `Any` — it's
+# a user-authored function we just inspect, not call.
 def _check_run_signature(  # noqa: PLR0911
-    *, file: str, ref: str, run_fn: Any  # noqa: ANN401
+    *,
+    file: str,
+    ref: str,
+    run_fn: Any,  # noqa: ANN401
 ) -> WorkflowNodeSignatureInvalid | None:
-    """Verify ``run`` matches master spec §5.3 signature rules.
+    """Verify `run` matches the authored-node signature rules.
 
-    Returns ``None`` on success or :class:`WorkflowNodeSignatureInvalid`
-    with a one-sentence reason on failure.
+    Returns `None` on success or `WorkflowNodeSignatureInvalid` with
+    a one-sentence reason on failure.
     """
     try:
         sig = inspect.signature(run_fn)
@@ -1204,9 +1194,7 @@ def _check_run_signature(  # noqa: PLR0911
                 reason=f"parameter {p.name!r} must be positional",
             )
     inputs_ann = hints.get(params[0].name)
-    if not isinstance(inputs_ann, type) or not issubclass(
-        inputs_ann, BaseModel
-    ):
+    if not isinstance(inputs_ann, type) or not issubclass(inputs_ann, BaseModel):
         return WorkflowNodeSignatureInvalid(
             file=file,
             line=0,
@@ -1223,15 +1211,12 @@ def _check_run_signature(  # noqa: PLR0911
             line=0,
             ref=ref,
             reason=(
-                f"param 2 ({params[1].name!r}) must be annotated exactly "
-                "as NodeContext"
+                f"param 2 ({params[1].name!r}) must be annotated exactly as NodeContext"
             ),
         )
     if len(params) == _MAX_RUN_PARAMS:
         config_ann = hints.get(params[2].name)
-        if not isinstance(config_ann, type) or not issubclass(
-            config_ann, BaseModel
-        ):
+        if not isinstance(config_ann, type) or not issubclass(config_ann, BaseModel):
             return WorkflowNodeSignatureInvalid(
                 file=file,
                 line=0,
@@ -1245,12 +1230,15 @@ def _check_run_signature(  # noqa: PLR0911
 
 
 def _check_run_return_type(
-    *, file: str, ref: str, run_fn: Any  # noqa: ANN401 — user fn
+    *,
+    file: str,
+    ref: str,
+    run_fn: Any,  # noqa: ANN401 — user fn
 ) -> WorkflowNodeReturnTypeInvalid | None:
-    """Verify ``run``'s return annotation matches master spec §5.4.
+    """Verify `run`'s return annotation is one of the accepted shapes.
 
-    Accepted: ``BaseModel`` subclass, ``bool``, or
-    ``tuple[bool, BaseModel subclass]``.
+    Accepted: `BaseModel` subclass, `bool`, or `tuple[bool, BaseModel
+    subclass]`.
     """
     try:
         hints = typing.get_type_hints(run_fn)
@@ -1282,7 +1270,7 @@ def _check_run_return_type(
 
 
 # ---------------------------------------------------------------------------
-# §7.7 — Policy / authz checks (Round 4 item #13 STRICT ``from:``).
+# Policy / authz checks — strict `from:` validation.
 # ---------------------------------------------------------------------------
 
 
@@ -1292,13 +1280,12 @@ def _check_authz(
     catalog: AssetCatalog,
     file: str,
 ) -> tuple[list[WorkflowValidationError], list[WorkflowValidationWarning]]:
-    """Master spec §7.7 — STRICT ``from:`` validation for the
-    workflow's ``policy:`` rules.
+    """Strict `from:` validation for the workflow's `policy:` rules.
 
-    Uses the provider's compile path (Step 4) so the same
-    :class:`WorkflowFromShapeError` / :class:`WorkflowFromAssetTypeError`
-    / :class:`WorkflowFromNotFound` exception classes fire here as do
-    at provider construction.
+    Uses the provider's compile path so the same
+    `WorkflowFromShapeError` / `WorkflowFromAssetTypeError` /
+    `WorkflowFromNotFound` exception classes fire here as do at
+    provider construction.
     """
     errors: list[WorkflowValidationError] = []
     warnings: list[WorkflowValidationWarning] = []
@@ -1311,13 +1298,15 @@ def _check_authz(
     for idx, rule in enumerate(workflow.policy):
         try:
             provider = RuleBasedAuthorizationProvider(
-                config={"rules": [
-                    rule.model_dump(
-                        by_alias=True,
-                        exclude={"id", "who"} if not rule.is_legacy else set(),
-                        exclude_none=True,
-                    )
-                ]},
+                config={
+                    "rules": [
+                        rule.model_dump(
+                            by_alias=True,
+                            exclude={"id", "who"} if not rule.is_legacy else set(),
+                            exclude_none=True,
+                        )
+                    ]
+                },
                 catalog=catalog,
             )
             _ = provider
@@ -1351,7 +1340,7 @@ def _check_authz(
 
 
 # ---------------------------------------------------------------------------
-# R3 #2 — `_check_timeouts`.
+# Timeouts.
 # ---------------------------------------------------------------------------
 
 
@@ -1361,7 +1350,7 @@ def _check_timeouts(
     catalog: AssetCatalog,
     file: str,
 ) -> tuple[list[WorkflowValidationError], list[WorkflowValidationWarning]]:
-    """R3 #2 — positive int validation + shadowing warning."""
+    """Positive-int validation plus per-node shadowing warning."""
     _ = catalog
     errors: list[WorkflowValidationError] = []
     warnings: list[WorkflowValidationWarning] = []
@@ -1391,11 +1380,7 @@ def _check_timeouts(
                 )
             )
             continue
-        if (
-            wf_timeout is not None
-            and wf_timeout > 0
-            and node_timeout > wf_timeout
-        ):
+        if wf_timeout is not None and wf_timeout > 0 and node_timeout > wf_timeout:
             warnings.append(
                 WorkflowTimeoutShadowsNode(
                     file=file,
@@ -1410,30 +1395,27 @@ def _check_timeouts(
 
 
 # ---------------------------------------------------------------------------
-# Phase 3.10 §16.2 / §16.3 — concurrency invariants.
+# Concurrency invariants.
 # ---------------------------------------------------------------------------
 
 
-# Master spec §16.2 — conservative ``state.<key>`` reference scanner.
-# Matches a literal ``state.``-dot prefix followed by a Python identifier.
-# Over-matches by design: any string containing the substring (a stray
-# log line such as ``"state.foo updated"``) WILL register as a state
-# read. The gate's contract is to REJECT possibly-unsafe workflows; a
-# false positive is on-spec, a false negative would be a correctness bug.
-_STATE_REF_RE: re.Pattern[str] = re.compile(
-    r"state\.([a-zA-Z_][a-zA-Z_0-9]*)"
-)
+# Conservative `state.<key>` reference scanner. Matches a literal
+# `state.`-dot prefix followed by a Python identifier. Over-matches by
+# design: any string containing the substring (a stray log line such
+# as `"state.foo updated"`) WILL register as a state read. The gate's
+# contract is to REJECT possibly-unsafe workflows; a false positive is
+# on-spec, a false negative would be a correctness bug.
+_STATE_REF_RE: re.Pattern[str] = re.compile(r"state\.([a-zA-Z_][a-zA-Z_0-9]*)")
 
 
 def _collect_parallel_branch_groups(
     workflow: Workflow,
 ) -> list[tuple[str, list[set[str]]]]:
-    """Decompose every fan-out point in ``workflow`` into its parallel
-    branches — Phase 3.10 §16.2 / build §1.
+    """Decompose every fan-out point in `workflow` into its parallel branches.
 
-    Returns one ``(fan_out_node, branches)`` entry per fan-out point.
-    A fan-out point is a node with two or more *distinct* outgoing
-    edges WHERE NONE carry a ``branch:`` selector (branch edges are
+    Returns one `(fan_out_node, branches)` entry per fan-out point. A
+    fan-out point is a node with two or more *distinct* outgoing
+    edges WHERE NONE carry a `branch:` selector (branch edges are
     exclusive — only one fires per dispatch — so they are NOT a
     concurrency surface).
 
@@ -1445,7 +1427,7 @@ def _collect_parallel_branch_groups(
     a different analysis frame).
 
     Nested fan-outs are NOT collapsed here — they are surfaced as
-    their own ``(fan_out_node, branches)`` entry, which gets its own
+    their own `(fan_out_node, branches)` entry, which gets its own
     pair-wise conflict pass.
     """
     if workflow.graph is None:
@@ -1486,9 +1468,11 @@ def _walk_parallel_branch(
     outgoing: dict[str, set[str]],
     incoming_count: dict[str, int],
 ) -> set[str]:
-    """BFS forward from ``start`` along non-branch edges. Stops
-    descending through any node that is a confluence (non-branch
-    ``incoming_count > 1``) other than the starting node itself."""
+    """BFS forward from `start` along non-branch edges.
+
+    Stops descending through any node that is a confluence (non-branch
+    `incoming_count > 1`) other than the starting node itself.
+    """
     visited: set[str] = set()
     queue: list[str] = [start]
     while queue:
@@ -1506,23 +1490,19 @@ def _walk_parallel_branch(
     return visited
 
 
-def _branch_state_write_set(
-    workflow: Workflow, branch: set[str]
-) -> dict[str, str]:
-    """Collect every ``state.<key>`` mutated by the branch — Phase
-    3.10 §16.2 / build §2.
+def _branch_state_write_set(workflow: Workflow, branch: set[str]) -> dict[str, str]:
+    """Collect every `state.<key>` mutated by the branch.
 
-    Returns a mapping ``state_key -> node_name`` so the gate can
+    Returns a mapping `state_key -> node_name` so the gate can
     identify *which* node touched the conflicting key when raising
-    :class:`WorkflowParallelStateConflict`.
+    `WorkflowParallelStateConflict`.
 
-    Sequential maps (``parallel: false``) recurse into the worker
-    node; parallel maps (``parallel: true``) are inspected separately
-    by :func:`_check_parallel_map_workers` and contribute no writes
-    here (a parallel map that writes state was already rejected).
-    Sub-workflow nodes are OPAQUE per Phase 3.7 — child state is
-    isolated, so a parent branch's write set does not include the
-    child's writes.
+    Sequential maps (`parallel: false`) recurse into the worker node;
+    parallel maps (`parallel: true`) are inspected separately by
+    `_check_parallel_map_workers` and contribute no writes here (a
+    parallel map that writes state was already rejected). Sub-workflow
+    nodes are OPAQUE — child state is isolated, so a parent branch's
+    write set does not include the child's writes.
     """
     writes: dict[str, str] = {}
     visited_workers: set[str] = set()
@@ -1553,25 +1533,22 @@ def _branch_state_write_set(
             return
         # All other node types (bash, agent, sub-workflow, etc.) do
         # not mutate state at this layer. Sub-workflow opacity is
-        # explicit per Phase 3.7 — its internal mutations belong to
-        # the child run, not the parent.
+        # deliberate — its internal mutations belong to the child run,
+        # not the parent.
 
     for node_name in branch:
         _collect_from_node(node_name)
     return writes
 
 
-def _branch_state_read_set(
-    workflow: Workflow, branch: set[str]
-) -> dict[str, str]:
-    """Conservative scan for ``state.<key>`` references in every
-    Jinja-evaluable string field of every node in ``branch`` — Phase
-    3.10 §16.2 / build §3.
+def _branch_state_read_set(workflow: Workflow, branch: set[str]) -> dict[str, str]:
+    """Conservative scan for `state.<key>` references inside `branch`.
 
-    Returns a mapping ``state_key -> node_name`` for the first node
-    in the branch found to reference the key. Sequential maps recurse
-    into their worker; sub-workflows are opaque (the child's reads
-    don't leak to the parent's read set).
+    Walks every Jinja-evaluable string field of every node in
+    `branch`. Returns a mapping `state_key -> node_name` for the
+    first node in the branch found to reference the key. Sequential
+    maps recurse into their worker; sub-workflows are opaque (the
+    child's reads don't leak to the parent's read set).
     """
     reads: dict[str, str] = {}
     visited_workers: set[str] = set()
@@ -1599,8 +1576,9 @@ def _branch_state_read_set(
             _scan_value(when_value, node_name)
         for value in _type_specific_jinja_values(node):
             _scan_value(value, node_name)
-        # SetState's ``keys:`` values are scanned by the type-specific
-        # helper above; DeleteState only carries key names, not values.
+        # `SetState`'s `keys:` values are scanned by the type-specific
+        # helper above; `DeleteState` only carries key names, not
+        # values.
         if isinstance(node, MapNodeDef):
             if getattr(node, "parallel", False):
                 return
@@ -1615,17 +1593,15 @@ def _branch_state_read_set(
     return reads
 
 
-def _walk_worker_descendants(
-    workflow: Workflow, start: str
-) -> list[str]:
-    """Return the transitive worker subgraph rooted at ``start`` —
-    used by :func:`_check_parallel_map_workers` to find state
-    mutators inside a ``parallel: true`` map's worker chain.
+def _walk_worker_descendants(workflow: Workflow, start: str) -> list[str]:
+    """Return the transitive worker subgraph rooted at `start`.
 
-    Sub-workflow nodes terminate the walk (their children are
-    isolated; the gate does not peer into them). Sequential maps
-    recurse into their own worker; parallel maps inside the chain
-    are flagged separately by the outer pass.
+    Used by `_check_parallel_map_workers` to find state mutators
+    inside a `parallel: true` map's worker chain. Sub-workflow nodes
+    terminate the walk (their children are isolated; the gate does
+    not peer into them). Sequential maps recurse into their own
+    worker; parallel maps inside the chain are flagged separately by
+    the outer pass.
     """
     visited: list[str] = []
     seen: set[str] = set()
@@ -1640,7 +1616,7 @@ def _walk_worker_descendants(
         visited.append(node_name)
         if isinstance(node, MapNodeDef):
             _recurse(node.apply)
-        # WorkflowNodeDef → opaque; do not recurse into ``ref:``.
+        # `WorkflowNodeDef` is opaque; do not recurse into `ref:`.
 
     _recurse(start)
     return visited
@@ -1651,21 +1627,19 @@ def _check_parallel_map_workers(
     workflow: Workflow,
     file: str,
 ) -> list[WorkflowValidationError]:
-    """Reject every ``parallel: true`` map whose worker chain reaches
-    a ``set_state`` / ``delete_state`` node — Phase 3.10 §16.3 / build §5.
+    """Reject `parallel: true` maps whose worker chain mutates state.
 
-    Also rejects non-positive ``concurrency:`` integers with
-    :class:`WorkflowInvalidConcurrency`. Sequential maps and the
-    ``concurrency:`` field on sequential maps are out of scope here.
+    Also rejects non-positive `concurrency:` integers with
+    `WorkflowInvalidConcurrency`. Sequential maps and the
+    `concurrency:` field on sequential maps are out of scope here.
     """
     errors: list[WorkflowValidationError] = []
     for node_name, node in workflow.nodes.items():
         if not isinstance(node, MapNodeDef):
             continue
-        # Validate ``concurrency:`` positivity regardless of
-        # ``parallel:`` — a ``concurrency:`` knob on a sequential map
-        # is meaningless but harmless; a non-positive value is still
-        # a config error.
+        # Validate `concurrency:` positivity regardless of `parallel:`
+        # — a `concurrency:` knob on a sequential map is meaningless
+        # but harmless; a non-positive value is still a config error.
         if node.concurrency is not None and (
             not isinstance(node.concurrency, int)
             or isinstance(node.concurrency, bool)
@@ -1683,9 +1657,7 @@ def _check_parallel_map_workers(
             continue
         for descendant in _walk_worker_descendants(workflow, node.apply):
             descendant_node = workflow.nodes.get(descendant)
-            if isinstance(
-                descendant_node, (SetStateNodeDef, DeleteStateNodeDef)
-            ):
+            if isinstance(descendant_node, (SetStateNodeDef, DeleteStateNodeDef)):
                 # Name the first state key the descendant writes so
                 # the error message points at the conflicting surface.
                 keys_iter: Any = (
@@ -1713,21 +1685,18 @@ def _check_concurrency_invariants(
     catalog: AssetCatalog,
     file: str,
 ) -> tuple[list[WorkflowValidationError], list[WorkflowValidationWarning]]:
-    """Phase 3.10 §16.2 / §16.3 — run-start gate static analysis for
-    concurrent execution safety.
+    """Run-start gate static analysis for concurrent execution safety.
 
-    Three independent sub-passes, ALL findings accumulated (the
-    layer never short-circuits):
+    Three independent sub-passes; all findings accumulate (the layer
+    never short-circuits):
 
-    1. ``parallel: true`` map worker subgraph reaches a state mutator
-       → :class:`WorkflowParallelStateConflict`.
-    2. ``concurrency:`` integer ``<= 0`` →
-       :class:`WorkflowInvalidConcurrency`.
-    3. (``auto`` mode only) sibling parallel branches whose
-       state-write or state-read sets overlap →
-       :class:`WorkflowParallelStateConflict`.
+    1. `parallel: true` map worker subgraph reaches a state mutator
+       → `WorkflowParallelStateConflict`.
+    2. `concurrency:` integer `<= 0` → `WorkflowInvalidConcurrency`.
+    3. (`auto` mode only) sibling parallel branches whose state-write
+       or state-read sets overlap → `WorkflowParallelStateConflict`.
 
-    ``sequential``-mode workflows skip the third sub-pass entirely —
+    `sequential`-mode workflows skip the third sub-pass entirely —
     the branches do NOT execute concurrently, so no conflict is
     possible. Sub-passes 1 and 2 still run because they reject
     structural misuse independent of the workflow-level mode.
@@ -1804,9 +1773,11 @@ def _record_conflict(
     node_b: str,
     state_key: str,
 ) -> None:
-    """Append a :class:`WorkflowParallelStateConflict` finding, deduping
-    so the same pair-key combination only surfaces once even when the
-    write-write and write-read passes both match."""
+    """Append a `WorkflowParallelStateConflict` finding, deduped.
+
+    The same pair-key combination only surfaces once even when the
+    write-write and write-read passes both match.
+    """
     pair_key = (
         node_a if node_a < node_b else node_b,
         node_b if node_a < node_b else node_a,
@@ -1824,5 +1795,3 @@ def _record_conflict(
             state_key=state_key,
         )
     )
-
-

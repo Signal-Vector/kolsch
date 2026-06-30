@@ -1,25 +1,26 @@
-"""Workflow event envelopes — Phase 3.1 Step 5.
+"""Workflow event envelopes — typed JSONL payloads.
 
-Master spec §11.1 lists the 13 executor-emitted event kinds; §11.2
-pins ordering rules; §11.3 names the common-field shape every
-envelope carries. This module ships:
+This module ships:
 
-- :class:`WorkflowEventKind` — the 13-value StrEnum vocabulary.
-- :class:`WorkflowEvent` — common-field base envelope.
-- :class:`NodeScopedWorkflowEvent` — adds ``invocation_id`` +
-  ``node_name`` at the top level for the 6 ``workflow.node.*`` kinds.
-- 13 typed subclasses, each with ``kind: Literal[...]`` so Pydantic
-  discriminates on emit. The subclasses are thin — payload remains a
-  ``dict[str, Any]`` here; tightening per-kind payload schemas lands
-  in Phase 3.2+ as agent / branch / map runtimes mature.
-- :func:`new_event_id` — mint a fresh ``ev_<uuid>``.
-- :func:`emit_event` — append a typed envelope through the
-  :class:`workflows.run_store.WorkflowRunStore` JSONL surface.
+- [`WorkflowEventKind`][workflows.events.WorkflowEventKind] — the
+  executor-emitted event vocabulary.
+- [`WorkflowEvent`][workflows.events.WorkflowEvent] — common-field
+  base envelope.
+- [`NodeScopedWorkflowEvent`][workflows.events.NodeScopedWorkflowEvent]
+  — adds `invocation_id` + `node_name` at the top level for the
+  `workflow.node.*` kinds.
+- One typed subclass per kind, each with `kind: Literal[...]` so
+  Pydantic discriminates on emit. The subclasses are thin — payload
+  remains a `dict[str, Any]` for most kinds; per-kind payload
+  tightening lands as runtimes mature.
+- `new_event_id` — mint a fresh `ev_<uuid>`.
+- `emit_event` — append a typed envelope through the
+  [`WorkflowRunStore`][workflows.run_store.WorkflowRunStore] JSONL
+  surface.
 
-The on-disk JSONL line is the envelope's ``model_dump(mode="json")``
+The on-disk JSONL line is the envelope's `model_dump(mode="json")`
 output: a single object with the common fields at the top level and
-``payload`` carrying kind-specific data. Existing Step 1-4 tests that
-inspect ``event["kind"]`` and ``event["payload"]["..."]`` still pass.
+`payload` carrying kind-specific data.
 """
 
 from __future__ import annotations
@@ -73,13 +74,11 @@ __all__ = [
 
 
 class WorkflowEventKind(StrEnum):
-    """The executor-emitted event vocabulary — master spec §11.1.
+    """The executor-emitted event vocabulary.
 
-    ``model.request.sent`` is the agent-emitted caller-chain carrier
-    per the Phase 3.1 build doc; it lives in the agent runtime
-    (Phase 3.2) so this enum covers only the workflow-engine-owned
-    kinds. Phase 3.3 adds :attr:`NODE_PRUNED` per master spec §11.1
-    extension.
+    `model.request.sent` is the agent-emitted caller-chain carrier; it
+    lives in the agent runtime, so this enum covers only the
+    workflow-engine-owned kinds.
     """
 
     RUN_STARTED = "workflow.run.started"
@@ -87,9 +86,9 @@ class WorkflowEventKind(StrEnum):
     RUN_FAILED = "workflow.run.failed"
     RUN_TIMED_OUT = "workflow.run.timed_out"
     RUN_ABORTED = "workflow.run.aborted"
-    # Phase 3.4 — first event emitted on every resume process; chained
-    # to the JSONL's last pre-pause event via ``parent_event_id`` so
-    # the cross-process event chain is unbroken (master spec §10.2).
+    # First event emitted on every resume process; chained to the
+    # JSONL's last pre-pause event via `parent_event_id` so the
+    # cross-process event chain is unbroken.
     RUN_RESUMED = "workflow.run.resumed"
     NODE_STARTED = "workflow.node.started"
     NODE_COMPLETED = "workflow.node.completed"
@@ -100,34 +99,33 @@ class WorkflowEventKind(StrEnum):
     NODE_EMITTED = "workflow.node.emitted"
     TOOL_CALLED = "workflow.tool.called"
     POLICY_DECISION_MADE = "policy.decision.made"
-    # Phase 3.5 §11.1 — emitted by the state-mutation runners
-    # (``set_state`` / ``delete_state``) ONCE PER affected key,
-    # ordered BETWEEN the node's ``workflow.node.started`` and
-    # ``workflow.node.completed`` events. The JSONL sequence is the
-    # source of truth for resume reconstruction (Phase 3.4 replay
-    # extension) and fork replay (Phase 3.8). Master spec §10.2.
+    # Emitted by the state-mutation runners (`set_state` /
+    # `delete_state`) ONCE PER affected key, ordered BETWEEN the
+    # node's `workflow.node.started` and `workflow.node.completed`
+    # events. The JSONL sequence is the source of truth for resume
+    # reconstruction and fork replay.
     STATE_MUTATED = "workflow.state.mutated"
-    # Phase 3.7 §11.1 — parent-side forensics markers around a
-    # ``kolsch/nodes/workflow`` invocation. The pair brackets the
-    # child run's lifecycle in the PARENT's JSONL: ``CALLED_WORKFLOW``
-    # fires before the child run is started (carries the child's
-    # ``workflow_run_id`` + ``workflow_ref``); ``CALLED_WORKFLOW_COMPLETED``
-    # fires after the child returns / pauses / fails (carries the
-    # child's terminal-ish status). Together they let consumers
-    # navigate parent→child JSONLs without re-deriving the linkage.
+    # Parent-side forensics markers around a `kolsch/nodes/workflow`
+    # invocation. The pair brackets the child run's lifecycle in the
+    # PARENT's JSONL: `CALLED_WORKFLOW` fires before the child run is
+    # started (carries the child's `workflow_run_id` +
+    # `workflow_ref`); `CALLED_WORKFLOW_COMPLETED` fires after the
+    # child returns / pauses / fails (carries the child's
+    # terminal-ish status). Together they let consumers navigate
+    # parent→child JSONLs without re-deriving the linkage.
     CALLED_WORKFLOW = "workflow.node.called_workflow"
     CALLED_WORKFLOW_COMPLETED = "workflow.node.called_workflow_completed"
-    # Phase 3.8 §11.1 — emitted as the FIRST event of every forked run's
-    # JSONL (mirrors Phase 3.4's ``RUN_RESUMED`` discipline: a new kind
-    # rather than a payload extension on ``RUN_STARTED`` so event-stream
-    # consumers' switch statements stay clean). The forked run shares
-    # the parent's ``trace_id``; the parent run id + fork event id live
-    # in :class:`WorkflowRunForkedFromPayload`.
+    # Emitted as the FIRST event of every forked run's JSONL (mirrors
+    # `RUN_RESUMED`'s discipline: a new kind rather than a payload
+    # extension on `RUN_STARTED` so event-stream consumers' switch
+    # statements stay clean). The forked run shares the parent's
+    # `trace_id`; the parent run id + fork event id live in
+    # `WorkflowRunForkedFromPayload`.
     RUN_FORKED_FROM = "workflow.run.forked_from"
 
 
 def new_event_id() -> EventId:
-    """Mint a fresh ``ev_<uuid>``. UUID4-backed for global uniqueness."""
+    """Mint a fresh `ev_<uuid>`. UUID4-backed for global uniqueness."""
     return EventId(f"ev_{uuid.uuid4()}")
 
 
@@ -139,44 +137,40 @@ def new_event_id() -> EventId:
 class WorkflowEvent(BaseModel):
     """Common-field envelope every executor-emitted event extends.
 
-    Master spec §11.3 — the five top-level fields below are universal;
-    node-scoped subtypes hoist :attr:`invocation_id` + :attr:`node_name`
-    to the top level (see :class:`NodeScopedWorkflowEvent`).
+    The top-level fields below are universal; node-scoped subtypes
+    hoist `invocation_id` + `node_name` to the top level (see
+    [`NodeScopedWorkflowEvent`][workflows.events.NodeScopedWorkflowEvent]).
 
-    ``payload`` is a free-shape dict; per-kind tightening lands as
-    Phase 3.2+ runtimes mature. Caller-chain (for the 3 named kinds)
-    lives INSIDE payload per the build doc.
+    `payload` is a free-shape dict; per-kind tightening lands as
+    runtimes mature. Caller-chain (for the relevant kinds) lives
+    INSIDE payload.
     """
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(
-        frozen=False, extra="forbid"
-    )
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=False, extra="forbid")
 
     event_id: EventId = Field(default_factory=new_event_id)
     parent_event_id: EventId | None = None
     kind: WorkflowEventKind
     workflow_run_id: WorkflowRunId
     trace_id: TraceId
-    # Master spec §11 lists ``ts`` as a common envelope field. The
-    # repo-wide convention (Phase 1 ``schemas.Event.created_at``,
-    # ``WorkflowRun.created_at``, ``MemoryItem.created_at``, session
-    # entities) is a Pydantic ``datetime`` field serialised to
-    # ISO-8601 by ``model_dump(mode="json")``. ``ts`` follows the
-    # same convention so a JSONL consumer doesn't need a second
-    # decoder for workflow events. The volatile-field canonicaliser
-    # at :mod:`tests.golden.runs_test` collapses every ``ts`` to the
-    # literal ``<TS>`` placeholder, matching the Phase 1 helper at
-    # :mod:`tests.golden._helpers`.
+    # `ts` is the common envelope timestamp. The repo-wide convention
+    # (`schemas.Event.created_at`, `WorkflowRun.created_at`,
+    # `MemoryItem.created_at`, session entities) is a Pydantic
+    # `datetime` field serialised to ISO-8601 by
+    # `model_dump(mode="json")`. `ts` follows the same convention so a
+    # JSONL consumer doesn't need a second decoder for workflow
+    # events. The volatile-field canonicaliser in the golden tests
+    # collapses every `ts` to the literal `<TS>` placeholder.
     ts: datetime = Field(default_factory=lambda: datetime.now(UTC))
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
 class NodeScopedWorkflowEvent(WorkflowEvent):
-    """Adds ``invocation_id`` + ``node_name`` at the envelope top level.
+    """Adds `invocation_id` + `node_name` at the envelope top level.
 
-    The 6 ``workflow.node.*`` kinds all carry these two fields so
+    The `workflow.node.*` kinds all carry these two fields so
     consumers (tail viewers, golden-trace diffs) can correlate node
-    events without parsing ``payload``.
+    events without parsing `payload`.
     """
 
     invocation_id: InvocationId
@@ -189,15 +183,12 @@ class NodeScopedWorkflowEvent(WorkflowEvent):
 
 
 class WorkflowRunStartedPayload(BaseModel):
-    """Typed payload for :class:`WorkflowRunStartedEvent` — Phase 3.10 §16.1.
+    """Typed payload for the `workflow.run.started` envelope.
 
-    Declared in Phase 3.10 Step 0 to anchor the new ``concurrency_mode``
-    field. ``extra="allow"`` so existing payload keys (``workflow_ref``,
-    ``inputs``, ``trace_id``) round-trip cleanly when loaded from a
-    pre-Phase-3.10 JSONL row; ``concurrency_mode`` defaults to ``None``
-    for the same reason. Phase 3.10 Step 3 wires runtime emission of
-    the field; the event class's ``payload`` field stays
-    ``dict[str, Any]`` at Step 0 (no runtime change).
+    Anchors the `concurrency_mode` field. `extra="allow"` so existing
+    payload keys (`workflow_ref`, `inputs`, `trace_id`) round-trip
+    cleanly when loaded from older JSONL rows; `concurrency_mode`
+    defaults to `None` for the same reason.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
@@ -206,20 +197,20 @@ class WorkflowRunStartedPayload(BaseModel):
 
 
 class WorkflowRunStartedEvent(WorkflowEvent):
+    """The `workflow.run.started` envelope."""
+
     kind: Literal[WorkflowEventKind.RUN_STARTED] = WorkflowEventKind.RUN_STARTED
 
 
 class WorkflowRunCompletedPayload(BaseModel):
-    """Typed payload for :class:`WorkflowRunCompletedEvent` — Phase 3.10 §16.1.
+    """Typed payload for the `workflow.run.completed` envelope.
 
-    Declared in Phase 3.10 Step 0 to anchor the new ``peak_in_flight``
-    field (master spec §16.9 — the maximum number of concurrent
-    in-flight node invocations observed during the run, a forensics
-    aid for authors tuning their workflows). ``extra="allow"`` so
-    existing payload keys (``outputs``) round-trip cleanly when loaded
-    from a pre-Phase-3.10 JSONL row; ``peak_in_flight`` defaults to
-    ``None`` for the same reason. Phase 3.10 Step 3 wires runtime
-    emission of the field.
+    Anchors the `peak_in_flight` field — the maximum number of
+    concurrent in-flight node invocations observed during the run, a
+    forensics aid for authors tuning their workflows. `extra="allow"`
+    so existing payload keys (`outputs`) round-trip cleanly when
+    loaded from older JSONL rows; `peak_in_flight` defaults to `None`
+    for the same reason.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
@@ -228,56 +219,59 @@ class WorkflowRunCompletedPayload(BaseModel):
 
 
 class WorkflowRunCompletedEvent(WorkflowEvent):
-    kind: Literal[WorkflowEventKind.RUN_COMPLETED] = (
-        WorkflowEventKind.RUN_COMPLETED
-    )
+    """The `workflow.run.completed` envelope."""
+
+    kind: Literal[WorkflowEventKind.RUN_COMPLETED] = WorkflowEventKind.RUN_COMPLETED
 
 
 class WorkflowRunFailedEvent(WorkflowEvent):
+    """The `workflow.run.failed` envelope."""
+
     kind: Literal[WorkflowEventKind.RUN_FAILED] = WorkflowEventKind.RUN_FAILED
 
 
 class WorkflowRunTimedOutEvent(WorkflowEvent):
-    kind: Literal[WorkflowEventKind.RUN_TIMED_OUT] = (
-        WorkflowEventKind.RUN_TIMED_OUT
-    )
+    """The `workflow.run.timed_out` envelope."""
+
+    kind: Literal[WorkflowEventKind.RUN_TIMED_OUT] = WorkflowEventKind.RUN_TIMED_OUT
 
 
 class WorkflowRunAbortedEvent(WorkflowEvent):
+    """The `workflow.run.aborted` envelope."""
+
     kind: Literal[WorkflowEventKind.RUN_ABORTED] = WorkflowEventKind.RUN_ABORTED
 
 
 class WorkflowRunResumedEvent(WorkflowEvent):
-    """``workflow.run.resumed`` — Phase 3.4 §10.2.
+    """The `workflow.run.resumed` envelope.
 
     Emitted as the FIRST event of every resume process, BEFORE the
-    paused ``user_input`` node's completion event. ``parent_event_id``
+    paused `user_input` node's completion event. `parent_event_id`
     chains to the last event in the JSONL at pause time (typically the
-    paused user_input node's :class:`WorkflowNodeStartedEvent`) so the
-    cross-process event chain is unbroken.
+    paused user_input node's
+    [`WorkflowNodeStartedEvent`][workflows.events.WorkflowNodeStartedEvent])
+    so the cross-process event chain is unbroken.
 
-    Payload carries ``resumed_at_invocation_id`` so forensics readers
+    Payload carries `resumed_at_invocation_id` so forensics readers
     can correlate the resume directly to the open invocation it
-    completes, without walking the JSONL backwards. Phase 3.9's chat
-    capsule consumes this event to visually mark resumed runs.
+    completes, without walking the JSONL backwards. The chat capsule
+    consumes this event to visually mark resumed runs.
     """
 
     kind: Literal[WorkflowEventKind.RUN_RESUMED] = WorkflowEventKind.RUN_RESUMED
 
 
 class WorkflowRunForkedFromPayload(BaseModel):
-    """Payload for :class:`WorkflowRunForkedFromEvent` — Phase 3.8 §11.1.
+    """Payload for the `workflow.run.forked_from` envelope.
 
-    Frozen + ``extra="forbid"`` so a typo'd payload field is a
+    Frozen + `extra="forbid"` so a typo'd payload field is a
     construction-time error rather than a silently-dropped JSONL line.
-    ``input_overrides`` carries the ``--input k=v`` pairs the operator
-    passed to ``kolsch workflows fork``; an empty dict means no
+    `input_overrides` carries the `--input k=v` pairs the operator
+    passed to `kolsch workflows fork`; an empty dict means no
     overrides were applied at the fork point.
     """
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(
-        frozen=True, extra="forbid"
-    )
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
 
     forked_from_run_id: str
     fork_event_id: str
@@ -285,106 +279,108 @@ class WorkflowRunForkedFromPayload(BaseModel):
 
 
 class WorkflowRunForkedFromEvent(WorkflowEvent):
-    """``workflow.run.forked_from`` — Phase 3.8 §11.1.
+    """The `workflow.run.forked_from` envelope.
 
-    Emitted as the FIRST event of every forked run's JSONL (before any
-    replay-driven completion events the executor synthesizes on
-    resume-from-fork). Mirrors :class:`WorkflowRunResumedEvent`'s
+    Emitted as the FIRST event of every forked run's JSONL (before
+    any replay-driven completion events the executor synthesizes on
+    resume-from-fork). Mirrors
+    [`WorkflowRunResumedEvent`][workflows.events.WorkflowRunResumedEvent]'s
     discipline — a new kind rather than a payload extension on
-    ``RUN_STARTED`` so event-stream consumers can switch on ``kind``
-    without inspecting payload shape. ``parent_event_id`` is ``None``
-    on this envelope (it IS the JSONL's first event); the cross-JSONL
-    link to the parent run is the payload's ``forked_from_run_id`` +
-    ``fork_event_id`` pair plus the inherited ``trace_id``.
+    `RUN_STARTED` so event-stream consumers can switch on `kind`
+    without inspecting payload shape. `parent_event_id` is `None` on
+    this envelope (it IS the JSONL's first event); the cross-JSONL
+    link to the parent run is the payload's `forked_from_run_id` +
+    `fork_event_id` pair plus the inherited `trace_id`.
     """
 
-    kind: Literal[WorkflowEventKind.RUN_FORKED_FROM] = (
-        WorkflowEventKind.RUN_FORKED_FROM
-    )
+    kind: Literal[WorkflowEventKind.RUN_FORKED_FROM] = WorkflowEventKind.RUN_FORKED_FROM
     payload: WorkflowRunForkedFromPayload
 
 
 class WorkflowNodeStartedEvent(NodeScopedWorkflowEvent):
-    kind: Literal[WorkflowEventKind.NODE_STARTED] = (
-        WorkflowEventKind.NODE_STARTED
-    )
+    """The `workflow.node.started` envelope."""
+
+    kind: Literal[WorkflowEventKind.NODE_STARTED] = WorkflowEventKind.NODE_STARTED
 
 
 class WorkflowNodeCompletedEvent(NodeScopedWorkflowEvent):
-    kind: Literal[WorkflowEventKind.NODE_COMPLETED] = (
-        WorkflowEventKind.NODE_COMPLETED
-    )
+    """The `workflow.node.completed` envelope."""
+
+    kind: Literal[WorkflowEventKind.NODE_COMPLETED] = WorkflowEventKind.NODE_COMPLETED
 
 
 class WorkflowNodeFailedEvent(NodeScopedWorkflowEvent):
+    """The `workflow.node.failed` envelope."""
+
     kind: Literal[WorkflowEventKind.NODE_FAILED] = WorkflowEventKind.NODE_FAILED
 
 
 class WorkflowNodeTimedOutEvent(NodeScopedWorkflowEvent):
-    kind: Literal[WorkflowEventKind.NODE_TIMED_OUT] = (
-        WorkflowEventKind.NODE_TIMED_OUT
-    )
+    """The `workflow.node.timed_out` envelope."""
+
+    kind: Literal[WorkflowEventKind.NODE_TIMED_OUT] = WorkflowEventKind.NODE_TIMED_OUT
 
 
 class WorkflowNodePrunedEvent(NodeScopedWorkflowEvent):
-    """``workflow.node.pruned`` — Phase 3.3 §11.1 extension.
+    """The `workflow.node.pruned` envelope.
 
     Emitted when a node is structurally suppressed because every
-    inbound edge was suppressed by upstream branch dispatch (master
-    spec §6.6 reverse-reachability cascade). The payload carries
-    ``{node_name, reason: "branch_not_taken", upstream_source,
-    branch_value}`` so JSONL forensics can correlate the prune back
-    to the branchable source whose decision caused the cascade.
+    inbound edge was suppressed by upstream branch dispatch (the
+    reverse-reachability cascade). The payload carries
+    `{node_name, reason: "branch_not_taken", upstream_source,
+    branch_value}` so JSONL forensics can correlate the prune back to
+    the branchable source whose decision caused the cascade.
 
-    Ordering rule per master spec §11.2 — pruned events follow the
-    source's :class:`WorkflowNodeCompletedEvent` in the JSONL; when
-    a single source prunes multiple descendants the events are
-    contiguous. The ``parent_event_id`` chains to that source's
-    completion id so consumers can walk the prune subtree without
-    re-parsing the graph.
+    Pruned events follow the source's
+    [`WorkflowNodeCompletedEvent`][workflows.events.WorkflowNodeCompletedEvent]
+    in the JSONL; when a single source prunes multiple descendants
+    the events are contiguous. The `parent_event_id` chains to that
+    source's completion id so consumers can walk the prune subtree
+    without re-parsing the graph.
 
-    The node-scoped envelope hoists ``invocation_id`` + ``node_name``
-    to the top level for consistency with the rest of the
-    ``workflow.node.*`` family; ``invocation_id`` is a fresh sentinel
-    (``inv_pruned_<uuid>``) since a pruned node never produced a
-    real invocation.
+    The node-scoped envelope hoists `invocation_id` + `node_name` to
+    the top level for consistency with the rest of the
+    `workflow.node.*` family; `invocation_id` is a fresh sentinel
+    (`inv_pruned_<uuid>`) since a pruned node never produced a real
+    invocation.
     """
 
     kind: Literal[WorkflowEventKind.NODE_PRUNED] = WorkflowEventKind.NODE_PRUNED
 
 
 class WorkflowNodeLoggedEvent(NodeScopedWorkflowEvent):
+    """The `workflow.node.logged` envelope."""
+
     kind: Literal[WorkflowEventKind.NODE_LOGGED] = WorkflowEventKind.NODE_LOGGED
 
 
 class WorkflowNodeEmittedEvent(NodeScopedWorkflowEvent):
-    kind: Literal[WorkflowEventKind.NODE_EMITTED] = (
-        WorkflowEventKind.NODE_EMITTED
-    )
+    """The `workflow.node.emitted` envelope."""
+
+    kind: Literal[WorkflowEventKind.NODE_EMITTED] = WorkflowEventKind.NODE_EMITTED
 
 
 class WorkflowToolCalledEvent(NodeScopedWorkflowEvent):
-    """``workflow.tool.called`` is node-scoped (a node fires the tool)
-    AND carries ``caller_chain`` in payload (master spec §11.3).
+    """The `workflow.tool.called` envelope.
+
+    Node-scoped (a node fires the tool) AND carries `caller_chain` in
+    payload.
     """
 
     kind: Literal[WorkflowEventKind.TOOL_CALLED] = WorkflowEventKind.TOOL_CALLED
 
 
 class WorkflowStateMutatedPayload(BaseModel):
-    """Payload for :class:`WorkflowStateMutatedEvent` — Phase 3.5 §11.1.
+    """Payload for the `workflow.state.mutated` envelope.
 
-    Frozen + ``extra="forbid"`` so a typo'd payload field is a
+    Frozen + `extra="forbid"` so a typo'd payload field is a
     construction-time error rather than a silently-dropped JSONL
-    line. ``value`` is ``None`` for ``"delete"`` ops and the rendered
-    Jinja result (or YAML literal) for ``"set"`` ops; the executor's
-    state dict is typed ``Any`` at v1 (master spec §2) so no further
-    narrowing applies here.
+    line. `value` is `None` for `"delete"` ops and the rendered Jinja
+    result (or YAML literal) for `"set"` ops; the executor's state
+    dict is typed `Any` so no further narrowing applies here.
     """
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(
-        frozen=True, extra="forbid"
-    )
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
 
     key: str
     op: Literal["set", "delete"]
@@ -392,34 +388,29 @@ class WorkflowStateMutatedPayload(BaseModel):
 
 
 class WorkflowStateMutatedEvent(WorkflowEvent):
-    """``workflow.state.mutated`` — Phase 3.5 §11.1.
+    """The `workflow.state.mutated` envelope.
 
-    NOT node-scoped at the envelope top level: the master spec
-    treats state as a workflow-run-scoped concern (mutations belong
-    to the run's state history, not specifically to the emitting
-    node's invocation). The emitting node is still recoverable via
-    the ``parent_event_id`` chain back to that node's
-    ``workflow.node.started`` event.
+    NOT node-scoped at the envelope top level: state is treated as a
+    workflow-run-scoped concern (mutations belong to the run's state
+    history, not specifically to the emitting node's invocation). The
+    emitting node is still recoverable via the `parent_event_id`
+    chain back to that node's `workflow.node.started` event.
     """
 
-    kind: Literal[WorkflowEventKind.STATE_MUTATED] = (
-        WorkflowEventKind.STATE_MUTATED
-    )
+    kind: Literal[WorkflowEventKind.STATE_MUTATED] = WorkflowEventKind.STATE_MUTATED
     payload: WorkflowStateMutatedPayload
 
 
 class WorkflowNodeCalledWorkflowPayload(BaseModel):
-    """Payload for :class:`WorkflowNodeCalledWorkflowEvent` — Phase 3.7 §11.1.
+    """Payload for the `workflow.node.called_workflow` envelope.
 
-    Frozen + ``extra="forbid"`` so a typo'd payload field is a
+    Frozen + `extra="forbid"` so a typo'd payload field is a
     construction-time error rather than a silently-dropped JSONL
-    line. Emitted by the parent's executor BEFORE the workflow
-    node's runner returns, after the child run has been minted.
+    line. Emitted by the parent's executor BEFORE the workflow node's
+    runner returns, after the child run has been minted.
     """
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(
-        frozen=True, extra="forbid"
-    )
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
 
     node_name: str
     invocation_id: str
@@ -428,33 +419,29 @@ class WorkflowNodeCalledWorkflowPayload(BaseModel):
 
 
 class WorkflowNodeCalledWorkflowEvent(NodeScopedWorkflowEvent):
-    """``workflow.node.called_workflow`` — Phase 3.7 §11.1.
+    """The `workflow.node.called_workflow` envelope.
 
     Parent-side forensics marker emitted between the workflow node's
-    own ``workflow.node.started`` and ``workflow.node.completed``.
+    own `workflow.node.started` and `workflow.node.completed`.
     Carries the child run's identifying fields so cross-JSONL
     navigation works without re-deriving the parent→child linkage.
     """
 
-    kind: Literal[WorkflowEventKind.CALLED_WORKFLOW] = (
-        WorkflowEventKind.CALLED_WORKFLOW
-    )
+    kind: Literal[WorkflowEventKind.CALLED_WORKFLOW] = WorkflowEventKind.CALLED_WORKFLOW
     payload: WorkflowNodeCalledWorkflowPayload
 
 
 class WorkflowNodeCalledWorkflowCompletedPayload(BaseModel):
-    """Payload for :class:`WorkflowNodeCalledWorkflowCompletedEvent` —
-    Phase 3.7 §11.1.
+    """Payload for the `workflow.node.called_workflow_completed` envelope.
 
-    ``child_status`` is the child run's terminal-ish status string:
-    ``"succeeded"`` / ``"failed"`` / ``"waiting_for_input"`` /
-    ``"aborted"`` / ``"timed_out"`` (the
-    :class:`workflows.run.WorkflowRunStatus` lowercased values).
+    `child_status` is the child run's terminal-ish status string:
+    `"succeeded"` / `"failed"` / `"waiting_for_input"` / `"aborted"`
+    / `"timed_out"` (the
+    [`WorkflowRunStatus`][workflows.run.WorkflowRunStatus] lowercased
+    values).
     """
 
-    model_config: ClassVar[ConfigDict] = ConfigDict(
-        frozen=True, extra="forbid"
-    )
+    model_config: ClassVar[ConfigDict] = ConfigDict(frozen=True, extra="forbid")
 
     node_name: str
     invocation_id: str
@@ -463,15 +450,16 @@ class WorkflowNodeCalledWorkflowCompletedPayload(BaseModel):
 
 
 class WorkflowNodeCalledWorkflowCompletedEvent(NodeScopedWorkflowEvent):
-    """``workflow.node.called_workflow_completed`` — Phase 3.7 §11.1.
+    """The `workflow.node.called_workflow_completed` envelope.
 
-    Parent-side bookend to :class:`WorkflowNodeCalledWorkflowEvent`.
+    Parent-side bookend to
+    [`WorkflowNodeCalledWorkflowEvent`][workflows.events.WorkflowNodeCalledWorkflowEvent].
     Emitted by the workflow runner AFTER the child run reaches a
     terminal-ish status (succeeded / failed / waiting_for_input /
     aborted / timed_out). For pause cascade, the parent emits this
-    with ``child_status="waiting_for_input"`` then re-raises
-    :class:`workflows.errors.WorkflowPausedForInput` so the parent's
-    executor catches it and pauses.
+    with `child_status="waiting_for_input"` then re-raises
+    [`WorkflowPausedForInput`][workflows.errors.WorkflowPausedForInput]
+    so the parent's executor catches it and pauses.
     """
 
     kind: Literal[WorkflowEventKind.CALLED_WORKFLOW_COMPLETED] = (
@@ -481,12 +469,12 @@ class WorkflowNodeCalledWorkflowCompletedEvent(NodeScopedWorkflowEvent):
 
 
 class PolicyDecisionMadeEvent(WorkflowEvent):
-    """``policy.decision.made`` is RUN-scoped (not node-scoped).
+    """The `policy.decision.made` envelope — RUN-scoped, not node-scoped.
 
     Authz fires this from the rule walk inside the tool dispatcher;
     the dispatcher's enclosing node is identified by the
-    ``parent_event_id`` chain back to a ``workflow.tool.called`` /
-    ``workflow.node.started`` event, not a top-level field.
+    `parent_event_id` chain back to a `workflow.tool.called` /
+    `workflow.node.started` event, not a top-level field.
     """
 
     kind: Literal[WorkflowEventKind.POLICY_DECISION_MADE] = (
@@ -503,11 +491,15 @@ def emit_event(
     store: WorkflowRunStore,
     event: WorkflowEvent,
 ) -> EventId:
-    """Append ``event`` to the run's JSONL via the store surface.
+    """Append `event` to the run's JSONL via the store surface.
 
-    Returns the envelope's ``event_id`` so the caller can stash it as
-    ``parent_event_id`` on a downstream emit (master spec §11.2 +
-    Phase 1 causal-parent convention).
+    Args:
+        store: The run store to append through.
+        event: The typed event envelope.
+
+    Returns:
+        The envelope's `event_id` — caller can stash it as
+        `parent_event_id` on a downstream emit.
     """
     store.append_event(event.workflow_run_id, event.model_dump(mode="json"))
     return event.event_id

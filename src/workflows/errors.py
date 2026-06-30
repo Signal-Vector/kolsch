@@ -1,31 +1,33 @@
-"""Workflow exception hierarchy — master spec §12.1.
+"""Workflow exception hierarchy.
 
-Every class follows the Phase 3.0 conventions (§12.2 + §12.3):
+Every class follows these conventions:
 
-- Structured attributes via ``__init__`` keyword args (each one
-  becomes ``self.<attr>``). NO error codes; NO enum lookups.
-- ``__str__()`` is STRICT single-line. YAML-origin classes embed
-  ``<file>:<line>`` + identifying names + the literal token
-  ``"Fix: "`` (capital F, colon, space).
-- ``caller_message: ClassVar[str]`` per R3 #8 — a 1-3 sentence
-  plain-English statement for non-engineer end users. Surfaced
-  by chat capsules and the CLI ``--format json`` envelope. NO
-  class names, file/line tokens, Jinja delimiters, or backticks.
-- ``identifying_names_keys: ClassVar[tuple[str, ...]]`` per
-  R3 #11 — listed keys become the JSON envelope's
-  ``identifying_names: {...}`` dict (the rest fall into ``attrs``).
-- Wrapped causes go in ``__cause__`` via ``raise X(...) from y``.
-- Multi-error reporting uses stdlib :class:`ExceptionGroup`
-  (Python 3.11+); NO custom ``WorkflowValidationErrorGroup``.
+- Structured attributes via `__init__` keyword args (each one becomes
+  `self.<attr>`). NO error codes; NO enum lookups.
+- `__str__()` is STRICT single-line. YAML-origin classes embed
+  `<file>:<line>` + identifying names + the literal token `"Fix: "`
+  (capital F, colon, space).
+- `caller_message: ClassVar[str]` — a 1-3 sentence plain-English
+  statement for non-engineer end users. Surfaced by chat capsules
+  and the CLI's `--format json` envelope. NO class names, file/line
+  tokens, Jinja delimiters, or backticks.
+- `identifying_names_keys: ClassVar[tuple[str, ...]]` — listed keys
+  become the JSON envelope's `identifying_names: {...}` dict (the
+  rest fall into `attrs`).
+- Wrapped causes go in `__cause__` via `raise X(...) from y`.
+- Multi-error reporting uses stdlib `ExceptionGroup`; NO custom
+  group class.
 
 The single-line format for YAML-origin errors:
 
-    <ClassName>: <file>:<line> <identifying-names>: <problem>. Fix: <action>.
+```text
+<ClassName>: <file>:<line> <identifying-names>: <problem>. Fix: <action>.
+```
 
-Fix-portion strict-prose rules: NO ``{{``/``}}``/``{%``/``%}``,
-NO backticks, NO YAML literal syntax. Single-quoted identifiers
-and prose vocabulary only; cross-reference exact syntax via
-``see docs/workflows#<anchor>``.
+Fix-portion strict-prose rules: NO `{{` / `}}` / `{%` / `%}`, NO
+backticks, NO YAML literal syntax. Single-quoted identifiers and
+prose vocabulary only; cross-reference exact syntax via `see
+docs/workflows#<anchor>`.
 """
 
 from __future__ import annotations
@@ -119,7 +121,7 @@ def _yaml_origin_str(
     problem: str,
     fix: str,
 ) -> str:
-    """Canonical single-line YAML-origin format (master spec §12.3)."""
+    """Canonical single-line YAML-origin format."""
     ids = _identifying_names(exc)
     prefix = f"{type(exc).__name__}: {file}:{line}"
     if ids:
@@ -154,19 +156,21 @@ class WorkflowValidationError(WorkflowError):
 
 
 class WorkflowValidationWarning(WorkflowError):
-    """Non-fatal run-start finding (R3 #6 restored).
+    """Non-fatal run-start finding.
 
     Surfaced by the validator alongside errors but does not block
-    execution. Currently hosts :class:`WorkflowTimeoutShadowsNode`.
+    execution. Currently hosts
+    [`WorkflowTimeoutShadowsNode`][workflows.errors.WorkflowTimeoutShadowsNode].
     """
 
     caller_message: ClassVar[str] = (
-        "The workflow has a non-blocking issue worth reviewing. "
-        "Contact your engineer."
+        "The workflow has a non-blocking issue worth reviewing. Contact your engineer."
     )
 
 
 class WorkflowDuplicateNode(WorkflowValidationError):
+    """Raised when two entries under `nodes:` share a name."""
+
     caller_message: ClassVar[str] = (
         "The workflow has two steps with the same name. Contact your engineer."
     )
@@ -191,15 +195,15 @@ class WorkflowDuplicateNode(WorkflowValidationError):
 
 
 class WorkflowDuplicateEdge(WorkflowValidationError):
+    """Raised when the same `(from, to)` edge appears twice under `edges:`."""
+
     caller_message: ClassVar[str] = (
         "The workflow has the same connection between two steps declared twice. "
         "Contact your engineer."
     )
     identifying_names_keys: ClassVar[tuple[str, ...]] = ("from_node", "to_node")
 
-    def __init__(
-        self, *, file: str, line: int, from_node: str, to_node: str
-    ) -> None:
+    def __init__(self, *, file: str, line: int, from_node: str, to_node: str) -> None:
         self.file = file
         self.line = line
         self.from_node = from_node
@@ -210,8 +214,7 @@ class WorkflowDuplicateEdge(WorkflowValidationError):
                 file=file,
                 line=line,
                 problem=(
-                    f"edge from {from_node!r} to {to_node!r} is "
-                    "declared more than once"
+                    f"edge from {from_node!r} to {to_node!r} is declared more than once"
                 ),
                 fix=(
                     f"remove the duplicate edge between {from_node!r} "
@@ -222,6 +225,8 @@ class WorkflowDuplicateEdge(WorkflowValidationError):
 
 
 class WorkflowExtendsCycle(WorkflowValidationError):
+    """Raised when the workflow `extends:` chain forms a cycle."""
+
     caller_message: ClassVar[str] = (
         "The workflow's 'extends' chain loops back on itself. Contact your engineer."
     )
@@ -249,14 +254,14 @@ class WorkflowExtendsCycle(WorkflowValidationError):
 
 
 class WorkflowExtendsDepthExceeded(WorkflowValidationError):
+    """Raised when the `extends:` chain exceeds the depth limit."""
+
     caller_message: ClassVar[str] = (
         "The workflow's 'extends' chain is too long. Contact your engineer."
     )
     identifying_names_keys: ClassVar[tuple[str, ...]] = ("depth", "limit")
 
-    def __init__(
-        self, *, file: str, line: int, depth: int, limit: int = 16
-    ) -> None:
+    def __init__(self, *, file: str, line: int, depth: int, limit: int = 16) -> None:
         self.file = file
         self.line = line
         self.depth = depth
@@ -266,9 +271,7 @@ class WorkflowExtendsDepthExceeded(WorkflowValidationError):
                 self,
                 file=file,
                 line=line,
-                problem=(
-                    f"extends chain depth {depth} exceeds the limit of {limit}"
-                ),
+                problem=(f"extends chain depth {depth} exceeds the limit of {limit}"),
                 fix=(
                     "flatten the extends chain so it stays at or below the "
                     "depth limit (see docs/workflows#extends)"
@@ -278,9 +281,10 @@ class WorkflowExtendsDepthExceeded(WorkflowValidationError):
 
 
 class WorkflowExtendsUnresolved(WorkflowValidationError):
+    """Raised when an `extends:` ref doesn't resolve to a known workflow."""
+
     caller_message: ClassVar[str] = (
-        "A workflow that this one extends could not be found. "
-        "Contact your engineer."
+        "A workflow that this one extends could not be found. Contact your engineer."
     )
     identifying_names_keys: ClassVar[tuple[str, ...]] = ("ref",)
 
@@ -303,9 +307,9 @@ class WorkflowExtendsUnresolved(WorkflowValidationError):
 
 
 class WorkflowExtendsPolicyForbidden(WorkflowValidationError):
-    """Round 6 S5 — workflow extends another that declares policy: rules.
+    """Raised when a workflow extends another that declares `policy:` rules.
 
-    ``policy:`` applies ONLY when the extended workflow is invoked
+    `policy:` applies ONLY when the extended workflow is invoked
     DIRECTLY; it is not mergeable across the extends chain.
     """
 
@@ -337,12 +341,12 @@ class WorkflowExtendsPolicyForbidden(WorkflowValidationError):
 
 
 class WorkflowNodeNotDefined(WorkflowValidationError):
-    """Any YAML field naming a node that doesn't exist in ``nodes:``.
+    """Raised when a YAML field names a node that doesn't exist in `nodes:`.
 
-    Renamed from ``WorkflowUnknownNodeRef``. Fires for ``edge.from``,
-    ``edge.to``, ``copy_of:`` source, ``map.apply:`` target. DISTINCT
-    from :class:`WorkflowJinjaRefUnknown` (which is exclusively for
-    Jinja ``nodes.<X>.<Y>`` references).
+    Fires for `edge.from`, `edge.to`, `copy_of:` source,
+    `map.apply:` target. DISTINCT from
+    [`WorkflowJinjaRefUnknown`][workflows.errors.WorkflowJinjaRefUnknown]
+    (which is exclusively for Jinja `nodes.<X>.<Y>` references).
     """
 
     caller_message: ClassVar[str] = (
@@ -374,15 +378,14 @@ class WorkflowNodeNotDefined(WorkflowValidationError):
 
 
 class WorkflowAmbiguousStart(WorkflowValidationError):
+    """Raised when multiple nodes have no incoming edges."""
+
     caller_message: ClassVar[str] = (
-        "The workflow has more than one possible starting step. "
-        "Contact your engineer."
+        "The workflow has more than one possible starting step. Contact your engineer."
     )
     identifying_names_keys: ClassVar[tuple[str, ...]] = ("candidates",)
 
-    def __init__(
-        self, *, file: str, line: int, candidates: tuple[str, ...]
-    ) -> None:
+    def __init__(self, *, file: str, line: int, candidates: tuple[str, ...]) -> None:
         self.file = file
         self.line = line
         self.candidates = candidates
@@ -404,6 +407,8 @@ class WorkflowAmbiguousStart(WorkflowValidationError):
 
 
 class WorkflowNoStartNode(WorkflowValidationError):
+    """Raised when every node has at least one incoming edge."""
+
     caller_message: ClassVar[str] = (
         "The workflow has no starting step. Contact your engineer."
     )
@@ -427,6 +432,8 @@ class WorkflowNoStartNode(WorkflowValidationError):
 
 
 class WorkflowUnreachableNode(WorkflowValidationError):
+    """Raised when a node is declared but can't be reached from the start."""
+
     caller_message: ClassVar[str] = (
         "A workflow step is defined but cannot be reached from the start. "
         "Contact your engineer."
@@ -455,7 +462,7 @@ class WorkflowUnreachableNode(WorkflowValidationError):
 
 
 class WorkflowBindCollision(WorkflowValidationError):
-    """Round 4 item #11 — two edges into the same target bind the same key."""
+    """Raised when two edges into the same target bind the same key."""
 
     caller_message: ClassVar[str] = (
         "A workflow step receives the same input from two different sources. "
@@ -495,7 +502,7 @@ class WorkflowBindCollision(WorkflowValidationError):
 
 
 class WorkflowBindTypeMismatch(WorkflowValidationError):
-    """Round 4 item #11 — runtime: rendered bind value fails strict validation."""
+    """Raised when a rendered bind value fails strict validation at runtime."""
 
     caller_message: ClassVar[str] = (
         "A workflow step received the wrong type of value. "
@@ -537,16 +544,15 @@ class WorkflowBindTypeMismatch(WorkflowValidationError):
 
 
 class WorkflowJinjaRefUnknown(WorkflowValidationError):
-    """R3 #9 renamed from WorkflowNodeRefUnknown.
+    """Raised when a Jinja `nodes.<X>.<Y>` reference doesn't resolve.
 
-    Carries ``reason: str`` (master spec §7.2 — typed as ``str`` per
-    R4 #9, NOT ``Literal``):
+    Carries `reason: str` (typed as `str`, not `Literal`):
 
-    - ``"not_predecessor"``: X is not a graph-reachable transitive
+    - `"not_predecessor"`: X is not a graph-reachable transitive
       ancestor of the consuming node.
-    - ``"unknown_field"``: X resolves and its output schema is known,
+    - `"unknown_field"`: X resolves and its output schema is known,
       but Y is not in that schema.
-    - ``"not_declared"``: X resolves but its output schema is unknown
+    - `"not_declared"`: X resolves but its output schema is unknown
       (e.g., authored Python node failed to import).
     """
 
@@ -602,19 +608,15 @@ class WorkflowJinjaRefUnknown(WorkflowValidationError):
                 "discoverable (see docs/workflows#node-types)"
             )
         else:
-            problem = (
-                f"node {node!r} references {reference!r} (reason: {reason})"
-            )
+            problem = f"node {node!r} references {reference!r} (reason: {reason})"
             fix = "see docs/workflows#fan-in for the reference rules"
         super().__init__(
-            _yaml_origin_str(
-                self, file=file, line=line, problem=problem, fix=fix
-            )
+            _yaml_origin_str(self, file=file, line=line, problem=problem, fix=fix)
         )
 
 
 class WorkflowMapperWorkerNotAddressable(WorkflowValidationError):
-    """Outside-map reference to a map worker (R3 #9 — kept verbose name)."""
+    """Raised when code outside a map references one of its worker nodes."""
 
     caller_message: ClassVar[str] = (
         "A workflow step refers into the middle of a parallel block. "
@@ -622,9 +624,7 @@ class WorkflowMapperWorkerNotAddressable(WorkflowValidationError):
     )
     identifying_names_keys: ClassVar[tuple[str, ...]] = ("node", "worker")
 
-    def __init__(
-        self, *, file: str, line: int, node: str, worker: str
-    ) -> None:
+    def __init__(self, *, file: str, line: int, node: str, worker: str) -> None:
         self.file = file
         self.line = line
         self.node = node
@@ -648,6 +648,8 @@ class WorkflowMapperWorkerNotAddressable(WorkflowValidationError):
 
 
 class WorkflowBranchOnNonBranchable(WorkflowValidationError):
+    """Raised when an edge carries `branch:` but the source node doesn't branch."""
+
     caller_message: ClassVar[str] = (
         "A workflow edge has true/false routing on a step that does not branch. "
         "Contact your engineer."
@@ -685,7 +687,7 @@ class WorkflowBranchOnNonBranchable(WorkflowValidationError):
 
 
 class WorkflowBranchMissingArm(WorkflowValidationError):
-    """R3 #9 renamed from WorkflowBranchDeadSide — clearer."""
+    """Raised when a branch node is missing its `true` or `false` arm."""
 
     caller_message: ClassVar[str] = (
         "A workflow decision step is missing a true or false arm. "
@@ -693,9 +695,7 @@ class WorkflowBranchMissingArm(WorkflowValidationError):
     )
     identifying_names_keys: ClassVar[tuple[str, ...]] = ("node", "missing_arm")
 
-    def __init__(
-        self, *, file: str, line: int, node: str, missing_arm: str
-    ) -> None:
+    def __init__(self, *, file: str, line: int, node: str, missing_arm: str) -> None:
         self.file = file
         self.line = line
         self.node = node
@@ -705,9 +705,7 @@ class WorkflowBranchMissingArm(WorkflowValidationError):
                 self,
                 file=file,
                 line=line,
-                problem=(
-                    f"branch node {node!r} is missing the {missing_arm!r} arm"
-                ),
+                problem=(f"branch node {node!r} is missing the {missing_arm!r} arm"),
                 fix=(
                     f"add an edge from {node!r} with branch: {missing_arm} "
                     "(see docs/workflows#branch)"
@@ -717,6 +715,8 @@ class WorkflowBranchMissingArm(WorkflowValidationError):
 
 
 class WorkflowMapperWorkerMissingField(WorkflowValidationError):
+    """Raised when a map node expects an output field the worker doesn't declare."""
+
     caller_message: ClassVar[str] = (
         "A parallel block expects a value the inner step doesn't produce. "
         "Contact your engineer."
@@ -755,14 +755,14 @@ class WorkflowMapperWorkerMissingField(WorkflowValidationError):
 
 
 class WorkflowCallCycle(WorkflowValidationError):
+    """Raised when sub-workflow refs form a cycle."""
+
     caller_message: ClassVar[str] = (
         "A sub-workflow ends up calling itself in a cycle. Contact your engineer."
     )
     identifying_names_keys: ClassVar[tuple[str, ...]] = ("cycle",)
 
-    def __init__(
-        self, *, file: str, line: int, cycle: tuple[str, ...]
-    ) -> None:
+    def __init__(self, *, file: str, line: int, cycle: tuple[str, ...]) -> None:
         self.file = file
         self.line = line
         self.cycle = cycle
@@ -784,14 +784,14 @@ class WorkflowCallCycle(WorkflowValidationError):
 
 
 class WorkflowNodeImportFailed(WorkflowValidationError):
+    """Raised when an authored Python `@node` module fails to import."""
+
     caller_message: ClassVar[str] = (
         "A workflow step's code could not be loaded. Contact your engineer."
     )
     identifying_names_keys: ClassVar[tuple[str, ...]] = ("ref",)
 
-    def __init__(
-        self, *, file: str, line: int, ref: str, reason: str
-    ) -> None:
+    def __init__(self, *, file: str, line: int, ref: str, reason: str) -> None:
         self.file = file
         self.line = line
         self.ref = ref
@@ -811,9 +811,10 @@ class WorkflowNodeImportFailed(WorkflowValidationError):
 
 
 class WorkflowNodeMissingRun(WorkflowValidationError):
+    """Raised when an authored Python `@node` module has no `run` function."""
+
     caller_message: ClassVar[str] = (
-        "A workflow step's code is missing its run function. "
-        "Contact your engineer."
+        "A workflow step's code is missing its run function. Contact your engineer."
     )
     identifying_names_keys: ClassVar[tuple[str, ...]] = ("ref",)
 
@@ -836,9 +837,10 @@ class WorkflowNodeMissingRun(WorkflowValidationError):
 
 
 class WorkflowNodeNotDecorated(WorkflowValidationError):
+    """Raised when a module's `run` function isn't decorated with `@node`."""
+
     caller_message: ClassVar[str] = (
-        "A workflow step's code is not registered as a node. "
-        "Contact your engineer."
+        "A workflow step's code is not registered as a node. Contact your engineer."
     )
     identifying_names_keys: ClassVar[tuple[str, ...]] = ("ref",)
 
@@ -863,14 +865,14 @@ class WorkflowNodeNotDecorated(WorkflowValidationError):
 
 
 class WorkflowNodeSignatureInvalid(WorkflowValidationError):
+    """Raised when an authored `@node` `run`'s signature doesn't match the contract."""
+
     caller_message: ClassVar[str] = (
         "A workflow step's code has the wrong shape. Contact your engineer."
     )
     identifying_names_keys: ClassVar[tuple[str, ...]] = ("ref",)
 
-    def __init__(
-        self, *, file: str, line: int, ref: str, reason: str
-    ) -> None:
+    def __init__(self, *, file: str, line: int, ref: str, reason: str) -> None:
         self.file = file
         self.line = line
         self.ref = ref
@@ -890,14 +892,14 @@ class WorkflowNodeSignatureInvalid(WorkflowValidationError):
 
 
 class WorkflowNodeReturnTypeInvalid(WorkflowValidationError):
+    """Raised when an authored `@node` `run`'s return annotation isn't allowed."""
+
     caller_message: ClassVar[str] = (
         "A workflow step's code returns the wrong shape. Contact your engineer."
     )
     identifying_names_keys: ClassVar[tuple[str, ...]] = ("ref",)
 
-    def __init__(
-        self, *, file: str, line: int, ref: str, return_type: str
-    ) -> None:
+    def __init__(self, *, file: str, line: int, ref: str, return_type: str) -> None:
         self.file = file
         self.line = line
         self.ref = ref
@@ -908,8 +910,7 @@ class WorkflowNodeReturnTypeInvalid(WorkflowValidationError):
                 file=file,
                 line=line,
                 problem=(
-                    f"node {ref!r} declares an unsupported return type "
-                    f"{return_type!r}"
+                    f"node {ref!r} declares an unsupported return type {return_type!r}"
                 ),
                 fix=(
                     "use a BaseModel subclass, bool, or tuple[bool, BaseModel] "
@@ -920,16 +921,14 @@ class WorkflowNodeReturnTypeInvalid(WorkflowValidationError):
 
 
 class WorkflowInvalidTimeout(WorkflowValidationError):
-    """R3 #2 — workflow- or node-level timeout_seconds is non-positive."""
+    """Raised when workflow- or node-level `timeout_seconds` is non-positive."""
 
     caller_message: ClassVar[str] = (
         "A workflow timeout is set to an invalid value. Contact your engineer."
     )
     identifying_names_keys: ClassVar[tuple[str, ...]] = ("scope", "value")
 
-    def __init__(
-        self, *, file: str, line: int, scope: str, value: float
-    ) -> None:
+    def __init__(self, *, file: str, line: int, scope: str, value: float) -> None:
         self.file = file
         self.line = line
         self.scope = scope
@@ -951,13 +950,13 @@ class WorkflowInvalidTimeout(WorkflowValidationError):
 
 
 class WorkflowParallelStateConflict(WorkflowValidationError):
-    """Phase 3.10 §16.4 / §16.8 — two concurrent branches fight over
-    a state key, or a ``parallel: true`` map transitively writes state.
+    """Raised when two concurrent branches fight over a state key.
 
-    Raised by the run-start gate when an ``auto``-mode workflow has
+    Also raised when a `parallel: true` map transitively writes state.
+    Surfaced by the run-start gate when an `auto`-mode workflow has
     two parallel-eligible nodes whose state-write/read sets overlap,
-    OR when a ``parallel: true`` map's worker subgraph reaches a
-    ``set_state`` / ``delete_state`` node. The fix-path message names
+    OR when a `parallel: true` map's worker subgraph reaches a
+    `set_state` / `delete_state` node. The fix-path message names
     both colliding nodes and the shared state key so authors can
     serialise the offending pair via an explicit edge.
     """
@@ -1007,16 +1006,16 @@ class WorkflowParallelStateConflict(WorkflowValidationError):
 
 
 class WorkflowInvalidConcurrency(WorkflowValidationError):
-    """Phase 3.10 §16.8 — ``concurrency:`` integer is non-positive.
+    """Raised when `concurrency:` is set but not a positive integer.
 
-    Raised by the run-start gate for any ``concurrency:`` field on a
-    map node that is set but not a positive integer. Distinct from
-    :class:`WorkflowInvalidTimeout` (which covers ``timeout_seconds``).
+    Surfaced by the run-start gate for any `concurrency:` field on a
+    map node. Distinct from
+    [`WorkflowInvalidTimeout`][workflows.errors.WorkflowInvalidTimeout]
+    (which covers `timeout_seconds`).
     """
 
     caller_message: ClassVar[str] = (
-        "The workflow declares a concurrency bound that is not a "
-        "positive integer."
+        "The workflow declares a concurrency bound that is not a positive integer."
     )
     identifying_names_keys: ClassVar[tuple[str, ...]] = ("node", "value")
 
@@ -1051,7 +1050,7 @@ class WorkflowInvalidConcurrency(WorkflowValidationError):
 
 
 class WorkflowInvalidRef(WorkflowValidationError):
-    """R3 #5 — non-3-seg type: value or malformed ref."""
+    """Raised when a `type:` value is not a 3-seg ref or is malformed."""
 
     caller_message: ClassVar[str] = (
         "A workflow step refers to a step type by an outdated short name. "
@@ -1081,7 +1080,7 @@ class WorkflowInvalidRef(WorkflowValidationError):
 
 
 class WorkflowBuiltinShadowed(WorkflowValidationError):
-    """R3 #5 — user authoring at a reserved built-in catalog slot."""
+    """Raised when user-authored code occupies a reserved built-in catalog slot."""
 
     caller_message: ClassVar[str] = (
         "A custom step type collides with a built-in one. Contact your engineer."
@@ -1097,9 +1096,7 @@ class WorkflowBuiltinShadowed(WorkflowValidationError):
                 self,
                 file=file,
                 line=line,
-                problem=(
-                    f"authored node at {ref!r} shadows a reserved built-in slot"
-                ),
+                problem=(f"authored node at {ref!r} shadows a reserved built-in slot"),
                 fix=(
                     f"rename the authored node so it does not collide with "
                     f"the built-in slot {ref!r} (see docs/workflows#node-types)"
@@ -1109,7 +1106,7 @@ class WorkflowBuiltinShadowed(WorkflowValidationError):
 
 
 class WorkflowFromShapeError(WorkflowValidationError):
-    """Round 4 item #13 — from: value is not a 3-seg ref."""
+    """Raised when a policy rule's `from:` value is not a 3-seg ref."""
 
     caller_message: ClassVar[str] = (
         "A permission rule has a malformed 'from' field. Contact your engineer."
@@ -1138,7 +1135,7 @@ class WorkflowFromShapeError(WorkflowValidationError):
 
 
 class WorkflowFromAssetTypeError(WorkflowValidationError):
-    """Round 4 item #13 — from: asset_type segment is not agents/workflows."""
+    """Raised when a policy rule's `from:` asset type is not agents/workflows."""
 
     caller_message: ClassVar[str] = (
         "A permission rule's 'from' field points at the wrong kind of asset. "
@@ -1176,7 +1173,7 @@ class WorkflowFromAssetTypeError(WorkflowValidationError):
 
 
 class WorkflowFromNotFound(WorkflowValidationError):
-    """Round 4 item #13 — from: ref's target doesn't exist in the catalog."""
+    """Raised when a policy rule's `from:` ref doesn't resolve in the catalog."""
 
     caller_message: ClassVar[str] = (
         "A permission rule's 'from' field points at something that doesn't exist. "
@@ -1208,7 +1205,7 @@ class WorkflowFromNotFound(WorkflowValidationError):
 
 
 class WorkflowTimeoutShadowsNode(WorkflowValidationWarning):
-    """R3 #2 — per-node timeout > workflow timeout."""
+    """Warning surfaced when a per-node timeout exceeds the workflow timeout."""
 
     caller_message: ClassVar[str] = (
         "A workflow step's timeout is longer than the whole workflow's. "
@@ -1253,7 +1250,7 @@ class WorkflowTimeoutShadowsNode(WorkflowValidationWarning):
 
 
 class WorkflowRuntimeError(WorkflowError):
-    """Base for run-time errors raised by the executor (Phase 3.1+)."""
+    """Base for run-time errors raised by the executor."""
 
     caller_message: ClassVar[str] = (
         "The workflow ran into a problem while running. "
@@ -1262,6 +1259,8 @@ class WorkflowRuntimeError(WorkflowError):
 
 
 class WorkflowNotRunnable(WorkflowRuntimeError):
+    """Raised when the workflow can't be started at runtime."""
+
     caller_message: ClassVar[str] = (
         "The workflow can't be started right now. Share the run ID with your engineer."
     )
@@ -1276,6 +1275,8 @@ class WorkflowNotRunnable(WorkflowRuntimeError):
 
 
 class WorkflowInputInvalid(WorkflowRuntimeError):
+    """Raised when the workflow's `inputs` fail strict-mode validation."""
+
     caller_message: ClassVar[str] = (
         "The workflow's inputs are invalid. Share the run ID with your engineer."
     )
@@ -1290,29 +1291,29 @@ class WorkflowInputInvalid(WorkflowRuntimeError):
 
 
 class BashNonZeroExit(WorkflowRuntimeError):
-    """Phase 3.3 — sentinel for ``kolsch/nodes/bash`` non-zero exits.
+    """Sentinel for `kolsch/nodes/bash` non-zero exits.
 
-    Raised by :class:`workflows.builtins.bash.BashRunner` when the
-    dispatched bash command finishes with ``exit_code != 0``. The
+    Raised by
+    [`BashRunner`][workflows.builtins.bash.BashRunner] when the
+    dispatched bash command finishes with `exit_code != 0`. The
     executor catches this exception at the worklist's runner-invoke
     arm and decides:
 
     - If the bash node has at least one outgoing edge with
-      ``branch: not None``: success-of-the-false-arm semantics —
-      the captured output flows through the normal completion path
-      and the branch dispatcher routes to the ``branch: false`` edge.
+      `branch: not None`: success-of-the-false-arm semantics — the
+      captured output flows through the normal completion path and
+      the branch dispatcher routes to the `branch: false` edge.
     - Otherwise: re-raise so the existing failure path emits
-      ``workflow.node.failed`` + ``workflow.run.failed`` per Phase
-      3.1's abort-on-failure rule.
+      `workflow.node.failed` + `workflow.run.failed` per the
+      abort-on-failure rule.
 
-    The exception carries the captured ``{stdout, stderr, exit_code}``
+    The exception carries the captured `{stdout, stderr, exit_code}`
     dict so the executor can use it as the node's output when the
-    branching success path applies (master spec §8.5.5).
+    branching success path applies.
     """
 
     caller_message: ClassVar[str] = (
-        "A bash workflow step exited non-zero. "
-        "Share the run ID with your engineer."
+        "A bash workflow step exited non-zero. Share the run ID with your engineer."
     )
     identifying_names_keys: ClassVar[tuple[str, ...]] = ("node",)
 
@@ -1323,15 +1324,14 @@ class BashNonZeroExit(WorkflowRuntimeError):
         super().__init__(
             _runtime_str(
                 self,
-                problem=(
-                    f"bash node {node!r} exited with "
-                    f"exit_code={exit_code}"
-                ),
+                problem=(f"bash node {node!r} exited with exit_code={exit_code}"),
             )
         )
 
 
 class WorkflowNodeFailed(WorkflowRuntimeError):
+    """Raised when a node's runner raises during dispatch."""
+
     caller_message: ClassVar[str] = (
         "A workflow step failed. Share the run ID with your engineer."
     )
@@ -1356,6 +1356,8 @@ class WorkflowNodeFailed(WorkflowRuntimeError):
 
 
 class WorkflowSecretUnresolved(WorkflowRuntimeError):
+    """Raised when a declared secret isn't available from its provider."""
+
     caller_message: ClassVar[str] = (
         "A required secret isn't available. Contact your engineer to configure it."
     )
@@ -1374,6 +1376,8 @@ class WorkflowSecretUnresolved(WorkflowRuntimeError):
 
 
 class WorkflowFileAccessDenied(WorkflowRuntimeError):
+    """Raised when a node tries to access a path the policy forbids."""
+
     caller_message: ClassVar[str] = (
         "A workflow step tried to read or write a file it isn't allowed to. "
         "Contact your engineer."
@@ -1395,7 +1399,7 @@ class WorkflowFileAccessDenied(WorkflowRuntimeError):
 
 
 class WorkflowJinjaSecurityError(WorkflowRuntimeError):
-    """Round 6 S1 — sandbox blocked an unsafe attribute or callable access."""
+    """Raised when the sandbox blocks an unsafe attribute or callable access."""
 
     caller_message: ClassVar[str] = (
         "A workflow step tried to do something that isn't allowed. "
@@ -1426,7 +1430,7 @@ class WorkflowJinjaSecurityError(WorkflowRuntimeError):
 
 
 class WorkflowTimeoutExceeded(WorkflowRuntimeError):
-    """R3 #2 — workflow-level deadline hit at next node boundary."""
+    """Raised when the workflow-level deadline hits at the next node boundary."""
 
     caller_message: ClassVar[str] = (
         "This workflow took longer than expected and was stopped. You can try again."
@@ -1440,15 +1444,14 @@ class WorkflowTimeoutExceeded(WorkflowRuntimeError):
             _runtime_str(
                 self,
                 problem=(
-                    f"workflow run {workflow_run_id!r} exceeded the "
-                    f"{limit}s deadline"
+                    f"workflow run {workflow_run_id!r} exceeded the {limit}s deadline"
                 ),
             )
         )
 
 
 class NodeTimeoutExceeded(WorkflowRuntimeError):
-    """R3 #2 — per-node timeout fires; retry policy applies."""
+    """Raised when a per-node timeout fires; retry policy applies."""
 
     caller_message: ClassVar[str] = (
         "A workflow step took longer than expected and was stopped. "
@@ -1460,9 +1463,7 @@ class NodeTimeoutExceeded(WorkflowRuntimeError):
         "limit",
     )
 
-    def __init__(
-        self, *, node: str, invocation_id: str, limit: float
-    ) -> None:
+    def __init__(self, *, node: str, invocation_id: str, limit: float) -> None:
         self.node = node
         self.invocation_id = invocation_id
         self.limit = limit
@@ -1478,14 +1479,16 @@ class NodeTimeoutExceeded(WorkflowRuntimeError):
 
 
 class AgentRefUnresolved(WorkflowRuntimeError):
-    """Phase 3.2 — the catalog could not resolve an ``agent:`` ref.
+    """Raised when the catalog can't resolve an `agent:` ref at runtime.
 
-    The Phase 3.0 validator already enforces that every ``agent:`` ref
-    on an agent node resolves at validation time; this runtime guard is
-    the safety net for validator drift (e.g., an asset deleted between
+    The validator already enforces that every `agent:` ref on an
+    agent node resolves at validation time; this runtime guard is the
+    safety net for validator drift (e.g., an asset deleted between
     validate and run). Surfaces from
-    :class:`workflows.builtins.agent.AgentRunner` and remaps to
-    :class:`WorkflowNodeFailed` at the executor boundary.
+    [`AgentRunner`][workflows.builtins.agent.AgentRunner] and remaps
+    to
+    [`WorkflowNodeFailed`][workflows.errors.WorkflowNodeFailed] at
+    the executor boundary.
     """
 
     caller_message: ClassVar[str] = (
@@ -1502,18 +1505,19 @@ class AgentRefUnresolved(WorkflowRuntimeError):
 
 
 class ChildWorkflowFailed(WorkflowRuntimeError):
-    """Phase 3.7 — a sub-workflow run reached a non-success terminal.
+    """Raised when a sub-workflow run reaches a non-success terminal.
 
-    Wrapped by :class:`workflows.builtins.workflow_sub.WorkflowSubRunner`
-    inside :class:`WorkflowNodeFailed(cause=)` whenever a child run's
-    status is ``failed`` / ``aborted`` / ``timed_out``. The two-field
-    identifying surface (``run_id``, ``status``) lets operators read
-    the parent's ``workflow.node.failed`` envelope and pivot directly
-    to the child's JSONL by id.
+    Wrapped by
+    [`WorkflowSubRunner`][workflows.builtins.workflow_sub.WorkflowSubRunner]
+    inside `WorkflowNodeFailed(cause=)` whenever a child run's status
+    is `failed` / `aborted` / `timed_out`. The two-field identifying
+    surface (`run_id`, `status`) lets operators read the parent's
+    `workflow.node.failed` envelope and pivot directly to the child's
+    JSONL by id.
 
-    The pause shape (``waiting_for_input``) is NOT a failure — the
-    child's pause re-raises :class:`WorkflowPausedForInput` through
-    the runner verbatim per Phase 3.4 discipline (master spec §10.1).
+    The pause shape (`waiting_for_input`) is NOT a failure — the
+    child's pause re-raises `WorkflowPausedForInput` through the
+    runner verbatim.
     """
 
     caller_message: ClassVar[str] = (
@@ -1528,19 +1532,19 @@ class ChildWorkflowFailed(WorkflowRuntimeError):
             _runtime_str(
                 self,
                 problem=(
-                    f"child workflow run {run_id!r} terminated with "
-                    f"status {status!r}"
+                    f"child workflow run {run_id!r} terminated with status {status!r}"
                 ),
             )
         )
 
 
 class WorkflowResumeRejected(WorkflowRuntimeError):
-    """Phase 3.4 — resume against a run not in ``waiting_for_input``.
+    """Raised when resume targets a run not in `waiting_for_input`.
 
-    Raised by :meth:`workflows.executor.IterativeExecutor.resume` (and
-    the ``kolsch workflows resume`` CLI) when the targeted run's
-    status is anything other than ``waiting_for_input``. The status
+    Surfaced by
+    [`IterativeExecutor.resume`][workflows.executor.IterativeExecutor.resume]
+    (and the `kolsch workflows resume` CLI) when the targeted run's
+    status is anything other than `waiting_for_input`. The status
     gate is the boundary between "this run is asleep on the disk
     waiting for an answer" (resumable) and every other state
     (running, terminal, pending) where a resume is undefined.
@@ -1567,14 +1571,17 @@ class WorkflowResumeRejected(WorkflowRuntimeError):
 
 
 class WorkflowRunNotFound(WorkflowRuntimeError):
-    """Phase 3.8 — target run's meta or events.jsonl is missing.
+    """Raised when a target run's `meta.json` or `events.jsonl` is missing.
 
-    Raised by :meth:`workflows.executor.IterativeExecutor.start_from_fork`
-    (and the ``kolsch workflows fork`` / ``events`` CLI handlers) when
+    Surfaced by
+    [`IterativeExecutor.start_from_fork`][workflows.executor.IterativeExecutor.start_from_fork]
+    (and the `kolsch workflows fork` / `events` CLI handlers) when
     the targeted run cannot be loaded — either its meta sidecar was
-    never created, or its ``events.jsonl`` has been deleted out from
-    under us. Distinct from :class:`WorkflowResumeRejected` (which
-    fires for a run that exists but isn't in the right status).
+    never created, or its `events.jsonl` has been deleted out from
+    under us. Distinct from
+    [`WorkflowResumeRejected`][workflows.errors.WorkflowResumeRejected]
+    (which fires for a run that exists but isn't in the right
+    status).
     """
 
     caller_message: ClassVar[str] = (
@@ -1597,16 +1604,13 @@ class WorkflowRunNotFound(WorkflowRuntimeError):
 
 
 class NodeTypeNotImplemented(WorkflowRuntimeError):
-    """Phase 3.1 Step 1 — dispatch hit a node type whose runtime
-    ships in a later sub-phase.
+    """Raised when dispatch hits a node type whose runtime isn't shipped.
 
-    The Phase 3.1 executor only implements three runtime node types
-    (``bash``, ``noop``, authored Python ``@node``). Every other
-    built-in dispatch goes through :class:`workflows.executor.RunnerRegistry`
-    which raises this exception with the phase number that ships the
-    runner (per ``process/phase3.x-roadmap.md`` §18.2). The
-    ``caller_message`` names the phase explicitly so end users can
-    tell whether to wait or pursue a workaround.
+    Used as a not-yet-implemented marker — the dispatcher
+    [`RunnerRegistry`][workflows.executor.RunnerRegistry] raises this
+    exception with the phase number that ships the runner. The
+    `caller_message` names the phase explicitly so end users can tell
+    whether to wait or pursue a workaround.
     """
 
     caller_message: ClassVar[str] = (
@@ -1619,9 +1623,7 @@ class NodeTypeNotImplemented(WorkflowRuntimeError):
         "phase",
     )
 
-    def __init__(
-        self, *, node: str, type_ref: str, phase: str
-    ) -> None:
+    def __init__(self, *, node: str, type_ref: str, phase: str) -> None:
         self.node = node
         self.type_ref = type_ref
         self.phase = phase
@@ -1642,17 +1644,16 @@ class NodeTypeNotImplemented(WorkflowRuntimeError):
 
 
 class WorkflowPausedForInput(Exception):  # noqa: N818 — control-flow signal, not an error
-    """Phase 3.4 — the user_input runner's pause signal.
+    """The `user_input` runner's pause signal.
 
-    NOT a :class:`WorkflowError` subclass: pause is normal control
-    flow, not a failure. The executor's failure path (which emits
-    ``workflow.node.failed`` + ``workflow.run.failed``) does NOT
-    handle this — the worklist catches it separately, persists the
-    open invocation marker, flips the run status to
-    ``waiting_for_input``, and exits cleanly. The matching
-    ``workflow.node.started`` event for this invocation is already on
-    disk; the ABSENCE of a corresponding completion event IS the
-    pause marker (master spec §10.1).
+    NOT a `WorkflowError` subclass: pause is normal control flow, not
+    a failure. The executor's failure path (which emits
+    `workflow.node.failed` + `workflow.run.failed`) does NOT handle
+    this — the worklist catches it separately, persists the open
+    invocation marker, flips the run status to `waiting_for_input`,
+    and exits cleanly. The matching `workflow.node.started` event for
+    this invocation is already on disk; the ABSENCE of a
+    corresponding completion event IS the pause marker.
     """
 
     def __init__(
@@ -1672,10 +1673,11 @@ class WorkflowPausedForInput(Exception):  # noqa: N818 — control-flow signal, 
 
 
 # ---------------------------------------------------------------------------
-# Sanity: every concrete class declares the two ClassVars per R3 #8 + #11.
-# A trivial assertion at import time keeps drift visible — if a future
-# subclass forgets to set them, the import fails loudly instead of the
-# bug showing up in production rendering.
+# Sanity: every concrete class declares the two required ClassVars
+# (`caller_message`, `identifying_names_keys`). A trivial assertion at
+# import time keeps drift visible — if a future subclass forgets to set
+# them, the import fails loudly instead of the bug showing up in
+# production rendering.
 # ---------------------------------------------------------------------------
 
 
@@ -1692,16 +1694,10 @@ def _verify_classvar_coverage() -> None:
         cm: Any = getattr(cls, "caller_message", None)
         ink: Any = getattr(cls, "identifying_names_keys", None)
         if not isinstance(cm, str) or not cm:
-            msg = (
-                f"{cls.__name__} is missing a non-empty caller_message "
-                "ClassVar (R3 #8)"
-            )
+            msg = f"{cls.__name__} is missing a non-empty caller_message ClassVar"
             raise TypeError(msg)
         if not isinstance(ink, tuple):
-            msg = (
-                f"{cls.__name__} is missing identifying_names_keys "
-                "ClassVar (R3 #11)"
-            )
+            msg = f"{cls.__name__} is missing identifying_names_keys ClassVar"
             raise TypeError(msg)
 
 

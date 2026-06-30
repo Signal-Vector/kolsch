@@ -1,16 +1,16 @@
-"""Workflows package — public API (master spec §5 + §12).
+"""Workflows package — public API.
 
-Phase 3.0 Step 1 ships the FOUNDATION layer only: the
-``@node`` decorator, the :class:`NodeContext` dataclass + its
-``for_test`` classmethod, the :func:`display_label` helper, the
-full exception hierarchy, the typed prefixed IDs, and the
-sandboxed Jinja singleton. No parser, no validator, no executor.
+The foundation layer: the `@node` decorator,
+[`NodeContext`][workflows.context.NodeContext] + its `for_test`
+classmethod, the [`display_label`][workflows.labels.display_label]
+helper, the full exception hierarchy, the typed prefixed IDs, and the
+sandboxed Jinja singleton. The parser, validator, and executor live in
+their own submodules.
 
-Per R4 #5: every public name is listed in :data:`__all__`. Names
-imported here but absent from ``__all__`` are a lint failure; names
-in ``__all__`` not imported here are likewise a failure. The
-discipline keeps the API surface explicit + ruff-checkable
-(``RUF022``).
+Every public name appears in `__all__`. Names imported here but absent
+from `__all__` are a lint failure; names in `__all__` not imported
+here are likewise a failure. The discipline keeps the API surface
+explicit and `ruff`-checkable (RUF022).
 """
 
 from __future__ import annotations
@@ -66,14 +66,13 @@ from workflows.errors import (
 from workflows.ids import InvocationId, ToolCallId, TraceId, WorkflowRunId
 from workflows.labels import display_label
 
-# The validator surface (``validate_workflow`` / ``validate_workflow_or_raise``
-# / ``ValidationResult``) lives at :mod:`workflows.validator` and is
-# re-exported here lazily via ``__getattr__`` (PEP 562) to satisfy
-# Phase 3.0 Step 5 AC 5.8 without triggering the import cycle:
-# ``workflows.validator`` pulls in ``workflows.parser`` which pulls in
-# ``providers.authz`` which pulls in ``workflows.errors``. Loading the
-# validator at package-init time would attempt that cycle before the
-# package itself is fully populated; deferring to first attribute
+# The validator surface (`validate_workflow` / `validate_workflow_or_raise`
+# / `ValidationResult`) lives at `workflows.validator` and is
+# re-exported here lazily via `__getattr__` (PEP 562) to dodge the
+# import cycle: `workflows.validator` pulls in `workflows.parser` which
+# pulls in `providers.authz` which pulls in `workflows.errors`. Loading
+# the validator at package-init time would attempt that cycle before
+# the package itself is fully populated; deferring to first attribute
 # access breaks the cycle cleanly.
 
 _LAZY_VALIDATOR_NAMES: frozenset[str] = frozenset(
@@ -102,12 +101,13 @@ def __getattr__(name: str) -> object:  # PEP 562 module-level hook
 
 
 def __dir__() -> list[str]:  # PEP 562 module-level hook
-    """Surface lazy validator names to :func:`dir`/introspection.
+    """Surface lazy validator names to `dir` and introspection.
 
-    Without this, ``dir(workflows)`` skips the validator names because
-    PEP 562's ``__getattr__`` is only consulted on actual attribute
-    access — the parity test in ``tests/component/test_workflow_scaffolding.py``
-    relies on ``dir`` matching ``__all__``.
+    Without this, `dir(workflows)` skips the validator names because
+    PEP 562's `__getattr__` is only consulted on actual attribute
+    access. The parity test in
+    `tests/component/test_workflow_scaffolding.py` relies on `dir`
+    matching `__all__`.
     """
     return sorted(set(globals().keys()) | _LAZY_VALIDATOR_NAMES)
 
