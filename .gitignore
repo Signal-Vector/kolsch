@@ -47,3 +47,10 @@ logs/
 # Keep `.codannaignore` itself tracked — it's the project's index policy.
 .codanna/
 .fastembed_cache
+
+# Local-only project planning artifacts. Specs / bug writeups / QoL
+# tickets / phase plans live here as a working knowledge base. The
+# public docs site (docs/) pulls migrated, polished versions of
+# whatever the team decides is enduring architectural content; the
+# raw process notes stay local.
+process/
