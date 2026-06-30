@@ -1847,8 +1847,9 @@ Patch: `process/phase2.2-agent-envelope-specs.md`.
 
 ### 11.10.1 `kolsch.tools.permissions`
 
-Two async functions backed by a `ContextVar` bound by the
-engine's tool dispatcher:
+Two async functions backed by a `ContextVar` bound by the tool
+dispatcher (`src/tools/dispatch.py`) around the tool function
+body:
 
 ```python
 permissions.check(who: str, what: str) -> AuthzEffect
@@ -1856,12 +1857,32 @@ permissions.require(who: str, what: str) -> None
 ```
 
 `who` is the principal pattern (e.g. `"agent.ag_helper"`);
-`what` is the action OR target pattern. Walks the composed
-rule list — agent permissions → platform rules → default-deny.
+`what` is the action OR target pattern the tool body wants to
+gate on (e.g. `"workspace.git.force_push"`). The string is
+passed through to the provider as-is — no prefixing.
 
-Out-of-context calls raise `tool.permissions_no_context`. The
-ContextVar is cleared in both the success and exception paths
-of the dispatcher.
+Walks the **four-level stack** identical to the dispatch-boundary
+check: agent permissions → bundle permissions → platform rules
+→ default-deny (per qol-tool-permission-discovery-uniform-with-stacking.md
++ qol-tool-permissions-binding-unused.md).
+
+`require` raises `errors.AuthzDenied` on anything other than
+`ALLOW`. A `PROMPT`-effect match collapses to deny here —
+mid-execution modals would block the tool's coroutine, so the
+in-body `require` never triggers the no-rule modal that the
+dispatch-boundary check fires. Use `check` instead of `require`
+when the tool wants to branch on the effect rather than raise.
+
+Out-of-context calls raise `tool.permissions_no_context`
+(typically a unit test that imported a tool directly without
+going through the dispatcher). The dispatcher's `bind` / `reset`
+pair lives inside the sandbox `_work` closure, so the
+ContextVar's lifetime exactly matches the tool body and is
+cleared on both the success and exception paths.
+
+The dispatcher constructs a `PermissionsBinding` with five
+fields: `provider`, `agent_permissions`, `bundle_permissions`,
+`principal`, `tool` — see `src/tools/permissions.py`.
 
 ### 11.10.2 The Jinja render context
 

@@ -781,16 +781,31 @@ permissions.require(who: str, what: str) -> None
 ```
 
 `who` is the principal pattern (the agent or user identity);
-`what` is the action OR target pattern. `check` returns the
-effect; `require` raises `PlatformError("authz.denied", ...)`
-on `DENY` or on `PROMPT` when no callback is available
-(non-chat callers).
+`what` is the action OR target pattern, passed through to the
+provider as-is (no prefixing). `check` returns the effect;
+`require` raises `PlatformError("authz.denied", ...)` on
+anything other than `ALLOW`.
 
-Implementation: a `ContextVar` set by the engine's tool
-dispatcher before the tool function is called, cleared after.
+The composed walk is the same four-level stack as the
+dispatch-boundary check: agent permissions → bundle permissions
+→ platform rules → default-deny (per
+qol-tool-permission-discovery-uniform-with-stacking.md +
+qol-tool-permissions-binding-unused.md). A `PROMPT`-effect
+match in the in-body check collapses to deny — the in-tool
+`require` never triggers the no-rule modal that the
+dispatch-boundary check fires (mid-execution prompts would
+block the tool's coroutine).
+
+Implementation: the tool dispatcher (`src/tools/dispatch.py`)
+constructs a `PermissionsBinding` carrying the provider, the
+agent + bundle permissions, the principal, and the tool name;
+binds it to a module-level `ContextVar` inside the sandbox's
+`_work` closure (so the binding lifetime exactly matches the
+tool body); clears it on both success and exception paths.
 Out-of-context calls raise `tool.permissions_no_context`.
 
-See process/phase2.2-agent-envelope-specs.md §2 for the full
+See process/phase2.2-agent-envelope-specs.md §2 +
+process/qol-tool-permissions-binding-unused.md for the full
 behaviour table.
 
 ---

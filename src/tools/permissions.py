@@ -33,18 +33,21 @@ The binding carries:
   engine is using.
 - The agent's resolved ``permissions:`` list (so the composed
   walk includes the agent layer per Phase 2.2 §1.2 / §3.8.1).
+- The bundle's ``permissions:`` list (qol-tool-permissions-binding-unused.md
+  Step 2 — same four-level stack as the dispatch-boundary check).
 - The principal the tool is running as (for the composed
   ``allow(...)`` call).
 - The tool name (for error envelopes).
 
 ## Why a Binding rather than the raw provider
 
-Carrying the agent's permissions list on the binding decouples
-:func:`check` / :func:`require` from how the engine threads the
-resolved config into the dispatcher. Step 14's pre-flight
-constructs one :class:`PermissionsBinding` per tool invocation
-and tears it down after — the tool's body sees a snapshot
-scoped exactly to its own call.
+Carrying the agent's + bundle's permissions on the binding
+decouples :func:`check` / :func:`require` from how the engine
+threads the resolved config into the dispatcher. The dispatch
+flow (``src/tools/dispatch.py``) constructs one
+:class:`PermissionsBinding` per tool invocation and tears it
+down after — the tool's body sees a snapshot scoped exactly to
+its own call.
 """
 
 from __future__ import annotations
@@ -74,10 +77,18 @@ class PermissionsBinding:
 
     Frozen so a tool can't accidentally mutate the engine's
     authz state via the binding it received.
+
+    qol-tool-permissions-binding-unused.md Step 2 — gains
+    ``bundle_permissions`` so in-tool :func:`check`/:func:`require`
+    walks the SAME four-level stack as the dispatch-boundary
+    check (agent → bundle → platform → default). Without the
+    bundle layer the in-tool API would diverge silently from the
+    pre-dispatch authz outcome.
     """
 
     provider: AuthorizationProvider
     agent_permissions: list[Rule] = field(default_factory=list)
+    bundle_permissions: list[Rule] = field(default_factory=list)
     principal: str = "user.local"
     tool: str = "<unknown>"
 
@@ -93,15 +104,38 @@ _BINDING: ContextVar[PermissionsBinding | None] = ContextVar(
 # ---------------------------------------------------------------------------
 
 
+def _layers_from(binding: PermissionsBinding) -> tuple[PermissionLayer, ...]:
+    """Assemble the agent + bundle layer tuple from a binding.
+
+    qol-tool-permissions-binding-unused.md Step 2 — mirrors the
+    dispatch-boundary's layer assembly at ``dispatch.py:100-110``
+    so the in-tool ``check``/``require`` walks the same stack:
+    agent first, then bundle (platform rules are on the provider
+    itself; default-deny is the tail).
+    """
+    layers: tuple[PermissionLayer, ...] = ()
+    if binding.agent_permissions:
+        layers = (
+            *layers,
+            PermissionLayer(name="agent", rules=tuple(binding.agent_permissions)),
+        )
+    if binding.bundle_permissions:
+        layers = (
+            *layers,
+            PermissionLayer(name="bundle", rules=tuple(binding.bundle_permissions)),
+        )
+    return layers
+
+
 async def check(who: str, what: str) -> AuthzEffect:
     """Return the composed :class:`AuthzEffect` for
     ``(who, what)``.
 
     ``who`` is the principal pattern (the agent calling the
     tool); ``what`` is the action OR target pattern. The lookup
-    walks agent permissions (from the binding) first, then
-    platform rules, then default-deny — same composition the
-    engine's pre-dispatch check uses (Phase 2.2 §3.8.1).
+    walks the same four-level stack as the dispatch-boundary
+    check (agent → bundle → platform → default-deny) so in-tool
+    decisions match what the platform would have decided.
 
     Raises :class:`ToolPermissionsNoContext` (Fatal,
     ``tool.permissions_no_context``) when called outside the
@@ -113,16 +147,11 @@ async def check(who: str, what: str) -> AuthzEffect:
     if binding is None:
         raise ToolPermissionsNoContext(tool="<unbound>")
     _ = who  # accepted for API symmetry; binding.principal is canonical
-    layers: tuple[PermissionLayer, ...] = ()
-    if binding.agent_permissions:
-        layers = (
-            PermissionLayer(name="agent", rules=tuple(binding.agent_permissions)),
-        )
     result = await binding.provider.allow(
         binding.principal,
         what,
         target=what,
-        layers=layers,
+        layers=_layers_from(binding),
     )
     return result.effect
 
@@ -137,21 +166,23 @@ async def require(who: str, what: str) -> None:
     contexts) as denial. The raised :class:`AuthzDenied` carries
     the tool name from the binding so error envelopes are
     actionable.
+
+    Note: the in-tool ``require`` does NOT trigger the no-rule
+    modal that the dispatch-boundary check fires (per
+    qol-tool-permissions-binding-unused.md Step 1 design pick
+    Q3 — modals mid-execution would block the tool's coroutine
+    and surface a UX disconnect from the user's perspective).
+    A PROMPT-effect result here always collapses to deny.
     """
     binding = _BINDING.get()
     if binding is None:
         raise ToolPermissionsNoContext(tool="<unbound>")
     _ = who
-    layers: tuple[PermissionLayer, ...] = ()
-    if binding.agent_permissions:
-        layers = (
-            PermissionLayer(name="agent", rules=tuple(binding.agent_permissions)),
-        )
     result = await binding.provider.allow(
         binding.principal,
         what,
         target=what,
-        layers=layers,
+        layers=_layers_from(binding),
     )
     if result.effect is AuthzEffect.ALLOW:
         return

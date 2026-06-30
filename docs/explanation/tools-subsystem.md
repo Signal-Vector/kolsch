@@ -918,11 +918,62 @@ semantics.
 - Treats `PROMPT` as `DENY` for `require` in non-chat context
   (mid-tool prompts are deferred per Phase 2.2 §12 item 1).
 
-**Implementation:** the engine's tool dispatcher binds a
-`ContextVar` to a carrier with the agent's composed permissions
-just before calling the tool function, and clears it after (in
-both the success and exception paths). Out-of-context calls
-raise `tool.permissions_no_context` (Fatal).
+**Implementation:** the tool dispatcher (`src/tools/dispatch.py`)
+constructs a `PermissionsBinding` with the authz provider, the
+agent's permissions, the bundle's permissions, the principal, and
+the tool name, then binds it to a module-level `ContextVar`
+immediately before invoking the tool function. The `bind` /
+`reset` pair lives inside the sandbox's `_work` closure so the
+binding lifetime exactly matches the tool body. Out-of-context
+calls (a unit test that imports a tool directly without going
+through the dispatcher) raise `tool.permissions_no_context`
+(Fatal).
+
+**Worked example — a fine-grained capability check:**
+
+```python
+from pydantic import BaseModel
+
+from tools import permissions
+from tools.decorator import tool, ToolContext
+
+
+class GitForcePushArgs(BaseModel):
+    branch: str
+
+
+@tool(
+    name="git_force_push",
+    description="Force-push a local branch to origin.",
+    args_schema=GitForcePushArgs,
+)
+async def git_force_push(args: GitForcePushArgs, ctx: ToolContext) -> str:
+    # Dispatch-boundary authz already cleared us to RUN this tool
+    # (someone wrote `what: kolsch/tools/git_force_push, effect: allow`).
+    # The body now asks a finer question — does this caller hold the
+    # `workspace.git.force_push` capability? If not, fail loud.
+    await permissions.require("agent", "workspace.git.force_push")
+    # …actually run `git push --force` here…
+    return f"force-pushed {args.branch}"
+```
+
+To grant the capability, the rule author writes a rule with the
+same `what` string the tool body passes:
+
+```yaml
+permissions:
+  - { what: workspace.git.force_push, pattern: "*", effect: allow }
+```
+
+The check walks the same four-level stack the dispatch-boundary
+check uses (agent → bundle → platform → default-deny per
+qol-tool-permission-discovery-uniform-with-stacking.md). A
+PROMPT-effect match here always collapses to deny — the in-body
+check does NOT trigger the no-rule modal (mid-execution prompts
+would block the tool's coroutine; per
+qol-tool-permissions-binding-unused.md Step 1 design pick Q3).
+Use `check` instead of `require` when the tool wants to branch
+on the effect rather than raise.
 
 ---
 

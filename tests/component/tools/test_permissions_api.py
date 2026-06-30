@@ -200,6 +200,187 @@ async def test_context_var_cleared_after_exception_path(
     assert permissions.current_binding() is None
 
 
+# ---------------------------------------------------------------------------
+# qol-tool-permissions-binding-unused.md Step 2 — dispatch wires the binding
+# ---------------------------------------------------------------------------
+
+
+class _StubSecrets:
+    """Minimal SecretsProvider stub for dispatch tests with no
+    ``secrets_needed`` — ``resolve``/``exists`` are unreachable."""
+
+    async def resolve(self, name: str) -> str:  # pragma: no cover
+        raise AssertionError(f"unexpected resolve({name!r})")
+
+    async def exists(self, name: str) -> bool:  # pragma: no cover
+        return False
+
+    async def list_names(self) -> list[str]:  # pragma: no cover
+        return []
+
+
+class _PassthroughSandbox:
+    """Minimal SandboxProvider stub — runs the work closure directly."""
+
+    async def execute(
+        self,
+        work: object,
+        policy: dict[str, object],
+    ) -> object:
+        _ = policy
+        return await work()  # type: ignore[operator]
+
+
+def _ctx_for(name: str) -> object:
+    """Build a minimal :class:`ToolContext` for the dispatcher.
+
+    Session / thread IDs require uuid bodies; agent_id accepts any
+    alphanumeric body (see :mod:`schemas.identifiers`).
+    """
+    import uuid
+
+    from schemas import AgentId, SessionId, ThreadId
+    from tools.decorator import ToolContext
+
+    u = str(uuid.uuid4())
+    return ToolContext(
+        agent_id=AgentId(f"ag_{name}"),
+        session_id=SessionId(f"ses_{u}"),
+        thread_id=ThreadId(f"th_{u}"),
+        principal=f"agent.{name}",
+        secrets={},
+    )
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_binds_permissions_around_tool_function() -> None:
+    """When ``dispatch_tool`` invokes a tool whose body calls
+    ``permissions.check(...)``, the binding is populated for the
+    duration of the body and cleared after.
+
+    Regression test for the gap qol-tool-permissions-binding-unused
+    fixed: before this QoL the binding was NEVER set, so every
+    in-body ``check`` raised ``ToolPermissionsNoContext``.
+    """
+    from pydantic import BaseModel
+
+    from tools.decorator import ToolContext, ToolDefinition
+    from tools.dispatch import dispatch_tool
+
+    class _Args(BaseModel):
+        path: str
+
+    captured: dict[str, object] = {}
+
+    async def _body(_args: _Args, _ctx: ToolContext) -> str:
+        captured["pre_effect"] = await permissions.check(
+            "agent.x", "workspace.git.write"
+        )
+        captured["pre_binding"] = permissions.current_binding()
+        return "ok"
+
+    defn = ToolDefinition(
+        name="probe",
+        description="probe",
+        args_schema=_Args,
+        func=_body,
+        home_bundle="kolsch",
+    )
+    provider = RuleBasedAuthorizationProvider(
+        config={
+            "rules": [
+                {
+                    "what": "workspace.git.write",
+                    "pattern": "*",
+                    "effect": "allow",
+                },
+                {"what": "*", "pattern": "*", "effect": "allow"},
+            ],
+        },
+    )
+    result = await dispatch_tool(
+        defn=defn,
+        args={"path": "/tmp/x"},
+        context=_ctx_for("probe"),  # type: ignore[arg-type]
+        authz=provider,
+        secrets=_StubSecrets(),  # type: ignore[arg-type]
+        sandbox=_PassthroughSandbox(),  # type: ignore[arg-type]
+    )
+    assert result == "ok"
+    assert captured["pre_effect"] is AuthzEffect.ALLOW
+    assert isinstance(captured["pre_binding"], permissions.PermissionsBinding)
+    # After dispatch returns, the binding is cleared again.
+    assert permissions.current_binding() is None
+
+
+@pytest.mark.asyncio
+async def test_dispatcher_binding_includes_bundle_layer() -> None:
+    """The binding carries ``bundle_permissions`` so in-tool
+    ``require`` participates in the same four-level stack the
+    dispatch-boundary check uses. A bundle-layer allow rule
+    satisfies an in-tool ``require`` for an action no other layer
+    covers."""
+    from pydantic import BaseModel
+
+    from tools.decorator import ToolContext, ToolDefinition
+    from tools.dispatch import dispatch_tool
+
+    class _Args(BaseModel):
+        path: str
+
+    inner_ok = False
+
+    async def _body(_args: _Args, _ctx: ToolContext) -> str:
+        nonlocal inner_ok
+        await permissions.require("agent.x", "workspace.git.commit")
+        inner_ok = True
+        return "ok"
+
+    defn = ToolDefinition(
+        name="probe",
+        description="probe",
+        args_schema=_Args,
+        func=_body,
+        home_bundle="kolsch",
+    )
+    # Platform: allow the tool-action (so dispatch passes) but
+    # deny the in-tool action explicitly. The bundle's allow rule
+    # MUST win to satisfy the in-body `require`. If the bundle
+    # layer weren't being threaded through, the platform deny would
+    # surface here and the test would raise AuthzDenied.
+    provider = RuleBasedAuthorizationProvider(
+        config={
+            "rules": [
+                {
+                    "what": "kolsch/tools/probe",
+                    "pattern": "*",
+                    "effect": "allow",
+                },
+                {
+                    "what": "workspace.git.commit",
+                    "pattern": "*",
+                    "effect": "deny",
+                },
+                {"what": "*", "pattern": "*", "effect": "deny"},
+            ],
+        },
+    )
+    bundle_rules = [
+        AuthzRule(what="workspace.git.commit", pattern="*", effect="allow"),
+    ]
+    result = await dispatch_tool(
+        defn=defn,
+        args={"path": "/tmp/x"},
+        context=_ctx_for("probe"),  # type: ignore[arg-type]
+        authz=provider,
+        secrets=_StubSecrets(),  # type: ignore[arg-type]
+        sandbox=_PassthroughSandbox(),  # type: ignore[arg-type]
+        bundle_permissions=bundle_rules,
+    )
+    assert result == "ok"
+    assert inner_ok
+
+
 @pytest.mark.asyncio
 async def test_nested_bindings_restore_outer_on_reset(
     deny_bash_provider: RuleBasedAuthorizationProvider,

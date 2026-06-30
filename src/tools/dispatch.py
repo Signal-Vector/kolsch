@@ -140,8 +140,31 @@ async def dispatch_tool(
     # Step 4 — wrap in the sandbox. Per T-I4, every invocation goes
     # through `sandbox.execute` even when it's the passthrough native
     # variant. Step 5 (the actual run) is inside the work closure.
+    #
+    # qol-tool-permissions-binding-unused.md Step 2 — construct the
+    # PermissionsBinding from the same provider + layers the
+    # dispatch-boundary check used, then bind it to the
+    # ``tools.permissions._BINDING`` ContextVar around the tool
+    # function body. The bind/reset pair lands INSIDE ``_work`` so
+    # the binding lifetime exactly matches the tool body — sandbox
+    # setup logic doesn't call into ``permissions.check`` and
+    # shouldn't see the binding leak across calls.
+    from tools import permissions as _tool_permissions  # noqa: PLC0415
+
+    binding = _tool_permissions.PermissionsBinding(
+        provider=authz,
+        agent_permissions=list(agent_permissions or []),
+        bundle_permissions=list(bundle_permissions or []),
+        principal=context.principal,
+        tool=defn.name,
+    )
+
     async def _work() -> Any:  # noqa: ANN401
-        return await defn.func(validated_args, invocation_context)
+        token = _tool_permissions.bind(binding)
+        try:
+            return await defn.func(validated_args, invocation_context)
+        finally:
+            _tool_permissions.reset(token)
 
     try:
         return await sandbox.execute(_work, policy={})
