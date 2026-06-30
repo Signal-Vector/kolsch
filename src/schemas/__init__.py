@@ -1,16 +1,20 @@
-"""Cross-module data models — Schemas §B (events), §C (entities),
-plus Module API Reference §13 common types.
+"""The cross-module data models — shared types every subsystem uses.
 
-Re-exports every public model so callers can write::
+Re-exports every public model so callers can write:
 
-    from schemas import Event, EventType, Session, Error, AgentId
+```python
+from schemas import Event, EventType, Session, Error, AgentId
+```
 
-Placement rationale: the Module API Reference §13 explicitly groups
-these as "Common Types (Cross-Module)" and handbook §2.1 demands one
-responsibility per module. A dedicated cross-cutting package
-``schemas/`` carries the shared contract without coupling the store,
-bus, engine, memory, and tools modules to each other through type
-imports.
+These types live in a dedicated `schemas/` package rather than inside
+any one subsystem because they are shared contract: the store, bus,
+engine, memory, and tools modules all consume them, and co-locating
+them here avoids cross-subsystem type imports that would otherwise
+create coupling.
+
+For the complete cross-module type catalog and its layering rules,
+see the
+[module API reference](../../docs/reference/module-api-reference.md).
 """
 
 from schemas.config import (

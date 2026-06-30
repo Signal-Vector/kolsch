@@ -1,10 +1,17 @@
-"""@tool decorator + canonical types — Module API Reference §9 + spec §2.
+"""The `@tool` decorator plus the canonical types that ride alongside it.
 
-A ``@tool``-decorated function carries a :class:`ToolDefinition`
-attached to its ``_tool_definition`` attribute. The Tools subsystem
-discovers tools by reading that attribute (Phase 1 simplification of
-spec §5's full discovery — declared-from-file loading is its own
-follow-up).
+A `@tool`-decorated function carries a
+[`ToolDefinition`][tools.decorator.ToolDefinition] attached to its
+`_tool_definition` attribute. The Tools subsystem discovers tools by
+reading that attribute. The other types in this module —
+[`ToolContext`][tools.decorator.ToolContext],
+[`ToolResult`][tools.decorator.ToolResult],
+[`ToolInfo`][tools.decorator.ToolInfo] — make up the public shape the
+dispatch flow exposes to tool authors and consumers.
+
+For the full Tools subsystem contract (discovery, registration,
+dispatch), see the
+[tools subsystem](../../docs/explanation/tools-subsystem.md).
 """
 
 from __future__ import annotations
@@ -24,45 +31,40 @@ if TYPE_CHECKING:
 
     from engine.context import CancelToken  # noqa: F401 — referenced by docstring
 
-# Spec §2.2 — name must match this pattern.
+# Tool name pattern.
 _NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
 
 class ToolContext(BaseModel):
-    """The runtime context passed to every tool function — §9.2.
+    """The runtime context passed to every tool function.
 
-    Eight fields, all read-only. Tools cannot write the event log,
-    inspect the principal, or perform authz checks (all done by the
-    dispatch flow before the tool runs).
+    Eight read-only fields, populated by the dispatch flow before the
+    tool body runs. Tools cannot mutate the event log or override
+    authz decisions — those are handled upstream of the tool body.
 
-    The five Phase 1 fields (``agent_id``, ``session_id``,
-    ``thread_id``, ``principal``, ``secrets``) are required for every
-    tool invocation. The Phase 2.0 additions (``workspace_root``,
-    ``path_policy``) are optional and populated by the
-    :class:`ToolsSubsystem` from its constructor args when present —
-    they let user-authored bundle tools at
-    ``<workspace>/bundles/kolsch/tools/`` reach the platform's path
-    policy and workspace root without holding a closure over them
-    (the way the Phase 1 in-engine factories do). When the subsystem
-    was constructed without a ``path_policy`` / ``root`` (e.g., tests
-    that don't exercise file tools), the fields stay ``None`` —
-    bundle tools that need them should raise a clear error rather
-    than silently misbehave.
+    The five core fields (`agent_id`, `session_id`, `thread_id`,
+    `principal`, `secrets`) are required for every tool invocation.
+    `workspace_root` and `path_policy` are optional, populated by the
+    [`ToolsSubsystem`][tools.subsystem.ToolsSubsystem] from its
+    constructor args when set, so user-authored bundle tools at
+    `<workspace>/bundles/kolsch/tools/` can reach the platform's path
+    policy and workspace root without holding a closure over them.
+    When the subsystem was constructed without a `path_policy` /
+    `root` (e.g. tests that don't exercise file tools), the fields
+    stay `None` — bundle tools that need them should raise a clear
+    error rather than silently misbehave.
 
-    The QoL addition (``tool_call_id``) carries the engine's per-call
-    id so tools that need to persist artifacts (e.g., bash overflow
-    writing the full stream to a workspace tmp path) can name them
-    by call rather than colliding across concurrent invocations.
-    Populated by ``_ObservedToolHandle.__call__`` and the
-    force-invoke read path; ``None`` when a tool runs outside the
-    engine (tests, REPL probes).
+    `tool_call_id` carries the engine's per-call id so tools that
+    need to persist artifacts (e.g. bash overflow writing the full
+    stream to a workspace tmp path) can name them by call rather than
+    colliding across concurrent invocations. `None` when a tool runs
+    outside the engine (tests, REPL probes).
 
-    bug-mid-tool-cancellation-latency.md — ``cancellation`` carries
-    the exchange's :class:`engine.context.CancelToken` so a tool body
-    can race long-running work (subprocess waits, network calls)
-    against ``ctx.cancellation.wait_cancelled()``. Tools that don't
-    poll it work unchanged (backwards-compatible per the spec's AC).
-    ``None`` outside the engine path.
+    `cancellation` carries the exchange's
+    [`CancelToken`][engine.context.CancelToken] so a tool body can
+    race long-running work (subprocess waits, network calls) against
+    `ctx.cancellation.wait_cancelled()`. Tools that don't poll it
+    work unchanged; `None` outside the engine path.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
@@ -72,31 +74,22 @@ class ToolContext(BaseModel):
     thread_id: ThreadId
     principal: str
     secrets: dict[str, str]
-    # Phase 2.0 (TOOL-R7) — populated by the dispatcher; None elsewhere.
     workspace_root: Path | None = None
     path_policy: PathPolicy | None = None
-    # QoL — tool output truncation + persistence — populated by the
-    # observer / engine force-invoke path; None when a tool runs
-    # outside the engine (tests, programmatic dispatch).
     tool_call_id: str | None = None
-    # bug-mid-tool-cancellation-latency.md — populated by
-    # ``_ObservedToolHandle.__call__`` from ``self._cancel`` (which
-    # the engine builds from ``ExecutionContext.cancellation``).
-    # Tools that need mid-flight cancellation race their work
-    # against ``cancellation.wait_cancelled()``; tools that don't
-    # need it ignore the field entirely. Typed as ``Any`` rather
-    # than ``CancelToken | None`` to avoid a tools↔engine import
-    # cycle at runtime — tool authors should annotate the access
-    # site as ``CancelToken | None`` and import lazily.
+    # Typed as `Any` rather than `CancelToken | None` to avoid a
+    # tools ↔ engine import cycle at runtime. Tool authors should
+    # annotate access sites as `CancelToken | None` and import lazily.
     cancellation: Any = None
 
 
 class ToolResult(BaseModel):
-    """The return shape of :meth:`ToolsSubsystem.invoke_tool` — §9.2.
+    """The return shape of
+    [`ToolsSubsystem.invoke_tool`][tools.subsystem.ToolsSubsystem.invoke_tool].
 
-    ``result`` is whatever the tool returned, captured verbatim
-    (T-I5). ``metadata`` carries optional latency/cost diagnostics
-    the dispatch flow attaches.
+    `result` is whatever the tool returned, captured verbatim.
+    `metadata` carries optional latency / cost diagnostics the
+    dispatch flow attaches.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -106,10 +99,11 @@ class ToolResult(BaseModel):
 
 
 class ToolInfo(BaseModel):
-    """Metadata-only view of a registered tool — §9.2.
+    """Metadata-only view of a registered tool.
 
-    Returned by :meth:`ToolsSubsystem.list_registered_tools` so
-    callers can introspect without holding function references.
+    Returned by
+    [`ToolsSubsystem.list_registered_tools`][tools.subsystem.ToolsSubsystem.list_registered_tools]
+    so callers can introspect without holding function references.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -121,20 +115,21 @@ class ToolInfo(BaseModel):
 
 @dataclass
 class ToolDefinition:
-    """Everything the dispatch needs to know about a tool — spec §2.2.
+    """Everything the dispatch needs to know about a tool.
 
-    Phase 2.2 (ENV-R5 / Step 11) — gains an optional ``summary``
-    field used by :class:`templating.vars.tools.ToolItem` for the
-    prompt's compact tool listing. Derived from the first
-    sentence of ``description`` when omitted from
-    :func:`tool` (the substring through the first period, trimmed).
+    The `@tool` decorator stamps one of these on the decorated
+    function's `_tool_definition` attribute. The Tools subsystem
+    discovers tools by reading that attribute.
 
-    qol-action-namespace-bundle-scoped.md Step 2 — gains
-    ``home_bundle``, stamped at registration time by
-    :meth:`ToolsSubsystem.register_for_agent` (Option B from the
-    spec writeup §2). The ``@tool`` decorator stays bundle-unaware;
-    the field is None at decoration time and populated when the
-    engine binds the tool to an agent's session.
+    `summary` is used for the prompt's compact tool listing; it falls
+    back to the first sentence of `description` when omitted from the
+    decorator.
+
+    `home_bundle` is stamped at registration time by the engine when
+    binding a tool to an agent's session. The `@tool` decorator stays
+    bundle-unaware — the field is `None` at decoration time and
+    populated when the engine binds the tool. `action_name` uses
+    `home_bundle` to derive the authz action string.
     """
 
     name: str
@@ -149,17 +144,15 @@ class ToolDefinition:
 
     @property
     def action_name(self) -> str:
-        """The action string used for authz checks.
+        """The authz action string used to check this tool's permission.
 
-        qol-action-namespace-bundle-scoped.md Step 2 — when
-        ``home_bundle`` is set (always true for engine-driven
-        registration), returns the 3-seg catalog ref
-        ``<home_bundle>/tools/<name>``. When unset (Phase 1
-        programmatic test registrations that construct
-        ToolDefinition directly without going through the engine),
-        falls back to the legacy ``tool.<name>`` form so existing
-        test paths stay byte-identical. ``action`` (set via the
-        decorator's ``action=`` kwarg) still overrides both.
+        When `home_bundle` is set (the engine-driven registration
+        path), returns the catalog ref `<home_bundle>/tools/<name>`.
+        When unset (programmatic test registrations that construct
+        `ToolDefinition` directly without going through the engine),
+        falls back to the legacy `tool.<name>` form so existing test
+        paths stay byte-identical. The `action` constructor arg
+        overrides both.
         """
         if self.action is not None:
             return self.action
@@ -168,6 +161,7 @@ class ToolDefinition:
         return f"{self.home_bundle}/tools/{self.name}"
 
     def to_info(self) -> ToolInfo:
+        """Return a metadata-only [`ToolInfo`][tools.decorator.ToolInfo] view."""
         return ToolInfo(
             name=self.name,
             description=self.description,
@@ -176,10 +170,13 @@ class ToolDefinition:
 
 
 def _derive_summary(description: str) -> str:
-    """Spec §5.1 fallback: the substring of ``description`` from
-    start through the first period, trimmed. When the description
-    has no period, the full description is the summary (still
-    trimmed)."""
+    """Derive a one-line summary from `description`.
+
+    Returns the substring from the start through the first period,
+    trimmed. When `description` contains no period, the full string
+    is the summary (still trimmed). Used as the fallback when the
+    `@tool` decorator's `summary=` kwarg is omitted.
+    """
     period_index = description.find(".")
     if period_index < 0:
         return description.strip()
@@ -196,30 +193,42 @@ def tool(
     timeout_seconds: float | None = None,
     summary: str | None = None,
 ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
-    """The ``@tool`` decorator — spec §2.
+    """The `@tool` decorator.
 
-    Attaches a :class:`ToolDefinition` to the function's
-    ``_tool_definition`` attribute. The function is returned
-    unchanged so the underlying coroutine remains directly callable.
+    Attaches a [`ToolDefinition`][tools.decorator.ToolDefinition] to
+    the function's `_tool_definition` attribute. The function is
+    returned unchanged so the underlying coroutine remains directly
+    callable.
 
-    Phase 1 simplifications:
-    - ``args_schema`` is REQUIRED. Spec §2.2 calls it optional; the
-      Pydantic-validate-first dispatch step would have to skip itself
-      otherwise. Tools that take no args declare an empty ``BaseModel``.
-    - ``returns_schema`` from spec §2.2 is omitted in v1 (no
-      Pydantic-validate-return step in dispatch).
+    Args:
+        name: The tool's wire name. Must match `^[a-z][a-z0-9_]*$`.
+        description: Long-form description; surfaced to the model
+            verbatim via the upstream LLM API's `tools=` parameter.
+        args_schema: A Pydantic model describing the tool's inputs.
+            Required — the dispatch pipeline validates arguments
+            against it before invoking the function. Tools that take
+            no arguments declare an empty `BaseModel`.
+        secrets_needed: Names of secrets the dispatch should resolve
+            into `ToolContext.secrets` before the tool runs.
+        action: Override the authz action string. When omitted,
+            `ToolDefinition.action_name` derives one from the tool's
+            `home_bundle` and `name`.
+        timeout_seconds: Optional per-call timeout enforced by the
+            dispatch.
+        summary: Optional one-line summary for the prompt's compact
+            tool listing. When omitted, derived from the first
+            sentence of `description`. The model still receives the
+            full `description` via the LLM API regardless.
 
-    Phase 2.2 (ENV-R5 / Step 11):
-    - ``summary`` — optional one-line summary surfaced via
-      :class:`templating.vars.tools.ToolItem`'s ``.summary`` for the
-      prompt's compact tool listing. When omitted, derived from the
-      first sentence of ``description`` (the substring through the
-      first period, trimmed). The model still receives the full
-      ``description`` via the upstream LLM API's ``tools=`` parameter
-      regardless of ``summary``.
+    Returns:
+        The decorator that stamps a `ToolDefinition` and returns the
+        function unchanged.
+
+    Raises:
+        ValueError: `name` doesn't match the required pattern.
     """
     if not _NAME_PATTERN.fullmatch(name):
-        msg = f"tool name {name!r} must match ^[a-z][a-z0-9_]*$ per spec §2.2"
+        msg = f"tool name {name!r} must match ^[a-z][a-z0-9_]*$"
         raise ValueError(msg)
 
     resolved_summary = summary if summary is not None else _derive_summary(description)
@@ -246,11 +255,22 @@ def tool(
 def get_tool_definition(
     fn: Callable[..., Awaitable[Any]],
 ) -> ToolDefinition:
-    """Return the :class:`ToolDefinition` attached to a decorated function.
+    """Return the `ToolDefinition` attached to a decorated function.
 
-    Raises :class:`AttributeError` if ``fn`` is not ``@tool``-decorated;
-    callers typically filter by ``hasattr(fn, "_tool_definition")``
-    during discovery.
+    Args:
+        fn: A function decorated with `@tool`.
+
+    Returns:
+        The `ToolDefinition` stamped by the decorator.
+
+    Raises:
+        AttributeError: `fn` has no `_tool_definition` attribute.
+            Callers typically filter by
+            `hasattr(fn, "_tool_definition")` during discovery to
+            avoid the raise.
+        TypeError: `fn._tool_definition` exists but isn't a
+            `ToolDefinition` (e.g. shadowed by an unrelated
+            attribute).
     """
     defn = fn._tool_definition  # type: ignore[attr-defined]
     if not isinstance(defn, ToolDefinition):
@@ -264,11 +284,16 @@ def register_tool(
     *,
     secrets_needed: list[str] | None = None,
 ) -> None:
-    """Update an existing ``@tool`` function's metadata in place.
+    """Update an existing `@tool` function's metadata in place.
 
-    Used by tests to add ``secrets_needed`` AFTER decoration when the
-    test wants to keep the original ``@tool(...)`` call concise.
-    Mutates the attached :class:`ToolDefinition` directly.
+    Used by tests to add `secrets_needed` AFTER decoration when the
+    test wants to keep the original `@tool(...)` call concise.
+    Mutates the attached `ToolDefinition` directly.
+
+    Args:
+        fn: A function decorated with `@tool`.
+        secrets_needed: New list of secret names. `None` leaves the
+            existing list unchanged.
     """
     defn = get_tool_definition(fn)
     if secrets_needed is not None:

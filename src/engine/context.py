@@ -1,6 +1,14 @@
-"""ExecutionContext + CancelToken + EngineCapabilities + AgentExecutionError.
+"""ExecutionContext, CancelToken, EngineCapabilities, and AgentExecutionError.
 
-Per Module API Reference §11.2 + §13.5 + agent-engine-contract §1.3.
+The runtime data shapes the engine accepts and emits at its public
+boundary. `ExecutionContext` is what callers pass *in*;
+`AgentExecutionError` is what they get *out* on failure; `CancelToken`
+is the cooperative cancellation handle they may attach;
+`EngineCapabilities` is what the engine *declares* about itself.
+
+For the full engine contract — `execute` semantics, ordering rules,
+cancellation guarantees — see the
+[module API reference](../../docs/reference/module-api-reference.md).
 """
 
 from __future__ import annotations
@@ -18,51 +26,74 @@ if TYPE_CHECKING:
 
 
 # ---------------------------------------------------------------------------
-# CancelToken — Module API Reference §13.5
+# CancelToken — cooperative cancellation handle
 # ---------------------------------------------------------------------------
 
 
 class CancelToken:
     """Cooperative cancellation handle.
 
-    Three methods per §13.5: :meth:`cancel`, :meth:`is_cancelled`,
-    :meth:`wait_cancelled`. The engine polls
-    :meth:`is_cancelled` at safe points (between framework iterations,
-    inside the LLM seam); the framework receives the polling callback
-    so it can abort mid-loop too.
+    Three methods: `cancel`, `is_cancelled`, `wait_cancelled`. The
+    engine polls `is_cancelled` at safe points (between framework
+    iterations, inside the LLM seam); the framework receives the
+    polling callback so it can abort mid-loop too.
     """
 
     def __init__(self) -> None:
         self._event = asyncio.Event()
 
     def cancel(self) -> None:
+        """Signal cancellation. Idempotent; safe to call from any task."""
         self._event.set()
 
     def is_cancelled(self) -> bool:
+        """Return `True` if `cancel` has been called."""
         return self._event.is_set()
 
     async def wait_cancelled(self) -> None:
+        """Suspend until `cancel` is called."""
         await self._event.wait()
 
 
 # ---------------------------------------------------------------------------
-# ExecutionContext — agent-engine-contract §1.3 + Module API Reference §11.2
+# ExecutionContext — the per-execute payload
 # ---------------------------------------------------------------------------
 
 
 class ExecutionContext(BaseModel):
-    """The per-execute payload carrying the thread + trigger.
+    """The per-execute payload carrying the thread and trigger.
 
-    Trigger shapes (spec §1.3):
+    Every call to [`AgentEngine.execute`][engine.AgentEngine.execute]
+    takes one of these. The payload identifies which thread the
+    exchange runs against and what kicked it off — a user message, a
+    force-invoke message that pins a skill, or single-shot inputs.
 
-    - Conversational: ``{kind: "user_message", content: <typed>}``.
-    - Conversational with force-invoke:
-      ``{kind: "user_message_with_force_skill", content: <typed>,
-         force_skills: ["<bundle>/skills/<name>", ...]}``.
-    - Single-shot: ``{kind: "invocation", inputs: <typed>}``.
+    Three trigger shapes are valid; the engine dispatches on
+    `trigger["kind"]`:
 
-    ``cancellation`` is optional — the engine constructs an internal
-    no-op token when omitted.
+    ```python
+    # Conversational
+    {"kind": "user_message", "content": <typed>}
+
+    # Conversational with force-invoke
+    {"kind": "user_message_with_force_skill",
+     "content": <typed>,
+     "force_skills": ["<bundle>/skills/<name>", ...]}
+
+    # Single-shot
+    {"kind": "invocation", "inputs": <typed>}
+    ```
+
+    The remaining fields are optional cross-call threading:
+    `cancellation` for cooperative cancellation (the engine constructs
+    an internal no-op token when omitted); `trace_id` for
+    workflow→agent trace propagation (the workflow agent runner sets
+    it so the spawned session's JSONL and the originating workflow's
+    JSONL share a single trace id); and `caller_chain` for authz
+    audit framing (the workflow agent runner prepends the agent's ref
+    so audit events record the workflow→agent frame). All three
+    defaults preserve backward-compatibility with callers that
+    haven't opted in.
     """
 
     model_config = ConfigDict(arbitrary_types_allowed=True, extra="forbid")
@@ -70,31 +101,21 @@ class ExecutionContext(BaseModel):
     thread_id: ThreadId
     trigger: dict[str, Any]
     cancellation: CancelToken | None = None
-    # Phase 3.2 — workflow→agent trace propagation (master spec §11.6.4).
-    # When set by a caller (the workflow agent runner), the engine
-    # threads this id into every event it emits so the spawned session's
-    # JSONL and the originating workflow's JSONL share a single
-    # ``trace_id`` across all events. ``None`` defaults preserve
-    # backward-compat with chat / API / sub-agent callers; those paths
-    # are unaffected until they opt in.
     trace_id: TraceId | None = None
-    # Phase 3.2 — proximate-first caller chain (master spec §13.x).
-    # The workflow agent runner prepends the agent's ref before passing
-    # it in so authz audit events record the workflow→agent frame.
-    # ``()`` default preserves backward-compat with existing callers.
     caller_chain: tuple[str, ...] = Field(default_factory=tuple)
 
 
 # ---------------------------------------------------------------------------
-# EngineCapabilities — agent-engine-contract §1.7
+# EngineCapabilities — what this engine declares
 # ---------------------------------------------------------------------------
 
 
 class EngineCapabilities(BaseModel):
-    """What this engine can do — surfaced via :meth:`AgentEngine.capabilities`.
+    """What this engine declares it can do.
 
-    Phase 1 v1 keeps the shape minimal; values get richer as features
-    arrive.
+    Surfaced via
+    [`AgentEngine.capabilities`][engine.AgentEngine.capabilities].
+    The shape is minimal today; values get richer as features arrive.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -107,23 +128,28 @@ class EngineCapabilities(BaseModel):
 
 
 # ---------------------------------------------------------------------------
-# AgentExecutionError — agent-engine-contract §1.6
+# AgentExecutionError — fatal-failure transport for sync callers
 # ---------------------------------------------------------------------------
 
 
 class AgentExecutionError(Exception):
-    """Raised by sync :meth:`AgentEngine.execute` on Fatal exchange failure.
+    """Raised by `AgentEngine.execute` on Fatal exchange failure.
 
-    Carries the ``thread.exchange_failed`` event the engine emitted
-    just before raising. Per spec §1.6:
+    Carries the `thread.exchange_failed` event the engine emitted
+    just before raising. See
+    [`AgentEngine.execute`][engine.AgentEngine.execute] for the call
+    contract.
 
-    - ``execute`` raises this.
-    - ``execute_stream`` yields ``failed_event`` and ends; it does NOT
-      raise this (the caller reads the failed event from the stream).
+    Two surfaces, two behaviours:
 
-    NOT a :class:`PlatformError`. It is a transport mechanism for the
-    caller of the sync API; the actual platform error is on
-    ``failed_event.data["error"]`` (per Error Model §5.2).
+    - `execute` raises this so the caller can `try/except`.
+    - `execute_stream` does NOT raise; it yields the failed event as
+      the last item and ends. The caller reads the failure from the
+      stream.
+
+    NOT a `PlatformError`. It's a transport mechanism for the
+    synchronous caller; the actual platform error lives on
+    `failed_event.data["error"]`.
     """
 
     def __init__(self, failed_event: Event) -> None:

@@ -1,17 +1,24 @@
-"""Entity records and shared event-envelope sub-types — spec §C + §13.2.
+"""Entity records and shared event-envelope sub-types.
 
-- :class:`Session` and :class:`Thread` are entity records (Schemas §C):
-  mutable state held outside the JSONL event log.
-- :class:`Actor` is the ``actor`` field of every :class:`Event`
-  (Module API Reference §13.2).
-- :class:`ContentRef` references the content sidecar store for
-  oversized event payloads (Module API Reference §3.2).
+Pure data models, no behaviour beyond Pydantic validation:
 
-These are pure data models — no behaviour beyond Pydantic validation.
+- [`Session`][schemas.entities.Session] and
+  [`Thread`][schemas.entities.Thread] — entity records (mutable state
+  held outside the JSONL event log).
+- [`Actor`][schemas.entities.Actor] — the `actor` field stamped on
+  every event: which side of the conversation produced this record
+  (`system`, `agent`, or `user`).
+- [`ContentRef`][schemas.entities.ContentRef] — pointer into the
+  content sidecar store for oversized event payloads that spill out
+  of the JSONL.
+- [`FromWorkflowRun`][schemas.entities.FromWorkflowRun],
+  [`ParentRunPointer`][schemas.entities.ParentRunPointer], and
+  [`ForkedFrom`][schemas.entities.ForkedFrom] — three parent-pointer
+  shapes for cross-JSONL forensics (session-spawned-by-workflow,
+  workflow-spawned-by-workflow, run-forked-from-run).
 
-Spec conflict (flagged): :class:`Thread` includes ``agent_id`` per
-Schemas §C even though Module API Reference §3.2 omits it. §C is
-authoritative for entity-record fields, so ``agent_id`` is included.
+For the full record shapes and the contracts they participate in, see
+the [module API reference](../../docs/reference/module-api-reference.md).
 """
 
 from __future__ import annotations
@@ -25,97 +32,107 @@ from pydantic import BaseModel, ConfigDict, Field, field_validator
 from schemas.identifiers import AgentId, EventId, SessionId, ThreadId
 
 if TYPE_CHECKING:
-    # Forward-referenced from string annotations on the Pydantic
-    # models below. ``workflows.ids`` is imported lazily in
-    # :func:`_resolve_forward_refs` to break the import cycle:
+    # Forward-referenced from string annotations on the Pydantic models
+    # below. `workflows.ids` is imported lazily in `_resolve_forward_refs`
+    # to break the import cycle:
     #
     #   workflows.ids → schemas.identifiers → schemas/__init__.py
     #     → schemas.entities → workflows.ids
     #
-    # The cycle existed since Phase 3.2's :class:`FromWorkflowRun`;
-    # the lazy resolution defers the actual rebind until both modules
-    # are fully loaded.
+    # The cycle exists because `FromWorkflowRun` references types from
+    # `workflows.ids`; the lazy resolution defers the actual rebind
+    # until both modules are fully loaded.
     from workflows.ids import InvocationId, WorkflowRunId
 
 _SHA256_HEX = re.compile(r"^[0-9a-fA-F]{64}$")
 
 
 class FromWorkflowRun(BaseModel):
-    """Parent pointer on sessions spawned by workflow agent nodes.
+    """Parent pointer on sessions spawned by a workflow agent node.
 
-    Populated by ``AgentRunner`` in Phase 3.2; surfaces in the
-    ``session.opened`` event's ``spawned_by`` payload per
-    ``docs/explanation/workflow-event-log.md`` line 62.
+    Populated by the agent runner when a workflow's agent node opens
+    a new session; surfaces in the `session.opened` event's
+    `spawned_by` payload so cross-JSONL tools can walk from the
+    spawned session back to the workflow run that produced it. See
+    the [workflow event log](../../docs/explanation/workflow-event-log.md).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # String forward refs — see ``_resolve_forward_refs`` below for
-    # the lazy import that breaks the schemas↔workflows.ids cycle.
+    # String forward refs — see `_resolve_forward_refs` below for the
+    # lazy import that breaks the schemas↔workflows.ids cycle.
     workflow_run_id: "WorkflowRunId"
     invocation_id: "InvocationId"
     event_id: EventId  # workflow.node.started event that spawned this session
 
 
 class ParentRunPointer(BaseModel):
-    """Phase 3.7 — parent-workflow pointer on child workflow runs.
+    """Parent-workflow pointer on a child workflow run.
 
-    Mirrors :class:`FromWorkflowRun` (Phase 3.2's agent-session
-    pointer). The shape is intentionally identical so cross-JSONL
-    forensics tools can handle both uniformly: ``workflow_run_id``
-    identifies the spawning workflow run, ``invocation_id`` the
-    specific ``kolsch/nodes/workflow`` node-invocation inside it.
+    Mirrors [`FromWorkflowRun`][schemas.entities.FromWorkflowRun] (the
+    session-side equivalent). The shape is intentionally identical so
+    cross-JSONL forensics tools can handle both uniformly:
+    `workflow_run_id` identifies the spawning workflow run,
+    `invocation_id` the specific `kolsch/nodes/workflow` node
+    invocation inside it.
 
-    Set by :class:`workflows.builtins.workflow_sub.WorkflowSubRunner`
-    (Phase 3.7 Step 1) when minting a child run; persisted on the
-    child's ``WorkflowRun.parent`` field and round-tripped through
-    ``runs/<wrk_id>/meta.json``.
+    Set by
+    [`WorkflowSubRunner`][workflows.builtins.workflow_sub.WorkflowSubRunner]
+    when minting a child run; persisted on the child's
+    `WorkflowRun.parent` field and round-tripped through
+    `runs/<wrk_id>/meta.json`.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # String forward refs — see ``_resolve_forward_refs`` below.
+    # String forward refs — see `_resolve_forward_refs` below.
     workflow_run_id: "WorkflowRunId"
     invocation_id: "InvocationId"
 
 
 class ForkedFrom(BaseModel):
-    """Phase 3.8 — parent-run pointer on forked workflow runs.
+    """Parent-run pointer on a forked workflow run.
 
-    Mirrors the shape of :class:`ParentRunPointer` (Phase 3.7's
-    sub-workflow pointer) and :class:`FromWorkflowRun` (Phase 3.2's
-    agent-session pointer). The three patterns are intentionally
-    symmetric so cross-JSONL forensics tools can handle all three
-    parent-pointer surfaces uniformly.
+    Completes the three-pattern set with
+    [`ParentRunPointer`][schemas.entities.ParentRunPointer]
+    (sub-workflow pointer) and
+    [`FromWorkflowRun`][schemas.entities.FromWorkflowRun]
+    (agent-session pointer). The three shapes are intentionally
+    symmetric so cross-JSONL forensics tools can handle every
+    parent-pointer surface uniformly.
 
-    ``run_id`` identifies the workflow run being forked from;
-    ``fork_event_id`` pins the event in that run's ``events.jsonl``
-    at which the fork is rooted. A forked run can also carry
-    ``parent`` (if it was originally spawned by a sub-workflow node)
-    — the two fields are independent.
+    `run_id` identifies the workflow run being forked from;
+    `fork_event_id` pins the event in that run's `events.jsonl` at
+    which the fork is rooted. A forked run can also carry `parent`
+    (if it was originally spawned by a sub-workflow node) — the two
+    fields are independent.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
-    # String forward refs — see ``_resolve_forward_refs`` below.
+    # String forward refs — see `_resolve_forward_refs` below.
     run_id: "WorkflowRunId"
     fork_event_id: EventId
 
 
 def _resolve_forward_refs() -> None:
-    """Rebind the ``WorkflowRunId`` / ``InvocationId`` forward refs.
+    """Rebind the `WorkflowRunId` and `InvocationId` forward refs.
 
     The cycle:
-    ``workflows.ids → schemas.identifiers → schemas/__init__.py →
-    schemas.entities → workflows.ids`` (mid-init).
+
+    ```
+    workflows.ids → schemas.identifiers → schemas/__init__.py
+      → schemas.entities → workflows.ids   (mid-init)
+    ```
+
     Defining the Pydantic fields as string forward refs above and
-    calling ``model_rebuild`` AFTER ``workflows.ids`` has finished
-    loading breaks the cycle without changing the on-disk schema.
+    calling `model_rebuild` after `workflows.ids` has finished loading
+    breaks the cycle without changing the on-disk schema.
 
     Called once at module-import time below; safe because Python's
-    import machinery serialises module loads — when ``schemas`` is
+    import machinery serialises module loads — when `schemas` is
     fully loaded (the import that triggered this module's load has
-    returned), ``workflows.ids`` is also fully loaded.
+    returned), `workflows.ids` is also fully loaded.
     """
     import workflows.ids as _wf_ids  # noqa: PLC0415
 
@@ -128,26 +145,27 @@ def _resolve_forward_refs() -> None:
     ForkedFrom.model_rebuild(_types_namespace=namespace)
 
 
-# The module-level call deliberately swallows ``ImportError`` so the
-# initial cycle-busting load (when ``workflows.ids`` triggers
-# ``schemas/__init__.py`` mid-init) doesn't crash; the eager retry
-# happens via :func:`_eager_resolve_when_workflows_loaded` below.
+# The module-level call deliberately swallows `ImportError` so the
+# initial cycle-busting load (when `workflows.ids` triggers
+# `schemas/__init__.py` mid-init) doesn't crash; the eager retry
+# happens via `_eager_resolve_when_workflows_loaded` below.
 try:
     _resolve_forward_refs()
 except (ImportError, AttributeError):
     # Pre-cycle: workflows.ids hasn't finished loading yet. The retry
-    # at the bottom of ``workflows.ids`` calls back into us once it's
+    # at the bottom of `workflows.ids` calls back into us once it's
     # done.
     pass
 
 
 class Session(BaseModel):
-    """A session entity record — Module API Reference §3.2, Schemas §C.
+    """A session entity record — one conversation instance.
 
-    Mutable UI-organisational fields (``name``, ``starred``,
-    ``archived``) sit alongside the immutable identity. The session's
-    event log is the JSONL file identified by ``session_id``; this
-    record does NOT carry execution history.
+    Mutable UI-organisational fields (`name`, `starred`, `archived`)
+    sit alongside the immutable identity (`session_id`, `agent_id`,
+    `created_at`). The session's event log is the JSONL file
+    identified by `session_id`; this record does NOT carry execution
+    history — that lives in the log.
     """
 
     model_config = ConfigDict(frozen=False, extra="forbid")
@@ -163,11 +181,12 @@ class Session(BaseModel):
 
 
 class Thread(BaseModel):
-    """A thread entity record — Schemas §C + Module API Reference §3.2.
+    """A thread entity record — the persistence unit inside a session.
 
-    Phase 1 has exactly one thread per session. ``agent_id`` is
-    included per Schemas §C (Module API Reference §3.2 omits it; §C is
-    authoritative for entity-record shape).
+    A thread's `thread_id` identifies the JSONL file that stores its
+    conversation history. `agent_id` is carried alongside so consumers
+    can attribute the thread without crossing the join to its
+    [`Session`][schemas.entities.Session].
     """
 
     model_config = ConfigDict(frozen=False, extra="forbid")
@@ -179,11 +198,21 @@ class Thread(BaseModel):
 
 
 class Actor(BaseModel):
-    """The actor that emitted an event — §13.2.
+    """The actor stamped on every event — who or what produced it.
 
-    ``kind`` is one of three discrete roles. ``id`` is required for
-    ``agent`` and ``user`` actors (so consumers can attribute events);
-    for ``system`` actors the id is optional.
+    Three discrete roles:
+
+    - `system` — synthetic platform operations.
+    - `agent` — a configured agent run.
+    - `user` — the human user.
+
+    `id` is required for `agent` and `user` actors so consumers can
+    attribute events; for `system` actors it is optional.
+
+    Distinct from the *principal* used in authz checks: an actor
+    records "who emitted this event" on the log; a principal is
+    "whose permissions are we checking". The same agent run may
+    appear as both — the words capture different lenses.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -193,10 +222,11 @@ class Actor(BaseModel):
 
 
 class ContentRef(BaseModel):
-    """A reference into the content sidecar store — §3.2 + §13.2.
+    """A reference into the content sidecar store.
 
-    Oversized event payloads spill to ``content/<hash>.bin``; the event
-    keeps an inline truncated form plus this reference.
+    Oversized event payloads spill to `content/<hash>.bin`; the event
+    keeps an inline truncated form plus this reference so consumers
+    can fetch the full payload only when they need it.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

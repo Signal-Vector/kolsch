@@ -1,21 +1,18 @@
-"""Event envelope + per-type data models — Schemas §B.2-B.8.
+"""Event envelope plus the per-type data payload models.
 
-Event types are organised as a :class:`StrEnum` (``EventType``) so
-emitters get autocomplete + Pydantic validation and so consumers can
+Event types are organised as a [`StrEnum`][schemas.events.EventType] so
+emitters get autocomplete plus Pydantic validation, and consumers can
 exhaustively switch over the set.
 
-Each event type has a dedicated ``*Data`` Pydantic model declaring its
-``data`` payload per Schemas §B.8. The :class:`Event` envelope holds
-``data`` as a permissive ``dict[str, Any]`` so the on-disk JSONL stays
+Each event type has a dedicated `*Data` Pydantic model declaring its
+payload shape. The [`Event`][schemas.events.Event] envelope holds
+`data` as a permissive `dict[str, Any]` so the on-disk JSONL stays
 forward-compatible; callers that want strict validation construct the
-matching ``*Data`` model and pass ``.model_dump()`` into the envelope.
+matching `*Data` model and pass `.model_dump()` into the envelope.
 
-Conflict (flagged): Schemas §B.2 notes ``session_id`` is NOT in the
-envelope ("the file IS the session"). Module API Reference §13.2
-includes ``session_id`` as a field. The Module API Reference is the
-arbiter for runtime API shape, so :class:`Event` carries
-``session_id``; serialisers writing the JSONL on disk are responsible
-for stripping/re-adding it as the file format dictates.
+For the full event-log contract — which records belong to which
+subsystem, ordering rules, and what consumers may assume — see the
+[module API reference](../../docs/reference/module-api-reference.md).
 """
 
 from __future__ import annotations
@@ -39,7 +36,12 @@ from schemas.identifiers import (
 
 
 class EventType(StrEnum):
-    """The Phase 1 event types — Schemas §B.7."""
+    """Every event type the platform writes to the JSONL log.
+
+    Grouped by subsystem in the declaration order below. New event
+    types are added here first; emitters and consumers then branch on
+    the value.
+    """
 
     # Session identity (the file's first event)
     SESSION_OPENED = "session.opened"
@@ -59,7 +61,7 @@ class EventType(StrEnum):
     # Model interaction
     MODEL_REQUEST = "model.request"
     MODEL_RESPONSE = "model.response"
-    # Phase 1.3 (FB-R4) — emitted once per fallback transition.
+    # Emitted once per fallback transition.
     MODEL_FALLBACK = "model.fallback"
 
     # Config
@@ -68,40 +70,37 @@ class EventType(StrEnum):
     # Memory
     MEMORY_WRITTEN = "memory.written"
     MEMORY_RETRIEVED = "memory.retrieved"
-    # NOTE: spec silent on memory.deleted in §B.7, but Module API
-    # Reference §5 has MemoryContext.delete with "engine separately
-    # emits memory.deleted event". Included here so deletions are
-    # captured in the log.
+    # Captured so deletions surface in the log and the in-memory cache
+    # reconstruction at replay time stays deterministic.
     MEMORY_DELETED = "memory.deleted"
 
     # Compaction
     CONTEXT_COMPACTED = "context.compacted"
 
-    # Phase 2.2 (ENV §9) — template-config consistency warnings
-    # emitted by the engine's pre-flight step 5.6.6 AST walker when a
-    # prompt references variable data the resolved config doesn't carry
-    # (e.g. ``{{ tools }}`` referenced + no tools declared).
+    # Engine pre-flight emits one of these when a template references
+    # variable data the resolved config doesn't carry (e.g.
+    # `{{ tools }}` referenced but no tools declared).
     AGENT_TEMPLATE_WARNING = "agent.template_warning"
 
 
 # ---------------------------------------------------------------------------
-# Per-event-type `data` payload models — Schemas §B.8
+# Per-event-type `data` payload models
 # ---------------------------------------------------------------------------
 
 
 class _DataModel(BaseModel):
     """Common base for event-data payloads.
 
-    ``extra="forbid"`` enforces the catalog shape (E-I7-style for events):
-    a typo in a field name fails validation rather than silently passing
-    through into the JSONL.
+    `extra="forbid"` enforces the per-type shape: a typo in a field
+    name fails validation rather than silently passing through into
+    the JSONL.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
 
 class SessionOpenedData(_DataModel):
-    """`session.opened.data` — §B.8."""
+    """`session.opened.data` — payload for the session-identity event."""
 
     session_id: SessionId
     initial_agent: dict[str, str]
@@ -109,31 +108,31 @@ class SessionOpenedData(_DataModel):
 
 
 class ThreadExchangeStartedData(_DataModel):
-    """`thread.exchange_started.data` — §B.8."""
+    """`thread.exchange_started.data` — opens one exchange on the thread."""
 
     trigger_event_id: EventId
 
 
 class ThreadExchangeCompletedData(_DataModel):
-    """`thread.exchange_completed.data` — §B.8."""
+    """`thread.exchange_completed.data` — closes one exchange successfully."""
 
     exchange_started_id: EventId
     agent_message_id: EventId
 
 
 class ThreadExchangeFailedData(_DataModel):
-    """`thread.exchange_failed.data` — §B.8 (Error Model §5.2)."""
+    """`thread.exchange_failed.data` — closes one exchange with a Fatal error."""
 
     exchange_started_id: EventId
     error: Error
 
 
 class UserMessageData(_DataModel):
-    """`user.message.data` — §B.8.
+    """`user.message.data` — one message the user sent into the exchange.
 
-    ``content`` is typed per ``IOSpec.inputs`` (conversational mode),
-    captured here as a permissive dict so the envelope is reusable
-    across agents with differing schemas.
+    `content` is typed per the agent's `IOSpec.inputs` (conversational
+    mode), captured here as a permissive dict so the envelope is
+    reusable across agents with differing schemas.
     """
 
     content: dict[str, Any]
@@ -141,52 +140,41 @@ class UserMessageData(_DataModel):
 
 
 class AgentMessageData(_DataModel):
-    """`agent.message.data` — §B.8."""
+    """`agent.message.data` — the agent's reply that closes an exchange."""
 
     content: dict[str, Any]
     exchange_id: EventId
 
 
 class ModelRequestData(_DataModel):
-    """`model.request.data` — §B.8 + §B.6 draft-0.6 amendment.
+    """`model.request.data` — what the engine sent to the LLM for one call.
 
-    Schemas spec extended (2026-05-28) so the LLM-seam message list
-    is captured verbatim on the request event. Before this amendment,
-    §B.8 said "context is derivable from the tree via Assembly
-    Procedure"; under a wrapping framework (CrewAI's prompt-template
-    injection, multimodal reshaping) that derivation diverges from
-    what the LLM actually saw. Capturing here closes the gap.
+    `messages` carries the LLM-seam message list verbatim, captured
+    post-framework-wrap and pre-LLM-invoke. The wrapping framework
+    (CrewAI's prompt-template injection, multimodal reshaping) can
+    diverge from what a path-derived context would produce, so the
+    log keeps the actual bytes the model saw — the
+    [Materialization Rule](../../docs/reference/master-index.md#key-vocabulary)
+    requires every input that shaped the model's context to live on
+    an event, verbatim. Replay reads `messages` directly rather than
+    re-running the projection.
 
-    Replay reads ``messages`` directly from this event for
-    "what did the model see at this call". The Assembly Procedure
-    still applies for projecting future calls (which haven't happened
-    yet and therefore haven't been captured).
-
-    Bug-engine-tools-wiring-gap.md Step F extends the capture to the
-    tool list the LLM saw — Engine I3 (Materialization Rule) wants
-    every input that contributed to the model's context recorded on
-    the event, and the tool schemas DO contribute (the model uses
-    them to decide tool_use). Before this extension the JSONL was
-    silent on whether the model saw any tools at all — the symptom
-    the user's hallucination bug surfaced.
+    `tools` carries the tool-schema list the LLM saw for this call.
+    The model uses the schemas to decide whether to emit a tool-use
+    response; capturing them keeps the log faithful to every input
+    that shaped the model's behaviour. Empty list when the agent
+    declares no tools; one entry per registered tool otherwise.
     """
 
     call_id: AgentCallId
     model: dict[str, Any]
     config_event_id: EventId
-    # §B.6 amendment — the LLM-seam request.messages dump. Captured
-    # post-framework-wrap, pre-LLM-invoke. Replay sources from here,
-    # not from the path.
     messages: list[dict[str, Any]] = Field(default_factory=list)
-    # Bug-engine-tools-wiring-gap.md Step F — the LLM-seam tool
-    # schema list. Empty when the agent declares no tools; populated
-    # with one entry per registered tool (``{name, schema, ...}``)
-    # otherwise. Engine I3 (Materialization Rule) compliance.
     tools: list[dict[str, Any]] = Field(default_factory=list)
 
 
 class ModelResponseData(_DataModel):
-    """`model.response.data` — §B.8 + §5.3 (error variant)."""
+    """`model.response.data` — what the LLM returned for one call."""
 
     call_id: AgentCallId
     content: dict[str, Any]
@@ -195,34 +183,34 @@ class ModelResponseData(_DataModel):
     cost: float
     latency_ms: int
     stop_reason: str
-    # When stop_reason == "error", `error` carries the canonical
-    # Error envelope (Error Model §5.3). Optional otherwise.
+    # When `stop_reason == "error"`, `error` carries the canonical
+    # Error envelope. Optional otherwise.
     error: Error | None = None
 
 
 class ModelFallbackData(_DataModel):
-    """`model.fallback.data` — Phase 1.3 patch §3.1.
+    """`model.fallback.data` — one transition in the model-fallback chain.
 
-    Emitted by the engine once per fallback transition. Lives
-    between the failing attempt (its ``model.request`` or
-    ``model.response``) and the next attempt's ``model.request``
-    per patch §3.2.
+    Emitted by the engine once per fallback transition, between the
+    failing attempt (its `model.request` or `model.response`) and the
+    next attempt's `model.request`.
 
-    - ``from`` / ``to`` carry canonical ``{provider, model}``
-      dicts (the resolver normalises aliases at Layer 1).
-    - ``reason`` is the failing attempt's error code (e.g.
-      ``model.rate_limited``).
-    - ``reason_detail`` is a one-line human-readable summary.
-    - ``attempt`` is 1-indexed; attempt 0 was the primary, so
-      the first ``model.fallback`` event always has
-      ``attempt: 1``.
+    Fields:
+
+    - `from` / `to` — canonical `{provider, model}` dicts (the
+      resolver normalises aliases before this event is emitted).
+    - `reason` — the failing attempt's error code (e.g.
+      `model.rate_limited`).
+    - `reason_detail` — a one-line human-readable summary.
+    - `attempt` — 1-indexed; attempt 0 was the primary, so the first
+      `model.fallback` event always has `attempt: 1`.
     """
 
-    # `from` shadows the Python keyword; use field-aliased form so
-    # the JSON shape (and the on-disk JSONL) matches patch §3.1
-    # exactly. ``populate_by_name`` lets engine code construct via
-    # the Python identifier (``from_model=``) while
-    # ``model_dump(by_alias=True)`` round-trips to the spec'd JSON.
+    # `from` shadows the Python keyword; use field-aliased form so the
+    # JSON shape (and the on-disk JSONL) matches the canonical wire
+    # format exactly. `populate_by_name` lets engine code construct
+    # via the Python identifier (`from_model=`) while
+    # `model_dump(by_alias=True)` round-trips to the canonical JSON.
     model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
     from_model: dict[str, str] = Field(alias="from")
@@ -233,7 +221,7 @@ class ModelFallbackData(_DataModel):
 
 
 class ToolCalledData(_DataModel):
-    """`tool.called.data` — §B.8."""
+    """`tool.called.data` — the agent's request to invoke one tool."""
 
     tool_name: str
     tool_call_id: str
@@ -241,7 +229,7 @@ class ToolCalledData(_DataModel):
 
 
 class ToolResultData(_DataModel):
-    """`tool.result.data` — §B.8."""
+    """`tool.result.data` — what the tool returned for one call."""
 
     tool_call_id: str
     tool_name: str
@@ -250,21 +238,19 @@ class ToolResultData(_DataModel):
 
 
 class ToolFailedData(_DataModel):
-    """`tool.failed.data` — §B.8 (Error Model §5.1).
+    """`tool.failed.data` — a tool invocation that raised.
 
-    qol-permission-system-human-readable.md Step 3 — adds the
-    optional ``recovery_hint`` field. When the tool failed because
-    the authz provider denied it (``error.type == "authz.denied"``
-    OR the wrapped ``tool.unauthorized`` whose detail names a deny
-    rule), the engine populates this with the exact ``/perm allow
-    …`` chat command the user can type to un-block. The chat
-    renderer surfaces it inside the denied capsule; the framework
-    forwards the whole event payload to the model so the agent
-    sees the actionable text and stops flailing.
+    When the failure was an authz denial (`error.type ==
+    "authz.denied"` or the wrapped `tool.unauthorized` whose detail
+    names a deny rule), the engine populates `recovery_hint` with the
+    exact `/perm allow …` chat command the user can type to un-block.
+    The chat renderer surfaces it inside the denied capsule; the
+    framework forwards the whole event payload to the model so the
+    agent sees the actionable text and stops flailing.
 
-    ``None`` for every non-authz failure — the field is purely a
-    convenience layer for the authz path; other tool failures
-    continue to surface through ``error.message`` alone.
+    `recovery_hint` is `None` for every non-authz failure — the field
+    is purely a convenience layer for the authz path; other tool
+    failures continue to surface through `error.message` alone.
     """
 
     tool_call_id: str
@@ -274,13 +260,12 @@ class ToolFailedData(_DataModel):
 
 
 class ConfigSetData(_DataModel):
-    """`config.set.data` — §B.8.
+    """`config.set.data` — the resolved agent config for an exchange.
 
-    ``resolved_config`` is the FULL, fully-dereferenced
-    ResolvedAgentConfig; captured here as a permissive dict so this
-    module has no import dependency on :mod:`schemas.config`. Callers
-    that want the typed model use :class:`ResolvedAgentConfig`
-    directly.
+    `resolved_config` is the FULL, fully-dereferenced
+    `ResolvedAgentConfig`; captured here as a permissive dict so this
+    module has no import dependency on `schemas.config`. Callers that
+    want the typed model use `ResolvedAgentConfig` directly.
     """
 
     resolved_config: dict[str, Any] = Field(min_length=1)
@@ -288,13 +273,11 @@ class ConfigSetData(_DataModel):
 
 
 class MemoryWrittenData(_DataModel):
-    """`memory.written.data` — §B.8 + extension.
+    """`memory.written.data` — one item the agent wrote to memory.
 
-    Spec §B.8 lists only ``scope / content / variant``; that is too
-    sparse to satisfy MEM I3 (Memory's cache MUST be reconstructable
-    from the log). The extension below carries the full MemoryItem
-    record so a replay deterministically rebuilds the in-memory cache
-    (MEM I9 — deterministic replay). Flag for spec amendment of §B.8.
+    The payload carries the full memory item record (not just `scope
+    / content / variant`) so a replay can deterministically rebuild
+    the in-memory cache from the log alone.
     """
 
     item_id: MemoryItemId
@@ -307,11 +290,11 @@ class MemoryWrittenData(_DataModel):
 
 
 class MemoryRetrievedData(_DataModel):
-    """`memory.retrieved.data` — §B.8.
+    """`memory.retrieved.data` — what a memory query returned.
 
-    Materialisation Rule (§B.6): ``results`` carries the actual items
-    returned, verbatim. The Assembly Procedure uses this content; it
-    never re-runs the query at replay time.
+    `results` carries the actual items returned, verbatim. The
+    [Assembly Procedure](../../docs/reference/master-index.md#key-vocabulary)
+    uses this content; it never re-runs the query at replay time.
     """
 
     scope: str
@@ -321,18 +304,18 @@ class MemoryRetrievedData(_DataModel):
 
 
 class MemoryDeletedData(_DataModel):
-    """`memory.deleted.data` — spec silent on shape; inferred from
-    Module API Reference §5 (MemoryContext.delete takes an item_id).
-    """
+    """`memory.deleted.data` — one memory item the agent removed."""
 
     item_id: MemoryItemId
 
 
 class ContextCompactedData(_DataModel):
-    """`context.compacted.data` — §B.8.
+    """`context.compacted.data` — one compaction the engine performed.
 
-    The log keeps everything; only the model's projected context is
-    shorter. ``pre_compaction`` is the FULL content being summarised.
+    The log keeps every original event; compaction only shortens what
+    later model calls project as context. `pre_compaction` captures
+    the FULL content being summarised, so a replay can decide whether
+    to apply the compaction or skip it.
     """
 
     compacted_event_ids: list[EventId]
@@ -343,10 +326,11 @@ class ContextCompactedData(_DataModel):
 
 
 class AgentTemplateWarningData(_DataModel):
-    """``agent.template_warning.data`` — Phase 2.2 §9 + ENV-R6 §4.18.
+    """`agent.template_warning.data` — a template/config consistency warning.
 
-    Emitted by the engine's pre-flight step 5.6.6 when a prompt
-    references variable data the resolved config doesn't carry.
+    Emitted by the engine's pre-flight when a prompt references
+    variable data the resolved config doesn't carry — e.g.
+    `{{ tools }}` referenced but no tools declared.
     """
 
     reference: str
@@ -355,17 +339,21 @@ class AgentTemplateWarningData(_DataModel):
 
 
 # ---------------------------------------------------------------------------
-# The Event envelope — §B.2 + §13.2
+# The Event envelope
 # ---------------------------------------------------------------------------
 
 
 class Event(BaseModel):
-    """The canonical Event envelope — Module API Reference §13.2.
+    """The canonical Event envelope — every record on the JSONL log.
 
-    ``data`` is intentionally loose (a dict). Callers that want strict
-    per-type validation construct the matching ``*Data`` model and
-    assign ``.model_dump()`` into ``data``; the engine and store
-    consume the envelope shape uniformly.
+    `data` is intentionally loose (a `dict`). Callers that want strict
+    per-type validation construct the matching `*Data` model and
+    assign `.model_dump()` into `data`; the engine and store consume
+    the envelope shape uniformly.
+
+    `session_id` is carried even though the JSONL file already
+    identifies the session — consumers reading events in memory
+    shouldn't need to know the storage layout to attribute events.
     """
 
     model_config = ConfigDict(frozen=False, extra="forbid")
@@ -379,12 +367,12 @@ class Event(BaseModel):
     actor: Actor
     created_at: datetime
     content_ref: ContentRef | None = None
-    # Phase 3.2 §11.6.4 — the chain-spanning trace id. Set by the agent
-    # engine when its :class:`ExecutionContext` carries one (workflow-
-    # spawned agent invocations); ``None`` for chat / API surfaces that
-    # haven't opted in. Typed loosely as ``str`` (not ``TraceId``) to
-    # keep ``schemas/`` free of an upward dependency on ``workflows/``
-    # — :class:`workflows.ids.TraceId` is a ``str`` subclass so typed
-    # values still pass through transparently, while plain strings
-    # read off legacy JSONL rows validate without a prefix-check raise.
+    # Chain-spanning trace id. Set by the agent engine when its
+    # `ExecutionContext` carries one (workflow-spawned agent
+    # invocations); `None` for chat / API surfaces that haven't opted
+    # in. Typed loosely as `str` (not `TraceId`) to keep `schemas/`
+    # free of an upward dependency on `workflows/` — `TraceId` is a
+    # `str` subclass so typed values still pass through transparently,
+    # while plain strings read off legacy JSONL rows validate without
+    # a prefix-check raise.
     trace_id: str | None = None
