@@ -1,14 +1,17 @@
-"""Canonical Error envelope — Module API Reference §13.4 / Error Model §2.1.
+"""The canonical Error envelope shared across modules.
 
-A Pydantic mirror of what :meth:`errors.PlatformError.to_dict` emits.
-Use this model whenever an error appears as event data
-(``tool.failed.data.error``, ``thread.exchange_failed.data.error``,
-``model.response.data.error``) so the consumer has a typed handle on
-``type / message / where / detail / cause``.
+A Pydantic mirror of what
+[`PlatformError.to_dict`][errors.PlatformError.to_dict] emits. Use
+this model whenever an error appears as event data (`tool.failed.
+data.error`, `thread.exchange_failed.data.error`,
+`model.response.data.error`) so the consumer has a typed handle on
+`type / message / where / detail / cause`.
 
-The ``cause`` field is self-referential per the Error Model spec
-(§2.6); Pydantic v2 handles the forward reference automatically when
-the class definition completes.
+The `cause` field is self-referential; Pydantic v2 handles the
+forward reference automatically when the class definition completes.
+
+See the [error model](../../docs/explanation/error-model.md) for the
+full classification contract.
 """
 
 from __future__ import annotations
@@ -24,10 +27,11 @@ if TYPE_CHECKING:
 class Error(BaseModel):
     """The canonical error envelope shared across modules.
 
-    Field semantics match :class:`errors.PlatformError`'s ``to_dict``
-    output so :meth:`from_platform_error` is a structural one-shot:
-    take what PlatformError emits, hand it to Pydantic, get a typed
-    object back.
+    Field semantics match
+    [`PlatformError`][errors.PlatformError]'s `to_dict` output so
+    `from_platform_error` is a structural one-shot: take what
+    `PlatformError` emits, hand it to Pydantic, get a typed object
+    back.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -40,9 +44,9 @@ class Error(BaseModel):
 
     @classmethod
     def from_platform_error(cls, error: PlatformError) -> Error:
-        """Build an :class:`Error` from a raised :class:`PlatformError`.
+        """Build a typed `Error` from a raised `PlatformError`.
 
-        Equivalent to ``Error.model_validate(error.to_dict())`` but
+        Equivalent to `Error.model_validate(error.to_dict())` but
         named so callers don't have to remember the round-trip.
         """
         return cls.model_validate(error.to_dict())
