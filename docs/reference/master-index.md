@@ -270,7 +270,10 @@ A topical index for jumping to the right spec.
 
 ## Key Vocabulary
 
-Concise definitions of the platform's core terms.
+Concise definitions of the platform's core terms. For **which word to
+use when writing docstrings** (rather than what each term means), see
+[`vocabulary.md`](vocabulary.md) — it sits on top of this section and
+assigns each near-synonym to a lane.
 
 **Agent call** — an atomic unit of work: one execution of one
 configured agent. The smallest unit the platform schedules.

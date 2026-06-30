@@ -41,7 +41,11 @@ Architecture and design rationale. The "why" behind the platform.
 Precise, complete, lookup-oriented.
 
 - [Master Index](reference/master-index.md) — reading order, dependency
-  map, topical index, vocabulary.
+  map, topical index, key vocabulary definitions.
+- [Vocabulary](reference/vocabulary.md) — the writer's reference:
+  which word to use in docstrings when two near-synonyms compete
+  (principal vs. caller, engine vs. framework, exchange vs.
+  iteration, etc.).
 - [Schemas](reference/schemas.md) — config schema, event log schema,
   entity records.
 - [Module API Reference](reference/module-api-reference.md) — the
@@ -52,6 +56,9 @@ Precise, complete, lookup-oriented.
 - [Development & Testing Handbook](process/development-testing-handbook.md)
   — engineering principles, Python practices, tooling, git, docs
   discipline, testing strategy, per-subsystem success criteria.
+- [Code Documentation Conventions](process/documentation-conventions.md)
+  — Google-style docstrings, module headers, cross-references, and the
+  rules that keep things MkDocs-ready before MkDocs is wired up.
 - [Test Catalog](process/test-catalog.md) — recommended test cases in
   English.
 - [Test Plan](process/test-plan.md) — per-module test categories and the
