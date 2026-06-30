@@ -1,9 +1,8 @@
-"""JSON Schema export — spec §2.3 + §5.
+"""JSON Schema export for external consumers.
 
-Phase 1 ships the JSON Schema as a published artifact for external
-consumers (YAML linters, the built-in agent, non-Python clients).
-This module is the single entry point so callers don't reach into
-Pydantic directly.
+The published AgentConfig schema artifact — consumed by YAML linters,
+the built-in agent, and non-Python clients. Single entry point so
+callers never reach into Pydantic directly.
 """
 
 from typing import Any
@@ -14,8 +13,7 @@ from schemas.config import ResolvedAgentConfig
 def export_json_schema() -> dict[str, Any]:
     """Export the AgentConfig schema as JSON Schema.
 
-    Pure: derived from the Pydantic model definition. Same call twice
-    returns the same shape (§I4-style determinism extended to the
-    schema export).
+    Pure and deterministic: derived from the Pydantic model definition,
+    so the same call always returns the same shape.
     """
     return ResolvedAgentConfig.model_json_schema()

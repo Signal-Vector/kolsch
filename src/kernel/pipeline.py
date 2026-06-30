@@ -1,27 +1,28 @@
-"""``resolve_and_validate`` — the orchestrated pipeline (spec §4.1).
+"""`resolve_and_validate` — the orchestrated config-resolution pipeline.
 
-Flow:
+Drives the full Layer 1 -> resolve -> Layer 1 -> Layer 3 -> Layer 2
+flow:
 
-1. Layer 1 on each partial. Per-partial Layer 1 fails fast (§I7) — a
+1. Layer 1 on each partial. Per-partial Layer 1 fails fast — a
    malformed partial is rejected before merging is attempted. Errors
    across partials are still aggregated within this step so the user
    sees every malformed partial at once.
-2. Same-version check (§I8). All partials with a ``schema_version``
-   field must agree.
-3. Merge via :func:`kernel.resolver.resolve`.
+2. Same-version check. All partials with a `schema_version` field
+   must agree.
+3. Merge via [`resolve`][kernel.resolver.resolve].
 4. Layer 1 on the resolved dict (required fields enforced).
-5. Layer 3 — for each entry in ``resolved.subsystems``, look up
-   ``subsystem_validators[name][variant]`` and call it on the entry's
-   ``config`` body. Unknown variants produce ``unknown_variant``
+5. Layer 3 — for each entry in `resolved.subsystems`, look up
+   `subsystem_validators[name][variant]` and call it on the entry's
+   `config` body. Unknown variants produce `unknown_variant`
    findings. Validators that raise are contained as
-   ``validator_internal_error`` (§I7 + Open Item §7).
-6. Layer 2 — call each ``system_validator`` with the resolved dict.
+   `validator_internal_error`.
+6. Layer 2 — call each `system_validator` with the resolved dict.
    Same containment for raises.
-7. Return — construct and return :class:`ResolvedAgentConfig`.
+7. Return — construct and return `ResolvedAgentConfig`.
 
 On any errors anywhere in steps 1, 2, 4-6 the pipeline raises
-:class:`errors.ConfigInvalid` with the aggregated findings (as plain
-dicts) inside ``detail.validation_errors``.
+`ConfigInvalid` with the aggregated findings (as plain dicts) inside
+`detail.validation_errors`.
 """
 
 from __future__ import annotations
@@ -38,7 +39,7 @@ _WHERE_PIPELINE = "kernel.resolver.validate"
 
 
 def _raise(errors: list[ValidationError]) -> None:
-    """Convert aggregated findings into a :class:`ConfigInvalid` raise."""
+    """Convert aggregated findings into a `ConfigInvalid` raise."""
     payload = [e.model_dump(mode="json") for e in errors]
     raise ConfigInvalid(validation_errors=payload, where=_WHERE_PIPELINE)
 
@@ -51,10 +52,10 @@ def _safe_call(
     source: str,
     path: str,
 ) -> ValidationResult:
-    """Run ``validator(value)``; contain raises as findings (§I7, Open §7).
+    """Run `validator(value)`; contain raises as findings.
 
     A validator that raises is misbehaving — the kernel turns the
-    failure into a ``validator_internal_error`` finding so other
+    failure into a `validator_internal_error` finding so other
     validators still run and the user sees every issue at once.
     """
     try:
@@ -77,7 +78,7 @@ def _safe_call(
 def _check_schema_versions(
     partials: list[dict[str, Any]],
 ) -> list[ValidationError]:
-    """Per §I8: every partial that carries a ``schema_version`` must agree."""
+    """Every partial that carries a `schema_version` must agree."""
     declared = [
         (i, p["schema_version"])
         for i, p in enumerate(partials)
@@ -110,25 +111,25 @@ def resolve_and_validate(
     subsystem_validators: dict[str, dict[str, ConfigValidator]],
     system_validators: list[ConfigValidator] | None = None,
 ) -> ResolvedAgentConfig:
-    """Full Layer 1 → resolve → Layer 1 → Layer 3 → Layer 2 pipeline.
+    """Run the full Layer 1 -> resolve -> Layer 1 -> Layer 3 -> Layer 2 pipeline.
 
-    See module docstring for the step-by-step.
+    See the module docstring for the step-by-step.
 
     Args:
-        partials: ordered list of partial configs (dicts).
-        subsystem_validators: ``{subsystem_name: {variant: validator}}``.
-            Looked up per resolved-subsystem entry; missing keys produce
-            ``unknown_variant`` findings.
-        system_validators: optional Layer 2 validators, each invoked on
-            the full resolved dict.
+        partials: Ordered list of partial configs.
+        subsystem_validators: `{subsystem_name: {variant: validator}}`.
+            Looked up per resolved-subsystem entry; missing keys
+            produce `unknown_variant` findings.
+        system_validators: Optional Layer 2 validators, each invoked
+            on the full resolved dict.
 
     Returns:
-        The validated :class:`ResolvedAgentConfig`.
+        The validated `ResolvedAgentConfig`.
 
     Raises:
-        ConfigInvalid: if any error is found at any layer (aggregated
-            across layers per §I7, with the per-partial Layer 1 step
-            failing fast before the merge is attempted).
+        ConfigInvalid: Any error found at any layer (aggregated across
+            layers, with the per-partial Layer 1 step failing fast
+            before the merge is attempted).
     """
     system_validators = system_validators or []
 
@@ -208,7 +209,6 @@ def resolve_and_validate(
         _raise(aggregated)
 
     # --- Step 7: construct and return ----------------------------------
-    # The resolved dict already passed validate_resolved (§I6); this
-    # second construction is the cheapest way to surface the typed
-    # model.
+    # The resolved dict already passed validate_resolved; this second
+    # construction is the cheapest way to surface the typed model.
     return ResolvedAgentConfig.model_validate(resolved)

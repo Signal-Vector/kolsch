@@ -1,16 +1,16 @@
-"""Partial-shape Pydantic models — spec §2 + §4.1 step 1.
+"""Partial-shape Pydantic models used by Layer 1 validation.
 
 Layer 1 runs on partials (every field optional) AND on the resolved
 config (required fields enforced). The resolved schema lives in
-:mod:`schemas.config`; the partial counterparts here mirror it with
-every field made optional so a partial declaring only ``model`` (or
-only ``subsystems.memory.config``) passes validation.
+`schemas.config`; the partial counterparts here mirror it with every
+field made optional so a partial declaring only `model` (or only
+`subsystems.memory.config`) passes validation.
 
-We deliberately do NOT use Pydantic's ``model_construct`` or build
+We deliberately do NOT use Pydantic's `model_construct` or build
 "deep partial" types programmatically — explicit Partial classes keep
-the structural contract obvious to readers and make ``extra="forbid"``
-inheritance clear (spec Open Item §1: top-level + known sub-types
-forbid unknown fields; open-map fields accept anything).
+the structural contract obvious to readers and make `extra="forbid"`
+inheritance clear: the top-level and known sub-types forbid unknown
+fields, while open-map fields accept anything.
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ _PARTIAL_EXTENDS_PREFIXES = ("kolsch:", "workspace:")
 
 
 class PartialModelSpec(BaseModel):
-    """Partial counterpart of :class:`schemas.ModelSpec` — §A.4."""
+    """Partial counterpart of `schemas.ModelSpec`."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -40,7 +40,7 @@ class PartialModelSpec(BaseModel):
 
 
 class PartialIOSpec(BaseModel):
-    """Partial counterpart of :class:`schemas.IOSpec` — §A.5."""
+    """Partial counterpart of `schemas.IOSpec`."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -50,9 +50,9 @@ class PartialIOSpec(BaseModel):
 
 
 class PartialSubsystemConfig(BaseModel):
-    """Partial counterpart of :class:`schemas.SubsystemConfig` — §A.7.
+    """Partial counterpart of `schemas.SubsystemConfig`.
 
-    Both ``variant`` and ``config`` may be omitted in a partial since a
+    Both `variant` and `config` may be omitted in a partial since a
     lower or higher layer may supply them. The resolved-level model
     enforces both as required.
     """
@@ -64,7 +64,7 @@ class PartialSubsystemConfig(BaseModel):
 
 
 class PartialRuntimeSpec(BaseModel):
-    """Partial counterpart of :class:`schemas.RuntimeSpec`."""
+    """Partial counterpart of `schemas.RuntimeSpec`."""
 
     model_config = ConfigDict(extra="forbid")
 
@@ -75,13 +75,17 @@ class PartialRuntimeSpec(BaseModel):
 class PartialAgentConfig(BaseModel):
     """The Layer 1 partial type — every field optional.
 
-    Used by :func:`kernel.validation.validate_partial`. Matches
-    :class:`schemas.ResolvedAgentConfig` field-for-field but with each
-    field made ``T | None`` and a default of ``None`` so any subset of
-    fields constitutes a valid partial.
+    Used by
+    [`validate_partial`][kernel.validation.validate_partial]. Matches
+    `schemas.ResolvedAgentConfig` field-for-field but with each field
+    made `T | None` and a default of `None` so any subset of fields
+    constitutes a valid partial.
 
-    ``extra="forbid"`` rejects unknown top-level fields (spec Open
-    Item §1 recommendation, confirmed for v1).
+    `extra="forbid"` rejects unknown top-level fields. The
+    `extends:` and `context_files` fields run their respective
+    resolved-schema prefix validators during Layer 1 resolution
+    (Pydantic short-circuits on construction) so a malformed prefix
+    surfaces in `validate_partial` rather than later in the pipeline.
     """
 
     model_config = ConfigDict(extra="forbid")
@@ -96,10 +100,6 @@ class PartialAgentConfig(BaseModel):
     io: PartialIOSpec | None = None
     subsystems: dict[str, PartialSubsystemConfig] | None = None
     runtime: PartialRuntimeSpec | None = None
-    # Phase 2.2 envelope additions — §A.11. The resolved schema's
-    # `_validate_extends_prefix` and `ContextFileSpec._validate_prefix`
-    # run during Layer 1 resolution (Pydantic short-circuits on
-    # construction) so a malformed prefix surfaces in `validate_partial`.
     extends: str | None = None
     permissions: list[PermissionRule] | None = None
     context_files: list[ContextFileSpec] | None = None
@@ -107,9 +107,8 @@ class PartialAgentConfig(BaseModel):
     @field_validator("extends")
     @classmethod
     def _validate_extends_prefix(cls, value: str | None) -> str | None:
-        # Permissive — accepts all four ref forms per
-        # qol-prefix-defaults-and-unified-refs.md (mirrors the
-        # resolved schema's validator). The resolver decides.
+        # Permissive — accepts all four ref forms (mirrors the resolved
+        # schema's validator). The resolver decides which form wins.
         if value is None:
             return value
         if not isinstance(value, str) or not value:
