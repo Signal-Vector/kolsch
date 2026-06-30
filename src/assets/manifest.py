@@ -1,9 +1,8 @@
-"""Bundle manifest model — spec §2.2.
+"""Bundle manifest model — loading and structural validation.
 
-Loading + structural validation of ``bundle.yaml``. Higher-level
-catalog rules (name/directory mismatch, duplicate names, reserved
-``core`` name) live in :mod:`assets.catalog`; this module focuses on
-the per-bundle shape.
+Higher-level catalog rules (name/directory mismatch, duplicate names,
+reserved `core` name) live in `assets.catalog`; this module focuses
+on the per-bundle shape.
 """
 
 from __future__ import annotations
@@ -19,22 +18,21 @@ from schemas import PermissionRule
 if TYPE_CHECKING:
     from pathlib import Path
 
-# Spec §2.2: lowercase alphanumeric, hyphens, underscores.
+# Lowercase alphanumeric, hyphens, underscores.
 _NAME_PATTERN = re.compile(r"^[a-z0-9][a-z0-9_-]*$")
 
 
 class BundleManifest(BaseModel):
-    """The parsed ``bundle.yaml`` contents — spec §2.2 + Module API §2.2.
+    """The parsed `bundle.yaml` contents.
 
-    ``path`` is the absolute path to the bundle directory; filled in by
-    the catalog scanner after a successful load.
-
-    ``permissions`` (qol-tool-permission-discovery-uniform-with-stacking.md
-    Step 2) is the bundle-wide authz rule list — same shape as
-    ``platform.yaml:authorization.config.rules`` and the agent-level
-    ``permissions:`` field on :class:`schemas.ResolvedAgentConfig`. The
-    authz provider walks rules in priority order — agent first, then
-    bundle, then platform, then no-rule callback, then default deny.
+    `path` is the absolute path to the bundle directory, filled in by
+    the catalog scanner after a successful load. `permissions` is the
+    bundle-wide authz rule list — same shape as
+    `platform.yaml:authorization.config.rules` and the agent-level
+    `permissions:` field on
+    [`ResolvedAgentConfig`][schemas.ResolvedAgentConfig]. The authz
+    provider walks rules in priority order: agent first, then bundle,
+    then platform, then no-rule callback, then default deny.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -45,8 +43,8 @@ class BundleManifest(BaseModel):
     required_env_vars: list[str] = Field(default_factory=list)
     dependencies: list[str] = Field(default_factory=list)
     permissions: list[PermissionRule] = Field(default_factory=list)
-    # Phase 3.0 Step 3 — auto-discovery opt-out list. Entries are
-    # paths relative to the bundle root (e.g. ``"nodes/draft_echo.py"``,
+    # Auto-discovery opt-out list. Entries are paths relative to the
+    # bundle root (e.g. ``"nodes/draft_echo.py"``,
     # ``"workflows/wip.yaml"``). Listed files are skipped during
     # workflow/node discovery; tools / agents / skills scanners do not
     # currently consult this list. Used for in-progress drafts,
@@ -56,11 +54,19 @@ class BundleManifest(BaseModel):
 
 
 def load_manifest(bundle_dir: Path) -> BundleManifest | None:
-    """Return the parsed manifest, or ``None`` if the file is missing.
+    """Return the parsed manifest, or `None` when the file is missing.
 
     Malformed manifests (YAML errors, schema errors) also return
-    ``None`` — the caller decides whether to skip with a warning or
-    treat as fatal. Spec §4.1 step 2 says "skip with warning."
+    `None` — the caller decides whether to skip with a warning or
+    treat as fatal. The catalog scanner's documented behavior is
+    "skip with warning."
+
+    Args:
+        bundle_dir: The bundle's directory under `bundles/`.
+
+    Returns:
+        The parsed [`BundleManifest`][assets.BundleManifest], or
+        `None` when the file is absent or unparseable.
     """
     path = bundle_dir / "bundle.yaml"
     if not path.exists():
@@ -79,5 +85,9 @@ def load_manifest(bundle_dir: Path) -> BundleManifest | None:
 
 
 def is_valid_bundle_name(name: str) -> bool:
-    """Spec §2.2 — name must be lowercase alphanumeric + hyphens/underscores."""
+    """Return `True` when `name` matches the bundle-name grammar.
+
+    The grammar is lowercase alphanumeric with hyphens and underscores
+    permitted after the leading character.
+    """
     return bool(_NAME_PATTERN.fullmatch(name))

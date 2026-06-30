@@ -1,11 +1,12 @@
-"""platform.yaml loading + first-run defaults — spec §3.2 + §3.10.
+"""`platform.yaml` loading and first-run defaults.
 
-Asset Management is the platform-bootstrap module (Am-I11): no other
-module reads ``platform.yaml`` directly. This module provides:
+Asset Management is the platform-bootstrap module: no other module
+reads `platform.yaml` directly. This file provides:
 
 - Default generation for first-run (no file present).
-- YAML load + structural validation (the top-level must be a mapping).
-- A section dict accessor consumed by every subsystem at its own
+- YAML load plus structural validation (the top level must be a
+  mapping).
+- A section-dict accessor consumed by every subsystem at its own
   initialisation.
 
 The exact per-section shape is owned by the consuming subsystem; this
@@ -26,9 +27,8 @@ if TYPE_CHECKING:
 
 _log = logging.getLogger("assets")
 
-# Valid section names per spec §3.10 (file_access included) + §3.2
-# (storage included). The accessor is permissive — unknown sections
-# raise ``KeyError`` per Module API Reference §2.2.
+# Valid section names. The accessor is permissive — unknown sections
+# raise ``KeyError`` rather than a PlatformError.
 _KNOWN_SECTIONS: frozenset[str] = frozenset(
     {
         "secrets",
@@ -39,15 +39,15 @@ _KNOWN_SECTIONS: frozenset[str] = frozenset(
         "file_access",
         "defaults",
         "logging",
-        # Phase 1.1 LLM Provider Configuration — patch §2.2.
+        # LLM provider configuration.
         "llm_providers",
         "model_aliases",
-        # Phase 2.2 (ENV-R2) — optional multi-line text describing the
-        # workspace's purpose. Surfaced in agent prompts via
-        # `{{ workspace.summary }}` and `{{ platform.workspace_summary }}`.
+        # Optional multi-line text describing the workspace's purpose.
+        # Surfaced in agent prompts via `{{ workspace.summary }}` and
+        # `{{ platform.workspace_summary }}`.
         "workspace_summary",
-        # Phase 3.11 §17.1 — meta-agent settings. The only knob today
-        # is ``target_bundle: <name>`` controlling which bundle the
+        # Meta-agent settings. The only knob today is
+        # ``target_bundle: <name>`` controlling which bundle the
         # ``author_workflow`` agent writes new files into. When the
         # key is absent, the agent's skill resolves the target to the
         # workspace's first non-``kolsch`` bundle (the primary user
@@ -60,13 +60,13 @@ _KNOWN_SECTIONS: frozenset[str] = frozenset(
 
 
 def default_platform_payload() -> dict[str, Any]:
-    """The first-run default ``platform.yaml`` payload.
+    """Return the first-run default `platform.yaml` payload.
 
-    Defaults follow spec §3.2 and require zero external services:
-    SQLite + in-process bus + dotenv secrets + native sandbox +
-    allow-all authorization. File-access defaults per File Handling
-    §4.1 (allow data/, bundles/, sessions/, content/, logs/,
-    platform.yaml; deny .env and .platform/).
+    The defaults require zero external services: SQLite + in-process
+    bus + dotenv secrets + native sandbox + allow-all authorization.
+    File-access defaults allow `data/`, `bundles/`, `sessions/`,
+    `content/`, `logs/`, and `platform.yaml`; they deny `.env` and
+    `.platform/`.
     """
     return {
         "secrets": {"variant": "dotenv", "config": {"path": ".env"}},
@@ -112,11 +112,17 @@ def default_platform_payload() -> dict[str, Any]:
 
 
 def load_or_create(root: Path) -> dict[str, Any]:
-    """Return the parsed ``platform.yaml``; generate defaults on first run.
+    """Return the parsed `platform.yaml`, generating defaults on first run.
 
-    Spec §3.10 + Module API Reference §2.1:
-    - Missing file → write the defaults and return them (TC-ASM-12).
-    - Present but malformed → ``ConfigInvalid``.
+    Args:
+        root: The platform root.
+
+    Returns:
+        The parsed top-level mapping. When the file was absent at
+        call time, the defaults are written to disk and returned.
+
+    Raises:
+        ConfigInvalid: The file is present but malformed.
     """
     path = root / "platform.yaml"
     if not path.exists():
@@ -170,15 +176,17 @@ def _load_existing(path: Path) -> dict[str, Any]:
 
 
 def _validate_section_shape(payload: dict[str, Any]) -> None:
-    """Each declared section must itself be a mapping (with two
-    Phase 2.2 exceptions: ``workspace_summary`` is a string;
-    ``model_aliases`` is a flat alias→ref string map but happens
-    to satisfy mapping shape already)."""
+    """Validate that each declared section is a mapping.
+
+    Two exceptions: `workspace_summary` is a string, and
+    `model_aliases` is a flat alias-to-ref string map (which still
+    satisfies the mapping check).
+    """
     errors: list[dict[str, Any]] = []
     for key, value in payload.items():
-        # Phase 2.2 (ENV-R2) — workspace_summary is a string, not a
-        # mapping. Skip the shape check; downstream consumers treat
-        # any non-string as None.
+        # workspace_summary is a string, not a mapping. Skip the
+        # shape check; downstream consumers treat any non-string as
+        # None.
         if key == "workspace_summary":
             continue
         if not isinstance(value, dict):
@@ -206,5 +214,5 @@ def _write_yaml(path: Path, payload: dict[str, Any]) -> None:
 
 
 def is_known_section(name: str) -> bool:
-    """Return True if ``name`` is one of the documented sections."""
+    """Return `True` when `name` is one of the documented sections."""
     return name in _KNOWN_SECTIONS

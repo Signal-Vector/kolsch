@@ -1,12 +1,12 @@
-"""SKILL.md frontmatter parsing — Skills subsystem §3.3 + Asset Mgmt §4.3.
+"""`SKILL.md` frontmatter parsing.
 
 Skills use the Agent Skills standard: a `SKILL.md` with YAML
-frontmatter delimited by ``---`` lines, followed by the skill body.
+frontmatter delimited by `---` lines, followed by the skill body.
 
 This module parses the frontmatter only; the body is loaded lazily
 by the engine when a skill is force-invoked or model-read. Catalog
-build never loads the body (Am-I10 + spec §4.3 "body NOT parsed at
-catalog build").
+build never loads the body — the catalog scan is read-only with
+respect to skill content.
 """
 
 from __future__ import annotations
@@ -24,14 +24,21 @@ _FRONTMATTER_DELIMITER = "---"
 def parse_skill_frontmatter(skill_md: Path) -> dict[str, Any]:
     """Return the parsed YAML frontmatter as a dict.
 
-    Skills spec keys land verbatim; ``disable-model-invocation`` is
-    canonicalised to ``disable_model_invocation`` so callers can
+    Skills spec keys land verbatim; `disable-model-invocation` is
+    canonicalised to `disable_model_invocation` so callers can
     consume it as a Python attribute name without per-key special
-    casing.
+    casing. Missing or malformed frontmatter returns `{}` — the
+    catalog treats that as "skill present but unusable"; the Skills
+    subsystem's Layer 3 validator surfaces the per-skill error at
+    agent execute time.
 
-    Missing or malformed frontmatter returns ``{}`` (the catalog
-    treats that as "skill present but unusable" — Skills' Layer 3
-    validator surfaces the per-skill error at agent execute).
+    Args:
+        skill_md: Filesystem path to the skill's `SKILL.md`.
+
+    Returns:
+        The parsed frontmatter mapping, or `{}` when the file is
+        absent, the delimiter is missing, or the YAML body fails to
+        parse.
     """
     if not skill_md.exists():
         return {}

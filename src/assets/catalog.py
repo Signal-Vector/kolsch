@@ -1,15 +1,14 @@
-"""Asset catalog — spec §4.
+"""Asset catalog — the in-memory record of every bundle and asset.
 
-Builds and holds the in-memory record of every bundle + every asset
-on disk. Read-only with respect to the filesystem (Am-I10): scans
-directories, parses YAML, reads SKILL.md frontmatter; never imports
-tool Python or executes asset code.
+Read-only with respect to the filesystem: scans directories, parses
+YAML, reads `SKILL.md` frontmatter; never imports tool Python or
+executes asset code.
 
-Public surface:
-
-- :class:`AssetEntry` — one row per asset.
-- :class:`AssetCatalog` — the collection + lookup helpers.
-- :func:`scan` — build the catalog from a platform root.
+- [`AssetEntry`][assets.AssetEntry] — one row per asset.
+- [`AssetCatalog`][assets.AssetCatalog] — the collection and lookup
+  helpers.
+- [`scan`][assets.catalog.scan] — build the catalog from a platform
+  root.
 """
 
 from __future__ import annotations
@@ -41,7 +40,7 @@ _ASSET_TYPES: frozenset[str] = frozenset(
 
 
 class AssetEntry(BaseModel):
-    """One catalogued asset — spec §4.2."""
+    """One catalogued asset — bundle, ref, type, and on-disk path."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -53,17 +52,16 @@ class AssetEntry(BaseModel):
 
 
 class AssetCatalog(BaseModel):
-    """Built once at startup; immutable thereafter (Am-I7).
+    """Built once at startup; immutable thereafter.
 
-    Phase 3.0 Step 1 (Round 5 H3) — :meth:`lookup` is the chokepoint
-    for **external** catalog reads. Direct ``catalog.assets[ref]``
-    subscript access is permitted ONLY inside this module; all
-    other call sites (``src/workflows/*``, ``src/providers/authz.py``,
-    ``src/cli/*``, ``src/assets/asset_manager.py``, etc.) route
-    through ``catalog.lookup(ref, expected_type=...)``. A custom
-    ruff lint rule (queued, see ``process/qol-refs-1seg-removal.md``)
-    will enforce this on future commits; for now the discipline is
-    documentary + reviewer-grep enforced.
+    [`lookup`][assets.AssetCatalog.lookup] is the chokepoint for
+    **external** catalog reads. Direct `catalog.assets[ref]` subscript
+    access is permitted ONLY inside this module; every other call
+    site (`src/workflows/*`, `src/providers/authz.py`, `src/cli/*`,
+    `src/assets/asset_manager.py`, and so on) routes through
+    `catalog.lookup(ref, expected_type=...)`. A custom ruff rule is
+    queued to mechanically enforce this; until then the discipline is
+    reviewer-grep enforced.
     """
 
     model_config = ConfigDict(frozen=False, extra="forbid")
@@ -74,30 +72,29 @@ class AssetCatalog(BaseModel):
     def lookup(
         self, ref: str, expected_type: str | None = None
     ) -> AssetEntry | None:
-        """Resolve a 3-segment ref to its :class:`AssetEntry`, or ``None``.
+        """Resolve a 3-segment ref to its [`AssetEntry`][assets.AssetEntry].
 
-        Phase 3.0 Step 1 (Round 5 H3) — the documented chokepoint for
-        catalog access. Combines shape validation (via
-        :func:`assets.refs.parse_three_segment`) and dict-get into one
-        well-typed call. ``None`` is returned in every "not found"
-        scenario so callers can write
-        ``entry = catalog.lookup(ref, expected_type="agent")``
-        and check truthiness without juggling multiple exception
-        classes:
+        The documented chokepoint for catalog access. Combines shape
+        validation (via
+        [`parse_three_segment`][assets.refs.parse_three_segment]) and
+        dict-get into one well-typed call. `None` is returned in
+        every "not found" scenario so callers can write
+        `entry = catalog.lookup(ref, expected_type="agent")` and
+        check truthiness without juggling exception classes:
 
-        - ``ref`` is not a 3-seg string → ``None`` (shape miss).
-        - ``ref`` shape is valid but the catalog has no entry → ``None``.
-        - ``ref`` resolves but its ``asset_type`` differs from
-          ``expected_type`` → ``None``.
+        - `ref` is not a 3-seg string → `None` (shape miss).
+        - `ref` shape is valid but the catalog has no entry → `None`.
+        - `ref` resolves but its `asset_type` differs from
+          `expected_type` → `None`.
 
         Args:
-            ref: 3-segment catalog ref (``<bundle>/<plural>/<name>``).
-            expected_type: optional singular asset type guard
-                (``tool``/``skill``/``agent``/``prompt``/``workflow``/
-                ``node``).
+            ref: 3-segment catalog ref (`<bundle>/<plural>/<name>`).
+            expected_type: Optional singular asset type guard
+                (`tool` / `skill` / `agent` / `prompt` / `workflow` /
+                `node`).
 
         Returns:
-            The matching :class:`AssetEntry` or ``None``.
+            The matching [`AssetEntry`][assets.AssetEntry], or `None`.
         """
         try:
             parse_three_segment(ref)
@@ -112,18 +109,31 @@ class AssetCatalog(BaseModel):
 
 
 def scan(root: Path) -> AssetCatalog:
-    """Walk ``root/bundles/`` and build the catalog.
+    """Walk `root/bundles/` and build the catalog.
+
+    Bundles with missing or malformed `bundle.yaml` are skipped with
+    a warning rather than aborting the scan; structural integrity
+    failures across bundles (duplicate names, name/directory
+    mismatches) abort with the matching `AssetsError` so the platform
+    fails loud at startup.
+
+    Args:
+        root: The platform root (workspace directory containing
+            `bundles/`).
+
+    Returns:
+        The fully built [`AssetCatalog`][assets.AssetCatalog]. An
+        empty catalog when `bundles/` is absent.
 
     Raises:
-        AssetsDuplicateBundleName: two bundles share a manifest name
-            (Am-I2). Detected BEFORE the directory-name match check
-            so a same-named pair surfaces as a duplicate rather than
-            the first-encountered mismatch.
-        AssetsBundleNameMismatch: a manifest's ``name`` does not
-            match its directory (Am-I1).
-
-    Bundles with missing/malformed ``bundle.yaml`` are skipped with
-    a warning (spec §4.1 step 2).
+        AssetsDuplicateBundleName: Two bundles share a manifest name.
+            Detected BEFORE the directory-name match check so a
+            same-named pair surfaces as a duplicate rather than the
+            first-encountered mismatch.
+        AssetsBundleNameMismatch: A manifest's `name` does not match
+            its directory.
+        AssetsDuplicateName: Two assets inside one bundle share a
+            `<bundle>/<name>` pair across asset types.
     """
     bundles_dir = root / "bundles"
     if not bundles_dir.exists():
@@ -150,7 +160,7 @@ def scan(root: Path) -> AssetCatalog:
             continue
         raw.append((bundle_dir, manifest))
 
-    # --- Pass 2: duplicate-name detection (Am-I2) ----------------------
+    # --- Pass 2: duplicate-name detection ------------------------------
     by_name: dict[str, list[str]] = {}
     for _, manifest in raw:
         by_name.setdefault(manifest.name, []).append(manifest.path)
@@ -159,7 +169,7 @@ def scan(root: Path) -> AssetCatalog:
         name = next(iter(duplicates))
         raise AssetsDuplicateBundleName(name=name, paths=duplicates[name])
 
-    # --- Pass 3: name == directory match (Am-I1) -----------------------
+    # --- Pass 3: name == directory match -------------------------------
     for bundle_dir, manifest in raw:
         if manifest.name != bundle_dir.name:
             raise AssetsBundleNameMismatch(
@@ -168,15 +178,13 @@ def scan(root: Path) -> AssetCatalog:
             )
 
     # --- Pass 4: build asset entries + uniqueness check ---------------
-    # Under the new 2-segment ref convention
-    # (qol-prefix-defaults-and-unified-refs.md), `<bundle>/<name>`
-    # must resolve to a unique catalog entry. A bundle that ships
-    # both `agents/butler.yaml` and `tools/butler.py` cannot
-    # disambiguate which one `<bundle>/butler` means; surface the
-    # collision at catalog scan time so the failure is loud and
+    # `<bundle>/<name>` must resolve to a unique catalog entry. A
+    # bundle that ships both `agents/butler.yaml` and `tools/butler.py`
+    # cannot disambiguate which one `<bundle>/butler` means; surface
+    # the collision at catalog scan time so the failure is loud and
     # early. This check is independent of the existing full-ref
-    # dedup (which keys on `<bundle>/<plural>/<name>` and won't
-    # catch cross-type collisions within a bundle).
+    # dedup (which keys on `<bundle>/<plural>/<name>` and won't catch
+    # cross-type collisions within a bundle).
     manifests: dict[str, BundleManifest] = {m.name: m for _, m in raw}
     assets: dict[str, AssetEntry] = {}
     by_bundle_name: dict[tuple[str, str], list[str]] = {}
@@ -197,15 +205,15 @@ def scan(root: Path) -> AssetCatalog:
 
 
 def _register_builtin_nodes(assets: dict[str, AssetEntry]) -> None:
-    """Phase 3.0 Step 3 — inject the 14 reserved
-    ``kolsch/nodes/<name>`` virtual built-in entries.
+    """Inject the reserved `kolsch/nodes/<name>` virtual built-in entries.
 
-    Registered unconditionally so :meth:`AssetCatalog.lookup` resolves
-    ``kolsch/nodes/bash`` uniformly with authored Python-node refs.
+    Registered unconditionally so
+    [`AssetCatalog.lookup`][assets.AssetCatalog.lookup] resolves
+    `kolsch/nodes/bash` uniformly with authored Python-node refs.
     User-authored files at these slots already raised
-    :class:`workflows.errors.WorkflowBuiltinShadowed` inside
-    ``discover_nodes`` during Pass 4; reaching this point means there
-    are no on-disk collisions to deconflict.
+    [`WorkflowBuiltinShadowed`][workflows.errors.WorkflowBuiltinShadowed]
+    inside `discover_nodes` during Pass 4; reaching this point means
+    there are no on-disk collisions to deconflict.
     """
     from workflows.catalog import builtin_node_entries  # noqa: PLC0415
 
@@ -216,11 +224,11 @@ def _register_builtin_nodes(assets: dict[str, AssetEntry]) -> None:
 def _scan_bundle_assets(manifest: BundleManifest) -> list[AssetEntry]:
     """Walk a bundle's six asset subdirectories and produce entries.
 
-    Phase 3.0 Step 3 adds ``workflows/`` and ``nodes/`` via
-    :mod:`workflows.catalog`. Local import (PLC0415-disabled at
-    the call site) keeps the dependency one-way — the workflows
-    package depends on assets.catalog for the :class:`AssetEntry`
-    shape; the reverse edge would create an import cycle.
+    Local import of `workflows.catalog` (PLC0415-disabled at the call
+    site) keeps the dependency one-way — the workflows package
+    depends on `assets.catalog` for the
+    [`AssetEntry`][assets.AssetEntry] shape; the reverse edge would
+    create an import cycle.
     """
     from workflows.catalog import (  # noqa: PLC0415
         discover_nodes,
@@ -245,13 +253,14 @@ def _scan_tools(bundle: str, bundle_dir: Path) -> list[AssetEntry]:
     out: list[AssetEntry] = []
     for path in sorted(tools_dir.glob("*.py")):
         stem = path.stem
-        # Spec §4.3: the catalog entry's ref segment is intended to
-        # be the @tool decorator's `name`. Without importing the
-        # Python file (Am-I10) we cannot read the decorator; v1 uses
-        # the filename stem as the ref segment. A single file with
-        # multiple @tool decorators surfaces a single catalog entry
-        # for the file; the Tools subsystem (which DOES import at
-        # registration time) expands per-decorator at that point.
+        # The catalog entry's ref segment is intended to be the
+        # @tool decorator's `name`. Without importing the Python
+        # file (catalog scan must not execute asset code) we cannot
+        # read the decorator; v1 uses the filename stem as the ref
+        # segment. A single file with multiple @tool decorators
+        # surfaces a single catalog entry for the file; the Tools
+        # subsystem (which DOES import at registration time)
+        # expands per-decorator at that point.
         out.append(
             AssetEntry(
                 ref=build_ref(bundle, "tool", stem),
@@ -261,12 +270,10 @@ def _scan_tools(bundle: str, bundle_dir: Path) -> list[AssetEntry]:
                 metadata={},
             )
         )
-    # Bug-engine-tools-wiring-gap.md Step B Task 3 — emit one
-    # diagnostic INFO line per bundle scanned so ``kolsch run -v``
-    # surfaces tool discovery (the absence of this line in the
-    # user's repro was Check #2 of the ground-truth investigation).
-    # Empty tools/ dirs stay silent to keep the log clean for
-    # bundles that don't ship tools.
+    # Emit one diagnostic INFO line per bundle scanned so
+    # ``kolsch run -v`` surfaces tool discovery. Empty tools/ dirs
+    # stay silent to keep the log clean for bundles that don't ship
+    # tools.
     if out:
         _log.info(
             "catalog: registered %d tools from bundles/%s/tools/",
@@ -344,5 +351,5 @@ def _scan_prompts(bundle: str, bundle_dir: Path) -> list[AssetEntry]:
 
 
 def known_asset_types() -> frozenset[str]:
-    """Spec §4.3 — the four catalogued asset types."""
+    """Return the set of catalogued asset-type strings."""
     return _ASSET_TYPES
