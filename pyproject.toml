@@ -230,14 +230,21 @@ select = [
     "PL",   # pylint subset
     "TRY",  # tryceratops
     "RUF",
+    "D",    # pydocstyle (Google-style docstrings) — see docs/process/documentation-conventions.md
 ]
 ignore = [
     "COM812",  # conflicts with ruff format
     "ISC001",  # conflicts with ruff format
+    "D107",    # __init__ docstring not required separately —
+               # conventions doc rule: document the class, not its __init__
 ]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = [
+    "D",       # tests are loose — docstrings optional
     "S101",    # asserts are the whole point in tests
     "ANN",     # tests don't need exhaustive annotations on every helper
     "PLR2004", # magic numbers are fine in tests
@@ -350,6 +357,9 @@ ignore = [
     # typed via a forward reference inside TYPE_CHECKING.
     "ANN401",
 ]
+# Package-level docstring optional — each module under the package
+# carries its own docstring, which is where the contract lives.
+"src/**/__init__.py" = ["D104"]
 
 [tool.ruff.lint.flake8-annotations]
 mypy-init-return = true
