@@ -1,18 +1,17 @@
-"""``read_file`` — read a UTF-8 text file by line range.
+"""`read_file` — read a UTF-8 text file by line range.
 
-This file IS the tool. It ships at ``<workspace>/bundles/kolsch/tools/``
-when ``kolsch setup`` runs and is discovered + registered by the Tools
-subsystem's standard bundle-tool path (importlib + ``@tool`` attribute
+This file IS the tool. It ships at `<workspace>/bundles/kolsch/tools/`
+when `kolsch setup` runs and is discovered + registered by the Tools
+subsystem's standard bundle-tool path (importlib + `@tool` attribute
 scan). Edit, copy, or swap freely.
 
-Per AGENTS.md hard rule (TOOL-R10): there is no hidden builtin
-registry — this file is the source of truth for what ``read_file``
-does. Future contributors adding a fifth tool follow the same shape:
-a Pydantic args model, an ``@tool``-decorated coroutine, the
-typed-error raises this file demonstrates.
-
-Spec: docs/process/phase2.0-tools-specs.md §1.1 +
-process/qol-tool-output-truncation-and-persistence.md §9.
+There is no hidden builtin registry — this file is the source of
+truth for what `read_file` does. Future contributors adding a fifth
+tool follow the same shape: a Pydantic args model, an
+`@tool`-decorated coroutine, the typed-error raises this file
+demonstrates. See the
+[tools subsystem](../../../../docs/explanation/tools-subsystem.md)
+for the discovery + dispatch contract.
 """
 
 from __future__ import annotations
@@ -36,6 +35,8 @@ _DEFAULT_MAX_BYTES = 1 * 1024 * 1024  # 1 MiB — single-line cap
 
 
 class ReadFileArgs(BaseModel):
+    """Argument schema for the `read_file` tool."""
+
     path: str = Field(
         description=(
             "Path to the file to read. Workspace-relative "
@@ -113,21 +114,24 @@ class ReadFileArgs(BaseModel):
     args_schema=ReadFileArgs,
 )
 async def read_file(args: ReadFileArgs, ctx: ToolContext) -> dict[str, Any]:
-    """Read ``args.path`` and return a paginated, numbered view.
+    """Read `args.path` and return a paginated, numbered view.
 
-    :returns: ``{content, lines_returned, total_lines, next_offset,
-        truncated}``. ``content`` is the requested slice rendered as
-        ``"<N>\\t<line>\\n"`` rows.
-    :raises file.access_denied: path resolves outside the allowed scope.
-    :raises file.line_too_long: a single line exceeds ``args.max_bytes``.
-    :raises file.not_found: path does not exist.
+    Returns:
+        `{content, lines_returned, total_lines, next_offset,
+        truncated}`. `content` is the requested slice rendered as
+        `"<N>\\t<line>\\n"` rows.
+
+    Raises:
+        FileAccessDenied: Path resolves outside the allowed scope.
+        FileLineTooLong: A single line exceeds `args.max_bytes`.
+        FileNotFound: Path does not exist.
     """
     if ctx.path_policy is None or ctx.workspace_root is None:
         msg = (
             "read_file requires the platform to populate ctx.path_policy "
             "and ctx.workspace_root; the running ToolsSubsystem appears "
             "to have been constructed without them. See "
-            "docs/explanation/tools-subsystem.md §4.5."
+            "docs/explanation/tools-subsystem.md."
         )
         raise ToolExecutionFailed(
             tool_name="read_file", error_class="RuntimeError"

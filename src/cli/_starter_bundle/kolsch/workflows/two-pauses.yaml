@@ -1,4 +1,4 @@
-# Phase 3.4 fixture — sequential pause/resume.
+# Starter fixture — sequential pause/resume.
 #
 # An `ask1 → between → ask2 → done` pipeline that pauses TWICE.
 # Run-resume-run-resume cycle proves the JSONL spans THREE process

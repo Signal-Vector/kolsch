@@ -1,10 +1,10 @@
-# Phase 3.7 starter — map over a list with an agent worker.
+# Starter workflow — map over a list with an agent worker.
 #
 # A two-node fan-out: the ``classify_all`` map dispatches the
 # ``kolsch/agents/classifier`` agent once per ticket text in the
 # input list; ``count_urgent`` aggregates the results via a Jinja
-# expression (``| selectattr | list | length``) — the same Phase 3.6
-# compute recipe that subsumes the 8 reserved aggregation node types.
+# expression (``| selectattr | list | length``) — the canonical
+# compute recipe that subsumes the reserved aggregation node types.
 #
 # Run it with:
 #

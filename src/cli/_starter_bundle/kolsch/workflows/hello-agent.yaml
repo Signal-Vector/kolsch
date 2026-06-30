@@ -1,4 +1,4 @@
-# Phase 3.2 starter — workflow → agent end-to-end demo.
+# Starter workflow — workflow → agent end-to-end demo.
 #
 # A three-node `noop → bash → agent` pipeline that proves the
 # workflow→agent boundary works on a fresh workspace:
@@ -20,8 +20,8 @@
 # The spawned agent session's JSONL carries `spawned_by` on its
 # `session.opened` event pointing back to this run's
 # `workflow.node.started` event for `classify`; both JSONLs share the
-# same `trace_id`. See `docs/explanation/workflow-event-log.md` §11.6
-# for the cross-JSONL linkage shape.
+# same `trace_id`. See `docs/explanation/workflow-event-log.md` for
+# the cross-JSONL linkage shape.
 description: "Workflow → agent demo — bash node feeds a single-shot agent."
 
 nodes:

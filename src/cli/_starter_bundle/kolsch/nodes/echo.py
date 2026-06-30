@@ -1,10 +1,9 @@
-"""Starter authored-Python node — Phase 3.0 Step 7.
+"""Starter authored-Python node — the minimal `@node` template.
 
-The minimum-viable ``@node``-decorated module: a single ``run``
-function with a Pydantic input model, a Pydantic output model, and
-the ``@node`` decorator applied. The Phase 3.0 validator's §7.6
-introspection check passes against this shape; the Phase 3.1
-executor will invoke it.
+A single `run` function with a Pydantic input model, a Pydantic
+output model, and the `@node` decorator applied. The workflow
+validator's introspection check passes against this shape; the
+executor invokes it as a workflow node.
 
 This file is intentionally small. Authors copy it as a template for
 new nodes inside their own bundles.
@@ -35,7 +34,7 @@ async def run(inputs: EchoInputs, ctx: NodeContext) -> EchoOutputs:
 
     The starter node performs no I/O beyond the trivial passthrough;
     it exists so the workflow validator has a concrete
-    ``@node``-decorated module to introspect on a fresh workspace.
+    `@node`-decorated module to introspect on a fresh workspace.
     """
     _ = ctx
     return EchoOutputs(message=inputs.message)

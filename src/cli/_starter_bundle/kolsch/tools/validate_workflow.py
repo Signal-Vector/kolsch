@@ -1,19 +1,17 @@
-"""``validate_workflow`` — wrap the run-start gate into a callable tool.
+"""`validate_workflow` — wrap the run-start gate into a callable tool.
 
-Phase 3.11 §17.3 — the meta-agent's iteration loop calls this tool
-after every YAML draft. The tool loads the workflow file from disk,
-runs :func:`workflows.validator.validate_workflow` against it, and
-returns a structured :class:`ValidationOutput` carrying one
-:class:`ValidationFinding` per error/warning. The agent reads the
-finding's ``error_class`` + ``identifying_names`` and consults its
+The workflow-authoring agent's iteration loop calls this tool after
+every YAML draft. The tool loads the workflow file from disk, runs
+[`validate_workflow`][workflows.validator.validate_workflow] against
+it, and returns a structured `ValidationOutput` carrying one
+`ValidationFinding` per error/warning. The agent reads the
+finding's `error_class` and `identifying_names` and consults its
 skill's error-class table to plan the next revision.
 
 Pure read — never writes, never spawns. The catalog is built
-on-demand from ``ctx.workspace_root`` (no per-call cache yet; the
-scan is single-digit-ms on a small workspace and the tool fires once
-per agent turn).
-
-Spec: ``process/phase3.11-author-workflow-meta-agent-spec.md`` §17.3.
+on-demand from `ctx.workspace_root` (no per-call cache yet; the scan
+is single-digit-ms on a small workspace and the tool fires once per
+agent exchange).
 """
 
 from __future__ import annotations
@@ -33,7 +31,7 @@ from workflows.validator import validate_workflow as engine_validate_workflow
 
 
 class ValidateWorkflowArgs(BaseModel):
-    """Spec §17.3 — exactly one of ``workflow_ref`` / ``yaml_path``."""
+    """Exactly one of `workflow_ref` / `yaml_path`."""
 
     workflow_ref: str | None = Field(
         default=None,
@@ -58,7 +56,7 @@ class ValidateWorkflowArgs(BaseModel):
 
 
 class ValidationFinding(BaseModel):
-    """One validator-emitted finding, structured per spec §17.3."""
+    """One validator-emitted finding, structured for the agent."""
 
     error_class: str = Field(
         description="The exception subclass name (e.g., 'WorkflowBindCollision')."
@@ -84,7 +82,7 @@ class ValidationFinding(BaseModel):
 
 
 class ValidationOutput(BaseModel):
-    """The tool's return shape per spec §17.3."""
+    """The tool's return shape."""
 
     is_valid: bool = Field(
         description=(
@@ -134,7 +132,7 @@ ValidationOutput.model_rebuild()
 async def validate_workflow(
     args: ValidateWorkflowArgs, ctx: ToolContext
 ) -> dict[str, Any]:
-    """Run the workflow validator and return :class:`ValidationOutput`."""
+    """Run the workflow validator and return a `ValidationOutput` dict."""
     if ctx.path_policy is None or ctx.workspace_root is None:
         msg = (
             "validate_workflow requires the platform to populate "
@@ -217,8 +215,7 @@ def _output(
     errors: list[ValidationFinding] | None = None,
     warnings: list[ValidationFinding] | None = None,
 ) -> dict[str, Any]:
-    """Shape the response. Returns a plain dict so the agent layer's
-    JSON serialiser sees a regular mapping."""
+    """Shape the response as a plain dict for the agent layer's serialiser."""
     return ValidationOutput(
         is_valid=is_valid,
         errors=errors or [],
@@ -233,12 +230,12 @@ def _finding_from(
 ) -> ValidationFinding:
     """Convert a validator-emitted exception into a structured finding.
 
-    Reads the exception's ``identifying_names_keys`` ClassVar (per
-    R3 #11) and pulls every named attribute into the finding's
-    ``identifying_names`` dict. Falls back to ``str(exc)`` for the
-    caller-facing message when the ``caller_message`` ClassVar is the
-    inherited default — but the validator-tree base classes set one
-    explicitly so this is a defensive guard.
+    Reads the exception's `identifying_names_keys` ClassVar and pulls
+    every named attribute into the finding's `identifying_names` dict.
+    Falls back to `str(exc)` for the caller-facing message when the
+    `caller_message` ClassVar is the inherited default — but the
+    validator-tree base classes set one explicitly so this is a
+    defensive guard.
     """
     keys = getattr(type(exc), "identifying_names_keys", ())
     identifying_names: dict[str, Any] = {}
@@ -258,11 +255,11 @@ def _finding_from(
 def _jsonable(value: Any) -> Any:  # noqa: ANN401 — heterogeneous attr values
     """Coerce identifying-name values into JSON-serialisable shapes.
 
-    Tuples become lists (the validator uses tuples for cycle paths +
-    ambiguous-start candidates so a single ``ValidationFinding`` round-
-    trips cleanly through JSON when the agent layer serialises it).
-    Everything else passes through — Pydantic's model_dump handles
-    primitives + nested containers natively.
+    Tuples become lists (the validator uses tuples for cycle paths
+    and ambiguous-start candidates so a single `ValidationFinding`
+    round-trips cleanly through JSON when the agent layer serialises
+    it). Everything else passes through — Pydantic's `model_dump`
+    handles primitives and nested containers natively.
     """
     if isinstance(value, tuple):
         return [_jsonable(item) for item in value]

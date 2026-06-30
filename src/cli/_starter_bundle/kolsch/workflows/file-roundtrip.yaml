@@ -1,4 +1,4 @@
-# Phase 3.5 starter — file-IO roundtrip.
+# Starter workflow — file-IO roundtrip.
 #
 # Three nodes: `write` lays a file down using `{{ inputs.body }}`,
 # `read` reads it back, `list` enumerates the workspace root. The
@@ -17,7 +17,7 @@
 # tool's pagination metadata (`lines_returned`, `next_offset`,
 # `truncated`) is dropped at the workflow boundary. Authors needing
 # the richer shape call the tool from an agent context.
-description: "Write a file, read it back, list the workspace — Phase 3.5 §4.2."
+description: "Write a file, read it back, list the workspace."
 
 # Workflow inputs are supplied at run time via `--input filename=...
 # --input body=...`. The Workflow schema doesn't declare them at v1;

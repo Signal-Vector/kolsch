@@ -14,8 +14,8 @@ description: |
 
 io: { mode: conversational }
 
-# Phase 3.11 §17.5 — context files inlined into the system prompt at
-# agent-load. The two `kolsch:` paths resolve via
+# Context files inlined into the system prompt at agent-load. The
+# two `kolsch:` paths resolve via
 # `importlib.resources.files("kolsch")` against the installed kolsch
 # package — no per-workspace setup required.
 context_files:
@@ -29,19 +29,19 @@ context_files:
       the validator's "Fix:" messages deep-link into.
     primary: true
 
-# Phase 3.11 §17.5 — per-agent permission rules. The default kolsch
-# `bash` policy is `prompt`; reaffirm it here so an operator who has
-# widened the workspace-level rule still sees the confirmation modal
-# for this meta-agent specifically. The two new validation tools are
-# pure read; they fall under the kolsch default (allow) policy.
+# Per-agent permission rules. The default kolsch `bash` policy is
+# `prompt`; reaffirm it here so an operator who has widened the
+# workspace-level rule still sees the confirmation modal for this
+# meta-agent specifically. The two validation tools are pure read;
+# they fall under the kolsch default (allow) policy.
 permissions:
   - who: ".*"
     what: "tool\\.bash"
     effect: prompt
 
-# Phase 3.11 §17.5 — one skill carries the bulk of the authoring
-# knowledge so the prompt stays small. Updating the skill updates the
-# meta-agent without re-shipping this file.
+# One skill carries the bulk of the authoring knowledge so the
+# prompt stays small. Updating the skill updates the meta-agent
+# without re-shipping this file.
 subsystems:
   skills:
     variant: standard

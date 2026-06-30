@@ -1,13 +1,11 @@
-"""``list_files`` — directory listing with optional recursive glob.
+"""`list_files` — directory listing with optional recursive glob.
 
-This file IS the tool. See ``read_file.py`` for the
-file-IS-the-tool rationale (TOOL-R10 hard rule).
+This file IS the tool. See `read_file.py` for the file-IS-the-tool
+rationale.
 
-Default glob ``"*"`` is non-recursive; ``"**/*"`` walks recursively.
-``max_entries`` caps the returned list. ``include_hidden=False``
-skips dotfiles by default (matches conventional shell behaviour).
-
-Spec: docs/process/phase2.0-tools-specs.md §1.3.
+Default glob `"*"` is non-recursive; `"**/*"` walks recursively.
+`max_entries` caps the returned list. `include_hidden=False` skips
+dotfiles by default (matches conventional shell behaviour).
 """
 
 from __future__ import annotations
@@ -25,6 +23,8 @@ _DEFAULT_MAX_ENTRIES = 500
 
 
 class ListFilesArgs(BaseModel):
+    """Argument schema for the `list_files` tool."""
+
     path: str = Field(
         default=".",
         description=(
@@ -85,7 +85,7 @@ class ListFilesArgs(BaseModel):
     args_schema=ListFilesArgs,
 )
 async def list_files(args: ListFilesArgs, ctx: ToolContext) -> list[dict[str, Any]]:
-    """Return ``[{"name", "path", "is_dir", "size_bytes"}, ...]``."""
+    """Return `[{"name", "path", "is_dir", "size_bytes"}, ...]`."""
     if ctx.path_policy is None or ctx.workspace_root is None:
         msg = (
             "list_files requires the platform to populate ctx.path_policy "
@@ -145,7 +145,7 @@ def _resolve(path: str, root: Path) -> Path:
 
 
 def _all_visible(child: Path, root: Path) -> bool:
-    """Skip entries below a hidden directory (when include_hidden=False)."""
+    """Return False when `child` sits below a hidden directory."""
     try:
         rel = child.relative_to(root)
     except ValueError:

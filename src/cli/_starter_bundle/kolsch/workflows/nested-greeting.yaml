@@ -1,4 +1,4 @@
-# Phase 3.7 starter — sub-workflow demo with pause / resume cascade.
+# Starter workflow — sub-workflow demo with pause / resume cascade.
 #
 # A 3-node parent that calls ``kolsch/workflows/hello-paused`` as a
 # child via ``kolsch/nodes/workflow``. The child pauses on its
@@ -16,8 +16,8 @@
 #   # parent re-checks its child, harvests the terminal output,
 #   # completes via the wrap node.
 #
-# The operator-driven two-step cascade is the v1 user-facing contract
-# (master spec §4.6.1.3); a future QoL may auto-cascade.
+# The operator-driven two-step cascade is the v1 user-facing
+# contract; a future quality-of-life pass may auto-cascade.
 description: "Sub-workflow demo with pause/resume cascade."
 
 nodes:

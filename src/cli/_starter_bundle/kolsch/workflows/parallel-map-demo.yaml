@@ -1,4 +1,4 @@
-# Phase 3.10 — canonical parallel-map example.
+# Canonical parallel-map example.
 #
 # A single map node fans out over a 10-element list. The worker is
 # a small bash node that sleeps 100ms then echoes the index;

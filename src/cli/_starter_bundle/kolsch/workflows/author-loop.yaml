@@ -1,7 +1,7 @@
-# Phase 3.11 — wrapper workflow that pairs the `author_workflow`
-# meta-agent with a `user_input → agent → user_input` loop so authors
-# can iterate on a workflow draft via the workflow surface (vs.
-# opening a chat session directly).
+# Wrapper workflow that pairs the `author_workflow` meta-agent with
+# a `user_input → agent → user_input` loop so authors can iterate on
+# a workflow draft via the workflow surface (vs. opening a chat
+# session directly).
 #
 # Run it with:
 #

@@ -4,7 +4,7 @@
 
 > Build a workflow that takes a `ticket_text` input, classifies it as urgent or normal, and prints "URGENT" or "NORMAL" to stdout.
 
-This is the spec §17.10 Scenario 1 verification case. Demonstrates the "agent → branch → terminal" shape, plus a first-draft revision driven by the error-class table.
+This is the canonical Scenario 1 verification case. Demonstrates the "agent → branch → terminal" shape, plus a first-draft revision driven by the error-class table.
 
 ## Turn 1 — discover + plan
 

@@ -183,7 +183,7 @@ async def run(inputs: Inputs, ctx: NodeContext) -> Outputs:
 - Param 3 (OPTIONAL): a `pydantic.BaseModel` subclass (config).
 - All params POSITIONAL.
 
-**Return types (master spec §5.4):**
+**Return types:**
 
 - `BaseModel` subclass → non-branching with structured output.
 - `bool` → branching only (no output payload).
@@ -218,7 +218,7 @@ The edge-level modifier:
 
 ### Concurrency — when to opt in
 
-Default is `concurrency: sequential` — the Phase 3.1 — Phase 3.7 behavior. Workflows opt into parallel execution by setting `concurrency: auto` at the top level.
+Default is `concurrency: sequential` — the original single-step behavior. Workflows opt into parallel execution by setting `concurrency: auto` at the top level.
 
 - **`concurrency: auto`** — the worklist schedules ready nodes concurrently when their state-write/read sets do not overlap. Two parallel-eligible nodes that BOTH touch the same `state.*` key → `WorkflowParallelStateConflict` at the run-start gate. Fix: add an explicit edge to serialise them, drop `concurrency: auto`, or remove the state write from one branch.
 - **`parallel: true`** on a `map` node — workers run concurrently. A `parallel: true` map whose worker subgraph transitively writes state ALSO trips `WorkflowParallelStateConflict`.
@@ -259,7 +259,7 @@ Every concrete `WorkflowValidationError` subclass with what the engine sees, the
 | `WorkflowNodeImportFailed` | An authored-Python `@node` file can't be imported. | Missing module, syntax error, bad import inside. | Run `introspect_node` directly on the path — the error reads `ImportError` / `SyntaxError` with detail. |
 | `WorkflowNodeMissingRun` | An authored-Python module has no top-level `run` symbol. | Function named something else. | Rename the function to `run`. |
 | `WorkflowNodeNotDecorated` | `run` exists but lacks `@node`. | Forgot the decorator. | Add `@node(label="...")` to `run`. |
-| `WorkflowNodeSignatureInvalid` | `run`'s signature doesn't match §5.3. | Wrong param count, non-BaseModel inputs, missing/wrong NodeContext annotation. | Param 1 must be `BaseModel`, param 2 must be `NodeContext` EXACTLY. Optional param 3 must be `BaseModel`. All positional. |
+| `WorkflowNodeSignatureInvalid` | `run`'s signature doesn't match the required shape. | Wrong param count, non-BaseModel inputs, missing/wrong NodeContext annotation. | Param 1 must be `BaseModel`, param 2 must be `NodeContext` EXACTLY. Optional param 3 must be `BaseModel`. All positional. |
 | `WorkflowNodeReturnTypeInvalid` | `run`'s return annotation isn't allowed. | Returns a dict, a tuple-other-than-`tuple[bool, BaseModel]`, or has no annotation. | Use `BaseModel`, `bool`, or `tuple[bool, BaseModel subclass]`. |
 | `WorkflowInvalidTimeout` | `timeout_seconds` is zero or negative. | Authoring slip. | Set a positive integer OR remove the field entirely. |
 | `WorkflowParallelStateConflict` | Two parallel-eligible nodes touch the same state key (in `concurrency: auto`) OR a `parallel: true` map's worker writes state. | Race condition on `state.*`. | Add an explicit edge to serialise the pair, drop `concurrency: auto`, OR remove the state write from one branch. |
@@ -298,7 +298,7 @@ These will read as plausible to a model that doesn't know the contract. Avoid th
 Three examples ship in `examples/` next to this skill. Each subdirectory carries a `brief.txt`, a sample agent `transcript.md`, the final `workflow.yaml`, and any nodes/*.py files.
 
 - **examples/small-bash-pipeline/** — three bash nodes, linear, no agents. Smallest possible end-to-end.
-- **examples/triage-with-agent/** — agent classifier → branch → two terminal bash nodes. The verification scenario from the spec §17.10.
+- **examples/triage-with-agent/** — agent classifier → branch → two terminal bash nodes. The canonical verification scenario.
 - **examples/parallel-fanout/** — a map node over a list of items with `parallel: true`, no state writes. Demonstrates safe concurrency.
 
 When the brief resembles one of these, read the matching example before drafting. The transcripts show the full iteration loop including a deliberate first-draft error and its fix.

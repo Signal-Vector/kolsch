@@ -1,4 +1,4 @@
-# Phase 3.1 Step 6 starter workflow.
+# Starter workflow — minimal end-to-end smoke test.
 #
 # A two-node linear pipeline that runs end-to-end on a fresh
 # ``kolsch setup --non-interactive`` workspace without any authz

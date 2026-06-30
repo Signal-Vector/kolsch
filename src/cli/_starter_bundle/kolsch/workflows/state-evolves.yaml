@@ -1,11 +1,10 @@
-# Phase 3.5 starter — multi-write state evolution.
+# Starter workflow — multi-write state evolution.
 #
 # Three sequential `set_state` writes to the same key (`attempts`)
 # produce three `workflow.state.mutated` events with values 0, 1, 2.
 # The final `report` node reads `{{ state.attempts }}` (= 2) and
 # `{{ state.status }}` (= "pending") to prove downstream visibility
-# of the evolved state — master spec §4.3.1 "evolving variable"
-# pattern.
+# of the evolved state — the "evolving variable" pattern.
 #
 # Run with:
 #
@@ -19,7 +18,7 @@
 # starter workspace the `platform.yaml` maps `kolsch/bash` to
 # `prompt`, which collapses to `deny` headlessly — swap `report` for
 # `kolsch/nodes/echo` if you want a no-auth headless smoke test.
-description: "Demonstrate multi-write state evolution (master spec §4.3.1)."
+description: "Demonstrate multi-write state evolution."
 
 nodes:
   init:

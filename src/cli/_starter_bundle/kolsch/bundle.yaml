@@ -1,11 +1,11 @@
 name: kolsch
 version: "0.3"
 description: |
-  The kolsch starter bundle — created by `kolsch setup` per Phase 2.0
-  patch §1.5. Contains the canonical builtin tool set (read_file,
-  write_file, list_files, bash), the helper agent that opts into them,
-  and the canonical skills (write-python-test, review-pr-diff,
-  commit-from-staged) per Phase 2.4 Step 9. Skills are NOT auto-enabled
-  on the helper agent — add a `subsystems.skills.config.enabled` entry
-  or force-invoke at chat time with `/skill <ref>`. Users can edit,
-  copy, or swap any of these files.
+  The kolsch starter bundle — created by `kolsch setup`. Contains the
+  canonical builtin tool set (read_file, write_file, list_files,
+  bash), the helper agent that opts into them, and the canonical
+  skills (write-python-test, review-pr-diff, commit-from-staged).
+  Skills are NOT auto-enabled on the helper agent — add a
+  `subsystems.skills.config.enabled` entry or force-invoke at chat
+  time with `/skill <ref>`. Users can edit, copy, or swap any of
+  these files.

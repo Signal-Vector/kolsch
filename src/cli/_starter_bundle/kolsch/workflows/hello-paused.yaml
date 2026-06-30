@@ -1,4 +1,4 @@
-# Phase 3.4 starter — pause / resume demo via `user_input`.
+# Starter workflow — pause / resume demo via `user_input`.
 #
 # A two-node `ask → echo` pipeline that pauses on `ask` and resumes
 # when the operator provides `--input response=<text>`. Proves the
@@ -20,8 +20,8 @@
 # Author note: uses authored Python `kolsch/nodes/echo` instead of
 # `kolsch/nodes/bash` because the starter `platform.yaml` maps
 # `kolsch/bash` to `prompt`, which collapses to `deny` on the
-# headless `kolsch workflows run` surface. See master spec §10 for
-# the pause / resume contract.
+# headless `kolsch workflows run` surface. See the workflow
+# subsystem docs for the pause / resume contract.
 description: "Pause/resume demo — workflow stops at user_input, resumes via CLI."
 
 nodes:

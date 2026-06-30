@@ -1,4 +1,4 @@
-# Phase 3.3 Step 3 starter — bash exit-code branching demo.
+# Starter workflow — bash exit-code branching demo.
 #
 # A three-node workflow that demonstrates the edge-level ``branch:``
 # field driving runtime dispatch off bash's ``exit_code``. The
@@ -15,9 +15,9 @@
 #
 # The workflow JSONL records the ``branch_value`` on ``check``'s
 # ``workflow.node.completed`` event and emits a
-# ``workflow.node.pruned`` event for the unfired arm (master spec
-# §11.1). See ``docs/explanation/workflow-event-log.md`` for the
-# pruning forensics shape.
+# ``workflow.node.pruned`` event for the unfired arm. See
+# ``docs/explanation/workflow-event-log.md`` for the pruning
+# forensics shape.
 description: "Bash exit-code branching demo — branch: true/false arms."
 
 nodes:

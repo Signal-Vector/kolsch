@@ -1,4 +1,4 @@
-# Phase 3.10 — canonical auto-mode fan-out example.
+# Canonical auto-mode fan-out example.
 #
 # Three sibling bash nodes (alpha, beta, gamma) each sleep 200ms; a
 # downstream noop confluence joins them. Under ``concurrency: auto``
@@ -11,7 +11,7 @@
 #
 # The envelope reports ``concurrency_mode: auto`` and
 # ``peak_in_flight: 3``. Replay (fork) inherits the parent's event
-# ordering verbatim per master spec §16.5.1.
+# ordering verbatim.
 description: "Three sibling bash nodes dispatched concurrently under auto mode."
 concurrency: auto
 

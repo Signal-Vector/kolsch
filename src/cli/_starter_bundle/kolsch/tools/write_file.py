@@ -1,15 +1,12 @@
-"""``write_file`` — atomic full-overwrite write of a UTF-8 text file.
+"""`write_file` — atomic full-overwrite write of a UTF-8 text file.
 
-This file IS the tool. Ships at ``<workspace>/bundles/kolsch/tools/``
-when ``kolsch setup`` runs. See ``read_file.py`` for the full
-file-IS-the-tool rationale (TOOL-R10 hard rule).
+This file IS the tool. Ships at `<workspace>/bundles/kolsch/tools/`
+when `kolsch setup` runs. See `read_file.py` for the full
+file-IS-the-tool rationale.
 
-Atomic write: writes to ``<path>.tmp.<pid>`` then ``os.replace`` onto
+Atomic write: writes to `<path>.tmp.<pid>` then `os.replace` onto
 the destination, so a SIGKILL between the temp write and rename
-leaves the prior content intact (TC-TOOL-07). The atomicity matches
-Phase 1.1's ``platform.yaml`` discipline.
-
-Spec: docs/process/phase2.0-tools-specs.md §1.2.
+leaves the prior content intact.
 """
 
 from __future__ import annotations
@@ -27,6 +24,8 @@ from tools.decorator import ToolContext, tool
 
 
 class WriteFileArgs(BaseModel):
+    """Argument schema for the `write_file` tool."""
+
     path: str = Field(
         description=(
             "Path where the file will be written. Workspace-relative "
@@ -84,9 +83,10 @@ class WriteFileArgs(BaseModel):
     args_schema=WriteFileArgs,
 )
 async def write_file(args: WriteFileArgs, ctx: ToolContext) -> dict[str, Any]:
-    """Write ``args.content`` to ``args.path`` atomically.
+    """Write `args.content` to `args.path` atomically.
 
-    :raises file.access_denied: path outside allowed scope.
+    Raises:
+        FileAccessDenied: Path outside allowed scope.
     """
     if ctx.path_policy is None or ctx.workspace_root is None:
         msg = (

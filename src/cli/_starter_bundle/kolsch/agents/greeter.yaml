@@ -3,11 +3,11 @@ assembly_version: "1"
 agent_id: ag_greeter
 name: greeter
 description: |
-  Phase 3.2 starter agent — invoked from `kolsch/workflows/hello-agent`
-  as the canonical workflow→agent demo. Single-shot so the workflow
-  drives it once with bound inputs and consumes a typed output dict;
-  no conversational state, no tools. Copy this file as a template
-  when authoring your own workflow-invoked agents.
+  Starter agent — invoked from `kolsch/workflows/hello-agent` as the
+  canonical workflow→agent demo. Single-shot so the workflow drives
+  it once with bound inputs and consumes a typed output dict; no
+  conversational state, no tools. Copy this file as a template when
+  authoring your own workflow-invoked agents.
 
 # model: intentionally omitted — resolves from `platform.yaml`'s
 # `defaults.model` via the kernel's defaults composition.

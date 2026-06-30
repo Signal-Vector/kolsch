@@ -1,21 +1,20 @@
-"""``introspect_node`` — load an authored ``@node`` module and report its shape.
+"""`introspect_node` — load an authored `@node` module and report its shape.
 
-Phase 3.11 §17.4 — the meta-agent calls this tool right after
-writing a new authored Python ``@node`` file so it can iterate on
-the signature BEFORE invoking :mod:`validate_workflow` (which would
-also catch the issue, but with a less direct error chain that runs
-the entire run-start gate first).
+The workflow-authoring agent calls this tool right after writing a
+new authored Python `@node` file so it can iterate on the signature
+BEFORE invoking the `validate_workflow` tool (which would also catch
+the issue, but with a less direct error chain that runs the entire
+run-start gate first).
 
-The tool delegates to :func:`workflows.catalog_node.introspect_node_module`
-— the public helper extracted in Phase 3.11 Step 0 that mirrors the
-run-start gate's own introspection logic.
+Delegates to
+[`introspect_node_module`][workflows.catalog_node.introspect_node_module]
+— the public helper that mirrors the run-start gate's own
+introspection logic.
 
 Pure read — never writes, never spawns. The module IS imported (so
 the path policy is enforced); the import happens in an isolated
 namespace so two consecutive introspections of distinct files with
-the same stem don't collide in :data:`sys.modules`.
-
-Spec: ``process/phase3.11-author-workflow-meta-agent-spec.md`` §17.4.
+the same stem don't collide in `sys.modules`.
 """
 
 from __future__ import annotations
@@ -32,7 +31,7 @@ from workflows.catalog_node import introspect_node_module
 
 
 class IntrospectNodeArgs(BaseModel):
-    """Spec §17.4 — single argument naming the ``@node`` Python file."""
+    """Single argument naming the `@node` Python file."""
 
     py_path: str = Field(
         description=(
@@ -45,13 +44,13 @@ class IntrospectNodeArgs(BaseModel):
 
 
 class NodeIntrospection(BaseModel):
-    """The tool's return shape per spec §17.4."""
+    """The tool's return shape."""
 
     signature_ok: bool = Field(
         description=(
             "True iff the module imported cleanly AND exposed a "
-            "``@node``-decorated ``run`` with a §5.3-conforming "
-            "signature AND a §5.4-conforming return annotation."
+            "``@node``-decorated ``run`` with a conforming signature "
+            "AND a conforming return annotation."
         ),
     )
     label: str | None = Field(
@@ -120,7 +119,7 @@ NodeIntrospection.model_rebuild()
 async def introspect_node(
     args: IntrospectNodeArgs, ctx: ToolContext
 ) -> dict[str, Any]:
-    """Run the introspector and return :class:`NodeIntrospection`."""
+    """Run the introspector and return a `NodeIntrospection` dict."""
     if ctx.path_policy is None or ctx.workspace_root is None:
         msg = (
             "introspect_node requires the platform to populate "

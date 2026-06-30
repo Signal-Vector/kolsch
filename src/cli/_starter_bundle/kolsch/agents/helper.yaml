@@ -11,11 +11,12 @@ description: A friendly general-purpose helper agent.
 
 io: { mode: conversational }
 
-# Phase 2.2 (§6) — context files inlined into the system prompt at
-# agent-load. Both entries use the `kolsch:` prefix and resolve via
+# Context files inlined into the system prompt at agent-load. Both
+# entries use the `kolsch:` prefix and resolve via
 # `importlib.resources.files("kolsch")` against the installed kolsch
-# package — no per-workspace setup required. Add `workspace:`-prefixed
-# entries to surface your own docs to the agent.
+# package — no per-workspace setup required. Add
+# `workspace:`-prefixed entries to surface your own docs to the
+# agent.
 context_files:
   - path: kolsch:docs/index.md
     summary: Master index of all Kolsch documentation.
@@ -24,26 +25,26 @@ context_files:
     summary: Operating rules for AI agents working in this codebase.
     primary: true
 
-# Phase 2.2 (§1) — per-agent permission rules. These OVERRIDE the
-# workspace's `platform.yaml:authorization.config.rules` defaults:
-# the agent-scope `prompt` effect fires first and the user sees the
+# Per-agent permission rules. These OVERRIDE the workspace's
+# `platform.yaml:authorization.config.rules` defaults: the
+# agent-scope `prompt` effect fires first and the user sees the
 # in-chat confirmation modal before any bash command runs. Add
 # additional rules to widen, narrow, or shift the effect for any
 # tool/target combination.
 #
-# qol-action-namespace-bundle-scoped.md Step 2 — `what:` is the
-# 3-seg catalog ref `<bundle>/tools/<name>`; `pattern:` is a glob
-# matched against the resolved target (the bash command string for
-# `bash`, the path for file tools). `pattern: "*"` matches anything.
+# `what:` is the 3-seg catalog ref `<bundle>/tools/<name>`;
+# `pattern:` is a glob matched against the resolved target (the bash
+# command string for `bash`, the path for file tools). `pattern:
+# "*"` matches anything.
 permissions:
   - what: kolsch/tools/bash
     pattern: "*"
     effect: prompt
 
-# Phase 2.2 (§3) — Jinja2 template referencing the six standardized
-# top-level variables (`agent`, `tools`, `docs`, `skills`,
-# `workspace`, `platform`). Edit freely; the engine renders this at
-# pre-flight step 5.6.6 with StrictUndefined so typos surface as
+# Jinja2 template referencing the six standardized top-level
+# variables (`agent`, `tools`, `docs`, `skills`, `workspace`,
+# `platform`). Edit freely; the engine renders this during the
+# pre-flight stage with StrictUndefined so typos surface as
 # `config.template_render_failed` immediately. Plain-text prompts
 # (no `{{ }}` / `{% %}`) render byte-identical to themselves.
 prompt: |
@@ -87,9 +88,9 @@ prompt: |
   Be concise. If the question is ambiguous, ask one clarifying
   question before acting.
 
-# Phase 2.0 (patch §1.5): the helper opts into the four builtin tools
-# shipped by this bundle. The implementations live alongside this file
-# in `tools/`. Edit, copy, or remove any of them.
+# The helper opts into the four builtin tools shipped by this
+# bundle. The implementations live alongside this file in `tools/`.
+# Edit, copy, or remove any of them.
 subsystems:
   tools:
     variant: standard

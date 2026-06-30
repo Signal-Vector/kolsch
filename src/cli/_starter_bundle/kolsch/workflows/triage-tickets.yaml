@@ -1,10 +1,10 @@
-# Phase 3.6 starter — the master spec §6.0.1 triage walkthrough.
+# Starter workflow — the triage walkthrough.
 #
 # Classify a ticket's text via an agent, branch on the classification,
-# and route to one of two responder agents. Exercises the Phase 3.6
-# branch runner end-to-end: ``is_urgent`` captures ``{value: bool}``;
-# the edge dispatcher picks the matching outgoing arm; the un-fired
-# arm emits ``workflow.node.pruned`` via Phase 3.3's cascade.
+# and route to one of two responder agents. Exercises the branch
+# runner end-to-end: ``is_urgent`` captures ``{value: bool}``; the
+# edge dispatcher picks the matching outgoing arm; the un-fired arm
+# emits ``workflow.node.pruned`` via the prune cascade.
 #
 # Run with:
 #
@@ -38,7 +38,7 @@ nodes:
   urgent_handler:
     type: kolsch/nodes/agent
     agent: kolsch/agents/urgent_responder
-    description: "Handle the urgent path — separate session per Phase 3.2."
+    description: "Handle the urgent path — separate session."
   normal_handler:
     type: kolsch/nodes/agent
     agent: kolsch/agents/normal_responder

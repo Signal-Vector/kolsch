@@ -1,28 +1,26 @@
-"""``bash`` — run a shell command in the workspace, timed + truncated.
+"""`bash` — run a shell command in the workspace, timed + truncated.
 
-This file IS the tool. See ``read_file.py`` for the
-file-IS-the-tool rationale (TOOL-R10 hard rule).
+This file IS the tool. See `read_file.py` for the file-IS-the-tool
+rationale.
 
-Returns ``{exit_code, stdout, stderr, stdout_persisted_to,
-stderr_persisted_to, duration_seconds, timed_out}``. Streams are
+Returns `{exit_code, stdout, stderr, stdout_persisted_to,
+stderr_persisted_to, duration_seconds, timed_out}`. Streams are
 truncated to 64 KiB each for the inline preview so a chatty command
 can't blow the context budget. When a stream OVERFLOWS that budget,
 the full bytes are written to
-``<workspace>/logs/tool-outputs/<session_id>/<call_id>.<stream>.txt``
-and the path is returned in ``*_persisted_to``; the model can then
-call ``read_file`` against the persisted path with ``offset``/
-``limit`` to drill in. The ``cwd`` argument, when supplied, is
-policy-checked the same way file tools' ``path`` is.
+`<workspace>/logs/tool-outputs/<session_id>/<call_id>.<stream>.txt`
+and the path is returned in `*_persisted_to`; the model can then
+call `read_file` against the persisted path with `offset` / `limit`
+to drill in. The `cwd` argument, when supplied, is policy-checked
+the same way file tools' `path` is.
 
-Bash itself is exempt from the path-access policy in v1's native
-sandbox per ``docs/explanation/file-handling.md`` §4.7. The
-workspace-only default rule set in ``platform.yaml`` defaults
-``tool.bash`` to ``prompt`` so the chat surface (Phase 2.1) gates
-each command interactively rather than the path policy trying — and
-failing — to constrain the shell.
-
-Spec: docs/process/phase2.0-tools-specs.md §1.4 +
-process/qol-tool-output-truncation-and-persistence.md §9.
+Bash itself is exempt from the path-access policy in the native
+sandbox — see
+[file handling](../../../../docs/explanation/file-handling.md). The
+workspace-only default rule set in `platform.yaml` defaults
+`tool.bash` to `prompt` so the chat surface gates each command
+interactively rather than the path policy trying — and failing — to
+constrain the shell.
 """
 
 from __future__ import annotations
@@ -47,12 +45,12 @@ if TYPE_CHECKING:
 _SIGINT_GRACE_SECONDS = 0.5
 """Seconds to wait after SIGINT before escalating to SIGKILL.
 
-bug-mid-tool-cancellation-latency.md — when Esc flips during a
-bash invocation, we send SIGINT first (so the subprocess can flush
-buffers / run cleanup) and wait this long for it to exit. If still
-alive after the grace, we send SIGKILL. 500ms balances "well-
-behaved CLIs get a chance to clean up" against "Esc-during-runaway
-bash visibly stops the chat within a heartbeat."
+When Esc flips during a bash invocation, the tool sends SIGINT first
+(so the subprocess can flush buffers / run cleanup) and waits this
+long for it to exit. If still alive after the grace, it sends
+SIGKILL. 500ms balances "well-behaved CLIs get a chance to clean
+up" against "Esc-during-runaway bash visibly stops the chat within
+a heartbeat."
 """
 
 _DEFAULT_TIMEOUT_SECONDS = 60
@@ -60,6 +58,8 @@ _OUTPUT_TRUNCATE_BYTES = 64 * 1024  # 64 KiB per stream — preview budget
 
 
 class BashArgs(BaseModel):
+    """Argument schema for the `bash` tool."""
+
     command: str = Field(
         description=(
             "Bash command to execute. Single string passed to the "
@@ -130,12 +130,15 @@ class BashArgs(BaseModel):
     args_schema=BashArgs,
 )
 async def bash(args: BashArgs, ctx: ToolContext) -> dict[str, Any]:
-    """Execute ``args.command`` via the shell.
+    """Execute `args.command` via the shell.
 
-    :returns: ``{exit_code, stdout, stderr, stdout_persisted_to,
-        stderr_persisted_to, duration_seconds, timed_out}``.
-    :raises tool.timeout: command exceeded ``args.timeout_seconds``.
-    :raises file.access_denied: ``args.cwd`` outside allowed scope.
+    Returns:
+        `{exit_code, stdout, stderr, stdout_persisted_to,
+        stderr_persisted_to, duration_seconds, timed_out}`.
+
+    Raises:
+        ToolTimeout: Command exceeded `args.timeout_seconds`.
+        FileAccessDenied: `args.cwd` outside allowed scope.
     """
     cwd = args.cwd
     if cwd is not None:
@@ -165,8 +168,7 @@ async def bash(args: BashArgs, ctx: ToolContext) -> dict[str, Any]:
         ) from exc
     try:
         try:
-            # bug-mid-tool-cancellation-latency.md — race the
-            # subprocess communicate() against the exchange's
+            # Race the subprocess communicate() against the exchange's
             # CancelToken so Esc during a long-running command
             # interrupts within ~one event-loop tick of the flip
             # (instead of waiting for the command to finish or hit
@@ -221,27 +223,24 @@ async def _communicate_with_cancel(
     *,
     timeout_seconds: int,
 ) -> tuple[bytes, bytes]:
-    """Race ``proc.communicate()`` against ``ctx.cancellation`` and
-    ``timeout_seconds``.
+    """Race `proc.communicate()` against cancellation and timeout.
 
-    bug-mid-tool-cancellation-latency.md — when ``ctx.cancellation``
-    is None (Phase 1 programmatic test paths), falls through to the
-    plain ``asyncio.wait_for(proc.communicate(), timeout=...)`` shape
-    so existing callers see no behaviour change.
+    When `ctx.cancellation` is None (programmatic test paths), falls
+    through to the plain `asyncio.wait_for(proc.communicate(),
+    timeout=...)` shape so existing callers see no behaviour change.
 
-    When ``ctx.cancellation`` is set, races three completions
+    When `ctx.cancellation` is set, races three completions
     concurrently:
 
-    - ``proc.communicate()`` — the natural completion.
-    - ``ctx.cancellation.wait_cancelled()`` — Esc was pressed.
-    - ``asyncio.sleep(timeout_seconds)`` — the per-call timeout
+    - `proc.communicate()` — the natural completion.
+    - `ctx.cancellation.wait_cancelled()` — Esc was pressed.
+    - `asyncio.sleep(timeout_seconds)` — the per-call timeout
       budget.
 
-    On cancellation: send SIGINT to the subprocess, wait up to
-    :data:`_SIGINT_GRACE_SECONDS` for it to exit, escalate to
-    SIGKILL if still alive, then raise :class:`ExchangeCancelled`.
-    On timeout: re-raise :class:`TimeoutError` so the outer
-    handler emits :class:`ToolTimeout` per pre-QoL semantics.
+    On cancellation: sends SIGINT to the subprocess, waits up to
+    `_SIGINT_GRACE_SECONDS` for it to exit, escalates to SIGKILL if
+    still alive, then raises `ExchangeCancelled`. On timeout:
+    re-raises `TimeoutError` so the outer handler emits `ToolTimeout`.
     """
     if ctx.cancellation is None:
         return await asyncio.wait_for(
@@ -285,13 +284,13 @@ async def _communicate_with_cancel(
 def _nudge_subprocess_toward_exit(proc: asyncio.subprocess.Process) -> None:
     """Send SIGINT to the subprocess — best-effort, synchronous.
 
-    SIGKILL escalation lives in the outer ``finally`` block of
-    :func:`bash` (lines tagged with ``proc.kill()``). Splitting the
-    two stages this way lets the cancellation handler raise
-    immediately without awaiting the SIGINT grace window: a
-    well-behaved CLI gets the chance to handle the signal cleanly
-    while the outer sweep guarantees the subprocess is dead by the
-    time the bash tool returns.
+    SIGKILL escalation lives in the outer `finally` block of `bash`
+    (lines tagged with `proc.kill()`). Splitting the two stages this
+    way lets the cancellation handler raise immediately without
+    awaiting the SIGINT grace window: a well-behaved CLI gets the
+    chance to handle the signal cleanly while the outer sweep
+    guarantees the subprocess is dead by the time the bash tool
+    returns.
     """
     if proc.returncode is not None:
         return
@@ -304,22 +303,22 @@ def _nudge_subprocess_toward_exit(proc: asyncio.subprocess.Process) -> None:
 def _persist_or_inline(
     data: bytes, ctx: ToolContext, stream: str
 ) -> tuple[str, str | None]:
-    """Decode + return inline preview, persisting the full stream when
-    it exceeds the 64 KiB inline budget.
+    """Decode and return an inline preview, persisting overflow to disk.
 
-    Returns ``(inline_text, persisted_path_str_or_None)``:
-    - When ``len(data) <= 64 KiB``: ``(decoded_text, None)``.
-    - When ``len(data) > 64 KiB``: writes ``data`` to
-      ``<workspace>/logs/tool-outputs/<session_id>/<call_id>.<stream>.txt``
-      and returns ``(preview_64KiB + footer, str(path))``. The
-      footer names the persisted path, byte-overflow size, and the
-      ``read_file`` handoff.
+    Returns `(inline_text, persisted_path_str_or_None)`:
+
+    - When `len(data) <= 64 KiB`: `(decoded_text, None)`.
+    - When `len(data) > 64 KiB`: writes `data` to
+      `<workspace>/logs/tool-outputs/<session_id>/<call_id>.<stream>.txt`
+      and returns `(preview_64KiB + footer, str(path))`. The footer
+      names the persisted path, byte-overflow size, and the
+      `read_file` handoff.
 
     When the workspace root or session is unavailable (e.g., a test
-    constructing a bare ``ToolContext``), the full stream still
-    needs a recovery path, so the function falls back to a
-    ``<cwd>/.tool-outputs/`` tmp dir. Practically never hits in
-    real engine use because the dispatcher populates both.
+    constructing a bare `ToolContext`), the full stream still needs a
+    recovery path, so the function falls back to a
+    `<cwd>/.tool-outputs/` tmp dir. Practically never hits in real
+    engine use because the dispatcher populates both.
     """
     if len(data) <= _OUTPUT_TRUNCATE_BYTES:
         return data.decode("utf-8", errors="replace"), None
@@ -350,20 +349,20 @@ def _persist_or_inline(
 def _persisted_output_path(ctx: ToolContext, stream: str) -> Path:
     """Return the workspace path where the full stream will land.
 
-    Layout (locked by Step 1 writeup §9.2):
-    ``<workspace>/logs/tool-outputs/<session_id>/<call_id>.<stream>.txt``
+    Layout:
+    `<workspace>/logs/tool-outputs/<session_id>/<call_id>.<stream>.txt`
 
-    The ``logs/`` prefix is in the default ``file_access.allowed_paths``
-    so a subsequent ``read_file`` against the returned path passes
-    the policy gate. ``.platform/`` was the obvious choice but is
-    DENIED by default, defeating the handoff.
+    The `logs/` prefix is in the default `file_access.allowed_paths`
+    so a subsequent `read_file` against the returned path passes the
+    policy gate. `.platform/` was the obvious choice but is DENIED by
+    default, defeating the handoff.
 
-    When ``ctx.tool_call_id`` is missing (out-of-engine
-    invocations), a stable ``tc_anon_<uuid4>`` is synthesized so
-    concurrent calls don't collide. When ``ctx.workspace_root`` is
-    missing, the path resolves under the current working directory's
-    ``.tool-outputs/`` so the persisted file is at least addressable
-    — bare-context tests still exercise the persistence shape.
+    When `ctx.tool_call_id` is missing (out-of-engine invocations), a
+    stable `tc_anon_<uuid4>` is synthesized so concurrent calls don't
+    collide. When `ctx.workspace_root` is missing, the path resolves
+    under the current working directory's `.tool-outputs/` so the
+    persisted file is at least addressable — bare-context tests still
+    exercise the persistence shape.
     """
     call_id = ctx.tool_call_id or f"tc_anon_{uuid4()}"
     session = str(ctx.session_id) if ctx.session_id else "anon"

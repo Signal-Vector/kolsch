@@ -1,10 +1,9 @@
-# Phase 3.10 — negative-test fixture for the run-start gate.
+# Negative-test fixture for the run-start gate.
 #
 # Two sibling ``set_state`` nodes both write ``state.counter`` under
-# ``concurrency: auto``. The validator's
-# :func:`_check_concurrency_invariants` pass rejects this with
-# :class:`WorkflowParallelStateConflict` naming both nodes plus the
-# shared state key.
+# ``concurrency: auto``. The validator's concurrency-invariants pass
+# rejects this with ``WorkflowParallelStateConflict`` naming both
+# nodes plus the shared state key.
 #
 # Run it with:
 #

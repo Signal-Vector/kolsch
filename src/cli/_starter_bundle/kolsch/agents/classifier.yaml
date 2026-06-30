@@ -3,7 +3,7 @@ assembly_version: "1"
 agent_id: ag_classifier
 name: classifier
 description: |
-  Phase 3.6 starter — classifies a ticket's text as "urgent" or
+  Starter agent — classifies a ticket's text as "urgent" or
   "normal". Invoked from ``kolsch/workflows/triage-tickets`` as the
   branch source; the workflow binds the classifier's text output to
   the branch's ``label`` input.

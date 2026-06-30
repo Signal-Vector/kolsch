@@ -122,7 +122,7 @@ body. Don't restate the diff — `git show` already does that.
 ```
 fix(cli,chat): deny stops the exchange + Esc cancels per bug-chat-deny-stops-and-esc-interrupts.md
 test(integration): TC-AGENTID-01..04 + e2e verification for bug-agent-id-derive-from-ref.md
-feat(setup,permissions): migrate existing workspaces to Phase 2.0 §3.1 rules
+feat(setup,permissions): migrate existing workspaces to new permission rules
 docs(process): bug-agent-id-derive-from-ref.md + Step 1 verification writeup
 ```
 
