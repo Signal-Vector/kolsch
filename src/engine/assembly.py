@@ -1,14 +1,14 @@
-"""The Assembly Procedure — Schemas §B.5 + Materialization Rule §B.6.
+"""The Assembly Procedure — projects an event path to a model call.
 
 **Normative and versioned.** Given the same tree path and the same
-declared ``assembly_version``, this procedure MUST produce a
-byte-identical output (Engine I4).
+declared `assembly_version`, this procedure MUST produce
+byte-identical output. v1 `assembly_version` is `"1"`; future
+versions land alongside their projection-rule changes in the test
+catalog.
 
-Phase 1 assembly_version: ``"1"``. Future versions land alongside their
-projection-rule changes in the test catalog and the schemas spec.
-
-Pure: no I/O, no clock reads, no random ordering. The engine wraps the
-output and hands it to the framework via :class:`Framework.run_exchange`.
+Pure: no I/O, no clock reads, no random ordering. The engine wraps
+the output and hands it to the framework via
+[`Framework.run_exchange`][engine.framework.Framework.run_exchange].
 """
 
 from __future__ import annotations
@@ -30,10 +30,11 @@ ASSEMBLY_VERSION = "1"
 class AssembledContext(BaseModel):
     """The output of the Assembly Procedure for one model call.
 
-    What §B.5 step 6 hands "to the model" — a system prompt, a
-    chronological message list, and the tool list. The engine bundles
-    these into :class:`engine.framework.LLMRequest` when calling the
-    LLM seam.
+    Carries what the procedure hands "to the model" — a system
+    prompt, a chronological message list, and the tool list. The
+    engine bundles these into
+    [`LLMRequest`][engine.framework.LLMRequest] when calling the LLM
+    seam.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -52,19 +53,21 @@ def assemble_context(
 ) -> AssembledContext:
     """Apply the Assembly Procedure to a path of events.
 
-    ``events`` is the chronological list from thread root → leaf (the
-    output of :meth:`SessionStore.read_path_to_leaf`).
+    Skills are rendered into the system prompt via the
+    `{{ skills }}` Jinja variable at pre-flight so the prompt
+    template controls placement and wording rather than receiving an
+    unconditional bolt-on at assembly time.
 
-    ``tool_schemas`` is the resolved tool list at the time of the
-    call. Not derived from events here — the engine passes it in
-    from the Tools subsystem's :meth:`list_registered_tools`.
+    Args:
+        events: The chronological list from thread root to leaf — the
+            output of `SessionStore.read_path_to_leaf`.
+        tool_schemas: The resolved tool list at call time. Not
+            derived from events here — the engine passes it in from
+            the Tools subsystem's `list_registered_tools`.
 
-    qol-skills-jinja-variable-symmetric-with-tools — the
-    ``skills_listing`` kwarg + post-append are gone. Skills are
-    rendered into the system prompt via the ``{{ skills }}`` Jinja
-    variable at pre-flight (``engine._render_prompt_if_needed``)
-    so the prompt template controls placement/wording rather than
-    receiving an unconditional bolt-on at assembly time.
+    Returns:
+        The [`AssembledContext`][engine.assembly.AssembledContext]
+        the engine bundles into the LLM request.
     """
     # Step 2 — find the most recent config.set on the path.
     config_event = _latest_event_of_type(events, EventType.CONFIG_SET)
@@ -84,7 +87,7 @@ def assemble_context(
     # (rendered at pre-flight), so there's no post-assembly append.
     system_prompt = _compose_system_prompt(resolved_config)
 
-    # Step 4 — project events to messages per the §B.5 table.
+    # Step 4 — project events to messages per the projection table.
     messages = _project_events(events)
 
     # Step 5 — tool definitions come from the engine, not events.
@@ -100,7 +103,7 @@ def assemble_context(
 
 
 # ---------------------------------------------------------------------------
-# Internal helpers — §B.5 steps 2-4
+# Internal helpers — Assembly Procedure steps 2-4
 # ---------------------------------------------------------------------------
 
 
@@ -116,10 +119,10 @@ def _latest_event_of_type(
 
 
 def _compose_system_prompt(resolved_config: dict[str, Any]) -> str:
-    """§B.5 step 3 — concatenate prompt layers in declared order.
+    """Concatenate prompt layers in declared order.
 
-    ``PromptSpec`` is ``list[str] | str`` per Schemas §A.6; we accept
-    either shape so the projection is robust to either form.
+    `PromptSpec` is `list[str] | str`; both shapes are accepted so the
+    projection is robust to either form.
     """
     prompt = resolved_config.get("prompt", "")
     if isinstance(prompt, str):
@@ -130,21 +133,21 @@ def _compose_system_prompt(resolved_config: dict[str, Any]) -> str:
 
 
 def _project_events(events: list[Event]) -> list[Message]:
-    """§B.5 step 4 — project each event to a model-facing message.
+    """Project each event to a model-facing message.
 
     Projection table (subset shipped in v1):
 
-    - ``user.message`` → one user message, content verbatim.
-    - ``agent.message`` → one assistant message, content verbatim.
-    - ``tool.called`` → folded into the preceding assistant message's
-      ``tool_calls`` (so the projection mirrors the chat-completions
+    - `user.message` → one user message, content verbatim.
+    - `agent.message` → one assistant message, content verbatim.
+    - `tool.called` → folded into the preceding assistant message's
+      `tool_calls` (so the projection mirrors the chat-completions
       shape). If the preceding event isn't an assistant message,
       synthesize a tool-call-only assistant turn.
-    - ``tool.result`` → one tool message with the result verbatim.
-    - ``tool.failed`` → one tool message with the error content.
-    - ``memory.retrieved`` → one system message wrapping the retrieved
-      content (variant: a system "context injection" per §B.6).
-    - all other types — not projected.
+    - `tool.result` → one tool message with the result verbatim.
+    - `tool.failed` → one tool message with the error content.
+    - `memory.retrieved` → one system message wrapping the retrieved
+      content (variant: a system "context injection").
+    - All other types — not projected.
     """
     messages: list[Message] = []
     for event in events:
@@ -204,17 +207,17 @@ def _project_events(events: list[Event]) -> list[Message]:
                     content=_format_memory_retrieval(results),
                 ),
             )
-        # All other event types: not projected (Schemas §B.5 step 4).
+        # All other event types: not projected.
     return messages
 
 
 def _extract_content_text(content: dict[str, Any] | str | None) -> str:
-    """Best-effort text projection for ``content`` blobs.
+    """Best-effort text projection for `content` blobs.
 
-    The events store ``content`` as a permissive dict (the engine
-    materializes whatever ``IOSpec.outputs`` produces); projection
+    The events store `content` as a permissive dict (the engine
+    materializes whatever `IOSpec.outputs` produces); projection
     here pulls a canonical text field for the message body. v1
-    convention: a ``text`` key wins; otherwise the dict is stringified
+    convention: a `text` key wins; otherwise the dict is stringified
     deterministically.
     """
     if content is None:
@@ -224,7 +227,7 @@ def _extract_content_text(content: dict[str, Any] | str | None) -> str:
     if "text" in content and isinstance(content["text"], str):
         return content["text"]
     # Deterministic JSON-style projection — sort keys so byte
-    # equality holds for replay (Engine I4).
+    # equality holds for replay.
     import json  # noqa: PLC0415
 
     return json.dumps(content, sort_keys=True, separators=(",", ":"))
@@ -241,11 +244,10 @@ def _error_message(err: dict[str, Any]) -> str:
 
 
 def _format_memory_retrieval(results: list[dict[str, Any]]) -> str:
-    """Format a ``memory.retrieved.data.results`` list as a system msg.
+    """Format a `memory.retrieved.data.results` list as a system msg.
 
-    Deterministic: each item dumped via ``json.dumps(sort_keys=True)``.
-    Replay produces the same string from the same captured content
-    (Materialization Rule §B.6).
+    Deterministic: each item dumped via `json.dumps(sort_keys=True)`.
+    Replay produces the same string from the same captured content.
     """
     if not results:
         return "<memory: no results>"

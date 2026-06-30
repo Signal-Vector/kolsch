@@ -1,34 +1,16 @@
-"""FakeFramework — reference implementation of :class:`Framework`.
+"""Reference implementation of [`Framework`][engine.framework.Framework].
 
-The v1 default framework for engine tests AND for development
+The v1 default framework for engine tests and for development
 scenarios where users want zero-LLM-cost runs against the Fake LLM.
-Engine-internal (lives in ``src/engine/``, not ``tests/fixtures/``)
+Engine-internal (lives in `src/engine/`, not `tests/fixtures/`)
 because it is shipped behavior, not a test fixture.
 
-The loop is intentionally minimal: build ``[system, user]``,
-call the LLM, dispatch any tool calls the LLM emits, append the
-tool result + assistant turn to the message list, repeat until the
-LLM returns a content-only response or ``cancellation`` fires. There
-is no per-exchange iteration cap; runaway loops are terminated by
-the user via Esc (which flips ``cancellation``).
-
-What this Framework promises (per the prereq design note):
-
-- Calls ``LLMHandle`` exactly once per iteration with the current
-  message list.
-- Dispatches every ``tool_call`` in the LLM's response through the
-  matching ``ToolHandle``; raises if no handle matches.
-- Polls ``cancellation`` between iterations; raises
-  :class:`asyncio.CancelledError` (Python idiom) if it fires.
-- Returns the LLM's text content when no tool calls remain.
-
-What this Framework does NOT promise (kept symmetric with what
-CrewAI would and would NOT provide):
-
-- No extra observability beyond what the LLM/tool seams surface.
-- No internal retry policy — retry is the engine's responsibility.
-- No prompt-template injection (CrewAI does this; FakeFramework
-  does not — the §B.6 amendment covers both shapes).
+The loop is deliberately minimal: build `[system, user]`, call the
+LLM, dispatch any tool calls the LLM emits, append the tool result +
+assistant turn to the message list, repeat until the LLM returns a
+content-only response or `cancellation` fires. There is no
+per-exchange iteration cap; runaway loops are terminated by the user
+via Esc (which flips `cancellation`).
 """
 
 from __future__ import annotations
@@ -46,7 +28,7 @@ if TYPE_CHECKING:
 
 
 class FakeFramework:
-    """Reference Framework for v1 — deterministic, zero-LLM-cost."""
+    """Deterministic, zero-LLM-cost reference framework."""
 
     def __init__(self, *, model_name: str = "fake") -> None:
         self._model_name = model_name
@@ -63,9 +45,9 @@ class FakeFramework:
         cancellation: Callable[[], bool] | None = None,
         cancel_token: Any = None,
     ) -> str:
-        # The engine's Assembly Procedure (§B.5) supplies `history`
-        # for multi-turn exchanges (prior user/assistant/tool turns
-        # already materialized in the log). For first-turn exchanges
+        # The engine's Assembly Procedure supplies `history` for
+        # multi-turn exchanges (prior user/assistant/tool turns
+        # already materialized in the log). For first-exchange runs
         # history is empty. The current `user_message` is appended
         # AFTER history so the model sees the new turn last.
         messages: list[Message] = [
@@ -86,12 +68,11 @@ class FakeFramework:
                 model=self._model_name,
                 parameters={},
             )
-            # bug-framework-cancellation-mid-call-latency.md — race
-            # the LLM call against the cancel token so an Esc during
-            # a hanging stream aborts within one event-loop tick of
-            # the flip instead of waiting for the call to return on
-            # its own. ``race_with_cancel`` is a no-op pass-through
-            # when ``cancel_token`` is None (test paths).
+            # Race the LLM call against the cancel token so an Esc
+            # during a hanging stream aborts within one event-loop
+            # tick of the flip instead of waiting for the call to
+            # return on its own. `race_with_cancel` is a no-op
+            # pass-through when `cancel_token` is None (test paths).
             response = await race_with_cancel(
                 llm(request), cancel_token, what="llm_call"
             )
@@ -129,12 +110,11 @@ class FakeFramework:
                     )
                     continue
 
-                # bug-mid-tool-cancellation-latency.md — same race
-                # treatment as the LLM call above. A 30s bash that
-                # the user cancels at 5s aborts within ~1 event-loop
-                # tick of the flip; the tool body itself sees the
-                # cancellation via ``ctx.cancellation`` and handles
-                # subprocess-side cleanup (SIGINT etc).
+                # Same race treatment as the LLM call above. A 30s
+                # bash that the user cancels at 5s aborts within ~1
+                # event-loop tick of the flip; the tool body itself
+                # sees the cancellation via `ctx.cancellation` and
+                # handles subprocess-side cleanup (SIGINT etc).
                 result = await race_with_cancel(
                     handle(
                         ToolCall(
@@ -160,8 +140,8 @@ def _stringify(value: object) -> str:
 
     Strings pass through; everything else is JSON-serialized with
     sorted keys + minimal separators so the projection is byte-stable
-    and round-trips through the Assembly Procedure's tool.result
-    projection rule (Materialization §B.6).
+    and round-trips through the Assembly Procedure's `tool.result`
+    projection rule.
     """
     if isinstance(value, str):
         return value

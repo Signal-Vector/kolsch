@@ -1,31 +1,27 @@
-"""The :class:`AgentEngine` — Module API Reference §11.
+"""The Agent Engine — recorder around the framework.
 
-The recorder around the framework, per agent-engine-contract §0:
-"The underlying framework (CrewAI in v1) does the agentic work — model
-calls, tool dispatch, retry loops. The engine prepares inputs,
+Implements the engine per the
+[agent engine contract](../../docs/explanation/agent-engine-contract.md):
+the wrapped framework (CrewAI in v1) does the agentic work — model
+calls, tool dispatch, retry loops; the engine prepares inputs,
 registers hooks, observes execution, emits events per the schema,
-returns the result."
-
-This file ships the engine wrapping the Framework Protocol from
-:mod:`engine.framework`. The default Framework in v1 is
-:class:`engine.fake_framework.FakeFramework` (engine-internal). A real
-CrewAI adapter ships in Step 12b.
+returns the result.
 
 The execute path:
 
-1. :meth:`execute_stream` — the streaming primitive. Spawns an internal
-   runner task that walks pre-flight (§2.1) + setup (§2.2) + framework
-   driver loop (§2.3-2.4) + finalize (§2.5), pushing events into an
-   asyncio.Queue. The generator yields events from the queue as they
-   land.
-2. :meth:`execute` — collects the stream; returns the final
-   :class:`schemas.Event` of type ``agent.message``; raises
-   :class:`AgentExecutionError` on Fatal failure.
+1. [`execute_stream`][engine.AgentEngine.execute_stream] — the
+   streaming primitive. Spawns an internal runner task that walks
+   pre-flight, framework setup, the framework driver loop, and
+   finalize, pushing events into an `asyncio.Queue`. The generator
+   yields events from the queue as they land.
+2. [`execute`][engine.AgentEngine.execute] — collects the stream;
+   returns the final `agent.message` event; raises
+   [`AgentExecutionError`][engine.AgentExecutionError] on Fatal
+   failure.
 
 Per-thread serialization: a lock per active thread ensures the
-``parent_event_id`` chain is well-formed even when the framework
-invokes the LLM/tool seams from concurrent callbacks. (Agent-engine
-spec §2.3 "Note on concurrent callbacks".)
+`parent_event_id` chain is well-formed even when the framework
+invokes the LLM/tool seams from concurrent callbacks.
 """
 
 from __future__ import annotations
@@ -99,19 +95,19 @@ _log = logging.getLogger("engine")
 # Sentinel pushed to the stream queue when the runner finishes.
 _QUEUE_END: Any = object()
 
-#: Phase 1 engine version — bump when the public contract changes.
+#: Engine version — bump when the public contract changes.
 ENGINE_VERSION = "0.1"
 
 
 class AgentEngine:
-    """The platform's Agent Engine — per Module API Reference §11.
+    """The platform's Agent Engine — long-lived, framework-agnostic.
 
     Constructor takes every subsystem the engine collaborates with
-    (per the dependency matrix in Module API Reference §12) plus the
-    chosen :class:`Framework` and an LLM callable. The LLM callable
-    is what the engine wraps inside :class:`_ObservedLLMHandle` and
-    hands to the framework — for tests, a Fake-LLM adapter; for the
-    Step 12b CrewAI adapter, a litellm-backed callable.
+    plus the chosen
+    [`Framework`][engine.framework.Framework] and an LLM callable.
+    The LLM callable is what the engine wraps inside the observed
+    LLM handle and hands to the framework — for tests, a Fake-LLM
+    adapter; for production, a litellm-backed callable.
     """
 
     def __init__(
@@ -148,18 +144,17 @@ class AgentEngine:
         self._authz = authz
         self._framework = framework
         self._llm = llm
-        # Phase 1.3 (Step 20) — async factory `llm_for_model` lets the
-        # fallback orchestrator lazily build per-attempt LLM clients.
-        # Tests can wire a `spec → FakeLLM` map; production wires
-        # `build_llm` via the bootstrap (`platform_runtime`). When the
-        # factory is None, fall back to wrapping `self._llm` so every
-        # spec returns the same callable — backward-compatible with
-        # Phase 1.1 / 1.2 tests that pass `llm=` directly.
+        # Async factory `llm_for_model` lets the fallback orchestrator
+        # lazily build per-attempt LLM clients. Tests can wire a
+        # `spec → FakeLLM` map; production wires `build_llm` via the
+        # bootstrap. When the factory is None, fall back to wrapping
+        # `self._llm` so every spec returns the same callable —
+        # backward-compatible with tests that pass `llm=` directly.
         self._llm_for_model = llm_for_model
-        # Phase 1.1 — pre-flight step 6 acquires a crewai.LLM via
-        # `build_llm` when `self._llm is None`. Tests still pass `llm=`
-        # directly to bypass this path; production wires
-        # `llm_providers_config` so build_llm has something to look up.
+        # Pre-flight acquires a `crewai.LLM` via `build_llm` when
+        # `self._llm is None`. Tests still pass `llm=` directly to
+        # bypass this path; production wires `llm_providers_config`
+        # so build_llm has something to look up.
         self._llm_providers_config: dict[str, ProviderConfig] = (
             llm_providers_config or {}
         )
@@ -168,14 +163,14 @@ class AgentEngine:
         # Per-thread lock map. Each execute call shares the lock so
         # concurrent framework callbacks serialize their event-construct
         # paths. The map persists across calls because engine instances
-        # are long-lived (I8 — statelessness is about exchange state,
-        # not in-process structural state like locks).
+        # are long-lived (statelessness is about exchange state, not
+        # in-process structural state like locks).
         self._thread_locks: dict[str, asyncio.Lock] = {}
 
     # ---- Public API ----------------------------------------------------
 
     def capabilities(self) -> EngineCapabilities:
-        """Module API Reference §11.1 — declare what this engine can do."""
+        """Declare what this engine can do."""
         return EngineCapabilities(
             engine_version=ENGINE_VERSION,
             assembly_versions=[ASSEMBLY_VERSION],
@@ -191,10 +186,32 @@ class AgentEngine:
         *,
         inputs: dict[str, Any] | None = None,
     ) -> Event:
-        """Sync convenience — collect the stream, return agent.message.
+        """Run one exchange and return the final agent.message event.
 
-        Raises :class:`AgentExecutionError` on Fatal failure, carrying
-        the ``thread.exchange_failed`` event (spec §1.6).
+        Collects the stream from
+        [`execute_stream`][engine.AgentEngine.execute_stream] and
+        returns the closing `agent.message`. For callers that need to
+        react event-by-event, use `execute_stream` instead. Unlike
+        `execute_stream`, this method **raises** on Fatal failure
+        rather than yielding a failed event as the last item.
+
+        Args:
+            config: The resolved agent configuration for this exchange.
+            context: The runtime payload — thread id, trigger,
+                optional cancellation token. See
+                [`ExecutionContext`][engine.context.ExecutionContext].
+            inputs: Single-shot mode inputs, forwarded to the
+                framework unchanged. `None` for conversational
+                triggers.
+
+        Returns:
+            The `agent.message` event closing the exchange.
+
+        Raises:
+            AgentExecutionError: Fatal exchange failure. Carries the
+                `thread.exchange_failed` event.
+            PlatformInternalError: Engine invariant violation —
+                should be unreachable.
         """
         agent_message: Event | None = None
         failed_event: Event | None = None
@@ -221,11 +238,26 @@ class AgentEngine:
         *,
         inputs: dict[str, Any] | None = None,
     ) -> AsyncIterator[Event]:
-        """Streaming primitive — yield each event as it is emitted.
+        """Yield each event as it is emitted, including failure events.
 
-        Per spec §1.6: this does NOT raise on Fatal failure. The
-        failed event is the final yielded item; the iterator ends
-        after it.
+        Unlike [`execute`][engine.AgentEngine.execute], this method
+        does NOT raise on Fatal failure: the failed event is the
+        final yielded item, and the iterator ends after it. Callers
+        that prefer a `try/except` shape should use `execute`
+        instead.
+
+        Args:
+            config: The resolved agent configuration for this
+                exchange.
+            context: The runtime payload — thread id, trigger,
+                optional cancellation token.
+            inputs: Single-shot mode inputs, forwarded to the
+                framework unchanged. `None` for conversational
+                triggers.
+
+        Yields:
+            Each [`Event`][schemas.Event] the engine emits during the
+            exchange, in append order.
         """
         queue: asyncio.Queue[Event | object] = asyncio.Queue()
         runner = asyncio.create_task(
@@ -300,8 +332,8 @@ class _Exchange:
     """Owns the state of one execute call.
 
     Not reusable; a fresh instance per execute. The engine instance
-    itself is durable across calls (I8 — statelessness is about
-    *exchange* state, not the engine object).
+    itself is durable across calls — statelessness is about
+    *exchange* state, not the engine object.
     """
 
     def __init__(
@@ -348,8 +380,9 @@ class _Exchange:
             # gets an empty stream and the wrapper at the boundary
             # raises.
             if self.session_id and self.exchange_started_id is None:
-                # Authz / capability denial — spec §2.1 step 3 requires
-                # emitting the failed event even without an exchange_started.
+                # Authz / capability denial — the engine contract
+                # requires emitting the failed event even without an
+                # exchange_started.
                 await self.emit_exchange_failed(exc, allow_no_started=True)
             elif self.exchange_started_id is not None:
                 await self.emit_exchange_failed(exc)
@@ -362,15 +395,14 @@ class _Exchange:
             await self.emit_exchange_failed(exc)
             return
         except Exception as exc:  # noqa: BLE001 — engine boundary
-            # bug-platform-internal-error-boundary-swallow.md Step 2 (B)
-            # — safety-net cause-chain inspection before falling back to
+            # Safety-net cause-chain inspection before falling back to
             # PlatformInternalError. The primary translation lives in
-            # the framework adapter (A); this catches anything that
-            # slipped past (future framework releases, paths the adapter
-            # doesn't yet cover). When a known typed exception appears
-            # in __cause__, re-classify so the user sees the right
-            # surface (e.g., model.upstream_error) instead of an
-            # opaque "internal platform error".
+            # the framework adapter; this catches anything that
+            # slipped past (future framework releases, paths the
+            # adapter doesn't yet cover). When a known typed
+            # exception appears in `__cause__`, re-classify so the
+            # user sees the right surface (e.g. model.upstream_error)
+            # instead of an opaque "internal platform error".
             from engine._classify import classify_from_cause_chain  # noqa: PLC0415
 
             classified = classify_from_cause_chain(exc, agent_id=self.agent_id)
@@ -383,7 +415,7 @@ class _Exchange:
 
         await self._finalize(agent_text)
 
-    # ---- Pre-flight (spec §2.1) ---------------------------------------
+    # ---- Pre-flight ---------------------------------------------------
 
     async def _preflight(self) -> None:
         # Step 1 — validate the resolved config. The kernel did this;
@@ -402,17 +434,17 @@ class _Exchange:
                 available=caps.assembly_versions,
             )
 
-        # Step 3 — authorization. principal = user.local per §1.8 v1.
+        # Step 3 — authorization. principal = user.local in v1.
         principal = "user.local"
         action = f"agent.execute.{self.agent_id}"
         # Look up thread/session early so we have session_id when raising.
         thread = await self.engine._store.get_thread(self.context.thread_id)
         self.session_id = str(thread.session_id)
 
-        # Phase 3.2 §13.x — pass the proximate-first caller_chain so
-        # workflow-spawned invocations surface the workflow→agent frame
-        # in the authz audit decision. Chat / API surfaces leave the
-        # chain empty and existing behaviour is unchanged.
+        # Pass the proximate-first caller_chain so workflow-spawned
+        # invocations surface the workflow→agent frame in the authz
+        # audit decision. Chat / API surfaces leave the chain empty
+        # and existing behaviour is unchanged.
         auth = await self.engine._authz.allow(
             principal,
             action,
@@ -429,12 +461,12 @@ class _Exchange:
             )
 
         # Step 4 — open session (already done at create_session time)
-        # + compute the thread's current leaf for parent_event_id wiring.
-        # SessionStore.get_leaf is called per-emit; nothing to do here
-        # beyond storing the session_id, which we already did.
+        # + compute the thread's current leaf for parent_event_id
+        # wiring. `SessionStore.get_leaf` is called per-emit; nothing
+        # to do here beyond storing the session_id (already done).
 
         # Step 5 — bind memory context, IF the agent has a memory
-        # subsystem configured. Phase 1 keeps the wired result on the
+        # subsystem configured. The wired result lives on the
         # exchange for tool-handler / future use.
         memory_sub = self.config.subsystems.get("memory")
         self.memory_ctx = None
@@ -448,53 +480,48 @@ class _Exchange:
                 config=memory_sub.config,
             )
 
-        # Step 6 — acquire LLM client for the primary model (spec §2.1
-        # step 6, post-Phase-1.3 FB-R3 retitle). When the engine was
-        # constructed without an `llm` callable, build one from this
-        # exchange's ModelSpec via `build_llm`. Tests inject `llm=`
-        # directly and skip this seam; production wires
+        # Step 6 — acquire LLM client for the primary model. When the
+        # engine was constructed without an `llm` callable, build one
+        # from this exchange's ModelSpec via `build_llm`. Tests inject
+        # `llm=` directly and skip this seam; production wires
         # `llm_providers_config` so the lookup has something to
         # resolve. The crewai.LLM lives on the exchange because each
         # exchange may target a different model.
         self.acquired_llm = await self._acquire_llm_if_needed()
 
-        # Step 7 — resolve fallback chain (Phase 1.3, FB-R3). Each
-        # entry's provider must be in `llm_providers`; clients are
-        # NOT built here (lazy construction is the engine loop's
-        # job per patch §2.1).
+        # Step 7 — resolve fallback chain. Each entry's provider must
+        # be in `llm_providers`; clients are NOT built here (lazy
+        # construction is the engine loop's job).
         self.fallback_chain = await self._resolve_fallback_chain()
 
         # Register tools with the Tools subsystem now (NOT with the
-        # framework — that happens in setup). The synthetic force-invoke
-        # read in step 9 routes through tools_subsystem.invoke_tool,
-        # which requires registration to have happened.
-        #
-        # Phase 2.2 Step 14 — registration is moved BEFORE step 8 so
-        # the prompt-render step has access to the registered tool
-        # metadata when building the ``tools`` variable.
+        # framework — that happens in setup). The synthetic
+        # force-invoke read in step 9 routes through
+        # `tools_subsystem.invoke_tool`, which requires registration
+        # to have happened. Registration runs BEFORE the prompt-render
+        # step so the render has access to the registered tool
+        # metadata when building the `tools` variable.
         await self._register_tools_with_subsystem()
 
-        # Phase 2.2 Step 14 — render the prompt template with the
-        # standardized variable context (spec §4 + §3 + agent-engine-
-        # contract §5.6.6). Replaces ``self.config.prompt`` with the
-        # rendered string so config.set persists the prompt the model
+        # Render the prompt template with the standardized variable
+        # context. Replaces `self.config.prompt` with the rendered
+        # string so `config.set` persists the prompt the model
         # actually saw. Plain-text prompts (no Jinja markers) survive
-        # the round-trip byte-identical via the StrictUndefined render
-        # harness.
+        # the round-trip byte-identical via the StrictUndefined
+        # render harness.
         await self._render_prompt_if_needed()
 
-        # Step 8 — emit config.set if the current effective config
-        # differs from the most recent config.set on the thread.
+        # Step 8 — emit `config.set` if the current effective config
+        # differs from the most recent `config.set` on the thread.
         await self._emit_config_set_if_changed()
 
         # Step 9 — process force-invoke skills, if any.
         await self._process_force_invoke()
 
-        # Step 10 — emit thread.exchange_started. The trigger_event_id
-        # is what we materialize in step 11; emit a placeholder then
-        # patch? Spec says it's the trigger event id. Phase 1 simplest
-        # path: pre-allocate the user.message id, emit exchange_started
-        # carrying that id, then emit user.message under that id.
+        # Step 10 — emit `thread.exchange_started`. The trigger_event_id
+        # is the trigger event id; pre-allocate the user.message id,
+        # emit exchange_started carrying that id, then emit user.message
+        # under that id.
         self.user_message_event_id = f"ev_{uuid4()}"
         started = await self._emit(
             type_=EventType.THREAD_EXCHANGE_STARTED,
@@ -516,33 +543,19 @@ class _Exchange:
         )
 
     async def _acquire_llm_if_needed(self) -> crewai.LLM | None:
-        """Spec §2.1 step 6 — acquire a crewai.LLM via build_llm.
+        """Acquire a `crewai.LLM` via `build_llm` for the primary spec.
 
-        Skipped (returns ``None``) when the engine was constructed
-        with a callable `llm` — that's the test path. The test path
-        keeps working unchanged.
-
-        When `engine._llm is None`, this is the production path:
-
-        - Look up the configured provider in
-          :attr:`AgentEngine._llm_providers_config` (read from
-          platform.yaml at runtime bootstrap).
-        - Call :func:`llm.build_llm` with the agent's `ModelSpec` +
-          the provider config + secrets.
-        - Return the constructed ``crewai.LLM`` for use by the
-          framework adapter.
-
-        The framework adapter that turns the ``crewai.LLM`` into the
-        engine's ``LLMHandle`` shape ships in a follow-up patch; this
-        method only realises the lookup + construction seam.
-
-        Phase 1.3+ (Step 20 + bug-echo-on-real-provider follow-up): when
-        ``llm_for_model`` is wired, the per-spec factory handles
-        construction lazily at call time (including ``provider:
-        "fake"`` → EchoLLMDriver). The pre-flight acquire becomes
-        redundant — skip it. Pre-Phase-1.3 callers that only wire
-        ``llm=`` still get the test-path short-circuit at the top of
-        this method.
+        Skipped (returns `None`) when the engine was constructed
+        with a callable `llm` — the test path keeps working
+        unchanged. Also skipped when `llm_for_model` is wired: the
+        per-spec factory handles construction lazily at call time
+        (including `provider: "fake"` → EchoLLMDriver). Otherwise
+        the configured provider is looked up in
+        `AgentEngine._llm_providers_config` (read from
+        `platform.yaml` at runtime bootstrap), `build_llm` is called
+        with the agent's `ModelSpec`, the provider config, and
+        secrets, and the constructed `crewai.LLM` is returned for
+        use by the framework adapter.
         """
         if self.engine._llm is not None:
             return None
@@ -569,17 +582,14 @@ class _Exchange:
         [ModelSpec],
         Awaitable[Callable[[LLMRequest], Awaitable[LLMResponse]]],
     ]:
-        """Return the per-spec LLM factory the
-        :class:`FallbackLLMHandle` uses to lazily construct attempt
-        clients.
+        """Return the per-spec LLM factory the orchestrator uses.
 
-        Production callers wire ``llm_for_model=`` at engine
-        construction (typically a closure around `llm.build_llm` +
-        the runtime's `llm_providers_config`). Pre-Phase-1.3 callers
-        passing only `llm=` get a degenerate factory that returns
-        the same single callable for every spec — fallback still
-        works in tests, but every chain entry calls the same
-        underlying LLM.
+        Production callers wire `llm_for_model=` at engine
+        construction (typically a closure around `llm.build_llm` and
+        the runtime's `llm_providers_config`). Callers passing only
+        `llm=` get a degenerate factory that returns the same single
+        callable for every spec — fallback still works in tests,
+        but every chain entry calls the same underlying LLM.
         """
         per_spec = self.engine._llm_for_model
         if per_spec is not None:
@@ -606,20 +616,17 @@ class _Exchange:
         return _single_factory
 
     async def _resolve_fallback_chain(self) -> list[ModelSpec]:
-        """Spec §2.1 step 7 (Phase 1.3 FB-R3) — resolve + validate the
-        agent's fallback chain. Clients are NOT built here.
+        """Resolve and validate the agent's fallback chain.
 
-        - If the agent specifies ``fallback_models`` (even ``[]``),
-          that wins per FB-R2 precedence.
-        - Otherwise the platform default (``defaults.fallback_models``)
-          is used. Phase 1.3 keeps this lookup out of the engine
-          (`platform_runtime.bootstrap_runtime` already merged
-          defaults into the agent config), so the engine just reads
-          ``config.fallback_models``.
+        Reads `config.fallback_models` — the platform default
+        (`defaults.fallback_models`) is already merged in by
+        bootstrap, so the engine only reads the resolved field. If
+        the agent specifies `fallback_models` (even `[]`), that
+        wins. Clients are NOT built here.
 
-        Validates each entry's provider is in ``llm_providers``.
-        Emits a `config.fallback_duplicate` warning per duplicate
-        (Diagnostic — see Error Model §4.15).
+        Validates each entry's provider is in `llm_providers`. Emits
+        a `config.fallback_duplicate` warning per duplicate
+        (Diagnostic).
         """
         from engine._fallback import build_fallback_chain  # noqa: PLC0415
 
@@ -632,19 +639,23 @@ class _Exchange:
             configured_providers=configured,
             emit_warning=warnings.append,
         )
-        # Phase 1.3 review #3 — surface duplicates visibly. For now
-        # the engine forwards them as Diagnostic-level platform-log
-        # warnings; a future patch may add a real CLI banner. Tests
-        # observe them via `_Exchange.fallback_warnings` (kept for
-        # introspection).
+        # Surface duplicates visibly. For now the engine forwards
+        # them as Diagnostic-level platform-log warnings; a future
+        # patch may add a real CLI banner. Tests observe them via
+        # `_Exchange.fallback_warnings` (kept for introspection).
         self.fallback_warnings: list[ConfigFallbackDuplicate] = warnings
         for w in warnings:
             _log.warning("%s", str(w))
         return chain
 
     async def _emit_config_set_if_changed(self) -> None:
-        """Spec §2.1 step 8 — emit config.set when the effective config
-        differs from the most recent config.set on the path (or none)."""
+        """Emit `config.set` when the effective config has changed.
+
+        Walks the path for the most recent `config.set` event and
+        compares its `resolved_config` to the current one; emits a
+        new event only when they differ (or when no prior event
+        exists).
+        """
         cur_resolved = self.config.model_dump(mode="json")
         # Walk path, find latest config.set.
         latest_set: Event | None = None
@@ -673,29 +684,25 @@ class _Exchange:
         self.config_event_id = str(evt.event_id)
 
     async def _render_prompt_if_needed(self) -> None:
-        """Phase 2.2 Step 14 / spec §3 + §4 — render the agent's
-        Jinja2 prompt template with the standardized variable
-        context.
+        """Render the agent's Jinja2 prompt template with the standard vars.
 
-        Build the five top-level variables (``tools`` / ``docs`` /
-        ``workspace`` / ``agent`` / ``platform``) from the resolved
-        config + runtime state, call
-        :func:`templating.render.render_prompt`, and replace
-        ``self.config`` with a :meth:`pydantic.BaseModel.model_copy`
-        carrying the rendered string. A prompt with no Jinja markers
-        renders byte-identical to itself, so every Phase 1.x agent
-        survives the round-trip untouched.
+        Builds the top-level variables (`tools`, `docs`, `workspace`,
+        `agent`, `platform`, `skills`) from the resolved config and
+        runtime state, calls `templating.render.render_prompt`, and
+        replaces `self.config` with a `model_copy` carrying the
+        rendered string. A prompt with no Jinja markers renders
+        byte-identical to itself, so plain-text agents survive the
+        round-trip untouched.
 
         Walks the prompt's Jinja AST after render and emits
-        ``agent.template_warning`` (Recoverable) for variable
-        accesses whose data is empty (e.g. ``{{ tools }}``
-        referenced + agent declares no tools) per spec §9.
+        `agent.template_warning` (Recoverable) for variable accesses
+        whose data is empty (e.g. `{{ tools }}` referenced but the
+        agent declares no tools).
         """
         prompt = self.config.prompt
         if not isinstance(prompt, str):
-            # Layered list-form prompts pre-date Phase 2.2 — engine
-            # treats them as fully pre-resolved by the asset
-            # manager. Skip the render.
+            # Layered list-form prompts are treated as fully
+            # pre-resolved by the asset manager — skip the render.
             return
 
         from templating import render_prompt  # noqa: PLC0415
@@ -745,14 +752,12 @@ class _Exchange:
             )
         tools_var = ToolsVar(tool_items)
 
-        # SkillsVar — qol-skills-jinja-variable-symmetric-with-tools.
-        # The Jinja path renders the skills block from a template
-        # variable instead of the pre-QoL post-append at
-        # ``assembly.py:83-87`` (deleted). ``get_enabled_skills``
-        # returns disabled skills too (so force-invoke can route to
-        # them — Sk-I2 / spec §6.5); we filter them out here so the
-        # model-facing prompt matches the pre-QoL
-        # ``format_skills_listing`` behaviour.
+        # SkillsVar — the Jinja path renders the skills block from a
+        # template variable instead of a post-append at assembly time.
+        # `get_enabled_skills` returns disabled skills too (so
+        # force-invoke can route to them); we filter them out here so
+        # the model-facing prompt matches the historical
+        # `format_skills_listing` behaviour.
         enabled_skills = await self.engine._skills.get_enabled_skills(self.config)
         skill_items: list[SkillItem] = [
             SkillItem(name=s.name, description=s.description, ref=s.ref)
@@ -761,7 +766,7 @@ class _Exchange:
         ]
         skills_var = SkillsVar(skill_items)
 
-        # DocsVar — load each ContextFileSpec via Step 12.
+        # DocsVar — load each ContextFileSpec.
         from templating.context_files import (  # noqa: PLC0415
             load_context_file,
         )
@@ -824,8 +829,7 @@ class _Exchange:
             "platform": platform_var,
         }
 
-        # bug-engine-extends-parent-not-rendered.md Step 2 — three
-        # paths for prompt render:
+        # Three paths for prompt render:
         #
         #   1. orphan: prompt has `{% extends parent %}` but the
         #      YAML has no `extends:` field → typed Fatal so the
@@ -834,9 +838,8 @@ class _Exchange:
         #   2. inheritance: prompt has an `extends:` field → walk
         #      the parent chain via the catalog and render via
         #      `render_with_parents` (DictLoader-backed env).
-        #   3. plain: the historical Phase 2.2 path —
-        #      `render_prompt` with the no-loader StrictUndefined
-        #      env.
+        #   3. plain: `render_prompt` with the no-loader
+        #      StrictUndefined env.
         #
         # Order is load-bearing: the orphan check must fire BEFORE
         # `render_prompt` because that path's env has no loader and
@@ -876,10 +879,10 @@ class _Exchange:
         # ResolvedAgentConfig is frozen so we go through model_copy.
         self.config = self.config.model_copy(update={"prompt": rendered})
 
-        # Phase 2.2 §9 — emit agent.template_warning for empty-data
-        # references. Minimal first cut: warn when the prompt
-        # references the variable name but the corresponding data is
-        # empty. Step 15 can broaden this to the full AST walk.
+        # Emit `agent.template_warning` for empty-data references.
+        # Minimal first cut: warn when the prompt references the
+        # variable name but the corresponding data is empty. A future
+        # patch can broaden this to a full AST walk.
         from schemas import AgentTemplateWarningData  # noqa: PLC0415
 
         warnings: list[tuple[str, str, str]] = []
@@ -902,8 +905,7 @@ class _Exchange:
                     "add a context_files: entry or remove the reference",
                 )
             )
-        # qol-skills-jinja-variable-symmetric-with-tools — symmetric
-        # warning for the ``{{ skills }}`` variable.
+        # Symmetric warning for the `{{ skills }}` variable.
         if "skills" in prompt and skills_var.count == 0:
             warnings.append(
                 (
@@ -914,13 +916,12 @@ class _Exchange:
                     "or remove the reference",
                 )
             )
-        # qol-skills-jinja-variable-symmetric-with-tools — migration
-        # warning. Pre-QoL, every rendered prompt got an auto-appended
-        # ``## Available Skills`` block whether the template asked for
-        # it or not. Post-QoL the prompt owns rendering; agents that
-        # declare skills but whose template doesn't reference them
-        # would silently lose the listing. Fire a Recoverable so the
-        # author sees the gap on first agent-load.
+        # Migration warning. Historically, every rendered prompt got
+        # an auto-appended `## Available Skills` block whether the
+        # template asked for it or not. Now the prompt owns rendering;
+        # agents that declare skills but whose template doesn't
+        # reference them would silently lose the listing. Fire a
+        # Recoverable so the author sees the gap on first agent-load.
         if skills_var.count > 0 and "skills" not in prompt:
             warnings.append(
                 (
@@ -929,7 +930,7 @@ class _Exchange:
                     "{{ skills }} — the auto-appended listing was removed "
                     "in qol-skills-jinja-variable-symmetric-with-tools.md",
                     "add a `{{ skills }}` block to the prompt template "
-                    "(see docs/explanation/tools-subsystem.md §7.5)",
+                    "(see docs/explanation/tools-subsystem.md)",
                 )
             )
         for reference, reason, hint in warnings:
@@ -944,34 +945,28 @@ class _Exchange:
             )
 
     async def _register_tools_with_subsystem(self) -> None:
-        """Register builtins/declared tools with the Tools subsystem.
+        """Register builtins / declared tools with the Tools subsystem.
 
-        Per bug-engine-tools-wiring-gap.md (resolved Step D+E, PR 1):
-        resolve every ``subsystems.tools.config.declared[*].ref`` via
-        :meth:`AssetManagement.get_asset` to its on-disk Path, then
-        pass the collected paths to ``register_for_agent`` alongside
-        any builtins. Without this resolution, the helper agent's
-        four declared tools (read_file / write_file / list_files /
-        bash) never reach the framework — the model gets zero tools
-        and hallucinates output.
+        Resolves every `subsystems.tools.config.declared[*].ref` via
+        `AssetManagement.get_asset` to its on-disk Path, then passes
+        the collected paths to `register_for_agent` alongside any
+        builtins. Without this resolution, declared tools never
+        reach the framework — the model gets zero tools and
+        hallucinates output.
 
-        Re-registration is idempotent — :meth:`ToolsSubsystem.register_for_agent`
-        overwrites in-place. We do it on every execute so a config
-        change (different tools enabled) takes effect (I8 — no exchange
-        state carried). The asset-management catalog is built once at
-        bootstrap so the ``get_asset`` lookups are cheap; the actual
-        Python imports happen inside ``discover_tools_in_file`` and
-        hit Python's module cache on the second-and-subsequent
-        invocations.
+        Re-registration is idempotent — `register_for_agent`
+        overwrites in-place. The engine re-registers on every
+        execute so a config change (different tools enabled) takes
+        effect. The asset-management catalog is built once at
+        bootstrap so the `get_asset` lookups are cheap; the actual
+        Python imports happen inside `discover_tools_in_file` and
+        hit Python's module cache on subsequent invocations.
 
-        Missing refs raise :class:`ConfigUnknownTool` (Fatal) per
-        coordinator resolution to bug-engine-tools-wiring-gap.md Q1
-        (option (b)): enforce at engine pre-flight rather than at
-        Layer 3 validator. FUL-1 tracks the validator-side
-        enforcement for server / lint-style usage.
-
-        MCP servers are still deferred — Phase 2.0 spec §3.3
-        documents the shape; engine wiring lands in a later phase.
+        Missing refs raise
+        [`ConfigUnknownTool`][errors.ConfigUnknownTool] (Fatal). MCP
+        servers are still deferred — the shape is documented in the
+        tools subsystem contract; engine wiring lands in a later
+        phase.
         """
         tools_sub = self.config.subsystems.get("tools")
         if tools_sub is None:
@@ -982,14 +977,13 @@ class _Exchange:
             list(body.get("declared", []) or []),
         )
 
-        # qol-tool-permission-discovery-uniform-with-stacking.md Step 2 —
-        # thread the agent's permissions + its home bundle's
+        # Thread the agent's permissions + its home bundle's
         # permissions to the tools subsystem so the dispatcher hands
-        # them to ``authz.allow``. The provider walks
+        # them to `authz.allow`. The provider walks
         # agent → bundle → platform → no-rule callback → default-deny.
         # PermissionRule is structurally identical to Rule; the
         # provider's compile path accepts either via duck-typing of
-        # the .who / .what / .effect fields.
+        # the `.who` / `.what` / `.effect` fields.
         from providers.authz import Rule  # noqa: PLC0415
 
         agent_rules: list[Rule] = [
@@ -1012,15 +1006,15 @@ class _Exchange:
             declared_paths=declared_paths,
             agent_permissions=agent_rules,
             bundle_permissions=bundle_rules,
-            # qol-action-namespace-bundle-scoped.md Step 2 — the same
-            # home_bundle resolved above for sourcing bundle_permissions
-            # also stamps each ToolDefinition's home_bundle so its
-            # action_name resolves to the 3-seg catalog ref
-            # ``<home_bundle>/tools/<name>``. Falls through as None for
-            # synthetic test configs not backed by a catalog bundle —
-            # the subsystem falls back to "kolsch" for builtins and to
-            # the legacy 1-seg action form for declared tools in that
-            # case (preserves Phase 1 programmatic test behaviour).
+            # The same home_bundle resolved above for sourcing
+            # bundle_permissions also stamps each ToolDefinition's
+            # home_bundle so its action_name resolves to the 3-seg
+            # catalog ref `<home_bundle>/tools/<name>`. Falls through
+            # as None for synthetic test configs not backed by a
+            # catalog bundle — the subsystem falls back to "kolsch"
+            # for builtins and to the legacy 1-seg action form for
+            # declared tools in that case (preserves programmatic
+            # test behaviour).
             home_bundle=home_bundle,
         )
         # MCP server registration lands when the MCP wiring patch ships.
@@ -1029,17 +1023,18 @@ class _Exchange:
         self,
         declared_entries: list[dict[str, Any]],
     ) -> list[Path]:
-        """Resolve each declared tool's ``ref`` to an on-disk Path.
+        """Resolve each declared tool's `ref` to an on-disk Path.
 
         The asset catalog (built at runtime bootstrap via
-        :meth:`AssetManagement.initialize`) already scanned every
-        bundle's ``tools/`` directory and produced an
-        :class:`AssetEntry` per file. This method maps each
-        config-supplied ref to its catalog entry's ``path`` field.
+        `AssetManagement.initialize`) already scanned every bundle's
+        `tools/` directory and produced an `AssetEntry` per file.
+        This method maps each config-supplied ref to its catalog
+        entry's `path` field.
 
-        Missing refs surface as :class:`ConfigUnknownTool` (Fatal)
-        with the available refs listed in the error detail so the
-        user sees an actionable error rather than a silent-skip.
+        Missing refs surface as
+        [`ConfigUnknownTool`][errors.ConfigUnknownTool] (Fatal) with
+        the available refs listed in the error detail so the user
+        sees an actionable error rather than a silent-skip.
         """
         from errors import AssetsNotFound, ConfigUnknownTool  # noqa: PLC0415
 
@@ -1071,9 +1066,12 @@ class _Exchange:
         return paths
 
     async def _process_force_invoke(self) -> None:
-        """Spec §2.1 step 9 — for each force-invoke skill, emit a
-        synthetic ``tool.called``/``tool.result`` pair for ``read`` on
-        the SKILL.md path, with principal=system."""
+        """Emit a synthetic read for each force-invoke skill.
+
+        For each entry in the trigger's `force_skills` list, emits a
+        `tool.called` / `tool.result` pair for `read` on the
+        SKILL.md path, with `principal="system"`.
+        """
         trigger = self.context.trigger
         if trigger.get("kind") != "user_message_with_force_skill":
             return
@@ -1090,7 +1088,7 @@ class _Exchange:
             )
 
             tool_call_id = f"tc_force_{uuid4()}"
-            # Emit synthetic tool.called (principal: system per §1.8).
+            # Emit synthetic tool.called (principal: system).
             await self._emit(
                 type_=EventType.TOOL_CALLED,
                 data=ToolCalledData(
@@ -1101,7 +1099,7 @@ class _Exchange:
                 actor=Actor(kind="system"),
             )
             # Drive the read tool via the Tools subsystem with
-            # principal=system per §1.8.
+            # principal=system.
             try:
                 result = await self.engine._tools.invoke_tool(
                     tool_name="read",
@@ -1150,7 +1148,7 @@ class _Exchange:
     # ---- Framework setup + driver loop --------------------------------
 
     async def _run_framework(self) -> str:
-        # §2.2 step 10 — build assembled context.
+        # Build assembled context.
         events = [
             e
             async for e in self.engine._store.read_path_to_leaf(
@@ -1158,12 +1156,9 @@ class _Exchange:
             )
         ]
 
-        # qol-skills-jinja-variable-symmetric-with-tools — the
-        # ``format_skills_listing`` post-append is gone. Skills are
-        # rendered into the prompt as the ``{{ skills }}`` Jinja
-        # variable during pre-flight (``_render_prompt_if_needed``)
-        # so the assembly here only handles the message projection +
-        # tool schemas.
+        # Skills are rendered into the prompt as the `{{ skills }}`
+        # Jinja variable during pre-flight, so the assembly here only
+        # handles the message projection and tool schemas.
         registered = self.engine._tools.list_registered_tools(
             self.agent_id,  # type: ignore[arg-type]
         )
@@ -1177,35 +1172,33 @@ class _Exchange:
             tool_schemas=tool_schemas,
         )
 
-        # §2.2 step 12 — register the LLM/tool seams the framework
-        # will invoke.
+        # Register the LLM/tool seams the framework will invoke.
         #
-        # The LLM seam is :class:`FallbackLLMHandle` from Phase 1.3
-        # (Step 20): it wraps the per-attempt observation that the
-        # pre-1.3 :class:`_ObservedLLMHandle` did, plus the
-        # chain loop. The factory we hand it produces a per-attempt
-        # ``Callable[[LLMRequest], Awaitable[LLMResponse]]``:
+        # The LLM seam is `FallbackLLMHandle`: it wraps per-attempt
+        # observation plus the chain loop. The factory we hand it
+        # produces a per-attempt
+        # `Callable[[LLMRequest], Awaitable[LLMResponse]]`:
         #
-        # - If the engine was constructed with `llm_for_model=`
-        #   (the per-spec factory — production wires this via
-        #   `platform_runtime`'s build_llm), use it directly. Each
+        # - If the engine was constructed with `llm_for_model=` (the
+        #   per-spec factory — production wires this via
+        #   `platform_runtime`'s `build_llm`), use it directly. Each
         #   chain entry gets its own client built lazily.
-        # - If only `llm=` was passed (Phase 1.1/1.2 tests + the default-tier
+        # - If only `llm=` was passed (tests + the default-tier
         #   EchoLLMDriver bootstrap), wrap it so every spec returns
         #   the same callable. The chain still works; just every
         #   entry calls the same underlying llm.
-        # - If neither, raise PlatformInternalError — the engine
-        #   has no way to make an LLM call.
+        # - If neither, raise PlatformInternalError — the engine has
+        #   no way to make an LLM call.
         llm_factory = self._build_llm_factory()
         from engine._fallback import FallbackLLMHandle, StreamState  # noqa: PLC0415
 
-        # Phase 1.3 patch §2.3 — the orchestrator consults this
-        # StreamState before advancing the chain on a Recoverable
-        # error. Once a streaming connector marks
-        # `mark_content_emitted()`, fallback is short-circuited and
-        # the engine emits `thread.exchange_failed` with the
-        # truncation visible. Non-streaming connectors (today: all
-        # of them) never set the flag, so behaviour is unchanged.
+        # The orchestrator consults this StreamState before advancing
+        # the chain on a Recoverable error. Once a streaming
+        # connector marks `mark_content_emitted()`, fallback is
+        # short-circuited and the engine emits
+        # `thread.exchange_failed` with the truncation visible.
+        # Non-streaming connectors (today: all of them) never set
+        # the flag, so behaviour is unchanged.
         self.stream_state = StreamState()
         llm_handle = FallbackLLMHandle(
             emit=self._emit_void,
@@ -1227,9 +1220,8 @@ class _Exchange:
                     self.agent_id,  # type: ignore[arg-type]
                     t.name,
                 ),
-                # bug-mid-tool-cancellation-latency.md — thread the
-                # exchange's CancelToken so tool bodies receive it
-                # via ``ctx.cancellation``.
+                # Thread the exchange's CancelToken so tool bodies
+                # receive it via `ctx.cancellation`.
                 cancel=self.cancel,
             )
             for t in registered
@@ -1237,13 +1229,13 @@ class _Exchange:
         # Filter any None defns (shouldn't happen if registration is sound).
         tool_handles = [h for h in tool_handles if h.name]
 
-        # §2.3 — hand to the framework. The user_message text is the
-        # most recent user.message's content text projection; history
-        # is everything BEFORE it (prior turns from the path).
+        # Hand to the framework. The user_message text is the most
+        # recent user.message's content text projection; history is
+        # everything BEFORE it (prior turns from the path).
         user_message_text = _last_user_text(assembled.messages)
         history_messages = _history_before_last_user(assembled.messages)
 
-        # §2.7 — engine-owned retry on Recoverable failures.
+        # Engine-owned retry on Recoverable failures.
         max_attempts = self.config.runtime.max_retries + 1
         attempts_data: list[dict[str, Any]] = []
         last_exc: PlatformError | None = None
@@ -1262,9 +1254,8 @@ class _Exchange:
                     llm=llm_handle,
                     tools=tool_handles,
                     cancellation=self.cancel.is_cancelled,
-                    # bug-framework-cancellation-mid-call-latency.md —
-                    # the raw token gives the framework access to
-                    # ``wait_cancelled()`` so it can race in-flight
+                    # The raw token gives the framework access to
+                    # `wait_cancelled()` so it can race in-flight
                     # awaits instead of only polling at iteration
                     # boundaries.
                     cancel_token=self.cancel,
@@ -1284,18 +1275,13 @@ class _Exchange:
                     cancelled_at_event_id=self.exchange_started_id or "",
                 ) from None
             except Exception as exc:  # noqa: BLE001 — in-loop classifier
-                # bug-platform-internal-error-boundary-swallow.md 0.3
-                # — IN-LOOP cause-chain classifier (the primary fix per
-                # 0.3). 0.2 put the classifier at the outer boundary,
-                # which correctly re-typed non-PlatformErrors but ran
-                # too late — the retry loop had already exited. With
-                # this block, a transport failure whose ``__cause__``
-                # carries a known typed exception (e.g.
-                # ``openai.APITimeoutError`` through CrewAI's
-                # adapter's ``raise ConnectionError(...) from e``)
-                # classifies as ``ModelUpstreamError`` (Recoverable)
-                # and the loop retries up to ``max_retries+1`` attempts
-                # before exhausting. ``runtime.max_retries`` finally
+                # IN-LOOP cause-chain classifier. A transport failure
+                # whose `__cause__` carries a known typed exception
+                # (e.g. `openai.APITimeoutError` through CrewAI's
+                # adapter's `raise ConnectionError(...) from e`)
+                # classifies as ModelUpstreamError (Recoverable) and
+                # the loop retries up to `max_retries+1` attempts
+                # before exhausting. `runtime.max_retries` finally
                 # means something for transport hiccups.
                 #
                 # Branch table:
@@ -1303,19 +1289,17 @@ class _Exchange:
                 #                       continue (mirrors the
                 #                       PlatformError-Recoverable
                 #                       branch above).
-                #   Fatal match       → ``raise classified from exc``
-                #                       so the outer ``except
-                #                       PlatformError`` at run() picks
-                #                       it up as the typed surface
-                #                       (e.g. ``agent.unauthorized``
-                #                       instead of
-                #                       ``platform.internal_error``).
-                #   No match          → bare ``raise``; the outer
-                #                       boundary's cause-chain
-                #                       safety net (0.2's wiring at
-                #                       engine.py:364-385) takes
-                #                       over, ultimately falling
-                #                       through to
+                #   Fatal match       → `raise classified from exc`
+                #                       so the outer
+                #                       `except PlatformError` at
+                #                       run() picks it up as the
+                #                       typed surface (e.g.
+                #                       `agent.unauthorized` instead
+                #                       of `platform.internal_error`).
+                #   No match          → bare `raise`; the outer
+                #                       boundary's cause-chain safety
+                #                       net takes over, ultimately
+                #                       falling through to
                 #                       PlatformInternalError for
                 #                       genuine engine bugs.
                 from engine._classify import (  # noqa: PLC0415
@@ -1370,10 +1354,10 @@ class _Exchange:
         if self.exchange_started_id is None and not allow_no_started:
             # Without a started id we cannot satisfy the data shape.
             return
-        # Spec §2.1 step 3 — pre-flight failures (e.g. authz denial)
-        # MUST emit thread.exchange_failed even when no
-        # thread.exchange_started preceded. The data shape requires a
-        # non-empty EventId; synthesize a placeholder when missing.
+        # Pre-flight failures (e.g. authz denial) MUST emit
+        # thread.exchange_failed even when no thread.exchange_started
+        # preceded. The data shape requires a non-empty EventId;
+        # synthesize a placeholder when missing.
         started_id = self.exchange_started_id or f"ev_{uuid4()}"
         await self._emit(
             type_=EventType.THREAD_EXCHANGE_FAILED,
@@ -1394,16 +1378,16 @@ class _Exchange:
         actor: Actor,
         event_id_override: EventId | None = None,
     ) -> Event:
-        """Append + publish + queue. Serialized per thread.
+        """Append, publish, and queue one event. Serialized per thread.
 
-        Phase 3.2 §11.6.4 — every event the engine emits carries the
-        :attr:`ExecutionContext.trace_id` set by the caller (the workflow
-        agent runner stamps it from the workflow run's ``trace_id``).
-        Chat / API surfaces leave it ``None`` and the envelope field
-        stays ``None``; the cross-JSONL correlation is opt-in at the
-        ``ExecutionContext`` level, but the engine's stamping is
-        unconditional so a callsite that DOES set it can't accidentally
-        forget to surface it.
+        Every event the engine emits carries the
+        [`ExecutionContext.trace_id`][engine.context.ExecutionContext]
+        set by the caller (the workflow agent runner stamps it from
+        the workflow run's `trace_id`). Chat / API surfaces leave it
+        `None` and the envelope field stays `None`; cross-JSONL
+        correlation is opt-in at the `ExecutionContext` level, but
+        the engine's stamping is unconditional so a callsite that
+        DOES set it can't accidentally forget to surface it.
         """
         async with self._lock:
             leaf = await self.engine._store.get_leaf(self.context.thread_id)
@@ -1441,9 +1425,11 @@ class _Exchange:
         data: dict[str, Any],
         actor: Actor,
     ) -> None:
-        """Observer-facing emit — returns None to match the
-        :class:`Callable[..., Awaitable[None]]` shape the observers
-        expect (they don't need the appended event)."""
+        """Observer-facing emit that drops the appended-event return.
+
+        Matches the `Callable[..., Awaitable[None]]` shape the
+        observers expect — they don't need the appended event.
+        """
         await self._emit(type_=type_, data=data, actor=actor)
 
 
@@ -1453,7 +1439,7 @@ class _Exchange:
 
 
 def _extract_trigger_content(trigger: dict[str, Any]) -> dict[str, Any]:
-    """§2.1 step 11 — produce the ``user.message.data.content`` dict."""
+    """Produce the `user.message.data.content` dict from a trigger."""
     kind = trigger.get("kind")
     if kind in ("user_message", "user_message_with_force_skill"):
         content = trigger.get("content")

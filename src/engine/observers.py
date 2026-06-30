@@ -1,17 +1,16 @@
 """Engine seam wrappers — the in-band observation path.
 
-The two wrappers below implement the Framework Protocol's
-:class:`LLMHandle` and :class:`ToolHandle` Protocols. The engine
-constructs them per exchange and hands them to
-:meth:`Framework.run_exchange`; the framework invokes them; the engine
-captures events around each call.
+The two wrappers implement the Framework Protocol's
+[`LLMHandle`][engine.framework.LLMHandle] and
+[`ToolHandle`][engine.framework.ToolHandle]. The engine constructs
+them per exchange and hands them to `Framework.run_exchange`; the
+framework invokes them; the engine captures events around each call.
 
-Why in-band: per the prereq design note (§2.5), CrewAI's event bus
-dispatches handlers off-thread with no back-pressure and silently
-swallows handler exceptions — unsafe as the primary observation path.
-Going in-band (subclass BaseLLM-equivalent, wrap tools) keeps event
-ordering deterministic and serial inside the agent's own async
-context.
+Why in-band: CrewAI's event bus dispatches handlers off-thread with
+no back-pressure and silently swallows handler exceptions — unsafe
+as the primary observation path. Going in-band (subclass
+BaseLLM-equivalent, wrap tools) keeps event ordering deterministic
+and serial inside the agent's own async context.
 
 These classes are engine-internal — not part of the public surface.
 """
@@ -44,28 +43,28 @@ if TYPE_CHECKING:
 
 
 class _ObservedLLMHandle:
-    """Engine-controlled LLMHandle. Implements
-    :class:`engine.framework.LLMHandle`.
+    """Engine-controlled LLMHandle wrapping a constructor-supplied LLM.
 
-    Flow on each call:
-    1. Generate a fresh ``cl_<uuid>`` call id.
-    2. Emit ``model.request`` BEFORE invoking the underlying LLM.
-       Per Schemas §B.8 the event data carries ``call_id``, ``model``,
-       ``config_event_id`` only — the assembled context is derivable
-       from the path per §B.5.
-    3. Invoke the underlying LLM callable (the engine's constructor-
-       supplied ``llm``).
-    4. On exception: emit ``model.response`` with stop_reason="error"
+    Implements [`LLMHandle`][engine.framework.LLMHandle]. On each
+    call:
+
+    1. Generate a fresh `cl_<uuid>` call id.
+    2. Emit `model.request` BEFORE invoking the underlying LLM. The
+       event data carries `call_id`, `model`, `config_event_id` —
+       the assembled context is derivable from the path.
+    3. Invoke the underlying LLM callable (the engine's
+       constructor-supplied `llm`).
+    4. On exception: emit `model.response` with `stop_reason="error"`
        carrying the Error envelope, then re-raise so the engine's
-       retry/Fatal layer can decide. Bubble PlatformErrors verbatim;
-       wrap everything else as :class:`PlatformInternalError` at
+       retry / Fatal layer can decide. Bubble PlatformErrors
+       verbatim; wrap everything else as `PlatformInternalError` at
        the engine boundary.
-    5. On success: emit ``model.response`` AFTER and return the
-       :class:`LLMResponse` unchanged.
+    5. On success: emit `model.response` AFTER and return the
+       [`LLMResponse`][engine.framework.LLMResponse] unchanged.
 
-    Materialization (I3) holds at this seam because the ``LLMRequest``
-    is what the LLM actually saw (post-framework-wrap, per the §B.6
-    draft-0.5 amendment).
+    Materialization holds at this seam because the
+    [`LLMRequest`][engine.framework.LLMRequest] is what the LLM
+    actually saw (post-framework-wrap).
     """
 
     def __init__(
@@ -85,13 +84,12 @@ class _ObservedLLMHandle:
 
     async def __call__(self, request: LLMRequest) -> LLMResponse:
         call_id = AgentCallId(f"cl_{uuid4()}")
-        # BEFORE — model.request (Engine I6).
-        # Bug-engine-tools-wiring-gap.md Step F — include the
-        # tool-schema list the framework forwarded to the LLM.
-        # ``request.tools`` is the canonical post-framework-wrap
-        # source for what the model actually saw (CrewAI / other
-        # frameworks may reshape; the engine emits what crossed
-        # the seam, not the engine-assembled pre-wrap list).
+        # BEFORE — model.request. Include the tool-schema list the
+        # framework forwarded to the LLM. `request.tools` is the
+        # canonical post-framework-wrap source for what the model
+        # actually saw (CrewAI / other frameworks may reshape; the
+        # engine emits what crossed the seam, not the
+        # engine-assembled pre-wrap list).
         request_data = ModelRequestData(
             call_id=call_id,
             model=dict(self._model_spec),
@@ -141,7 +139,7 @@ class _ObservedLLMHandle:
             )
             raise
 
-        # AFTER — model.response (Engine I6).
+        # AFTER — model.response.
         content_dict: dict[str, Any]
         if response.tool_calls:
             content_dict = {"tool_calls": list(response.tool_calls)}
@@ -166,15 +164,14 @@ class _ObservedLLMHandle:
 
 
 class _ObservedToolHandle:
-    """Engine-controlled ToolHandle. Implements
-    :class:`engine.framework.ToolHandle`.
+    """Engine-controlled ToolHandle wrapping the Tools subsystem.
 
-    Routes the tool call through :meth:`ToolsSubsystem.invoke_tool`,
-    which itself routes through authz → secrets → sandbox → execute
-    (Engine I9 sandbox + I10 secrets). Per spec §1.6, an in-exchange
-    tool failure (Diagnostic) MUST NOT raise — the wrapper returns
-    an error payload to the framework so the model sees the failure
-    on the next turn.
+    Implements [`ToolHandle`][engine.framework.ToolHandle]. Routes
+    the tool call through `ToolsSubsystem.invoke_tool`, which itself
+    routes through authz → secrets → sandbox → execute. An
+    in-exchange tool failure (Diagnostic) MUST NOT raise — the
+    wrapper returns an error payload to the framework so the model
+    sees the failure on the next turn.
     """
 
     def __init__(
@@ -193,12 +190,12 @@ class _ObservedToolHandle:
         self._session_id = session_id
         self._thread_id = thread_id
         self._tools_subsystem = tools_subsystem
-        # bug-mid-tool-cancellation-latency.md — the exchange's
-        # CancelToken, threaded by the engine. Forwarded into the
-        # ToolContext at invocation time so tool bodies can race
-        # long work against ``ctx.cancellation.wait_cancelled()``.
-        # ``None`` when the engine constructed the observer without
-        # cancellation (tests, programmatic paths).
+        # The exchange's CancelToken, threaded by the engine.
+        # Forwarded into the ToolContext at invocation time so tool
+        # bodies can race long work against
+        # `ctx.cancellation.wait_cancelled()`. `None` when the
+        # engine constructed the observer without cancellation
+        # (tests, programmatic paths).
         self._cancel = cancel
         # Public attributes required by the ToolHandle Protocol.
         self.name = defn.name
@@ -207,7 +204,7 @@ class _ObservedToolHandle:
     async def __call__(self, call: ToolCall) -> Any:
         tool_call_id = call.tool_call_id or f"tc_{uuid4()}"
 
-        # BEFORE — tool.called (Engine I6).
+        # BEFORE — tool.called.
         await self._emit(
             type_=EventType.TOOL_CALLED,
             data=ToolCalledData(
@@ -234,11 +231,10 @@ class _ObservedToolHandle:
             )
         except ToolUnauthorized as exc:
             err = Error.from_platform_error(exc)
-            # qol-permission-system-human-readable.md Step 3 — derive
-            # the exact `/perm allow` chat command from the matched
-            # rule's `what` + the in-flight args. The model + the
-            # chat renderer both see this hint; the user types it
-            # to un-block.
+            # Derive the exact `/perm allow` chat command from the
+            # matched rule's `what` + the in-flight args. The model
+            # and the chat renderer both see this hint; the user
+            # types it to un-block.
             recovery_hint = _derive_authz_recovery_hint(
                 exc, arguments=call.arguments
             )
@@ -270,7 +266,7 @@ class _ObservedToolHandle:
             )
             return {"error": err.model_dump(mode="json")}
 
-        # AFTER — tool.result (Engine I6).
+        # AFTER — tool.result.
         result_payload = _normalize_result(result.result)
         await self._emit(
             type_=EventType.TOOL_RESULT,
@@ -287,9 +283,9 @@ class _ObservedToolHandle:
 def _normalize_result(value: object) -> dict[str, Any]:
     """Wrap a tool result for the event-data dict shape.
 
-    The event payload `tool.result.data.result` is a dict per Schemas
-    §B.8. Dict results pass through; everything else is wrapped under
-    a `value` key so the verbatim content remains capturable.
+    The event payload `tool.result.data.result` is a dict. Dict
+    results pass through; everything else is wrapped under a `value`
+    key so the verbatim content remains capturable.
     """
     if isinstance(value, dict):
         return value
@@ -297,15 +293,15 @@ def _normalize_result(value: object) -> dict[str, Any]:
 
 
 # ---------------------------------------------------------------------------
-# qol-permission-system-human-readable.md Step 3 — denied recovery hint
+# Denied-recovery hint — derives the `/perm allow` slash command
 # ---------------------------------------------------------------------------
 
 
 _TARGET_ARG_PRIORITY = ("path", "command", "url")
-"""Same order as ``tools.dispatch._TARGET_ARG_PRIORITY``. Duplicated
+"""Same order as `tools.dispatch._TARGET_ARG_PRIORITY`. Duplicated
 here (rather than imported) because the observer can't take a
 dependency on the dispatcher's internal helper — both modules read
-the convention from the same spec."""
+the convention from the same contract."""
 
 
 def _derive_authz_recovery_hint(
@@ -313,20 +309,19 @@ def _derive_authz_recovery_hint(
     *,
     arguments: dict[str, Any] | None,
 ) -> str | None:
-    """Build the ``/perm allow <tool> <pattern>`` hint string.
+    """Build the `/perm allow <tool> <pattern>` hint string.
 
-    Reads :attr:`ToolUnauthorized.detail`'s ``matched_rule`` to find
-    the qualified tool ref (or falls back to the legacy action
-    namespace ``tool.<name>`` when the matched rule's ``what`` is
-    in old shape). The suggested pattern is derived from the
-    in-flight arguments via the same convention the modal uses
-    (first whitespace-bounded token for bash; parent dir for file
-    tools; ``*`` otherwise). Returns ``None`` if there's nothing
-    actionable to surface (e.g., no rule matched — pure default
-    deny — in which case the user can use ``/perm allow
-    <ref> *``).
+    Reads `ToolUnauthorized.detail`'s `matched_rule` to find the
+    qualified tool ref (or falls back to the legacy action namespace
+    `tool.<name>` when the matched rule's `what` is in old shape).
+    The suggested pattern is derived from the in-flight arguments
+    via the same convention the modal uses (first whitespace-bounded
+    token for bash; parent dir for file tools; `*` otherwise).
+    Returns `None` if there's nothing actionable to surface (e.g.
+    no rule matched — pure default deny — in which case the user
+    can use `/perm allow <ref> *`).
 
-    The pattern is intentionally **broad** by default (``*``); the
+    The pattern is intentionally **broad** by default (`*`); the
     user can edit before submitting. The point of the hint is to
     save them from looking up the qualified tool ref and the
     slash-command grammar — not to guess their intent precisely.
@@ -364,19 +359,18 @@ def _suggest_glob_pattern(
     tool_name: str,
     arguments: dict[str, Any] | None,
 ) -> str:
-    """Mirror the modal's :func:`cli._modal.suggest_pattern`.
+    """Mirror the chat modal's `suggest_pattern` helper.
 
     Same three heuristics in priority order:
 
-    1. bash with a command target: first whitespace-bounded
-       token → ``"<token> *"``.
-    2. file tools with a path target: parent-dir glob
-       ``"<parent>/*"``.
-    3. fallback: ``"*"``.
+    1. bash with a command target: first whitespace-bounded token
+       → `"<token> *"`.
+    2. File tools with a path target: parent-dir glob
+       `"<parent>/*"`.
+    3. Fallback: `"*"`.
 
     Kept independent of the modal so the engine can run without
-    importing chat code (Engine I1: engine doesn't depend on
-    cli/).
+    importing chat code (the engine doesn't depend on `cli/`).
     """
     if not arguments:
         return "*"

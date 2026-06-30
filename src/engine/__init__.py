@@ -1,27 +1,11 @@
-"""Engine — Agent Engine wrapping the Framework Protocol.
+"""The Agent Engine — long-lived orchestrator wrapping a framework.
 
-Per Module API Reference §11 + agent-engine-contract +
-docs/explanation/framework-protocol-design.md.
-
-The engine is framework-agnostic. v1 ships:
-- :class:`FakeFramework` — the default for tests and zero-LLM-cost
-  development.
-- (Step 12b: ``CrewAIFramework`` adapter — not in this commit.)
-
-Public surface:
-
-- :class:`AgentEngine` — the facade per §11.
-- :class:`Framework` / :class:`LLMHandle` / :class:`ToolHandle` —
-  the Protocols.
-- :class:`LLMRequest` / :class:`LLMResponse` / :class:`ToolCall` /
-  :class:`Message` — the value types crossing the seams.
-- :class:`FakeFramework` — reference implementation.
-- :class:`ExecutionContext` / :class:`CancelToken` /
-  :class:`EngineCapabilities` / :class:`AgentExecutionError` — the
-  caller-facing types per §11.2 + §13.5.
-- :class:`AssembledContext` / :func:`assemble_context` /
-  :data:`ASSEMBLY_VERSION` — Schemas §B.5 surface for engine internals
-  and Materialization tests.
+Implements the engine subsystem per the
+[agent engine contract](../../docs/explanation/agent-engine-contract.md).
+v1 ships [`FakeFramework`][engine.fake_framework.FakeFramework] as the
+default for tests and zero-LLM-cost development, plus
+[`CrewAIFramework`][engine.crewai_framework.CrewAIFramework] as the
+production adapter.
 """
 
 from engine.assembly import ASSEMBLY_VERSION, AssembledContext, assemble_context

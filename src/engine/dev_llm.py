@@ -1,14 +1,13 @@
-"""Development LLM drivers — :class:`EchoLLMDriver`.
+"""Development LLM drivers — runtime-shippable, zero-creds defaults.
 
-Shipped in ``src/engine/`` (not ``tests/fixtures/``) because the CLI
-and API both rely on it as the default-tier LLM. Lets a fresh
-install run ``kolsch run <agent>`` end-to-end with zero LLM
-keys and zero external services.
+Lives in `src/engine/` (not `tests/fixtures/`) because the CLI and API
+both rely on the echo driver as the default-tier LLM. A fresh install
+runs `kolsch run <agent>` end-to-end with zero LLM keys and zero
+external services.
 
-Distinct from ``tests/fixtures/fake_llm.FakeLLM`` (which is the
-scripted Pydantic-modelled test stub). The dev driver is
-runtime-shippable: deterministic, no per-test script, no Pydantic
-schema for users to satisfy.
+Distinct from `tests/fixtures/fake_llm.FakeLLM` (the scripted
+Pydantic-modelled test stub). The dev driver is deterministic, has no
+per-test script, and no Pydantic schema for users to satisfy.
 """
 
 from __future__ import annotations
@@ -25,12 +24,14 @@ _DEFAULT_PREFIX = "Echo:"
 
 
 class EchoLLMDriver:
-    """Returns ``"<prefix> <last user message text>"`` as plain text.
+    """Echoes the last user message back as the assistant's reply.
 
     Implements the engine's LLM callable shape — async, accepts
-    :class:`LLMRequest`, returns :class:`LLMResponse`. Ships as the
-    default-tier LLM so a new user can run ``kolsch run`` against
-    a brand-new platform root without configuring a real provider.
+    [`LLMRequest`][engine.framework.LLMRequest], returns
+    [`LLMResponse`][engine.framework.LLMResponse]. Ships as the
+    default-tier LLM so a new user can run `kolsch run` against a
+    brand-new platform root without configuring a real provider.
+    Output is `"<prefix> <last user message text>"`.
     """
 
     def __init__(self, *, prefix: str = _DEFAULT_PREFIX) -> None:

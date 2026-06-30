@@ -1,24 +1,25 @@
-"""Engine-boundary exception classifier — bug-platform-internal-error-boundary-swallow.md Step 2 (B).
+"""Engine-boundary exception classifier — cause-chain safety net.
 
-The engine's top-level boundary (``engine.py:364-367``) used to wrap
-every non-:class:`PlatformError` as :class:`PlatformInternalError`.
-That equated "unknown to the engine" with "the engine crashed,"
-which obscured terminal conditions from below — most painfully,
-transport timeouts that the retry pipeline should have absorbed.
+The engine's top-level boundary used to wrap every non-PlatformError
+as [`PlatformInternalError`][errors.PlatformInternalError]. That
+equated "unknown to the engine" with "the engine crashed," which
+obscured terminal conditions from below — most painfully, transport
+timeouts that the retry pipeline should have absorbed.
 
-This module is the safety net half (B) of the fix. The primary half
-(A) is per-framework adapter translation
-(``crewai_framework.py:run_exchange`` catches known CrewAI exception
-shapes and re-raises as typed :class:`PlatformError` BEFORE reaching
-the boundary). Even with A in place, a future framework release could
-change its surface; B walks the cause chain on every boundary catch
-so the boundary can re-classify based on the original typed
-exception even when intermediate layers flattened it.
+This module is the safety net half. The primary half is per-framework
+adapter translation (the CrewAI adapter catches known CrewAI
+exception shapes and re-raises as typed
+[`PlatformError`][errors.PlatformError] BEFORE reaching the
+boundary). Even with the adapter in place, a future framework
+release could change its surface; the safety net walks the cause
+chain on every boundary catch so the boundary can re-classify based
+on the original typed exception even when intermediate layers
+flattened it.
 
 **String matching, not isinstance.** The classifier matches on
-``f"{type(exc).__module__}.{type(exc).__name__}"`` so the engine does
+`f"{type(exc).__module__}.{type(exc).__name__}"` so the engine does
 not hard-import any provider SDK at module load. The engine module
-must stay loadable without ``openai`` (or any other provider) on the
+must stay loadable without `openai` (or any other provider) on the
 PYTHONPATH — provider SDKs are test-group dependencies, not engine
 deps.
 """
@@ -64,19 +65,30 @@ def classify_from_cause_chain(
     *,
     agent_id: str = "",
 ) -> "PlatformError | None":
-    """Walk ``exc`` → ``exc.__cause__`` → ... up to :data:`_MAX_DEPTH`.
+    """Walk the cause chain and re-classify a known provider exception.
 
-    Returns a typed :class:`PlatformError` when a known type appears
-    in the chain, ``None`` otherwise. ``None`` is the boundary's
-    signal to fall back to :class:`PlatformInternalError` (the
-    pre-fix behaviour).
+    Walks `exc` → `exc.__cause__` → ... up to `_MAX_DEPTH`. Returns a
+    typed [`PlatformError`][errors.PlatformError] when a known type
+    appears in the chain, `None` otherwise. `None` is the boundary's
+    signal to fall back to
+    [`PlatformInternalError`][errors.PlatformInternalError].
 
-    Cycle detection via seen-set on ``id()`` — Python's ``__cause__``
+    Cycle detection via seen-set on `id()` — Python's `__cause__`
     chains can technically loop if user code attaches a cause back
-    to an ancestor; without the guard the loop would hang.
+    to an ancestor; without the guard the loop would hang. String
+    matching on `module.name` avoids the layering violation of
+    hard-importing provider SDKs from engine code.
 
-    String matching on ``module.name`` avoids the layering violation
-    of hard-importing provider SDKs from engine code.
+    Args:
+        exc: The exception to classify (typically the engine
+            boundary's caught non-PlatformError).
+        agent_id: Stamped on
+            [`AgentUnauthorized`][errors.AgentUnauthorized] when an
+            auth exception classifies.
+
+    Returns:
+        A typed `PlatformError` when the chain carries a known
+        provider exception, otherwise `None`.
     """
     seen: set[int] = set()
     current: BaseException | None = exc

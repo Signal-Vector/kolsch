@@ -1,79 +1,63 @@
-"""CrewAIFramework — v1 production :class:`Framework` adapter.
+"""Production [`Framework`][engine.framework.Framework] adapter for CrewAI.
 
-Wraps real CrewAI (pinned to ``crewai==1.14.6`` in
-``[dependency-groups.test]``) so the engine can drive
-production agentic workflows without changing its own contract. The
-engine never imports this module directly; callers wire it via
-``AgentEngine(framework=CrewAIFramework(), ...)``.
+Wraps real CrewAI (pinned to `crewai==1.14.6`) so the engine can
+drive production agentic workflows without changing its own
+contract. The engine never imports this module directly; callers
+wire it via `AgentEngine(framework=CrewAIFramework(), ...)`.
 
-Design (per docs/explanation/framework-protocol-design.md):
+Design (per
+[framework protocol design](../../docs/explanation/framework-protocol-design.md)):
 
-- **Fake-LLM injection chosen mechanism: BaseLLM subclass**
-  (:class:`_CrewAILLM`). Justified in that class's docstring; the
-  short version: the prereq spike validated this is the only
-  mechanism that lets the engine see messages verbatim (post-
-  framework-wrap, pre-LLM-invoke) without monkey-patching litellm.
-  CrewAI's ``Agent(llm=BaseLLM-instance)`` bypasses
-  ``crewai.llm.LLM`` and litellm entirely — the engine's
-  :class:`LLMHandle` sees exactly what would have gone to a real
-  provider.
-
-- **Tool dispatch via BaseTool subclass** (:class:`_CrewAITool`).
-  Every framework-issued tool call invokes our wrapper, which
-  routes through the engine's :class:`ToolHandle`. Sandboxing
-  (Engine I9), authorization, and secrets stay engine-owned.
-
-- **Concurrency bridge.** ``Crew.kickoff_async`` runs the sync
-  ``kickoff`` on a worker thread (``asyncio.to_thread``). Inside
-  that thread our sync ``_run`` / ``call`` methods need to invoke
-  the engine's async handles. We capture the main event loop at
-  :meth:`run_exchange` entry and use
-  ``asyncio.run_coroutine_threadsafe(coro, main_loop).result()``
-  to schedule + block. The engine's per-thread lock then serializes
+- **Fake-LLM injection via BaseLLM subclass** (`_CrewAILLM`). The
+  prereq spike validated this as the only mechanism that lets the
+  engine see messages verbatim (post-framework-wrap, pre-LLM-invoke)
+  without monkey-patching litellm. CrewAI's
+  `Agent(llm=BaseLLM-instance)` bypasses `crewai.llm.LLM` and
+  litellm entirely — the engine's
+  [`LLMHandle`][engine.framework.LLMHandle] sees exactly what would
+  have gone to a real provider.
+- **Tool dispatch via BaseTool subclass** (`_CrewAITool`). Every
+  framework-issued tool call invokes our wrapper, which routes
+  through the engine's
+  [`ToolHandle`][engine.framework.ToolHandle]. Sandboxing,
+  authorization, and secrets stay engine-owned.
+- **Concurrency bridge.** `Crew.kickoff_async` runs the sync
+  `kickoff` on a worker thread (`asyncio.to_thread`). Inside that
+  thread our sync `_run` / `call` methods invoke the engine's async
+  handles. The main event loop is captured at `run_exchange` entry
+  and used via
+  `asyncio.run_coroutine_threadsafe(coro, main_loop).result()` to
+  schedule and block. The engine's per-thread lock then serializes
   emits as designed.
-
 - **Retry composition.** CrewAI's internal retries are disabled
-  (``Agent(max_retry_limit=0)``); the engine owns retry per
-  ``RuntimeSpec.max_retries`` (TC-CRW-03 pins this).
-
+  (`Agent(max_retry_limit=0)`); the engine owns retry per
+  `RuntimeSpec.max_retries`.
 - **History injection.** CrewAI has no first-class "prior turns"
-  parameter on ``Task``. We prepend the assembled history as
-  preamble text on ``Task.description``. The captured
-  ``model.request.data.messages`` (§B.6 amendment) records what
-  the LLM actually saw — CrewAI's wrap is part of that record.
+  parameter on `Task`. The assembled history is prepended as
+  preamble text on `Task.description`. The captured
+  `model.request.data.messages` records what the LLM actually saw —
+  CrewAI's wrap is part of that record.
+- **Stdout/stderr capture around `kickoff_async`.** CrewAI 1.14.6
+  wires a singleton `EventListener` whose `ConsoleFormatter` is
+  hardcoded `verbose=True` regardless of `Agent(verbose=False)` /
+  `Crew(verbose=False)`. Failure-path warnings (665 stdout bytes,
+  2,673 stderr bytes from `logging` ERROR records) plus ~12 KB of
+  Rich panel output leak through during a single LLM error. The
+  fix wraps `await crew.kickoff_async()` in
+  `contextlib.redirect_stdout` + `redirect_stderr` pointed at
+  `io.StringIO` and discards the captured bytes — defense in depth
+  against the failure-path warnings, the verbose=True panels, and
+  any future regression upstream that re-routes formatter output
+  through `sys.stdout` / `sys.stderr`. The user-facing failure
+  signal comes from `thread.exchange_failed` events rendered by
+  the chat renderer; the engine event stream carries the
+  authoritative failure UI.
 
-- **Stdout/stderr capture around ``kickoff_async``**
-  (bug-crewai-stdout-leak-investigation Step G1, coordinator
-  resolution E-BUG-CREWAI-006 D11). CrewAI 1.14.6 wires a
-  singleton ``EventListener`` whose ``ConsoleFormatter`` is
-  hardcoded ``verbose=True`` regardless of
-  ``Agent(verbose=False)`` / ``Crew(verbose=False)``. Probe 1
-  in the investigation doc captured 665 stdout bytes (EventsBus
-  pairing-mismatch warnings on the failure path) plus 2,673
-  stderr bytes (Python ``logging`` ERROR records) leaking
-  through during a single LLM error; Probe 2 showed
-  ``verbose=True`` adds ~12 KB of Rich panel output. Probe 3
-  confirmed that per-call ``redirect_stdout`` + ``redirect_stderr``
-  catches the byte stream cleanly (no singleton-import-time
-  capture quirk). The fix wraps ``await crew.kickoff_async()``
-  in ``contextlib.redirect_stdout`` + ``redirect_stderr``
-  pointed at ``io.StringIO`` and discards the captured bytes —
-  defense-in-depth against the failure-path warnings, the
-  verbose=True panels, and any future regression upstream that
-  re-routes formatter output through ``sys.stdout`` / ``sys.stderr``.
-
-  *D11 annotation* — CrewAI's failure-path warnings are noise;
-  the user-facing failure signal comes from
-  ``thread.exchange_failed`` events, rendered by the chat's
-  renderer per Phase 2.1 §3. The wrap is therefore safe to
-  discard (no user-relevant signal is in those bytes); the
-  engine event stream carries the authoritative failure UI.
-
-  Caveat: ``redirect_stdout`` is process-wide for the duration
-  of the await, so concurrent coroutines that also write to
-  stdout during the exchange will have their output swallowed
-  too. The engine runs one exchange at a time per chat thread,
-  so this is fine in practice.
+  Caveat: `redirect_stdout` is process-wide for the duration of
+  the await, so concurrent coroutines that also write to stdout
+  during the exchange will have their output swallowed too. The
+  engine runs one exchange at a time per chat thread, so this is
+  fine in practice.
 """
 
 from __future__ import annotations
@@ -112,7 +96,7 @@ _UNBOUNDED_MAX_ITER = 10**9
 
 
 class CrewAIFramework:
-    """v1 production framework — implements :class:`Framework`."""
+    """Production framework implementing [`Framework`][engine.framework.Framework]."""
 
     def __init__(self, *, model_name: str = "fake-crewai") -> None:
         self._model_name = model_name
@@ -140,9 +124,8 @@ class CrewAIFramework:
             llm_handle=llm,
             main_loop=main_loop,
             cancellation=cancellation,
-            # bug-framework-cancellation-mid-call-latency.md — the
-            # raw token gives the worker thread access to
-            # ``is_cancelled()`` polling between ``future.result()``
+            # The raw token gives the worker thread access to
+            # `is_cancelled()` polling between `future.result()`
             # timeouts so a hanging LLM call observes cancellation
             # within ~50ms.
             cancel_token=cancel_token,
@@ -171,8 +154,7 @@ class CrewAIFramework:
                 max_iterations if max_iterations is not None else _UNBOUNDED_MAX_ITER
             ),
             # Engine owns retry per RuntimeSpec.max_retries; disable
-            # CrewAI's internal retry so the two layers don't compound
-            # (TC-CRW-03).
+            # CrewAI's internal retry so the two layers don't compound.
             max_retry_limit=0,
             verbose=False,
             allow_delegation=False,
@@ -207,10 +189,10 @@ class CrewAIFramework:
         #
         # Capture-and-discard wrap — see the module docstring's
         # "Stdout/stderr capture around kickoff_async" section for
-        # the why (CrewAI 1.14.6's verbose=True singleton + the D11
-        # annotation that failure-path warnings are noise, not signal).
-        # Do NOT remove without first checking that the upstream
-        # singleton has been fixed.
+        # the why (CrewAI 1.14.6's verbose=True singleton + failure-
+        # path warnings being noise, not signal). Do NOT remove
+        # without first checking that the upstream singleton has
+        # been fixed.
         with (
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(io.StringIO()),
@@ -224,21 +206,20 @@ class CrewAIFramework:
                 # typed.
                 raise
             except ConnectionError as exc:
-                # bug-platform-internal-error-boundary-swallow.md Step 2
-                # (A) — CrewAI's OpenAI adapter re-raises every
-                # ``openai.APIConnectionError`` (incl. ``APITimeoutError``)
-                # as a bare ``builtins.ConnectionError`` with the prefix
-                # "Failed to connect to OpenAI API:"
-                # (.venv/.../crewai/llms/providers/openai/completion.py:917-923).
-                # Translate to ModelUpstreamError (Recoverable) so the
-                # engine's retry pipeline at ``engine.py:1095-1112`` runs
-                # — the user's configured ``runtime.max_retries`` becomes
-                # effective for transient transport failures instead of
-                # collapsing the whole exchange on the first hiccup.
+                # CrewAI's OpenAI adapter re-raises every
+                # `openai.APIConnectionError` (incl. `APITimeoutError`)
+                # as a bare `builtins.ConnectionError` with the prefix
+                # "Failed to connect to OpenAI API:". Translate to
+                # ModelUpstreamError (Recoverable) so the engine's
+                # retry pipeline runs — the user's configured
+                # `runtime.max_retries` becomes effective for
+                # transient transport failures instead of collapsing
+                # the whole exchange on the first hiccup.
                 #
-                # ``from exc`` preserves the cause chain so cause-chain
-                # inspection (B) can still classify accurately if a
-                # future CrewAI release flattens the type.
+                # `from exc` preserves the cause chain so the
+                # engine's cause-chain inspector can still classify
+                # accurately if a future CrewAI release flattens the
+                # type.
                 raise ModelUpstreamError(
                     provider="crewai",
                     http_status=0,
@@ -255,25 +236,24 @@ class CrewAIFramework:
 class _CrewAILLM(BaseLLM):
     """BaseLLM subclass routing every call through the engine's LLMHandle.
 
-    **Why BaseLLM subclass (vs. litellm monkeypatch vs. callback
-    injection):**
+    Engine-internal (leading underscore) — the public surface is
+    [`CrewAIFramework`][engine.crewai_framework.CrewAIFramework].
 
-    - litellm monkeypatch — replaces ``litellm.completion`` globally,
-      which would touch every other test running in the same process,
-      and would not capture the post-``_format_messages_for_provider``
-      message shape because ``crewai.llm.LLM`` reformats AFTER the
-      monkey point. Rejected.
-    - Callback injection (``Agent(llm=str, ...)`` + after-call hooks)
-      — after-call hooks fire AFTER the LLM ran; we cannot stub the
-      response without going through a real LLM first. Rejected.
-    - BaseLLM subclass — public, stable since PR #2277 (CrewAI
-      0.105.x). A subclass is wired via ``Agent(llm=BaseLLM-instance)``
-      and **bypasses `crewai.llm.LLM` and litellm entirely**. The
-      engine sees the exact messages CrewAI built (post-wrap,
-      pre-network) and chooses what response to return. Chosen.
+    **Why BaseLLM subclass over alternatives:**
 
-    The class is engine-internal (leading underscore) — the public
-    surface is :class:`CrewAIFramework`.
+    - litellm monkeypatch replaces `litellm.completion` globally,
+      which would touch every other test running in the same
+      process, and would not capture the
+      post-`_format_messages_for_provider` message shape because
+      `crewai.llm.LLM` reformats AFTER the monkey point. Rejected.
+    - Callback injection (`Agent(llm=str, ...)` + after-call hooks)
+      fires AFTER the LLM ran; the response cannot be stubbed
+      without going through a real LLM first. Rejected.
+    - BaseLLM subclass is public, stable since CrewAI PR #2277
+      (0.105.x). A subclass wired via `Agent(llm=BaseLLM-instance)`
+      bypasses `crewai.llm.LLM` and litellm entirely. The engine
+      sees the exact messages CrewAI built (post-wrap, pre-network)
+      and chooses what response to return.
     """
 
     # Pydantic v2 model config. CrewAI's BaseLLM is a Pydantic
@@ -295,11 +275,10 @@ class _CrewAILLM(BaseLLM):
     llm_handle: Any = Field(default=None)
     main_loop: Any = Field(default=None)
     cancellation: Any = Field(default=None)
-    # bug-framework-cancellation-mid-call-latency.md — the raw
-    # CancelToken so the worker thread can poll
-    # ``is_cancelled()`` between ``future.result(timeout=...)``
-    # polls. ``cancellation`` (the callable) is kept for backwards
-    # compat with the pre-call poll check.
+    # The raw CancelToken so the worker thread can poll
+    # `is_cancelled()` between `future.result(timeout=...)` polls.
+    # `cancellation` (the callable) is kept for backwards compat
+    # with the pre-call poll check.
     cancel_token: Any = Field(default=None)
 
     def supports_function_calling(self) -> bool:
@@ -344,9 +323,8 @@ class _CrewAILLM(BaseLLM):
 
         # Schedule the async LLMHandle on the engine's main loop
         # (we're inside CrewAI's worker thread from asyncio.to_thread).
-        # bug-framework-cancellation-mid-call-latency.md — replace
-        # the indefinite ``future.result()`` block with a
-        # poll-with-cancel loop so a hanging LLM observes cancel
+        # The poll-with-cancel loop replaces an indefinite
+        # `future.result()` block so a hanging LLM observes cancel
         # within ~50ms of the flip.
         from engine._cancellation import wait_future_with_cancel  # noqa: PLC0415
 
@@ -391,17 +369,18 @@ def _make_crewai_tool(
     """Build a concrete BaseTool subclass bound to one ToolHandle.
 
     The subclass is created per-handle so each tool surfaces its own
-    ``name``, ``description``, and ``args_schema`` to CrewAI's tool
-    converter. ``_run`` schedules the engine's async :class:`ToolHandle`
-    on the captured main loop and blocks for the result — the engine's
-    per-thread emit lock then serializes event construction.
+    `name`, `description`, and `args_schema` to CrewAI's tool
+    converter. `_run` schedules the engine's async
+    [`ToolHandle`][engine.framework.ToolHandle] on the captured main
+    loop and blocks for the result — the engine's per-thread emit
+    lock then serializes event construction.
 
-    bug-framework-cancellation-mid-call-latency.md — ``cancel_token``
-    is the exchange's :class:`CancelToken` (or None for pre-cancel
-    paths). When set, ``_run`` uses ``wait_future_with_cancel`` so
-    a hanging tool observes cancellation in the worker thread
-    within ~50ms instead of blocking indefinitely on
-    ``future.result()``.
+    `cancel_token` is the exchange's
+    [`CancelToken`][engine.context.CancelToken] (or None for
+    pre-cancel paths). When set, `_run` uses
+    `wait_future_with_cancel` so a hanging tool observes
+    cancellation in the worker thread within ~50ms instead of
+    blocking indefinitely on `future.result()`.
     """
     from engine._cancellation import wait_future_with_cancel  # noqa: PLC0415
 
@@ -451,10 +430,9 @@ def _build_passthrough_schema(
 ) -> type[BaseModel]:
     """Return a Pydantic model that accepts the LLM-emitted kwargs.
 
-    Phase 1: we don't reconstruct the original args_schema from the
-    JSON Schema dict — CrewAI uses this only to advertise to the LLM.
-    The actual validation runs inside
-    :meth:`ToolsSubsystem.invoke_tool` (the dispatch order, spec §6.2).
+    The original args_schema is not reconstructed from the JSON
+    Schema dict — CrewAI uses this only to advertise to the LLM. The
+    actual validation runs inside `ToolsSubsystem.invoke_tool`.
     """
     # Use Pydantic's create_model so the class has a deterministic
     # name visible in CrewAI's tool-schema export.
@@ -481,11 +459,12 @@ def _build_passthrough_schema(
 
 
 def _to_engine_message(raw: dict[str, Any]) -> Message:
-    """Translate a CrewAI message dict into our :class:`Message`.
+    """Translate a CrewAI message dict into the engine's `Message`.
 
-    CrewAI uses LLMMessage TypedDict with optional ``tool_call_id``,
-    ``name``, ``tool_calls`` keys. The engine's Message has the same
-    shape but with strict typing; unknown keys are dropped.
+    CrewAI uses LLMMessage TypedDict with optional `tool_call_id`,
+    `name`, `tool_calls` keys.
+    [`Message`][engine.framework.Message] has the same shape but
+    with strict typing; unknown keys are dropped.
     """
     content = raw.get("content")
     if content is None:
@@ -508,7 +487,7 @@ def _format_task_description(user_message: str, history: Sequence[Message]) -> s
 
     CrewAI has no first-class "prior turns" parameter; prepending as
     preamble keeps the engine's history visible to the LLM via
-    CrewAI's prompt builder. The §B.6 amendment captures whatever
+    CrewAI's prompt builder. Materialization captures whatever
     CrewAI ultimately sends to the LLM, so replay sees the wrapped
     view (not the pre-wrap engine view).
     """
@@ -524,12 +503,11 @@ def _format_task_description(user_message: str, history: Sequence[Message]) -> s
 
 
 def _extract_text(result: Any) -> str:
-    """Pull the final text from a :class:`CrewOutput`.
+    """Pull the final text from a `CrewOutput`.
 
-    ``CrewOutput.raw`` is the canonical attribute in v1.14.x; fall
-    back to ``str(result)`` defensively in case CrewAI shifts the
-    shape in a future bump (re-spike per the design note §2.6's
-    version-pin rationale).
+    `CrewOutput.raw` is the canonical attribute in v1.14.x; falls
+    back to `str(result)` defensively in case CrewAI shifts the
+    shape in a future bump.
     """
     raw = getattr(result, "raw", None)
     if isinstance(raw, str):

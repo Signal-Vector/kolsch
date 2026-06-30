@@ -1,30 +1,30 @@
-"""Engine fallback orchestrator — Phase 1.3 (Step 20).
+"""Engine fallback orchestrator — primary → chain → exhaustion.
 
-Three things live here:
+Three surfaces live here:
 
-- :func:`is_fallback_triggering` — the predicate the engine consults
-  to decide whether a Recoverable ``model.*`` error should walk to
-  the next chain entry. Pure, exhaustive over the catalog's
-  ``model.*`` codes; import-time validation raises ``ImportError``
-  if a new ``model.*`` code lands without a classification (AGENTS.md
-  hard rule, FB-R10).
-- :func:`build_fallback_chain` — resolves and validates an agent's
-  fallback chain at agent-load time. Each entry's provider must
-  appear in ``llm_providers``; emits
-  :class:`ConfigFallbackDuplicate` (Diagnostic) warnings for repeats
-  (not errors — a user may have listed the same model twice
-  intentionally per patch §2.4). Returns
-  ``list[ModelSpec]``; clients are NOT built here (lazy
-  construction is the engine loop's job — patch §2.1 step 7).
-- :class:`FallbackLLMHandle` — the framework-facing LLMHandle. Wraps
-  the per-attempt observation that ``_ObservedLLMHandle`` does
-  today, plus the chain loop: try primary → on Recoverable, emit
-  ``model.fallback`` and advance → on Fatal, abort → on
-  exhaustion, raise :class:`LlmAllModelsFailed`.
+- [`is_fallback_triggering`][engine._fallback.is_fallback_triggering]
+  — the predicate the engine consults to decide whether a
+  Recoverable `model.*` error should walk to the next chain entry.
+  Pure and exhaustive over the catalog's `model.*` codes;
+  import-time validation raises `ImportError` if a new `model.*`
+  code lands without a classification.
+- [`build_fallback_chain`][engine._fallback.build_fallback_chain] —
+  resolves and validates an agent's fallback chain at agent-load
+  time. Each entry's provider must appear in `llm_providers`;
+  duplicates emit
+  [`ConfigFallbackDuplicate`][errors.ConfigFallbackDuplicate]
+  (Diagnostic) warnings rather than errors. Returns
+  `list[ModelSpec]`; clients are NOT built here (lazy construction
+  is the engine loop's job).
+- [`FallbackLLMHandle`][engine._fallback.FallbackLLMHandle] — the
+  framework-facing LLMHandle wrapping the per-attempt observation
+  plus the chain loop: try primary → on Recoverable, emit
+  `model.fallback` and advance → on Fatal, abort → on exhaustion,
+  raise [`LlmAllModelsFailed`][errors.LlmAllModelsFailed].
 
-The orchestrator does not "remember" the chain across exchanges —
+The orchestrator does not remember the chain across exchanges —
 each exchange starts from the primary. Sticky preferences are a
-Phase 3 hosted concern.
+later concern.
 """
 
 from __future__ import annotations
@@ -73,20 +73,19 @@ _log = logging.getLogger("engine.fallback")
 
 # Exhaustive list of `model.*` codes that drive the fallback loop.
 # Adding a new `model.*` code without listing it here or in
-# :data:`_FATAL_MODEL_CODES` causes :func:`_assert_classification_exhaustive`
-# to fail at import time — that's the AGENTS.md hard rule (FB-R10)
-# enforced in code.
+# `_FATAL_MODEL_CODES` causes `_assert_classification_exhaustive` to
+# fail at import time — the AGENTS.md hard rule enforced in code.
 _RECOVERABLE_MODEL_CODES: frozenset[str] = frozenset(
     {
         "model.rate_limited",
         "model.server_error",
         "model.timeout",
         "model.context_overflow",
-        # Phase 1.1 generic, kept Recoverable in the catalog. Treated
-        # as fallback-triggering for back-compat.
+        # Generic upstream failure, kept Recoverable in the catalog
+        # and treated as fallback-triggering for back-compat.
         "model.upstream_error",
-        # Phase 1.1 / engine-side parse failure. Recoverable per the
-        # catalog; the chain may have a more reliable model.
+        # Engine-side parse failure. Recoverable per the catalog;
+        # the chain may have a more reliable model.
         "model.malformed_response",
     }
 )
@@ -95,25 +94,24 @@ _FATAL_MODEL_CODES: frozenset[str] = frozenset(
     {
         "model.authentication_failed",
         "model.bad_request",
-        # Phase 1.1 — chain won't help (we already retried).
+        # Chain won't help — we already retried.
         "model.retry_exhausted",
     }
 )
 
 
 def is_fallback_triggering(err: PlatformError) -> bool:
-    """Return True iff `err` is a Recoverable `model.*` error and the
-    engine should advance to the next chain entry.
+    """Return True iff the engine should advance the fallback chain.
 
     Behaviour summary:
 
-    - `err.code` in :data:`_RECOVERABLE_MODEL_CODES` → True.
-    - `err.code` in :data:`_FATAL_MODEL_CODES` → False.
-    - Anything not in `model.*` → False (out of scope per patch §2.2:
-      fallback is about model availability, not engine bugs).
+    - `err.code` in `_RECOVERABLE_MODEL_CODES` → True.
+    - `err.code` in `_FATAL_MODEL_CODES` → False.
+    - Anything not in `model.*` → False; fallback is about model
+      availability, not engine bugs.
     - A `model.*` code not in either set → import-time `ImportError`
       ensures this never happens at runtime (see
-      :func:`_assert_classification_exhaustive`).
+      `_assert_classification_exhaustive`).
     """
     code = err.code
     if code in _RECOVERABLE_MODEL_CODES:
@@ -125,14 +123,14 @@ def is_fallback_triggering(err: PlatformError) -> bool:
 
 
 def _assert_classification_exhaustive() -> None:
-    """Import-time guard for AGENTS.md FB-R10.
+    """Import-time guard — every `model.*` code must be classified.
 
-    Walk the registered catalog; any `model.*` code that is neither
-    in :data:`_RECOVERABLE_MODEL_CODES` nor :data:`_FATAL_MODEL_CODES`
-    raises ``ImportError`` naming the unclassified code. The fix is
-    to declare the code's level in
-    :mod:`errors.fallback` (or its sibling module) AND add it to the
-    classification set here in the SAME change.
+    Walks the registered catalog; any `model.*` code that is neither
+    in `_RECOVERABLE_MODEL_CODES` nor `_FATAL_MODEL_CODES` raises
+    `ImportError` naming the unclassified code. The fix is to
+    declare the code's level in `errors.fallback` (or its sibling
+    module) AND add it to the classification set here in the SAME
+    change.
     """
     from errors import list_catalog_codes  # noqa: PLC0415
 
@@ -151,7 +149,7 @@ def _assert_classification_exhaustive() -> None:
             f"codes are missing fallback classification — declare each "
             f"as Recoverable or Fatal in src/engine/_fallback.py and "
             f"add it to the trigger table in "
-            f"docs/explanation/error-model.md §4.15: {sorted(unclassified)}"
+            f"docs/explanation/error-model.md: {sorted(unclassified)}"
         )
         raise ImportError(msg)
 
@@ -174,20 +172,37 @@ def build_fallback_chain(
 ) -> list[ModelSpec]:
     """Validate the fallback chain at agent-load time.
 
-    Spec §2.1 step 7 + patch §1.3:
+    Each entry's `provider` must be in `configured_providers`; if
+    not, raises
+    [`LlmProviderNotConfigured`][errors.LlmProviderNotConfigured]
+    naming the offending entry position. Duplicates (either against
+    the primary or another entry) are allowed but emit
+    [`ConfigFallbackDuplicate`][errors.ConfigFallbackDuplicate]
+    (Diagnostic). `emit_warning` is the surface — production wires
+    it to the CLI banner; tests collect to a list. The list is
+    returned as-is.
 
-    - Each entry's ``provider`` must be in ``configured_providers``;
-      if not, raises :class:`LlmProviderNotConfigured` naming the
-      offending entry position.
-    - Duplicates (either against the primary or another entry) are
-      allowed but emit :class:`ConfigFallbackDuplicate` (Diagnostic).
-      ``emit_warning`` is the surface — production wires it to the
-      CLI banner; tests collect to a list.
-    - The list is returned as-is (post-Layer-1 normalisation; the
-      assembler already canonicalised each entry).
-
-    Does NOT build ``crewai.LLM`` clients — that's the engine loop's
+    Does NOT build `crewai.LLM` clients — that is the engine loop's
     job at use time.
+
+    Args:
+        agent_id: Stamped on
+            [`ConfigFallbackDuplicate`][errors.ConfigFallbackDuplicate]
+            warnings so the user knows which agent emitted them.
+        fallback_specs: The agent's declared fallback chain entries.
+        primary: The agent's primary `ModelSpec` — included in
+            duplicate detection so a fallback entry equal to the
+            primary surfaces.
+        configured_providers: Providers actually wired in
+            `platform.yaml`.
+        emit_warning: Sink for Diagnostic duplicate warnings.
+
+    Returns:
+        The validated chain — same entries, same order.
+
+    Raises:
+        LlmProviderNotConfigured: A chain entry's provider is not
+            wired.
     """
     # Duplicate detection — keyed by canonical (provider, model).
     seen: dict[tuple[str, str], list[int]] = {}
@@ -218,39 +233,38 @@ def build_fallback_chain(
 
 
 # ---------------------------------------------------------------------------
-# Streaming boundary — patch §2.3
+# Streaming boundary
 # ---------------------------------------------------------------------------
 
 
 class StreamState:
-    """Per-call streaming-boundary signal — Phase 1.3 patch §2.3.
+    """Per-call streaming-boundary signal.
 
     Carries one boolean: has the connector emitted any content
-    token to the user yet? The :class:`FallbackLLMHandle`
+    token to the user yet? The
+    [`FallbackLLMHandle`][engine._fallback.FallbackLLMHandle]
     Recoverable branch consults this on every retry attempt. Once
     the flag is set, fallback is short-circuited — partial output
-    has been committed to the log + the user's terminal; swapping
+    has been committed to the log and the user's terminal; swapping
     models mid-stream would lie about which model produced the
     answer.
 
     Wiring:
 
-    - The engine constructs one :class:`StreamState` per
-      ``execute_stream`` call and passes it to the handle.
-    - The connector's streaming layer calls
-      :meth:`mark_content_emitted` on the first content chunk.
-    - The handle's orchestrator polls
-      :meth:`has_emitted_content` before advancing on a
-      Recoverable error; if True, it re-raises the original error
-      without emitting a ``model.fallback`` event.
+    - The engine constructs one `StreamState` per `execute_stream`
+      call and passes it to the handle.
+    - The connector's streaming layer calls `mark_content_emitted`
+      on the first content chunk.
+    - The handle's orchestrator polls `has_emitted_content` before
+      advancing on a Recoverable error; if True, it re-raises the
+      original error without emitting a `model.fallback` event.
 
-    Non-streaming callers don't need this — they pass ``None`` and
-    the orchestrator behaves exactly as before. The current Phase
-    1.1 / 1.2 connectors do not stream through the handle (they
-    return one ``LLMResponse``); when a streaming connector lands,
-    it sets this flag on the first token. The contract is
-    front-loaded so connector authors implement against a real
-    seam, not a TODO.
+    Non-streaming callers don't need this — they pass `None` and
+    the orchestrator behaves exactly as before. The current
+    connectors do not stream through the handle (they return one
+    `LLMResponse`); when a streaming connector lands, it sets this
+    flag on the first token. The contract is front-loaded so
+    connector authors implement against a real seam.
     """
 
     __slots__ = ("_emitted",)
@@ -263,8 +277,7 @@ class StreamState:
         self._emitted = True
 
     def has_emitted_content(self) -> bool:
-        """Return whether any content token has been emitted to the
-        user since this StreamState was constructed."""
+        """Return True if any content token has been emitted."""
         return self._emitted
 
 
@@ -282,29 +295,28 @@ if TYPE_CHECKING:
 
 
 class FallbackLLMHandle:
-    """Engine-controlled LLMHandle implementing the Phase 1.3
-    fallback loop.
+    """Engine-controlled LLMHandle implementing the fallback loop.
 
-    Each ``__call__(request)`` walks the chain:
+    Each `__call__(request)` walks the chain:
 
-    1. Try primary → on success, emit ``model.request`` /
-       ``model.response`` AND return.
-    2. On Recoverable ``model.*``: emit a failure
-       ``model.response`` (stop_reason=error), then a
-       ``model.fallback`` event, then re-issue against the next
-       chain entry's lazily-built LLMCallable. Repeat.
-    3. On Fatal ``model.*``: emit the failure ``model.response``
-       and re-raise the original PlatformError. Chain is NOT
+    1. Try primary → on success, emit `model.request` /
+       `model.response` and return.
+    2. On Recoverable `model.*`: emit a failure `model.response`
+       (`stop_reason=error`), then a `model.fallback` event, then
+       re-issue against the next chain entry's lazily-built
+       LLMCallable. Repeat.
+    3. On Fatal `model.*`: emit the failure `model.response` and
+       re-raise the original `PlatformError`. The chain is NOT
        consulted.
-    4. On chain exhaustion: raise :class:`LlmAllModelsFailed` with
-       the full attempts list.
+    4. On chain exhaustion: raise
+       [`LlmAllModelsFailed`][errors.LlmAllModelsFailed] with the
+       full attempts list.
 
     Streaming is supported by the engine's outer layer; this handle
     does not currently distinguish stream-pre-token-emitted from
     stream-post-token-emitted (the engine sets
-    :attr:`stream_pre_first_token` on the request context to gate
-    fallback at the outer level — see :mod:`engine.engine`'s
-    streaming path).
+    `stream_pre_first_token` on the request context to gate
+    fallback at the outer level — see the engine's streaming path).
     """
 
     def __init__(
@@ -324,13 +336,13 @@ class FallbackLLMHandle:
         self._chain = chain
         self._llm_factory = llm_factory
         self._config_event_id = config_event_id
-        # Phase 1.3 patch §2.3 — populated by the engine's streaming
-        # path; None for non-streaming exchanges. When set, the
-        # orchestrator's Recoverable branch consults
+        # Populated by the engine's streaming path; None for
+        # non-streaming exchanges. When set, the orchestrator's
+        # Recoverable branch consults
         # `stream_state.has_emitted_content()` before advancing.
         self._stream_state = stream_state
         # Production callers can observe `factory_calls` to confirm
-        # lazy-build behaviour (TC-FB-03 etc).
+        # lazy-build behaviour.
         self.factory_calls: list[ModelSpec] = []
 
     async def __call__(self, request: LLMRequest) -> LLMResponse:
@@ -341,7 +353,8 @@ class FallbackLLMHandle:
 
         for attempt_idx, spec in enumerate(all_specs):
             # Emit `model.fallback` BEFORE the next attempt's
-            # `model.request` (patch §3.2 ordering).
+            # `model.request` (ordering: from/to pair sits between
+            # the failed response and the next request).
             if previous_spec is not None and previous_error is not None:
                 await self._emit_fallback(
                     from_spec=previous_spec,
@@ -356,17 +369,16 @@ class FallbackLLMHandle:
                 llm_callable = await self._llm_factory(spec)
             except PlatformError as exc:
                 # Treat client-build failures as fallback-triggering
-                # for the chain entries (per patch §1.3: a fallback
-                # to an unconfigured provider should have failed at
-                # agent load — if it surfaces here, the chain is
-                # mis-resolved).
+                # for the chain entries — a fallback to an
+                # unconfigured provider should have failed at agent
+                # load, so surfacing here means the chain is
+                # mis-resolved.
                 if not is_fallback_triggering(exc):
                     raise
                 if self._stream_emitted_content():
-                    # Phase 1.3 patch §2.3 streaming boundary —
-                    # partial output already committed; abort with
-                    # the original error rather than swapping models
-                    # mid-stream.
+                    # Streaming boundary — partial output already
+                    # committed; abort with the original error
+                    # rather than swapping models mid-stream.
                     raise
                 attempts.append(_attempt_entry(spec, exc))
                 previous_spec = spec
@@ -387,11 +399,11 @@ class FallbackLLMHandle:
                     # without consulting the rest of the chain.
                     raise
                 if self._stream_emitted_content():
-                    # Phase 1.3 patch §2.3 streaming boundary —
-                    # post-token-emitted Recoverable does NOT
-                    # advance; re-raise the original Recoverable so
-                    # the engine emits `thread.exchange_failed` with
-                    # the truncation visible.
+                    # Streaming boundary — post-token-emitted
+                    # Recoverable does NOT advance; re-raise the
+                    # original Recoverable so the engine emits
+                    # `thread.exchange_failed` with the truncation
+                    # visible.
                     raise
                 previous_spec = spec
                 previous_error = exc
@@ -406,13 +418,13 @@ class FallbackLLMHandle:
             return response
 
         # Loop fell through — every attempt raised a Recoverable
-        # error. If the chain was empty (only primary attempted), the
-        # patch's `llm.all_models_failed` ("after exhausting the
-        # chain") doesn't apply — there was no chain. Re-raise the
-        # original Recoverable so the outer engine emits
-        # `thread.exchange_failed` with the unwrapped error as cause.
-        # When the chain WAS non-empty, every entry's failure is
-        # bundled into the load-bearing `attempts` field.
+        # error. If the chain was empty (only primary attempted),
+        # `llm.all_models_failed` ("after exhausting the chain")
+        # doesn't apply — there was no chain. Re-raise the original
+        # Recoverable so the outer engine emits
+        # `thread.exchange_failed` with the unwrapped error as
+        # cause. When the chain WAS non-empty, every entry's
+        # failure is bundled into the load-bearing `attempts` field.
         if not self._chain and previous_error is not None:
             raise previous_error
         raise LlmAllModelsFailed(
@@ -429,10 +441,11 @@ class FallbackLLMHandle:
     # ---- Streaming-boundary helper ----------------------------------------
 
     def _stream_emitted_content(self) -> bool:
-        """Return True iff the engine's streaming layer marked
-        content as emitted before the current attempt failed. Phase
-        1.3 patch §2.3: once tokens have streamed to the user,
-        fallback does NOT apply."""
+        """Return True iff streaming has emitted any content.
+
+        Once tokens have streamed to the user, fallback does NOT
+        apply.
+        """
         if self._stream_state is None:
             return False
         return self._stream_state.has_emitted_content()
@@ -447,15 +460,13 @@ class FallbackLLMHandle:
         request: LLMRequest,
     ) -> None:
         # Full ModelSpec dump (parameters + fallback) lands on the
-        # request event — matches the pre-Phase-1.3 observer
-        # behaviour. The `from`/`to` fields on `model.fallback` are
-        # the canonical (provider, model) pair per patch §3.1.
+        # request event. The `from` / `to` fields on
+        # `model.fallback` are the canonical (provider, model) pair.
         #
-        # Bug-engine-tools-wiring-gap.md Step F — also include the
-        # tool-schema list the framework forwarded. This is the
-        # production emit path (FallbackLLMHandle replaces the
-        # pre-Phase-1.3 _ObservedLLMHandle); the parallel fix in
-        # observers.py is for test paths that still wire
+        # Also include the tool-schema list the framework forwarded
+        # — this is the production emit path (FallbackLLMHandle
+        # replaces _ObservedLLMHandle); the parallel emit in
+        # observers.py covers test paths that still wire
         # _ObservedLLMHandle directly.
         await self._emit(
             type_=EventType.MODEL_REQUEST,
@@ -550,7 +561,7 @@ class FallbackLLMHandle:
 
 
 def _attempt_entry(spec: ModelSpec, exc: PlatformError) -> dict[str, Any]:
-    """One row in :attr:`LlmAllModelsFailed.detail.attempts`."""
+    """One row in `LlmAllModelsFailed.detail.attempts`."""
     return {
         "model": {"provider": spec.provider, "model": spec.model},
         "error_code": exc.code,
