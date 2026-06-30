@@ -1,9 +1,11 @@
-"""Content sidecar store — spec §2.3 + §I11 (immutability).
+"""Content sidecar store — immutable hash-addressed payload spill.
 
-Oversized event payloads spill to ``<platform-root>/content/<hash>.bin``.
-The hash is the SHA-256 hex digest of the content; the same content
-written twice is the same file (write_content is idempotent and a
-second write is a no-op).
+Oversized event payloads spill to `<platform-root>/content/<hash>.bin`.
+The hash is the SHA-256 hex digest of the content, so the same payload
+written twice resolves to the same file and a second write is a no-op.
+
+The on-disk layout and immutability rule belong to the
+[session/run store contract](../../docs/explanation/session-run-store-contract.md).
 """
 
 from __future__ import annotations
@@ -18,21 +20,32 @@ from schemas import ContentRef
 
 
 def content_path(root: Path, content_hash: str) -> Path:
-    """The canonical path for a content entry — spec §2.3."""
+    """Return the canonical path for a content entry under `root`."""
     return root / "content" / f"{content_hash}.bin"
 
 
 def write_content_sync(root: Path, payload: bytes) -> ContentRef:
-    """Write ``payload`` to the content store, returning a :class:`ContentRef`.
+    """Write `payload` to the content store and return a `ContentRef`.
 
-    Idempotent: if a file already exists at the target path, the
-    function returns the existing reference without rewriting. The
-    content is immutable per §I11.
+    Idempotent — when a file already exists at the target path, return
+    the existing reference without rewriting. Content is immutable, so
+    the same hash always maps to the same bytes.
 
-    Crash-safety: writes go to a uniquely-named tempfile in the same
-    directory, then ``os.rename`` atomically moves it into place. A
-    process crash mid-write leaves at most a stray tempfile, never a
-    partial content file.
+    **Crash safety.** Writes go to a uniquely-named tempfile in the
+    same directory, then `os.rename` atomically moves it into place.
+    A process crash mid-write leaves at most a stray tempfile, never
+    a partial content file.
+
+    Args:
+        root: The platform root containing the `content/` directory.
+        payload: The raw bytes to persist.
+
+    Returns:
+        A [`ContentRef`][schemas.entities.ContentRef] naming the
+        stored payload.
+
+    Raises:
+        StoreWriteFailed: The tempfile write or rename failed.
     """
     digest = hashlib.sha256(payload).hexdigest()
     target = content_path(root, digest)

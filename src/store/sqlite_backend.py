@@ -1,16 +1,16 @@
-"""SQLite implementation of :class:`store.backend.EntityBackend`.
+"""SQLite implementation of [`EntityBackend`][store.backend.EntityBackend].
 
-Default v1 backend per handbook §6.1 — zero external services, single
-file at ``<platform-root>/.platform/entities.db`` (path passed in by
-the caller).
+The default v1 backend — zero external services, single file at
+`<platform-root>/.platform/entities.db` (path passed in by the
+caller).
 
 WAL mode is enabled so multiple processes can read while a writer
-holds the database. The single-writer constraint of SQLite is fine
-for v1: ``insert_session`` and friends are rare relative to event
-appends (which never touch this DB).
+holds the database. SQLite's single-writer constraint is fine for v1:
+`insert_session` and friends are rare relative to event appends
+(which never touch this DB).
 
-Sync I/O is wrapped in :func:`asyncio.to_thread` so the event loop
-stays unblocked (spec §I10).
+Sync I/O is wrapped in `asyncio.to_thread` so the event loop stays
+unblocked.
 """
 
 from __future__ import annotations
@@ -102,13 +102,14 @@ def _row_to_thread(row: sqlite3.Row) -> Thread:
 
 
 class SqliteBackend:
-    """Spec-conformant SQLite-backed :class:`EntityBackend`.
+    """SQLite-backed [`EntityBackend`][store.backend.EntityBackend].
 
     Path is supplied at construction; the file is created on first
-    :meth:`initialize`. Connection is opened with
-    ``check_same_thread=False`` so :func:`asyncio.to_thread` workers
-    can use it; serialised access is enforced by a single
-    :class:`asyncio.Lock` held during every mutating operation.
+    `initialize`. The connection is opened with
+    `check_same_thread=False` so `asyncio.to_thread` workers can use
+    it; serialised access is enforced by a single `asyncio.Lock` held
+    during every operation, including reads (SQLite's connection is
+    not safe for concurrent use across worker threads).
     """
 
     def __init__(self, path: Path) -> None:
@@ -121,6 +122,7 @@ class SqliteBackend:
     # --- lifecycle -----------------------------------------------------
 
     async def initialize(self) -> None:
+        """Open the SQLite connection and create tables. Idempotent."""
         if self._conn is not None:
             return
         await asyncio.to_thread(self._initialize_sync)
@@ -136,10 +138,10 @@ class SqliteBackend:
         conn.execute("PRAGMA journal_mode = WAL")
         conn.execute("PRAGMA foreign_keys = ON")
         conn.executescript(_SCHEMA)
-        # Additive migration for DBs created before Phase 3.2 — the
-        # CREATE TABLE above is a no-op when the table already exists,
-        # so a fresh `from_workflow_run` column has to be patched in
-        # via ALTER TABLE.
+        # Additive migration for DBs created before `from_workflow_run`
+        # existed — the CREATE TABLE above is a no-op when the table
+        # already exists, so a fresh column has to be patched in via
+        # ALTER TABLE.
         existing_cols = {
             row["name"] for row in conn.execute("PRAGMA table_info(sessions)")
         }
@@ -148,6 +150,7 @@ class SqliteBackend:
         self._conn = conn
 
     async def close(self) -> None:
+        """Close the SQLite connection. Idempotent."""
         if self._conn is None:
             return
         conn = self._conn
@@ -155,12 +158,12 @@ class SqliteBackend:
         await asyncio.to_thread(conn.close)
 
     def _require_conn(self) -> sqlite3.Connection:
-        """Return the active connection or raise if uninitialised.
+        """Return the active connection or raise when uninitialised.
 
         Sync sites narrow the optional connection by going through
-        this helper rather than ``assert``, so the binary is robust
-        when stripped (``python -O``) and the failure mode is a
-        clear ``RuntimeError`` rather than ``AssertionError``.
+        this helper rather than `assert`, so the binary is robust
+        when stripped (`python -O`) and the failure mode is a clear
+        `RuntimeError` rather than `AssertionError`.
         """
         if self._conn is None:
             msg = "SqliteBackend used before initialize() / after close()"
@@ -170,6 +173,7 @@ class SqliteBackend:
     # --- sessions ------------------------------------------------------
 
     async def insert_session(self, session: Session) -> None:
+        """Insert a session record."""
         async with self._lock:
             await asyncio.to_thread(self._insert_session_sync, session)
 
@@ -193,9 +197,10 @@ class SqliteBackend:
         )
 
     async def get_session(self, session_id: SessionId) -> Session | None:
+        """Return the session record, or `None` when it does not exist."""
         # SQLite's connection isn't thread-safe even for concurrent
         # reads when shared across `to_thread` workers; serialise
-        # every access (incl. reads) through the asyncio lock.
+        # every access (including reads) through the asyncio lock.
         async with self._lock:
             return await asyncio.to_thread(self._get_session_sync, session_id)
 
@@ -216,6 +221,7 @@ class SqliteBackend:
         order_by: Literal["created_at", "name"] = "created_at",
         order: Literal["asc", "desc"] = "desc",
     ) -> list[Session]:
+        """Return session records filtered and ordered per the kwargs."""
         async with self._lock:
             return await asyncio.to_thread(
                 self._list_sessions_sync,
@@ -261,6 +267,7 @@ class SqliteBackend:
         return [_row_to_session(row) for row in conn.execute(sql, params).fetchall()]
 
     async def update_session(self, session: Session) -> None:
+        """Persist mutable-field changes; re-stamps `updated_at`."""
         # We re-stamp updated_at at the store layer so this backend
         # method takes the fully-formed Session and just persists.
         session = session.model_copy(update={"updated_at": datetime.now(UTC)})
@@ -283,6 +290,7 @@ class SqliteBackend:
         )
 
     async def delete_session(self, session_id: SessionId) -> None:
+        """Delete the session record. Cascades to its threads."""
         async with self._lock:
             await asyncio.to_thread(self._delete_session_sync, session_id)
 
@@ -297,6 +305,7 @@ class SqliteBackend:
     # --- threads -------------------------------------------------------
 
     async def insert_thread(self, thread: Thread) -> None:
+        """Insert a thread record."""
         async with self._lock:
             await asyncio.to_thread(self._insert_thread_sync, thread)
 
@@ -315,6 +324,7 @@ class SqliteBackend:
         )
 
     async def get_thread(self, thread_id: ThreadId) -> Thread | None:
+        """Return the thread record, or `None` when it does not exist."""
         async with self._lock:
             return await asyncio.to_thread(self._get_thread_sync, thread_id)
 
@@ -327,6 +337,7 @@ class SqliteBackend:
         return _row_to_thread(row) if row else None
 
     async def list_threads(self, session_id: SessionId) -> list[Thread]:
+        """Return every thread record belonging to `session_id`."""
         async with self._lock:
             return await asyncio.to_thread(self._list_threads_sync, session_id)
 
@@ -341,6 +352,7 @@ class SqliteBackend:
     # --- reconstruction helper -----------------------------------------
 
     async def delete_all(self) -> None:
+        """Wipe every session and thread record."""
         async with self._lock:
             await asyncio.to_thread(self._delete_all_sync)
 

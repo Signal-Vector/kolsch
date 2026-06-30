@@ -1,10 +1,15 @@
-"""The :class:`SessionStore` — public API per Module API Reference §3.
+"""The `SessionStore` — public persistence surface for the engine and CLI.
 
-Composes the three pieces — :class:`EntityBackend`, the JSONL helpers,
-and the content store — behind a single object the engine and CLI
-consume. The class itself is a thin orchestrator; the protocol-shaped
-sub-pieces let alternative implementations (Postgres backend in a
-later phase) drop in by injecting a different backend.
+Composes the three pieces — [`EntityBackend`][store.backend.EntityBackend],
+the JSONL helpers, and the content sidecar store — behind one object
+the engine and CLI consume. The class itself is a thin orchestrator;
+the protocol-shaped sub-pieces let alternative implementations
+(a Postgres backend in a later phase) drop in by injecting a different
+backend.
+
+See the
+[session/run store contract](../../docs/explanation/session-run-store-contract.md)
+for the full set of invariants this layer upholds.
 """
 
 from __future__ import annotations
@@ -55,11 +60,12 @@ if TYPE_CHECKING:
 
 
 class ReconstructionResult(BaseModel):
-    """Outcome of :meth:`SessionStore.reconstruct_from_filesystem`.
+    """Outcome of
+    [`SessionStore.reconstruct_from_filesystem`][store.SessionStore.reconstruct_from_filesystem].
 
-    Per spec §2.5: counts of sessions and threads found vs.
-    reconstructed, plus warnings (e.g., files without
-    ``session.opened``).
+    Counts sessions and threads found versus reconstructed, plus
+    warnings (for example, JSONL files missing a `session.opened`
+    event).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -96,16 +102,17 @@ class SessionStore:
     """Persistence layer for sessions, threads, events, and content.
 
     Constructor takes the platform root and a configured
-    :class:`EntityBackend`. The store owns no global state; multiple
-    instances over the same root + backend are safe because the
-    durable state lives entirely on disk + in the backend.
+    [`EntityBackend`][store.backend.EntityBackend]. The store owns no
+    global state; multiple instances over the same root and backend
+    are safe because the durable state lives entirely on disk and in
+    the backend.
     """
 
     def __init__(self, *, root: Path, backend: EntityBackend) -> None:
         self._root = root
         self._backend = backend
 
-    # --- Session lifecycle (spec §2.1) ---------------------------------
+    # --- Session lifecycle ---------------------------------------------
 
     async def create_session(
         self,
@@ -115,33 +122,37 @@ class SessionStore:
         from_workflow_run: FromWorkflowRun | None = None,
         trace_id: str | None = None,
     ) -> Session:
-        """Create a session AND its default thread, then write `session.opened`.
+        """Create a session and its default thread, then write `session.opened`.
 
-        Spec §13.2's Event envelope requires ``thread_id``; for the
-        first event in the file (``session.opened``) that id must
-        point at a real thread. Phase 1 has one thread per session,
-        so :meth:`create_session` allocates the default thread as
-        part of session creation. Additional threads (Phase 2) are
-        created explicitly via :meth:`create_thread` and remain a
-        no-event operation.
+        The Event envelope requires `thread_id`; for the first event
+        in the file (`session.opened`) that id must point at a real
+        thread. Today one thread per session is the rule, so
+        `create_session` allocates the default thread as part of
+        session creation. Additional threads are created explicitly
+        via `create_thread` and remain a no-event operation.
 
-        ``from_workflow_run`` is the Phase 3.2 parent pointer set by
-        ``AgentRunner`` when an ``agent:`` workflow node spawns the
-        session. When non-None it populates ``Session.from_workflow_run``
-        AND injects a ``spawned_by`` entry into the ``session.opened``
-        event's ``data`` payload per
-        ``docs/explanation/workflow-event-log.md`` line 62. Chat- and
-        API-spawned sessions leave it ``None`` and the payload is
-        byte-identical to the pre-3.2 shape.
+        Args:
+            initial_agent_id: Agent ref the session opens against.
+            name: Display name; defaults to the new session id.
+            from_workflow_run: Parent pointer set by the agent runner
+                when an `agent:` workflow node spawns the session.
+                When non-`None` it populates `Session.from_workflow_run`
+                AND injects a `spawned_by` entry into the
+                `session.opened` event's `data` payload per the
+                [workflow event log](../../docs/explanation/workflow-event-log.md).
+                Chat- and API-spawned sessions leave it `None` and the
+                payload is byte-identical to the pre-spawn shape.
+            trace_id: Stamped on the `session.opened` event envelope
+                so the spawned session's very first event correlates
+                with the workflow run that spawned it. Every subsequent
+                event the engine emits inherits the same trace id via
+                [`ExecutionContext`][engine.context.ExecutionContext]
+                (the engine's `_emit` chokepoint stamps it on every
+                emitted Event). Chat and API callers leave it `None`
+                and the envelope field stays `None`.
 
-        ``trace_id`` (Phase 3.2 §11.6.4) is stamped on the
-        ``session.opened`` event envelope so the spawned session's very
-        first event correlates with the workflow run that spawned it.
-        Every subsequent event the agent engine emits inherits the same
-        trace_id via :class:`engine.ExecutionContext` (the engine's
-        ``_emit`` chokepoint stamps it on every emitted Event). Chat /
-        API callers leave it ``None`` and the envelope field stays
-        ``None``.
+        Returns:
+            The newly created [`Session`][schemas.entities.Session].
         """
         agent_id = AgentId(initial_agent_id)
         session_id = _new_session_id()
@@ -200,6 +211,11 @@ class SessionStore:
         return session
 
     async def get_session(self, session_id: SessionId) -> Session:
+        """Return the session record for `session_id`.
+
+        Raises:
+            SessionNotFound: No record exists for that id.
+        """
         result = await self._backend.get_session(session_id)
         if result is None:
             raise SessionNotFound(session_id=str(session_id))
@@ -214,6 +230,16 @@ class SessionStore:
         order_by: Literal["created_at", "name"] = "created_at",
         order: Literal["asc", "desc"] = "desc",
     ) -> list[Session]:
+        """Return session records filtered and ordered per the kwargs.
+
+        Args:
+            starred: Filter to starred (`True`) or un-starred (`False`)
+                sessions, or both (`None`).
+            archived: Same filter shape on the archived flag.
+            limit: Cap the result count. `None` returns every match.
+            order_by: Column to sort on.
+            order: Ascending or descending.
+        """
         return await self._backend.list_sessions(
             starred=starred,
             archived=archived,
@@ -230,6 +256,25 @@ class SessionStore:
         starred: bool | None = None,
         archived: bool | None = None,
     ) -> Session:
+        """Patch the mutable UI fields on a session record.
+
+        Only the kwargs that are not `None` are applied; the rest of
+        the record is left untouched. The backend re-stamps
+        `updated_at`, so the returned record is refetched to give the
+        caller the authoritative timestamp.
+
+        Args:
+            session_id: The session to patch.
+            name: New display name; `None` leaves it unchanged.
+            starred: New starred flag; `None` leaves it unchanged.
+            archived: New archived flag; `None` leaves it unchanged.
+
+        Returns:
+            The post-update session record.
+
+        Raises:
+            SessionNotFound: No record exists for `session_id`.
+        """
         existing = await self.get_session(session_id)
         updated = existing.model_copy(
             update={
@@ -246,17 +291,31 @@ class SessionStore:
         return refetched if refetched is not None else updated
 
     async def delete_session(self, session_id: SessionId) -> None:
+        """Delete the session record, JSONL file, and lock sidecar.
+
+        Idempotent — missing files and missing records are silently
+        tolerated.
+        """
         await self._backend.delete_session(session_id)
         await asyncio.to_thread(safe_unlink, jsonl_path(self._root, session_id))
         await asyncio.to_thread(safe_unlink, lock_path(self._root, session_id))
 
-    # --- Thread lifecycle (spec §2.2) ----------------------------------
+    # --- Thread lifecycle ----------------------------------------------
 
     async def create_thread(
         self,
         session_id: SessionId,
         agent_id: AgentId,
     ) -> Thread:
+        """Create a new thread record under `session_id`.
+
+        Confirms the session exists before inserting; no event is
+        written (thread creation is a record-only operation in this
+        phase).
+
+        Raises:
+            SessionNotFound: No session record exists for `session_id`.
+        """
         # Confirm the session exists; raises SessionNotFound otherwise.
         await self.get_session(session_id)
         thread = Thread(
@@ -269,21 +328,48 @@ class SessionStore:
         return thread
 
     async def get_thread(self, thread_id: ThreadId) -> Thread:
+        """Return the thread record for `thread_id`.
+
+        Raises:
+            ThreadNotFound: No record exists for that id.
+        """
         result = await self._backend.get_thread(thread_id)
         if result is None:
             raise ThreadNotFound(thread_id=str(thread_id))
         return result
 
     async def list_threads(self, session_id: SessionId) -> list[Thread]:
+        """Return every thread record belonging to `session_id`."""
         return await self._backend.list_threads(session_id)
 
-    # --- Event operations (spec §2.3) ----------------------------------
+    # --- Event operations ----------------------------------------------
 
     async def append_event(
         self,
         thread_id: ThreadId,
         event: Event,
     ) -> Event:
+        """Append `event` to the JSONL backing `thread_id`'s session.
+
+        Resolves the thread → session mapping, validates the caller's
+        `session_id` matches the resolved one, then delegates to
+        `append_event_sync` under a worker thread so the event loop
+        stays unblocked.
+
+        Args:
+            thread_id: The thread the event belongs to.
+            event: The event to append. `parent_event_id` is filled
+                in by the store; callers leave it `None`.
+
+        Returns:
+            The appended event with `parent_event_id` populated.
+
+        Raises:
+            ThreadNotFound: No thread record exists for `thread_id`.
+            ValueError: `event.session_id` does not match the resolved
+                session — coercing would mask a real engine bug.
+            StoreWriteFailed: The append failed at the filesystem.
+        """
         # Resolve the thread → session mapping so we know which file
         # to append to. ThreadNotFound bubbles if absent.
         thread = await self.get_thread(thread_id)
@@ -304,6 +390,11 @@ class SessionStore:
         )
 
     async def get_leaf(self, thread_id: ThreadId) -> Event | None:
+        """Return the most recent event on `thread_id`, or `None`.
+
+        Recovers any partial trailing line on the file before scanning
+        so a previous crash does not skew the leaf result.
+        """
         thread = await self.get_thread(thread_id)
         path = jsonl_path(self._root, thread.session_id)
         await asyncio.to_thread(recover_partial_final_line, path)
@@ -320,6 +411,27 @@ class SessionStore:
         from_event_id: str | None = None,
         limit: int | None = None,
     ) -> AsyncIterator[Event]:
+        """Yield events for `thread_id` in file order.
+
+        Reads all matching lines on a worker thread up front so the
+        async iteration itself never blocks the loop. Filters to
+        `thread_id`: today there is one thread per session and the
+        filter is the identity, but the same call site stays correct
+        when multi-thread sessions arrive.
+
+        Args:
+            thread_id: The thread to read.
+            from_event_id: When set, yield only events strictly after
+                the event with this id. Unknown ids yield nothing.
+            limit: Cap the yield count. `None` yields every match.
+
+        Yields:
+            Each [`Event`][schemas.events.Event] in file order.
+
+        Raises:
+            ThreadNotFound: No thread record exists for `thread_id`.
+            StoreCorruptLog: The JSONL has a malformed mid-file line.
+        """
         thread = await self.get_thread(thread_id)
         path = jsonl_path(self._root, thread.session_id)
         await asyncio.to_thread(recover_partial_final_line, path)
@@ -346,9 +458,9 @@ class SessionStore:
             all_events = all_events[:limit]
 
         for event in all_events:
-            # Filter to the requested thread. Phase 1 has one thread
-            # per session so this is identity, but the filter is the
-            # forward-compatible behaviour for Phase 2 multi-thread.
+            # Filter to the requested thread. Today's one-thread-per-
+            # session shape makes this identity, but the filter is the
+            # forward-compatible behaviour for multi-thread.
             if event.thread_id == thread_id:
                 yield event
 
@@ -356,21 +468,53 @@ class SessionStore:
         self,
         thread_id: ThreadId,
     ) -> AsyncIterator[Event]:
-        # Phase 1: no branching → file order is the path. Phase 2's
-        # branching-aware implementation replaces this body without
-        # changing the call site.
+        """Yield the events on the path from the thread's root to its leaf.
+
+        Today's no-branching event log makes file order the path, so
+        this delegates to `read_events`. A future branching-aware
+        implementation replaces this body without changing the call
+        site.
+        """
+        # No branching → file order is the path. The branching-aware
+        # implementation replaces this body without changing the call
+        # site.
         async for event in self.read_events(thread_id):
             yield event
 
-    # --- Content store (spec §2.3) -------------------------------------
+    # --- Content store -------------------------------------------------
 
     async def write_content(self, content: bytes | str) -> ContentRef:
+        """Persist `content` to the content sidecar store.
+
+        Strings are encoded as UTF-8. The write is idempotent: the
+        same payload written twice resolves to the same on-disk file.
+
+        Returns:
+            A [`ContentRef`][schemas.entities.ContentRef] naming the
+            stored payload.
+
+        Raises:
+            StoreWriteFailed: The sidecar write failed.
+        """
         payload = content if isinstance(content, bytes) else content.encode("utf-8")
         return await asyncio.to_thread(write_content_sync, self._root, payload)
 
-    # --- Reconstruction (spec §2.5) ------------------------------------
+    # --- Reconstruction ------------------------------------------------
 
     async def reconstruct_from_filesystem(self) -> ReconstructionResult:
+        """Rebuild missing session and thread records from the JSONL files.
+
+        Scans `<root>/sessions/*.jsonl`, reads each file's
+        `session.opened` event to recover the agent id and creation
+        timestamp, and inserts a record only when the backend is
+        missing one. Files without a valid `session.opened` are
+        skipped with a warning rather than aborting the whole sweep.
+
+        Returns:
+            A [`ReconstructionResult`][store.ReconstructionResult]
+            with counts of found versus reconstructed sessions and
+            threads plus any per-file warnings.
+        """
         sessions_dir = self._root / "sessions"
         if not sessions_dir.exists():
             return ReconstructionResult(
@@ -417,7 +561,8 @@ class SessionStore:
                 rebuilt = Session(
                     session_id=session_id,
                     agent_id=agent_id,
-                    # UI-state defaults per spec §2.5.
+                    # UI-state defaults — reconstruct can't recover
+                    # operator-set name / starred / archived.
                     name=session_id,
                     starred=False,
                     archived=False,
@@ -428,8 +573,8 @@ class SessionStore:
                 sessions_reconstructed += 1
 
             # Scan the file's events for threads referenced. We use
-            # the inferred (session, agent_id) since Phase 1 has no
-            # explicit thread.created event.
+            # the inferred (session, agent_id) since there is no
+            # explicit thread.created event today.
             seen_in_file: set[ThreadId] = set()
             for event in await asyncio.to_thread(_safe_read_events, path):
                 tid = event.thread_id
@@ -470,7 +615,7 @@ def _parse_dt(value: object) -> datetime | None:
 
 
 def _safe_read_events(path: Path) -> list[Event]:
-    """Best-effort event read for reconstruct; corruption returns []."""
+    """Best-effort event read for reconstruct; corruption returns `[]`."""
     try:
         return list(read_lines(path))
     except Exception:  # noqa: BLE001 — reconstruct is intentionally tolerant

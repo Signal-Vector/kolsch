@@ -1,9 +1,11 @@
-"""JSONL append, read, leaf, and recovery — spec §4 + §5.
+"""JSONL append, read, leaf resolution, and partial-line recovery.
 
-All filesystem operations are sync and small. The :class:`SessionStore`
-wraps these in :func:`asyncio.to_thread` so the event loop is never
-blocked on disk I/O (spec §I10). ``flock`` itself remains a blocking
-syscall per the spec's allowance.
+Implements the on-disk event-log surface of the
+[session/run store contract](../../docs/explanation/session-run-store-contract.md).
+All filesystem operations are synchronous and small;
+[`SessionStore`][store.session_store.SessionStore] wraps them in
+`asyncio.to_thread` so the event loop is never blocked on disk I/O.
+`flock` itself remains a blocking syscall.
 """
 
 from __future__ import annotations
@@ -24,9 +26,9 @@ if TYPE_CHECKING:
     from schemas import SessionId, ThreadId
 
 
-# Per spec §5.2: events whose loss would make the agent "forget what
-# it just did" are fsync-critical. Engine-emitted progress events MAY
-# skip fsync for performance.
+# Events whose loss would make the agent "forget what it just did" are
+# fsync-critical. Engine-emitted progress events MAY skip fsync for
+# performance.
 _FSYNC_EVENT_TYPES: frozenset[str] = frozenset(
     {
         "agent.message",
@@ -42,12 +44,12 @@ _FSYNC_EVENT_TYPES: frozenset[str] = frozenset(
 
 
 def jsonl_path(root: Path, session_id: SessionId) -> Path:
-    """The canonical JSONL path for a session — spec §3.1."""
+    """Return the canonical JSONL path for `session_id` under `root`."""
     return root / "sessions" / f"{session_id}.jsonl"
 
 
 def lock_path(root: Path, session_id: SessionId) -> Path:
-    """The sidecar `.lock` path for a session — spec §3.1."""
+    """Return the sidecar `.lock` path for `session_id` under `root`."""
     return root / "sessions" / f"{session_id}.jsonl.lock"
 
 
@@ -56,29 +58,28 @@ def _serialise(event: Event) -> bytes:
 
     The byte representation is load-bearing for two callers:
 
-    - Golden event-log tests (handbook §8.4) snapshot the JSONL
-      output and compare against committed files; any change to the
-      byte representation invalidates every golden file.
-    - The partial-final-line recovery (spec §5.3) probes the file's
-      last bytes; ambiguity here means corrupt detection misfires.
+    - Golden event-log tests snapshot the JSONL output and compare
+      against committed files; any change to the byte representation
+      invalidates every golden file.
+    - The partial-final-line recovery probes the file's last bytes;
+      ambiguity here means corrupt detection misfires.
 
-    We therefore do NOT use :meth:`Event.model_dump_json` directly,
-    because Pydantic v2 emits keys in field-declaration order and a
-    future field reorder would silently change every line's bytes.
-    Instead: dump to a JSON-ready dict via Pydantic (handles
-    datetime, etc.), then re-encode through the stdlib with
-    ``sort_keys=True`` + compact separators. The byte output is
-    insensitive to Pydantic field order AND to nested-dict insertion
-    order. Re-reading and re-serialising the same Event yields
-    byte-identical output.
+    We therefore do NOT use `Event.model_dump_json` directly, because
+    Pydantic v2 emits keys in field-declaration order and a future
+    field reorder would silently change every line's bytes. Instead:
+    dump to a JSON-ready dict via Pydantic (handles datetime, etc.),
+    then re-encode through the stdlib with `sort_keys=True` and
+    compact separators. The byte output is insensitive to Pydantic
+    field order AND to nested-dict insertion order. Re-reading and
+    re-serialising the same Event yields byte-identical output.
     """
     payload = event.model_dump(mode="json")
-    # Phase 3.2 §11.6.4 — ``trace_id`` is additive on the envelope.
-    # Strip it from the on-disk row when absent so chat / API sessions
-    # (which leave it ``None``) produce JSONL lines byte-identical to
-    # the pre-3.2 shape — the golden snapshots committed before this
-    # field landed stay valid. Spawned-from-workflow sessions DO carry
-    # it and the key surfaces in their lines verbatim.
+    # `trace_id` is additive on the envelope. Strip it from the
+    # on-disk row when absent so chat / API sessions (which leave it
+    # `None`) produce JSONL lines byte-identical to the pre-trace_id
+    # shape — the golden snapshots committed before this field landed
+    # stay valid. Spawned-from-workflow sessions DO carry it and the
+    # key surfaces in their lines verbatim.
     if payload.get("trace_id") is None:
         payload.pop("trace_id", None)
     return (
@@ -88,7 +89,7 @@ def _serialise(event: Event) -> bytes:
 
 
 def _parse_line(raw: str, *, session_id: SessionId, line_number: int) -> Event:
-    """Parse one JSONL line into an :class:`Event` or raise StoreCorruptLog."""
+    """Parse one JSONL line into an `Event` or raise `StoreCorruptLog`."""
     try:
         payload = json.loads(raw)
         return Event.model_validate(payload)
@@ -104,7 +105,7 @@ def _parse_line(raw: str, *, session_id: SessionId, line_number: int) -> Event:
 
 
 def _find_last_newline(path: Path, size: int) -> int | None:
-    """Return the byte offset of the last `\\n` in ``path``, or None."""
+    """Return the byte offset of the last `\\n` in `path`, or `None`."""
     chunk_size = 4096
     with path.open("rb") as f:
         offset = max(0, size - chunk_size)
@@ -120,7 +121,7 @@ def _find_last_newline(path: Path, size: int) -> int | None:
 
 
 def _tail_after(path: Path, position: int) -> bytes:
-    """Read the bytes from ``position`` to EOF."""
+    """Read the bytes from `position` to EOF."""
     with path.open("rb") as f:
         f.seek(position)
         return f.read()
@@ -135,10 +136,11 @@ def _parses_as_json(payload: bytes) -> bool:
 
 
 def recover_partial_final_line(path: Path) -> None:
-    """Truncate a partial last line at file open — spec §5.3.
+    """Truncate a partial last line at file open.
 
-    Idempotent: running twice on a well-formed file does nothing the
-    second time. Run on every file open before reads/appends.
+    Idempotent — running twice on a well-formed file does nothing the
+    second time. Run on every file open before reads or appends so a
+    crashed mid-line write does not poison subsequent operations.
     """
     if not path.exists():
         return
@@ -170,9 +172,27 @@ def append_event_sync(
     thread_id: ThreadId,
     event: Event,
 ) -> Event:
-    """Lock-serialised, leaf-resolved, atomic-or-recoverable append.
+    """Append `event` to the session's JSONL under a per-session lock.
 
-    Returns the appended event with ``parent_event_id`` filled in.
+    Resolves the thread leaf under the lock, stamps the appended
+    event's `parent_event_id`, and writes the line with `O_APPEND` so
+    the kernel positions the bytes at EOF atomically. fsyncs the file
+    descriptor for events in the durability-critical set; lower-stakes
+    progress events skip fsync for throughput.
+
+    Args:
+        root: Platform root containing the `sessions/` directory.
+        session_id: The session whose JSONL receives the event.
+        thread_id: The thread whose leaf the append chains onto.
+        event: The event to write. `parent_event_id` is filled in by
+            this call; callers leave it `None`.
+
+    Returns:
+        The appended event with `parent_event_id` populated.
+
+    Raises:
+        StoreWriteFailed: The `flock`, write, or fsync failed, or the
+            write was short.
     """
     jsonl = jsonl_path(root, session_id)
     lock = lock_path(root, session_id)
@@ -188,10 +208,10 @@ def append_event_sync(
                 reason=f"flock failed: {exc}",
             ) from exc
 
-        # Step §5.3 — recover any partial line BEFORE computing leaf.
+        # Recover any partial line BEFORE computing leaf.
         recover_partial_final_line(jsonl)
 
-        # Step §4.1.3 — compute leaf under the lock.
+        # Compute leaf under the lock.
         leaf = read_last_event_for_thread(jsonl, thread_id)
         appended = event.model_copy(
             update={"parent_event_id": leaf.event_id if leaf else None},
@@ -202,7 +222,7 @@ def append_event_sync(
             jsonl.parent.mkdir(parents=True, exist_ok=True)
 
         # Open with O_APPEND so the kernel positions writes at EOF
-        # atomically (spec §5.1).
+        # atomically.
         flags = os.O_WRONLY | os.O_APPEND | os.O_CREAT
         fd = os.open(jsonl, flags, 0o644)
         try:
@@ -232,9 +252,9 @@ def read_last_event_for_thread(
     path: Path,
     thread_id: ThreadId,
 ) -> Event | None:
-    """Scan back from EOF for the most recent event of ``thread_id``.
+    """Scan from EOF for the most recent event of `thread_id`.
 
-    Returns ``None`` if the file does not exist, is empty, or contains
+    Returns `None` when the file does not exist, is empty, or contains
     no events for that thread.
     """
     if not path.exists():
@@ -252,7 +272,7 @@ def read_last_event_for_thread(
 
 
 def _iter_lines(path: Path) -> Iterator[tuple[str, int]]:
-    """Yield (line_text, 1-indexed_line_number) for every non-empty line."""
+    """Yield `(line_text, 1-indexed_line_number)` for every non-empty line."""
     with path.open(encoding="utf-8") as f:
         for index, raw in enumerate(f, start=1):
             stripped = raw.rstrip("\n")
@@ -262,9 +282,9 @@ def _iter_lines(path: Path) -> Iterator[tuple[str, int]]:
 
 
 def _session_id_from_path(path: Path) -> SessionId:
-    """Derive a SessionId from the JSONL file name.
+    """Derive a `SessionId` from the JSONL file name.
 
-    Used only for surfacing in :class:`StoreCorruptLog` messages — no
+    Used only for surfacing in `StoreCorruptLog` messages — no
     validation since we control the filename.
     """
     from schemas import SessionId as _SessionId  # noqa: PLC0415
@@ -273,12 +293,12 @@ def _session_id_from_path(path: Path) -> SessionId:
 
 
 def read_lines(path: Path) -> Iterator[Event]:
-    """Yield every event in file order — spec §2.3 ``read_events``.
+    """Yield every event in `path` in file order.
 
-    Raises :class:`StoreCorruptLog` on any malformed mid-file line
-    (with 1-indexed line number). The final partial line, if any, is
-    recovered by :func:`recover_partial_final_line`; callers should
-    invoke that before reading if they suspect a crash.
+    Raises [`StoreCorruptLog`][errors.StoreCorruptLog] on any malformed
+    mid-file line (with 1-indexed line number). The final partial line,
+    if any, is recovered by `recover_partial_final_line`; callers
+    should invoke that before reading if they suspect a crash.
     """
     if not path.exists():
         return
@@ -288,10 +308,10 @@ def read_lines(path: Path) -> Iterator[Event]:
 
 
 def read_first_event(path: Path) -> dict[str, Any] | None:
-    """Return the first line's JSON payload (or ``None`` for empty files).
+    """Return the first line's JSON payload, or `None` for empty files.
 
-    Used by reconstruct to peek at ``session.opened`` without
-    triggering Event validation on the rest of the file.
+    Used by `reconstruct_from_filesystem` to peek at `session.opened`
+    without triggering Event validation on the rest of the file.
     """
     if not path.exists():
         return None
@@ -307,7 +327,7 @@ def read_first_event(path: Path) -> dict[str, Any] | None:
 
 
 def safe_unlink(path: Path) -> None:
-    """Delete a file if it exists; ignore ENOENT."""
+    """Delete `path` if it exists; ignore ENOENT."""
     try:
         path.unlink()
     except FileNotFoundError:
