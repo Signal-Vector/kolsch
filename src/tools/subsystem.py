@@ -1,18 +1,10 @@
-"""The :class:`ToolsSubsystem` facade — Module API Reference §9.
+"""The [`ToolsSubsystem`][tools.subsystem.ToolsSubsystem] facade.
 
 Composes the registry, dispatch, builtins, and MCP lifecycle behind
 one object the Agent Engine consumes. Tools the engine receives are
-already authorized + secret-bound + sandbox-wrapped at invoke time.
-
-Phase 1 simplifications:
-- The Module API Reference's ``register_tools_for_agent(config,
-  framework_registry)`` signature is split here into ``register_for_agent``
-  taking explicit ``tools`` / ``builtin_names`` / ``mcp_servers`` lists.
-  The engine's CrewAI integration (Phase 1 follow-up) wraps this with
-  the ResolvedAgentConfig dispatch.
-- Declared-from-file loading (importing user .py modules at
-  registration time) is a follow-up — for now callers pass already-
-  imported ``@tool``-decorated functions.
+already authorized, secret-bound, and sandbox-wrapped at invoke time.
+See the [tools subsystem](../../docs/explanation/tools-subsystem.md)
+contract.
 """
 
 from __future__ import annotations
@@ -54,13 +46,14 @@ if TYPE_CHECKING:
 
 
 class ToolsSubsystem:
-    """The platform's Tools subsystem.
+    """The platform's Tools subsystem facade.
 
-    Constructor takes the three providers (secrets / sandbox / authz)
-    and optionally the path policy + platform root used by the
+    Constructor takes the three providers (secrets, sandbox, authz)
+    and optionally the path policy and platform root used by the
     file-touching builtins. Per-agent registration happens via
-    :meth:`register_for_agent`; per-invocation dispatch via
-    :meth:`invoke_tool`.
+    [`register_for_agent`][tools.subsystem.ToolsSubsystem.register_for_agent];
+    per-invocation dispatch via
+    [`invoke_tool`][tools.subsystem.ToolsSubsystem.invoke_tool].
     """
 
     def __init__(
@@ -91,36 +84,48 @@ class ToolsSubsystem:
         bundle_permissions: list[Rule] | None = None,
         home_bundle: str | None = None,
     ) -> list[ToolInfo]:
-        """Register the given tool set for ``agent_id``.
+        """Register the given tool set for `agent_id`.
 
-        Per spec §6.1:
-        - ``tools`` — already-imported ``@tool``-decorated functions
-          (test helper / programmatic registration).
-        - ``declared_paths`` — paths to ``.py`` files. Spec §6.1 step
-          1: scan + import here, NOT in Asset Management (Am-I10 keeps
-          asset discovery read-only of Python). Each file's
-          ``@tool``-decorated functions are extracted via
-          :func:`discover_tools_in_file` and registered.
-        - For each tool (regardless of source): verify declared
-          secrets via :meth:`SecretsProvider.exists`; raise
-          :class:`ToolSetupFailed` with the underlying
-          :class:`SecretNotFound` chained if any are missing.
-        - For each eager MCP server: call :meth:`MCPServer.start` now.
-        - For each lazy MCP server: register as a placeholder; the
-          subsystem starts it on first invoke (T-I8).
+        Three intake channels with one common post-step. `tools` is
+        already-imported `@tool`-decorated functions (test helper or
+        programmatic registration). `declared_paths` is paths to
+        `.py` files — scanned and imported here, not in Asset
+        Management; each file's `@tool` functions are extracted via
+        [`discover_tools_in_file`][tools.discovery.discover_tools_in_file].
+        `builtin_names` selects from the platform's canonical
+        builtins. For every tool (regardless of source), declared
+        secrets are verified via `SecretsProvider.exists` and
+        `ToolSetupFailed` is raised with the underlying
+        `SecretNotFound` chained if any are missing.
+        MCP servers register the same way: eager lifecycle starts
+        the server now, lazy registers a placeholder and starts on
+        first invoke.
+        `home_bundle` stamps every registered
+        [`ToolDefinition`][tools.decorator.ToolDefinition] so its
+        `action_name` resolves to the catalog ref
+        `<home_bundle>/tools/<name>`. Builtins are always attributed
+        to `kolsch`; declared and programmatically-supplied tools
+        take the caller-supplied value. When `home_bundle` is `None`
+        (test paths that don't go through the engine), `action_name`
+        falls back to `tool.<name>`.
 
-        qol-action-namespace-bundle-scoped.md Step 2 — ``home_bundle``
-        stamps every registered :class:`ToolDefinition` so its
-        ``action_name`` resolves to the 3-seg catalog ref
-        ``<home_bundle>/tools/<name>``. Builtins are always attributed
-        to ``kolsch`` (Decision #8 of the spec); declared tools take
-        the caller-supplied ``home_bundle`` (the engine passes the
-        agent's resolved home bundle); programmatically-supplied
-        ``tools=`` likewise take the caller-supplied value. When
-        ``home_bundle`` is None (Phase 1 test paths that don't go
-        through the engine), the ToolDefinition's ``action_name``
-        falls back to the legacy ``tool.<name>`` form — preserves
-        byte-identical behaviour for those tests.
+        Args:
+            agent_id: The agent the registration is scoped to.
+            tools: Already-imported `@tool` functions.
+            builtin_names: Names of canonical builtins to register.
+            declared_paths: Paths to `.py` files declaring tools.
+            mcp_servers: `(server, lifecycle)` pairs to register.
+            agent_permissions: The agent's resolved permission rules.
+            bundle_permissions: The bundle's resolved permission rules.
+            home_bundle: Bundle slug stamped on each non-builtin
+                tool's `home_bundle` for `action_name` derivation.
+
+        Returns:
+            Metadata-only views of every tool registered for the agent.
+
+        Raises:
+            ToolSetupFailed: A declared secret is missing or a tool
+                file fails to import.
         """
         registration = self._registry.ensure_agent(agent_id)
 
@@ -143,10 +148,10 @@ class ToolsSubsystem:
             fn = self._make_builtin(name)
             defn = get_tool_definition(fn)
             # Builtins are always attributed to the kolsch canonical
-            # bundle (spec Decision #8). Stamp unconditionally so the
-            # action namespace is correct regardless of whether the
-            # caller supplied a ``home_bundle`` (engine path) or not
-            # (legacy test path).
+            # bundle. Stamp unconditionally so the authz action
+            # string is correct regardless of whether the caller
+            # supplied a ``home_bundle`` (engine path) or not (test
+            # path).
             if defn.home_bundle is None:
                 defn.home_bundle = "kolsch"
             registration.tools[defn.name] = defn
@@ -156,9 +161,9 @@ class ToolsSubsystem:
             if lifecycle == "eager":
                 await server.start()
                 reg.started = True
-                # Populate the published tool list eagerly so the model
-                # sees them at agent setup (T-I8 mirrors this for lazy
-                # by registering the placeholder).
+                # Populate the published tool list eagerly so the
+                # model sees them at agent setup; the lazy path
+                # mirrors this by registering a placeholder.
                 listed = await server.list_tools()
                 reg.tools = [str(t.get("name", "")) for t in listed]
             registration.mcp_servers[server.name] = reg
@@ -166,7 +171,7 @@ class ToolsSubsystem:
         # Pin the agent / bundle permission layers for the dispatcher.
         # Both are no-ops when the caller doesn't supply them — the
         # provider's existing two-layer (platform → default-deny)
-        # behaviour stays intact for Phase 1 programmatic tests.
+        # behaviour stays intact for programmatic tests.
         registration.agent_permissions = list(agent_permissions or [])
         registration.bundle_permissions = list(bundle_permissions or [])
 
@@ -178,25 +183,37 @@ class ToolsSubsystem:
         args: dict[str, Any],
         context: ToolContext,
     ) -> ToolResult:
-        """Run the full dispatch — Module API Reference §9.1.
+        """Run the full dispatch for one tool call.
 
         Supports both regular tools (looked up by name in the
         registry) and MCP invocations of the form
-        ``mcp.<server>.<tool>`` (forwarded to the registered MCP
-        server, starting it lazily if needed per spec §5.1).
+        `mcp.<server>.<tool>` (forwarded to the registered MCP
+        server, starting it lazily if needed).
 
-        Phase 2.0 (TOOL-R7): enriches the caller's ``ToolContext``
-        with the subsystem's ``workspace_root`` and ``path_policy``
-        so bundle tools at ``<workspace>/bundles/kolsch/tools/`` can
-        reach them without holding a closure (the way the Phase 1
-        in-engine factories do). Fields the caller already set
-        (non-None) are preserved.
+        Enriches the caller's [`ToolContext`][tools.decorator.ToolContext]
+        with the subsystem's `workspace_root` and `path_policy` so
+        bundle tools at `<workspace>/bundles/kolsch/tools/` can reach
+        them without holding a closure. Fields the caller already set
+        (non-`None`) are preserved.
+
+        Args:
+            tool_name: Name as registered, or `mcp.<server>.<tool>`.
+            args: Raw arguments passed by the framework.
+            context: The runtime context handed to the tool body.
+
+        Returns:
+            A [`ToolResult`][tools.decorator.ToolResult] wrapping the
+            tool function's return value.
+
+        Raises:
+            ToolNotFound: No tool of that name is registered for the
+                context's agent.
         """
         agent_id = context.agent_id
 
         # Enrich the context with workspace_root + path_policy when
         # the subsystem knows them and the caller hasn't already
-        # supplied them. Phase 1 callers / tests that construct
+        # supplied them. Callers and tests that construct
         # ToolContext directly stay byte-identical.
         updates: dict[str, Any] = {}
         if context.workspace_root is None and self._root is not None:
@@ -235,14 +252,17 @@ class ToolsSubsystem:
         return ToolResult(result=result, metadata={})
 
     def list_registered_tools(self, agent_id: AgentId) -> list[ToolInfo]:
+        """Return metadata-only views of every tool registered for `agent_id`."""
         return [d.to_info() for d in self._registry.list_tools(agent_id)]
 
     # --- internal --------------------------------------------------------
 
     async def _verify_secrets(self, defn: ToolDefinition) -> None:
-        """Spec §6.1 step 3 — call ``secrets.exists`` for every
-        declared secret. The first missing one raises ToolSetupFailed
-        with the SecretNotFound chained as ``__cause__``."""
+        """Call ``secrets.exists`` for every declared secret on ``defn``.
+
+        The first missing one raises ``ToolSetupFailed`` with the
+        underlying ``SecretNotFound`` chained as ``__cause__``.
+        """
         for name in defn.secrets_needed:
             if await self._secrets.exists(name):
                 continue
@@ -285,12 +305,12 @@ class ToolsSubsystem:
     ) -> ToolResult:
         reg, mcp_tool_name = match
 
-        # Authorization happens at the MCP action namespace per spec
-        # §5.4 — `mcp.<server>.<tool>`. The dispatch order below
-        # mirrors the standard tool flow as closely as the spec allows.
+        # Authorization happens at the MCP authz action string
+        # `mcp.<server>.<tool>`. The dispatch order below mirrors
+        # the standard tool flow as closely as the contract allows.
         action = invocation_name  # already in the right shape
-        # Phase 3.0 Step 4 — assemble the layers tuple from the
-        # registration's agent + bundle permission lists.
+        # Assemble the layers tuple from the registration's
+        # agent + bundle permission lists.
         layers: tuple[PermissionLayer, ...] = ()
         if agent_permissions:
             layers = (
@@ -319,7 +339,7 @@ class ToolsSubsystem:
                 ),
             )
 
-        # Lazy start — T-I8: subprocess starts on first use.
+        # Lazy start — the subprocess starts on first use.
         if not reg.started:
             await reg.server.start()
             reg.started = True

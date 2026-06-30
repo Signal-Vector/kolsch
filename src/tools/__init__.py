@@ -1,20 +1,9 @@
 """Tools — declared tools, MCP servers, and builtin tools.
 
-Per Module API Reference §9 + docs/explanation/tools-subsystem.md.
-
-Public surface:
-
-- :class:`ToolsSubsystem` — the facade the engine consumes
-  (register tools per agent, invoke a tool through the full
-  validate→authz→secrets→sandbox→execute pipeline).
-- ``@tool`` + :class:`ToolContext` / :class:`ToolDefinition` /
-  :class:`ToolResult` / :class:`ToolInfo` — tool authoring + the
-  shapes the dispatch returns.
-- :class:`MCPServer` — the Protocol every MCP server backend honours.
-- :func:`validate_standard_config` — the Layer 3 ConfigValidator
-  the kernel dispatches for ``tools.variant=standard``.
-- The four builtins via :func:`make_builtin` + the helpers
-  :func:`builtin_names`.
+Implements the Tools subsystem per the
+[tools subsystem](../../docs/explanation/tools-subsystem.md) contract:
+declared tools, MCP server lifecycle, and the four file-touching
+builtins, exposed to the engine through a single facade.
 """
 
 from tools.builtins import (

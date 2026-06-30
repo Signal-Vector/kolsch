@@ -1,31 +1,23 @@
-"""The built-in tools — Phase 1 spec §4 + Phase 2.0 patch §1.
+"""The built-in tools — file and shell tools the platform ships.
 
-Phase 1 set (``read`` / ``write`` / ``edit`` / ``bash``): consult
-:func:`files.check_path_allowed` before touching the filesystem
-(Fh-I2). ``bash`` is EXEMPT in v1's native sandbox per spec §4.7 +
-Fh-I6 — an honest documented limitation. A future real-sandbox
-variant closes the gap; for now users wanting strict path control
-either omit bash from the agent's tool list or add a
-``deny tool.bash`` authz rule.
+Two coexisting sets ship from this module. The legacy set
+(`read` / `write` / `edit` / `bash`) consults
+[`files.check_path_allowed`][files.check_path_allowed] before
+touching the filesystem; `bash` is exempt from the policy in v1's
+native sandbox — an honest documented limitation. The canonical
+shipping set (`read_file` / `write_file` / `list_files` / `bash_v2`)
+adds line-paginated reads, atomic writes via temp + rename, a glob
+listing with a `max_entries` cap, and a richer `bash` return shape
+with timing, truncation, and overflow persistence.
 
-Phase 2.0 set (``read_file`` / ``write_file`` / ``list_files`` /
-``bash``): the canonical shipping builtins per Phase 2.0 patch §1.
-``read_file`` pre-checks ``max_bytes`` via ``stat`` before opening
-(context-budget guard); ``write_file`` is atomic via temp + rename;
-``list_files`` exposes a glob with a ``max_entries`` cap;
-``bash`` returns ``{exit_code, stdout, stderr, duration_seconds,
-timed_out}`` with stdout/stderr truncated to 64 KiB each. The Phase
-2.0 builtins raise the Error Model §4.16 codes (``file.access_denied``,
-``file.too_large``, ``file.not_found``, ``tool.timeout``).
-
-Each builtin is a *factory* taking the platform root + path policy
+Each builtin is a *factory* taking the platform root and path policy
 because the tool function closes over them. The factory returns the
-``@tool``-decorated function; callers register the resulting function
-with the Tools subsystem. The Phase 1 and Phase 2.0 sets coexist;
-agents opt into either via their ``subsystems.tools.config.builtin``
-list. Phase 2.0's `bash` factory supersedes Phase 1's — same action
-name, more comprehensive return shape — but agents using the legacy
-Phase 1 `bash` are unaffected until they migrate.
+`@tool`-decorated function; callers register the resulting function
+with the Tools subsystem. Agents opt into either set via their
+`subsystems.tools.config.builtin` list. The `bash_v2` factory
+supersedes legacy `bash` for new agents (same authz action string,
+richer return shape); agents using legacy `bash` are unaffected
+until they migrate.
 """
 
 from __future__ import annotations
@@ -57,16 +49,16 @@ if TYPE_CHECKING:
     from tools.decorator import ToolContext
 
 
-# Phase 2.0 tunables (patch §1.1, §1.4).
-_DEFAULT_READ_MAX_BYTES = 1 * 1024 * 1024  # 1 MiB — NEW MEANING: single-line cap
-_DEFAULT_READ_LINE_LIMIT = 2000  # QoL: line-based pagination default
+# Tunables for the canonical builtins.
+_DEFAULT_READ_MAX_BYTES = 1 * 1024 * 1024  # 1 MiB — single-line cap
+_DEFAULT_READ_LINE_LIMIT = 2000  # line-based pagination default
 _DEFAULT_LIST_MAX_ENTRIES = 500
 _DEFAULT_BASH_TIMEOUT_SECONDS = 60
 _BASH_OUTPUT_TRUNCATE_BYTES = 64 * 1024  # 64 KiB per stream
 
 
 # ---------------------------------------------------------------------------
-# Argument models — spec §4.1-4.4
+# Argument models — legacy set
 # ---------------------------------------------------------------------------
 
 
@@ -101,6 +93,13 @@ class BashArgs(BaseModel):
 
 
 def make_read(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]]:
+    """Build the legacy `read` builtin — whole-file text read.
+
+    The factory closes the returned `@tool` function over `policy`
+    and `root` so the body can gate paths without holding extra
+    state.
+    """
+
     @tool(
         name="read",
         description="Read the contents of a file from disk.",
@@ -124,18 +123,24 @@ def make_read(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]
 
 
 def make_write(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]]:
+    """Build the legacy `write` builtin — overwrite a file with text.
+
+    Path policy gates reads; an additional write-destination check
+    refuses writes into the engine-only `content/` store even when
+    the policy allows reads there.
+    """
+
     @tool(
         name="write",
         description=("Write text content to a file on disk, overwriting if it exists."),
         args_schema=WriteArgs,
     )
     async def write(args: WriteArgs, ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG001
-        # Fh-I2 — path policy first.
+        # Path policy first.
         check_path_allowed(args.path, policy=policy, root=root)
-        # Fh-I5 + Fh-I9 — refuse writes into the engine-only
-        # content/ store, even when policy would otherwise allow
-        # reads there. Two-step check: policy gates reads; this
-        # gates writes.
+        # Refuse writes into the engine-only content/ store, even
+        # when policy would otherwise allow reads there. Two-step
+        # check: policy gates reads; this gates writes.
         assert_writable_destination(args.path, root=root)
         target = _resolve(args.path, root)
         if args.create_parents:
@@ -153,15 +158,23 @@ def make_write(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any
 
 
 def make_edit(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]]:
+    """Build the legacy `edit` builtin — substring replacement in a file.
+
+    Edit reads and writes, so both the path policy and the
+    write-destination check fire. `occurrence` controls which match
+    is replaced; matching multiple sites without `occurrence=0`
+    fails loudly rather than silently picking the first.
+    """
+
     @tool(
         name="edit",
         description=("Edit a file by replacing a specific string with new content."),
         args_schema=EditArgs,
     )
     async def edit(args: EditArgs, ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG001
-        # Fh-I2 + Fh-I5 — edit reads AND writes, so it needs both
-        # gates. The write-side refusal of content/ matters even when
-        # the path policy allows reads under content/.
+        # Edit reads AND writes, so it needs both gates. The
+        # write-side refusal of content/ matters even when the path
+        # policy allows reads under content/.
         check_path_allowed(args.path, policy=policy, root=root)
         assert_writable_destination(args.path, root=root)
         target = _resolve(args.path, root)
@@ -184,8 +197,8 @@ def make_edit(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]
                     error_class="NoMatchError",
                 )
             if count > 1:
-                # Spec §4.3 — fail loudly on ambiguity rather than
-                # silently picking the first match.
+                # Fail loudly on ambiguity rather than silently
+                # picking the first match.
                 raise ToolExecutionFailed(
                     tool_name="edit",
                     error_class="MultipleMatchesError",
@@ -213,10 +226,12 @@ def make_edit(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]
 
 
 def make_bash(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]]:  # noqa: ARG001
-    """Spec §4.4 + §4.7 + Fh-I6 — bash is EXEMPT from the path policy
-    in v1's native sandbox. The `policy` and `root` arguments are
-    accepted (and ignored here) so the factory signature matches the
-    other builtins; the documented gap is the whole point.
+    """Build the legacy `bash` builtin — shell tool exempt from path policy.
+
+    `bash` is exempt from the path policy in v1's native sandbox
+    (an honest documented limitation). The `policy` and `root`
+    arguments are accepted and ignored so the factory signature
+    matches the other builtins.
     """
 
     @tool(
@@ -259,7 +274,7 @@ def make_bash(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]
 
 
 # ---------------------------------------------------------------------------
-# Phase 2.0 (patch §1) — read_file / write_file / list_files / bash_v2
+# Canonical set — read_file / write_file / list_files / bash_v2
 # ---------------------------------------------------------------------------
 
 
@@ -290,21 +305,16 @@ class BashV2Args(BaseModel):
 
 
 def make_read_file(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]]:
-    """Phase 2.0 §1.1 + QoL §9 — line-based read with soft truncation.
+    """Build the canonical `read_file` builtin — line-based read with soft truncation.
 
-    Replaces the pre-QoL whole-file-bytes shape. New shape:
-
-    - Args: ``path`` + ``offset`` (0-indexed line) + ``limit`` (max
-      lines, default 2000) + ``max_bytes`` (single-line cap, default
-      1 MiB).
-    - Return: ``{content, lines_returned, total_lines, next_offset,
-      truncated}`` — see ``process/qol-tool-output-truncation-and-
-      persistence.md`` §9.5.
-    - Whole-file size is no longer capped (``FileTooLarge`` is NOT
-      raised here); only a single line exceeding ``max_bytes`` trips
-      :class:`FileLineTooLong` (the binary-as-text guard).
-    - Output is ``cat -n`` numbered so the model can reference line
-      numbers in responses + follow-up calls.
+    Args are `path` plus `offset` (0-indexed line), `limit` (max
+    lines, default 2000), and `max_bytes` (single-line cap, default
+    1 MiB). Return shape is `{content, lines_returned, total_lines,
+    next_offset, truncated}`. Whole-file size is not capped — only
+    a single line exceeding `max_bytes` trips
+    [`FileLineTooLong`][errors.FileLineTooLong] (the binary-as-text
+    guard). Output is `cat -n` numbered so the model can reference
+    line numbers in responses and follow-up calls.
     """
 
     @tool(
@@ -343,11 +353,11 @@ def _paginate_read_file(
     limit: int,
     max_bytes: int,
 ) -> dict[str, Any]:
-    """Shared implementation between the builtin and (conceptually)
-    the bundle copy. Returns the QoL §9.5 dict shape.
+    """Shared implementation between the builtin and the bundle copy.
 
-    Single-line byte cap is the only hard refusal — everything else
-    soft-truncates.
+    Returns the canonical `{content, lines_returned, total_lines,
+    next_offset, truncated}` dict. The single-line byte cap is the
+    only hard refusal — everything else soft-truncates.
     """
     text = raw.decode("utf-8", errors="replace")
     lines = text.splitlines()
@@ -382,12 +392,12 @@ def _paginate_read_file(
 
 
 def make_write_file(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]]:
-    """Phase 2.0 §1.2 — atomic full-overwrite write.
+    """Build the canonical `write_file` builtin — atomic full-overwrite write.
 
-    Writes to ``<path>.tmp.<pid>`` then ``os.replace`` onto the
+    Writes to `<path>.tmp.<pid>` then `os.replace` onto the
     destination so a SIGKILL between the temp write and the rename
-    leaves the prior content intact (TC-TOOL-07). The atomicity
-    discipline matches Phase 1.1's ``platform.yaml`` writes.
+    leaves the prior content intact. Matches the atomicity
+    discipline used for `platform.yaml` writes elsewhere.
     """
 
     @tool(
@@ -430,12 +440,12 @@ def make_write_file(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitabl
 
 
 def make_list_files(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]]:
-    """Phase 2.0 §1.3 — directory listing with optional recursive glob.
+    """Build the canonical `list_files` builtin — directory listing with optional glob.
 
-    Default glob is ``"*"`` (one-level); ``"**/*"`` walks recursively.
-    ``max_entries`` caps the returned list to prevent runaway context
-    spend on huge trees. ``include_hidden`` defaults to False to skip
-    dotfiles (the conventional shell behaviour).
+    Default glob is `"*"` (one-level); `"**/*"` walks recursively.
+    `max_entries` caps the returned list to prevent runaway context
+    spend on huge trees. `include_hidden` defaults to `False` to
+    skip dotfiles, mirroring conventional shell behaviour.
     """
 
     @tool(
@@ -496,27 +506,27 @@ def make_list_files(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitabl
 
 
 def make_bash_v2(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]]:
-    """Phase 2.0 §1.4 — bash with timing + truncation + cwd policy.
+    """Build the canonical `bash_v2` builtin — timed, truncated, cwd-policed bash.
 
-    The legacy Phase 1 ``bash`` (``make_bash`` above) stays in place
-    for backward compatibility; agents opting into the Phase 2.0 set
-    register ``bash_v2``. Same shell semantics; richer return:
-    ``{exit_code, stdout, stderr, stdout_persisted_to,
-    stderr_persisted_to, duration_seconds, timed_out}``.
+    Same shell semantics as legacy `bash` with a richer return:
+    `{exit_code, stdout, stderr, stdout_persisted_to,
+    stderr_persisted_to, duration_seconds, timed_out}`. The legacy
+    `bash` (`make_bash` above) stays in place for backward
+    compatibility; agents opting into the canonical set register
+    `bash_v2`.
 
     Streams have a 64 KiB inline preview budget. When a stream
-    EXCEEDS that budget, the full bytes are written to
-    ``<root>/logs/tool-outputs/<session_id>/<call_id>.<stream>.txt``
-    and the path is returned in ``*_persisted_to`` (QoL
-    process/qol-tool-output-truncation-and-persistence.md §9). The
-    model then calls ``read_file`` on the path with offset/limit to
-    drill in — no more lost tail when a chatty command exceeds the
-    inline budget.
+    exceeds that budget, the full bytes are written to
+    `<root>/logs/tool-outputs/<session_id>/<call_id>.<stream>.txt`
+    and the path is returned in `*_persisted_to`. The model then
+    calls `read_file` on the path with offset/limit to drill in —
+    no more lost tail when a chatty command exceeds the inline
+    budget.
 
-    The ``cwd`` argument, when supplied, is policy-checked the same
-    way file tools' ``path`` is — the workspace-only default rule set
+    The `cwd` argument, when supplied, is policy-checked the same
+    way file tools' `path` is — the workspace-only default rule set
     means the model can't redirect commands to dangerous directories
-    via ``cwd`` alone.
+    via `cwd` alone.
     """
 
     @tool(
@@ -559,8 +569,8 @@ def make_bash_v2(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[A
                 timed_out = True
                 duration = time.monotonic() - started
                 # Surface a typed ToolTimeout so the model sees the
-                # catalog code, but include the partial output in the
-                # error detail for replay analysis — patch §1.4.
+                # catalog code; the partial output is captured for
+                # replay analysis.
                 raise ToolTimeout(
                     tool_name="bash_v2",
                     timeout_seconds=args.timeout_seconds,
@@ -604,18 +614,18 @@ def make_bash_v2(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[A
 
 
 _BUILTIN_FACTORIES: dict[str, Callable[..., Callable[..., Awaitable[Any]]]] = {
-    # Phase 1 set (spec §4) — kept for backward compatibility with
-    # workspaces and tests authored before Phase 2.0.
+    # Legacy set — kept for backward compatibility with workspaces
+    # and tests authored before the canonical set landed.
     "read": make_read,
     "write": make_write,
     "edit": make_edit,
     "bash": make_bash,
-    # Phase 2.0 set (patch §1). bash_v2 ships under a distinct name
-    # alongside the Phase 1 bash so existing agents using the simpler
-    # return shape continue to work; new agents opt into the richer
-    # shape by listing `bash_v2`. The Phase 2.0 specs name this tool
-    # `bash`; the v2 suffix is an implementation-level distinguisher
-    # only — agents see the tool by whichever name they declare.
+    # Canonical set. bash_v2 ships under a distinct name alongside
+    # the legacy bash so existing agents using the simpler return
+    # shape continue to work; new agents opt into the richer shape
+    # by listing `bash_v2`. The v2 suffix is an implementation-level
+    # distinguisher — agents see the tool by whichever name they
+    # declare.
     "read_file": make_read_file,
     "write_file": make_write_file,
     "list_files": make_list_files,
@@ -624,10 +634,12 @@ _BUILTIN_FACTORIES: dict[str, Callable[..., Callable[..., Awaitable[Any]]]] = {
 
 
 def _all_visible(child: Path, root: Path) -> bool:
-    """Return False if any path segment between ``root`` and ``child``
-    starts with ``"."`` (hidden). Used to skip dotfile descendants
-    during recursive glob without making the caller specify a more
-    restrictive pattern."""
+    """Return False when any path segment between `root` and `child` is hidden.
+
+    A segment starting with `"."` counts as hidden. Used to skip
+    dotfile descendants during recursive glob without making the
+    caller specify a more restrictive pattern.
+    """
     try:
         rel = child.relative_to(root)
     except ValueError:
@@ -636,17 +648,17 @@ def _all_visible(child: Path, root: Path) -> bool:
 
 
 def _truncate_stream(data: bytes) -> str:
-    """Decode + truncate a captured stdout/stderr stream to 64 KiB.
+    """Decode and truncate a captured stdout/stderr stream to 64 KiB.
 
-    Truncation marker is human-readable so the model knows it lost
-    data; bytes-level truncation happens BEFORE decode to avoid
-    splitting a multi-byte sequence in the middle (we accept the
-    cost of falling back to errors='replace' if the truncate boundary
-    lands inside a codepoint).
+    The truncation marker is human-readable so the model knows it
+    lost data; bytes-level truncation happens before decode to
+    avoid splitting a multi-byte sequence in the middle (we accept
+    the cost of falling back to `errors='replace'` if the truncate
+    boundary lands inside a codepoint).
 
-    Retained for the legacy Phase 1 ``bash`` factory; the Phase 2.0
-    ``bash_v2`` uses :func:`_persist_or_inline_stream` instead so the
-    full tail is available via ``read_file``.
+    Retained for the legacy `bash` factory; the canonical `bash_v2`
+    uses `_persist_or_inline_stream` instead so the full tail is
+    available via `read_file`.
     """
     if len(data) <= _BASH_OUTPUT_TRUNCATE_BYTES:
         return data.decode("utf-8", errors="replace")
@@ -664,18 +676,16 @@ def _persist_or_inline_stream(
     *,
     root: Path,
 ) -> tuple[str, str | None]:
-    """Decode + return inline preview, persisting on overflow.
+    """Decode and return inline preview, persisting on overflow.
 
-    See ``process/qol-tool-output-truncation-and-persistence.md``
-    §9 for the path convention. Mirrors the helper in the bundle
-    ``bash.py`` so the two tool surfaces (builtin + bundle) behave
-    identically — when a stream exceeds 64 KiB, the full bytes go
-    to ``<root>/logs/tool-outputs/<session_id>/<call_id>.<stream>.txt``
-    and the path is returned for the model to ``read_file`` on.
-
-    The ``logs/`` prefix is in the default
-    ``file_access.allowed_paths`` so the subsequent read_file passes
-    the policy gate. Returns ``(inline_text, persisted_path_str_or_None)``.
+    Mirrors the helper in the bundle's `bash.py` so the two tool
+    surfaces (builtin and bundle) behave identically — when a stream
+    exceeds 64 KiB, the full bytes go to
+    `<root>/logs/tool-outputs/<session_id>/<call_id>.<stream>.txt`
+    and the path is returned for the model to `read_file` on. The
+    `logs/` prefix is in the default `file_access.allowed_paths` so
+    the subsequent `read_file` passes the policy gate. Returns
+    `(inline_text, persisted_path_str_or_None)`.
     """
     if len(data) <= _BASH_OUTPUT_TRUNCATE_BYTES:
         return data.decode("utf-8", errors="replace"), None
@@ -707,7 +717,20 @@ def make_builtin(
     policy: PathPolicy,
     root: Path,
 ) -> Callable[..., Awaitable[Any]]:
-    """Construct one of the four builtins by name — spec §3.1."""
+    """Construct a builtin tool by name.
+
+    Args:
+        name: One of the names returned by
+            [`builtin_names`][tools.builtins.builtin_names].
+        policy: Path policy the file-touching builtins consult.
+        root: The platform root the builtins resolve paths against.
+
+    Returns:
+        The `@tool`-decorated coroutine for the named builtin.
+
+    Raises:
+        ValueError: `name` isn't a known builtin.
+    """
     factory = _BUILTIN_FACTORIES.get(name)
     if factory is None:
         msg = f"unknown builtin tool {name!r}; available: {sorted(_BUILTIN_FACTORIES)}"
@@ -716,7 +739,7 @@ def make_builtin(
 
 
 def builtin_names() -> set[str]:
-    """The four names spec §4 enumerates."""
+    """Return the set of names `make_builtin` recognises."""
     return set(_BUILTIN_FACTORIES)
 
 
@@ -733,7 +756,7 @@ def _replace_nth(
     new: str,
     n: int,
 ) -> tuple[str, int]:
-    """Replace the Nth (1-indexed) occurrence of ``old`` with ``new``."""
+    """Replace the Nth (1-indexed) occurrence of `old` with `new`."""
     index = -1
     for _ in range(n):
         index = text.find(old, index + 1)

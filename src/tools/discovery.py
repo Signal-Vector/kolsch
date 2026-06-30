@@ -1,13 +1,11 @@
-"""Declared-tool discovery — spec §6.1 step 1.
+"""Declared-tool discovery — file import at registration time.
 
-Imports a tool ``.py`` file at registration time (NOT at asset catalog
-build — Am-I10 forbids that), finds every ``@tool``-decorated function
-on the module, and returns them so the :class:`ToolsSubsystem` can
-register them like any other tool.
-
-The asset-management catalog supplies the path (per
-:meth:`assets.AssetManagement.get_asset`); discovery is the Tools
-subsystem's responsibility per the prompt for Step 10.
+Imports a tool `.py` file at registration time (not at asset-catalog
+build — asset discovery stays read-only of Python), finds every
+`@tool`-decorated function on the module, and returns them so the
+[`ToolsSubsystem`][tools.subsystem.ToolsSubsystem] can register them
+like any other tool. The asset-management catalog supplies the path;
+discovery is the Tools subsystem's responsibility.
 """
 
 from __future__ import annotations
@@ -24,16 +22,23 @@ if TYPE_CHECKING:
 
 
 def discover_tools_in_file(path: Path) -> list[Callable[..., Awaitable[object]]]:
-    """Import ``path`` and return every ``@tool``-decorated callable.
+    """Import `path` and return every `@tool`-decorated callable.
 
-    Phase 1 simplification: each module is loaded under a synthetic
-    name derived from its absolute path so two different bundles with
-    the same filename don't collide. The import happens once per
-    call; callers wanting persistent registration cache the result.
+    Each module is loaded under a synthetic name derived from its
+    absolute path so two different bundles with the same filename
+    don't collide. The import happens once per call; callers wanting
+    persistent registration cache the result.
 
-    Raises :class:`ToolSetupFailed` if the file can't be loaded
-    (missing, syntax error, import-time crash) — the typed-PlatformError
-    wrapping keeps the engine boundary clean per the handbook hard rule.
+    Args:
+        path: Absolute path to a `.py` file declaring `@tool` functions.
+
+    Returns:
+        Every `@tool`-decorated callable found on the imported module.
+
+    Raises:
+        ToolSetupFailed: The file is missing, has a syntax error, or
+            its import raises — wrapped as a typed `PlatformError` so
+            the engine boundary stays clean.
     """
     if not path.exists() or not path.is_file():
         raise ToolSetupFailed(

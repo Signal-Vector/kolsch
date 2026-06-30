@@ -1,53 +1,31 @@
-"""The ``kolsch.tools.permissions`` module — Phase 2.2 Step 10
-(ENV §2).
+"""In-tool authz access — `check` and `require`.
 
-Two async functions tool authors call from inside a ``@tool``
-body:
+Two async functions tool authors call from inside a `@tool` body:
+[`check`][tools.permissions.check] returns the composed
+[`AuthzEffect`][providers.authz.AuthzEffect] without raising;
+[`require`][tools.permissions.require] raises
+[`AuthzDenied`][errors.AuthzDenied] on anything other than `ALLOW`.
 
-- :func:`check` — returns the composed
-  :class:`providers.authz.AuthzEffect` (``ALLOW`` / ``PROMPT`` /
-  ``DENY``) without raising. Use for branching.
-- :func:`require` — raises
-  :class:`errors.AuthzDenied` (``authz.denied``, Recoverable) on
-  ``DENY`` or on ``PROMPT`` when no callback is available. Use
-  when the call MUST be allowed.
+Both are async because the underlying
+`AuthorizationProvider.allow` is async; synchronous bridging from
+inside a coroutine is fragile.
 
-Both are async per Phase 2.2 §2.3 ("Async by default — matches
-the Phase 2.0 dispatcher and Phase 1.1 ``build_llm`` patterns")
-because the underlying
-:meth:`providers.authz.AuthorizationProvider.allow` is async;
-synchronous bridging from inside a coroutine is fragile.
+**Binding.** The dispatch flow binds a
+[`PermissionsBinding`][tools.permissions.PermissionsBinding] to the
+module's `_BINDING` `ContextVar` immediately before calling the tool
+function and clears it after (on both the success and exception
+paths). Tools see the binding only during their own execution; an
+out-of-context call raises
+[`ToolPermissionsNoContext`][errors.ToolPermissionsNoContext]. The
+binding carries the provider, the agent and bundle permission lists,
+the principal, and the tool name.
 
-## ContextVar binding
-
-The engine's tool dispatcher binds a :class:`PermissionsBinding`
-to the module's :data:`_BINDING` ``ContextVar`` immediately before
-calling the tool function and clears it after (in both the
-success and exception paths). Tools see the binding only during
-their own execution; an out-of-context call raises
-:class:`errors.ToolPermissionsNoContext`.
-
-The binding carries:
-
-- The :class:`providers.authz.AuthorizationProvider` instance the
-  engine is using.
-- The agent's resolved ``permissions:`` list (so the composed
-  walk includes the agent layer per Phase 2.2 §1.2 / §3.8.1).
-- The bundle's ``permissions:`` list (qol-tool-permissions-binding-unused.md
-  Step 2 — same four-level stack as the dispatch-boundary check).
-- The principal the tool is running as (for the composed
-  ``allow(...)`` call).
-- The tool name (for error envelopes).
-
-## Why a Binding rather than the raw provider
-
-Carrying the agent's + bundle's permissions on the binding
-decouples :func:`check` / :func:`require` from how the engine
-threads the resolved config into the dispatcher. The dispatch
-flow (``src/tools/dispatch.py``) constructs one
-:class:`PermissionsBinding` per tool invocation and tears it
-down after — the tool's body sees a snapshot scoped exactly to
-its own call.
+**Why a binding rather than the raw provider.** Carrying the agent's
+and bundle's permissions on the binding decouples `check` / `require`
+from how the engine threads the resolved config into the dispatcher.
+The dispatch flow constructs one binding per tool invocation and
+tears it down after — the tool body sees a snapshot scoped exactly
+to its own call.
 """
 
 from __future__ import annotations
@@ -72,18 +50,16 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True, slots=True)
 class PermissionsBinding:
-    """The state the engine's dispatcher pins on the
-    :data:`_BINDING` ContextVar while a tool function runs.
+    """The state the dispatcher pins on `_BINDING` while a tool runs.
 
-    Frozen so a tool can't accidentally mutate the engine's
-    authz state via the binding it received.
-
-    qol-tool-permissions-binding-unused.md Step 2 — gains
-    ``bundle_permissions`` so in-tool :func:`check`/:func:`require`
-    walks the SAME four-level stack as the dispatch-boundary
-    check (agent → bundle → platform → default). Without the
-    bundle layer the in-tool API would diverge silently from the
-    pre-dispatch authz outcome.
+    Frozen so a tool can't accidentally mutate the engine's authz
+    state via the binding it received. Carries `bundle_permissions`
+    alongside `agent_permissions` so in-tool
+    [`check`][tools.permissions.check] /
+    [`require`][tools.permissions.require] walks the same four-level
+    stack (agent → bundle → platform → default) as the
+    dispatch-boundary check — without the bundle layer the in-tool
+    API would diverge silently from the pre-dispatch authz outcome.
     """
 
     provider: AuthorizationProvider
@@ -107,11 +83,10 @@ _BINDING: ContextVar[PermissionsBinding | None] = ContextVar(
 def _layers_from(binding: PermissionsBinding) -> tuple[PermissionLayer, ...]:
     """Assemble the agent + bundle layer tuple from a binding.
 
-    qol-tool-permissions-binding-unused.md Step 2 — mirrors the
-    dispatch-boundary's layer assembly at ``dispatch.py:100-110``
-    so the in-tool ``check``/``require`` walks the same stack:
-    agent first, then bundle (platform rules are on the provider
-    itself; default-deny is the tail).
+    Mirrors the dispatch-boundary's layer assembly so the in-tool
+    `check` / `require` walks the same stack: agent first, then
+    bundle (platform rules live on the provider itself; default-deny
+    is the tail).
     """
     layers: tuple[PermissionLayer, ...] = ()
     if binding.agent_permissions:
@@ -128,20 +103,26 @@ def _layers_from(binding: PermissionsBinding) -> tuple[PermissionLayer, ...]:
 
 
 async def check(who: str, what: str) -> AuthzEffect:
-    """Return the composed :class:`AuthzEffect` for
-    ``(who, what)``.
+    """Return the composed [`AuthzEffect`][providers.authz.AuthzEffect].
 
-    ``who`` is the principal pattern (the agent calling the
-    tool); ``what`` is the action OR target pattern. The lookup
-    walks the same four-level stack as the dispatch-boundary
-    check (agent → bundle → platform → default-deny) so in-tool
-    decisions match what the platform would have decided.
+    The lookup walks the same four-level stack as the
+    dispatch-boundary check (agent → bundle → platform →
+    default-deny) so in-tool decisions match what the platform would
+    have decided pre-dispatch.
 
-    Raises :class:`ToolPermissionsNoContext` (Fatal,
-    ``tool.permissions_no_context``) when called outside the
-    engine's dispatcher binding — typically a unit test that
-    imported the tool directly without setting up an authz
-    fixture.
+    Args:
+        who: The principal pattern (the agent calling the tool).
+            Accepted for API symmetry; the binding's principal is
+            canonical for the actual lookup.
+        what: The authz action string or target pattern.
+
+    Returns:
+        The composed effect — `ALLOW`, `PROMPT`, or `DENY`.
+
+    Raises:
+        ToolPermissionsNoContext: Called outside the dispatcher's
+            binding — typically a unit test that imported the tool
+            directly without setting up an authz fixture.
     """
     binding = _BINDING.get()
     if binding is None:
@@ -157,22 +138,28 @@ async def check(who: str, what: str) -> AuthzEffect:
 
 
 async def require(who: str, what: str) -> None:
-    """Raise :class:`AuthzDenied` on anything other than
-    :data:`AuthzEffect.ALLOW`.
+    """Raise [`AuthzDenied`][errors.AuthzDenied] on anything other than `ALLOW`.
 
-    The composed result's effect is used directly — PROMPT
-    without a callback collapses to deny per Phase 2.2 §2.3, so
-    ``require`` treats both ``DENY`` and ``PROMPT`` (in non-chat
-    contexts) as denial. The raised :class:`AuthzDenied` carries
-    the tool name from the binding so error envelopes are
-    actionable.
+    The composed result's effect is used directly — `PROMPT` without
+    a callback collapses to deny, so `require` treats both `DENY`
+    and `PROMPT` (in non-chat contexts) as denial. The raised
+    `AuthzDenied` carries the tool name from the binding so error
+    envelopes are actionable.
 
-    Note: the in-tool ``require`` does NOT trigger the no-rule
-    modal that the dispatch-boundary check fires (per
-    qol-tool-permissions-binding-unused.md Step 1 design pick
-    Q3 — modals mid-execution would block the tool's coroutine
-    and surface a UX disconnect from the user's perspective).
-    A PROMPT-effect result here always collapses to deny.
+    Unlike the dispatch-boundary check, the in-tool `require` does
+    not trigger the no-rule modal — surfacing one mid-execution
+    would block the tool's coroutine and disconnect from the user's
+    perspective. A `PROMPT` effect here always collapses to deny.
+
+    Args:
+        who: The principal pattern. Accepted for API symmetry; the
+            binding's principal is canonical.
+        what: The authz action string or target pattern.
+
+    Raises:
+        AuthzDenied: The composed effect was `DENY` or `PROMPT`.
+        ToolPermissionsNoContext: Called outside the dispatcher's
+            binding.
     """
     binding = _BINDING.get()
     if binding is None:
@@ -200,27 +187,29 @@ async def require(who: str, what: str) -> None:
 
 
 def bind(binding: PermissionsBinding) -> Token[PermissionsBinding | None]:
-    """Set :data:`_BINDING` to ``binding`` and return the
-    :class:`contextvars.Token` the engine uses to reset it.
+    """Set `_BINDING` to `binding` and return the reset token.
 
-    The engine's tool dispatcher wraps the tool call in
-    ``token = permissions.bind(...)`` / ``try ... finally:
-    permissions.reset(token)`` so the ContextVar is restored on
-    BOTH the success and exception paths (Step 10 reviewer's
-    check 2).
+    The dispatch flow wraps the tool call in
+    `token = permissions.bind(...)` / `try ... finally:
+    permissions.reset(token)` so the `ContextVar` is restored on
+    both the success and exception paths.
     """
     return _BINDING.set(binding)
 
 
 def reset(token: Token[PermissionsBinding | None]) -> None:
-    """Restore the previous ContextVar value. ``token`` is what
-    :func:`bind` returned. Always call this in a ``finally`` —
-    typically inside the tool dispatcher."""
+    """Restore the previous `_BINDING` value.
+
+    `token` is what [`bind`][tools.permissions.bind] returned. Always
+    call this in a `finally` — typically inside the tool dispatcher.
+    """
     _BINDING.reset(token)
 
 
 def current_binding() -> PermissionsBinding | None:
-    """Return the currently-bound :class:`PermissionsBinding`
-    for inspection (engine internals, tests). Returns ``None``
-    when no binding is active."""
+    """Return the currently-bound `PermissionsBinding`, or `None`.
+
+    For inspection by engine internals and tests; `None` when no
+    binding is active.
+    """
     return _BINDING.get()

@@ -1,20 +1,15 @@
-"""Layer 3 ConfigValidator for the ``standard`` tools variant — spec §3.4.
+"""Layer 3 ConfigValidator for the `standard` tools variant.
 
 The kernel dispatches this during Layer 3 config validation. It
-checks the structural shape of the ``tools.config`` body:
+checks the structural shape of the `tools.config` body: each `builtin`
+name is a known builtin, each MCP server `name` is unique within the
+agent's config, and each `mcp[].env_inject` value names a secret
+listed in `secrets_needed` for the same server.
 
-- Each ``builtin`` name is a known builtin (spec §4 enumeration).
-- Each MCP server ``name`` is unique within the agent's config.
-- Each ``mcp[].env_inject`` value names a secret in
-  ``secrets_needed`` for the same server.
-
-Phase 1 simplifications:
-- Declared-tool ref resolution is NOT cross-checked here (would require
-  the asset catalog at validation time; the Tools subsystem's runtime
-  registration raises if a ref doesn't resolve).
-- ``mcp[].secrets_needed`` existence is NOT checked (would require the
-  Secrets provider at validation time; the registration step calls
-  ``secrets.exists`` per spec §6.1 step 3).
+Two cross-checks are deliberately left to runtime registration:
+declared-tool ref resolution (the Tools subsystem's runtime path
+raises on unresolved refs) and `mcp[].secrets_needed` existence (the
+registration step calls `secrets.exists`).
 """
 
 from __future__ import annotations
@@ -26,8 +21,11 @@ from tools.builtins import builtin_names
 
 
 def validate_standard_config(body: dict[str, Any]) -> ValidationResult:
-    """The Layer 3 validator the kernel dispatches for
-    ``tools.variant=standard``."""
+    """Validate a `tools.variant=standard` config body.
+
+    The Layer 3 validator the kernel dispatches when an agent's tools
+    config selects the standard variant.
+    """
     errors: list[ValidationError] = []
 
     builtin_list = body.get("builtin", []) or []

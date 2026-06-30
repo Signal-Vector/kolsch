@@ -1,25 +1,23 @@
-"""Tool invocation dispatch — Module API Reference §9.1 + spec §6.2.
+"""Tool invocation dispatch.
 
-The dispatch order is EXACT:
+The dispatch order is exact:
 
-1. Validate args against the tool's Pydantic ``args_schema``
-   (:class:`ToolInvalidArguments` on failure — Diagnostic).
-2. Authorize via ``authz.allow(principal, tool.action_name)``
-   (:class:`ToolUnauthorized` on denial — Diagnostic).
-3. Resolve declared secrets (:class:`SecretNotFound` is raised by the
-   provider; the dispatch lets it propagate — this is a Fatal error
-   the engine surfaces as ``thread.exchange_failed`` rather than as
-   a per-tool Diagnostic, per Error-Model levels).
-4. Wrap the work in ``sandbox.execute(work, policy)``
-   (:class:`SandboxPolicyInvalid` on bad policy — Fatal).
-5. Run the tool function. Non-PlatformError exceptions become
-   :class:`ToolExecutionFailed` (Diagnostic) with the original
-   exception preserved on ``__cause__`` for in-process debugging.
-
-Spec conflict (flagged): the prose at spec §6.2 lists authorization
-FIRST and validation SECOND. Module API Reference §9.1 — the
-arbiter — lists validate FIRST then authz. The implementation
-honours the arbiter; documented in the dispatch docstring.
+1. Validate args against the tool's Pydantic `args_schema`
+   ([`ToolInvalidArguments`][errors.ToolInvalidArguments] on failure —
+   Diagnostic).
+2. Authorize via `authz.allow(principal, tool.action_name)`
+   ([`ToolUnauthorized`][errors.ToolUnauthorized] on denial —
+   Diagnostic).
+3. Resolve declared secrets. `SecretNotFound` is raised by the
+   provider; the dispatch lets it propagate — Fatal, surfaced by the
+   engine as `thread.exchange_failed` rather than a per-tool
+   Diagnostic.
+4. Wrap the work in `sandbox.execute(work, policy)`
+   (`SandboxPolicyInvalid` on bad policy — Fatal).
+5. Run the tool function. Non-`PlatformError` exceptions become
+   [`ToolExecutionFailed`][errors.ToolExecutionFailed] (Diagnostic)
+   with the original exception preserved on `__cause__` for
+   in-process debugging.
 """
 
 from __future__ import annotations
@@ -59,18 +57,39 @@ async def dispatch_tool(
     agent_permissions: list[Rule] | None = None,
     bundle_permissions: list[Rule] | None = None,
 ) -> Any:  # noqa: ANN401 — caller knows the return type for their tool
-    """Run a tool through the validate → authz → secrets → sandbox →
-    execute pipeline. Returns the tool function's raw return value.
+    """Run a tool through the full dispatch pipeline.
 
-    Caller (:class:`ToolsSubsystem.invoke_tool`) wraps the return in
-    :class:`ToolResult`.
+    Walks the validate → authz → secrets → sandbox → execute order
+    and returns the tool function's raw return value. The caller
+    ([`ToolsSubsystem.invoke_tool`][tools.subsystem.ToolsSubsystem.invoke_tool])
+    wraps the return in [`ToolResult`][tools.decorator.ToolResult].
 
-    ``agent_permissions`` / ``bundle_permissions`` are forwarded to
-    ``authz.allow`` so the provider walks the four-level stack
-    (qol-tool-permission-discovery-uniform-with-stacking.md). Both
-    default to ``None`` so Phase 1 programmatic callers (tests,
-    integration harnesses that construct ToolsSubsystem with their
-    own minimal authz) stay byte-identical.
+    `agent_permissions` and `bundle_permissions` are forwarded to
+    `authz.allow` so the provider walks the four-level stack
+    (agent → bundle → platform → default). Both default to `None` so
+    programmatic callers (tests, integration harnesses that construct
+    `ToolsSubsystem` with their own minimal authz) stay byte-identical.
+
+    Args:
+        defn: The registered tool's definition.
+        args: Raw argument dict from the framework; validated against
+            `defn.args_schema` before anything else runs.
+        context: The runtime context handed to the tool body.
+        authz: Authorization provider — consulted with the composed
+            principal and `defn.action_name`.
+        secrets: Secrets provider — resolves names listed in
+            `defn.secrets_needed`.
+        sandbox: Sandbox provider — wraps the tool body.
+        agent_permissions: The agent's resolved permission rules.
+        bundle_permissions: The bundle's resolved permission rules.
+
+    Returns:
+        Whatever the tool function returned.
+
+    Raises:
+        ToolInvalidArguments: Pydantic validation of `args` failed.
+        ToolUnauthorized: Authz denied the call.
+        ToolExecutionFailed: The tool body raised a non-`PlatformError`.
     """
     # Step 1 — Pydantic validate args.
     try:
@@ -81,22 +100,22 @@ async def dispatch_tool(
             validation_errors=[dict(e) for e in exc.errors()],
         ) from exc
 
-    # Step 2 — authorization. The action name is `tool.<name>` by
-    # default per spec T-I1; tools can override via the decorator.
+    # Step 2 — authorization. The default authz action string is
+    # derived by the tool's `action_name`; tools can override via the
+    # decorator.
     #
-    # Phase 2.1 (24d) — derive the target string from the validated
-    # args so the prompt-effect path has something meaningful to
-    # show in the modal (and to match against the
-    # write-on-[a]-or-[d] suggested pattern). The provider's
-    # matcher checks `target` first, then falls back to `action`,
-    # so existing rules with action-namespace `what` patterns
-    # still fire as before — see RuleBasedAuthorizationProvider.allow.
+    # Derive the target string from the validated args so the
+    # prompt-effect path has something meaningful to show in the
+    # modal (and to match against the write-on-[a]-or-[d] suggested
+    # pattern). The provider's matcher checks `target` first, then
+    # falls back to `action`, so existing rules with action-namespace
+    # `what` patterns still fire as before — see
+    # RuleBasedAuthorizationProvider.allow.
     target = _extract_target_from_args(validated_args)
-    # Phase 3.0 Step 4 (Round 4 item #7) — assemble the layers tuple
-    # in proximate-caller order. The current tool-dispatch wrapper
-    # only sees agent + bundle layers; the ``workflow`` layer is
-    # added by the workflow engine's tool-dispatch wrapper when it
-    # ships in Phase 3.1.
+    # Assemble the layers tuple in proximate-caller order. The
+    # current tool-dispatch wrapper only sees agent + bundle layers;
+    # the ``workflow`` layer is added by the workflow engine's
+    # tool-dispatch wrapper.
     layers: tuple[PermissionLayer, ...] = ()
     if agent_permissions:
         layers = (
@@ -125,25 +144,24 @@ async def dispatch_tool(
         )
 
     # Step 3 — resolve declared secrets and rebuild the context with
-    # them populated. Per T-I3 — tools NEVER call secrets.resolve
-    # themselves; the platform mediates.
+    # them populated. Tools never call secrets.resolve themselves;
+    # the platform mediates.
     resolved_secrets = dict(context.secrets)
     for secret_name in defn.secrets_needed:
         # SecretNotFound (Fatal) propagates out of the dispatch. The
         # engine catches it at the exchange boundary and emits
-        # `thread.exchange_failed` per Error-Model §1.3.
+        # `thread.exchange_failed`.
         resolved_secrets[secret_name] = await secrets.resolve(secret_name)
     invocation_context = context.model_copy(
         update={"secrets": resolved_secrets},
     )
 
-    # Step 4 — wrap in the sandbox. Per T-I4, every invocation goes
-    # through `sandbox.execute` even when it's the passthrough native
+    # Step 4 — wrap in the sandbox. Every invocation goes through
+    # `sandbox.execute` even when it's the passthrough native
     # variant. Step 5 (the actual run) is inside the work closure.
     #
-    # qol-tool-permissions-binding-unused.md Step 2 — construct the
-    # PermissionsBinding from the same provider + layers the
-    # dispatch-boundary check used, then bind it to the
+    # Construct the PermissionsBinding from the same provider +
+    # layers the dispatch-boundary check used, then bind it to the
     # ``tools.permissions._BINDING`` ContextVar around the tool
     # function body. The bind/reset pair lands INSIDE ``_work`` so
     # the binding lifetime exactly matches the tool body — sandbox
@@ -183,13 +201,12 @@ async def dispatch_tool(
 _TARGET_ARG_PRIORITY = ("path", "command", "url")
 """Argument names dispatch_tool looks at to derive an authz target.
 
-Phase 2.0's spec §2.3 says ``what`` "matches the tool's target
-string. For file tools the target is the resolved absolute path.
-For ``bash`` it's the command string." This list captures the
-convention: file tools use ``path``, shell tools use ``command``,
-network tools (future) use ``url``. First-hit-wins so tools that
-declare both a path and a command (none today, but possible
-later) pick a stable one.
+The convention: file tools use ``path``, shell tools use ``command``,
+network tools (future) use ``url``. The authz rule's ``what``
+matches against the tool's target string — the resolved path for
+file tools, the command for ``bash``. First-hit-wins so tools that
+declare both a path and a command (none today, but possible later)
+pick a stable one.
 """
 
 
@@ -198,8 +215,8 @@ def _extract_target_from_args(validated_args: object) -> str | None:
 
     Tools whose declared args lack ``path``/``command``/``url``
     return None — the authz provider's matcher then falls back to
-    matching ``what`` against ``action`` (the Phase-1-compat
-    behaviour), so this is safe to call for every tool.
+    matching ``what`` against ``action``, so this is safe to call
+    for every tool.
     """
     for attr in _TARGET_ARG_PRIORITY:
         value = getattr(validated_args, attr, None)
@@ -212,9 +229,11 @@ def authz_call(
     *,
     authz: AuthorizationProvider,
 ) -> Callable[..., Awaitable[Any]]:
-    """Placeholder seam — exists so tests that want to substitute the
-    authz invocation specifically can monkeypatch this module rather
-    than the provider. Currently a no-op pass-through; kept reserved.
+    """Return a thin authz invocation seam tests can monkeypatch.
+
+    A reserved no-op pass-through. Exists so tests that want to
+    substitute the authz invocation specifically can patch this
+    module rather than the provider.
     """
 
     async def _call(principal: str, action: str) -> Any:  # noqa: ANN401
