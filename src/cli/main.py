@@ -1,8 +1,9 @@
-"""``kolsch`` CLI dispatcher.
+"""`kolsch` CLI dispatcher.
 
 Argparse-based — no external CLI dep. Each subcommand has a small
-async handler in this module; the top-level :func:`main` is the
-entry point bound to the ``kolsch`` console script.
+async handler in this module; the top-level
+[`main`][cli.main.main] is the entry point bound to the `kolsch`
+console script.
 """
 
 from __future__ import annotations
@@ -32,10 +33,10 @@ if TYPE_CHECKING:
 _log = logging.getLogger("cli")
 
 
-# Phase 1.2 patch §1.4 — the friendly message printed when a non-setup
-# command lands against an uninitialised workspace. The `{path}` token
-# is substituted at print time; no other formatting. Plain text on
-# stderr, no JSON, no traceback.
+# Friendly message printed when a non-setup command lands against an
+# uninitialised workspace. The `{path}` token is substituted at print
+# time; no other formatting. Plain text on stderr, no JSON, no
+# traceback.
 _MISSING_WORKSPACE_MESSAGE = (
     "No Kolsch workspace at {path}.\n"
     "\n"
@@ -49,7 +50,7 @@ _EXIT_MISSING_WORKSPACE = 3
 
 
 def main(argv: Sequence[str] | None = None) -> int:
-    """Console-script entry point. Returns the process exit code."""
+    """Run the console-script entry point and return the process exit code."""
     parser = _build_parser()
     args = parser.parse_args(argv)
 
@@ -62,22 +63,21 @@ def main(argv: Sequence[str] | None = None) -> int:
         format="%(levelname)s %(name)s: %(message)s",
     )
 
-    # Phase 1.2 — resolve the workspace once, intercept the missing-
-    # workspace case before any subsystem boots so the user gets a
-    # friendly message instead of a stack trace. `setup` is the one
-    # command exempt from the initialization gate; it's what populates
-    # the workspace.
+    # Resolve the workspace once, intercept the missing-workspace case
+    # before any subsystem boots so the user gets a friendly message
+    # instead of a stack trace. `setup` is the one command exempt from
+    # the initialization gate; it's what populates the workspace.
     resolved_root = resolve_workspace(args.root)
     if args.command != "setup" and not workspace_is_initialized(resolved_root):
         sys.stderr.write(_MISSING_WORKSPACE_MESSAGE.format(path=resolved_root))
         return _EXIT_MISSING_WORKSPACE
     args.root = resolved_root
 
-    # Phase 3.1 Step 4 — engine-startup orphan sweep. Any ``workflows``
-    # or ``nodes`` invocation reconciles ``runs/<wrk_id>/`` JSONLs whose
-    # executor PID is dead, so the run index never reports a stale
-    # ``running`` row from a crashed process. The sweep is a no-op when
-    # the workspace has no ``runs/`` dir yet.
+    # Engine-startup orphan sweep. Any `workflows` or `nodes`
+    # invocation reconciles `runs/<wrk_id>/` JSONLs whose executor
+    # PID is dead, so the run index never reports a stale `running`
+    # row from a crashed process. The sweep is a no-op when the
+    # workspace has no `runs/` dir yet.
     if args.command in {"workflows", "nodes"}:
         _run_orphan_sweep(args.root)
 
@@ -114,18 +114,17 @@ def _run_orphan_sweep(root: Path) -> None:
 
 
 _PARSER_REGISTRY: dict[str, argparse.ArgumentParser] = {}
-"""Stash for subcommand parsers, populated by ``_build_parser``.
+"""Stash for subcommand parsers, populated by `_build_parser`.
 
 Lets handlers print sub-parser-specific help when a multi-subcommand
-top-level (``sessions``, ``permissions``) is invoked without an op —
-the fix for bug-sessions-namespace-attr-error.md. Keyed by command
-name (``"sessions"``, ``"permissions"``)."""
+top-level (`sessions`, `permissions`) is invoked without an op.
+Keyed by command name (`"sessions"`, `"permissions"`)."""
 
 
 def _build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="kolsch",
-        description="Agent Platform CLI (v1 default tier).",
+        description="Agent Platform CLI.",
     )
     parser.add_argument(
         "--root",
@@ -174,9 +173,8 @@ def _build_parser() -> argparse.ArgumentParser:
         metavar="<bundle>/skills/<name>",
         help=(
             "Force-load a skill before the exchange. Repeatable. The "
-            "engine emits a synthetic tool.read on the SKILL.md path "
-            "(skills spec §6). Refs not in the agent's enabled list "
-            "fail at submit time."
+            "engine emits a synthetic tool.read on the SKILL.md path. "
+            "Refs not in the agent's enabled list fail at submit time."
         ),
     )
 
@@ -248,7 +246,7 @@ def _build_parser() -> argparse.ArgumentParser:
     server.add_argument("--host", default="127.0.0.1")
     server.add_argument("--port", type=int, default=8080)
 
-    # ---- setup — Phase 1.2 -------------------------------------------
+    # ---- setup -------------------------------------------------------
     setup = sub.add_parser(
         "setup",
         help=(
@@ -267,7 +265,7 @@ def _build_parser() -> argparse.ArgumentParser:
         ),
     )
 
-    # ---- connect / disconnect / providers / refresh — Phase 1.1 ------
+    # ---- connect / disconnect / providers / refresh ------------------
     connect = sub.add_parser("connect", help="Connect an LLM provider.")
     connect.add_argument("provider", help="Provider name (e.g. opencode).")
 
@@ -318,14 +316,13 @@ def _build_parser() -> argparse.ArgumentParser:
         "provider", nargs="?", default=None, help="Provider name (optional)."
     )
 
-    # Phase 2.0 (TOOL-R6) — kolsch permissions {list, add, remove, show}.
+    # kolsch permissions {list, add, remove, show}.
     from cli.permissions import add_permissions_subparser  # noqa: PLC0415
 
     permissions_parser = add_permissions_subparser(sub)
     if permissions_parser is not None:
         _PARSER_REGISTRY["permissions"] = permissions_parser
 
-    # Step 4 (skills-subsystem.md Draft 0.2 follow-up) —
     # kolsch skills {list, show, which}.
     from cli.skills import add_skills_subparser  # noqa: PLC0415
 
@@ -333,17 +330,17 @@ def _build_parser() -> argparse.ArgumentParser:
     if skills_parser is not None:
         _PARSER_REGISTRY["skills"] = skills_parser
 
-    # Phase 2.1 Step 24a — kolsch chat (streaming REPL).
+    # kolsch chat (streaming REPL).
     _add_chat_subparser(sub)
 
-    # Phase 3.0 Step 6 — kolsch workflows {list, show, validate, cancel, run}.
+    # kolsch workflows {list, show, validate, cancel, run}.
     from cli.workflows import add_workflows_subparser  # noqa: PLC0415
 
     workflows_parser = add_workflows_subparser(sub)
     if workflows_parser is not None:
         _PARSER_REGISTRY["workflows"] = workflows_parser
 
-    # Phase 3.0 Step 6 (Round 7 L7-12) — kolsch nodes {list, show}.
+    # kolsch nodes {list, show}.
     from cli.nodes import add_nodes_subparser  # noqa: PLC0415
 
     nodes_parser = add_nodes_subparser(sub)
@@ -354,10 +351,10 @@ def _build_parser() -> argparse.ArgumentParser:
 
 
 def _add_chat_subparser(sub: argparse._SubParsersAction[Any]) -> None:
-    """Register the ``kolsch chat`` subparser.
+    """Register the `kolsch chat` subparser.
 
-    Extracted from ``_build_parser`` to keep that function under the
-    PLR0915 statement-count ceiling. Phase 2.1 Step 24a.
+    Extracted from `_build_parser` to keep that function under the
+    PLR0915 statement-count ceiling.
     """
     chat = sub.add_parser(
         "chat",
@@ -376,16 +373,13 @@ def _add_chat_subparser(sub: argparse._SubParsersAction[Any]) -> None:
         "--session",
         dest="session",
         default=None,
-        help="Resume an existing session by id (24e — accepted but ignored in 24a).",
+        help="Resume an existing session by id.",
     )
     chat.add_argument(
         "--model",
         dest="model",
         default=None,
-        help=(
-            "Session-scoped model override (ModelSpec input shape). "
-            "Recorded for the banner in 24a; full alias resolution lands in 24d."
-        ),
+        help="Session-scoped model override (ModelSpec input shape).",
     )
 
 
@@ -420,7 +414,8 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     content = inputs.pop("content", None)
 
     # Reuse session or create a fresh one. Reusing means the thread's
-    # leaf carries forward (engine I8 — statelessness across calls).
+    # leaf carries forward; the engine itself is stateless across
+    # calls.
     if args.session:
         from schemas import SessionId  # noqa: PLC0415
 
@@ -438,10 +433,10 @@ async def _cmd_run(args: argparse.Namespace) -> int:
         raise RuntimeError(msg)
     thread = threads[0]
 
-    # Phase 2.0 / skills-subsystem.md Step 3 — --skill collects refs
-    # to force-load before the exchange. Validate against the agent's
-    # enabled list at submit time so a typo doesn't crash through to
-    # SkillForcedNotEnabled (Fatal) at engine pre-flight.
+    # --skill collects refs to force-load before the exchange.
+    # Validate against the agent's enabled list at submit time so a
+    # typo doesn't crash through to SkillForcedNotEnabled (Fatal) at
+    # engine pre-flight.
     force_skills = list(getattr(args, "skill", None) or [])
     if force_skills:
         unknown = _validate_force_skill_refs(force_skills, config)
@@ -478,9 +473,9 @@ async def _cmd_run(args: argparse.Namespace) -> int:
 
     if args.stream:
         # Track whether a Fatal event landed — execute_stream doesn't
-        # raise on Fatal (spec §1.6); the failed event IS the signal.
-        # Exit 2 so shell pipelines can distinguish stream success
-        # from stream-with-Fatal-final-event (review #6 fix).
+        # raise on Fatal; the failed event IS the signal. Exit 2 so
+        # shell pipelines can distinguish stream success from
+        # stream-with-Fatal-final-event.
         from schemas import EventType  # noqa: PLC0415
 
         had_fatal = False
@@ -505,11 +500,9 @@ async def _cmd_run(args: argparse.Namespace) -> int:
 async def _cmd_sessions_list(args: argparse.Namespace) -> int:
     """Print a compact, sorted-by-recency table of sessions.
 
-    Per docs/process/qol-sessions-list-columns.md — replaces the prior
-    ``key=value``-per-column layout with four aligned columns
-    (SESSION_ID, STARTED, LAST, NAME). The ``--starred`` / ``--archived``
-    filter flags still filter the underlying query; they just no longer
-    have columns in the default output.
+    Four aligned columns (SESSION_ID, STARTED, LAST, NAME). The
+    `--starred` / `--archived` filter flags filter the underlying
+    query; they have no columns in the default output.
     """
     runtime = await bootstrap_runtime(root=args.root)
     sessions = await runtime.store.list_sessions(
@@ -563,8 +556,7 @@ def _format_delta(delta: timedelta) -> str:
     """Render a non-negative timedelta as a compact ago-style string.
 
     Compact units only — no "just now" / "1y" prose: the column is
-    fixed-width and grep-friendly. Per qol-sessions-list-columns.md
-    §"Delta formatter".
+    fixed-width and grep-friendly.
     """
     seconds = int(delta.total_seconds())
     if seconds < _SECONDS_PER_MINUTE:
@@ -579,17 +571,17 @@ def _format_delta(delta: timedelta) -> str:
 async def _compute_last_event_at(
     runtime: PlatformRuntime, session_id: object
 ) -> datetime | None:
-    """Max ``created_at`` across every thread's last event in the session.
+    """Return the max `created_at` across each thread's last event.
 
-    Walks the session's threads via ``runtime.store.list_threads`` and
+    Walks the session's threads via `runtime.store.list_threads` and
     reads the last event per thread via
-    :func:`store.jsonl.read_last_event_for_thread`. Returns ``None``
-    when the session has no events yet (rare — created but never run).
+    [`read_last_event_for_thread`][store.jsonl.read_last_event_for_thread].
+    Returns `None` when the session has no events yet (rare — created
+    but never run).
 
-    Per qol-sessions-list-columns.md §"Last-event computation":
-    one JSONL tail-scan per thread per session. Fast for typical
+    One JSONL tail-scan per thread per session. Fast for typical
     workspaces (<100 sessions); pathological cases (10k+ sessions)
-    are flagged as a deferred optimization, not a v1 blocker.
+    are flagged as a deferred optimization.
     """
     from schemas import SessionId  # noqa: PLC0415
     from store.jsonl import (  # noqa: PLC0415
@@ -652,14 +644,13 @@ async def _cmd_sessions_delete(args: argparse.Namespace) -> int:
 
 
 async def _cmd_sessions(args: argparse.Namespace) -> int:
-    """Dispatch the ``sessions`` op.
+    """Dispatch the `sessions` op.
 
-    *(Bug-fix: docs/process/bug-sessions-namespace-attr-error.md.)*
-    When the user typed ``kolsch sessions`` with no operation,
-    ``args.sessions_command`` is ``None`` — print the subparser's
-    help to stderr and exit 1 instead of falling through to
-    ``_cmd_sessions_list`` (which would crash on missing
-    ``args.starred`` / ``args.archived`` / ``args.limit``).
+    When the user typed `kolsch sessions` with no operation,
+    `args.sessions_command` is `None` — print the subparser's help
+    to stderr and exit 1 instead of falling through to
+    `_cmd_sessions_list` (which would crash on missing
+    `args.starred` / `args.archived` / `args.limit`).
     """
     if args.sessions_command is None:
         return _print_subcommand_help_and_exit("sessions")
@@ -677,10 +668,9 @@ async def _cmd_sessions(args: argparse.Namespace) -> int:
 def _print_subcommand_help_and_exit(command: str) -> int:
     """Print a multi-subcommand subparser's help to stderr; return 1.
 
-    Used by ``_cmd_sessions`` and ``_cmd_permissions`` when the user
-    invokes the parent subcommand without specifying an op.
-    Bug-sessions-namespace-attr-error.md acceptance criterion 1 —
-    show available operations, NO Python traceback.
+    Used by `_cmd_sessions` and `_cmd_permissions` when the user
+    invokes the parent subcommand without specifying an op. Shows
+    available operations; no Python traceback.
     """
     subparser = _PARSER_REGISTRY.get(command)
     if subparser is not None:
@@ -751,15 +741,11 @@ async def _cmd_models(args: argparse.Namespace) -> int:
 
 
 async def _cmd_permissions(args: argparse.Namespace) -> int:
-    """Dispatch the ``permissions`` op.
+    """Dispatch the `permissions` op.
 
-    *(Bug-fix parity: docs/process/bug-sessions-namespace-attr-error.md
-    reviewer Q2 — same help-and-exit pattern as ``_cmd_sessions``.)*
-    ``cmd_permissions`` itself handles the ``None`` case without
-    crashing, but the user-facing message was awkward
-    (``"unknown permissions op None"``). Uniform fix: print the
-    subparser's help to stderr and exit 1, matching the sessions
-    dispatcher.
+    Mirrors `_cmd_sessions`: when no op is supplied, print the
+    subparser's help to stderr and exit 1 rather than the awkward
+    `"unknown permissions op None"` the inner handler emits.
     """
     if args.permissions_command is None:
         return _print_subcommand_help_and_exit("permissions")
@@ -769,10 +755,10 @@ async def _cmd_permissions(args: argparse.Namespace) -> int:
 
 
 async def _cmd_skills(args: argparse.Namespace) -> int:
-    """Dispatch the ``skills`` op.
+    """Dispatch the `skills` op.
 
-    Same help-and-exit pattern as ``_cmd_sessions`` /
-    ``_cmd_permissions`` for the missing-op case.
+    Same help-and-exit pattern as `_cmd_sessions` /
+    `_cmd_permissions` for the missing-op case.
     """
     if args.skills_command is None:
         return _print_subcommand_help_and_exit("skills")
@@ -837,20 +823,20 @@ _DISPATCH = {
 def _maybe_warn_silent_echo(
     config: ResolvedAgentConfig, runtime: PlatformRuntime
 ) -> None:
-    """Emit a stderr warning when a real-provider agent will silently
-    echo (bug-echo-on-real-provider AC #5 defensive surface).
+    """Warn on stderr when a real-provider agent would silently echo.
 
     Fires when:
 
-    - `config.model.provider != "fake"` (the agent intends a real call), AND
-    - The runtime did NOT wire `llm_for_model` (i.e., engine has only
-      the `EchoLLMDriver` fallback). After the bug fix, this combination
-      only happens when no providers are connected — but the warning
-      catches any future regression that silently routes a real-provider
-      agent through the echo path.
+    - `config.model.provider != "fake"` (the agent intends a real
+      call), AND
+    - The runtime did not wire `llm_for_model` (i.e. engine has only
+      the `EchoLLMDriver` fallback). Normally this only happens when
+      no providers are connected; the warning catches any future
+      regression that silently routes a real-provider agent through
+      the echo path.
 
-    Agents that explicitly use `provider: fake` are silent — that's the
-    tutorial path; the user knows what they signed up for.
+    Agents that explicitly use `provider: fake` are silent — that's
+    the tutorial path; the user knows what they signed up for.
     """
     if config.model.provider == "fake":
         return
@@ -867,9 +853,9 @@ def _maybe_warn_silent_echo(
 def _enabled_skill_refs(config: object) -> list[str]:
     """Return the agent's enabled skill refs in declaration order.
 
-    Mirrors :func:`cli._slash._enabled_skill_refs` (kept duplicated so
-    main.py does not pull the chat module in for a one-line read of
-    its own typed config). Returns ``[]`` when the subsystem is absent.
+    Mirrors `cli._slash._enabled_skill_refs` (kept duplicated so
+    `main.py` does not pull the chat module in for a one-line read of
+    its own typed config). Returns `[]` when the subsystem is absent.
     """
     subsystems = getattr(config, "subsystems", None) or {}
     sub = subsystems.get("skills") if isinstance(subsystems, dict) else None
@@ -886,10 +872,10 @@ def _enabled_skill_refs(config: object) -> list[str]:
 
 
 def _validate_force_skill_refs(refs: list[str], config: object) -> list[str]:
-    """Return the subset of ``refs`` NOT in the agent's enabled skills.
+    """Return the subset of `refs` not in the agent's enabled skills.
 
     Surfaces typos at submit time instead of failing with
-    :class:`errors.SkillForcedNotEnabled` (Fatal) at engine pre-flight,
+    `errors.SkillForcedNotEnabled` (Fatal) at engine pre-flight,
     which would also discard the just-submitted user message.
     """
     enabled = set(_enabled_skill_refs(config))
@@ -897,10 +883,10 @@ def _validate_force_skill_refs(refs: list[str], config: object) -> list[str]:
 
 
 def _parse_inputs(raw: list[str]) -> dict[str, str]:
-    """Parse ``--input KEY=VALUE`` pairs into a dict.
+    """Parse `--input KEY=VALUE` pairs into a dict.
 
-    Multiple ``--input`` flags accumulate. Values are strings; the
-    engine's IO type system will coerce per the agent's ``IOSpec``.
+    Multiple `--input` flags accumulate. Values are strings; the
+    engine's IO type system will coerce per the agent's `IOSpec`.
     """
     out: dict[str, str] = {}
     for item in raw:

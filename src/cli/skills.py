@@ -1,20 +1,21 @@
-"""``kolsch skills {list, show, which}`` — Step 4 (skills-subsystem.md
-Draft 0.2 follow-up).
+"""`kolsch skills {list, show, which, new, validate}` CLI surface.
 
-Read-only catalog introspection. Three ops:
+Read-only catalog introspection plus a couple of write commands.
+Ops:
 
-- ``list``   — every catalogued skill across bundles, with a
-  ``--bundle`` filter and a ``--json`` toggle.
-- ``show``   — frontmatter + body of one SKILL.md.
-- ``which``  — what a given agent has enabled (resolved against
-  the catalog so missing refs surface here, not at engine
-  pre-flight).
+- `list` — every catalogued skill across bundles, with a
+  `--bundle` filter and a `--json` toggle.
+- `show` — frontmatter + body of one SKILL.md.
+- `which` — what a given agent has enabled (resolved against the
+  catalog so missing refs surface here, not at engine pre-flight).
+- `new` — scaffold a new skill directory + SKILL.md.
+- `validate` — schema and content checks for the catalogued
+  skills.
 
-Mirrors the subparser + dispatcher shape of
-:mod:`cli.permissions`. No side effects — these commands never
-write, never start an exchange, never touch the event log. The
-work each op does is a read on the asset catalog plus a
-formatter.
+Mirrors the subparser + dispatcher shape of `cli.permissions`. The
+read ops never write, never start a turn, never touch the event
+log. The work each read op does is a read on the asset catalog
+plus a formatter.
 """
 
 from __future__ import annotations
@@ -36,22 +37,22 @@ from platform_runtime import bootstrap_runtime
 from platform_runtime.workspace import workspace_is_initialized
 
 _DEFAULT_BUNDLE = "kolsch"
-"""Default ``--bundle`` for ``kolsch skills new``.
+"""Default `--bundle` for `kolsch skills new`.
 
-Matches the starter bundle ``kolsch setup`` writes (see
-``src/cli/_starter_bundle/kolsch/``). The Step 1 audit did not pin a
-"user" bundle convention; ``kolsch`` is the bundle guaranteed to
-exist after first-run setup, so it's the most predictable default.
-Users who want a separate bundle for their own skills create it and
-pass ``--bundle <name>`` explicitly — this command never creates
-bundles itself."""
+Matches the starter bundle `kolsch setup` writes (see
+`src/cli/_starter_bundle/kolsch/`). There is no separate "user"
+bundle convention; `kolsch` is the bundle guaranteed to exist
+after first-run setup, so it's the most predictable default.
+Users who want a separate bundle for their own skills create it
+and pass `--bundle <name>` explicitly — this command never
+creates bundles itself."""
 
 _SKILL_NAME_RE = re.compile(r"[a-z][a-z0-9_-]*")
-"""Spec §2.3 — the ``name`` frontmatter field's character class.
+"""The `name` frontmatter field's character class.
 
-Enforced at ``skills new`` time so the directory name + the
-frontmatter ``name`` agree (the catalog uses the directory name
-as the ref segment regardless of frontmatter, so a mismatch would
+Enforced at `skills new` time so the directory name + the
+frontmatter `name` agree (the catalog uses the directory name as
+the ref segment regardless of frontmatter, so a mismatch would
 silently produce a confusing ref)."""
 
 if TYPE_CHECKING:
@@ -67,12 +68,11 @@ if TYPE_CHECKING:
 def add_skills_subparser(
     sub: argparse._SubParsersAction[Any],
 ) -> argparse.ArgumentParser:
-    """Register the ``kolsch skills`` subparser tree.
+    """Register the `kolsch skills` subparser tree.
 
-    Three leaf subcommands. Returns the parent subparser so the
-    dispatcher can stash it for ``_print_subcommand_help_and_exit``
-    on the missing-op path (matching ``permissions`` /
-    ``sessions``).
+    Returns the parent subparser so the dispatcher can stash it for
+    `_print_subcommand_help_and_exit` on the missing-op path
+    (matching `permissions` / `sessions`).
     """
     skills: argparse.ArgumentParser = sub.add_parser(
         "skills",
@@ -187,8 +187,7 @@ def add_skills_subparser(
         "-y",
         action="store_true",
         help=(
-            "Skip the trust prompt. Required for non-TTY callers "
-            "(CI, scripts, server)."
+            "Skip the trust prompt. Required for non-TTY callers (CI, scripts, server)."
         ),
     )
 
@@ -256,10 +255,10 @@ async def cmd_skills(
     out: TextIO | None = None,
     err: TextIO | None = None,
 ) -> int:
-    """Dispatch the three leaf ops. Returns the process exit code.
+    """Dispatch the skills subcommands and return the process exit code.
 
-    ``out`` / ``err`` default to the *current* ``sys.stdout`` /
-    ``sys.stderr`` at call time (not at module import). pytest's
+    `out` / `err` default to the *current* `sys.stdout` /
+    `sys.stderr` at call time (not at module import). pytest's
     capsys replaces those streams per test; binding the default at
     call time keeps captured output flowing to the right buffer.
     """
@@ -374,9 +373,7 @@ def _cmd_list(
         name = _meta_str(entry, "name", entry.ref.rsplit("/", 1)[-1])
         flags = "[hidden]" if _disable_model_invocation(entry) else "       "
         description = _truncate(_meta_str(entry, "description", ""), 72)
-        out.write(
-            f"{entry.ref:<{ref_w}}  {name:<{name_w}}  {flags}  {description}\n"
-        )
+        out.write(f"{entry.ref:<{ref_w}}  {name:<{name_w}}  {flags}  {description}\n")
     return 0
 
 
@@ -413,9 +410,7 @@ def _cmd_show(
         )
         return 1
     if entry.asset_type != "skill":
-        err.write(
-            f"error: ref {ref!r} is a {entry.asset_type}, not a skill.\n"
-        )
+        err.write(f"error: ref {ref!r} is a {entry.asset_type}, not a skill.\n")
         return 1
 
     # Frontmatter — explicit field order so the output reads in
@@ -485,9 +480,7 @@ def _cmd_which(
         err.write(f"error: agent ref {agent_ref!r} not in catalog.\n")
         return 1
     if entry.asset_type != "agent":
-        err.write(
-            f"error: ref {agent_ref!r} is a {entry.asset_type}, not an agent.\n"
-        )
+        err.write(f"error: ref {agent_ref!r} is a {entry.asset_type}, not an agent.\n")
         return 1
 
     enabled_refs = _read_enabled_skill_refs_from_agent_yaml(Path(entry.path))
@@ -541,14 +534,14 @@ docs/explanation/skills-subsystem.md for the SKILL.md format.
 _PLACEHOLDER_DESCRIPTION = (
     "TODO — one-line description of when to use this skill and what it does."
 )
-"""Default ``description`` when ``--description`` is omitted.
+"""Default `description` when `--description` is omitted.
 
-The description IS the model's discovery signal per spec §2.3 — a
-new skill with this placeholder is intentionally not yet
-discoverable, which the TODO marker makes visible. The em-dash
-(not a colon) keeps the value unambiguous to YAML's flow-scalar
-parser; the body template + spec docs steer the user toward
-making it trigger-rich before enabling on an agent."""
+The description is the model's discovery signal — a new skill with
+this placeholder is intentionally not yet discoverable, which the
+TODO marker makes visible. The em-dash (not a colon) keeps the
+value unambiguous to YAML's flow-scalar parser; the body template
++ docs steer the user toward making it trigger-rich before
+enabling on an agent."""
 
 
 def _render_skill_md(name: str, description: str) -> str:
@@ -608,10 +601,7 @@ def _cmd_new(
     skill_dir = bundle_dir / "skills" / name
     skill_md = skill_dir / "SKILL.md"
     if skill_md.exists():
-        err.write(
-            f"error: {skill_md} already exists. "
-            "Refusing to overwrite.\n"
-        )
+        err.write(f"error: {skill_md} already exists. Refusing to overwrite.\n")
         err.write(
             f"(View it with `kolsch skills show {bundle}/skills/{name}` "
             "or edit the file directly.)\n"
@@ -676,9 +666,7 @@ def _cmd_remove(
         err.write(f"error: skill ref {ref!r} not in catalog.\n")
         return 1
     if entry.asset_type != "skill":
-        err.write(
-            f"error: ref {ref!r} is a {entry.asset_type}, not a skill.\n"
-        )
+        err.write(f"error: ref {ref!r} is a {entry.asset_type}, not a skill.\n")
         return 1
 
     skill_md_path = Path(entry.path)
@@ -1105,9 +1093,8 @@ def _confirm_install(
         out.write(f"  branch: {parsed_url.branch}\n")
     if parsed_url.subpath:
         out.write(f"  subpath: {parsed_url.subpath}\n")
-    destination = (
-        f"  → {bundle_name}/skills/{skill_name}"
-        + ("  (new bundle)" if is_new_bundle else "")
+    destination = f"  → {bundle_name}/skills/{skill_name}" + (
+        "  (new bundle)" if is_new_bundle else ""
     )
     out.write(destination + "\n")
 
@@ -1212,8 +1199,7 @@ def _cmd_install(  # noqa: PLR0913 — install owns the full URL → destination
     target_skill_dir = bundle_dir / "skills" / skill_name
     if not is_new_bundle and target_skill_dir.exists():
         err.write(
-            f"error: {target_skill_dir} already exists. "
-            "Refusing to overwrite.\n",
+            f"error: {target_skill_dir} already exists. Refusing to overwrite.\n",
         )
         return 1
 
@@ -1235,9 +1221,7 @@ def _cmd_install(  # noqa: PLR0913 — install owns the full URL → destination
         # an explicit subpath in the URL (decision locked, Phase
         # 2.4 Part 0).
         if not skill_root.is_dir():
-            err.write(
-                f"error: fetched path {skill_root} is not a directory.\n"
-            )
+            err.write(f"error: fetched path {skill_root} is not a directory.\n")
             return 1
         skill_md = skill_root / "SKILL.md"
         if not skill_md.is_file():
@@ -1518,9 +1502,7 @@ def _cmd_validate(
             err.write(f"error: skill ref {ref!r} not in catalog.\n")
             return 1
         if entry.asset_type != "skill":
-            err.write(
-                f"error: ref {ref!r} is a {entry.asset_type}, not a skill.\n"
-            )
+            err.write(f"error: ref {ref!r} is a {entry.asset_type}, not a skill.\n")
             return 1
         entries = [entry]
     else:
@@ -1601,28 +1583,26 @@ def _read_enabled_skill_refs_from_agent_yaml(path: Path) -> list[str]:
 def _get_catalog_entry_sync(am: AssetManagement, ref: str) -> AssetEntry:
     """Sync get_asset — the catalog is in-memory after initialize().
 
-    :meth:`AssetManagement.get_asset` is async only because the API
+    `AssetManagement.get_asset` is async only because the API
     leaves room for network-backed catalogs. Today it does no I/O;
     the CLI is sync at this point so a direct catalog lookup keeps
     the call site simple.
 
-    Accepts any of the three catalog-ref input forms per
-    qol-prefix-defaults-and-unified-refs.md Step 2:
+    Accepts any of the three catalog-ref input forms:
 
-    - 3-segment ``<bundle>/<asset_type>/<name>`` (legacy passthrough)
-    - 2-segment ``<bundle>/<name>`` (canonical) — looks across all
+    - 3-segment `<bundle>/<asset_type>/<name>` (legacy passthrough)
+    - 2-segment `<bundle>/<name>` (canonical) — looks across all
       asset types since the sync helper has no field context
-    - 1-segment ``<name>`` shorthand — same fallback scan
+    - 1-segment `<name>` shorthand — same fallback scan
 
-    Raises :class:`AssetsNotFound` on a miss.
+    Raises [`AssetsNotFound`][errors.AssetsNotFound] on a miss.
     """
-    # _catalog access is intentional — the public list/get APIs would
-    # work equally well; this avoids the async hop. All catalog reads
-    # below route through the Round 5 H3 chokepoint
-    # ``AssetCatalog.lookup`` so this resolver stays disciplined
-    # alongside the rest of the codebase; only the 1-seg fallback
-    # iterates entries (no ref to look up — it's a whole-catalog
-    # scan by trailing name).
+    # `_catalog` access is intentional — the public list/get APIs
+    # would work equally well; this avoids the async hop. All
+    # catalog reads below route through `AssetCatalog.lookup` so
+    # this resolver stays disciplined alongside the rest of the
+    # codebase; only the 1-seg fallback iterates entries (no ref
+    # to look up — it's a whole-catalog scan by trailing name).
     catalog = am._catalog  # noqa: SLF001 — read-only catalog access
     if catalog is None:
         msg = "AssetManagement not initialized"
@@ -1647,8 +1627,7 @@ def _get_catalog_entry_sync(am: AssetManagement, ref: str) -> AssetEntry:
     elif len(parts) == 1:
         name = parts[0]
         matches = [
-            e for e in catalog.assets.values()
-            if e.ref.rsplit("/", 1)[-1] == name
+            e for e in catalog.assets.values() if e.ref.rsplit("/", 1)[-1] == name
         ]
         if len(matches) == 1:
             return matches[0]

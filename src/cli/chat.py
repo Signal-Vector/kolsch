@@ -1,35 +1,33 @@
-"""``kolsch chat`` — Phase 2.1 streaming REPL.
+"""`kolsch chat` — streaming REPL.
 
-Step 24a scaffolded the input loop + the no-full-screen guard.
-Step 24b added the slash-command framework. Step 24c (this layer)
-replaces the echo stub with **real engine integration**: each user
-submission becomes an ``ExecutionContext`` whose ``execute_stream``
-events feed the :class:`cli._renderer.Renderer`. The renderer is a
-pure consumer (CHAT-R9) — every visible block traces back to one
-event the engine emitted.
+Each user submission becomes an
+[`ExecutionContext`][engine.context.ExecutionContext] whose
+`execute_stream` events feed the
+[`Renderer`][cli._renderer.Renderer]. The renderer is a pure
+consumer — every visible block traces back to one event the engine
+emitted.
 
-Architectural commitment (patch §2.4): the chat MUST stay in
-prompt_toolkit's non-full-screen idiom. Native terminal scrolling
-and text selection only work on output written via normal stdout;
-full-screen / alternate-screen mode replaces the scrollback
-buffer and selection breaks across every terminal emulator.
-TC-CHAT-18 enforces this architecturally — see
-``tests/component/cli/test_chat_input.py``.
+**Architectural commitment.** The chat stays in prompt_toolkit's
+non-full-screen idiom. Native terminal scrolling and text selection
+only work on output written via normal stdout; full-screen /
+alternate-screen mode replaces the scrollback buffer and selection
+breaks across every terminal emulator. A guard test enforces this
+architecturally — see `tests/component/cli/test_chat_input.py`.
 
-Key bindings (patch §2.5):
+**Key bindings.**
 
 - **Enter** submits the current input.
-- **Ctrl-J** inserts a newline. (Universal — every terminal sends
-  ``\\n`` for Ctrl-J. Shift-Enter on iTerm2 / kitty / Alacritty
+- **Ctrl-J** inserts a newline. Universal — every terminal sends
+  `\\n` for Ctrl-J. Shift-Enter on iTerm2 / kitty / Alacritty
   *also* sends Ctrl-J under default settings, so this single
-  binding covers the patch's "primary Shift-Enter" requirement
-  on the terminals that distinguish it.)
+  binding covers the "primary Shift-Enter" requirement on the
+  terminals that distinguish it.
 - **Alt-Enter** (Esc-Enter sequence) inserts a newline. Universal
   fallback for terminals that don't send a distinct Shift-Enter
   (macOS Terminal.app, stock gnome-terminal). Documented in the
   footer hint.
 - **Shift-Enter**: prompt_toolkit 3.0.x doesn't expose a portable
-  ``s-enter`` key token, but every terminal that sends a distinct
+  `s-enter` key token, but every terminal that sends a distinct
   Shift-Enter sequence (iTerm2, kitty, Alacritty in their
   defaults) routes it through Ctrl-J anyway, so the Ctrl-J
   binding above already covers it. Terminals that collapse
@@ -37,19 +35,16 @@ Key bindings (patch §2.5):
   stock gnome-terminal) submit — users on those terminals use
   Alt-Enter or Ctrl-J for newline, both documented in the footer
   hint.
-- Default prompt_toolkit editing keys cover everything else in
-  the §2.5 table (cursor motion, history, kill/yank).
+- Default prompt_toolkit editing keys cover cursor motion,
+  history, kill/yank.
 
-Ctrl-D raises ``EOFError`` and exits the loop cleanly (returns
-``0``). Ctrl-C raises ``KeyboardInterrupt`` and clears the
-current input without exiting (a hint nudges the user toward
-Ctrl-D / ``/exit`` in later steps; for 24a the input simply
-clears).
+Ctrl-D raises `EOFError` and exits the loop cleanly (returns `0`).
+Ctrl-C raises `KeyboardInterrupt` and clears the current input
+without exiting.
 
-Chat is interactive-only; the user's submitted line lands in
-the scrollback via prompt_toolkit's terminal echo. Non-TTY
-usage is not supported (use ``kolsch run`` for scripted
-invocation).
+Chat is interactive-only; the user's submitted line lands in the
+scrollback via prompt_toolkit's terminal echo. Non-TTY usage is not
+supported (use `kolsch run` for scripted invocation).
 """
 
 from __future__ import annotations
@@ -94,14 +89,14 @@ if TYPE_CHECKING:
 
 
 # ---------------------------------------------------------------------------
-# Defaults — patch §1.1
+# Defaults
 # ---------------------------------------------------------------------------
 
 
 _DEFAULT_AGENT_REF = "kolsch/agents/helper"
-"""Fallback when ``<agent_ref>`` is omitted and
-``platform.yaml``'s ``defaults.starter_agent`` is unset.
-Phase 3.0 Step 1B — 3-segment canonical form."""
+"""Fallback when `<agent_ref>` is omitted and
+`platform.yaml`'s `defaults.starter_agent` is unset.
+3-segment canonical form."""
 
 
 # ---------------------------------------------------------------------------
@@ -119,22 +114,17 @@ async def cmd_chat(
 ) -> int:
     """Run the chat REPL.
 
-    Phase 2.1 patch §1.2 startup flow:
+    Startup flow:
 
-    1. Resolve the workspace via Phase 1.2's ``resolve_workspace``
-       (already done by the dispatcher in ``cli.main.main`` before
-       ``cmd_chat`` is called; ``args.root`` is the resolved path).
+    1. Workspace resolution is already done by the dispatcher in
+       `cli.main.main` before `cmd_chat` is called; `args.root` is
+       the resolved path.
     2. Bootstrap the runtime.
-    3. Resolve ``<agent_ref>`` and build the agent config.
-    4. Apply ``--model`` override if present (recorded; full
-       per-spec normalisation lands in 24d).
-    5. Create a fresh session named ``chat:<agent_ref>``. Resume
-       support (``--session``) lands in 24e.
+    3. Resolve `<agent_ref>` and build the agent config.
+    4. Apply `--model` override if present.
+    5. Create a fresh session named `chat:<agent_ref>`, or reload
+       an existing one when `--session` is set.
     6. Print the title banner; enter the input loop.
-
-    For 24a the input-loop body is a stub — each submitted line
-    echoes as ``you said: <text>``. The renderer replaces this in
-    24c.
     """
     stdout = out if out is not None else sys.stdout
     _ = err  # reserved for stderr-bound diagnostics in later steps
@@ -145,11 +135,10 @@ async def cmd_chat(
 
     model_label = _format_model_label(config.model)
     if args.model:
-        # 24e: --model startup override resolves through the same
-        # ModelSpec parser /model uses; on parse failure we exit
-        # 1 with a clear message rather than entering the chat
-        # with a bogus model. Patch §1.1 + §1.3 row "Invalid
-        # invocation".
+        # --model startup override resolves through the same
+        # ModelSpec parser /model uses; on parse failure exit 1
+        # with a clear message rather than entering the chat with
+        # a bogus model.
         try:
             override = _parse_startup_model_override(
                 args.model,
@@ -163,9 +152,9 @@ async def cmd_chat(
         config = config.model_copy(update={"model": override})
         model_label = f"{override.provider}/{override.model}"
 
-    # Phase 2.1 / 24e — --session loads an existing session and
-    # replays its events through the same Renderer (patch §6.2).
-    # Without --session, create a fresh session.
+    # --session loads an existing session and replays its events
+    # through the same Renderer. Without --session, create a fresh
+    # session.
     if getattr(args, "session", None):
         try:
             from schemas import SessionId  # noqa: PLC0415
@@ -190,14 +179,13 @@ async def cmd_chat(
         session_id=str(session.session_id),
     )
 
-    # Phase 2.1 / 24e — model_aliases come from platform.yaml;
-    # recent_session_ids come from the store. Both feed the
-    # SlashCompleter's dynamic-suggestion paths per patch §5.3.
+    # model_aliases come from platform.yaml; recent_session_ids
+    # come from the store. Both feed the SlashCompleter's
+    # dynamic-suggestion paths.
     model_aliases = _load_model_aliases(args.root)
     recent_session_ids = await _snapshot_recent_session_ids(runtime)
     enabled_skill_refs = [
-        (ref, "force-load before next message")
-        for ref in _enabled_skill_refs(config)
+        (ref, "force-load before next message") for ref in _enabled_skill_refs(config)
     ]
     prompt_session = _build_prompt_session(
         input=prompt_input,
@@ -206,19 +194,18 @@ async def cmd_chat(
         recent_session_ids=recent_session_ids,
         enabled_skill_refs=enabled_skill_refs,
     )
-    # threads[0] convention — Phase 1 sessions are single-thread;
-    # multi-thread support lands when the Workflow Engine arrives.
+    # threads[0] convention — sessions are single-thread today;
+    # multi-thread support lands later.
     threads = await runtime.store.list_threads(session.session_id)
     if not threads:
         msg = f"session {session.session_id} has no threads"
         raise RuntimeError(msg)
     thread_id = threads[0].thread_id
 
-    # 24e — replay the loaded session's events before entering the
-    # input loop. The replay uses the SAME Renderer as live
-    # exchanges (patch §6.2 "render-output byte-identical"),
-    # which is what the 24c renderer's pure-consumer property
-    # makes possible.
+    # Replay the loaded session's events before entering the input
+    # loop. The replay uses the SAME Renderer as live turns —
+    # render-output byte-identical — which is what the renderer's
+    # pure-consumer property makes possible.
     if getattr(args, "session", None):
         await _replay_session(
             runtime=runtime,
@@ -227,19 +214,17 @@ async def cmd_chat(
             agent_name=config.name,
         )
 
-    # Phase 2.1 / 24d — register the approval modal as the
-    # chat-surface prompt callback. Pair the registration with a
-    # finally so a subsequent in-process command (test suites,
-    # the future Python embedding API) never sees a leaked
-    # modal — which would either hang on stdin or, worse, allow
-    # silently. The clear is unconditional regardless of how the
-    # loop exited.
-    # qol-permission-system-human-readable.md Step 3 — pass the
-    # authz provider's action→tool_ref lookup so the modal's
-    # [a]/[d] write path constructs new-shape Rules (qualified
+    # Register the approval modal as the chat-surface prompt
+    # callback. Pair the registration with a finally so a
+    # subsequent in-process command (test suites, the future
+    # Python embedding API) never sees a leaked modal — which would
+    # either hang on stdin or, worse, allow silently. The clear is
+    # unconditional regardless of how the loop exited.
+    # The authz provider's action→tool_ref lookup lets the modal's
+    # [a]/[d] write path construct new-shape Rules (qualified
     # ``what`` + glob ``pattern``). When the authz variant doesn't
     # expose lookup_tool_ref (a future custom variant), the modal
-    # falls back to legacy regex shape — same as Step 2 behaviour.
+    # falls back to legacy regex shape.
     tool_ref_lookup = getattr(runtime.authz, "lookup_tool_ref", None)
     modal = ApprovalModal(
         stdout=stdout,
@@ -275,26 +260,25 @@ def _build_prompt_session(
     recent_session_ids: list[tuple[str, str]] | None = None,
     enabled_skill_refs: list[tuple[str, str]] | None = None,
 ) -> PromptSession[str]:
-    """Construct the prompt_toolkit session with the patch §2.5 bindings.
+    """Construct the prompt_toolkit session with the chat's bindings.
 
-    ``input`` / ``output`` default to ``None`` for production
+    `input` / `output` default to `None` for production
     (prompt_toolkit auto-detects stdin/stdout); tests inject a
-    ``create_pipe_input()`` + ``DummyOutput()`` pair so the input
-    loop is driven by feeding key sequences from Python code.
+    `create_pipe_input()` + `DummyOutput()` pair so the input loop
+    is driven by feeding key sequences from Python code.
 
-    Patch §2.4: ``full_screen`` is NEVER set. The architectural
-    guard test (TC-CHAT-18) inspects this module's source and
-    fails loudly if a future change introduces full-screen mode.
+    `full_screen` is never set. The architectural guard test
+    inspects this module's source and fails loudly if a future
+    change introduces full-screen mode.
 
-    24e: ``model_aliases`` drives the ``/model`` dynamic
-    completer suggestions per patch §5.3 row "/model".
+    `model_aliases` drives the `/model` dynamic completer
+    suggestions.
     """
     bindings = _build_key_bindings()
     # The completer + bottom_toolbar both read from the slash
-    # registry (single source of truth — patch §5.3 + §5.4).
-    # 24e adds /model dynamic suggestions via a closure over the
-    # aliases dict so the completer doesn't import bootstrap-
-    # adjacent modules.
+    # registry (single source of truth). /model dynamic suggestions
+    # ride a closure over the aliases dict so the completer doesn't
+    # import bootstrap-adjacent modules.
     aliases_snapshot = dict(model_aliases or {})
     sessions_snapshot = list(recent_session_ids or [])
     skills_snapshot = list(enabled_skill_refs or [])
@@ -337,9 +321,9 @@ def _build_prompt_session(
 
 
 def _build_key_bindings() -> KeyBindings:
-    """The patch §2.5 binding table.
+    """Build the chat's key-binding table.
 
-    ``multiline=True`` inverts prompt_toolkit's default Enter
+    `multiline=True` inverts prompt_toolkit's default Enter
     behaviour (which would insert newline). The bindings below
     re-target Enter to submit and route the three documented
     newline keys (Ctrl-J, Alt-Enter, Shift-Enter) to newline
@@ -356,11 +340,10 @@ def _build_key_bindings() -> KeyBindings:
     def _newline_ctrl_j(event: Any) -> None:  # noqa: ANN401
         """Ctrl-J inserts a literal newline.
 
-        Universal because every terminal sends ``\\n`` for Ctrl-J.
+        Universal because every terminal sends `\\n` for Ctrl-J.
         On iTerm2 / kitty / Alacritty with default settings,
         Shift-Enter is delivered as Ctrl-J — this binding covers
-        the patch's "primary Shift-Enter" requirement on those
-        terminals.
+        the "primary Shift-Enter" requirement on those terminals.
         """
         event.current_buffer.insert_text("\n")
 
@@ -368,11 +351,11 @@ def _build_key_bindings() -> KeyBindings:
     def _newline_alt_enter(event: Any) -> None:  # noqa: ANN401
         """Alt-Enter (Esc-Enter) inserts a newline — universal fallback.
 
-        Documented in the patch §2.5 as the cross-terminal fallback
-        for macOS Terminal.app and gnome-terminal which don't
-        distinguish Shift-Enter from plain Enter. Every terminal
-        delivers the Esc-Enter sequence as a distinct two-key
-        event, so this binding works everywhere.
+        Cross-terminal fallback for macOS Terminal.app and
+        gnome-terminal, which don't distinguish Shift-Enter from
+        plain Enter. Every terminal delivers the Esc-Enter sequence
+        as a distinct two-key event, so this binding works
+        everywhere.
         """
         event.current_buffer.insert_text("\n")
 
@@ -391,31 +374,30 @@ async def _run_input_loop(  # noqa: PLR0913, PLR0912, PLR0915 — loop owns all 
     model_aliases: dict[str, str] | None = None,
     modal: ApprovalModal | None = None,
 ) -> int:
-    """Drive the prompt_session until EOF, ``/exit``, or an unrecoverable error.
+    """Drive the prompt_session until EOF, `/exit`, or an unrecoverable error.
 
-    Submitted text starting with ``/`` dispatches as a slash
-    command; anything else becomes an :class:`ExecutionContext`
-    fed to the engine via :meth:`AgentEngine.execute_stream` and
-    rendered through a fresh :class:`Renderer` per exchange
-    (patch §3 — "the renderer's only state is the current
-    exchange's block list").
+    Submitted text starting with `/` dispatches as a slash command;
+    anything else becomes an
+    [`ExecutionContext`][engine.context.ExecutionContext] fed to the
+    engine via
+    [`AgentEngine.execute_stream`][engine.AgentEngine.execute_stream]
+    and rendered through a fresh `Renderer` per turn — the
+    renderer's only state is the current turn's block list.
 
-    24e adds three lifecycle behaviours per patch §5 + §6:
+    Three lifecycle behaviours:
 
-    - ``/new`` → loop spins up a new session under the same
-      agent, clears the visible scrollback, reprints the banner.
-    - ``/session <id>`` → loop loads the named session and
-      replays its events through the SAME renderer (no
-      replay-specific code path — patch §6.2).
+    - `/new` → loop spins up a new session under the same agent,
+      clears the visible scrollback, reprints the banner.
+    - `/session <id>` → loop loads the named session and replays
+      its events through the same renderer (no replay-specific code
+      path).
     - Ctrl-C during the renderer's await → signal the engine's
-      typed cancellation hook, drain the remaining events
-      (the engine emits ``thread.exchange_failed`` with cause
-      ``engine.cancelled``), then return to the prompt
-      (patch §6.1).
+      typed cancellation hook, drain the remaining events (the
+      engine emits `thread.exchange_failed` with cause
+      `engine.cancelled`), then return to the prompt.
 
-    Ctrl-D / EOF returns exit code 0. Ctrl-C at the prompt
-    clears the current input without exiting (the hint-line
-    advice).
+    Ctrl-D / EOF returns exit code 0. Ctrl-C at the prompt clears
+    the current input without exiting.
     """
     state = ChatSessionState(
         runtime=runtime,
@@ -424,11 +406,11 @@ async def _run_input_loop(  # noqa: PLR0913, PLR0912, PLR0915 — loop owns all 
         thread_id=thread_id,
         model_aliases=dict(model_aliases or {}),
     )
-    # bug-chat-deny-stops-and-esc-interrupts.md Q1 — late-bind state
-    # to the modal so the deny path can flip state.active_cancel and
-    # the fan-out guard can read it. The modal is constructed during
-    # cmd_chat startup (so the authz registration lands before any
-    # input is processed); state only exists here.
+    # Late-bind state to the modal so the deny path can flip
+    # state.active_cancel and the fan-out guard can read it. The
+    # modal is constructed during cmd_chat startup (so the authz
+    # registration lands before any input is processed); state only
+    # exists here.
     if modal is not None:
         modal.bind_state(state)
     slash_ctx = SlashContext(
@@ -447,15 +429,13 @@ async def _run_input_loop(  # noqa: PLR0913, PLR0912, PLR0915 — loop owns all 
         except KeyboardInterrupt:
             stdout.write("\n")
             continue
-        # Phase 3.9 Step 2 — when a workflow is paused waiting for a
-        # chat reply, a non-slash message is the resume response. A
-        # slash command falls through to the dispatcher, which clears
-        # the resume-expectation flag for state-changing commands and
-        # leaves it armed for info-only ones (``/help``, ``/tools``).
+        # When a workflow is paused waiting for a chat reply, a
+        # non-slash message is the resume response. A slash command
+        # falls through to the dispatcher, which clears the
+        # resume-expectation flag for state-changing commands and
+        # leaves it armed for info-only ones (`/help`, `/tools`).
         if state.expecting_user_input_response and not is_slash_command(text):
-            await _resume_pending_workflow(
-                state, stdout=stdout, response_text=text
-            )
+            await _resume_pending_workflow(state, stdout=stdout, response_text=text)
             continue
         if is_slash_command(text):
             signal = await dispatch_slash(text, slash_ctx)
@@ -489,15 +469,15 @@ async def _run_input_loop(  # noqa: PLR0913, PLR0912, PLR0915 — loop owns all 
                 state.pending_session_id = None
             continue
         cancel = CancelToken()
-        # bug-chat-deny-stops-and-esc-interrupts.md Q1/Q4/Q5 — share
-        # the per-exchange cancel handle via ChatSessionState so the
-        # modal's deny path and the Esc background watcher can flip
-        # the same token Ctrl-C already flips. The finally below
-        # clears both fields so the next iteration starts fresh.
+        # Share the per-turn cancel handle via ChatSessionState so
+        # the modal's deny path and the Esc background watcher can
+        # flip the same token Ctrl-C already flips. The finally
+        # below clears both fields so the next iteration starts
+        # fresh.
         state.active_cancel = cancel
-        # Pending /skill refs flip the trigger shape per Skills spec
-        # §6.4. Consumed (cleared) here so a one-shot ``/skill`` does
-        # not bleed into the next exchange.
+        # Pending /skill refs flip the trigger shape. Consumed
+        # (cleared) here so a one-shot `/skill` does not bleed into
+        # the next turn.
         trigger = _build_user_trigger(text, state.pending_force_skill)
         state.pending_force_skill.clear()
         ctx = ExecutionContext(
@@ -507,24 +487,22 @@ async def _run_input_loop(  # noqa: PLR0913, PLR0912, PLR0915 — loop owns all 
         )
         renderer = Renderer(stdout=stdout, agent_name=state.config.name)
         event_stream = state.runtime.engine.execute_stream(state.config, ctx)
-        # bug-chat-deny-stops-and-esc-interrupts.md Q2 — spawn the
-        # Esc watcher BEFORE entering renderer.render so it's
-        # already attached when the first event lands. The watcher
-        # is cancelled in the finally so the next prompt_async
-        # iteration doesn't fight for stdin.
+        # Spawn the Esc watcher BEFORE entering renderer.render so
+        # it's already attached when the first event lands. The
+        # watcher is cancelled in the finally so the next
+        # prompt_async iteration doesn't fight for stdin.
         esc_task = asyncio.create_task(_watch_esc_during_streaming(state, cancel))
         exit_reason: str | None = None
         try:
             try:
                 await renderer.render(event_stream)
             except KeyboardInterrupt:
-                # Patch §6.1 — Ctrl-C during streaming: signal the
-                # engine's typed cancellation hook + drain the
-                # remaining events (the engine emits
-                # thread.exchange_failed with cause engine.cancelled)
-                # so the JSONL stays honest. The renderer's
-                # exchange_failed branch surfaces the cancel as a
-                # yellow system notice.
+                # Ctrl-C during streaming: signal the engine's typed
+                # cancellation hook + drain the remaining events
+                # (the engine emits thread.exchange_failed with
+                # cause engine.cancelled) so the JSONL stays honest.
+                # The renderer's exchange_failed branch surfaces the
+                # cancel as a yellow system notice.
                 if state.last_cancel_reason is None:
                     state.last_cancel_reason = "interrupted"
                 cancel.cancel()
@@ -550,11 +528,10 @@ async def _run_input_loop(  # noqa: PLR0913, PLR0912, PLR0915 — loop owns all 
             exit_reason = state.last_cancel_reason
             state.active_cancel = None
             state.last_cancel_reason = None
-        # bug-chat-deny-stops-and-esc-interrupts.md Q3 — chat-surface
-        # print of the distinct cancellation reason. The renderer's
-        # generic [cancelled] suffix already fired on the partial
-        # agent block (if any); this confirms what happened and
-        # which key produced it.
+        # Chat-surface print of the distinct cancellation reason.
+        # The renderer's generic [cancelled] suffix already fired on
+        # the partial agent block (if any); this confirms what
+        # happened and which key produced it.
         if exit_reason == "denied":
             stdout.write("[stopped — you denied the tool]\n")
             stdout.flush()
@@ -569,10 +546,10 @@ async def _run_input_loop(  # noqa: PLR0913, PLR0912, PLR0915 — loop owns all 
 
 
 def _build_user_trigger(text: str, force_skills: list[str]) -> dict[str, Any]:
-    """Construct the per-exchange trigger dict.
+    """Construct the per-turn trigger dict.
 
-    Returns the ``user_message_with_force_skill`` shape when
-    ``force_skills`` is non-empty, otherwise the plain ``user_message``
+    Returns the `user_message_with_force_skill` shape when
+    `force_skills` is non-empty, otherwise the plain `user_message`
     shape. Pure for test reach — the input loop calls this then
     clears the source list.
     """
@@ -593,24 +570,23 @@ async def _watch_esc_during_streaming(
 ) -> None:
     """Watch stdin for a bare Esc keystroke; flip the cancel token when seen.
 
-    Routed into the same ``CancelToken`` Ctrl-C uses
-    (``chat.py:467``) so the framework's iteration-boundary poll
-    (``fake_framework.py:88-90``) observes cancellation and raises
-    on the next cycle. ``state.last_cancel_reason`` is stamped to
-    ``"interrupted"`` BEFORE ``cancel.cancel()`` so the chat's
+    Routed into the same `CancelToken` Ctrl-C uses so the
+    framework's iteration-boundary poll observes cancellation and
+    raises on the next cycle. `state.last_cancel_reason` is stamped
+    to `"interrupted"` BEFORE `cancel.cancel()` so the chat's
     post-render print can distinguish Esc from a modal-driven deny.
 
-    Uses prompt_toolkit's :class:`Input` abstraction so the Vt100
-    parser handles the bare-Esc-vs-``Esc[A``-prefix disambiguation
-    (~0.5s flush timer) for us. ``inp_factory`` is the test seam
-    (``create_pipe_input`` in unit tests; the default
-    ``create_input`` reads the real terminal).
+    Uses prompt_toolkit's `Input` abstraction so the Vt100 parser
+    handles the bare-Esc-vs-`Esc[A`-prefix disambiguation (~0.5s
+    flush timer) for us. `inp_factory` is the test seam
+    (`create_pipe_input` in unit tests; the default `create_input`
+    reads the real terminal).
 
     Gracefully no-ops if stdin is not a TTY (Input construction,
-    ``raw_mode``, or ``attach`` fails). The chat is interactive-only
-    in production — non-TTY use is documented as "go use
-    ``kolsch run``" — but component tests that drive the loop
-    without a real terminal don't blow up.
+    `raw_mode`, or `attach` fails). The chat is interactive-only in
+    production — non-TTY use is documented as "go use
+    `kolsch run`" — but component tests that drive the loop without
+    a real terminal don't blow up.
     """
     try:
         inp = (inp_factory or create_input)()
@@ -647,18 +623,18 @@ async def _resume_pending_workflow(
     stdout: TextIO,
     response_text: str,
 ) -> None:
-    """Phase 3.9 Step 2 — resume the chat's pending workflow_run with
-    the operator's text reply.
+    """Resume the chat's pending workflow_run with the operator's reply.
 
-    Loads the run from disk, rebuilds the executor + capsule renderer,
-    awaits :meth:`IterativeExecutor.resume` while tailing the JSONL,
-    and re-arms :attr:`ChatSessionState.expecting_user_input_response`
-    if the workflow pauses again on a downstream ``user_input``
-    (sequential pauses are fully supported per Step 2 ACs).
+    Loads the run from disk, rebuilds the executor + capsule
+    renderer, awaits
+    [`IterativeExecutor.resume`][workflows.executor.IterativeExecutor.resume]
+    while tailing the JSONL, and re-arms
+    `ChatSessionState.expecting_user_input_response` if the workflow
+    pauses again on a downstream `user_input`.
 
-    No-op when ``pending_workflow_run_id`` is unexpectedly absent
-    (the input-loop branch already gated on
-    ``expecting_user_input_response`` so this should never fire — the
+    No-op when `pending_workflow_run_id` is unexpectedly absent (the
+    input-loop branch already gates on
+    `expecting_user_input_response` so this should never fire — the
     guard is defense-in-depth).
     """
     from pathlib import Path  # noqa: PLC0415
@@ -692,9 +668,7 @@ async def _resume_pending_workflow(
     catalog = runtime.asset_management.catalog()
     entry = catalog.lookup(run.workflow_ref, expected_type="workflow")
     if entry is None:
-        stdout.write(
-            f"resume failed: workflow {run.workflow_ref!r} not in catalog.\n"
-        )
+        stdout.write(f"resume failed: workflow {run.workflow_ref!r} not in catalog.\n")
         state.expecting_user_input_response = False
         return
     try:
@@ -713,9 +687,7 @@ async def _resume_pending_workflow(
         run=run,
         resume_response={"response": response_text},
     )
-    state.expecting_user_input_response = (
-        status == WorkflowRunStatus.WAITING_FOR_INPUT
-    )
+    state.expecting_user_input_response = status == WorkflowRunStatus.WAITING_FOR_INPUT
 
 
 async def _open_new_session(
@@ -724,10 +696,10 @@ async def _open_new_session(
     stdout: TextIO,
     agent_ref: str,
 ) -> None:
-    """``/new`` impl — create a fresh session under the same agent + model.
+    """`/new` impl — create a fresh session under the same agent + model.
 
-    Patch §5 row 3 — old session is preserved on disk for
-    ``kolsch chat <agent> --session <old_id>`` resume.
+    The old session is preserved on disk for `kolsch chat <agent>
+    --session <old_id>` resume.
     """
     session = await state.runtime.store.create_session(
         str(state.config.agent_id),
@@ -754,11 +726,11 @@ async def _switch_session(
     target_session_id: SessionId,
     stdout: TextIO,
 ) -> None:
-    """``/session <id>`` impl — load + replay an existing session.
+    """`/session <id>` impl — load + replay an existing session.
 
-    Patch §6.2 — uses the SAME Renderer as live exchanges so the
-    rendered output is byte-identical to what the original chat
-    showed (modulo timestamps / rule IDs).
+    Uses the same Renderer as live turns so the rendered output is
+    byte-identical to what the original chat showed (modulo
+    timestamps / rule IDs).
     """
     threads = await state.runtime.store.list_threads(target_session_id)
     if not threads:
@@ -796,9 +768,8 @@ async def _replay_session(
 ) -> None:
     """Pipe a thread's events through a fresh Renderer.
 
-    Patch §6.2 — single render code path; the renderer's
-    pure-consumer property (CHAT-R9 + 24c) is what makes resume
-    output identical to live output.
+    Single render code path; the renderer's pure-consumer property
+    is what makes resume output identical to live output.
     """
     renderer = Renderer(stdout=stdout, agent_name=agent_name)
     await renderer.render(runtime.store.read_path_to_leaf(thread_id))
@@ -811,9 +782,9 @@ def _refresh_slash_ctx(
     """Rebuild SlashContext with the post-transition config.
 
     SlashContext is frozen; lifecycle commands that change the
-    agent_config (``/new`` doesn't, ``/model`` does, ``/session``
-    doesn't change config) need a fresh context so subsequent
-    ``/tools`` runs against the right agent's tool list.
+    agent_config (`/new` doesn't, `/model` does, `/session` doesn't
+    change config) need a fresh context so subsequent `/tools` runs
+    against the right agent's tool list.
     """
     from dataclasses import replace  # noqa: PLC0415
 
@@ -825,9 +796,9 @@ def _parse_startup_model_override(
     runtime: PlatformRuntime,
     root: Path,
 ) -> Any:  # noqa: ANN401 — concrete ModelSpec; Any sidesteps a TYPE_CHECKING import cycle
-    """Parse the ``--model <ref>`` CLI override into a ModelSpec.
+    """Parse the `--model <ref>` CLI override into a ModelSpec.
 
-    Same alias-resolution path as ``/model`` so the two surfaces
+    Same alias-resolution path as `/model` so the two surfaces
     behave consistently.
     """
     from assets.assembler import _normalize_model_value  # noqa: PLC0415
@@ -843,12 +814,11 @@ def _parse_startup_model_override(
 
 
 def _load_model_aliases(root: Path) -> dict[str, str]:
-    """Read ``platform.yaml``'s ``model_aliases`` section.
+    """Read `platform.yaml`'s `model_aliases` section.
 
     Returns an empty dict when the section is absent — common for
-    fresh workspaces. The ``/model`` slash command and the
-    ``--model`` startup flag both rely on this for alias
-    resolution.
+    fresh workspaces. The `/model` slash command and the `--model`
+    startup flag both rely on this for alias resolution.
     """
     from _yamlio import YAMLError, load  # noqa: PLC0415
 
@@ -870,7 +840,7 @@ def _load_model_aliases(root: Path) -> dict[str, str]:
 _RECENT_SESSIONS_LIMIT = 10
 """How many recent session ids the /session completer surfaces.
 Cap at 10 so the popup stays scannable; users who need older
-sessions can paste the id or scroll ``kolsch sessions list``."""
+sessions can paste the id or scroll `kolsch sessions list`."""
 
 
 async def _snapshot_recent_session_ids(
@@ -878,16 +848,15 @@ async def _snapshot_recent_session_ids(
 ) -> list[tuple[str, str]]:
     """Snapshot the most recent session ids at chat startup.
 
-    The completer is sync; we capture once. ``/new`` mid-chat
-    re-snapshotting isn't wired yet (the user would have to
-    restart chat to see a just-created session in the completer
-    popup) — small UX gap noted as a polish-phase item; the
-    handler-side ``/session <id>`` accepts any id the user
-    types, so it doesn't block correctness.
+    The completer is sync; capture once. `/new` mid-chat
+    re-snapshotting isn't wired yet (the user would have to restart
+    chat to see a just-created session in the completer popup) —
+    small UX gap; the handler-side `/session <id>` accepts any id
+    the user types, so it doesn't block correctness.
 
-    Returns a list of ``(session_id, display_label)`` tuples.
-    The label shows the session name + start date so the user
-    can pick the right one without leaving chat.
+    Returns a list of `(session_id, display_label)` tuples. The
+    label shows the session name + start date so the user can pick
+    the right one without leaving chat.
     """
     sessions = await runtime.store.list_sessions(limit=_RECENT_SESSIONS_LIMIT)
     return [
@@ -903,11 +872,11 @@ async def _snapshot_recent_session_ids(
 
 
 def _placeholder_session_id() -> SessionId:
-    """Synthesize an empty SessionId for the rare in-test path that
-    bypasses cmd_chat's session-creation logic. Production cmd_chat
-    always passes a real session_id; tests of ``_run_input_loop``
-    in isolation use this fallback so the dataclass invariant
-    holds.
+    """Synthesize an empty SessionId for in-test isolation paths.
+
+    Production `cmd_chat` always passes a real session_id; tests of
+    `_run_input_loop` in isolation use this fallback so the
+    dataclass invariant holds.
     """
     from uuid import uuid4  # noqa: PLC0415
 
@@ -924,22 +893,21 @@ def _install_modal_callback(
 ) -> None:
     """Register the modal as the authz provider's prompt callback.
 
-    Phase 2.1 / 24d: only the chat installs the callback; non-chat
-    callers (``kolsch run``, server, tests) leave it None and the
-    provider's ``_resolve_prompt`` collapses ``prompt`` to deny
-    per Phase 2.0 §2.2.
+    Only the chat installs the callback; non-chat callers
+    (`kolsch run`, server, tests) leave it `None` and the provider's
+    `_resolve_prompt` collapses `prompt` to deny.
 
-    Includes the ``on_rule_added`` hook that atomically rewrites
-    ``platform.yaml`` so a rule added via the modal survives chat
-    exit. The hook uses ``cli.permissions._write_back`` — the
-    SAME helper ``kolsch permissions add`` uses for atomic
-    rewrites; one persistence path, not one-per-callsite.
+    Includes the `on_rule_added` hook that atomically rewrites
+    `platform.yaml` so a rule added via the modal survives chat
+    exit. The hook uses `cli.permissions._write_back` — the same
+    helper `kolsch permissions add` uses for atomic rewrites; one
+    persistence path, not one-per-callsite.
 
     Silently no-ops if the runtime's authz isn't the rule-based
     variant (a future custom authz variant might not support the
-    callback registration API; the modal stays installable
-    without crashing — the per-call ``prompt`` would just collapse
-    to deny, same as a non-chat caller).
+    callback registration API; the modal stays installable without
+    crashing — the per-call `prompt` would just collapse to deny,
+    same as a non-chat caller).
     """
     authz = runtime.authz
     if not isinstance(authz, RuleBasedAuthorizationProvider):
@@ -957,11 +925,11 @@ def _install_modal_callback(
 def _clear_modal_callback(runtime: PlatformRuntime) -> None:
     """Tear down the modal registration on chat exit.
 
-    Load-bearing for tests: a subsequent in-process command
-    against the same runtime instance MUST NOT see the modal.
-    Without this clear, the next ``runtime.authz.allow(...)`` from
-    a non-chat caller would invoke the modal — which would try to
-    read stdin (no TTY in tests) and hang or worse.
+    Load-bearing for tests: a subsequent in-process command against
+    the same runtime instance must not see the modal. Without this
+    clear, the next `runtime.authz.allow(...)` from a non-chat
+    caller would invoke the modal — which would try to read stdin
+    (no TTY in tests) and hang or worse.
     """
     authz = runtime.authz
     if isinstance(authz, RuleBasedAuthorizationProvider):
@@ -975,11 +943,11 @@ def _print_banner(
     model_label: str,
     session_id: str,
 ) -> None:
-    """Print the title banner per patch §2.1 sketch.
+    """Print the title banner.
 
-    Format: ``kolsch chat • <agent_name> • <model_label> • <session_id>``.
+    Format: `kolsch chat • <agent_name> • <model_label> • <session_id>`.
     Plain stdout — not pinned, not full-screen; scrolls away with
-    the conversation per the §2.4 architectural commitment.
+    the conversation per the architectural commitment.
     """
     stdout.write(
         f"kolsch chat • {agent_name} • {model_label} • {session_id}\n",
@@ -989,11 +957,11 @@ def _print_banner(
 
 
 def _format_model_label(model: object) -> str:
-    """Render the agent's ``model:`` field as the banner string.
+    """Render the agent's `model:` field as the banner string.
 
-    Pydantic ``ModelSpec`` objects carry ``provider`` + ``model``
-    attributes; emit ``<provider>/<model>``. Strings (aliases) pass
-    through. Anything else stringifies to its ``repr``.
+    Pydantic `ModelSpec` objects carry `provider` + `model`
+    attributes; emit `<provider>/<model>`. Strings (aliases) pass
+    through. Anything else stringifies to its `repr`.
     """
     provider = getattr(model, "provider", None)
     model_id = getattr(model, "model", None)

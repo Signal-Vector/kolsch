@@ -1,17 +1,17 @@
-"""``kolsch nodes`` CLI — Phase 3.0 Step 6 (Round 7 L7-12).
+"""`kolsch nodes` CLI surface.
 
-Two subcommands, symmetric in shape with ``kolsch workflows``:
+Two subcommands, symmetric in shape with `kolsch workflows`:
 
-- ``list [--bundle <name>]`` — iterate catalog entries with
-  ``asset_type="node"``; optional ``--bundle <name>`` filter.
-- ``show <ref>`` — introspect one node (catalog lookup; full
-  introspection lands when the Phase 3.1 executor wires up
-  ``@node`` runtime registration).
+- `list [--bundle <name>]` — iterate catalog entries with
+  `asset_type="node"`; optional `--bundle <name>` filter.
+- `show <ref>` — introspect one node (catalog lookup; full
+  introspection lands once the executor wires up `@node` runtime
+  registration).
 
-Both commands accept ``--format text|json``; output routes through
-the shared :func:`cli._format.render` helper.
+Both commands accept `--format text|json`; output routes through the
+shared [`render`][cli._format.render] helper.
 
-``kolsch nodes run`` is NOT shipped at Phase 3.0; deferred to Phase 3.1+.
+`kolsch nodes run` is not shipped here; deferred to a later milestone.
 """
 
 from __future__ import annotations
@@ -32,11 +32,11 @@ __all__ = ["add_nodes_subparser", "cmd_nodes"]
 
 
 def _build_format_parent() -> argparse.ArgumentParser:
-    """Tiny parent parser that defines ``--format`` once.
+    """Tiny parent parser that defines `--format` once.
 
-    Step 6 AC 6.7 — see :func:`cli.workflows._build_format_parent` for
-    the rationale. Kept local rather than imported across modules so
-    each CLI group owns its surface.
+    See `cli.workflows._build_format_parent` for the rationale. Kept
+    local rather than imported across modules so each CLI group owns
+    its surface.
     """
     parent = argparse.ArgumentParser(add_help=False)
     parent.add_argument(
@@ -55,7 +55,7 @@ def _build_format_parent() -> argparse.ArgumentParser:
 def add_nodes_subparser(
     sub: argparse._SubParsersAction[Any],
 ) -> argparse.ArgumentParser:
-    """Register the ``kolsch nodes`` subparser tree."""
+    """Register the `kolsch nodes` subparser tree."""
     fmt_parent = _build_format_parent()
     nodes: argparse.ArgumentParser = sub.add_parser(
         "nodes",
@@ -95,14 +95,12 @@ async def cmd_nodes(
     out: TextIO = sys.stdout,
     err: TextIO = sys.stderr,
 ) -> int:
+    """Dispatch the `kolsch nodes` subcommands and return the exit code."""
     op = args.nodes_command
     fmt: str = getattr(args, "format", "text") or "text"
 
     if op is None:
-        err.write(
-            "usage: kolsch nodes <op>\n"
-            "ops: list, show\n"
-        )
+        err.write("usage: kolsch nodes <op>\nops: list, show\n")
         return 1
 
     am = AssetManagement(root=args.root)

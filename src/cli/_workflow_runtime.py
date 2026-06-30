@@ -1,15 +1,16 @@
 """Shared executor-construction helper for workflow-execution surfaces.
 
-Phase 3.9 Step 1 factored this out of :func:`cli.workflows._cmd_run` so
-the chat ``/workflow`` slash handler can spin up the same
-:class:`IterativeExecutor` wiring (with the same tool definitions, the
-same authz/secrets/sandbox providers, the same builtin runners) without
-duplicating ~30 lines per call site.
+Factored out of `cli.workflows._cmd_run` so the chat `/workflow` slash
+handler can spin up the same
+[`IterativeExecutor`][workflows.executor.IterativeExecutor] wiring
+(same tool definitions, same authz/secrets/sandbox providers, same
+builtin runners) without duplicating ~30 lines per call site.
 
-The CLI surface still owns its own ``WorkflowRunStore`` instantiation
+The CLI surface still owns its own `WorkflowRunStore` instantiation
 (per-command lifetime, scoped to the command's root); chat builds the
-store once per ``/workflow`` invocation but reuses the chat's already-
-bootstrapped :class:`PlatformRuntime` for everything else.
+store once per `/workflow` invocation but reuses the chat's already-
+bootstrapped [`PlatformRuntime`][platform_runtime.PlatformRuntime] for
+everything else.
 """
 
 from __future__ import annotations
@@ -46,18 +47,18 @@ def build_workflow_executor(
     run: WorkflowRun,
     store: WorkflowRunStore,
 ) -> IterativeExecutor:
-    """Construct a fully-wired :class:`IterativeExecutor`.
+    """Construct a fully-wired
+    [`IterativeExecutor`][workflows.executor.IterativeExecutor].
 
-    The wiring matches what :func:`cli.workflows._cmd_run` shipped at
-    Phase 3.1 Step 6: bash + file-IO tool definitions, the runtime's
-    authz / secrets / sandbox / engine / session-store / config builder
-    plumbed into :func:`workflows.builtins.register_builtins`, and a
+    The wiring matches what `cli.workflows._cmd_run` ships: bash +
+    file-IO tool definitions, the runtime's authz / secrets / sandbox /
+    engine / session-store / config builder plumbed into
+    [`register_builtins`][workflows.builtins.register_builtins], and a
     sub-workflow executor factory that defers to this same class.
 
-    Caller-owned: the :class:`WorkflowRunStore` and the
-    :class:`WorkflowRun` are passed in. The store's directory layout
-    is created lazily by :meth:`WorkflowRunStore.create`; the
-    executor's :meth:`run` writes the JSONL.
+    Caller-owned: the `WorkflowRunStore` and the `WorkflowRun` are
+    passed in. The store's directory layout is created lazily by
+    `WorkflowRunStore.create`; the executor's `run` writes the JSONL.
     """
     catalog = runtime.asset_management.catalog()
 

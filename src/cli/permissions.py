@@ -1,15 +1,15 @@
-"""``kolsch permissions {list, add, remove, show}`` — Phase 2.0, TOOL-R6.
+"""`kolsch permissions {list, add, remove, show}` CLI surface.
 
 The out-of-chat editor for the workspace's authorization rule list.
-Routes through the in-memory :class:`RuleBasedAuthorizationProvider`
-runtime API (``list_rules`` / ``add_rule`` / ``remove_rule`` /
-``get_rule``) so the same rule-id scheme, default-deny protection,
-and atomicity discipline that the in-chat modal uses (Phase 2.1)
-also apply here.
+Routes through the in-memory
+[`RuleBasedAuthorizationProvider`][providers.RuleBasedAuthorizationProvider]
+runtime API (`list_rules` / `add_rule` / `remove_rule` / `get_rule`)
+so the same rule-id scheme, default-deny protection, and atomicity
+discipline as the in-chat modal apply here too.
 
-Atomic writes: ``platform.yaml`` is rewritten via temp + fsync +
-``os.replace`` — same pattern as ``llm_commands.py`` uses for
-``platform.yaml`` writes (Phase 1.1 atomicity discipline).
+Atomic writes: `platform.yaml` is rewritten via temp + fsync +
+`os.replace`, the same pattern `llm_commands.py` uses for
+`platform.yaml` writes.
 """
 
 from __future__ import annotations
@@ -43,13 +43,12 @@ from providers import (
 def add_permissions_subparser(
     sub: argparse._SubParsersAction[Any],
 ) -> argparse.ArgumentParser:
-    """Register the ``kolsch permissions`` subparser tree.
+    """Register the `kolsch permissions` subparser tree.
 
     Four leaf subcommands mirror the runtime API on
-    :class:`RuleBasedAuthorizationProvider`. Returns the parent
-    ``permissions`` subparser so the dispatcher can stash a reference
-    for the help-on-missing-op path
-    (bug-sessions-namespace-attr-error.md).
+    [`RuleBasedAuthorizationProvider`][providers.RuleBasedAuthorizationProvider].
+    Returns the parent `permissions` subparser so the dispatcher can
+    stash a reference for the help-on-missing-op path.
     """
     perms: argparse.ArgumentParser = sub.add_parser(
         "permissions",
@@ -93,7 +92,7 @@ def add_permissions_subparser(
 
     remove = perms_sub.add_parser(
         "remove",
-        help="Remove a rule by id (refuses rl_default_deny per TOOL-R10).",
+        help="Remove a rule by id (refuses the protected default-deny rule).",
     )
     remove.add_argument("rule_id", help="Stable rule id (e.g. rl_abcdef12).")
 
@@ -117,16 +116,15 @@ async def cmd_permissions(
     out: TextIO = sys.stdout,
     err: TextIO = sys.stderr,
 ) -> int:
-    """Dispatch the four leaf ops. Returns the process exit code."""
+    """Dispatch the four leaf ops and return the process exit code."""
     if not workspace_is_initialized(args.root):
         raise WorkspaceNotInitialized(path=str(args.root), env_var_set=False)
 
     yaml_path = args.root / "platform.yaml"
     config = _read_authz_config(yaml_path)
-    # qol-permission-system-human-readable.md Step 2 — build a fresh
-    # :class:`AssetManagement` so the provider can validate qualified
-    # tool refs against the catalog. Initialization is cheap (one
-    # workspace scan) and gives every CLI subcommand the same
+    # Build a fresh `AssetManagement` so the provider can validate
+    # qualified tool refs against the catalog. Initialization is cheap
+    # (one workspace scan) and gives every CLI subcommand the same
     # validation surface the chat / engine paths get.
     from assets import AssetManagement  # noqa: PLC0415
 
@@ -155,12 +153,10 @@ async def cmd_permissions(
 async def _cmd_list(provider: RuleBasedAuthorizationProvider, *, out: TextIO) -> int:
     """List every rule, marking legacy-shape entries.
 
-    qol-permission-system-human-readable.md Step 4 acceptance
-    criterion 9: legacy regex rules render with a
-    ``[legacy regex — please convert]`` marker so users know
-    which entries still need the schema migration. New-shape
-    rules render in the canonical ``what / pattern / effect``
-    form.
+    Legacy regex rules render with a `[legacy regex — please convert]`
+    marker so users know which entries still need the schema
+    migration. New-shape rules render in the canonical
+    `what / pattern / effect` form.
     """
     rules = await provider.list_rules()
     if not rules:
@@ -203,7 +199,7 @@ async def _cmd_show(
     out.write(f"what:   {rule.what!r}\n")
     out.write(f"effect: {rule.effect}\n")
     if rule.id == DEFAULT_DENY_RULE_ID:
-        out.write("        (protected — removal refused per TOOL-R10)\n")
+        out.write("        (protected — removal refused)\n")
     return 0
 
 
@@ -284,11 +280,11 @@ def _read_authz_config(yaml_path: Path) -> dict[str, Any]:
 
 
 def _write_back(yaml_path: Path, rules: list[Rule]) -> None:
-    """Atomically rewrite platform.yaml's ``authorization.config.rules``.
+    """Atomically rewrite platform.yaml's `authorization.config.rules`.
 
     Preserves every other section of the file verbatim — only the
-    rules list is replaced. Temp + fsync + ``os.replace`` for
-    crash-safety per Phase 1.1's discipline.
+    rules list is replaced. Temp + fsync + `os.replace` for
+    crash-safety.
     """
     payload: dict[str, Any] = {}
     if yaml_path.is_file():
@@ -325,12 +321,11 @@ def _write_back(yaml_path: Path, rules: list[Rule]) -> None:
 def _rule_to_dict(rule: Rule) -> dict[str, str]:
     """Serialize a Rule for round-trip.
 
-    qol-permission-system-human-readable.md Step 3 — new-shape rules
-    (``who is None``) serialize without ``id`` / ``who`` and carry
-    ``pattern``; legacy rules still serialize with the old
-    ``{id, who, what, effect}`` shape so an unmigrated workspace
-    that gets one rule added/removed via the CLI doesn't accidentally
-    flip back to the new shape mid-file.
+    New-shape rules (`who is None`) serialize without `id` / `who` and
+    carry `pattern`; legacy rules still serialize with the old
+    `{id, who, what, effect}` shape so an unmigrated workspace that
+    gets one rule added/removed via the CLI doesn't accidentally flip
+    back to the new shape mid-file.
     """
     if rule.who is None:
         return {

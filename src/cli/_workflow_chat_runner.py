@@ -1,21 +1,24 @@
-"""Phase 3.9 chat-side workflow execution helpers.
+"""Chat-side workflow execution helpers.
 
-Shared by the ``/workflow`` slash handler (Step 1) and the
-``user_input`` chat-resume path (Step 2). Both surfaces need:
+Shared by the `/workflow` slash handler and the `user_input`
+chat-resume path. Both surfaces need:
 
-1. A wired :class:`IterativeExecutor` rooted at the chat's runtime.
-2. A :class:`WorkflowCapsuleRenderer` writing to the chat's stdout.
+1. A wired
+   [`IterativeExecutor`][workflows.executor.IterativeExecutor] rooted
+   at the chat's runtime.
+2. A
+   [`WorkflowCapsuleRenderer`][cli._workflow_capsules.WorkflowCapsuleRenderer]
+   writing to the chat's stdout.
 3. A concurrent run loop: executor task + tail-rendering renderer +
-   a ``done_event`` so a WAITING_FOR_INPUT pause (no terminal
-   workflow.run.* event) doesn't hang the tail.
-4. Post-pause rendering of the spec §15.2.1 inline prompt capsule.
+   a `done_event` so a `WAITING_FOR_INPUT` pause (no terminal
+   `workflow.run.*` event) doesn't hang the tail.
+4. Post-pause rendering of the inline prompt capsule.
 
 The caller owns:
 
-- Catalog lookup + ``WorkflowRun.create`` (``/workflow`` handler).
+- Catalog lookup + `WorkflowRun.create` (`/workflow` handler).
 - Reading the existing run + setting/clearing
-  :attr:`ChatSessionState.expecting_user_input_response` (chat
-  resume path).
+  `ChatSessionState.expecting_user_input_response` (chat resume path).
 
 This module is intentionally small — the chat-specific orchestration
 lives here; the chat input loop and slash dispatcher stay focused on
@@ -62,25 +65,24 @@ async def execute_workflow_with_renderer(
     fork_event_id: str | None = None,
     input_overrides: dict[str, Any] | None = None,
 ) -> WorkflowRunStatus:
-    """Run, resume, or fork a workflow with the chat capsule
-    renderer attached.
+    """Run, resume, or fork a workflow with the chat capsule renderer.
 
-    Mode is determined by which kwargs are set (caller picks
-    EXACTLY one):
+    Mode is determined by which kwargs are set (caller picks exactly
+    one):
 
-    - Neither ``resume_response`` nor ``fork_event_id`` → fresh start:
-      ``executor.run()``.
-    - ``resume_response`` set → ``executor.resume(response=...)``.
-    - ``fork_event_id`` set → ``executor.start_from_fork(
-      fork_event_id=..., input_overrides=...)``; the caller is
-      responsible for minting the forked :class:`WorkflowRun` with a
-      ``forked_from`` pointer before invoking this helper.
+    - Neither `resume_response` nor `fork_event_id` → fresh start:
+      `executor.run()`.
+    - `resume_response` set → `executor.resume(response=...)`.
+    - `fork_event_id` set → `executor.start_from_fork(
+      fork_event_id=..., input_overrides=...)`; the caller is
+      responsible for minting the forked `WorkflowRun` with a
+      `forked_from` pointer before invoking this helper.
 
-    Returns the executor's terminal status (or ``WAITING_FOR_INPUT``
-    if a downstream user_input pauses). The caller updates
-    :attr:`ChatSessionState.expecting_user_input_response` based on
-    the returned status — this helper only RENDERS the pause capsule;
-    it does not arm the flag.
+    Returns the executor's terminal status (or `WAITING_FOR_INPUT` if
+    a downstream `user_input` pauses). The caller updates
+    `ChatSessionState.expecting_user_input_response` based on the
+    returned status — this helper only renders the pause capsule; it
+    does not arm the flag.
     """
     runtime: PlatformRuntime = state.runtime
     executor = build_workflow_executor(
@@ -100,9 +102,7 @@ async def execute_workflow_with_renderer(
             child_run = store.read(WorkflowRunId(child_run_id))
         except (FileNotFoundError, ValueError):
             return None
-        child_entry = catalog.lookup(
-            child_run.workflow_ref, expected_type="workflow"
-        )
+        child_entry = catalog.lookup(child_run.workflow_ref, expected_type="workflow")
         if child_entry is None:
             return None
         from pathlib import Path  # noqa: PLC0415
@@ -143,9 +143,9 @@ async def execute_workflow_with_renderer(
     finally:
         status = await exec_wrapper
 
-    # Spec §15.2.1 — render the inline pause capsule when the run is
-    # paused for input. The capsule's node lookup walks the JSONL +
-    # ``waiting_at`` sidecar; it is a no-op if the lookup fails.
+    # Render the inline pause capsule when the run is paused for
+    # input. The capsule's node lookup walks the JSONL + ``waiting_at``
+    # sidecar; it is a no-op if the lookup fails.
     from workflows.run import WorkflowRunStatus  # noqa: PLC0415
 
     if status == WorkflowRunStatus.WAITING_FOR_INPUT:
@@ -156,17 +156,17 @@ async def execute_workflow_with_renderer(
 
 
 def resolve_paused_node_name(
-    store: WorkflowRunStore, run_id: Any  # noqa: ANN401 — WorkflowRunId
+    store: WorkflowRunStore,
+    run_id: Any,  # noqa: ANN401 — WorkflowRunId
 ) -> str | None:
-    """Resolve the paused user_input node's ``node_name`` from disk.
+    """Resolve the paused `user_input` node's `node_name` from disk.
 
-    Reads the ``waiting_at`` sidecar (the executor's pause handler
-    writes the open invocation_id there — see
-    ``src/workflows/executor.py:1300-1306``); then scans the JSONL
-    for the matching ``workflow.node.started`` event and returns its
-    ``node_name``. Returns ``None`` when any step of the lookup
-    fails — the chat handler renders no pause capsule in that case
-    rather than crashing.
+    Reads the `waiting_at` sidecar (the executor's pause handler
+    writes the open invocation_id there); then scans the JSONL for
+    the matching `workflow.node.started` event and returns its
+    `node_name`. Returns `None` when any step of the lookup fails —
+    the chat handler renders no pause capsule in that case rather
+    than crashing.
     """
     try:
         run_dir = store.directory(run_id)

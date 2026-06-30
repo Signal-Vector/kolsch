@@ -1,10 +1,9 @@
-"""``cli._migrations`` — per-artifact migrators run at ``kolsch setup``
-re-run time.
+"""Per-artifact migrators run at `kolsch setup` re-run time.
 
-The package is the home for QoL-driven schema migrations. Each module
+The package is the home for in-place schema migrations. Each module
 exports a pure function that takes the pre-fix shape and returns the
 post-fix shape plus any Recoverable events the caller should log.
-The runner stays in :mod:`cli._setup` so the migration package never
+The runner stays in `cli._setup` so the migration package never
 touches stdio.
 """
 

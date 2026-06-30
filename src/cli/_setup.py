@@ -1,20 +1,20 @@
-"""`kolsch setup` — Phase 1.2 first-run flow.
+"""`kolsch setup` — first-run flow.
 
-Six idempotent steps (A-F per patch §2.2). Each step has one
-question: "is this already done?" → skip. "do I need to ask?"
-→ prompt (or read env for ``--non-interactive``). "ready to
-write?" → write atomically.
+Six idempotent steps (A-F). Each step has one question: "is this
+already done?" → skip. "do I need to ask?" → prompt (or read env
+for `--non-interactive`). "ready to write?" → write atomically.
 
-Step composition rules from the patch:
+Step composition rules:
 
-- Step C MUST call the existing :func:`cli.llm_commands.cmd_connect`;
-  setup does not re-implement the connect flow.
-- Step E MUST call the existing :func:`cli.main._cmd_run`; setup
-  does not re-implement agent execution.
-- Setup writes nothing outside the resolved workspace (the .env
-  secret-value write is the only exception, per Phase 1.1).
+- Step C must call the existing
+  [`cmd_connect`][cli.llm_commands.cmd_connect]; setup does not
+  re-implement the connect flow.
+- Step E must call the existing `cli.main._cmd_run`; setup does
+  not re-implement agent execution.
+- Setup writes nothing outside the resolved workspace (the `.env`
+  secret-value write is the only exception).
 - Each step is interruptible at any prompt; the next setup run
-  resumes from the same content-derived state, NOT a state flag.
+  resumes from the same content-derived state, not a state flag.
 """
 
 from __future__ import annotations
@@ -45,7 +45,7 @@ if TYPE_CHECKING:
 
 
 _EXIT_OK = 0
-_EXIT_PARTIAL = 4  # Phase 1.2 patch §2.5 — partial setup completion.
+_EXIT_PARTIAL = 4  # Partial setup completion.
 
 
 # ---------------------------------------------------------------------------
@@ -58,18 +58,19 @@ _SKIPPED = "skipped"
 
 
 # ---------------------------------------------------------------------------
-# Step E result — richer than the string tokens above (bug-setup-test-run-
-# failure-handling.md edit (a)). Carries the outcome enum + an optional
-# failure code so the orchestrator can pick the right banner + a
-# classifier-derived hint.
+# Step E result — richer than the string tokens above. Carries the
+# outcome enum + an optional failure code so the orchestrator can
+# pick the right banner + a classifier-derived hint.
 # ---------------------------------------------------------------------------
 
 
 class _StepEOutcome(StrEnum):
-    """How the test exchange ended — drives the banner + exit code in
-    the orchestrator. Distinct from the ``proceeded``/``skipped``/
-    ``partial`` tokens the other steps return because Step E's outcome
-    has finer-grained user-facing behaviour."""
+    """How the test exchange ended — drives the banner + exit code.
+
+    Distinct from the `proceeded` / `skipped` / `partial` tokens
+    the other steps return because Step E's outcome has
+    finer-grained user-facing behaviour.
+    """
 
     PASSED = "pass"
     SKIPPED = "skipped"
@@ -78,8 +79,7 @@ class _StepEOutcome(StrEnum):
 
 @dataclass(frozen=True)
 class _StepEResult:
-    """The richer return type from Step E (bug-setup-test-run-failure-
-    handling.md edit (a))."""
+    """The richer return type from Step E."""
 
     outcome: _StepEOutcome
     failure_code: str | None = None
@@ -95,24 +95,27 @@ class SetupPrompter(Protocol):
     """Three methods cover every prompt shape in the setup flow."""
 
     def choose(self, question: str, options: list[str], default: str) -> str:
-        """Pick one of ``options`` (single-letter answers OK). Returns
-        the chosen option string (lowercased). Default fires on empty
-        input."""
+        """Pick one of `options` (single-letter answers OK).
+
+        Returns the chosen option string (lowercased). Default
+        fires on empty input.
+        """
 
     def text(self, question: str, default: str = "") -> str:
-        """Free-form text. Empty input returns ``default``."""
+        """Free-form text. Empty input returns `default`."""
 
     def confirm(self, question: str, *, default: bool = True) -> bool:
-        """Yes/no. Returns ``default`` on empty input."""
+        """Yes/no. Returns `default` on empty input."""
 
 
 class StdinSetupPrompter:
-    """Production prompter — uses stdin/stdout. Lowercases all answers."""
+    """Production prompter — uses stdin/stdout, lowercases all answers."""
 
     def __init__(self, out: TextIO) -> None:
         self._out = out
 
     def choose(self, question: str, options: list[str], default: str) -> str:
+        """Prompt the user to pick one of `options`."""
         self._out.write(question + "\n")
         for opt in options:
             self._out.write(f"  {opt}\n")
@@ -126,11 +129,13 @@ class StdinSetupPrompter:
             self._out.write(f"  (please pick one of {options})\n")
 
     def text(self, question: str, default: str = "") -> str:
+        """Prompt for free-form text; empty input returns `default`."""
         suffix = f" [{default}]" if default else ""
         raw = input(f"{question}{suffix}: ").strip()
         return raw or default
 
     def confirm(self, question: str, *, default: bool = True) -> bool:
+        """Prompt for yes/no; empty input returns `default`."""
         suffix = " [Y/n]" if default else " [y/N]"
         raw = input(f"{question}{suffix} ").strip().lower()
         if not raw:
@@ -139,17 +144,20 @@ class StdinSetupPrompter:
 
 
 class NonInteractivePrompter:
-    """Returns defaults for everything; no I/O. Used by ``--non-interactive``."""
+    """Returns defaults for everything; no I/O. Used by `--non-interactive`."""
 
     def choose(self, question: str, options: list[str], default: str) -> str:
+        """Return `default` lowercased."""
         _ = question, options
         return default.lower()
 
     def text(self, question: str, default: str = "") -> str:
+        """Return `default`."""
         _ = question
         return default
 
     def confirm(self, question: str, *, default: bool = True) -> bool:
+        """Return `default`."""
         _ = question
         return default
 
@@ -161,8 +169,11 @@ class NonInteractivePrompter:
 
 @dataclass(frozen=True)
 class _SetupIO:
-    """The dependencies setup needs to do its job. Tests inject a
-    custom instance to mock HTTP, capture output, and script prompts."""
+    """Setup's collaborators.
+
+    Tests inject a custom instance to mock HTTP, capture output,
+    and script prompts.
+    """
 
     root: Path
     out: TextIO
@@ -173,14 +184,13 @@ class _SetupIO:
     # The factory receives the provider name + an optional API key
     # override (used by --non-interactive's env-driven path).
     connect_io_factory: Callable[[Path, str, str | None], _CommandIO]
-    # Run-handler — wraps `cli.main._cmd_run`. Used by step E to verify
-    # the install with a real exchange. Returns ``(exit_code,
-    # failure_code)`` so Step E can pass the failure code to
-    # :func:`_classify_failure` for an actionable hint
-    # (bug-setup-test-run-failure-handling.md). ``failure_code`` is
-    # the canonical Error Model code from the failed event's
-    # ``data.error.type`` when an exchange ended Fatal; ``None``
-    # otherwise (success / non-engine failures).
+    # Run-handler — wraps `cli.main._cmd_run`. Used by step E to
+    # verify the install with a real exchange. Returns
+    # `(exit_code, failure_code)` so Step E can pass the failure
+    # code to `_classify_failure` for an actionable hint.
+    # `failure_code` is the canonical Error Model code from the
+    # failed event's `data.error.type` when an exchange ended
+    # Fatal; `None` otherwise (success / non-engine failures).
     run_handler: Callable[[argparse.Namespace], Awaitable[tuple[int, str | None]]]
 
 
@@ -190,15 +200,14 @@ class _SetupIO:
 
 
 async def run_setup(args: argparse.Namespace, io: _SetupIO) -> int:
-    """Walk the six steps. Returns exit code (0 ok, 4 partial).
+    """Walk the six setup steps. Returns exit code (0 ok, 4 partial).
 
-    Bug-fix (bug-setup-test-run-failure-handling.md edit (b)): Step F
-    is gated on Step E's outcome — the success banner only fires when
-    the test exchange actually passed (or was actively skipped). A
-    failed test produces a partial-completion banner that names the
-    failed step, the workspace path, and a classifier-driven hint
-    derived from the failure code, NOT a hardcoded "check provider
-    credentials" string.
+    Step F is gated on Step E's outcome — the success banner only
+    fires when the test exchange actually passed (or was actively
+    skipped). A failed test produces a partial-completion banner
+    that names the failed step, the workspace path, and a
+    classifier-driven hint derived from the failure code, not a
+    hardcoded "check provider credentials" string.
     """
     non_interactive: bool = bool(getattr(args, "non_interactive", False))
     if non_interactive:
@@ -230,8 +239,8 @@ async def run_setup(args: argparse.Namespace, io: _SetupIO) -> int:
         if result == "partial":
             partial = True
 
-    # Step E is handled separately because its outcome drives the banner
-    # + exit code (bug-setup-test-run-failure-handling.md).
+    # Step E is handled separately because its outcome drives the
+    # banner + exit code.
     try:
         step_e_result = await _step_e_test_run(io, non_interactive=non_interactive)
     except KeyboardInterrupt:
@@ -260,33 +269,31 @@ async def run_setup(args: argparse.Namespace, io: _SetupIO) -> int:
 
 
 # ---------------------------------------------------------------------------
-# Edit (c) — _classify_failure (bug-setup-test-run-failure-handling.md
-# acceptance criterion 4)
+# Failure classification
 # ---------------------------------------------------------------------------
 
 
 def _classify_failure(failure_code: str | None) -> str:
     """Map a failed-event error code to a user-facing actionable hint.
 
-    Single source of truth — extend the table as Phase 1.3 lands more
-    ``model.*`` codes or as new failure modes appear. Unknown codes
-    (including ``None``) fall through to the generic hint.
+    Single source of truth — extend the table as more `model.*`
+    codes or new failure modes appear. Unknown codes (including
+    `None`) fall through to the generic hint.
 
-    Mapping is per bug-setup-test-run-failure-handling.md §3 acceptance
-    criterion 4:
+    Mapping:
 
-    - ``model.server_error`` / 5xx → "the model returned a 5xx; usually
-      transient. Try again, or pick a different model by editing the
-      agent's ``model:`` field (or `kolsch permissions`)."
-    - ``model.authentication_failed`` / 401/403 → "credentials failed;
-      re-run `kolsch connect <provider>`."
-    - ``llm.provider_not_configured`` → "the agent's provider isn't
+    - `model.server_error` / 5xx → "the model returned a 5xx;
+      usually transient. Try again, or pick a different model by
+      editing the agent's `model:` field (or `kolsch permissions`)."
+    - `model.authentication_failed` / 401/403 → "credentials
+      failed; re-run `kolsch connect <provider>`."
+    - `llm.provider_not_configured` → "the agent's provider isn't
       connected; run `kolsch connect <provider>`."
-    - ``model.timeout`` → "the model took too long to respond. Try
+    - `model.timeout` → "the model took too long to respond. Try
       again or pick a faster model."
     - Default (any other code) → "the test exchange failed; check
-      `kolsch sessions events <id>` for details, then re-run setup or
-      `kolsch run` directly."
+      `kolsch sessions events <id>` for details, then re-run setup
+      or `kolsch run` directly."
     """
     table = {
         "model.server_error": (
@@ -366,33 +373,29 @@ async def _step_b_skeleton(io: _SetupIO, *, non_interactive: bool) -> str:
     already = yaml_path.is_file()
     if already:
         io.out.write(f"✓ workspace already initialized at {io.root}\n")
-        # bug-chat-permissions-and-console-leak Step C / E-BUG-CHAT-001
-        # resolution (option a): when re-run against a workspace whose
-        # platform.yaml still carries the Phase 1 allow-all sentinel,
-        # offer to migrate to the Phase 2.0 §3.1 defaults.
+        # When re-run against a workspace whose platform.yaml still
+        # carries the legacy allow-all sentinel, offer to migrate
+        # to the canonical defaults.
         _maybe_migrate_authz_rules(io, yaml_path, non_interactive=non_interactive)
-        # Phase 2.4 Step 9 — drop in canonical kolsch skills that
-        # weren't in the packaged template at the time the user first
-        # ran setup. Additive only; never overwrites existing files.
-        # Runs BEFORE the validation hook so the new skills are in the
+        # Drop in canonical kolsch skills that weren't in the
+        # packaged template at the time the user first ran setup.
+        # Additive only; never overwrites existing files. Runs
+        # BEFORE the validation hook so the new skills are in the
         # catalog when validation walks it.
         _maybe_install_missing_kolsch_skills(io)
-        # qol-permission-system-human-readable.md Step 4 (carryover
-        # E-QOL-PERMSYS-002) — migrate platform.yaml's authz rules
-        # from the legacy `{id, who, what, effect}` regex shape to
-        # the new `{what, pattern, effect}` glob shape. Runs AFTER
-        # the kolsch-skills drop-in so the catalog walk has every
-        # tool the migrator's `tool.<name>` heuristic needs to
-        # resolve to `<bundle>/<name>`.
+        # Migrate platform.yaml's authz rules from the legacy
+        # `{id, who, what, effect}` regex shape to the new
+        # `{what, pattern, effect}` glob shape. Runs AFTER the
+        # kolsch-skills drop-in so the catalog walk has every tool
+        # the migrator's `tool.<name>` heuristic needs to resolve
+        # to `<bundle>/<name>`.
         await _maybe_migrate_authz_rules_to_qol_schema(io)
-        # qol-workspace-root-listable.md — make `list_files(path=".")`
-        # work in the workspace root. Adds `.` to `file_access.allowed_paths`
-        # if missing so the natural workspace-inspection call doesn't
-        # default-deny.
+        # Make `list_files(path=".")` work in the workspace root.
+        # Adds `.` to `file_access.allowed_paths` if missing so the
+        # natural workspace-inspection call doesn't default-deny.
         _maybe_add_workspace_root_to_file_access(io)
-        # Step 6 (skills-subsystem.md Draft 0.2 follow-up): advisory
-        # skill validation. Warning-only — never blocks setup so a
-        # user mid-editing a SKILL.md doesn't get stuck.
+        # Advisory skill validation. Warning-only — never blocks
+        # setup so a user mid-editing a SKILL.md doesn't get stuck.
         await _maybe_warn_invalid_skills(io)
         return _SKIPPED
 
@@ -487,27 +490,26 @@ async def _step_c_non_interactive(io: _SetupIO) -> str:
 # ---------------------------------------------------------------------------
 
 
-_STARTER_BUNDLE = "kolsch"  # Phase 2.0 (patch §1.5) — was "starter" in 1.2.
+_STARTER_BUNDLE = "kolsch"
 _STARTER_AGENT = "helper"
 
-# The packaged template the bundle is materialized from (Phase 2.0
-# coordinator resolution to E-2.0-001 — Option A: ship the four tool
-# files as a copyable template under src/, copy at setup time).
+# The packaged template the bundle is materialized from: ship the
+# four tool files as a copyable template under src/, copy at setup
+# time.
 _STARTER_BUNDLE_TEMPLATE_DIR = Path(__file__).parent / "_starter_bundle" / "kolsch"
 
 
 async def _step_d_starter_agent(io: _SetupIO, *, non_interactive: bool) -> str:
     """Materialize the kolsch bundle from the packaged template.
 
-    Phase 2.0 (TOOL-R10, coordinator resolution E-2.0-001 Option A):
-    copies the packaged template at ``src/cli/_starter_bundle/kolsch/``
-    (bundle.yaml + agents/helper.yaml + the four tool .py files) into
-    ``<workspace>/bundles/kolsch/`` verbatim. The chosen model lands in
-    ``platform.yaml``'s ``defaults.model`` block — the helper's
-    ``model:`` field is intentionally absent so the kernel's defaults
-    composition (`assets/assembler.py:35` partial order +
-    `kernel/resolver.py` RFC 7386 merge) supplies the value
-    (E-BUG-MODELLINE-001 option a-prime).
+    Copies the packaged template at
+    `src/cli/_starter_bundle/kolsch/` (bundle.yaml +
+    agents/helper.yaml + the four tool `.py` files) into
+    `<workspace>/bundles/kolsch/` verbatim. The chosen model lands
+    in `platform.yaml`'s `defaults.model` block — the helper's
+    `model:` field is intentionally absent so the kernel's
+    defaults composition (the assembler's partial order + the
+    resolver's RFC 7386 merge) supplies the value.
     """
     bundle_dir = io.root / "bundles" / _STARTER_BUNDLE
     agent_path = bundle_dir / "agents" / f"{_STARTER_AGENT}.yaml"
@@ -536,18 +538,17 @@ async def _step_d_starter_agent(io: _SetupIO, *, non_interactive: bool) -> str:
 def _copy_kolsch_bundle(root: Path) -> None:
     """Copy the packaged kolsch bundle template into the workspace.
 
-    The four tools/*.py files are copied verbatim — they're standalone
-    Python that the asset catalog discovers + the Tools subsystem
-    registers per the standard bundle-tool path (per the Phase 2.0
-    coordinator resolution E-2.0-001 Option A). The helper agent file
-    is also a verbatim copy; per E-BUG-MODELLINE-001 the model value
-    lives in ``platform.yaml``'s ``defaults.model``, not the agent
+    The four `tools/*.py` files are copied verbatim — they're
+    standalone Python that the asset catalog discovers + the Tools
+    subsystem registers per the standard bundle-tool path. The
+    helper agent file is also a verbatim copy; the model value
+    lives in `platform.yaml`'s `defaults.model`, not the agent
     file.
     """
     target = root / "bundles" / _STARTER_BUNDLE
     if target.exists():
-        # Idempotent — leave existing bundle alone. (Drift detection
-        # in Phase 2.3 will surface mismatches; setup doesn't overwrite.)
+        # Idempotent — leave existing bundle alone. Drift detection
+        # is a separate concern; setup doesn't overwrite.
         return
 
     if not _STARTER_BUNDLE_TEMPLATE_DIR.exists():
@@ -561,14 +562,13 @@ def _copy_kolsch_bundle(root: Path) -> None:
 
 
 def _write_defaults_model(yaml_path: Path, model: str | dict[str, str]) -> None:
-    """Write the picked model into ``platform.yaml``'s ``defaults.model``.
+    """Write the picked model into `platform.yaml`'s `defaults.model`.
 
-    E-BUG-MODELLINE-001 option (a-prime): instead of substituting a
-    placeholder in the starter helper.yaml, setup writes the chosen
-    model to the workspace's ``defaults.model`` so the kernel's
-    defaults composition supplies the agent's resolved ``model:``
-    field. Alias strings are written verbatim; canonical
-    ``{provider, model}`` dicts are written as-is.
+    Setup writes the chosen model to the workspace's
+    `defaults.model` so the kernel's defaults composition supplies
+    the agent's resolved `model:` field. Alias strings are written
+    verbatim; canonical `{provider, model}` dicts are written
+    as-is.
     """
     payload = _read_yaml(yaml_path)
     defaults = payload.get("defaults")
@@ -604,9 +604,8 @@ def _announce_picked_model(io: _SetupIO, model: str | dict[str, str]) -> None:
 
 
 _ALIAS_PRIORITY: tuple[str, ...] = ("opus", "smart", "cheap")
-"""Deployment-alias preference order (bug-setup-test-run-failure-
-handling.md acceptance criterion 3). ``opus`` first because it's the
-historic recommendation; ``smart`` and ``cheap`` are the two other
+"""Deployment-alias preference order. `opus` first because it's the
+historic recommendation; `smart` and `cheap` are the two other
 documented aliases. Aliases outside this list fall through to
 alphabetical."""
 
@@ -620,30 +619,29 @@ tutorial."""
 def _pick_starter_model(io: _SetupIO) -> str | dict[str, str]:
     """Choose the model field value for the starter agent.
 
-    **Bug-fix (bug-setup-test-run-failure-handling.md edit (d)):**
-    The picker now prefers a deployment alias from ``platform.yaml``'s
-    ``model_aliases`` over a raw discovered model id whenever any alias
-    exists. The historic behaviour (raw-discovery from the first
-    non-metadata-source provider) was the wrong shape — when the user
-    has OpenRouter aliases like ``opus`` + ``smart`` and also has
-    OpenCode connected, the user's curated aliases should win over the
-    first-discovered raw OpenCode model.
+    Prefers a deployment alias from `platform.yaml`'s
+    `model_aliases` over a raw discovered model id whenever any
+    alias exists. When the user has OpenRouter aliases like `opus`
+    + `smart` and also has OpenCode connected, the user's curated
+    aliases win over the first-discovered raw OpenCode model.
 
     Tie-breaker order:
 
     1. Aliases. Within the aliases dict:
-       a. ``opus`` if present (historic recommendation).
-       b. ``smart`` if present (second documented alias).
-       c. ``cheap`` if present (third documented alias).
+       a. `opus` if present (historic recommendation).
+       b. `smart` if present (second documented alias).
+       c. `cheap` if present (third documented alias).
        d. First alphabetical alias otherwise.
-    2. Raw ``{provider, model}`` from discovered providers, when no
+    2. Raw `{provider, model}` from discovered providers, when no
        alias exists. Within discovered providers:
-       a. ``openrouter`` first (the recommended primary; metadata source).
-       b. ``opencode`` second (the secondary documented provider).
+       a. `openrouter` first (the recommended primary; metadata
+          source).
+       b. `opencode` second (the secondary documented provider).
        c. Other providers alphabetically.
-       Within each provider, the first model id from its ``models`` list.
-    3. ``{"provider": "fake", "model": "fake-model"}`` if no
-       provider yielded a model.
+       Within each provider, the first model id from its `models`
+       list.
+    3. `{"provider": "fake", "model": "fake-model"}` if no provider
+       yielded a model.
     """
     payload = _read_yaml(io.root / "platform.yaml")
     providers_raw = payload.get("llm_providers")
@@ -687,8 +685,10 @@ def _pick_starter_model(io: _SetupIO) -> str | dict[str, str]:
 
 
 def _first_model_id(entry: dict[str, Any]) -> str | None:
-    """Return the first non-empty model id from a provider's `models`
-    list, or ``None`` if the provider has none."""
+    """Return the first non-empty model id from a provider's `models` list.
+
+    Returns `None` if the provider has none.
+    """
     raw_models = entry.get("models")
     if not isinstance(raw_models, list):
         return None
@@ -708,10 +708,9 @@ def _first_model_id(entry: dict[str, Any]) -> str | None:
 async def _step_e_test_run(io: _SetupIO, *, non_interactive: bool) -> _StepEResult:
     """Run the starter agent once to verify the install.
 
-    Returns a :class:`_StepEResult` so the orchestrator can branch on
-    the precise outcome (pass / fail / skipped) for both the banner
-    and the exit code. See bug-setup-test-run-failure-handling.md
-    edits (a) and (b).
+    Returns a `_StepEResult` so the orchestrator can branch on the
+    precise outcome (pass / fail / skipped) for both the banner
+    and the exit code.
     """
     agent_ref = f"{_STARTER_BUNDLE}/agents/{_STARTER_AGENT}"
     agent_path = (
@@ -757,12 +756,11 @@ async def _step_e_test_run(io: _SetupIO, *, non_interactive: bool) -> _StepEResu
 
 
 def _step_f_banner_success(io: _SetupIO, *, test_skipped: bool = False) -> None:
-    """The success banner — printed on Step E pass OR skipped.
+    """The success banner — printed on Step E pass or skipped.
 
-    Bug-setup-test-run-failure-handling.md acceptance criterion 2 + 3:
-    a user pressing ``[n]`` on the test-run prompt is full success; the
-    banner suffixes ``(test skipped)`` so the user knows nothing was
-    actually exchanged but the workspace IS ready.
+    A user pressing `[n]` on the test-run prompt is full success;
+    the banner suffixes `(test skipped)` so the user knows nothing
+    was actually exchanged but the workspace is ready.
     """
     agent_ref = f"{_STARTER_BUNDLE}/agents/{_STARTER_AGENT}"
     io.out.write("\n")
@@ -781,10 +779,9 @@ def _step_f_banner_success(io: _SetupIO, *, test_skipped: bool = False) -> None:
 def _step_f_banner_failure(io: _SetupIO, result: _StepEResult) -> None:
     """The partial-completion banner — printed when Step E failed.
 
-    Bug-setup-test-run-failure-handling.md acceptance criterion 1: name
-    the failed step, the workspace path, and the classifier-driven
-    hint. NEVER print "Kolsch is ready" on this path; the user must
-    see that something needs attention.
+    Names the failed step, the workspace path, and the
+    classifier-driven hint. Never prints "Kolsch is ready" on this
+    path; the user must see that something needs attention.
     """
     agent_ref = f"{_STARTER_BUNDLE}/agents/{_STARTER_AGENT}"
     hint = _classify_failure(result.failure_code)
@@ -820,18 +817,17 @@ def _read_yaml(path: Path) -> dict[str, Any]:
 def _setup_platform_payload() -> dict[str, Any]:
     """The platform.yaml setup writes.
 
-    Starts from :func:`assets.platform_config.default_platform_payload`
-    and applies two Phase 2.0 overrides:
+    Starts from
+    [`default_platform_payload`][assets.platform_config.default_platform_payload]
+    and applies two overrides:
 
-    1. ``authorization.config.rules`` is the workspace-only
-       default set per Phase 2.0 patch §3.1 — read_file / list_files
-       silently allowed; write_file / bash gated by the ``prompt``
-       effect; protected ``rl_default_deny`` tail. (TOOL-R10 hard
-       rule + Step 22 reviewer Q11.)
-    2. ``defaults`` is overridden to empty for the same reason as
-       Phase 1.2: the stock ``defaults.memory`` block doesn't fit
-       the kernel's ``ResolvedAgentConfig`` shape at the top level.
-       Flagged for spec follow-up; see Phase 1.2 Step 18 summary.
+    1. `authorization.config.rules` is the workspace-only default
+       set — read_file / list_files silently allowed; write_file /
+       bash gated by the `prompt` effect; protected
+       `rl_default_deny` tail.
+    2. `defaults` is overridden to empty: the stock
+       `defaults.memory` block doesn't fit the kernel's
+       `ResolvedAgentConfig` shape at the top level.
     """
     payload = _stock_defaults()
     payload["defaults"] = {}
@@ -843,46 +839,42 @@ def _setup_platform_payload() -> dict[str, Any]:
 
 
 def _workspace_only_default_rules() -> list[dict[str, str]]:
-    """The workspace-only default rules per Phase 2.0 patch §3.1.
+    """The workspace-only default rules.
 
-    qol-action-namespace-bundle-scoped.md Step 2 — ``what`` is the
-    3-seg catalog ref ``<bundle>/tools/<name>`` for builtin tools,
-    the system action namespace (``agent.execute.*``) for the
-    engine pre-flight, and the catch-all ``*`` for the
-    default-deny tail. The previous 2-seg shape
-    (``kolsch/<name>``) shipped by the human-readable QoL is
-    deprecated; the runtime migration shim auto-rewrites legacy
-    workspaces. New workspaces start in the 3-seg canonical form
-    so the action matches the rule without translation.
+    `what` is the 3-seg catalog ref `<bundle>/tools/<name>` for
+    builtin tools, the system action namespace
+    (`agent.execute.*`) for the engine pre-flight, and the
+    catch-all `*` for the default-deny tail. New workspaces start
+    in the 3-seg canonical form so the action matches the rule
+    without translation.
 
-    Includes an ``agent.execute.*`` allow at the top so the
-    engine's pre-flight authz check passes — without this the
-    default-deny tail would block every exchange.
+    Includes an `agent.execute.*` allow at the top so the engine's
+    pre-flight authz check passes — without this the default-deny
+    tail would block every exchange.
     """
     return [
-        # Pre-flight gate — the engine requires agent.execute.<id> to
-        # run any exchange. Default to allow; users tighten by adding
-        # a more specific deny before this rule.
+        # Pre-flight gate — the engine requires agent.execute.<id>
+        # to run any exchange. Default to allow; users tighten by
+        # adding a more specific deny before this rule.
         {"what": "agent.execute.*", "pattern": "*", "effect": "allow"},
-        # The four Phase 2.0 builtins — owned by the kolsch bundle.
+        # The four canonical builtins — owned by the kolsch bundle.
         {"what": "kolsch/tools/read_file", "pattern": "*", "effect": "allow"},
         {"what": "kolsch/tools/list_files", "pattern": "*", "effect": "allow"},
         {"what": "kolsch/tools/write_file", "pattern": "*", "effect": "prompt"},
         {"what": "kolsch/tools/bash", "pattern": "*", "effect": "prompt"},
-        # Default-deny tail (protected — TOOL-R10).
+        # Default-deny tail (protected).
         {"what": "*", "pattern": "*", "effect": "deny"},
     ]
 
 
 # ---------------------------------------------------------------------------
-# Authz-rules migration — bug-chat-permissions-and-console-leak Step C
+# Authz-rules migration
 # ---------------------------------------------------------------------------
 #
-# Workspaces created before commit deaf95f (2026-05-30) carry the
-# Phase 1 allow-all rule set, not the Phase 2.0 §3.1 defaults. The
-# migration here is per E-BUG-CHAT-001 option (a): on `kolsch setup`
-# re-run, detect the sentinel, prompt the user, and rewrite
-# ``authorization.config.rules`` in place — preserving any
+# Older workspaces carry the legacy allow-all rule set, not the
+# current workspace-only defaults. On `kolsch setup` re-run, detect
+# the sentinel, prompt the user, and rewrite
+# `authorization.config.rules` in place — preserving any
 # user-added custom rules in their original relative position.
 # Non-interactive re-runs default to "skip" so silent mutation of
 # the user's config can't happen via CI.
@@ -892,16 +884,14 @@ _ALLOW_ALL_SENTINEL: dict[str, str] = {"who": ".*", "what": ".*", "effect": "all
 
 
 def _has_pre_phase_2_authz_shape(rules: list[object]) -> bool:
-    """True when the rule list looks Phase-1-origin: the allow-all
-    sentinel is present AND there is no default-deny tail.
+    """Return True when the rule list looks legacy-origin.
 
-    Phase 1 ``kolsch setup`` wrote only the sentinel; users may
-    have appended their own custom rules after the fact, so the
-    detection accepts ``[sentinel, ...customs]`` rather than
-    ``[sentinel]``-only. The absence of the
-    ``{who:.*, what:.*, effect:deny}`` tail is the signal: Phase
-    2.0's §3.1 defaults always end with that tail, so a list with
-    the sentinel and no deny tail can only have come from Phase 1.
+    Detects the allow-all sentinel without a default-deny tail.
+    Older setup wrote only the sentinel; users may have appended
+    their own custom rules after the fact, so the detection
+    accepts `[sentinel, ...customs]` rather than `[sentinel]`-only.
+    The absence of the `{who:.*, what:.*, effect:deny}` tail is the
+    signal: the current defaults always end with that tail.
     """
     if not rules:
         return False
@@ -931,13 +921,13 @@ def _is_default_deny_rule(rule: object) -> bool:
 def _migrate_rules_preserving_customs(
     existing: list[dict[str, Any]],
 ) -> list[dict[str, Any]]:
-    """Return the §3.1 defaults with any non-sentinel rules from
-    ``existing`` preserved BEFORE the default-deny tail.
+    """Return the canonical defaults with non-sentinel rules preserved.
 
     Customs (rules that are not the allow-all sentinel) survive in
-    their original relative position. The tail ``rl_default_deny``
-    stays last so first-match-wins semantics keep the deny as the
-    floor."""
+    their original relative position, before the default-deny
+    tail. The tail `rl_default_deny` stays last so first-match-wins
+    semantics keep the deny as the floor.
+    """
     defaults = _workspace_only_default_rules()
     customs = [r for r in existing if not _is_sentinel_rule(r)]
     # The last default is the deny tail; keep it last.
@@ -945,12 +935,12 @@ def _migrate_rules_preserving_customs(
 
 
 def _backup_platform_yaml(yaml_path: Path) -> Path:
-    """Copy ``yaml_path`` to
-    ``.platform/platform.yaml.bak.<UTC-timestamp>``.
+    """Copy `yaml_path` to `.platform/platform.yaml.bak.<UTC-timestamp>`.
 
     UTC + ISO-ish basic format keeps backups sortable and avoids
     timezone ambiguity. Returns the backup path so the caller can
-    surface it to the user."""
+    surface it to the user.
+    """
     ts = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     backup_dir = yaml_path.parent / ".platform"
     backup_dir.mkdir(parents=True, exist_ok=True)
@@ -960,7 +950,7 @@ def _backup_platform_yaml(yaml_path: Path) -> Path:
 
 
 _MIGRATION_PROMPT_OPTIONS: list[str] = [
-    "[m] migrate to §3.1 defaults",
+    "[m] migrate to canonical defaults",
     "[k] keep mine — no changes",
     "[d] diff first",
     "[s] skip — decide later",
@@ -971,12 +961,13 @@ _MIGRATION_PROMPT_DEFAULT = "s"
 def _maybe_migrate_authz_rules(
     io: _SetupIO, yaml_path: Path, *, non_interactive: bool
 ) -> None:
-    """Detect the Phase 1 allow-all sentinel and prompt for migration.
+    """Detect the legacy allow-all sentinel and prompt for migration.
 
-    No-op when the workspace already has the §3.1 defaults (or any
-    other non-sentinel rule set). Non-interactive runs default to
-    "skip" so CI re-runs never mutate the user's config silently
-    (per E-BUG-CHAT-001's resolution: migration is opt-in)."""
+    No-op when the workspace already has the canonical defaults
+    (or any other non-sentinel rule set). Non-interactive runs
+    default to "skip" so CI re-runs never mutate the user's config
+    silently; migration is opt-in.
+    """
     payload = _read_yaml(yaml_path)
     authz = payload.get("authorization") or {}
     if authz.get("variant") != "rule_based":
@@ -987,9 +978,9 @@ def _maybe_migrate_authz_rules(
 
     if non_interactive:
         io.out.write(
-            "  ⚠ this workspace has the old allow-all rule set "
-            "(pre-Phase 2.0). Re-run setup interactively to migrate "
-            "to the §3.1 defaults, or edit platform.yaml by hand.\n"
+            "  ⚠ this workspace has the old allow-all rule set. "
+            "Re-run setup interactively to migrate to the canonical "
+            "defaults, or edit platform.yaml by hand.\n"
         )
         return
 
@@ -1012,7 +1003,7 @@ def _maybe_migrate_authz_rules(
         new_rules = _migrate_rules_preserving_customs(rules)
         payload["authorization"]["config"]["rules"] = new_rules
         yaml_path.write_text(dump(payload), encoding="utf-8")
-        io.out.write("  ✓ migrated authorization rules → §3.1 defaults\n")
+        io.out.write("  ✓ migrated authorization rules → canonical defaults\n")
         io.out.write(f"  ✓ backup written to {backup.relative_to(yaml_path.parent)}\n")
     elif choice == "k":
         io.out.write("  → keeping current rules; no changes written\n")
@@ -1021,34 +1012,30 @@ def _maybe_migrate_authz_rules(
 
 
 async def _maybe_migrate_authz_rules_to_qol_schema(io: _SetupIO) -> None:
-    """Migrate ``platform.yaml`` rules to the QoL three-field schema.
+    """Migrate `platform.yaml` rules to the three-field schema.
 
-    qol-permission-system-human-readable.md Step 4 (carryover
-    E-QOL-PERMSYS-002). On `kolsch setup` re-run:
+    On `kolsch setup` re-run:
 
-    1. Build the catalog so the migrator can resolve
-       ``tool.<name>`` actions to ``<bundle>/<name>`` qualified
-       refs.
-    2. Run :func:`cli._migrations.authz_rules.migrate_authz_rules`
+    1. Build the catalog so the migrator can resolve `tool.<name>`
+       actions to `<bundle>/tools/<name>` qualified refs.
+    2. Run
+       [`migrate_authz_rules`][cli._migrations.authz_rules.migrate_authz_rules]
        over the existing rule list.
     3. For each rule that couldn't be migrated, emit a
-       :class:`errors.ConfigDeprecatedRegexRule` Recoverable
-       warning via stdout (the chat/server runtime swap stdout
-       for the Recoverable-event surface; setup is the CLI
-       caller and writes directly).
+       [`ConfigDeprecatedRegexRule`][errors.ConfigDeprecatedRegexRule]
+       Recoverable warning via stdout.
     4. If anything migrated, atomically rewrite the YAML.
 
     Silent no-op when:
 
-    - The workspace's rule list is already entirely new-shape
-      (no ``who`` field on any entry).
-    - The workspace is non-rule-based authz variant.
+    - The workspace's rule list is already entirely new-shape (no
+      `who` field on any entry).
+    - The workspace is a non-rule-based authz variant.
 
-    The function never raises — a per-rule failure produces a
-    warning line but doesn't abort setup. Migration is opt-out
-    via the existing "skip" path on the prior
-    (E-BUG-CHAT-001) prompt; this new path runs unconditionally
-    AFTER that prompt has resolved.
+    Never raises — a per-rule failure produces a warning line but
+    doesn't abort setup. Migration is opt-out via the existing
+    "skip" path on the prior prompt; this path runs unconditionally
+    after that prompt has resolved.
     """
     from assets import AssetManagement  # noqa: PLC0415
     from cli._migrations.authz_rules import migrate_authz_rules  # noqa: PLC0415
@@ -1086,14 +1073,11 @@ async def _maybe_migrate_authz_rules_to_qol_schema(io: _SetupIO) -> None:
     # Nothing changed (everything was unconvertible) → leave the YAML
     # alone but still emit deprecation warnings so the user knows.
     converted_count = sum(
-        1
-        for old, new in zip(rules, result.rules, strict=False)
-        if old != new
+        1 for old, new in zip(rules, result.rules, strict=False) if old != new
     )
     for entry in result.deprecated:
-        # qol-action-namespace-bundle-scoped.md Step 2 — dispatch on
-        # ``kind`` so the right event class fires per deprecation
-        # cause: legacy 1-seg regex rules emit
+        # Dispatch on `kind` so the right event class fires per
+        # deprecation cause: legacy 1-seg regex rules emit
         # ConfigDeprecatedRegexRule; new 2-seg shape rules emit
         # ConfigDeprecatedRuleForm. Both are Recoverable warnings.
         if entry.kind == "two_seg":
@@ -1128,21 +1112,20 @@ async def _maybe_migrate_authz_rules_to_qol_schema(io: _SetupIO) -> None:
 
 
 def _maybe_add_workspace_root_to_file_access(io: _SetupIO) -> None:
-    """Add ``.`` to ``file_access.allowed_paths`` if missing.
+    """Add `.` to `file_access.allowed_paths` if missing.
 
-    qol-workspace-root-listable.md — the natural inspection call
-    ``list_files(path=".")`` default-denies on workspaces created
-    before the QoL landed because the default template only allowed
-    subdirectories (``data/``, ``bundles/``, ``sessions/``,
-    ``content/``, ``logs/``) plus ``platform.yaml``. Adding ``.``
-    at the front lets agents list the workspace root without
-    falling back to ``bash ls``.
+    The natural inspection call `list_files(path=".")` default-denies
+    on older workspaces because the default template only allowed
+    subdirectories (`data/`, `bundles/`, `sessions/`, `content/`,
+    `logs/`) plus `platform.yaml`. Adding `.` at the front lets
+    agents list the workspace root without falling back to `bash ls`.
 
     Silent no-op when:
-    - ``platform.yaml`` is absent.
-    - ``file_access`` section is absent (catalog-resolved default
+
+    - `platform.yaml` is absent.
+    - `file_access` section is absent (catalog-resolved default
       applies; nothing to migrate).
-    - ``.`` is already in ``allowed_paths`` (already migrated, or
+    - `.` is already in `allowed_paths` (already migrated, or
       hand-edited).
     """
     yaml_path = io.root / "platform.yaml"
@@ -1175,15 +1158,17 @@ def _maybe_add_workspace_root_to_file_access(io: _SetupIO) -> None:
 def _maybe_install_missing_kolsch_skills(io: _SetupIO) -> None:
     """Drop in canonical kolsch skills missing from an existing workspace.
 
-    Phase 2.4 Step 9 — additive drift handler for the kolsch bundle's
-    ``skills/`` tree. Compares the packaged template's skill set to
-    what's on disk; copies the difference. Never overwrites — if the
-    user edited a canonical skill, their edits stay. If they deleted
-    one, the next setup re-run adds it back (intentional: skills are
-    additive content, not config the user "owns").
+    Additive drift handler for the kolsch bundle's `skills/` tree.
+    Compares the packaged template's skill set to what's on disk;
+    copies the difference. Never overwrites — if the user edited a
+    canonical skill, their edits stay. If they deleted one, the
+    next setup re-run adds it back (intentional: skills are
+    additive content, not config the user owns).
 
     Silent no-op when:
-    - The user has no kolsch bundle (they removed it; respect that).
+
+    - The user has no kolsch bundle (they removed it; respect
+      that).
     - The packaged template ships no skills.
     - Every canonical skill is already present.
     """
@@ -1214,22 +1199,20 @@ def _maybe_install_missing_kolsch_skills(io: _SetupIO) -> None:
 
     if added:
         io.out.write(
-            f"  ✓ installed {len(added)} canonical skill(s): "
-            f"{', '.join(added)}\n",
+            f"  ✓ installed {len(added)} canonical skill(s): {', '.join(added)}\n",
         )
 
 
 async def _maybe_warn_invalid_skills(io: _SetupIO) -> None:
     """Skill-validation advisory hook — runs on setup re-runs.
 
-    Builds a fresh :class:`AssetManagement`, walks every catalogued
-    skill, and prints a one-line warning per skill that fails
-    :func:`cli.skills.validate_skill_entry`. Never blocks setup —
-    Step 6's explicit design call (a user mid-editing a SKILL.md
-    should not be locked out of completing setup).
+    Builds a fresh `AssetManagement`, walks every catalogued skill,
+    and prints a one-line warning per skill that fails
+    [`validate_skill_entry`][cli.skills.validate_skill_entry].
+    Never blocks setup — a user mid-editing a SKILL.md should not
+    be locked out of completing setup.
 
-    Silent when the workspace has no skills catalogued — no noise
-    on fresh re-runs.
+    Silent when the workspace has no skills catalogued.
     """
     from assets import AssetManagement  # noqa: PLC0415
     from cli.skills import validate_skill_entry  # noqa: PLC0415
@@ -1296,10 +1279,12 @@ def _print_migration_diff(io: _SetupIO, current_rules: list[dict[str, Any]]) -> 
 def _default_connect_io_factory(
     root: Path, provider: str, api_key: str | None
 ) -> _CommandIO:
-    """Build a `_CommandIO` for `cmd_connect`. When `api_key` is not
-    `None` (the non-interactive env-driven path), wrap a prompter that
-    returns the env-provided key for any ``api_key`` field; otherwise
-    fall back to the production StdinPrompter.
+    """Build a `_CommandIO` for `cmd_connect`.
+
+    When `api_key` is not `None` (the non-interactive env-driven
+    path), wraps a prompter that returns the env-provided key for
+    any `api_key` field; otherwise falls back to the production
+    `StdinPrompter`.
     """
     from cli.llm_commands import (  # noqa: PLC0415
         StdinPrompter,
@@ -1312,17 +1297,20 @@ def _default_connect_io_factory(
     _ = provider
 
     class _EnvKeyPrompter:
-        """Returns `api_key` from the env-provided value; everything
-        else uses the field's default (good enough for OpenRouter,
-        whose only required field is `api_key`; OpenCode also asks
-        for `base_url` — defaults are populated by the connector's
-        prompt spec)."""
+        """Returns `api_key` from the env-provided value.
+
+        Everything else uses the field's default (good enough for
+        OpenRouter, whose only required field is `api_key`;
+        OpenCode also asks for `base_url` — defaults are populated
+        by the connector's prompt spec).
+        """
 
         def __init__(self, key: str, fallback: StdinPrompter) -> None:
             self._key = key
             self._fallback = fallback
 
         def ask(self, field: PromptField) -> str:
+            """Resolve the field's value, preferring the env-provided api_key."""
             if field.name == "api_key":
                 return self._key
             if field.default is not None:
@@ -1350,13 +1338,13 @@ def make_default_setup_io(*, root: Path) -> _SetupIO:
     async def _run_handler(
         args: argparse.Namespace,
     ) -> tuple[int, str | None]:
-        """Adapter — wraps the existing ``_cmd_run`` so Step E can read
-        the failure code from a Fatal ``AgentExecutionError`` without
-        re-implementing agent execution (Phase 1.2 spec rule). On
-        success returns ``(0, None)``; on Fatal returns
-        ``(exit_code, error_code)`` where ``error_code`` is the
+        """Wrap `_cmd_run` so Step E can read the Fatal failure code.
+
+        Setup must not re-implement agent execution. On success
+        returns `(0, None)`; on Fatal returns
+        `(exit_code, error_code)` where `error_code` is the
         canonical Error Model code from
-        ``failed_event.data["error"]["type"]``.
+        `failed_event.data["error"]["type"]`.
         """
         from engine.context import AgentExecutionError  # noqa: PLC0415
 

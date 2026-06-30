@@ -1,20 +1,18 @@
-"""``kolsch connect / disconnect / providers / refresh`` — Phase 1.1.
+"""`kolsch connect / disconnect / providers / refresh` CLI surface.
 
-Implements the four LLM provider commands described in patch Part 8.
-Lives outside :mod:`cli.main` so the heavy interactive + filesystem
+Lives outside `cli.main` so the heavy interactive + filesystem
 orchestration stays separate from the argparse skeleton.
 
 Invariants:
 
-- API key values NEVER touch ``platform.yaml`` (TC-LLM-10). The
-  ``api_key_secret`` field carries the secret NAME; the value lives
-  only in ``.env``.
-- ``platform.yaml`` writes are atomic — temp file + fsync + rename —
+- API key values never touch `platform.yaml`. The `api_key_secret`
+  field carries the secret name; the value lives only in `.env`.
+- `platform.yaml` writes are atomic — temp file + fsync + rename —
   so a partial write never leaves a corrupt file on disk.
-- ``.env`` partial updates preserve every entry that isn't the secret
+- `.env` partial updates preserve every entry that isn't the secret
   this command is touching.
-- A failed connect leaves both ``platform.yaml`` and ``.env`` unchanged
-  (we write only after every validation + discovery succeeds).
+- A failed connect leaves both `platform.yaml` and `.env` unchanged
+  (writes happen only after every validation + discovery succeeds).
 """
 
 from __future__ import annotations
@@ -63,17 +61,22 @@ if TYPE_CHECKING:
 class Prompter(Protocol):
     """One-method protocol: read one prompt's value.
 
-    Production wires :class:`StdinPrompter`; tests pass a stub that
-    returns canned answers."""
+    Production wires [`StdinPrompter`][cli.llm_commands.StdinPrompter];
+    tests pass a stub that returns canned answers.
+    """
 
     def ask(self, field: PromptField) -> str: ...
 
 
 class StdinPrompter:
-    """Production prompter — reads from stdin, uses :func:`getpass` for
-    secret fields so values don't echo to the terminal."""
+    """Production prompter — reads from stdin.
+
+    Uses `getpass` for secret fields so values don't echo to the
+    terminal.
+    """
 
     def ask(self, field: PromptField) -> str:
+        """Read the value for one prompt field from stdin."""
         suffix = f" [{field.default}]" if field.default else ""
         label = f"{field.label}{suffix}: "
         if field.kind == "secret":
@@ -88,8 +91,11 @@ class StdinPrompter:
 
 @dataclass(frozen=True)
 class _CommandIO:
-    """The four collaborators every command takes — kept on one
-    bag so tests can swap them without 6-positional-arg signatures."""
+    """The four collaborators every command takes.
+
+    Bagged together so tests can swap them without 6-positional-arg
+    signatures.
+    """
 
     root: Path
     out: Any  # file-like; defaults to sys.stdout in main.py
@@ -171,8 +177,10 @@ def _set_dotenv_entry(root: Path, key: str, value: str) -> None:
 
 
 def _remove_dotenv_entry(root: Path, key: str) -> bool:
-    """Remove `key=...` from `.env` (if present). Returns True when
-    something was removed."""
+    """Remove `key=...` from `.env` if present.
+
+    Returns True when something was removed.
+    """
     env_path = root / ".env"
     if not env_path.exists():
         return False
@@ -215,7 +223,7 @@ _PLANNED_PROVIDERS: frozenset[str] = frozenset(
 
 
 async def cmd_connect(args: argparse.Namespace, io: _CommandIO) -> int:
-    """Interactive connect flow — patch §8.1."""
+    """Run the interactive connect flow for one provider."""
     provider_name = args.provider
     try:
         connector = io.connector_factory(provider_name)
@@ -274,7 +282,9 @@ def _gather_responses(
     io: _CommandIO,
 ) -> dict[str, str] | None:
     """Walk the connector's `auth_prompt_spec` and collect responses.
-    Returns ``None`` when a required field came back empty."""
+
+    Returns `None` when a required field came back empty.
+    """
     spec = connector.auth_prompt_spec()
     io.out.write(f"Connecting {spec.provider_label}...\n\n")
     io.out.write(spec.intro + "\n\n")
@@ -378,6 +388,7 @@ def _build_provider_entry(
 
 
 async def cmd_disconnect(args: argparse.Namespace, io: _CommandIO) -> int:
+    """Remove a provider from `platform.yaml` and erase its `.env` secret."""
     provider_name = args.provider
     payload = _load_platform_yaml(io.root)
     providers = payload.get("llm_providers") or {}
@@ -406,6 +417,7 @@ async def cmd_disconnect(args: argparse.Namespace, io: _CommandIO) -> int:
 
 
 async def cmd_providers(args: argparse.Namespace, io: _CommandIO) -> int:
+    """Print registered connector types and currently connected providers."""
     _ = args
     payload = _load_platform_yaml(io.root)
     providers = payload.get("llm_providers") or {}
@@ -490,11 +502,11 @@ async def cmd_models(args: argparse.Namespace, io: _CommandIO) -> int:
 
 
 def _alias_lookup(aliases: dict[str, Any]) -> dict[tuple[str, str], str]:
-    """Build a reverse index ``(provider, model) → alias`` from
-    ``platform.yaml``'s ``model_aliases``.
+    """Build a reverse index `(provider, model) → alias`.
 
-    Aliases are deployment-shareable strings users can type into agent
-    YAML; the `models` listing prefers them when shown.
+    Source is `platform.yaml`'s `model_aliases`. Aliases are
+    deployment-shareable strings users can type into agent YAML; the
+    `models` listing prefers them when shown.
     """
     out: dict[tuple[str, str], str] = {}
     for alias, raw in aliases.items():
@@ -641,6 +653,7 @@ def _emit_models_json(
 
 
 async def cmd_refresh(args: argparse.Namespace, io: _CommandIO) -> int:
+    """Re-run discovery against connected providers and rewrite their model lists."""
     payload = _load_platform_yaml(io.root)
     providers = payload.get("llm_providers") or {}
     if not providers:
@@ -698,12 +711,11 @@ async def cmd_refresh(args: argparse.Namespace, io: _CommandIO) -> int:
 
 
 def _build_refresh_secrets(root: Path, payload: dict[str, Any]) -> Any:  # noqa: ANN401 — opaque SecretsProvider
-    """Instantiate a Secrets provider from the platform.yaml `secrets`
-    section. Used by `refresh` so the command doesn't require a full
-    runtime bootstrap.
+    """Instantiate a Secrets provider from platform.yaml's `secrets` section.
 
-    Defaults to the dotenv variant when no `secrets` section exists —
-    matches first-run platform defaults.
+    Used by `refresh` so the command doesn't require a full runtime
+    bootstrap. Defaults to the dotenv variant when no `secrets`
+    section exists — matches first-run platform defaults.
     """
     from providers import make_secrets_provider  # noqa: PLC0415
 
@@ -715,7 +727,7 @@ def _build_refresh_secrets(root: Path, payload: dict[str, Any]) -> Any:  # noqa:
 
 
 def _secret_name_for(provider_name: str) -> str:
-    """Convention: ``<PROVIDER>_API_KEY`` (uppercase, hyphens → underscores)."""
+    """Convention: `<PROVIDER>_API_KEY` (uppercase, hyphens → underscores)."""
     sanitized = provider_name.upper().replace("-", "_").replace(".", "_")
     return f"{sanitized}_API_KEY"
 
@@ -757,9 +769,11 @@ def _augmentation_sources(
     skip_type: str,
     connector_factory: Callable[[str], ProviderConnector],
 ) -> list[MetadataSourceConnector]:
-    """Return connected metadata sources, EXCLUDING any whose type
-    matches `skip_type` (so connecting OpenRouter doesn't try to
-    augment itself)."""
+    """Return connected metadata sources, excluding any whose type matches `skip_type`.
+
+    Skipping by type ensures connecting OpenRouter doesn't try to
+    augment itself from itself.
+    """
     candidates = connected_metadata_sources(existing_providers)
     # `connected_metadata_sources` returns fresh instances from the
     # registry's get(); replace with factory-built instances so tests
@@ -808,7 +822,7 @@ async def _augment_entries(
 
 
 def _model_entry_to_yaml(entry: ModelEntry) -> dict[str, Any]:
-    """Serialize a :class:`ModelEntry` to the platform.yaml row shape."""
+    """Serialize a `ModelEntry` to the `platform.yaml` row shape."""
     out: dict[str, Any] = {"id": entry.id}
     if entry.context_length is not None:
         out["context_length"] = entry.context_length
@@ -829,8 +843,11 @@ def make_default_io(
     root: Path,
     out: TextIO | None = None,
 ) -> _CommandIO:
-    """Production helper — wires :class:`StdinPrompter` + the
-    registry's `get` for `connector_factory`."""
+    """Build a production `_CommandIO` wired to stdin + the LLM registry.
+
+    Combines [`StdinPrompter`][cli.llm_commands.StdinPrompter] with
+    the registry's `get` as the `connector_factory`.
+    """
     return _CommandIO(
         root=root,
         out=out if out is not None else sys.stdout,

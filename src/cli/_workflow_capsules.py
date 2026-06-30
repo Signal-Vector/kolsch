@@ -1,15 +1,9 @@
-"""Workflow-event capsule renderer — Phase 3.9.
+"""Workflow-event capsule renderer.
 
 The chat side of `/workflow` and `/fork` consumes a workflow run's
-event stream and renders one capsule per node-level event. This module
-holds the renderer; the slash commands (Step 1, Step 3) wire it to the
+event stream and renders one capsule per node-level event. This
+module holds the renderer; the slash commands wire it to the
 running executor.
-
-Step 0 ships the SKELETON: a synchronous ``render_events`` entry point
-that walks an iterable of event dicts (the JSONL shape produced by
-:meth:`workflows.run_store.WorkflowRunStore.read_events` /
-:meth:`tail`) and emits the rendered text. Step 1 fills in the async
-tail-follow path that streams capsules as events land in real time.
 
 The renderer is structured so the chat surface and tests share one
 code path:
@@ -20,20 +14,20 @@ code path:
   iterator, awaits the executor task in parallel, and lets the
   capsules stream to the user's terminal.
 
-Per spec §15.4 (locked at Round 4 #6 + Round 7 L7-8), the SOLE label
-source is :func:`workflows.labels.display_label`. No inline 3-step
-fallback. The renderer never reaches into ``description:`` or
-``@node(label=...)`` directly — every header passes through one call
-to ``display_label(node_def, type_label)``.
+The sole label source is
+[`display_label`][workflows.labels.display_label]. No inline
+fallback. The renderer never reaches into `description:` or
+`@node(label=...)` directly — every header passes through one call
+to `display_label(node_def, type_label)`.
 
-Per spec §15.2.2, ``workflow.node.started`` emits a single dim
-``▸ <label>…`` line — NOT a capsule, no border bar, no timestamp,
-no event_id subscript. The matching ``workflow.node.completed`` /
-``.failed`` / ``.pruned`` capsule lands beneath it.
+`workflow.node.started` emits a single dim `▸ <label>…` line — not
+a capsule, no border bar, no timestamp, no event_id subscript. The
+matching `workflow.node.completed` / `.failed` / `.pruned` capsule
+lands beneath it.
 
-Per spec §15.5, ``workflow.node.failed`` capsules render the failing
-error class's ``caller_message`` ClassVar, NOT ``str(exc)``. The
-engineer-targeted single-line form stays on the CLI / JSONL surfaces.
+`workflow.node.failed` capsules render the failing error class's
+`caller_message` ClassVar, not `str(exc)`. The engineer-targeted
+single-line form stays on the CLI / JSONL surfaces.
 """
 
 from __future__ import annotations
@@ -66,42 +60,38 @@ _ELLIPSIS = "…"  # …
 _EVENT_ID_SHORT_LEN = 8
 """Width of the event_id subscript shown below each capsule's header.
 
-Master spec §15.3 — operators copy the id for ``/fork``. Step 3 will
-either widen this or add prefix-matching in ``/fork`` so the short id
-is paste-safe; for Step 0 the skeleton displays the short form
-verbatim and the fork handler does not exist yet."""
+Operators copy the id for `/fork`. The renderer displays the short
+form verbatim; `/fork` accepts the short form via prefix-matching."""
 
 
 _TerminalKindResolver = "Callable[[Any], str | None]"
 
 
 class WorkflowCapsuleRenderer:
-    """Consumes a workflow-run's event stream; emits one capsule per event.
+    """Consumes a workflow run's event stream; emits one capsule per event.
 
-    Phase 3.9 — capsules render at ``workflow.node.completed``
-    (success), ``workflow.node.pruned`` (muted), ``workflow.node.failed``
-    (``caller_message``); ``workflow.node.started`` emits the
-    spec §15.2.2 running indicator (one dim line, not a capsule). All
-    other event kinds are silent at v1.
+    Capsules render at `workflow.node.completed` (success),
+    `workflow.node.pruned` (muted), `workflow.node.failed`
+    (`caller_message`); `workflow.node.started` emits the running
+    indicator (one dim line, not a capsule). All other event kinds
+    are silent today.
 
-    The :attr:`workflow` parameter is the parsed workflow definition;
-    the renderer uses ``workflow.nodes[node_name]`` to fetch the
-    per-instance ``NodeDef`` (carrying any ``description:``) the label
-    helper needs. When ``workflow`` is ``None`` (Step 0 tests that
-    don't construct a full workflow), the renderer synthesizes a
-    minimal stub from the event's ``node_name`` so :func:`display_label`
-    still has a callable surface — the cleaned-name fallback runs.
+    The `workflow` parameter is the parsed workflow definition; the
+    renderer uses `workflow.nodes[node_name]` to fetch the
+    per-instance `NodeDef` (carrying any `description:`) the label
+    helper needs. When `workflow` is `None` (tests that don't
+    construct a full workflow), the renderer synthesizes a minimal
+    stub from the event's `node_name` so `display_label` still has
+    a callable surface — the cleaned-name fallback runs.
 
-    The :attr:`type_label_for` callable resolves a node_def to its
-    type-level label (per spec §15.4 step 2 — ``LABEL = "..."`` on
-    built-ins, ``@node(label=...)`` on authored Python). Step 1 will
-    wire the real catalog walk; the Step 0 default returns ``None``
-    everywhere so the cleaned-name fallback runs.
+    The `type_label_for` callable resolves a node_def to its
+    type-level label (`LABEL = "..."` on built-ins,
+    `@node(label=...)` on authored Python).
 
-    The :attr:`indent_depth` parameter supports sub-workflow nesting
-    (spec §15.2 + Step 1 §3): a child renderer with depth N indents
-    every line by ``"  " * N`` so child capsules visually nest under
-    the parent's ``workflow:`` node capsule.
+    The `indent_depth` parameter supports sub-workflow nesting: a
+    child renderer with depth N indents every line by `"  " * N` so
+    child capsules visually nest under the parent's `workflow:`
+    node capsule.
     """
 
     def __init__(
@@ -112,18 +102,16 @@ class WorkflowCapsuleRenderer:
         type_label_for: Callable[[Any], str | None] | None = None,
         indent_depth: int = 0,
         store: WorkflowRunStore | None = None,
-        child_workflow_loader: (
-            Callable[[str], Workflow | None] | None
-        ) = None,
+        child_workflow_loader: (Callable[[str], Workflow | None] | None) = None,
     ) -> None:
         self._console = console
         self._workflow = workflow
         self._type_label_for = type_label_for or (lambda _node_def: None)
         self._indent_depth = indent_depth
         self._indent = "  " * indent_depth
-        # Phase 3.9 Step 1 — store + loader are needed for the async
-        # tail entry point (production path). Step 0 tests pass events
-        # directly via ``render_events`` and don't touch these.
+        # Store + loader are needed for the async tail entry point
+        # (production path). Tests can pass events directly via
+        # `render_events` without setting them.
         self._store = store
         self._child_workflow_loader = child_workflow_loader
         # Pending child-workflow renderer tasks. When a
@@ -140,9 +128,9 @@ class WorkflowCapsuleRenderer:
     def render_events(self, events: Iterable[dict[str, Any]]) -> None:
         """Walk an iterable of event dicts; emit one render per event.
 
-        Used by Step 0 unit tests (pre-built event lists) and by the
-        async tail loop (one event at a time). Step 1 builds the
-        :meth:`render_run` async path on top of this same dispatch.
+        Used by unit tests (pre-built event lists) and by the async
+        tail loop (one event at a time). The `render_run` async
+        path is built on top of this same dispatch.
         """
         for event in events:
             self._dispatch(event)
@@ -154,32 +142,31 @@ class WorkflowCapsuleRenderer:
         done_event: asyncio.Event | None = None,
         poll_seconds: float = 0.05,
     ) -> None:
-        """Tail the run's JSONL on the event loop; emit one render
-        per event; await child sub-workflow renderers; return when
-        a terminal ``workflow.run.*`` event lands OR ``done_event``
-        is set.
+        """Tail the run's JSONL on the event loop; emit one render per event.
 
-        The :paramref:`done_event` parameter is the WAITING_FOR_INPUT
-        escape hatch. A paused run NEVER emits a terminal
-        ``workflow.run.*`` event (it ends mid-stream, awaiting resume),
-        so a naive tail would block forever. The slash handler sets
-        ``done_event`` after the executor coroutine returns; the
-        loop body does one final drain after seeing it set, then
-        exits cleanly. Synchronous file appends in the executor's
-        ``emit_event`` mean all events are visible on disk by the
+        Awaits child sub-workflow renderers; returns when a terminal
+        `workflow.run.*` event lands OR `done_event` is set.
+
+        The `done_event` parameter is the WAITING_FOR_INPUT escape
+        hatch. A paused run never emits a terminal `workflow.run.*`
+        event (it ends mid-stream, awaiting resume), so a naive
+        tail would block forever. The slash handler sets
+        `done_event` after the executor coroutine returns; the loop
+        body does one final drain after seeing it set, then exits
+        cleanly. Synchronous file appends in the executor's
+        `emit_event` mean all events are visible on disk by the
         time the executor task completes.
 
-        Sub-workflow nesting: when a ``workflow.node.called_workflow``
+        Sub-workflow nesting: when a `workflow.node.called_workflow`
         event lands, the renderer spawns a child
-        :class:`WorkflowCapsuleRenderer` at ``indent_depth+1`` tailing
-        the child run's JSONL. The parent awaits the child task in
-        its own ``render_run`` so child capsules complete before the
+        `WorkflowCapsuleRenderer` at `indent_depth+1` tailing the
+        child run's JSONL. The parent awaits the child task in its
+        own `render_run` so child capsules complete before the
         parent's tail returns.
         """
         if self._store is None:
             msg = (
-                "render_run requires a WorkflowRunStore; pass store=... at "
-                "construction"
+                "render_run requires a WorkflowRunStore; pass store=... at construction"
             )
             raise ValueError(msg)
         import json  # noqa: PLC0415
@@ -199,9 +186,7 @@ class WorkflowCapsuleRenderer:
                     # (``OSError: telling position disabled by next()
                     # call``). The polled-resume pattern requires
                     # ``tell()`` to capture the next-read offset.
-                    with run_dir.events_path.open(
-                        "r", encoding="utf-8"
-                    ) as fh:
+                    with run_dir.events_path.open("r", encoding="utf-8") as fh:
                         fh.seek(offset)
                         while True:
                             line = fh.readline()
@@ -243,16 +228,18 @@ class WorkflowCapsuleRenderer:
             self._render_pruned_capsule(event)
         elif kind == "workflow.node.failed":
             self._render_failed_capsule(event)
-        # All other kinds are silent at v1 (no run-level framing, no
-        # tool.* capsules, no state.mutated render).
-        # ``workflow.node.called_workflow`` (sub-workflow spawn) is
-        # handled only in the async path :meth:`_adispatch` because
+        # All other kinds are silent today (no run-level framing,
+        # no tool.* capsules, no state.mutated render).
+        # `workflow.node.called_workflow` (sub-workflow spawn) is
+        # handled only in the async path `_adispatch` because
         # spawning a child renderer needs the event loop.
 
     async def _adispatch(self, event: dict[str, Any]) -> None:
-        """Async-side dispatch — handles the same events plus
-        ``workflow.node.called_workflow`` which spawns a child renderer
-        (one indent deeper) tailing the named child run."""
+        """Async-side dispatch — handles the same events plus the spawn case.
+
+        `workflow.node.called_workflow` spawns a child renderer
+        (one indent deeper) tailing the named child run.
+        """
         kind = event.get("kind", "")
         if kind == "workflow.node.called_workflow":
             self._spawn_child_renderer(event)
@@ -260,11 +247,13 @@ class WorkflowCapsuleRenderer:
         self._dispatch(event)
 
     def _spawn_child_renderer(self, event: dict[str, Any]) -> None:
-        """Phase 3.7 — ``workflow.node.called_workflow`` carries the
-        ``child_workflow_run_id`` of the sub-workflow's run. Tail the
-        child JSONL in a fresh :class:`WorkflowCapsuleRenderer` whose
-        ``indent_depth`` is one deeper so child capsules nest
-        visually under the parent's ``workflow:`` node.
+        """Spawn a nested renderer for a sub-workflow run.
+
+        `workflow.node.called_workflow` carries the
+        `child_workflow_run_id` of the sub-workflow's run. Tail the
+        child JSONL in a fresh `WorkflowCapsuleRenderer` whose
+        `indent_depth` is one deeper so child capsules nest
+        visually under the parent's `workflow:` node.
         """
         if self._store is None:
             return
@@ -298,9 +287,9 @@ class WorkflowCapsuleRenderer:
     # ------------------------------------------------------------------
 
     def _render_running_indicator(self, event: dict[str, Any]) -> None:
-        """Spec §15.2.2 — one dim ``▸ <label>…`` line per started node.
+        """Print one dim `▸ <label>…` line per started node.
 
-        NOT a capsule: no border bar, no timestamp, no event_id
+        Not a capsule: no border bar, no timestamp, no event_id
         subscript. The line persists in scrollback unchanged; the
         matching completion / failure / pruned-target capsule lands
         beneath it.
@@ -310,12 +299,11 @@ class WorkflowCapsuleRenderer:
         self._console.print(Text(line, style="dim"))
 
     def _render_completed_capsule(self, event: dict[str, Any]) -> None:
-        """Spec §15.2 — capsule at node completion.
+        """Emit the capsule at node completion.
 
-        Header = ``display_label(node_def, type_label)``. Body =
-        the captured output, formatted as a single-line preview at v1
-        (Step 1 may widen). Event_id subscript appears in dim text
-        below the header.
+        Header = `display_label(node_def, type_label)`. Body = the
+        captured output, formatted as a single-line preview.
+        Event_id subscript appears in dim text below the header.
         """
         label = self._label_for(event)
         body_lines = self._format_output_body(event)
@@ -327,14 +315,12 @@ class WorkflowCapsuleRenderer:
         )
 
     def _render_pruned_capsule(self, event: dict[str, Any]) -> None:
-        """Spec §15.2 — branch-not-taken edges render MUTED with body
-        ``(not taken)``.
+        """Render branch-not-taken edges muted with body `(not taken)`.
 
-        Pruned nodes never emit ``workflow.node.started`` (pruning
-        happens at edge-evaluation time, before any runner fires), so
-        there is no preceding running indicator — the muted capsule
-        lands standalone. Spec §15.2.2 calls this out as a hard rule;
-        the renderer-test side asserts it.
+        Pruned nodes never emit `workflow.node.started` (pruning
+        happens at edge-evaluation time, before any runner fires),
+        so there is no preceding running indicator — the muted
+        capsule lands standalone.
         """
         label = self._label_for(event)
         body_lines = ["(not taken)"]
@@ -346,29 +332,27 @@ class WorkflowCapsuleRenderer:
         )
 
     def render_pause_capsule(self, node_name: str) -> None:
-        """Spec §15.2.1 — render the inline ``user_input`` pause capsule.
+        """Render the inline `user_input` pause capsule.
 
         The chat handler calls this AFTER the executor returns
-        :attr:`WorkflowRunStatus.WAITING_FOR_INPUT`. The capsule is
-        rendered SYNCHRONOUSLY (the executor task has already returned
-        — there's nothing to await). Shape:
+        `WorkflowRunStatus.WAITING_FOR_INPUT`. The capsule is
+        rendered synchronously (the executor task has already
+        returned — there's nothing to await). Shape:
 
-        - Header = ``display_label(node_def, type_label)``.
-        - Body line 1 = ``node_def.prompt`` from the parsed workflow.
-          For prompts that contain Jinja markers (``{{ ... }}``) the
-          operator sees the unrendered template; the rendered form on
-          ``WorkflowPausedForInput.prompt`` is dropped by the
-          executor catch and is not on disk at v1 (spec §15.2.1).
-        - Body line 2 = dim ``→ <node_name>`` for forensics + sequential-
-          pause disambiguation. Always rendered.
-        - No ``(awaiting your response)`` placeholder — the chat's
-          ``:> `` input prompt is the cue.
+        - Header = `display_label(node_def, type_label)`.
+        - Body line 1 = `node_def.prompt` from the parsed workflow.
+          For prompts that contain Jinja markers (`{{ ... }}`) the
+          operator sees the unrendered template; the rendered form
+          on `WorkflowPausedForInput.prompt` is dropped by the
+          executor catch and is not on disk today.
+        - Body line 2 = dim `→ <node_name>` for forensics +
+          sequential-pause disambiguation. Always rendered.
+        - No `(awaiting your response)` placeholder — the chat's
+          `:> ` input prompt is the cue.
         """
         node_def = self._lookup_node_def(node_name)
         label = (
-            display_label(
-                node_def, self._type_label_for(node_def)
-            )
+            display_label(node_def, self._type_label_for(node_def))
             if node_def is not None
             else display_label(_NodeNameStub(node_name))
         )
@@ -391,13 +375,13 @@ class WorkflowCapsuleRenderer:
         )
 
     def _render_failed_capsule(self, event: dict[str, Any]) -> None:
-        """Spec §15.5 — render the failing error class's
-        ``caller_message`` ClassVar (NOT ``str(exc)``).
+        """Render the failing error class's `caller_message` ClassVar.
 
         Looks up the class named in the event payload's
-        ``error_class`` field on :mod:`workflows.errors`; falls back to
-        :attr:`WorkflowError.caller_message` (the generic blurb) when
+        `error_class` field on `workflows.errors`; falls back to
+        `WorkflowError.caller_message` (the generic blurb) when
         the class is missing or doesn't carry the ClassVar.
+        `str(exc)` never reaches chat.
         """
         label = self._label_for(event)
         payload = event.get("payload") or {}
@@ -414,14 +398,14 @@ class WorkflowCapsuleRenderer:
     # ------------------------------------------------------------------
 
     def _label_for(self, event: dict[str, Any]) -> str:
-        """Resolve the node's display label via the SOLE call site
-        :func:`workflows.labels.display_label` (spec §15.4).
+        """Resolve the node's display label.
 
-        Looks up the :class:`NodeDef` by ``node_name`` from the parsed
-        :attr:`workflow`. When the workflow is unavailable (Step 0
-        test surface) or the node_name is missing from the workflow's
-        :attr:`Workflow.nodes` map, synthesizes a stub object so the
-        helper's cleaned-name fallback runs.
+        Calls [`display_label`][workflows.labels.display_label] —
+        the sole label source. Looks up the `NodeDef` by `node_name`
+        from the parsed `workflow`. When the workflow is unavailable
+        (tests) or the node_name is missing from `Workflow.nodes`,
+        synthesizes a stub object so the helper's cleaned-name
+        fallback runs.
         """
         node_name = str(event.get("node_name") or "")
         node_def = self._lookup_node_def(node_name)
@@ -443,10 +427,8 @@ class WorkflowCapsuleRenderer:
     def _format_output_body(self, event: dict[str, Any]) -> list[str]:
         """Render the completed node's captured output as body lines.
 
-        Step 0 keeps this minimal — collapses the payload's ``output``
-        field (when present) to a single-line preview. Step 1 widens
-        to handle structured outputs (dicts, lists) and per-type
-        rendering (bash stdout vs. agent output).
+        Collapses the payload's `output` field (when present) to a
+        single-line preview.
         """
         payload = event.get("payload") or {}
         output = payload.get("output")
@@ -457,9 +439,9 @@ class WorkflowCapsuleRenderer:
     def _event_id_subscript(self, event: dict[str, Any]) -> list[str]:
         """One dim subscript line carrying the event's short id.
 
-        Operators copy this for ``/fork`` per spec §15.3. The short
-        form keeps the capsule compact; Step 3 will either widen this
-        or add prefix-matching in ``/fork``.
+        Operators copy this for `/fork`. The short form keeps the
+        capsule compact; `/fork` accepts the short form via
+        prefix-matching.
         """
         event_id = str(event.get("event_id") or "")
         if not event_id:
@@ -468,11 +450,11 @@ class WorkflowCapsuleRenderer:
         return [f"  {short}"]
 
     def _caller_message_for(self, payload: dict[str, Any]) -> str:
-        """Spec §15.5 — resolve the failing class's ``caller_message``.
+        """Resolve the failing class's `caller_message`.
 
-        Falls back to :attr:`WorkflowError.caller_message` (generic
-        blurb) when the named class is missing or doesn't carry the
-        ClassVar. Engineer-targeted ``str(exc)`` never reaches chat.
+        Falls back to `WorkflowError.caller_message` (generic blurb)
+        when the named class is missing or doesn't carry the
+        ClassVar. Engineer-targeted `str(exc)` never reaches chat.
         """
         from workflows import errors as workflow_errors  # noqa: PLC0415
 
@@ -489,21 +471,20 @@ class WorkflowCapsuleRenderer:
         label: str,
         body_lines: list[str],
     ) -> None:
-        """Emit a capsule whose every line is prefixed with the
-        renderer's indent.
+        """Emit a capsule whose every line is prefixed with the renderer's indent.
 
-        :func:`cli._renderer._capsule` writes ``│ <source> · ts``
-        as the header — the workflow renderer wants the NODE LABEL in
-        the header slot (the identity of what just ran), so we pass
-        ``label`` as ``source`` and override the bar color directly
-        from the ``workflow*`` palette entry indicated by the
-        :paramref:`source` kwarg here.
+        `cli._renderer._capsule` writes `│ <source> · ts` as the
+        header — the workflow renderer wants the NODE LABEL in the
+        header slot (the identity of what just ran), so pass `label`
+        as `source` and override the bar color directly from the
+        `workflow*` palette entry indicated by the `source` kwarg
+        here.
 
-        :func:`_capsule` itself is ignorant of indent depth (the
-        existing chat capsules — tool, permission, agent — never
-        nest). For nested sub-workflows we render manually below,
-        mirroring :func:`_capsule`'s shape line-for-line with an extra
-        space-prefix on every line.
+        `_capsule` itself is ignorant of indent depth (the existing
+        chat capsules — tool, permission, agent — never nest). For
+        nested sub-workflows render manually below, mirroring
+        `_capsule`'s shape line-for-line with an extra space-prefix
+        on every line.
         """
         color = _CAPSULE_PALETTE.get(source, "white")
         if self._indent_depth == 0:
@@ -514,8 +495,8 @@ class WorkflowCapsuleRenderer:
                 color=color,
             )
             return
-        # Manual indented render — mirrors ``_capsule`` exactly but
-        # prefixes every line with ``self._indent``.
+        # Manual indented render — mirrors `_capsule` exactly but
+        # prefixes every line with `self._indent`.
         from datetime import datetime  # noqa: PLC0415
 
         ts = datetime.now().strftime("%H:%M:%S")  # noqa: DTZ005
@@ -535,15 +516,15 @@ class WorkflowCapsuleRenderer:
 
 
 class _NodeNameStub:
-    """Minimal stand-in for a ``NodeDef`` when the renderer doesn't
-    have a parsed workflow to look up.
+    """Minimal stand-in for a `NodeDef` when no parsed workflow is available.
 
-    Carries the node_name as an instance-level ``__name__`` attribute
-    so :func:`display_label`'s step-3 cleaned-name fallback (which
-    consults ``getattr(node, "__name__", None)`` before falling back
-    to ``type(node).__name__``) returns a legible label.
-    ``description`` is intentionally absent so the step-1 short-circuit
-    doesn't fire.
+    Carries the node_name as an instance-level `__name__` attribute
+    so [`display_label`][workflows.labels.display_label]'s
+    cleaned-name fallback (which consults
+    `getattr(node, "__name__", None)` before falling back to
+    `type(node).__name__`) returns a legible label. `description`
+    is intentionally absent so the short-circuit branch doesn't
+    fire.
     """
 
     def __init__(self, name: str) -> None:
@@ -551,12 +532,11 @@ class _NodeNameStub:
 
 
 def _short_event_id(event_id: str) -> str:
-    """Truncate ``ev_<uuid>`` to ``ev_<first_8>`` per spec §15.3.
+    """Truncate `ev_<uuid>` to `ev_<first_8>`.
 
-    The ``ev_`` prefix is kept intact (operators visually anchor on
-    it); the suffix is the first :data:`_EVENT_ID_SHORT_LEN`
-    characters of the UUID body. Non-``ev_``-prefixed ids are
-    returned verbatim.
+    The `ev_` prefix is kept intact (operators visually anchor on
+    it); the suffix is the first `_EVENT_ID_SHORT_LEN` characters
+    of the UUID body. Non-`ev_`-prefixed ids are returned verbatim.
     """
     if not event_id.startswith("ev_"):
         return event_id
@@ -570,9 +550,7 @@ def _single_line_preview(value: Any) -> str:  # noqa: ANN401
     """Collapse a value to a single-line preview string.
 
     Strings are stripped of newlines; everything else passes through
-    ``repr`` for an unambiguous shape. Step 1 widens this to handle
-    multi-line agent outputs with the existing tool-result truncation
-    pattern (``_renderer._truncate_tool_body`` at 20 lines).
+    `repr` for an unambiguous shape.
     """
     if isinstance(value, str):
         return value.replace("\n", " ").strip()

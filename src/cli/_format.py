@@ -1,16 +1,16 @@
-"""CLI render helpers — Phase 3.0 Step 6.
+"""CLI render helpers for the workflows / nodes command groups.
 
 Two responsibilities:
 
-- :func:`render` — the SINGLE place where text vs json branching
-  happens for the ``kolsch workflows`` and ``kolsch nodes`` command
-  groups (master spec §14.3 + §14.4 envelope). No subcommand prints
-  payload directly; all output routes through this helper.
-- :func:`render_exception` — R3 #11 generic JSON formatter for any
-  :class:`workflows.errors.WorkflowError`. Uses
-  ``identifying_names_keys`` and ``caller_message`` ClassVars
-  (R3 #8 + R3 #11) to auto-build a uniform per-exception dict so the
-  CLI doesn't need per-class formatters.
+- [`render`][cli._format.render] — the single place where text vs json
+  branching happens for the `kolsch workflows` and `kolsch nodes`
+  command groups. No subcommand prints payload directly; all output
+  routes through this helper.
+- [`render_exception`][cli._format.render_exception] — generic JSON
+  formatter for any [`WorkflowError`][workflows.errors.WorkflowError].
+  Uses `identifying_names_keys` and `caller_message` ClassVars to
+  auto-build a uniform per-exception dict so the CLI doesn't need
+  per-class formatters.
 """
 
 from __future__ import annotations
@@ -35,7 +35,7 @@ class EnvelopeStatus:
 _STATUS = EnvelopeStatus()
 
 
-# PLR0913 acknowledged: the envelope schema (master spec §14.3) is
+# PLR0913 acknowledged: the envelope schema is
 # {command, status, data, errors, warnings} — five fields plus the
 # ``fmt`` discriminator and the ``text_body`` carve-out for callers
 # that want a pre-rendered text payload when ``fmt="text"``. Each
@@ -53,21 +53,21 @@ def render(  # noqa: PLR0913
 ) -> str:
     """Render a command's terminal output as text or JSON.
 
-    Master spec §14.3 envelope shape (json):
+    The JSON envelope shape is fixed:
 
-    ::
+    ```json
+    {
+        "command": "<workflows verb>",
+        "status": "ok" | "error",
+        "data": {...} | null,
+        "errors": [...],
+        "warnings": [...]
+    }
+    ```
 
-        {
-            "command": "<workflows verb>",
-            "status": "ok" | "error",
-            "data": {...} | null,
-            "errors": [...],
-            "warnings": [...]
-        }
-
-    Text path: returns ``text_body`` verbatim when provided, else a
-    minimal stringification of ``data``. The caller is responsible
-    for tabular formatting of the text path.
+    Text path returns `text_body` verbatim when provided, else a
+    minimal stringification of `data`. The caller is responsible for
+    tabular formatting of the text path.
     """
     if fmt == "json":
         envelope: dict[str, Any] = {
@@ -93,29 +93,30 @@ def render(  # noqa: PLR0913
 
 
 def render_exception(exc: BaseException) -> dict[str, Any]:
-    """R3 #11 generic JSON formatter for a single exception.
+    """Render a single exception as the CLI's error-envelope dict.
 
-    Output dict shape (per master spec §14.4):
+    Output dict shape:
 
-    ::
+    ```json
+    {
+        "class": "<ClassName>",
+        "summary": "str(exc)",
+        "caller_message": "<caller_message ClassVar>",
+        "identifying_names": {...},
+        "attrs": {...},
+        "file": null,
+        "line": null,
+        "docs_anchor": null
+    }
+    ```
 
-        {
-            "class": "<ClassName>",
-            "summary": str(exc),
-            "caller_message": "<caller_message ClassVar>",
-            "identifying_names": {...},
-            "attrs": {...},
-            "file": str | None,
-            "line": int | None,
-            "docs_anchor": str | None
-        }
+    Works generically for any
+    [`WorkflowError`][workflows.errors.WorkflowError] by reading
+    `identifying_names_keys` + `caller_message` ClassVars; all
+    remaining instance attributes land in `attrs`.
 
-    Works generically for any :class:`workflows.errors.WorkflowError`
-    by reading ``identifying_names_keys`` + ``caller_message``
-    ClassVars; all remaining instance attributes land in ``attrs``.
-
-    For non-WorkflowError exceptions (defensive: e.g., bare
-    ``NotImplementedError`` from the run stub), the formatter produces
+    For non-`WorkflowError` exceptions (defensive: e.g. bare
+    `NotImplementedError` from the run stub), the formatter produces
     a minimal envelope with class + summary populated.
     """
     cls = type(exc)

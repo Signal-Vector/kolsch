@@ -1,22 +1,20 @@
-"""Argument parsers for ``/workflow`` and ``/fork`` chat slash commands.
+"""Argument parsers for `/workflow` and `/fork` chat slash commands.
 
-Phase 3.9 Step 0 — pure parsing, no I/O. Both parsers operate on the
-free-form text AFTER the slash keyword (the dispatch layer strips the
-``/workflow `` / ``/fork `` prefix before calling).
+Pure parsing, no I/O. Both parsers operate on the free-form text
+*after* the slash keyword (the dispatch layer strips the `/workflow `
+/ `/fork ` prefix before calling).
 
-Grammar — by design minimal:
+The grammar is intentionally minimal:
 
-- ``<ref> [with k1=v1 k2=v2 ...]`` for ``/workflow``.
-- ``<event_id> [with k1=v1 ...]`` for ``/fork``.
+- `<ref> [with k1=v1 k2=v2 ...]` for `/workflow`.
+- `<event_id> [with k1=v1 ...]` for `/fork`.
 
-The ``with`` separator is whitespace-bounded — split on the FIRST
-occurrence of ``" with "`` only. Values cannot contain spaces (no
+The `with` separator is whitespace-bounded — split on the first
+occurrence of `" with "` only. Values cannot contain spaces (no
 shell-style quoting); operators with prose values pass JSON literals
-or pre-bind the value through workflow inputs at runtime. This
-limitation is locked at v1 per
-``process/phase3.9-chat-surface-build.md`` (Scope §G).
+or pre-bind the value through workflow inputs at runtime.
 
-Errors raise :class:`ValueError`; the slash dispatcher surfaces them as
+Errors raise `ValueError`; the slash dispatcher surfaces them as
 slash-error capsules in chat.
 """
 
@@ -33,21 +31,21 @@ _WITH_SEPARATOR = " with "
 
 
 def parse_slash_workflow_args(text: str) -> tuple[str, dict[str, Any]]:
-    """Parse the args after ``/workflow`` into ``(ref, inputs)``.
+    """Parse the args after `/workflow` into `(ref, inputs)`.
 
-    The caller has already stripped the leading ``/workflow `` so
-    ``text`` is the remainder (e.g., ``"kolsch/workflows/hello with
-    name=Alice"`` or just ``"kolsch/workflows/hello"``).
+    The caller has already stripped the leading `/workflow ` so
+    `text` is the remainder (e.g., `"kolsch/workflows/hello with
+    name=Alice"` or just `"kolsch/workflows/hello"`).
 
     Returns:
-        ``(ref, inputs)`` — ``ref`` is the workflow catalog ref (a
-        non-empty string); ``inputs`` is a dict of bound inputs
+        `(ref, inputs)` — `ref` is the workflow catalog ref (a
+        non-empty string); `inputs` is a dict of bound inputs
         (possibly empty).
 
     Raises:
-        ValueError: missing ref, empty ref before ``with``, or any
+        ValueError: Missing ref, empty ref before `with`, or any
             malformed input pair raised by
-            :func:`workflows._args.parse_input_pairs`.
+            [`parse_input_pairs`][workflows._args.parse_input_pairs].
     """
     body = text.strip()
     if not body:
@@ -72,21 +70,20 @@ def parse_slash_workflow_args(text: str) -> tuple[str, dict[str, Any]]:
 
 
 def parse_slash_fork_args(text: str) -> tuple[str, dict[str, Any]]:
-    """Parse the args after ``/fork`` into ``(event_id, overrides)``.
+    """Parse the args after `/fork` into `(event_id, overrides)`.
 
-    The caller has already stripped the leading ``/fork `` so ``text``
-    is the remainder (e.g., ``"ev_abcd1234 with check_cmd=false"``).
+    The caller has already stripped the leading `/fork ` so `text` is
+    the remainder (e.g., `"ev_abcd1234 with check_cmd=false"`).
 
     Returns:
-        ``(event_id, overrides)`` — ``event_id`` is the user-supplied
-        event id verbatim (no validation here; the
-        ``WorkflowRunStore`` lookup downstream surfaces a clean error
-        for typos / missing events); ``overrides`` is a dict of input
-        overrides patched into the forked run's pre-fork output
-        (possibly empty).
+        `(event_id, overrides)` — `event_id` is the user-supplied
+        event id verbatim (no validation here; the `WorkflowRunStore`
+        lookup downstream surfaces a clean error for typos / missing
+        events); `overrides` is a dict of input overrides patched
+        into the forked run's pre-fork output (possibly empty).
 
     Raises:
-        ValueError: missing event_id, empty event_id before ``with``,
+        ValueError: Missing event_id, empty event_id before `with`,
             or any malformed override pair.
     """
     body = text.strip()
