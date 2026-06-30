@@ -1,21 +1,18 @@
-"""Layer 3 ConfigValidator factory for the ``standard`` skills variant.
+"""Layer 3 ConfigValidator factory for the `standard` skills variant.
 
-Spec §4.2: the standard variant's validator checks that
-
-- ``enabled`` is a list of mappings;
-- each entry has a string ``ref``;
-- each ``ref`` resolves to a discovered skill in the catalog;
-- no ``ref`` appears twice.
+The standard variant's validator checks that `enabled` is a list of
+mappings, that each entry carries a string `ref`, that each `ref`
+resolves to a discovered skill in the catalog, and that no `ref`
+appears twice.
 
 The validator dispatched by the kernel must honour the
-:class:`kernel.ConfigValidator` signature — sync,
-``Callable[[dict], ValidationResult]``. To carry the catalog
-dependency we expose a *factory* that closes over an
-:class:`AssetManagement` and returns the closure the kernel calls.
-
-The closure does no I/O (it reads a snapshot built at
-``AssetManagement.initialize`` time), so it remains pure enough for
-the kernel's purity expectation (Kernel §4.3).
+[`ConfigValidator`][kernel.ConfigValidator] signature — sync,
+`Callable[[dict], ValidationResult]`. To carry the catalog dependency
+we expose a *factory* that closes over an [`AssetManagement`]
+[assets.AssetManagement] and returns the closure the kernel calls. The
+closure does no I/O — it reads an immutable snapshot built at
+[`AssetManagement.initialize`][assets.AssetManagement] time — so it
+stays pure enough for the kernel's purity expectation.
 """
 
 from __future__ import annotations
@@ -33,12 +30,20 @@ _SOURCE = "skills.standard"
 
 
 def make_standard_validator(asset_management: AssetManagement) -> ConfigValidator:
-    """Build the Layer 3 validator dispatched for ``skills.variant=standard``.
+    """Build the Layer 3 validator dispatched for `skills.variant=standard`.
 
-    The returned callable matches :data:`kernel.ConfigValidator`
-    exactly: takes the ``config`` body (the dict inside ``{variant,
-    config}`` per Schemas §A.7) and returns a
-    :class:`kernel.ValidationResult`.
+    The returned callable matches [`ConfigValidator`]
+    [kernel.ConfigValidator] exactly: it takes the `config` body (the
+    dict inside `{variant, config}`) and returns a [`ValidationResult`]
+    [kernel.ValidationResult].
+
+    Args:
+        asset_management: The platform's asset management surface. The
+            returned closure holds a reference to it so it can call
+            `catalog()` at validate time.
+
+    Returns:
+        The kernel-facing validator closure.
     """
 
     def validate(body: dict[str, Any]) -> ValidationResult:
@@ -58,9 +63,8 @@ def make_standard_validator(asset_management: AssetManagement) -> ConfigValidato
             return ValidationResult(ok=False, errors=errors)
 
         # Snapshot the catalogued skill refs once per call. Reads off
-        # the immutable post-initialize catalog (Am-I7). Phase 3.0
-        # Step 1B — refs are now canonical 3-segment only; lookup
-        # routes through the catalog chokepoint (Round 5 H3).
+        # the immutable post-initialize catalog. Refs are canonical
+        # 3-segment only; lookup routes through the catalog chokepoint.
         catalog = asset_management.catalog()
         seen: set[str] = set()
         for index, entry in enumerate(enabled):

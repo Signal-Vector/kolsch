@@ -1,15 +1,17 @@
-"""The :class:`SkillsSubsystem` facade — Module API Reference §10.
+"""The [`SkillsSubsystem`][skills.subsystem.SkillsSubsystem] facade.
 
-Resolves enabled skill refs to :class:`EnabledSkill` records (catalog
-metadata only — bodies NEVER load here; that happens at engine runtime
-via the ``read`` tool, per spec §5.1) and prepares force-invoke
-handoffs.
+Resolves enabled skill refs to [`EnabledSkill`]
+[skills.models.EnabledSkill] records (catalog metadata only — skill
+bodies never load here; they materialise into the event log later
+through the Tools subsystem's `read` dispatch) and prepares
+force-invoke handoffs.
 
-Skills emit NO events (Sk-I5). The engine performs the synthetic
-``tool.called`` / ``tool.result`` pair when processing a force-invoke;
-the model's voluntary skill loads are also engine-side (the regular
-``read`` dispatch). This subsystem is pure with respect to the event
-log.
+This module is pure with respect to the event log. The engine emits
+the synthetic `tool.called` / `tool.result` pair when processing a
+force-invoke; the model's voluntary skill loads are also engine-side
+via the regular `read` dispatch. See the
+[skills subsystem](../../docs/explanation/skills-subsystem.md) for
+the full contract.
 """
 
 from __future__ import annotations
@@ -29,17 +31,18 @@ _SUBSYSTEM_KEY = "skills"
 
 
 class SkillsSubsystem:
-    """Per-agent skill discovery surface.
+    """Per-agent skill discovery facade.
 
     Constructed once at engine startup with the platform's
-    :class:`AssetManagement`. Methods are async to match the contract
-    (Module API §10.1) even though the underlying catalog lookups are
-    sync — keeping them async leaves room for future
-    network-backed catalogs without an API break.
+    [`AssetManagement`][assets.AssetManagement]. Methods are async even
+    though the underlying catalog lookups are sync — keeping the public
+    surface async leaves room for future network-backed catalogs
+    without an API break.
 
-    No per-agent state cached: re-resolution on each call is O(N) on
-    the enabled list, which is small in practice, and avoids cache-
-    invalidation bugs when the agent's config changes.
+    No per-agent state is cached. Re-resolution on each call is O(N) on
+    the enabled list (small in practice) and sidesteps the cache-
+    invalidation bugs that would surface when the agent's config
+    changes mid-session.
     """
 
     def __init__(self, *, asset_management: AssetManagement) -> None:
@@ -49,15 +52,23 @@ class SkillsSubsystem:
         self,
         config: ResolvedAgentConfig,
     ) -> list[EnabledSkill]:
-        """Resolve each ref in ``skills.config.enabled`` to an EnabledSkill.
+        """Resolve each enabled ref to an `EnabledSkill` record.
 
-        Skills with ``disable-model-invocation: true`` ARE included —
-        the engine filters them out of the system-prompt listing via
-        :func:`format_skills_listing` but still needs them in the
-        returned list so force-invoke can route to them (Sk-I2 + §6.5).
+        Skills with `disable-model-invocation: true` ARE included. The
+        engine filters them out of the system-prompt listing at render
+        time but still needs them in the returned list so force-invoke
+        can route to them.
 
-        Raises :class:`SkillNotFound` (Fatal) when any enabled ref
-        does not resolve to a catalogued skill.
+        Args:
+            config: The resolved agent configuration.
+
+        Returns:
+            One [`EnabledSkill`][skills.models.EnabledSkill] per ref
+            in `skills.config.enabled`, in declaration order.
+
+        Raises:
+            SkillNotFound: An enabled ref does not resolve to a
+                catalogued skill.
         """
         out: list[EnabledSkill] = []
         for entry in _enabled_entries(config):
@@ -73,15 +84,27 @@ class SkillsSubsystem:
     ) -> SkillInvocation:
         """Prepare a force-invoke handoff for the engine.
 
-        - Verifies ``skill_ref`` is in the agent's enabled list (raises
-          :class:`SkillForcedNotEnabled` otherwise — spec §6.4 last
-          paragraph).
-        - Looks up the catalogued SKILL.md path (raises
-          :class:`SkillNotFound` if the catalog and config disagree).
-        - Returns a :class:`SkillInvocation` the engine then drives
-          through a synthetic ``tool.called`` for ``read`` on
-          ``skill_md_path``. Authorization is the engine's standard
-          ``tool.read`` check (Sk-I4 + spec §6.3).
+        Verifies the ref is in the agent's enabled list, then resolves
+        its catalogued SKILL.md path. The returned [`SkillInvocation`]
+        [skills.models.SkillInvocation] is what the engine drives
+        through a synthetic `tool.called` for `read` on
+        `skill_md_path`; authorization is the regular `tool.read`
+        check, so this method performs no authz of its own.
+
+        Args:
+            skill_ref: The 3-segment catalog ref the caller wants to
+                force-invoke.
+            config: The resolved agent configuration. Used to verify
+                that `skill_ref` is enabled.
+
+        Returns:
+            The prepared handoff record.
+
+        Raises:
+            SkillForcedNotEnabled: `skill_ref` is not in the agent's
+                enabled list.
+            SkillNotFound: The catalog has no skill at `skill_ref`
+                (catalog and config disagree).
         """
         if skill_ref not in _enabled_ref_set(config):
             raise SkillForcedNotEnabled(
@@ -114,7 +137,7 @@ class SkillsSubsystem:
 
 
 def _skills_body(config: ResolvedAgentConfig) -> dict[str, Any]:
-    """Return the ``skills.config`` body dict, or empty if disabled."""
+    """Return the `skills.config` body dict, or empty if disabled."""
     sub = config.subsystems.get(_SUBSYSTEM_KEY)
     if sub is None:
         return {}
@@ -122,12 +145,12 @@ def _skills_body(config: ResolvedAgentConfig) -> dict[str, Any]:
 
 
 def _enabled_entries(config: ResolvedAgentConfig) -> list[dict[str, Any]]:
-    """Yield well-formed ``{"ref": str}`` entries from the enabled list.
+    """Yield well-formed `{"ref": str}` entries from the enabled list.
 
     Malformed entries are silently skipped here — Layer 3 validation
-    (the :func:`make_standard_validator` factory) is responsible for
-    surfacing those at config-load time so the runtime path stays
-    narrow.
+    (the [`make_standard_validator`][skills.validator.make_standard_validator]
+    factory) is responsible for surfacing those at config-load time so
+    the runtime path stays narrow.
     """
     raw = _skills_body(config).get("enabled", []) or []
     out: list[dict[str, Any]] = []
@@ -144,10 +167,10 @@ def _enabled_ref_set(config: ResolvedAgentConfig) -> set[str]:
 
 
 def _make_enabled_skill(*, ref: str, metadata: dict[str, Any]) -> EnabledSkill:
-    """Project a catalog metadata dict into an :class:`EnabledSkill`.
+    """Project a catalog metadata dict into an `EnabledSkill`.
 
-    Tolerates both ``allowed-tools`` (kebab — the SKILL.md frontmatter
-    parser does not canonicalise this field) and ``allowed_tools``
+    Tolerates both `allowed-tools` (kebab — the SKILL.md frontmatter
+    parser does not canonicalise this field) and `allowed_tools`
     (snake). Missing optional fields collapse to their defaults.
     """
     allowed = metadata.get("allowed-tools")
