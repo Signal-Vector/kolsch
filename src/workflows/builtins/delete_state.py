@@ -1,18 +1,18 @@
-"""``kolsch/nodes/delete_state`` runner — Phase 3.5 Step 1.
+"""`kolsch/nodes/delete_state` runner — drops keys from workflow state.
 
-Master spec §4.3.2. Iterates :attr:`DeleteStateNodeDef.keys` in
-YAML declaration order. For each key:
+Iterates `DeleteStateNodeDef.keys` in YAML declaration order. For
+each key:
 
-- ``state.pop(key, None)`` — silent on absent keys. Matches Python
-  ``dict.pop`` semantics; idempotency is intentional per master
-  spec §4.3.2.
-- Emit one :class:`WorkflowStateMutatedEvent` with
-  ``op="delete"`` AND ``value=None`` regardless of whether the key
+- `state.pop(key, None)` — silent on absent keys, matching Python
+  `dict.pop` semantics. Idempotency is intentional.
+- Emit one
+  [`WorkflowStateMutatedEvent`][workflows.events.WorkflowStateMutatedEvent]
+  with `op="delete"` AND `value=None` regardless of whether the key
   was present. The event records the AUTHOR'S intent, not the
-  observable mutation — replay applies a no-op ``pop`` consistently.
+  observable mutation — replay applies a no-op `pop` consistently.
 
-Returns ``{}`` — like ``set_state``, the observable effect is on
-``_state``, not on the captured output dict.
+Returns `{}` — like `set_state`, the observable effect is on
+`_state`, not on the captured output dict.
 """
 
 from __future__ import annotations
@@ -33,7 +33,7 @@ __all__ = ["DeleteStateRunner"]
 
 
 class DeleteStateRunner:
-    """Runtime for ``kolsch/nodes/delete_state`` — Phase 3.5 §4.3.2."""
+    """Runner for `kolsch/nodes/delete_state` — drops the listed keys."""
 
     async def run(
         self,
@@ -44,6 +44,7 @@ class DeleteStateRunner:
         state: dict[str, Any],
         ctx: NodeContext,
     ) -> dict[str, Any]:
+        """Pop each key from `state` and emit one mutation event per key."""
         _ = (node_name, bound_inputs)
         for key in node_def.keys:
             state.pop(key, None)

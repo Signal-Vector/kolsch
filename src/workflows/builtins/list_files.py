@@ -1,21 +1,19 @@
-"""``kolsch/nodes/list_files`` runner — Phase 3.5 Step 2.
+"""`kolsch/nodes/list_files` runner — narrows tool output to leaf names.
 
-Master spec §4.2.3. Renders ``path`` and the optional ``pattern``;
-dispatches via the in-engine :func:`tools.builtins.make_list_files`
-factory; narrows the tool's ``list[{name, path, is_dir, size_bytes}]``
-return to ``{entries: list[str]}`` — the canonical workflow output
-contract.
+Renders `path` and the optional `pattern`; dispatches via the
+in-engine
+[`make_list_files`][tools.builtins.make_list_files] factory;
+narrows the tool's `list[{name, path, is_dir, size_bytes}]` return
+to `{entries: list[str]}` — the canonical workflow output contract.
 
-Naming-mismatch note: the parser's :attr:`ListFilesNodeDef.pattern`
-maps to the underlying tool's ``glob`` argument. The tool natively
-honours the filter; the runner forwards verbatim and applies no
-secondary :func:`fnmatch.filter` pass — the spec's "runner-side
-filter is the safety net" hedge was for cases where the tool ignored
-the pattern, which the in-engine ``make_list_files`` does NOT.
+**Naming mismatch.** The parser's `ListFilesNodeDef.pattern` maps
+to the underlying tool's `glob` argument. The tool natively honours
+the filter; the runner forwards verbatim and applies no secondary
+`fnmatch.filter` pass.
 
-Non-recursive at v1 per master spec §4.2.3 — the runner does not
-inject ``**`` into the glob; if the author writes ``pattern: "**/*"``
-the tool's existing recursive-walk behaviour kicks in (forward-compat).
+**Non-recursive at v1.** The runner does not inject `**` into the
+glob; if the author writes `pattern: "**/*"` the tool's existing
+recursive-walk behaviour kicks in (forward-compat).
 """
 
 from __future__ import annotations
@@ -44,7 +42,7 @@ _SYNTHETIC_AGENT = AgentId("ag_workflow_executor")
 
 
 class ListFilesRunner:
-    """Runtime for ``kolsch/nodes/list_files`` — Phase 3.5 §4.2.3."""
+    """Runner for `kolsch/nodes/list_files` — captures leaf names only."""
 
     def __init__(
         self,
@@ -68,6 +66,12 @@ class ListFilesRunner:
         state: dict[str, Any],
         ctx: NodeContext,
     ) -> dict[str, Any]:
+        """Render the path/pattern and dispatch `list_files`.
+
+        Raises:
+            WorkflowFileAccessDenied: The rendered path is outside
+                the policy-allowed area.
+        """
         _ = state
         from tools.dispatch import dispatch_tool  # noqa: PLC0415
 
@@ -97,10 +101,10 @@ class ListFilesRunner:
                 path=rendered_path,
                 node=node_name,
             ) from exc
-        # The tool returns a list of metadata dicts; the spec narrows
-        # to LEAF names only. Full paths drop — authors get them via
-        # the agent-side tool dispatch when they need the structured
-        # shape.
+        # The tool returns a list of metadata dicts; the workflow
+        # contract narrows to LEAF names only. Full paths drop —
+        # authors get them via the agent-side tool dispatch when
+        # they need the structured shape.
         entries: list[str] = [str(item["name"]) for item in result]
         return {"entries": entries}
 

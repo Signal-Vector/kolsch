@@ -1,42 +1,41 @@
-"""``kolsch/nodes/workflow`` runner — Phase 3.7 §4.6.1.
+"""`kolsch/nodes/workflow` runner — the workflow→workflow boundary.
 
-The workflow-sub runtime is the workflow→workflow boundary: catalog
-lookup of the child ``ref:``, parent-pointer mint, child-run creation
-with inherited ``trace_id``, nested executor construction with the
-extended ``_call_chain`` / ``_call_depth`` metadata (used for cycle +
-depth caps), child run with pause-cascade re-raise, and terminal
-output harvest via :func:`workflows._terminal.compute_terminal_output_dict`.
+Catalog lookup of the child `ref:`, parent-pointer mint, child-run
+creation with inherited `trace_id`, nested executor construction
+with the extended `_call_chain` / `_call_depth` metadata (used for
+cycle + depth caps), child run with pause-cascade re-raise, and
+terminal output harvest via
+[`compute_terminal_output_dict`][workflows._terminal.compute_terminal_output_dict].
 
-The runner emits two parent-side forensics events around the child's
-lifecycle: :class:`workflows.events.WorkflowNodeCalledWorkflowEvent`
+The runner emits two parent-side forensics events around the
+child's lifecycle:
+[`WorkflowNodeCalledWorkflowEvent`][workflows.events.WorkflowNodeCalledWorkflowEvent]
 BEFORE the nested executor begins, and
-:class:`workflows.events.WorkflowNodeCalledWorkflowCompletedEvent`
+[`WorkflowNodeCalledWorkflowCompletedEvent`][workflows.events.WorkflowNodeCalledWorkflowCompletedEvent]
 AFTER it returns / pauses / fails. Cross-JSONL navigation goes
-through ``trace_id`` (universal), ``child_run_id`` (parent→child via
-the workflow node's ``workflow.node.completed`` payload), and
-``WorkflowRun.parent`` (child→parent).
+through `trace_id` (universal), `child_run_id` (parent→child via
+the workflow node's `workflow.node.completed` payload), and
+`WorkflowRun.parent` (child→parent).
 
-Pause cascade (master spec §10.1 + §4.6.1.2): when the nested
-executor raises :class:`workflows.errors.WorkflowPausedForInput`, the
-runner emits ``called_workflow_completed`` with
-``child_status="waiting_for_input"`` then RE-RAISES so the parent's
-executor catches the pause at the same site as a leaf user_input
-runner would (Phase 3.4 worklist catch arm). A swallowed pause
-silently hangs the parent's worklist; the explicit re-raise is the
-load-bearing contract.
+**Pause cascade.** When the nested executor raises
+[`WorkflowPausedForInput`][workflows.errors.WorkflowPausedForInput],
+the runner emits `called_workflow_completed` with
+`child_status="waiting_for_input"` then RE-RAISES so the parent's
+executor catches the pause at the same site as a leaf
+`user_input` runner would. A swallowed pause silently hangs the
+parent's worklist; the explicit re-raise is the load-bearing
+contract.
 
-Failure propagation (§4.6.1.1): a child reaching ``failed`` /
-``aborted`` / ``timed_out`` surfaces as
-:class:`workflows.errors.WorkflowNodeFailed(cause=ChildWorkflowFailed(...))`
-so the parent's executor emits the canonical
-``workflow.node.failed`` + ``workflow.run.failed`` pair.
+**Failure propagation.** A child reaching `failed` / `aborted` /
+`timed_out` surfaces as
+`WorkflowNodeFailed(cause=ChildWorkflowFailed(...))` so the
+parent's executor emits the canonical `workflow.node.failed` +
+`workflow.run.failed` pair.
 
-Resume cascade is operator-driven at v1 (§4.6.1.3): the parent does
-NOT auto-resume the child. The leaf is resumed first; the operator
-then resumes the parent and the runner detects the child reached a
-terminal-ish status and harvests. The resume-detection branch lands
-in Step 3 alongside the ``_replay.py`` extension; Step 1 ships the
-forward path only.
+**Resume cascade.** Operator-driven at v1: the parent does NOT
+auto-resume the child. The leaf is resumed first; the operator
+then resumes the parent and the runner detects the child reached
+a terminal-ish status and harvests.
 """
 
 from __future__ import annotations
@@ -79,17 +78,17 @@ _DEPTH_LIMIT = 16
 
 
 class WorkflowSubRunner:
-    """Runtime for ``kolsch/nodes/workflow`` — master spec §4.6.1.
+    """Runner for `kolsch/nodes/workflow` — spawns and drives a child run.
 
     Constructed with the catalog + run-store + executor-factory +
-    registry. The ``executor_factory`` seam exists because the
-    runtime executor module would otherwise create a circular import:
-    ``workflows.builtins`` registers runners against
-    :class:`workflows.executor.RunnerRegistry`, and the executor
-    can't import the runners back without a cycle. The factory is a
-    plain callable taking the same kwargs as
-    :class:`workflows.executor.IterativeExecutor` — the CLI wires
-    it as ``lambda **kw: IterativeExecutor(**kw)``.
+    registry. The `executor_factory` seam exists because the
+    executor module would otherwise create a circular import:
+    `workflows.builtins` registers runners against
+    [`RunnerRegistry`][workflows.executor.RunnerRegistry], and the
+    executor can't import the runners back without a cycle. The
+    factory is a plain callable taking the same kwargs as
+    [`IterativeExecutor`][workflows.executor.IterativeExecutor] —
+    the CLI wires it as `lambda **kw: IterativeExecutor(**kw)`.
     """
 
     def __init__(
@@ -114,19 +113,35 @@ class WorkflowSubRunner:
         state: dict[str, Any],
         ctx: NodeContext,
     ) -> dict[str, Any]:
-        """§4.6.1.1 algorithm — see module docstring for the full prose."""
-        _ = state  # child runs are state-isolated (§4.6.1, locked).
+        """Resolve the child ref, spawn the child run, drive it to completion.
+
+        See the module docstring for the full pause-cascade,
+        failure-propagation, and resume-cascade semantics.
+
+        Raises:
+            WorkflowCallCycle: The child ref is already on the call
+                chain — direct or transitive recursion.
+            WorkflowExtendsDepthExceeded: The call depth would
+                exceed the static limit.
+            WorkflowNodeFailed: Catalog drift (missing child ref)
+                or terminal child failure (`failed` / `aborted` /
+                `timed_out`), wrapped via
+                [`ChildWorkflowFailed`][workflows.errors.ChildWorkflowFailed].
+            WorkflowPausedForInput: The child paused waiting for
+                input — re-raised so the parent's worklist writes
+                its own `waiting_at` sidecar.
+        """
+        _ = state  # child runs are state-isolated by contract.
 
         child_ref = node_def.ref
 
-        # Phase 3.7 Step 3 — operator-driven resume cascade. The
-        # executor's resume entry detected this workflow-node
-        # invocation as the OPEN pause point and pre-populated
-        # ``ctx.recorded_child_run_id`` from the replayed
-        # ``called_workflow`` marker. We DON'T spawn a new child here
-        # — we read the existing child's status off disk and either
-        # harvest its terminal output, raise a still-paused error, or
-        # propagate a child failure.
+        # Operator-driven resume cascade. The executor's resume
+        # entry detected this workflow-node invocation as the OPEN
+        # pause point and pre-populated `ctx.recorded_child_run_id`
+        # from the replayed `called_workflow` marker. We DON'T spawn
+        # a new child here — we read the existing child's status
+        # off disk and either harvest its terminal output, raise a
+        # still-paused error, or propagate a child failure.
         if ctx.is_resume_mode and ctx.recorded_child_run_id is not None:
             return await self._resume_cascade(
                 node_name=node_name,
@@ -136,8 +151,8 @@ class WorkflowSubRunner:
             )
 
         # Step 1 — cycle detection BEFORE the catalog lookup. The
-        # auto-include in ``IterativeExecutor.__init__`` guarantees
-        # ``ctx.call_chain`` carries this run's workflow_ref as the
+        # auto-include in `IterativeExecutor.__init__` guarantees
+        # `ctx.call_chain` carries this run's workflow_ref as the
         # tail entry, so direct A→A recursion is caught on the first
         # would-be call (not after one extra level).
         if child_ref in ctx.call_chain:
@@ -161,9 +176,9 @@ class WorkflowSubRunner:
             )
 
         # Step 3 — catalog resolution. Missing refs raise
-        # ``WorkflowNodeFailed`` so the executor's existing failure
-        # path emits ``workflow.node.failed`` (parity with the agent
-        # runner's :class:`AgentRefUnresolved` remap).
+        # `WorkflowNodeFailed` so the executor's existing failure
+        # path emits `workflow.node.failed` (parity with the agent
+        # runner's `AgentRefUnresolved` remap).
         entry = self._catalog.lookup(child_ref, expected_type="workflow")
         if entry is None:
             raise WorkflowNodeFailed(
@@ -176,8 +191,8 @@ class WorkflowSubRunner:
         child_workflow = load_workflow(Path(entry.path))
 
         # Step 4 — parent pointer + child-run creation. Trace id
-        # inherits unchanged per master spec §11.3 so cross-JSONL
-        # correlation (parent + every child) shares a single id.
+        # inherits unchanged so cross-JSONL correlation (parent +
+        # every child) shares a single id.
         parent_ptr = ParentRunPointer(
             workflow_run_id=WorkflowRunId(ctx.workflow_run_id),
             invocation_id=InvocationId(ctx.invocation_id),
@@ -189,20 +204,20 @@ class WorkflowSubRunner:
             parent=parent_ptr,
         )
 
-        # Step 5 — stamp ``spawned_run_id`` on the (frozen) ctx so
-        # the parent executor's ``workflow.node.completed`` payload
-        # builder picks it up as ``child_run_id``. Frozen dataclass
-        # — write via ``object.__setattr__`` mirrors the agent
-        # runner's ``spawned_session_id`` stamp.
+        # Step 5 — stamp `spawned_run_id` on the (frozen) ctx so
+        # the parent executor's `workflow.node.completed` payload
+        # builder picks it up as `child_run_id`. Frozen dataclass —
+        # write via `object.__setattr__` mirrors the agent runner's
+        # `spawned_session_id` stamp.
         object.__setattr__(ctx, "spawned_run_id", child_run.run_id)
 
-        # Step 6 — emit ``workflow.node.called_workflow`` on the
-        # PARENT'S JSONL BEFORE constructing the nested executor so a
-        # crash mid-construction still leaves the forensics marker
-        # behind. Chains to the workflow-node's ``started`` event via
-        # the executor's per-invocation chain pointer (Phase 3.5's
-        # ``emit_workflow_event`` hook advances both the per-invocation
-        # pointer and ``_last_event_id``).
+        # Step 6 — emit `workflow.node.called_workflow` on the
+        # PARENT'S JSONL BEFORE constructing the nested executor so
+        # a crash mid-construction still leaves the forensics marker
+        # behind. Chains to the workflow-node's `started` event via
+        # the executor's per-invocation chain pointer (the
+        # `emit_workflow_event` hook advances both the
+        # per-invocation pointer and `_last_event_id`).
         await ctx.emit_workflow_event(
             WorkflowNodeCalledWorkflowEvent(
                 workflow_run_id=WorkflowRunId(ctx.workflow_run_id),
@@ -235,19 +250,18 @@ class WorkflowSubRunner:
         # Step 8 — run the child. Two pause-signalling shapes from
         # the nested executor:
         #
-        # 1. ``WorkflowPausedForInput`` bubbles up (the inner
-        #    ``user_input`` runner raised it AND the nested executor
+        # 1. `WorkflowPausedForInput` bubbles up (the inner
+        #    `user_input` runner raised it AND the nested executor
         #    chose to re-raise rather than swallow — currently the
-        #    Phase 3.4 executor swallows + returns, so this branch is
+        #    executor swallows + returns, so this branch is
         #    documentary / belt-and-braces).
-        # 2. ``nested.run()`` returns ``WAITING_FOR_INPUT`` after
+        # 2. `nested.run()` returns `WAITING_FOR_INPUT` after
         #    swallowing the pause + writing the child's sidecar +
-        #    flipping the child's status. This is the live Phase 3.4
-        #    contract.
+        #    flipping the child's status. This is the live contract.
         #
-        # In BOTH cases the parent must pause too: the parent's outer
-        # worklist needs a ``WorkflowPausedForInput`` to catch so it
-        # writes the parent's ``waiting_at`` sidecar (with the
+        # In BOTH cases the parent must pause too: the parent's
+        # outer worklist needs a `WorkflowPausedForInput` to catch
+        # so it writes the parent's `waiting_at` sidecar (with the
         # workflow-node's invocation id, so the eventual resume
         # re-enters this runner) and flips the parent's status. The
         # synthesised pause for the return-shape case carries the
@@ -283,8 +297,8 @@ class WorkflowSubRunner:
 
         # Step 9 — terminal-status branching. SUCCEEDED is the only
         # success arm; every other terminal becomes a node failure
-        # wrapping ``ChildWorkflowFailed`` so the parent's existing
-        # ``workflow.node.failed`` path emits cleanly.
+        # wrapping `ChildWorkflowFailed` so the parent's existing
+        # `workflow.node.failed` path emits cleanly.
         if status == WorkflowRunStatus.SUCCEEDED:
             await self._emit_called_completed(
                 ctx=ctx,
@@ -322,30 +336,30 @@ class WorkflowSubRunner:
         child_run_id: WorkflowRunId,
         ctx: NodeContext,
     ) -> dict[str, Any]:
-        """Phase 3.7 §4.6.1.3 — operator-driven resume cascade.
+        """Resume an OPEN workflow-node invocation against its existing child.
 
-        Called when the parent is resuming an OPEN workflow-node
-        invocation that previously paused waiting for its child. The
-        child's status is read off disk; three terminal arms:
+        Called when the parent is resuming a workflow-node
+        invocation that previously paused waiting for its child.
+        The child's status is read off disk; three terminal arms:
 
-        - ``SUCCEEDED`` → harvest the child's terminal output dict
-          from its JSONL's ``workflow.run.completed.payload.outputs``
+        - `SUCCEEDED` → harvest the child's terminal output dict
+          from its JSONL's `workflow.run.completed.payload.outputs`
           and return it. The parent's worklist body emits the
-          ``workflow.node.completed`` event with this dict.
-        - ``WAITING_FOR_INPUT`` → the leaf is still paused. The
+          `workflow.node.completed` event with this dict.
+        - `WAITING_FOR_INPUT` → the leaf is still paused. The
           operator must resume the leaf FIRST. Raise a
-          :class:`WorkflowNodeFailed` whose ``cause`` is an explicit
-          ValueError so the executor's failure path surfaces a
+          `WorkflowNodeFailed` whose `cause` is an explicit
+          `ValueError` so the executor's failure path surfaces a
           clear "resume <leaf> first" hint.
-        - ``FAILED`` / ``ABORTED`` / ``TIMED_OUT`` → wrap in
-          :class:`ChildWorkflowFailed` and propagate via
-          ``WorkflowNodeFailed``, matching the initial-spawn path's
+        - `FAILED` / `ABORTED` / `TIMED_OUT` → wrap in
+          `ChildWorkflowFailed` and propagate via
+          `WorkflowNodeFailed`, matching the initial-spawn path's
           failure semantics so downstream tooling reads the same
           envelope shape across spawn and resume.
 
-        Stamps ``ctx.spawned_run_id`` so the parent's
-        ``workflow.node.completed`` payload still carries
-        ``child_run_id`` (parity with the initial-spawn path; the
+        Stamps `ctx.spawned_run_id` so the parent's
+        `workflow.node.completed` payload still carries
+        `child_run_id` (parity with the initial-spawn path; the
         forensics view of resumed runs matches the live-run view).
         """
         object.__setattr__(ctx, "spawned_run_id", child_run_id)
@@ -399,16 +413,17 @@ class WorkflowSubRunner:
     ) -> dict[str, Any]:
         """Walk the child's JSONL for its terminal-output dict.
 
-        Phase 3.7 — at resume the child's :class:`IterativeExecutor`
+        At resume the child's
+        [`IterativeExecutor`][workflows.executor.IterativeExecutor]
         is long-gone (it ran in a different process); its in-memory
-        ``_captured`` + ``_pruned`` aren't accessible. The child's
-        ``workflow.run.completed`` event's payload carries the same
+        `_captured` + `_pruned` aren't accessible. The child's
+        `workflow.run.completed` event's payload carries the same
         terminal-keyed output dict that
-        :func:`workflows._terminal.compute_terminal_output_dict`
+        [`compute_terminal_output_dict`][workflows._terminal.compute_terminal_output_dict]
         produced at child run-end (the executor's
-        ``_assemble_terminal_outputs`` writes it there). Returning
+        `_assemble_terminal_outputs` writes it there). Returning
         that dict gives the parent's downstream consumers the same
-        ``nodes.<workflow_node>.<terminal>.<key>`` shape regardless
+        `nodes.<workflow_node>.<terminal>.<key>` shape regardless
         of whether the parent harvested live (initial spawn) or via
         resume cascade.
         """

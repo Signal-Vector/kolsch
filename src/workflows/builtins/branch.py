@@ -1,19 +1,19 @@
-"""``kolsch/nodes/branch`` runner — Phase 3.6 §4.6.3.
+"""`kolsch/nodes/branch` runner — first-class boolean route gate.
 
-Boolean route gate ORTHOGONAL to the edge-level ``branch:`` field
-shipped in Phase 3.3. The Phase 3.3 mechanism reads
-``compute_branch_value(node_def, captured)`` after every node
-completion to decide which outgoing edges fire; this runner makes
-``kolsch/nodes/branch`` a first-class branchable source by capturing
-its ``condition:`` evaluation under the ``value`` key — the same
-shape authored Python ``@node``s use for ``bool`` returns.
+Orthogonal to the edge-level `branch:` field. The edge-level
+mechanism reads
+[`compute_branch_value`][workflows.branching.compute_branch_value]
+after every node completion to decide which outgoing edges fire;
+this runner makes `kolsch/nodes/branch` a first-class branchable
+source by capturing its `condition:` evaluation under the `value`
+key — the same shape authored Python `@node`s use for `bool`
+returns.
 
-The condition follows Round 6 J5/β: a YAML literal (typically a bool,
-sometimes an int via Jinja arithmetic upstream) or a Jinja-marked
-string. ``bool(rendered)`` coerces both — defensive against
-non-bool Jinja results (a truthy non-bool would otherwise be
-rejected by :func:`workflows.branching.compute_branch_value`'s
-``isinstance(value, bool)`` guard and route to ``None``).
+The condition is a YAML literal (typically a bool, sometimes an
+int via Jinja arithmetic upstream) or a Jinja-marked string;
+`bool(rendered)` coerces both — defensive against non-bool Jinja
+results that the branching helper's `isinstance(value, bool)` guard
+would otherwise route to `None`.
 """
 
 from __future__ import annotations
@@ -31,7 +31,7 @@ __all__ = ["BranchRunner"]
 
 
 class BranchRunner:
-    """Runtime for ``kolsch/nodes/branch`` — Phase 3.6 §4.6.3."""
+    """Runner for `kolsch/nodes/branch` — captures `{value: bool}`."""
 
     async def run(
         self,
@@ -42,6 +42,7 @@ class BranchRunner:
         state: dict[str, Any],
         ctx: NodeContext,
     ) -> dict[str, Any]:
+        """Render `condition:` and capture its truthiness under `value`."""
         _ = (node_name, state)
         raw = node_def.condition
         if _is_jinja_marked(raw):

@@ -1,23 +1,25 @@
-"""``kolsch/nodes/read_file`` runner — Phase 3.5 Step 2.
+"""`kolsch/nodes/read_file` runner — narrows the tool output to `content`.
 
-Routes through :func:`tools.dispatch.dispatch_tool` against a
-:class:`tools.decorator.ToolDefinition` for ``read_file`` (built by
-:func:`tools.builtins.make_read_file` in the CLI bootstrap — the
-factory closes over ``policy`` and ``root`` so the tool function
-checks file access without ToolContext needing to carry the policy,
-matching :mod:`workflows.builtins.bash`'s wiring).
+Routes through
+[`dispatch_tool`][tools.dispatch.dispatch_tool] against a
+[`ToolDefinition`][tools.decorator.ToolDefinition] for `read_file`
+(built by
+[`make_read_file`][tools.builtins.make_read_file] in the CLI
+bootstrap — the factory closes over `policy` and `root` so the
+tool function checks file access without `ToolContext` needing to
+carry the policy, matching the bash runner's wiring).
 
-Master spec §4.2.1. Narrows the tool's richer return shape
-(``content`` / ``lines_returned`` / ``total_lines`` / ``next_offset``
-/ ``truncated``) to ``{content}`` — the canonical workflow output
-contract. The runner threads a large ``limit`` so the workflow node's
-``{{ nodes.<n>.content }}`` reflects the entire file rather than
-silently truncating at the tool's default 2000-line pagination cap;
-pagination as a workflow-author surface is a future QoL.
+Narrows the tool's richer return shape (`content` /
+`lines_returned` / `total_lines` / `next_offset` / `truncated`) to
+`{content}` — the canonical workflow output contract. The runner
+threads a large `limit` so the workflow node's
+`{{ nodes.<n>.content }}` reflects the entire file rather than
+silently truncating at the tool's default 2000-line pagination
+cap; pagination as a workflow-author surface is a future QoL.
 
-``FileAccessDenied`` raised by the tool's :func:`files.check_path_allowed`
-is remapped to :class:`workflows.errors.WorkflowFileAccessDenied`
-with the rendered path + node name; ``__cause__`` preserves the
+`FileAccessDenied` raised by the tool's path policy is remapped to
+[`WorkflowFileAccessDenied`][workflows.errors.WorkflowFileAccessDenied]
+with the rendered path + node name; `__cause__` preserves the
 original platform error for in-process debugging.
 """
 
@@ -56,7 +58,7 @@ _FULL_CONTENT_LINE_LIMIT = 10_000_000
 
 
 class ReadFileRunner:
-    """Runtime for ``kolsch/nodes/read_file`` — Phase 3.5 §4.2.1."""
+    """Runner for `kolsch/nodes/read_file` — captures `{content}` only."""
 
     def __init__(
         self,
@@ -80,6 +82,12 @@ class ReadFileRunner:
         state: dict[str, Any],
         ctx: NodeContext,
     ) -> dict[str, Any]:
+        """Render the path and dispatch `read_file`; capture `{content}`.
+
+        Raises:
+            WorkflowFileAccessDenied: The rendered path is outside
+                the policy-allowed area.
+        """
         _ = state
         from tools.dispatch import dispatch_tool  # noqa: PLC0415
 
@@ -115,9 +123,9 @@ def _render(
 ) -> str:
     """Render a Jinja-marked string via the executor's renderer.
 
-    Plain strings (no ``{{``) pass through verbatim — matches
-    :mod:`workflows.builtins.bash`'s pattern so the file-IO runners'
-    config surface behaves identically to bash's.
+    Plain strings (no `{{`) pass through verbatim — matches the
+    bash runner's pattern so the file-IO runners' config surface
+    behaves identically.
     """
     if "{{" not in value:
         return value
@@ -125,12 +133,12 @@ def _render(
 
 
 def _build_tool_ctx(ctx: NodeContext) -> ToolContext:
-    """Construct the synthetic :class:`ToolContext` for dispatch.
+    """Construct the synthetic `ToolContext` for tool dispatch.
 
-    Mirrors :class:`BashRunner._build_tool_ctx`: the in-engine
-    ``make_*`` factory closes over ``policy`` and ``root``, so
-    ``path_policy`` stays ``None`` on the context and the tool
-    function reaches its own copy via the closure.
+    Mirrors the bash runner's variant: the in-engine `make_*`
+    factory closes over `policy` and `root`, so `path_policy` stays
+    `None` on the context and the tool function reaches its own
+    copy via the closure.
     """
     return ToolContext(
         agent_id=_SYNTHETIC_AGENT,

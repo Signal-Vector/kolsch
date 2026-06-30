@@ -1,16 +1,16 @@
-"""``kolsch/nodes/write_file`` runner — Phase 3.5 Step 2.
+"""`kolsch/nodes/write_file` runner — narrows tool output to `bytes_written`.
 
-Master spec §4.2.2. Renders BOTH ``path`` AND ``content`` (both
-Jinja-eligible per the spec); dispatches via the in-engine
-:func:`tools.builtins.make_write_file` factory (closure over policy
-+ root); narrows the tool's ``{path, bytes_written, created}`` return
-to ``{bytes_written}`` — the canonical workflow output contract.
+Renders BOTH `path` AND `content` (both Jinja-eligible);
+dispatches via the in-engine
+[`make_write_file`][tools.builtins.make_write_file] factory
+(closure over policy + root); narrows the tool's
+`{path, bytes_written, created}` return to `{bytes_written}` — the
+canonical workflow output contract.
 
-``WriteFileNodeDef.content`` is typed ``str | bytes`` (the parser
-accepts both for forward-compat); ``bytes`` pass through verbatim
-without Jinja rendering (strings only).
-
-``FileAccessDenied`` remap matches :mod:`workflows.builtins.read_file`.
+`WriteFileNodeDef.content` is typed `str | bytes` (the parser
+accepts both for forward-compat); `bytes` pass through verbatim
+without Jinja rendering (strings only). `FileAccessDenied` remap
+matches the read-file runner's.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ _SYNTHETIC_AGENT = AgentId("ag_workflow_executor")
 
 
 class WriteFileRunner:
-    """Runtime for ``kolsch/nodes/write_file`` — Phase 3.5 §4.2.2."""
+    """Runner for `kolsch/nodes/write_file` — captures `{bytes_written}`."""
 
     def __init__(
         self,
@@ -63,6 +63,12 @@ class WriteFileRunner:
         state: dict[str, Any],
         ctx: NodeContext,
     ) -> dict[str, Any]:
+        """Render path + content and dispatch `write_file`.
+
+        Raises:
+            WorkflowFileAccessDenied: The rendered path is outside
+                the policy-allowed area.
+        """
         _ = state
         from tools.dispatch import dispatch_tool  # noqa: PLC0415
 

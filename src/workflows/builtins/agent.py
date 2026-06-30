@@ -1,23 +1,16 @@
-"""``kolsch/nodes/agent`` runner — Phase 3.2.
+"""`kolsch/nodes/agent` runner — the workflow→agent boundary.
 
-Master spec §8.5. The runner is the workflow→agent boundary: catalog
-lookup of the ``agent:`` ref, ``ResolvedAgentConfig`` build via the
-existing chat-side loader, optional per-invocation ``outputs:``
-override, child-session creation carrying the :class:`FromWorkflowRun`
-parent pointer, and synchronous invocation of
-:meth:`engine.AgentEngine.execute`.
-
-Step 1 shipped the SKELETON (catalog → builder → session) behind a
-stubbed ``engine_call`` callable. Step 2 replaces the seam with a real
-:class:`engine.AgentEngine` injection, constructs the
-:class:`engine.ExecutionContext` carrying the workflow's ``trace_id``
-and an extended caller chain (agent ref prepended), and remaps
-:class:`engine.AgentExecutionError` (the engine's Fatal failure
-transport) to :class:`workflows.errors.WorkflowNodeFailed` so the
-executor's existing failure path emits ``workflow.node.failed`` +
-``workflow.run.failed`` per Phase 3.1.
-
-Step 3 wires registration into ``register_builtins(...)``.
+Catalog lookup of the node's `agent:` ref, `ResolvedAgentConfig`
+build via the chat-side loader, optional per-invocation `outputs:`
+override, child-session creation carrying the
+[`FromWorkflowRun`][schemas.entities.FromWorkflowRun] parent
+pointer, and synchronous invocation of
+[`AgentEngine.execute`][engine.AgentEngine.execute].
+[`AgentExecutionError`][engine.context.AgentExecutionError] — the
+engine's Fatal failure transport — is remapped to
+[`WorkflowNodeFailed`][workflows.errors.WorkflowNodeFailed] so the
+executor's existing failure path emits `workflow.node.failed` +
+`workflow.run.failed`.
 """
 
 from __future__ import annotations
@@ -44,7 +37,17 @@ __all__ = ["AgentRunner"]
 
 
 class AgentRunner:
-    """Runtime for ``kolsch/nodes/agent`` — master spec §8.5."""
+    """Runner for `kolsch/nodes/agent` — spawns a child agent session.
+
+    Constructed once at registration with the catalog, session
+    store, config builder, and engine. Every invocation resolves the
+    node's `agent:` ref, builds the agent config, spawns a child
+    session linked back to this run via
+    [`FromWorkflowRun`][schemas.entities.FromWorkflowRun], and
+    invokes [`AgentEngine.execute`][engine.AgentEngine.execute]
+    synchronously. The agent's structured `agent.message.content`
+    becomes the node's captured output.
+    """
 
     def __init__(
         self,
@@ -68,32 +71,61 @@ class AgentRunner:
         state: dict[str, Any],
         ctx: NodeContext,
     ) -> dict[str, Any]:
-        """Algorithm — master spec §8.5.2.
+        """Spawn a child agent session and return its structured output.
 
-        Step-by-step:
+        Steps in order:
 
-        1. Defensive catalog lookup. The Phase 3.0 validator already
+        1. Defensive catalog lookup. The run-start validator already
            catches missing refs; this guard protects against drift
            (asset deleted between validate and run).
-        2. Build the typed :class:`ResolvedAgentConfig` via the
-           injected loader (chat surface's path).
-        3. If ``node_def.outputs`` is set, replace ``config.io.outputs``
+        2. Build the typed
+           [`ResolvedAgentConfig`][schemas.ResolvedAgentConfig] via
+           the injected loader (chat surface's path).
+        3. If `node_def.outputs` is set, replace `config.io.outputs`
            with the override schema. Identity fields and inputs are
-           UNCHANGED — §4.1.2.3 / §4.1.2.4 locked decisions.
-        4. Mint the :class:`FromWorkflowRun` parent pointer from
-           ``ctx`` (workflow_run_id + invocation_id + parent_event_id).
+           untouched — the override only narrows the agent's output
+           shape for this invocation.
+        4. Mint the
+           [`FromWorkflowRun`][schemas.entities.FromWorkflowRun]
+           parent pointer from `ctx` (workflow_run_id +
+           invocation_id + parent_event_id).
         5. Create the child session with the pointer; stamp
-           ``ctx.spawned_session_id`` so the executor's payload
-           builder (Step 3) can read it.
-        6. Build the :class:`ExecutionContext` carrying the workflow's
-           ``trace_id`` (master spec §11.6.4) and the extended caller
-           chain (agent ref prepended, master spec §13.x). Invoke
-           :meth:`AgentEngine.execute` synchronously.
-        7. Catch :class:`AgentExecutionError`; remap to
-           :class:`WorkflowNodeFailed(cause=)`. The executor's existing
-           failure path emits ``workflow.node.failed``.
+           `ctx.spawned_session_id` so the executor's payload
+           builder can read it.
+        6. Build the
+           [`ExecutionContext`][engine.ExecutionContext] carrying
+           the workflow's `trace_id` and the extended caller chain
+           (agent ref prepended). Invoke
+           [`AgentEngine.execute`][engine.AgentEngine.execute]
+           synchronously.
+        7. Catch
+           [`AgentExecutionError`][engine.context.AgentExecutionError];
+           remap to
+           [`WorkflowNodeFailed`][workflows.errors.WorkflowNodeFailed]
+           so the executor's existing failure path emits
+           `workflow.node.failed`.
         8. Extract the structured output from the returned
-           ``agent.message`` event's ``data["content"]``.
+           `agent.message` event's `data["content"]`.
+
+        Args:
+            node_name: The workflow-level node handle.
+            node_def: The parsed agent-node definition.
+            bound_inputs: The receiver's edge-bound inputs, already
+                rendered by the executor.
+            state: The workflow's live state dict; the agent runner
+                does not consume it directly at this version.
+            ctx: The per-invocation
+                [`NodeContext`][workflows.context.NodeContext]
+                carrying ids, callbacks, and trace plumbing.
+
+        Returns:
+            The agent's `agent.message.content` dict — empty when
+            the message carries no structured content.
+
+        Raises:
+            WorkflowNodeFailed: The agent ref could not be resolved,
+                or the engine raised
+                [`AgentExecutionError`][engine.context.AgentExecutionError].
         """
         _ = state  # reserved — Step 5+ may surface state into trigger
 
@@ -109,10 +141,11 @@ class AgentRunner:
         # Step 2: build the resolved config via the chat-side loader.
         resolved = await self._config_builder(node_def.agent)
 
-        # Step 3: optional ``outputs:`` override — replace ONLY the
-        # ``outputs`` slice of ``config.io``. Identity fields (model,
+        # Step 3: optional `outputs:` override — replace ONLY the
+        # `outputs` slice of `config.io`. Identity fields (model,
         # prompt, system_prompt, temperature, max_iterations, tools)
-        # and ``config.io.inputs`` are untouched per §4.1.2.4.
+        # and `config.io.inputs` are untouched — the override is
+        # an output-shape narrowing, not a re-skinning.
         if node_def.outputs is not None:
             patched_io = IOSpec(
                 mode=resolved.io.mode,
@@ -129,24 +162,24 @@ class AgentRunner:
         )
 
         # Step 5: spawn the child session. The store keys sessions by
-        # the resolved ``agent_id`` (prefixed ``ag_...``); the catalog
-        # ``ref`` is the 3-segment user-facing handle and would fail
-        # the ``AgentId`` shape check. Deterministic ``name=`` so
-        # spawned sessions are easy to spot in ``kolsch sessions list``
-        # — Step 1 Reviewer AC for AC 1.5. ``trace_id`` is threaded so
-        # the spawned session's ``session.opened`` event correlates
-        # with the workflow run from the very first event; subsequent
-        # engine-emitted events inherit it via :class:`ExecutionContext`
-        # (master spec §11.6.4).
+        # the resolved `agent_id` (prefixed `ag_...`); the catalog
+        # `ref` is the 3-segment user-facing handle and would fail
+        # the `AgentId` shape check. Deterministic `name=` so
+        # spawned sessions are easy to spot in `kolsch sessions list`.
+        # `trace_id` is threaded so the spawned session's
+        # `session.opened` event correlates with the workflow run
+        # from the very first event; subsequent engine-emitted events
+        # inherit it via
+        # [`ExecutionContext`][engine.ExecutionContext].
         session = await self._session_store.create_session(
             str(resolved.agent_id),
             name=f"{ctx.workflow_run_id}::{node_name}",
             from_workflow_run=fwr,
             trace_id=str(ctx.trace_id) if ctx.trace_id is not None else None,
         )
-        # ``NodeContext`` is frozen to keep authored nodes from
+        # `NodeContext` is frozen to keep authored nodes from
         # mutating it; the runner sets the engine-side outbound field
-        # via ``object.__setattr__`` so the public surface stays
+        # via `object.__setattr__` so the public surface stays
         # immutable for nodes themselves.
         object.__setattr__(ctx, "spawned_session_id", session.session_id)
 
@@ -154,12 +187,12 @@ class AgentRunner:
         # follows the agent's declared mode — workflow agent nodes are
         # naturally single-shot (the workflow drives the agent once
         # with bound inputs and consumes structured output); we fall
-        # back to the ``user_message`` shape if the agent declares
-        # ``conversational`` so the engine's preflight doesn't reject.
+        # back to the `user_message` shape if the agent declares
+        # `conversational` so the engine's preflight doesn't reject.
         threads = await self._session_store.list_threads(session.session_id)
-        # Phase 1 convention: ``create_session`` allocates one default
-        # thread, so the list is guaranteed non-empty (an empty result
-        # would be a store invariant violation, not a runner concern).
+        # `create_session` allocates one default thread, so the list
+        # is guaranteed non-empty (an empty result would be a store
+        # invariant violation, not a runner concern).
         default_thread_id = threads[0].thread_id
 
         if resolved.io.mode == "single_shot":
@@ -169,9 +202,10 @@ class AgentRunner:
             }
         else:
             # Conversational — bound_inputs become the user message
-            # content payload. Phase 3.2 v1 doesn't ship a conversational
-            # workflow-agent recipe; this branch keeps the engine
-            # preflight happy if a starter agent declares the mode.
+            # content payload. The v1 release doesn't ship a
+            # conversational workflow-agent recipe; this branch keeps
+            # the engine preflight happy if a starter agent declares
+            # the mode.
             trigger = {"kind": "user_message", "content": bound_inputs}
 
         exec_ctx = ExecutionContext(
@@ -182,12 +216,11 @@ class AgentRunner:
         )
 
         # Step 7: invoke + error remap. The engine's only documented
-        # surface failure is :class:`AgentExecutionError` per
-        # agent-engine-contract §1.6; we remap to
-        # :class:`WorkflowNodeFailed` so the executor's existing
-        # failure path emits the canonical ``workflow.node.failed`` +
-        # ``workflow.run.failed`` pair. The ``raise ... from exc``
-        # form preserves ``__cause__`` for the error envelope.
+        # surface failure is `AgentExecutionError`; we remap to
+        # `WorkflowNodeFailed` so the executor's existing failure
+        # path emits the canonical `workflow.node.failed` +
+        # `workflow.run.failed` pair. The `raise ... from exc` form
+        # preserves `__cause__` for the error envelope.
         try:
             event = await self._engine.execute(
                 resolved,
@@ -201,7 +234,7 @@ class AgentRunner:
                 cause=exc,
             ) from exc
 
-        # Step 8: extract structured output. ``agent.message.data``
-        # carries ``content: dict[str, Any]`` per §B.8.
+        # Step 8: extract structured output. `agent.message.data`
+        # carries `content: dict[str, Any]`.
         content = event.data.get("content") if event.data else None
         return dict(content) if isinstance(content, dict) else {}

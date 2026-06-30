@@ -1,23 +1,20 @@
-"""``with_retry`` decorator — Phase 3.1 Step 2.
+"""`with_retry` — per-invocation runner wrapper for `retry:` modifiers.
 
-Wraps a :class:`workflows.executor.NodeRunner` so the inner
-``run`` is attempted ``retries + 1`` times. Intermediate failures
-are swallowed (per master spec §8.1 AND-strict rule 3 + §11.2 —
-only the final attempt's success or failure surfaces in the JSONL
-event stream). Between attempts, the wrapper sleeps for a small
-backoff so a transient failure mode (network blip, short-lived
-file lock) gets a real chance to clear.
+Wraps a [`NodeRunner`][workflows.executor.NodeRunner] so the inner
+`run` is attempted `retries + 1` times. Intermediate failures are
+swallowed — only the final attempt's success or failure surfaces
+in the JSONL event stream. Between attempts, the wrapper sleeps
+for a small backoff so a transient failure mode (network blip,
+short-lived file lock) gets a real chance to clear.
 
 The executor applies this wrapper per-invocation when the node's
-:attr:`retry` modifier is non-zero; without the modifier, the raw
-runner runs unwrapped.
-
-Phase 3.1 v1 ships a flat 100ms backoff — no exponential growth,
-no jitter, no per-exception-class filter. The :attr:`retry` field
-is documented as a thin facade (master spec §6.3) so future
-versions can extend the surface via a dict shape without breaking
-the integer API. ``tenacity`` is intentionally NOT introduced as a
-dep: a 6-line loop covers the contract.
+`retry` modifier is non-zero; without the modifier, the raw runner
+runs unwrapped. The v1 surface is a flat 100ms backoff — no
+exponential growth, no jitter, no per-exception-class filter. The
+`retry` field is a thin facade so future versions can extend it
+via a dict shape without breaking the integer API. `tenacity` is
+intentionally NOT introduced as a dep: a 6-line loop covers the
+contract.
 """
 
 from __future__ import annotations
@@ -40,14 +37,26 @@ def with_retry(
     retries: int,
     backoff_seconds: float = _RETRY_BACKOFF_SECONDS,
 ) -> NodeRunner:
-    """Return a runner that attempts ``runner.run`` up to ``retries + 1``
-    times.
+    """Wrap `runner` so its `run` is attempted up to `retries + 1` times.
 
     Intermediate failures are swallowed (the wrapper sleeps
-    ``backoff_seconds`` between attempts). The final attempt's
+    `backoff_seconds` between attempts). The final attempt's
     exception is re-raised to the caller; the executor's per-node
-    failure path emits ``workflow.node.failed`` for that single
+    failure path emits `workflow.node.failed` for that single
     terminal exception.
+
+    Args:
+        runner: The inner runner whose `run` is repeated.
+        retries: How many retries to perform after the initial
+            attempt. `0` is a single attempt; `2` is three total.
+        backoff_seconds: Flat delay between attempts.
+
+    Returns:
+        A runner with the same `NodeRunner` shape that delegates
+        to `runner` with the retry loop applied.
+
+    Raises:
+        ValueError: `retries` is negative.
     """
 
     if retries < 0:
