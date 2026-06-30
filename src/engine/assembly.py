@@ -48,7 +48,6 @@ class AssembledContext(BaseModel):
 def assemble_context(
     events: list[Event],
     *,
-    skills_listing: str = "",
     tool_schemas: list[dict[str, Any]] | None = None,
 ) -> AssembledContext:
     """Apply the Assembly Procedure to a path of events.
@@ -56,13 +55,16 @@ def assemble_context(
     ``events`` is the chronological list from thread root → leaf (the
     output of :meth:`SessionStore.read_path_to_leaf`).
 
-    ``skills_listing`` is appended to the system prompt per Engine
-    §2.2 step 10. The engine fetches it from the Skills subsystem
-    before calling assemble; this function does no subsystem lookups.
-
     ``tool_schemas`` is the resolved tool list at the time of the
     call. Not derived from events here — the engine passes it in
     from the Tools subsystem's :meth:`list_registered_tools`.
+
+    qol-skills-jinja-variable-symmetric-with-tools — the
+    ``skills_listing`` kwarg + post-append are gone. Skills are
+    rendered into the system prompt via the ``{{ skills }}`` Jinja
+    variable at pre-flight (``engine._render_prompt_if_needed``)
+    so the prompt template controls placement/wording rather than
+    receiving an unconditional bolt-on at assembly time.
     """
     # Step 2 — find the most recent config.set on the path.
     config_event = _latest_event_of_type(events, EventType.CONFIG_SET)
@@ -78,13 +80,9 @@ def assemble_context(
         config_event_id = str(config_event.event_id)
 
     # Step 3 — compose the system prompt from the prompt layers in
-    # declared order, then append the skills listing (§2.2 step 10).
+    # declared order. The skills block is part of the template now
+    # (rendered at pre-flight), so there's no post-assembly append.
     system_prompt = _compose_system_prompt(resolved_config)
-    if skills_listing:
-        if system_prompt and not system_prompt.endswith("\n"):
-            system_prompt = system_prompt + "\n\n" + skills_listing
-        else:
-            system_prompt = system_prompt + skills_listing
 
     # Step 4 — project events to messages per the §B.5 table.
     messages = _project_events(events)

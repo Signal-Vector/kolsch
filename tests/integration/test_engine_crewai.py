@@ -377,8 +377,16 @@ async def test_tc_eng_11_skills_listing_against_crewai(tmp_path: Path) -> None:
         framework=CrewAIFramework(),
     )
 
+    # qol-skills-jinja-variable-symmetric-with-tools — the
+    # post-append is gone; render the skills block via the prompt
+    # template so it lands inside CrewAI's wrap.
     cfg = _config().model_copy(
         update={
+            "prompt": (
+                "You are a helpful test agent.\n\n"
+                "## Available skills\n\n"
+                "{{ skills }}"
+            ),
             "subsystems": {
                 "skills": SubsystemConfig(
                     variant="standard",

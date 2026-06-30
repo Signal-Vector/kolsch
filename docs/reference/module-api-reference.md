@@ -1140,30 +1140,22 @@ async def get_enabled_skills(
 - Each record includes the SKILL.md metadata (parsed at catalog build
   per Asset Mgmt §4.3) but NOT the body.
 - Skills with `disable-model-invocation: true` are still included in
-  this list (the engine filters them out of the system-prompt listing).
+  this list (so force-invoke can route to them); the engine's pre-flight
+  filters them out when building the `SkillsVar` template variable.
 
 **Raises:**
 - `skill.not_found` if any enabled ref doesn't resolve.
 
 ---
 
-```python
-def format_skills_listing(
-    skills: list[EnabledSkill],
-) -> str:
-    """Format the skills listing block for inclusion in the system prompt."""
-```
-
-**Preconditions:** `skills` from `get_enabled_skills`.
-
-**Postconditions:**
-- Returns a string suitable for appending to the system prompt
-  (per Skills §5.1).
-- Skills with `disable-model-invocation: true` are EXCLUDED from the
-  output.
-- Returns empty string if no eligible skills.
-
-**Raises:** Never.
+**Note**: the pre-QoL `format_skills_listing(skills) -> str`
+projection that emitted a `## Available Skills` block for
+post-append to the system prompt was REMOVED by
+`qol-skills-jinja-variable-symmetric-with-tools.md`. Skills are
+now rendered into the prompt via the `{{ skills }}` Jinja
+variable (`templating.vars.skills.SkillsVar`), symmetric with
+`{{ tools }}`. The template owns placement/wording — see
+Part 11.10.2 + `docs/how-to/agent-templating.md` § `skills`.
 
 ---
 
@@ -1903,12 +1895,13 @@ agent's YAML path. Render failures surface as
 (`code = "config.template_render_failed"`, Fatal) with
 `detail = {template, reason}`.
 
-The engine pre-flight binds the five standardized variables:
+The engine pre-flight binds the six standardized variables:
 
 | Key | Type | Default rendering |
 |---|---|---|
 | `tools` | `ToolsVar` (list-shaped) | `tools.list()` — markdown blocks per tool |
 | `docs` | `DocsVar` (list-shaped) | primaries inlined + secondaries listed |
+| `skills` | `SkillsVar` (list-shaped) | `- **<name>** — <desc> Path: \`<ref>/SKILL.md\`` per skill (qol-skills-jinja-variable-symmetric-with-tools) |
 | `workspace` | `WorkspaceVar` (single-object) | `## Active workspace` + path + allow/deny lists |
 | `agent` | `AgentVar` (single-object) | `<name> (<id>) — <provider>/<model>` |
 | `platform` | `PlatformVar` (single-object) | `Workspace: <path> · Providers: <names> · <N> rules` |
@@ -1963,7 +1956,7 @@ specific methods called.
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | **CLI / API** | — | initialize, get_asset, build_resolved_config, list_bundles | create_session, get_session, get_thread, delete_session | subscribe | — | resolve, exists | — | — | — | — | registry.{get,known_types,connected_metadata_sources}; connector.{auth_prompt_spec,validate_credentials,discover_models} for connect/refresh | **resolve_workspace, workspace_is_initialized** *(Phase 1.2, UX-R7)* |
 | **Asset Mgmt** | resolve_and_validate | (self) | — | — | — | — | — | — | — | — | — | — |
-| **Agent Engine** | (via Asset Mgmt) | build_resolved_config | get_leaf, append_event, read_path_to_leaf, write_content | publish | bind_session, (Context.*) | resolve, exists | execute | allow | register_tools_for_agent, invoke_tool | get_enabled_skills, format_skills_listing, force_invoke | **build_llm** *(Phase 1.1, pre-flight step 6 — primary; Phase 1.3 FB-R6 calls it again per fallback chain entry on Recoverable model.\* errors)* | — |
+| **Agent Engine** | (via Asset Mgmt) | build_resolved_config | get_leaf, append_event, read_path_to_leaf, write_content | publish | bind_session, (Context.*) | resolve, exists | execute | allow | register_tools_for_agent, invoke_tool | get_enabled_skills, force_invoke | **build_llm** *(Phase 1.1, pre-flight step 6 — primary; Phase 1.3 FB-R6 calls it again per fallback chain entry on Recoverable model.\* errors)* | — |
 | **Memory Provider** | — | — | read_events | — | (self) | — | — | — | — | — | — | — |
 | **Tools Subsystem** | — | get_asset | — | — | — | resolve, exists | (calls engine's sandbox use) | allow | (self) | — | — | — |
 | **Skills Subsystem** | — | get_asset | — | — | — | — | — | — | — | (self) | — | — |
@@ -1974,8 +1967,10 @@ specific methods called.
 the Bus's `publish`, Memory's `bind_session`, Secrets's
 `resolve`/`exists`, Sandbox's `execute`, Authz's `allow`, Tools'
 `register_tools_for_agent`/`invoke_tool`, Skills'
-`get_enabled_skills`/`format_skills_listing`/`force_invoke`, and the
-LLM module's **`build_llm`** per exchange."
+`get_enabled_skills`/`force_invoke` (and the engine itself
+builds `SkillsVar` from the result for the
+`{{ skills }}` Jinja variable), and the LLM module's
+**`build_llm`** per exchange."
 
 The Agent Engine is the central caller. Subsystems mostly don't call
 each other directly — they're called by the engine and by the entry

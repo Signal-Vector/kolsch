@@ -319,25 +319,41 @@ The platform constructs the agent's system prompt. As part of this:
    registry.
 2. Filter out skills with `disable_model_invocation: true` — these are
    invisible to the model.
-3. Emit a "Available Skills" section into the system prompt, listing
-   each remaining skill's `name`, `description`, and `ref`.
+3. Build the `SkillsVar` Jinja template variable
+   (`templating.vars.skills`) from the remaining skills and bind it
+   as `skills` in the agent's render context.
 
-Format (example):
+The prompt template owns placement and wording — write
+`{{ skills }}` (shorthand for `{{ skills.list() }}`) or iterate
+explicitly with `{% for s in skills %}…{% endfor %}`. The default
+`.list()` rendering matches the pre-QoL auto-appended block
+byte-identically:
 
 ```
-## Available Skills
-
-You have access to the following skills. To load a skill's full
-instructions, use the `read` tool on its path:
-
 - **literature-review** — Conduct a structured literature review on
-  a given topic. Path: `local/literature-review/SKILL.md`
+  a given topic. Path: `local/skills/literature-review/SKILL.md`
 - **scholarly-search** — Search academic databases via institution
-  access. Path: `acme-research/scholarly-search/SKILL.md`
+  access. Path: `acme-research/skills/scholarly-search/SKILL.md`
 ```
 
-The exact wording is part of the platform's prompt-template and can be
-tuned. The data conveyed is what matters: name, description, path.
+A canonical template:
+
+```yaml
+prompt: |
+  You are {{ agent.name }}.
+
+  ## Available skills
+
+  {{ skills }}
+```
+
+Pre-QoL behaviour (the engine unconditionally appended a
+`## Available Skills` block to every rendered prompt) was removed
+by `qol-skills-jinja-variable-symmetric-with-tools.md`. Agents
+that declare skills but whose template omits `{{ skills }}` emit
+`agent.template_warning` at load with a pointer to add the
+variable. See
+`docs/how-to/agent-templating.md` § `skills` for the full surface.
 
 ### 5.2 At runtime
 

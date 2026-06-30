@@ -31,7 +31,12 @@ from engine import ExecutionContext, LLMRequest, LLMResponse
 from engine.context import AgentExecutionError
 from platform_runtime import bootstrap_runtime
 from schemas import EventType
-from skills import format_skills_listing
+# qol-skills-jinja-variable-symmetric-with-tools — the post-append
+# projection is gone; SkillsVar from templating.vars is the new
+# in-prompt rendering surface. This test now exercises the same
+# Sk-I2 filter at the Var construction step (mirroring the engine's
+# pre-flight at engine._render_prompt_if_needed).
+from templating.vars import SkillItem, SkillsVar
 
 
 # ---------------------------------------------------------------------------
@@ -264,7 +269,18 @@ async def test_tc_skill_disable_01_excludes_listing_but_force_invocable(
         "skl/skills/hidden-deliberate",
     }, "get_enabled_skills must include disabled skills (force-invoke routes through them)."
 
-    listing = format_skills_listing(enabled)
+    # Mirror the engine's pre-flight filter at engine.py
+    # (``[SkillItem(...) for s in enabled_skills if not s.disable_model_invocation]``)
+    # so the assertion stays a pure projection check decoupled from
+    # the engine path.
+    var = SkillsVar(
+        [
+            SkillItem(name=s.name, description=s.description, ref=s.ref)
+            for s in enabled
+            if not s.disable_model_invocation
+        ]
+    )
+    listing = var.list()
     assert "discoverable" in listing
     assert "hidden-deliberate" not in listing, (
         "disable-model-invocation: true must hide the skill from the listing. "

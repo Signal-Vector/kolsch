@@ -70,7 +70,6 @@ from schemas import (
     UserMessageData,
 )
 from schemas.events import AgentMessageData
-from skills import format_skills_listing
 from tools import ToolContext
 
 if TYPE_CHECKING:
@@ -709,6 +708,8 @@ class _Exchange:
             AgentVar,
             DocsVar,
             ModelView,
+            SkillItem,
+            SkillsVar,
             ToolsVar,
             WorkspaceVar,
         )
@@ -743,6 +744,22 @@ class _Exchange:
                 )
             )
         tools_var = ToolsVar(tool_items)
+
+        # SkillsVar — qol-skills-jinja-variable-symmetric-with-tools.
+        # The Jinja path renders the skills block from a template
+        # variable instead of the pre-QoL post-append at
+        # ``assembly.py:83-87`` (deleted). ``get_enabled_skills``
+        # returns disabled skills too (so force-invoke can route to
+        # them — Sk-I2 / spec §6.5); we filter them out here so the
+        # model-facing prompt matches the pre-QoL
+        # ``format_skills_listing`` behaviour.
+        enabled_skills = await self.engine._skills.get_enabled_skills(self.config)
+        skill_items: list[SkillItem] = [
+            SkillItem(name=s.name, description=s.description, ref=s.ref)
+            for s in enabled_skills
+            if not s.disable_model_invocation
+        ]
+        skills_var = SkillsVar(skill_items)
 
         # DocsVar — load each ContextFileSpec via Step 12.
         from templating.context_files import (  # noqa: PLC0415
@@ -801,6 +818,7 @@ class _Exchange:
         context = {
             "tools": tools_var,
             "docs": docs_var,
+            "skills": skills_var,
             "workspace": workspace_var,
             "agent": agent_var,
             "platform": platform_var,
@@ -882,6 +900,36 @@ class _Exchange:
                     "prompt references {{ docs }} but agent declares "
                     "no context_files",
                     "add a context_files: entry or remove the reference",
+                )
+            )
+        # qol-skills-jinja-variable-symmetric-with-tools — symmetric
+        # warning for the ``{{ skills }}`` variable.
+        if "skills" in prompt and skills_var.count == 0:
+            warnings.append(
+                (
+                    "skills",
+                    "prompt references {{ skills }} but agent declares "
+                    "no skills",
+                    "add a skills entry under subsystems.skills.config.enabled "
+                    "or remove the reference",
+                )
+            )
+        # qol-skills-jinja-variable-symmetric-with-tools — migration
+        # warning. Pre-QoL, every rendered prompt got an auto-appended
+        # ``## Available Skills`` block whether the template asked for
+        # it or not. Post-QoL the prompt owns rendering; agents that
+        # declare skills but whose template doesn't reference them
+        # would silently lose the listing. Fire a Recoverable so the
+        # author sees the gap on first agent-load.
+        if skills_var.count > 0 and "skills" not in prompt:
+            warnings.append(
+                (
+                    "skills",
+                    "agent declares skills but prompt does not reference "
+                    "{{ skills }} — the auto-appended listing was removed "
+                    "in qol-skills-jinja-variable-symmetric-with-tools.md",
+                    "add a `{{ skills }}` block to the prompt template "
+                    "(see docs/explanation/tools-subsystem.md §7.5)",
                 )
             )
         for reference, reason, hint in warnings:
@@ -1110,11 +1158,12 @@ class _Exchange:
             )
         ]
 
-        # Skills listing — non-disabled skills only (Sk-I2).
-        enabled_skills = await self.engine._skills.get_enabled_skills(self.config)
-        skills_listing = format_skills_listing(enabled_skills)
-
-        # Tool schemas for the framework.
+        # qol-skills-jinja-variable-symmetric-with-tools — the
+        # ``format_skills_listing`` post-append is gone. Skills are
+        # rendered into the prompt as the ``{{ skills }}`` Jinja
+        # variable during pre-flight (``_render_prompt_if_needed``)
+        # so the assembly here only handles the message projection +
+        # tool schemas.
         registered = self.engine._tools.list_registered_tools(
             self.agent_id,  # type: ignore[arg-type]
         )
@@ -1125,7 +1174,6 @@ class _Exchange:
 
         assembled = assemble_context(
             events,
-            skills_listing=skills_listing,
             tool_schemas=tool_schemas,
         )
 

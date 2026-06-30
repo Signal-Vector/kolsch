@@ -40,8 +40,9 @@ permissions:
     pattern: "*"
     effect: prompt
 
-# Phase 2.2 (§3) — Jinja2 template referencing the five standardized
-# top-level variables (§4.4). Edit freely; the engine renders this at
+# Phase 2.2 (§3) — Jinja2 template referencing the six standardized
+# top-level variables (`agent`, `tools`, `docs`, `skills`,
+# `workspace`, `platform`). Edit freely; the engine renders this at
 # pre-flight step 5.6.6 with StrictUndefined so typos surface as
 # `config.template_render_failed` immediately. Plain-text prompts
 # (no `{{ }}` / `{% %}`) render byte-identical to themselves.
@@ -58,6 +59,14 @@ prompt: |
   {% for t in tools %}
   - **{{ t.name }}**: {{ t.summary }}
   {% endfor %}
+  {% if skills.count %}
+
+  ## Available skills
+
+  {% for s in skills %}
+  - **{{ s.name }}** — {{ s.description }}
+  {% endfor %}
+  {% endif %}
 
   When the user asks you to do something operational — run a command,
   read or write a file, browse the workspace, check git status, run

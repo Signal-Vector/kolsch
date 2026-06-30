@@ -8,10 +8,11 @@ covers where in pre-flight the render happens. The first-agent
 tutorial in [`docs/tutorials/first-agent.md`](../tutorials/first-agent.md)
 walks the loop from a fresh `kolsch setup` to a templated helper.
 
-The five standardized variables — `tools`, `docs`, `workspace`,
-`agent`, `platform` — are all available in every prompt; the engine
-populates them at pre-flight step 5.6.6 with `StrictUndefined`
-so typos surface as `config.template_render_failed` at agent-load.
+The six standardized variables — `tools`, `docs`, `skills`,
+`workspace`, `agent`, `platform` — are all available in every
+prompt; the engine populates them at pre-flight step 5.6.6 with
+`StrictUndefined` so typos surface as
+`config.template_render_failed` at agent-load.
 
 ---
 
@@ -48,7 +49,7 @@ silently send broken context to the LLM.
 
 ---
 
-## Use the five top-level variables
+## Use the six top-level variables
 
 ### `agent`
 
@@ -126,6 +127,48 @@ prompt: |
   - **{{ d.path }}**: {{ d.summary }}
   {% endfor %}
 ```
+
+### `skills`
+
+The agent's enabled skill set (per `subsystems.skills.config.enabled`
+— `disable-model-invocation: true` skills are excluded). Symmetric
+with `tools`: list-shaped, same method family (`.list()`,
+`.summary()`, `.names()`, `.get(name)`, `.count`), same Pythonic
+protocols. Per-skill fields: `name`, `description`, `ref` (the
+3-segment catalog ref).
+
+```yaml
+prompt: |
+  ## Available skills
+
+  {% for s in skills %}
+  - **{{ s.name }}** — {{ s.description }}
+  {% endfor %}
+```
+
+Compact alternative — `{{ skills }}` defaults to `{{ skills.list() }}`:
+
+```yaml
+prompt: |
+  ## Available skills
+
+  {{ skills }}
+```
+
+The default `.list()` rendering is `- **<name>** — <description>
+Path: \`<ref>/SKILL.md\`` per skill — matches the pre-QoL
+auto-appended block byte-identically, so existing prompts that
+add a `{{ skills }}` placeholder produce the same content the
+platform used to bolt on.
+
+**Migration note** — before
+qol-skills-jinja-variable-symmetric-with-tools, the engine
+unconditionally appended `## Available Skills` to every rendered
+prompt. That post-append is gone; the template now controls
+placement / wording / whether to include the section at all. An
+agent that declares skills but whose template omits
+`{{ skills }}` emits `agent.template_warning` at load with a
+pointer to this section.
 
 ### `workspace`
 
@@ -504,6 +547,11 @@ is empty:
 
 - `{{ tools }}` referenced + agent declares no tools.
 - `{{ docs }}` referenced + agent has no `context_files`.
+- `{{ skills }}` referenced + agent declares no skills.
+- Agent declares skills but the prompt does not reference
+  `{{ skills }}` (the post-QoL migration warning — the
+  auto-appended `## Available Skills` block was removed in
+  qol-skills-jinja-variable-symmetric-with-tools).
 - `platform.providers.get('X')` referenced + provider X not
   connected.
 - `{{ workspace.summary }}` referenced +

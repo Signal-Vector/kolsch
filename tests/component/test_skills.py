@@ -29,9 +29,13 @@ from skills import (
     EnabledSkill,
     SkillInvocation,
     SkillsSubsystem,
-    format_skills_listing,
     make_standard_validator,
 )
+# qol-skills-jinja-variable-symmetric-with-tools — SkillsVar replaces
+# the pre-QoL ``format_skills_listing`` projection. Tests that used to
+# assert on the post-append string assert on the Var's ``.list()`` /
+# ``.summary()`` outputs instead.
+from templating.vars import SkillItem, SkillsVar
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -153,11 +157,17 @@ async def am(tmp_path: Path) -> AssetManagement:
 
 
 async def test_tc_skl_01_enabled_skill_in_listing(am: AssetManagement) -> None:
+    """qol-skills-jinja-variable-symmetric-with-tools — the
+    ``format_skills_listing`` projection is gone; SkillsVar's
+    ``.list()`` is the same per-skill rendering."""
     sub = SkillsSubsystem(asset_management=am)
     cfg = _config(["acme/skills/literature-review"])
 
     skills = await sub.get_enabled_skills(cfg)
-    listing = format_skills_listing(skills)
+    var = SkillsVar(
+        [SkillItem(name=s.name, description=s.description, ref=s.ref) for s in skills]
+    )
+    listing = var.list()
 
     assert [s.ref for s in skills] == ["acme/skills/literature-review"]
     assert skills[0].name == "literature-review"
@@ -178,6 +188,16 @@ async def test_tc_skl_01_enabled_skill_in_listing(am: AssetManagement) -> None:
 
 
 async def test_tc_skl_02_disable_excluded_from_listing(am: AssetManagement) -> None:
+    """Sk-I2 — disabled skill is returned by ``get_enabled_skills``
+    (so force-invoke can route to it) but the engine's pre-flight
+    skips it when building the SkillsVar items.
+
+    qol-skills-jinja-variable-symmetric-with-tools — the engine
+    builds SkillsVar from non-disabled skills only (matching the
+    pre-QoL behaviour of ``format_skills_listing`` filtering by
+    ``disable_model_invocation``). This test mirrors that filter
+    locally so the assertion stays a pure projection test.
+    """
     sub = SkillsSubsystem(asset_management=am)
     cfg = _config(
         [
@@ -187,10 +207,6 @@ async def test_tc_skl_02_disable_excluded_from_listing(am: AssetManagement) -> N
     )
 
     skills = await sub.get_enabled_skills(cfg)
-    listing = format_skills_listing(skills)
-
-    # Sk-I2 — disabled skill is still returned to the engine (so
-    # force-invoke can route to it) but excluded from the listing.
     refs = {s.ref for s in skills}
     assert refs == {
         "acme/skills/literature-review",
@@ -199,6 +215,16 @@ async def test_tc_skl_02_disable_excluded_from_listing(am: AssetManagement) -> N
     disabled = next(s for s in skills if s.ref.endswith("/dangerous-cleanup"))
     assert disabled.disable_model_invocation is True
 
+    # The Var is built from non-disabled entries only — matching the
+    # engine's pre-flight construction at engine.py:_render_prompt_if_needed.
+    var = SkillsVar(
+        [
+            SkillItem(name=s.name, description=s.description, ref=s.ref)
+            for s in skills
+            if not s.disable_model_invocation
+        ]
+    )
+    listing = var.list()
     assert "literature-review" in listing
     assert "dangerous-cleanup" not in listing
 
@@ -293,11 +319,25 @@ async def test_get_enabled_skills_empty_config_returns_empty_list(
     assert await sub.get_enabled_skills(cfg) == []
 
 
-def test_format_skills_listing_empty_returns_empty_string() -> None:
-    assert format_skills_listing([]) == ""
+def test_skills_var_empty_renders_empty_string() -> None:
+    """qol-skills-jinja-variable-symmetric-with-tools — empty
+    SkillsVar renders to ``""`` so ``{{ skills }}`` against a
+    skill-less agent contributes nothing (the
+    ``agent.template_warning`` walker catches the
+    referenced-but-empty case separately)."""
+    assert SkillsVar([]).list() == ""
+    assert str(SkillsVar([])) == ""
+    assert SkillsVar([]).count == 0
 
 
-def test_format_skills_listing_all_disabled_returns_empty_string() -> None:
+def test_skills_var_engine_filter_excludes_disabled() -> None:
+    """The engine's pre-flight filter (matches the pre-QoL
+    ``format_skills_listing`` Sk-I2 filter) — engine.py:
+    ``[SkillItem(...) for s in enabled_skills if not s.disable_model_invocation]``.
+
+    This test simulates the filter at the EnabledSkill layer and
+    asserts the resulting Var is empty when every skill is
+    disabled — same outcome as the pre-QoL all-disabled case."""
     items = [
         EnabledSkill(
             ref="acme/skills/x",
@@ -310,7 +350,12 @@ def test_format_skills_listing_all_disabled_returns_empty_string() -> None:
             disable_model_invocation=True,
         ),
     ]
-    assert format_skills_listing(items) == ""
+    visible = [
+        SkillItem(name=s.name, description=s.description, ref=s.ref)
+        for s in items
+        if not s.disable_model_invocation
+    ]
+    assert SkillsVar(visible).list() == ""
 
 
 def test_layer3_validator_accepts_well_formed_enabled_list(

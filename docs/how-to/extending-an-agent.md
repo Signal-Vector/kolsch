@@ -248,8 +248,8 @@ directly if any verification fails.
 
 - [Templated Agent Prompts](agent-templating.md) — the
   envelope-variable surface (`{{ agent.name }}`,
-  `{{ tools }}`, etc.) and the broader Jinja patterns
-  including `{{ super() }}` and multi-level chains.
+  `{{ tools }}`, `{{ skills }}`, etc.) and the broader Jinja
+  patterns including `{{ super() }}` and multi-level chains.
 - [Schemas §A.11](../reference/schemas.md#a11-phase-22--agent-envelope-extends-permissions-context_files)
   — the formal `extends:`, `permissions:`, and
   `context_files:` field schema.

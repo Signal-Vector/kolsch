@@ -1004,6 +1004,12 @@ async def test_tc_eng_10_force_invoke_emits_synthetic_read(tmp_path: Path) -> No
 
 
 async def test_tc_eng_11_skills_listing_in_system_prompt(tmp_path: Path) -> None:
+    """qol-skills-jinja-variable-symmetric-with-tools — the
+    pre-QoL post-append at ``assembly.py:83-87`` is gone. The
+    rendered prompt's ``{{ skills }}`` block is now the
+    in-prompt skills surface. Sk-I2 (disable-model-invocation
+    skips the skill) is enforced at the engine's SkillsVar
+    construction so the same assertions hold."""
     _platform_yaml(tmp_path)
     _write_skill(tmp_path, "acme", "alpha", "alpha body")
     _write_skill(tmp_path, "acme", "beta", "beta body")
@@ -1023,6 +1029,13 @@ async def test_tc_eng_11_skills_listing_in_system_prompt(tmp_path: Path) -> None
 
     cfg = _config().model_copy(
         update={
+            # Prompt template renders the skills block — the
+            # auto-append is gone; template owns placement now.
+            "prompt": (
+                "You are a helpful test agent.\n\n"
+                "## Available skills\n\n"
+                "{{ skills }}"
+            ),
             "subsystems": {
                 "skills": SubsystemConfig(
                     variant="standard",

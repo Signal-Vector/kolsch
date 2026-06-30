@@ -303,9 +303,15 @@ work. Its responsibilities, in order of an `execute` call:
    After a successful render, the engine walks the parsed Jinja
    AST and cross-checks variable accesses against the resolved
    config. For each access whose data is empty
-   (`{{ tools }}` referenced + no tools declared, etc.), the
-   engine emits an `agent.template_warning` event
-   (`Recoverable`, Warning) carrying `{reference, reason, hint}`.
+   (`{{ tools }}` / `{{ docs }}` / `{{ skills }}` referenced
+   with no items declared), the engine emits an
+   `agent.template_warning` event (`Recoverable`, Warning)
+   carrying `{reference, reason, hint}`. A second `skills`-only
+   migration warning fires when the agent DECLARES skills but
+   the prompt OMITS `{{ skills }}` — the pre-QoL auto-appended
+   `## Available Skills` block was removed in
+   `qol-skills-jinja-variable-symmetric-with-tools.md` and
+   silently dropping the listing would be jarring.
 
 8.5. **Register the agent's tools with the Tools subsystem.**
    *(Bug-engine-tools-wiring-gap.md, PR 1 — fixes a Phase 2.0 gap
@@ -358,11 +364,14 @@ work. Its responsibilities, in order of an `execute` call:
 ### 2.2 Set up the framework
 
 10. **Build the model's input** using the Assembly Procedure (§B.5) on the
-    current tree path. This is the engine's main owned behavior. After
-    running the procedure (which projects the tree path into model-facing
-    messages), **append the available-skills listing** (per Skills
-    subsystem §5.1) to the assembled system prompt. The skills listing is
-    engine-appended, not declared in the PromptSpec.
+    current tree path. This is the engine's main owned behavior — it
+    projects the tree path into model-facing messages with the system
+    prompt already rendered at step 8. The skills listing is part of
+    that rendered prompt via the `{{ skills }}` Jinja variable
+    (`templating.vars.skills.SkillsVar`), not engine-appended — the
+    pre-QoL post-append at `assembly.py:83-87` was removed by
+    `qol-skills-jinja-variable-symmetric-with-tools.md`. The prompt
+    template owns placement and wording.
 11. **Register tools with the framework.** From `config.subsystems.tools`:
     - Builtin tools (the platform's standard library) — register with the
       framework's tool mechanism.

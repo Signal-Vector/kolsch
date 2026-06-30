@@ -261,3 +261,102 @@ async def test_tc_env_11_template_warning_for_empty_data_reference(
     assert len(warnings) >= 1
     assert warnings[0].data["reference"] == "docs"
     assert "context_files" in warnings[0].data["hint"]
+
+
+# ---------------------------------------------------------------------------
+# TC-ENV-12 — qol-skills-jinja-variable-symmetric-with-tools.
+# Symmetric warning when {{ skills }} is referenced but agent has none.
+# ---------------------------------------------------------------------------
+
+
+async def test_tc_env_12_template_warning_for_empty_skills_reference(
+    tmp_path: Path,
+) -> None:
+    """A prompt referencing ``{{ skills }}`` against an agent with
+    no skills declared emits :event:`agent.template_warning` —
+    symmetric with the docs/tools branches."""
+    prompt = "I have these skills: {{ skills }}"
+    _write_workspace(tmp_path, prompt=prompt)
+
+    runtime = await bootstrap_runtime(root=tmp_path, llm=_stub_llm)
+    config = await runtime.build_resolved_config("demo/agents/demo")
+    session = await runtime.store.create_session(
+        str(config.agent_id), name="tc-env-12"
+    )
+    threads = await runtime.store.list_threads(session.session_id)
+    ctx = ExecutionContext(
+        thread_id=threads[0].thread_id,
+        trigger={"kind": "user_message", "content": "hi"},
+    )
+    await runtime.engine.execute(config, ctx)
+
+    events = [e async for e in runtime.store.read_path_to_leaf(ctx.thread_id)]
+    warnings = [
+        e
+        for e in events
+        if e.type == EventType.AGENT_TEMPLATE_WARNING
+        and e.data["reference"] == "skills"
+    ]
+    assert len(warnings) >= 1
+    # Hint guides the user to add a skills entry, mirroring the
+    # docs/tools hint wording.
+    assert "skills" in warnings[0].data["hint"]
+
+
+async def test_tc_env_13_template_warning_for_skills_declared_but_not_referenced(
+    tmp_path: Path,
+) -> None:
+    """qol-skills-jinja-variable-symmetric-with-tools — the
+    migration warning. Pre-QoL, every rendered prompt got an
+    auto-appended ``## Available Skills`` block; post-QoL the
+    template owns rendering. Agents that declare skills but
+    whose template omits ``{{ skills }}`` would silently lose
+    the listing, so a Recoverable fires at agent-load."""
+    # Lay down the standard workspace with a prompt that does NOT
+    # reference {{ skills }} (and doesn't contain the word as
+    # substring — the engine's referenced-check matches the literal
+    # substring per the existing tools/docs heuristic).
+    prompt = "You are a plain agent. Use the tools you have."
+    _write_workspace(tmp_path, prompt=prompt)
+
+    # Patch the agent file to declare a skill, and lay down the
+    # corresponding SKILL.md so the catalog resolves.
+    agent_path = tmp_path / "bundles" / "demo" / "agents" / "demo.yaml"
+    agent_payload = yaml.safe_load(agent_path.read_text(encoding="utf-8"))
+    agent_payload["subsystems"] = {
+        "skills": {
+            "variant": "standard",
+            "config": {"enabled": [{"ref": "demo/skills/literature-review"}]},
+        },
+    }
+    agent_path.write_text(yaml.safe_dump(agent_payload), encoding="utf-8")
+    skill_dir = tmp_path / "bundles" / "demo" / "skills" / "literature-review"
+    skill_dir.mkdir(parents=True, exist_ok=True)
+    (skill_dir / "SKILL.md").write_text(
+        "---\nname: literature-review\ndescription: A test skill.\n---\n\nBody.\n",
+        encoding="utf-8",
+    )
+
+    runtime = await bootstrap_runtime(root=tmp_path, llm=_stub_llm)
+    config = await runtime.build_resolved_config("demo/agents/demo")
+    session = await runtime.store.create_session(
+        str(config.agent_id), name="tc-env-13"
+    )
+    threads = await runtime.store.list_threads(session.session_id)
+    ctx = ExecutionContext(
+        thread_id=threads[0].thread_id,
+        trigger={"kind": "user_message", "content": "hi"},
+    )
+    await runtime.engine.execute(config, ctx)
+
+    events = [e async for e in runtime.store.read_path_to_leaf(ctx.thread_id)]
+    warnings = [
+        e
+        for e in events
+        if e.type == EventType.AGENT_TEMPLATE_WARNING
+        and e.data["reference"] == "skills"
+    ]
+    assert len(warnings) >= 1
+    # The migration warning's reason names the QoL doc + hints at the fix.
+    assert "auto-appended" in warnings[0].data["reason"]
+    assert "{{ skills }}" in warnings[0].data["hint"]
