@@ -1,15 +1,11 @@
-"""Secrets provider — spec Module 1 + Module API Reference §6.
+"""Secrets provider — resolve named secrets without leaking values.
 
-v1 ships the ``dotenv`` variant; the registry seam below lets future
-variants (vault, cloud secret managers) slot in without core changes.
-
-Conformance invariants:
-- S-I1 — Secret values MUST NOT appear in the provider's own logs.
-  The dotenv variant logs only metadata (path, count of keys); never
-  values. Lookups (resolve / exists / list_names) emit no log lines.
-- S-I3 — Missing secret raises :class:`SecretNotFound`. Never None
-  or empty string.
-- S-I5 — All methods are ``async``.
+The v1 `dotenv` variant reads a `.env` file once at startup and serves
+lookups from memory; the registry seam below lets future variants
+(vault, cloud secret managers) slot in without core changes. For the
+full contract — non-logging of values, missing-secret behaviour, the
+async shape — see the [secrets-sandbox-authz
+contract](../../docs/explanation/secrets-sandbox-authz-contract.md).
 """
 
 from __future__ import annotations
@@ -27,21 +23,26 @@ _log = logging.getLogger("providers.secrets")
 
 
 # ---------------------------------------------------------------------------
-# Protocol — Module API Reference §6.1
+# Protocol
 # ---------------------------------------------------------------------------
 
 
 class SecretsProvider(Protocol):
-    """The three-method contract every secrets variant honours."""
+    """The three-method contract every secrets variant honours.
+
+    Implementations MUST NOT log secret values — the dotenv variant
+    logs only the path and the count of loaded keys, never the values
+    themselves.
+    """
 
     async def resolve(self, name: str) -> str:
-        """Return the secret value, or raise :class:`SecretNotFound`."""
+        """Return the secret value, or raise `SecretNotFound`."""
 
     async def exists(self, name: str) -> bool:
-        """Return whether a secret is available; does NOT return value."""
+        """Return whether a secret is available; never returns the value."""
 
     async def list_names(self) -> list[str]:
-        """Return all secret names. Values NEVER returned (S-I1)."""
+        """Return all secret names. Values are never returned."""
 
 
 # ---------------------------------------------------------------------------
@@ -50,16 +51,16 @@ class SecretsProvider(Protocol):
 
 
 def _parse_dotenv(text: str) -> dict[str, str]:
-    """Minimal dotenv parser per spec §1.4.2.
+    """Minimal dotenv parser.
 
-    Supports ``KEY=value`` lines, ``#`` line comments, and basic
-    single/double-quote pair stripping. Lines without ``=`` are
-    silently skipped (malformed; comments are also skipped here).
+    Supports `KEY=value` lines, `#` line comments, and basic
+    single/double-quote pair stripping. Lines without `=` are silently
+    skipped (malformed; comments are also skipped here).
     """
     result: dict[str, str] = {}
     # Minimum length for a string to be a matching pair of quotes
     # ("" or ''). Two chars exactly is still a valid empty-quoted
-    # secret per spec §1.4.4.
+    # secret.
     quoted_min = 2
     for raw_line in text.splitlines():
         line = raw_line.strip()
@@ -88,10 +89,11 @@ def _parse_dotenv(text: str) -> dict[str, str]:
 
 
 class DotenvSecretsProvider:
-    """Spec §1.4 — read once at startup, serve from memory.
+    """Read a `.env` file once at startup, serve lookups from memory.
 
-    Missing .env → empty dict (the user may add the file later;
-    restart picks it up). Unreadable .env → :class:`SecretReadFailed`.
+    A missing `.env` resolves to an empty dict (the user may add the
+    file later; restart picks it up). An unreadable `.env` raises
+    `SecretReadFailed`.
     """
 
     def __init__(self, *, root: Path, config: dict[str, Any]) -> None:
@@ -118,14 +120,21 @@ class DotenvSecretsProvider:
         return _parse_dotenv(text)
 
     async def resolve(self, name: str) -> str:
+        """Return the secret value for `name`.
+
+        Raises:
+            SecretNotFound: No secret with that name is loaded.
+        """
         if name not in self._secrets:
             raise SecretNotFound(name=name)
         return self._secrets[name]
 
     async def exists(self, name: str) -> bool:
+        """Return whether a secret with that name is loaded."""
         return name in self._secrets
 
     async def list_names(self) -> list[str]:
+        """Return every loaded secret name; values are never returned."""
         return list(self._secrets)
 
 
@@ -142,7 +151,7 @@ def register_secrets_variant(
     name: str,
     factory: Callable[..., SecretsProvider],
 ) -> None:
-    """Register a variant factory. Idempotent on the same (name, factory)."""
+    """Register a variant factory. Idempotent on the same `(name, factory)`."""
     _REGISTRY[name] = factory
 
 
@@ -151,12 +160,14 @@ def make_secrets_provider(
     root: Path,
     config: dict[str, Any],
 ) -> SecretsProvider:
-    """Dispatch by ``config['variant']``.
+    """Dispatch by `config['variant']`.
 
-    ``config`` is the ``{variant, config}`` wrapper from
-    ``platform.yaml`` (spec §1.4.1). Unknown variants raise
-    :class:`ConfigInvalid` so the user sees a clean platform-bootstrap
-    failure rather than an AttributeError later.
+    `config` is the `{variant, config}` wrapper from `platform.yaml`.
+    Unknown variants raise `ConfigInvalid` so the user sees a clean
+    platform-bootstrap failure rather than an `AttributeError` later.
+
+    Raises:
+        ConfigInvalid: `variant` is unset or names no registered factory.
     """
     variant = config.get("variant")
     body = config.get("config", {}) or {}

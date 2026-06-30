@@ -1,10 +1,11 @@
-"""Providers — memory, secrets, sandbox, authorization.
+"""The four swappable provider subsystems: memory, secrets, sandbox, authz.
 
-Per Module API Reference §6-§8 +
-docs/explanation/secrets-sandbox-authz-contract.md. These three are
-**platform-level** Provider Modules: configured in ``platform.yaml``,
-applied uniformly to every agent. Memory is agent-level and lives
-elsewhere (Step 8).
+Secrets, sandbox, and authz are **platform-level** providers
+configured in `platform.yaml` and applied uniformly to every agent;
+see the [secrets-sandbox-authz
+contract](../../docs/explanation/secrets-sandbox-authz-contract.md).
+Memory is agent-level and follows the [memory provider
+contract](../../docs/explanation/memory-provider-contract.md).
 
 Each provider exposes a Protocol (the contract), one v1 variant, and
 a small registry seam so future variants slot in without core changes.

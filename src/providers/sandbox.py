@@ -1,16 +1,11 @@
-"""Sandbox provider — spec Module 2 + Module API Reference §7.
+"""Sandbox provider — execute work coroutines under a policy.
 
-v1 ships the ``native`` variant: pass-through of the work coroutine.
-The Protocol + registry are in place so future variants (containers,
-resource limits, isolation) drop in without changing call sites.
-
-Conformance invariants:
-- Sb-I1 / Sb-I2 — result + exception transparency for ``native``.
-- Sb-I3 — variants MUST honour their policy. ``native``'s policy is
-  empty by design.
-- Sb-I4 — invalid policy MUST raise :class:`SandboxPolicyInvalid`
-  before the work runs. ``native`` has nothing to validate.
-- Sb-I5 — all methods are ``async``.
+The v1 `native` variant is a pass-through of the work coroutine; the
+Protocol plus registry seam lets future isolation variants (containers,
+resource limits) drop in without changing call sites. For the full
+contract — result/exception transparency, policy validation, async
+shape — see the [secrets-sandbox-authz
+contract](../../docs/explanation/secrets-sandbox-authz-contract.md).
 """
 
 from __future__ import annotations
@@ -33,11 +28,11 @@ class SandboxProvider(Protocol):
         work: Callable[[], Awaitable[T]],
         policy: dict[str, Any],
     ) -> T:
-        """Execute ``work`` under ``policy``; return what ``work`` returns.
+        """Execute `work` under `policy`; return what `work` returns.
 
-        For ``native``, ``policy`` is ignored. Real variants validate
-        the policy and raise :class:`SandboxPolicyInvalid` for shapes
-        they don't support (Sb-I4).
+        For `native`, `policy` is ignored. Real variants validate the
+        policy and raise `SandboxPolicyInvalid` for shapes they don't
+        support.
         """
 
 
@@ -47,12 +42,12 @@ class SandboxProvider(Protocol):
 
 
 class NativeSandboxProvider:
-    """Spec §2.3 — literally ``await work()``.
+    """Pass-through sandbox — literally `await work()`.
 
     Accepted for v1 because the platform is local-first and
     single-user; the tools the platform runs are the tools the user
-    installed and trusts. Sandboxing arrives in Phase 2+ when
-    multi-tenancy / downloaded bundles / untrusted sources appear.
+    installed and trusts. Real isolation variants arrive when
+    multi-tenancy, downloaded bundles, or untrusted sources land.
     """
 
     def __init__(self, *, config: dict[str, Any] | None = None) -> None:
@@ -63,10 +58,9 @@ class NativeSandboxProvider:
     async def execute(
         self,
         work: Callable[[], Awaitable[T]],
-        policy: dict[str, Any],  # noqa: ARG002 — spec-mandated, ignored here
+        policy: dict[str, Any],  # noqa: ARG002 — contract-mandated, ignored here
     ) -> T:
-        # Pass-through: result and exceptions propagate unchanged
-        # (Sb-I1 / Sb-I2).
+        """Run `work` directly; result and exceptions propagate unchanged."""
         return await work()
 
 
@@ -82,11 +76,16 @@ def register_sandbox_variant(
     name: str,
     factory: Callable[..., SandboxProvider],
 ) -> None:
+    """Register a variant factory under `name`."""
     _REGISTRY[name] = factory
 
 
 def make_sandbox_provider(*, config: dict[str, Any]) -> SandboxProvider:
-    """Dispatch by ``config['variant']`` per platform.yaml §sandbox."""
+    """Dispatch by `config['variant']` per `platform.yaml`'s `sandbox` block.
+
+    Raises:
+        ConfigInvalid: `variant` is unset or names no registered factory.
+    """
     variant = config.get("variant")
     body = config.get("config", {}) or {}
     factory = _REGISTRY.get(variant or "")

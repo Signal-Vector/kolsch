@@ -1,28 +1,17 @@
-"""Memory provider — spec Memory Provider Contract + Module API Reference §5.
+"""Memory provider — session-scoped recall of tagged items plus recent events.
 
-v1 ships the ``recent_buffer`` variant: a session-scoped, in-process
-cache fed by replaying ``memory.written`` / ``memory.deleted`` events
-from the session log. Combines recent conversational events with
-explicitly-written tagged items at retrieval time.
+The v1 `recent_buffer` variant is a session-scoped, in-process cache
+fed by replaying `memory.written` / `memory.deleted` events from the
+session log; retrieval combines recent conversational events with the
+explicitly-written tagged items. For the full contract — write-tag
+binding, deterministic replay, session isolation — see the
+[memory provider contract](../../docs/explanation/memory-provider-contract.md).
 
-Load-bearing invariants:
-- **MEM I1** — Memory NEVER appends to the session log. The engine
-  emits ``memory.written`` / ``memory.deleted`` / ``memory.retrieved``
-  events; this module just returns results. Enforced by code
-  inspection at test time.
-- **MEM I3** — Cache MUST be reconstructable from the log. The
-  ``bind_session`` replay rebuilds identical cache state.
-- **MEM I4** — write_tag is bound at session-setup; callers cannot
-  override at write time.
-- **MEM I5** — write_tag containing ``*`` rejected at Layer 3.
-- **MEM I7** — session-scoped; items from one session never appear in
-  another.
-- **MEM I9** — deterministic replay: ordering by ``(created_at,
-  item_id)`` so a rebuilt cache matches the live cache.
-
-Implementation note: the provider reads the log via
-:meth:`SessionStore.read_events` (Store I8 — sole mediator of log
-access). It NEVER opens JSONL files directly.
+The provider never writes to the session log itself: the engine emits
+`memory.written` / `memory.deleted` / `memory.retrieved` events, and
+this provider just returns results. Log access is mediated entirely
+by [`SessionStore.read_events`][store.SessionStore.read_events]; the
+provider never opens JSONL files directly.
 """
 
 from __future__ import annotations
@@ -56,10 +45,10 @@ _log = logging.getLogger("providers.memory")
 
 
 class MemoryItem(BaseModel):
-    """One explicitly-written memory record — spec §2.
+    """One explicitly-written memory record.
 
-    ``content`` is opaque to the provider (typed as a dict for
-    Pydantic ergonomics; the agent owning the write knows the shape).
+    `content` is opaque to the provider — typed as a dict for Pydantic
+    ergonomics; the agent owning the write knows the shape.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -73,7 +62,7 @@ class MemoryItem(BaseModel):
 
 
 class RetrievalQuery(BaseModel):
-    """Per-call retrieval parameters — spec §4.3."""
+    """Per-call retrieval parameters."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -86,7 +75,7 @@ class RetrievalQuery(BaseModel):
 
 
 class RetrievedItem(BaseModel):
-    """One item in a :class:`RetrievalResult` — spec §4.4."""
+    """One item in a [`RetrievalResult`][providers.memory.RetrievalResult]."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -108,7 +97,8 @@ class RetrievalResult(BaseModel):
 
 
 class FilterExpression(BaseModel):
-    """`list(filters)` query — spec §4.5."""
+    """Query shape consumed by
+    [`MemoryContext.list_items`][providers.memory.MemoryContext]."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -121,7 +111,7 @@ class FilterExpression(BaseModel):
 
 
 class CompactionResult(BaseModel):
-    """`compact()` output — Module API Reference §5.2."""
+    """Output of a memory-compaction pass."""
 
     model_config = ConfigDict(frozen=True, extra="forbid")
 
@@ -139,13 +129,14 @@ class CompactionResult(BaseModel):
 def validate_recent_buffer_config(
     body: dict[str, Any],
 ) -> ValidationResult:
-    """`recent_buffer`'s Layer 3 validator — spec §5.1.
+    """Validate a `recent_buffer` config body at Layer 3.
 
-    Rules:
-    - ``write_tag`` (if present) MUST NOT contain ``*`` (MEM I5).
-    - At least one of ``write_tag`` or ``read_tags`` MUST be present;
+    Three rules:
+
+    - `write_tag` (if present) must not contain `*`.
+    - At least one of `write_tag` or `read_tags` must be present;
       otherwise the subsystem should be omitted entirely.
-    - ``recent_turns`` / ``max_tokens`` must be non-negative ints if
+    - `recent_turns` / `max_tokens` must be non-negative ints when
       supplied.
     """
     errors: list[ValidationError] = []
@@ -161,7 +152,7 @@ def validate_recent_buffer_config(
                 code="wildcard_in_write_tag",
                 message=(
                     f"write_tag {write_tag!r} contains '*'; "
-                    "wildcards are not permitted on write_tag (MEM I5)"
+                    "wildcards are not permitted on write_tag"
                 ),
             )
         )
@@ -226,9 +217,11 @@ def validate_recent_buffer_config(
 
 
 def _tag_matches_pattern(tag: str, pattern: str) -> bool:
-    """Per spec §5.1 — prefix wildcard ``"research/*"`` matches
-    children (``research/a``, ``research/a/b``) but NOT ``research``
-    exactly. Patterns without ``*`` are matched exactly.
+    """Return whether `tag` matches `pattern` under the recent-buffer rules.
+
+    A prefix wildcard `"research/*"` matches children
+    (`research/a`, `research/a/b`) but not `research` exactly.
+    Patterns without `*` are matched exactly.
     """
     if pattern.endswith("/*"):
         prefix = pattern[:-1]  # keep the trailing slash
@@ -248,11 +241,12 @@ def _item_matches_any_tag(item_tags: list[str], patterns: list[str]) -> bool:
 
 
 def _item_from_event(event_data: dict[str, Any], created_at: datetime) -> MemoryItem:
-    """Reconstruct a :class:`MemoryItem` from a `memory.written` event.
+    """Reconstruct a [`MemoryItem`][providers.memory.MemoryItem] from a
+    `memory.written` event.
 
-    The envelope's ``created_at`` is authoritative — the engine
-    stamps it when emitting, and we trust it for cache ordering
-    (MEM I9). The data payload carries item_id/agent_id/tags/etc.
+    The envelope's `created_at` is authoritative — the engine stamps
+    it when emitting, and we trust it for cache ordering. The data
+    payload carries `item_id` / `agent_id` / `tags` / etc.
     """
     return MemoryItem(
         item_id=MemoryItemId(event_data["item_id"]),
@@ -289,12 +283,12 @@ class MemoryContext(Protocol):
 
 
 class RecentBufferMemoryContext:
-    """The v1 ``recent_buffer`` MemoryContext.
+    """The v1 `recent_buffer` `MemoryContext`.
 
-    Holds the per-session cache. Writes update the in-memory cache
-    AND return the constructed item to the caller (the Agent Engine)
-    — the engine emits the ``memory.written`` event (MEM I1). The
-    same flow applies to deletes.
+    Holds the per-session cache. Writes update the in-memory cache and
+    return the constructed item to the caller (the Agent Engine) — the
+    engine emits the `memory.written` event so the provider stays out
+    of the log. The same flow applies to deletes.
     """
 
     def __init__(  # noqa: PLR0913 — bound config is intentionally explicit
@@ -321,14 +315,19 @@ class RecentBufferMemoryContext:
         content: dict[str, Any],
         metadata: dict[str, Any] | None = None,
     ) -> MemoryItem:
+        """Construct and cache a new memory item under the configured tag.
+
+        Raises:
+            MemoryWriteDisabled: No `write_tag` was configured at
+                bind time.
+        """
         if self.write_tag is None:
             raise MemoryWriteDisabled(
                 agent_id=str(self.agent_id),
                 reason="no write_tag configured",
             )
-        # MEM I4 — strip any caller-supplied tag from metadata; the
-        # configured write_tag wins. We never accept a runtime
-        # override; the spec is explicit.
+        # Strip any caller-supplied tag from metadata; the configured
+        # write_tag wins. We never accept a runtime override.
         clean_metadata = dict(metadata or {})
         clean_metadata.pop("tags", None)
         from uuid import uuid4  # noqa: PLC0415 — minor IO
@@ -345,25 +344,24 @@ class RecentBufferMemoryContext:
         return item
 
     async def retrieve(self, query: RetrievalQuery) -> RetrievalResult:
+        """Return tagged memory items matching `query`, newest first."""
         patterns = query.tags_any if query.tags_any is not None else self.read_tags
-        # Spec §5.3 — collect memory items matching the tag filter,
-        # newest first.
+        # Collect memory items matching the tag filter, newest first.
         matching = [
             item
             for item in self._cache.values()
             if _item_matches_any_tag(item.tags, patterns)
         ]
-        # MEM I9 — deterministic ordering: created_at desc, item_id
-        # tie-break so identical timestamps don't reorder across runs.
+        # Deterministic ordering: created_at desc, item_id tie-break so
+        # identical timestamps don't reorder across runs.
         matching.sort(
             key=lambda item: (item.created_at, item.item_id),
             reverse=True,
         )
 
-        # Phase 1 simplification: the engine assembles recent
-        # conversational events itself; this provider just returns the
-        # memory items. Spec §5.3's "blend recent events with memory
-        # items" lands when the engine wires this through the
+        # The engine assembles recent conversational events itself;
+        # this provider just returns the memory items. Blending events
+        # with items lands when the engine wires this through the
         # Assembly Procedure.
         items = [
             RetrievedItem(
@@ -375,8 +373,8 @@ class RecentBufferMemoryContext:
             )
             for item in matching
         ]
-        # Token accounting is a placeholder until the engine ships
-        # its real tokenizer; treat each content as one token for
+        # Token accounting is a placeholder until the engine ships its
+        # real tokenizer; treat each content as one token for
         # diagnostics-only purposes.
         return RetrievalResult(
             items=items,
@@ -391,9 +389,11 @@ class RecentBufferMemoryContext:
         self,
         filters: FilterExpression | None = None,
     ) -> list[MemoryItem]:
-        """Module API Reference §5.2 names this method ``list``; Python
-        ergonomics + mypy shadowing make ``list_items`` the in-code
-        name. Functionally identical."""
+        """Return cached items filtered by `filters`, newest first.
+
+        Named `list_items` rather than `list` to avoid shadowing the
+        builtin; functionally the contract's `list` method.
+        """
         result = list(self._cache.values())
         if filters is None:
             return self._sort(result)
@@ -428,6 +428,11 @@ class RecentBufferMemoryContext:
         return self._sort(result)
 
     async def delete(self, item_id: str) -> None:
+        """Drop `item_id` from the cache.
+
+        Raises:
+            MemoryItemNotFound: No item with that id is cached.
+        """
         cast_id = MemoryItemId(item_id)
         if cast_id not in self._cache:
             raise MemoryItemNotFound(
@@ -454,9 +459,10 @@ def _utc() -> Any:  # noqa: ANN401 — tiny helper indirection for tests
 class RecentBufferMemoryProvider:
     """The v1 Memory provider.
 
-    Constructed with a :class:`SessionStore` so it can read events
-    back for cache rebuild (Store I8 — sole mediator of log access;
-    the provider NEVER opens JSONL files itself).
+    Constructed with a [`SessionStore`][store.SessionStore] so it can
+    read events back for cache rebuild — the store is the sole
+    mediator of log access; the provider never opens JSONL files
+    itself.
     """
 
     def __init__(self, *, store: SessionStore) -> None:
@@ -469,6 +475,15 @@ class RecentBufferMemoryProvider:
         agent_id: AgentId,
         config: dict[str, Any],
     ) -> RecentBufferMemoryContext:
+        """Build the session-scoped `MemoryContext` by replaying the log.
+
+        Walks the thread's `memory.written` / `memory.deleted` events
+        in order so the rebuilt cache matches a live cache exactly.
+
+        Raises:
+            ConfigInvalid: `config` fails the recent-buffer validator.
+            MemorySessionUnbound: The session has no threads on disk.
+        """
         # Safety re-check; main validation ran at Layer 3.
         revalidation = validate_recent_buffer_config(config)
         if not revalidation.ok:
@@ -524,6 +539,7 @@ def register_memory_variant(
     name: str,
     factory: Callable[..., RecentBufferMemoryProvider],
 ) -> None:
+    """Register a variant factory under `name`."""
     _REGISTRY[name] = factory
 
 
@@ -532,8 +548,11 @@ def make_memory_provider(
     store: SessionStore,
     config: dict[str, Any],
 ) -> RecentBufferMemoryProvider:
-    """Dispatch by ``config['variant']`` — symmetric with the other
-    provider factories in :mod:`providers`."""
+    """Dispatch by `config['variant']` — symmetric with the sibling factories.
+
+    Raises:
+        ConfigInvalid: `variant` is unset or names no registered factory.
+    """
     variant = config.get("variant")
     factory = _REGISTRY.get(variant or "")
     if factory is None:
