@@ -112,16 +112,25 @@ def _allow_bash_in_workspace(root: Path) -> None:
     Post-Phase-2.2 (and per qol-tool-permission-discovery-uniform-
     with-stacking.md Step 2) the resolver composes the four-level
     stack agent → bundle → platform → default. The starter
-    ``helper.yaml`` ships an agent-level ``tool.bash`` → prompt
-    rule; that rule wins over the platform layer in a
-    no-callback (non-chat) context and collapses to deny. So the
-    fixture flips BOTH layers' prompt → allow.
+    ``helper.yaml`` ships an agent-level bash → prompt rule; that
+    rule wins over the platform layer in a no-callback (non-chat)
+    context and collapses to deny. So the fixture flips BOTH
+    layers' prompt → allow.
+
+    qol-action-namespace-bundle-scoped.md Step 2 — the bash rule
+    is identified by either the legacy regex shape
+    (``what: tool\\.bash``, pre-migration) OR the 3-seg form
+    (``what: kolsch/tools/bash``, post-migration); both shapes are
+    accepted so the fixture works regardless of which startup
+    migrations have run.
     """
+    bash_rule_whats = (r"tool\.bash", "kolsch/tools/bash")
+
     yaml_path = root / "platform.yaml"
     payload = yaml.safe_load(yaml_path.read_text(encoding="utf-8")) or {}
     rules = payload["authorization"]["config"]["rules"]
     for rule in rules:
-        if rule.get("what") == r"tool\.bash" and rule.get("effect") == "prompt":
+        if rule.get("what") in bash_rule_whats and rule.get("effect") == "prompt":
             rule["effect"] = "allow"
             break
     yaml_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
@@ -135,7 +144,7 @@ def _allow_bash_in_workspace(root: Path) -> None:
         agent_rules = agent_payload.get("permissions") or []
         for rule in agent_rules:
             if (
-                rule.get("what") == r"tool\.bash"
+                rule.get("what") in bash_rule_whats
                 and rule.get("effect") == "prompt"
             ):
                 rule["effect"] = "allow"

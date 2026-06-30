@@ -410,7 +410,7 @@ shape is three fields:
 
 | Field | Required | Type | Notes |
 |---|---|---|---|
-| `what` | yes | `str` | Fully-qualified tool ref (`<bundle>/<name>`), system action namespace (`agent.execute.*`), or catch-all `*`. Bare names rejected at load. |
+| `what` | yes | `str` | 3-segment catalog ref (`<bundle>/tools/<name>`), system action namespace (`agent.execute.*`), or catch-all `*`. Bare names and the deprecated 2-segment shape (`<bundle>/<name>`) are rejected at load (auto-migrated on `kolsch setup`). |
 | `pattern` | no | `str` (glob, default `"*"`) | Glob matched against the target (path / command / url). `*` and `?` only — regex characters (`^`, `$`, `[`, `\`, …) rejected at load. |
 | `effect` | yes | `Literal["allow", "deny", "prompt"]` | First-match-wins; `prompt` in non-chat callers collapses to `deny`. |
 
@@ -418,9 +418,9 @@ Example:
 
 ```yaml
 permissions:
-  - { what: kolsch/bash,        pattern: "find *", effect: allow }
-  - { what: kolsch/write_file,  pattern: "*",      effect: prompt }
-  - { what: "*",                pattern: "*",      effect: deny }
+  - { what: kolsch/tools/bash,        pattern: "find *", effect: allow }
+  - { what: kolsch/tools/write_file,  pattern: "*",      effect: prompt }
+  - { what: "*",                      pattern: "*",      effect: deny }
 ```
 
 The resolver composes the **four-level stack** per
@@ -509,11 +509,13 @@ The catalog scanner (`src/assets/catalog.py`) loads
 `BundleManifest` once at startup; the field flows through to the
 authz provider without any per-call YAML reads.
 
-Today's action namespace is single-segment (`tool.<name>`),
-so a bundle rule `what: "tool\\.bash"` matches any bundle's
-`bash` tool. See `docs/how-to/permissions.md` §"Naming tools
-across bundles" for the workaround and the migration plan to
-bundle-rooted action names.
+Action namespace is the 3-segment catalog ref
+(`<bundle>/tools/<name>`) per
+qol-action-namespace-bundle-scoped.md. A bundle rule
+`what: kolsch/tools/bash` matches **only** the kolsch bundle's
+bash tool — `andre/tools/bash` (if a workspace ships one) is a
+distinct authz subject. The single-segment limitation noted in
+the pre-Step-2 draft of this section is no longer present.
 
 ---
 

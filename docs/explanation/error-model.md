@@ -228,9 +228,9 @@ Examples:
 ```
 {
     "tool_name": "bash",
-    "action": "tool.bash",
+    "action": "kolsch/tools/bash",
     "principal": "agent.ag_abc123",
-    "matched_rule": {"who": ".*", "what": "tool\\.bash", "effect": "deny"}
+    "matched_rule": {"what": "kolsch/tools/bash", "pattern": "*", "effect": "deny"}
 }
 ```
 
@@ -683,7 +683,7 @@ the canonical "what each effect does" mapping for callers is
 | `authz.rule_invalid` | Fatal | `{position, reason}` | `kolsch permissions add` validating user input |
 | `authz.rule_not_found` | Fatal | `{id, available_ids}` | `kolsch permissions remove` for unknown id |
 | `authz.protected_rule` | Fatal | `{id, reason}` | `kolsch permissions remove rl_default_deny` (the default-deny tail is removal-protected) |
-| `authz.bare_tool_ref` | Fatal | `{rule_index, bare_name, candidates}` | Provider construction when a rule's `what` is a bare tool name (e.g., `bash` instead of `kolsch/bash`) — qol-permission-system-human-readable.md |
+| `authz.bare_tool_ref` | Fatal | `{rule_index, bare_name, candidates}` | Provider construction when a rule's `what` is a bare tool name (e.g., `bash` instead of `kolsch/tools/bash`) — qol-permission-system-human-readable.md + qol-action-namespace-bundle-scoped.md |
 | `authz.pattern_invalid` | Fatal | `{rule_index, pattern, forbidden_chars}` | Provider construction when a rule's `pattern` contains regex characters (`^`, `$`, `[`, …) — qol-permission-system-human-readable.md |
 | `authz.tool_ref_unknown` | Fatal | `{rule_index, tool_ref}` | Provider construction when a qualified `what` doesn't resolve to a catalogued tool |
 | `config.deprecated_regex_rule` | Recoverable | `{rule_index, what, reason}` | Setup-runner migration when a legacy regex rule can't be auto-converted; the rule stays in legacy form |

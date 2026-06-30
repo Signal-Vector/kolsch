@@ -365,7 +365,7 @@ A few things to try inside the chat:
 
 - **Tool approval modal.** Ask the helper to run `bash` (e.g.,
   "run `rg build_llm src/` and show me the matches"). Because
-  `tool.bash` defaults to `prompt`, you get the four-choice
+  `kolsch/tools/bash` defaults to `prompt`, you get the four-choice
   modal — `[y]` allow once, `[a]` always allow this pattern,
   `[n]` deny once, `[d]` always deny. Picking `[a]` writes a
   rule into `platform.yaml` immediately; the next matching

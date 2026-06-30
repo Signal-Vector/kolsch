@@ -142,32 +142,27 @@ _TWO_SEG_PARTS = 2
 
 
 def _build_action_to_tool_ref(catalog: AssetCatalog) -> dict[str, str]:
-    """Build the ``action → tool_ref`` map used by the new-shape matcher.
+    """Build the ``action → ref`` bridge map used by the new-shape matcher.
 
-    qol-permission-system-human-readable.md Step 2 — the action
-    namespace stays as ``tool.<name>`` (per Part 6 out-of-scope) but
-    rule ``what`` now uses the qualified tool ref ``<bundle>/<name>``.
-    The matcher needs both forms to fnmatch a rule like
-    ``what: kolsch/bash`` against an action invocation
-    ``tool.bash`` — this map bridges them.
+    qol-action-namespace-bundle-scoped.md Step 2 — the tool branch
+    of this map is **deleted**. Tool actions are now 3-seg catalog
+    refs (``<bundle>/tools/<name>``), so a rule
+    ``what: kolsch/tools/bash`` matches the action invocation
+    ``kolsch/tools/bash`` directly via ``fnmatch`` — no bridge
+    needed. The cross-bundle name-collision ambiguity that the
+    previous tool branch carried (last-write-wins) is structurally
+    impossible now: the bundle segment is always present in the
+    action string.
 
-    When two bundles ship a tool with the same name, the action
-    namespace itself is ambiguous (a follow-up will migrate the
-    action namespace to ``tool.<home_bundle>.<name>``; see
-    ``qol-action-namespace-bundle-scoped.md``). For now, last-write
-    wins; the deny-side surface is safe (the legacy regex matcher
-    still fires on action) and the documented limitation is the
-    qualified-tool-ref rule.
+    The **node branch stays** until the parallel unification for
+    workflow nodes ships (separate ticket). Node actions are still
+    1-seg ``node.<name>``; rule ``what:`` carries the canonical
+    3-seg ``<bundle>/nodes/<name>``; the matcher uses this map's
+    node entries to fnmatch the two forms.
     """
     out: dict[str, str] = {}
     for entry in catalog.assets.values():
-        if entry.asset_type == "tool":
-            # Catalog refs are 3-seg ``<bundle>/<plural>/<name>``; tool
-            # refs in ``what:`` are 2-seg ``<bundle>/<name>`` (migration
-            # shim — DO NOT touch per Phase 3.0 Step 4 guidance).
-            name = entry.ref.rsplit("/", 1)[-1]
-            out[f"tool.{name}"] = f"{entry.bundle}/{name}"
-        elif entry.asset_type == "node":
+        if entry.asset_type == "node":
             # Phase 3.0 Step 4 — workflow node actions land at
             # ``node.<name>``; rules in ``what:`` carry the canonical
             # 3-seg ``<bundle>/nodes/<name>`` ref. The action map
@@ -520,13 +515,13 @@ class RuleBasedAuthorizationProvider:
                 rule_index=-1,
                 error=(f"`rules` must be a list; got {type(raw_rules).__name__}"),
             )
-        # qol-permission-system-human-readable.md Step 2 — when a
-        # catalog is supplied, the provider validates every new-shape
-        # rule's `what` against it AND builds an action→tool_ref map
-        # so a rule like `what: kolsch/bash` fires on the
-        # corresponding `tool.bash` action invocation. When ``None``
-        # (tests, non-workspace callers), legacy-only behaviour
-        # without catalog validation is preserved.
+        # qol-action-namespace-bundle-scoped.md Step 2 — the action
+        # → tool-ref bridge is gone for tools (action IS the 3-seg
+        # ref now; matcher hits action directly). The map still
+        # carries node entries until the parallel node-namespace
+        # unification ships. When ``catalog`` is None (tests,
+        # non-workspace callers), the map is empty and the matcher
+        # falls back to action-only matching for both kinds.
         self._catalog = catalog
         self._action_to_tool_ref: dict[str, str] = (
             _build_action_to_tool_ref(catalog) if catalog is not None else {}
@@ -819,9 +814,12 @@ class RuleBasedAuthorizationProvider:
             return
         # Bare name (no `/`, no `.`, not `*`). Walk the catalog for
         # candidates so the error names the qualified form(s) the
-        # user should write.
+        # user should write. qol-action-namespace-bundle-scoped.md
+        # Step 2 — candidates are 3-seg catalog refs
+        # (``<bundle>/tools/<name>``) so the user copies in the
+        # canonical form, not the deprecated 2-seg shape.
         candidates = sorted(
-            f"{entry.bundle}/{entry.ref.rsplit('/', 1)[-1]}"
+            entry.ref
             for entry in self._catalog.assets.values()
             if entry.asset_type == "tool"
             and entry.ref.rsplit("/", 1)[-1] == what
@@ -1239,17 +1237,19 @@ class RuleBasedAuthorizationProvider:
         return [c.raw for c in self._rules]
 
     def lookup_tool_ref(self, action: str) -> str | None:
-        """Map an action string (``tool.bash``) to a qualified tool ref
-        (``kolsch/bash``).
+        """Map an action string to a qualified rule-shape ref, when one
+        is needed.
 
-        qol-permission-system-human-readable.md Step 3 — the chat
-        modal + the ``/perm`` slash commands both need this lookup
-        to write new-shape rules whose ``what`` is the qualified
-        ref. The map is built from the catalog at construction
-        (see :func:`_build_action_to_tool_ref`); returns ``None``
-        when no catalog was supplied (test paths) or the action
-        isn't a ``tool.<name>`` invocation (e.g.
-        ``agent.execute.<id>`` or ``mcp.<server>.<tool>``).
+        qol-action-namespace-bundle-scoped.md Step 2 — for **tools**
+        the action string IS the canonical 3-seg ref
+        (``kolsch/tools/bash``), so callers persisting a new rule
+        from the modal / ``/perm`` slash can use ``action`` directly
+        as the rule's ``what:``. This method returns None for tool
+        actions (no bridge entry exists for them anymore).
+
+        The method still returns a non-None bridge value for **node**
+        actions (``node.bash`` → ``kolsch/nodes/bash``) until the
+        parallel unification ships for workflow nodes.
         """
         return self._action_to_tool_ref.get(action)
 

@@ -521,12 +521,15 @@ async def test_tools_handler_surfaces_matching_rule_id(
     out = _io.StringIO()
     # Custom authz with a rule that matches every agent + every
     # tool — first match wins, so /tools surfaces this rule's id.
+    # qol-action-namespace-bundle-scoped.md Step 2 — tool actions
+    # are now 3-seg `<bundle>/tools/<name>` (was 1-seg `tool.<name>`);
+    # this regex matches the new shape.
     custom_authz = RuleBasedAuthorizationProvider(
         config={
             "rules": [
                 {
                     "who": "agent\\..*",
-                    "what": "tool\\..*",
+                    "what": ".+/tools/.+",
                     "effect": "allow",
                 },
                 {"who": ".*", "what": ".*", "effect": "deny"},

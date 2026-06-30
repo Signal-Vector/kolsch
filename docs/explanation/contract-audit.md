@@ -383,7 +383,7 @@ Covered in 1.2. Gap G1 noted (signature reference).
 
 ### 7.3 Tools ↔ Authorization
 
-**Tools → Authorization:** Per tool invocation, `authz.allow(principal, "tool.<name>")`.
+**Tools → Authorization:** Per tool invocation, `authz.allow(principal, "<bundle>/tools/<name>")` (3-segment catalog ref per qol-action-namespace-bundle-scoped.md).
 
 **Gap G17:** Who is the principal at tool invocation time? The Tools spec §6.2 doesn't specify; Authorization §3.2.4 conventions suggest `agent.<agent_id>` (since the agent is the actor calling the tool). The Engine's adapter, when calling allow(), should pass the agent_id as the principal. Needs explicit statement.
 

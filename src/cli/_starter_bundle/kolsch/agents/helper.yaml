@@ -31,11 +31,13 @@ context_files:
 # additional rules to widen, narrow, or shift the effect for any
 # tool/target combination.
 #
-# Grammar: `who` matches the principal (e.g. `agent.ag_helper`);
-# `what` matches the action OR the resolved target.
+# qol-action-namespace-bundle-scoped.md Step 2 — `what:` is the
+# 3-seg catalog ref `<bundle>/tools/<name>`; `pattern:` is a glob
+# matched against the resolved target (the bash command string for
+# `bash`, the path for file tools). `pattern: "*"` matches anything.
 permissions:
-  - who: ".*"
-    what: "tool\\.bash"
+  - what: kolsch/tools/bash
+    pattern: "*"
     effect: prompt
 
 # Phase 2.2 (§3) — Jinja2 template referencing the five standardized

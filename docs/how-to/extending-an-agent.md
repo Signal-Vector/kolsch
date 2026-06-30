@@ -50,7 +50,7 @@ bundle. The helper ships:
   `bash`.
 - Two `context_files` entries (`kolsch:docs/index.md` and
   `kolsch:AGENTS.md`).
-- A `prompt`-effect permission on `tool.bash`.
+- A `prompt`-effect permission on `kolsch/tools/bash`.
 
 Any agent in any bundle on disk is a valid parent — the
 resolver looks up the ref against the catalog, not the
@@ -182,9 +182,9 @@ asyncio.run(main())
 ```
 
 For the butler against a fresh-from-`kolsch setup` workspace
-you should see four inherited tools (`kolsch/read_file`,
-`kolsch/write_file`, `kolsch/list_files`, `kolsch/bash` —
-plus any extras you've added to your own
+you should see four inherited tools (`kolsch/tools/read_file`,
+`kolsch/tools/write_file`, `kolsch/tools/list_files`,
+`kolsch/tools/bash` — plus any extras you've added to your own
 `bundles/kolsch/agents/helper.yaml`), two inherited
 `context_files`, the inherited bash-prompt permission, and
 `cfg.extends == "kolsch/helper"`. The leaf's `extends:` is

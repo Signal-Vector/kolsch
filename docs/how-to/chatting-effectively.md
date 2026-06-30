@@ -141,7 +141,7 @@ set hits a `prompt`-effect rule and the four-choice modal pops:
 
 ```
 │ permission · 14:23:44                              [dark_orange3]
-│ bash(command='rg "build_llm" src/')  —  matched what='kolsch/bash' pattern='*' effect='prompt'
+│ bash(command='rg "build_llm" src/')  —  matched what='kolsch/tools/bash' pattern='*' effect='prompt'
 │
 │ [y] once    [a] always allow this
 │ [n] deny once    [d] always deny
@@ -195,7 +195,7 @@ If you regret an `[a]`, undo it with `/perm`:
 
 ```
 /perm list                              # find the (what, pattern) pair
-/perm remove kolsch/bash "rg *"         # back to prompting
+/perm remove kolsch/tools/bash "rg *"         # back to prompting
 ```
 
 (Or edit `platform.yaml`; the change applies on the next authz
@@ -217,10 +217,10 @@ When a tool is denied OR you just want to pre-authorize
 something, type the command instead of leaving the chat:
 
 ```
-/perm allow  kolsch/bash "rg *"             # pre-authorize ripgrep
-/perm deny   kolsch/bash "rm -rf *"         # block the dangerous shape
-/perm prompt kolsch/write_file /etc/*       # always ask for system writes
-/perm remove kolsch/bash "rg *"             # undo a prior allow
+/perm allow  kolsch/tools/bash "rg *"             # pre-authorize ripgrep
+/perm deny   kolsch/tools/bash "rm -rf *"         # block the dangerous shape
+/perm prompt kolsch/tools/write_file /etc/*       # always ask for system writes
+/perm remove kolsch/tools/bash "rg *"             # undo a prior allow
 /perm list                                   # print every current rule
 ```
 
@@ -240,7 +240,7 @@ Three things to know:
 
 - **`<tool>` must be qualified.** `bash` alone is rejected with
   a friendly error naming the qualified form (e.g.,
-  `kolsch/bash`). Use `/tools` to list refs the agent can call.
+  `kolsch/tools/bash`). Use `/tools` to list refs the agent can call.
 - **`<pattern>` is a glob.** `^find .*$` is rejected at the
   slash level — same character set the YAML rejects at load.
 - **Conflicts: `/perm allow` replaces an exact prior `(what,

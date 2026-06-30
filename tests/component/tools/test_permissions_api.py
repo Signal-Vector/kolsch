@@ -36,7 +36,7 @@ def deny_bash_provider() -> RuleBasedAuthorizationProvider:
     return RuleBasedAuthorizationProvider(
         config={
             "rules": [
-                {"who": ".*", "what": r"tool\.bash", "effect": "deny"},
+                {"what": "kolsch/tools/bash", "pattern": "*", "effect": "deny"},
             ],
         },
     )
@@ -58,7 +58,7 @@ async def test_check_returns_deny_when_platform_denies(
     )
     token = permissions.bind(binding)
     try:
-        effect = await permissions.check("agent.ag_helper", "tool.bash")
+        effect = await permissions.check("agent.ag_helper", "kolsch/tools/bash")
     finally:
         permissions.reset(token)
     assert effect is AuthzEffect.DENY
@@ -72,14 +72,14 @@ async def test_check_returns_allow_when_agent_rule_overrides_platform(
     binding = permissions.PermissionsBinding(
         provider=deny_bash_provider,
         agent_permissions=[
-            AuthzRule(who=".*", what=r"tool\.bash", effect="allow"),
+            AuthzRule(what="kolsch/tools/bash", pattern="*", effect="allow"),
         ],
         principal="agent.ag_helper",
         tool="bash",
     )
     token = permissions.bind(binding)
     try:
-        effect = await permissions.check("agent.ag_helper", "tool.bash")
+        effect = await permissions.check("agent.ag_helper", "kolsch/tools/bash")
     finally:
         permissions.reset(token)
     assert effect is AuthzEffect.ALLOW
@@ -102,7 +102,7 @@ async def test_require_raises_authz_denied_on_deny(
     token = permissions.bind(binding)
     try:
         with pytest.raises(AuthzDenied) as excinfo:
-            await permissions.require("agent.ag_helper", "tool.bash")
+            await permissions.require("agent.ag_helper", "kolsch/tools/bash")
     finally:
         permissions.reset(token)
     err = excinfo.value
@@ -116,7 +116,7 @@ async def test_require_returns_none_on_allow() -> None:
     allow_provider = RuleBasedAuthorizationProvider(
         config={
             "rules": [
-                {"who": ".*", "what": r"tool\.bash", "effect": "allow"},
+                {"what": "kolsch/tools/bash", "pattern": "*", "effect": "allow"},
             ],
         },
     )
@@ -127,7 +127,7 @@ async def test_require_returns_none_on_allow() -> None:
     )
     token = permissions.bind(binding)
     try:
-        result = await permissions.require("agent.ag_helper", "tool.bash")
+        result = await permissions.require("agent.ag_helper", "kolsch/tools/bash")
     finally:
         permissions.reset(token)
     assert result is None
@@ -144,7 +144,7 @@ async def test_check_outside_binding_raises_permissions_no_context() -> None:
     (Fatal). Catches the test-fixture mistake of importing the
     tool directly."""
     with pytest.raises(ToolPermissionsNoContext) as excinfo:
-        await permissions.check("agent.ag_helper", "tool.bash")
+        await permissions.check("agent.ag_helper", "kolsch/tools/bash")
     assert excinfo.value.code == "tool.permissions_no_context"
 
 
@@ -152,7 +152,7 @@ async def test_check_outside_binding_raises_permissions_no_context() -> None:
 async def test_require_outside_binding_raises_permissions_no_context() -> None:
     """Symmetric to ``check`` — same error envelope."""
     with pytest.raises(ToolPermissionsNoContext):
-        await permissions.require("agent.ag_helper", "tool.bash")
+        await permissions.require("agent.ag_helper", "kolsch/tools/bash")
 
 
 # ---------------------------------------------------------------------------

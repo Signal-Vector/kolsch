@@ -253,20 +253,26 @@ async def test_node_action_matches_3seg_node_ref() -> None:
 
 
 # ---------------------------------------------------------------------------
-# AC 4.6 — 2-seg tool ref migration shim continues to work
+# AC 4.6 — tool ref directly matches the 3-seg action
+# (qol-action-namespace-bundle-scoped.md Step 2 — the bridge map for
+# tools is deleted; action IS the ref now.)
 # ---------------------------------------------------------------------------
 
 
-async def test_2seg_tool_ref_still_fires_on_tool_action() -> None:
-    """``what: kolsch/bash`` (2-seg shim) matches ``tool.bash`` —
-    behavior unchanged from Phase 2."""
+async def test_3seg_tool_ref_matches_3seg_tool_action() -> None:
+    """``what: kolsch/tools/bash`` matches ``kolsch/tools/bash`` action.
+
+    qol-action-namespace-bundle-scoped.md Step 2 — supersedes the
+    deleted 2-seg → 1-seg bridge. The action namespace and the
+    rule.what share the same 3-seg grammar; matcher fires directly.
+    """
     provider = _provider(
         rules=[
-            {"what": "kolsch/bash", "pattern": "*", "effect": "allow"},
+            {"what": "kolsch/tools/bash", "pattern": "*", "effect": "allow"},
         ],
         catalog=_catalog_with_assets(),
     )
-    result = await provider.allow("user.local", "tool.bash")
+    result = await provider.allow("user.local", "kolsch/tools/bash")
     assert result.allowed is True
 
 

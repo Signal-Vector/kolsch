@@ -309,7 +309,14 @@ class ApprovalModal:
             # Skip the panel + input collection entirely.
             return AuthzEffect.DENY
 
-        tool_name = action.removeprefix("tool.")
+        # qol-action-namespace-bundle-scoped.md Step 2 — actions are
+        # now 3-seg catalog refs ``<bundle>/tools/<name>``. The
+        # rsplit handles both the new form (returns the trailing
+        # ``<name>``) and the legacy ``tool.<name>`` form (no ``/``
+        # present, so the whole string survives and ``removeprefix``
+        # strips the ``tool.`` head). The fall-through keeps Phase 1
+        # programmatic registrations rendering correctly.
+        tool_name = action.rsplit("/", 1)[-1].removeprefix("tool.")
         self._render_panel(tool=tool_name, target=target, rule_id=rule_id)
         choice = await self._collect_choice()
 
@@ -334,24 +341,28 @@ class ApprovalModal:
             return AuthzEffect.DENY
 
         effect = AuthzEffect.ALLOW if choice == "a" else AuthzEffect.DENY
-        # qol-permission-system-human-readable.md Step 3 — write the
-        # new-shape Rule whenever a tool-ref lookup is available
-        # (chat lifecycle wires this through). ``what`` becomes the
-        # qualified tool ref (``kolsch/bash``); ``pattern`` is the
-        # user-accepted glob. When no lookup is available (tests, or
-        # an unknown action like ``mcp.foo.bar``) we fall back to the
-        # legacy ``who/what`` shape — the provider's compile path
-        # recognises the legacy form and uses the regex matcher, so
-        # nothing breaks at the cost of a less ergonomic rule.
+        # qol-action-namespace-bundle-scoped.md Step 2 — for tool
+        # actions the 3-seg form (``kolsch/tools/bash``) IS the
+        # canonical ``what:``; no bridge lookup needed. The
+        # ``lookup_tool_ref`` map still resolves node actions
+        # (``node.bash`` → ``kolsch/nodes/bash``). Prefer the lookup
+        # result when present (covers nodes); otherwise use the
+        # action directly when it looks like a 2-or-3-seg catalog
+        # ref (covers tool actions under this QoL); otherwise fall
+        # to the legacy regex shape (covers ``mcp.foo.bar`` and
+        # other unqualified shapes the user can't easily migrate).
         effect_str = "allow" if effect is AuthzEffect.ALLOW else "deny"
         tool_ref = (
             self._tool_ref_lookup(action)
             if self._tool_ref_lookup is not None
             else None
         )
-        if tool_ref is not None:
+        qualified_ref = (
+            tool_ref if tool_ref is not None else (action if "/" in action else None)
+        )
+        if qualified_ref is not None:
             rule = Rule(
-                what=tool_ref,
+                what=qualified_ref,
                 pattern=pattern,
                 effect=effect_str,
             )
@@ -479,9 +490,17 @@ class ApprovalModal:
         (Esc / empty submission per patch §4.2). The chat treats
         None as "fall back to single-call [y]/[n]".
 
-        The prompt shows the tool's ``who`` namespace ("tool.bash")
-        and the suggested ``what`` regex pre-filled so the user
-        can edit in-place — patch §4.2's reference UX.
+        The prompt shows the tool's qualified ref
+        ("kolsch/tools/bash") and the suggested ``what`` pattern
+        pre-filled so the user can edit in-place — patch §4.2's
+        reference UX.
+
+        qol-action-namespace-bundle-scoped.md Step 2 — the displayed
+        ref defaults to the legacy ``tool.<name>`` form when the
+        modal is invoked without a tool-ref lookup (Phase 1 test
+        paths). Engine-driven invocations always carry the full
+        ``<bundle>/tools/<name>`` action through the lookup, so the
+        new form surfaces in the panel header at line 313.
         """
         self._console.print(
             Text(

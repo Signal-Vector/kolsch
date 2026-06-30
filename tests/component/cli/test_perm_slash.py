@@ -68,7 +68,7 @@ def _platform_seed() -> dict[str, object]:
         "variant": "rule_based",
         "config": {
             "rules": [
-                {"what": "kolsch/bash", "pattern": "*", "effect": "deny"},
+                {"what": "kolsch/tools/bash", "pattern": "*", "effect": "deny"},
                 {"what": "*", "pattern": "*", "effect": "deny"},
             ],
         },
@@ -149,19 +149,19 @@ async def test_perm_allow_writes_new_shape_rule(tmp_path: Path) -> None:
     ctx = _ctx(runtime, stdout)
 
     sig = await dispatch_slash(
-        '/perm allow kolsch/bash "find *"', ctx
+        '/perm allow kolsch/tools/bash "find *"', ctx
     )
     assert sig.value == "continue"
     output = stdout.getvalue()
     assert "/perm allow:" in output
-    assert "kolsch/bash" in output
+    assert "kolsch/tools/bash" in output
     assert "find *" in output
 
     # platform.yaml should now contain the new-shape rule.
     payload = yaml.safe_load((tmp_path / "platform.yaml").read_text(encoding="utf-8"))
     rules = payload["authorization"]["config"]["rules"]
     new_rule = next(
-        r for r in rules if r.get("what") == "kolsch/bash" and r.get("pattern") == "find *"
+        r for r in rules if r.get("what") == "kolsch/tools/bash" and r.get("pattern") == "find *"
     )
     assert new_rule["effect"] == "allow"
     # `who` and `id` are absent in the new shape.
@@ -173,11 +173,11 @@ async def test_perm_deny_writes_new_shape_rule(tmp_path: Path) -> None:
     runtime = await _runtime(tmp_path)
     stdout = _io.StringIO()
     ctx = _ctx(runtime, stdout)
-    await dispatch_slash('/perm deny kolsch/bash "rm *"', ctx)
+    await dispatch_slash('/perm deny kolsch/tools/bash "rm *"', ctx)
     payload = yaml.safe_load((tmp_path / "platform.yaml").read_text(encoding="utf-8"))
     rules = payload["authorization"]["config"]["rules"]
     assert any(
-        r.get("what") == "kolsch/bash"
+        r.get("what") == "kolsch/tools/bash"
         and r.get("pattern") == "rm *"
         and r.get("effect") == "deny"
         for r in rules
@@ -188,12 +188,12 @@ async def test_perm_prompt_writes_new_shape_rule(tmp_path: Path) -> None:
     runtime = await _runtime(tmp_path)
     stdout = _io.StringIO()
     ctx = _ctx(runtime, stdout)
-    await dispatch_slash("/perm prompt kolsch/bash *", ctx)
+    await dispatch_slash("/perm prompt kolsch/tools/bash *", ctx)
     rules = yaml.safe_load(
         (tmp_path / "platform.yaml").read_text(encoding="utf-8"),
     )["authorization"]["config"]["rules"]
     assert any(
-        r.get("what") == "kolsch/bash" and r.get("effect") == "prompt"
+        r.get("what") == "kolsch/tools/bash" and r.get("effect") == "prompt"
         for r in rules
     )
 
@@ -203,17 +203,17 @@ async def test_perm_remove_drops_matching_new_shape_rule(tmp_path: Path) -> None
     stdout = _io.StringIO()
     ctx = _ctx(runtime, stdout)
     # Add then remove.
-    await dispatch_slash('/perm allow kolsch/bash "find *"', ctx)
+    await dispatch_slash('/perm allow kolsch/tools/bash "find *"', ctx)
     stdout.truncate(0)
     stdout.seek(0)
-    await dispatch_slash('/perm remove kolsch/bash "find *"', ctx)
+    await dispatch_slash('/perm remove kolsch/tools/bash "find *"', ctx)
     output = stdout.getvalue()
     assert "dropped rule" in output
     rules = yaml.safe_load(
         (tmp_path / "platform.yaml").read_text(encoding="utf-8"),
     )["authorization"]["config"]["rules"]
     assert not any(
-        r.get("what") == "kolsch/bash" and r.get("pattern") == "find *"
+        r.get("what") == "kolsch/tools/bash" and r.get("pattern") == "find *"
         for r in rules
     )
 
@@ -225,7 +225,7 @@ async def test_perm_list_renders_all_rules(tmp_path: Path) -> None:
     await dispatch_slash("/perm list", ctx)
     output = stdout.getvalue()
     assert "rules (first-match-wins" in output
-    assert "kolsch/bash" in output
+    assert "kolsch/tools/bash" in output
 
 
 async def test_perm_allow_replaces_existing_same_rule(tmp_path: Path) -> None:
@@ -235,10 +235,10 @@ async def test_perm_allow_replaces_existing_same_rule(tmp_path: Path) -> None:
     runtime = await _runtime(tmp_path)
     stdout = _io.StringIO()
     ctx = _ctx(runtime, stdout)
-    await dispatch_slash('/perm allow kolsch/bash "find *"', ctx)
+    await dispatch_slash('/perm allow kolsch/tools/bash "find *"', ctx)
     stdout.truncate(0)
     stdout.seek(0)
-    await dispatch_slash('/perm allow kolsch/bash "find *"', ctx)
+    await dispatch_slash('/perm allow kolsch/tools/bash "find *"', ctx)
     output = stdout.getvalue()
     assert "replaced previous rule" in output
     rules = yaml.safe_load(
@@ -246,7 +246,7 @@ async def test_perm_allow_replaces_existing_same_rule(tmp_path: Path) -> None:
     )["authorization"]["config"]["rules"]
     matching = [
         r for r in rules
-        if r.get("what") == "kolsch/bash" and r.get("pattern") == "find *"
+        if r.get("what") == "kolsch/tools/bash" and r.get("pattern") == "find *"
     ]
     assert len(matching) == 1
 
@@ -266,7 +266,7 @@ async def test_perm_bare_tool_name_emits_friendly_error(tmp_path: Path) -> None:
     assert sig.value == "continue"
     output = stdout.getvalue()
     assert "bare tool name" in output
-    assert "kolsch/bash" in output  # the suggested qualified form
+    assert "kolsch/tools/bash" in output  # the suggested qualified form
 
 
 async def test_perm_pattern_with_regex_chars_emits_friendly_error(
@@ -275,7 +275,7 @@ async def test_perm_pattern_with_regex_chars_emits_friendly_error(
     runtime = await _runtime(tmp_path)
     stdout = _io.StringIO()
     ctx = _ctx(runtime, stdout)
-    sig = await dispatch_slash('/perm allow kolsch/bash "^find .*$"', ctx)
+    sig = await dispatch_slash('/perm allow kolsch/tools/bash "^find .*$"', ctx)
     assert sig.value == "continue"
     output = stdout.getvalue()
     assert "regex character" in output
@@ -285,7 +285,7 @@ async def test_perm_unknown_verb_emits_usage(tmp_path: Path) -> None:
     runtime = await _runtime(tmp_path)
     stdout = _io.StringIO()
     ctx = _ctx(runtime, stdout)
-    await dispatch_slash("/perm forbid kolsch/bash *", ctx)
+    await dispatch_slash("/perm forbid kolsch/tools/bash *", ctx)
     output = stdout.getvalue()
     assert "unknown verb" in output
 
@@ -308,7 +308,7 @@ def _denied_event(
     *,
     tool_name: str = "bash",
     matched_rule: dict[str, object] | None = None,
-    recovery_hint: str = "/perm allow kolsch/bash *",
+    recovery_hint: str = "/perm allow kolsch/tools/bash *",
 ) -> Event:
     """Build a synthetic tool.failed event the renderer can consume.
 
@@ -316,7 +316,7 @@ def _denied_event(
     :class:`engine.observers._ObservedToolHandle` emits when
     :class:`errors.ToolUnauthorized` fires."""
     matched_rule = matched_rule or {
-        "what": "kolsch/bash",
+        "what": "kolsch/tools/bash",
         "pattern": "*",
         "effect": "deny",
     }
@@ -358,9 +358,9 @@ def test_denied_capsule_renders_with_perm_hint() -> None:
     # Source label flips to `permission` (orange palette), not `tool`.
     assert "permission" in output
     assert "denied: bash" in output
-    assert "what='kolsch/bash'" in output
+    assert "what='kolsch/tools/bash'" in output
     assert "pattern='*'" in output
-    assert "/perm allow kolsch/bash *" in output
+    assert "/perm allow kolsch/tools/bash *" in output
 
 
 def test_denied_capsule_legacy_rule_renders_without_pattern() -> None:
@@ -377,13 +377,13 @@ def test_denied_capsule_legacy_rule_renders_without_pattern() -> None:
     renderer._render_tool_failed(
         _denied_event(
             matched_rule=legacy_rule,
-            recovery_hint="/perm allow kolsch/bash *",
+            recovery_hint="/perm allow kolsch/tools/bash *",
         ),
     )
     output = out.getvalue()
     assert "permission" in output
     assert "pattern=" not in output  # legacy → no pattern field
-    assert "/perm allow kolsch/bash *" in output
+    assert "/perm allow kolsch/tools/bash *" in output
 
 
 def test_generic_tool_failure_still_renders_tool_capsule() -> None:
@@ -431,10 +431,10 @@ def test_tool_failed_data_accepts_recovery_hint() -> None:
         tool_call_id="tc_1",
         tool_name="bash",
         error=error,
-        recovery_hint='/perm allow kolsch/bash "find *"',
+        recovery_hint='/perm allow kolsch/tools/bash "find *"',
     )
     dump = data.model_dump(mode="json")
-    assert dump["recovery_hint"] == '/perm allow kolsch/bash "find *"'
+    assert dump["recovery_hint"] == '/perm allow kolsch/tools/bash "find *"'
 
 
 def test_tool_failed_data_recovery_hint_defaults_to_none() -> None:
@@ -464,10 +464,10 @@ def test_engine_derives_hint_for_bash_authz_denial() -> None:
         tool_name="bash",
         action="tool.bash",
         principal="agent.test",
-        matched_rule={"what": "kolsch/bash", "pattern": "*", "effect": "deny"},
+        matched_rule={"what": "kolsch/tools/bash", "pattern": "*", "effect": "deny"},
     )
     hint = _derive_authz_recovery_hint(exc, arguments={"command": "find / -name foo"})
-    assert hint == '/perm allow kolsch/bash "find *"'
+    assert hint == '/perm allow kolsch/tools/bash "find *"'
 
 
 def test_engine_skips_hint_when_matched_rule_lacks_qualified_ref() -> None:
@@ -499,7 +499,7 @@ def test_engine_hint_uses_star_when_no_args() -> None:
         tool_name="bash",
         action="tool.bash",
         principal="agent.test",
-        matched_rule={"what": "kolsch/bash", "pattern": "*", "effect": "deny"},
+        matched_rule={"what": "kolsch/tools/bash", "pattern": "*", "effect": "deny"},
     )
     hint = _derive_authz_recovery_hint(exc, arguments={})
-    assert hint == "/perm allow kolsch/bash *"
+    assert hint == "/perm allow kolsch/tools/bash *"

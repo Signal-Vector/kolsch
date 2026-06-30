@@ -31,8 +31,10 @@
 - **Tool invocation context** contains `secrets`, `session_id`, `agent_id`.
   Nothing else. Authorization happens before invocation; tools don't write
   to the log.
-- Tool actions are named **`tool.<name>`** (builtin/declared) or
-  **`mcp.<server>.<tool>`** (MCP) in the Authorization namespace.
+- Tool actions are named **`<bundle>/tools/<name>`** (builtin /
+  declared — the 3-segment catalog ref per
+  qol-action-namespace-bundle-scoped.md) or **`mcp.<server>.<tool>`**
+  (MCP) in the Authorization namespace.
 
 ---
 
@@ -68,7 +70,8 @@ platform doesn't have to ship itself.
 - The invocation flow that calls a tool when the model requests it,
   routing through Authorization, Secrets, and Sandbox.
 - The MCP server lifecycle (spawn, ready-check, tool listing).
-- The action namespace (`tool.<name>` / `mcp.<server>.<tool>`).
+- The action namespace (`<bundle>/tools/<name>` for builtin /
+  declared tools, `mcp.<server>.<tool>` for MCP).
 
 ### 1.3 What the subsystem doesn't own
 
@@ -121,7 +124,11 @@ async def web_search(args: WebSearchArgs, ctx: ToolContext) -> dict:
     secrets_needed    [str]         optional; default []
     returns_schema    BaseModel?    optional; for tools returning structured data
     action            str?          optional; overrides default action name
-                                    (default: f"tool.{name}")
+                                    (default: f"{home_bundle}/tools/{name}",
+                                    e.g. "kolsch/tools/bash" — the
+                                    home_bundle is stamped at tool-
+                                    registration time by the engine,
+                                    not by the @tool decorator)
     timeout_seconds   int?          optional; tool-specific timeout override
 )
 ```
@@ -158,7 +165,8 @@ LLM what structure to expect. Tools returning unstructured text omit this.
 **`action`** — overrides the default action name. Almost never needed;
 exists for tools that legitimately want to live in a different namespace
 (e.g., a sandboxed tool that should be authorized as `system.X`). Default
-is `tool.<name>`.
+is `<home_bundle>/tools/<name>` (the 3-segment catalog ref, with
+`home_bundle` stamped at registration time by the engine).
 
 **`timeout_seconds`** — per-tool timeout. Overrides the Engine's default
 timeout. For long-running tools (a thorough web search, a large file
@@ -424,14 +432,17 @@ filesystem and network access for the command.
 
 ### 4.5 Action names for builtins
 
-Per the Authorization namespace:
-- `tool.read`
-- `tool.write`
-- `tool.edit`
-- `tool.bash`
+Per the Authorization namespace (3-segment catalog refs per
+qol-action-namespace-bundle-scoped.md):
 
-The v1 default allow-all rule covers all of them. Restrictive rule sets
-(e.g., "no bash for any agent") would add `who: ".*", what: "tool\\.bash", effect: deny`.
+- `kolsch/tools/read_file`
+- `kolsch/tools/write_file`
+- `kolsch/tools/list_files`
+- `kolsch/tools/bash`
+
+The default rule set ships permissive entries for the first three
+and `prompt` for `bash`. Restrictive rule sets (e.g., "no bash for
+any agent") add `{ what: "kolsch/tools/bash", pattern: "*", effect: deny }`.
 
 ---
 
@@ -473,7 +484,7 @@ def read_file(path: str, max_bytes: int = 1_048_576) -> str:
     """
 ```
 
-Action name: `tool.read_file`. The 1 MiB default `max_bytes` is a
+Action name: `kolsch/tools/read_file`. The 1 MiB default `max_bytes` is a
 context-budget guard; users tune it via the in-chat permission flow
 (Part 2 of the patch) or by editing the tool file directly.
 
@@ -493,7 +504,7 @@ def write_file(path: str, content: str, *, create_parents: bool = True) -> dict:
     """
 ```
 
-Action name: `tool.write_file`. Semantics are **full overwrite**, not
+Action name: `kolsch/tools/write_file`. Semantics are **full overwrite**, not
 patch-style edit — incremental editing belongs in a later phase when
 the model emits reliable diffs. Full-overwrite is honest about what
 it does.
@@ -519,7 +530,7 @@ def list_files(
     """
 ```
 
-Action name: `tool.list_files`. Non-recursive by default; recursive
+Action name: `kolsch/tools/list_files`. Non-recursive by default; recursive
 walks need an explicit `glob="**/*"`. The `max_entries` cap is the
 same context-budget discipline as `read_file.max_bytes`.
 
@@ -547,14 +558,14 @@ def bash(
     """
 ```
 
-Action name: `tool.bash`. Runs through the existing Sandbox provider
+Action name: `kolsch/tools/bash`. Runs through the existing Sandbox provider
 (the `native` variant — subprocess, in-process). Docker sandbox is a
 later phase. The `bash` path-policy gap documented in
 `docs/explanation/file-handling.md` §4.7 still applies in Phase 2.0:
 the path-access policy guards `read_file` / `write_file` / `list_files`
 but does NOT constrain commands the shell runs. The workspace-only
-default rule set (patch §3.1) defaults `tool.bash` to `prompt` for
-exactly this reason — the user authorizes each command interactively.
+default rule set (patch §3.1) defaults `kolsch/tools/bash` to `prompt`
+for exactly this reason — the user authorizes each command interactively.
 
 ### 4.5.5 Error codes raised by the builtins
 
@@ -810,10 +821,12 @@ What any Tools subsystem implementation must honor.
 
 ### T-I1 — Tool action namespace
 
-Every tool MUST have an action name. Default is `tool.<name>` for
-declared and builtin tools, `mcp.<server>.<tool>` for MCP tools.
-Authorization MUST be checked against this action name before every
-invocation.
+Every tool MUST have an action name. Default is the 3-segment catalog
+ref `<home_bundle>/tools/<name>` for declared and builtin tools (per
+qol-action-namespace-bundle-scoped.md — the `home_bundle` is stamped
+on the `ToolDefinition` at registration time by the engine);
+`mcp.<server>.<tool>` for MCP tools. Authorization MUST be checked
+against this action name before every invocation.
 
 ### T-I2 — Argument validation before invocation
 
@@ -892,9 +905,10 @@ permissions.require(who: str, what: str) -> None
 
 `who` is the principal pattern (the agent or user identity —
 e.g. `"agent.ag_helper"`); `what` is the action OR target
-pattern (e.g. `"tool.bash"` for the action, or the resolved
-path the tool is about to touch). The orientation matches
-§3.2.1 — see that section for the regex semantics.
+pattern (e.g. `"kolsch/tools/bash"` for the 3-segment action,
+or the resolved path the tool is about to touch). The
+orientation matches §3.2.1 — see that section for the regex
+semantics.
 
 **Behaviour:**
 

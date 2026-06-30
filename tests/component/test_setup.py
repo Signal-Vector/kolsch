@@ -1314,13 +1314,13 @@ def _rules_in(yaml_path: Path) -> list[dict[str, str]]:
 
 
 _PHASE_2_0_DEFAULT_WHATS: tuple[str, ...] = (
-    # qol-permission-system-human-readable.md Step 4 — defaults now
-    # use the new schema's qualified tool refs (`<bundle>/<name>`).
+    # qol-action-namespace-bundle-scoped.md Step 2 — defaults use
+    # the canonical 3-seg catalog ref (`<bundle>/tools/<name>`).
     "agent.execute.*",
-    "kolsch/read_file",
-    "kolsch/list_files",
-    "kolsch/write_file",
-    "kolsch/bash",
+    "kolsch/tools/read_file",
+    "kolsch/tools/list_files",
+    "kolsch/tools/write_file",
+    "kolsch/tools/bash",
 )
 
 

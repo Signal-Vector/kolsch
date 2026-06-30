@@ -973,8 +973,10 @@ async def allow(
 **Preconditions:**
 - `principal` is a string in the namespace conventions:
   `user.<id>`, `agent.<id>`, or `system`.
-- `action` is a dotted-string action name (e.g., `agent.execute.ag_x`,
-  `tool.bash`, `tool.read`).
+- `action` is an action identifier. For tools the canonical form is
+  the 3-segment catalog ref (e.g. `kolsch/tools/bash`,
+  `kolsch/tools/read_file`); for system actions, the dotted form
+  (e.g. `agent.execute.ag_x`); for MCP, `mcp.<server>.<tool>`.
 
 **Postconditions:**
 - Returns `AuthorizationResult` with `allowed: bool`, `matched_rule:
@@ -1063,7 +1065,9 @@ async def invoke_tool(
 **Postconditions:**
 - Dispatch order (per Tools §6.2):
   1. Validate `args` against the tool's Pydantic args_schema.
-  2. Authorize via `authz.allow(principal, f"tool.{tool_name}")`.
+  2. Authorize via `authz.allow(principal, defn.action_name)` —
+     `action_name` resolves to `f"{home_bundle}/tools/{name}"`
+     (3-segment catalog ref) for engine-driven registrations.
   3. Resolve secrets if the tool declares any.
   4. Route through `sandbox.execute(...)`.
   5. Execute the tool function.
@@ -1780,9 +1784,9 @@ the new rule first.
 
 Pattern suggestion is a pure helper in the chat module —
 `_suggest_what_pattern(tool, target) -> str` — that maps
-`(tool.bash, "rg foo")` → `"^rg .*$"`, `(tool.write_file,
-"/path/X.py")` → `"^/path/.*$"`, etc. The user always sees and
-can edit the suggestion before committing.
+`(kolsch/tools/bash, "rg foo")` → `"rg *"` (glob, not regex),
+`(kolsch/tools/write_file, "/path/X.py")` → `"/path/*"`, etc. The
+user always sees and can edit the suggestion before committing.
 
 ### 11.9.3 Slash-command surface
 

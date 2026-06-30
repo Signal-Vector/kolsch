@@ -39,6 +39,7 @@ from errors import (
     ConfigContextFileUnprefixed,
     ConfigDeprecatedRefForm,
     ConfigDeprecatedRegexRule,
+    ConfigDeprecatedRuleForm,
     ConfigExtendsTemplateWithoutInheritance,
     ConfigFallbackDuplicate,
     ConfigInvalid,
@@ -262,6 +263,14 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
         "rule_index": 5,
         "what": r"^find .*$",
         "reason": "regex doesn't match any migration heuristic",
+    },
+    ConfigDeprecatedRuleForm: {
+        "rule_index": 6,
+        "what": "kolsch/bash",
+        "reason": (
+            "2-seg form `<bundle>/<name>` is deprecated; "
+            "use the 3-seg catalog ref `<bundle>/tools/<name>` instead"
+        ),
     },
     # 4.10 Skills
     SkillNotFound: {"ref": "core/skills/missing"},

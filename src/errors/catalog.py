@@ -180,6 +180,8 @@ CATALOG: dict[str, Level] = {
     "authz.pattern_invalid": Level.FATAL,
     "authz.tool_ref_unknown": Level.FATAL,
     "config.deprecated_regex_rule": Level.RECOVERABLE,
+    # qol-action-namespace-bundle-scoped.md Step 2 — 2-seg rule form deprecation.
+    "config.deprecated_rule_form": Level.RECOVERABLE,
     "file.too_large": Level.RECOVERABLE,
     "file.not_found": Level.RECOVERABLE,
     # QoL tool-output-truncation-and-persistence §9.6 — read_file

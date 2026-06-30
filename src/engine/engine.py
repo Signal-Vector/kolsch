@@ -964,6 +964,16 @@ class _Exchange:
             declared_paths=declared_paths,
             agent_permissions=agent_rules,
             bundle_permissions=bundle_rules,
+            # qol-action-namespace-bundle-scoped.md Step 2 — the same
+            # home_bundle resolved above for sourcing bundle_permissions
+            # also stamps each ToolDefinition's home_bundle so its
+            # action_name resolves to the 3-seg catalog ref
+            # ``<home_bundle>/tools/<name>``. Falls through as None for
+            # synthetic test configs not backed by a catalog bundle —
+            # the subsystem falls back to "kolsch" for builtins and to
+            # the legacy 1-seg action form for declared tools in that
+            # case (preserves Phase 1 programmatic test behaviour).
+            home_bundle=home_bundle,
         )
         # MCP server registration lands when the MCP wiring patch ships.
 

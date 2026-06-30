@@ -76,11 +76,15 @@ def _strip_agent_bash_prompt(root: Path) -> None:
     test instead of the agent layer."""
     helper_path = root / "bundles" / "kolsch" / "agents" / "helper.yaml"
     payload = yaml.safe_load(helper_path.read_text(encoding="utf-8")) or {}
+    # qol-action-namespace-bundle-scoped.md Step 2 — helper.yaml's
+    # bash rule is now 3-seg ``kolsch/tools/bash``; accept both forms
+    # so this fixture works across the migration window.
     payload["permissions"] = [
         r
         for r in (payload.get("permissions") or [])
         if not (
-            r.get("what") == r"tool\.bash" and r.get("effect") == "prompt"
+            r.get("what") in (r"tool\.bash", "kolsch/tools/bash")
+            and r.get("effect") == "prompt"
         )
     ]
     helper_path.write_text(
@@ -152,7 +156,7 @@ async def test_bundle_allow_rule_passes_through_in_non_chat_context(
     _strip_agent_bash_prompt(root)
     _set_bundle_permissions(
         root,
-        [{"who": ".*", "what": r"tool\.bash", "effect": "allow"}],
+        [{"what": "kolsch/tools/bash", "pattern": "*", "effect": "allow"}],
     )
 
     fake = FakeLLM(
@@ -209,18 +213,19 @@ async def test_bundle_deny_rule_wins_over_platform_allow(
     _setup_workspace(root)
     _strip_agent_bash_prompt(root)
 
-    # Flip platform.yaml's tool.bash rule to allow.
+    # Flip platform.yaml's bash rule to allow. Match both forms so
+    # this fixture works whether the workspace has been migrated yet.
     plat_path = root / "platform.yaml"
     plat = yaml.safe_load(plat_path.read_text(encoding="utf-8")) or {}
     for rule in plat["authorization"]["config"]["rules"]:
-        if rule.get("what") == r"tool\.bash":
+        if rule.get("what") in (r"tool\.bash", "kolsch/tools/bash"):
             rule["effect"] = "allow"
             break
     plat_path.write_text(yaml.safe_dump(plat, sort_keys=False), encoding="utf-8")
 
     _set_bundle_permissions(
         root,
-        [{"who": ".*", "what": r"tool\.bash", "effect": "deny"}],
+        [{"what": "kolsch/tools/bash", "pattern": "*", "effect": "deny"}],
     )
 
     fake = FakeLLM(

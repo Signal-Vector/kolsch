@@ -206,7 +206,9 @@ async def test_tc_skill_authz_01_skill_md_read_denied_by_authz(
     failure = tool_failed[0]
     assert failure.data["tool_name"] == "read"
     assert failure.data["error"]["type"] == "tool.unauthorized"
-    assert failure.data["error"]["detail"]["action"] == "tool.read"
+    # qol-action-namespace-bundle-scoped.md Step 2 — action is the
+    # 3-seg catalog ref `<bundle>/tools/<name>` (was `tool.read`).
+    assert failure.data["error"]["detail"]["action"] == "kolsch/tools/read"
     assert failure.data["error"]["detail"]["principal"] == "system"
 
     # Force-invoke is pre-flight; failure terminates the exchange BEFORE

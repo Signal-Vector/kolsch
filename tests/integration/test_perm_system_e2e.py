@@ -166,7 +166,7 @@ def _seed_new_shape_workspace(root: Path) -> Path:
     bash-specific rule). PERM-SYS-03 then exercises ``/perm allow``
     landing above the catch-all + matching on next call.
 
-    A workspace where a broader ``deny kolsch/bash *`` sits above
+    A workspace where a broader ``deny kolsch/tools/bash *`` sits above
     the catch-all is the smart-insertion shadow case tracked at
     E-QOL-PERMSYS-004 (Step 4 doc carryover); it isn't part of
     PERM-SYS-03's acceptance criterion."""
@@ -211,7 +211,7 @@ async def test_perm_sys_01_migration_roundtrip(tmp_path: Path) -> None:
     """``kolsch setup`` re-run migrates legacy rules to the new
     schema. Every canonical pre-Step-2 rule round-trips cleanly;
     a backup is written; the post-migration provider matches a
-    ``tool.bash`` action against the migrated ``kolsch/bash``
+    ``tool.bash`` action against the migrated ``kolsch/tools/bash``
     qualified ref."""
     yaml_path = _seed_pre_qol_workspace(tmp_path)
     # Pre-migration assertion: every rule still carries `who`.
@@ -247,8 +247,8 @@ async def test_perm_sys_01_migration_roundtrip(tmp_path: Path) -> None:
         assert "id" not in rule, f"legacy `id` survived: {rule}"
         assert "pattern" in rule, f"missing `pattern`: {rule}"
     # The migrated bash rule names the qualified ref.
-    bash_rules = [r for r in post_rules if r["what"] == "kolsch/bash"]
-    assert bash_rules, f"no kolsch/bash rule in {post_rules}"
+    bash_rules = [r for r in post_rules if r["what"] == "kolsch/tools/bash"]
+    assert bash_rules, f"no kolsch/tools/bash rule in {post_rules}"
 
     # Backup written.
     backups = sorted((tmp_path / ".platform").glob("platform.yaml.bak.*"))
@@ -263,12 +263,12 @@ async def test_perm_sys_01_migration_roundtrip(tmp_path: Path) -> None:
     )
     result = await provider.allow(
         "user.local",
-        "tool.bash",
+        "kolsch/tools/bash",
         target="find / -name foo",
     )
     assert result.allowed
     assert result.matched_rule is not None
-    assert result.matched_rule.what == "kolsch/bash"
+    assert result.matched_rule.what == "kolsch/tools/bash"
 
 
 # ===========================================================================
@@ -302,7 +302,7 @@ async def test_perm_sys_02_bare_tool_name_blocks_startup(tmp_path: Path) -> None
     with pytest.raises(AuthzBareToolRef) as excinfo:
         await bootstrap_runtime(root=tmp_path)
     assert excinfo.value.detail["bare_name"] == "bash"
-    assert "kolsch/bash" in excinfo.value.detail["candidates"]
+    assert "kolsch/tools/bash" in excinfo.value.detail["candidates"]
 
 
 # ===========================================================================
@@ -313,8 +313,8 @@ async def test_perm_sys_02_bare_tool_name_blocks_startup(tmp_path: Path) -> None
 async def test_perm_sys_03_perm_allow_persists_and_takes_effect(
     tmp_path: Path,
 ) -> None:
-    """``/perm allow kolsch/bash "find *"`` writes a rule above the
-    catch-all; the next ``provider.allow("...", "tool.bash",
+    """``/perm allow kolsch/tools/bash "find *"`` writes a rule above the
+    catch-all; the next ``provider.allow("...", "kolsch/tools/bash",
     target="find / -name x")`` returns ``allowed=True``; reloading
     the workspace yields the same rule (persistence)."""
     _seed_new_shape_workspace(tmp_path)
@@ -322,7 +322,7 @@ async def test_perm_sys_03_perm_allow_persists_and_takes_effect(
 
     # Pre-/perm: only the catch-all matches → deny by default.
     result = await runtime.authz.allow(
-        "user.local", "tool.bash", target="find /"
+        "user.local", "kolsch/tools/bash", target="find /"
     )
     assert not result.allowed
     assert result.matched_rule is not None
@@ -330,7 +330,7 @@ async def test_perm_sys_03_perm_allow_persists_and_takes_effect(
 
     stdout = _io.StringIO()
     ctx = _slash_ctx(runtime, stdout)
-    sig = await dispatch_slash('/perm allow kolsch/bash "find *"', ctx)
+    sig = await dispatch_slash('/perm allow kolsch/tools/bash "find *"', ctx)
     assert sig.value == "continue"
     assert "added rule" in stdout.getvalue()
 
@@ -338,11 +338,11 @@ async def test_perm_sys_03_perm_allow_persists_and_takes_effect(
     # ``add_rule`` mutates the rule list in place AND ``/perm`` writes
     # the YAML.
     result = await runtime.authz.allow(
-        "user.local", "tool.bash", target="find / -name x"
+        "user.local", "kolsch/tools/bash", target="find / -name x"
     )
     assert result.allowed
     assert result.matched_rule is not None
-    assert result.matched_rule.what == "kolsch/bash"
+    assert result.matched_rule.what == "kolsch/tools/bash"
     assert result.matched_rule.pattern == "find *"
 
     # Persistence — reload from disk and assert the rule survives.
@@ -357,7 +357,7 @@ async def test_perm_sys_03_perm_allow_persists_and_takes_effect(
         catalog=am.catalog(),
     )
     result = await reloaded.allow(
-        "user.local", "tool.bash", target="find / -name x"
+        "user.local", "kolsch/tools/bash", target="find / -name x"
     )
     assert result.allowed
 
@@ -371,13 +371,13 @@ def _denied_tool_failed_event(
     *,
     tool_name: str = "bash",
     matched_rule: dict[str, object] | None = None,
-    recovery_hint: str = '/perm allow kolsch/bash "find *"',
+    recovery_hint: str = '/perm allow kolsch/tools/bash "find *"',
 ) -> Event:
     """Mirror what
     :class:`engine.observers._ObservedToolHandle` emits on
     :class:`errors.ToolUnauthorized`."""
     matched_rule = matched_rule or {
-        "what": "kolsch/bash",
+        "what": "kolsch/tools/bash",
         "pattern": "*",
         "effect": "deny",
     }
@@ -423,9 +423,9 @@ def test_perm_sys_04_denied_capsule_renders_with_perm_hint() -> None:
     assert "permission" in rendered
     # Body lines: `denied:`, the matched rule, the /perm command.
     assert "denied: bash" in rendered
-    assert "what='kolsch/bash'" in rendered
+    assert "what='kolsch/tools/bash'" in rendered
     assert "pattern='*'" in rendered
-    assert '/perm allow kolsch/bash "find *"' in rendered
+    assert '/perm allow kolsch/tools/bash "find *"' in rendered
 
 
 # ===========================================================================
@@ -445,14 +445,14 @@ def test_perm_sys_05_tool_failed_carries_recovery_hint() -> None:
     # Step 1 — derive the hint from a denied invocation.
     exc = ToolUnauthorized(
         tool_name="bash",
-        action="tool.bash",
+        action="kolsch/tools/bash",
         principal="agent.test",
-        matched_rule={"what": "kolsch/bash", "pattern": "*", "effect": "deny"},
+        matched_rule={"what": "kolsch/tools/bash", "pattern": "*", "effect": "deny"},
     )
     hint = _derive_authz_recovery_hint(
         exc, arguments={"command": "find / -name foo"}
     )
-    assert hint == '/perm allow kolsch/bash "find *"'
+    assert hint == '/perm allow kolsch/tools/bash "find *"'
 
     # Step 2 — the schema carries the hint round-trip.
     error = Error.from_platform_error(exc)

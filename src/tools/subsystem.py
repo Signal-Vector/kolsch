@@ -89,6 +89,7 @@ class ToolsSubsystem:
         mcp_servers: list[tuple[MCPServer, Literal["lazy", "eager"]]] | None = None,
         agent_permissions: list[Rule] | None = None,
         bundle_permissions: list[Rule] | None = None,
+        home_bundle: str | None = None,
     ) -> list[ToolInfo]:
         """Register the given tool set for ``agent_id``.
 
@@ -107,23 +108,47 @@ class ToolsSubsystem:
         - For each eager MCP server: call :meth:`MCPServer.start` now.
         - For each lazy MCP server: register as a placeholder; the
           subsystem starts it on first invoke (T-I8).
+
+        qol-action-namespace-bundle-scoped.md Step 2 — ``home_bundle``
+        stamps every registered :class:`ToolDefinition` so its
+        ``action_name`` resolves to the 3-seg catalog ref
+        ``<home_bundle>/tools/<name>``. Builtins are always attributed
+        to ``kolsch`` (Decision #8 of the spec); declared tools take
+        the caller-supplied ``home_bundle`` (the engine passes the
+        agent's resolved home bundle); programmatically-supplied
+        ``tools=`` likewise take the caller-supplied value. When
+        ``home_bundle`` is None (Phase 1 test paths that don't go
+        through the engine), the ToolDefinition's ``action_name``
+        falls back to the legacy ``tool.<name>`` form — preserves
+        byte-identical behaviour for those tests.
         """
         registration = self._registry.ensure_agent(agent_id)
 
         for fn in tools or []:
             defn = get_tool_definition(fn)
             await self._verify_secrets(defn)
+            if home_bundle is not None and defn.home_bundle is None:
+                defn.home_bundle = home_bundle
             registration.tools[defn.name] = defn
 
         for path in declared_paths or []:
             for fn in discover_tools_in_file(path):
                 defn = get_tool_definition(fn)
                 await self._verify_secrets(defn)
+                if home_bundle is not None and defn.home_bundle is None:
+                    defn.home_bundle = home_bundle
                 registration.tools[defn.name] = defn
 
         for name in builtin_names or []:
             fn = self._make_builtin(name)
             defn = get_tool_definition(fn)
+            # Builtins are always attributed to the kolsch canonical
+            # bundle (spec Decision #8). Stamp unconditionally so the
+            # action namespace is correct regardless of whether the
+            # caller supplied a ``home_bundle`` (engine path) or not
+            # (legacy test path).
+            if defn.home_bundle is None:
+                defn.home_bundle = "kolsch"
             registration.tools[defn.name] = defn
 
         for server, lifecycle in mcp_servers or []:

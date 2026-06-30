@@ -845,16 +845,15 @@ def _setup_platform_payload() -> dict[str, Any]:
 def _workspace_only_default_rules() -> list[dict[str, str]]:
     """The workspace-only default rules per Phase 2.0 patch §3.1.
 
-    qol-permission-system-human-readable.md Step 4 — emits the
-    new three-field schema ``{what, pattern, effect}`` directly.
-    ``what`` is the qualified tool ref (``kolsch/<name>``) for
-    builtin tools, the system action namespace
-    (``agent.execute.*``) for the engine pre-flight, and the
-    catch-all ``*`` for the default-deny tail. The old
-    ``{who, what, effect}`` legacy shape still loads via the
-    provider's compile dispatch (see
-    :class:`providers.authz.Rule`), but new workspaces start in
-    the canonical form so setup is idempotent on re-runs.
+    qol-action-namespace-bundle-scoped.md Step 2 — ``what`` is the
+    3-seg catalog ref ``<bundle>/tools/<name>`` for builtin tools,
+    the system action namespace (``agent.execute.*``) for the
+    engine pre-flight, and the catch-all ``*`` for the
+    default-deny tail. The previous 2-seg shape
+    (``kolsch/<name>``) shipped by the human-readable QoL is
+    deprecated; the runtime migration shim auto-rewrites legacy
+    workspaces. New workspaces start in the 3-seg canonical form
+    so the action matches the rule without translation.
 
     Includes an ``agent.execute.*`` allow at the top so the
     engine's pre-flight authz check passes — without this the
@@ -866,10 +865,10 @@ def _workspace_only_default_rules() -> list[dict[str, str]]:
         # a more specific deny before this rule.
         {"what": "agent.execute.*", "pattern": "*", "effect": "allow"},
         # The four Phase 2.0 builtins — owned by the kolsch bundle.
-        {"what": "kolsch/read_file", "pattern": "*", "effect": "allow"},
-        {"what": "kolsch/list_files", "pattern": "*", "effect": "allow"},
-        {"what": "kolsch/write_file", "pattern": "*", "effect": "prompt"},
-        {"what": "kolsch/bash", "pattern": "*", "effect": "prompt"},
+        {"what": "kolsch/tools/read_file", "pattern": "*", "effect": "allow"},
+        {"what": "kolsch/tools/list_files", "pattern": "*", "effect": "allow"},
+        {"what": "kolsch/tools/write_file", "pattern": "*", "effect": "prompt"},
+        {"what": "kolsch/tools/bash", "pattern": "*", "effect": "prompt"},
         # Default-deny tail (protected — TOOL-R10).
         {"what": "*", "pattern": "*", "effect": "deny"},
     ]
@@ -1053,7 +1052,11 @@ async def _maybe_migrate_authz_rules_to_qol_schema(io: _SetupIO) -> None:
     """
     from assets import AssetManagement  # noqa: PLC0415
     from cli._migrations.authz_rules import migrate_authz_rules  # noqa: PLC0415
-    from errors import ConfigDeprecatedRegexRule  # noqa: PLC0415
+    from errors import (  # noqa: PLC0415
+        ConfigDeprecatedRegexRule,
+        ConfigDeprecatedRuleForm,
+        PlatformError,
+    )
 
     yaml_path = io.root / "platform.yaml"
     if not yaml_path.is_file():
@@ -1088,11 +1091,23 @@ async def _maybe_migrate_authz_rules_to_qol_schema(io: _SetupIO) -> None:
         if old != new
     )
     for entry in result.deprecated:
-        warn = ConfigDeprecatedRegexRule(
-            rule_index=entry.rule_index,
-            what=entry.what,
-            reason=entry.reason,
-        )
+        # qol-action-namespace-bundle-scoped.md Step 2 — dispatch on
+        # ``kind`` so the right event class fires per deprecation
+        # cause: legacy 1-seg regex rules emit
+        # ConfigDeprecatedRegexRule; new 2-seg shape rules emit
+        # ConfigDeprecatedRuleForm. Both are Recoverable warnings.
+        if entry.kind == "two_seg":
+            warn: PlatformError = ConfigDeprecatedRuleForm(
+                rule_index=entry.rule_index,
+                what=entry.what,
+                reason=entry.reason,
+            )
+        else:
+            warn = ConfigDeprecatedRegexRule(
+                rule_index=entry.rule_index,
+                what=entry.what,
+                reason=entry.reason,
+            )
         # PlatformError carries the message via `str(exc)` (super().__init__(message)).
         io.out.write(f"  ⚠ {warn}\n")
     if converted_count == 0:

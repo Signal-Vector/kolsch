@@ -321,7 +321,7 @@ tools (`read_file`, `write_file`, `list_files`) — out-of-scope paths
 surface as `file.access_denied` per Error Model §4.16, the same
 mechanism described in §4.7 for the Phase 1 set. `bash`'s exemption
 from path policy (§4.7 below) carries over unchanged; Phase 2.0's
-workspace-only default rule set (patch §3.1) defaults `tool.bash`
+workspace-only default rule set (patch §3.1) defaults `kolsch/tools/bash`
 to the new `prompt` effect (per Authz Protocol §3 in
 `docs/explanation/secrets-sandbox-authz-contract.md`) so the user
 authorizes each command interactively rather than the path policy
@@ -366,14 +366,14 @@ constrain this.
 **Path policy does NOT apply to `bash` in v1.** This is a real
 limitation, not a bug.
 
-Practical implication: a user who allows `tool.bash` in their
-Authorization rules is accepting that bash bypasses path policy. The
-user wanting strict path-based control should:
+Practical implication: a user who allows `kolsch/tools/bash` in
+their Authorization rules is accepting that bash bypasses path
+policy. The user wanting strict path-based control should:
 
 - Remove `bash` from their agents' tool lists (via the Tools subsystem
   config), OR
-- Add `who: ".*", what: "tool\\.bash", effect: "deny"` to their
-  Authorization rules.
+- Add `{what: "kolsch/tools/bash", pattern: "*", effect: "deny"}` to
+  their Authorization rules.
 
 When real sandboxing arrives (a future Sandbox variant), bash will run
 inside a sandbox that enforces filesystem isolation matching the path
@@ -471,8 +471,8 @@ a contract obligation on tool authors.
 
 Implementations MUST document `bash`'s exemption from path policy in
 v1's `native` sandbox. Users MUST be able to understand that allowing
-`tool.bash` allows arbitrary filesystem access regardless of path
-policy.
+`kolsch/tools/bash` allows arbitrary filesystem access regardless of
+path policy.
 
 ### Fh-I7 — Default policy is pre-populated, then user-owned
 

@@ -58,8 +58,8 @@ def _make_platform() -> PlatformVar:
     authorization = AuthorizationVar(
         variant="rule_based",
         rules=[
-            Rule(who=".*", what=r"tool\.read_file", effect="allow"),
-            Rule(who=".*", what=r"tool\.bash", effect="prompt"),
+            Rule(what="kolsch/tools/read_file", pattern="*", effect="allow"),
+            Rule(what="kolsch/tools/bash", pattern="*", effect="prompt"),
         ],
     )
     file_access = FileAccessVar(

@@ -1,39 +1,42 @@
-"""Authz-rules migration — qol-permission-system-human-readable.md Step 2.
+"""Authz-rules migration — qol-permission-system-human-readable.md Step 2
++ qol-action-namespace-bundle-scoped.md Step 2.
 
 Converts the pre-QoL rule shape ``{id, who, what, effect}`` (regex
 ``what`` matched against action OR target) to the new shape
-``{what, pattern, effect}`` (glob ``what`` matched against action OR
-tool ref; glob ``pattern`` matched against target). Pure function;
+``{what, pattern, effect}`` (glob ``what`` matched against the 3-seg
+catalog ref; glob ``pattern`` matched against target). Pure function;
 no I/O — the caller reads / writes ``platform.yaml``.
 
-Migration heuristics (Step 1 writeup §2, mirroring the table in the
-spec's Part 1 §10):
+Migration heuristics (in priority order; first match wins):
 
 1. ``what: tool\\.<name>`` (the legacy action-namespace pin) →
-   ``what: <home_bundle>/<name>, pattern: "*"``. ``home_bundle`` is
-   resolved by walking the catalog for a tool entry whose final
-   segment matches ``<name>``. Zero hits or two-plus hits make the
-   rule un-migratable; it stays in legacy form and emits a
-   :class:`DeprecatedRegexRule` event for the workspace-load
-   surface.
+   ``what: <home_bundle>/tools/<name>, pattern: "*"``.
+   ``home_bundle`` is resolved by walking the catalog for a tool
+   entry whose final segment matches ``<name>``. Zero hits or
+   two-plus hits make the rule un-migratable; it stays in legacy
+   form and emits a :class:`DeprecatedRule` event tagged
+   ``regex`` for the workspace-load surface.
 2. ``what: ^<cmd> .*$`` (the legacy bash-suggest output) →
-   ``what: <bash_bundle>/bash, pattern: "<cmd> *"``. Same fallback
-   when the workspace has no ``bash`` tool (e.g., the user removed
-   the kolsch bundle).
+   ``what: <bash_bundle>/tools/bash, pattern: "<cmd> *"``. Same
+   fallback when the workspace has no ``bash`` tool.
 3. ``what: agent\\.execute\\..*`` (the engine pre-flight allow) →
-   ``what: "agent.execute.*", pattern: "*"``. The trailing glob in
-   ``what`` mirrors the original regex's ``\\..*`` clause so
-   ``fnmatch("agent.execute.helper", "agent.execute.*")`` fires the
-   same as the legacy ``re.fullmatch``.
+   ``what: "agent.execute.*", pattern: "*"``. Trailing glob mirrors
+   the original regex's ``\\..*`` clause.
 4. ``what: .*`` (the legacy catch-all) →
    ``what: "*", pattern: "*"``.
+5. ``what: <bundle>/<name>`` (the 2-seg new-shape form shipped by
+   the human-readable QoL) → ``what: <bundle>/tools/<name>``
+   (3-seg). Catalog must confirm the bundle owns a tool of that
+   name; ambiguous / unknown refs stay in 2-seg form and emit a
+   :class:`DeprecatedRule` event tagged ``two_seg``. Only fires on
+   new-shape rules (``pattern`` field present); legacy rules go
+   through heuristic 1.
 
 Unconvertible rules — anything containing character classes,
-lookahead, or other regex constructs the heuristic doesn't recognise
-— stay in legacy form and emit a Recoverable
-``config.deprecated_regex_rule`` event so the user knows to convert
-them. The rule still loads, so the platform isn't bricked by an
-unfamiliar regex.
+lookahead, or other regex constructs the heuristic doesn't
+recognise, or 2-seg refs that don't resolve in the catalog — stay
+in their existing form and emit a Recoverable event so the user
+knows to convert them.
 """
 
 from __future__ import annotations
@@ -53,18 +56,28 @@ if TYPE_CHECKING:
 
 @dataclass(frozen=True)
 class DeprecatedRegexRule:
-    """One legacy regex rule that couldn't be auto-converted.
+    """One rule the migrator couldn't auto-convert OR converted from a
+    deprecated form.
 
-    Carries enough context for the workspace-load surface to emit a
-    :class:`errors.ConfigDeprecatedRegexRule` Recoverable event. The
-    actual emission is the caller's responsibility — this dataclass
-    keeps the migrator pure (no error-class instantiation in the
-    hot path).
+    qol-action-namespace-bundle-scoped.md Step 2 — gains a ``kind``
+    discriminator so the emitter can pick the right event class:
+
+    - ``kind="regex"`` (default — legacy 1-seg regex shape) →
+      :class:`errors.ConfigDeprecatedRegexRule`.
+    - ``kind="two_seg"`` (a new-shape rule using the 2-seg
+      ``<bundle>/<name>`` form that this QoL deprecates) →
+      :class:`errors.ConfigDeprecatedRuleForm`.
+
+    Both shapes were either converted (the rule was rewritten) or
+    survive in their input form; the dataclass entry exists so the
+    workspace-load surface can emit a Recoverable warning per
+    affected rule.
     """
 
     rule_index: int
     what: str
     reason: str
+    kind: str = "regex"
 
 
 @dataclass(frozen=True)
@@ -111,8 +124,43 @@ def migrate_authz_rules(
             converted.append(raw)
             continue
         if "who" not in raw:
-            # Already new-shape — pass through unchanged.
-            converted.append(_strip_legacy_keys(raw))
+            # Already new-shape. qol-action-namespace-bundle-scoped.md
+            # Step 2 — try the 2-seg → 3-seg upgrade for new-shape
+            # rules whose `what` looks like a 2-seg ref. Catalog must
+            # be available AND the bundle must own a tool of that
+            # name. Unconvertible entries pass through in their
+            # current 2-seg form but emit a `two_seg` deprecation so
+            # the user knows the shape is going away.
+            stripped = _strip_legacy_keys(raw)
+            upgraded = _try_upgrade_two_seg(stripped, catalog=catalog)
+            if upgraded is not None:
+                converted.append(upgraded)
+                if upgraded != stripped:
+                    deprecated.append(
+                        DeprecatedRegexRule(
+                            rule_index=index,
+                            what=str(stripped.get("what", "")),
+                            reason=(
+                                "2-seg form `<bundle>/<name>` is deprecated; "
+                                "use the 3-seg catalog ref "
+                                "`<bundle>/tools/<name>` instead"
+                            ),
+                            kind="two_seg",
+                        ),
+                    )
+                continue
+            # Looks 2-seg but unresolvable — pass through unchanged
+            # and warn the user.
+            converted.append(stripped)
+            if _looks_like_two_seg(str(stripped.get("what", ""))):
+                deprecated.append(
+                    DeprecatedRegexRule(
+                        rule_index=index,
+                        what=str(stripped.get("what", "")),
+                        reason=_diagnose_two_seg(stripped, catalog=catalog),
+                        kind="two_seg",
+                    ),
+                )
             continue
         # Legacy shape. Try each heuristic in priority order.
         migrated = _try_migrate(raw, catalog=catalog)
@@ -122,6 +170,7 @@ def migrate_authz_rules(
                     rule_index=index,
                     what=str(raw.get("what", "")),
                     reason=_diagnose_legacy(raw, catalog=catalog),
+                    kind="regex",
                 ),
             )
             converted.append(raw)  # keep legacy form
@@ -174,7 +223,9 @@ def _try_migrate(
     if _AGENT_EXECUTE_RE.match(what):
         return {"what": "agent.execute.*", "pattern": "*", "effect": effect}
 
-    # 3. tool.<name> action pin → qualified ref. Needs catalog.
+    # 3. tool.<name> action pin → 3-seg catalog ref. Needs catalog.
+    # qol-action-namespace-bundle-scoped.md Step 2 — target shape
+    # is now `<bundle>/tools/<name>` (was 2-seg `<bundle>/<name>`).
     tool_match = _TOOL_ACTION_RE.match(what)
     if tool_match:
         if catalog is None:
@@ -184,12 +235,13 @@ def _try_migrate(
         if bundle is None:
             return None
         return {
-            "what": f"{bundle}/{name}",
+            "what": f"{bundle}/tools/{name}",
             "pattern": "*",
             "effect": effect,
         }
 
     # 4. bash-suggest `^<cmd> .*$` → bash tool + `"<cmd> *"`.
+    # Same 3-seg upgrade applies.
     bash_match = _BASH_SUGGEST_RE.match(what)
     if bash_match:
         if catalog is None:
@@ -199,12 +251,99 @@ def _try_migrate(
             return None
         cmd = bash_match.group(1)
         return {
-            "what": f"{bundle}/bash",
+            "what": f"{bundle}/tools/bash",
             "pattern": f"{cmd} *",
             "effect": effect,
         }
 
     return None
+
+
+# qol-action-namespace-bundle-scoped.md Step 2 — the 2-seg
+# new-shape form (`<bundle>/<name>`) shipped by the human-readable
+# QoL is being deprecated. Anchored to start-of-string + end so
+# we don't confuse 2-seg with 3-seg (`<bundle>/tools/<name>`)
+# which contains an extra `/`.
+_TWO_SEG_GLOB_RE = re.compile(r"^([a-z0-9][a-z0-9_-]*)/([a-z][a-z0-9_-]*)$")
+
+
+def _looks_like_two_seg(what: str) -> bool:
+    """True when ``what`` matches the deprecated 2-seg shape exactly."""
+    return _TWO_SEG_GLOB_RE.match(what) is not None
+
+
+def _try_upgrade_two_seg(
+    raw: dict[str, Any],
+    *,
+    catalog: AssetCatalog | None,
+) -> dict[str, Any] | None:
+    """Rewrite a new-shape rule whose ``what`` is 2-seg → 3-seg.
+
+    Returns the rewritten dict when the 2-seg ref resolves to a
+    catalogued tool, OR the original dict unchanged when the rule
+    isn't 2-seg (passes through). Returns ``None`` to signal the
+    caller "looked 2-seg but couldn't resolve" — caller then keeps
+    the original rule and emits a deprecation event.
+
+    The function is conservative: anything other than an exact
+    2-seg ``<bundle>/<name>`` match is treated as non-2-seg and
+    returned untouched (3-seg refs, glob patterns like
+    ``kolsch/*``, system actions like ``agent.execute.*``).
+    """
+    what = raw.get("what")
+    if not isinstance(what, str):
+        return raw
+    match = _TWO_SEG_GLOB_RE.match(what)
+    if match is None:
+        # Not 2-seg — leave as-is (3-seg, glob, system action, etc).
+        return raw
+    if catalog is None:
+        # Looks 2-seg but we can't verify; surface for deprecation
+        # event but don't rewrite (caller emits the warning).
+        return None
+    bundle, name = match.group(1), match.group(2)
+    if not _bundle_owns_tool(catalog, bundle, name):
+        # Bundle doesn't own a tool of that name — could be a
+        # genuine non-tool ref (skills, agents are also 2-seg
+        # `<bundle>/<name>` in their own contexts). Surface for
+        # deprecation event without rewriting.
+        return None
+    rewritten = dict(raw)
+    rewritten["what"] = f"{bundle}/tools/{name}"
+    return rewritten
+
+
+def _bundle_owns_tool(catalog: AssetCatalog, bundle: str, name: str) -> bool:
+    """True when ``<bundle>`` ships a tool entry whose short name is ``<name>``."""
+    return any(
+        entry.asset_type == "tool"
+        and entry.bundle == bundle
+        and entry.ref.rsplit("/", 1)[-1] == name
+        for entry in catalog.assets.values()
+    )
+
+
+def _diagnose_two_seg(
+    raw: dict[str, Any],
+    *,
+    catalog: AssetCatalog | None,
+) -> str:
+    """Short reason for a 2-seg rule that survived in deprecated form."""
+    what = str(raw.get("what", ""))
+    if catalog is None:
+        return (
+            "2-seg form `<bundle>/<name>` is deprecated; "
+            "catalog unavailable to auto-rewrite to 3-seg form"
+        )
+    match = _TWO_SEG_GLOB_RE.match(what)
+    if match is None:
+        return "shape not 2-seg; no diagnosis available"
+    bundle, name = match.group(1), match.group(2)
+    return (
+        f"2-seg form is deprecated and bundle {bundle!r} does not "
+        f"own a tool named {name!r} (could be a skill / agent ref); "
+        "rewrite manually as `<bundle>/tools/<name>` if it pins a tool"
+    )
 
 
 def _resolve_tool_home_bundle(catalog: AssetCatalog, name: str) -> str | None:

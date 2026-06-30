@@ -26,14 +26,14 @@ All three write the same shape; you can mix and match.
 Every rule is three fields — `what`, `pattern`, `effect`:
 
 ```yaml
-- what: kolsch/bash      # which tool / system action
+- what: kolsch/tools/bash      # which tool / system action
   pattern: "find *"      # which invocations of that tool
   effect: allow          # what to do when this matches
 ```
 
-- **`what`** is the **fully-qualified tool ref** (`<bundle>/<name>`)
+- **`what`** is the **3-segment catalog ref** (`<bundle>/tools/<name>`)
   OR a system action namespace (`agent.execute.*`) OR the catch-all
-  `*`. Bare names (`bash` instead of `kolsch/bash`) are rejected at
+  `*`. Bare names (`bash` instead of `kolsch/tools/bash`) are rejected at
   startup with the candidates listed; you must commit to a bundle
   even if there's only one.
 - **`pattern`** is a **glob** — `*` matches any chars, `?` matches
@@ -50,20 +50,23 @@ catch-all is the safety net; the runtime refuses to remove it.
 
 ---
 
-## Tool refs: qualified by bundle
+## Tool refs: one grammar everywhere
 
-The action the dispatcher passes is `tool.<name>` (e.g.,
-`tool.bash`); the rule's `what` is the qualified ref
-`<bundle>/<name>` (e.g., `kolsch/bash`). The matcher tries `what`
-against both forms so the same rule fires regardless of which one
-the catalog produces.
+The runtime action the dispatcher passes to the authz check, the
+`what` field on a rule, and the `subsystems.tools.config.declared`
+ref in an agent YAML all use the same 3-segment catalog ref
+(`<bundle>/tools/<name>`, e.g. `kolsch/tools/bash`). The matcher
+fnmatches `what` against the action directly — no translation,
+no bridge map. Two bundles can ship a tool with the same name
+(`kolsch/tools/bash` vs `andre/tools/bash`) and authz rules
+target them independently.
 
-To see what qualified refs are available in your workspace:
+To see what tools are available in your workspace:
 
 ```bash
 ls bundles/*/tools/*.py
-# bundles/kolsch/tools/bash.py       → kolsch/bash
-# bundles/kolsch/tools/read_file.py  → kolsch/read_file
+# bundles/kolsch/tools/bash.py       → kolsch/tools/bash
+# bundles/kolsch/tools/read_file.py  → kolsch/tools/read_file
 # ...
 ```
 
@@ -122,17 +125,17 @@ error and leaves the rule list untouched.
 Quote patterns with spaces:
 
 ```
-/perm allow kolsch/bash "find *"
-/perm allow kolsch/bash "rg *"
-/perm deny kolsch/bash "rm -rf *"
-/perm prompt kolsch/write_file /etc/*
+/perm allow kolsch/tools/bash "find *"
+/perm allow kolsch/tools/bash "rg *"
+/perm deny kolsch/tools/bash "rm -rf *"
+/perm prompt kolsch/tools/write_file /etc/*
 ```
 
 After an `allow`/`deny`/`prompt`, the chat prints the position the
 rule landed at:
 
 ```
-/perm allow: added rule  what='kolsch/bash'  pattern='find *'  effect=allow  (above the catch-all, position 4)
+/perm allow: added rule  what='kolsch/tools/bash'  pattern='find *'  effect=allow  (above the catch-all, position 4)
 ```
 
 If you write a duplicate `(what, pattern)`, `/perm` replaces the
@@ -141,7 +144,7 @@ the replaced position:
 
 ```
 /perm allow: replaced previous rule at position 4
-/perm allow: added rule  what='kolsch/bash'  pattern='find *'  effect=allow  (above the catch-all, position 4)
+/perm allow: added rule  what='kolsch/tools/bash'  pattern='find *'  effect=allow  (above the catch-all, position 4)
 ```
 
 ### Why didn't my `/perm` rule take effect?
@@ -153,12 +156,12 @@ because the matcher is first-match-wins:
 ```
 /perm list
    0  what='agent.execute.*'  pattern='*'         effect=allow
-   1  what='kolsch/bash'       pattern='*'         effect=deny     ← broader; fires first
-   2  what='kolsch/bash'       pattern='find *'    effect=allow    ← shadowed
+   1  what='kolsch/tools/bash'       pattern='*'         effect=deny     ← broader; fires first
+   2  what='kolsch/tools/bash'       pattern='find *'    effect=allow    ← shadowed
    3  what='*'                 pattern='*'         effect=deny     (protected)
 ```
 
-To fix: either `/perm remove kolsch/bash "*"` to drop the broader
+To fix: either `/perm remove kolsch/tools/bash "*"` to drop the broader
 deny, or hand-edit `platform.yaml` to reorder. The slash commands
 intentionally don't reorder hand-arranged rules — you get to decide
 which intent wins.
@@ -174,7 +177,7 @@ chat:
 ```bash
 kolsch permissions list                    # print every rule (legacy entries marked)
 kolsch permissions show <rule_id>          # one rule's details
-kolsch permissions add --who ".*" --what "kolsch/bash" --effect allow
+kolsch permissions add --who ".*" --what "kolsch/tools/bash" --effect allow
 kolsch permissions remove <rule_id>        # by stable id
 ```
 
@@ -203,15 +206,15 @@ authorization:
   config:
     rules:
       - { what: agent.execute.*,    pattern: "*",        effect: allow }
-      - { what: kolsch/read_file,   pattern: "*",        effect: allow }
-      - { what: kolsch/list_files,  pattern: "*",        effect: allow }
-      - { what: kolsch/write_file,  pattern: "*",        effect: prompt }
+      - { what: kolsch/tools/read_file,   pattern: "*",        effect: allow }
+      - { what: kolsch/tools/list_files,  pattern: "*",        effect: allow }
+      - { what: kolsch/tools/write_file,  pattern: "*",        effect: prompt }
       # Allow read-only bash commands without asking.
-      - { what: kolsch/bash,        pattern: "find *",   effect: allow }
-      - { what: kolsch/bash,        pattern: "ls *",     effect: allow }
-      - { what: kolsch/bash,        pattern: "grep *",   effect: allow }
+      - { what: kolsch/tools/bash,        pattern: "find *",   effect: allow }
+      - { what: kolsch/tools/bash,        pattern: "ls *",     effect: allow }
+      - { what: kolsch/tools/bash,        pattern: "grep *",   effect: allow }
       # Everything else `bash` triggers the modal.
-      - { what: kolsch/bash,        pattern: "*",        effect: prompt }
+      - { what: kolsch/tools/bash,        pattern: "*",        effect: prompt }
       # Default-deny tail (protected).
       - { what: "*",                pattern: "*",        effect: deny }
 ```
@@ -229,9 +232,9 @@ tool-failure capsule):
 ```
 │ permission · 14:23:48                                  [dark_orange3]
 │ denied: bash(command='rm -rf /')
-│   matched rule:  what='kolsch/bash'  pattern='*'  effect='deny'
+│   matched rule:  what='kolsch/tools/bash'  pattern='*'  effect='deny'
 │
-│ to allow:  /perm allow kolsch/bash "rm *"
+│ to allow:  /perm allow kolsch/tools/bash "rm *"
 ```
 
 Three things to read:
@@ -270,7 +273,7 @@ The schema you want is:
 
 ```yaml
 # new
-- { what: kolsch/bash, pattern: "*", effect: prompt }
+- { what: kolsch/tools/bash, pattern: "*", effect: prompt }
 ```
 
 **`kolsch setup` re-run migrates automatically.** Run it once
@@ -283,13 +286,18 @@ kolsch setup
 The setup runner:
 
 1. Calls the migrator at `cli/_migrations/authz_rules.py`.
-2. Resolves each `tool\.<name>` to `<home_bundle>/<name>` via the
-   catalog.
-3. Atomically rewrites `platform.yaml` (backup lands under
+2. Resolves each `tool\.<name>` to `<home_bundle>/tools/<name>`
+   via the catalog (3-segment canonical form).
+3. Auto-upgrades the deprecated 2-segment shape
+   (`<bundle>/<name>`, e.g. `kolsch/bash`) to 3-segment
+   (`<bundle>/tools/<name>`) when the catalog confirms the
+   bundle owns a tool of that name.
+4. Atomically rewrites `platform.yaml` (backup lands under
    `.platform/platform.yaml.bak.<timestamp>`).
-4. Emits a one-line `config.deprecated_regex_rule` warning per
-   rule the heuristic couldn't convert (custom user regexes with
-   character classes, lookahead, etc.).
+5. Emits a one-line `config.deprecated_regex_rule` warning per
+   legacy regex rule the heuristic couldn't convert, and a
+   `config.deprecated_rule_form` warning per 2-segment rule it
+   surfaced.
 
 After migration, `kolsch permissions list` annotates any rules
 that stayed in legacy form with
@@ -313,14 +321,14 @@ kolsch permissions list
 
 ```
 rl_ec…  allow   what='agent.execute.*'        pattern='*'
-rl_0d…  allow   what='kolsch/read_file'       pattern='*'
-rl_95…  allow   what='kolsch/list_files'      pattern='*'
-rl_d3…  prompt  what='kolsch/write_file'      pattern='*'
-rl_45…  allow   what='kolsch/bash'            pattern='find *'
-rl_44…  allow   what='kolsch/bash'            pattern='ls *'
-rl_4a…  allow   what='kolsch/bash'            pattern='grep *'
-rl_c4…  allow   what='kolsch/bash'            pattern='cat *'
-rl_99…  prompt  what='kolsch/bash'            pattern='*'
+rl_0d…  allow   what='kolsch/tools/read_file'       pattern='*'
+rl_95…  allow   what='kolsch/tools/list_files'      pattern='*'
+rl_d3…  prompt  what='kolsch/tools/write_file'      pattern='*'
+rl_45…  allow   what='kolsch/tools/bash'            pattern='find *'
+rl_44…  allow   what='kolsch/tools/bash'            pattern='ls *'
+rl_4a…  allow   what='kolsch/tools/bash'            pattern='grep *'
+rl_c4…  allow   what='kolsch/tools/bash'            pattern='cat *'
+rl_99…  prompt  what='kolsch/tools/bash'            pattern='*'
 rl_default_deny  deny  what='*'                pattern='*'  (protected)
 ```
 
@@ -368,9 +376,9 @@ name: git-write
 version: 0.1
 description: "Tools that mutate the repository — commit, push, branch."
 permissions:
-  - { what: git-write/commit,  pattern: "*",  effect: prompt }
-  - { what: git-write/push,    pattern: "*",  effect: prompt }
-  - { what: git-write/branch,  pattern: "*",  effect: allow  }
+  - { what: git-write/tools/commit,  pattern: "*",  effect: prompt }
+  - { what: git-write/tools/push,    pattern: "*",  effect: prompt }
+  - { what: git-write/tools/branch,  pattern: "*",  effect: allow  }
 ```
 
 Any agent whose **home bundle** is `git-write` invokes these tools

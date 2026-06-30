@@ -515,9 +515,11 @@ async def test_cmd_chat_clears_modal_callback_on_clean_exit(
     assert isinstance(fresh_runtime.authz, RuleBasedAuthorizationProvider)
     # The fresh provider has no callback — a prompt-effect rule
     # collapses to deny, NOT to a modal invocation.
+    # qol-action-namespace-bundle-scoped.md Step 2 — action is now
+    # the 3-seg catalog ref; this matches the migrated rule shape.
     result = await fresh_runtime.authz.allow(
         principal="agent.helper",
-        action="tool.bash",
+        action="kolsch/tools/bash",
         target="ls",
     )
     assert result.effect is AuthzEffect.PROMPT
@@ -589,9 +591,10 @@ async def test_cmd_chat_clears_modal_callback_even_when_loop_raises(
     assert rt_authz._rule_added_hook is None
 
     # Subsequent allow on the SAME provider doesn't invoke a modal.
+    # qol-action-namespace-bundle-scoped.md Step 2 — 3-seg action.
     result = await rt_authz.allow(
         principal="agent.helper",
-        action="tool.bash",
+        action="kolsch/tools/bash",
         target="ls",
     )
     assert result.effect is AuthzEffect.PROMPT

@@ -109,6 +109,13 @@ class ToolDefinition:
     prompt's compact tool listing. Derived from the first
     sentence of ``description`` when omitted from
     :func:`tool` (the substring through the first period, trimmed).
+
+    qol-action-namespace-bundle-scoped.md Step 2 — gains
+    ``home_bundle``, stamped at registration time by
+    :meth:`ToolsSubsystem.register_for_agent` (Option B from the
+    spec writeup §2). The ``@tool`` decorator stays bundle-unaware;
+    the field is None at decoration time and populated when the
+    engine binds the tool to an agent's session.
     """
 
     name: str
@@ -119,13 +126,27 @@ class ToolDefinition:
     action: str | None = None
     timeout_seconds: float | None = None
     summary: str = ""
+    home_bundle: str | None = None
 
     @property
     def action_name(self) -> str:
-        """The action string used for authz checks. Defaults to
-        ``tool.<name>`` per spec T-I1; overridable via the decorator
-        for the rare case of a tool wanting a different namespace."""
-        return self.action or f"tool.{self.name}"
+        """The action string used for authz checks.
+
+        qol-action-namespace-bundle-scoped.md Step 2 — when
+        ``home_bundle`` is set (always true for engine-driven
+        registration), returns the 3-seg catalog ref
+        ``<home_bundle>/tools/<name>``. When unset (Phase 1
+        programmatic test registrations that construct
+        ToolDefinition directly without going through the engine),
+        falls back to the legacy ``tool.<name>`` form so existing
+        test paths stay byte-identical. ``action`` (set via the
+        decorator's ``action=`` kwarg) still overrides both.
+        """
+        if self.action is not None:
+            return self.action
+        if self.home_bundle is None:
+            return f"tool.{self.name}"
+        return f"{self.home_bundle}/tools/{self.name}"
 
     def to_info(self) -> ToolInfo:
         return ToolInfo(

@@ -109,6 +109,10 @@ def scenario_2_workspace(tmp_path_factory: pytest.TempPathFactory) -> Path:
     root = tmp_path_factory.mktemp("scenario_2_workspace")
     _setup_workspace(root)
 
+    # qol-action-namespace-bundle-scoped.md Step 2 — the agent-level
+    # bash rule is now 3-seg ``kolsch/tools/bash``; accept both
+    # shapes so this fixture survives the migration window.
+    bash_rule_whats = (r"tool\.bash", "kolsch/tools/bash")
     helper_path = root / "bundles" / "kolsch" / "agents" / "helper.yaml"
     if helper_path.is_file():
         agent_payload = (
@@ -118,7 +122,8 @@ def scenario_2_workspace(tmp_path_factory: pytest.TempPathFactory) -> Path:
             r
             for r in (agent_payload.get("permissions") or [])
             if not (
-                r.get("what") == r"tool\.bash" and r.get("effect") == "prompt"
+                r.get("what") in bash_rule_whats
+                and r.get("effect") == "prompt"
             )
         ]
         helper_path.write_text(
@@ -461,18 +466,26 @@ async def test_scenario_2_deny_always_persists_rule_and_restart_auto_denies(
     assert state_a.last_cancel_reason == "denied"
 
     # The persisted rule landed in platform.yaml.
+    # qol-action-namespace-bundle-scoped.md Step 2 — the modal now
+    # persists in new-shape with the 3-seg ref as `what:` and the
+    # user-typed pattern as `pattern:`. The pre-QoL behaviour
+    # wrote a legacy regex rule (`what: ^cat .*$`); the post-QoL
+    # behaviour writes `{what: kolsch/tools/bash, pattern: "cat *", effect: deny}`.
     payload = yaml.safe_load(yaml_path.read_text(encoding="utf-8"))
     persisted = payload["authorization"]["config"]["rules"]
     new_deny = next(
         (
             r for r in persisted
-            if r.get("effect") == "deny" and r.get("what") == "^cat .*$"
+            if r.get("effect") == "deny"
+            and r.get("what") == "kolsch/tools/bash"
+            and r.get("pattern", "").startswith("cat")
         ),
         None,
     )
     assert new_deny is not None, (
-        f"expected new deny rule with what='^cat .*$' in platform.yaml; "
-        f"got rules: {[(r.get('what'), r.get('effect')) for r in persisted]}"
+        "expected new deny rule with what='kolsch/tools/bash' + pattern 'cat *' "
+        f"in platform.yaml; got rules: "
+        f"{[(r.get('what'), r.get('pattern'), r.get('effect')) for r in persisted]}"
     )
 
     # Capture the relevant platform.yaml section for the writeup.

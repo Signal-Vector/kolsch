@@ -188,7 +188,7 @@ async def test_envelope_end_to_end_bug_closure(tmp_path: Path) -> None:
         tmp_path,
         prompt=prompt,
         permissions=[
-            {"who": ".*", "what": r"tool\.bash", "effect": "prompt"},
+            {"what": "kolsch/tools/bash", "pattern": "*", "effect": "prompt"},
         ],
         context_files=[
             {

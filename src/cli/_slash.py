@@ -552,8 +552,8 @@ async def _handler_tools(arg_text: str, ctx: SlashContext) -> ControlSignal:
         )
         return ControlSignal.CONTINUE
 
-    tool_names = _tools_for_agent(config)
-    if not tool_names:
+    tool_entries = _tools_for_agent(config)
+    if not tool_entries:
         ctx.stdout.write(
             "no tools configured for this agent "
             "(subsystems.tools is empty or unset).\n",
@@ -564,20 +564,21 @@ async def _handler_tools(arg_text: str, ctx: SlashContext) -> ControlSignal:
     if ctx.authz is not None:
         rules = await ctx.authz.list_rules()
     principal = f"agent.{config.agent_id}"
-    # qol-permission-system-human-readable.md Step 4 — the
-    # rule-lookup helper handles both legacy regex AND new-shape
-    # glob rules; the lookup callable bridges the action namespace
-    # (`tool.bash`) and the qualified tool ref (`kolsch/bash`)
-    # used by new-shape `what:` fields. Absent when the authz
-    # variant doesn't expose the map.
+    # qol-action-namespace-bundle-scoped.md Step 2 — the action
+    # namespace is now the 3-seg catalog ref
+    # (``<home_bundle>/tools/<name>``); ``_governing_rule`` builds
+    # it from each tool's (name, home_bundle) pair. The
+    # ``lookup_tool_ref`` callable is kept around for the node
+    # branch but returns None for tool actions under this QoL.
     tool_ref_lookup = getattr(ctx.authz, "lookup_tool_ref", None)
 
     ctx.stdout.write("tools available to this agent:\n")
-    for name in tool_names:
+    for name, home_bundle in tool_entries:
         rule = _governing_rule(
             rules,
             principal=principal,
             tool_name=name,
+            home_bundle=home_bundle,
             tool_ref_lookup=tool_ref_lookup,
         )
         if rule is None:
@@ -755,6 +756,13 @@ def _validate_perm_tool(tool: str, *, ctx: SlashContext) -> bool:
     - Contains ``/`` and the catalog has the qualified tool → accept.
     - Otherwise → friendly slash-line error (no exception).
 
+    qol-action-namespace-bundle-scoped.md Step 2 — the canonical
+    tool ref accepted here is the 3-seg form ``<bundle>/tools/<name>``
+    (matching the runtime action). The legacy 2-seg shape
+    ``<bundle>/<name>`` is still accepted with a friendly warning
+    pointing at the 3-seg form, so users in the migration window
+    don't get blocked by an unhelpful "not found" error.
+
     Returns ``True`` when valid; otherwise writes the error to
     ``ctx.stdout`` and returns ``False``."""
     if not tool:
@@ -773,20 +781,60 @@ def _validate_perm_tool(tool: str, *, ctx: SlashContext) -> bool:
         else:
             ctx.stdout.write(
                 f"/perm: {tool!r} is a bare tool name and not in the catalog. "
-                "Use the qualified `<bundle>/<name>` form.\n",
+                "Use the qualified `<bundle>/tools/<name>` form.\n",
             )
         return False
     # Qualified form — confirm against catalog if accessible.
-    lookup = _action_to_tool_ref_map(ctx)
-    if lookup is None:
+    qualified_refs = _catalog_tool_refs(ctx)
+    if qualified_refs is None:
         return True  # no catalog to check against; accept (best-effort)
-    qualified_refs = set(lookup.values())
-    if tool not in qualified_refs:
-        ctx.stdout.write(
-            f"/perm: tool ref {tool!r} not found in the catalog.\n",
-        )
-        return False
-    return True
+    if tool in qualified_refs:
+        return True
+    # qol-action-namespace-bundle-scoped.md Step 2 — accept the
+    # deprecated 2-seg form (`<bundle>/<name>`) when it resolves to
+    # a catalogued tool's 3-seg ref, and nudge the user to switch.
+    parts = tool.split("/")
+    if len(parts) == 2 and all(parts):
+        upgraded = f"{parts[0]}/tools/{parts[1]}"
+        if upgraded in qualified_refs:
+            ctx.stdout.write(
+                f"/perm: tool ref {tool!r} uses the deprecated 2-seg form; "
+                f"the 3-seg form {upgraded!r} is canonical.\n",
+            )
+            return False
+    ctx.stdout.write(
+        f"/perm: tool ref {tool!r} not found in the catalog.\n",
+    )
+    return False
+
+
+def _catalog_tool_refs(ctx: SlashContext) -> set[str] | None:
+    """Return the set of 3-seg tool refs the catalog ships.
+
+    qol-action-namespace-bundle-scoped.md Step 2 — replaces the
+    prior use of the action→tool_ref bridge map (whose tool
+    entries were deleted). Walks the AssetCatalog directly via the
+    runtime's AssetManagement handle. Returns None when the
+    runtime / catalog isn't accessible (tests / non-workspace
+    contexts); callers treat None as "skip catalog validation."
+    """
+    if ctx.state is None:
+        return None
+    am = getattr(ctx.state.runtime, "asset_management", None)
+    if am is None:
+        return None
+    catalog_method = getattr(am, "catalog", None)
+    if catalog_method is None:
+        return None
+    try:
+        catalog = catalog_method()
+    except Exception:  # noqa: BLE001 — defensive; never raise out of /perm
+        return None
+    return {
+        entry.ref
+        for entry in catalog.assets.values()
+        if entry.asset_type == "tool"
+    }
 
 
 def _validate_perm_pattern(pattern: str, *, ctx: SlashContext) -> bool:
@@ -817,14 +865,18 @@ def _qualified_candidates_for_bare(
     *,
     ctx: SlashContext,
 ) -> list[str]:
-    """Look up qualified refs for ``bare`` from the runtime's authz
-    provider. Returns ``[]`` if nothing in the catalog matches."""
-    lookup = _action_to_tool_ref_map(ctx)
-    if lookup is None:
+    """Look up qualified refs for ``bare`` from the runtime's catalog.
+
+    qol-action-namespace-bundle-scoped.md Step 2 — sources
+    candidates from :func:`_catalog_tool_refs` (the catalog walk)
+    rather than the deleted action→tool_ref bridge map. Returns the
+    3-seg ``<bundle>/tools/<name>`` form so the user sees the
+    canonical shape.
+    """
+    refs = _catalog_tool_refs(ctx)
+    if refs is None:
         return []
-    return sorted(
-        ref for ref in lookup.values() if ref.rsplit("/", 1)[-1] == bare
-    )
+    return sorted(ref for ref in refs if ref.rsplit("/", 1)[-1] == bare)
 
 
 def _action_to_tool_ref_map(ctx: SlashContext) -> dict[str, str] | None:
@@ -1650,42 +1702,49 @@ with ``/``. Patch §5.4 + §2.1."""
 # ---------------------------------------------------------------------------
 
 
-def _tools_for_agent(config: ResolvedAgentConfig) -> list[str]:
-    """Return the tool names a ``ResolvedAgentConfig`` enables.
+def _tools_for_agent(config: ResolvedAgentConfig) -> list[tuple[str, str]]:
+    """Return ``(name, home_bundle)`` pairs for the agent's enabled tools.
 
     Reads from ``config.subsystems["tools"].config`` — the same
     structure the engine reads at pre-flight step 11
     (``_register_tools_with_subsystem``). Two flavours:
 
     - ``builtin: [name, ...]`` — Phase-1-era platform builtins.
-      Used by older agent configs; no live shippable agent today
-      relies on it, but the helper handles both shapes.
+      Home bundle is always ``kolsch`` (spec Decision #8).
     - ``declared: [{ref: "<bundle>/tools/<name>"}, ...]`` — the
-      file-IS-the-tool path the helper agent uses. The shipped
-      starter bundle declares four refs this way.
+      file-IS-the-tool path the helper agent uses. Home bundle is
+      the ref's leading segment.
 
-    Returns names in the order the config lists them so the
+    qol-action-namespace-bundle-scoped.md Step 2 — the home_bundle
+    accompanies each name so ``/tools`` can construct the 3-seg
+    action string the authz matcher now uses
+    (``<home_bundle>/tools/<name>``).
+
+    Returns entries in the order the config lists them so the
     ``/tools`` output is deterministic.
     """
     sub = config.subsystems.get("tools")
     if sub is None:
         return []
     body = sub.config or {}
-    names: list[str] = []
+    out: list[tuple[str, str]] = []
     for raw in body.get("builtin") or []:
         if isinstance(raw, str):
-            names.append(raw)
+            out.append((raw, "kolsch"))
     for raw in body.get("declared") or []:
         if isinstance(raw, dict):
             ref = str(raw.get("ref", ""))
-            # Tool name is the ref's final segment ("kolsch/read_file"
-            # → "read_file", or the legacy "kolsch/read_file"
-            # → "read_file"). Matches the Tools subsystem's discovery rule.
             if ref:
-                names.append(ref.rpartition("/")[2] or ref)
+                segments = ref.split("/")
+                bundle = segments[0] if len(segments) > 1 else "kolsch"
+                name = segments[-1]
+                out.append((name, bundle))
         elif isinstance(raw, str):
-            names.append(raw.rpartition("/")[2] or raw)
-    return names
+            segments = raw.split("/")
+            bundle = segments[0] if len(segments) > 1 else "kolsch"
+            name = segments[-1]
+            out.append((name, bundle))
+    return out
 
 
 def _enabled_skill_refs(config: ResolvedAgentConfig) -> list[str]:
@@ -1715,6 +1774,7 @@ def _governing_rule(
     *,
     principal: str,
     tool_name: str,
+    home_bundle: str = "kolsch",
     tool_ref_lookup: Callable[[str], str | None] | None = None,
 ) -> Rule | None:
     """First-match-wins rule lookup mirroring the authz provider.
@@ -1728,20 +1788,20 @@ def _governing_rule(
       the tool ref, mirroring
       :meth:`providers.RuleBasedAuthorizationProvider._rule_matches`.
 
-    ``tool_ref_lookup`` resolves an action string to its qualified
-    tool ref (``tool.bash`` → ``kolsch/bash``). When None,
-    new-shape rules only match against the bare action (rules
-    written as ``what: kolsch/bash`` won't fire — same loss the
-    provider has when no catalog is supplied; ``/tools`` shows
-    "(no matching rule)" in that case).
-
-    Returns ``None`` when no rule matches — the caller renders
-    that as "(default deny)" because the authz provider's
-    A-I3 invariant is default-deny when no rule matches.
+    qol-action-namespace-bundle-scoped.md Step 2 — the action
+    string is built from ``home_bundle`` + ``tool_name`` as the
+    3-seg catalog ref ``<home_bundle>/tools/<name>``. New-shape
+    rules with ``what: kolsch/tools/bash`` fire directly via
+    ``fnmatch`` against this action; no bridge lookup needed. The
+    ``tool_ref_lookup`` kwarg is retained for backward compat with
+    callers that still pass it, but its return value is None for
+    tool actions under this QoL (only node actions populate the
+    bridge map). Returns ``None`` when no rule matches — the
+    caller renders that as "(default deny)".
     """
     import fnmatch  # noqa: PLC0415
 
-    action = f"tool.{tool_name}"
+    action = f"{home_bundle}/tools/{tool_name}"
     tool_ref = tool_ref_lookup(action) if tool_ref_lookup is not None else None
     for rule in rules:
         if rule.who is not None:

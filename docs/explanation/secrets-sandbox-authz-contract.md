@@ -380,11 +380,11 @@ its id.
 
 Both `who` and `what` are regular expressions matched with **fullmatch**
 semantics — the regex must match the entire string, not a substring.
-This avoids the well-known over-matching footgun (`tool.b` accidentally
-matching `tool.bash`).
+This avoids the well-known over-matching footgun (`kolsch/tools/b`
+accidentally matching `kolsch/tools/bash`).
 
 If a user wants substring or prefix matching, they write it explicitly
-with `.*` (e.g., `tool\\..*` matches all tool actions).
+with `.*` (e.g., `kolsch/tools/.*` matches every kolsch tool action).
 
 Standard Python regex syntax. Implementation uses `re.fullmatch()`.
 
@@ -515,16 +515,16 @@ authorization:
   variant: rule_based
   config:
     rules:
-      - who: ".*"
-        what: "tool\\.bash"
+      - what: kolsch/tools/bash
+        pattern: "*"
         effect: deny
-      - who: ".*"
-        what: ".*"
+      - what: "*"
+        pattern: "*"
         effect: allow
 ```
 
-Deny `tool.bash` for everyone; allow everything else. The deny is listed
-first so it matches before the general allow.
+Deny `kolsch/tools/bash` for everyone; allow everything else. The
+deny is listed first so it matches before the general allow.
 
 ### 3.4.2 Behavior
 
@@ -557,9 +557,10 @@ caller's responsibility. The intended call sites in v1:
    before any work begins. Raise if denied.
 
 2. **The Tools subsystem, before invoking a tool.** Per the Tools
-   subsystem spec (to be drafted): check `allow(principal, "tool.<name>")`
-   before invocation. Raise — surfaced as `tool.failed` event — if
-   denied.
+   subsystem spec: check `allow(principal, "<bundle>/tools/<name>")`
+   before invocation (3-segment catalog ref per
+   qol-action-namespace-bundle-scoped.md). Raise — surfaced as
+   `tool.failed` event — if denied.
 
 3. **The Memory MemoryContext, on write and read.** Optionally check
    `allow(principal, "memory.write")` etc. v1's default allow-everything
@@ -800,7 +801,7 @@ behaviour table.
 
 When the Agent Engine invokes a tool, all three modules participate:
 
-1. **Authorization:** check `allow(agent_principal, "tool.<name>")`.
+1. **Authorization:** check `allow(agent_principal, "<bundle>/tools/<name>")`.
    If denied, emit `tool.failed` with cause=unauthorized, no further
    action.
 

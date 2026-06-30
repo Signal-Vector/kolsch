@@ -229,20 +229,24 @@ async def test_agent_permission_overrides_bundle_and_platform() -> None:
     provider = RuleBasedAuthorizationProvider(
         config={
             "rules": [
-                {"who": ".*", "what": r"tool\.bash", "effect": "deny"},
+                {"what": "kolsch/tools/bash", "pattern": "*", "effect": "deny"},
             ],
         },
     )
     # Bundle: deny.
-    bundle_rules = (Rule(who=".*", what=r"tool\.bash", effect="deny"),)
+    bundle_rules = (
+        Rule(what="kolsch/tools/bash", pattern="*", effect="deny"),
+    )
     # Agent: allow — should win.
-    agent_rules = (Rule(who=".*", what=r"tool\.bash", effect="allow"),)
+    agent_rules = (
+        Rule(what="kolsch/tools/bash", pattern="*", effect="allow"),
+    )
 
     from providers.authz import PermissionLayer
 
     result = await provider.allow(
         principal="agent.helper",
-        action="tool.bash",
+        action="kolsch/tools/bash",
         layers=(
             PermissionLayer(name="agent", rules=agent_rules),
             PermissionLayer(name="bundle", rules=bundle_rules),
@@ -265,17 +269,19 @@ async def test_bundle_permission_overrides_platform() -> None:
     provider = RuleBasedAuthorizationProvider(
         config={
             "rules": [
-                {"who": ".*", "what": r"tool\.bash", "effect": "deny"},
+                {"what": "kolsch/tools/bash", "pattern": "*", "effect": "deny"},
             ],
         },
     )
-    bundle_rules = (Rule(who=".*", what=r"tool\.bash", effect="allow"),)
+    bundle_rules = (
+        Rule(what="kolsch/tools/bash", pattern="*", effect="allow"),
+    )
 
     from providers.authz import PermissionLayer
 
     result = await provider.allow(
         principal="agent.helper",
-        action="tool.bash",
+        action="kolsch/tools/bash",
         layers=(PermissionLayer(name="bundle", rules=bundle_rules),),
     )
     assert result.allowed is True

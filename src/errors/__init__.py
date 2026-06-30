@@ -30,6 +30,7 @@ from errors.authz import (
     AuthzRuleNotFound,
     AuthzToolRefUnknown,
     ConfigDeprecatedRegexRule,
+    ConfigDeprecatedRuleForm,
 )
 from errors.base import (
     PlatformError,
@@ -163,6 +164,7 @@ __all__ = [
     "AuthzRuleNotFound",
     "AuthzToolRefUnknown",
     "ConfigDeprecatedRegexRule",
+    "ConfigDeprecatedRuleForm",
     "BusPublishFailed",
     "BusUnavailable",
     "CapabilityMismatch",

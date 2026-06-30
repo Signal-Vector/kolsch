@@ -78,20 +78,25 @@ def _catalog(*tool_refs: tuple[str, str]) -> AssetCatalog:
 
 
 async def test_new_shape_rule_matches_against_tool_ref() -> None:
-    """A `what: kolsch/bash` rule fires on a `tool.bash` action."""
+    """A `what: kolsch/tools/bash` rule fires on a `kolsch/tools/bash` action.
+
+    qol-action-namespace-bundle-scoped.md Step 2 — the action namespace
+    and the rule `what:` share the same 3-seg grammar; the matcher
+    hits action directly without the deleted bridge map.
+    """
     catalog = _catalog(("kolsch", "bash"))
     provider = RuleBasedAuthorizationProvider(
         config={
             "rules": [
-                {"what": "kolsch/bash", "pattern": "*", "effect": "allow"},
+                {"what": "kolsch/tools/bash", "pattern": "*", "effect": "allow"},
             ],
         },
         catalog=catalog,
     )
-    result = await provider.allow("user.local", "tool.bash", target="ls -la")
+    result = await provider.allow("user.local", "kolsch/tools/bash", target="ls -la")
     assert result.allowed
     assert result.matched_rule is not None
-    assert result.matched_rule.what == "kolsch/bash"
+    assert result.matched_rule.what == "kolsch/tools/bash"
 
 
 async def test_new_shape_pattern_narrows_by_target() -> None:
@@ -100,16 +105,18 @@ async def test_new_shape_pattern_narrows_by_target() -> None:
     provider = RuleBasedAuthorizationProvider(
         config={
             "rules": [
-                {"what": "kolsch/bash", "pattern": "find *", "effect": "allow"},
+                {"what": "kolsch/tools/bash", "pattern": "find *", "effect": "allow"},
                 {"what": "*", "pattern": "*", "effect": "deny"},
             ],
         },
         catalog=catalog,
     )
-    matched = await provider.allow("u", "tool.bash", target="find / -name foo")
+    matched = await provider.allow(
+        "u", "kolsch/tools/bash", target="find / -name foo"
+    )
     assert matched.allowed
 
-    blocked = await provider.allow("u", "tool.bash", target="rm -rf /")
+    blocked = await provider.allow("u", "kolsch/tools/bash", target="rm -rf /")
     assert not blocked.allowed
     assert blocked.matched_rule is not None
     assert blocked.matched_rule.what == "*"
@@ -154,22 +161,27 @@ async def test_legacy_shape_still_loads_and_matches() -> None:
 
 
 async def test_legacy_and_new_shape_coexist_in_one_provider() -> None:
-    """Mixed-shape rule list compiles + matches both halves."""
+    """Mixed-shape rule list compiles + matches both halves.
+
+    The legacy regex rule still matches its 1-seg action (kept for
+    workspaces mid-migration); the new-shape rule matches the 3-seg
+    action directly (qol-action-namespace-bundle-scoped.md Step 2).
+    """
     catalog = _catalog(("kolsch", "bash"))
     provider = RuleBasedAuthorizationProvider(
         config={
             "rules": [
-                # Legacy
+                # Legacy — still matches the legacy 1-seg action.
                 {"who": ".*", "what": r"tool\.read_file", "effect": "allow"},
-                # New
-                {"what": "kolsch/bash", "pattern": "*", "effect": "allow"},
+                # New 3-seg shape.
+                {"what": "kolsch/tools/bash", "pattern": "*", "effect": "allow"},
             ],
         },
         catalog=catalog,
     )
     read_ok = await provider.allow("u", "tool.read_file", target="/tmp/x")
     assert read_ok.allowed
-    bash_ok = await provider.allow("u", "tool.bash", target="ls")
+    bash_ok = await provider.allow("u", "kolsch/tools/bash", target="ls")
     assert bash_ok.allowed
 
 
@@ -179,7 +191,11 @@ async def test_legacy_and_new_shape_coexist_in_one_provider() -> None:
 
 
 def test_bare_tool_name_rejected_with_candidates() -> None:
-    """`what: bash` (bare) → AuthzBareToolRef naming the qualified form."""
+    """`what: bash` (bare) → AuthzBareToolRef naming the 3-seg form.
+
+    qol-action-namespace-bundle-scoped.md Step 2 — candidates are the
+    canonical 3-seg catalog refs (was 2-seg `kolsch/bash`).
+    """
     catalog = _catalog(("kolsch", "bash"))
     with pytest.raises(AuthzBareToolRef) as excinfo:
         RuleBasedAuthorizationProvider(
@@ -187,7 +203,7 @@ def test_bare_tool_name_rejected_with_candidates() -> None:
             catalog=catalog,
         )
     assert excinfo.value.detail["bare_name"] == "bash"
-    assert "kolsch/bash" in excinfo.value.detail["candidates"]
+    assert "kolsch/tools/bash" in excinfo.value.detail["candidates"]
 
 
 def test_bare_tool_name_ambiguous_across_bundles() -> None:
@@ -198,7 +214,10 @@ def test_bare_tool_name_ambiguous_across_bundles() -> None:
             config={"rules": [{"what": "bash", "pattern": "*", "effect": "allow"}]},
             catalog=catalog,
         )
-    assert set(excinfo.value.detail["candidates"]) == {"kolsch/bash", "andre/bash"}
+    assert set(excinfo.value.detail["candidates"]) == {
+        "kolsch/tools/bash",
+        "andre/tools/bash",
+    }
 
 
 def test_qualified_tool_ref_not_in_catalog_rejected() -> None:
@@ -250,12 +269,14 @@ async def test_glob_star_matches_anything() -> None:
     catalog = _catalog(("kolsch", "bash"))
     provider = RuleBasedAuthorizationProvider(
         config={
-            "rules": [{"what": "kolsch/bash", "pattern": "*", "effect": "allow"}],
+            "rules": [
+                {"what": "kolsch/tools/bash", "pattern": "*", "effect": "allow"},
+            ],
         },
         catalog=catalog,
     )
     for cmd in ("ls", "find / -x", ""):
-        result = await provider.allow("u", "tool.bash", target=cmd)
+        result = await provider.allow("u", "kolsch/tools/bash", target=cmd)
         assert result.allowed, cmd
 
 
@@ -264,14 +285,16 @@ async def test_glob_question_matches_one_char() -> None:
     provider = RuleBasedAuthorizationProvider(
         config={
             "rules": [
-                {"what": "kolsch/bash", "pattern": "l?", "effect": "allow"},
+                {"what": "kolsch/tools/bash", "pattern": "l?", "effect": "allow"},
                 {"what": "*", "pattern": "*", "effect": "deny"},
             ],
         },
         catalog=catalog,
     )
-    assert (await provider.allow("u", "tool.bash", target="ls")).allowed
-    assert not (await provider.allow("u", "tool.bash", target="lsa")).allowed
+    assert (await provider.allow("u", "kolsch/tools/bash", target="ls")).allowed
+    assert not (
+        await provider.allow("u", "kolsch/tools/bash", target="lsa")
+    ).allowed
 
 
 async def test_glob_prefix_matches() -> None:
@@ -279,14 +302,18 @@ async def test_glob_prefix_matches() -> None:
     provider = RuleBasedAuthorizationProvider(
         config={
             "rules": [
-                {"what": "kolsch/bash", "pattern": "find *", "effect": "allow"},
+                {"what": "kolsch/tools/bash", "pattern": "find *", "effect": "allow"},
                 {"what": "*", "pattern": "*", "effect": "deny"},
             ],
         },
         catalog=catalog,
     )
-    assert (await provider.allow("u", "tool.bash", target="find / -name x")).allowed
-    assert not (await provider.allow("u", "tool.bash", target="rm -rf /")).allowed
+    assert (
+        await provider.allow("u", "kolsch/tools/bash", target="find / -name x")
+    ).allowed
+    assert not (
+        await provider.allow("u", "kolsch/tools/bash", target="rm -rf /")
+    ).allowed
 
 
 # ---------------------------------------------------------------------------
@@ -313,25 +340,26 @@ def test_migration_converts_agent_execute() -> None:
 
 
 def test_migration_converts_tool_action_pin() -> None:
+    """Legacy `tool\\.<name>` → 3-seg `<bundle>/tools/<name>`."""
     catalog = _catalog(("kolsch", "read_file"))
     out = migrate_authz_rules(
         [{"who": ".*", "what": r"tool\.read_file", "effect": "allow"}],
         catalog=catalog,
     )
     assert out.rules == [
-        {"what": "kolsch/read_file", "pattern": "*", "effect": "allow"},
+        {"what": "kolsch/tools/read_file", "pattern": "*", "effect": "allow"},
     ]
 
 
 def test_migration_converts_bash_suggest() -> None:
-    """The legacy `_modal.suggest_pattern` output round-trips."""
+    """The legacy `_modal.suggest_pattern` output round-trips to 3-seg."""
     catalog = _catalog(("kolsch", "bash"))
     out = migrate_authz_rules(
         [{"who": ".*", "what": r"^find .*$", "effect": "allow"}],
         catalog=catalog,
     )
     assert out.rules == [
-        {"what": "kolsch/bash", "pattern": "find *", "effect": "allow"},
+        {"what": "kolsch/tools/bash", "pattern": "find *", "effect": "allow"},
     ]
 
 
@@ -349,15 +377,46 @@ def test_migration_keeps_unconvertible_in_legacy_form() -> None:
     assert out.deprecated[0].rule_index == 0
 
 
-def test_migration_passes_new_shape_through() -> None:
-    """Rules already in the new shape are untouched (no `who`)."""
+def test_migration_passes_new_shape_through_when_3seg() -> None:
+    """3-seg new-shape rules are untouched (no `who`, no `pattern` rewrite)."""
     out = migrate_authz_rules(
-        [{"what": "kolsch/bash", "pattern": "*", "effect": "allow"}],
+        [{"what": "kolsch/tools/bash", "pattern": "*", "effect": "allow"}],
     )
     assert out.rules == [
-        {"what": "kolsch/bash", "pattern": "*", "effect": "allow"},
+        {"what": "kolsch/tools/bash", "pattern": "*", "effect": "allow"},
     ]
     assert out.deprecated == []
+
+
+def test_migration_upgrades_two_seg_to_three_seg() -> None:
+    """qol-action-namespace-bundle-scoped.md Step 2 — 2-seg new-shape rules
+    auto-upgrade to 3-seg at startup; the deprecation is recorded."""
+    catalog = _catalog(("kolsch", "bash"))
+    out = migrate_authz_rules(
+        [{"what": "kolsch/bash", "pattern": "*", "effect": "allow"}],
+        catalog=catalog,
+    )
+    assert out.rules == [
+        {"what": "kolsch/tools/bash", "pattern": "*", "effect": "allow"},
+    ]
+    assert len(out.deprecated) == 1
+    assert out.deprecated[0].kind == "two_seg"
+    assert out.deprecated[0].what == "kolsch/bash"
+
+
+def test_migration_two_seg_unresolvable_survives_with_warning() -> None:
+    """2-seg refs that don't resolve to a tool stay as-is + warn."""
+    catalog = _catalog(("kolsch", "bash"))
+    out = migrate_authz_rules(
+        [{"what": "andre/unknown", "pattern": "*", "effect": "allow"}],
+        catalog=catalog,
+    )
+    # Survives in 2-seg form (catalog doesn't own this tool).
+    assert out.rules == [
+        {"what": "andre/unknown", "pattern": "*", "effect": "allow"},
+    ]
+    assert len(out.deprecated) == 1
+    assert out.deprecated[0].kind == "two_seg"
 
 
 def test_migration_full_canonical_workspace_roundtrip() -> None:
@@ -384,21 +443,26 @@ def test_migration_full_canonical_workspace_roundtrip() -> None:
     assert out.deprecated == []
     expected = [
         {"what": "agent.execute.*", "pattern": "*", "effect": "allow"},
-        {"what": "kolsch/read_file", "pattern": "*", "effect": "allow"},
-        {"what": "kolsch/list_files", "pattern": "*", "effect": "allow"},
-        {"what": "kolsch/write_file", "pattern": "*", "effect": "prompt"},
-        {"what": "kolsch/bash", "pattern": "find *", "effect": "allow"},
-        {"what": "kolsch/bash", "pattern": "ls *", "effect": "allow"},
-        {"what": "kolsch/bash", "pattern": "grep *", "effect": "allow"},
-        {"what": "kolsch/bash", "pattern": "cat *", "effect": "allow"},
-        {"what": "kolsch/bash", "pattern": "*", "effect": "prompt"},
+        {"what": "kolsch/tools/read_file", "pattern": "*", "effect": "allow"},
+        {"what": "kolsch/tools/list_files", "pattern": "*", "effect": "allow"},
+        {"what": "kolsch/tools/write_file", "pattern": "*", "effect": "prompt"},
+        {"what": "kolsch/tools/bash", "pattern": "find *", "effect": "allow"},
+        {"what": "kolsch/tools/bash", "pattern": "ls *", "effect": "allow"},
+        {"what": "kolsch/tools/bash", "pattern": "grep *", "effect": "allow"},
+        {"what": "kolsch/tools/bash", "pattern": "cat *", "effect": "allow"},
+        {"what": "kolsch/tools/bash", "pattern": "*", "effect": "prompt"},
         {"what": "*", "pattern": "*", "effect": "deny"},
     ]
     assert out.rules == expected
 
 
 async def test_migrated_rules_load_into_provider_and_match() -> None:
-    """The migration output composes with the provider end-to-end."""
+    """The migration output composes with the provider end-to-end.
+
+    qol-action-namespace-bundle-scoped.md Step 2 — migrated rules
+    are 3-seg `<bundle>/tools/<name>`; the runtime action is the
+    same 3-seg form; no bridge needed.
+    """
     catalog = _catalog(("kolsch", "bash"))
     legacy = [
         {"who": ".*", "what": r"^find .*$", "effect": "allow"},
@@ -411,12 +475,60 @@ async def test_migrated_rules_load_into_provider_and_match() -> None:
         catalog=catalog,
     )
     # The `find *` rule should fire and allow.
-    res = await provider.allow("u", "tool.bash", target="find / -name x")
+    res = await provider.allow("u", "kolsch/tools/bash", target="find / -name x")
     assert res.allowed
     # Any other bash command falls through to `prompt` then `deny`
     # (no callback → prompt collapses to deny).
-    res = await provider.allow("u", "tool.bash", target="rm -rf /")
+    res = await provider.allow("u", "kolsch/tools/bash", target="rm -rf /")
     assert not res.allowed
+
+
+# ---------------------------------------------------------------------------
+# qol-action-namespace-bundle-scoped.md Step 2 regression coverage
+# ---------------------------------------------------------------------------
+
+
+async def test_cross_bundle_tools_are_distinct_authz_subjects() -> None:
+    """qol-action-namespace-bundle-scoped.md acceptance #7 — the
+    headline win: two bundles shipping a tool of the same name now
+    have distinct rule subjects. ``kolsch/tools/bash`` and
+    ``andre/tools/bash`` are NOT bridged by any translation map."""
+    catalog = _catalog(("kolsch", "bash"), ("andre", "bash"))
+    provider = RuleBasedAuthorizationProvider(
+        config={
+            "rules": [
+                {"what": "kolsch/tools/bash", "pattern": "*", "effect": "allow"},
+                {"what": "andre/tools/bash", "pattern": "*", "effect": "deny"},
+            ],
+        },
+        catalog=catalog,
+    )
+    kolsch_ok = await provider.allow("u", "kolsch/tools/bash", target="ls")
+    andre_blocked = await provider.allow("u", "andre/tools/bash", target="ls")
+    assert kolsch_ok.allowed
+    assert not andre_blocked.allowed
+    # And the rules cross-fire test: an `andre` rule does NOT match
+    # a `kolsch` action and vice versa.
+    assert kolsch_ok.matched_rule is not None
+    assert kolsch_ok.matched_rule.what == "kolsch/tools/bash"
+    assert andre_blocked.matched_rule is not None
+    assert andre_blocked.matched_rule.what == "andre/tools/bash"
+
+
+async def test_translation_map_no_longer_carries_tool_entries() -> None:
+    """qol-action-namespace-bundle-scoped.md acceptance #4 — the
+    ``_build_action_to_tool_ref`` tool branch is deleted. The map
+    still exists for node entries (separate ticket); for tools it
+    should be empty."""
+    catalog = _catalog(("kolsch", "bash"), ("andre", "bash"))
+    provider = RuleBasedAuthorizationProvider(
+        config={"rules": []},
+        catalog=catalog,
+    )
+    # Tool actions: no bridge entries.
+    assert provider.lookup_tool_ref("tool.bash") is None
+    assert provider.lookup_tool_ref("kolsch/tools/bash") is None
+    assert provider.lookup_tool_ref("andre/tools/bash") is None
 
 
 # ---------------------------------------------------------------------------

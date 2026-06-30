@@ -171,7 +171,7 @@ def test_agent_permissions_returns_rule_objects() -> None:
     the default is an empty list."""
     tools = _make_tools_var()
     spec = ModelSpec(provider="anthropic", model="claude-opus-4-7")
-    rule = Rule(who=".*", what=r"tool\.bash", effect="prompt")
+    rule = Rule(what="kolsch/tools/bash", pattern="*", effect="prompt")
     agent = AgentVar(
         name="helper",
         id="ag_helper",

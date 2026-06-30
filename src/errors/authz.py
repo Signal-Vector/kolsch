@@ -343,3 +343,43 @@ class ConfigDeprecatedRegexRule(PlatformError):
                 "reason": reason,
             },
         )
+
+
+class ConfigDeprecatedRuleForm(PlatformError):
+    """A platform.yaml rule uses the deprecated 2-seg ``<bundle>/<name>`` form.
+
+    qol-action-namespace-bundle-scoped.md Step 2 — the 2-seg shape
+    shipped by the human-readable QoL is superseded by the 3-seg
+    catalog ref ``<bundle>/tools/<name>``. The startup migration
+    shim auto-rewrites these where the bundle owns a catalogued
+    tool of that name; entries that can't be auto-rewritten (no
+    catalog, ambiguous bundle, ref points at a non-tool asset)
+    survive in 2-seg form and emit this Recoverable warning so
+    the user knows to convert them. The platform still loads the
+    2-seg form during the migration window — warning-only for at
+    least one minor version.
+    """
+
+    code = "config.deprecated_rule_form"
+    level = Level.RECOVERABLE
+
+    def __init__(
+        self,
+        rule_index: int,
+        what: str,
+        reason: str,
+        *,
+        where: str = "cli._migrations.authz_rules",
+    ) -> None:
+        super().__init__(
+            message=(
+                f"Rule at index {rule_index} uses deprecated rule form "
+                f"(what={what!r}): {reason}."
+            ),
+            where=where,
+            detail={
+                "rule_index": rule_index,
+                "what": what,
+                "reason": reason,
+            },
+        )

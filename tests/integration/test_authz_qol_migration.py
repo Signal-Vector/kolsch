@@ -100,38 +100,43 @@ async def test_canonical_workspace_migrates_roundtrip(tmp_path: Path) -> None:
     assert len(result.rules) == len(legacy)
     # The tail collapses to the new-shape catch-all.
     assert result.rules[-1] == {"what": "*", "pattern": "*", "effect": "deny"}
-    # `tool\.read_file` resolves to `kolsch/read_file`.
+    # qol-action-namespace-bundle-scoped.md Step 2 — `tool\.read_file`
+    # resolves to the 3-seg catalog ref `kolsch/tools/read_file`.
     assert result.rules[1] == {
-        "what": "kolsch/read_file",
+        "what": "kolsch/tools/read_file",
         "pattern": "*",
         "effect": "allow",
     }
-    # `^find .*$` resolves to `kolsch/bash` + `find *`.
+    # `^find .*$` resolves to `kolsch/tools/bash` + `find *`.
     assert result.rules[4] == {
-        "what": "kolsch/bash",
+        "what": "kolsch/tools/bash",
         "pattern": "find *",
         "effect": "allow",
     }
 
     # The migrated rules load into a fresh provider and exercise
-    # the real matcher path (catalog injected, action→tool_ref map
-    # built).
+    # the real matcher path. Actions are now 3-seg directly; the
+    # bridge map carries node entries only.
     provider = RuleBasedAuthorizationProvider(
         config={"rules": result.rules},
         catalog=catalog,
     )
 
     # bash `find …` is allowed by the migrated `find *` rule.
-    res = await provider.allow("user.local", "tool.bash", target="find / -name x")
+    res = await provider.allow(
+        "user.local", "kolsch/tools/bash", target="find / -name x"
+    )
     assert res.allowed
 
     # bash `rm …` falls through to the bash prompt rule → no
     # callback → collapsed to deny.
-    res = await provider.allow("user.local", "tool.bash", target="rm -rf /")
+    res = await provider.allow("user.local", "kolsch/tools/bash", target="rm -rf /")
     assert not res.allowed
 
     # read_file is silently allowed.
-    res = await provider.allow("user.local", "tool.read_file", target="/tmp/x")
+    res = await provider.allow(
+        "user.local", "kolsch/tools/read_file", target="/tmp/x"
+    )
     assert res.allowed
 
     # agent.execute.<id> is allowed by the pre-flight rule.
@@ -169,4 +174,5 @@ async def test_provider_rejects_bare_tool_ref_in_real_workspace(
             catalog=catalog,
         )
     # The error names the qualified form the user should write.
-    assert "kolsch/bash" in excinfo.value.detail["candidates"]
+    # qol-action-namespace-bundle-scoped.md Step 2 — candidate is 3-seg.
+    assert "kolsch/tools/bash" in excinfo.value.detail["candidates"]
