@@ -183,6 +183,15 @@ class Framework(Protocol):
     is constructed by the engine and bound to this callback by the
     engine's preflight before being handed to the framework.
 
+    ``cancel_token`` (bug-framework-cancellation-mid-call-latency.md)
+    is the same :class:`engine.context.CancelToken` exposed directly
+    so the framework can race ``await llm(...)`` / ``await handle(...)``
+    against ``cancel_token.wait_cancelled()`` instead of only polling
+    at iteration boundaries. ``cancellation`` (the callable) stays
+    for backwards compat with frameworks that only need a poll
+    check; new code prefers ``cancel_token``. Both can be passed;
+    framework adapters use whichever they need.
+
     ``max_iterations`` is an optional per-call cap on the framework's
     internal loop. ``None`` (the default) means no cap — the framework
     loops until the LLM stops emitting tool calls or ``cancellation``
@@ -201,6 +210,7 @@ class Framework(Protocol):
         tools: Sequence[ToolHandle],
         max_iterations: int | None = None,
         cancellation: Callable[[], bool] | None = None,
+        cancel_token: Any = None,
     ) -> str: ...
 
 

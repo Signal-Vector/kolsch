@@ -157,3 +157,153 @@ async def test_tc_frm_nocap_02_fake_framework_observes_cancellation_mid_loop() -
     # latency model: cancellation observed at iteration boundary, no
     # mid-call observation.
     assert llm.calls == 2
+
+
+# ===========================================================================
+# TC-FRM-CANCEL-MID-* — bug-framework-cancellation-mid-call-latency.md
+# bug-mid-tool-cancellation-latency.md
+# ===========================================================================
+
+
+class _HangingLLM:
+    """LLM that sleeps long enough for cancellation to fire mid-await."""
+
+    def __init__(self, *, sleep_seconds: float = 5.0) -> None:
+        self._sleep_seconds = sleep_seconds
+        self.calls = 0
+        self.completed_calls = 0
+
+    async def __call__(self, request: LLMRequest) -> LLMResponse:  # noqa: ARG002
+        self.calls += 1
+        import asyncio  # noqa: PLC0415
+
+        await asyncio.sleep(self._sleep_seconds)
+        self.completed_calls += 1
+        return LLMResponse(content="never reached if cancelled")
+
+
+class _HangingTool:
+    """Tool that sleeps long enough for cancellation to fire mid-await."""
+
+    name = "hang"
+    schema: dict[str, Any] = {  # noqa: RUF012
+        "type": "object",
+        "properties": {"i": {"type": "integer"}},
+    }
+
+    def __init__(self, *, sleep_seconds: float = 5.0) -> None:
+        self._sleep_seconds = sleep_seconds
+        self.calls = 0
+        self.completed_calls = 0
+
+    async def __call__(self, call: ToolCall) -> Any:  # noqa: ARG002
+        self.calls += 1
+        import asyncio  # noqa: PLC0415
+
+        await asyncio.sleep(self._sleep_seconds)
+        self.completed_calls += 1
+        return {"never": "reached"}
+
+
+async def test_fake_framework_observes_cancel_during_llm_await() -> None:
+    """bug-framework-cancellation-mid-call-latency.md AC — a 5s hung
+    LLM aborts within ~one grace window of the cancel flip instead
+    of waiting for the call to return."""
+    import time  # noqa: PLC0415
+
+    from engine.context import CancelToken  # noqa: PLC0415
+    from errors import ExchangeCancelled  # noqa: PLC0415
+
+    llm = _HangingLLM(sleep_seconds=10)
+    tool = _NoopTool()
+    cancel = CancelToken()
+
+    # Flip cancel after 50ms so the LLM is mid-await.
+    async def _flip_after_delay() -> None:
+        import asyncio  # noqa: PLC0415
+
+        await asyncio.sleep(0.05)
+        cancel.cancel()
+
+    flip_task = asyncio.create_task(_flip_after_delay())
+
+    fw = FakeFramework()
+    start = time.monotonic()
+    with pytest.raises(ExchangeCancelled):
+        await fw.run_exchange(
+            system_prompt="sys",
+            user_message="hang please",
+            llm=llm,
+            tools=[tool],
+            cancellation=cancel.is_cancelled,
+            cancel_token=cancel,
+        )
+    elapsed = time.monotonic() - start
+    await flip_task
+    # Cancel fired ~50ms in + ~200ms grace + scheduling slack —
+    # total wall clock should be WELL under the 10s sleep that
+    # would have hung the test pre-QoL.
+    assert elapsed < 2.0, f"hung longer than expected: {elapsed:.2f}s"
+    # The LLM call was preempted mid-await — it did NOT complete.
+    assert llm.completed_calls == 0
+
+
+class _ScriptedSingleHangCall:
+    """LLM that emits exactly one ``hang`` tool call."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    async def __call__(self, request: LLMRequest) -> LLMResponse:  # noqa: ARG002
+        self.calls += 1
+        if self.calls == 1:
+            return LLMResponse(
+                content=None,
+                tool_calls=[
+                    {"id": "call_1", "name": "hang", "arguments": {"i": 1}}
+                ],
+            )
+        return LLMResponse(content="never reached")
+
+
+async def test_fake_framework_observes_cancel_during_tool_await() -> None:
+    """bug-mid-tool-cancellation-latency.md AC — a hanging tool
+    aborts within ~one grace window of the cancel flip. The
+    framework's tool-dispatch loop no longer waits for the tool
+    to return on its own."""
+    import time  # noqa: PLC0415
+
+    from engine.context import CancelToken  # noqa: PLC0415
+    from errors import ExchangeCancelled  # noqa: PLC0415
+
+    # LLM emits exactly one tool call routed to the hanging tool —
+    # the cancel races the tool's await.
+    llm = _ScriptedSingleHangCall()
+    tool = _HangingTool(sleep_seconds=10)
+    cancel = CancelToken()
+
+    async def _flip_after_delay() -> None:
+        import asyncio  # noqa: PLC0415
+
+        # Wait for the LLM to emit the tool call and dispatch to
+        # start, then flip.
+        await asyncio.sleep(0.05)
+        cancel.cancel()
+
+    flip_task = asyncio.create_task(_flip_after_delay())
+
+    fw = FakeFramework()
+    start = time.monotonic()
+    with pytest.raises(ExchangeCancelled):
+        await fw.run_exchange(
+            system_prompt="sys",
+            user_message="run hang",
+            llm=llm,
+            tools=[tool],
+            cancellation=cancel.is_cancelled,
+            cancel_token=cancel,
+        )
+    elapsed = time.monotonic() - start
+    await flip_task
+    assert elapsed < 2.0, f"hung longer than expected: {elapsed:.2f}s"
+    assert tool.completed_calls == 0

@@ -1227,6 +1227,10 @@ class _Exchange:
                     self.agent_id,  # type: ignore[arg-type]
                     t.name,
                 ),
+                # bug-mid-tool-cancellation-latency.md — thread the
+                # exchange's CancelToken so tool bodies receive it
+                # via ``ctx.cancellation``.
+                cancel=self.cancel,
             )
             for t in registered
         ]
@@ -1258,6 +1262,12 @@ class _Exchange:
                     llm=llm_handle,
                     tools=tool_handles,
                     cancellation=self.cancel.is_cancelled,
+                    # bug-framework-cancellation-mid-call-latency.md —
+                    # the raw token gives the framework access to
+                    # ``wait_cancelled()`` so it can race in-flight
+                    # awaits instead of only polling at iteration
+                    # boundaries.
+                    cancel_token=self.cancel,
                 )
             except PlatformError as exc:
                 if exc.level.name != "RECOVERABLE":

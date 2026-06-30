@@ -127,6 +127,7 @@ class CrewAIFramework:
         tools: Sequence[ToolHandle],
         max_iterations: int | None = None,
         cancellation: Callable[[], bool] | None = None,
+        cancel_token: Any = None,
     ) -> str:
         # Capture the main event loop. Inside Crew.kickoff_async,
         # CrewAI runs the sync executor on a worker thread; our
@@ -139,10 +140,19 @@ class CrewAIFramework:
             llm_handle=llm,
             main_loop=main_loop,
             cancellation=cancellation,
+            # bug-framework-cancellation-mid-call-latency.md — the
+            # raw token gives the worker thread access to
+            # ``is_cancelled()`` polling between ``future.result()``
+            # timeouts so a hanging LLM call observes cancellation
+            # within ~50ms.
+            cancel_token=cancel_token,
         )
 
         adapter_tools: list[BaseTool] = [
-            _make_crewai_tool(handle=handle, main_loop=main_loop) for handle in tools
+            _make_crewai_tool(
+                handle=handle, main_loop=main_loop, cancel_token=cancel_token
+            )
+            for handle in tools
         ]
 
         # Backstory carries the engine-assembled system prompt; role
@@ -285,6 +295,12 @@ class _CrewAILLM(BaseLLM):
     llm_handle: Any = Field(default=None)
     main_loop: Any = Field(default=None)
     cancellation: Any = Field(default=None)
+    # bug-framework-cancellation-mid-call-latency.md — the raw
+    # CancelToken so the worker thread can poll
+    # ``is_cancelled()`` between ``future.result(timeout=...)``
+    # polls. ``cancellation`` (the callable) is kept for backwards
+    # compat with the pre-call poll check.
+    cancel_token: Any = Field(default=None)
 
     def supports_function_calling(self) -> bool:
         # Drive CrewAI's native tool-calling path (see
@@ -328,9 +344,17 @@ class _CrewAILLM(BaseLLM):
 
         # Schedule the async LLMHandle on the engine's main loop
         # (we're inside CrewAI's worker thread from asyncio.to_thread).
+        # bug-framework-cancellation-mid-call-latency.md — replace
+        # the indefinite ``future.result()`` block with a
+        # poll-with-cancel loop so a hanging LLM observes cancel
+        # within ~50ms of the flip.
+        from engine._cancellation import wait_future_with_cancel  # noqa: PLC0415
+
         coro = self.llm_handle(request)
         future = asyncio.run_coroutine_threadsafe(coro, self.main_loop)
-        response = future.result()
+        response = wait_future_with_cancel(
+            future, self.cancel_token, what="crewai_llm_call"
+        )
 
         # Translate engine LLMResponse → CrewAI's expected shape.
         # Per crew_agent_executor._is_tool_call_list, an OpenAI-style
@@ -362,6 +386,7 @@ def _make_crewai_tool(
     *,
     handle: ToolHandle,
     main_loop: asyncio.AbstractEventLoop,
+    cancel_token: Any = None,
 ) -> BaseTool:
     """Build a concrete BaseTool subclass bound to one ToolHandle.
 
@@ -370,7 +395,16 @@ def _make_crewai_tool(
     converter. ``_run`` schedules the engine's async :class:`ToolHandle`
     on the captured main loop and blocks for the result — the engine's
     per-thread emit lock then serializes event construction.
+
+    bug-framework-cancellation-mid-call-latency.md — ``cancel_token``
+    is the exchange's :class:`CancelToken` (or None for pre-cancel
+    paths). When set, ``_run`` uses ``wait_future_with_cancel`` so
+    a hanging tool observes cancellation in the worker thread
+    within ~50ms instead of blocking indefinitely on
+    ``future.result()``.
     """
+    from engine._cancellation import wait_future_with_cancel  # noqa: PLC0415
+
     name = handle.name
     schema = handle.schema or {}
     description = str(schema.get("description") or f"Tool: {name}")
@@ -390,7 +424,9 @@ def _make_crewai_tool(
         def _run(self, **kwargs: Any) -> Any:
             coro = handle(ToolCall(name=name, arguments=dict(kwargs)))
             future = asyncio.run_coroutine_threadsafe(coro, main_loop)
-            result = future.result()
+            result = wait_future_with_cancel(
+                future, cancel_token, what=f"crewai_tool[{name}]"
+            )
             # Tool result must be a string for CrewAI's tool-message
             # synthesis; JSON-serialize dicts deterministically.
             if isinstance(result, str):

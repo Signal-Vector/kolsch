@@ -34,8 +34,9 @@ CrewAI would and would NOT provide):
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
+from engine._cancellation import race_with_cancel
 from engine.framework import LLMRequest, Message, ToolCall
 
 if TYPE_CHECKING:
@@ -60,6 +61,7 @@ class FakeFramework:
         tools: Sequence[ToolHandle],
         max_iterations: int | None = None,  # noqa: ARG002
         cancellation: Callable[[], bool] | None = None,
+        cancel_token: Any = None,
     ) -> str:
         # The engine's Assembly Procedure (§B.5) supplies `history`
         # for multi-turn exchanges (prior user/assistant/tool turns
@@ -84,7 +86,15 @@ class FakeFramework:
                 model=self._model_name,
                 parameters={},
             )
-            response = await llm(request)
+            # bug-framework-cancellation-mid-call-latency.md — race
+            # the LLM call against the cancel token so an Esc during
+            # a hanging stream aborts within one event-loop tick of
+            # the flip instead of waiting for the call to return on
+            # its own. ``race_with_cancel`` is a no-op pass-through
+            # when ``cancel_token`` is None (test paths).
+            response = await race_with_cancel(
+                llm(request), cancel_token, what="llm_call"
+            )
 
             # Text-only response → exchange complete.
             if response.tool_calls is None or len(response.tool_calls) == 0:
@@ -119,12 +129,22 @@ class FakeFramework:
                     )
                     continue
 
-                result = await handle(
-                    ToolCall(
-                        name=tool_name,
-                        arguments=arguments,
-                        tool_call_id=tool_call_id or None,
+                # bug-mid-tool-cancellation-latency.md — same race
+                # treatment as the LLM call above. A 30s bash that
+                # the user cancels at 5s aborts within ~1 event-loop
+                # tick of the flip; the tool body itself sees the
+                # cancellation via ``ctx.cancellation`` and handles
+                # subprocess-side cleanup (SIGINT etc).
+                result = await race_with_cancel(
+                    handle(
+                        ToolCall(
+                            name=tool_name,
+                            arguments=arguments,
+                            tool_call_id=tool_call_id or None,
+                        ),
                     ),
+                    cancel_token,
+                    what=f"tool_call[{tool_name}]",
                 )
                 messages.append(
                     Message(

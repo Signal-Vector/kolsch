@@ -22,6 +22,8 @@ from schemas import AgentId, SessionId, ThreadId
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from engine.context import CancelToken  # noqa: F401 — referenced by docstring
+
 # Spec §2.2 — name must match this pattern.
 _NAME_PATTERN = re.compile(r"^[a-z][a-z0-9_]*$")
 
@@ -54,6 +56,13 @@ class ToolContext(BaseModel):
     Populated by ``_ObservedToolHandle.__call__`` and the
     force-invoke read path; ``None`` when a tool runs outside the
     engine (tests, REPL probes).
+
+    bug-mid-tool-cancellation-latency.md — ``cancellation`` carries
+    the exchange's :class:`engine.context.CancelToken` so a tool body
+    can race long-running work (subprocess waits, network calls)
+    against ``ctx.cancellation.wait_cancelled()``. Tools that don't
+    poll it work unchanged (backwards-compatible per the spec's AC).
+    ``None`` outside the engine path.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid", arbitrary_types_allowed=True)
@@ -70,6 +79,16 @@ class ToolContext(BaseModel):
     # observer / engine force-invoke path; None when a tool runs
     # outside the engine (tests, programmatic dispatch).
     tool_call_id: str | None = None
+    # bug-mid-tool-cancellation-latency.md — populated by
+    # ``_ObservedToolHandle.__call__`` from ``self._cancel`` (which
+    # the engine builds from ``ExecutionContext.cancellation``).
+    # Tools that need mid-flight cancellation race their work
+    # against ``cancellation.wait_cancelled()``; tools that don't
+    # need it ignore the field entirely. Typed as ``Any`` rather
+    # than ``CancelToken | None`` to avoid a tools↔engine import
+    # cycle at runtime — tool authors should annotate the access
+    # site as ``CancelToken | None`` and import lazily.
+    cancellation: Any = None
 
 
 class ToolResult(BaseModel):

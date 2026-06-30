@@ -186,12 +186,20 @@ class _ObservedToolHandle:
         thread_id: str,
         tools_subsystem: Any,
         defn: ToolDefinition,
+        cancel: Any = None,
     ) -> None:
         self._emit = emit
         self._agent_id = agent_id
         self._session_id = session_id
         self._thread_id = thread_id
         self._tools_subsystem = tools_subsystem
+        # bug-mid-tool-cancellation-latency.md — the exchange's
+        # CancelToken, threaded by the engine. Forwarded into the
+        # ToolContext at invocation time so tool bodies can race
+        # long work against ``ctx.cancellation.wait_cancelled()``.
+        # ``None`` when the engine constructed the observer without
+        # cancellation (tests, programmatic paths).
+        self._cancel = cancel
         # Public attributes required by the ToolHandle Protocol.
         self.name = defn.name
         self.schema = defn.args_schema.model_json_schema()
@@ -221,6 +229,7 @@ class _ObservedToolHandle:
                     principal=f"agent.{self._agent_id}",
                     secrets={},
                     tool_call_id=tool_call_id,
+                    cancellation=self._cancel,
                 ),
             )
         except ToolUnauthorized as exc:

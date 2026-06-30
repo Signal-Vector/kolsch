@@ -28,6 +28,8 @@ process/qol-tool-output-truncation-and-persistence.md §9.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import signal
 import time
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -35,12 +37,23 @@ from uuid import uuid4
 
 from pydantic import BaseModel, Field
 
-from errors import ToolExecutionFailed, ToolTimeout
+from errors import ExchangeCancelled, ToolExecutionFailed, ToolTimeout
 from files import check_path_allowed
 from tools.decorator import ToolContext, tool
 
 if TYPE_CHECKING:
     pass
+
+_SIGINT_GRACE_SECONDS = 0.5
+"""Seconds to wait after SIGINT before escalating to SIGKILL.
+
+bug-mid-tool-cancellation-latency.md — when Esc flips during a
+bash invocation, we send SIGINT first (so the subprocess can flush
+buffers / run cleanup) and wait this long for it to exit. If still
+alive after the grace, we send SIGKILL. 500ms balances "well-
+behaved CLIs get a chance to clean up" against "Esc-during-runaway
+bash visibly stops the chat within a heartbeat."
+"""
 
 _DEFAULT_TIMEOUT_SECONDS = 60
 _OUTPUT_TRUNCATE_BYTES = 64 * 1024  # 64 KiB per stream — preview budget
@@ -152,8 +165,17 @@ async def bash(args: BashArgs, ctx: ToolContext) -> dict[str, Any]:
         ) from exc
     try:
         try:
-            stdout_b, stderr_b = await asyncio.wait_for(
-                proc.communicate(), timeout=args.timeout_seconds
+            # bug-mid-tool-cancellation-latency.md — race the
+            # subprocess communicate() against the exchange's
+            # CancelToken so Esc during a long-running command
+            # interrupts within ~one event-loop tick of the flip
+            # (instead of waiting for the command to finish or hit
+            # its timeout). The subprocess receives SIGINT then
+            # escalates to SIGKILL after a 500ms grace; the tool
+            # re-raises ExchangeCancelled (Fatal) so the engine
+            # surfaces it as ``exchange.cancelled``.
+            stdout_b, stderr_b = await _communicate_with_cancel(
+                proc, ctx, timeout_seconds=args.timeout_seconds
             )
         except TimeoutError as exc:
             proc.kill()
@@ -191,6 +213,92 @@ async def bash(args: BashArgs, ctx: ToolContext) -> dict[str, Any]:
         "duration_seconds": round(duration, 3),
         "timed_out": timed_out,
     }
+
+
+async def _communicate_with_cancel(
+    proc: asyncio.subprocess.Process,
+    ctx: ToolContext,
+    *,
+    timeout_seconds: int,
+) -> tuple[bytes, bytes]:
+    """Race ``proc.communicate()`` against ``ctx.cancellation`` and
+    ``timeout_seconds``.
+
+    bug-mid-tool-cancellation-latency.md — when ``ctx.cancellation``
+    is None (Phase 1 programmatic test paths), falls through to the
+    plain ``asyncio.wait_for(proc.communicate(), timeout=...)`` shape
+    so existing callers see no behaviour change.
+
+    When ``ctx.cancellation`` is set, races three completions
+    concurrently:
+
+    - ``proc.communicate()`` — the natural completion.
+    - ``ctx.cancellation.wait_cancelled()`` — Esc was pressed.
+    - ``asyncio.sleep(timeout_seconds)`` — the per-call timeout
+      budget.
+
+    On cancellation: send SIGINT to the subprocess, wait up to
+    :data:`_SIGINT_GRACE_SECONDS` for it to exit, escalate to
+    SIGKILL if still alive, then raise :class:`ExchangeCancelled`.
+    On timeout: re-raise :class:`TimeoutError` so the outer
+    handler emits :class:`ToolTimeout` per pre-QoL semantics.
+    """
+    if ctx.cancellation is None:
+        return await asyncio.wait_for(
+            proc.communicate(), timeout=timeout_seconds
+        )
+
+    communicate_task = asyncio.ensure_future(proc.communicate())
+    cancel_task = asyncio.ensure_future(ctx.cancellation.wait_cancelled())
+    timeout_task = asyncio.ensure_future(asyncio.sleep(timeout_seconds))
+    try:
+        done, pending = await asyncio.wait(
+            {communicate_task, cancel_task, timeout_task},
+            return_when=asyncio.FIRST_COMPLETED,
+        )
+    except asyncio.CancelledError:
+        for task in (communicate_task, cancel_task, timeout_task):
+            task.cancel()
+        raise
+
+    # Clean up the losers so they don't leak.
+    for task in pending:
+        task.cancel()
+    for task in pending:
+        with contextlib.suppress(asyncio.CancelledError, Exception):
+            await task
+
+    if communicate_task in done:
+        return communicate_task.result()
+
+    if timeout_task in done:
+        raise TimeoutError
+
+    # Cancellation won — interrupt the subprocess and raise.
+    _nudge_subprocess_toward_exit(proc)
+    raise ExchangeCancelled(
+        cancelled_at_event_id="",
+        where="kolsch.tools.bash._communicate_with_cancel",
+    )
+
+
+def _nudge_subprocess_toward_exit(proc: asyncio.subprocess.Process) -> None:
+    """Send SIGINT to the subprocess — best-effort, synchronous.
+
+    SIGKILL escalation lives in the outer ``finally`` block of
+    :func:`bash` (lines tagged with ``proc.kill()``). Splitting the
+    two stages this way lets the cancellation handler raise
+    immediately without awaiting the SIGINT grace window: a
+    well-behaved CLI gets the chance to handle the signal cleanly
+    while the outer sweep guarantees the subprocess is dead by the
+    time the bash tool returns.
+    """
+    if proc.returncode is not None:
+        return
+    try:
+        proc.send_signal(signal.SIGINT)
+    except (ProcessLookupError, OSError):
+        return
 
 
 def _persist_or_inline(
