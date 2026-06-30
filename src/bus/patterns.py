@@ -1,19 +1,18 @@
-"""Topic + attribute-filter matching — spec §3.
+"""Topic and attribute-filter matching for the event bus.
 
 Three topic-pattern shapes:
 
-- ``"*"`` — full wildcard, matches every event.
-- ``"<prefix>*"`` — prefix wildcard. The prefix is everything before
-  the trailing ``*`` and matches as a literal string. Spec §3.1
-  examples show both ``"tool.*"`` (prefix ends at the dot) and
-  ``"thread.exchange_*"`` (prefix ends mid-segment) so the matcher
-  takes any literal prefix, not only dotted ones. Embedded ``*``
-  inside the pattern is treated as a literal character; since real
-  event types never contain ``*`` this degrades cleanly to "no match".
-- ``"tool.failed"`` — exact match on ``event.type``.
+- `"*"` — full wildcard, matches every event.
+- `"<prefix>*"` — prefix wildcard. The prefix is everything before the
+  trailing `*` and matches as a literal string. Both dotted prefixes
+  (`"tool.*"`) and mid-segment prefixes (`"thread.exchange_*"`) are
+  supported. An embedded `*` inside the pattern is treated as a
+  literal character; since real event types never contain `*` this
+  degrades cleanly to "no match".
+- `"tool.failed"` — exact match on `event.type`.
 
 Attribute filters are AND-combined key/value equality checks against
-:class:`schemas.Event` fields. The matcher is field-name-agnostic so
+[`Event`][schemas.Event] fields. The matcher is field-name-agnostic so
 future fields work without changes here.
 """
 
@@ -28,11 +27,19 @@ _FULL_WILDCARD = "*"
 
 
 def topic_matches(pattern: str, event_type: str) -> bool:
-    """Return True when ``event_type`` satisfies ``pattern``.
+    """Return `True` when `event_type` satisfies `pattern`.
 
     The three shapes (full wildcard, prefix wildcard, exact) are
     exhaustive; an empty pattern is treated as exact (and so never
     matches a non-empty event type).
+
+    Args:
+        pattern: Subscription pattern — `"*"`, `"<prefix>*"`, or an
+            exact event type.
+        event_type: The event's `type` field.
+
+    Returns:
+        `True` when the pattern matches the event type.
     """
     if pattern == _FULL_WILDCARD:
         return True
@@ -43,16 +50,24 @@ def topic_matches(pattern: str, event_type: str) -> bool:
 
 
 def event_matches_filters(event: Event, filters: dict[str, object]) -> bool:
-    """Return True when ``event`` satisfies every (key, value) filter.
+    """Return `True` when `event` satisfies every (key, value) filter.
 
-    Empty / ``None`` filters match everything. Comparison is plain
+    Empty / `None` filters match everything. Comparison is plain
     equality against the event's field of that name.
 
     Unknown filter keys are treated as "no match" — a typo in a filter
-    key (e.g. ``{"thread_idd": th_a}``) would otherwise silently
-    broaden delivery to every event, which is the opposite of the
-    caller's intent. Subscribers asking to filter on a field the
-    event does not carry get nothing.
+    key (e.g. `{"thread_idd": th_a}`) would otherwise silently broaden
+    delivery to every event, which is the opposite of the caller's
+    intent. Subscribers asking to filter on a field the event does not
+    carry get nothing.
+
+    Args:
+        event: The event being delivered.
+        filters: Key/value equality checks AND-applied against the
+            event's fields.
+
+    Returns:
+        `True` when every filter matches a same-named field on the event.
     """
     if not filters:
         return True

@@ -1,9 +1,10 @@
-"""EventBus Protocol — Module API Reference §4.
+"""The `EventBus` Protocol — the public contract every backend honours.
 
-The public contract every bus implementation honours. v1 ships
-:class:`bus.InProcessEventBus`; a Redis-backed implementation slots in
-at the same Protocol surface when cross-process delivery (Tier 2+)
-is needed.
+v1 ships [`InProcessEventBus`][bus.in_process.InProcessEventBus]; a
+Redis-backed backend slots in at the same Protocol surface when
+cross-process delivery is needed. See the
+[event bus contract](../../docs/explanation/event-bus-contract.md) for
+the full semantics.
 """
 
 from __future__ import annotations
@@ -17,25 +18,26 @@ if TYPE_CHECKING:
 
 
 # Subscriber handlers receive one event per invocation and return a
-# coroutine. Per spec §4.3 the handler MUST be safe to call
-# concurrently; failures are caught by the bus (§I4).
+# coroutine. Handlers MUST be safe to call concurrently; failures are
+# isolated by the bus so one handler cannot break siblings.
 EventHandler = "Callable[[Event], Awaitable[None]]"
 
 
 class EventBus(Protocol):
-    """The bus contract — publish / subscribe / unsubscribe.
+    """The bus contract — publish, subscribe, unsubscribe.
 
-    All methods are async (spec §I8). Implementations dispatch via
-    the configured backend (asyncio pub/sub in-process by default,
-    Redis at scale).
+    All methods are async. Implementations dispatch via the configured
+    backend (asyncio pub/sub in-process by default, Redis at scale).
     """
 
     async def publish(self, event: Event) -> None:
-        """Publish an event; deliver to every matching subscriber.
+        """Publish an event and deliver it to every matching subscriber.
 
-        Best-effort per spec §I5/§I7 — a transport failure MUST NOT
-        raise into the caller. Slow or failing subscribers do NOT
-        block the publisher.
+        Best-effort — a transport failure MUST NOT raise into the
+        caller. Slow or failing subscribers do NOT block the publisher.
+
+        Args:
+            event: The event to fan out to matching subscribers.
         """
 
     async def subscribe(
@@ -44,11 +46,20 @@ class EventBus(Protocol):
         handler: Callable[[Event], Awaitable[None]],
         filters: dict[str, object] | None = None,
     ) -> SubscriptionId:
-        """Register ``handler`` for events matching ``topic_pattern``.
+        """Register `handler` for events matching `topic_pattern`.
 
-        See :mod:`bus.patterns` for pattern grammar. ``filters`` is
-        AND-applied alongside the topic match. Returns a
-        :class:`SubscriptionId` usable to unsubscribe.
+        See `bus.patterns` for the pattern grammar. `filters` is
+        AND-applied alongside the topic match.
+
+        Args:
+            topic_pattern: Full wildcard (`"*"`), prefix wildcard
+                (`"tool.*"`), or exact event type.
+            handler: Coroutine invoked once per matching event.
+            filters: Optional equality checks AND-applied against
+                event fields.
+
+        Returns:
+            A handle usable to unsubscribe later.
         """
 
     async def unsubscribe(self, subscription_id: SubscriptionId) -> None:
