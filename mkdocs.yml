@@ -154,12 +154,9 @@ nav:
       - Permissions: how-to/permissions.md
       - Finding models: how-to/find-models.md
   - Reference:
-      - reference/master-index.md
       - Vocabulary: reference/vocabulary.md
       - Schemas: reference/schemas.md
-      - Module API reference: reference/module-api-reference.md
-      - Workflow YAML reference: reference/workflow-yaml.md
-      - Workflows (legacy reference): workflows.md
+      - Workflow YAML: reference/workflow-yaml.md
       - Documentation conventions: process/documentation-conventions.md
   - API: api/index.md
 

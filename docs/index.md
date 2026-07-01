@@ -1,83 +1,69 @@
 # Documentation
 
-Documentation for the Agent Platform, organized by the
+Documentation for Kolsch, organized by the
 [Diátaxis](https://diataxis.fr/) framework: each section serves a
 distinct need.
 
-New here? The [master index](reference/master-index.md) gives a
-recommended reading order, a dependency map, and a topical index of
-every concept.
+New here? Start with the [First agent tutorial](tutorials/first-agent.md)
+for a hands-on run, or the [Architecture index](architecture/index.md)
+for the map of how the platform is built.
 
 ---
 
-## Explanation — understanding-oriented
+## Tutorials — learning-oriented
 
-Architecture and design rationale. The "why" behind the platform.
+- [First agent](tutorials/first-agent.md) — scaffold a workspace,
+  write an agent, run a chat session end-to-end.
 
-- [Specification](explanation/specification.md) — consolidated
-  architectural skeleton.
-- [v1 Scope](explanation/v1-scope.md) — what Phase 1 ships and excludes.
-- [Architecture Roadmap](explanation/architecture-roadmap.md) — Phase
-  1/2/3 architecture and migration seams.
-- [Contract Audit](explanation/contract-audit.md) — inter-module
-  consistency audit.
+## How-to — task-oriented
 
-**Subsystem & module contracts:**
+Guides for common tasks. See the full list on the
+[Guides landing](how-to/README.md).
 
-- [Kernel / Resolver](explanation/kernel-resolver-contract.md)
-- [Session / Run Store](explanation/session-run-store-contract.md)
-- [Event Bus](explanation/event-bus-contract.md)
-- [Memory Provider](explanation/memory-provider-contract.md)
-- [Secrets / Sandbox / Authorization](explanation/secrets-sandbox-authz-contract.md)
-- [Tools Subsystem](explanation/tools-subsystem.md)
-- [Skills Subsystem](explanation/skills-subsystem.md)
-- [Asset Management](explanation/asset-management-contract.md)
-- [File Handling](explanation/file-handling.md)
-- [Agent Engine](explanation/agent-engine-contract.md)
-- [Error Model](explanation/error-model.md)
+- [Connect a provider](how-to/connect-a-provider.md)
+- [Build a workflow](how-to/build-a-workflow.md)
+- [Write a tool](how-to/write-a-tool.md)
+- [Write a workflow node](how-to/write-a-workflow-node.md)
+- [Chatting effectively](how-to/chatting-effectively.md)
+- [Permissions](how-to/permissions.md)
+
+## Architecture — how it's built
+
+Subsystem-by-subsystem tour of the platform. Start at the
+[Architecture index](architecture/index.md) for the map, or jump to
+a specific subsystem:
+
+- [CLI](architecture/cli.md) · [API](architecture/api.md) ·
+  [Workflows](architecture/workflows.md) ·
+  [Agent Engine](architecture/engine.md)
+- [Tools](architecture/tools.md) · [Skills](architecture/skills.md) ·
+  [Assets](architecture/assets.md) · [Kernel](architecture/kernel.md)
+- [Templating](architecture/templating.md) ·
+  [Store](architecture/store.md) · [Bus](architecture/bus.md) ·
+  [Providers](architecture/providers.md)
+- [LLM Connectors](architecture/llm.md) ·
+  [Files](architecture/files.md) ·
+  [Schemas](architecture/schemas.md) ·
+  [Errors](architecture/errors.md) ·
+  [Platform Runtime](architecture/platform-runtime.md)
 
 ## Reference — information-oriented
 
 Precise, complete, lookup-oriented.
 
-- [Master Index](reference/master-index.md) — reading order, dependency
-  map, topical index, key vocabulary definitions.
-- [Vocabulary](reference/vocabulary.md) — the writer's reference:
-  which word to use in docstrings when two near-synonyms compete
-  (principal vs. caller, engine vs. framework, exchange vs.
-  iteration, etc.).
-- [Schemas](reference/schemas.md) — config schema, event log schema,
-  entity records.
-- [Module API Reference](reference/module-api-reference.md) — the
-  gold-standard inter-module API surface.
+- [Vocabulary](reference/vocabulary.md) — which term to pick when
+  two synonyms compete.
+- [Schemas](reference/schemas.md) — config, event log, and entity
+  record shapes.
+- [Workflow YAML](reference/workflow-yaml.md) — the shape of every
+  built-in node type.
 
-## Process — how we build and verify
+## API
 
-- [Development & Testing Handbook](process/development-testing-handbook.md)
-  — engineering principles, Python practices, tooling, git, docs
-  discipline, testing strategy, per-subsystem success criteria.
-- [Code Documentation Conventions](process/documentation-conventions.md)
-  — Google-style docstrings, module headers, cross-references, and the
-  rules that keep things MkDocs-ready before MkDocs is wired up.
-- [Test Catalog](process/test-catalog.md) — recommended test cases in
-  English.
-- [Test Plan](process/test-plan.md) — per-module test categories and the
-  four overall validation tests.
-- [Revisions](process/revisions/) — applied revision sets (audit,
-  modular storage).
+- [Module reference](api/index.md) — auto-generated from source
+  docstrings.
 
-## How-to — task-oriented
+## Explanation — understanding-oriented
 
-Task guides for using and extending the platform. *Added during
-implementation.*
-
-- [Chatting Effectively with `kolsch chat`](how-to/chatting-effectively.md)
-  — long conversations, mid-session model switches, approving
-  bash patterns wisely, using `--session` to resume.
-- [Extending an Agent](how-to/extending-an-agent.md) —
-  declare a child agent that inherits from an existing one
-  via `extends:` (worked butler example).
-
-## Tutorials — learning-oriented
-
-Step-by-step learning paths. *Added during implementation.*
+Design rationale and deeper contracts. Linked from the Architecture
+pages where relevant; not surfaced in the top nav.
