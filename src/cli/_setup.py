@@ -865,6 +865,10 @@ def _workspace_only_default_rules() -> list[dict[str, str]]:
         # qol-fetch-url-tool — network access is a fresh capability;
         # conservative default per bash/write_file.
         {"what": "kolsch/tools/fetch_url", "pattern": "*", "effect": "prompt"},
+        # qol-browse-url-tool — Tier 2 (opt-in `kolsch[browse]`
+        # extra). Same conservative prompt default as fetch_url so the
+        # chat surface asks before the agent drives headless Chromium.
+        {"what": "kolsch/tools/browse_url", "pattern": "*", "effect": "prompt"},
         # Default-deny tail (protected).
         {"what": "*", "pattern": "*", "effect": "deny"},
     ]
