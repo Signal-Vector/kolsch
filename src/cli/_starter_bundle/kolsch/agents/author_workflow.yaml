@@ -22,11 +22,14 @@ context_files:
   - path: kolsch:docs/explanation/workflow-foundation.md
     summary: Locked cross-phase foundation decisions for workflow design.
     primary: true
-  - path: kolsch:docs/workflows.md
+  - path: kolsch:docs/reference/workflow-yaml.md
     summary: |
-      Day-to-day author reference for workflow YAML — node-type
-      catalog, fan-in semantics, error-format index, anchored sections
-      the validator's "Fix:" messages deep-link into.
+      Field-by-field reference for the workflow YAML — top-level
+      shape, every built-in node type, edges / binds / branches,
+      modifiers. This replaced ``docs/workflows.md`` after the
+      docs-reorg (repo commit ``abc4142``); mkdocs strict-mode
+      surfaced the legacy file's duplicate anchors and it was
+      deleted in favour of this canonical reference.
     primary: true
 
 # Per-agent permission rules. The default kolsch `bash` policy is

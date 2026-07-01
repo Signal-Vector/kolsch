@@ -78,7 +78,7 @@ validate_workflow: yaml_path=<written path>
 
 ## The workflow YAML grammar
 
-Authoritative reference: docs/workflows.md (deep-linked from every validator error's "Fix:" suggestion) and docs/explanation/workflow-foundation.md (locked cross-phase decisions).
+Authoritative reference: docs/reference/workflow-yaml.md (field-by-field grammar, deep-linked from every validator error's "Fix:" suggestion) and docs/explanation/workflow-foundation.md (locked cross-phase decisions).
 
 ### Top-level fields
 
