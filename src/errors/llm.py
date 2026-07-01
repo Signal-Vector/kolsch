@@ -4,7 +4,7 @@ The Fatal classes here all surface from the engine's pre-flight
 `build_llm` call; the Recoverable `LlmDiscoveryFailed` surfaces from
 the CLI's `connect` and `refresh` flows when a provider's discovery
 endpoint is transiently unreachable. See the
-[error model](../../docs/explanation/error-model.md) for the
+[error model](../explanation/error-model.md) for the
 classification contract.
 """
 

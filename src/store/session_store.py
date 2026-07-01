@@ -8,7 +8,7 @@ the protocol-shaped sub-pieces let alternative implementations
 backend.
 
 See the
-[session/run store contract](../../docs/explanation/session-run-store-contract.md)
+[session/run store contract](../explanation/session-run-store-contract.md)
 for the full set of invariants this layer upholds.
 """
 
@@ -140,7 +140,7 @@ class SessionStore:
                 When non-`None` it populates `Session.from_workflow_run`
                 AND injects a `spawned_by` entry into the
                 `session.opened` event's `data` payload per the
-                [workflow event log](../../docs/explanation/workflow-event-log.md).
+                [workflow event log](../explanation/workflow-event-log.md).
                 Chat- and API-spawned sessions leave it `None` and the
                 payload is byte-identical to the pre-spawn shape.
             trace_id: Stamped on the `session.opened` event envelope

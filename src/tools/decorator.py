@@ -11,7 +11,7 @@ dispatch flow exposes to tool authors and consumers.
 
 For the full Tools subsystem contract (discovery, registration,
 dispatch), see the
-[tools subsystem](../../docs/explanation/tools-subsystem.md).
+[tools subsystem](../explanation/tools-subsystem.md).
 """
 
 from __future__ import annotations

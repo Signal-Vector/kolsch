@@ -1,7 +1,7 @@
 """The Agent Engine — recorder around the framework.
 
 Implements the engine per the
-[agent engine contract](../../docs/explanation/agent-engine-contract.md):
+[agent engine contract](../explanation/agent-engine-contract.md):
 the wrapped framework (CrewAI in v1) does the agentic work — model
 calls, tool dispatch, retry loops; the engine prepares inputs,
 registers hooks, observes execution, emits events per the schema,

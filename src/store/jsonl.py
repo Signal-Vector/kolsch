@@ -1,7 +1,7 @@
 """JSONL append, read, leaf resolution, and partial-line recovery.
 
 Implements the on-disk event-log surface of the
-[session/run store contract](../../docs/explanation/session-run-store-contract.md).
+[session/run store contract](../explanation/session-run-store-contract.md).
 All filesystem operations are synchronous and small;
 [`SessionStore`][store.session_store.SessionStore] wraps them in
 `asyncio.to_thread` so the event loop is never blocked on disk I/O.

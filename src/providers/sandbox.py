@@ -5,7 +5,7 @@ Protocol plus registry seam lets future isolation variants (containers,
 resource limits) drop in without changing call sites. For the full
 contract — result/exception transparency, policy validation, async
 shape — see the [secrets-sandbox-authz
-contract](../../docs/explanation/secrets-sandbox-authz-contract.md).
+contract](../explanation/secrets-sandbox-authz-contract.md).
 """
 
 from __future__ import annotations

@@ -20,9 +20,9 @@ a wrapper, and passes `isinstance(x, str)` checks. Pydantic v2 calls
 the same constructor during field validation, so the prefix and body
 checks run whether the id is built in code or parsed from JSON.
 
-For the full contract — including how each id is produced, who owns
-it, and which records reference it — see the
-[module API reference](../../docs/reference/module-api-reference.md).
+For the narrative on how each id is produced, who owns it, and which
+records reference it, see the
+[Schemas architecture page](../architecture/schemas.md).
 """
 
 from __future__ import annotations

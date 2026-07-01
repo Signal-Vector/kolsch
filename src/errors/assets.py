@@ -4,7 +4,7 @@ These codes are referenced by the Asset Management contract,
 registered in `errors.catalog`, and surfaced here as concrete
 `PlatformError` subclasses so callers can raise and match on them
 like any other catalogued error. See the
-[error model](../../docs/explanation/error-model.md) for the
+[error model](../explanation/error-model.md) for the
 classification contract.
 """
 

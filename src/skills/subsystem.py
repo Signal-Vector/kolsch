@@ -10,7 +10,7 @@ This module is pure with respect to the event log. The engine emits
 the synthetic `tool.called` / `tool.result` pair when processing a
 force-invoke; the model's voluntary skill loads are also engine-side
 via the regular `read` dispatch. See the
-[skills subsystem](../../docs/explanation/skills-subsystem.md) for
+[skills subsystem](../explanation/skills-subsystem.md) for
 the full contract.
 """
 

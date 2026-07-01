@@ -3,7 +3,7 @@
 A run-time authorization denial is not itself an error — it's a
 structured `AuthorizationResult`. Only configuration problems and
 prompt-effect collapse produce typed errors. See the
-[error model](../../docs/explanation/error-model.md) for the
+[error model](../explanation/error-model.md) for the
 classification contract.
 
 - `AuthzDenied` (Recoverable) — the tools dispatcher's surface for

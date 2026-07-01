@@ -175,7 +175,5 @@ connector that wants to handle 429 internally.
   canonical trigger table + level declarations.
 - Spec: [agent-engine-contract.md §2.1 + §2.4](../explanation/agent-engine-contract.md)
   — pre-flight chain build + the runtime loop.
-- Reference: [module-api-reference.md Part 11.7](../reference/module-api-reference.md)
+- Reference: [API: Engine](../api/index.md#engine-execution-context)
   — the engine's API surface for fallback.
-- Patch: [phase1.3-fallback-specs.md](../process/phase1.3-fallback-specs.md)
-  — the full design (rationale + deferred items).

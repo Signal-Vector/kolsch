@@ -462,6 +462,6 @@ CrewAI docs:
 Phase 1 contracts (internal):
 
 - Agent Engine: `docs/explanation/agent-engine-contract.md`
-- Schemas §B.5 (Assembly Procedure), §B.6 (Materialization Rule):
-  `docs/explanation/specification.md`
-- Module API Reference §11: `docs/reference/module-api-reference.md`
+- Assembly Procedure + Materialization Rule:
+  `docs/explanation/event-log-contract.md`
+- API reference: `docs/api/index.md#engine-execution-context`

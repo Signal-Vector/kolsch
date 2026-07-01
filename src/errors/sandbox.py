@@ -3,7 +3,7 @@
 Policy validation errors are Fatal — a malformed policy prevents
 setup. Runtime denial and resource-exceeded errors are Diagnostic so
 the model can adapt and the exchange continues. See the
-[error model](../../docs/explanation/error-model.md) for the
+[error model](../explanation/error-model.md) for the
 classification contract.
 """
 

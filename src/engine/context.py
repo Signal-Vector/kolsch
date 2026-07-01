@@ -8,7 +8,7 @@ is the cooperative cancellation handle they may attach;
 
 For the full engine contract — `execute` semantics, ordering rules,
 cancellation guarantees — see the
-[module API reference](../../docs/reference/module-api-reference.md).
+[module API reference](../reference/module-api-reference.md).
 """
 
 from __future__ import annotations

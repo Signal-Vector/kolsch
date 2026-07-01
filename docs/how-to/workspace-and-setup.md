@@ -174,5 +174,5 @@ exit codes.
   guided tour of what a workspace gets you.
 - Spec: [asset-management-contract.md §1.4](../explanation/asset-management-contract.md)
   — the resolution rules in normative form.
-- Reference: [module-api-reference.md Part 11.6](../reference/module-api-reference.md)
+- Reference: [API: Platform Runtime](../api/index.md#platform-runtime)
   — `resolve_workspace` and `workspace_is_initialized` signatures.

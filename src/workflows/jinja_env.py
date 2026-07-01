@@ -27,7 +27,7 @@ chokepoint for kolsch-maintained Jinja filters. Today the registered
 set is `from_json`; future additions land here in ~5 LoC each.
 Filters are CORE-ONLY — bundles, plugins, and pip-installable
 packages cannot register custom filters (see
-[jinja extensions](../../docs/explanation/jinja-extensions.md)).
+[jinja extensions](../explanation/jinja-extensions.md)).
 """
 
 from __future__ import annotations

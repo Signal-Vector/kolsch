@@ -3,7 +3,7 @@
 A normative registry: subsystems use these codes and never invent
 ad-hoc strings. New error types are added by amending this map and the
 corresponding class file. See the
-[error model](../../docs/explanation/error-model.md) for the contract
+[error model](../explanation/error-model.md) for the contract
 this registry implements.
 
 Iteration helpers live in `errors.base` so the catalog has no

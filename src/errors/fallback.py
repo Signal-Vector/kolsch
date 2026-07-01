@@ -4,7 +4,7 @@ Eight classes that drive the engine's fallback loop. Classification
 (Recoverable vs Fatal) is load-bearing — the engine's
 `is_fallback_triggering` predicate (see `engine._fallback`) consults
 the level to decide whether to walk the chain. See the
-[error model](../../docs/explanation/error-model.md) for the
+[error model](../explanation/error-model.md) for the
 classification contract.
 
 Recoverable — drive fallback:

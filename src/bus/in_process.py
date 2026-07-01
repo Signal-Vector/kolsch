@@ -8,7 +8,7 @@ The whole dispatch path is wrapped in a try/except so that a transport
 failure (anything below the handler-level isolation) is logged and
 swallowed — the publisher's primary work is never broken by a bus
 failure. See the
-[event bus contract](../../docs/explanation/event-bus-contract.md) for
+[event bus contract](../explanation/event-bus-contract.md) for
 the full delivery semantics.
 """
 

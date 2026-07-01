@@ -1,10 +1,7 @@
 # Chatting Effectively with `kolsch chat`
 
-Short recipes for getting the most out of the streaming REPL.
-For *why* chat works the way it does (event-stream consumer,
-four-choice approval modal, slash commands), read the
-[Phase 2.1 patch](../process/phase2.1-chat-specs.md). For an
-introduction, see [step 10 of the first-agent
+Short recipes for getting the most out of the streaming REPL. For
+an introduction, see [step 10 of the first-agent
 tutorial](../tutorials/first-agent.md#10-chat-with-your-agent).
 
 The TL;DR: `kolsch chat` is the day-2 command. It streams the
@@ -298,8 +295,6 @@ not the recording.
 
 ## Where next
 
-- [`docs/process/phase2.1-chat-specs.md`](../process/phase2.1-chat-specs.md) — the full chat contract: event-to-render mapping,
-  modal mechanics, exit codes, every slash command.
 - [`docs/how-to/permissions.md`](permissions.md) — editing the
   rule list that drives the approval modal.
 - [`docs/how-to/configure-fallbacks.md`](configure-fallbacks.md) — automatic recovery from transient model failures.

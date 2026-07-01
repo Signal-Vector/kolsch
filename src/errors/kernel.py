@@ -4,7 +4,7 @@ Configuration load and inheritance failures, plus the agent-load-time
 context-file and template-render surfaces. All classes here are Fatal
 except `config.deprecated_ref_form`, which is Recoverable so the
 agent still loads. See the
-[error model](../../docs/explanation/error-model.md) for the
+[error model](../explanation/error-model.md) for the
 classification contract.
 """
 

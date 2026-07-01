@@ -4,7 +4,7 @@ Composes the catalog, ref resolver, prompt pre-resolver, and the
 `platform.yaml` loader behind one object. The engine and CLI consume
 this class; internal modules consume the building blocks directly.
 For the full subsystem contract see the
-[asset management contract](../../docs/explanation/asset-management-contract.md).
+[asset management contract](../explanation/asset-management-contract.md).
 """
 
 from __future__ import annotations

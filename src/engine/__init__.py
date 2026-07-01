@@ -1,7 +1,7 @@
 """The Agent Engine — long-lived orchestrator wrapping a framework.
 
 Implements the engine subsystem per the
-[agent engine contract](../../docs/explanation/agent-engine-contract.md).
+[agent engine contract](../explanation/agent-engine-contract.md).
 v1 ships [`FakeFramework`][engine.fake_framework.FakeFramework] as the
 default for tests and zero-LLM-cost development, plus
 [`CrewAIFramework`][engine.crewai_framework.CrewAIFramework] as the

@@ -1,7 +1,7 @@
 """Skill discovery and progressive disclosure.
 
 Implements the Skills subsystem per
-[skills subsystem](../../docs/explanation/skills-subsystem.md). The
+[skills subsystem](../explanation/skills-subsystem.md). The
 public surface is a facade the engine consumes ([`SkillsSubsystem`]
 [skills.subsystem.SkillsSubsystem]), a Layer 3 validator factory
 ([`make_standard_validator`][skills.validator.make_standard_validator])

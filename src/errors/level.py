@@ -3,7 +3,7 @@
 The level is assigned to each error *type*, never chosen at runtime —
 the same type at different severities in different code paths is a
 contract violation. See the
-[error model](../../docs/explanation/error-model.md) for the contract
+[error model](../explanation/error-model.md) for the contract
 and the engine-side fan-out each level drives.
 
 - `DIAGNOSTIC` — the model sees a `tool.failed` (or equivalent) event

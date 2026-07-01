@@ -1,7 +1,7 @@
 """Path-access policy and `file_ref` validation.
 
 Implements the file-access subsystem per
-[file handling](../../docs/explanation/file-handling.md). Consumed by:
+[file handling](../explanation/file-handling.md). Consumed by:
 
 - The builtin file-touching tools (`read`, `write`, `edit`) to gate
   each invocation's path argument.

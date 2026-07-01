@@ -10,9 +10,9 @@ dotenv secrets, native sandbox, rule-based authz, recent-buffer memory,
 external services. Production frameworks (`CrewAIFramework`) and
 real-LLM providers are opt-in upgrades injected at bootstrap.
 
-See the [v1 scope](../../docs/explanation/v1-scope.md) for the
+See the [v1 scope](../explanation/v1-scope.md) for the
 default-tier contract and the
-[agent engine contract](../../docs/explanation/agent-engine-contract.md)
+[agent engine contract](../explanation/agent-engine-contract.md)
 for the engine-side wiring.
 """
 
@@ -67,7 +67,7 @@ class PlatformRuntime:
 
     `subsystem_validators` is the Layer 3 validator dispatch dict —
     keyed by subsystem name, then variant name — defined by the
-    [kernel resolver contract](../../docs/explanation/kernel-resolver-contract.md).
+    [kernel resolver contract](../explanation/kernel-resolver-contract.md).
     Both CLI and API route config builds through `build_resolved_config`
     so wildcard write_tags, unknown variants, and missing skill refs
     fail at config-resolution time rather than mid-exchange.

@@ -1,7 +1,7 @@
 """Store — session and thread entity records plus the JSONL event log.
 
 Implements the persistence layer per the
-[session/run store contract](../../docs/explanation/session-run-store-contract.md).
+[session/run store contract](../explanation/session-run-store-contract.md).
 The filesystem JSONL is ground truth; entity records (SQLite default,
 Postgres scale-up) are rebuildable from the log via
 [`SessionStore.reconstruct_from_filesystem`][store.SessionStore.reconstruct_from_filesystem].

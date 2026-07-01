@@ -4,7 +4,7 @@ Builds the ordered list of partial configs the kernel resolver merges
 (`[system_defaults, agent_definition, call_overrides]`), pre-resolves
 prompt refs into actual file content, and passes tool and skill refs
 through unchanged. See the
-[asset management contract](../../docs/explanation/asset-management-contract.md)
+[asset management contract](../explanation/asset-management-contract.md)
 for the assembly ordering and the pre-resolution rules.
 """
 

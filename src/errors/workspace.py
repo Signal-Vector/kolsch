@@ -2,7 +2,7 @@
 
 Two Fatal classes that block bootstrap and two Recoverable classes
 that flag setup-time conditions a human can resolve. See the
-[error model](../../docs/explanation/error-model.md) for the
+[error model](../explanation/error-model.md) for the
 classification contract.
 
 - `WorkspaceNotInitialized` (Fatal) — a non-setup command was pointed

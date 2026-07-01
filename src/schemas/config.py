@@ -11,7 +11,7 @@ those modules land. The structural envelope is strict.
 
 For the full schema reference (field semantics, validation rules,
 default-application order), see the
-[schemas reference](../../docs/reference/schemas.md).
+[schemas reference](../reference/schemas.md).
 """
 
 from __future__ import annotations

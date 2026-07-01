@@ -5,7 +5,7 @@ fed by replaying `memory.written` / `memory.deleted` events from the
 session log; retrieval combines recent conversational events with the
 explicitly-written tagged items. For the full contract — write-tag
 binding, deterministic replay, session isolation — see the
-[memory provider contract](../../docs/explanation/memory-provider-contract.md).
+[memory provider contract](../explanation/memory-provider-contract.md).
 
 The provider never writes to the session log itself: the engine emits
 `memory.written` / `memory.deleted` / `memory.retrieved` events, and

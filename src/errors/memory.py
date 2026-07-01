@@ -1,6 +1,6 @@
 """Memory provider errors.
 
-See the [error model](../../docs/explanation/error-model.md) for the
+See the [error model](../explanation/error-model.md) for the
 Diagnostic / Recoverable / Fatal classification each class lives under.
 """
 

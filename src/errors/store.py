@@ -2,7 +2,7 @@
 
 All five classes are Fatal — store failures break the persistence
 contract every other subsystem depends on. See the
-[error model](../../docs/explanation/error-model.md) for the
+[error model](../explanation/error-model.md) for the
 classification contract.
 """
 

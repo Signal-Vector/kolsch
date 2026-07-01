@@ -12,7 +12,7 @@ workspace, bootstraps a runtime, and builds the app — the intended
 entry point for uvicorn factory-mode deployments where no Python
 caller has already built a runtime.
 
-See the [file handling contract](../../docs/explanation/file-handling.md)
+See the [file handling contract](../explanation/file-handling.md)
 for the `file_ref` boundary validation applied to invocation inputs
 before the engine sees them.
 """

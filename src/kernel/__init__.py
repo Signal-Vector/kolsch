@@ -1,7 +1,7 @@
 """Kernel — pure config resolver, validators, JSON Merge Patch.
 
 Implements the
-[kernel/resolver contract](../../docs/explanation/kernel-resolver-contract.md):
+[kernel/resolver contract](../explanation/kernel-resolver-contract.md):
 zero I/O, zero state, and no platform-module dependencies. Every other
 module imports the kernel; the kernel imports only Pydantic, the
 standard library, and `schemas` (cross-module data types).

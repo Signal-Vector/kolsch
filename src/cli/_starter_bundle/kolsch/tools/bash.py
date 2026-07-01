@@ -16,7 +16,7 @@ the same way file tools' `path` is.
 
 Bash itself is exempt from the path-access policy in the native
 sandbox — see
-[file handling](../../../../docs/explanation/file-handling.md). The
+[file handling](../../../explanation/file-handling.md). The
 workspace-only default rule set in `platform.yaml` defaults
 `tool.bash` to `prompt` so the chat surface gates each command
 interactively rather than the path policy trying — and failing — to

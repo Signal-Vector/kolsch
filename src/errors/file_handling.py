@@ -2,7 +2,7 @@
 
 Most surfaces are Diagnostic so the model adapts to the failure;
 policy-load failures are Fatal because they prevent bootstrap. See
-the [error model](../../docs/explanation/error-model.md) for the
+the [error model](../explanation/error-model.md) for the
 classification contract.
 """
 

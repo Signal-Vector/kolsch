@@ -108,7 +108,7 @@ def append_event(thread_id: ThreadId, event: Event) -> EventId:
   rots.
 - **`Raises:` lists `PlatformError` subclasses by name.** This matches
   the project's hard rule that bare exceptions never escape public
-  methods (see [`AGENTS.md`](../../AGENTS.md) — Hard rules).
+  methods (see `AGENTS.md` — Hard rules).
 - **`Returns:` for `None`** — omit the section. Don't write
   `Returns: None`.
 
@@ -277,7 +277,7 @@ out of the box, so following it means no extra config later.
 ## Inline comments
 
 Separate from docstrings — different audience, different rules. See
-the existing project rule in [`AGENTS.md`](../../AGENTS.md) (Hard
+the existing project rule in `AGENTS.md` (Hard
 rules): comments explain the *why* when it's non-obvious; the *what*
 should be in the code and the *who/when* is in git.
 

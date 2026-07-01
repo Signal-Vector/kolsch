@@ -5,7 +5,7 @@ The hash is the SHA-256 hex digest of the content, so the same payload
 written twice resolves to the same file and a second write is a no-op.
 
 The on-disk layout and immutability rule belong to the
-[session/run store contract](../../docs/explanation/session-run-store-contract.md).
+[session/run store contract](../explanation/session-run-store-contract.md).
 """
 
 from __future__ import annotations

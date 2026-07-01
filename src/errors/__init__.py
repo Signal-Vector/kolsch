@@ -9,7 +9,7 @@ from errors import ToolUnauthorized, SecretNotFound, Level
 Every error raised across a module boundary is a `PlatformError`
 subclass whose `code` is registered in `CATALOG` and whose `level` is
 intrinsic to the type. See the
-[error model](../../docs/explanation/error-model.md) for the canonical
+[error model](../explanation/error-model.md) for the canonical
 contract.
 """
 

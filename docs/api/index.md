@@ -97,11 +97,39 @@ resolved agent config) render in the
     options:
       heading_level: 3
 
+::: engine.fake_framework
+    options:
+      heading_level: 3
+
+::: engine.crewai_framework
+    options:
+      heading_level: 3
+
+::: engine.dev_llm
+    options:
+      heading_level: 3
+
 ---
 
 ## Errors
 
 ::: errors.base
+    options:
+      heading_level: 3
+
+::: errors.engine
+    options:
+      heading_level: 3
+
+::: errors.file_handling
+    options:
+      heading_level: 3
+
+::: errors.assets
+    options:
+      heading_level: 3
+
+::: errors.tools
     options:
       heading_level: 3
 
@@ -126,6 +154,14 @@ resolved agent config) render in the
       heading_level: 3
 
 ::: kernel.validation
+    options:
+      heading_level: 3
+
+::: kernel.partials
+    options:
+      heading_level: 3
+
+::: kernel.findings
     options:
       heading_level: 3
 
@@ -181,6 +217,10 @@ resolved agent config) render in the
     options:
       heading_level: 3
 
+::: skills.models
+    options:
+      heading_level: 3
+
 ---
 
 ## Store
@@ -190,6 +230,10 @@ resolved agent config) render in the
       heading_level: 3
 
 ::: store.backend
+    options:
+      heading_level: 3
+
+::: store.sqlite_backend
     options:
       heading_level: 3
 
@@ -238,6 +282,18 @@ resolved agent config) render in the
       heading_level: 3
 
 ::: workflows.parser
+    options:
+      heading_level: 3
+
+::: workflows.errors
+    options:
+      heading_level: 3
+
+::: workflows.events
+    options:
+      heading_level: 3
+
+::: workflows.labels
     options:
       heading_level: 3
 

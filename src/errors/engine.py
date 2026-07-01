@@ -4,7 +4,7 @@ The engine boundary is where most Fatal-level escalations land —
 authorization denial at pre-flight, retry-budget exhaustion,
 cancellation, timeout, and the safety net for any otherwise-unhandled
 exception. See the
-[error model](../../docs/explanation/error-model.md) for the
+[error model](../explanation/error-model.md) for the
 classification contract.
 """
 

@@ -5,7 +5,7 @@ functions, no [`PlatformRuntime`][platform_runtime.runtime.PlatformRuntime]
 import, no other module reads `KOLSCH_WORKSPACE` or imports
 `platformdirs`.
 
-See [workspace and setup](../../docs/how-to/workspace-and-setup.md)
+See [workspace and setup](../how-to/workspace-and-setup.md)
 for the resolution chain rationale and CLI gating behaviour.
 """
 

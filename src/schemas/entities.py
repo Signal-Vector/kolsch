@@ -17,8 +17,8 @@ Pure data models, no behaviour beyond Pydantic validation:
   shapes for cross-JSONL forensics (session-spawned-by-workflow,
   workflow-spawned-by-workflow, run-forked-from-run).
 
-For the full record shapes and the contracts they participate in, see
-the [module API reference](../../docs/reference/module-api-reference.md).
+For the narrative on which contracts each record participates in, see
+the [Schemas architecture page](../architecture/schemas.md).
 """
 
 from __future__ import annotations
@@ -54,7 +54,7 @@ class FromWorkflowRun(BaseModel):
     a new session; surfaces in the `session.opened` event's
     `spawned_by` payload so cross-JSONL tools can walk from the
     spawned session back to the workflow run that produced it. See
-    the [workflow event log](../../docs/explanation/workflow-event-log.md).
+    the [workflow event log](../explanation/workflow-event-log.md).
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")

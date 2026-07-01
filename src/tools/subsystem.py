@@ -3,7 +3,7 @@
 Composes the registry, dispatch, builtins, and MCP lifecycle behind
 one object the Agent Engine consumes. Tools the engine receives are
 already authorized, secret-bound, and sandbox-wrapped at invoke time.
-See the [tools subsystem](../../docs/explanation/tools-subsystem.md)
+See the [tools subsystem](../explanation/tools-subsystem.md)
 contract.
 """
 

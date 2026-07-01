@@ -10,7 +10,7 @@ truth for what `read_file` does. Future contributors adding a fifth
 tool follow the same shape: a Pydantic args model, an
 `@tool`-decorated coroutine, the typed-error raises this file
 demonstrates. See the
-[tools subsystem](../../../../docs/explanation/tools-subsystem.md)
+[tools subsystem](../../../explanation/tools-subsystem.md)
 for the discovery + dispatch contract.
 """
 

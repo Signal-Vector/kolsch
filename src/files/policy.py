@@ -1,7 +1,7 @@
 """Path-access policy plus `file_ref` shape validation.
 
 Implements the policy half of the file-access subsystem per
-[file handling](../../docs/explanation/file-handling.md). The policy
+[file handling](../explanation/file-handling.md). The policy
 gates which filesystem paths the platform's file-touching code may
 reach: consulted by the builtin tools (`read`, `write`, `edit`) at
 invocation time and by the engine's `execute` boundary when

@@ -54,7 +54,7 @@ class _UpdateSessionRequest(BaseModel):
     """Partial update of UI-state fields for `PATCH /sessions/{id}`.
 
     All fields are optional; only present keys are applied. See the
-    [module API reference](../../docs/reference/module-api-reference.md)
+    [module API reference](../reference/module-api-reference.md)
     for the underlying `entity_backend.update_session` contract.
     """
 
@@ -285,7 +285,7 @@ async def _prepare_context(
     """Validate request inputs and build the engine's `ExecutionContext`.
 
     `file_ref` inputs on the invocation are validated at this boundary
-    — see the [file handling contract](../../docs/explanation/file-handling.md).
+    — see the [file handling contract](../explanation/file-handling.md).
     The engine trusts inputs once they cross this seam.
     """
     try:

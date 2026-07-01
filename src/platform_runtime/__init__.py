@@ -6,7 +6,7 @@ to stand up the v1 default tier (SQLite entity backend + in-process
 event bus + dotenv secrets + native sandbox + FakeFramework +
 EchoLLMDriver) with zero external services required.
 
-See the [v1 scope](../../docs/explanation/v1-scope.md) for the
+See the [v1 scope](../explanation/v1-scope.md) for the
 default-tier contract this module implements.
 """
 

@@ -27,7 +27,7 @@ The public surface re-exports:
   register themselves in `llm.providers` at import time.
 
 For the full subsystem contract, see the
-[LLM providers explanation](../../docs/explanation/llm-providers.md).
+[LLM providers explanation](../explanation/llm-providers.md).
 """
 
 from llm.build_llm import build_llm

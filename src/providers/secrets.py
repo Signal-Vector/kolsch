@@ -5,7 +5,7 @@ lookups from memory; the registry seam below lets future variants
 (vault, cloud secret managers) slot in without core changes. For the
 full contract — non-logging of values, missing-secret behaviour, the
 async shape — see the [secrets-sandbox-authz
-contract](../../docs/explanation/secrets-sandbox-authz-contract.md).
+contract](../explanation/secrets-sandbox-authz-contract.md).
 """
 
 from __future__ import annotations

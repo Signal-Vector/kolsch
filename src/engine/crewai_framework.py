@@ -6,7 +6,7 @@ contract. The engine never imports this module directly; callers
 wire it via `AgentEngine(framework=CrewAIFramework(), ...)`.
 
 Design (per
-[framework protocol design](../../docs/explanation/framework-protocol-design.md)):
+[framework protocol design](../explanation/framework-protocol-design.md)):
 
 - **Fake-LLM injection via BaseLLM subclass** (`_CrewAILLM`). The
   prereq spike validated this as the only mechanism that lets the

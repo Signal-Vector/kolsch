@@ -2,7 +2,7 @@
 
 Both classes are Diagnostic because the bus is best-effort — losing a
 bus message must not fail an exchange. See the
-[error model](../../docs/explanation/error-model.md) for the
+[error model](../explanation/error-model.md) for the
 classification contract.
 """
 

@@ -2,7 +2,7 @@
 
 Implements the canonical error envelope and the class-time catalog
 guard every concrete subclass relies on. See the
-[error model](../../docs/explanation/error-model.md) for the contract.
+[error model](../explanation/error-model.md) for the contract.
 
 `__init_subclass__` validates at class-definition time that the
 declared `code` is registered in `CATALOG` and that `level` agrees

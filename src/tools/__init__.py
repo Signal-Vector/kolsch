@@ -1,7 +1,7 @@
 """Tools — declared tools, MCP servers, and builtin tools.
 
 Implements the Tools subsystem per the
-[tools subsystem](../../docs/explanation/tools-subsystem.md) contract:
+[tools subsystem](../explanation/tools-subsystem.md) contract:
 declared tools, MCP server lifecycle, and the four file-touching
 builtins, exposed to the engine through a single facade.
 """

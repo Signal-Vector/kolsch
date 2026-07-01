@@ -2,7 +2,7 @@
 
 Both classes are Fatal — a missing or unreadable secret means a tool
 that needs it cannot be set up and the agent cannot run. See the
-[error model](../../docs/explanation/error-model.md) for the
+[error model](../explanation/error-model.md) for the
 classification contract.
 """
 

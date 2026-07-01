@@ -2,7 +2,7 @@
 
 All four classes are Fatal — a missing, malformed, or unauthorized
 skill prevents an exchange from running cleanly. See the
-[error model](../../docs/explanation/error-model.md) for the
+[error model](../explanation/error-model.md) for the
 classification contract.
 """
 

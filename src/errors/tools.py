@@ -3,7 +3,7 @@
 Tool execution and authorization failures live at Diagnostic so the
 model adapts and the exchange continues; setup-time and dispatcher
 binding failures are Fatal. See the
-[error model](../../docs/explanation/error-model.md) for the
+[error model](../explanation/error-model.md) for the
 classification contract.
 """
 

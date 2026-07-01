@@ -10,9 +10,9 @@ payload shape. The [`Event`][schemas.events.Event] envelope holds
 forward-compatible; callers that want strict validation construct the
 matching `*Data` model and pass `.model_dump()` into the envelope.
 
-For the full event-log contract — which records belong to which
-subsystem, ordering rules, and what consumers may assume — see the
-[module API reference](../../docs/reference/module-api-reference.md).
+For the full event-log contract — the append protocol, assembly
+procedure, materialization rule, and reconstruction guarantee — see
+the [Event log contract](../explanation/event-log-contract.md).
 """
 
 from __future__ import annotations
@@ -154,7 +154,7 @@ class ModelRequestData(_DataModel):
     (CrewAI's prompt-template injection, multimodal reshaping) can
     diverge from what a path-derived context would produce, so the
     log keeps the actual bytes the model saw — the
-    [Materialization Rule](../../docs/explanation/event-log-contract.md#the-materialization-rule)
+    [Materialization Rule](../explanation/event-log-contract.md#the-materialization-rule)
     requires every input that shaped the model's context to live on
     an event, verbatim. Replay reads `messages` directly rather than
     re-running the projection.
@@ -293,7 +293,7 @@ class MemoryRetrievedData(_DataModel):
     """`memory.retrieved.data` — what a memory query returned.
 
     `results` carries the actual items returned, verbatim. The
-    [Assembly Procedure](../../docs/explanation/event-log-contract.md#the-assembly-procedure)
+    [Assembly Procedure](../explanation/event-log-contract.md#the-assembly-procedure)
     uses this content; it never re-runs the query at replay time.
     """
 

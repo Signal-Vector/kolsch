@@ -3,9 +3,9 @@
 Secrets, sandbox, and authz are **platform-level** providers
 configured in `platform.yaml` and applied uniformly to every agent;
 see the [secrets-sandbox-authz
-contract](../../docs/explanation/secrets-sandbox-authz-contract.md).
+contract](../explanation/secrets-sandbox-authz-contract.md).
 Memory is agent-level and follows the [memory provider
-contract](../../docs/explanation/memory-provider-contract.md).
+contract](../explanation/memory-provider-contract.md).
 
 Each provider exposes a Protocol (the contract), one v1 variant, and
 a small registry seam so future variants slot in without core changes.

@@ -183,7 +183,7 @@ register("<name>", <Name>Connector)   # and this line
 
 ## 2.5. Picking the right `crewai.LLM` route
 
-*(Added after [bug-litellm-model-routing.md](../../../docs/process/bug-litellm-model-routing.md):
+*(Added after [bug-litellm-model-routing.md](../../process/bug-litellm-model-routing.md):
 the OpenCode connector originally used ``openai/<model>`` and
 LiteLLM rejected non-canonical model names with a hard import
 error.)*
@@ -238,7 +238,7 @@ If a future contributor "fixes" `hosted_vllm/` back to `openai/`
 on a connector serving non-OpenAI models, the failure mode is the
 same `ImportError("Unable to initialize LLM…the model did not
 match any supported native provider…")`. The
-[bug-litellm-model-routing.md](../../../docs/process/bug-litellm-model-routing.md)
+[bug-litellm-model-routing.md](../../process/bug-litellm-model-routing.md)
 ticket walks through the diagnostic; the OpenCode connector's
 module docstring explains the choice inline.
 

@@ -1,7 +1,7 @@
 """The Framework Protocol — the seam the engine depends on.
 
 Implements the framework boundary per the
-[framework protocol design](../../docs/explanation/framework-protocol-design.md).
+[framework protocol design](../explanation/framework-protocol-design.md).
 The engine depends on this Protocol, never on a concrete framework.
 Reference implementations:
 [`FakeFramework`][engine.fake_framework.FakeFramework] (the v1 default
@@ -135,7 +135,7 @@ class ToolHandle(Protocol):
     """Engine-provided tool wrapper the framework invokes by name.
 
     The engine owns the body: capture `tool.called` BEFORE, route
-    through the [Tools subsystem](../../docs/explanation/tools-subsystem.md)
+    through the [Tools subsystem](../explanation/tools-subsystem.md)
     (which routes through the sandbox), then capture
     `tool.result` / `tool.failed` AFTER. On a Diagnostic failure the
     wrapper MUST return a value the framework can include as a

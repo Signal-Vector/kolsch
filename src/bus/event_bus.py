@@ -3,7 +3,7 @@
 v1 ships [`InProcessEventBus`][bus.in_process.InProcessEventBus]; a
 Redis-backed backend slots in at the same Protocol surface when
 cross-process delivery is needed. See the
-[event bus contract](../../docs/explanation/event-bus-contract.md) for
+[event bus contract](../explanation/event-bus-contract.md) for
 the full semantics.
 """
 

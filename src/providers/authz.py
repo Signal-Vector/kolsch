@@ -16,7 +16,7 @@ CLI and the in-chat modal.
 
 For the full contract — principal grammar, layered walk, audit
 emission, prompt resolution — see the [secrets-sandbox-authz
-contract](../../docs/explanation/secrets-sandbox-authz-contract.md).
+contract](../explanation/secrets-sandbox-authz-contract.md).
 
 A separate `AllowAllTestAuthorizationProvider` variant returns
 `ALLOW` for everything; it is registered unconditionally but its

@@ -6,7 +6,7 @@ Adding a new provider does not change this function — provider-specific
 concerns live entirely inside the provider class.
 
 The engine's pre-flight calls this per exchange. See the
-[agent engine contract](../../docs/explanation/agent-engine-contract.md).
+[agent engine contract](../explanation/agent-engine-contract.md).
 """
 
 from __future__ import annotations

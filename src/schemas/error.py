@@ -10,7 +10,7 @@ data.error`, `thread.exchange_failed.data.error`,
 The `cause` field is self-referential; Pydantic v2 handles the
 forward reference automatically when the class definition completes.
 
-See the [error model](../../docs/explanation/error-model.md) for the
+See the [error model](../explanation/error-model.md) for the
 full classification contract.
 """
 
