@@ -1,4 +1,5 @@
-"""Component tests for the ``fetch_url`` tool — happy path + redirects/auth.
+"""Component tests for the ``fetch_url`` tool — happy path + redirects/auth
++ failure paths + overflow persistence.
 
 Each test spins up a local ``http.server.ThreadingHTTPServer`` on an
 ephemeral port. A per-test route table (a plain ``dict[str, tuple]``)
@@ -21,19 +22,30 @@ Tests covered here (from ``process/qol-fetch-url-tool.md``):
 - Test 6 — ``follow_redirects=False`` returns the raw 302 with
   ``final_url`` unchanged.
 - Test 7 — custom ``headers`` + ``cookies`` reach the target.
+- Test 8 — non-2xx status is returned verbatim in ``status`` +
+  ``content`` (tool does NOT raise on 4xx / 5xx).
+- Test 9 — a sleep-forever route + ``request_timeout_seconds=1``
+  raises ``ToolTimeout`` with ``timeout_seconds=1``.
+- Test 10 — ``ctx.cancellation.cancel()`` during a slow fetch raises
+  ``ExchangeCancelled`` within one heartbeat.
+- Test 11 — extracted text >64 KiB persists to
+  ``<workspace>/logs/tool-outputs/…`` and inline ``content`` is a
+  truncated preview.
 """
 
 from __future__ import annotations
 
+import asyncio
 import base64
 import importlib.util
 import json
 import socket
 import sys
 import threading
+import time
+from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -42,6 +54,8 @@ import pytest
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+from engine.context import CancelToken
+from errors import ExchangeCancelled, ToolTimeout
 from schemas import AgentId, SessionId, ThreadId
 from tools.decorator import ToolContext
 
@@ -442,3 +456,298 @@ async def test_fetch_url_auth_headers_and_cookies_reach_target(
     # httpx.AsyncClient constructor arg from headers).
     assert "auth=Bearer secret" in result["content"]
     assert "cookie=session=abc123" in result["content"]
+
+
+# ---------------------------------------------------------------------------
+# Cancellation shim
+# ---------------------------------------------------------------------------
+
+
+class _CtxWithCancel:
+    """Minimal duck-typed ``ToolContext`` carrying a ``cancellation`` token.
+
+    :class:`ToolContext` is a frozen Pydantic model with ``extra="forbid"``
+    so a real ``cancellation`` field can't be attached from outside the
+    schema. The fetch_url tool reads the token via
+    ``getattr(ctx, "cancellation", None)`` — deliberately duck-typed
+    precisely so tests and future call sites can inject a token without
+    reshaping the ToolContext schema. This shim exposes the same
+    attribute surface (agent_id / session_id / thread_id / principal /
+    secrets / workspace_root / path_policy) plus ``cancellation``.
+    """
+
+    def __init__(
+        self,
+        *,
+        base: ToolContext,
+        cancellation: CancelToken | None,
+    ) -> None:
+        self.agent_id = base.agent_id
+        self.session_id = base.session_id
+        self.thread_id = base.thread_id
+        self.principal = base.principal
+        self.secrets = base.secrets
+        self.workspace_root = base.workspace_root
+        self.path_policy = base.path_policy
+        self.cancellation = cancellation
+
+
+# ---------------------------------------------------------------------------
+# Failure-path fixture routes
+# ---------------------------------------------------------------------------
+
+
+def _register_error_route(server: _LocalHttpServer, path: str, body: bytes) -> None:
+    """Wire up a route that always returns 404 with ``body``."""
+    server.routes[path] = (
+        404,
+        {"Content-Type": "text/plain; charset=utf-8"},
+        body,
+    )
+
+
+def _register_sleep_forever_route(
+    server: _LocalHttpServer,
+    path: str,
+    *,
+    max_sleep_seconds: float = 30.0,
+) -> None:
+    """Wire up a route that never responds within test time.
+
+    The handler blocks its request thread on ``time.sleep`` — the
+    ``ThreadingHTTPServer`` gives each request its own thread, so this
+    only stalls the one request under test. ``max_sleep_seconds`` is a
+    safety cap so a runaway test doesn't leak a thread forever; real
+    tests should trip a timeout or cancellation well before this fires.
+    """
+
+    def _sleep_handler(handler: BaseHTTPRequestHandler) -> Route:
+        # No headers sent yet — sleeping here means the client is still
+        # waiting on the response line, which is exactly the case we
+        # want to exercise for timeout / cancellation.
+        time.sleep(max_sleep_seconds)
+        return (200, {"Content-Type": "text/plain"}, b"never")
+
+    server.routes[path] = _sleep_handler
+
+
+# ---------------------------------------------------------------------------
+# Test 8 — non-2xx returns status + body without raising
+# ---------------------------------------------------------------------------
+
+
+async def test_fetch_url_non_2xx_returns_status_and_body(
+    local_http_server: _LocalHttpServer,
+) -> None:
+    """Test 8: 404 → tool returns status=404 + the error body inline.
+
+    The tool must NOT raise on non-2xx — a 4xx / 5xx is a valid
+    response the caller may want to inspect (Retry-After, error JSON,
+    etc.). Only network-level failures wrap as ``NetworkError``.
+    """
+    error_body = b"resource missing: sentinel-marker-Test8"
+    _register_error_route(local_http_server, "/missing", error_body)
+    args = FetchUrlArgs(url=f"{local_http_server.base_url}/missing")
+
+    result = await fetch_url(args, _ctx())
+
+    assert result["status"] == 404
+    # Content-Type is text/plain, so the extraction path is
+    # utf-8-decode → content_type="text".
+    assert result["content_type"] == "text"
+    # The fixture body must reach the caller verbatim; asserting on the
+    # sentinel token proves the tool didn't swallow the body.
+    assert "sentinel-marker-Test8" in result["content"]
+
+
+# ---------------------------------------------------------------------------
+# Test 9 — request_timeout_seconds bounds the request
+# ---------------------------------------------------------------------------
+
+
+async def test_fetch_url_timeout_raises_tool_timeout(
+    local_http_server: _LocalHttpServer,
+) -> None:
+    """Test 9: sleep-forever route + timeout=1 → ToolTimeout(timeout_seconds=1).
+
+    Asserts on the exception's ``timeout_seconds`` attribute (the
+    kolsch error field on ``detail``), NOT on the request arg
+    ``request_timeout_seconds`` — the two are intentionally distinct
+    names so a rename on one side surfaces here.
+    """
+    _register_sleep_forever_route(local_http_server, "/sleep-forever")
+    args = FetchUrlArgs(
+        url=f"{local_http_server.base_url}/sleep-forever",
+        request_timeout_seconds=1,
+    )
+
+    start = time.monotonic()
+    with pytest.raises(ToolTimeout) as excinfo:
+        await fetch_url(args, _ctx())
+    elapsed = time.monotonic() - start
+
+    # The kolsch ToolTimeout exposes its bound via ``detail`` (see
+    # errors/tools.py::ToolTimeout). This is the field the test spec
+    # explicitly calls out — "the exception's field, not the arg".
+    assert excinfo.value.detail["timeout_seconds"] == 1
+    assert excinfo.value.detail["tool_name"] == "fetch_url"
+    # Guard the tight bound too — a hung request that took >5s would
+    # be a real regression (implies the timeout wasn't actually
+    # applied and something else stopped the fetch).
+    assert elapsed < 5.0, f"timeout took too long: {elapsed:.2f}s"
+
+
+# ---------------------------------------------------------------------------
+# Test 10 — cancellation via ctx.cancellation
+# ---------------------------------------------------------------------------
+
+
+async def test_fetch_url_cancellation_raises_exchange_cancelled(
+    local_http_server: _LocalHttpServer,
+) -> None:
+    """Test 10: cancel token flipped mid-fetch → ExchangeCancelled within a heartbeat.
+
+    Mirrors the bash cancellation pattern (see the bash cancel test
+    referenced in the build plan): schedule ``cancel()`` after 100 ms
+    while a slow route is being fetched, then assert the tool aborts
+    within a bounded latency window (not just "eventually raised").
+    """
+    _register_sleep_forever_route(local_http_server, "/sleep-forever")
+    args = FetchUrlArgs(
+        url=f"{local_http_server.base_url}/sleep-forever",
+        # Give the request a generous timeout — the cancellation racer
+        # is what should abort, not the timeout. If a bug swaps the
+        # order, the elapsed-latency guard below still catches it.
+        request_timeout_seconds=30,
+    )
+    cancel = CancelToken()
+    ctx = _CtxWithCancel(base=_ctx(), cancellation=cancel)
+
+    async def _flip_after_delay() -> None:
+        await asyncio.sleep(0.1)
+        cancel.cancel()
+
+    flipper = asyncio.create_task(_flip_after_delay())
+    start = time.monotonic()
+    with pytest.raises(ExchangeCancelled):
+        await fetch_url(args, ctx)  # type: ignore[arg-type]
+    elapsed = time.monotonic() - start
+    await flipper
+
+    # 100 ms flip delay + a bounded grace for asyncio task shutdown
+    # and cancel propagation. Well below the 30s request timeout —
+    # any regression that fell through to the timeout instead of
+    # the cancellation branch would blow past this bound.
+    assert elapsed < 2.0, f"cancellation took too long: {elapsed:.2f}s"
+
+
+# ---------------------------------------------------------------------------
+# Test 11 — overflow persistence to <workspace>/logs/tool-outputs/
+# ---------------------------------------------------------------------------
+
+
+# One paragraph large enough that ~256 repetitions blow past 64 KiB of
+# extracted text. Wrapped in <p> tags so trafilatura sees article-shaped
+# HTML and returns the concatenated prose rather than falling back to
+# BeautifulSoup or None.
+_BIG_PARAGRAPH = (
+    "This is a very long paragraph that trafilatura will happily "
+    "extract as main-content prose. It contains no navigation, no "
+    "script tags, and no chrome — just enough sentences to survive the "
+    "extractor's boilerplate filter. Each copy adds a few hundred "
+    "bytes of extracted text so a couple hundred copies push the "
+    "output well past the 64 KiB inline cap. Sentinel token: "
+    "OVERFLOW_MARKER_TEST_11."
+)
+
+
+def _large_article_html(paragraph_repeats: int) -> bytes:
+    body = "\n".join(f"<p>{_BIG_PARAGRAPH}</p>" for _ in range(paragraph_repeats))
+    return (
+        "<!doctype html><html><head><title>overflow</title></head>"
+        "<body><main><article>"
+        f"{body}"
+        "</article></main></body></html>"
+    ).encode()
+
+
+def _ctx_with_workspace(workspace_root: Path) -> ToolContext:
+    """Build a ToolContext pointed at ``workspace_root``.
+
+    Overflow persistence writes under
+    ``<workspace_root>/logs/tool-outputs/<session_id>/<call_id>.content.txt``,
+    so the persistence branch only fires when ``ctx.workspace_root`` is
+    set. Fresh session id per call keeps the disk layout deterministic
+    for this test's assertions.
+    """
+    agent_id = "ag_test_overflow"
+    return ToolContext(
+        agent_id=AgentId(agent_id),
+        session_id=SessionId(f"ses_{uuid4()}"),
+        thread_id=ThreadId(f"th_{uuid4()}"),
+        principal=f"agent.{agent_id}",
+        secrets={},
+        workspace_root=workspace_root,
+    )
+
+
+async def test_fetch_url_overflow_persists_to_logs_tool_outputs(
+    local_http_server: _LocalHttpServer,
+    tmp_path: Path,
+) -> None:
+    """Test 11: extracted text >64 KiB persists; inline = preview + footer.
+
+    Verifies:
+      - ``content_persisted_to`` is a path under
+        ``<workspace>/logs/tool-outputs/<session_id>/``.
+      - The on-disk file contains the FULL extracted text (not the
+        preview), byte-for-byte.
+      - Inline ``content`` is a 64 KiB (utf-8-byte) preview with a
+        ``[... truncated N bytes; ...]`` footer.
+      - ``truncated is True``.
+    """
+    # 256 repetitions of the ~400-byte paragraph → ~100 KiB extracted,
+    # comfortably past the 64 KiB threshold with headroom for
+    # trafilatura's whitespace trimming.
+    html_body = _large_article_html(paragraph_repeats=256)
+    local_http_server.routes["/big"] = (
+        200,
+        {"Content-Type": "text/html; charset=utf-8"},
+        html_body,
+    )
+    args = FetchUrlArgs(url=f"{local_http_server.base_url}/big")
+    ctx = _ctx_with_workspace(tmp_path)
+
+    result = await fetch_url(args, ctx)
+
+    assert result["status"] == 200
+    assert result["content_type"] == "text"
+    assert result["truncated"] is True
+
+    persisted = result["content_persisted_to"]
+    assert persisted is not None, "expected overflow to persist a full copy"
+    persisted_path = Path(persisted)
+    # Landing directory must be <workspace>/logs/tool-outputs/<session_id>/…
+    # exactly per the spec's overflow persistence contract. The Path
+    # blocking-IO warnings ASYNC240 flags below are fine here — the
+    # writes already happened synchronously inside fetch_url; these
+    # asserts merely inspect the outcome.
+    assert persisted_path.is_file()  # noqa: ASYNC240
+    assert persisted_path.parent.parent == tmp_path / "logs" / "tool-outputs"
+    assert persisted_path.parent.name == str(ctx.session_id)
+
+    on_disk = persisted_path.read_text(encoding="utf-8")  # noqa: ASYNC240
+    # The overflow marker appears many times in the extracted body;
+    # asserting on the count proves the disk file is the FULL text
+    # (all 256 copies), not the preview.
+    assert on_disk.count("OVERFLOW_MARKER_TEST_11") == 256
+    # The inline preview must contain SOME copies of the marker but
+    # strictly fewer than the disk file — that's what "truncated"
+    # means.
+    inline = result["content"]
+    inline_hits = inline.count("OVERFLOW_MARKER_TEST_11")
+    assert 0 < inline_hits < 256
+    # The footer signals truncation with the persisted-to path so the
+    # caller (LLM or workflow) can retrieve the full body.
+    assert "[... truncated" in inline
+    assert persisted in inline

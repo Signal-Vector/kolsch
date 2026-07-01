@@ -1,4 +1,4 @@
-"""Unit tests for the ``fetch_url`` tool — Test 1 in
+"""Unit tests for the ``fetch_url`` tool — Tests 1 and 12 in
 process/qol-fetch-url-tool.md.
 
 The tool file at ``src/cli/_starter_bundle/kolsch/tools/fetch_url.py``
@@ -14,6 +14,12 @@ Test 1 exercises argument-validation surfaces:
   Pydantic ``ValidationError`` at model construction (before the
   coroutine sees anything).
 - ``format`` outside the Literal set → Pydantic ``ValidationError``.
+
+Test 12 exercises the ``NetworkError`` wrapping:
+- ``httpx.ConnectError`` at the AsyncClient layer becomes
+  ``ToolExecutionFailed(error_class="NetworkError")``. Monkeypatched
+  at ``httpx.AsyncClient.request`` so the wrapping is proven on the
+  real error path (patching the tool's own body would not).
 """
 
 from __future__ import annotations
@@ -22,6 +28,7 @@ import asyncio
 import importlib.util
 import sys
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -114,3 +121,40 @@ def test_fetch_url_bad_format_literal_raises_validation_error() -> None:
     """`format="markdown"` is outside the Literal["text","html","bytes_base64"]."""
     with pytest.raises(ValidationError):
         FetchUrlArgs(url="https://example.com", format="markdown")
+
+
+# ---------------------------------------------------------------------------
+# Test 12: httpx.ConnectError → ToolExecutionFailed(error_class="NetworkError")
+# ---------------------------------------------------------------------------
+
+
+def test_fetch_url_network_error_wraps_as_network_error(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test 12: patch ``httpx.AsyncClient.request`` → ConnectError → NetworkError.
+
+    Patching at the AsyncClient layer — not at the tool's body — is
+    the whole point: it proves the ``except httpx.HTTPError`` branch
+    fires on the real error path, and that the tool's wrapping logic
+    isn't a no-op. If a future refactor moves the ``except`` clause
+    or renames the ``error_class`` string, this test flags it.
+    """
+    import httpx
+
+    async def _boom(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> Any:
+        raise httpx.ConnectError("dns fail")  # noqa: TRY003
+
+    monkeypatch.setattr(httpx.AsyncClient, "request", _boom)
+
+    args = FetchUrlArgs(url="https://example.com")
+    with pytest.raises(ToolExecutionFailed) as excinfo:
+        asyncio.run(fetch_url(args, _ctx()))
+
+    assert excinfo.value.detail["tool_name"] == "fetch_url"
+    assert excinfo.value.detail["error_class"] == "NetworkError"
+    # The original ConnectError message must survive the wrapping so
+    # the caller / diagnostics chain can see what actually went wrong.
+    # __cause__ carries the ``from exc`` chain.
+    cause = excinfo.value.__cause__
+    assert isinstance(cause, httpx.ConnectError)
+    assert "dns fail" in str(cause)

@@ -107,10 +107,10 @@ class FetchUrlArgs(BaseModel):
         "format='bytes_base64': the body base64-encoded, for PDFs / "
         "images / anything binary you want to round-trip. "
         "\n\n"
-        'DO NOT use this tool when the target is a JS-heavy SPA that '
+        "DO NOT use this tool when the target is a JS-heavy SPA that "
         'returns an empty shell (<div id="root"></div>) without '
-        'server-side rendering — use browse_url. DO NOT use it as a '
-        'replacement for read_file on local disk. '
+        "server-side rendering — use browse_url. DO NOT use it as a "
+        "replacement for read_file on local disk. "
         "\n\n"
         "Returns {url, final_url, status, content, content_persisted_to, "
         "truncated, content_type}. content is truncated to a 64 KiB "
@@ -155,7 +155,12 @@ async def fetch_url(args: FetchUrlArgs, ctx: ToolContext) -> dict[str, Any]:
             resp = await _request_with_cancel(client, args, ctx)
     except ExchangeCancelled:
         raise
-    except httpx.TimeoutException as exc:
+    except (httpx.TimeoutException, TimeoutError) as exc:
+        # ``httpx.TimeoutException`` covers httpx's own connect / read /
+        # write / pool timeout branch. ``TimeoutError`` (= asyncio's
+        # ``TimeoutError`` in 3.11+) covers the bare-context fallback
+        # in ``_request_with_cancel`` where ``asyncio.wait_for`` is
+        # what races the request. Both funnel to the same ToolTimeout.
         raise ToolTimeout(
             tool_name="fetch_url",
             timeout_seconds=args.request_timeout_seconds,
@@ -173,7 +178,8 @@ async def fetch_url(args: FetchUrlArgs, ctx: ToolContext) -> dict[str, Any]:
     content, content_type = _extract(raw_bytes, ctype_header, args, trafilatura)
 
     persisted_path, inline_content, truncated = _persist_or_inline(
-        content, ctx=ctx,
+        content,
+        ctx=ctx,
     )
 
     return {
@@ -219,7 +225,8 @@ async def _request_with_cancel(
     cancellation = getattr(ctx, "cancellation", None)
     if cancellation is None:
         resp: httpx_mod.Response = await asyncio.wait_for(
-            request_coro, timeout=args.request_timeout_seconds,
+            request_coro,
+            timeout=args.request_timeout_seconds,
         )
         return resp
 
