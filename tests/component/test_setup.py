@@ -1321,6 +1321,7 @@ _PHASE_2_0_DEFAULT_WHATS: tuple[str, ...] = (
     "kolsch/tools/list_files",
     "kolsch/tools/write_file",
     "kolsch/tools/bash",
+    "kolsch/tools/fetch_url",
 )
 
 
