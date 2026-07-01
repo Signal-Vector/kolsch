@@ -115,7 +115,7 @@ before any subsystem boots. The behaviour is gated by
 
 ## Where the starter agent's model comes from
 
-`kolsch setup` picks a model for the starter `kolsch/helper` agent
+`kolsch setup` picks a model for the starter `kolsch/agents/helper` agent
 and writes it to **`platform.yaml`'s `defaults.model`** — not to the
 agent file. The helper's `bundles/kolsch/agents/helper.yaml`
 intentionally has no `model:` field; the kernel's defaults
@@ -159,7 +159,7 @@ KOLSCH_PROVIDER=openrouter \
 KOLSCH_PROVIDER_KEY="$OPENROUTER_API_KEY" \
   kolsch setup --non-interactive --root /tmp/kolsch-ci
 
-kolsch run kolsch/helper --input content="hello" \
+kolsch run kolsch/agents/helper --input content="hello" \
   --root /tmp/kolsch-ci
 ```
 

@@ -217,7 +217,7 @@ Then:
 
 ```bash
 # 3. Talk to it.
-kolsch chat kolsch/helper
+kolsch chat kolsch/agents/helper
 ```
 
 If any step fails, re-read the troubleshooting table, fix the

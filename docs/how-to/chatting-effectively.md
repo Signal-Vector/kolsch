@@ -12,7 +12,7 @@ turning the event log into a conversation in your terminal.
 
 ```bash
 kolsch chat                          # uses the configured starter agent
-kolsch chat kolsch/helper     # explicit agent ref
+kolsch chat kolsch/agents/helper     # explicit agent ref
 kolsch chat --model haiku            # session-scoped model override
 kolsch chat --session ses_abc123     # resume a prior conversation
 ```
@@ -69,14 +69,14 @@ kolsch sessions list
 
 ```
 SESSION_ID                                STARTED           LAST  NAME
-ses_30d67125-35ca-4cdc-aeac-959fafd4c02c  2026-05-30 11:05  4s    chat:kolsch/helper
-ses_11f5475c-afb2-4487-9510-b3ceae629d28  2026-05-29 09:41  19h   chat:kolsch/helper
+ses_30d67125-35ca-4cdc-aeac-959fafd4c02c  2026-05-30 11:05  4s    chat:kolsch/agents/helper
+ses_11f5475c-afb2-4487-9510-b3ceae629d28  2026-05-29 09:41  19h   chat:kolsch/agents/helper
 ```
 
 Then:
 
 ```bash
-kolsch chat kolsch/helper --session ses_30d67125-...
+kolsch chat kolsch/agents/helper --session ses_30d67125-...
 ```
 
 The prior conversation replays into your scrollback (the

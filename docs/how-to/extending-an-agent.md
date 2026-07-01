@@ -38,7 +38,7 @@ materialises into every workspace at
 canonical 2-segment catalog ref:
 
 ```yaml
-extends: kolsch/helper
+extends: kolsch/agents/helper
 ```
 
 That resolves against the workspace's `bundles/kolsch/`
@@ -57,7 +57,7 @@ Any agent in any bundle on disk is a valid parent — the
 resolver looks up the ref against the catalog, not the
 package. <!-- lint-allowed-kolsch-agents: intentional warning callout -->
 `acme/research-base` is as legitimate a parent as
-`kolsch/helper`. The form
+`kolsch/agents/helper`. The form
 `extends: kolsch:agents/<name>.yaml` (using the `kolsch:`
 prefix) does NOT work — that prefix routes through
 `importlib.resources` against the installed kolsch package,
@@ -82,7 +82,7 @@ session JSONLs and observability surfaces show a distinct
 identity.
 
 ```yaml
-extends: kolsch/helper
+extends: kolsch/agents/helper
 name: assistant
 description: A renamed helper.
 ```
@@ -97,7 +97,7 @@ parent's *capability set* (tools, permissions) but a
 distinct operating style.
 
 ```yaml
-extends: kolsch/helper
+extends: kolsch/agents/helper
 name: deploy
 description: A deployment agent with the kolsch helper's tool set.
 prompt: |
@@ -118,7 +118,7 @@ example below.
 
 ## Define your child agent
 
-Worked example: a butler that extends `kolsch/helper` via
+Worked example: a butler that extends `kolsch/agents/helper` via
 Pattern C. Drop this file at
 `bundles/<your-bundle>/agents/butler.yaml`. (If you don't
 have your own bundle yet, the kolsch starter bundle works
@@ -131,7 +131,7 @@ assembly_version: "1"
 agent_id: ag_butler
 name: butler
 description: A personal butler agent inheriting from kolsch helper.
-extends: kolsch/helper
+extends: kolsch/agents/helper
 prompt: |
   {% extends parent %}
   {% block role %}a personal butler — attentive, precise, and proactive{% endblock %}
@@ -141,7 +141,7 @@ prompt: |
 ```
 
 What happens at agent-load: (1) the catalog resolves
-`kolsch/helper` to `bundles/kolsch/agents/helper.yaml`; (2)
+`kolsch/agents/helper` to `bundles/kolsch/agents/helper.yaml`; (2)
 the resolver merges fields per RFC 7386 — `model`, `tools`,
 `permissions`, `context_files` flow from the parent because
 the child doesn't redefine them; (3) the engine renders the
@@ -188,7 +188,7 @@ you should see four inherited tools (`kolsch/tools/read_file`,
 `kolsch/tools/bash` — plus any extras you've added to your own
 `bundles/kolsch/agents/helper.yaml`), two inherited
 `context_files`, the inherited bash-prompt permission, and
-`cfg.extends == "kolsch/helper"`. The leaf's `extends:` is
+`cfg.extends == "kolsch/agents/helper"`. The leaf's `extends:` is
 preserved on the resolved config so the engine's render
 dispatch can route through `render_with_parents`.
 

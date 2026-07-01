@@ -299,7 +299,7 @@ prompt: |
 
 ```yaml
 # bundles/<bundle>/agents/butler.yaml
-extends: kolsch/helper
+extends: kolsch/agents/helper
 name: butler
 description: A personal butler agent inheriting from kolsch helper.
 prompt: |
@@ -335,9 +335,9 @@ permissions, context_files).
 
 ```yaml
 # bundles/<bundle>/agents/deploy.yaml — EXT-CORPUS B4 shape
-extends: kolsch/helper
+extends: kolsch/agents/helper
 name: deploy
-description: A deployment agent inheriting kolsch/helper's tool set.
+description: A deployment agent inheriting kolsch/agents/helper's tool set.
 prompt: |
   You are a deployment agent. Run kubectl and helm commands the
   user asks for. Confirm any destructive operation by repeating
@@ -362,7 +362,7 @@ for migration:
 - **`kolsch/<name>`** — the canonical form. Resolves against
   the **workspace's `bundles/kolsch/` bundle** (the one `kolsch
   setup` materialised from the starter bundle on first run). So
-  in a workspace that ran `kolsch setup`, `extends: kolsch/helper`
+  in a workspace that ran `kolsch setup`, `extends: kolsch/agents/helper`
   resolves to `bundles/kolsch/agents/helper.yaml`.
 - **`workspace:<rel>`** — explicit workspace-root file path
   (e.g. `extends: workspace:bundles/kolsch/agents/helper.yaml`).
@@ -431,7 +431,7 @@ F5). The installed kolsch package ships only `docs/` +
 `AGENTS.md` today; the `kolsch:` prefix routes through
 `importlib.resources`, so any path under `agents/` raises
 `config.parent_agent_not_found`. To extend the kolsch starter
-helper, use the canonical catalog ref `extends: kolsch/helper`
+helper, use the canonical catalog ref `extends: kolsch/agents/helper`
 — that resolves against the workspace's `bundles/kolsch/`
 bundle, which is exactly where the helper agent ships.
 
@@ -448,7 +448,7 @@ prompt: |
   Footer.
 
 # child — EXT-CORPUS K2
-extends: kolsch/helper
+extends: kolsch/agents/helper
 prompt: |
   {% extends parent %}
   {% block body %}{{ super() }} + CHILD_PART{% endblock %}

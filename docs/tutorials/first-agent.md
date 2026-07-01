@@ -99,13 +99,13 @@ Plus the standard skeleton: `bundles/`, `sessions/`, `content/`,
 `logs/`, `data/`, `.platform/`, and an empty `.env`.
 
 The YAML is the source of truth. Kolsch has nothing else to read.
-The rest of the tutorial uses the `kolsch/helper` agent setup
+The rest of the tutorial uses the `kolsch/agents/helper` agent setup
 produced; substitute another ref if you've gone off-script.
 
 ## 2. Run it
 
 ```bash
-uv run kolsch run kolsch/helper --input content="hello, kolsch"
+uv run kolsch run kolsch/agents/helper --input content="hello, kolsch"
 ```
 
 You'll see one line of JSON: the agent's reply.
@@ -138,7 +138,7 @@ uv run kolsch sessions list
 Continue the conversation:
 
 ```bash
-uv run kolsch run kolsch/helper \
+uv run kolsch run kolsch/agents/helper \
   --session ses_<paste-id> \
   --input content="say it again"
 ```
@@ -149,7 +149,7 @@ first. `kolsch sessions events ses_<id>` shows the full timeline.
 ## 5. Stream events
 
 ```bash
-uv run kolsch run kolsch/helper --input content="stream me" --stream
+uv run kolsch run kolsch/agents/helper --input content="stream me" --stream
 ```
 
 Same events as before — printed live as the Agent Engine produces
@@ -173,7 +173,7 @@ index. Losing the DB doesn't lose the truth.
 ```bash
 uv run kolsch server --port 8080 &
 curl -s http://127.0.0.1:8080/sessions | jq .
-curl -s -X POST http://127.0.0.1:8080/agents/kolsch/helper/execute \
+curl -s -X POST http://127.0.0.1:8080/agents/kolsch/agents/helper/execute \
   -H 'content-type: application/json' \
   -d '{"inputs": {"content": "hello from http"}}' | jq .
 ```
@@ -257,7 +257,7 @@ agent-level `model:` overrides `defaults.model` for that agent.
 Run it:
 
 ```bash
-uv run kolsch run kolsch/helper --input content="explain kölsch in one sentence"
+uv run kolsch run kolsch/agents/helper --input content="explain kölsch in one sentence"
 ```
 
 Real answer this time. Same agent, same session machinery, same
@@ -300,7 +300,7 @@ Useful follow-ups:
 REPL — the same Agent Engine turned into a real conversation.
 
 ```bash
-uv run kolsch chat kolsch/helper
+uv run kolsch chat kolsch/agents/helper
 ```
 
 You drop into a prompt. Type a message and hit Enter; tokens arrive
@@ -331,7 +331,7 @@ Try a few things:
   model mid-session; `/tools` shows what the agent can call;
   `/exit` (or Ctrl-D) leaves cleanly.
 - **Resume.** Get a session id from `kolsch sessions list`, then
-  `kolsch chat kolsch/helper --session ses_<id>`. The prior
+  `kolsch chat kolsch/agents/helper --session ses_<id>`. The prior
   conversation replays into the scrollback and you continue where
   you left off.
 
@@ -356,7 +356,7 @@ Run it again with Opus simulated unavailable (swap the API key to
 a bad value temporarily, or pick a rate-limited model):
 
 ```bash
-uv run kolsch run kolsch/helper --input content="say hi"
+uv run kolsch run kolsch/agents/helper --input content="say hi"
 ```
 
 Two new events in `kolsch sessions events`:

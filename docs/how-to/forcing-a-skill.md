@@ -58,7 +58,7 @@ submitting.
 ## In `kolsch run`
 
 ```
-$ kolsch run kolsch/researcher \
+$ kolsch run kolsch/agents/researcher \
     --input content="literature review on transformer attention" \
     --skill kolsch/skills/write-python-test
 ```
