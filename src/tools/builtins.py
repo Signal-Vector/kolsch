@@ -233,6 +233,20 @@ def make_edit(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]
     return edit
 
 
+def make_fetch_url(
+    *, policy: PathPolicy, root: Path,
+) -> Callable[..., Awaitable[Any]]:
+    """Placeholder factory for the fetch_url tool — qol-fetch-url-tool Step 1.
+
+    Filled in during Step 2 of process/qol-fetch-url-tool-build.md.
+    The signature is fixed here so downstream import surfaces
+    (workflow-node companion, future `_workflow_runtime.py` wiring)
+    are stable without a second `uv lock` churn.
+    """
+    msg = "filled in step 2 of qol-fetch-url-tool-build"
+    raise NotImplementedError(msg)
+
+
 def make_bash(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]]:  # noqa: ARG001
     """Build the legacy `bash` builtin — shell tool exempt from path policy.
 

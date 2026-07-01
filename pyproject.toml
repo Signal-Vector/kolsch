@@ -57,7 +57,16 @@ dependencies = [
     # (see e.g. `httpx.HTTPError` catches in
     # `_discover_models`). Must be a runtime dep because `kolsch
     # setup` imports `llm.providers` to register the connectors.
+    # Also consumed by qol-fetch-url-tool — the light Tier 1 of the
+    # two-tier web-fetch architecture (async HTTP request); the heavy
+    # Tier 2 (Playwright / Chromium for JS rendering) stays behind
+    # the `kolsch[browse]` extra — see process/qol-browse-url-tool.md.
     "httpx>=0.27,<1",
+    # qol-fetch-url-tool — extracts main-content text from HTML.
+    # Combined with httpx keeps the Tier 1 disk footprint <5 MB, so
+    # kept as an unconditional runtime dep (the whole point of Tier 1
+    # is that it ships by default).
+    "trafilatura>=1.12",
     # LLM framework adapter — imported at module load by the same
     # provider connectors (for `crewai.LLM` construction in
     # `build_llm`) and by `src/engine/crewai_framework.py`, which
