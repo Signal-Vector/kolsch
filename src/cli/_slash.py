@@ -663,43 +663,71 @@ async def _handler_perm(arg_text: str, ctx: SlashContext) -> ControlSignal:
     if tokens is None:
         ctx.stdout.write(_PERM_USAGE)
         return ControlSignal.CONTINUE
-    tool, pattern = tokens
+    tool, pattern, from_ref = tokens
     if not _validate_perm_tool(tool, ctx=ctx):
         return ControlSignal.CONTINUE
     if not _validate_perm_pattern(pattern, ctx=ctx):
         return ControlSignal.CONTINUE
+    if from_ref is not None and not _validate_perm_from(from_ref, ctx=ctx):
+        return ControlSignal.CONTINUE
 
     yaml_path = ctx.state.runtime.root / "platform.yaml"
     if verb == "remove":
-        await _perm_remove(ctx, tool=tool, pattern=pattern, yaml_path=yaml_path)
+        await _perm_remove(
+            ctx,
+            tool=tool,
+            pattern=pattern,
+            from_ref=from_ref,
+            yaml_path=yaml_path,
+        )
     else:
         await _perm_upsert(
             ctx,
             verb=verb,
             tool=tool,
             pattern=pattern,
+            from_ref=from_ref,
             yaml_path=yaml_path,
         )
     return ControlSignal.CONTINUE
 
 
 _PERM_USAGE = (
-    "/perm <verb> <tool> <pattern>   verbs: allow | deny | prompt | remove\n"
-    "/perm list                       print every current rule\n"
+    "/perm <verb> <tool> <pattern> [from:<ref>]   "
+    "verbs: allow | deny | prompt | remove\n"
+    "/perm list                                    print every current rule\n"
     '  example: /perm allow kolsch/bash "find *"\n'
+    "  example: /perm allow kolsch/bash * from:kolsch/agents/triage\n"
 )
 
 
-def _split_perm_args(text: str) -> tuple[str, str] | None:
-    """Split a ``<tool> <pattern>`` arg string into two non-empty tokens.
+def _split_perm_args(text: str) -> tuple[str, str, str | None] | None:
+    """Split ``<tool> <pattern> [from:<ref>]`` into a triple.
 
     Supports double-quoted patterns so multi-word globs like
-    ``"find * -name foo"`` survive: ``/perm allow kolsch/bash "find * -name foo"``.
-    Returns ``None`` when the input doesn't parse as two tokens.
+    ``"find * -name foo"`` survive:
+    ``/perm allow kolsch/bash "find * -name foo"``.
+    An optional trailing ``from:<ref>`` token scopes the rule to
+    a caller-chain frame (see `Rule.from_`); when omitted the
+    third element is `None`.
+
+    Returns `None` when the input doesn't parse as two-or-three
+    tokens.
     """
     text = text.strip()
     if not text:
         return None
+    # `from:<ref>` is always the trailing token, unquoted (refs
+    # contain no whitespace); strip it first so the remaining split
+    # doesn't have to reason about it.
+    from_ref: str | None = None
+    if " from:" in text:
+        head, _, from_token = text.rpartition(" from:")
+        from_ref = from_token.strip()
+        if not from_ref:
+            return None
+        text = head.strip()
+
     head, _, tail = text.partition(" ")
     if not tail:
         return None
@@ -707,8 +735,8 @@ def _split_perm_args(text: str) -> tuple[str, str] | None:
     if tail.startswith('"'):
         if not tail.endswith('"') or len(tail) < 2:
             return None
-        return head, tail[1:-1]
-    return head, tail
+        return head, tail[1:-1], from_ref
+    return head, tail, from_ref
 
 
 def _validate_perm_tool(tool: str, *, ctx: SlashContext) -> bool:
@@ -795,6 +823,33 @@ def _catalog_tool_refs(ctx: SlashContext) -> set[str] | None:
     }
 
 
+def _validate_perm_from(from_ref: str, *, ctx: SlashContext) -> bool:
+    """Validate `from:<ref>` for `/perm`, mirroring the provider.
+
+    Three-segment shape, second segment `agents` or `workflows`.
+    Catalog existence isn't checked here — glob patterns are
+    permitted (e.g. `kolsch/agents/*`) and the authz provider
+    re-validates on insert. Failures surface as a friendly
+    slash-line error (no exception).
+    """
+    parts = from_ref.split("/")
+    three_seg = 3
+    if len(parts) != three_seg or not all(parts):
+        ctx.stdout.write(
+            f"/perm: from-ref {from_ref!r} must be a 3-segment ref "
+            "like `kolsch/agents/triage` or `kolsch/workflows/pipeline`.\n",
+        )
+        return False
+    _bundle, segment, _name = parts
+    if segment not in ("agents", "workflows"):
+        ctx.stdout.write(
+            f"/perm: from-ref {from_ref!r} has middle segment "
+            f"{segment!r}; expected `agents` or `workflows`.\n",
+        )
+        return False
+    return True
+
+
 def _validate_perm_pattern(pattern: str, *, ctx: SlashContext) -> bool:
     """Reject regex characters in the glob pattern.
 
@@ -875,9 +930,13 @@ async def _perm_list(ctx: SlashContext) -> None:
     ctx.stdout.write("rules (first-match-wins, top to bottom):\n")
     for index, rule in enumerate(rules):
         if rule.who is None:
+            from_str = (
+                f"  from={rule.from_!r}" if rule.from_ is not None else ""
+            )
             ctx.stdout.write(
                 f"  {index:>2}  what={rule.what!r:<22}  "
-                f"pattern={rule.pattern!r:<14}  effect={rule.effect}\n",
+                f"pattern={rule.pattern!r:<14}"
+                f"{from_str}  effect={rule.effect}\n",
             )
         else:
             ctx.stdout.write(
@@ -886,20 +945,24 @@ async def _perm_list(ctx: SlashContext) -> None:
             )
 
 
-async def _perm_upsert(
+async def _perm_upsert(  # noqa: PLR0913
     ctx: SlashContext,
     *,
     verb: str,
     tool: str,
     pattern: str,
+    from_ref: str | None,
     yaml_path: Any,
 ) -> None:
     """Insert/update an allow/deny/prompt rule.
 
     Smart insertion: drops any prior new-shape rule with the same
-    `(what, pattern)` (replacing intent) then inserts above the
-    default-deny tail. The output names the final position so the
-    user can immediately verify where it landed.
+    `(what, pattern, from_)` (replacing intent) then inserts above
+    the default-deny tail. Rules with the same `(what, pattern)`
+    but different `from_` are distinct — a `from:kolsch/agents/X`
+    rule doesn't shadow the unscoped variant. The output names the
+    final position so the user can immediately verify where it
+    landed.
     """
     from cli.permissions import _write_back  # noqa: PLC0415
     from providers import RuleBasedAuthorizationProvider, Rule  # noqa: PLC0415
@@ -911,14 +974,13 @@ async def _perm_upsert(
         return
 
     effect = _VERB_TO_EFFECT[verb]
-    # Remove any existing new-shape rule with the same
-    # (what, pattern) so the user's intent isn't shadowed.
     removed_index = await _remove_matching_new_rule(
         authz,
         what=tool,
         pattern=pattern,
+        from_=from_ref,
     )
-    new_rule = Rule(what=tool, pattern=pattern, effect=effect)
+    new_rule = Rule(what=tool, pattern=pattern, from_=from_ref, effect=effect)
     inserted = await authz.add_rule(new_rule)
     _write_back(yaml_path, await authz.list_rules())
     position = await _position_of(authz, inserted.id)
@@ -927,9 +989,10 @@ async def _perm_upsert(
         ctx.stdout.write(
             f"/perm {verb}: replaced previous rule at position {removed_index}\n",
         )
+    from_str = f"  from={from_ref!r}" if from_ref is not None else ""
     ctx.stdout.write(
-        f"/perm {verb}: added rule  what={tool!r}  pattern={pattern!r}  "
-        f"effect={effect}  ({landed}, position {position})\n",
+        f"/perm {verb}: added rule  what={tool!r}  pattern={pattern!r}"
+        f"{from_str}  effect={effect}  ({landed}, position {position})\n",
     )
 
 
@@ -938,9 +1001,10 @@ async def _perm_remove(
     *,
     tool: str,
     pattern: str,
+    from_ref: str | None,
     yaml_path: Any,
 ) -> None:
-    """Drop the new-shape rule matching `(tool, pattern)`.
+    """Drop the new-shape rule matching `(tool, pattern, from_)`.
 
     Legacy rules are intentionally not droppable here — they have
     a stable rule id the user can use via
@@ -957,10 +1021,14 @@ async def _perm_remove(
     if not isinstance(authz, RuleBasedAuthorizationProvider):
         ctx.stdout.write("/perm: authz variant doesn't support editing rules.\n")
         return
-    removed = await _remove_matching_new_rule(authz, what=tool, pattern=pattern)
+    removed = await _remove_matching_new_rule(
+        authz, what=tool, pattern=pattern, from_=from_ref,
+    )
     if removed is None:
+        from_str = f" from={from_ref!r}" if from_ref is not None else ""
         ctx.stdout.write(
-            f"/perm remove: no rule with what={tool!r} pattern={pattern!r} "
+            f"/perm remove: no rule with what={tool!r} pattern={pattern!r}"
+            f"{from_str} "
             "(legacy rules: use `kolsch permissions remove <id>`)\n",
         )
         return
@@ -976,20 +1044,27 @@ async def _remove_matching_new_rule(
     *,
     what: str,
     pattern: str,
+    from_: str | None,
 ) -> int | None:
-    """Drop the first new-shape rule whose `(what, pattern)` matches.
+    """Drop the first new-shape rule whose `(what, pattern, from_)` matches.
 
     Returns the original index of the removed rule (so the caller
     can report it) or `None` when nothing matched. Walks the rule
     list once; matching is exact on the strings — globs aren't
     expanded since this operates on the rule itself, not an
-    invocation.
+    invocation. A rule with the same `(what, pattern)` but a
+    different `from_` is NOT matched — different scopes are
+    genuinely different rules.
     """
     rules = await authz.list_rules()
     for index, rule in enumerate(rules):
         if rule.who is not None:
             continue  # never touch legacy rules from /perm
-        if rule.what == what and rule.pattern == pattern:
+        if (
+            rule.what == what
+            and rule.pattern == pattern
+            and rule.from_ == from_
+        ):
             await authz.remove_rule(rule.id)
             return index
     return None

@@ -247,6 +247,7 @@ class ApprovalModal:
         rule_id: str | None,
         action: str,
         target: str | None,
+        caller_chain: tuple[str, ...] = (),
     ) -> PromptCallbackReturn:
         """Run the modal; return the authz callback shape.
 
@@ -256,15 +257,26 @@ class ApprovalModal:
         - `[y]` → `ALLOW` (single value; no rule).
         - `[n]` → `DENY` (single value; no rule).
         - `[a]` (with pattern P) →
-          `(ALLOW, Rule(what=<tool_ref>, pattern=P, effect=ALLOW))`.
+          `(ALLOW, Rule(what=<tool_ref>, pattern=P, from_=<F>, effect=ALLOW))`.
         - `[d]` (with pattern P) →
-          `(DENY, Rule(what=<tool_ref>, pattern=P, effect=DENY))`.
+          `(DENY, Rule(what=<tool_ref>, pattern=P, from_=<F>, effect=DENY))`.
+
+        `caller_chain` is the proximate-first tuple of caller frames
+        the authz provider matched against. Persisted `[a]`/`[d]`
+        rules default `from_ = caller_chain[0]` — so approving a
+        tool during agent X's execution scopes the rule to
+        `kolsch/agents/X` rather than granting the effect to every
+        future caller. The pattern-edit step surfaces the default
+        `from:` glob and lets the user broaden it (e.g. to `*`) or
+        leave it unset via an empty input.
 
         When `_tool_ref_lookup` is bound (chat lifecycle wires it),
-        the persisted rule uses the new `{what, pattern, effect}`
-        schema with `what` as the qualified tool ref. When no
-        lookup is bound (tests, unknown action), it falls back to
-        the legacy `{who, what, effect}` regex shape.
+        the persisted rule uses the new
+        `{what, pattern, from, effect}` schema with `what` as the
+        qualified tool ref. When no lookup is bound (tests, unknown
+        action), it falls back to the legacy `{who, what, effect}`
+        regex shape (which does NOT support `from:`; broadening to
+        all callers is the only option there).
 
         Esc on the pattern edit abandons the rule write — the
         original `[y]`/`[n]` semantics apply for the current call
@@ -291,7 +303,12 @@ class ApprovalModal:
         # strips the `tool.` head). The fall-through keeps older
         # programmatic registrations rendering correctly.
         tool_name = action.rsplit("/", 1)[-1].removeprefix("tool.")
-        self._render_panel(tool=tool_name, target=target, rule_id=rule_id)
+        self._render_panel(
+            tool=tool_name,
+            target=target,
+            rule_id=rule_id,
+            caller_chain=caller_chain,
+        )
         choice = await self._collect_choice()
 
         if choice == "y":
@@ -302,6 +319,7 @@ class ApprovalModal:
 
         # [a] / [d] — show pattern edit step.
         suggested = suggest_pattern(tool=tool_name, target=target)
+        default_from = caller_chain[0] if caller_chain else None
         pattern = await self._collect_pattern_edit(
             tool_name=tool_name,
             suggested=suggested,
@@ -313,6 +331,14 @@ class ApprovalModal:
                 return AuthzEffect.ALLOW
             self._flip_cancel_for_deny()
             return AuthzEffect.DENY
+
+        # Scope prompt — Enter accepts the proximate caller frame,
+        # an empty submission after clearing broadens to all callers.
+        # Skipped when no chain is available (bootstrap paths /
+        # tests without a chain).
+        from_ref = default_from
+        if default_from is not None:
+            from_ref = await self._collect_from_edit(default_from=default_from)
 
         effect = AuthzEffect.ALLOW if choice == "a" else AuthzEffect.DENY
         # For tool actions the 3-seg form (`kolsch/tools/bash`) IS
@@ -335,6 +361,7 @@ class ApprovalModal:
             rule = Rule(
                 what=qualified_ref,
                 pattern=pattern,
+                from_=from_ref,
                 effect=effect_str,
             )
         else:
@@ -343,7 +370,9 @@ class ApprovalModal:
             # or a test path with no catalog). `pattern` here
             # already looks like a glob (suggest_pattern always
             # emits globs), so wrap it as a permissive regex for
-            # the legacy matcher: literal-prefixed plus `.*`.
+            # the legacy matcher: literal-prefixed plus `.*`. The
+            # legacy shape doesn't support `from:` scoping; approved
+            # rules on that path always fire for every caller.
             rule = Rule(
                 id="",
                 who=".*",
@@ -407,23 +436,29 @@ class ApprovalModal:
         tool: str,
         target: str | None,
         rule_id: str | None,
+        caller_chain: tuple[str, ...] = (),
     ) -> None:
         """Render the permission prompt as a sidebar capsule.
 
-        Layout: source bar, signature line, blank, choice rows,
-        blank, cursor line.
+        Layout: source bar, signature line, optional caller line
+        (surfaces the proximate frame the `[a]/[d]` rule will scope
+        to), blank, choice rows, blank, cursor line.
         """
         from cli._renderer import _capsule, _now_hhmmss  # noqa: PLC0415
 
         sig = f"{tool}({target})" if target is not None else f"{tool}()"
         suffix = f"  —  matched {rule_id}" if rule_id is not None else ""
-        body_lines: list[str] = [
-            f"{sig}{suffix}",
-            "",
-            "[y] once    [a] always allow this",
-            "[n] deny once    [d] always deny",
-            "",
-        ]
+        body_lines: list[str] = [f"{sig}{suffix}"]
+        if caller_chain:
+            body_lines.append(f"caller: {caller_chain[0]}")
+        body_lines.extend(
+            [
+                "",
+                "[y] once    [a] always allow this",
+                "[n] deny once    [d] always deny",
+                "",
+            ]
+        )
         _capsule(
             self._console,
             source="permission",
@@ -476,9 +511,9 @@ class ApprovalModal:
             ),
         )
         self._console.print(
-            Text(f"  who:  tool.{tool_name}", style="dim"),
+            Text(f"  tool: tool.{tool_name}", style="dim"),
         )
-        raw = await self._input_fn(f"  what: [{suggested}] ")
+        raw = await self._input_fn(f"  pattern: [{suggested}] ")
         if not raw.strip():
             # Empty submission accepts the suggested pattern. An
             # explicit Esc through prompt_toolkit raises a
@@ -487,6 +522,42 @@ class ApprovalModal:
             # and the input_fn raising as abandon.
             return suggested
         return raw.strip()
+
+    async def _collect_from_edit(self, *, default_from: str) -> str | None:
+        """Prompt the user for the rule's `from:` caller-chain scope.
+
+        `default_from` is the proximate caller-chain frame (the
+        agent or workflow that fired the tool call). Three inputs:
+
+        - Enter (empty submission) — accept `default_from`; the
+          rule fires only when the same caller invokes the tool
+          again.
+        - `*` — broaden to all callers. `Rule.from_` becomes `None`,
+          so the rule fires regardless of caller.
+        - Any other string — used verbatim as `from_`. Must be a
+          3-seg agent/workflow ref (glob or literal); the authz
+          provider validates it on insert.
+
+        Returns the string to put on `Rule.from_`, or `None` for the
+        broaden case.
+        """
+        self._console.print(
+            Text(
+                "Scope this rule to the current caller? "
+                "(Enter accepts; `*` broadens to all callers)",
+                style="dim",
+            ),
+        )
+        raw = await self._input_fn(f"  from: [{default_from}] ")
+        stripped = raw.strip()
+        if not stripped:
+            # Empty / whitespace-only submission — accept default.
+            return default_from
+        if stripped == "*":
+            # Explicit broaden sentinel — `*` is not a valid `from:`
+            # glob (fails 3-seg validation) so it's unambiguous.
+            return None
+        return stripped
 
 
 # ---------------------------------------------------------------------------

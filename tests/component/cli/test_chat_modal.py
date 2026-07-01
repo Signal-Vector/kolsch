@@ -193,6 +193,84 @@ async def test_modal_a_with_lookup_writes_new_shape() -> None:
     assert rule.effect == "allow"
 
 
+async def test_modal_a_scopes_from_to_proximate_caller_by_default() -> None:
+    """When `caller_chain` is non-empty the modal defaults `from_`
+    to the proximate frame (`caller_chain[0]`), so approved rules
+    scope to the current agent/workflow instead of granting the
+    effect to every future caller. Bare Enter on the `from:` prompt
+    accepts the default.
+    """
+    out = _io.StringIO()
+    # Inputs: [a] choice, "" accept pattern, "" accept default from.
+    modal = ApprovalModal(
+        stdout=out,
+        input_fn=_scripted_input(["a", "", ""]),
+        tool_ref_lookup=lambda action: (
+            "kolsch/tools/bash" if action == "tool.bash" else None
+        ),
+    )
+    result = await modal(
+        rule_id="rl_prompt",
+        action="tool.bash",
+        target="rg foo",
+        caller_chain=("kolsch/agents/triage",),
+    )
+    assert isinstance(result, tuple)
+    _, rule = result
+    assert rule.from_ == "kolsch/agents/triage"
+    assert rule.what == "kolsch/tools/bash"
+
+
+async def test_modal_a_star_broadens_scope_to_all_callers() -> None:
+    """Typing `*` at the scope prompt clears `from_` (broadens the
+    rule so it fires for every caller). `*` is not a valid `from:`
+    glob (3-seg validation would reject it), so treating it as an
+    unambiguous broaden sentinel is safe.
+    """
+    out = _io.StringIO()
+    modal = ApprovalModal(
+        stdout=out,
+        input_fn=_scripted_input(["a", "", "*"]),
+        tool_ref_lookup=lambda action: (
+            "kolsch/tools/bash" if action == "tool.bash" else None
+        ),
+    )
+    result = await modal(
+        rule_id="rl_prompt",
+        action="tool.bash",
+        target="rg foo",
+        caller_chain=("kolsch/agents/triage",),
+    )
+    assert isinstance(result, tuple)
+    _, rule = result
+    assert rule.from_ is None
+
+
+async def test_modal_without_caller_chain_leaves_from_none() -> None:
+    """Bootstrap / test paths that don't have a caller_chain skip
+    the scope prompt entirely; approved rules land unscoped so
+    behavior matches the pre-workflow modal for non-workflow
+    contexts.
+    """
+    out = _io.StringIO()
+    # Only two inputs — no scope prompt when caller_chain is empty.
+    modal = ApprovalModal(
+        stdout=out,
+        input_fn=_scripted_input(["a", ""]),
+        tool_ref_lookup=lambda action: (
+            "kolsch/tools/bash" if action == "tool.bash" else None
+        ),
+    )
+    result = await modal(
+        rule_id="rl_prompt",
+        action="tool.bash",
+        target="rg foo",
+    )
+    assert isinstance(result, tuple)
+    _, rule = result
+    assert rule.from_ is None
+
+
 async def test_modal_a_with_edited_pattern_uses_user_value() -> None:
     """User can override the suggested pattern by typing a new one.
 

@@ -115,11 +115,11 @@ qualified and `<pattern>` is a glob; bad input prints a one-line
 error and leaves the rule list untouched.
 
 ```
-/perm allow  <tool> <pattern>    permit matching invocations
-/perm deny   <tool> <pattern>    block matching invocations
-/perm prompt <tool> <pattern>    ask each time an invocation matches
-/perm remove <tool> <pattern>    drop the new-shape rule with this (tool, pattern)
-/perm list                       print every current rule in evaluation order
+/perm allow  <tool> <pattern> [from:<ref>]    permit matching invocations
+/perm deny   <tool> <pattern> [from:<ref>]    block matching invocations
+/perm prompt <tool> <pattern> [from:<ref>]    ask each time an invocation matches
+/perm remove <tool> <pattern> [from:<ref>]    drop the new-shape rule with this (tool, pattern, from)
+/perm list                                    print every current rule in evaluation order
 ```
 
 Quote patterns with spaces:
@@ -129,6 +129,16 @@ Quote patterns with spaces:
 /perm allow kolsch/tools/bash "rg *"
 /perm deny kolsch/tools/bash "rm -rf *"
 /perm prompt kolsch/tools/write_file /etc/*
+```
+
+Add `from:<ref>` to scope a rule to a specific agent or workflow
+frame (see
+["Scoping rules to a specific agent or workflow"](#scoping-rules-to-a-specific-agent-or-workflow)
+below):
+
+```
+/perm allow kolsch/tools/bash "rg *" from:kolsch/agents/triage
+/perm prompt kolsch/tools/bash "*" from:kolsch/workflows/security
 ```
 
 After an `allow`/`deny`/`prompt`, the chat prints the position the
@@ -177,23 +187,65 @@ chat:
 ```bash
 kolsch permissions list                    # print every rule (legacy entries marked)
 kolsch permissions show <rule_id>          # one rule's details
-kolsch permissions add --who ".*" --what "kolsch/tools/bash" --effect allow
+kolsch permissions add --what "kolsch/tools/bash" --pattern "*" --effect allow
+kolsch permissions add --what "kolsch/tools/bash" --pattern "find *" \
+    --from "kolsch/agents/triage" --effect allow
 kolsch permissions remove <rule_id>        # by stable id
 ```
 
-The CLI surface uses the legacy flag names (`--who`, `--what`) for
-compatibility with existing scripts. Note that supplying `--who`
-forces the on-disk rule into the legacy `{id, who, what, effect}`
-shape rather than the new `{what, pattern, effect}` — the
-serializer writes the legacy shape whenever `who is not None`. To
-write a new-shape rule from the CLI, hand-edit `platform.yaml` or
-use the `/perm` slash command in chat. The full transition to a
-`--pattern` flag is a planned follow-up.
+`--what` is the qualified tool ref (or `agent.execute.*` /
+`*`), `--pattern` is the glob matched against the target (defaults
+to `*`), and `--effect` is one of `allow`/`deny`/`prompt`. The
+optional `--from <ref>` scopes the rule to invocations whose
+caller-chain contains a matching 3-segment agent/workflow ref (see
+["Scoping rules to a specific agent or workflow"](#scoping-rules-to-a-specific-agent-or-workflow)
+below).
 
 The default-deny tail is **removal-protected**:
 `kolsch permissions remove rl_default_deny` raises
 `authz.protected_rule`. Direct edits to `platform.yaml` removing
 the tail are rejected at bootstrap.
+
+---
+
+## Scoping rules to a specific agent or workflow
+
+By default, a rule fires for every caller — every agent, every
+workflow. That's usually fine for platform-wide defaults, but
+sometimes you want a narrower scope: "let `triage` run `bash rg *`,
+but no other agent." The optional `from:` field on a rule is the
+knob.
+
+```yaml
+# Only fires when the caller-chain contains `kolsch/agents/triage`.
+- { what: kolsch/tools/bash, pattern: "rg *", from: "kolsch/agents/triage", effect: allow }
+
+# Fires for any agent in the `security` workflow.
+- { what: kolsch/tools/bash, pattern: "*", from: "kolsch/workflows/security", effect: prompt }
+
+# Broad — no `from:`, fires regardless of caller.
+- { what: kolsch/tools/bash, pattern: "ls *", effect: allow }
+```
+
+Three rules to remember:
+
+1. **`from:` is a 3-segment glob.** Shape must be
+   `<bundle>/<agents|workflows>/<name>`; `<name>` can be a literal
+   or a glob (`kolsch/agents/*`). Anything else raises a parse-time
+   error.
+2. **Caller-chain is proximate-first.** For a workflow `W`
+   invoking agent `A` invoking `tool.bash`, the chain is
+   `(kolsch/agents/A, kolsch/workflows/W)`. A rule with
+   `from: kolsch/workflows/W` fires because the workflow appears in
+   the chain (any frame matches — the check is transitive).
+3. **Empty chain fails closed.** A rule with `from:` set will NOT
+   fire for engine-bootstrap invocations that never entered an
+   agent/workflow frame.
+
+The chat modal auto-populates `from:` from the proximate frame
+when you press `[a]` or `[d]` — so approving a tool during agent
+`X`'s run scopes the rule to `X` by default. Type `*` at the
+`from: [<default>]` prompt to broaden.
 
 ---
 
@@ -434,9 +486,6 @@ kolsch sessions events ses_<id> --type tool.failed --json | \
 
 ## What this does NOT cover
 
-- **Per-agent rule scopes via `who:`.** v1 evaluates platform
-  rules without per-principal scoping; agent / bundle layers
-  handle that via the four-level stack.
 - **Time-limited rules** ("allow this for 5 minutes"). Deferred.
 - **Real sandboxing for `bash`.** The native sandbox runs `bash`
   in-process; the path-access policy does not constrain it. Real

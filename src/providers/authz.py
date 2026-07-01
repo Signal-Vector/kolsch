@@ -319,8 +319,12 @@ if TYPE_CHECKING:
     class PromptCallback(Protocol):
         """The hook chat surfaces inject to resolve `prompt` effects.
 
-        Receives the matched rule's id, the action, and the optional
-        target (resolved path / command string). Returns either:
+        Receives the matched rule's id, the action, the optional
+        target (resolved path / command string), and the caller_chain
+        (proximate-first tuple of caller frames — the modal defaults
+        newly-persisted rules' `from:` to `caller_chain[0]` so
+        approved rules scope to the current agent by default).
+        Returns either:
 
         - A single [`AuthzEffect`][providers.authz.AuthzEffect]
           (`ALLOW` or `DENY`) — the resolution for this single call;
@@ -337,6 +341,7 @@ if TYPE_CHECKING:
             rule_id: str | None,
             action: str,
             target: str | None,
+            caller_chain: tuple[str, ...] = (),
         ) -> AuthzEffect | tuple[AuthzEffect, Rule]:
             """Resolve a `prompt` rule and optionally append a new rule."""
 
@@ -909,6 +914,7 @@ class RuleBasedAuthorizationProvider:
                 callback=effective_callback,
                 action=action,
                 target=target,
+                caller_chain=caller_chain,
             )
 
         # Default deny.
@@ -971,6 +977,7 @@ class RuleBasedAuthorizationProvider:
                     target=target,
                     callback=callback,
                     layer=layer,
+                    caller_chain=caller_chain,
                 )
             return AuthorizationResult(
                 allowed=effect is AuthzEffect.ALLOW,
@@ -1050,7 +1057,11 @@ class RuleBasedAuthorizationProvider:
             f"effect={compiled.effect!r} (who_chain={layer})"
         )
 
-    async def _resolve_prompt(
+    # PLR0913 — same rationale as `_match_against_rules`: the full
+    # decision context (compiled rule, action, target, callback,
+    # layer, caller_chain) is coherent. Splitting would just move
+    # the fields to an intermediate object.
+    async def _resolve_prompt(  # noqa: PLR0913
         self,
         *,
         compiled: _CompiledRule,
@@ -1058,6 +1069,7 @@ class RuleBasedAuthorizationProvider:
         target: str | None,
         callback: PromptCallback | None,
         layer: str = "platform",
+        caller_chain: tuple[str, ...] = (),
     ) -> AuthorizationResult:
         # When the per-call callback is absent, fall back to the
         # chat-injected registered callback. This keeps the tool
@@ -1083,6 +1095,7 @@ class RuleBasedAuthorizationProvider:
             rule_id=compiled.raw.id,
             action=action,
             target=target,
+            caller_chain=caller_chain,
         )
         if isinstance(answer, tuple):
             resolved_effect, persist_rule = answer
@@ -1130,6 +1143,7 @@ class RuleBasedAuthorizationProvider:
         callback: PromptCallback,
         action: str,
         target: str | None,
+        caller_chain: tuple[str, ...] = (),
     ) -> AuthorizationResult:
         """Resolve the no-rule path via the registered prompt callback.
 
@@ -1142,7 +1156,12 @@ class RuleBasedAuthorizationProvider:
         fires so the chat's `cli.permissions._write_back` persists it
         to `platform.yaml`.
         """
-        answer = await callback(rule_id=None, action=action, target=target)
+        answer = await callback(
+            rule_id=None,
+            action=action,
+            target=target,
+            caller_chain=caller_chain,
+        )
         if isinstance(answer, tuple):
             resolved_effect, persist_rule = answer
             self._insert_at_tail(persist_rule)

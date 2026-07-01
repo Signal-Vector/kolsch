@@ -58,7 +58,7 @@ async def test_check_returns_deny_when_platform_denies(
     )
     token = permissions.bind(binding)
     try:
-        effect = await permissions.check("agent.ag_helper", "kolsch/tools/bash")
+        effect = await permissions.check("kolsch/tools/bash")
     finally:
         permissions.reset(token)
     assert effect is AuthzEffect.DENY
@@ -79,7 +79,7 @@ async def test_check_returns_allow_when_agent_rule_overrides_platform(
     )
     token = permissions.bind(binding)
     try:
-        effect = await permissions.check("agent.ag_helper", "kolsch/tools/bash")
+        effect = await permissions.check("kolsch/tools/bash")
     finally:
         permissions.reset(token)
     assert effect is AuthzEffect.ALLOW
@@ -102,7 +102,7 @@ async def test_require_raises_authz_denied_on_deny(
     token = permissions.bind(binding)
     try:
         with pytest.raises(AuthzDenied) as excinfo:
-            await permissions.require("agent.ag_helper", "kolsch/tools/bash")
+            await permissions.require("kolsch/tools/bash")
     finally:
         permissions.reset(token)
     err = excinfo.value
@@ -127,7 +127,7 @@ async def test_require_returns_none_on_allow() -> None:
     )
     token = permissions.bind(binding)
     try:
-        result = await permissions.require("agent.ag_helper", "kolsch/tools/bash")
+        result = await permissions.require("kolsch/tools/bash")
     finally:
         permissions.reset(token)
     assert result is None
@@ -144,7 +144,7 @@ async def test_check_outside_binding_raises_permissions_no_context() -> None:
     (Fatal). Catches the test-fixture mistake of importing the
     tool directly."""
     with pytest.raises(ToolPermissionsNoContext) as excinfo:
-        await permissions.check("agent.ag_helper", "kolsch/tools/bash")
+        await permissions.check("kolsch/tools/bash")
     assert excinfo.value.code == "tool.permissions_no_context"
 
 
@@ -152,7 +152,7 @@ async def test_check_outside_binding_raises_permissions_no_context() -> None:
 async def test_require_outside_binding_raises_permissions_no_context() -> None:
     """Symmetric to ``check`` — same error envelope."""
     with pytest.raises(ToolPermissionsNoContext):
-        await permissions.require("agent.ag_helper", "kolsch/tools/bash")
+        await permissions.require("kolsch/tools/bash")
 
 
 # ---------------------------------------------------------------------------
@@ -273,9 +273,7 @@ async def test_dispatcher_binds_permissions_around_tool_function() -> None:
     captured: dict[str, object] = {}
 
     async def _body(_args: _Args, _ctx: ToolContext) -> str:
-        captured["pre_effect"] = await permissions.check(
-            "agent.x", "workspace.git.write"
-        )
+        captured["pre_effect"] = await permissions.check("workspace.git.write")
         captured["pre_binding"] = permissions.current_binding()
         return "ok"
 
@@ -332,7 +330,7 @@ async def test_dispatcher_binding_includes_bundle_layer() -> None:
 
     async def _body(_args: _Args, _ctx: ToolContext) -> str:
         nonlocal inner_ok
-        await permissions.require("agent.x", "workspace.git.commit")
+        await permissions.require("workspace.git.commit")
         inner_ok = True
         return "ok"
 

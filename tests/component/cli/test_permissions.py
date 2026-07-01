@@ -68,8 +68,9 @@ def _args(root: Path, **kw: object) -> argparse.Namespace:
     base = {
         "root": root,
         "permissions_command": kw.get("permissions_command", "list"),
-        "who": kw.get("who"),
         "what": kw.get("what"),
+        "pattern": kw.get("pattern", "*"),
+        "from_": kw.get("from_"),
         "effect": kw.get("effect"),
         "before": kw.get("before"),
         "after": kw.get("after"),
@@ -147,8 +148,8 @@ async def test_permissions_add_writes_back_atomically(tmp_path: Path) -> None:
         _args(
             root,
             permissions_command="add",
-            who=".*",
             what=r"tool\.bash",
+            pattern="*",
             effect="allow",
         ),
         out=out,
@@ -166,6 +167,43 @@ async def test_permissions_add_writes_back_atomically(tmp_path: Path) -> None:
     )
 
 
+async def test_permissions_add_writes_new_shape_with_from_field(
+    tmp_path: Path,
+) -> None:
+    """`--from <ref>` scopes the persisted rule to a specific
+    caller-chain frame. Verify the on-disk YAML carries the `from`
+    key and that omitting `--from` leaves it absent.
+    """
+    root = _workspace(tmp_path)
+    out, err = io.StringIO(), io.StringIO()
+    # Glob pattern in the ref skips the catalog-existence check;
+    # this test doesn't ship a `triage` agent fixture. The 3-seg
+    # shape + `agents` middle segment are still validated.
+    rc = await cmd_permissions(
+        _args(
+            root,
+            permissions_command="add",
+            what="kolsch/tools/bash",
+            pattern="rg *",
+            from_="kolsch/agents/*",
+            effect="allow",
+        ),
+        out=out,
+        err=err,
+    )
+    assert rc == 0
+    payload = yaml.safe_load((root / "platform.yaml").read_text())
+    rules = payload["authorization"]["config"]["rules"]
+    scoped = [r for r in rules if r.get("what") == "kolsch/tools/bash"]
+    assert len(scoped) == 1
+    assert scoped[0]["from"] == "kolsch/agents/*"
+    assert scoped[0]["pattern"] == "rg *"
+    assert scoped[0]["effect"] == "allow"
+    # The scoped-rule branch never emits `who` (that's the legacy
+    # discriminator).
+    assert "who" not in scoped[0]
+
+
 async def test_permissions_add_first_lands_at_top(tmp_path: Path) -> None:
     root = _workspace(tmp_path)
     out, err = io.StringIO(), io.StringIO()
@@ -173,8 +211,8 @@ async def test_permissions_add_first_lands_at_top(tmp_path: Path) -> None:
         _args(
             root,
             permissions_command="add",
-            who=".*",
             what=r"tool\.bash",
+            pattern="*",
             effect="deny",
             first=True,
         ),
@@ -248,8 +286,8 @@ async def test_permissions_add_then_list_roundtrip(tmp_path: Path) -> None:
         _args(
             root,
             permissions_command="add",
-            who="agent.helper",
             what=r"tool\.bash",
+            pattern="*",
             effect="allow",
         ),
         out=out,
@@ -263,7 +301,10 @@ async def test_permissions_add_then_list_roundtrip(tmp_path: Path) -> None:
         _args(root, permissions_command="list"), out=list_out, err=err
     )
     assert list_rc == 0
-    assert "agent.helper" in list_out.getvalue()
+    # The list command renders `what` via repr(), which escapes the
+    # backslash — search for the repr'd form.
+    assert r"'tool\\.bash'" in list_out.getvalue()
+    assert "pattern='*'" in list_out.getvalue()
 
 
 # ---------------------------------------------------------------------------

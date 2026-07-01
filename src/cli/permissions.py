@@ -65,8 +65,31 @@ def add_permissions_subparser(
         "add",
         help="Insert a new rule into the rule list.",
     )
-    add.add_argument("--who", required=True, help="Principal regex.")
-    add.add_argument("--what", required=True, help="Action regex.")
+    add.add_argument(
+        "--what",
+        required=True,
+        help=(
+            "Qualified tool ref (e.g. `kolsch/tools/bash`), a system "
+            "action namespace (e.g. `agent.execute.*`), or `*`."
+        ),
+    )
+    add.add_argument(
+        "--pattern",
+        default="*",
+        help="Glob matched against the target string. Defaults to `*`.",
+    )
+    add.add_argument(
+        "--from",
+        dest="from_",
+        default=None,
+        metavar="<ref>",
+        help=(
+            "Optional 3-seg caller-chain glob "
+            "(e.g. `kolsch/agents/triage`, `kolsch/workflows/*`). "
+            "Scopes the rule to invocations whose caller-chain "
+            "contains a matching frame."
+        ),
+    )
     add.add_argument(
         "--effect",
         required=True,
@@ -168,10 +191,12 @@ async def _cmd_list(provider: RuleBasedAuthorizationProvider, *, out: TextIO) ->
     for rule in rules:
         protected = "  (protected)" if rule.id == DEFAULT_DENY_RULE_ID else ""
         if rule.who is None:
-            # New shape — surface what/pattern.
+            # New shape — surface what/pattern (and from: when set).
+            from_str = f"  from={rule.from_!r}" if rule.from_ is not None else ""
             out.write(
                 f"{rule.id:<{id_w}}  {rule.effect:<{effect_w}}  "
-                f"what={rule.what!r}  pattern={rule.pattern!r}{protected}\n"
+                f"what={rule.what!r}  pattern={rule.pattern!r}"
+                f"{from_str}{protected}\n"
             )
         else:
             out.write(
@@ -195,8 +220,15 @@ async def _cmd_show(
         err.write(f"error: {exc}\n")
         return 1
     out.write(f"id:     {rule.id}\n")
-    out.write(f"who:    {rule.who!r}\n")
-    out.write(f"what:   {rule.what!r}\n")
+    if rule.who is None:
+        out.write(f"what:    {rule.what!r}\n")
+        out.write(f"pattern: {rule.pattern!r}\n")
+        if rule.from_ is not None:
+            out.write(f"from:    {rule.from_!r}\n")
+    else:
+        out.write(f"who:    {rule.who!r}\n")
+        out.write(f"what:   {rule.what!r}\n")
+        out.write("        (legacy regex shape — please convert)\n")
     out.write(f"effect: {rule.effect}\n")
     if rule.id == DEFAULT_DENY_RULE_ID:
         out.write("        (protected — removal refused)\n")
@@ -211,7 +243,12 @@ async def _cmd_add(
     out: TextIO,
     err: TextIO,
 ) -> int:
-    new_rule = Rule(who=args.who, what=args.what, effect=args.effect)
+    new_rule = Rule(
+        what=args.what,
+        pattern=args.pattern,
+        from_=args.from_,
+        effect=args.effect,
+    )
     kwargs: dict[str, Any] = {}
     if args.before:
         kwargs["before"] = args.before
@@ -225,9 +262,10 @@ async def _cmd_add(
         err.write(f"error: {exc}\n")
         return 1
     _write_back(yaml_path, await provider.list_rules())
+    from_str = f" from={added.from_!r}" if added.from_ is not None else ""
     out.write(
-        f"added rule {added.id}: who={added.who!r} "
-        f"what={added.what!r} effect={added.effect}\n"
+        f"added rule {added.id}: what={added.what!r} "
+        f"pattern={added.pattern!r}{from_str} effect={added.effect}\n"
     )
     return 0
 
@@ -322,17 +360,20 @@ def _rule_to_dict(rule: Rule) -> dict[str, str]:
     """Serialize a Rule for round-trip.
 
     New-shape rules (`who is None`) serialize without `id` / `who` and
-    carry `pattern`; legacy rules still serialize with the old
-    `{id, who, what, effect}` shape so an unmigrated workspace that
-    gets one rule added/removed via the CLI doesn't accidentally flip
-    back to the new shape mid-file.
+    carry `pattern` (plus `from` when scoped); legacy rules still
+    serialize with the old `{id, who, what, effect}` shape so an
+    unmigrated workspace that gets one rule added/removed via the
+    CLI doesn't accidentally flip back to the new shape mid-file.
     """
     if rule.who is None:
-        return {
+        out: dict[str, str] = {
             "what": rule.what,
             "pattern": rule.pattern,
-            "effect": rule.effect,
         }
+        if rule.from_ is not None:
+            out["from"] = rule.from_
+        out["effect"] = rule.effect
+        return out
     return {
         "id": rule.id,
         "who": rule.who,

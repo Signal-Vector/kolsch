@@ -899,16 +899,15 @@ that lets tool functions query the composed authz rule set
 programmatically from inside a `@tool` body.
 
 ```python
-permissions.check(who: str, what: str) -> AuthzEffect
-permissions.require(who: str, what: str) -> None
+permissions.check(what: str) -> AuthzEffect
+permissions.require(what: str) -> None
 ```
 
-`who` is the principal pattern (the agent or user identity —
-e.g. `"agent.ag_helper"`); `what` is the action OR target
-pattern (e.g. `"kolsch/tools/bash"` for the 3-segment action,
-or the resolved path the tool is about to touch). The
-orientation matches §3.2.1 — see that section for the regex
-semantics.
+`what` is the action OR target pattern (e.g.
+`"kolsch/tools/bash"` for the 3-segment action, or the resolved
+path the tool is about to touch). The principal + caller-chain
+come from the tool dispatcher's binding — tool authors don't
+need to (and can't) override them from inside the body.
 
 **Behaviour:**
 

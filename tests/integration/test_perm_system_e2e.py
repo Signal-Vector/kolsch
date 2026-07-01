@@ -362,6 +362,44 @@ async def test_perm_sys_03_perm_allow_persists_and_takes_effect(
     assert result.allowed
 
 
+async def test_perm_sys_03b_perm_allow_with_from_scopes_rule(
+    tmp_path: Path,
+) -> None:
+    """`/perm allow ... from:<ref>` writes a scoped rule. The
+    persisted YAML carries the `from` key; broader unscoped
+    rules with the same (what, pattern) are NOT shadow-removed
+    because different `from_` values are genuinely different
+    rules.
+    """
+    _seed_new_shape_workspace(tmp_path)
+    runtime = await bootstrap_runtime(root=tmp_path)
+
+    stdout = _io.StringIO()
+    ctx = _slash_ctx(runtime, stdout)
+    # Use a glob so the ref skips the catalog-existence check
+    # (this test doesn't ship an agent fixture).
+    sig = await dispatch_slash(
+        "/perm allow kolsch/tools/bash * from:kolsch/agents/*",
+        ctx,
+    )
+    assert sig.value == "continue"
+    assert "added rule" in stdout.getvalue()
+    assert "from='kolsch/agents/*'" in stdout.getvalue()
+
+    payload = yaml.safe_load(
+        (tmp_path / "platform.yaml").read_text(encoding="utf-8"),
+    )
+    scoped = [
+        r
+        for r in payload["authorization"]["config"]["rules"]
+        if r.get("what") == "kolsch/tools/bash" and "from" in r
+    ]
+    assert len(scoped) == 1
+    assert scoped[0]["from"] == "kolsch/agents/*"
+    assert scoped[0]["pattern"] == "*"
+    assert scoped[0]["effect"] == "allow"
+
+
 # ===========================================================================
 # PERM-SYS-04 — authz.denied renders distinct capsule with /perm hint
 # ===========================================================================

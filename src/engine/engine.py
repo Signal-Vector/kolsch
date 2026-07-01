@@ -981,13 +981,21 @@ class _Exchange:
         # permissions to the tools subsystem so the dispatcher hands
         # them to `authz.allow`. The provider walks
         # agent → bundle → platform → no-rule callback → default-deny.
-        # PermissionRule is structurally identical to Rule; the
-        # provider's compile path accepts either via duck-typing of
-        # the `.who` / `.what` / `.effect` fields.
+        # PermissionRule is structurally identical to Rule; copy every
+        # field the provider matches on — dropping `pattern` or
+        # `from_` here would silently degrade the caller-chain scope
+        # or target glob of any layer-supplied rule.
         from providers.authz import Rule  # noqa: PLC0415
 
         agent_rules: list[Rule] = [
-            Rule(id=r.id, who=r.who, what=r.what, effect=r.effect)
+            Rule(
+                id=r.id,
+                who=r.who,
+                what=r.what,
+                pattern=r.pattern,
+                from_=r.from_,
+                effect=r.effect,
+            )
             for r in self.config.permissions
         ]
         bundle_rules: list[Rule] = []
@@ -996,7 +1004,14 @@ class _Exchange:
             manifest = self.engine._assets.get_bundle(home_bundle)
             if manifest is not None:
                 bundle_rules = [
-                    Rule(id=r.id, who=r.who, what=r.what, effect=r.effect)
+                    Rule(
+                        id=r.id,
+                        who=r.who,
+                        what=r.what,
+                        pattern=r.pattern,
+                        from_=r.from_,
+                        effect=r.effect,
+                    )
                     for r in manifest.permissions
                 ]
 

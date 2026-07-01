@@ -131,11 +131,16 @@ class PermissionRule(BaseModel):
     """One entry in the agent config's `permissions:` block.
 
     Same shape as `platform.yaml`'s `authorization.config.rules`
-    entries. The canonical shape is `{what, pattern, effect}`:
+    entries. The canonical shape is `{what, pattern, from?, effect}`:
 
     - `what` is the tool's fully-qualified ref (`kolsch/bash`), a
       system action namespace (`agent.execute.*`), or `*`.
     - `pattern` is a glob matched against the target.
+    - `from` (optional) is a 3-seg caller-chain glob
+      (`kolsch/agents/triage`, `kolsch/workflows/*`) that scopes the
+      rule to invocations whose caller-chain contains a matching
+      frame. Shape/asset-type/catalog validation happens in the authz
+      provider.
     - `effect` is `allow`, `deny`, or `prompt`.
 
     The legacy shape `{id, who, what, effect}` is still accepted
@@ -147,11 +152,12 @@ class PermissionRule(BaseModel):
     because the schemas layer must not depend on the providers layer.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="forbid", populate_by_name=True)
 
     what: str
     pattern: str = "*"
     effect: Literal["allow", "deny", "prompt"]
+    from_: str | None = Field(default=None, alias="from")
     # Legacy fields — deprecated; present-but-None on new-shape rules.
     # `who` is the discriminator the authz provider uses to dispatch
     # regex vs. glob matching.

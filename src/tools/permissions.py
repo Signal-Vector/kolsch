@@ -102,7 +102,7 @@ def _layers_from(binding: PermissionsBinding) -> tuple[PermissionLayer, ...]:
     return layers
 
 
-async def check(who: str, what: str) -> AuthzEffect:
+async def check(what: str) -> AuthzEffect:
     """Return the composed [`AuthzEffect`][providers.authz.AuthzEffect].
 
     The lookup walks the same four-level stack as the
@@ -111,9 +111,6 @@ async def check(who: str, what: str) -> AuthzEffect:
     have decided pre-dispatch.
 
     Args:
-        who: The principal pattern (the agent calling the tool).
-            Accepted for API symmetry; the binding's principal is
-            canonical for the actual lookup.
         what: The authz action string or target pattern.
 
     Returns:
@@ -127,7 +124,6 @@ async def check(who: str, what: str) -> AuthzEffect:
     binding = _BINDING.get()
     if binding is None:
         raise ToolPermissionsNoContext(tool="<unbound>")
-    _ = who  # accepted for API symmetry; binding.principal is canonical
     result = await binding.provider.allow(
         binding.principal,
         what,
@@ -137,7 +133,7 @@ async def check(who: str, what: str) -> AuthzEffect:
     return result.effect
 
 
-async def require(who: str, what: str) -> None:
+async def require(what: str) -> None:
     """Raise [`AuthzDenied`][errors.AuthzDenied] on anything other than `ALLOW`.
 
     The composed result's effect is used directly — `PROMPT` without
@@ -152,8 +148,6 @@ async def require(who: str, what: str) -> None:
     perspective. A `PROMPT` effect here always collapses to deny.
 
     Args:
-        who: The principal pattern. Accepted for API symmetry; the
-            binding's principal is canonical.
         what: The authz action string or target pattern.
 
     Raises:
@@ -164,7 +158,6 @@ async def require(who: str, what: str) -> None:
     binding = _BINDING.get()
     if binding is None:
         raise ToolPermissionsNoContext(tool="<unbound>")
-    _ = who
     result = await binding.provider.allow(
         binding.principal,
         what,

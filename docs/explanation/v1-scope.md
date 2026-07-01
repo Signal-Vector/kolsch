@@ -141,11 +141,14 @@ chain ← agent` (wholesale-per-field override; see Schemas
   list out of chat:
   - `kolsch permissions list` — print the rule list with stable
     rule ids.
-  - `kolsch permissions add --who <pattern> --what <pattern>
-    --effect {allow,prompt,deny} [--before <id> | --after <id> |
-    --first]` — insert a new rule at the chosen position; writes
-    `platform.yaml` atomically and reloads the in-memory rule
-    list if a runtime is active in the same process.
+  - `kolsch permissions add --what <ref> --pattern <glob>
+    [--from <caller-ref>] --effect {allow,prompt,deny}
+    [--before <id> | --after <id> | --first]` — insert a new rule
+    at the chosen position; writes `platform.yaml` atomically and
+    reloads the in-memory rule list if a runtime is active in the
+    same process. `--from` (optional) scopes the rule to
+    invocations whose caller-chain contains a matching
+    `<bundle>/<agents|workflows>/<name>` frame.
   - `kolsch permissions remove <id>` — remove the named rule.
     Refuses to remove the protected default-deny tail
     (`rl_default_deny`).

@@ -391,7 +391,9 @@ async def test_allow_no_rule_with_callback_fires_with_rule_id_none() -> None:
         rule_id: str | None,
         action: str,
         target: str | None,
+        caller_chain: tuple[str, ...] = (),
     ) -> AuthzEffect:
+        _ = caller_chain
         seen["rule_id"] = rule_id
         seen["action"] = action
         seen["target"] = target
@@ -426,8 +428,9 @@ async def test_allow_no_rule_with_callback_persists_rule_and_fires_hook() -> (
         rule_id: str | None,
         action: str,
         target: str | None,
+        caller_chain: tuple[str, ...] = (),
     ) -> tuple[AuthzEffect, Rule]:
-        _ = rule_id, target
+        _ = rule_id, target, caller_chain
         return (
             AuthzEffect.ALLOW,
             Rule(who=".*", what=action, effect="allow"),

@@ -790,7 +790,7 @@ per-agent permissions API for tool authors.
 | `config.parent_agent_not_found` | Fatal | `{path, resolved}` | engine pre-flight (5.6.5) — `extends:` points at a missing file |
 | `config.extends_template_without_inheritance` | Fatal | `{agent_path}` | engine pre-flight (5.6.6) — child prompt uses `{% extends parent %}` but its YAML has no `extends:` field |
 | `agent.template_warning` | Recoverable (Warning) | `{reference, reason, hint}` | engine pre-flight (5.6.6) — template-config consistency walker (Phase 2.2 §9) flags an empty-data variable access |
-| `authz.denied` | Recoverable | `{tool, target, rule_id, who_chain}` | engine pre-dispatch OR tool's `permissions.require` call when the composed rules resolve to `DENY` / `PROMPT`-without-callback |
+| `authz.denied` | Recoverable | `{tool, target, rule_id}` | engine pre-dispatch OR tool's `permissions.require` call when the composed rules resolve to `DENY` / `PROMPT`-without-callback |
 | `tool.permissions_no_context` | Fatal | `{tool, caller}` | tool's `permissions.check` / `.require` called outside the engine's dispatch ContextVar (e.g. a unit test that imported the tool directly) |
 
 **Why these levels.** The seven `config.*` codes plus the two

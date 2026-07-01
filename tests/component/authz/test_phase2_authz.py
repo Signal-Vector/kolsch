@@ -72,8 +72,13 @@ async def test_tc_tool_12_prompt_effect_callback_returns_allow() -> None:
     invoked: list[tuple[str | None, str, str | None]] = []
 
     async def callback(
-        *, rule_id: str | None, action: str, target: str | None
+        *,
+        rule_id: str | None,
+        action: str,
+        target: str | None,
+        caller_chain: tuple[str, ...] = (),
     ) -> AuthzEffect:
+        _ = caller_chain
         invoked.append((rule_id, action, target))
         return AuthzEffect.ALLOW
 
@@ -99,8 +104,13 @@ async def test_tc_tool_12_prompt_effect_callback_persists_rule() -> None:
     invocations = 0
 
     async def callback(
-        *, rule_id: str | None, action: str, target: str | None
+        *,
+        rule_id: str | None,
+        action: str,
+        target: str | None,
+        caller_chain: tuple[str, ...] = (),
     ) -> tuple[AuthzEffect, Rule]:
+        _ = caller_chain
         nonlocal invocations
         invocations += 1
         _ = rule_id, action, target

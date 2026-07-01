@@ -427,17 +427,26 @@ whoever is checking.
 
 ### 3.2.5 Rule evaluation
 
-Given a `(principal, action)` pair, the provider:
+Given a `(principal, action, target, caller_chain)` tuple, the
+provider:
 
 1. Walks the rule list in order.
-2. For each rule, tests whether `re.fullmatch(rule.who, principal)`
-   AND `re.fullmatch(rule.what, action)` both succeed.
+2. For each rule, evaluates the checks in this order:
+   a. If `rule.from_` is set, at least one frame in
+      `caller_chain` must match the glob (empty chain fails
+      closed).
+   b. `rule.what` must glob-match the action (or the resolved tool
+      ref).
+   c. `rule.pattern` must glob-match the target.
 3. Returns the first matching rule's `effect`.
 4. If no rule matches: **default deny**. Returns "deny".
 
 First-match-wins with default-deny is standard ACL semantics. It
 permits both "general allow + specific deny" patterns and "general
 deny + specific allow" patterns by ordering rules appropriately.
+The optional `from:` filter is the primitive that scopes rules to
+a specific agent or workflow — the caller-chain the engine
+constructs carries the workflow/agent frames of the invocation.
 
 ### 3.2.6 The default deny
 
@@ -499,14 +508,14 @@ authorization:
   variant: rule_based
   config:
     rules:
-      - who: ".*"
-        what: ".*"
+      - what: "*"
+        pattern: "*"
         effect: allow
 ```
 
-The default v1 rule set: one rule, allow everything for everyone. The
-mechanism is in place; the rule is permissive. Restrictive setups edit
-the rule list.
+The default v1 rule set: one rule, allow everything. The mechanism
+is in place; the rule is permissive. Restrictive setups edit the
+rule list.
 
 Example with restrictions:
 
@@ -528,16 +537,27 @@ deny is listed first so it matches before the general allow.
 
 ### 3.4.2 Behavior
 
-`allow(principal, action)`:
+`allow(principal, action, target=None, caller_chain=())`:
 
 ```python
 for rule in self.rules:
-    if re.fullmatch(rule.who, principal) and re.fullmatch(rule.what, action):
-        return AuthorizationResult(
-            allowed=(rule.effect == "allow"),
-            matched_rule=rule,
-            reason=f"matched rule: who={rule.who} what={rule.what} effect={rule.effect}",
-        )
+    if rule.from_ is not None:
+        if not caller_chain:
+            continue  # empty chain fails closed
+        if not any(fnmatch.fnmatchcase(frame, rule.from_) for frame in caller_chain):
+            continue
+    if not fnmatch.fnmatchcase(action, rule.what):
+        continue
+    if target is not None and not fnmatch.fnmatchcase(target, rule.pattern):
+        continue
+    return AuthorizationResult(
+        allowed=(rule.effect == "allow"),
+        matched_rule=rule,
+        reason=(
+            f"matched rule: what={rule.what} pattern={rule.pattern} "
+            f"effect={rule.effect}"
+        ),
+    )
 return AuthorizationResult(
     allowed=False,
     matched_rule=None,
@@ -545,7 +565,9 @@ return AuthorizationResult(
 )
 ```
 
-Straightforward.
+Straightforward. The optional `from:` check sits at the top so a
+rule scoped to a specific agent short-circuits before doing any
+glob work when the caller-chain doesn't match.
 
 ## 3.5 Where Authorization Checks Happen
 
@@ -767,8 +789,9 @@ identical to Phase 2.0 / 2.1 — every existing caller continues
 to work unchanged.
 
 The matched `AuthorizationResult.matched_rule` is the rule that
-fired (agent OR platform); a `who_chain` token in the result's
-`reason` names which layer matched.
+fired (agent OR platform); the result's `reason` string names
+which layer matched (workflow / agent / bundle / platform /
+default).
 
 ### 3.8.3 The `permissions` API for tool authors
 
@@ -776,15 +799,16 @@ Phase 2.2 §2 adds a small module — `kolsch.tools.permissions` —
 with two async functions:
 
 ```python
-permissions.check(who: str, what: str) -> AuthzEffect
-permissions.require(who: str, what: str) -> None
+permissions.check(what: str) -> AuthzEffect
+permissions.require(what: str) -> None
 ```
 
-`who` is the principal pattern (the agent or user identity);
 `what` is the action OR target pattern, passed through to the
-provider as-is (no prefixing). `check` returns the effect;
-`require` raises `PlatformError("authz.denied", ...)` on
-anything other than `ALLOW`.
+provider as-is (no prefixing). The principal + caller-chain
+come from the tool dispatcher's binding; tool authors don't
+override them. `check` returns the effect; `require` raises
+`PlatformError("authz.denied", ...)` on anything other than
+`ALLOW`.
 
 The composed walk is the same four-level stack as the
 dispatch-boundary check: agent permissions → bundle permissions
@@ -855,8 +879,8 @@ platform:
     variant: rule_based
     config:
       rules:
-        - who: ".*"
-          what: ".*"
+        - what: "*"
+          pattern: "*"
           effect: allow
 ```
 

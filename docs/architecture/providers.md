@@ -58,13 +58,15 @@ when a real implementation lands.
 
 `AuthorizationProvider` decides whether a tool call is allowed. The
 current implementation is rule-based — a list of records compiled
-into a fast matcher. Each rule has three fields:
+into a fast matcher. Each rule has three required fields and one
+optional field:
 
 | Field | Type | Semantics |
 |---|---|---|
-| `what` | `str` | The tool's fully-qualified ref (`kolsch/bash`), a system action namespace (`agent.execute.*`), or `*` for any. |
-| `pattern` | `str` | A glob matched against the target — for `kolsch/bash` the target is the command string, for `kolsch/read_file` it's the path, etc. Defaults to `*`. |
+| `what` | `str` | The tool's fully-qualified ref (`kolsch/tools/bash`), a system action namespace (`agent.execute.*`), or `*` for any. |
+| `pattern` | `str` | A glob matched against the target — for `kolsch/tools/bash` the target is the command string, for `kolsch/tools/read_file` it's the path, etc. Defaults to `*`. |
 | `effect` | `"allow" \| "deny" \| "prompt"` | The decision, or a prompt to the user. |
+| `from` | `str \| None` | Optional 3-seg caller-chain glob (`kolsch/agents/triage`, `kolsch/workflows/*`). When set, the rule fires only if at least one frame in the caller-chain matches; empty chain fails closed. Defaults to `None` (rule fires regardless of caller). |
 
 A concrete rule set:
 
@@ -74,22 +76,28 @@ authorization:
   config:
     rules:
       # Allow the agent to read anything under the workspace
-      - what: kolsch/read_file
+      - what: kolsch/tools/read_file
         pattern: "workspace:**"
         effect: allow
 
+      # Only the triage agent gets to grep — nobody else
+      - what: kolsch/tools/bash
+        pattern: "rg *"
+        from: kolsch/agents/triage
+        effect: allow
+
       # Allow git commands but nothing else that shells out
-      - what: kolsch/bash
+      - what: kolsch/tools/bash
         pattern: "git *"
         effect: allow
 
       # Prompt on any other bash — surfaces the four-choice modal
-      - what: kolsch/bash
+      - what: kolsch/tools/bash
         pattern: "*"
         effect: prompt
 
       # Hard-deny writes to .env
-      - what: kolsch/write_file
+      - what: kolsch/tools/write_file
         pattern: "**.env"
         effect: deny
 ```
@@ -97,19 +105,41 @@ authorization:
 A `prompt` effect surfaces the call to the user in `kolsch chat`
 with four choices: **allow once**, **allow always** (writes a new
 `allow` rule and remembers), **deny once**, **deny always** (writes
-a new `deny` rule and remembers).
+a new `deny` rule and remembers). Rules written via **allow always**
+/ **deny always** are auto-scoped to the current agent via `from:`
+— so approving `bash rg *` while chatting with agent `X` grants
+that permission to agent `X` alone, not every future caller. Type
+`*` at the `from:` prompt to broaden.
 
-Rules live in three layers: each agent's `permissions:` block, each
-bundle's `bundle.yaml` `permissions:` block, and the platform-wide
-`platform.yaml` `authorization.config.rules`. The authz provider
-walks them first-match-wins in that order — agent first, then
-bundle, then platform, then default-deny. Because matching stops at
-the first rule that fires, an agent or bundle `allow` rule can
-grant access the platform layer would have denied. The layering is
-precedence, not enforced narrowing: nothing in the code stops a
-bundle from effectively widening the platform policy. Workspace
-owners installing untrusted bundles have to audit each bundle's
+Rules live in four layers: the workflow's `policy:` block (when a
+workflow node is firing the action), each agent's `permissions:`
+block, each bundle's `bundle.yaml` `permissions:` block, and the
+platform-wide `platform.yaml` `authorization.config.rules`. The
+authz provider walks them first-match-wins in that order —
+workflow first (when applicable), then agent, then bundle, then
+platform, then default-deny. Because matching stops at the first
+rule that fires, an earlier-layer `allow` rule can grant access a
+later layer would have denied. The layering is precedence, not
+enforced narrowing: nothing in the code stops a bundle from
+effectively widening the platform policy. Workspace owners
+installing untrusted bundles have to audit each bundle's
 `permissions:` block themselves.
+
+**Workflow-agent escalation guarantee.** When a workflow node
+invokes an embedded agent, the workflow layer is **omitted** from
+the walk for the agent's own tool calls — so an agent embedded in
+a workflow can never inherit the workflow's broader permissions.
+The workflow layer only fires when the workflow node itself is
+directly invoking a tool.
+
+**Caller-chain.** The engine assembles a proximate-first tuple of
+caller frames (`(kolsch/agents/X, kolsch/workflows/W)` for
+`W → X → tool.bash`) and threads it into every `allow` call. The
+`from:` filter matches transitively against this chain — any frame
+that matches is enough. An empty chain (engine bootstrap) fails
+closed for any `from:`-filtered rule. See
+[`docs/how-to/permissions.md`](../how-to/permissions.md#scoping-rules-to-a-specific-agent-or-workflow)
+for the operator-facing guide.
 
 ## Principles
 
