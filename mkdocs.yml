@@ -154,10 +154,11 @@ nav:
       - Permissions: how-to/permissions.md
       - Finding models: how-to/find-models.md
   - Reference:
-      - Vocabulary: reference/vocabulary.md
       - Schemas: reference/schemas.md
       - Workflow YAML: reference/workflow-yaml.md
-      - Documentation conventions: process/documentation-conventions.md
+      - Contributor process:
+          - Documentation conventions: process/documentation-conventions.md
+          - Vocabulary: process/vocabulary.md
   - API: api/index.md
 
 # Deep-dive subsystem contracts under docs/explanation/ stay in the

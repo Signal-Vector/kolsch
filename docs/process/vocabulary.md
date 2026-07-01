@@ -3,11 +3,6 @@
 A **writer's reference** for docstrings and in-code comments: which
 word to use when, and which look-alikes to keep separate.
 
-For the *definition* of each term — what each thing **is** in the
-platform — see the Key Vocabulary in
-[`master-index.md`](master-index.md#key-vocabulary). That file is the
-noun catalog. This file is the **lane assignment**.
-
 If a term you need isn't here, it's either obvious or wasn't drifting.
 Add it the first time you have to make a choice twice.
 
@@ -31,7 +26,7 @@ Three near-synonyms that mean **different things**. Don't swap them.
 
 | Use | What it means | Where it lives |
 |---|---|---|
-| **principal** | The authz subject of an authorization check — `user.local`, `agent.<id>`, `system`. | `cli/permissions.py`, `engine/engine.py`, error codes `authz.principal_*` |
+| **principal** | The authz subject of an authorization check — `user.local`, `agent.<id>`, `system`. | `providers/authz.py`, `engine/engine.py`, permission rules |
 | **actor** | The entity record stored on an event (a Pydantic model with `kind` + `id`). | `schemas/entities.py`, every `Event` payload, `engine/observers.py` |
 | **caller** | The immediate code path that invoked the current function. | `caller_chain` audit trail in `engine/context.py`, tool subsystem docstrings |
 
@@ -53,14 +48,12 @@ proximity to the verb "execute".
 |---|---|---|
 | **engine** | The Agent Engine — long-lived, wraps the framework, runs exchanges. | `engine/engine.py` (`AgentEngine`) |
 | **framework** | The wrapped library (CrewAI). The engine drives it. | `engine/framework.py`, `engine/crewai_framework.py` |
-| **executor** | The workflow-node executor that runs one workflow node at a time. Ephemeral. | `workflows/executor.py` |
-| **runner** | A CLI surface that drives an engine to produce output for a human. | `cli/_workflow_chat_runner.py`, `cli/chat.py` |
+| **executor** | The workflow subsystem's dispatcher that hands each node to its runner. | `workflows/executor.py` (`RunnerRegistry`, `execute_workflow`) |
+| **runner** | The per-node-type worker registered on the executor. Also, the CLI shell surfaces at `cli/_workflow_chat_runner.py` etc. | `workflows/executor.py` (`NodeRunner` protocol), `cli/*_runner.py` |
 
 **Quick rule:** *engine = ours, long-lived; framework = the library
-we wrap; executor = per workflow node; runner = the CLI shell on top.*
-
-**Avoid:** writing "runner" for non-CLI code, or "executor" outside
-the workflows subsystem.
+we wrap; executor = the workflow dispatcher; runner = the thing
+executed by an executor (workflows) or the CLI shell on top.*
 
 ---
 
@@ -73,15 +66,16 @@ Four units at nested scales. Use the innermost word that fits.
 | **agent call** | One execution of one configured agent. The top-level unit the platform schedules. | Outermost |
 | **exchange** | One user-message → agent → tools → agent cycle ending in a final text response. Event-log unit. | Mid |
 | **iteration** | One framework-internal loop step inside an exchange. | Inner |
-| **turn** | Conversational synonym for "exchange". **Scoped** — chat subsystem only. | `cli/chat.py` and the chat renderer |
+| **turn** | Interchangeable with "exchange". Common in engine/framework code that talks about back-and-forth with the model. | Everywhere |
 
 **Quick rule:** *agent call ⊇ exchange ⊇ iteration. Use the innermost
 that fits the sentence.*
 
-**Scope rule for "turn":** allowed inside `cli/chat.py` and the chat
-renderer code only — those modules talk to a human in conversational
-language and "turn" reads naturally there. Everywhere else (engine,
-store, workflows, providers, tools) → write "exchange".
+**"turn" vs "exchange":** they mean the same thing. `turn` reads more
+naturally in narrative code that talks about the model (assembly,
+framework adapters, fake framework, chat UI); `exchange` reads more
+naturally in event-log / store code that treats it as a discrete
+recorded unit. Pick by the sentence, not by the module.
 
 ---
 
@@ -89,19 +83,13 @@ store, workflows, providers, tools) → write "exchange".
 
 | Use | When | Where it lives |
 |---|---|---|
-| **tool** | The default term. Use it everywhere unless one of the rows below applies. | Everywhere |
-| **action** | **Reserved** for the workflow node `action` type only. | `workflows/catalog.py`, builtin node defs |
+| **tool** | The invokable — the `@tool`-decorated function an agent calls. | `tools/`, agent YAML `subsystems.tools.config.declared` |
+| **action** | The **authz identifier** for a tool invocation. This is the string a permission rule's `what:` matches against — the 3-segment catalog ref (`<bundle>/tools/<name>`). | `providers/authz.py` (`Rule.action`, `allow(principal, action)`), `tools/dispatch.py` (`defn.action_name`) |
 | **function** | Only in generic Python context ("this function does X" — not "this tool"). | Anywhere |
 
-**Quick rule:** *if an agent invokes it through `ctx.tools`, it's a
-tool. If a workflow runs it as a node, it's an action. If neither,
-it's a function.*
-
-**Migration note:** the HTTP layer in `src/api/` currently uses
-"action" for endpoint-level invocations. During the `api/` subsystem
-sweep, rename those uses to **request** (the HTTP-layer noun) or
-**invocation** (the call we forward to the engine), so "action" stays
-reserved for workflow nodes.
+**Quick rule:** *tool = the thing that runs; action = the string
+permissions match against. `word_count` is the tool; `mybundle/tools/word_count`
+is the action.*
 
 ---
 
@@ -110,16 +98,17 @@ reserved for workflow nodes.
 | Use | When | Where it lives |
 |---|---|---|
 | **agent** | The default term — both the template (configuration) and its session instances. | Everywhere |
-| **assistant** | **Scoped — banned outside `llm/providers/opencode.py`**. Used inside that file because the provider's API uses the word. | `llm/providers/opencode.py` |
+| **assistant** | Reserved for **LLM message roles** — the model side of a request's `messages` list, matching the underlying provider API. | `engine/framework.py`, `engine/_crewai_adapter.py`, `engine/assembly.py`, any LLM message-shape code |
 | **crew** | **Scoped — banned outside `engine/_crewai_adapter.py` and `engine/crewai_framework.py`**. Used inside those files because the wrapped library calls it that. | `engine/_crewai_adapter.py`, `engine/crewai_framework.py` |
 
 **Quick rule:** *if you're talking about Kolsch concepts, write
-"agent". The library's word is allowed inside the file that wraps
-that library — nowhere else.*
+"agent". `assistant` is the message-role word (as in `{"role": "assistant"}`),
+not a synonym for agent. `crew` is CrewAI's word, allowed only inside
+the adapter.*
 
-**Reviewer rule:** `crew` or `assistant` appearing in any file other
-than the ones above is a review-blocker. A future `ruff` custom rule
-or grep-based pre-commit check will enforce this mechanically.
+**Reviewer rule:** `crew` outside the two adapter files is a
+review-blocker. `assistant` as a synonym for agent (rather than as an
+LLM message role) is also a review-blocker.
 
 ---
 
@@ -153,7 +142,7 @@ the store maintains, it's a record.*
 | Use | When |
 |---|---|
 | **session** | The conversation instance. One JSONL file per session. |
-| **thread** | The persistence unit inside a session. Phase 1: one thread per session; later: many. |
+| **thread** | The persistence unit inside a session. One thread per session today; the shape allows more. |
 | **conversation** | UI / explanatory text only — never the primary noun in a docstring. |
 
 **Quick rule:** *session is what the user starts; thread is what the
@@ -174,13 +163,14 @@ A close-reading checklist for the pairs most often confused:
   library (CrewAI). If you say "the framework iterates", you mean
   CrewAI, not us.
 - **session vs thread** — session is the conversation; thread is the
-  persistence unit inside it. They are 1:1 in Phase 1 and will
-  diverge later — write docstrings that already respect the
-  distinction.
+  persistence unit inside it. One-to-one today; write docstrings that
+  respect the distinction.
 - **agent vs session** — agent is the template; session is the
   instance.
-- **tool vs action** — tool runs from an agent; action runs from a
-  workflow node.
+- **tool vs action** — tool is what runs; action is the authz string
+  a permission rule matches against.
+- **executor vs runner** — the executor dispatches; a runner is what
+  the executor dispatches *to*.
 
 ---
 
@@ -216,10 +206,7 @@ this file doesn't say which to pick:
 
 1. **Search `src/`** for both variants. Whichever the codebase uses
    more, use that.
-2. **Check
-   [`master-index.md` Key Vocabulary](master-index.md#key-vocabulary)**
-   — if one variant is defined there, that's the winner.
-3. **Otherwise, pick the one that's clearer to a new contributor and
+2. **Otherwise, pick the one that's clearer to a new contributor and
    add the entry here.** A two-row table costs nothing; the next
    writer benefits.
 
@@ -227,7 +214,5 @@ this file doesn't say which to pick:
 
 ## See also
 
-- [`docs/process/documentation-conventions.md`](../process/documentation-conventions.md)
-  — the docstring shape rules (Google style, MkDocs-readiness).
-- [`master-index.md` Key Vocabulary](master-index.md#key-vocabulary)
-  — the noun catalog: what each term *is*.
+- [`documentation-conventions.md`](documentation-conventions.md) — the
+  docstring shape rules (Google style, MkDocs-readiness).

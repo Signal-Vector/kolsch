@@ -53,7 +53,10 @@ logs/
 # public docs site (docs/) pulls migrated, polished versions of
 # whatever the team decides is enduring architectural content; the
 # raw process notes stay local.
-process/
+#
+# Anchored to root so it doesn't also match `docs/process/` (which
+# holds the contributor process pages that DO ship).
+/process/
 
 # MkDocs build output
 site/

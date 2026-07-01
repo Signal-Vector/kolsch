@@ -7,7 +7,7 @@ with the Google-style docstrings retrofitted in the docs rollout
 
 For the rules these docstrings follow, see the
 [code documentation conventions](../process/documentation-conventions.md)
-and the [vocabulary reference](../reference/vocabulary.md).
+and the [vocabulary reference](../process/vocabulary.md).
 
 ---
 

@@ -51,7 +51,7 @@ a specific subsystem:
 
 Precise, complete, lookup-oriented.
 
-- [Vocabulary](reference/vocabulary.md) — which term to pick when
+- [Vocabulary](process/vocabulary.md) — which term to pick when
   two synonyms compete.
 - [Schemas](reference/schemas.md) — config, event log, and entity
   record shapes.
