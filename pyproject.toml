@@ -206,6 +206,14 @@ test = [
     # (PyPI: httpx2==2.2.0 as of 2026-05); pin it explicitly so the
     # test path doesn't fall back to the legacy httpx import.
     "httpx2>=2.2,<3",
+    # psutil — cross-platform process enumeration used by the
+    # `browse_url` component tests to probe for leaked Chromium
+    # processes after timeouts / cancellation (spec explicitly
+    # forbids using `browser.contexts` as a leak indicator because
+    # that check is trivially true after `browser.close()` and
+    # doesn't actually prove the OS-level process is gone). Test
+    # group only — the tool itself never touches psutil.
+    "psutil>=5.9",
 ]
 
 # ---------------------------------------------------------------------------
