@@ -6,7 +6,7 @@ Pydantic models declared inline so the auto-generated OpenAPI schema
 reflects them.
 
 Streaming uses Server-Sent Events (SSE) over
-[`AgentEngine.execute_stream`][engine.AgentEngine.execute_stream] —
+[`AgentEngine.execute_stream`][engine.engine.AgentEngine.execute_stream] —
 one event-per-SSE-message, terminated by a synthetic `event: done`
 line after the final engine event.
 """
@@ -54,7 +54,7 @@ class _UpdateSessionRequest(BaseModel):
     """Partial update of UI-state fields for `PATCH /sessions/{id}`.
 
     All fields are optional; only present keys are applied. See the
-    [module API reference](../reference/module-api-reference.md)
+    [architecture pages](../architecture/index.md)
     for the underlying `entity_backend.update_session` contract.
     """
 

@@ -8,7 +8,7 @@ is the cooperative cancellation handle they may attach;
 
 For the full engine contract — `execute` semantics, ordering rules,
 cancellation guarantees — see the
-[module API reference](../reference/module-api-reference.md).
+[architecture pages](../architecture/index.md).
 """
 
 from __future__ import annotations
@@ -63,7 +63,7 @@ class CancelToken:
 class ExecutionContext(BaseModel):
     """The per-execute payload carrying the thread and trigger.
 
-    Every call to [`AgentEngine.execute`][engine.AgentEngine.execute]
+    Every call to [`AgentEngine.execute`][engine.engine.AgentEngine.execute]
     takes one of these. The payload identifies which thread the
     exchange runs against and what kicked it off — a user message, a
     force-invoke message that pins a skill, or single-shot inputs.
@@ -114,7 +114,7 @@ class EngineCapabilities(BaseModel):
     """What this engine declares it can do.
 
     Surfaced via
-    [`AgentEngine.capabilities`][engine.AgentEngine.capabilities].
+    [`AgentEngine.capabilities`][engine.engine.AgentEngine.capabilities].
     The shape is minimal today; values get richer as features arrive.
     """
 
@@ -137,7 +137,7 @@ class AgentExecutionError(Exception):
 
     Carries the `thread.exchange_failed` event the engine emitted
     just before raising. See
-    [`AgentEngine.execute`][engine.AgentEngine.execute] for the call
+    [`AgentEngine.execute`][engine.engine.AgentEngine.execute] for the call
     contract.
 
     Two surfaces, two behaviours:

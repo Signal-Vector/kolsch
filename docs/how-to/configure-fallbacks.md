@@ -137,9 +137,8 @@ Fallback applies only **before** the first content event has
 fired. Once any token has been emitted to the user, the engine
 ends the exchange with the truncation rather than swap models
 mid-stream — `model.fallback` does not fire, and the user sees
-the partial output. This is documented in
-[engine contract §2.4 (Fallback loop)](../explanation/agent-engine-contract.md)
-and [Phase 1.3 patch §2.3](../process/phase1.3-fallback-specs.md).
+the partial output. See the
+[engine contract](../explanation/agent-engine-contract.md).
 
 If you need mid-stream resilience, watch for a future patch — the
 UX decisions around partial-output replay are non-trivial.

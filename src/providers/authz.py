@@ -827,7 +827,7 @@ class RuleBasedAuthorizationProvider:
         **Audit emission.** After the rule walk resolves, a
         `policy.decision.made` event is appended to the active
         workflow run's JSONL subject to
-        [`audit_level`][providers.authz.RuleBasedAuthorizationProvider.audit_level]
+        `audit_level`
         (`"all"` emits every decision; `"rule_matched"`, the default,
         emits only when a rule fired). Non-workflow callers (chat,
         `kolsch run`, tests) observe no emission because no

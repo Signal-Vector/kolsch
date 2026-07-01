@@ -63,7 +63,7 @@ class ReconstructionResult(BaseModel):
     """Outcome of filesystem-driven session reconstruction.
 
     Returned by
-    [`SessionStore.reconstruct_from_filesystem`][store.SessionStore.reconstruct_from_filesystem].
+    [`SessionStore.reconstruct_from_filesystem`][store.session_store.SessionStore.reconstruct_from_filesystem].
     Counts sessions and threads found versus reconstructed, plus
     warnings (for example, JSONL files missing a `session.opened`
     event).

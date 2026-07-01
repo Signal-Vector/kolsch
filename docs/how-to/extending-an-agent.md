@@ -190,8 +190,7 @@ you should see four inherited tools (`kolsch/tools/read_file`,
 `context_files`, the inherited bash-prompt permission, and
 `cfg.extends == "kolsch/helper"`. The leaf's `extends:` is
 preserved on the resolved config so the engine's render
-dispatch can route through `render_with_parents` — see
-[bug-engine-extends-parent-not-rendered.md](../../process/bug-engine-extends-parent-not-rendered.md).
+dispatch can route through `render_with_parents`.
 
 The `cfg.prompt` you see here is the **raw Jinja template**
 (`{% extends parent %}` is still literal). The asset-manager
@@ -254,6 +253,3 @@ directly if any verification fails.
 - [Schemas reference](../reference/schemas.md) — the
   `ResolvedAgentConfig` model carrying `extends`, `permissions`,
   and `context_files`, generated from source.
-- [Test catalog Part 9.10.1 (EXT-CORPUS)](../../process/test-catalog.md)
-  — the 28 fixture cases this how-to's examples
-  correspond to.

@@ -21,7 +21,7 @@ Eight subcommands:
 
 All commands accept `--format text|json`. Text/json branching
 happens exclusively inside
-[`render`][cli._format.render] — no subcommand prints payload
+`render` (private) — no subcommand prints payload
 directly.
 """
 

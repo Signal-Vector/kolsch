@@ -6,7 +6,7 @@ NOT a `PlatformError` subclass; findings are values that the kernel
 collects and ships inside `ConfigInvalid.detail.validation_errors` when
 raising.
 
-The [`ConfigValidator`][kernel.findings.ConfigValidator] type alias is
+The `ConfigValidator` type alias is
 the contract every Layer 2 and Layer 3 validator honours: a sync, pure
 function from input dict to
 [`ValidationResult`][kernel.findings.ValidationResult].

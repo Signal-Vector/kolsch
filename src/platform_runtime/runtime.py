@@ -97,7 +97,7 @@ class PlatformRuntime:
         """Resolve an agent's config with the runtime's validators wired.
 
         Wraps
-        [`AssetManagement.build_resolved_config`][assets.AssetManagement.build_resolved_config]
+        [`AssetManagement.build_resolved_config`][assets.asset_manager.AssetManagement.build_resolved_config]
         and pins `subsystem_validators` so wildcard write_tags,
         unknown builtin tools, and missing skill refs surface at
         config-resolution time. CLI and API callers MUST route through
@@ -111,7 +111,7 @@ class PlatformRuntime:
 
         Returns:
             The resolved agent config, ready to hand to
-            [`AgentEngine.execute`][engine.AgentEngine.execute].
+            [`AgentEngine.execute`][engine.engine.AgentEngine.execute].
         """
         return await self.asset_management.build_resolved_config(
             agent_ref,

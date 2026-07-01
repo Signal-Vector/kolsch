@@ -5,7 +5,7 @@ build via the chat-side loader, optional per-invocation `outputs:`
 override, child-session creation carrying the
 [`FromWorkflowRun`][schemas.entities.FromWorkflowRun] parent
 pointer, and synchronous invocation of
-[`AgentEngine.execute`][engine.AgentEngine.execute].
+[`AgentEngine.execute`][engine.engine.AgentEngine.execute].
 [`AgentExecutionError`][engine.context.AgentExecutionError] — the
 engine's Fatal failure transport — is remapped to
 [`WorkflowNodeFailed`][workflows.errors.WorkflowNodeFailed] so the
@@ -44,7 +44,7 @@ class AgentRunner:
     node's `agent:` ref, builds the agent config, spawns a child
     session linked back to this run via
     [`FromWorkflowRun`][schemas.entities.FromWorkflowRun], and
-    invokes [`AgentEngine.execute`][engine.AgentEngine.execute]
+    invokes [`AgentEngine.execute`][engine.engine.AgentEngine.execute]
     synchronously. The agent's structured `agent.message.content`
     becomes the node's captured output.
     """
@@ -96,7 +96,7 @@ class AgentRunner:
            [`ExecutionContext`][engine.ExecutionContext] carrying
            the workflow's `trace_id` and the extended caller chain
            (agent ref prepended). Invoke
-           [`AgentEngine.execute`][engine.AgentEngine.execute]
+           [`AgentEngine.execute`][engine.engine.AgentEngine.execute]
            synchronously.
         7. Catch
            [`AgentExecutionError`][engine.context.AgentExecutionError];

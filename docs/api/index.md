@@ -133,6 +133,14 @@ resolved agent config) render in the
     options:
       heading_level: 3
 
+::: errors.workspace
+    options:
+      heading_level: 3
+
+::: errors.kernel
+    options:
+      heading_level: 3
+
 ---
 
 ## Files
@@ -261,6 +269,14 @@ resolved agent config) render in the
     options:
       heading_level: 3
 
+::: tools.discovery
+    options:
+      heading_level: 3
+
+::: tools.dispatch
+    options:
+      heading_level: 3
+
 ---
 
 ## Workflows
@@ -282,6 +298,26 @@ resolved agent config) render in the
       heading_level: 3
 
 ::: workflows.parser
+    options:
+      heading_level: 3
+
+::: workflows.validator
+    options:
+      heading_level: 3
+
+::: workflows.run
+    options:
+      heading_level: 3
+
+::: workflows.run_store
+    options:
+      heading_level: 3
+
+::: workflows.builtins.bash
+    options:
+      heading_level: 3
+
+::: workflows.builtins.agent
     options:
       heading_level: 3
 

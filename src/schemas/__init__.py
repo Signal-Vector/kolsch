@@ -14,7 +14,7 @@ create coupling.
 
 For the complete cross-module type catalog and its layering rules,
 see the
-[module API reference](../reference/module-api-reference.md).
+[architecture pages](../architecture/index.md).
 """
 
 from schemas.config import (

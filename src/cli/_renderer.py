@@ -1,7 +1,7 @@
 """Event renderer for `kolsch chat`.
 
 The chat is a **pure consumer** of
-[`AgentEngine.execute_stream`][engine.AgentEngine.execute_stream].
+[`AgentEngine.execute_stream`][engine.engine.AgentEngine.execute_stream].
 Every visible block in the REPL corresponds to one event emitted by
 the engine; the renderer adds no semantic layer of its own. This is
 the load-bearing architectural property enforced by AGENTS.md's

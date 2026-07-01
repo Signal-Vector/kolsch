@@ -54,7 +54,7 @@ class AssetEntry(BaseModel):
 class AssetCatalog(BaseModel):
     """Built once at startup; immutable thereafter.
 
-    [`lookup`][assets.AssetCatalog.lookup] is the chokepoint for
+    `lookup()` is the chokepoint for
     **external** catalog reads. Direct `catalog.assets[ref]` subscript
     access is permitted ONLY inside this module; every other call
     site (`src/workflows/*`, `src/providers/authz.py`, `src/cli/*`,
@@ -208,7 +208,7 @@ def _register_builtin_nodes(assets: dict[str, AssetEntry]) -> None:
     """Inject the reserved `kolsch/nodes/<name>` virtual built-in entries.
 
     Registered unconditionally so
-    [`AssetCatalog.lookup`][assets.AssetCatalog.lookup] resolves
+    `AssetCatalog.lookup` resolves
     `kolsch/nodes/bash` uniformly with authored Python-node refs.
     User-authored files at these slots already raised
     [`WorkflowBuiltinShadowed`][workflows.errors.WorkflowBuiltinShadowed]

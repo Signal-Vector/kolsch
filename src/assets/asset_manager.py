@@ -38,11 +38,11 @@ class AssetManagement:
     """Platform-bootstrap module, asset catalog, and ref resolver.
 
     Construct with the platform root (the CWD at startup) and call
-    [`initialize`][assets.AssetManagement.initialize] once before any
+    [`initialize`][assets.asset_manager.AssetManagement.initialize] once before any
     other method to load `platform.yaml` and build the catalog. The
     catalog does not mutate during the platform's run, and no other
     module reads `platform.yaml` — every consumer goes through
-    [`get_platform_config`][assets.AssetManagement.get_platform_config].
+    [`get_platform_config`][assets.asset_manager.AssetManagement.get_platform_config].
     """
 
     def __init__(self, *, root: Path) -> None:
@@ -103,7 +103,7 @@ class AssetManagement:
         """Return the built [`AssetCatalog`][assets.AssetCatalog].
 
         Read access only — the catalog is built once at
-        [`initialize`][assets.AssetManagement.initialize] and immutable
+        [`initialize`][assets.asset_manager.AssetManagement.initialize] and immutable
         thereafter. The authz provider takes the catalog at
         construction so it can validate qualified tool refs in rule
         `what:` fields.
@@ -142,7 +142,7 @@ class AssetManagement:
 
         1. The `_agent_id_to_bundle` cache populated as a side effect
            of
-           [`build_resolved_config`][assets.AssetManagement.build_resolved_config]
+           [`build_resolved_config`][assets.asset_manager.AssetManagement.build_resolved_config]
            — covers both explicit and derived `agent_id` YAMLs.
         2. Fallback for callers that bootstrapped the engine without
            going through `build_resolved_config` (rare — tests with

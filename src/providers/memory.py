@@ -10,7 +10,7 @@ binding, deterministic replay, session isolation — see the
 The provider never writes to the session log itself: the engine emits
 `memory.written` / `memory.deleted` / `memory.retrieved` events, and
 this provider just returns results. Log access is mediated entirely
-by [`SessionStore.read_events`][store.SessionStore.read_events]; the
+by [`SessionStore.read_events`][store.session_store.SessionStore.read_events]; the
 provider never opens JSONL files directly.
 """
 

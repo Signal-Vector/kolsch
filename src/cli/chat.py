@@ -3,7 +3,7 @@ r"""`kolsch chat` — streaming REPL.
 Each user submission becomes an
 [`ExecutionContext`][engine.context.ExecutionContext] whose
 `execute_stream` events feed the
-[`Renderer`][cli._renderer.Renderer]. The renderer is a pure
+`Renderer` (private). The renderer is a pure
 consumer — every visible block traces back to one event the engine
 emitted.
 
@@ -380,7 +380,7 @@ async def _run_input_loop(  # noqa: PLR0913, PLR0912, PLR0915 — loop owns all 
     anything else becomes an
     [`ExecutionContext`][engine.context.ExecutionContext] fed to the
     engine via
-    [`AgentEngine.execute_stream`][engine.AgentEngine.execute_stream]
+    [`AgentEngine.execute_stream`][engine.engine.AgentEngine.execute_stream]
     and rendered through a fresh `Renderer` per turn — the
     renderer's only state is the current turn's block list.
 

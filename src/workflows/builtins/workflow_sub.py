@@ -5,7 +5,7 @@ creation with inherited `trace_id`, nested executor construction
 with the extended `_call_chain` / `_call_depth` metadata (used for
 cycle + depth caps), child run with pause-cascade re-raise, and
 terminal output harvest via
-[`compute_terminal_output_dict`][workflows._terminal.compute_terminal_output_dict].
+`compute_terminal_output_dict` (private).
 
 The runner emits two parent-side forensics events around the
 child's lifecycle:
@@ -419,7 +419,7 @@ class WorkflowSubRunner:
         `_captured` + `_pruned` aren't accessible. The child's
         `workflow.run.completed` event's payload carries the same
         terminal-keyed output dict that
-        [`compute_terminal_output_dict`][workflows._terminal.compute_terminal_output_dict]
+        `compute_terminal_output_dict` (private)
         produced at child run-end (the executor's
         `_assemble_terminal_outputs` writes it there). Returning
         that dict gives the parent's downstream consumers the same

@@ -1,9 +1,8 @@
 # Templated Agent Prompts
 
-Recipes for writing agent prompts that use the Phase 2.2 Jinja2
-template variables — the kolsch envelope. For the *why* of the
-design, read the [Phase 2.2 envelope spec](../../process/phase2.2-agent-envelope-specs.md);
-for the [agent-engine contract §2.1](../explanation/agent-engine-contract.md)
+Recipes for writing agent prompts that use the Jinja2 template
+variables — the kolsch envelope. The
+[agent-engine contract](../explanation/agent-engine-contract.md)
 covers where in pre-flight the render happens. The first-agent
 tutorial in [`docs/tutorials/first-agent.md`](../tutorials/first-agent.md)
 walks the loop from a fresh `kolsch setup` to a templated helper.
@@ -356,10 +355,9 @@ example and how the chain composes at render time.
 ### Resolving the parent reference
 
 `extends:` accepts the canonical 2-segment catalog ref
-`<bundle>/<name>` per
-[qol-prefix-defaults-and-unified-refs.md](../../process/qol-prefix-defaults-and-unified-refs.md);
-asset type is inferred from the field (`extends:` → `agent`).
-The resolver also accepts file-path forms for migration:
+`<bundle>/<name>`; asset type is inferred from the field
+(`extends:` → `agent`). The resolver also accepts file-path forms
+for migration:
 
 - **`kolsch/<name>`** — the canonical form. Resolves against
   the **workspace's `bundles/kolsch/` bundle** (the one `kolsch
@@ -387,8 +385,7 @@ agent-load.
 
 ### Common gotchas
 
-Three failure modes the EXT-CORPUS (`process/test-catalog.md`
-Part 9.10.1) pins as regression cases. Each is the kind of
+Three failure modes pinned as regression cases. Each is the kind of
 thing that surfaces once when you write your first inheriting
 agent and never again.
 

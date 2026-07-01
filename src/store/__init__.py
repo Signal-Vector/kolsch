@@ -4,7 +4,7 @@ Implements the persistence layer per the
 [session/run store contract](../explanation/session-run-store-contract.md).
 The filesystem JSONL is ground truth; entity records (SQLite default,
 Postgres scale-up) are rebuildable from the log via
-[`SessionStore.reconstruct_from_filesystem`][store.SessionStore.reconstruct_from_filesystem].
+[`SessionStore.reconstruct_from_filesystem`][store.session_store.SessionStore.reconstruct_from_filesystem].
 """
 
 from store.backend import EntityBackend

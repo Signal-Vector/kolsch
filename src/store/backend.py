@@ -92,7 +92,7 @@ class EntityBackend(Protocol):
         """Wipe every session and thread record.
 
         Used by
-        [`SessionStore.reconstruct_from_filesystem`][store.SessionStore.reconstruct_from_filesystem]
+        [`SessionStore.reconstruct_from_filesystem`][store.session_store.SessionStore.reconstruct_from_filesystem]
         regression tests and by operators performing a deliberate
         restart; the JSONL files (ground truth) are untouched.
         """

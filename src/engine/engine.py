@@ -9,12 +9,12 @@ returns the result.
 
 The execute path:
 
-1. [`execute_stream`][engine.AgentEngine.execute_stream] — the
+1. [`execute_stream`][engine.engine.AgentEngine.execute_stream] — the
    streaming primitive. Spawns an internal runner task that walks
    pre-flight, framework setup, the framework driver loop, and
    finalize, pushing events into an `asyncio.Queue`. The generator
    yields events from the queue as they land.
-2. [`execute`][engine.AgentEngine.execute] — collects the stream;
+2. [`execute`][engine.engine.AgentEngine.execute] — collects the stream;
    returns the final `agent.message` event; raises
    [`AgentExecutionError`][engine.AgentExecutionError] on Fatal
    failure.
@@ -189,7 +189,7 @@ class AgentEngine:
         """Run one exchange and return the final agent.message event.
 
         Collects the stream from
-        [`execute_stream`][engine.AgentEngine.execute_stream] and
+        [`execute_stream`][engine.engine.AgentEngine.execute_stream] and
         returns the closing `agent.message`. For callers that need to
         react event-by-event, use `execute_stream` instead. Unlike
         `execute_stream`, this method **raises** on Fatal failure
@@ -240,7 +240,7 @@ class AgentEngine:
     ) -> AsyncIterator[Event]:
         """Yield each event as it is emitted, including failure events.
 
-        Unlike [`execute`][engine.AgentEngine.execute], this method
+        Unlike [`execute`][engine.engine.AgentEngine.execute], this method
         does NOT raise on Fatal failure: the failed event is the
         final yielded item, and the iterator ends after it. Callers
         that prefer a `try/except` shape should use `execute`
