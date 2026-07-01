@@ -387,8 +387,8 @@ permissions:
 Any agent whose **home bundle** is `git-write` invokes these tools
 through the bundle's rules. The shape is the same as
 `platform.yaml.authorization.config.rules` and agent-level
-`permissions:` (see
-[`docs/reference/schemas.md`](../reference/schemas.md) §A.11.4).
+`permissions:` — see the `Rule` model in the
+[Schemas reference](../reference/schemas.md).
 
 ---
 
@@ -457,8 +457,5 @@ kolsch sessions events ses_<id> --type tool.failed --json | \
   `authz.pattern_invalid`, `config.deprecated_regex_rule`).
 - [`docs/explanation/tools-subsystem.md`](../explanation/tools-subsystem.md) §4.5 — the four canonical builtin
   tools and the action names you write rules against.
-- [`docs/reference/schemas.md`](../reference/schemas.md) §A.11.4 — the canonical `Rule` /
-  `PermissionRule` schema with the legacy-form subsection.
-- [`docs/reference/module-api-reference.md`](../reference/module-api-reference.md) Part 11.8 — the runtime API
-  the CLI calls into; useful if you're scripting against the
-  Authorization provider directly.
+- [Schemas reference](../reference/schemas.md) — the `Rule` /
+  `PermissionRule` model, generated from source.

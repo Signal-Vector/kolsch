@@ -570,12 +570,10 @@ for a later phase.
 
 ## Related
 
-- [Phase 2.2 envelope spec](../../process/phase2.2-agent-envelope-specs.md)
-  — the full design rationale and the variable API in detail.
-- [Schemas §A.11](../reference/schemas.md) — the agent envelope
-  fields' formal schema.
-- [Agent-engine contract §2.1](../explanation/agent-engine-contract.md)
-  — where in pre-flight the render happens (steps 5.6.5 and
-  5.6.6).
+- [Schemas reference](../reference/schemas.md) — the
+  `ResolvedAgentConfig` model carrying `extends`, `permissions`,
+  and `context_files`, generated from source.
+- [Agent-engine contract](../explanation/agent-engine-contract.md)
+  — where in pre-flight the template render happens.
 - [Error Model §4.18](../explanation/error-model.md) — the eleven
   envelope error codes.

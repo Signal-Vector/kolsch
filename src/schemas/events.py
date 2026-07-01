@@ -154,7 +154,7 @@ class ModelRequestData(_DataModel):
     (CrewAI's prompt-template injection, multimodal reshaping) can
     diverge from what a path-derived context would produce, so the
     log keeps the actual bytes the model saw — the
-    [Materialization Rule](../../docs/reference/master-index.md#key-vocabulary)
+    [Materialization Rule](../../docs/explanation/event-log-contract.md#the-materialization-rule)
     requires every input that shaped the model's context to live on
     an event, verbatim. Replay reads `messages` directly rather than
     re-running the projection.
@@ -293,7 +293,7 @@ class MemoryRetrievedData(_DataModel):
     """`memory.retrieved.data` — what a memory query returned.
 
     `results` carries the actual items returned, verbatim. The
-    [Assembly Procedure](../../docs/reference/master-index.md#key-vocabulary)
+    [Assembly Procedure](../../docs/explanation/event-log-contract.md#the-assembly-procedure)
     uses this content; it never re-runs the query at replay time.
     """
 

@@ -8,8 +8,9 @@ inherits from the kolsch starter helper.
 For the wider templating surface (variables, blocks, render
 context) see
 [Templated Agent Prompts](agent-templating.md). For the formal
-field schema see
-[Schemas §A.11](../reference/schemas.md#a11-phase-22--agent-envelope-extends-permissions-context_files).
+field schema see the
+[Schemas reference](../reference/schemas.md) — `ResolvedAgentConfig`
+carries `extends`, `permissions`, and `context_files`.
 
 ---
 
@@ -250,9 +251,9 @@ directly if any verification fails.
   envelope-variable surface (`{{ agent.name }}`,
   `{{ tools }}`, `{{ skills }}`, etc.) and the broader Jinja
   patterns including `{{ super() }}` and multi-level chains.
-- [Schemas §A.11](../reference/schemas.md#a11-phase-22--agent-envelope-extends-permissions-context_files)
-  — the formal `extends:`, `permissions:`, and
-  `context_files:` field schema.
+- [Schemas reference](../reference/schemas.md) — the
+  `ResolvedAgentConfig` model carrying `extends`, `permissions`,
+  and `context_files`, generated from source.
 - [Test catalog Part 9.10.1 (EXT-CORPUS)](../../process/test-catalog.md)
   — the 28 fixture cases this how-to's examples
   correspond to.
