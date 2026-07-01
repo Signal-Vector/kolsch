@@ -80,6 +80,17 @@ dependencies = [
     "crewai==1.14.6",
 ]
 
+[project.optional-dependencies]
+# qol-browse-url-tool — the heavy Tier 2 of the two-tier web-fetch
+# architecture. Playwright drives headless Chromium for JS-rendered
+# pages. The wheel itself is small; the ~150 MB Chromium binary is
+# fetched by the user via `playwright install chromium` after
+# `uv tool install 'kolsch[browse]'`. The extra name is `browse`
+# (grouping — all browser-based tools live here) rather than
+# `browse_url` so a future browser-driven tool joining the family
+# does not need a second extra.
+browse = ["playwright>=1.45"]
+
 [project.urls]
 Homepage = "https://example.invalid/kolsch"
 

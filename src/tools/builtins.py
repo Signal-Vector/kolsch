@@ -282,6 +282,21 @@ def make_fetch_url(
     return fetch_url
 
 
+def make_browse_url(
+    *, policy: PathPolicy, root: Path,  # noqa: ARG001
+) -> Callable[..., Awaitable[Any]]:
+    """Factory placeholder for the browse_url tool — qol-browse-url-tool Step 1.
+
+    The real body lands in Step 2 (``feat(tools): add browse_url tool
+    + arg-validation tests``) alongside the starter-bundle module at
+    ``src/cli/_starter_bundle/kolsch/tools/browse_url.py``. This
+    placeholder exists so downstream callers can reference the factory
+    name in the Step-1 commit without ambient churn in Step 2's diff.
+    """
+    msg = "filled in step 2 of qol-browse-url-tool-build"
+    raise NotImplementedError(msg)
+
+
 def make_bash(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]]:  # noqa: ARG001
     """Build the legacy `bash` builtin — shell tool exempt from path policy.
 
