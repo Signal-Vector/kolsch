@@ -1,4 +1,4 @@
-"""Component tests for the ``fetch_url`` tool — happy path (Tests 2-4).
+"""Component tests for the ``fetch_url`` tool — happy path + redirects/auth.
 
 Each test spins up a local ``http.server.ThreadingHTTPServer`` on an
 ephemeral port. A per-test route table (a plain ``dict[str, tuple]``)
@@ -16,6 +16,11 @@ Tests covered here (from ``process/qol-fetch-url-tool.md``):
 - Test 2 — HTML article via trafilatura → clean extracted text.
 - Test 3 — ``application/json`` auto-detected → pretty-printed JSON.
 - Test 4 — ``format='bytes_base64'`` round-trips to the original bytes.
+- Test 5 — ``follow_redirects=True`` resolves ``/a`` → ``/b`` and
+  populates ``final_url``.
+- Test 6 — ``follow_redirects=False`` returns the raw 302 with
+  ``final_url`` unchanged.
+- Test 7 — custom ``headers`` + ``cookies`` reach the target.
 """
 
 from __future__ import annotations
@@ -28,6 +33,7 @@ import sys
 import threading
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+from collections.abc import Callable
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
@@ -98,10 +104,15 @@ def _ctx() -> ToolContext:
 
 
 # Route table shape:
-#   path -> (status, headers, body)
-# where headers is a dict[str, str] and body is bytes.
+#   path -> (status, headers, body)  # static response
+#     OR
+#   path -> callable(BaseHTTPRequestHandler) -> (status, headers, body)
+# where headers is a dict[str, str] and body is bytes. Callables let a
+# test inspect request headers (see the /echo-headers route in Test 7)
+# without teaching the fixture about every possible dynamic response.
 Route = tuple[int, dict[str, str], bytes]
-RouteTable = dict[str, Route]
+RouteHandler = Callable[[BaseHTTPRequestHandler], Route]
+RouteTable = dict[str, "Route | RouteHandler"]
 
 
 class _LocalHttpServer:
@@ -142,7 +153,11 @@ class _LocalHttpServer:
                     self.end_headers()
                     self.wfile.write(b"not-found")
                     return
-                status, headers, body = entry
+                # Callable routes get the raw request handler so they
+                # can inspect self.headers / self.path before deciding
+                # on a response.
+                resolved = entry(self) if callable(entry) else entry
+                status, headers, body = resolved
                 self.send_response(status)
                 for name, value in headers.items():
                     self.send_header(name, value)
@@ -316,3 +331,114 @@ async def test_fetch_url_bytes_base64_round_trip(
     assert result["content_type"] == "bytes_base64"
     decoded = base64.b64decode(result["content"])
     assert decoded == original
+
+
+# ---------------------------------------------------------------------------
+# Test 5 & 6 — redirect fixture pair
+# ---------------------------------------------------------------------------
+
+
+def _register_redirect_pair(server: _LocalHttpServer) -> None:
+    """Wire up the ``/a`` → 302 → ``/b`` route pair.
+
+    Both Test 5 and Test 6 exercise the SAME fixture pair — the ONLY
+    difference between them is the ``follow_redirects`` arg passed to
+    ``fetch_url``. Keeping the routes in one helper prevents the two
+    tests from drifting apart.
+    """
+    # /a always redirects to /b — Location is a relative path so the
+    # test doesn't need to know the ephemeral port.
+    server.routes["/a"] = (
+        302,
+        {"Location": "/b", "Content-Type": "text/plain"},
+        b"redirecting",
+    )
+    server.routes["/b"] = (
+        200,
+        {"Content-Type": "text/plain; charset=utf-8"},
+        b"landed at /b",
+    )
+
+
+async def test_fetch_url_redirect_follows_and_populates_final_url(
+    local_http_server: _LocalHttpServer,
+) -> None:
+    """Test 5: follow_redirects=True → final_url ends with /b."""
+    _register_redirect_pair(local_http_server)
+    args = FetchUrlArgs(
+        url=f"{local_http_server.base_url}/a",
+        # follow_redirects defaults to True; make that explicit so the
+        # test doesn't silently pass if the default ever flipped.
+        follow_redirects=True,
+    )
+
+    result = await fetch_url(args, _ctx())
+
+    assert result["status"] == 200
+    assert result["final_url"].endswith("/b")
+    # The /b fixture body is served as text/plain, not html, so the
+    # tool takes the utf-8-decode branch and content_type stays "text".
+    assert result["content_type"] == "text"
+    assert "landed at /b" in result["content"]
+
+
+async def test_fetch_url_no_follow_returns_302(
+    local_http_server: _LocalHttpServer,
+) -> None:
+    """Test 6: follow_redirects=False → status=302, final_url unchanged."""
+    _register_redirect_pair(local_http_server)
+    args = FetchUrlArgs(
+        url=f"{local_http_server.base_url}/a",
+        follow_redirects=False,
+    )
+
+    result = await fetch_url(args, _ctx())
+
+    assert result["status"] == 302
+    # final_url must NOT have advanced to /b — httpx should have
+    # returned the 302 response verbatim.
+    assert result["final_url"].endswith("/a")
+    assert not result["final_url"].endswith("/b")
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — headers + cookies reach the target
+# ---------------------------------------------------------------------------
+
+
+async def test_fetch_url_auth_headers_and_cookies_reach_target(
+    local_http_server: _LocalHttpServer,
+) -> None:
+    """Test 7: Authorization header AND session cookie reach the fixture."""
+
+    def _echo_headers(handler: BaseHTTPRequestHandler) -> Route:
+        # Echo BOTH headers back into the body so the assertion below
+        # can prove each one actually reached the server (a
+        # server-side check would be brittle against httpx's
+        # canonicalization).
+        auth = handler.headers.get("Authorization", "")
+        cookie = handler.headers.get("Cookie", "")
+        body = f"auth={auth}\ncookie={cookie}".encode()
+        return (
+            200,
+            {"Content-Type": "text/plain; charset=utf-8"},
+            body,
+        )
+
+    local_http_server.routes["/echo-headers"] = _echo_headers
+
+    args = FetchUrlArgs(
+        url=f"{local_http_server.base_url}/echo-headers",
+        headers={"Authorization": "Bearer secret"},
+        cookies={"session": "abc123"},
+    )
+
+    result = await fetch_url(args, _ctx())
+
+    assert result["status"] == 200
+    # BOTH the header AND the cookie must appear in the echoed body.
+    # Missing either half is a real regression — the tool must not
+    # silently drop cookies (they can arrive through a separate
+    # httpx.AsyncClient constructor arg from headers).
+    assert "auth=Bearer secret" in result["content"]
+    assert "cookie=session=abc123" in result["content"]
