@@ -1,43 +1,107 @@
 # Kolsch
 
-Local-first, YAML-driven multi-agent runtime. Define an agent in a
-YAML file. Run it locally on your machine. Every step lands on a
-JSONL event log you can read.
+Kolsch is a local-first harness for agents that get sharper with
+use, paired with a workflow layer for the parts that shouldn't
+drift.
 
-Under the hood: a Python engine, an in-process event bus, a SQLite
-entity store, and a first-class DAG workflow layer. LLM calls go
-through pluggable connectors (OpenRouter, OpenCode). CrewAI is the
-framework adapter today; the engine talks to a `Framework` Protocol,
-so the framework is swappable.
+Kolsch is two things under one runtime. It is a harness for agents
+you build, extend, and re-run against your own context. It is a
+YAML-defined workflow layer for the steps you want to pin down and
+repeat. Both sit on the same event log, the same asset catalog, and
+the same local SQLite store, so an agent you shaped last week is the
+same agent a workflow calls tomorrow.
 
-Kolsch is a runtime plus a YAML config format plus a JSONL event
-log. It isn't a hosted service, a managed cloud, or a UI. It isn't
-a replacement for CrewAI — it wraps CrewAI. It isn't a workflow
-engine competing with n8n at scale — it's a workflow layer for
-multi-agent chains that keeps everything replayable on disk.
+The design comes from a simple observation. Agent tools tend to be
+good at open-ended one-to-one work and bad at multi-step
+orchestration. Workflow tools tend to be good at deterministic
+pipelines and blind to who is using them or what they already know.
+Kolsch treats these as one problem. Agents accumulate skills, tools,
+and prompts inside bundles you own. Workflows call those agents as
+nodes when a job has enough shape to warrant a DAG.
+
+The harness angle is deliberate. Agents in Kolsch are not one-shot
+prompts. They are configurations you inherit from, extend, and pair
+with your own tools and skills. A bundle is a namespaced folder that
+co-locates agents, tools, skills, workflows, nodes, and prompts
+under one manifest, with its own permission layer. You add to it
+over time. Sessions are event-sourced JSONL logs on disk, so
+resuming a conversation or replaying a run is a file read, not a
+service call.
+
+This lands between two camps. Workflow platforms like n8n and CrewAI
+make it easy to wire steps together but treat the operator as a
+stateless caller — there is no built-in notion of your agents, your
+skills, or your accumulated context traveling with the work.
+Agent-forward services in the Hermes shape do the opposite: they
+hold a rich one-to-one exchange but stop short of multi-step,
+branching, deterministic orchestration you can schedule against and
+reason about. Kolsch keeps both. An agent you have shaped, with the
+tools and skills it has picked up, is the same unit a workflow node
+invokes. The workflow gives you determinism where you need it. The
+agent gives you judgment where you don't. Neither side has to
+pretend the other doesn't exist.
 
 ## Key principles
 
-Four load-bearing choices worth understanding before committing time:
+Five load-bearing choices worth understanding before committing time:
 
-- **The event log is the ground truth.** Every model call, tool
-  invocation, and workflow step lands on a JSONL file per session.
-  The SQLite entity store is a rebuildable index of that log; drop
-  it and the log reconstructs the world. See the
-  [event log contract](explanation/event-log-contract.md).
-- **YAML is the source of truth for configuration.** Agents, tools,
-  skills, and workflows are files under `bundles/<bundle>/`. Nothing
-  hidden in a DB, nothing baked into code paths. See
+- **Bundles are first-class packages, not just skill folders.** A
+  bundle is a namespaced directory that co-locates agents, tools,
+  skills, workflows, nodes, and prompts under one manifest with its
+  own permission layer. Every asset gets a canonical
+  `<bundle>/<type>/<name>` ref, so shipping a capability means
+  shipping the folder — no registry, no glue code. See
   [Assets](architecture/assets.md).
-- **Local-first.** SQLite plus an in-process event bus by default.
-  No cloud service required to run; no phone-home. Postgres and
-  Redis are contract-level extension points, not shipping backends
-  today.
-- **The framework is swappable behind a Protocol.** The engine
-  depends on the `Framework` interface, not on CrewAI directly.
-  CrewAI is one implementation; a `FakeFramework` ships for tests
-  and offline runs. See the
-  [framework protocol design](explanation/framework-protocol-design.md).
+- **Workflows are YAML-declared, DAG-based, and event-sourced.**
+  Multi-step automation is authored as a nodes-and-edges YAML file
+  with explicit data binding — no scheduler, no hidden state, and
+  every node's inputs, outputs, and errors land in the event log.
+  The same file runs the same way on your laptop, in CI, and inside
+  another agent's tool call. See the
+  [workflow foundation](explanation/workflow-foundation.md).
+- **Python-first and strictly typed at every boundary.** Tools,
+  nodes, and manifests are Pydantic v2 models with
+  `ConfigDict(extra='forbid')`, checked by `mypy --strict` and the
+  full ruff ANN rule set. Configuration errors surface at load time
+  with a filename and a Fix: line, not three tool calls later. See
+  the [schemas reference](reference/schemas.md).
+- **Local-first, with multi-workspace by cd.** The default install
+  runs on SQLite and an in-process event bus with zero external
+  services; Postgres and Redis are opt-in for scale, not
+  prerequisites. A workspace is just a directory — switch between
+  them with `--root`, `$KOLSCH_WORKSPACE`, or a shell export, no
+  registry required. See
+  [Workspace and setup](how-to/workspace-and-setup.md).
+- **The event log is the ground truth.** Every user turn, tool call,
+  node fire, and framework exchange is appended to a JSONL log that
+  is replayable and diffable — the SQLite entity DB is a derived
+  index, never the source of record. Sessions resume, workflows
+  fork, and audits reconstruct exactly what happened from the same
+  append-only stream. See the
+  [event log contract](explanation/event-log-contract.md).
+
+## Bundles
+
+A bundle is a namespaced package that co-locates agents, tools,
+skills, workflows, nodes, and prompts under one manifest — with its
+own permission layer. Traditional skills are a single folder of
+instructions; a bundle owns six asset types and the authz rules that
+govern them, so an agent, the tool it calls, and the workflow that
+orchestrates it all ship and version together. `kolsch setup` drops
+a starter bundle into your workspace; adding another today means
+copying a directory into `bundles/` — git clone, tar, cp, whatever
+gets the folder there.
+
+```
+bundles/my-bundle/
+├── bundle.yaml       # name, version, permissions
+├── agents/           # *.yaml
+├── tools/            # @tool Python modules
+├── skills/           # SKILL.md folders
+├── workflows/        # YAML DAGs
+├── nodes/            # workflow node handlers
+└── prompts/
+```
 
 ## Where it is in development
 
@@ -53,6 +117,8 @@ Kolsch is in early development. What that means concretely:
   tab is the arbiter of the current shape.
 - **The Python API isn't stable.** Public surface may change; the
   contracts in `docs/explanation/` are the load-bearing invariants.
+- **No bundle registry.** Sharing a bundle today means shipping the
+  folder — no `kolsch install`, no marketplace.
 - **License is TBD.**
 
 None of that stops you from using Kolsch today for its intended
