@@ -47,12 +47,12 @@ That means:
   Override what you want, keep the rest.
 - **Reuse tools across agents.** A tool written in one bundle is
   callable from any agent in any bundle, subject to permissions.
-- **Permissions travel with the capability.** Rules live next to the
-  code they govern, so installing a bundle installs its safety
-  posture too.
+- **Bundles don't share permissions.** A new bundle's tools don't
+  inherit rules you granted for other tools — installing one can't
+  silently widen what your existing agents can do.
 - **One reference shape for everything.** Agents, tools, skills,
-  workflows, nodes, and prompts all resolve as
-  `<bundle>/<type>/<name>` — e.g. `kolsch/agents/helper`.
+  workflows, and nodes all resolve as `<bundle>/<type>/<name>` —
+  e.g. `kolsch/agents/helper`.
 
 ```
 bundles/my-bundle/
@@ -61,8 +61,7 @@ bundles/my-bundle/
 ├── tools/            # @tool Python modules
 ├── skills/           # SKILL.md folders
 ├── workflows/        # YAML DAGs
-├── nodes/            # workflow node handlers
-└── prompts/
+└── nodes/            # workflow node handlers
 ```
 
 `kolsch setup` drops a starter bundle in. Adding another today means
