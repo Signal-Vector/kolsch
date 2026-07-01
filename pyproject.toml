@@ -28,8 +28,7 @@ dependencies = [
     "ruamel.yaml>=0.18,<1",
     "ruamel.yaml.clib>=0.2.8",
     # Step 13 — CLI + API entry surfaces. FastAPI for the HTTP surface;
-    # uvicorn as the production ASGI server. No CrewAI / litellm here —
-    # the engine's runtime is still framework-agnostic.
+    # uvicorn as the production ASGI server.
     "fastapi>=0.115,<1",
     "uvicorn[standard]>=0.30,<1",
     # Phase 1.2 (UX-R1) — workspace resolution. `platformdirs` provides
@@ -52,6 +51,24 @@ dependencies = [
     # `src/templating/render.py` and the prompt pre-flight in
     # `src/engine/engine.py` (steps 5.6.5 + 5.6.6).
     "jinja2>=3.1.0,<4",
+    # LLM provider HTTP client — used at module-load time by the
+    # OpenRouter / OpenCode connectors in `src/llm/providers/` for
+    # discovery, credential validation, and request classification
+    # (see e.g. `httpx.HTTPError` catches in
+    # `_discover_models`). Must be a runtime dep because `kolsch
+    # setup` imports `llm.providers` to register the connectors.
+    "httpx>=0.27,<1",
+    # LLM framework adapter — imported at module load by the same
+    # provider connectors (for `crewai.LLM` construction in
+    # `build_llm`) and by `src/engine/crewai_framework.py`, which
+    # is the v1 production Framework adapter the engine binds to
+    # when a real provider is connected. Pinned to a specific
+    # version because CrewAI iterates rapidly and breaks APIs
+    # (e.g. `function_calling_llm` deprecated in 1.14.5a6); bump
+    # alongside a fresh validation pass against
+    # docs/explanation/framework-protocol-design.md §2.
+    # Release notes: https://github.com/crewAIInc/crewAI/releases
+    "crewai==1.14.6",
 ]
 
 [project.urls]
@@ -169,16 +186,6 @@ test = [
     # (PyPI: httpx2==2.2.0 as of 2026-05); pin it explicitly so the
     # test path doesn't fall back to the legacy httpx import.
     "httpx2>=2.2,<3",
-    # CrewAI for the v1 production Framework adapter. Test-group only —
-    # the engine's contract (src/engine/framework.py) stays
-    # framework-agnostic per the prereq design note. Pinned to a
-    # specific version because (a) CrewAI iterates rapidly and breaks
-    # APIs (e.g. function_calling_llm deprecated in 1.14.5a6) and (b)
-    # the prereq spike was validated against this exact version. Bump
-    # alongside a fresh validation pass against
-    # docs/explanation/framework-protocol-design.md §2.
-    # Release notes: https://github.com/crewAIInc/crewAI/releases
-    "crewai==1.14.6",
 ]
 
 # ---------------------------------------------------------------------------
