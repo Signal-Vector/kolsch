@@ -448,7 +448,7 @@ exclude = [
 [[tool.mypy.overrides]]
 # Third-party libraries without type stubs land here as they get adopted.
 # Add ignores explicitly so the scope of "untyped" stays visible.
-module = ["testcontainers.*", "bs4", "trafilatura"]
+module = ["testcontainers.*", "bs4", "trafilatura", "playwright.*"]
 ignore_missing_imports = true
 
 [tool.pydantic-mypy]

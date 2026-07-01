@@ -285,16 +285,48 @@ def make_fetch_url(
 def make_browse_url(
     *, policy: PathPolicy, root: Path,  # noqa: ARG001
 ) -> Callable[..., Awaitable[Any]]:
-    """Factory placeholder for the browse_url tool — qol-browse-url-tool Step 1.
+    """Factory for the browse_url tool — qol-browse-url-tool Step 2.
 
-    The real body lands in Step 2 (``feat(tools): add browse_url tool
-    + arg-validation tests``) alongside the starter-bundle module at
-    ``src/cli/_starter_bundle/kolsch/tools/browse_url.py``. This
-    placeholder exists so downstream callers can reference the factory
-    name in the Step-1 commit without ambient churn in Step 2's diff.
+    Loads the ``@tool``-decorated coroutine defined in
+    ``src/cli/_starter_bundle/kolsch/tools/browse_url.py`` via
+    ``importlib`` (the starter-bundle tree is a filesystem template,
+    not an importable package — no ``__init__.py``) so this factory
+    stays a thin wrapper. The starter-bundle file is the source of
+    truth (TOOL-R10, file-IS-the-tool); ``make_browse_url`` exists so
+    the workflow-node companion (a follow-up QoL) can consume the
+    same implementation via the ``make_*`` pattern that ``make_bash``
+    / ``make_read_file`` use.
+
+    ``policy`` and ``root`` are accepted for factory-signature symmetry
+    but not used: ``browse_url`` reaches the network, not the filesystem,
+    and reads ``workspace_root`` / ``session_id`` off ``ToolContext`` at
+    invocation time (via the dispatch flow) rather than closing over them.
     """
-    msg = "filled in step 2 of qol-browse-url-tool-build"
-    raise NotImplementedError(msg)
+    import importlib.util  # noqa: PLC0415 — deferred; avoids cost when factory unused
+    import sys  # noqa: PLC0415 — deferred
+
+    tool_path = (
+        Path(__file__).resolve().parent.parent
+        / "cli"
+        / "_starter_bundle"
+        / "kolsch"
+        / "tools"
+        / "browse_url.py"
+    )
+    module_name = "_kolsch_starter_bundle_browse_url"
+    cached = sys.modules.get(module_name)
+    if cached is None:
+        spec = importlib.util.spec_from_file_location(module_name, tool_path)
+        if spec is None or spec.loader is None:
+            msg = f"could not load browse_url tool template from {tool_path}"
+            raise RuntimeError(msg)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+    else:
+        module = cached
+    browse_url: Callable[..., Awaitable[Any]] = module.browse_url
+    return browse_url
 
 
 def make_bash(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]]:  # noqa: ARG001
