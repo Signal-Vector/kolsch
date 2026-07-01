@@ -27,17 +27,32 @@ for both.
 |  | Workflow tools (n8n, CrewAI) | Agent chat tools | Kolsch |
 |---|---|---|---|
 | Multi-step orchestration | Yes | No | Yes |
-| Agent context that travels | No | Yes | Yes |
-| Determinism where you need it | Yes | No | Yes |
-| Judgment where you don't | No | Yes | Yes |
+| Agent context that travels between steps | No | Yes | Yes |
+| Extend an agent you already built | No | Partial | Yes |
+| Reuse the same tool across agents and workflows | Partial | No | Yes |
+| Resume a conversation from last week | No | Partial | Yes |
+| Runs locally with no external services | Partial | No | Yes |
 
 ## Bundles
 
-A bundle is a folder that groups agents, tools, skills, workflows,
-nodes, and prompts under one manifest with its own permission rules.
-Six kinds of assets under one namespace, so the agent, the tool it
-calls, and the workflow that orchestrates it ship and version
-together.
+A bundle is a shippable capability. You get a working agent, the
+tools it calls, the skills it loads, the workflows that orchestrate
+it, and the permission rules that govern all of it — as one folder
+with one name.
+
+That means:
+
+- **Extend someone else's agent.** Point `extends:` at another
+  bundle's agent and inherit its instructions, tools, and skills.
+  Override what you want, keep the rest.
+- **Reuse tools across agents.** A tool written in one bundle is
+  callable from any agent in any bundle, subject to permissions.
+- **Permissions travel with the capability.** Rules live next to the
+  code they govern, so installing a bundle installs its safety
+  posture too.
+- **One reference shape for everything.** Agents, tools, skills,
+  workflows, nodes, and prompts all resolve as
+  `<bundle>/<type>/<name>` — e.g. `kolsch/agents/helper`.
 
 ```
 bundles/my-bundle/
@@ -55,21 +70,23 @@ copying a directory into `bundles/` — git clone, tar, cp.
 
 ## Principles
 
-- **Bundles are packages, not just skill folders.** Every asset gets
-  a `<bundle>/<type>/<name>` reference. See
-  [Assets](architecture/assets.md).
-- **Workflows are YAML graphs.** No scheduler. No hidden state.
-  Every step's inputs, outputs, and errors land in the event log.
-  See [Workflow foundation](explanation/workflow-foundation.md).
-- **Python-first, strictly typed.** Configuration errors surface at
-  load time with a filename and a Fix: line. See
+- **Extend and compose.** Inherit from any agent, reuse any tool,
+  build on any bundle. Your work stacks on top of what already
+  exists instead of forking it.
+- **Strictly typed configuration.** Mistakes in a YAML file surface
+  at load time with the filename, the field, and a Fix: line — not
+  as a stack trace three steps into a run. See
   [Schemas](reference/schemas.md).
-- **Local-first, multi-workspace by cd.** SQLite plus an in-process
-  bus, zero external services. Postgres and Redis are opt-in. See
-  [Workspace and setup](how-to/workspace-and-setup.md).
-- **The event log is the source of record.** Every turn, tool call,
-  and node fire appends to a JSONL log. SQLite is a derived index.
-  See [Event log contract](explanation/event-log-contract.md).
+- **Workflows compose your agents, tools, and bundle assets.** A
+  workflow step can call any agent you've built, any tool you've
+  written, and any asset any bundle exposes — all under the same
+  reference shape.
+- **Runs on your machine.** No cloud service, no external database
+  required. See [Workspace and setup](how-to/workspace-and-setup.md).
+- **Resume any conversation, replay any run.** Every turn, tool
+  call, and node fire is recorded, so you can pick a session back
+  up or audit exactly what happened. See
+  [Event log contract](explanation/event-log-contract.md).
 
 ## Where it is in development
 
@@ -90,7 +107,7 @@ multi-tenant SaaS.
 ```bash
 uv tool install kolsch
 kolsch setup
-kolsch chat kolsch/helper
+kolsch chat kolsch/agents/helper
 ```
 
 The [first-agent tutorial](tutorials/first-agent.md) walks the same
