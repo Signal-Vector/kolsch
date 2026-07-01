@@ -54,3 +54,6 @@ logs/
 # whatever the team decides is enduring architectural content; the
 # raw process notes stay local.
 process/
+
+# MkDocs build output
+site/

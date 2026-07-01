@@ -1,0 +1,175 @@
+site_name: Kolsch
+site_description: Local-first, definition-orchestrated multi-agent workflow platform.
+repo_url: https://github.com/Signal-Vector/kolsch
+repo_name: Signal-Vector/kolsch
+edit_uri: edit/main/docs/
+
+docs_dir: docs
+
+# Neutral baseline — Material defaults, dark/light toggle, no custom
+# branding yet. The goal of this first pass is to get the project's
+# existing docs/ tree rendering so we can iterate on tone and design
+# against a real build, not in the abstract.
+
+theme:
+  name: material
+  features:
+    # Navigation
+    - navigation.tabs
+    - navigation.sections
+    - navigation.indexes
+    - navigation.top
+    - navigation.tracking
+    - toc.follow
+    # Search
+    - search.suggest
+    - search.highlight
+    - search.share
+    # Code
+    - content.code.copy
+    - content.code.annotate
+    # Editing
+    - content.action.edit
+    - content.action.view
+  palette:
+    - media: "(prefers-color-scheme: light)"
+      scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-sunny
+        name: Switch to dark mode
+    - media: "(prefers-color-scheme: dark)"
+      scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/weather-night
+        name: Switch to light mode
+  font:
+    text: Inter
+    code: JetBrains Mono
+  icon:
+    repo: fontawesome/brands/github
+    edit: material/pencil
+    view: material/eye
+
+plugins:
+  - search
+  - mkdocstrings:
+      handlers:
+        python:
+          paths: [src]
+          options:
+            # Render style: Google docstring convention so our locked
+            # Args / Returns / Raises blocks land cleanly.
+            docstring_style: google
+            docstring_section_style: table
+            # Show signatures + types pulled from annotations.
+            show_signature: true
+            show_signature_annotations: true
+            separate_signature: true
+            line_length: 80
+            # Layout: group by member kind; show source links so
+            # readers can jump from rendered docs to the .py file.
+            show_root_heading: true
+            show_source: true
+            show_bases: true
+            show_inheritance_diagram: false
+            members_order: source
+            # Filter: underscore-prefixed are private by convention.
+            filters: ["!^_"]
+            # Cross-references in our docstrings use the bracket
+            # form ([`Name`][module.path]) — mkdocstrings resolves
+            # these against the inventory.
+            heading_level: 2
+
+markdown_extensions:
+  # Standard Material extensions — enables admonitions, code blocks
+  # with line numbers + annotations, tabbed content, etc. Removing
+  # any of these may break rendering of existing docstrings or doc
+  # pages that depend on them.
+  - admonition
+  - attr_list
+  - def_list
+  - footnotes
+  - md_in_html
+  - tables
+  - toc:
+      permalink: true
+  - pymdownx.highlight:
+      anchor_linenums: true
+      line_spans: __span
+      pygments_lang_class: true
+  - pymdownx.inlinehilite
+  - pymdownx.snippets
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - pymdownx.details
+  - pymdownx.emoji:
+      emoji_index: !!python/name:material.extensions.emoji.twemoji
+      emoji_generator: !!python/name:material.extensions.emoji.to_svg
+
+nav:
+  - Home: index.md
+  - Architecture:
+      - architecture/index.md
+      - CLI: architecture/cli.md
+      - API: architecture/api.md
+      - Workflows: architecture/workflows.md
+      - Agent Engine: architecture/engine.md
+      - Tools: architecture/tools.md
+      - Skills: architecture/skills.md
+      - Assets: architecture/assets.md
+      - Kernel: architecture/kernel.md
+      - Templating: architecture/templating.md
+      - Store: architecture/store.md
+      - Bus: architecture/bus.md
+      - Providers: architecture/providers.md
+      - LLM Connectors: architecture/llm.md
+      - Files: architecture/files.md
+      - Schemas: architecture/schemas.md
+      - Errors: architecture/errors.md
+      - Platform Runtime: architecture/platform-runtime.md
+  - Guides:
+      - how-to/README.md
+      - First agent: tutorials/first-agent.md
+      - Write a workflow node: how-to/write-a-workflow-node.md
+      - Chatting effectively: how-to/chatting-effectively.md
+      - Workspace and setup: how-to/workspace-and-setup.md
+      - Extending an agent: how-to/extending-an-agent.md
+      - Agent templating: how-to/agent-templating.md
+      - Forcing a skill: how-to/forcing-a-skill.md
+      - Configuring fallbacks: how-to/configure-fallbacks.md
+      - Permissions: how-to/permissions.md
+      - Finding models: how-to/find-models.md
+  - Reference:
+      - reference/master-index.md
+      - Vocabulary: reference/vocabulary.md
+      - Schemas: reference/schemas.md
+      - Module API reference: reference/module-api-reference.md
+      - Workflow YAML reference: reference/workflow-yaml.md
+      - Workflows (legacy reference): workflows.md
+      - Documentation conventions: process/documentation-conventions.md
+  - API: api/index.md
+
+# Deep-dive subsystem contracts under docs/explanation/ stay in the
+# tree but are not surfaced in the top nav — they're linked from
+# the Architecture pages and findable via search. Surfacing all 22
+# files as a top tab overwhelms the toolbar.
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/Signal-Vector/kolsch
+
+# Strict mode is enabled per-build via `mkdocs build --strict` so we
+# see all link / cross-ref warnings during iteration.
+strict: false
