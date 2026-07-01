@@ -5,7 +5,7 @@ bind-collision / timeout-sign checks land in the validator.
 
 Layout:
 
-- Per-built-in `*NodeDef` for the 14 reserved `kolsch/nodes/<name>`
+- Per-built-in `*NodeDef` for the 15 reserved `kolsch/nodes/<name>`
   types, each paired 1:1 with its `*Inputs(BaseModel)`.
 - [`CopyOfNodeDef`][workflows.parser.CopyOfNodeDef] for nodes that
   reuse another node's type via `copy_of:` (semantic resolution at
@@ -66,6 +66,8 @@ __all__ = [
     "BashNodeDef",
     "BranchInputs",
     "BranchNodeDef",
+    "BrowseUrlInputs",
+    "BrowseUrlNodeDef",
     "CatalogNodeDef",
     "ComputeInputs",
     "ComputeNodeDef",
@@ -112,6 +114,12 @@ __all__ = [
 
 class BashInputs(BaseModel):
     """Receiver inputs for `kolsch/nodes/bash`."""
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+
+
+class BrowseUrlInputs(BaseModel):
+    """Receiver inputs for `kolsch/nodes/browse_url`."""
 
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
 
@@ -272,6 +280,29 @@ class BashNodeDef(_BaseNodeDef):
     env: dict[str, Any] | None = None
 
 
+class BrowseUrlNodeDef(_BaseNodeDef):
+    """`kolsch/nodes/browse_url` — fetch a rendered web page.
+
+    Wraps the `browse_url` bundle tool. Type-specific fields are
+    Jinja-renderable strings (`url`, `format`, `wait_selector`) plus
+    per-value Jinja rendering on `headers` / `cookies` (keys pass
+    through as literals — allowing dynamic header names would let a
+    Jinja-generated string smuggle unintended headers past review).
+    `request_timeout_seconds` is the TOOL-level request timeout —
+    named this way deliberately to avoid colliding with
+    `_BaseNodeDef.timeout_seconds` (the workflow-executor-level
+    timeout).
+    """
+
+    type: Literal["kolsch/nodes/browse_url"]
+    url: str = Field(description="URL to fetch. Jinja-renderable.")
+    format: Literal["text", "html"] = "text"
+    wait_selector: str | None = None
+    headers: dict[str, str] | None = None
+    cookies: dict[str, str] | None = None
+    request_timeout_seconds: int = Field(default=30, ge=1, le=120)
+
+
 class AgentNodeDef(_BaseNodeDef):
     """`kolsch/nodes/agent` — invoke a catalogued agent."""
 
@@ -415,6 +446,7 @@ class CopyOfNodeDef(_BaseNodeDef):
 
 _BUILTIN_NODE_CLASSES: dict[str, type[_BaseNodeDef]] = {
     "bash": BashNodeDef,
+    "browse_url": BrowseUrlNodeDef,
     "agent": AgentNodeDef,
     "user_input": UserInputNodeDef,
     "noop": NoopNodeDef,
@@ -433,6 +465,7 @@ _BUILTIN_NODE_CLASSES: dict[str, type[_BaseNodeDef]] = {
 
 NodeDefUnion = Union[  # noqa: UP007 — Annotated unions over Pydantic models
     BashNodeDef,
+    BrowseUrlNodeDef,
     AgentNodeDef,
     UserInputNodeDef,
     NoopNodeDef,
