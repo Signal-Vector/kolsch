@@ -15,7 +15,7 @@ gates which refs you can force-invoke.
 
 ## When to use it
 
-- The user knows which skill applies. ("Run the literature-review
+- The user knows which skill applies. ("Run the write-python-test
   skill on transformer attention.")
 - The skill is marked `disable-model-invocation: true` and
   cannot be discovered by the model — force-invoke is the only
@@ -29,8 +29,8 @@ Force-invoke is the override, not the default.
 ## In `kolsch chat`
 
 ```
-You: /skill kolsch/literature-review
-queued kolsch/literature-review — force-load runs before your next message.
+You: /skill kolsch/skills/write-python-test
+queued kolsch/skills/write-python-test — force-load runs before your next message.
 You: write a literature review on transformer attention variants
 ```
 
@@ -60,7 +60,7 @@ submitting.
 ```
 $ kolsch run kolsch/researcher \
     --input content="literature review on transformer attention" \
-    --skill kolsch/literature-review
+    --skill kolsch/skills/write-python-test
 ```
 
 `--skill` is repeatable. Each occurrence adds one ref to the

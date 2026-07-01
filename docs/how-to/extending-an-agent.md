@@ -208,7 +208,7 @@ Common load-time errors and what they mean:
 | `config.agent_inheritance_cycle` | Loop in the chain | Two YAMLs extend each other (or A→B→A); fix one to terminate at a real parent. |
 | `config.extends_template_without_inheritance` | Prompt uses `{% extends parent %}` but YAML has no `extends:` field | Add the `extends: <bundle>/<name>` field, or remove the Jinja directive. |
 | `config.required_block_missing` | Parent declares `{% block X required %}{% endblock %}`; child doesn't override `X` | Override the required block in the child's prompt. |
-| `config.template_render_failed` | Typo'd variable name under StrictUndefined | Check the variable name in the child's prompt against the [five envelope vars](agent-templating.md#use-the-five-top-level-variables). |
+| `config.template_render_failed` | Typo'd variable name under StrictUndefined | Check the variable name in the child's prompt against the [six envelope vars](agent-templating.md#use-the-six-top-level-variables). |
 
 ---
 

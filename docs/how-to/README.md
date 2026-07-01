@@ -7,11 +7,18 @@ agents, and working with the CLI.
 
 - [First agent](../tutorials/first-agent.md) — set up a workspace,
   write an agent YAML, and run a chat session end-to-end.
+- [Connect a provider](connect-a-provider.md) — from an empty
+  workspace to a real LLM. OpenRouter and OpenCode connectors.
 - [Workspace and setup](workspace-and-setup.md) — where the workspace
   lives, switching between workspaces, scripting setup for CI.
 
 ## Extend the platform
 
+- [Build a workflow](build-a-workflow.md) — wire the built-in node
+  types into a DAG for a real task. Nodes, edges, binds, branching.
+- [Write a tool](write-a-tool.md) — author a `@tool`-decorated
+  Python function agents can call. Args schema, ToolContext, agent
+  declaration.
 - [Write a workflow node](write-a-workflow-node.md) — author a
   custom `@node`-decorated Python module that becomes a
   `<bundle>/nodes/<name>` step in workflow YAML.
@@ -20,9 +27,9 @@ agents, and working with the CLI.
 
 - [Extending an agent](extending-an-agent.md) — declare a child agent
   that inherits from a parent via `extends:`.
-- [Agent templating](agent-templating.md) — use the five top-level
-  variables (`tools`, `skills`, `docs`, `workspace`, `agent`) in
-  agent prompts.
+- [Agent templating](agent-templating.md) — use the six top-level
+  variables (`tools`, `skills`, `docs`, `workspace`, `agent`,
+  `platform`) in agent prompts.
 - [Forcing a skill](forcing-a-skill.md) — pin a skill on a turn so
   the agent can't skip it.
 - [Configuring fallbacks](configure-fallbacks.md) — declare backup

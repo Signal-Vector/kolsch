@@ -141,6 +141,9 @@ nav:
   - Guides:
       - how-to/README.md
       - First agent: tutorials/first-agent.md
+      - Connect a provider: how-to/connect-a-provider.md
+      - Build a workflow: how-to/build-a-workflow.md
+      - Write a tool: how-to/write-a-tool.md
       - Write a workflow node: how-to/write-a-workflow-node.md
       - Chatting effectively: how-to/chatting-effectively.md
       - Workspace and setup: how-to/workspace-and-setup.md

@@ -181,11 +181,14 @@ kolsch permissions add --who ".*" --what "kolsch/tools/bash" --effect allow
 kolsch permissions remove <rule_id>        # by stable id
 ```
 
-The CLI surface uses the **legacy** flag names (`--who`, `--what`)
-for compatibility with existing scripts; the rule it writes still
-ends up in the new shape if you supply the qualified tool ref in
-`--what`. The full transition to a `--pattern` flag is a planned
-follow-up.
+The CLI surface uses the legacy flag names (`--who`, `--what`) for
+compatibility with existing scripts. Note that supplying `--who`
+forces the on-disk rule into the legacy `{id, who, what, effect}`
+shape rather than the new `{what, pattern, effect}` — the
+serializer writes the legacy shape whenever `who is not None`. To
+write a new-shape rule from the CLI, hand-edit `platform.yaml` or
+use the `/perm` slash command in chat. The full transition to a
+`--pattern` flag is a planned follow-up.
 
 The default-deny tail is **removal-protected**:
 `kolsch permissions remove rl_default_deny` raises

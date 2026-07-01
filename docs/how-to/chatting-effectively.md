@@ -282,8 +282,10 @@ not the recording.
 
 ## What this how-to does NOT cover
 
-- **Writing custom slash commands.** Phase 2.1 ships eight; new
-  ones are demand-driven (the patch's Part 0 design decision).
+- **Writing custom slash commands.** Twelve ship today (`/help`,
+  `/exit`, `/new`, `/clear`, `/model`, `/thinking`, `/tools`,
+  `/session`, `/skill`, `/perm`, `/workflow`, `/fork`); new ones
+  are demand-driven.
 - **Mid-stream fallback** ("if `opus` fails halfway through, try
   `haiku`"). Out of scope per
   [`configure-fallbacks.md`](configure-fallbacks.md); the chat

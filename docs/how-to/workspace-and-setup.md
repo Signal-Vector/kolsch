@@ -159,7 +159,7 @@ KOLSCH_PROVIDER=openrouter \
 KOLSCH_PROVIDER_KEY="$OPENROUTER_API_KEY" \
   kolsch setup --non-interactive --root /tmp/kolsch-ci
 
-kolsch run starter/helper --input content="hello" \
+kolsch run kolsch/helper --input content="hello" \
   --root /tmp/kolsch-ci
 ```
 
