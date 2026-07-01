@@ -25,6 +25,7 @@ from typing import TYPE_CHECKING
 from workflows.builtins.agent import AgentRunner
 from workflows.builtins.bash import BashRunner
 from workflows.builtins.branch import BranchRunner
+from workflows.builtins.browse_url import BrowseUrlRunner
 from workflows.builtins.catalog_node_runner import CatalogNodeRunner
 from workflows.builtins.compute import ComputeRunner
 from workflows.builtins.delete_state import DeleteStateRunner
@@ -58,6 +59,7 @@ __all__ = [
     "AgentRunner",
     "BashRunner",
     "BranchRunner",
+    "BrowseUrlRunner",
     "CatalogNodeRunner",
     "ComputeRunner",
     "DeleteStateRunner",
@@ -92,6 +94,7 @@ def register_builtins(  # noqa: PLR0913 — wide-by-design wiring surface; see d
     read_file_defn: ToolDefinition | None = None,
     write_file_defn: ToolDefinition | None = None,
     list_files_defn: ToolDefinition | None = None,
+    browse_url_defn: ToolDefinition | None = None,
     workflow_store: WorkflowRunStore | None = None,
     executor_factory: (
         Callable[..., IterativeExecutor] | None
@@ -117,8 +120,9 @@ def register_builtins(  # noqa: PLR0913 — wide-by-design wiring surface; see d
       `workflow_store`, AND `executor_factory` are all supplied. The
       factory seam exists to avoid a circular import between this
       package and [`workflows.executor`][workflows.executor].
-    - `kolsch/nodes/read_file` / `write_file` / `list_files` — each
-      registers only when its `ToolDefinition` is supplied.
+    - `kolsch/nodes/read_file` / `write_file` / `list_files` /
+      `browse_url` — each registers only when its `ToolDefinition` is
+      supplied.
     - The catalog-driven authored-`@node` dispatch (the
       [`CatalogNodeRunner`][workflows.builtins.CatalogNodeRunner]
       fallback) installs when `catalog` is supplied.
@@ -144,6 +148,8 @@ def register_builtins(  # noqa: PLR0913 — wide-by-design wiring surface; see d
         read_file_defn: The `read_file` tool definition.
         write_file_defn: The `write_file` tool definition.
         list_files_defn: The `list_files` tool definition.
+        browse_url_defn: The `browse_url` tool definition — enables
+            `kolsch/nodes/browse_url` (fetches rendered web pages).
         workflow_store: The workflow run store — required for the
             sub-workflow runner.
         executor_factory: Callable returning an
@@ -219,6 +225,23 @@ def register_builtins(  # noqa: PLR0913 — wide-by-design wiring surface; see d
             "kolsch/nodes/list_files",
             ListFilesRunner(
                 tool_defn=list_files_defn,
+                authz=authz,
+                secrets=secrets,
+                sandbox=sandbox,
+            ),
+        )
+    # `browse_url` runner. Same shape as the file-IO runners — the
+    # in-engine `make_browse_url` factory builds the `ToolDefinition`
+    # from the starter-bundle template; the runner narrows the tool's
+    # nine-field return to the six canonical workflow fields
+    # `{url, final_url, status, content, content_persisted_to,
+    # truncated}`. Absent the kwarg the slot keeps raising
+    # `NodeTypeNotImplemented`.
+    if browse_url_defn is not None:
+        registry.register(
+            "kolsch/nodes/browse_url",
+            BrowseUrlRunner(
+                tool_defn=browse_url_defn,
                 authz=authz,
                 secrets=secrets,
                 sandbox=sandbox,

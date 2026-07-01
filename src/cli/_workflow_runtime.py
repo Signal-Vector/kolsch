@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Any
 
 from tools.builtins import (
     make_bash,
+    make_browse_url,
     make_list_files,
     make_read_file,
     make_write_file,
@@ -73,6 +74,9 @@ def build_workflow_executor(
     list_files_defn = get_tool_definition(
         make_list_files(policy=runtime.path_policy, root=root)
     )
+    browse_url_defn = get_tool_definition(
+        make_browse_url(policy=runtime.path_policy, root=root)
+    )
     registry = RunnerRegistry()
 
     def _executor_factory(**kwargs: Any) -> IterativeExecutor:
@@ -91,6 +95,7 @@ def build_workflow_executor(
         read_file_defn=read_file_defn,
         write_file_defn=write_file_defn,
         list_files_defn=list_files_defn,
+        browse_url_defn=browse_url_defn,
         workflow_store=store,
         executor_factory=_executor_factory,
     )

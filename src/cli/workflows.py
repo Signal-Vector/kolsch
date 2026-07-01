@@ -764,6 +764,7 @@ async def _cmd_resume(  # noqa: PLR0913 — five explicit kw args; mirrors _cmd_
     # of the user_input).
     from tools.builtins import (  # noqa: PLC0415
         make_bash,
+        make_browse_url,
         make_list_files,
         make_read_file,
         make_write_file,
@@ -792,6 +793,9 @@ async def _cmd_resume(  # noqa: PLR0913 — five explicit kw args; mirrors _cmd_
     list_files_defn = get_tool_definition(
         make_list_files(policy=runtime.path_policy, root=root)
     )
+    browse_url_defn = get_tool_definition(
+        make_browse_url(policy=runtime.path_policy, root=root)
+    )
     registry = RunnerRegistry()
 
     # Same factory wiring as `_cmd_run` so a resumed workflow that
@@ -813,6 +817,7 @@ async def _cmd_resume(  # noqa: PLR0913 — five explicit kw args; mirrors _cmd_
         read_file_defn=read_file_defn,
         write_file_defn=write_file_defn,
         list_files_defn=list_files_defn,
+        browse_url_defn=browse_url_defn,
         workflow_store=store,
         executor_factory=_executor_factory,
     )
@@ -956,6 +961,7 @@ async def _cmd_fork(  # noqa: PLR0913 — seven explicit kw args; mirrors _cmd_r
     # branching).
     from tools.builtins import (  # noqa: PLC0415
         make_bash,
+        make_browse_url,
         make_list_files,
         make_read_file,
         make_write_file,
@@ -978,6 +984,9 @@ async def _cmd_fork(  # noqa: PLR0913 — seven explicit kw args; mirrors _cmd_r
     list_files_defn = get_tool_definition(
         make_list_files(policy=runtime.path_policy, root=root)
     )
+    browse_url_defn = get_tool_definition(
+        make_browse_url(policy=runtime.path_policy, root=root)
+    )
     registry = RunnerRegistry()
 
     def _executor_factory(**kwargs: Any) -> IterativeExecutor:
@@ -996,6 +1005,7 @@ async def _cmd_fork(  # noqa: PLR0913 — seven explicit kw args; mirrors _cmd_r
         read_file_defn=read_file_defn,
         write_file_defn=write_file_defn,
         list_files_defn=list_files_defn,
+        browse_url_defn=browse_url_defn,
         workflow_store=store,
         executor_factory=_executor_factory,
     )
