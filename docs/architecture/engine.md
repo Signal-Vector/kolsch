@@ -107,7 +107,7 @@ its natural completion or stops at the next cancellation check.
 
 ---
 
-The class reference is at [API: Engine](../api/index.md#engine--execution-context).
+The class reference is at [API: Engine](../api/index.md#engine-execution-context).
 The [Engine contract](../explanation/agent-engine-contract.md) covers
 event ordering, replay determinism, and what observers see — the
 guarantees this page summarizes.

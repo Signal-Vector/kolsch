@@ -1,41 +1,225 @@
 # API Reference
 
-Generated from the source docstrings via `mkdocstrings`. Each module
-below renders its public surface — classes, functions, attributes —
-with the Google-style docstrings retrofitted in the docs rollout
-(commits `7530977` through `1990f0f`).
+Generated from the source docstrings via `mkdocstrings`. Each
+subsystem below renders its primary public modules — classes,
+functions, attributes — with the Google-style docstrings retrofitted
+across the codebase.
 
-For the rules these docstrings follow, see the
+For the rules the docstrings follow, see the
 [code documentation conventions](../process/documentation-conventions.md)
 and the [vocabulary reference](../process/vocabulary.md).
 
----
-
-## Schemas — shared cross-module types
-
-::: schemas.identifiers
-    options:
-      heading_level: 3
-
-::: schemas.entities
-    options:
-      heading_level: 3
-
-::: schemas.events
-    options:
-      heading_level: 3
+Shared cross-module types (identifiers, entity records, events, the
+resolved agent config) render in the
+[Schemas reference](../reference/schemas.md), not here.
 
 ---
 
-## Engine — execution context
+## HTTP API
+
+::: api.app
+    options:
+      heading_level: 3
+
+::: api.routes
+    options:
+      heading_level: 3
+
+---
+
+## Assets
+
+::: assets.asset_manager
+    options:
+      heading_level: 3
+
+::: assets.manifest
+    options:
+      heading_level: 3
+
+::: assets.catalog
+    options:
+      heading_level: 3
+
+::: assets.refs
+    options:
+      heading_level: 3
+
+---
+
+## Bus
+
+::: bus.event_bus
+    options:
+      heading_level: 3
+
+::: bus.in_process
+    options:
+      heading_level: 3
+
+---
+
+## CLI
+
+::: cli.main
+    options:
+      heading_level: 3
+
+::: cli.chat
+    options:
+      heading_level: 3
+
+::: cli.permissions
+    options:
+      heading_level: 3
+
+::: cli.workflows
+    options:
+      heading_level: 3
+
+---
+
+## Engine — Execution Context
+
+::: engine.engine
+    options:
+      heading_level: 3
 
 ::: engine.context
     options:
       heading_level: 3
 
+::: engine.framework
+    options:
+      heading_level: 3
+
+::: engine.assembly
+    options:
+      heading_level: 3
+
 ---
 
-## Workflows — runtime types
+## Errors
+
+::: errors.base
+    options:
+      heading_level: 3
+
+---
+
+## Files
+
+::: files.policy
+    options:
+      heading_level: 3
+
+---
+
+## Kernel
+
+::: kernel.resolver
+    options:
+      heading_level: 3
+
+::: kernel.pipeline
+    options:
+      heading_level: 3
+
+::: kernel.validation
+    options:
+      heading_level: 3
+
+---
+
+## LLM Connectors
+
+::: llm.protocol
+    options:
+      heading_level: 3
+
+::: llm.build_llm
+    options:
+      heading_level: 3
+
+::: llm.registry
+    options:
+      heading_level: 3
+
+---
+
+## Platform Runtime
+
+::: platform_runtime
+    options:
+      heading_level: 3
+
+---
+
+## Providers
+
+::: providers.memory
+    options:
+      heading_level: 3
+
+::: providers.secrets
+    options:
+      heading_level: 3
+
+::: providers.sandbox
+    options:
+      heading_level: 3
+
+::: providers.authz
+    options:
+      heading_level: 3
+
+---
+
+## Skills
+
+::: skills.subsystem
+    options:
+      heading_level: 3
+
+---
+
+## Store
+
+::: store.session_store
+    options:
+      heading_level: 3
+
+::: store.backend
+    options:
+      heading_level: 3
+
+---
+
+## Templating
+
+::: templating.inheritance
+    options:
+      heading_level: 3
+
+---
+
+## Tools
+
+::: tools.decorator
+    options:
+      heading_level: 3
+
+::: tools.subsystem
+    options:
+      heading_level: 3
+
+::: tools.builtins
+    options:
+      heading_level: 3
+
+---
+
+## Workflows
 
 ::: workflows.ids
     options:
@@ -45,10 +229,22 @@ and the [vocabulary reference](../process/vocabulary.md).
     options:
       heading_level: 3
 
----
+::: workflows.decorator
+    options:
+      heading_level: 3
 
-## Tools — decorator + canonical types
+::: workflows.executor
+    options:
+      heading_level: 3
 
-::: tools.decorator
+::: workflows.parser
+    options:
+      heading_level: 3
+
+::: workflows.builtins.map
+    options:
+      heading_level: 3
+
+::: workflows.builtins.workflow_sub
     options:
       heading_level: 3

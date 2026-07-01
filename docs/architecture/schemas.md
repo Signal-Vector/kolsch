@@ -80,6 +80,7 @@ from loading first.
 
 ---
 
-The class reference is at [API: Schemas](../api/index.md#schemas).
-The [schemas reference](../reference/schemas.md) covers each type's
-field semantics and validation rules in detail.
+The class reference is at
+[Schemas reference](../reference/schemas.md) — the field-level
+listing is generated from source docstrings and stays in sync with
+the code.
