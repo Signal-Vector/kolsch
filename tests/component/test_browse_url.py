@@ -33,6 +33,19 @@ Tests covered here (from ``process/qol-browse-url-tool.md``):
   ``browser.close()`` and doesn't prove anything).
 - Test 6 — ``ctx.cancellation.cancel()`` mid-fetch → the tool raises
   ``ExchangeCancelled`` within one heartbeat and no page leaks.
+- Test 9 — ``/a`` responds ``302 → /b``; ``final_url`` ends with
+  ``/b`` and ``content`` reflects the redirect target body.
+- Test 10 — ``wait_selector`` exercises ``page.wait_for_selector``'s
+  own timeout (distinct code path from Test 5's ``goto`` timeout);
+  the tool raises ``ToolTimeout`` when the selector never appears.
+- Test 11 — non-2xx (404) status is surfaced verbatim without
+  raising — authors branch on ``status`` downstream.
+- Test 12 — caller-supplied ``headers`` (custom ``X-Test`` and
+  ``User-Agent``) survive to the fixture, proving the extra-header
+  merge order is caller-wins.
+- Test 13 — caller-supplied ``cookies`` reach the fixture, proving
+  ``context.add_cookies`` fires BEFORE navigation and the
+  domain-from-``args.url`` derivation is correct.
 """
 
 from __future__ import annotations
@@ -607,3 +620,276 @@ async def test_browse_url_cancellation_raises_exchange_cancelled(
     # is what makes this hold.
     leaked = await _wait_for_pids_to_drain(before)
     assert not leaked, f"leaked Chromium PIDs after cancel: {leaked}"
+
+
+# ---------------------------------------------------------------------------
+# Test 9 — redirect resolves final_url
+# ---------------------------------------------------------------------------
+
+
+def _register_redirect_pair(server: _LocalHttpServer) -> None:
+    """Wire ``/a`` → 302 → ``/b`` and ``/b`` → rendered landing page.
+
+    ``Location`` is a relative path so the test never has to know the
+    ephemeral port. ``/b`` returns a full HTML doc so the tool's
+    text-mode extractor produces a body innerText that the assertion
+    below can pin against.
+    """
+    server.routes["/a"] = (
+        302,
+        {"Location": "/b", "Content-Type": "text/plain"},
+        b"redirecting",
+    )
+    server.routes["/b"] = (
+        200,
+        {"Content-Type": "text/html; charset=utf-8"},
+        (
+            b"<!doctype html><html><head><title>b</title></head>"
+            b"<body><h1>redirected</h1></body></html>"
+        ),
+    )
+
+
+async def test_browse_url_redirect_resolves_final_url(
+    local_http_server: _LocalHttpServer,
+) -> None:
+    """Test 9: /a → 302 → /b resolves final_url to /b and captures /b body.
+
+    Playwright's ``page.goto`` follows the 302 by default and the tool
+    reads ``page.url`` for ``final_url``, so the check compares
+    ``final_url`` against the redirect TARGET (``/b``) — not the
+    requested URL (``/a``). A regression that captured
+    ``response.url`` instead of ``page.url`` (or that recorded
+    ``args.url``) would fail this test.
+    """
+    _register_redirect_pair(local_http_server)
+    args = BrowseUrlArgs(url=f"{local_http_server.base_url}/a")
+
+    result = await browse_url(args, _ctx())
+
+    assert result["status"] == 200
+    assert result["final_url"].endswith("/b")
+    assert not result["final_url"].endswith("/a")
+    # The 302 body ("redirecting") must NOT leak into the rendered
+    # content — Playwright discarded it and rendered /b's DOM.
+    assert "redirected" in result["content"]
+    assert "redirecting" not in result["content"]
+
+
+# ---------------------------------------------------------------------------
+# Test 10 — wait_selector times out on its own budget
+# ---------------------------------------------------------------------------
+
+
+# Note the deliberate lack of a `#target` node — the whole point of
+# this fixture is that `wait_for_selector('#target')` never resolves.
+# The page LOADS immediately so `goto` returns; the timeout must come
+# from `page.wait_for_selector`'s own budget — a distinct code path
+# from Test 5 (which exercises `goto`'s timeout on a stalled route).
+_MISSING_SELECTOR_HTML = b"""<!doctype html>
+<html>
+  <head><title>no-target</title></head>
+  <body>
+    <h1>page loaded but the selector never renders</h1>
+  </body>
+</html>
+"""
+
+
+async def test_browse_url_wait_selector_timeout(
+    local_http_server: _LocalHttpServer,
+) -> None:
+    """Test 10: wait_selector on missing node → ToolTimeout on its budget.
+
+    Distinct code path from Test 5: ``goto`` COMPLETES successfully
+    here (the page returns 200 immediately). The timeout comes from
+    ``page.wait_for_selector('#target', timeout=…)`` — a separate
+    Playwright call with its own timeout arg. A regression that
+    forgot to pass ``timeout=`` to ``wait_for_selector`` would fall
+    through to Playwright's own 30 s default and this test would
+    hang for far longer than the elapsed-latency guard below allows.
+    """
+    local_http_server.routes["/no-target"] = (
+        200,
+        {"Content-Type": "text/html; charset=utf-8"},
+        _MISSING_SELECTOR_HTML,
+    )
+    args = BrowseUrlArgs(
+        url=f"{local_http_server.base_url}/no-target",
+        wait_selector="#target",
+        request_timeout_seconds=2,
+    )
+
+    start = time.monotonic()
+    with pytest.raises(ToolTimeout) as excinfo:
+        await browse_url(args, _ctx())
+    elapsed = time.monotonic() - start
+
+    # The exception's kwarg is still ``timeout_seconds`` even though
+    # the tool ARG is ``request_timeout_seconds`` — the spec calls
+    # this out explicitly (kolsch's ToolTimeout attribute name is
+    # ``timeout_seconds``, unrelated to the tool's arg naming).
+    assert excinfo.value.detail["tool_name"] == "browse_url"
+    assert excinfo.value.detail["timeout_seconds"] == 2
+    # Tight bound catches a regression where wait_for_selector was
+    # called without a ``timeout=`` arg and fell back to Playwright's
+    # 30 s default.
+    assert elapsed < 10.0, f"wait_selector timeout took too long: {elapsed:.2f}s"
+
+
+# ---------------------------------------------------------------------------
+# Test 11 — non-2xx status returns content without raising
+# ---------------------------------------------------------------------------
+
+
+# A 404 body that Chromium will actually render. The <h1> lets the
+# text-mode extractor produce a distinctive innerText the assertion
+# can pin against — a bare "not found" body would be too easy to
+# collide with any other 404 rendering.
+_NOT_FOUND_HTML = b"""<!doctype html>
+<html>
+  <head><title>404</title></head>
+  <body>
+    <h1>404: this page does not exist</h1>
+    <p>error-page-body-sentinel</p>
+  </body>
+</html>
+"""
+
+
+async def test_browse_url_non_2xx_returns_content_without_raising(
+    local_http_server: _LocalHttpServer,
+) -> None:
+    """Test 11: 404 with a rendered body → status=404, content has body.
+
+    A non-2xx response must NOT raise. The tool's contract is that
+    ``status`` is surfaced verbatim so authors can branch on it —
+    over-eagerly raising on 4xx/5xx forecloses that pattern. Playwright's
+    ``page.goto`` returns a response for 4xx/5xx (they're valid HTTP
+    responses); only network / navigation failures raise.
+    """
+    local_http_server.routes["/missing"] = (
+        404,
+        {"Content-Type": "text/html; charset=utf-8"},
+        _NOT_FOUND_HTML,
+    )
+    args = BrowseUrlArgs(url=f"{local_http_server.base_url}/missing")
+
+    result = await browse_url(args, _ctx())
+
+    assert result["status"] == 404
+    # Both assertions matter: the status must reflect the 404, AND
+    # the error page body must render into the returned content.
+    # Missing either half means the tool short-circuited on non-2xx
+    # instead of surfacing the response verbatim.
+    assert "404: this page does not exist" in result["content"]
+    assert "error-page-body-sentinel" in result["content"]
+
+
+# ---------------------------------------------------------------------------
+# Test 12 — custom headers reach the target
+# ---------------------------------------------------------------------------
+
+
+async def test_browse_url_custom_headers_reach_target(
+    local_http_server: _LocalHttpServer,
+) -> None:
+    """Test 12: X-Test AND caller-supplied User-Agent survive to the fixture.
+
+    Two assertions in one test — the second is the load-bearing one:
+    Playwright ships a real Chromium ``User-Agent`` by default (a long
+    string that includes ``HeadlessChrome``). If the extra-header
+    merge order were reversed, that default would win and the test's
+    ``kolsch-test/1`` UA would never reach the fixture. The fixture
+    echoes BOTH headers back into the rendered body so a single
+    ``page.inner_text('body')`` capture proves each one landed.
+    """
+
+    def _echo_headers(handler: BaseHTTPRequestHandler) -> Route:
+        x_test = handler.headers.get("X-Test", "")
+        user_agent = handler.headers.get("User-Agent", "")
+        # Render both into the body so the tool's text-mode extractor
+        # surfaces them via `page.inner_text('body')`. Using distinct
+        # <p> tags keeps the innerText separator predictable.
+        body = (
+            "<!doctype html><html><head><title>echo</title></head>"
+            "<body>"
+            f"<p>x-test={x_test}</p>"
+            f"<p>user-agent={user_agent}</p>"
+            "</body></html>"
+        ).encode()
+        return (200, {"Content-Type": "text/html; charset=utf-8"}, body)
+
+    local_http_server.routes["/echo-headers"] = _echo_headers
+
+    args = BrowseUrlArgs(
+        url=f"{local_http_server.base_url}/echo-headers",
+        headers={"X-Test": "hello", "User-Agent": "kolsch-test/1"},
+    )
+
+    result = await browse_url(args, _ctx())
+
+    assert result["status"] == 200
+    # X-Test proves custom headers reach the target at all.
+    assert "x-test=hello" in result["content"]
+    # User-Agent proves the caller override wins over Playwright's
+    # default. If the merge order were flipped (Playwright default
+    # taking precedence), this assertion would fail against a real
+    # Chromium UA string like
+    # ``Mozilla/5.0 ... HeadlessChrome/… Safari/…``.
+    assert "user-agent=kolsch-test/1" in result["content"]
+
+
+# ---------------------------------------------------------------------------
+# Test 13 — cookies reach the target
+# ---------------------------------------------------------------------------
+
+
+async def test_browse_url_cookies_reach_target(
+    local_http_server: _LocalHttpServer,
+) -> None:
+    """Test 13: cookies attach to browser context BEFORE goto → auth reached.
+
+    The fixture branches on the ``Cookie`` request header:
+    ``session=abc123`` present → ``authenticated`` body; otherwise
+    ``anon``. ``browse_url`` derives the cookie's domain from
+    ``args.url``'s hostname (127.0.0.1 here) and calls
+    ``context.add_cookies`` BEFORE ``page.goto`` — the timing matters:
+    cookies attached after ``goto`` would arrive too late to be
+    included in the request. A regression that reordered those two
+    steps would produce the ``anon`` body and fail the assertion.
+    """
+
+    def _cookie_gated(handler: BaseHTTPRequestHandler) -> Route:
+        cookie_header = handler.headers.get("Cookie", "")
+        # Match a whole cookie name=value pair, not a substring —
+        # a bare "abc123" check could pass on nonsense like
+        # `_ga=abc123`. The full pair proves the tool sent the
+        # cookie under the expected name.
+        if "session=abc123" in cookie_header:
+            body = (
+                b"<!doctype html><html><head><title>auth</title></head>"
+                b"<body><h1>authenticated</h1></body></html>"
+            )
+        else:
+            body = (
+                b"<!doctype html><html><head><title>anon</title></head>"
+                b"<body><h1>anon</h1></body></html>"
+            )
+        return (200, {"Content-Type": "text/html; charset=utf-8"}, body)
+
+    local_http_server.routes["/gated"] = _cookie_gated
+
+    args = BrowseUrlArgs(
+        url=f"{local_http_server.base_url}/gated",
+        cookies={"session": "abc123"},
+    )
+
+    result = await browse_url(args, _ctx())
+
+    assert result["status"] == 200
+    # The authenticated branch is the load-bearing check — asserting
+    # NOT anon is the negative complement so a partial regression
+    # (fixture serving both branches) can't sneak through.
+    assert "authenticated" in result["content"]
+    assert "anon" not in result["content"]
