@@ -1124,3 +1124,120 @@ async def test_writes_to_target_bundle_only(tmp_path: Path) -> None:
     # Sanity — the target file IS where we expect it.
     assert target_yaml.is_file()
     assert not fake.script
+
+
+# ===========================================================================
+# Phase Test 7 — kolsch-only workspace surfaces escalation (Step 3 follow-up)
+# ===========================================================================
+
+
+def _make_workspace_kolsch_only(tmp_path: Path) -> Path:
+    """Variant of :func:`_make_workspace` that ships ONLY the kolsch
+    package bundle — no user bundle at all.
+
+    Used by Phase Test 7 to exercise the skill's ``"Where to write"``
+    escalation path. ``platform.yaml`` stays permissive but omits
+    ``author_workflow.target_bundle`` so the default resolution
+    (auto-pick primary user bundle) trips the "only kolsch exists"
+    guard the skill documents at SKILL.md §"Where to write" step 3.
+    """
+    for sub in ("bundles", "sessions", "content", "logs", "data", "out", ".platform"):
+        (tmp_path / sub).mkdir(parents=True, exist_ok=True)
+    (tmp_path / "platform.yaml").write_text(
+        _PERMISSIVE_PLATFORM_YAML, encoding="utf-8"
+    )
+    (tmp_path / ".env").write_text("", encoding="utf-8")
+    shutil.copytree(_STARTER_BUNDLE, tmp_path / "bundles" / "kolsch")
+    return tmp_path
+
+
+async def test_kolsch_only_workspace_surfaces_escalation(
+    tmp_path: Path,
+) -> None:
+    """Phase Test 7 — a workspace containing ONLY the kolsch package
+    bundle (no user bundle) must NOT be written to by the meta-agent.
+
+    The skill's ``"Where to write"`` section (SKILL.md, step 3)
+    documents the error path: absent
+    ``author_workflow.target_bundle`` AND no user bundle → surface
+    ``"No user bundle is configured. Either set
+    author_workflow.target_bundle in platform.yaml, or create a bundle
+    with kolsch bundles init <name>."`` and stop. The scripted
+    response models this: no tool calls, just the escalation text.
+
+    Like Phase Test 6, this verifies the CONTRACT (workspace shape +
+    "no writes, only escalation" response leaves ``bundles/kolsch/``
+    byte-identical). It does NOT verify a real LLM would obey the
+    skill's prescription — that's on the model + prompt + skill to
+    get right; a scripted-LLM test can only assert the infrastructure
+    supports the contract. Phase Test 6 covers the happy path (user
+    bundle present → writes go there); Phase Test 7 covers the error
+    path (only kolsch present → no writes, escalation surfaced).
+    """
+    workspace = _make_workspace_kolsch_only(tmp_path)
+
+    # Sanity — the workspace really only has the kolsch bundle.
+    other_bundles = [
+        p
+        for p in (workspace / "bundles").iterdir()
+        if p.is_dir() and p.name != "kolsch"
+    ]
+    assert not other_bundles, (
+        f"expected only the kolsch bundle; found: {other_bundles!r}"
+    )
+
+    kolsch_bundle = workspace / "bundles" / "kolsch"
+    before = _snapshot_bundle(kolsch_bundle)
+
+    # Scripted response models the skill's "Where to write" step 3
+    # verbatim — the model reads the skill, sees no user bundle, and
+    # surfaces the escalation message without invoking any tool.
+    scripted = [
+        TextResponse(
+            text=(
+                "No user bundle is configured. Either set "
+                "author_workflow.target_bundle in platform.yaml, or "
+                "create a bundle with 'kolsch bundles init "
+                "<name>'. I won't write into bundles/kolsch/ — it "
+                "ships with the engine and is read-only by "
+                "convention."
+            )
+        ),
+    ]
+
+    fake, events, _am = await _run_author_workflow_session(
+        workspace,
+        brief="Build a workflow that classifies a ticket.",
+        scripted_responses=scripted,
+    )
+
+    # AC — no write_file (or any other mutating tool) invocations.
+    tool_calls = [name for name, _args in _tool_call_sequence(events)]
+    assert "write_file" not in tool_calls, (
+        f"expected zero write_file calls in the escalation path; "
+        f"got: {tool_calls}"
+    )
+
+    # AC — final agent message carries the prescribed escalation
+    # markers so operators know exactly how to fix the workspace.
+    final = _final_agent_message(events) or ""
+    assert "No user bundle is configured" in final
+    assert "author_workflow.target_bundle" in final
+    assert "kolsch bundles init" in final
+
+    # AC — kolsch bundle byte-identical (no accidental writes landed
+    # while the agent was surfacing the escalation).
+    after = _snapshot_bundle(kolsch_bundle)
+    assert set(after) == set(before), (
+        f"kolsch bundle file set changed: "
+        f"added={set(after) - set(before)} "
+        f"removed={set(before) - set(after)}"
+    )
+    for rel, content in before.items():
+        assert after[rel] == content, (
+            f"kolsch bundle file {rel!r} mutated; write to the "
+            "package bundle is a P0 violation"
+        )
+
+    # Sanity — the single scripted response was consumed exactly once.
+    assert not fake.script
