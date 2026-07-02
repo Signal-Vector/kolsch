@@ -1062,9 +1062,14 @@ async def _maybe_migrate_authz_rules_to_qol_schema(io: _SetupIO) -> None:
     rules = (authz.get("config") or {}).get("rules") or []
     if not rules:
         return
-    # Skip when nothing has a `who` field — already migrated.
-    if not any(isinstance(r, dict) and "who" in r for r in rules):
-        return
+    # Historical fast-path gated this on the presence of a `who`
+    # field (legacy-shape marker); dropped because the migrator now
+    # also handles orphaned 3-seg reattributions
+    # (bug-authz-rule-caller-bundle-mismatch) which fire on
+    # already-new-shape rules. The migrator is O(rules * catalog)
+    # and idempotent; on a pristine workspace it produces zero
+    # deprecation entries and `converted_count == 0` short-circuits
+    # the YAML write below.
 
     am = AssetManagement(root=io.root)
     try:
@@ -1085,9 +1090,10 @@ async def _maybe_migrate_authz_rules_to_qol_schema(io: _SetupIO) -> None:
     for entry in result.deprecated:
         # Dispatch on `kind` so the right event class fires per
         # deprecation cause: legacy 1-seg regex rules emit
-        # ConfigDeprecatedRegexRule; new 2-seg shape rules emit
+        # ConfigDeprecatedRegexRule; new-shape rules with shape /
+        # attribution issues (`two_seg`, `orphan_3seg`) emit
         # ConfigDeprecatedRuleForm. Both are Recoverable warnings.
-        if entry.kind == "two_seg":
+        if entry.kind in ("two_seg", "orphan_3seg"):
             warn: PlatformError = ConfigDeprecatedRuleForm(
                 rule_index=entry.rule_index,
                 what=entry.what,

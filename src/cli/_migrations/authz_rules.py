@@ -120,13 +120,44 @@ def migrate_authz_rules(
             converted.append(raw)
             continue
         if "who" not in raw:
-            # Already new-shape. Try the 2-seg → 3-seg upgrade for
-            # new-shape rules whose `what` looks like a 2-seg ref.
-            # Catalog must be available AND the bundle must own a
-            # tool of that name. Unconvertible entries pass through
-            # in their current 2-seg form but emit a `two_seg`
-            # deprecation so the user knows the shape is going away.
+            # Already new-shape. Two orthogonal migrations apply:
+            #
+            # 1. Orphaned 3-seg reattribution
+            #    (bug-authz-rule-caller-bundle-mismatch). If `what`
+            #    is `<bundle>/tools/<name>` but that bundle doesn't
+            #    own a tool of that name AND another bundle does,
+            #    rewrite the prefix so boot-time authz strictness
+            #    lets it through.
+            # 2. 2-seg → 3-seg upgrade. Legacy 2-seg refs
+            #    `<bundle>/<name>` rewrite to `<bundle>/tools/<name>`
+            #    when the catalog confirms the bundle owns the tool.
+            #
+            # (1) fires before (2) because it targets a shape (3-seg)
+            # that (2) leaves untouched.
             stripped = _strip_legacy_keys(raw)
+            reattributed, did_reattribute = _try_reattribute_orphaned_3seg(
+                stripped, catalog=catalog
+            )
+            if reattributed is not None:
+                converted.append(reattributed)
+                if did_reattribute:
+                    deprecated.append(
+                        DeprecatedRegexRule(
+                            rule_index=index,
+                            what=str(stripped.get("what", "")),
+                            reason=(
+                                "3-seg ref pointed at a bundle that does "
+                                "not own the tool; auto-rewrote to the "
+                                f"bundle that does ({reattributed['what']}). "
+                                "This usually means the rule was granted via "
+                                "the modal or `/perm allow` on a tool an "
+                                "agent inherited from another bundle "
+                                "(see bug-authz-rule-caller-bundle-mismatch)."
+                            ),
+                            kind="orphan_3seg",
+                        ),
+                    )
+                continue
             upgraded = _try_upgrade_two_seg(stripped, catalog=catalog)
             if upgraded is not None:
                 converted.append(upgraded)
@@ -355,6 +386,68 @@ def _resolve_tool_home_bundle(catalog: AssetCatalog, name: str) -> str | None:
     if len(matches) != 1:
         return None
     return matches[0]
+
+
+# Full 3-seg tool ref anchored at start and end (`<bundle>/tools/<name>`).
+# Distinct from `_TWO_SEG_GLOB_RE` — the middle segment must be literal
+# `tools`. Used by the orphaned-3-seg reattribution path.
+_THREE_SEG_TOOL_RE = re.compile(
+    r"^([a-z0-9][a-z0-9_-]*)/tools/([a-z][a-z0-9_-]*)$"
+)
+
+
+def _try_reattribute_orphaned_3seg(
+    raw: dict[str, Any],
+    *,
+    catalog: AssetCatalog | None,
+) -> tuple[dict[str, Any] | None, bool]:
+    """Rewrite a 3-seg rule pointing at a bundle that doesn't own the tool.
+
+    Fixes bug-authz-rule-caller-bundle-mismatch: modal-granted rules
+    on inherited tools were persisted under the CALLER agent's bundle
+    instead of the tool's authoritative home bundle. Boot on strict
+    authz then rejects the ref with `AuthzToolRefUnknown` because
+    `<caller_bundle>/tools/<name>` doesn't resolve.
+
+    Returns `(rewritten_or_None, was_reattributed)`:
+
+    - `(new_dict, True)` — matched an orphaned 3-seg ref AND a
+      same-named tool exists in exactly one other bundle. Rewrote
+      the `what:` prefix to that bundle so the rule resolves at
+      boot. Caller should record a deprecation event.
+    - `(None, False)` — rule doesn't look like an orphaned 3-seg
+      ref, OR the same-named tool is missing / ambiguous. Caller
+      passes the rule through unchanged.
+
+    Ambiguous cases (0 or ≥2 same-named tools across bundles) are
+    intentionally left alone — the user resolves by hand or via
+    `/perm`. Silently guessing a bundle would mis-attribute the
+    rule again in a different direction.
+    """
+    what = raw.get("what")
+    if not isinstance(what, str):
+        return None, False
+    match = _THREE_SEG_TOOL_RE.match(what)
+    if match is None:
+        return None, False
+    if catalog is None:
+        # Can't verify without the catalog — leave as-is; the
+        # boot-time validator will produce a clearer error than any
+        # migrator guess.
+        return None, False
+    claimed_bundle, name = match.group(1), match.group(2)
+    if _bundle_owns_tool(catalog, claimed_bundle, name):
+        # Ref is valid — nothing to do.
+        return None, False
+    # Ref is orphaned. Try to reattribute if a same-named tool lives
+    # in exactly one other bundle.
+    real_bundle = _resolve_tool_home_bundle(catalog, name)
+    if real_bundle is None:
+        # Zero or ≥2 candidates — leave alone.
+        return None, False
+    rewritten = dict(raw)
+    rewritten["what"] = f"{real_bundle}/tools/{name}"
+    return rewritten, True
 
 
 def _diagnose_legacy(

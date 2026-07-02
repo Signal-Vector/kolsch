@@ -419,6 +419,85 @@ def test_migration_two_seg_unresolvable_survives_with_warning() -> None:
     assert out.deprecated[0].kind == "two_seg"
 
 
+def test_migration_reattributes_orphaned_3seg_to_owner_bundle() -> None:
+    """bug-authz-rule-caller-bundle-mismatch — orphaned 3-seg refs.
+
+    A rule with `what: andre/tools/read_file` gets rewritten to
+    `kolsch/tools/read_file` when the catalog says `read_file` lives
+    in `kolsch`. Simulates the modal-granted rule the butler agent
+    produces after inheriting `read_file` from
+    `kolsch/agents/helper`.
+    """
+    catalog = _catalog(("kolsch", "read_file"))
+    out = migrate_authz_rules(
+        [{"what": "andre/tools/read_file", "pattern": "*", "effect": "allow"}],
+        catalog=catalog,
+    )
+    assert out.rules == [
+        {"what": "kolsch/tools/read_file", "pattern": "*", "effect": "allow"},
+    ]
+    assert len(out.deprecated) == 1
+    assert out.deprecated[0].kind == "orphan_3seg"
+    assert out.deprecated[0].what == "andre/tools/read_file"
+    assert "bug-authz-rule-caller-bundle-mismatch" in out.deprecated[0].reason
+
+
+def test_migration_orphaned_3seg_ambiguous_leaves_alone() -> None:
+    """When 2+ bundles own the same tool name, don't guess — leave alone.
+
+    Migrator must not silently mis-attribute in the ambiguous case.
+    The rule survives unchanged; boot-time authz will still fail
+    but the user gets a chance to fix by hand.
+    """
+    catalog = _catalog(("kolsch", "bash"), ("otherbundle", "bash"))
+    out = migrate_authz_rules(
+        [{"what": "andre/tools/bash", "pattern": "*", "effect": "allow"}],
+        catalog=catalog,
+    )
+    # Unchanged.
+    assert out.rules == [
+        {"what": "andre/tools/bash", "pattern": "*", "effect": "allow"},
+    ]
+    # No deprecation event either — nothing was actionable.
+    assert out.deprecated == []
+
+
+def test_migration_orphaned_3seg_no_matching_tool_leaves_alone() -> None:
+    """If no bundle owns the referenced tool, survive unchanged.
+
+    Could be a real user-authored tool that was later removed, or a
+    typo. The migrator has no honest way to fix it; the user does.
+    """
+    catalog = _catalog(("kolsch", "read_file"))
+    out = migrate_authz_rules(
+        [
+            {
+                "what": "andre/tools/fetch_website",
+                "pattern": "*",
+                "effect": "allow",
+            }
+        ],
+        catalog=catalog,
+    )
+    assert out.rules == [
+        {"what": "andre/tools/fetch_website", "pattern": "*", "effect": "allow"},
+    ]
+    assert out.deprecated == []
+
+
+def test_migration_valid_3seg_ref_passes_through_untouched() -> None:
+    """A correctly-attributed 3-seg ref is not deprecation-flagged."""
+    catalog = _catalog(("kolsch", "read_file"))
+    out = migrate_authz_rules(
+        [{"what": "kolsch/tools/read_file", "pattern": "*", "effect": "allow"}],
+        catalog=catalog,
+    )
+    assert out.rules == [
+        {"what": "kolsch/tools/read_file", "pattern": "*", "effect": "allow"},
+    ]
+    assert out.deprecated == []
+
+
 def test_migration_full_canonical_workspace_roundtrip() -> None:
     """Every rule from the canonical platform.yaml migrates cleanly."""
     catalog = _catalog(
