@@ -21,6 +21,116 @@ All three write the same shape; you can mix and match.
 
 ---
 
+## How permissions gate an exchange
+
+Kolsch checks authorization at **two independent surfaces** during an
+agent exchange. Rules that gate one surface do not gate the other —
+mixing them up is the single most common cause of "unauthorized"
+errors that look confusing at first.
+
+### Surface 1 — Agent execution (one check per exchange)
+
+Before an agent's exchange loop even starts, the engine's pre-flight
+asks the authz provider: **"is this principal allowed to run this
+agent?"** If the answer is deny, no LLM call happens, no tool call
+happens — the exchange fails at pre-flight with `agent.unauthorized`
+and event kind `thread.exchange_failed`.
+
+The action string this check uses is:
+
+```
+agent.execute.<agent_id>
+```
+
+For the starter `kolsch/agents/helper` (whose `agent_id: ag_helper`),
+that's `agent.execute.ag_helper`. For a personal `andre/agents/butler`
+(`agent_id: ag_butler`) it's `agent.execute.ag_butler`. Rule shape
+matches on the `what:` field the same way as tool rules:
+
+```yaml
+- what: agent.execute.*    # allow any principal to run any agent
+  pattern: "*"
+  effect: allow
+```
+
+The default kolsch rule set ships this catch-all so a fresh workspace
+just works. If your workspace was ever hand-edited to narrow it
+(e.g. `^agent\.execute\.ag_butler$` to only run butler), any agent
+you try to run afterwards — including `kolsch/agents/helper` at
+`kolsch setup`'s test step — fails at pre-flight.
+
+Errors from this surface look like:
+
+```
+error.type:    agent.unauthorized
+error.message: Agent 'ag_helper' unauthorized for action 'agent.execute.ag_helper'
+error.where:   engine.preflight.authorize
+```
+
+Fix: add an allow rule with `what: agent.execute.*` (broadest) OR a
+specific-id rule per agent you want to run.
+
+### Surface 2 — Tool call (one check per invocation)
+
+Every time an agent calls a tool, the dispatcher asks the authz
+provider: **"is this agent allowed to call this specific tool with
+these arguments?"** If deny, the tool call becomes a `tool.failed`
+event; the agent sees it and (usually) course-corrects.
+
+The action string this check uses is the tool's canonical 3-segment
+catalog ref:
+
+```
+<bundle>/tools/<name>
+```
+
+For example `kolsch/tools/bash`, `kolsch/tools/read_file`. Rule shape:
+
+```yaml
+- what: kolsch/tools/bash    # which tool
+  pattern: "ls *"            # which invocations (glob against target)
+  effect: allow
+```
+
+`pattern:` matches against the **target** the tool receives — for
+`bash` that's the command string; for file tools it's the resolved
+path. See §"Patterns: globs, not regex" below.
+
+Errors from this surface look like:
+
+```
+error.type:    tool.unauthorized
+error.message: tool 'bash' unauthorized for pattern 'rm -rf /'
+error.where:   tools.dispatch
+```
+
+Fix: add an allow rule with the right `what:` + `pattern:` combo,
+or approve via the in-chat modal / `/perm allow`.
+
+### The two surfaces together
+
+A minimal workspace that lets you run the starter agent AND use bash:
+
+```yaml
+- what: agent.execute.*     # Surface 1 — let any principal run any agent
+  pattern: "*"
+  effect: allow
+- what: kolsch/tools/bash   # Surface 2 — prompt before every bash invocation
+  pattern: "*"
+  effect: prompt
+- what: "*"                 # default-deny tail (protected)
+  pattern: "*"
+  effect: deny
+```
+
+Rule order matters — evaluation is **first-match-wins** — but the
+two surfaces read from the same rule list. The engine picks whichever
+rules match `agent.execute.*` at pre-flight, and the dispatcher picks
+whichever rules match `<bundle>/tools/<name>` at each tool call. Rules
+that don't match are silently skipped.
+
+---
+
 ## The rule shape
 
 Every rule is three fields — `what`, `pattern`, `effect`:
