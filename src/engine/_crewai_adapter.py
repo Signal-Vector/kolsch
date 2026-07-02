@@ -78,8 +78,16 @@ def make_llm_callable(
         # Forward tools to crewai.LLM.call so litellm includes them
         # in the upstream API request. Pass None (not an empty
         # list) when there are no tools — some providers reject
-        # ``tools: []`` per the OpenAI-compat spec.
-        tools_arg = list(request.tools) if request.tools else None
+        # ``tools: []`` per the OpenAI-compat spec. Also normalise to
+        # OpenAI spec shape — the engine's `{name, schema}` internal
+        # shape (as built by FakeFramework) is opaque to litellm;
+        # Kimi K2 in particular emits `arguments: {}` for every tool
+        # call when it can't find `function.parameters`.
+        tools_arg = (
+            [_tool_to_openai_spec(t) for t in request.tools]
+            if request.tools
+            else None
+        )
         # crewai's LLMMessage is a TypedDict variant we don't import
         # to avoid the heavy crewai imports at module load; our dict
         # has the same shape. Cast is safe.
@@ -124,6 +132,45 @@ def _engine_message_to_crewai(message: Any) -> dict[str, Any]:
     if name:
         base["name"] = name
     return base
+
+
+def _tool_to_openai_spec(tool: dict[str, Any]) -> dict[str, Any]:
+    """Normalise a tool advertisement to OpenAI spec shape.
+
+    The engine's internal shape is
+    ``{"name": ..., "description": ..., "schema": {JSON Schema}}`` —
+    what ``FakeFramework.run_exchange`` builds from ``ToolHandle`` and
+    what the observer records on ``model.request.tools``. LiteLLM /
+    OpenAI-compat providers require the ``{type: "function", function:
+    {name, description, parameters}}`` envelope; without the
+    ``function.parameters`` key the arg schema doesn't reach the model.
+
+    Kimi K2 surfaces this first: its response drops
+    ``function.arguments`` when the tool advertisement lacks proper
+    ``parameters``, so every tool call arrives with ``arguments: {}``.
+    Smarter models (Claude, GPT-4) infer argument names from the tool
+    name plus the user prompt and mask the bug.
+
+    Already-spec-shaped entries (``function`` key present) pass
+    through unchanged so the ``_CrewAILLM.call`` path — which receives
+    tools already in OpenAI shape from CrewAI's
+    ``convert_tools_to_openai_schema`` — is unaffected.
+    """
+    if "function" in tool:
+        out = dict(tool)
+        out.setdefault("type", "function")
+        return out
+    name = str(tool.get("name") or "")
+    description = str(tool.get("description") or f"Tool: {name}")
+    parameters = tool.get("schema") or {}
+    return {
+        "type": "function",
+        "function": {
+            "name": name,
+            "description": description,
+            "parameters": parameters,
+        },
+    }
 
 
 def _engine_tool_call_to_openai(tc: Any) -> dict[str, Any]:

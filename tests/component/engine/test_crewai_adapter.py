@@ -99,7 +99,105 @@ async def test_make_llm_callable_forwards_tools_to_crewai_llm() -> None:
         "is dropping request.tools (bug-engine-tools-wiring-gap PR 3 "
         "has regressed)."
     )
-    assert recorded["tools"] == tools
+    # The wrapper now normalises to OpenAI spec shape (see
+    # ``_tool_to_openai_spec``). Kolsch's internal ``{name, schema}``
+    # shape doesn't reach litellm — Kimi K2 needs the proper envelope
+    # to populate ``function.arguments``.
+    assert len(recorded["tools"]) == 1
+    forwarded = recorded["tools"][0]
+    assert forwarded["type"] == "function"
+    assert forwarded["function"]["name"] == "bash"
+    assert forwarded["function"]["parameters"] == tools[0]["schema"]
+
+
+async def test_make_llm_callable_normalises_kolsch_shape_to_openai_spec() -> None:
+    """Engine-internal ``{name, description, schema}`` → OpenAI
+    ``{type: function, function: {name, description, parameters}}``.
+
+    Kimi K2 emits ``arguments: {}`` for every tool call when the
+    advertisement lacks the ``function.parameters`` envelope; the
+    kolsch-native shape from ``FakeFramework`` was going to litellm
+    unchanged. This test pins the conversion so a future refactor
+    can't silently regress it.
+    """
+    stub = _StubCrewaiLLM(return_value="ok")
+    fn = make_llm_callable(stub)  # type: ignore[arg-type]
+
+    kolsch_tools = [
+        {
+            "name": "fetch_website",
+            "description": "Fetch a URL and return content",
+            "schema": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL"},
+                },
+                "required": ["url"],
+            },
+        },
+    ]
+    request = LLMRequest(
+        messages=[Message(role="user", content="fetch example.com")],
+        tools=kolsch_tools,
+        model="m",
+        parameters={},
+    )
+    await fn(request)
+
+    forwarded = stub.recorded_calls[0]["tools"][0]
+    assert forwarded == {
+        "type": "function",
+        "function": {
+            "name": "fetch_website",
+            "description": "Fetch a URL and return content",
+            "parameters": {
+                "type": "object",
+                "properties": {
+                    "url": {"type": "string", "description": "URL"},
+                },
+                "required": ["url"],
+            },
+        },
+    }
+
+
+async def test_make_llm_callable_passes_openai_shape_verbatim() -> None:
+    """Tools already in ``{type: function, function: {...}}`` shape pass
+    through unchanged.
+
+    Guards the ``_CrewAILLM.call`` path — CrewAI's
+    ``convert_tools_to_openai_schema`` already produces spec shape;
+    double-wrapping would produce ``function.function.name`` which
+    litellm doesn't handle.
+    """
+    stub = _StubCrewaiLLM(return_value="ok")
+    fn = make_llm_callable(stub)  # type: ignore[arg-type]
+
+    already_spec = [
+        {
+            "type": "function",
+            "function": {
+                "name": "bash",
+                "description": "Run a shell command",
+                "parameters": {
+                    "type": "object",
+                    "properties": {"command": {"type": "string"}},
+                    "required": ["command"],
+                },
+                "strict": True,
+            },
+        },
+    ]
+    request = LLMRequest(
+        messages=[Message(role="user", content="ls")],
+        tools=already_spec,
+        model="m",
+        parameters={},
+    )
+    await fn(request)
+
+    forwarded = stub.recorded_calls[0]["tools"][0]
+    assert forwarded == already_spec[0]
 
 
 async def test_make_llm_callable_passes_none_when_no_tools_declared() -> None:
