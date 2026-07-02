@@ -3,7 +3,7 @@
 Spec: docs/explanation/agent-engine-contract.md + Module API Reference
 §11. The Test Catalog (draft 0.2) reclassifies TC-ENG-01..11 as
 framework-agnostic: this file runs them against
-:class:`engine.FakeFramework` (Step 12a). Step 12b will re-run the
+:class:`engine.MinimalFramework` (Step 12a). Step 12b will re-run the
 same cases against ``CrewAIFramework``; the golden event sequences
 must match.
 
@@ -29,7 +29,7 @@ from engine import (
     AgentExecutionError,
     CancelToken,
     ExecutionContext,
-    FakeFramework,
+    MinimalFramework,
     LLMRequest,
     LLMResponse,
     assemble_context,
@@ -173,7 +173,7 @@ async def _build_engine(
     skills_sub = SkillsSubsystem(asset_management=am)
     bus = InProcessEventBus()
 
-    framework = FakeFramework()
+    framework = MinimalFramework()
 
     async def llm_callable(request: LLMRequest) -> LLMResponse:
         # Adapt LLMRequest → FakeLLM's dict context shape; translate
@@ -484,7 +484,7 @@ async def test_tc_eng_03_materialization_simple_text(tmp_path: Path) -> None:
     captures what the LLM saw verbatim (§B.6 draft-0.6 amendment) AND
     the Assembly Procedure on the truncated path produces the same
     projection (replay-by-derivation still works for non-wrapping
-    frameworks like FakeFramework)."""
+    frameworks like MinimalFramework)."""
     fake = FakeLLM(script=[TextResponse(text="Done.")])
     engine, store, _am = await _build_engine(tmp_path, fake)
     ctx = await _new_session_context(store)
@@ -507,7 +507,7 @@ async def test_tc_eng_03_materialization_simple_text(tmp_path: Path) -> None:
 
     # Assembly Procedure on the path AS IT WAS at the moment of the
     # model call (truncated at the first model.request) — derivation
-    # also produces the same projection under FakeFramework (no wrap).
+    # also produces the same projection under MinimalFramework (no wrap).
     truncated = _events_before_first_model_request(all_events)
     assembled = assemble_context(truncated)
     derived_full = [
@@ -527,7 +527,7 @@ async def test_tc_eng_03_materialization_tool_call(tmp_path: Path) -> None:
     """Scenario 2: tool-call exchange. Two model.request events fire
     (one per turn); each captures the LLM-seam messages for that
     turn. Replay sources from the event — Assembly Procedure on the
-    truncated path also reproduces the FakeFramework view as a
+    truncated path also reproduces the MinimalFramework view as a
     secondary check."""
     fake = FakeLLM(
         script=[
@@ -559,7 +559,7 @@ async def test_tc_eng_03_materialization_tool_call(tmp_path: Path) -> None:
     assert last_captured == final_messages
 
     # Assembly Procedure on the truncated path also reproduces it
-    # (FakeFramework doesn't wrap, so derivation matches capture).
+    # (MinimalFramework doesn't wrap, so derivation matches capture).
     truncated = _events_before_last_model_request(all_events)
     assembled = assemble_context(truncated)
     derived_full = [

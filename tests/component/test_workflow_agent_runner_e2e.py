@@ -33,7 +33,7 @@ from bus import InProcessEventBus
 from cli.main import main
 from engine import (
     AgentEngine,
-    FakeFramework,
+    MinimalFramework,
     LLMRequest,
     LLMResponse,
 )
@@ -209,7 +209,7 @@ async def _build_engine_with_llm(
     )
     skills_sub = SkillsSubsystem(asset_management=am)
     bus = InProcessEventBus()
-    framework = FakeFramework()
+    framework = MinimalFramework()
 
     engine = AgentEngine(
         store=store,

@@ -101,7 +101,7 @@ def test_tc_cli_01_run_end_to_end(
     """The default ``kolsch run`` works with no external services.
 
     Uses the v1 default tier (SQLite + in-process bus + EchoLLM via
-    FakeFramework). Asserts the agent_message text from the engine
+    MinimalFramework). Asserts the agent_message text from the engine
     lands on stdout (`Echo: hello world`)."""
     exit_code = main(
         [

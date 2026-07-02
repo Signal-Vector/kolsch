@@ -467,7 +467,7 @@ async def test_tc_int_06_resume_after_restart(tmp_path: Path) -> None:
     # The FRESH engine reconstructed turn 1's history from the log
     # (Engine I8). The exact placement is framework-dependent —
     # CrewAI may collapse prior turns into the task-description wrap;
-    # FakeFramework keeps them as separate assistant messages. The
+    # MinimalFramework keeps them as separate assistant messages. The
     # robust pin is content presence: turn 1's assistant reply must
     # appear somewhere in turn 2's LLM-seam messages.
     #
@@ -493,7 +493,7 @@ async def test_tc_int_06_resume_after_restart(tmp_path: Path) -> None:
 
 async def test_tc_int_06b_default_tier_end_to_end(tmp_path: Path) -> None:
     """Step 14 review #9 — the v1-scope §2.5 "great first-run
-    experience" promise is FakeFramework + EchoLLM with zero external
+    experience" promise is MinimalFramework + EchoLLM with zero external
     services. TC-INT-01..06 all use real CrewAI to exercise the
     production framework; this case pins that the DEFAULT tier
     (which a fresh user gets out of the box) also runs an exchange
@@ -501,14 +501,14 @@ async def test_tc_int_06b_default_tier_end_to_end(tmp_path: Path) -> None:
     layer covers this via TC-CLI-01; this is the integration-tier
     pin.
     """
-    from engine import FakeFramework
+    from engine import MinimalFramework
     from engine.dev_llm import EchoLLMDriver
 
     fake = FakeLLM(script=[])  # never used — EchoLLM drives instead.
     _ = fake  # silence unused warning; kept for symmetry with builders.
 
-    # Use bootstrap_runtime-style defaults: FakeFramework + EchoLLM.
-    # build_engine takes the framework explicitly; pass FakeFramework
+    # Use bootstrap_runtime-style defaults: MinimalFramework + EchoLLM.
+    # build_engine takes the framework explicitly; pass MinimalFramework
     # and override the llm callable with EchoLLMDriver.
     from tests.fixtures.engine_builder import write_platform_yaml
 
@@ -558,7 +558,7 @@ async def test_tc_int_06b_default_tier_end_to_end(tmp_path: Path) -> None:
         secrets=secrets,
         sandbox=sandbox,
         authz=authz,
-        framework=FakeFramework(),
+        framework=MinimalFramework(),
         llm=EchoLLMDriver().__call__,
     )
     ctx = await new_session_context(store)

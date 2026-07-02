@@ -1,8 +1,8 @@
 """TC-ENG-01..11 against :class:`CrewAIFramework` — integration tier.
 
-The same case bodies live as component tests against FakeFramework
+The same case bodies live as component tests against MinimalFramework
 (tests/component/test_engine.py). This file re-runs them with the
-production framework so divergences from the FakeFramework view land
+production framework so divergences from the MinimalFramework view land
 as reviewable test failures rather than silent wrap-time drift.
 
 Golden files: separate per framework
@@ -116,7 +116,7 @@ async def test_tc_eng_01_simple_against_crewai(tmp_path: Path) -> None:
     events = [e async for e in store.read_path_to_leaf(ctx.thread_id)]
     engine_events = [e for e in events if e.type != EventType.SESSION_OPENED]
 
-    # Event-type sequence — must match FakeFramework's run exactly
+    # Event-type sequence — must match MinimalFramework's run exactly
     # (this is the framework-agnostic invariant: same engine, same
     # event taxonomy, same order).
     expected_types = (

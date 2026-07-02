@@ -6,7 +6,7 @@ construct one of these at startup and route their commands through it.
 
 The default tier — SQLite entity backend, in-process event bus,
 dotenv secrets, native sandbox, rule-based authz, recent-buffer memory,
-`FakeFramework`, and `EchoLLMDriver` — runs end-to-end with zero
+`MinimalFramework`, and `EchoLLMDriver` — runs end-to-end with zero
 external services. Production frameworks (`CrewAIFramework`) and
 real-LLM providers are opt-in upgrades injected at bootstrap.
 
@@ -26,7 +26,7 @@ from assets import AssetManagement
 from bus import EventBus, InProcessEventBus
 from engine import (
     AgentEngine,
-    FakeFramework,
+    MinimalFramework,
     LLMRequest,
     LLMResponse,
 )
@@ -128,19 +128,38 @@ async def bootstrap_runtime(
 ) -> PlatformRuntime:
     """Stand up the default-tier `PlatformRuntime` rooted at `root`.
 
-    `framework` and `llm` default to
-    [`FakeFramework`][engine.FakeFramework] and
-    [`EchoLLMDriver`][engine.dev_llm.EchoLLMDriver] so a fresh install
-    runs end-to-end without any LLM credentials. Production callers
-    inject `CrewAIFramework` and a real-LLM callable.
+    Default framework is
+    [`MinimalFramework`][engine.MinimalFramework] regardless of whether
+    a real LLM factory is present: kolsch's shipped default is the
+    minimal message/tool-dispatch loop, not CrewAI. Users who need
+    production affordances only `CrewAIFramework` provides —
+    cancellation-during-hang polling, `ModelUpstreamError` retry
+    translation, stdout/stderr capture around CrewAI's noisy
+    singletons, tracing-consent short-circuit — pass
+    `framework=CrewAIFramework()` explicitly.
+
+    Rationale for the default: `MinimalFramework` has no third-party
+    agent-lib dependency, no wrapping semantics, and the smallest
+    possible surface between the engine and the LLM. The trade-offs
+    listed above are documented so users can make an informed choice
+    per workspace. See `process/feat-clarify-framework-selection.md`
+    for the historical context (this class was renamed from
+    `FakeFramework`, which misled users into treating it as a test
+    fixture).
+
+    Default `llm` is [`EchoLLMDriver`][engine.dev_llm.EchoLLMDriver]
+    when no `llm_providers` are configured, so a fresh install runs
+    end-to-end without credentials. When providers ARE configured
+    (`llm_providers` in `platform.yaml`), the runtime wires a real
+    per-model factory via `make_build_llm_factory`.
 
     Args:
         root: The workspace root — every subsystem's on-disk state
             (entities DB, JSONL store, dotenv secrets) sits beneath
             this path.
         framework: Optional framework override. Defaults to
-            `FakeFramework` so tests and the no-credentials tutorial
-            path don't require CrewAI.
+            `MinimalFramework`; pass `CrewAIFramework()` for the
+            production affordances documented above.
         llm: Optional explicit LLM callable. When set, takes priority
             over the per-model factory wired from `llm_providers`
             config — test paths that pin a single callable continue
@@ -188,7 +207,7 @@ async def bootstrap_runtime(
     )
     skills_sub = SkillsSubsystem(asset_management=am)
 
-    chosen_framework = framework or FakeFramework()
+    chosen_framework = framework or MinimalFramework()
 
     # Load the `llm_providers` section (if present) into the engine so
     # pre-flight can dispatch to build_llm when an exchange needs a

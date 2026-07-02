@@ -116,7 +116,7 @@ async def test_make_llm_callable_normalises_kolsch_shape_to_openai_spec() -> Non
 
     Kimi K2 emits ``arguments: {}`` for every tool call when the
     advertisement lacks the ``function.parameters`` envelope; the
-    kolsch-native shape from ``FakeFramework`` was going to litellm
+    kolsch-native shape from ``MinimalFramework`` was going to litellm
     unchanged. This test pins the conversion so a future refactor
     can't silently regress it.
     """

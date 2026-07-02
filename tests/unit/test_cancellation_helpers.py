@@ -5,7 +5,7 @@ Coverage for the helpers added by
 ``bug-mid-tool-cancellation-latency.md``:
 
 - :func:`race_with_cancel` — the async race used by the
-  FakeFramework's mid-LLM / mid-tool awaits and the bash tool's
+  MinimalFramework's mid-LLM / mid-tool awaits and the bash tool's
   subprocess wait. Scenarios:
     - cancel_token is None → passthrough (Phase 1 backwards compat)
     - work completes first → returns the result, cancels the waiter

@@ -73,7 +73,7 @@ The engine depends on these collaborators at construction time:
   `SkillsSubsystem`, `MemoryProvider`, `SecretsProvider`,
   `SandboxProvider`, `AuthorizationProvider` — per the dependency
   matrix in Module API Reference §12.
-- `Framework` — the chosen framework adapter (FakeFramework in tests
+- `Framework` — the chosen framework adapter (MinimalFramework in tests
   and dev; CrewAIFramework in production).
 - **`build_llm` helper** *(Phase 1.1, LLM-R4)* — the bridge between
   `ModelSpec` and a usable `crewai.LLM`. The engine calls this at

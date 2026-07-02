@@ -34,7 +34,7 @@ from bus import InProcessEventBus
 from engine import (
     AgentEngine,
     ExecutionContext,
-    FakeFramework,
+    MinimalFramework,
     LLMRequest,
     LLMResponse,
 )
@@ -204,7 +204,7 @@ async def _build_engine(
     )
     skills_sub = SkillsSubsystem(asset_management=am)
     bus = InProcessEventBus()
-    framework = FakeFramework()
+    framework = MinimalFramework()
 
     engine = AgentEngine(
         store=store,

@@ -4,7 +4,7 @@ Implements the framework boundary per the
 [framework protocol design](../explanation/framework-protocol-design.md).
 The engine depends on this Protocol, never on a concrete framework.
 Reference implementations:
-[`FakeFramework`][engine.fake_framework.FakeFramework] (the v1 default
+[`MinimalFramework`][engine.fake_framework.MinimalFramework] (the v1 default
 for engine tests and zero-LLM-cost dev workflows) and
 [`CrewAIFramework`][engine.crewai_framework.CrewAIFramework] (the real
 CrewAI adapter).
@@ -72,13 +72,13 @@ class LLMResponse(BaseModel):
     tool-invocation list when the model wants to call one or more
     tools (mutually exclusive in v1 — a model either answers in text
     OR requests tools, not both, per the
-    [`FakeFramework`][engine.fake_framework.FakeFramework] loop's
+    [`MinimalFramework`][engine.fake_framework.MinimalFramework] loop's
     invariant). `raw` carries the provider-shaped response dict for
     downstream materialization on `model.response.data` — the parts
     of the LLM's reply the engine cannot derive from `content` +
     `tool_calls` alone (provider message-id, finish_reason,
     system_fingerprint, cached-prompt markers, reasoning trace
-    blocks). `FakeFramework` satisfies it with `raw={}`; the CrewAI
+    blocks). `MinimalFramework` satisfies it with `raw={}`; the CrewAI
     adapter populates it from whatever the configured provider
     returned. The asymmetry is deliberate — `raw` is a passthrough
     channel, not a Fake-contract gap.

@@ -33,7 +33,7 @@ The event-type → render-action mapping:
 
 **Live region scope.** A Rich `Live` region is permitted only
 around the in-progress agent block during streaming. The
-FakeFramework + EchoLLM emit `model.response` as a single
+MinimalFramework + EchoLLM emit `model.response` as a single
 non-streamed event; there is no token-by-token streaming to wrap
 today. Future streaming connectors will add a `Live` ctx around the
 `model.response` token-append loop — the exit-before-next-static-
@@ -212,7 +212,7 @@ _THINKING_INDICATOR = "  …"
 first `model.request`.
 
 A one-line text indicator (not a spinning animation) — the
-FakeFramework + EchoLLM resolve instantly so an animation would
+MinimalFramework + EchoLLM resolve instantly so an animation would
 only ever flash. When real streaming connectors land the indicator
 becomes the spinner inside a Rich `Live` ctx.
 

@@ -1,7 +1,7 @@
-"""TC-FRM-NOCAP-01..02 — FakeFramework runs without an iteration cap.
+"""TC-FRM-NOCAP-01..02 — MinimalFramework runs without an iteration cap.
 
 Regression pins for bug-framework-iteration-cap-removal.md. Pre-fix,
-``FakeFramework.run_exchange`` hard-capped the loop at 10 iterations
+``MinimalFramework.run_exchange`` hard-capped the loop at 10 iterations
 and raised :class:`FakeFrameworkLoopExceededError` on exhaustion —
 which the engine boundary then mis-classified as
 ``platform.internal_error``. After Step 2, the cap is gone and the
@@ -18,18 +18,18 @@ from typing import Any
 
 import pytest
 
-from engine import FakeFramework, LLMRequest, LLMResponse, ToolCall
+from engine import MinimalFramework, LLMRequest, LLMResponse, ToolCall
 
 
 # ---------------------------------------------------------------------------
-# Helpers — minimal LLMHandle / ToolHandle for FakeFramework
+# Helpers — minimal LLMHandle / ToolHandle for MinimalFramework
 # ---------------------------------------------------------------------------
 
 
 class _ScriptedToolCallLLM:
     """Issues ``n`` tool calls, then one content-only response.
 
-    Each tool call uses a unique id so FakeFramework's tool dispatch
+    Each tool call uses a unique id so MinimalFramework's tool dispatch
     appends distinguishable tool-result messages.
     """
 
@@ -85,13 +85,13 @@ class _NoopTool:
 
 
 # ===========================================================================
-# TC-FRM-NOCAP-01 — FakeFramework loops past the old 10-iteration cap
+# TC-FRM-NOCAP-01 — MinimalFramework loops past the old 10-iteration cap
 # ===========================================================================
 
 
 async def test_tc_frm_nocap_01_fake_framework_runs_past_ten_iterations() -> None:
     """Drive a FakeLLM that scripts 15 tool calls then a content-only
-    response. Pre-fix, FakeFramework raised
+    response. Pre-fix, MinimalFramework raised
     ``FakeFrameworkLoopExceededError`` at iteration 10 (which the engine
     boundary wrapped as ``platform.internal_error``). Post-fix, the
     loop completes and returns the final text.
@@ -102,7 +102,7 @@ async def test_tc_frm_nocap_01_fake_framework_runs_past_ten_iterations() -> None
     llm = _ScriptedToolCallLLM(tool_call_count=15, final_text="Done.")
     tool = _NoopTool()
 
-    fw = FakeFramework()
+    fw = MinimalFramework()
     final_text = await fw.run_exchange(
         system_prompt="sys",
         user_message="loop please",
@@ -142,7 +142,7 @@ async def test_tc_frm_nocap_02_fake_framework_observes_cancellation_mid_loop() -
         # already dispatched the tool call.
         return poll_count >= 3
 
-    fw = FakeFramework()
+    fw = MinimalFramework()
     with pytest.raises(asyncio.CancelledError):
         await fw.run_exchange(
             system_prompt="sys",
@@ -227,7 +227,7 @@ async def test_fake_framework_observes_cancel_during_llm_await() -> None:
 
     flip_task = asyncio.create_task(_flip_after_delay())
 
-    fw = FakeFramework()
+    fw = MinimalFramework()
     start = time.monotonic()
     with pytest.raises(ExchangeCancelled):
         await fw.run_exchange(
@@ -292,7 +292,7 @@ async def test_fake_framework_observes_cancel_during_tool_await() -> None:
 
     flip_task = asyncio.create_task(_flip_after_delay())
 
-    fw = FakeFramework()
+    fw = MinimalFramework()
     start = time.monotonic()
     with pytest.raises(ExchangeCancelled):
         await fw.run_exchange(

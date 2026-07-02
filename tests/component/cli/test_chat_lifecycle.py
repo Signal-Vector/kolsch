@@ -8,7 +8,7 @@ Six named cases per the build-doc's acceptance criterion:
 - **TC-CHAT-08 (Ctrl-C)**: cancellation mid-stream → engine emits
   ``thread.exchange_failed`` with cause ``engine.cancelled``;
   the renderer surfaces the system notice. Driven via direct
-  ``cancel_token.cancel()`` because FakeFramework + EchoLLM
+  ``cancel_token.cancel()`` because MinimalFramework + EchoLLM
   resolve too fast to inject a real SIGINT.
 - **TC-CHAT-09 (tool error)**: a failing tool renders as the red
   panel — already covered structurally in ``test_chat_renderer``;
@@ -731,7 +731,7 @@ async def test_tc_chat_08_pre_cancelled_token_emits_engine_cancelled_failed_even
     Drives the engine's cancellation path directly. The
     pre-cancel trick sidesteps the asyncio-timing problem (no
     streaming connector mid-stream to interrupt under
-    FakeFramework + EchoLLMDriver) while still exercising the
+    MinimalFramework + EchoLLMDriver) while still exercising the
     real cancel path the engine implements per Phase 1's typed
     CancelToken contract.
 
@@ -782,7 +782,7 @@ async def test_tc_chat_08_cancel_token_signals_engine() -> None:
     which is what the engine's pre-flight polls.
 
     A full end-to-end Ctrl-C through stdin would require a slow
-    LLM to be mid-stream when the signal arrives; the FakeFramework
+    LLM to be mid-stream when the signal arrives; the MinimalFramework
     + EchoLLMDriver resolve too fast to inject a real interrupt
     in test time. This case pins the mechanism the loop uses;
     the loop's KeyboardInterrupt handler is exercised separately."""
@@ -926,7 +926,7 @@ def test_cancel_handling_in_loop_signals_engine_token(
     the cancellation wiring.
 
     Source-level test (cheap, doesn't require driving stdin)
-    because the engine's instant-response under FakeFramework
+    because the engine's instant-response under MinimalFramework
     makes a real interrupt test flaky. The behavioural test would
     need a slow connector and is deferred to a streaming-engine
     phase."""

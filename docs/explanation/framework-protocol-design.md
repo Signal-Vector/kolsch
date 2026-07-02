@@ -3,7 +3,7 @@
 **Draft 0.1 · 2026-05-28 · Status: pre-Step-12 research**
 
 > Purpose: define the minimal Python Protocol that the Agent Engine depends
-> on, informed by what CrewAI actually exposes today, so the FakeFramework
+> on, informed by what CrewAI actually exposes today, so the MinimalFramework
 > used by Step 12a's integration tests only assumes guarantees the eventual
 > CrewAI adapter can also provide. Read-only spike: no installs, no engine
 > code, no dependency edits.
@@ -208,7 +208,7 @@ class LLMResponse(BaseModel):
     LLM's reply the engine cannot derive from `content` + `tool_calls`
     alone (provider message-id, finish_reason, system_fingerprint,
     cached-prompt markers, reasoning trace blocks, etc.). The
-    FakeFramework satisfies it with `raw={}` (the Fake LLM has no
+    MinimalFramework satisfies it with `raw={}` (the Fake LLM has no
     provider details to thread); the CrewAI adapter populates it from
     whatever the configured provider returned. This asymmetry is
     deliberate — `raw` is a passthrough channel, not a contract the
@@ -284,7 +284,7 @@ class Framework(Protocol):
 | `Framework.run_exchange` | One exchange = build an agent + task + crew, kickoff_async, return result | `Crew.kickoff_async()` exists; sync `kickoff` too | Setup overhead per call (build Agent/Task/Crew each time) but matches engine I8 statelessness |
 | `cancellation` poll | Cooperative cancel between iterations | CrewAI has no first-class cancel; we poll inside `LLMHandle.__call__` and raise to abort the loop | Acceptable — the LLM seam is the natural cancellation point |
 
-The FakeFramework used in Step 12a integration tests implements
+The MinimalFramework used in Step 12a integration tests implements
 `run_exchange` directly: loop calling `llm` and dispatching tool calls
 the LLM emits. No CrewAI dependency; same Protocol; same engine code.
 
@@ -405,7 +405,7 @@ satisfied by the seam structure itself, not by adapter discipline.
 
 With those five conditions, every engine-contract invariant — I1, I3,
 I5, I6, I7, I8 — can be honored. The Step 12a engine code targets the
-Framework Protocol; Step 12b ships the CrewAI adapter; the FakeFramework
+Framework Protocol; Step 12b ships the CrewAI adapter; the MinimalFramework
 in tests/fixtures/ provides the same Protocol shape so TC-ENG-01..11
 become true Framework-Protocol integration tests that the real adapter
 will inherit.

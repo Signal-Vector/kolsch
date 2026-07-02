@@ -88,7 +88,7 @@ design:
   step 6 calls `build_llm` per exchange to get a `crewai.LLM`.
 - **Test path** — pass `llm=<callable>` directly. Pre-flight step 6
   returns ``None`` without consulting the registry; the framework
-  uses the injected callable. The FakeFramework + EchoLLMDriver
+  uses the injected callable. The MinimalFramework + EchoLLMDriver
   bootstrap relies on this so tests don't need any provider config.
 
 A future patch may unify the two paths by deprecating the direct

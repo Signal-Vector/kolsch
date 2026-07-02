@@ -1526,7 +1526,7 @@ def _history_before_last_user(messages: list[Any]) -> list[Any]:
 
     Together with :func:`_last_user_text`, this lets the engine hand
     the framework a (system_prompt, history, user_message) triple that
-    a no-wrap framework (FakeFramework) can reassemble byte-equal to
+    a no-wrap framework (MinimalFramework) can reassemble byte-equal to
     what the Assembly Procedure produced.
     """
     last_user_idx: int | None = None

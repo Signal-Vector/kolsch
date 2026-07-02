@@ -80,7 +80,7 @@ def make_llm_callable(
         # list) when there are no tools — some providers reject
         # ``tools: []`` per the OpenAI-compat spec. Also normalise to
         # OpenAI spec shape — the engine's `{name, schema}` internal
-        # shape (as built by FakeFramework) is opaque to litellm;
+        # shape (as built by MinimalFramework) is opaque to litellm;
         # Kimi K2 in particular emits `arguments: {}` for every tool
         # call when it can't find `function.parameters`.
         tools_arg = (
@@ -139,7 +139,7 @@ def _tool_to_openai_spec(tool: dict[str, Any]) -> dict[str, Any]:
 
     The engine's internal shape is
     ``{"name": ..., "description": ..., "schema": {JSON Schema}}`` —
-    what ``FakeFramework.run_exchange`` builds from ``ToolHandle`` and
+    what ``MinimalFramework.run_exchange`` builds from ``ToolHandle`` and
     what the observer records on ``model.request.tools``. LiteLLM /
     OpenAI-compat providers require the ``{type: "function", function:
     {name, description, parameters}}`` envelope; without the

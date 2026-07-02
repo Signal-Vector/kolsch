@@ -3,7 +3,7 @@
 Three named cases per the build-doc's acceptance criterion:
 
 - **TC-CHAT-01**: basic exchange. Feed "hello" to ``_run_input_loop``
-  against the default-tier runtime (EchoLLMDriver + FakeFramework).
+  against the default-tier runtime (EchoLLMDriver + MinimalFramework).
   Assert the renderer printed the agent's reply AND the JSONL
   contains the expected thread.exchange_* event sequence.
 - **TC-CHAT-02**: tool-call block. Feed a crafted ``tool.called`` +

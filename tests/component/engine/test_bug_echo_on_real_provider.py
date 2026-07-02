@@ -32,7 +32,7 @@ This test:
    - `model.response.data.content.text == "DISTINCTIVE_REPLY_42"`.
    - `agent.message.data.content.text == "DISTINCTIVE_REPLY_42"`.
 
-Catches H1 (FakeFramework wired unconditionally), H3 (no per-spec
+Catches H1 (MinimalFramework wired unconditionally), H3 (no per-spec
 dispatch), H4 (connector returns wrong thing), H5 (CLI bypasses
 config), H6 (agent.message constructed from user.message)
 simultaneously.

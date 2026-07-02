@@ -1,16 +1,26 @@
 """Reference implementation of [`Framework`][engine.framework.Framework].
 
-The v1 default framework for engine tests and for development
-scenarios where users want zero-LLM-cost runs against the Fake LLM.
-Engine-internal (lives in `src/engine/`, not `tests/fixtures/`)
-because it is shipped behavior, not a test fixture.
+`MinimalFramework` (formerly `FakeFramework`) is kolsch's default
+production framework — `bootstrap_runtime` wires it up regardless of
+whether a real LLM factory is present. Renamed from `FakeFramework`
+because the old name misled reviewers into treating the class as a
+test fixture; see `process/feat-clarify-framework-selection.md` for
+the rename rationale + the shipped bug that revealed the confusion
+(kimi K2 empty-args tool calls, 2026-07-02).
 
 The loop is deliberately minimal: build `[system, user]`, call the
 LLM, dispatch any tool calls the LLM emits, append the tool result +
 assistant turn to the message list, repeat until the LLM returns a
-content-only response or `cancellation` fires. There is no
-per-exchange iteration cap; runaway loops are terminated by the user
-via Esc (which flips `cancellation`).
+content-only response or `cancellation` fires. No per-exchange
+iteration cap; runaway loops are terminated by the user via Esc
+(which flips `cancellation`).
+
+Trade-off vs `CrewAIFramework`: this class provides no
+cancellation-during-hang polling, no `ModelUpstreamError`
+retry translation, no stdout/stderr capture around a noisy agent
+library, and no tracing-consent short-circuit. Users who need those
+production affordances should pass `framework=CrewAIFramework()`
+explicitly to `bootstrap_runtime`.
 """
 
 from __future__ import annotations
@@ -27,8 +37,11 @@ if TYPE_CHECKING:
     from engine.framework import LLMHandle, ToolHandle
 
 
-class FakeFramework:
-    """Deterministic, zero-LLM-cost reference framework."""
+class MinimalFramework:
+    """Kolsch's minimal reference framework — the `bootstrap_runtime` default.
+
+    Renamed from `FakeFramework` — see the module docstring.
+    """
 
     def __init__(self, *, model_name: str = "fake") -> None:
         self._model_name = model_name
@@ -154,3 +167,10 @@ def _stringify(value: object) -> str:
     import json  # noqa: PLC0415
 
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
+
+
+# DEPRECATED: renamed to `MinimalFramework` (see
+# process/feat-clarify-framework-selection.md). Alias kept for one
+# release so external callers upgrading from the previous release do
+# not break immediately; remove in the next feature release.
+FakeFramework = MinimalFramework

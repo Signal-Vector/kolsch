@@ -62,7 +62,7 @@ from unittest.mock import patch
 
 import pytest
 
-from engine import ExecutionContext, FakeFramework
+from engine import ExecutionContext, MinimalFramework
 from errors import ModelUpstreamError, PlatformError
 from schemas import EventType
 from tests.fixtures.engine_builder import build_engine, new_session_context
@@ -371,7 +371,7 @@ async def test_tc_eng_classify_03_real_engine_bug_still_internal_error(
     engine, store, _am = await build_engine(
         tmp_path,
         fake_llm,
-        framework=FakeFramework(),
+        framework=MinimalFramework(),
     )
     ctx = await new_session_context(store)
 
