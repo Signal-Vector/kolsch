@@ -88,7 +88,13 @@ async def test_model_request_carries_tool_schemas_when_agent_declares_tools(
     assert isinstance(fake_first, dict)
     assert fake_first.get("name") == "beep"
 
-    # The model.request event on the JSONL.
+    # The model.request event on the JSONL. The observer normalises
+    # tools to the OpenAI spec envelope before emitting so the recorded
+    # event matches what actually crosses an LLM wire (see
+    # process/bug-observer-records-pre-normalisation-tool-shape.md).
+    # The direct-to-LLM handoff still uses the engine's internal shape
+    # (`fake_saw` above); the divergence is intentional and documented
+    # in the observer + fallback docstrings.
     events = [e async for e in store.read_path_to_leaf(ctx.thread_id)]
     requests = [e for e in events if e.type == EventType.MODEL_REQUEST]
     assert len(requests) == 1
@@ -99,17 +105,16 @@ async def test_model_request_carries_tool_schemas_when_agent_declares_tools(
     )
     assert len(captured_tools) == 1
     captured_first = captured_tools[0]
-    assert captured_first.get("name") == "beep"
-    schema = captured_first.get("schema")
-    assert isinstance(schema, dict)
-    assert schema.get("type") == "object"
+    assert captured_first.get("type") == "function"
+    function = captured_first.get("function")
+    assert isinstance(function, dict)
+    assert function.get("name") == "beep"
+    parameters = function.get("parameters")
+    assert isinstance(parameters, dict)
+    assert parameters.get("type") == "object"
     # Pydantic-derived: properties + required reflect _BeepArgs.
-    properties = schema.get("properties", {})
+    properties = parameters.get("properties", {})
     assert "count" in properties
-
-    # The event-side tools list matches the LLM-side tools list
-    # exactly (the framework didn't reshape).
-    assert captured_tools == fake_saw
 
 
 async def test_model_request_carries_empty_tools_when_agent_has_no_tools(

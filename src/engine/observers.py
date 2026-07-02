@@ -20,6 +20,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from engine._crewai_adapter import _tool_to_openai_spec
 from errors import PlatformError, ToolUnauthorized
 from schemas import (
     Actor,
@@ -84,18 +85,20 @@ class _ObservedLLMHandle:
 
     async def __call__(self, request: LLMRequest) -> LLMResponse:
         call_id = AgentCallId(f"cl_{uuid4()}")
-        # BEFORE — model.request. Include the tool-schema list the
-        # framework forwarded to the LLM. `request.tools` is the
-        # canonical post-framework-wrap source for what the model
-        # actually saw (CrewAI / other frameworks may reshape; the
-        # engine emits what crossed the seam, not the
-        # engine-assembled pre-wrap list).
+        # BEFORE — model.request. Normalise the tool advertisements to
+        # the OpenAI spec envelope (`{type: function, function: {name,
+        # description, parameters}}`) before emitting so the event log
+        # records what actually crosses the LLM wire, not the engine's
+        # internal `{name, description, schema}` shape. Both the
+        # observer and `_crewai_adapter.call` invoke
+        # `_tool_to_openai_spec`; it is idempotent, so the double call
+        # is a no-op on the second pass.
         request_data = ModelRequestData(
             call_id=call_id,
             model=dict(self._model_spec),
             config_event_id=EventId(self._config_event_id or "ev_pending"),
             messages=[m.model_dump(mode="json") for m in request.messages],
-            tools=list(request.tools),
+            tools=[_tool_to_openai_spec(t) for t in request.tools],
         )
         await self._emit(
             type_=EventType.MODEL_REQUEST,

@@ -200,6 +200,35 @@ async def test_make_llm_callable_passes_openai_shape_verbatim() -> None:
     assert forwarded == already_spec[0]
 
 
+def test_tool_to_openai_spec_is_idempotent() -> None:
+    """Applying the normalization twice returns byte-identical output.
+
+    Guards the observer + fallback emit paths, which run
+    ``_tool_to_openai_spec`` upstream of the adapter's own call. Both
+    invocations must produce the same result — otherwise the second
+    pass (at the adapter boundary) would corrupt the shape by
+    re-wrapping. See
+    ``process/bug-observer-records-pre-normalisation-tool-shape.md``.
+    """
+    from engine._crewai_adapter import _tool_to_openai_spec
+
+    kolsch_shape = {
+        "name": "fetch_website",
+        "description": "Fetch a URL",
+        "schema": {
+            "type": "object",
+            "properties": {"url": {"type": "string"}},
+            "required": ["url"],
+        },
+    }
+    once = _tool_to_openai_spec(kolsch_shape)
+    twice = _tool_to_openai_spec(once)
+    assert once == twice
+    # And a third pass — the guard should never wrap-and-wrap again.
+    thrice = _tool_to_openai_spec(twice)
+    assert twice == thrice
+
+
 async def test_make_llm_callable_passes_none_when_no_tools_declared() -> None:
     """Empty request.tools → ``tools=None`` (NOT ``tools=[]``).
 

@@ -33,6 +33,7 @@ import logging
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
+from engine._crewai_adapter import _tool_to_openai_spec
 from errors import (
     ConfigFallbackDuplicate,
     LlmAllModelsFailed,
@@ -463,11 +464,13 @@ class FallbackLLMHandle:
         # request event. The `from` / `to` fields on
         # `model.fallback` are the canonical (provider, model) pair.
         #
-        # Also include the tool-schema list the framework forwarded
-        # — this is the production emit path (FallbackLLMHandle
-        # replaces _ObservedLLMHandle); the parallel emit in
-        # observers.py covers test paths that still wire
-        # _ObservedLLMHandle directly.
+        # Also include the tool-schema list the framework forwarded,
+        # normalised to the OpenAI spec envelope so the recorded
+        # event matches what actually crosses the LLM wire (not the
+        # engine's internal `{name, description, schema}` shape). The
+        # observer at `_ObservedLLMHandle` uses the same normalisation;
+        # both invocations are idempotent via `_tool_to_openai_spec`'s
+        # `"function" in tool` guard.
         await self._emit(
             type_=EventType.MODEL_REQUEST,
             data=ModelRequestData(
@@ -475,7 +478,7 @@ class FallbackLLMHandle:
                 model=spec.model_dump(mode="json"),
                 config_event_id=EventId(self._config_event_id or "ev_pending"),
                 messages=[m.model_dump(mode="json") for m in request.messages],
-                tools=list(request.tools),
+                tools=[_tool_to_openai_spec(t) for t in request.tools],
             ).model_dump(mode="json"),
             actor=Actor(kind="agent", id=self._agent_id),
         )
