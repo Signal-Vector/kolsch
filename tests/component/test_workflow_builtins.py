@@ -114,6 +114,7 @@ async def _run_workflow(
     tmp_path: Path,
     workflow: Workflow,
     registry: RunnerRegistry,
+    catalog: AssetCatalog | None = None,
 ) -> tuple[WorkflowRunStatus, list[dict[str, Any]]]:
     store = WorkflowRunStore(tmp_path)
     run = store.create(workflow_ref="demo/workflows/x", inputs={})
@@ -122,7 +123,7 @@ async def _run_workflow(
         run=run,
         store=store,
         registry=registry,
-        catalog=AssetCatalog(),
+        catalog=catalog if catalog is not None else AssetCatalog(),
     )
     status = await ex.run()
     return status, list(store.read_events(run.run_id))
@@ -238,6 +239,233 @@ class TestBashRunner:
         assert "from subprocess" not in text
         assert "subprocess.run" not in text
         assert "subprocess.Popen" not in text
+
+
+# ---------------------------------------------------------------------------
+# Regression: bug-workflow-policy-not-enforced end-to-end.
+#
+# The unit tests in tests/unit/test_dispatch_workflow_permissions.py verify
+# that dispatch_tool FORWARDS workflow_permissions correctly to authz.allow
+# as the first layer. This suite exercises the DOWNSTREAM contract: that
+# a real RuleBasedAuthorizationProvider walks the layered rule stack in
+# proximate-first order (workflow → agent → bundle → workspace) and lets
+# a workflow.policy allow beat a workspace-level deny.
+#
+# Without this coverage the unit tests could pass while the provider
+# silently ignored the workflow layer at eval time.
+# ---------------------------------------------------------------------------
+
+
+def _minimal_bash_catalog() -> AssetCatalog:
+    """Catalog with just `kolsch/tools/bash` so new-shape rules validate.
+
+    ``RuleBasedAuthorizationProvider`` validates new-shape refs
+    (like ``kolsch/tools/bash``) against the catalog at construction
+    and raises ``AuthzToolRefUnknown`` when the ref doesn't resolve.
+    ``_make_registry`` sidesteps this by using legacy shape
+    (``who: .*, what: .*``); tests that assert on canonical
+    new-shape matches need the catalog to include the referenced
+    tool.
+    """
+    from assets.catalog import AssetEntry, BundleManifest  # noqa: PLC0415
+
+    return AssetCatalog(
+        bundles={
+            "kolsch": BundleManifest(
+                name="kolsch",
+                version="0.1.0",
+                description="test fixture",
+                path="/tmp/bundles/kolsch",
+            )
+        },
+        assets={
+            "kolsch/tools/bash": AssetEntry(
+                ref="kolsch/tools/bash",
+                asset_type="tool",
+                bundle="kolsch",
+                path="bundles/kolsch/tools/bash.py",
+            )
+        },
+    )
+
+
+def _stamp_bash_defn(bash_defn: Any) -> Any:
+    """Stamp ``home_bundle="kolsch"`` matching the workflow-runtime fix.
+
+    The module-scope ``bash_defn`` fixture in this file (used by every
+    other test class) predates the workflow-runtime home_bundle stamp
+    (kolsch commit ``347fd95``) and constructs the defn directly via
+    ``get_tool_definition`` without stamping. That leaves
+    ``defn.action_name`` as the legacy ``tool.bash`` form — fine for
+    tests that use legacy-shape ``who: .*, what: .*`` rules, but this
+    class asserts against the canonical ``kolsch/tools/bash`` rule
+    shape and needs the stamped defn.
+    """
+    bash_defn.home_bundle = "kolsch"
+    return bash_defn
+
+
+def _make_registry_with_workspace_deny(
+    tmp_path: Path, bash_defn: Any
+) -> RunnerRegistry:
+    """Registry whose workspace authz has a bash DENY at the head.
+
+    The default `_make_registry` allows everything. This variant
+    installs a `{what: "kolsch/tools/bash", pattern: "*", effect: "deny"}`
+    rule so any bash invocation without a workflow.policy override
+    fails. The workflow-policy-wins test below relies on this.
+    """
+    bash_defn = _stamp_bash_defn(bash_defn)
+    workspace = _make_workspace(tmp_path)
+    reg = RunnerRegistry()
+    register_builtins(
+        reg,
+        bash_defn=bash_defn,
+        authz=RuleBasedAuthorizationProvider(
+            config={
+                "rules": [
+                    # Workspace-level deny for bash — every bash
+                    # invocation without a beating workflow layer
+                    # must hit this.
+                    {
+                        "what": "kolsch/tools/bash",
+                        "pattern": "*",
+                        "effect": "deny",
+                    },
+                    # Everything else stays allow so the surrounding
+                    # workflow pre-flight (session start, etc.)
+                    # doesn't accidentally trip on some other rule.
+                    {"who": ".*", "what": ".*", "effect": "allow"},
+                ]
+            },
+            catalog=_minimal_bash_catalog(),
+        ),
+        secrets=DotenvSecretsProvider(
+            root=workspace, config={"path": ".env"}
+        ),
+        sandbox=NativeSandboxProvider(config={}),
+    )
+    return reg
+
+
+class TestWorkflowPolicyEnforcement:
+    """Real-provider end-to-end coverage for bug-workflow-policy-not-enforced."""
+
+    async def test_workflow_policy_allow_beats_workspace_deny(
+        self, tmp_path: Path, bash_defn: Any
+    ) -> None:
+        """workflow.policy allow at layer 0 beats workspace deny at the tail.
+
+        The provider walks layers in proximate-first order (workflow →
+        workspace) and short-circuits on the first matching rule. This
+        is the entire point of the policy field.
+        """
+        registry = _make_registry_with_workspace_deny(tmp_path, bash_defn)
+        wf = Workflow.model_validate(
+            {
+                "nodes": {
+                    "greet": {
+                        "type": "kolsch/nodes/bash",
+                        "command": "echo hello",
+                    }
+                },
+                "policy": [
+                    {
+                        "what": "kolsch/tools/bash",
+                        "pattern": "*",
+                        "effect": "allow",
+                    }
+                ],
+                "graph": {"edges": []},
+            }
+        )
+        status, events = await _run_workflow(
+            tmp_path=tmp_path,
+            workflow=wf,
+            registry=registry,
+            catalog=_minimal_bash_catalog(),
+        )
+        assert status == WorkflowRunStatus.SUCCEEDED, (
+            "workflow.policy allow at layer 0 must beat workspace deny; "
+            f"got status={status.value!r}. events={events[-3:]}"
+        )
+        completed = [e for e in events if e["kind"] == "workflow.node.completed"]
+        assert len(completed) == 1
+        assert completed[0]["payload"]["output"]["stdout"] == "hello\n"
+
+    async def test_no_workflow_policy_still_hits_workspace_deny(
+        self, tmp_path: Path, bash_defn: Any
+    ) -> None:
+        """Negative control: absent workflow.policy, the workspace deny fires.
+
+        Pins that the deny rule in the workspace ACTUALLY works —
+        otherwise the positive test above would pass for the wrong
+        reason (e.g., a stray allow-all elsewhere).
+        """
+        registry = _make_registry_with_workspace_deny(tmp_path, bash_defn)
+        wf = Workflow.model_validate(
+            {
+                "nodes": {
+                    "greet": {
+                        "type": "kolsch/nodes/bash",
+                        "command": "echo hello",
+                    }
+                },
+                # NO policy: block.
+                "graph": {"edges": []},
+            }
+        )
+        status, events = await _run_workflow(
+            tmp_path=tmp_path,
+            workflow=wf,
+            registry=registry,
+            catalog=_minimal_bash_catalog(),
+        )
+        assert status == WorkflowRunStatus.FAILED
+        failed = [e for e in events if e["kind"] == "workflow.node.failed"]
+        assert len(failed) == 1
+        assert "Authorization denied" in failed[0]["payload"]["message"]
+
+    async def test_workflow_policy_deny_beats_workspace_allow(
+        self, tmp_path: Path, bash_defn: Any
+    ) -> None:
+        """Symmetric case: workflow.policy deny wins even against workspace allow.
+
+        Locks the proximate-first semantics both ways — a workflow
+        can TIGHTEN what the workspace allows, not only widen.
+        """
+        # Reuse the default all-allow workspace; add a workflow.policy
+        # deny at layer 0. Bash defn needs the kolsch stamp so the
+        # canonical `what: kolsch/tools/bash` deny rule matches.
+        registry = _make_registry(tmp_path, _stamp_bash_defn(bash_defn))
+        wf = Workflow.model_validate(
+            {
+                "nodes": {
+                    "greet": {
+                        "type": "kolsch/nodes/bash",
+                        "command": "echo hello",
+                    }
+                },
+                "policy": [
+                    {
+                        "what": "kolsch/tools/bash",
+                        "pattern": "*",
+                        "effect": "deny",
+                    }
+                ],
+                "graph": {"edges": []},
+            }
+        )
+        status, events = await _run_workflow(
+            tmp_path=tmp_path,
+            workflow=wf,
+            registry=registry,
+            catalog=_minimal_bash_catalog(),
+        )
+        assert status == WorkflowRunStatus.FAILED
+        failed = [e for e in events if e["kind"] == "workflow.node.failed"]
+        assert len(failed) == 1
+        assert "Authorization denied" in failed[0]["payload"]["message"]
 
 
 # ---------------------------------------------------------------------------
