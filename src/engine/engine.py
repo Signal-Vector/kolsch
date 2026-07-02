@@ -973,8 +973,10 @@ class _Exchange:
             return
         body = tools_sub.config
 
-        declared_paths = await self._resolve_declared_tool_paths(
-            list(body.get("declared", []) or []),
+        declared_paths, declared_owner_bundles = (
+            await self._resolve_declared_tool_paths(
+                list(body.get("declared", []) or []),
+            )
         )
 
         # Thread the agent's permissions + its home bundle's
@@ -1019,17 +1021,25 @@ class _Exchange:
             agent_id=self.agent_id,  # type: ignore[arg-type]
             builtin_names=list(body.get("builtin", []) or []),
             declared_paths=declared_paths,
+            # Per-declared-path owner bundle derived from the ref's
+            # leading segment (bug-authz-rule-caller-bundle-mismatch).
+            # A butler-in-`andre` extending `kolsch/agents/helper`
+            # inherits declared refs like `kolsch/tools/read_file` —
+            # the tool's authoritative home is `kolsch`, NOT the
+            # caller agent's bundle. Threading the map through
+            # register_for_agent stamps each defn with its ref's
+            # bundle instead of a single caller-derived default.
+            declared_owner_bundles=declared_owner_bundles,
             agent_permissions=agent_rules,
             bundle_permissions=bundle_rules,
-            # The same home_bundle resolved above for sourcing
-            # bundle_permissions also stamps each ToolDefinition's
-            # home_bundle so its action_name resolves to the 3-seg
-            # catalog ref `<home_bundle>/tools/<name>`. Falls through
-            # as None for synthetic test configs not backed by a
-            # catalog bundle — the subsystem falls back to "kolsch"
-            # for builtins and to the legacy 1-seg action form for
-            # declared tools in that case (preserves programmatic
-            # test behaviour).
+            # The home_bundle resolved above (from the caller agent's
+            # own bundle) sources bundle_permissions and stamps
+            # PROGRAMMATIC / TEST tools that don't come through the
+            # declared-refs path. For declared tools the per-path
+            # owner map takes precedence. Falls through as None for
+            # synthetic test configs; the subsystem stamps "kolsch"
+            # for builtins and legacy 1-seg action form for
+            # unstamped declared tools in that case.
             home_bundle=home_bundle,
         )
         # MCP server registration lands when the MCP wiring patch ships.
@@ -1037,14 +1047,34 @@ class _Exchange:
     async def _resolve_declared_tool_paths(
         self,
         declared_entries: list[dict[str, Any]],
-    ) -> list[Path]:
-        """Resolve each declared tool's `ref` to an on-disk Path.
+    ) -> tuple[list[Path], dict[Path, str]]:
+        """Resolve each declared tool's `ref` to a Path + owner bundle.
+
+        Returns `(paths, owner_bundles)`:
+
+        - `paths` — resolved on-disk paths in declaration order.
+        - `owner_bundles` — path → owner-bundle string, derived from
+          the ref's leading segment (e.g. `kolsch/tools/read_file`
+          → `"kolsch"`). This is the tool's AUTHORITATIVE home bundle
+          for stamping `defn.home_bundle` at registration time. The
+          convention matches
+          [`_tools_for_agent`][cli._slash._tools_for_agent] at
+          `src/cli/_slash.py:1755-1756`.
+
+        Threading the owner bundle through fixes
+        bug-authz-rule-caller-bundle-mismatch: a butler agent in the
+        `andre` bundle extending `kolsch/agents/helper` inherits
+        declared refs like `kolsch/tools/read_file`; before this
+        change, `register_for_agent` stamped each tool with the
+        caller agent's bundle (`andre`) so `defn.action_name`
+        returned `andre/tools/read_file` and modal-granted rules
+        landed under the wrong bundle.
 
         The asset catalog (built at runtime bootstrap via
         `AssetManagement.initialize`) already scanned every bundle's
         `tools/` directory and produced an `AssetEntry` per file.
         This method maps each config-supplied ref to its catalog
-        entry's `path` field.
+        entry's `path` field alongside the owner-bundle derivation.
 
         Missing refs surface as
         [`ConfigUnknownTool`][errors.ConfigUnknownTool] (Fatal) with
@@ -1054,6 +1084,7 @@ class _Exchange:
         from errors import AssetsNotFound, ConfigUnknownTool  # noqa: PLC0415
 
         paths: list[Path] = []
+        owner_bundles: dict[Path, str] = {}
         for entry in declared_entries:
             # The Layer 3 validator rejects non-dict declared entries
             # at config-load time (see validate_standard_config), so
@@ -1077,8 +1108,15 @@ class _Exchange:
                     available_refs=available,
                     agent_id=str(self.agent_id),
                 ) from exc
-            paths.append(Path(asset.path))
-        return paths
+            path = Path(asset.path)
+            paths.append(path)
+            # Owner bundle from the ref's leading segment. Refs are
+            # 3-segment catalog refs (`<bundle>/tools/<name>`) by
+            # convention; a stray 1-segment ref (test path) falls
+            # back to "kolsch" mirroring _slash.py:1755-1756.
+            segments = ref.split("/")
+            owner_bundles[path] = segments[0] if len(segments) > 1 else "kolsch"
+        return paths, owner_bundles
 
     async def _process_force_invoke(self) -> None:
         """Emit a synthetic read for each force-invoke skill.

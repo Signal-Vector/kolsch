@@ -815,3 +815,120 @@ async def echo(args, ctx):
     assert "echo" in properties["message"].get("description", "").lower() or (
         properties["message"].get("description") == "text to echo back"
     )
+
+
+# ---------------------------------------------------------------------------
+# Regression: bug-authz-rule-caller-bundle-mismatch
+# ---------------------------------------------------------------------------
+#
+# Butler agent (`andre` bundle) extends `kolsch/agents/helper`. Helper's
+# tools config lists them as `declared:` refs like
+# `kolsch/tools/read_file`. Before the fix, the engine passed the CALLER
+# agent's bundle (`andre`) as `home_bundle=` to `register_for_agent` for
+# ALL declared tools, so `defn.action_name` returned
+# `andre/tools/read_file`. Modal-granted rules then landed under `andre/`
+# and boot on today's main fails with `AuthzToolRefUnknown` because
+# the ref doesn't resolve to a catalogued tool.
+#
+# The fix threads `declared_owner_bundles: dict[Path, str]` through
+# `register_for_agent`. The map is derived from each declared ref's
+# leading segment at engine setup time. Per-path owner takes precedence
+# over the caller-supplied `home_bundle=` default.
+
+
+async def test_declared_owner_bundles_overrides_home_bundle(
+    tmp_path: Path,
+) -> None:
+    """Declared owner map wins over `home_bundle=` for declared tools.
+
+    Regression for bug-authz-rule-caller-bundle-mismatch. Simulates a
+    butler (`ag_butler` in `andre` bundle) inheriting a
+    `kolsch/tools/greet` declared ref via
+    ``extends: kolsch/agents/helper``. The tool file lives under
+    ``bundles/kolsch/tools/`` on disk. Owner-bundle map says the tool
+    belongs to ``kolsch``; the ``home_bundle`` kwarg says ``andre``
+    (caller's bundle). The map must win.
+    """
+    bundle = tmp_path / "bundles" / "kolsch" / "tools"
+    bundle.mkdir(parents=True)
+    source = '''
+from pydantic import BaseModel
+from tools import tool
+
+
+class GreetArgs(BaseModel):
+    name: str
+
+
+@tool(name="greet", description="Greets the caller", args_schema=GreetArgs)
+async def greet(args, ctx):
+    return {"text": f"hi, {args.name}"}
+'''
+    tool_file = bundle / "greet.py"
+    tool_file.write_text(source, encoding="utf-8")
+
+    subsystem = _make_subsystem(tmp_path=tmp_path)
+    await subsystem.register_for_agent(
+        agent_id=AgentId("ag_butler"),
+        declared_paths=[tool_file],
+        # The map is what the fixed engine passes for declared refs.
+        declared_owner_bundles={tool_file: "kolsch"},
+        # The caller-derived default that USED to leak into every
+        # declared tool's home_bundle. Must be overridden by the map.
+        home_bundle="andre",
+    )
+    defns = subsystem._registry.list_tools(AgentId("ag_butler"))
+    greet_defn = next(d for d in defns if d.name == "greet")
+    assert greet_defn.home_bundle == "kolsch", (
+        "Declared owner map must take precedence over the caller's "
+        "home_bundle default — bug-authz-rule-caller-bundle-mismatch."
+    )
+    assert greet_defn.action_name == "kolsch/tools/greet", (
+        "action_name must resolve against the TOOL's own bundle, not "
+        "the caller agent's bundle. Modal-granted rules key off this."
+    )
+
+
+async def test_declared_paths_without_owner_map_uses_home_bundle_fallback(
+    tmp_path: Path,
+) -> None:
+    """Backward-compat: callers that omit the map fall through to `home_bundle=`.
+
+    Programmatic / test callers that pass only `declared_paths=[...]`
+    (no owner map) keep the pre-fix behaviour — every declared tool
+    gets stamped with the caller-supplied `home_bundle=` value. This
+    is what the 4 existing test callers rely on; the migration path
+    for `register_for_agent`'s signature must not break them.
+    """
+    bundle = tmp_path / "bundles" / "programmatic" / "tools"
+    bundle.mkdir(parents=True)
+    source = '''
+from pydantic import BaseModel
+from tools import tool
+
+
+class NoopArgs(BaseModel):
+    pass
+
+
+@tool(name="noop", description="does nothing", args_schema=NoopArgs)
+async def noop(args, ctx):
+    return {"ok": True}
+'''
+    tool_file = bundle / "noop.py"
+    tool_file.write_text(source, encoding="utf-8")
+
+    subsystem = _make_subsystem(tmp_path=tmp_path)
+    await subsystem.register_for_agent(
+        agent_id=AgentId("ag_test"),
+        declared_paths=[tool_file],
+        # NO declared_owner_bundles — mimics the 4 existing test
+        # callers that pass raw Paths.
+        home_bundle="myprogram",
+    )
+    defns = subsystem._registry.list_tools(AgentId("ag_test"))
+    noop_defn = next(d for d in defns if d.name == "noop")
+    assert noop_defn.home_bundle == "myprogram", (
+        "Backward compat: when declared_owner_bundles is None, the "
+        "caller-supplied home_bundle= still stamps each declared tool."
+    )

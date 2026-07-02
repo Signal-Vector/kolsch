@@ -79,6 +79,7 @@ class ToolsSubsystem:
         tools: list[Callable[..., Awaitable[Any]]] | None = None,
         builtin_names: list[str] | None = None,
         declared_paths: list[Path] | None = None,
+        declared_owner_bundles: dict[Path, str] | None = None,
         mcp_servers: list[tuple[MCPServer, Literal["lazy", "eager"]]] | None = None,
         agent_permissions: list[Rule] | None = None,
         bundle_permissions: list[Rule] | None = None,
@@ -100,25 +101,56 @@ class ToolsSubsystem:
         MCP servers register the same way: eager lifecycle starts
         the server now, lazy registers a placeholder and starts on
         first invoke.
-        `home_bundle` stamps every registered
+        `home_bundle` and `declared_owner_bundles` together stamp
+        every registered
         [`ToolDefinition`][tools.decorator.ToolDefinition] so its
         `action_name` resolves to the catalog ref
-        `<home_bundle>/tools/<name>`. Builtins are always attributed
-        to `kolsch`; declared and programmatically-supplied tools
-        take the caller-supplied value. When `home_bundle` is `None`
-        (test paths that don't go through the engine), `action_name`
-        falls back to `tool.<name>`.
+        `<home_bundle>/tools/<name>`:
+
+        - Builtins are always attributed to `kolsch` (canonical
+          set has no ref of its own).
+        - Declared tools are stamped from
+          `declared_owner_bundles[path]` when the map is supplied
+          (the ref's authoritative owner bundle); otherwise fall
+          back to `home_bundle` (preserves programmatic /
+          test-driven callers).
+        - Programmatic (`tools=`) callers stamp from `home_bundle`.
+
+        When both `declared_owner_bundles[path]` and `home_bundle`
+        are absent for a given tool, `action_name` falls back to
+        the legacy `tool.<name>` form so existing test paths stay
+        byte-identical.
+
+        The declared-owner map is what fixes
+        bug-authz-rule-caller-bundle-mismatch: a butler agent in
+        `andre` extending `kolsch/agents/helper` inherits declared
+        refs like `kolsch/tools/read_file`. Before this parameter,
+        the single `home_bundle` kwarg (the caller agent's bundle)
+        was stamped onto every declared tool, so `defn.action_name`
+        returned `andre/tools/read_file` and modal-granted rules
+        landed under the wrong bundle. The map preserves each
+        ref's authoritative bundle.
 
         Args:
             agent_id: The agent the registration is scoped to.
             tools: Already-imported `@tool` functions.
             builtin_names: Names of canonical builtins to register.
             declared_paths: Paths to `.py` files declaring tools.
+            declared_owner_bundles: Optional per-path owner-bundle
+                map. When supplied, stamps each declared tool's
+                `home_bundle` from `declared_owner_bundles[path]`
+                (the ref's leading segment). When absent, declared
+                tools fall through to `home_bundle`.
             mcp_servers: `(server, lifecycle)` pairs to register.
             agent_permissions: The agent's resolved permission rules.
             bundle_permissions: The bundle's resolved permission rules.
-            home_bundle: Bundle slug stamped on each non-builtin
-                tool's `home_bundle` for `action_name` derivation.
+            home_bundle: Bundle slug stamped on programmatic tools
+                and on declared tools not covered by
+                `declared_owner_bundles`. Serves as the DEFAULT for
+                the two channels that don't carry per-tool owner
+                info; the engine's setup path always provides
+                `declared_owner_bundles`, so this only applies to
+                programmatic-tools callers there.
 
         Returns:
             Metadata-only views of every tool registered for the agent.
@@ -137,11 +169,21 @@ class ToolsSubsystem:
             registration.tools[defn.name] = defn
 
         for path in declared_paths or []:
+            # Per-path owner bundle (from the declared ref's leading
+            # segment) is the AUTHORITATIVE home for tools resolved
+            # through the declared:-refs channel. Falls back to the
+            # caller-supplied `home_bundle` when the map is absent
+            # (programmatic / test callers that only pass raw
+            # `declared_paths=[Path, ...]`).
+            path_owner: str | None = None
+            if declared_owner_bundles is not None:
+                path_owner = declared_owner_bundles.get(path)
+            stamp = path_owner if path_owner is not None else home_bundle
             for fn in discover_tools_in_file(path):
                 defn = get_tool_definition(fn)
                 await self._verify_secrets(defn)
-                if home_bundle is not None and defn.home_bundle is None:
-                    defn.home_bundle = home_bundle
+                if stamp is not None and defn.home_bundle is None:
+                    defn.home_bundle = stamp
                 registration.tools[defn.name] = defn
 
         for name in builtin_names or []:
