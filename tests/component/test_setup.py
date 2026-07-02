@@ -303,6 +303,137 @@ async def test_setup_rerun_adds_workspace_root_to_legacy_allowed_paths(
     assert backups, "migration should have written a timestamped backup"
 
 
+async def test_setup_rerun_adds_agent_execute_allow_when_missing(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Setup ensures a broad `agent.execute.*` allow exists.
+
+    Regression: a workspace hand-narrowed to a single agent-execute
+    rule (e.g. `^agent\\.execute\\.ag_butler$`) used to fail Step E
+    when the helper agent's pre-flight authz check found no matching
+    allow. The setup step
+    `_maybe_ensure_agent_execute_allow` prepends the broad
+    `agent.execute.*` allow when no coverage is present, unblocking
+    subsequent `kolsch run <agent>` invocations.
+    """
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    io_ = _make_test_io(root=tmp_path)
+    assert await run_setup(
+        argparse.Namespace(non_interactive=True, root=tmp_path),
+        io_,
+    ) == 0
+    yaml_path = tmp_path / "platform.yaml"
+    payload = yaml.safe_load(yaml_path.read_text())
+    # Simulate hand-narrowing: drop the default `agent.execute.*`
+    # allow, keep only a butler-specific legacy rule.
+    payload["authorization"]["config"]["rules"] = [
+        {
+            "id": "rl_butler_only",
+            "who": ".*",
+            "what": r"^agent\.execute\.ag_butler$",
+            "effect": "allow",
+        },
+        # Retain the default-deny tail so the check is realistic.
+        {"what": "*", "pattern": "*", "effect": "deny"},
+    ]
+    yaml_path.write_text(yaml.safe_dump(payload, sort_keys=False))
+    # Re-run; the guard should prepend a broad agent.execute.* allow.
+    rerun_io = _make_test_io(root=tmp_path)
+    assert await run_setup(
+        argparse.Namespace(non_interactive=True, root=tmp_path),
+        rerun_io,
+    ) == 0
+    final = yaml.safe_load(yaml_path.read_text())
+    rules = final["authorization"]["config"]["rules"]
+    assert rules[0] == {
+        "what": "agent.execute.*",
+        "pattern": "*",
+        "effect": "allow",
+    }, f"expected broad agent.execute.* allow at position 0; got {rules[0]}"
+    # Existing butler-specific rule survives at position 1 — auto-add
+    # is additive, not destructive.
+    assert rules[1]["what"] == r"^agent\.execute\.ag_butler$"
+
+
+async def test_setup_rerun_no_op_when_agent_execute_allow_present(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Idempotent — a workspace already covering agent.execute.* is untouched."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    io_ = _make_test_io(root=tmp_path)
+    assert await run_setup(
+        argparse.Namespace(non_interactive=True, root=tmp_path),
+        io_,
+    ) == 0
+    yaml_path = tmp_path / "platform.yaml"
+    before = yaml.safe_load(yaml_path.read_text())
+    before_rules = before["authorization"]["config"]["rules"]
+    # Re-run.
+    rerun_io = _make_test_io(root=tmp_path)
+    assert await run_setup(
+        argparse.Namespace(non_interactive=True, root=tmp_path),
+        rerun_io,
+    ) == 0
+    after = yaml.safe_load(yaml_path.read_text())
+    after_rules = after["authorization"]["config"]["rules"]
+    assert after_rules == before_rules, (
+        "setup re-run must be a no-op when agent.execute.* is already covered"
+    )
+
+
+async def test_setup_recognises_legacy_regex_agent_execute_catchall(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Legacy-shape `^agent\\.execute\\..*$` regex counts as coverage.
+
+    Guards against redundantly prepending a new-shape allow when the
+    workspace already has the legacy-form catchall (from a pre-QoL
+    migration). Rule position 0 stays the legacy rule, no new-shape
+    duplicate appears.
+    """
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    io_ = _make_test_io(root=tmp_path)
+    assert await run_setup(
+        argparse.Namespace(non_interactive=True, root=tmp_path),
+        io_,
+    ) == 0
+    yaml_path = tmp_path / "platform.yaml"
+    payload = yaml.safe_load(yaml_path.read_text())
+    payload["authorization"]["config"]["rules"] = [
+        {
+            "id": "rl_legacy_ae",
+            "who": ".*",
+            "what": r"^agent\.execute\..*$",
+            "effect": "allow",
+        },
+        {"what": "*", "pattern": "*", "effect": "deny"},
+    ]
+    yaml_path.write_text(yaml.safe_dump(payload, sort_keys=False))
+    rerun_io = _make_test_io(root=tmp_path)
+    assert await run_setup(
+        argparse.Namespace(non_interactive=True, root=tmp_path),
+        rerun_io,
+    ) == 0
+    final = yaml.safe_load(yaml_path.read_text())
+    rules = final["authorization"]["config"]["rules"]
+    # The pre-existing qol-schema migrator rewrites the legacy regex
+    # to the new-shape catchall at position 0. Our guard sees THAT
+    # as coverage and correctly does not append a duplicate.
+    catchall_indices = [
+        i for i, r in enumerate(rules) if r.get("what") == "agent.execute.*"
+    ]
+    assert len(catchall_indices) == 1, (
+        "expected exactly one agent.execute.* allow after setup; "
+        f"got {catchall_indices} across rules {rules}"
+    )
+
+
 # ===========================================================================
 # TC-UX-06 — idempotency
 # ===========================================================================

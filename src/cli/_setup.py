@@ -390,6 +390,12 @@ async def _step_b_skeleton(io: _SetupIO, *, non_interactive: bool) -> str:
         # the migrator's `tool.<name>` heuristic needs to resolve
         # to `<bundle>/<name>`.
         await _maybe_migrate_authz_rules_to_qol_schema(io)
+        # Guarantee the pre-flight `agent.execute.*` allow rule so
+        # Step E's helper-agent smoke test doesn't fail with a
+        # confusing agent.unauthorized error on workspaces that
+        # hand-narrowed the rule set. Silent no-op when coverage is
+        # already present. Must run BEFORE Step E.
+        _maybe_ensure_agent_execute_allow(io)
         # Make `list_files(path=".")` work in the workspace root.
         # Adds `.` to `file_access.allowed_paths` if missing so the
         # natural workspace-inspection call doesn't default-deny.
@@ -1162,6 +1168,120 @@ def _maybe_add_workspace_root_to_file_access(io: _SetupIO) -> None:
     io.out.write(
         "  ✓ added '.' to file_access.allowed_paths — list_files(\".\") "
         "now works in the workspace root\n",
+    )
+    io.out.write(
+        f"  ✓ backup written to {backup.relative_to(yaml_path.parent)}\n",
+    )
+
+
+_AGENT_EXECUTE_CATCHALL_REGEX_FORMS = frozenset(
+    {
+        # agent.execute.* namespace catchalls (new + legacy shapes)
+        r"agent\.execute\..*",
+        r"^agent\.execute\..*$",
+        r"^agent\.execute\..*",
+        r"agent\.execute\..*$",
+        # Phase 1 allow-all sentinels (legacy regex + new-shape glob)
+        r".*",
+        r"^.*$",
+    }
+)
+
+
+def _rule_covers_broad_agent_execute(rule: Any) -> bool:  # noqa: ANN401
+    r"""Return True when the rule allows the pre-flight `agent.execute.*` check.
+
+    Accepted shapes:
+
+    - New-shape catchall: ``{what: agent.execute.*, effect: allow}``
+      (exact string match on `what`).
+    - Legacy regex catchall: ``what: ^?agent\.execute\..*$?`` with
+      ``effect: allow`` (any anchoring variant).
+    - Phase 1 allow-all sentinel: ``{what: .*, effect: allow}`` (or
+      ``.*``, ``^.*$``, ``*``). These are strictly broader than
+      ``agent.execute.*`` and would match the pre-flight check the
+      same way.
+
+    Legacy specific-agent rules (e.g. ``^agent\.execute\.ag_butler$``)
+    are NOT treated as broad coverage — they scope to one agent, so
+    a different agent (like the helper Step E runs) still hits the
+    default-deny tail.
+
+    Non-dict entries and rules without ``allow`` effect return False.
+    """
+    if not isinstance(rule, dict):
+        return False
+    if rule.get("effect") != "allow":
+        return False
+    what = str(rule.get("what", ""))
+    return (
+        what == "agent.execute.*"
+        or what == "*"
+        or what in _AGENT_EXECUTE_CATCHALL_REGEX_FORMS
+    )
+
+
+def _maybe_ensure_agent_execute_allow(io: _SetupIO) -> None:
+    r"""Guarantee at least one rule allows the pre-flight `agent.execute.*` check.
+
+    Kolsch's pre-flight authz gate at
+    [`engine.preflight.authorize`][engine.engine.Engine.execute] runs
+    ONCE per exchange, before any tool call, and checks
+    ``allow(principal, "agent.execute.<agent_id>")``. Fresh workspaces
+    always include a broad
+    ``{what: agent.execute.*, pattern: "*", effect: allow}`` in the
+    default rule set (see `_workspace_only_default_rules`). Older
+    workspaces — or workspaces where someone hand-narrowed the rule
+    set to just one agent, e.g. ``^agent\.execute\.ag_butler$`` for
+    a personal butler — can end up with NO rule that authorises the
+    helper agent Step E runs as its smoke test. The pre-flight then
+    denies and setup fails with a confusing ``agent.unauthorized``.
+
+    This step prepends the broad-allow rule when none of the shapes
+    recognised by
+    [`_rule_covers_broad_agent_execute`][cli._setup._rule_covers_broad_agent_execute]
+    is already present. Silent no-op when coverage is present. Runs
+    BEFORE Step E so the smoke test sees the newly-inserted rule.
+
+    Silent no-op when:
+
+    - ``platform.yaml`` is absent.
+    - The authz variant isn't ``rule_based``.
+    - Coverage is already present.
+    """
+    yaml_path = io.root / "platform.yaml"
+    if not yaml_path.is_file():
+        return
+    payload = _read_yaml(yaml_path)
+    authz = payload.get("authorization") or {}
+    if authz.get("variant") != "rule_based":
+        return
+    rules = (authz.get("config") or {}).get("rules") or []
+    if not isinstance(rules, list):
+        return
+
+    if any(_rule_covers_broad_agent_execute(r) for r in rules):
+        return
+
+    backup = _backup_platform_yaml(yaml_path)
+    new_rule = {
+        "what": "agent.execute.*",
+        "pattern": "*",
+        "effect": "allow",
+    }
+    # Prepend so it beats any narrower agent-specific deny that might
+    # be lurking above the default-deny tail. Rule order is
+    # first-match-wins and this is a default-shape allow, not a
+    # policy statement.
+    payload["authorization"]["config"]["rules"] = [new_rule, *rules]
+    yaml_path.write_text(
+        dump(payload),
+        encoding="utf-8",
+    )
+    io.out.write(
+        "  ✓ added `agent.execute.*` allow rule — required for "
+        "`kolsch run <agent>` pre-flight; see "
+        "docs/how-to/permissions.md#how-permissions-gate-an-exchange\n",
     )
     io.out.write(
         f"  ✓ backup written to {backup.relative_to(yaml_path.parent)}\n",
