@@ -309,35 +309,44 @@ def _persist_or_inline(
     Returns ``(persisted_path, inline_content, truncated)``.
 
     Local copy of ``bash.py``'s overflow-persistence helper. A shared
-    ``_tool_helpers`` module lands in a follow-up QoL — keeping the
-    logic local for now avoids widening the diff.
+    ``_tool_helpers`` module lands in a follow-up QoL. Convention
+    aligned to ``bash.py``:
+
+    - Filename uses ``ctx.tool_call_id`` (with ``tc_anon_<uuid4>``
+      fallback for out-of-engine invocations) so overflow paths are
+      correlated to the tool-call event that produced them.
+    - When ``ctx.workspace_root`` is missing (bare-context tests), we
+      fall back to ``<cwd>/.tool-outputs/`` so the persisted file is
+      still addressable rather than silently dropped.
     """
     encoded = content.encode("utf-8")
     if len(encoded) <= _CONTENT_INLINE_BYTES:
         return None, content, False
 
-    persisted_path: str | None = None
+    call_id = ctx.tool_call_id or f"tc_anon_{uuid4()}"
+    session = str(ctx.session_id) if ctx.session_id else "anon"
     if ctx.workspace_root is not None:
-        outputs_root = (
-            ctx.workspace_root / "logs" / "tool-outputs" / str(ctx.session_id)
-        )
-        try:
-            outputs_root.mkdir(parents=True, exist_ok=True)
-            call_id = uuid4().hex
-            target = outputs_root / f"{call_id}.content.txt"
-            target.write_text(content, encoding="utf-8")
-            persisted_path = str(target)
-        except OSError:
-            # Best-effort persistence — an unwriteable workspace still
-            # returns a truncated preview so the caller isn't blocked.
-            persisted_path = None
+        outputs_root = ctx.workspace_root / "logs" / "tool-outputs" / session
+    else:
+        outputs_root = Path(".tool-outputs") / session
+
+    persisted_path: str | None = None
+    try:
+        outputs_root.mkdir(parents=True, exist_ok=True)
+        target = outputs_root / f"{call_id}.content.txt"
+        target.write_text(content, encoding="utf-8")
+        persisted_path = str(target)
+    except OSError:
+        # Best-effort persistence — an unwriteable workspace still
+        # returns a truncated preview so the caller isn't blocked.
+        persisted_path = None
 
     head_bytes = encoded[:_CONTENT_INLINE_BYTES]
     head = head_bytes.decode("utf-8", errors="replace")
     remaining = len(encoded) - _CONTENT_INLINE_BYTES
     footer = (
         f"\n[... truncated {remaining} bytes; full content at "
-        f"{persisted_path or '<workspace_root not available>'} ]"
+        f"{persisted_path or '<persistence failed>'} ]"
     )
     return persisted_path, head + footer, True
 
