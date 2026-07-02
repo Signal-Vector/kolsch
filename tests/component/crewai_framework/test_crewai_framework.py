@@ -340,3 +340,93 @@ async def test_tc_crw_04_concurrent_tools_serialize_via_loop_bridge() -> None:
     for i in range(pair_count):
         assert tool_markers[i * 2] == "tool.before:ping"
         assert tool_markers[i * 2 + 1] == "tool.after:ping"
+
+
+# ===========================================================================
+# TC-CRW-05 — _build_passthrough_schema preserves types for the LLM
+# ===========================================================================
+
+
+def test_tc_crw_05_passthrough_schema_carries_types_and_descriptions() -> None:
+    """The passthrough Pydantic model must reflect the source schema's types
+    and descriptions so CrewAI's `convert_tools_to_openai_schema` produces
+    a fully-typed OpenAI tool spec.
+
+    Losing the type here caused Kimi K2 to emit tool calls with
+    `arguments: {}` because the model saw properties like
+    `{"url": {"default": null, "title": "Url"}}` and had no signal about
+    what value to send. Smarter models (Claude/GPT-4) infer from the
+    prompt anyway; Kimi doesn't."""
+    from engine.crewai_framework import _build_passthrough_schema
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "url": {"type": "string", "description": "URL to fetch"},
+            "timeout": {"type": "integer", "default": 30, "description": "seconds"},
+            "enabled": {"type": "boolean", "description": "toggle"},
+        },
+        "required": ["url"],
+    }
+    model = _build_passthrough_schema("fetcher", schema)
+    js = model.model_json_schema()
+
+    # `url` (required + string) surfaces as string with description; no default.
+    assert js["properties"]["url"]["type"] == "string"
+    assert js["properties"]["url"]["description"] == "URL to fetch"
+    assert "url" in js["required"]
+
+    # `timeout` (optional + integer): reachable as either integer or null.
+    timeout_prop = js["properties"]["timeout"]
+    if "anyOf" in timeout_prop:
+        assert {e.get("type") for e in timeout_prop["anyOf"]} == {"integer", "null"}
+    else:
+        assert timeout_prop["type"] == "integer"
+    assert timeout_prop["description"] == "seconds"
+    assert timeout_prop["default"] == 30
+
+    # `enabled` (optional + boolean): boolean or null.
+    enabled_prop = js["properties"]["enabled"]
+    if "anyOf" in enabled_prop:
+        assert {e.get("type") for e in enabled_prop["anyOf"]} == {"boolean", "null"}
+    else:
+        assert enabled_prop["type"] == "boolean"
+
+
+def test_tc_crw_05_passthrough_schema_empty_properties_stays_passthrough() -> None:
+    """A tool that declares no properties still gets a working model.
+
+    Regression: the fix must not break tools whose schema omits
+    `properties` entirely (some builtins expose a no-argument surface).
+    Pydantic's `create_model` silently drops underscore-prefixed fields,
+    so the resulting model has empty properties — which is the correct
+    "any kwargs accepted" shape for a no-argument surface.
+    """
+    from engine.crewai_framework import _build_passthrough_schema
+
+    model = _build_passthrough_schema("no_args", {})
+    # Should not crash. Empty properties is the correct answer.
+    js = model.model_json_schema()
+    assert js["type"] == "object"
+    assert js.get("properties", {}) == {}
+
+
+def test_tc_crw_05_passthrough_schema_handles_nullable_union_types() -> None:
+    """A property typed as `["string", "null"]` (Pydantic's nullable form)
+    still round-trips to a usable Python type."""
+    from engine.crewai_framework import _build_passthrough_schema
+
+    schema = {
+        "type": "object",
+        "properties": {
+            "id": {"type": ["string", "null"], "description": "opt id"},
+        },
+        "required": [],
+    }
+    model = _build_passthrough_schema("tool", schema)
+    js = model.model_json_schema()
+    id_prop = js["properties"]["id"]
+    # Either resolved to `string | null` or plain string — both are
+    # acceptable because the field is non-required (so null was already
+    # implied by our default). Assert the description survived.
+    assert id_prop["description"] == "opt id"

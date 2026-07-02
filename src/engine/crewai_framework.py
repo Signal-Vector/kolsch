@@ -429,25 +429,79 @@ def _make_crewai_tool(
     )
 
 
+_JSON_TYPE_TO_PYTHON: dict[str, Any] = {
+    "string": str,
+    "integer": int,
+    "number": float,
+    "boolean": bool,
+    "array": list,
+    "object": dict,
+}
+
+
+def _pytype_for_property(prop: Any) -> Any:  # noqa: ANN401 — Pydantic annotations
+    """Map a JSON-schema property's `type` to a Python type.
+
+    Handles both scalar `"type": "string"` and array-form `"type":
+    ["string", "null"]` (Pydantic → JSON Schema emits the latter for
+    `str | None`). Falls back to `Any` for missing / unknown types so
+    the field still round-trips.
+    """
+    if not isinstance(prop, dict):
+        return Any
+    t = prop.get("type")
+    if isinstance(t, str):
+        return _JSON_TYPE_TO_PYTHON.get(t, Any)
+    if isinstance(t, list):
+        for entry in t:
+            if isinstance(entry, str) and entry != "null":
+                return _JSON_TYPE_TO_PYTHON.get(entry, Any)
+    return Any
+
+
 def _build_passthrough_schema(
     tool_name: str,
     schema: dict[str, Any],
 ) -> type[BaseModel]:
-    """Return a Pydantic model that accepts the LLM-emitted kwargs.
+    """Return a Pydantic model that advertises the tool's real parameters.
 
-    The original args_schema is not reconstructed from the JSON
-    Schema dict — CrewAI uses this only to advertise to the LLM. The
-    actual validation runs inside `ToolsSubsystem.invoke_tool`.
+    The model rebuilds each property from the source JSON Schema with
+    its real `type` and `description` so CrewAI's
+    `convert_tools_to_openai_schema` produces a fully-typed OpenAI
+    tool spec. Losing the type here was the root cause of the
+    Kimi K2 "empty arguments" bug: models rely on the type + description
+    to decide what to send; a schema with only field names and
+    `default: null` gives them no signal. Smarter models (Claude,
+    GPT-4) infer from the tool name and user prompt anyway;
+    Kimi doesn't, and returns `arguments: {}` verbatim.
+
+    Actual argument validation still runs downstream inside
+    `ToolsSubsystem.invoke_tool` against the tool's real
+    `args_schema` — this model is used only to advertise to the LLM.
+    Fields absent from `schema.required` accept `None` so the LLM can
+    omit them; the tool subsystem re-validates against real
+    constraints.
     """
-    # Use Pydantic's create_model so the class has a deterministic
-    # name visible in CrewAI's tool-schema export.
-    from pydantic import create_model  # noqa: PLC0415
+    from pydantic import Field, create_model  # noqa: PLC0415
 
     fields: dict[str, Any] = {}
     properties = schema.get("properties", {})
+    required = set(schema.get("required", []) or [])
     if isinstance(properties, dict):
-        for key in properties:
-            fields[str(key)] = (Any, None)
+        for key, prop in properties.items():
+            pytype = _pytype_for_property(prop)
+            description = (
+                str(prop.get("description", ""))
+                if isinstance(prop, dict)
+                else ""
+            )
+            if key in required:
+                field_info = Field(..., description=description)
+                fields[str(key)] = (pytype, field_info)
+            else:
+                default = prop.get("default") if isinstance(prop, dict) else None
+                field_info = Field(default=default, description=description)
+                fields[str(key)] = (pytype | None, field_info)
     if not fields:
         fields["_passthrough"] = (Any, None)
     model: type[BaseModel] = create_model(
