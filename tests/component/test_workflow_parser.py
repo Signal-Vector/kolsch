@@ -959,6 +959,47 @@ nodes:
         load_workflow(_write(tmp_path / "wf.yaml", yaml_text))
 
 
+def test_browse_url_parser_rejects_ambiguous_timeout_seconds(tmp_path: Path) -> None:
+    """Naked ``timeout_seconds`` on browse_url is the confusion case.
+
+    ``_BaseNodeDef.timeout_seconds`` bounds the workflow-executor budget,
+    while ``BrowseUrlNodeDef.request_timeout_seconds`` bounds the tool's
+    per-request timeout. A YAML author writing only ``timeout_seconds``
+    almost certainly meant the tool budget — but the value silently
+    lands on the executor knob. Parser must raise with a disambiguation
+    hint rather than accept it.
+    """
+    yaml_text = """
+nodes:
+  fetch:
+    type: kolsch/nodes/browse_url
+    url: "https://example.com"
+    timeout_seconds: 30
+"""
+    with pytest.raises(WorkflowValidationError) as exc_info:
+        load_workflow(_write(tmp_path / "wf.yaml", yaml_text))
+    # Error message must name both knobs so the user can pick.
+    msg = str(exc_info.value)
+    assert "request_timeout_seconds" in msg
+    assert "timeout_seconds" in msg
+
+
+def test_browse_url_parser_accepts_both_timeouts_explicitly(tmp_path: Path) -> None:
+    """When both timeout knobs are set explicitly, the user disambiguated."""
+    yaml_text = """
+nodes:
+  fetch:
+    type: kolsch/nodes/browse_url
+    url: "https://example.com"
+    timeout_seconds: 60
+    request_timeout_seconds: 30
+"""
+    wf = load_workflow(_write(tmp_path / "wf.yaml", yaml_text))
+    node = wf.nodes["fetch"]
+    assert node.timeout_seconds == 60           # executor budget
+    assert node.request_timeout_seconds == 30   # tool budget
+
+
 # ---------------------------------------------------------------------------
 # Helper used by parameterised tests above (kept at file end for locality)
 # ---------------------------------------------------------------------------

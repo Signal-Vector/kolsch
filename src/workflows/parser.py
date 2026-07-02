@@ -302,6 +302,38 @@ class BrowseUrlNodeDef(_BaseNodeDef):
     cookies: dict[str, str] | None = None
     request_timeout_seconds: int = Field(default=30, ge=1, le=120)
 
+    @model_validator(mode="before")
+    @classmethod
+    def _disambiguate_timeout_fields(cls, data: Any) -> Any:  # noqa: ANN401
+        """Refuse the confusion case where only ``timeout_seconds`` is set.
+
+        The base ``_BaseNodeDef`` field ``timeout_seconds`` bounds the
+        workflow-executor budget (all Playwright ops + overhead). The
+        node-specific ``request_timeout_seconds`` bounds the tool's own
+        per-request timeout (page.goto / page.wait_for_selector). A
+        YAML author writing ``timeout_seconds: 30`` on a browse_url
+        node almost always intends the tool budget — but the value
+        silently lands on the executor knob while the tool stays at
+        its 30s default. Detect the ambiguous pattern and raise with
+        a clear fix-path rather than let it slip through.
+        """
+        if isinstance(data, dict) and "timeout_seconds" in data and (
+            "request_timeout_seconds" not in data
+        ):
+            msg = (
+                "browse_url node sets 'timeout_seconds' but not "
+                "'request_timeout_seconds'. On this node type, "
+                "'timeout_seconds' bounds the workflow-executor budget "
+                "(all Playwright ops + overhead), while "
+                "'request_timeout_seconds' bounds the tool's own per-request "
+                "timeout (page.goto / wait_for_selector). If you meant the "
+                "per-request budget, set 'request_timeout_seconds'. If you "
+                "meant the executor budget, also set "
+                "'request_timeout_seconds' explicitly to disambiguate."
+            )
+            raise WorkflowValidationError(msg)
+        return data
+
 
 class AgentNodeDef(_BaseNodeDef):
     """`kolsch/nodes/agent` — invoke a catalogued agent."""
