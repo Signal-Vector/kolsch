@@ -21,6 +21,7 @@ providers don't depend on Asset Management directly.
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Mapping
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol
 
 if TYPE_CHECKING:
@@ -230,8 +231,18 @@ class ProviderConnector(Protocol):
         model_id: str,
         provider_config: ProviderConfig,
         api_key: str | None,
+        parameters: Mapping[str, Any] | None = None,
     ) -> crewai.LLM:
-        """Construct a configured `crewai.LLM` for the named model."""
+        """Construct a configured `crewai.LLM` for the named model.
+
+        `parameters` carries the agent's
+        [`ModelSpec.parameters`][schemas.config.ModelSpec] map — extra
+        kwargs like `max_tokens` / `temperature` / `top_p` the caller
+        wants forwarded to `crewai.LLM`. Connectors spread these into
+        the constructor kwargs but always let the connector's own
+        infrastructure keys (`model`, `api_key`, `base_url`, `timeout`)
+        win, so a YAML can't accidentally clobber routing.
+        """
         ...
 
 

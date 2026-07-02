@@ -252,7 +252,11 @@ async def test_build_llm_connector_failure_wraps_as_client_init() -> None:
                 raise NotImplementedError
 
             async def build_llm(
-                self, model_id: str, provider_config: object, api_key: object
+                self,
+                model_id: str,
+                provider_config: object,
+                api_key: object,
+                parameters: object = None,
             ) -> object:
                 msg = "boom"
                 raise RuntimeError(msg)
@@ -718,6 +722,204 @@ async def test_opencode_build_llm_emits_hosted_vllm_prefixed_model() -> None:
     llm = await connector.build_llm("gpt-oss-120b", config, "sk-y")
     assert llm.provider == "hosted_vllm"
     assert llm.model == "gpt-oss-120b"
+
+
+# ===========================================================================
+# ModelSpec.parameters forwarding — agent YAML controls LLM call params
+# ===========================================================================
+
+
+async def test_openrouter_build_llm_forwards_parameters() -> None:
+    """`parameters={max_tokens, temperature}` reach crewai.LLM attrs."""
+    connector = OpenRouterConnector()
+    config = ProviderConfig(
+        name="openrouter",
+        type="openrouter",
+        api_key_secret="OPENROUTER_API_KEY",
+        base_url=None,
+        timeout_seconds=60,
+        extras={},
+        models=[],
+    )
+    llm = await connector.build_llm(
+        "anthropic/claude-opus-4-7",
+        config,
+        "sk-x",
+        parameters={"max_tokens": 4000, "temperature": 0.3},
+    )
+    assert llm.max_tokens == 4000
+    assert llm.temperature == 0.3
+
+
+async def test_opencode_build_llm_forwards_parameters() -> None:
+    """`parameters={max_tokens, temperature}` reach crewai.LLM attrs."""
+    connector = OpenCodeConnector()
+    config = ProviderConfig(
+        name="opencode",
+        type="opencode",
+        api_key_secret="OPENCODE_API_KEY",
+        base_url="https://opencode.example.com/v1",
+        timeout_seconds=None,
+        extras={},
+        models=[],
+    )
+    llm = await connector.build_llm(
+        "kimi-k2.6",
+        config,
+        "sk-y",
+        parameters={"max_tokens": 4000, "temperature": 0.5},
+    )
+    assert llm.max_tokens == 4000
+    assert llm.temperature == 0.5
+
+
+async def test_openrouter_build_llm_drops_infrastructure_keys_from_parameters() -> None:
+    """A `parameters:` block that mentions `model` / `api_key` / `base_url`
+    / `timeout` never overrides the connector's own routing.
+
+    Prevents an accidental YAML entry from re-routing a request or
+    leaking a key. The connector's infra-side wins silently."""
+    connector = OpenRouterConnector()
+    config = ProviderConfig(
+        name="openrouter",
+        type="openrouter",
+        api_key_secret="OPENROUTER_API_KEY",
+        base_url="https://openrouter.example.com/v1",
+        timeout_seconds=45,
+        extras={},
+        models=[],
+    )
+    llm = await connector.build_llm(
+        "anthropic/claude-opus-4-7",
+        config,
+        "sk-real",
+        parameters={
+            "model": "attacker/bogus",
+            "api_key": "sk-hijack",
+            "base_url": "https://evil.example.com",
+            "timeout": 0.001,
+            "max_tokens": 100,
+        },
+    )
+    # Infrastructure keys come from the connector, not from parameters.
+    assert llm.provider == "openrouter"
+    assert llm.model == "anthropic/claude-opus-4-7"
+    assert llm.api_key == "sk-real"
+    assert llm.base_url == "https://openrouter.example.com/v1"
+    assert llm.timeout == 45
+    # Non-infra parameters still flow through.
+    assert llm.max_tokens == 100
+
+
+async def test_build_llm_threads_spec_parameters_through_to_connector() -> None:
+    """End-to-end: `ModelSpec.parameters` reaches the connector's build_llm.
+
+    Guards the wiring at `src/llm/build_llm.py` — regression would look
+    like the top-level orchestrator silently dropping the field. Uses a
+    recording double so we assert on the value the connector received,
+    not just the resulting crewai.LLM state (that's covered above)."""
+    received: dict[str, Any] = {}
+
+    class _RecordingConnector:
+        type_name = "recorder"
+
+        def auth_prompt_spec(self) -> Any:  # pragma: no cover — unused
+            raise NotImplementedError
+
+        async def validate_credentials(
+            self, credentials: Credentials, base_url: str | None
+        ) -> Any:  # pragma: no cover — unused
+            raise NotImplementedError
+
+        async def discover_models(
+            self, credentials: Credentials, base_url: str | None
+        ) -> Any:  # pragma: no cover — unused
+            raise NotImplementedError
+
+        async def build_llm(
+            self,
+            model_id: str,
+            provider_config: ProviderConfig,
+            api_key: str | None,
+            parameters: Any = None,
+        ) -> Any:
+            received["model_id"] = model_id
+            received["parameters"] = parameters
+            return object()
+
+    try:
+        registry.register("recorder", _RecordingConnector)  # type: ignore[arg-type]
+        spec = ModelSpec(
+            provider="recorder-provider",
+            model="test-model",
+            parameters={"max_tokens": 512, "temperature": 0.9},
+        )
+        cfg = _provider_config(
+            name="recorder-provider",
+            type_name="recorder",
+            api_key_secret=None,
+        )
+        secrets = _StubSecrets()
+        await build_llm(spec, provider_config=cfg, secrets=secrets)
+    finally:
+        registry._clear_for_tests()
+        registry.register(OpenCodeConnector.type_name, OpenCodeConnector)
+        registry.register(OpenRouterConnector.type_name, OpenRouterConnector)
+
+    assert received["model_id"] == "test-model"
+    assert received["parameters"] == {"max_tokens": 512, "temperature": 0.9}
+
+
+async def test_build_llm_omits_parameters_when_spec_has_empty_dict() -> None:
+    """Empty `ModelSpec.parameters` passes `None` (not `{}`) to the connector.
+
+    The `spec.parameters or None` idiom in `build_llm` normalises the
+    default `Field(default_factory=dict)` into `None` so connectors
+    don't have to disambiguate "user set an empty dict" from "no
+    override" (they mean the same thing)."""
+    received: dict[str, Any] = {}
+
+    class _RecordingConnector:
+        type_name = "recorder2"
+
+        def auth_prompt_spec(self) -> Any:  # pragma: no cover — unused
+            raise NotImplementedError
+
+        async def validate_credentials(
+            self, credentials: Credentials, base_url: str | None
+        ) -> Any:  # pragma: no cover — unused
+            raise NotImplementedError
+
+        async def discover_models(
+            self, credentials: Credentials, base_url: str | None
+        ) -> Any:  # pragma: no cover — unused
+            raise NotImplementedError
+
+        async def build_llm(
+            self,
+            model_id: str,
+            provider_config: ProviderConfig,
+            api_key: str | None,
+            parameters: Any = None,
+        ) -> Any:
+            received["parameters"] = parameters
+            return object()
+
+    try:
+        registry.register("recorder2", _RecordingConnector)  # type: ignore[arg-type]
+        spec = ModelSpec(provider="rp2", model="m2")  # parameters={} by default
+        cfg = _provider_config(
+            name="rp2",
+            type_name="recorder2",
+            api_key_secret=None,
+        )
+        await build_llm(spec, provider_config=cfg, secrets=_StubSecrets())
+    finally:
+        registry._clear_for_tests()
+        registry.register(OpenCodeConnector.type_name, OpenCodeConnector)
+        registry.register(OpenRouterConnector.type_name, OpenRouterConnector)
+
+    assert received["parameters"] is None
 
 
 async def test_openrouter_validate_credentials_handles_json_failure() -> None:

@@ -89,6 +89,7 @@ exercises the same mapping through the Fake-LLM test path.
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 from typing import Any, ClassVar
 
 import crewai
@@ -116,6 +117,19 @@ from llm.providers._errors import (
 # `llm_providers.<name>.timeout_seconds` in platform.yaml.
 _DEFAULT_TIMEOUT_SECONDS = 180.0
 _HTTP_CLIENT_ERROR_MIN = 400
+
+# Keys the connector sets itself when building `crewai.LLM`. Agent-YAML
+# `ModelSpec.parameters` values that collide with these are dropped —
+# the connector always wins on routing so a mistyped YAML can't hijack
+# the model, key, base_url, or timeout via a `parameters:` entry.
+_INFRA_KEYS = frozenset({"model", "api_key", "base_url", "timeout"})
+
+
+def _extras(parameters: Mapping[str, Any] | None) -> dict[str, Any]:
+    """Return `parameters` with `_INFRA_KEYS` filtered out."""
+    if not parameters:
+        return {}
+    return {k: v for k, v in parameters.items() if k not in _INFRA_KEYS}
 
 
 class OpenCodeConnector:
@@ -250,11 +264,15 @@ class OpenCodeConnector:
         model_id: str,
         provider_config: ProviderConfig,
         api_key: str | None,
+        parameters: Mapping[str, Any] | None = None,
     ) -> crewai.LLM:
         """Construct a `crewai.LLM` pointed at OpenCode.
 
         Routes through CrewAI's `hosted_vllm` prefix — see the module
-        docstring for the routing-choice rationale.
+        docstring for the routing-choice rationale. `parameters`
+        (e.g. `{max_tokens, temperature, top_p}`) is forwarded to
+        `crewai.LLM`. Infrastructure keys are dropped silently so
+        agent YAML can't accidentally hijack routing.
         """
         return crewai.LLM(
             model=f"hosted_vllm/{model_id}",
@@ -265,6 +283,7 @@ class OpenCodeConnector:
                 if provider_config.timeout_seconds is not None
                 else _DEFAULT_TIMEOUT_SECONDS
             ),
+            **_extras(parameters),
         )
 
     # ---- Internals ---------------------------------------------------------

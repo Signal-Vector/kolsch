@@ -97,6 +97,7 @@ async def build_llm(
             spec.model,
             provider_config,
             api_key,
+            parameters=spec.parameters or None,
         )
     except PlatformError:
         # Already typed (e.g., provider raises a domain-specific
