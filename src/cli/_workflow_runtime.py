@@ -24,7 +24,7 @@ from tools.builtins import (
     make_read_file,
     make_write_file,
 )
-from tools.decorator import get_tool_definition
+from tools.decorator import ToolDefinition, get_tool_definition
 from workflows.builtins import register_builtins
 from workflows.executor import IterativeExecutor, RunnerRegistry
 
@@ -63,19 +63,33 @@ def build_workflow_executor(
     """
     catalog = runtime.asset_management.catalog()
 
+    # Canonical builtins ship at src/tools/builtins.py and belong to
+    # the `kolsch` bundle by definition. Stamp home_bundle on each
+    # defn so `action_name` returns the 3-seg catalog ref
+    # `kolsch/tools/<name>` (matching what users' `platform.yaml`
+    # rules reference) rather than the legacy 1-seg fallback
+    # `tool.<name>`. Without this stamp, workflows dispatch tools as
+    # `tool.bash` etc. and users' canonical rules silently do not
+    # match — see bug-workflow-runtime-tool-home-bundle-not-stamped.
+    # Same guard pattern used at src/tools/subsystem.py:155-156 for
+    # the agent-invocation path.
+    def _stamp_kolsch(defn: ToolDefinition) -> ToolDefinition:
+        defn.home_bundle = "kolsch"
+        return defn
+
     bash_fn = make_bash(policy=runtime.path_policy, root=root)
-    bash_defn = get_tool_definition(bash_fn)
-    read_file_defn = get_tool_definition(
-        make_read_file(policy=runtime.path_policy, root=root)
+    bash_defn = _stamp_kolsch(get_tool_definition(bash_fn))
+    read_file_defn = _stamp_kolsch(
+        get_tool_definition(make_read_file(policy=runtime.path_policy, root=root))
     )
-    write_file_defn = get_tool_definition(
-        make_write_file(policy=runtime.path_policy, root=root)
+    write_file_defn = _stamp_kolsch(
+        get_tool_definition(make_write_file(policy=runtime.path_policy, root=root))
     )
-    list_files_defn = get_tool_definition(
-        make_list_files(policy=runtime.path_policy, root=root)
+    list_files_defn = _stamp_kolsch(
+        get_tool_definition(make_list_files(policy=runtime.path_policy, root=root))
     )
-    browse_url_defn = get_tool_definition(
-        make_browse_url(policy=runtime.path_policy, root=root)
+    browse_url_defn = _stamp_kolsch(
+        get_tool_definition(make_browse_url(policy=runtime.path_policy, root=root))
     )
     registry = RunnerRegistry()
 
