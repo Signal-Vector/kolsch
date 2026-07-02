@@ -284,9 +284,12 @@ def _bs4_fallback(raw_bytes: bytes) -> str:
     """Title + body-text fallback when trafilatura returns None.
 
     Paywalls, login walls, and pages with unusual DOM shapes can
-    trip trafilatura. BeautifulSoup ships with trafilatura (via
-    ``lxml`` / ``lxml_html_clean``) so this fallback has no
-    additional dep footprint.
+    trip trafilatura. ``beautifulsoup4`` is declared under the
+    ``kolsch[browse]`` extra (grouped with Playwright as the
+    "web-tooling" opt-in); when the user hasn't installed the
+    extra the import fails and this function falls back to a raw
+    utf-8 decode. Users who care about extraction quality across
+    the tail of unusual pages install ``kolsch[browse]``.
     """
     try:
         from bs4 import BeautifulSoup  # noqa: PLC0415 — deferred by design

@@ -89,7 +89,20 @@ dependencies = [
 # (grouping — all browser-based tools live here) rather than
 # `browse_url` so a future browser-driven tool joining the family
 # does not need a second extra.
-browse = ["playwright>=1.45"]
+#
+# `beautifulsoup4` also joins the `browse` extra: `fetch_url`'s
+# extraction pipeline uses `trafilatura` as the primary path and
+# falls back to a BeautifulSoup title+body extraction when
+# trafilatura returns None (paywalls, login walls, unusual DOM
+# shapes). Without the extra installed the fallback silently
+# degrades to a raw utf-8 decode — users who care about extraction
+# quality install `kolsch[browse]` for the fallback (and for
+# `browse_url`). Grouping bs4 with playwright under one extra keeps
+# the "web-tooling" opt-in coherent.
+browse = [
+    "playwright>=1.45",
+    "beautifulsoup4>=4.12",
+]
 
 [project.urls]
 Homepage = "https://example.invalid/kolsch"
