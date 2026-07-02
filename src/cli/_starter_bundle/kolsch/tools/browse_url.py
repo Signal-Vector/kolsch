@@ -295,7 +295,7 @@ async def _navigate_with_cancel(
     ``ToolContext`` constructed without one). In that case we let
     Playwright's own ``timeout`` argument bound the navigation.
     """
-    goto_coro: Coroutine[Any, Any, Any] = page.goto(
+    goto_coro: Coroutine[Any, Any, playwright_mod.Response | None] = page.goto(
         args.url,
         wait_until="load",
         timeout=args.request_timeout_seconds * 1000,  # Playwright expects ms
@@ -304,7 +304,9 @@ async def _navigate_with_cancel(
     if cancellation is None:
         return await goto_coro
 
-    goto_task = asyncio.create_task(goto_coro)
+    goto_task: asyncio.Task[playwright_mod.Response | None] = asyncio.create_task(
+        goto_coro
+    )
     cancel_task = asyncio.create_task(cancellation.wait_cancelled())
     try:
         done, _pending = await asyncio.wait(
