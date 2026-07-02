@@ -145,6 +145,13 @@ class BrowseUrlRunner:
             tool_call_id=None,
         )
 
+        # Workflow-scoped `policy:` rules — see bug-workflow-policy-not-enforced.
+        workflow_obj = getattr(ctx, "workflow", None)
+        workflow_permissions = (
+            list(workflow_obj.policy)
+            if workflow_obj is not None and getattr(workflow_obj, "policy", None)
+            else None
+        )
         try:
             raw = await dispatch_tool(
                 defn=self._defn,
@@ -153,6 +160,7 @@ class BrowseUrlRunner:
                 authz=self._authz,
                 secrets=self._secrets,
                 sandbox=self._sandbox,
+                workflow_permissions=workflow_permissions,
             )
         except ToolUnauthorized as exc:
             raise WorkflowNodeFailed(

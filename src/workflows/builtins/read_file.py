@@ -95,6 +95,13 @@ class ReadFileRunner:
             ctx, node_def.path, bound_inputs=bound_inputs
         )
         tool_ctx = _build_tool_ctx(ctx)
+        # Workflow-scoped `policy:` rules — see bug-workflow-policy-not-enforced.
+        workflow_obj = getattr(ctx, "workflow", None)
+        workflow_permissions = (
+            list(workflow_obj.policy)
+            if workflow_obj is not None and getattr(workflow_obj, "policy", None)
+            else None
+        )
         try:
             result = await dispatch_tool(
                 defn=self._defn,
@@ -106,6 +113,7 @@ class ReadFileRunner:
                 authz=self._authz,
                 secrets=self._secrets,
                 sandbox=self._sandbox,
+                workflow_permissions=workflow_permissions,
             )
         except FileAccessDenied as exc:
             raise WorkflowFileAccessDenied(

@@ -131,6 +131,18 @@ class BashRunner:
             tool_call_id=None,
         )
 
+        # Feed the workflow's own YAML `policy:` rules into dispatch
+        # as the outermost layer so workflow-scoped authz rules take
+        # effect at run time — see bug-workflow-policy-not-enforced.
+        # `ctx.workflow` is stamped by the executor; the `getattr`
+        # keeps unit tests that construct bare NodeContexts working.
+        workflow_obj = getattr(ctx, "workflow", None)
+        workflow_permissions = (
+            list(workflow_obj.policy)
+            if workflow_obj is not None and getattr(workflow_obj, "policy", None)
+            else None
+        )
+
         try:
             result = await dispatch_tool(
                 defn=self._defn,
@@ -139,6 +151,7 @@ class BashRunner:
                 authz=self._authz,
                 secrets=self._secrets,
                 sandbox=self._sandbox,
+                workflow_permissions=workflow_permissions,
             )
         except ToolUnauthorized as exc:
             raise WorkflowNodeFailed(

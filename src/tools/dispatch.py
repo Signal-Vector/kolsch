@@ -54,6 +54,7 @@ async def dispatch_tool(
     authz: AuthorizationProvider,
     secrets: SecretsProvider,
     sandbox: SandboxProvider,
+    workflow_permissions: list[Rule] | None = None,
     agent_permissions: list[Rule] | None = None,
     bundle_permissions: list[Rule] | None = None,
 ) -> Any:  # noqa: ANN401 — caller knows the return type for their tool
@@ -64,11 +65,13 @@ async def dispatch_tool(
     ([`ToolsSubsystem.invoke_tool`][tools.subsystem.ToolsSubsystem.invoke_tool])
     wraps the return in [`ToolResult`][tools.decorator.ToolResult].
 
-    `agent_permissions` and `bundle_permissions` are forwarded to
-    `authz.allow` so the provider walks the four-level stack
-    (agent → bundle → platform → default). Both default to `None` so
-    programmatic callers (tests, integration harnesses that construct
-    `ToolsSubsystem` with their own minimal authz) stay byte-identical.
+    `workflow_permissions`, `agent_permissions`, and
+    `bundle_permissions` are forwarded to `authz.allow` so the
+    provider walks the full stack (workflow → agent → bundle →
+    platform → default). All three default to `None` so programmatic
+    callers (tests, integration harnesses that construct
+    `ToolsSubsystem` with their own minimal authz) stay
+    byte-identical.
 
     Args:
         defn: The registered tool's definition.
@@ -80,6 +83,15 @@ async def dispatch_tool(
         secrets: Secrets provider — resolves names listed in
             `defn.secrets_needed`.
         sandbox: Sandbox provider — wraps the tool body.
+        workflow_permissions: The workflow's ``policy:`` rules when the
+            proximate caller frame is a workflow node. Kolsch's
+            ``AuthorizationProvider.allow`` docstring
+            (``src/providers/authz.py:813-822``) already specifies
+            this layer as FIRST in the tuple; before this parameter
+            existed the workflow layer was silently dropped and the
+            workflow YAML's ``policy:`` field validated at parse time
+            but never enforced at dispatch — see
+            ``bug-workflow-policy-not-enforced.md``.
         agent_permissions: The agent's resolved permission rules.
         bundle_permissions: The bundle's resolved permission rules.
 
@@ -112,11 +124,21 @@ async def dispatch_tool(
     # `what` patterns still fire as before — see
     # RuleBasedAuthorizationProvider.allow.
     target = _extract_target_from_args(validated_args)
-    # Assemble the layers tuple in proximate-caller order. The
-    # current tool-dispatch wrapper only sees agent + bundle layers;
-    # the ``workflow`` layer is added by the workflow engine's
-    # tool-dispatch wrapper.
+    # Assemble the layers tuple in proximate-caller order:
+    # workflow → agent → bundle. The provider's docstring
+    # (src/providers/authz.py:813-822) specifies workflow FIRST when
+    # the proximate caller frame is a workflow node firing the
+    # action. Workflow builtin runners populate `workflow_permissions`
+    # from `ctx.workflow.policy` so a workflow's own YAML `policy:`
+    # rules match at dispatch. When the workflow invoked an agent
+    # which is now calling a tool, callers omit `workflow_permissions`
+    # (structural escalation prevention — see the docstring).
     layers: tuple[PermissionLayer, ...] = ()
+    if workflow_permissions:
+        layers = (
+            *layers,
+            PermissionLayer(name="workflow", rules=tuple(workflow_permissions)),
+        )
     if agent_permissions:
         layers = (
             *layers,
