@@ -180,11 +180,15 @@ async def browse_url(args: BrowseUrlArgs, ctx: ToolContext) -> dict[str, Any]:
         try:
             browser = await p.chromium.launch(headless=True)
         except PlaywrightError as exc:
-            # "Executable doesn't exist" is Playwright's phrasing when
-            # the Chromium binary hasn't been fetched via
-            # `playwright install chromium`. Spec: no in-process
-            # auto-install — mid-chat 150 MB downloads are user-hostile.
-            if "Executable doesn't exist" in str(exc):
+            # Playwright signals the missing-binary case with a message
+            # that historically leads with "Executable doesn't exist"
+            # and includes a "playwright install" install-hint. We
+            # match on EITHER token so a message rewording upstream
+            # doesn't silently demote BrowserBinaryMissing to a generic
+            # NavigationError. Spec: no in-process auto-install —
+            # mid-chat 150 MB downloads are user-hostile.
+            msg = str(exc)
+            if "Executable doesn't exist" in msg or "playwright install" in msg:
                 raise ToolExecutionFailed(
                     tool_name="browse_url",
                     error_class="BrowserBinaryMissing",

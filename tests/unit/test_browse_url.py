@@ -252,3 +252,33 @@ def test_browse_url_missing_binary_surfaces_as_browser_binary_missing(
         "on missing-binary (auto-install is out of scope by design); "
         f"observed install-shaped calls: {install_calls}"
     )
+
+
+def test_browse_url_missing_binary_matches_install_hint_alone(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Widened match: ``playwright install`` alone must also surface as BrowserBinaryMissing.
+
+    Guards against Playwright rewording the "Executable doesn't exist"
+    prefix upstream. As long as the install hint survives in the error
+    text, users continue to see an actionable BrowserBinaryMissing
+    rather than a confusing NavigationError.
+    """
+    from playwright.async_api import Error as PlaywrightError
+    from playwright.async_api._generated import BrowserType
+
+    hint_only_message = (
+        "Browser binary not available. "
+        "Please run: playwright install chromium"
+    )
+
+    async def _boom(self: Any, *args: Any, **kwargs: Any) -> Any:
+        raise PlaywrightError(hint_only_message)
+
+    monkeypatch.setattr(BrowserType, "launch", _boom)
+
+    args = BrowseUrlArgs(url="https://example.com")
+    with pytest.raises(ToolExecutionFailed) as excinfo:
+        asyncio.run(browse_url(args, _ctx()))
+
+    assert excinfo.value.detail["error_class"] == "BrowserBinaryMissing"
