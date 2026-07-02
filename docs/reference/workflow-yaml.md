@@ -71,6 +71,7 @@ Every node's captured output is available downstream via
 | Node type | Captured shape |
 |---|---|
 | `kolsch/nodes/bash` | `{stdout: str, stderr: str, exit_code: int}` |
+| `kolsch/nodes/browse_url` | `{url: str, final_url: str, status: int, content: str, content_persisted_to: str \| None, truncated: bool}` |
 | `kolsch/nodes/agent` | The child agent's declared output schema. |
 | `kolsch/nodes/user_input` | The resume payload — whatever `kolsch workflows resume` supplied. |
 | `kolsch/nodes/noop` | `{}` |
@@ -132,6 +133,81 @@ run_tests:
   type: kolsch/nodes/bash
   command: "pytest {{ inputs.suite }}"
   cwd: "{{ state.repo_root }}"
+```
+
+### `kolsch/nodes/browse_url`
+
+Fetch a rendered web page through the `kolsch/tools/browse_url` tool.
+Runs Playwright inside the tool's sandbox, so JavaScript-heavy pages
+resolve before the HTML is captured. Downstream nodes read the page
+via `{{ nodes.<name>.content }}`.
+
+**Config schema:**
+
+| Field | Type | Default | Semantics |
+|---|---|---|---|
+| `url` | `str` | required | URL to fetch. Jinja-rendered. |
+| `format` | `"text" \| "html"` | `"text"` | Return the extracted text (`"text"`) or the raw rendered HTML (`"html"`). Jinja-rendered. |
+| `wait_selector` | `str \| None` | `None` | Optional CSS selector to wait for before capturing. Jinja-rendered. |
+| `headers` | `dict[str, str] \| None` | `None` | Extra request headers. **Values** are Jinja-rendered; **keys pass through as literals** — allowing dynamic header names would let a Jinja-generated string smuggle unintended headers past review. |
+| `cookies` | `dict[str, str] \| None` | `None` | Extra request cookies. Same rendering discipline as `headers`. |
+| `request_timeout_seconds` | `int` (1–120) | `30` | Tool-level request deadline, forwarded to the `browse_url` tool. **Deliberately not named `timeout_seconds`** — that name is reserved on every node for the workflow-executor-level deadline (see [Node modifiers](#node-modifiers-common-to-every-node)). The two are independent: `timeout_seconds` wraps the whole runner; `request_timeout_seconds` bounds the underlying HTTP fetch. |
+
+**Binds accepted:** any keys the `url`, `format`, `wait_selector`, or
+per-value `headers` / `cookies` Jinja expressions reference under
+`inputs.*`.
+
+**State read / written:** reads any `state.*` referenced by the Jinja
+expressions. Writes nothing.
+
+**Return shape:**
+
+```json
+{
+  "url": "https://example.com/",
+  "final_url": "https://example.com/landing",
+  "status": 200,
+  "content": "…",
+  "content_persisted_to": null,
+  "truncated": false
+}
+```
+
+The tool returns nine fields; the node narrows to these six. `format`,
+`content_length`, and `duration_seconds` are dropped —
+`content_length` is derivable from `content`, timing is an executor
+concern. Keeping BOTH `url` (the requested URL) and `final_url` (the
+post-redirect URL) lets authors branch on redirect behavior (`url !=
+final_url`). `truncated` disambiguates
+`content_persisted_to is None`: a small inline page has
+`truncated == false`, while a persistence failure has
+`truncated == true`.
+
+**Errors surfaced:** `WorkflowNodeFailed` wrapping a
+`ToolUnauthorized` when the authz layer denies
+`kolsch/tools/browse_url`; `ToolTimeout` propagates unchanged when the
+tool-level `request_timeout_seconds` fires; `NodeTimeoutExceeded` on
+the node's own `timeout_seconds`.
+
+**Example:**
+
+```yaml
+description: Fetch a page and print it.
+nodes:
+  fetch:
+    type: kolsch/nodes/browse_url
+    url: "{{ inputs.target }}"
+    format: text
+    request_timeout_seconds: 30
+  print:
+    type: kolsch/nodes/bash
+    command: "echo {{ inputs.body | quote }}"
+graph:
+  edges:
+    - from: fetch
+      to: print
+      binds:
+        body: "{{ nodes.fetch.content }}"
 ```
 
 ### `kolsch/nodes/agent`

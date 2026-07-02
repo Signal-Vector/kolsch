@@ -37,6 +37,7 @@ from workflows.parser import (
     BashNodeDef,
     BranchInputs,
     BranchNodeDef,
+    BrowseUrlNodeDef,
     ComputeInputs,
     ComputeNodeDef,
     CopyOfNodeDef,
@@ -119,6 +120,11 @@ nodes:
     ("type_ref", "extra", "expected_cls"),
     [
         ("kolsch/nodes/bash", {"command": "ls"}, BashNodeDef),
+        (
+            "kolsch/nodes/browse_url",
+            {"url": "https://example.com"},
+            BrowseUrlNodeDef,
+        ),
         ("kolsch/nodes/agent", {"agent": "acme/agents/bot"}, AgentNodeDef),
         ("kolsch/nodes/workflow", {"ref": "acme/workflows/triage"}, WorkflowNodeDef),
         ("kolsch/nodes/noop", {}, NoopNodeDef),
@@ -150,7 +156,7 @@ nodes:
         ),
     ],
 )
-def test_all_14_builtin_types_parse(
+def test_all_15_builtin_types_parse(
     tmp_path: Path,
     type_ref: str,
     extra: dict[str, Any],
@@ -166,12 +172,13 @@ def test_all_14_builtin_types_parse(
 
 
 def test_builtin_type_name_set_size() -> None:
-    """AC 2.2 sanity — the 14-name set is EXACTLY 14 entries."""
-    assert len(BUILTIN_TYPE_NAMES) == 14
+    """AC sanity — the 15-name set is EXACTLY 15 entries."""
+    assert len(BUILTIN_TYPE_NAMES) == 15
     expected = {
         "agent",
         "bash",
         "branch",
+        "browse_url",
         "compute",
         "delete_state",
         "filter",
@@ -844,6 +851,153 @@ nodes:
     assert n.secrets == ["API_KEY"]
     # Type-specific config passes through untouched (Step 5 validates it).
     assert getattr(n, "extra_field", None) == "passed through"
+
+
+# ---------------------------------------------------------------------------
+# browse_url — Step 1 Test 1 (accepts valid) + Test 2 (rejects invalid).
+# Per qol-browse-url-node.md Tests 1-2.
+# ---------------------------------------------------------------------------
+
+
+def test_browse_url_parser_accepts_valid_defaults(tmp_path: Path) -> None:
+    """Test 1 — YAML `{type: kolsch/nodes/browse_url, url: ...}` parses to a
+    :class:`BrowseUrlNodeDef` carrying the documented defaults
+    (`format="text"`, `wait_selector=None`, `headers=None`,
+    `cookies=None`, `request_timeout_seconds=30`).
+    """
+    yaml_text = """
+nodes:
+  fetch:
+    type: kolsch/nodes/browse_url
+    url: "https://example.com"
+"""
+    wf = load_workflow(_write(tmp_path / "wf.yaml", yaml_text))
+    node = wf.nodes["fetch"]
+    assert isinstance(node, BrowseUrlNodeDef)
+    assert node.type == "kolsch/nodes/browse_url"
+    assert node.url == "https://example.com"
+    assert node.format == "text"
+    assert node.wait_selector is None
+    assert node.headers is None
+    assert node.cookies is None
+    assert node.request_timeout_seconds == 30
+
+
+def test_browse_url_parser_accepts_full_config(tmp_path: Path) -> None:
+    """All optional type-specific fields land on the parsed model unchanged."""
+    yaml_text = """
+nodes:
+  fetch:
+    type: kolsch/nodes/browse_url
+    url: "{{ inputs.target }}"
+    format: html
+    wait_selector: "main"
+    headers:
+      X-From: "kolsch"
+    cookies:
+      session: "abc"
+    request_timeout_seconds: 45
+"""
+    wf = load_workflow(_write(tmp_path / "wf.yaml", yaml_text))
+    node = wf.nodes["fetch"]
+    assert isinstance(node, BrowseUrlNodeDef)
+    assert node.url == "{{ inputs.target }}"
+    assert node.format == "html"
+    assert node.wait_selector == "main"
+    assert node.headers == {"X-From": "kolsch"}
+    assert node.cookies == {"session": "abc"}
+    assert node.request_timeout_seconds == 45
+
+
+def test_browse_url_parser_invalid_missing_url(tmp_path: Path) -> None:
+    """Test 2 — missing `url` fails shape validation."""
+    yaml_text = """
+nodes:
+  fetch:
+    type: kolsch/nodes/browse_url
+"""
+    with pytest.raises(WorkflowValidationError):
+        load_workflow(_write(tmp_path / "wf.yaml", yaml_text))
+
+
+def test_browse_url_parser_invalid_bad_format_literal(tmp_path: Path) -> None:
+    """Test 2 — `format: markdown` is rejected (Literal["text","html"])."""
+    yaml_text = """
+nodes:
+  fetch:
+    type: kolsch/nodes/browse_url
+    url: "https://example.com"
+    format: markdown
+"""
+    with pytest.raises(WorkflowValidationError):
+        load_workflow(_write(tmp_path / "wf.yaml", yaml_text))
+
+
+def test_browse_url_parser_invalid_timeout_below_bound(tmp_path: Path) -> None:
+    """Test 2 — `request_timeout_seconds: 0` is out of `ge=1`."""
+    yaml_text = """
+nodes:
+  fetch:
+    type: kolsch/nodes/browse_url
+    url: "https://example.com"
+    request_timeout_seconds: 0
+"""
+    with pytest.raises(WorkflowValidationError):
+        load_workflow(_write(tmp_path / "wf.yaml", yaml_text))
+
+
+def test_browse_url_parser_invalid_timeout_above_bound(tmp_path: Path) -> None:
+    """Test 2 — `request_timeout_seconds: 300` is out of `le=120`."""
+    yaml_text = """
+nodes:
+  fetch:
+    type: kolsch/nodes/browse_url
+    url: "https://example.com"
+    request_timeout_seconds: 300
+"""
+    with pytest.raises(WorkflowValidationError):
+        load_workflow(_write(tmp_path / "wf.yaml", yaml_text))
+
+
+def test_browse_url_parser_rejects_ambiguous_timeout_seconds(tmp_path: Path) -> None:
+    """Naked ``timeout_seconds`` on browse_url is the confusion case.
+
+    ``_BaseNodeDef.timeout_seconds`` bounds the workflow-executor budget,
+    while ``BrowseUrlNodeDef.request_timeout_seconds`` bounds the tool's
+    per-request timeout. A YAML author writing only ``timeout_seconds``
+    almost certainly meant the tool budget — but the value silently
+    lands on the executor knob. Parser must raise with a disambiguation
+    hint rather than accept it.
+    """
+    yaml_text = """
+nodes:
+  fetch:
+    type: kolsch/nodes/browse_url
+    url: "https://example.com"
+    timeout_seconds: 30
+"""
+    with pytest.raises(WorkflowValidationError) as exc_info:
+        load_workflow(_write(tmp_path / "wf.yaml", yaml_text))
+    # Error message must name both knobs so the user can pick.
+    msg = str(exc_info.value)
+    assert "request_timeout_seconds" in msg
+    assert "timeout_seconds" in msg
+
+
+def test_browse_url_parser_accepts_both_timeouts_explicitly(tmp_path: Path) -> None:
+    """When both timeout knobs are set explicitly, the user disambiguated."""
+    yaml_text = """
+nodes:
+  fetch:
+    type: kolsch/nodes/browse_url
+    url: "https://example.com"
+    timeout_seconds: 60
+    request_timeout_seconds: 30
+"""
+    wf = load_workflow(_write(tmp_path / "wf.yaml", yaml_text))
+    node = wf.nodes["fetch"]
+    assert node.timeout_seconds == 60           # executor budget
+    assert node.request_timeout_seconds == 30   # tool budget
 
 
 # ---------------------------------------------------------------------------

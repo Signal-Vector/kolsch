@@ -270,6 +270,11 @@ authorization:
       - { what: kolsch/tools/bash,        pattern: "grep *",   effect: allow }
       # Everything else `bash` triggers the modal.
       - { what: kolsch/tools/bash,        pattern: "*",        effect: prompt }
+      # Ask before fetching a URL from the open web — the light
+      # `fetch_url` (httpx + trafilatura) or the heavier
+      # `browse_url` (opt-in `kolsch[browse]` extra, Playwright + Chromium).
+      - { what: kolsch/tools/fetch_url,   pattern: "*",        effect: prompt }
+      - { what: kolsch/tools/browse_url,  pattern: "*",        effect: prompt }
       # Default-deny tail (protected).
       - { what: "*",                pattern: "*",        effect: deny }
 ```
@@ -375,7 +380,7 @@ kolsch permissions list
 ```
 
 ```
-rl_ec…  allow   what='agent.execute.*'        pattern='*'
+rl_ec…  allow   what='agent.execute.*'              pattern='*'
 rl_0d…  allow   what='kolsch/tools/read_file'       pattern='*'
 rl_95…  allow   what='kolsch/tools/list_files'      pattern='*'
 rl_d3…  prompt  what='kolsch/tools/write_file'      pattern='*'
@@ -384,7 +389,9 @@ rl_44…  allow   what='kolsch/tools/bash'            pattern='ls *'
 rl_4a…  allow   what='kolsch/tools/bash'            pattern='grep *'
 rl_c4…  allow   what='kolsch/tools/bash'            pattern='cat *'
 rl_99…  prompt  what='kolsch/tools/bash'            pattern='*'
-rl_default_deny  deny  what='*'                pattern='*'  (protected)
+rl_fu…  prompt  what='kolsch/tools/fetch_url'       pattern='*'
+rl_bu…  prompt  what='kolsch/tools/browse_url'      pattern='*'
+rl_default_deny  deny  what='*'                     pattern='*'  (protected)
 ```
 
 Inside chat:

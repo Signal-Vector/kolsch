@@ -113,6 +113,28 @@ trace, no runtime bootstrap — the CLI catches the missing workspace
 before any subsystem boots. The behaviour is gated by
 `workspace_is_initialized()` in `platform_runtime.workspace`.
 
+## Fetching URLs
+
+Two tools ship for pulling web pages:
+
+- **`fetch_url`** — light, always available. Uses `httpx` +
+  `trafilatura`. Good for static or server-rendered pages, JSON
+  APIs, RSS/XML, and small binary payloads. Adds under 5 MB of
+  dependencies, no headless browser, no Chromium download.
+- **`browse_url`** — heavy, opt-in via the `kolsch[browse]` extra.
+  Uses a real headless Chromium via Playwright and executes page
+  JavaScript before capture. Reach for it when `fetch_url` returns
+  a page shell without the content the model needs — the classic
+  single-page-app case where the DOM is hydrated after
+  `DOMContentLoaded`.
+
+Start with `fetch_url`. If the page returns a shell
+(`<div id="root"></div>` and nothing meaningful in the body), swap
+to `browse_url`. Both are gated by an in-chat prompt by default
+(actions `kolsch/tools/fetch_url` and `kolsch/tools/browse_url`); see
+[Permissions](permissions.md) for how to tighten or loosen that
+gate.
+
 ## Where the starter agent's model comes from
 
 `kolsch setup` picks a model for the starter `kolsch/agents/helper` agent
@@ -142,6 +164,20 @@ To change the model afterwards, either:
 The setup-time `{{MODEL_LINE}}` placeholder mechanism was removed
 in E-BUG-MODELLINE-001 (it collided with Phase 2.2 Jinja syntax in
 agent YAMLs). The starter file now ships as plain, unprocessed YAML.
+
+To enable `browse_url`:
+
+```
+uv tool install 'kolsch[browse]'
+playwright install chromium
+```
+
+Chromium is a ~150 MB download and is NOT installed
+automatically — mid-chat downloads of that size are user-hostile,
+so kolsch surfaces the missing binary as an actionable error
+rather than a silent install. Container users: add
+`RUN playwright install chromium` as a layer at image-build time so
+image-shipped kolsch envs are ready to fetch on first run.
 
 ## Scripted setup (CI, devcontainers)
 

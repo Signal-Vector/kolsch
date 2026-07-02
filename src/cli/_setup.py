@@ -857,11 +857,18 @@ def _workspace_only_default_rules() -> list[dict[str, str]]:
         # to run any exchange. Default to allow; users tighten by
         # adding a more specific deny before this rule.
         {"what": "agent.execute.*", "pattern": "*", "effect": "allow"},
-        # The four canonical builtins — owned by the kolsch bundle.
+        # The canonical builtins — owned by the kolsch bundle.
         {"what": "kolsch/tools/read_file", "pattern": "*", "effect": "allow"},
         {"what": "kolsch/tools/list_files", "pattern": "*", "effect": "allow"},
         {"what": "kolsch/tools/write_file", "pattern": "*", "effect": "prompt"},
         {"what": "kolsch/tools/bash", "pattern": "*", "effect": "prompt"},
+        # qol-fetch-url-tool — network access is a fresh capability;
+        # conservative default per bash/write_file.
+        {"what": "kolsch/tools/fetch_url", "pattern": "*", "effect": "prompt"},
+        # qol-browse-url-tool — Tier 2 (opt-in `kolsch[browse]`
+        # extra). Same conservative prompt default as fetch_url so the
+        # chat surface asks before the agent drives headless Chromium.
+        {"what": "kolsch/tools/browse_url", "pattern": "*", "effect": "prompt"},
         # Default-deny tail (protected).
         {"what": "*", "pattern": "*", "effect": "deny"},
     ]

@@ -233,6 +233,102 @@ def make_edit(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]
     return edit
 
 
+def make_fetch_url(
+    *, policy: PathPolicy, root: Path,  # noqa: ARG001
+) -> Callable[..., Awaitable[Any]]:
+    """Factory for the fetch_url tool — qol-fetch-url-tool Step 2.
+
+    Loads the ``@tool``-decorated coroutine defined in
+    ``src/cli/_starter_bundle/kolsch/tools/fetch_url.py`` via
+    ``importlib`` (the starter-bundle tree is a filesystem template,
+    not an importable package — no ``__init__.py``) so this factory
+    stays a thin wrapper. The starter-bundle file is the source of
+    truth (TOOL-R10, file-IS-the-tool); ``make_fetch_url`` exists so
+    the workflow-node companion (a follow-up QoL) can consume the
+    same implementation via the ``make_*`` pattern that ``make_bash``
+    / ``make_read_file`` use.
+
+    ``policy`` and ``root`` are accepted for factory-signature symmetry
+    but not used: ``fetch_url`` reaches the network, not the filesystem,
+    and reads ``workspace_root`` / ``session_id`` off ``ToolContext`` at
+    invocation time (via the dispatch flow) rather than closing over them.
+    """
+    import importlib.util  # noqa: PLC0415 — deferred; avoids cost when factory unused
+    import sys  # noqa: PLC0415 — deferred
+
+    # The template lives under src/cli/_starter_bundle/kolsch/tools/ —
+    # this file (src/tools/builtins.py) is siblings-of-siblings with it.
+    tool_path = (
+        Path(__file__).resolve().parent.parent
+        / "cli"
+        / "_starter_bundle"
+        / "kolsch"
+        / "tools"
+        / "fetch_url.py"
+    )
+    module_name = "_kolsch_starter_bundle_fetch_url"
+    cached = sys.modules.get(module_name)
+    if cached is None:
+        spec = importlib.util.spec_from_file_location(module_name, tool_path)
+        if spec is None or spec.loader is None:
+            msg = f"could not load fetch_url tool template from {tool_path}"
+            raise RuntimeError(msg)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+    else:
+        module = cached
+    fetch_url: Callable[..., Awaitable[Any]] = module.fetch_url
+    return fetch_url
+
+
+def make_browse_url(
+    *, policy: PathPolicy, root: Path,  # noqa: ARG001
+) -> Callable[..., Awaitable[Any]]:
+    """Factory for the browse_url tool — qol-browse-url-tool Step 2.
+
+    Loads the ``@tool``-decorated coroutine defined in
+    ``src/cli/_starter_bundle/kolsch/tools/browse_url.py`` via
+    ``importlib`` (the starter-bundle tree is a filesystem template,
+    not an importable package — no ``__init__.py``) so this factory
+    stays a thin wrapper. The starter-bundle file is the source of
+    truth (TOOL-R10, file-IS-the-tool); ``make_browse_url`` exists so
+    the workflow-node companion (a follow-up QoL) can consume the
+    same implementation via the ``make_*`` pattern that ``make_bash``
+    / ``make_read_file`` use.
+
+    ``policy`` and ``root`` are accepted for factory-signature symmetry
+    but not used: ``browse_url`` reaches the network, not the filesystem,
+    and reads ``workspace_root`` / ``session_id`` off ``ToolContext`` at
+    invocation time (via the dispatch flow) rather than closing over them.
+    """
+    import importlib.util  # noqa: PLC0415 — deferred; avoids cost when factory unused
+    import sys  # noqa: PLC0415 — deferred
+
+    tool_path = (
+        Path(__file__).resolve().parent.parent
+        / "cli"
+        / "_starter_bundle"
+        / "kolsch"
+        / "tools"
+        / "browse_url.py"
+    )
+    module_name = "_kolsch_starter_bundle_browse_url"
+    cached = sys.modules.get(module_name)
+    if cached is None:
+        spec = importlib.util.spec_from_file_location(module_name, tool_path)
+        if spec is None or spec.loader is None:
+            msg = f"could not load browse_url tool template from {tool_path}"
+            raise RuntimeError(msg)
+        module = importlib.util.module_from_spec(spec)
+        sys.modules[module_name] = module
+        spec.loader.exec_module(module)
+    else:
+        module = cached
+    browse_url: Callable[..., Awaitable[Any]] = module.browse_url
+    return browse_url
+
+
 def make_bash(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]]:  # noqa: ARG001
     """Build the legacy `bash` builtin — shell tool exempt from path policy.
 
