@@ -53,6 +53,8 @@ _CONTENT_INLINE_BYTES = 64 * 1024  # 64 KiB preview cap before overflow persiste
 
 
 class BrowseUrlArgs(BaseModel):
+    """Argument schema for the ``browse_url`` tool."""
+
     url: str = Field(
         description="Absolute URL to fetch. Must be http:// or https://.",
     )
