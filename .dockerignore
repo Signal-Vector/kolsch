@@ -1,6 +1,8 @@
-# Keep the container build context lean. The Containerfile copies only
-# pyproject.toml, uv.lock, README.md, src/, and tests/; everything else
-# is noise that slows builds and confuses caching.
+# Keep the container build context lean. The Containerfile copies
+# pyproject.toml, uv.lock, README.md, src/, tests/, docs/, and
+# AGENTS.md (the last two are force-included by hatchling as package
+# data); everything else is noise that slows builds and confuses
+# caching.
 
 .git/
 .github/
@@ -42,11 +44,12 @@ logs/
 .env
 .env.*
 
-# Docs and compose files (Containerfile doesn't reference them)
-docs/
+# Compose files (Containerfile doesn't reference them). docs/ and
+# AGENTS.md must stay in the context — they are force-included by
+# pyproject's hatch wheel target, and the editable install evaluates
+# force-include just like the wheel build does.
 compose.dev.yml
 compose.test.yml
-AGENTS.md
 
 # OS noise
 .DS_Store

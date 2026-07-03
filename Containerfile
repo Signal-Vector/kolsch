@@ -57,8 +57,17 @@ RUN --mount=type=cache,target=/root/.cache/uv \
 # --- Source layer --------------------------------------------------------
 # In compose.dev.yml this is overlaid by a bind mount. In compose.test.yml
 # it represents the committed tree.
+#
+# AGENTS.md and docs/ are force-included by pyproject's
+# [tool.hatch.build.targets.wheel.force-include] (they ship as package
+# data inside the `kolsch` umbrella package). Hatchling evaluates
+# force-include even for editable installs, so both must exist on disk
+# before `uv sync --frozen --all-groups` runs — otherwise the editable
+# build fails with `Forced include not found`.
 COPY src ./src
 COPY tests ./tests
+COPY AGENTS.md ./AGENTS.md
+COPY docs ./docs
 
 # Install the project package itself (editable in-tree).
 RUN --mount=type=cache,target=/root/.cache/uv \
