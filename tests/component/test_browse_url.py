@@ -68,6 +68,14 @@ import pytest
 if TYPE_CHECKING:
     from collections.abc import Iterator
 
+# browse_url is the Tier 2 (opt-in `browse` extra) web-fetch tool —
+# it drives headless Chromium via Playwright. When either the
+# `playwright` wheel OR the Chromium binary is absent from the test
+# environment, skip the whole module rather than fail per-test with
+# import errors. Contributors who work on browse_url install locally
+# via `uv sync --extra browse && playwright install chromium`.
+pytest.importorskip("playwright")
+
 from engine.context import CancelToken
 from errors import ExchangeCancelled, ToolTimeout
 from schemas import AgentId, SessionId, ThreadId

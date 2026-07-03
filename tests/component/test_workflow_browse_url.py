@@ -33,6 +33,13 @@ from typing import TYPE_CHECKING, Any
 
 import pytest
 
+# The kolsch/nodes/browse_url runner instantiates the browse_url
+# tool, which imports `playwright.async_api` at coroutine start.
+# Skip the whole module when playwright isn't installed (opt-in
+# via the `browse` extra); tests below would otherwise fail with
+# ImportError at collection.
+pytest.importorskip("playwright")
+
 from assets.catalog import AssetCatalog
 from errors import ToolTimeout, ToolUnauthorized
 from files import PathPolicy
