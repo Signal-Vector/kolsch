@@ -62,7 +62,7 @@ def _scripted_input(answers: list[str]) -> Callable[[str], Awaitable[str]]:
     return _fn
 
 
-def _stub_state(cancel: CancelToken) -> object:
+def _stub_state(cancel: CancelToken) -> SimpleNamespace:
     """Minimal ``ChatSessionState`` stand-in.
 
     The modal reads ``active_cancel`` and writes

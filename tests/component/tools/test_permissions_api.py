@@ -18,7 +18,10 @@ rule and a platform rule apply, agent wins (per Phase 2.2 §1.2).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from tools.decorator import ToolContext
 
 import pytest
 
@@ -234,7 +237,7 @@ class _PassthroughSandbox:
         return await work()  # type: ignore[operator]
 
 
-def _ctx_for(name: str) -> object:
+def _ctx_for(name: str) -> ToolContext:
     """Build a minimal :class:`ToolContext` for the dispatcher.
 
     Session / thread IDs require uuid bodies; agent_id accepts any
@@ -267,7 +270,7 @@ async def test_dispatcher_binds_permissions_around_tool_function() -> None:
     """
     from pydantic import BaseModel
 
-    from tools.decorator import ToolContext, ToolDefinition
+    from tools.decorator import ToolDefinition
     from tools.dispatch import dispatch_tool
 
     class _Args(BaseModel):
@@ -323,7 +326,7 @@ async def test_dispatcher_binding_includes_bundle_layer() -> None:
     covers."""
     from pydantic import BaseModel
 
-    from tools.decorator import ToolContext, ToolDefinition
+    from tools.decorator import ToolDefinition
     from tools.dispatch import dispatch_tool
 
     class _Args(BaseModel):

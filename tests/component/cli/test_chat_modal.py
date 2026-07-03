@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import io as _io
 import sys
+from types import SimpleNamespace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -694,7 +695,7 @@ async def test_cmd_chat_clears_modal_callback_even_when_loop_raises(
 #     above, which is unchanged because that test omits state).
 
 
-def _stub_state_with_cancel(cancel: object) -> object:
+def _stub_state_with_cancel(cancel: object) -> SimpleNamespace:
     """Build a minimal stand-in for :class:`ChatSessionState`.
 
     The modal only reads ``active_cancel`` and writes
@@ -704,8 +705,6 @@ def _stub_state_with_cancel(cancel: object) -> object:
     shape exactly and the modal's type-check is permissive
     (TYPE_CHECKING import only).
     """
-    from types import SimpleNamespace
-
     return SimpleNamespace(active_cancel=cancel, last_cancel_reason=None)
 
 
