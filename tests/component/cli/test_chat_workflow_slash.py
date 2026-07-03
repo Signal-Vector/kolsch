@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import io as _io
 import re
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -36,6 +36,9 @@ from cli._slash import (
     dispatch_slash,
 )
 from platform_runtime import PlatformRuntime, bootstrap_runtime
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Helpers

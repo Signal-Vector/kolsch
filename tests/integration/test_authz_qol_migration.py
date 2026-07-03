@@ -19,13 +19,16 @@ This catches integration regressions the unit tests miss:
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import yaml
 
 from assets import AssetManagement
 from cli._migrations.authz_rules import migrate_authz_rules
 from providers import RuleBasedAuthorizationProvider
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _CANONICAL_LEGACY_RULES = [
     {"id": "rl_a", "who": ".*", "what": r"agent\.execute\..*", "effect": "allow"},

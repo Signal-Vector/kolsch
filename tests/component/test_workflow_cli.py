@@ -16,8 +16,7 @@ from __future__ import annotations
 import io
 import json
 import textwrap
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -27,6 +26,9 @@ from workflows.errors import (
     WorkflowJinjaRefUnknown,
     WorkflowNodeNotDefined,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Workspace fixture

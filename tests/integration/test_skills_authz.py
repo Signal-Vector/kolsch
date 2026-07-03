@@ -20,8 +20,7 @@ Two regression tests closing audit gaps surfaced in Step 1:
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import yaml
@@ -37,6 +36,9 @@ from schemas import EventType
 # Sk-I2 filter at the Var construction step (mirroring the engine's
 # pre-flight at engine._render_prompt_if_needed).
 from templating.vars import SkillItem, SkillsVar
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Workspace fixture.

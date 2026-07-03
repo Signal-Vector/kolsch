@@ -12,13 +12,15 @@ alongside the existing engine wiring.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
 from assets import AssetManagement
 from schemas import ResolvedAgentConfig
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _PLATFORM_PAYLOAD: dict[str, Any] = {
     "secrets": {"variant": "dotenv", "config": {"path": ".env"}},

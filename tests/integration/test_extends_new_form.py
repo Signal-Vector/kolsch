@@ -16,14 +16,17 @@ Two end-to-end scenarios against ``build_resolved_config``:
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import pytest
 import yaml
 
 from assets import AssetManagement
 from schemas import ResolvedAgentConfig
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    import pytest
 
 _PLATFORM_PAYLOAD: dict[str, Any] = {
     "secrets": {"variant": "dotenv", "config": {"path": ".env"}},

@@ -25,12 +25,15 @@ from __future__ import annotations
 
 import io as _io
 import shutil
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 import yaml
 
 from cli.skills import _cmd_install, _ParsedInstallUrl
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Workspace + fixture helpers.

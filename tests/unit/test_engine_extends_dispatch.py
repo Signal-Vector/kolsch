@@ -21,7 +21,7 @@ pure-function pieces of the dispatch:
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 import yaml
@@ -36,6 +36,9 @@ from templating.inheritance import (
     render_with_parents,
     resolve_parent_chain_from_extends,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # prompt_uses_extends_directive — the AST detector.

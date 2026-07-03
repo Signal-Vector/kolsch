@@ -32,9 +32,7 @@ Covers Step 1 ACs 1.1-1.12 of ``process/phase3.8-fork-build.md``:
 from __future__ import annotations
 
 import os
-from collections.abc import Iterable
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -49,6 +47,10 @@ from workflows.ids import InvocationId, WorkflowRunId
 from workflows.parser import Workflow
 from workflows.run import WorkflowRun, WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from collections.abc import Iterable
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Pipeline fixture — A→B→C using kolsch/nodes/compute.

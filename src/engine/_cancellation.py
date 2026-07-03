@@ -56,7 +56,7 @@ preempted.
 """
 
 
-async def race_with_cancel(
+async def race_with_cancel[T](
     coro: Coroutine[Any, Any, T],
     cancel_token: CancelToken | None,
     *,
@@ -146,7 +146,7 @@ async def race_with_cancel(
         return result
 
 
-def wait_future_with_cancel(
+def wait_future_with_cancel[T](
     future: concurrent.futures.Future[T],
     cancel_token: CancelToken | None,
     *,

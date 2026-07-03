@@ -25,8 +25,7 @@ from __future__ import annotations
 
 import asyncio
 import time
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -36,6 +35,9 @@ from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class _IndexedSleepRunner:
@@ -294,7 +296,8 @@ class _FailingAtIndexRunner:
         idx = bound_inputs.get("index")
         if idx == self._fail_at:
             await asyncio.sleep(0.02)
-            raise self._SentinelError(f"index {idx} raised")
+            msg = f"index {idx} raised"
+            raise self._SentinelError(msg)
         await asyncio.sleep(self._sleep_other)
         return {"index": idx}
 

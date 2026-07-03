@@ -29,8 +29,7 @@ runtime.
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from pydantic import ValidationError
@@ -49,8 +48,12 @@ from workflows.events import (
 from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.ids import InvocationId, TraceId, WorkflowRunId
 from workflows.parser import Workflow
-from workflows.run import WorkflowRun
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from workflows.run import WorkflowRun
 
 _RUN_ID_A = WorkflowRunId("wrk_3b9e7e84-9a1d-4ce6-b6c1-2a4f8a91d101")
 _INV_ID_A = InvocationId("inv_2c8c01fa-4b7a-4c0c-b5fb-c19c1c0d3401")

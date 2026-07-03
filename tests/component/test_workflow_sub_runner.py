@@ -28,8 +28,7 @@ production code path.
 from __future__ import annotations
 
 import textwrap
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -40,7 +39,6 @@ from workflows.builtins import (
     WorkflowSubRunner,
     register_builtins,
 )
-from workflows.context import NodeContext
 from workflows.errors import (
     NodeTypeNotImplemented,
     WorkflowPausedForInput,
@@ -49,6 +47,11 @@ from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow, load_workflow
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from workflows.context import NodeContext
 
 # ---------------------------------------------------------------------------
 # Fixtures + helpers
@@ -760,7 +763,7 @@ class TestStateIsolation:
                     check_state.update(state)
                 return {}
 
-        ex, store, parent_run, _ = _run_parent(
+        ex, _store, _parent_run, _ = _run_parent(
             tmp_path,
             parent_yaml=parent_yaml,
             parent_ref="demo/workflows/parent",

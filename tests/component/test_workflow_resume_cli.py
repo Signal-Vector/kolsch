@@ -22,12 +22,14 @@ from __future__ import annotations
 import json
 import os
 import textwrap
-from pathlib import Path
-from typing import Any
-
-import pytest
+from typing import TYPE_CHECKING, Any
 
 from cli.main import main
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    import pytest
 
 # ---------------------------------------------------------------------------
 # Workspace fixture — mirrors tests/component/test_workflow_cli.py's pattern

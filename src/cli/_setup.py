@@ -1215,9 +1215,7 @@ def _rule_covers_broad_agent_execute(rule: Any) -> bool:  # noqa: ANN401
         return False
     what = str(rule.get("what", ""))
     return (
-        what == "agent.execute.*"
-        or what == "*"
-        or what in _AGENT_EXECUTE_CATCHALL_REGEX_FORMS
+        what in {"agent.execute.*", "*"} or what in _AGENT_EXECUTE_CATCHALL_REGEX_FORMS
     )
 
 

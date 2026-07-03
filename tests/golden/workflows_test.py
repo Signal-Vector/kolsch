@@ -138,7 +138,8 @@ def _resolve_error_class(name: str) -> type[BaseException]:
     module = importlib.import_module("workflows.errors")
     cls = getattr(module, name, None)
     if cls is None:
-        raise ValueError(f"unknown exception class in fixture annotation: {name!r}")
+        msg = f"unknown exception class in fixture annotation: {name!r}"
+        raise ValueError(msg)
     return cls  # type: ignore[no-any-return]
 
 

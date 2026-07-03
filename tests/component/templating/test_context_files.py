@@ -17,6 +17,8 @@ Pins (post qol-prefix-defaults-and-unified-refs.md Step 2):
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from errors import (
@@ -31,7 +33,7 @@ from templating.context_files import (
     resolve_path,
 )
 
-if True:
+if TYPE_CHECKING:
     from pathlib import Path
 
 

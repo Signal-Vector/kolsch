@@ -29,7 +29,6 @@ import threading
 import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -52,6 +51,7 @@ from workflows.run_store import WorkflowRunStore
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
 # All tests in this file launch headless Chromium via the browse_url
 # tool, so they cost seconds even on a warm cache.

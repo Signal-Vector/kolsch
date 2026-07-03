@@ -558,7 +558,7 @@ class TestPhase6MapNonListRaises:
         graph:
           edges: []
         """
-        ex, store, run, _ = _run_with_yaml_catalog(
+        ex, _store, _run, _ = _run_with_yaml_catalog(
             tmp_path,
             entry_ref="demo/workflows/m",
             workflows={"demo/workflows/m": wf_yaml},

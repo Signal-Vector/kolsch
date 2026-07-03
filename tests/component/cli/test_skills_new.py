@@ -20,14 +20,18 @@ proxy for "the next ``kolsch ...`` invocation will see it".
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pytest
 import yaml
 
 from assets import AssetManagement
 from assets.skill_metadata import parse_skill_frontmatter
 from cli import main
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    import pytest
 
 # ---------------------------------------------------------------------------
 # Workspace fixture — platform.yaml + a kolsch bundle (the default).

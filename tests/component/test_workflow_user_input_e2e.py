@@ -30,10 +30,12 @@ import json
 import os
 import textwrap
 from pathlib import Path
-
-import pytest
+from typing import TYPE_CHECKING
 
 from cli.main import main
+
+if TYPE_CHECKING:
+    import pytest
 
 # ---------------------------------------------------------------------------
 # Workspace fixture — installs the starter bundle so the e2e tests

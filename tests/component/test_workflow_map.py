@@ -15,8 +15,7 @@ shapes intentionally.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -35,6 +34,9 @@ from workflows.ids import InvocationId, WorkflowRunId
 from workflows.parser import Workflow
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Helpers / fakes
@@ -64,8 +66,9 @@ class _FailOnNthRunner:
         _ = (node_def, bound_inputs, state, ctx)
         self._call_count += 1
         if self._call_count > self._n:
+            msg = f"worker {node_name!r} blew up on call {self._call_count}"
             raise RuntimeError(
-                f"worker {node_name!r} blew up on call {self._call_count}"
+                msg
             )
         return {"ok": self._call_count}
 

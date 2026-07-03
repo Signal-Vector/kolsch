@@ -35,7 +35,6 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
-from rich.console import Console
 from rich.text import Text
 
 from cli._renderer import _BAR, _CAPSULE_PALETTE, _capsule
@@ -44,6 +43,8 @@ from workflows.labels import display_label
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
+
+    from rich.console import Console
 
     from workflows.ids import WorkflowRunId
     from workflows.parser import Workflow

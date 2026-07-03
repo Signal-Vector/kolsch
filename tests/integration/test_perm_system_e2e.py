@@ -35,7 +35,6 @@ from __future__ import annotations
 
 import io as _io
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
@@ -64,6 +63,8 @@ from schemas import (
 from schemas.error import Error
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from platform_runtime import PlatformRuntime
 
 

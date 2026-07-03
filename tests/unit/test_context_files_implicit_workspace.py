@@ -16,10 +16,14 @@ Three behaviors pinned:
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-from errors import ConfigDeprecatedRefForm
 from templating.context_files import resolve_path
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from errors import ConfigDeprecatedRefForm
 
 
 def test_plain_relative_path_resolves_under_workspace_root(tmp_path: Path) -> None:

@@ -14,14 +14,16 @@ Covers Step 1 ACs:
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from assets.catalog import AssetCatalog
 from workflows.builtins import SetStateRunner
 from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -201,7 +203,7 @@ class TestLiteralVsJinja:
                 }
             }
         )
-        ex, store, run = _run_executor(tmp_path, workflow=wf)
+        ex, _store, _run = _run_executor(tmp_path, workflow=wf)
         await ex.run()
         assert ex._state == {
             "flag": True,

@@ -30,12 +30,14 @@ from __future__ import annotations
 
 import json
 import textwrap
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from cli.main import main
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Workspace fixture — mirrors tests/component/test_workflow_resume_cli.py

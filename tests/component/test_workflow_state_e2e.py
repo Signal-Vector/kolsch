@@ -21,8 +21,7 @@ exact JSONL byte sequences (see ``tests/golden/runs/state-*.jsonl``).
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from assets.catalog import AssetCatalog
 from workflows.builtins import (
@@ -34,6 +33,9 @@ from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -232,7 +234,7 @@ class TestPhase4ResumeReconstructsState:
         reg.register("demo/nodes/echo", _CapturingEcho())
         catalog = _catalog_with_demo_echo()
 
-        ex, store, run = _executor(
+        ex, _store, run = _executor(
             tmp_path, workflow=wf, registry=reg, catalog=catalog
         )
         first = await ex.run()

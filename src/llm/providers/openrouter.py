@@ -53,8 +53,7 @@ shape doesn't reimplement it.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import crewai
 import httpx
@@ -74,6 +73,9 @@ from llm.providers._errors import (
     classify_http_response,
     classify_transport_error,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 _DEFAULT_BASE_URL = "https://openrouter.ai/api/v1"
 _DEFAULT_TIMEOUT_SECONDS = 30.0

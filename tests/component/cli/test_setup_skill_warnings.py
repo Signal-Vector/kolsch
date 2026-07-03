@@ -16,12 +16,16 @@ from __future__ import annotations
 
 import argparse
 import io
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pytest
 import yaml
 
 from cli._setup import NonInteractivePrompter, _SetupIO, run_setup
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    import pytest
 
 
 async def _noop_run_handler(_args: argparse.Namespace) -> tuple[int, str | None]:

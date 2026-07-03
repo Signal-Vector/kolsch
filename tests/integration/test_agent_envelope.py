@@ -26,7 +26,7 @@ pins the END-TO-END composition.
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import yaml
@@ -34,6 +34,9 @@ import yaml
 from engine import ExecutionContext, LLMRequest, LLMResponse
 from platform_runtime import bootstrap_runtime
 from schemas import EventType
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Workspace fixture.

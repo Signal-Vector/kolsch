@@ -68,7 +68,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import yaml
@@ -76,7 +76,6 @@ import yaml
 from assets import AssetManagement
 from errors import PlatformError
 from kernel.findings import ValidationResult
-from schemas import ResolvedAgentConfig
 from templating import render_prompt
 from templating.inheritance import (
     prompt_uses_extends_directive,
@@ -97,9 +96,12 @@ from templating.vars._platform import (
     PlatformVar,
     ProvidersVar,
 )
-from templating.vars.docs import DocItem
 from templating.vars.tools import ToolItem
 from tests.integration._extends_corpus_cases import CASES, FixtureCase
+
+if TYPE_CHECKING:
+    from schemas import ResolvedAgentConfig
+    from templating.vars.docs import DocItem
 
 pytestmark = pytest.mark.asyncio
 

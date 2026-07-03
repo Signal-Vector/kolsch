@@ -89,8 +89,7 @@ exercises the same mapping through the Fake-LLM test path.
 
 from __future__ import annotations
 
-from collections.abc import Mapping
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 import crewai
 import httpx
@@ -108,6 +107,9 @@ from llm.providers._errors import (
     classify_http_response,
     classify_transport_error,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Mapping
 
 # The 30s default sits below the observed long-tail of opencode
 # responses (replay showed 12 successful calls between 30 and 56s,

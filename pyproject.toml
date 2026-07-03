@@ -413,6 +413,12 @@ convention = "google"
 # Package-level docstring optional — each module under the package
 # carries its own docstring, which is where the contract lives.
 "src/**/__init__.py" = ["D104"]
+# `scripts/` — one-off utility scripts (replay tools, migration
+# helpers). They print progress to stderr by design (T201), often
+# raise SystemExit with vanilla strings (TRY003/EM101/EM102) which
+# is idiomatic for CLIs, and don't carry pydocstyle contracts (D).
+# Long f-strings in reporting occasionally exceed 88 cols (E501).
+"scripts/**" = ["T201", "TRY003", "EM101", "EM102", "D", "E501", "PLR2004"]
 
 [tool.ruff.lint.flake8-annotations]
 mypy-init-return = true

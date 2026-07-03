@@ -342,10 +342,7 @@ def _derive_authz_recovery_hint(
     # — we suppress the hint so we never tell the user to type
     # `/perm allow bash` (which would fail validation).
     what = matched_rule.get("what") if isinstance(matched_rule, dict) else None
-    if isinstance(what, str) and "/" in what:
-        tool_ref = what
-    else:
-        tool_ref = None
+    tool_ref = what if isinstance(what, str) and "/" in what else None
 
     if tool_ref is None:
         return None

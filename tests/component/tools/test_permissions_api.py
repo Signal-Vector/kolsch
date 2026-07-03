@@ -209,7 +209,8 @@ class _StubSecrets:
     ``secrets_needed`` — ``resolve``/``exists`` are unreachable."""
 
     async def resolve(self, name: str) -> str:  # pragma: no cover
-        raise AssertionError(f"unexpected resolve({name!r})")
+        msg = f"unexpected resolve({name!r})"
+        raise AssertionError(msg)
 
     async def exists(self, name: str) -> bool:  # pragma: no cover
         return False

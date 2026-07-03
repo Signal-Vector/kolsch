@@ -20,6 +20,7 @@ the same iterative shape per-child.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import uuid
@@ -2030,10 +2031,8 @@ class IterativeExecutor:
         """
         if not run_dir.waiting_at_path.exists():
             return
-        try:
+        with contextlib.suppress(FileNotFoundError):
             run_dir.waiting_at_path.unlink()
-        except FileNotFoundError:
-            pass
 
     # ------------------------------------------------------------------
     # Topology + predecessor closure.

@@ -22,8 +22,7 @@ Covers Step 1 ACs:
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -42,6 +41,9 @@ from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -494,7 +496,7 @@ class TestResumeHappyPath:
         registry = _registry_with_user_input()
         registry.register("kolsch/nodes/agent", capture)
 
-        ex, store, run = _make_executor(
+        ex, _store, run = _make_executor(
             tmp_path, workflow=wf, registry=registry
         )
         await ex.run()  # pauses
@@ -611,7 +613,7 @@ class TestBadResponsePreservesStatus:
                 }
             }
         )
-        ex, store, run = _make_executor(
+        ex, _store, run = _make_executor(
             tmp_path,
             workflow=wf,
             registry=_registry_with_user_input(),

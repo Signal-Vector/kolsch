@@ -577,7 +577,7 @@ class TestPauseRunsModuleCleanup:
         # the executor's cleanup filter looks for ``workspace_root /
         # "bundles" /``, where ``workspace_root = runs_root.parent ==
         # tmp_path``. So the seeded bundles dir is in scope.
-        ex, store, run = _make_executor(
+        ex, _store, _run = _make_executor(
             tmp_path,
             workflow=wf,
             registry=registry,
