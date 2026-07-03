@@ -12,7 +12,7 @@ introspected input model — the lookup threads through the optional
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pydantic import BaseModel
 
 from workflows.parser import (
     AgentInputs,
@@ -30,10 +30,6 @@ from workflows.parser import (
     WorkflowSubInputs,
     WriteFileInputs,
 )
-
-if TYPE_CHECKING:
-    from pydantic import BaseModel
-
 
 __all__ = ["inputs_model_for"]
 
@@ -102,4 +98,7 @@ def inputs_model_for(
     lookup = getattr(catalog_runner, "inputs_model_for", None)
     if lookup is None:
         return None
-    return lookup(type_ref)
+    result = lookup(type_ref)
+    if result is None or (isinstance(result, type) and issubclass(result, BaseModel)):
+        return result
+    return None

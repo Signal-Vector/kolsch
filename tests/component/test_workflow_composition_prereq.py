@@ -260,9 +260,11 @@ class TestDeriveForIteration:
 
 class TestNewEventKinds:
     def test_called_workflow_enum_values(self) -> None:
-        assert WorkflowEventKind.CALLED_WORKFLOW == "workflow.node.called_workflow"
         assert (
-            WorkflowEventKind.CALLED_WORKFLOW_COMPLETED
+            WorkflowEventKind.CALLED_WORKFLOW.value == "workflow.node.called_workflow"
+        )
+        assert (
+            WorkflowEventKind.CALLED_WORKFLOW_COMPLETED.value
             == "workflow.node.called_workflow_completed"
         )
 

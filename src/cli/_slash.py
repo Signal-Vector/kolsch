@@ -907,7 +907,7 @@ def _action_to_tool_ref_map(ctx: SlashContext) -> dict[str, str] | None:
     return getter
 
 
-_VERB_TO_EFFECT: dict[str, str] = {
+_VERB_TO_EFFECT: dict[str, Literal["allow", "deny", "prompt"]] = {
     "allow": "allow",
     "deny": "deny",
     "prompt": "prompt",
@@ -1216,6 +1216,7 @@ async def _handler_fork(arg_text: str, ctx: SlashContext) -> ControlSignal:
     from cli._workflow_slash_args import (  # noqa: PLC0415
         parse_slash_fork_args,
     )
+    from schemas import EventId  # noqa: PLC0415
     from schemas.entities import ForkedFrom  # noqa: PLC0415
     from workflows.errors import (  # noqa: PLC0415
         WorkflowError,
@@ -1291,7 +1292,7 @@ async def _handler_fork(arg_text: str, ctx: SlashContext) -> ControlSignal:
         trace_id=parent_run.trace_id,
         forked_from=ForkedFrom(
             run_id=parent_run.run_id,
-            fork_event_id=event_id,
+            fork_event_id=EventId(event_id),
         ),
     )
     # Chained-fork support — point pending at the fork so a
@@ -1305,7 +1306,7 @@ async def _handler_fork(arg_text: str, ctx: SlashContext) -> ControlSignal:
             store=store,
             workflow=workflow,
             run=forked_run,
-            fork_event_id=event_id,
+            fork_event_id=EventId(event_id),
             input_overrides=overrides,
         )
     except WorkflowRunNotFound as exc:

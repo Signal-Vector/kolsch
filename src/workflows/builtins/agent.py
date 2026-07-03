@@ -21,6 +21,7 @@ from engine import ExecutionContext
 from engine.context import AgentExecutionError
 from schemas import FromWorkflowRun, IOSpec
 from workflows.errors import AgentRefUnresolved, WorkflowNodeFailed
+from workflows.ids import InvocationId, WorkflowRunId
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -156,9 +157,9 @@ class AgentRunner:
 
         # Step 4: mint the parent pointer.
         fwr = FromWorkflowRun(
-            workflow_run_id=ctx.workflow_run_id,
-            invocation_id=ctx.invocation_id,
-            event_id=ctx.parent_event_id,
+            workflow_run_id=WorkflowRunId(ctx.workflow_run_id),
+            invocation_id=InvocationId(ctx.invocation_id),
+            event_id=ctx.require_parent_event_id(),
         )
 
         # Step 5: spawn the child session. The store keys sessions by

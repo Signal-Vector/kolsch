@@ -133,7 +133,9 @@ class TestValidationResultAPI:
                 },
             }
         )
-        assert validate_workflow_or_raise(wf, AssetCatalog()) is None
+        validate_workflow_or_raise(
+            wf, AssetCatalog()
+        )  # returns None; success = no raise
 
     def test_validate_workflow_or_raise_single_error_raises_specific(
         self,

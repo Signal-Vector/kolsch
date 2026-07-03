@@ -895,6 +895,7 @@ async def _cmd_fork(
     runtime = await bootstrap_runtime(root=root)
     catalog = runtime.asset_management.catalog()
 
+    from schemas import EventId  # noqa: PLC0415
     from schemas.entities import ForkedFrom  # noqa: PLC0415
     from workflows.errors import (  # noqa: PLC0415
         WorkflowInputInvalid,
@@ -950,7 +951,7 @@ async def _cmd_fork(
         trace_id=parent_run.trace_id,
         forked_from=ForkedFrom(
             run_id=parent_run.run_id,
-            fork_event_id=fork_event_id,
+            fork_event_id=EventId(fork_event_id),
         ),
     )
 

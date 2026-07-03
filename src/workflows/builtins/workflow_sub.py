@@ -219,7 +219,7 @@ class WorkflowSubRunner:
         await ctx.emit_workflow_event(
             WorkflowNodeCalledWorkflowEvent(
                 workflow_run_id=WorkflowRunId(ctx.workflow_run_id),
-                trace_id=ctx.trace_id,
+                trace_id=ctx.require_trace_id(),
                 parent_event_id=ctx.parent_event_id,
                 invocation_id=InvocationId(ctx.invocation_id),
                 node_name=node_name,
@@ -447,7 +447,7 @@ class WorkflowSubRunner:
         await ctx.emit_workflow_event(
             WorkflowNodeCalledWorkflowCompletedEvent(
                 workflow_run_id=WorkflowRunId(ctx.workflow_run_id),
-                trace_id=ctx.trace_id,
+                trace_id=ctx.require_trace_id(),
                 parent_event_id=ctx.parent_event_id,
                 invocation_id=InvocationId(ctx.invocation_id),
                 node_name=node_name,

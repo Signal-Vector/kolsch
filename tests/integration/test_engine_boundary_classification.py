@@ -197,7 +197,7 @@ async def _drive_one_exchange(
     engine, store, _am = await build_engine(
         tmp_path,
         fake_llm,
-        framework=framework,  # type: ignore[arg-type] — protocol duck-types
+        framework=framework,  # protocol duck-types
     )
     ctx = await new_session_context(store)
     # Bump max_retries on the config Phase 2.2 envelope uses.

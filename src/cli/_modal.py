@@ -35,7 +35,7 @@ tests can pin its heuristics independently of the modal's I/O.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING, TextIO
+from typing import TYPE_CHECKING, Literal, TextIO
 
 from prompt_toolkit import PromptSession
 from rich.console import Console
@@ -350,7 +350,9 @@ class ApprovalModal:
         # ref (covers tool actions); otherwise fall back to the
         # legacy regex shape (covers `mcp.foo.bar` and other
         # unqualified shapes the user can't easily migrate).
-        effect_str = "allow" if effect is AuthzEffect.ALLOW else "deny"
+        effect_str: Literal["allow", "deny"] = (
+            "allow" if effect is AuthzEffect.ALLOW else "deny"
+        )
         tool_ref = (
             self._tool_ref_lookup(action) if self._tool_ref_lookup is not None else None
         )

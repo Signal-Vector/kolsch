@@ -24,8 +24,7 @@ from __future__ import annotations
 
 import pytest
 
-from providers.authz import Rule
-from schemas import ModelSpec
+from schemas import ModelSpec, PermissionRule
 from templating.vars.agent import AgentVar, ModelView
 from templating.vars.tools import ToolItem, ToolsVar
 
@@ -139,7 +138,7 @@ def test_agent_model_returns_model_view_not_string() -> None:
         model=ModelView.from_model_spec(spec),
         tools=tools,
     )
-    assert not isinstance(agent.model, str)
+    assert not isinstance(agent.model, str)  # type: ignore[unreachable]  # defensive — pin the type stays ModelView
     assert agent.model.provider == "anthropic"
     assert agent.model.model == "claude-opus-4-7"
     assert agent.model.ref == "anthropic/claude-opus-4-7"
@@ -168,7 +167,7 @@ def test_agent_permissions_returns_rule_objects() -> None:
     the default is an empty list."""
     tools = _make_tools_var()
     spec = ModelSpec(provider="anthropic", model="claude-opus-4-7")
-    rule = Rule(what="kolsch/tools/bash", pattern="*", effect="prompt")
+    rule = PermissionRule(what="kolsch/tools/bash", pattern="*", effect="prompt")
     agent = AgentVar(
         name="helper",
         id="ag_helper",
@@ -177,7 +176,7 @@ def test_agent_permissions_returns_rule_objects() -> None:
         permissions=[rule],
     )
     assert agent.permissions == [rule]
-    assert all(isinstance(r, Rule) for r in agent.permissions)
+    assert all(isinstance(r, PermissionRule) for r in agent.permissions)
 
 
 def test_agent_typo_attribute_raises() -> None:

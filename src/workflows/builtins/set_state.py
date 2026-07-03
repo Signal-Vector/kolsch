@@ -43,6 +43,7 @@ from workflows.events import (
     WorkflowStateMutatedPayload,
 )
 from workflows.executor import _is_jinja_marked
+from workflows.ids import WorkflowRunId
 
 if TYPE_CHECKING:
     from workflows.context import NodeContext
@@ -74,8 +75,8 @@ class SetStateRunner:
             state[key] = rendered
             await ctx.emit_workflow_event(
                 WorkflowStateMutatedEvent(
-                    workflow_run_id=ctx.workflow_run_id,
-                    trace_id=ctx.trace_id,
+                    workflow_run_id=WorkflowRunId(ctx.workflow_run_id),
+                    trace_id=ctx.require_trace_id(),
                     parent_event_id=ctx.parent_event_id,
                     payload=WorkflowStateMutatedPayload(
                         key=key,

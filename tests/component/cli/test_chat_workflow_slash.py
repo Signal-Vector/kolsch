@@ -367,7 +367,7 @@ async def test_pending_workflow_run_id_set_after_dispatch(
     assert state.pending_workflow_run_id is None
     await dispatch_slash("/workflow kolsch/workflows/hello", ctx)
     assert state.pending_workflow_run_id is not None
-    assert state.pending_workflow_run_id.startswith("wrk_")
+    assert state.pending_workflow_run_id.startswith("wrk_")  # type: ignore[unreachable]
 
 
 # ===========================================================================
@@ -430,7 +430,7 @@ async def test_user_input_chat_resume_completes_workflow(
     # Flag cleared; resume rendered downstream capsules; "world"
     # surfaced in the echo node's output.
     assert state.expecting_user_input_response is False
-    rendered = out_resume.getvalue()
+    rendered = out_resume.getvalue()  # type: ignore[unreachable]
     assert "world" in rendered
 
 
@@ -522,7 +522,7 @@ async def test_sequential_pauses_resume_cycle(chat_workspace: Path) -> None:
     await _resume_pending_workflow(state, stdout=out_second, response_text="beta")
     assert state.expecting_user_input_response is False
     # Final node's output blends both responses per the YAML.
-    assert "alpha+beta" in out_second.getvalue()
+    assert "alpha+beta" in out_second.getvalue()  # type: ignore[unreachable]
 
 
 # ===========================================================================

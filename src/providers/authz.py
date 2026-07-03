@@ -1024,11 +1024,11 @@ class RuleBasedAuthorizationProvider:
         # None — `pattern: "*"` then trivially matches).
         assert compiled.what is not None
         what_pattern = compiled.what
-        action_match = fnmatch.fnmatchcase(action, what_pattern)
+        action_glob = fnmatch.fnmatchcase(action, what_pattern)
         tool_ref_match = tool_ref is not None and fnmatch.fnmatchcase(
             tool_ref, what_pattern
         )
-        if not (action_match or tool_ref_match):
+        if not (action_glob or tool_ref_match):
             return False
         return fnmatch.fnmatchcase(target or "", compiled.raw.pattern)
 

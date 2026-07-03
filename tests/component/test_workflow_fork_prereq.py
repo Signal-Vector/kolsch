@@ -177,7 +177,7 @@ class TestWorkflowRunNotFound:
 
 class TestRunForkedFromEvent:
     def test_enum_value(self) -> None:
-        assert WorkflowEventKind.RUN_FORKED_FROM == "workflow.run.forked_from"
+        assert WorkflowEventKind.RUN_FORKED_FROM.value == "workflow.run.forked_from"
 
     def test_event_round_trip_via_model_dump(self) -> None:
         evt = WorkflowRunForkedFromEvent(

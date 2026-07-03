@@ -85,7 +85,7 @@ class _LocalHttpServer:
     def base_url(self) -> str:
         assert self._server is not None, "server not started"
         host, port = self._server.server_address[:2]
-        return f"http://{host}:{port}"
+        return f"http://{host}:{port}"  # type: ignore[str-bytes-safe]  # host is str from socket.AF_INET
 
     def start(self) -> None:
         routes = self.routes

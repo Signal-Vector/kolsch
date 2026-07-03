@@ -294,7 +294,7 @@ def test_session_opened_data() -> None:
         initial_agent={"id": "ag_x", "name": "x"},
     )
     with pytest.raises(ValidationError):
-        SessionOpenedData(session_id="not-a-session-id")
+        SessionOpenedData(session_id="not-a-session-id")  # type: ignore[call-arg]
 
 
 def test_thread_exchange_started_data() -> None:
@@ -344,7 +344,7 @@ def test_model_request_data() -> None:
         config_event_id=_ev(),
     )
     with pytest.raises(ValidationError):
-        ModelRequestData(call_id="bad")
+        ModelRequestData(call_id="bad")  # type: ignore[call-arg]
 
 
 def test_model_response_data() -> None:

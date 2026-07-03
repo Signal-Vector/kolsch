@@ -30,8 +30,7 @@ from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
-    from providers.authz import Rule
-    from schemas import ModelSpec
+    from schemas import ModelSpec, PermissionRule
     from templating.vars.tools import ToolsVar
 
 
@@ -102,7 +101,7 @@ class AgentVar:
     id: str
     model: ModelView
     tools: ToolsVar
-    permissions: list[Rule] = field(default_factory=list)
+    permissions: list[PermissionRule] = field(default_factory=list)
     context_files: list[Any] = field(default_factory=list)
 
     def __str__(self) -> str:

@@ -419,7 +419,7 @@ class MapRunner:
         iter_started_id = await ctx.emit_workflow_event(
             WorkflowNodeStartedEvent(
                 workflow_run_id=WorkflowRunId(ctx.workflow_run_id),
-                trace_id=ctx.trace_id,
+                trace_id=ctx.require_trace_id(),
                 parent_event_id=ctx.parent_event_id,
                 invocation_id=InvocationId(iter_ctx.invocation_id),
                 node_name=node_def.apply,
@@ -458,7 +458,7 @@ class MapRunner:
             await ctx.emit_workflow_event(
                 WorkflowNodeFailedEvent(
                     workflow_run_id=WorkflowRunId(ctx.workflow_run_id),
-                    trace_id=ctx.trace_id,
+                    trace_id=ctx.require_trace_id(),
                     parent_event_id=iter_started_id,
                     invocation_id=InvocationId(iter_ctx.invocation_id),
                     node_name=node_def.apply,
@@ -484,7 +484,7 @@ class MapRunner:
             await ctx.emit_workflow_event(
                 WorkflowNodeFailedEvent(
                     workflow_run_id=WorkflowRunId(ctx.workflow_run_id),
-                    trace_id=ctx.trace_id,
+                    trace_id=ctx.require_trace_id(),
                     parent_event_id=iter_started_id,
                     invocation_id=InvocationId(iter_ctx.invocation_id),
                     node_name=node_def.apply,
@@ -504,7 +504,7 @@ class MapRunner:
         await ctx.emit_workflow_event(
             WorkflowNodeCompletedEvent(
                 workflow_run_id=WorkflowRunId(ctx.workflow_run_id),
-                trace_id=ctx.trace_id,
+                trace_id=ctx.require_trace_id(),
                 parent_event_id=iter_started_id,
                 invocation_id=InvocationId(iter_ctx.invocation_id),
                 node_name=node_def.apply,
