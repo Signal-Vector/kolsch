@@ -21,7 +21,7 @@ from assets.assembler import (
     pre_resolve_prompts,
 )
 from assets.platform_config import load_or_create
-from errors import AssetsNotFound
+from errors import AssetsNotFound, ConfigInputsInAgentTemplate
 from kernel import resolve_and_validate
 from schemas import ResolvedAgentConfig, derive_agent_id
 
@@ -32,6 +32,34 @@ if TYPE_CHECKING:
 
 
 _log = logging.getLogger("assets")
+
+
+def _check_no_inputs_in_agent_prompt_layers(
+    agent_partials_chain: list[dict[str, Any]],
+    *,
+    agent_ref: str,
+) -> None:
+    """Raise ``ConfigInputsInAgentTemplate`` if any layer's prompt references inputs.
+
+    Walks every layer in the pre-merge chain (leaf + extends parents)
+    and reports the first layer that carries an ``inputs.*``
+    reference. Fires before the run starts so authors see the error
+    at agent-load rather than at first invocation.
+    """
+    # Local import — templating.inheritance imports Jinja + AST types,
+    # which are only needed on this check path.
+    from templating.inheritance import prompt_references_inputs  # noqa: PLC0415
+
+    for layer in agent_partials_chain:
+        prompt = layer.get("prompt")
+        if not isinstance(prompt, str):
+            continue
+        refs = prompt_references_inputs(prompt)
+        if refs:
+            raise ConfigInputsInAgentTemplate(
+                agent_path=agent_ref,
+                references=refs,
+            )
 
 
 class AssetManagement:
@@ -365,6 +393,26 @@ class AssetManagement:
             subsystem_validators or {},
             system_validators or [],
         )
+
+        # Step 5 — agent-template scope check. ``inputs`` is not in
+        # the agent-template Jinja scope (the render harness binds
+        # tools/docs/workspace/agent/platform/skills, never inputs).
+        # Users following ``docs/reference/workflow-yaml.md`` — which
+        # heavily uses ``{{ inputs.* }}`` in WORKFLOW-NODE examples —
+        # naturally reach for the same convention in AGENT prompts
+        # and hit ``UndefinedError: 'inputs' is undefined`` at first
+        # invocation. Fire a typed ``ConfigInputsInAgentTemplate``
+        # here at agent-load, before the run starts, with a message
+        # pointing at the correct ``io.inputs`` + prose pattern.
+        #
+        # Walk every layer's prompt: a parent in the extends chain
+        # can carry the offending reference just as easily as the
+        # leaf, and the leaf-only check would miss it.
+        _check_no_inputs_in_agent_prompt_layers(
+            agent_partials_chain,
+            agent_ref=agent_ref,
+        )
+
         # Stash the resolved-agent-id → home-bundle mapping so the
         # engine's tool-registration site can look up the bundle's
         # ``permissions:`` block. The resolved agent_id may be
