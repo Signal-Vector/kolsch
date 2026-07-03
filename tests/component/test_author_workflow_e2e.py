@@ -300,7 +300,7 @@ async def _run_workflow(
     if workflow_entry is None:
         msg = f"workflow {workflow_ref!r} not in catalog"
         raise AssertionError(msg)
-    workflow_text = Path(workflow_entry.path).read_text(encoding="utf-8")  # noqa: ASYNC240 — single sync read; test-only seam
+    workflow_text = Path(workflow_entry.path).read_text(encoding="utf-8")
     workflow = Workflow.model_validate(yaml.safe_load(workflow_text))
 
     run_store = WorkflowRunStore(workspace)

@@ -335,6 +335,18 @@ convention = "google"
     "E501",    # Long test names + parametrized table rows occasionally
                # exceed 88 cols; the docs/process catalog test names
                # are deliberate.
+    "S108",    # `/tmp/...` string literals in tests are synthetic
+               # parameter values (workspace paths, bundle paths)
+               # passed to view constructors — nothing actually opens
+               # a temp file. Same rationale as S101: the security
+               # check is a false positive when the test isn't
+               # exercising insecure I/O.
+    "ASYNC240",# Sync `pathlib` inside `async def` tests blocks the
+               # event loop, but pytest-asyncio runs tests one
+               # coroutine at a time — no concurrent tasks are
+               # starved. Rewriting `tmp_path.write_text(...)` to
+               # `await anyio.Path(tmp_path).write_text(...)` in
+               # every fixture setup would be pure line noise.
 ]
 # `src/errors/` is, by definition, the errors package. Every class is a
 # PlatformError subclass; the N818 "must end in Error" rule would force
@@ -413,6 +425,16 @@ convention = "google"
 # Package-level docstring optional — each module under the package
 # carries its own docstring, which is where the contract lives.
 "src/**/__init__.py" = ["D104"]
+# `src/cli/_slash.py` — slash-command handlers use `assert ctx.state is
+# not None` as a caller-guarded type-narrowing invariant. The dispatcher
+# gates all handlers on `ctx.state` being set; the assert exists so the
+# type checker sees the narrowing.
+"src/cli/_slash.py" = ["S101"]
+# `src/providers/authz.py` — the rule matcher asserts on compile-time
+# invariants (e.g. `compiled.who_re is not None` on the branch that
+# only runs after a successful compile). Same type-narrowing pattern
+# as above; not a security-sensitive assertion.
+"src/providers/authz.py" = ["S101"]
 # `scripts/` — one-off utility scripts (replay tools, migration
 # helpers). They print progress to stderr by design (T201), often
 # raise SystemExit with vanilla strings (TRY003/EM101/EM102) which

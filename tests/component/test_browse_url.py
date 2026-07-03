@@ -467,11 +467,11 @@ async def test_browse_url_overflow_persists_to_logs_tool_outputs(
     persisted_path = Path(persisted)
     # Landing directory must be
     # <workspace>/logs/tool-outputs/<session_id>/…
-    assert persisted_path.is_file()  # noqa: ASYNC240
+    assert persisted_path.is_file()
     assert persisted_path.parent.parent == tmp_path / "logs" / "tool-outputs"
     assert persisted_path.parent.name == str(ctx.session_id)
 
-    on_disk = persisted_path.read_text(encoding="utf-8")  # noqa: ASYNC240
+    on_disk = persisted_path.read_text(encoding="utf-8")
     # The overflow marker appears many times in the rendered body;
     # asserting on the count proves the disk file is the FULL text
     # (all 256 copies), not the preview.
