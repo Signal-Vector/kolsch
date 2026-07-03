@@ -10,8 +10,11 @@
 # lightweight per-file checks so feedback stays fast.
 
 repos:
+  # Keep in sync with the ruff version pinned by uv.lock (the CI
+  # gate runs `uv run ruff` from the same environment). Drift here
+  # means contributors get different findings pre-commit vs CI.
   - repo: https://github.com/astral-sh/ruff-pre-commit
-    rev: v0.6.9
+    rev: v0.15.15
     hooks:
       - id: ruff
         args: ["--fix"]
