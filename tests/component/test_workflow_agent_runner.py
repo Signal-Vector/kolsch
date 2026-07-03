@@ -97,7 +97,7 @@ def _as_engine(fake: _FakeEngine) -> AgentEngine:
     """Cast the fake to satisfy the runner's annotation. The runner
     only invokes ``execute(...)`` — full structural conformance
     isn't needed for these unit tests."""
-    return fake  # type: ignore[return-value]
+    return fake
 
 
 def _make_resolved_config(
@@ -115,7 +115,7 @@ def _make_resolved_config(
         ),
         prompt="You are a classifier.",
         io=IOSpec(
-            mode=mode,  # type: ignore[arg-type]
+            mode=mode,
             inputs={"text": {"type": "str"}},
             outputs={"label": {"type": "str"}},
         ),

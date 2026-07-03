@@ -299,10 +299,10 @@ async def test_dispatcher_binds_permissions_around_tool_function() -> None:
     result = await dispatch_tool(
         defn=defn,
         args={"path": "/tmp/x"},
-        context=_ctx_for("probe"),  # type: ignore[arg-type]
+        context=_ctx_for("probe"),
         authz=provider,
         secrets=_StubSecrets(),
-        sandbox=_PassthroughSandbox(),  # type: ignore[arg-type]
+        sandbox=_PassthroughSandbox(),
     )
     assert result == "ok"
     assert captured["pre_effect"] is AuthzEffect.ALLOW
@@ -369,10 +369,10 @@ async def test_dispatcher_binding_includes_bundle_layer() -> None:
     result = await dispatch_tool(
         defn=defn,
         args={"path": "/tmp/x"},
-        context=_ctx_for("probe"),  # type: ignore[arg-type]
+        context=_ctx_for("probe"),
         authz=provider,
         secrets=_StubSecrets(),
-        sandbox=_PassthroughSandbox(),  # type: ignore[arg-type]
+        sandbox=_PassthroughSandbox(),
         bundle_permissions=bundle_rules,
     )
     assert result == "ok"

@@ -479,7 +479,7 @@ async def test_tc_eng_classify_05_crewai_framework_wrap_translates_connection_er
             system_prompt="hi",
             user_message="hi",
             history=(),
-            llm=_llm_handle,  # type: ignore[arg-type]
+            llm=_llm_handle,
             tools=(),
         )
 

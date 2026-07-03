@@ -233,8 +233,8 @@ async def test_perm_sys_01_migration_roundtrip(tmp_path: Path) -> None:
         out=stdout,
         err=_io.StringIO(),
         prompter=NonInteractivePrompter(),
-        connect_io_factory=lambda *a, **k: None,  # type: ignore[arg-type]
-        run_handler=lambda *a, **k: None,  # type: ignore[arg-type]
+        connect_io_factory=lambda *a, **k: None,
+        run_handler=lambda *a, **k: None,
     )
     await _maybe_migrate_authz_rules_to_qol_schema(io_)
 

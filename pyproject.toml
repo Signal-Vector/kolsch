@@ -568,6 +568,32 @@ exclude = [
 module = ["testcontainers.*", "bs4", "trafilatura", "playwright.*"]
 ignore_missing_imports = true
 
+[[tool.mypy.overrides]]
+# `tests.*` — the strict src/ typing regime doesn't fit the shape of
+# test scaffolding. Tests routinely dict-walk parsed JSONL payloads
+# (mypy can't narrow the value type from `dict[str, Any]` reads),
+# accept `Exception | SubclassOfException` from `pytest.raises`
+# then inspect subclass-specific attributes, pass Fake/Mock objects
+# where a specific type is expected, and use bare `dict` / `list`
+# in helper signatures. Same rationale as the ruff `tests/**`
+# per-file-ignore for D / ANN / PLR2004 / N806 etc.: strict rules
+# fight the natural test-writing style more than they catch real
+# bugs. The disabled codes below are the ones that fire almost
+# exclusively in tests; real typing invariants (assignment,
+# no-redef, unreachable, valid-type, syntax) stay enforced.
+module = ["tests.*"]
+disable_error_code = [
+    "index",
+    "union-attr",
+    "attr-defined",
+    "arg-type",
+    "type-arg",
+    "no-any-return",
+    "no-untyped-call",
+    "no-untyped-def",
+    "return-value",
+]
+
 [tool.pydantic-mypy]
 init_forbid_extra = true
 init_typed = true

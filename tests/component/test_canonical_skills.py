@@ -243,8 +243,8 @@ def test_setup_migration_shim_copies_missing_skills_into_existing_bundle(
         out=captured,
         err=_io.StringIO(),
         prompter=NonInteractivePrompter(),
-        connect_io_factory=lambda _r, _p, _k: None,  # type: ignore[arg-type]
-        run_handler=lambda _a: (0, None),  # type: ignore[arg-type]
+        connect_io_factory=lambda _r, _p, _k: None,
+        run_handler=lambda _a: (0, None),
     )
     _maybe_install_missing_kolsch_skills(setup_io)
 

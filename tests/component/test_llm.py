@@ -261,7 +261,7 @@ async def test_build_llm_connector_failure_wraps_as_client_init() -> None:
                 msg = "boom"
                 raise RuntimeError(msg)
 
-        registry.register("failing", _FailingConnector)  # type: ignore[arg-type]
+        registry.register("failing", _FailingConnector)
         spec = ModelSpec(provider="failing", model="m")
         config = _provider_config(
             type_name="failing", api_key_secret=None, base_url=None
@@ -471,9 +471,9 @@ def test_tc_llm_09_registry_rejects_duplicate() -> None:
         class _B:
             type_name = "dupe"
 
-        registry.register("dupe", _A)  # type: ignore[arg-type]
+        registry.register("dupe", _A)
         with pytest.raises(LlmConnectorDuplicate) as exc_info:
-            registry.register("dupe", _B)  # type: ignore[arg-type]
+            registry.register("dupe", _B)
         assert exc_info.value.detail["type"] == "dupe"
     finally:
         registry._clear_for_tests()
@@ -848,7 +848,7 @@ async def test_build_llm_threads_spec_parameters_through_to_connector() -> None:
             return object()
 
     try:
-        registry.register("recorder", _RecordingConnector)  # type: ignore[arg-type]
+        registry.register("recorder", _RecordingConnector)
         spec = ModelSpec(
             provider="recorder-provider",
             model="test-model",
@@ -906,7 +906,7 @@ async def test_build_llm_omits_parameters_when_spec_has_empty_dict() -> None:
             return object()
 
     try:
-        registry.register("recorder2", _RecordingConnector)  # type: ignore[arg-type]
+        registry.register("recorder2", _RecordingConnector)
         spec = ModelSpec(provider="rp2", model="m2")  # parameters={} by default
         cfg = _provider_config(
             name="rp2",

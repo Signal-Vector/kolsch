@@ -76,7 +76,7 @@ async def test_make_llm_callable_forwards_tools_to_crewai_llm() -> None:
     this failure here.
     """
     stub = _StubCrewaiLLM(return_value="ok")
-    fn = make_llm_callable(stub)  # type: ignore[arg-type]
+    fn = make_llm_callable(stub)
 
     tools = [
         {
@@ -121,7 +121,7 @@ async def test_make_llm_callable_normalises_kolsch_shape_to_openai_spec() -> Non
     can't silently regress it.
     """
     stub = _StubCrewaiLLM(return_value="ok")
-    fn = make_llm_callable(stub)  # type: ignore[arg-type]
+    fn = make_llm_callable(stub)
 
     kolsch_tools = [
         {
@@ -171,7 +171,7 @@ async def test_make_llm_callable_passes_openai_shape_verbatim() -> None:
     litellm doesn't handle.
     """
     stub = _StubCrewaiLLM(return_value="ok")
-    fn = make_llm_callable(stub)  # type: ignore[arg-type]
+    fn = make_llm_callable(stub)
 
     already_spec = [
         {
@@ -237,7 +237,7 @@ async def test_make_llm_callable_passes_none_when_no_tools_declared() -> None:
     omits the field entirely when no tools are declared.
     """
     stub = _StubCrewaiLLM(return_value="hi")
-    fn = make_llm_callable(stub)  # type: ignore[arg-type]
+    fn = make_llm_callable(stub)
 
     request = LLMRequest(
         messages=[Message(role="user", content="hi")],
@@ -272,7 +272,7 @@ async def test_make_llm_callable_translates_tool_call_list_into_llm_response() -
         },
     ]
     stub = _StubCrewaiLLM(return_value=crewai_tool_call_response)
-    fn = make_llm_callable(stub)  # type: ignore[arg-type]
+    fn = make_llm_callable(stub)
 
     request = LLMRequest(
         messages=[Message(role="user", content="list files")],
@@ -296,7 +296,7 @@ async def test_make_llm_callable_translates_tool_call_list_into_llm_response() -
 async def test_make_llm_callable_translates_text_response_into_content() -> None:
     """Plain string return → ``LLMResponse(content=text)``."""
     stub = _StubCrewaiLLM(return_value="hello back")
-    fn = make_llm_callable(stub)  # type: ignore[arg-type]
+    fn = make_llm_callable(stub)
 
     request = LLMRequest(
         messages=[Message(role="user", content="hi")],
@@ -323,7 +323,7 @@ async def test_make_llm_callable_handles_dict_arguments() -> None:
             },
         ],
     )
-    fn = make_llm_callable(stub)  # type: ignore[arg-type]
+    fn = make_llm_callable(stub)
 
     request = LLMRequest(
         messages=[Message(role="user", content="read README")],
@@ -351,7 +351,7 @@ async def test_make_llm_callable_synthesises_id_when_provider_omits_it() -> None
             },
         ],
     )
-    fn = make_llm_callable(stub)  # type: ignore[arg-type]
+    fn = make_llm_callable(stub)
 
     response = await fn(
         LLMRequest(

@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-def _scripted_input(answers: list[str]):  # type: ignore[no-untyped-def]
+def _scripted_input(answers: list[str]):
     """Return an ``input_fn`` that pops one line per prompt."""
     iterator = iter(answers)
 

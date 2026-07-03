@@ -62,7 +62,7 @@ def _make_event(
         trace_id=_tr(),
         payload=WorkflowStateMutatedPayload(
             key=key,
-            op=op,  # type: ignore[arg-type]
+            op=op,
             value=value,
         ),
     )
@@ -120,7 +120,7 @@ class TestStateMutatedEventShape:
         with pytest.raises(ValidationError):
             WorkflowStateMutatedPayload(
                 key="x",
-                op="update",  # type: ignore[arg-type]
+                op="update",
                 value=1,
             )
 

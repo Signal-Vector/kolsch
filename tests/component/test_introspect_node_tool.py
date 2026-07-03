@@ -49,7 +49,7 @@ _ECHO_PATH = _STARTER_BUNDLE / "nodes" / "echo.py"
 
 def _tool() -> Callable[..., Awaitable[object]]:
     for fn in discover_tools_in_file(_TOOL_PATH):
-        defn = fn._tool_definition  # type: ignore[attr-defined]
+        defn = fn._tool_definition
         if defn.name == "introspect_node":
             return fn
     msg = f"could not find introspect_node tool in {_TOOL_PATH}"
@@ -83,7 +83,7 @@ def _make_workspace(tmp_path: Path) -> Path:
 async def test_introspect_valid_echo_node(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path)
     fn = _tool()
-    Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
+    Args = fn._tool_definition.args_schema
 
     dest = workspace / "bundles" / "kolsch" / "nodes" / "echo.py"
     shutil.copy(_ECHO_PATH, dest)
@@ -110,7 +110,7 @@ async def test_introspect_valid_echo_node(tmp_path: Path) -> None:
 async def test_introspect_missing_decorator(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path)
     fn = _tool()
-    Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
+    Args = fn._tool_definition.args_schema
 
     target = workspace / "bundles" / "kolsch" / "nodes" / "bare.py"
     target.write_text(
@@ -151,7 +151,7 @@ async def test_introspect_missing_decorator(tmp_path: Path) -> None:
 async def test_introspect_wrong_signature_no_params(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path)
     fn = _tool()
-    Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
+    Args = fn._tool_definition.args_schema
 
     target = workspace / "bundles" / "kolsch" / "nodes" / "no_params.py"
     target.write_text(
@@ -192,7 +192,7 @@ async def test_introspect_wrong_param1_annotation(tmp_path: Path) -> None:
     Inputs requirement so the meta-agent can fix it."""
     workspace = _make_workspace(tmp_path)
     fn = _tool()
-    Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
+    Args = fn._tool_definition.args_schema
 
     target = workspace / "bundles" / "kolsch" / "nodes" / "bad_inputs.py"
     target.write_text(
@@ -232,7 +232,7 @@ async def test_introspect_wrong_param1_annotation(tmp_path: Path) -> None:
 async def test_introspect_missing_file(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path)
     fn = _tool()
-    Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
+    Args = fn._tool_definition.args_schema
 
     # Path is inside workspace (so the path policy passes) but the file
     # itself doesn't exist.
@@ -253,7 +253,7 @@ async def test_introspect_missing_file(tmp_path: Path) -> None:
 async def test_introspect_syntax_error(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path)
     fn = _tool()
-    Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
+    Args = fn._tool_definition.args_schema
 
     target = workspace / "bundles" / "kolsch" / "nodes" / "syntax.py"
     target.write_text("def run(inputs, ctx ->\n    return None\n", encoding="utf-8")

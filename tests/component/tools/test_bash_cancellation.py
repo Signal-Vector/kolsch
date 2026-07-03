@@ -48,7 +48,7 @@ _BASH_PATH = (
 
 def _bash_tool() -> Callable[..., Awaitable[object]]:
     for fn in discover_tools_in_file(_BASH_PATH):
-        defn = fn._tool_definition  # type: ignore[attr-defined]
+        defn = fn._tool_definition
         if defn.name == "bash":
             return fn
     msg = f"could not find bash tool in {_BASH_PATH}"
@@ -83,7 +83,7 @@ async def test_tc_bash_cancel_01_long_sleep_aborts_within_grace_on_cancel() -> N
     from pydantic import BaseModel
 
     bash = _bash_tool()
-    bash_defn = bash._tool_definition  # type: ignore[attr-defined]
+    bash_defn = bash._tool_definition
     args_schema = bash_defn.args_schema
     assert issubclass(args_schema, BaseModel)
     args = args_schema(command="sleep 30")
@@ -118,7 +118,7 @@ async def test_tc_bash_cancel_02_fast_command_completes_normally_with_cancel_tok
     from pydantic import BaseModel
 
     bash = _bash_tool()
-    bash_defn = bash._tool_definition  # type: ignore[attr-defined]
+    bash_defn = bash._tool_definition
     args_schema = bash_defn.args_schema
     assert issubclass(args_schema, BaseModel)
     args = args_schema(command="echo 'hello'")
@@ -141,7 +141,7 @@ async def test_tc_bash_cancel_03_no_cancel_token_falls_through_to_legacy_path() 
     from pydantic import BaseModel
 
     bash = _bash_tool()
-    bash_defn = bash._tool_definition  # type: ignore[attr-defined]
+    bash_defn = bash._tool_definition
     args_schema = bash_defn.args_schema
     assert issubclass(args_schema, BaseModel)
     args = args_schema(command="echo 'legacy'")

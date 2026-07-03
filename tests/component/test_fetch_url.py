@@ -62,7 +62,7 @@ from tools.decorator import ToolContext
 pytestmark = pytest.mark.slow
 
 
-def _load_fetch_url_module():  # type: ignore[no-untyped-def]
+def _load_fetch_url_module():
     """Load the starter-bundle template as an importable module.
 
     Shares the module-name key with ``tests/unit/test_fetch_url.py`` so
