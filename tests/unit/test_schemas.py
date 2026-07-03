@@ -6,6 +6,7 @@ API Reference §13.
 """
 
 from datetime import UTC, datetime
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -32,6 +33,7 @@ from schemas import (
     ModelRequestData,
     ModelResponseData,
     ModelSpec,
+    PrefixedId,
     PromptSpec,
     ResolvedAgentConfig,
     RuntimeSpec,
@@ -150,7 +152,7 @@ def test_id_rejects_empty_body(cls: type, bad_value: str) -> None:
     "cls",
     [SessionId, ThreadId, EventId, MemoryItemId, AgentCallId],
 )
-def test_uuid_id_rejects_non_uuid_body(cls: type) -> None:
+def test_uuid_id_rejects_non_uuid_body(cls: type[PrefixedId]) -> None:
     # AgentId is exempt — its body is user-chosen, not a UUID.
     bad = f"{cls.prefix}not-a-uuid"
     with pytest.raises(ValueError, match="uuid"):
@@ -601,7 +603,7 @@ def test_resolved_agent_config_with_prompt_list() -> None:
     assert cfg.subsystems["memory"].variant == "recent_buffer"
 
 
-def _resolved_kwargs_without_versions() -> dict[str, object]:
+def _resolved_kwargs_without_versions() -> dict[str, Any]:
     return {
         "agent_id": AgentId("ag_x"),
         "name": "x",

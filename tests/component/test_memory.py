@@ -15,7 +15,7 @@ from __future__ import annotations
 
 import inspect
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -75,7 +75,7 @@ async def _bind(
 ) -> tuple[SessionId, ThreadId, RecentBufferMemoryContext]:
     session = await store.create_session(agent_id)
     thread = (await store.list_threads(session.session_id))[0]
-    config: dict[str, object] = {}
+    config: dict[str, Any] = {}
     if write_tag is not None:
         config["write_tag"] = write_tag
     config["read_tags"] = read_tags or []

@@ -11,7 +11,7 @@ Python execution for Sandbox, real regex compilation for Authz).
 from __future__ import annotations
 
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -393,7 +393,7 @@ async def test_allow_no_rule_with_callback_fires_with_rule_id_none() -> None:
     from providers.authz import AuthzEffect
 
     provider = _authz([])
-    seen: dict[str, object] = {}
+    seen: dict[str, Any] = {}
 
     async def _cb(
         *,

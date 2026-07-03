@@ -10,6 +10,8 @@ top inherits the drift. These tests exercise:
 - preservation of script across reset_calls.
 """
 
+from typing import Any
+
 import pytest
 
 from tests.fixtures.fake_llm import (
@@ -24,7 +26,7 @@ from tests.fixtures.fake_llm import (
 
 async def test_text_response_returned_and_recorded() -> None:
     fake = FakeLLM(script=[TextResponse(text="hello")])
-    context: dict[str, object] = {"system_prompt": "be brief"}
+    context: dict[str, Any] = {"system_prompt": "be brief"}
 
     response = await fake.agenerate(context)
 
@@ -57,7 +59,7 @@ async def test_tool_call_response_returned_and_recorded() -> None:
 
 async def test_error_response_raises_and_still_records_call() -> None:
     fake = FakeLLM(script=[ErrorResponse(error_type="model.transient", message="boom")])
-    context: dict[str, object] = {"turn": 1}
+    context: dict[str, Any] = {"turn": 1}
 
     with pytest.raises(FakeLLMScriptedError) as exc_info:
         await fake.agenerate(context)

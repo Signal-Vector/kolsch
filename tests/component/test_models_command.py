@@ -10,7 +10,7 @@ from __future__ import annotations
 import argparse
 import io
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -38,14 +38,14 @@ def _command_io(root: Path) -> tuple[_CommandIO, io.StringIO]:
     )
 
 
-def _write_platform_yaml(root: Path, payload: dict[str, object]) -> None:
+def _write_platform_yaml(root: Path, payload: dict[str, Any]) -> None:
     (root / "platform.yaml").write_text(
         yaml.safe_dump(payload, sort_keys=False), encoding="utf-8"
     )
 
 
 def _args(**overrides: object) -> argparse.Namespace:
-    defaults: dict[str, object] = {
+    defaults: dict[str, Any] = {
         "provider": None,
         "filter": None,
         "verbose": False,

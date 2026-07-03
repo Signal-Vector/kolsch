@@ -26,7 +26,7 @@ pins the END-TO-END composition.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import yaml
@@ -94,7 +94,7 @@ def _write_workspace(
         yaml.safe_dump({"name": "demo", "version": "0.1", "description": "demo"}),
         encoding="utf-8",
     )
-    agent_payload: dict[str, object] = {
+    agent_payload: dict[str, Any] = {
         "schema_version": "0.1",
         "assembly_version": "1",
         "agent_id": "ag_demo",

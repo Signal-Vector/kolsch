@@ -178,7 +178,7 @@ async def _build_engine(
     async def llm_callable(request: LLMRequest) -> LLMResponse:
         # Adapt LLMRequest → FakeLLM's dict context shape; translate
         # the Fake's response variants back to LLMResponse.
-        context: dict[str, object] = {
+        context: dict[str, Any] = {
             "messages": [m.model_dump() for m in request.messages],
             "tools": list(request.tools),
             "model": request.model,
@@ -255,7 +255,7 @@ def _events_before_last_model_request(events: list[Event]) -> list[Event]:
 
 
 def _as_messages(raw: object) -> list[dict[str, Any]]:
-    """Help mypy: the FakeLLM stores context as dict[str, object]; the
+    """Help mypy: the FakeLLM stores context as dict[str, Any]; the
     'messages' entry is concretely a list of message dicts."""
     if not isinstance(raw, list):
         msg = f"expected messages list, got {type(raw).__name__}"

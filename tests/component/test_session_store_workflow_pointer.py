@@ -10,7 +10,7 @@ we exercise it via direct ``SessionStore.create_session`` calls so the data-mode
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -42,7 +42,7 @@ async def store(tmp_path: Path, backend: EntityBackend) -> SessionStore:
     return SessionStore(root=tmp_path, backend=backend)
 
 
-def _read_first_event(root: Path, session_id: str) -> dict[str, object]:
+def _read_first_event(root: Path, session_id: str) -> dict[str, Any]:
     jsonl = root / "sessions" / f"{session_id}.jsonl"
     with jsonl.open() as f:
         return json.loads(f.readline())

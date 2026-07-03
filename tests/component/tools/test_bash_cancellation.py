@@ -26,7 +26,7 @@ import sys
 import time
 import uuid
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -46,7 +46,7 @@ _BASH_PATH = (
 )
 
 
-def _bash_tool() -> Callable[..., Awaitable[object]]:
+def _bash_tool() -> Callable[..., Awaitable[dict[str, Any]]]:
     for fn in discover_tools_in_file(_BASH_PATH):
         defn = fn._tool_definition
         if defn.name == "bash":
