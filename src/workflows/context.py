@@ -218,10 +218,11 @@ class NodeContext:
                 a test factory that forgot to set it.
         """
         if self.trace_id is None:
-            raise RuntimeError(
+            msg = (
                 "NodeContext.trace_id is None; executor-populated contexts "
                 "always set it — this call path is test-only."
             )
+            raise RuntimeError(msg)
         return self.trace_id
 
     def require_parent_event_id(self) -> EventId:
@@ -238,10 +239,11 @@ class NodeContext:
                 reachable from a test factory that forgot to set it.
         """
         if self.parent_event_id is None:
-            raise RuntimeError(
+            msg = (
                 "NodeContext.parent_event_id is None; executor-populated "
                 "contexts always set it — this call path is test-only."
             )
+            raise RuntimeError(msg)
         return self.parent_event_id
 
     async def emit_workflow_event(self, event: WorkflowEvent) -> EventId:

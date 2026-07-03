@@ -1216,6 +1216,7 @@ async def _handler_fork(arg_text: str, ctx: SlashContext) -> ControlSignal:
     from cli._workflow_slash_args import (  # noqa: PLC0415
         parse_slash_fork_args,
     )
+    from schemas import EventId  # noqa: PLC0415
     from schemas.entities import ForkedFrom  # noqa: PLC0415
     from workflows.errors import (  # noqa: PLC0415
         WorkflowError,
@@ -1224,7 +1225,6 @@ async def _handler_fork(arg_text: str, ctx: SlashContext) -> ControlSignal:
         WorkflowRunNotFound,
         WorkflowRuntimeError,
     )
-    from schemas import EventId  # noqa: PLC0415
     from workflows.ids import WorkflowRunId  # noqa: PLC0415
     from workflows.parser import load_workflow  # noqa: PLC0415
     from workflows.run import WorkflowRunStatus  # noqa: PLC0415

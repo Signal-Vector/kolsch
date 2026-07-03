@@ -12,7 +12,7 @@ introspected input model — the lookup threads through the optional
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from pydantic import BaseModel
 
 from workflows.parser import (
     AgentInputs,
@@ -30,10 +30,6 @@ from workflows.parser import (
     WorkflowSubInputs,
     WriteFileInputs,
 )
-
-if TYPE_CHECKING:
-    from pydantic import BaseModel
-
 
 __all__ = ["inputs_model_for"]
 
