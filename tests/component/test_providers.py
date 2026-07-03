@@ -112,6 +112,15 @@ async def test_dotenv_missing_file_yields_empty_dict(tmp_path: Path) -> None:
 async def test_dotenv_unreadable_file_raises_secret_read_failed(
     tmp_path: Path,
 ) -> None:
+    import os
+
+    # Root can read any file regardless of mode bits (CAP_DAC_READ_SEARCH),
+    # so `chmod 0o000` doesn't produce a PermissionError under root — which
+    # is the default UID inside the compose.test.yml container. Skip when
+    # euid==0; the check still runs meaningfully on a dev laptop or in CI
+    # jobs that drop privileges.
+    if os.geteuid() == 0:
+        pytest.skip("chmod 0o000 doesn't restrict reads for root (compose.test.yml)")
     env = tmp_path / ".env"
     env.write_text("KEY=v\n", encoding="utf-8")
     env.chmod(0o000)

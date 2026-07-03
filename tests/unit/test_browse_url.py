@@ -37,6 +37,11 @@ from uuid import uuid4
 import pytest
 from pydantic import ValidationError
 
+# browse_url is the Tier 2 (opt-in `browse` extra) tool. When
+# playwright isn't installed, the individual tests below fail on
+# `from playwright.async_api import ...` — skip the whole module.
+pytest.importorskip("playwright")
+
 from errors import ToolExecutionFailed
 from schemas import AgentId, SessionId, ThreadId
 from tools.decorator import ToolContext
