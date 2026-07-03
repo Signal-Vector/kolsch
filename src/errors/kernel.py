@@ -194,6 +194,58 @@ class ConfigExtendsTemplateWithoutInheritance(PlatformError):
         )
 
 
+class ConfigInputsInAgentTemplate(PlatformError):
+    """Raised when an agent prompt references ``{{ inputs.* }}``.
+
+    ``inputs`` is not in the agent-template Jinja scope — the render
+    harness binds six standard variables (``tools``, ``docs``,
+    ``workspace``, ``agent``, ``platform``, ``skills``) plus any
+    per-agent context, but never ``inputs``.
+
+    A workflow that invokes the agent with bound values delivers
+    them through the LLM's user message (per
+    ``src/workflows/builtins/agent.py``), not through the agent's
+    prompt template scope. The correct authoring pattern — used by
+    ``src/cli/_starter_bundle/kolsch/agents/classifier.yaml`` — is
+    to declare ``io.inputs`` on the agent and describe the field in
+    prose in the prompt, not to Jinja-substitute it.
+
+    Fires at agent-load / config resolution so authors see the
+    error before the run starts (previously this raised
+    :class:`ConfigTemplateRenderFailed` at first invocation with a
+    generic ``'inputs' is undefined`` reason).
+
+    See ``process/bug-agent-inputs-template-scope.md`` for context.
+    """
+
+    code = "config.inputs_in_agent_template"
+    level = Level.FATAL
+
+    def __init__(
+        self,
+        agent_path: str,
+        references: tuple[str, ...],
+        *,
+        where: str = "assets.asset_manager.build_resolved_config",
+    ) -> None:
+        joined = ", ".join(f"{{{{ {r} }}}}" for r in references)
+        super().__init__(
+            message=(
+                f"agent {agent_path!r} references {joined} in its prompt "
+                f"template, but `inputs` is not in the agent-template "
+                f"scope. Declare io.inputs on the agent and describe the "
+                f"field in prose instead — see "
+                f"src/cli/_starter_bundle/kolsch/agents/classifier.yaml "
+                f"for the canonical pattern."
+            ),
+            where=where,
+            detail={
+                "agent_path": agent_path,
+                "references": list(references),
+            },
+        )
+
+
 class ContextFileNotFound(PlatformError):
     """Raised when a `context_files[].path` resolves to a non-existent file.
 

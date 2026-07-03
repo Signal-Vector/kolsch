@@ -31,7 +31,7 @@ from jinja2.exceptions import (
     TemplateError,
     TemplateRuntimeError,
 )
-from jinja2.nodes import Extends
+from jinja2.nodes import Extends, Getattr, Getitem, Name
 
 from _yamlio import load
 from assets.refs import is_three_segment
@@ -388,6 +388,107 @@ def prompt_uses_extends_directive(prompt: str) -> bool:
         return False
     # ``ast.find_all(Extends)`` is the canonical Jinja walk.
     return any(True for _ in ast.find_all(Extends))
+
+
+def prompt_references_inputs(prompt: str) -> tuple[str, ...]:
+    r"""Return the ``inputs.*`` references found in ``prompt``, in source order.
+
+    Walks the Jinja AST for every occurrence of the top-level name
+    ``inputs`` (bare ``{{ inputs }}``, attribute access
+    ``{{ inputs.foo }}``, subscript access ``{{ inputs["foo"] }}``,
+    and any deeper chain like ``{{ inputs.foo.bar }}``). Returns a
+    tuple of source-shaped strings so the error message can name
+    the exact references the author wrote.
+
+    ``inputs`` is not in kolsch's agent-template scope; the render
+    harness at ``src/templating/render.py`` binds six standard
+    variables plus per-agent context, but never ``inputs``. This
+    detector is used at agent-load by
+    :meth:`assets.asset_manager.AssetManagement.build_resolved_config`
+    to raise
+    :class:`errors.ConfigInputsInAgentTemplate` before the run
+    starts, instead of the previous silent
+    :class:`errors.ConfigTemplateRenderFailed` at first invocation
+    with a generic ``'inputs' is undefined`` reason.
+
+    Returns:
+        Tuple of the offending reference strings (e.g. ``("inputs",
+        "inputs.foo", "inputs[\"bar\"]")``), or the empty tuple if
+        ``inputs`` is not referenced. Returns the empty tuple on any
+        Jinja parse error — malformed templates surface via
+        :func:`render_prompt`'s ``StrictUndefined`` path, not here.
+
+    See ``process/bug-agent-inputs-template-scope.md`` for context.
+    """
+    try:
+        ast = Environment().parse(prompt)
+    except TemplateError:
+        return ()
+
+    references: list[str] = []
+    # Walk every `Name` node in the AST; when name == "inputs", climb
+    # its containing chain of Getattr / Getitem to reconstruct the
+    # source-shaped reference.
+    for name_node in ast.find_all(Name):
+        if name_node.name != "inputs":
+            continue
+        references.append(_reconstruct_inputs_reference(name_node, ast))
+    return tuple(references)
+
+
+def _reconstruct_inputs_reference(
+    name_node: Name,
+    ast_root: Any,  # noqa: ANN401 — jinja2.nodes.Template is dynamically typed
+) -> str:
+    """Walk parent Getattr/Getitem chain to render `inputs.foo["bar"]` etc."""
+
+    # Jinja AST nodes carry no back-pointers; walk the tree looking
+    # for the topmost Getattr/Getitem whose deepest .node is our
+    # target Name.
+    def _deepest(
+        node: Any,  # noqa: ANN401 — jinja2 AST is dynamically typed
+    ) -> Any:  # noqa: ANN401 — same
+        while isinstance(node, (Getattr, Getitem)):
+            node = node.node
+        return node
+
+    best: Any = name_node
+    for candidate in ast_root.find_all((Getattr, Getitem)):
+        # Prefer the chain with the most Getattr/Getitem levels.
+        if _deepest(candidate) is name_node and _chain_depth(candidate) > _chain_depth(
+            best
+        ):
+            best = candidate
+    return _render_chain(best)
+
+
+def _chain_depth(
+    node: Any,  # noqa: ANN401 — jinja2 AST is dynamically typed
+) -> int:
+    depth = 0
+    while isinstance(node, (Getattr, Getitem)):
+        depth += 1
+        node = node.node
+    return depth
+
+
+def _render_chain(
+    node: Any,  # noqa: ANN401 — jinja2 AST is dynamically typed
+) -> str:
+    if isinstance(node, Name):
+        return node.name
+    if isinstance(node, Getattr):
+        return f"{_render_chain(node.node)}.{node.attr}"
+    if isinstance(node, Getitem):
+        # Best-effort subscript rendering — keys are Const nodes for
+        # `inputs["foo"]`. Non-Const keys fall back to a placeholder.
+        arg = getattr(node.arg, "value", None)
+        if isinstance(arg, str):
+            return f'{_render_chain(node.node)}["{arg}"]'
+        if arg is not None:
+            return f"{_render_chain(node.node)}[{arg!r}]"
+        return f"{_render_chain(node.node)}[<expr>]"
+    return "<?>"
 
 
 def _extract_block_name(message: str) -> str:

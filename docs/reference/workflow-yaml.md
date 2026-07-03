@@ -62,6 +62,35 @@ A downstream author writing `binds:` picks values from any of the
 three. The receiver never sees the sender directly — it sees whatever
 the edge chose to hand it under `inputs.*`.
 
+!!! warning "Workflow-node scope ≠ agent-prompt scope"
+
+    The `inputs.*` / `state.*` / `nodes.*` namespaces above apply
+    to **workflow-node config strings** (bash `command:`, browse_url
+    `url:`, write_file `content:`, and so on). They do **not** apply
+    to **agent prompt templates**.
+
+    An agent's `prompt:` field is rendered by the templating harness
+    at agent-load with a different, fixed set of six variables:
+    `tools`, `docs`, `workspace`, `agent`, `platform`, `skills`. It
+    does **not** include `inputs` — so `{{ inputs.foo }}` inside an
+    agent prompt fails at agent-load with a typed
+    `config.inputs_in_agent_template` error.
+
+    When a workflow invokes an agent node with `binds: {job_description:
+    "..."}`, the bound values reach the LLM as the user message
+    content, not as agent-template variables. The correct authoring
+    pattern is:
+
+    1. Declare the field on the agent under `io.inputs`.
+    2. Describe it in prose inside the prompt template (do NOT
+       Jinja-substitute it).
+
+    The canonical example is
+    `src/cli/_starter_bundle/kolsch/agents/classifier.yaml` — declares
+    `io.inputs.ticket_text` and describes it as "The user message
+    contains a `ticket_text` argument" without any Jinja
+    substitution.
+
 ## Node captured outputs — quick reference
 
 Every node's captured output is available downstream via

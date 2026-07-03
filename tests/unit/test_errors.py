@@ -41,6 +41,7 @@ from errors import (
     ConfigDeprecatedRegexRule,
     ConfigDeprecatedRuleForm,
     ConfigExtendsTemplateWithoutInheritance,
+    ConfigInputsInAgentTemplate,
     ConfigFallbackDuplicate,
     ConfigInvalid,
     ConfigMergeFailed,
@@ -152,6 +153,10 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
     },
     ConfigExtendsTemplateWithoutInheritance: {
         "agent_path": "bundles/x/agents/child.yaml"
+    },
+    ConfigInputsInAgentTemplate: {
+        "agent_path": "bundles/x/agents/child.yaml",
+        "references": ("inputs.foo",),
     },
     ContextFileNotFound: {"path": "workspace:x.md", "resolved": "/tmp/x.md"},
     ContextFileTooLarge: {

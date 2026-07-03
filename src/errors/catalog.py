@@ -35,6 +35,10 @@ CATALOG: dict[str, Level] = {
     "config.parent_agent_not_found": Level.FATAL,
     "config.required_block_missing": Level.FATAL,
     "config.extends_template_without_inheritance": Level.FATAL,
+    # Agent prompt template references `{{ inputs.* }}` — `inputs` is
+    # not in the agent-template scope; declare io.inputs + describe
+    # the field in prose instead.
+    "config.inputs_in_agent_template": Level.FATAL,
     # Tool's permissions API invoked outside the engine's dispatcher
     # binding.
     "tool.permissions_no_context": Level.FATAL,
