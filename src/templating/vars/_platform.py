@@ -60,9 +60,7 @@ class ProvidersVar:
 
     def list(self) -> str:
         """Render each provider as `- <name> (<type>)`."""
-        return "\n".join(
-            f"- {item.name} ({item.type})" for item in self._items
-        )
+        return "\n".join(f"- {item.name} ({item.type})" for item in self._items)
 
     def summary(self) -> str:
         """Render one line per provider: `<name>: <type>`."""

@@ -52,9 +52,7 @@ def test_setup_then_run_starter_workflow_succeeds(
     order, and ``workflow.run.completed`` last.
     """
     workspace = tmp_path / "ws"
-    rc = _run_cli(
-        ["--root", str(workspace), "setup", "--non-interactive"]
-    )
+    rc = _run_cli(["--root", str(workspace), "setup", "--non-interactive"])
     assert rc == 0
     capsys.readouterr()  # drain setup output
 
@@ -71,9 +69,7 @@ def test_setup_then_run_starter_workflow_succeeds(
     assert rc == 0, f"workflow run failed: {captured.err}"
 
     runs = list((workspace / "runs").iterdir())
-    assert len(runs) == 1, (
-        f"expected exactly one run dir; got {[r.name for r in runs]}"
-    )
+    assert len(runs) == 1, f"expected exactly one run dir; got {[r.name for r in runs]}"
     events = _read_jsonl(runs[0] / "events.jsonl")
     kinds = [e["kind"] for e in events]
     assert kinds[0] == "workflow.run.started"
@@ -145,9 +141,7 @@ def _make_cancel_workspace(tmp_path: Path) -> Path:
     workspace = tmp_path / "ws"
     for sub in ("bundles", "sessions", "content", "logs", "data", ".platform"):
         (workspace / sub).mkdir(parents=True, exist_ok=True)
-    (workspace / "platform.yaml").write_text(
-        _ALLOW_ALL_PLATFORM_YAML, encoding="utf-8"
-    )
+    (workspace / "platform.yaml").write_text(_ALLOW_ALL_PLATFORM_YAML, encoding="utf-8")
     bundle = workspace / "bundles" / "demo"
     (bundle / "workflows").mkdir(parents=True, exist_ok=True)
     (bundle / "bundle.yaml").write_text(
@@ -186,9 +180,7 @@ def test_cancel_mid_run_aborts_at_node_boundary(
                 if children:
                     events_path = children[0] / "events.jsonl"
                     if events_path.exists() and events_path.stat().st_size > 0:
-                        (children[0] / "cancel.flag").write_text(
-                            "", encoding="utf-8"
-                        )
+                        (children[0] / "cancel.flag").write_text("", encoding="utf-8")
                         cancel_signaled.set()
                         return
             time.sleep(0.05)
@@ -211,9 +203,7 @@ def test_cancel_mid_run_aborts_at_node_boundary(
     t.join(timeout=10.0)
     captured = capsys.readouterr()
     # Non-success terminal — exit code 1 per ``_run_blocking``.
-    assert rc == 1, (
-        f"expected non-zero exit; got {rc}. stderr: {captured.err}"
-    )
+    assert rc == 1, f"expected non-zero exit; got {rc}. stderr: {captured.err}"
     runs = list((workspace / "runs").iterdir())
     assert len(runs) == 1
     events = _read_jsonl(runs[0] / "events.jsonl")

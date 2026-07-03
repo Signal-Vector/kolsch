@@ -71,9 +71,7 @@ def _write_workflow_bundle(
     wf_dir.mkdir(exist_ok=True)
     from _yamlio import dump
 
-    (wf_dir / f"{workflow_name}.yaml").write_text(
-        dump(workflow_yaml), encoding="utf-8"
-    )
+    (wf_dir / f"{workflow_name}.yaml").write_text(dump(workflow_yaml), encoding="utf-8")
     return bundle
 
 
@@ -86,9 +84,7 @@ def _run_cli(
     return rc, captured.out, captured.err
 
 
-def _run_noop_workflow(
-    workspace: Path, capsys: pytest.CaptureFixture[str]
-) -> str:
+def _run_noop_workflow(workspace: Path, capsys: pytest.CaptureFixture[str]) -> str:
     """Run a single-noop workflow and return its run id."""
     _write_workflow_bundle(
         workspace,
@@ -202,8 +198,7 @@ class TestEventsText:
         # separators. 200 chars is a comfortable upper bound.
         for line in out.splitlines():
             assert len(line) < 200, (
-                f"event row exceeded preview cap: {len(line)} chars — "
-                f"{line!r}"
+                f"event row exceeded preview cap: {len(line)} chars — {line!r}"
             )
 
     def test_run_not_found_exits_one(

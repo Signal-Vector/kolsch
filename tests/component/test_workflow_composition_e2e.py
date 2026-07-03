@@ -104,9 +104,7 @@ def _run_with_yaml_catalog(
     assets: dict[str, AssetEntry] = {}
     for ref, content in workflows.items():
         bundle, _kind, name = ref.split("/")
-        path = (
-            tmp_path / "bundles" / bundle / "workflows" / f"{name}.yaml"
-        )
+        path = tmp_path / "bundles" / bundle / "workflows" / f"{name}.yaml"
         _write_workflow(path, content)
         assets[ref] = _entry(ref, path)
     catalog = AssetCatalog(assets=assets)
@@ -114,9 +112,7 @@ def _run_with_yaml_catalog(
     entry_run = store.create(workflow_ref=entry_ref, inputs=inputs or {})
     entry_path = Path(assets[entry_ref].path)
     entry_workflow = load_workflow(entry_path)
-    registry = _build_registry(
-        catalog=catalog, store=store, extras=extras
-    )
+    registry = _build_registry(catalog=catalog, store=store, extras=extras)
     executor = IterativeExecutor(
         workflow=entry_workflow,
         run=entry_run,
@@ -194,9 +190,7 @@ class TestPhase1ThreeLevelNesting:
             if not called:
                 break
             depth += 1
-            child_id = WorkflowRunId(
-                called[0]["payload"]["child_workflow_run_id"]
-            )
+            child_id = WorkflowRunId(called[0]["payload"]["child_workflow_run_id"])
             child = store.read(child_id)
             assert child.trace_id == root_run.trace_id
             assert child.parent is not None
@@ -226,12 +220,8 @@ class TestPhase2CycleRejected:
         status = await ex.run()
         assert status == WorkflowRunStatus.FAILED
         events = list(store.read_events(run.run_id))
-        node_failed = next(
-            e for e in events if e["kind"] == "workflow.node.failed"
-        )
-        assert (
-            node_failed["payload"]["error_class"] == "WorkflowCallCycle"
-        )
+        node_failed = next(e for e in events if e["kind"] == "workflow.node.failed")
+        assert node_failed["payload"]["error_class"] == "WorkflowCallCycle"
 
 
 # ---------------------------------------------------------------------------
@@ -280,17 +270,11 @@ class TestPhase3DepthSeventeenRejected:
         last_class = ""
         while True:
             events = list(store.read_events(current_run_id))
-            node_failed = [
-                e for e in events if e["kind"] == "workflow.node.failed"
-            ]
+            node_failed = [e for e in events if e["kind"] == "workflow.node.failed"]
             if not node_failed:
                 break
             last_class = node_failed[-1]["payload"]["error_class"]
-            called = [
-                e
-                for e in events
-                if e["kind"] == "workflow.node.called_workflow"
-            ]
+            called = [e for e in events if e["kind"] == "workflow.node.called_workflow"]
             if not called:
                 break
             current_run_id = WorkflowRunId(
@@ -305,9 +289,7 @@ class TestPhase3DepthSeventeenRejected:
 
 
 class TestPhase4NestedPauseResume:
-    async def test_nested_pause_resume_cascade(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_nested_pause_resume_cascade(self, tmp_path: Path) -> None:
         # Parent: ``sub`` node → ``wrap`` node.
         # Child: a ``user_input`` node that pauses, then a downstream
         # compute that echoes the response.
@@ -354,21 +336,15 @@ class TestPhase4NestedPauseResume:
         # Find the child run id via the parent's JSONL.
         parent_events = list(store.read_events(parent_run.run_id))
         called = next(
-            e
-            for e in parent_events
-            if e["kind"] == "workflow.node.called_workflow"
+            e for e in parent_events if e["kind"] == "workflow.node.called_workflow"
         )
-        leaf_run_id = WorkflowRunId(
-            called["payload"]["child_workflow_run_id"]
-        )
+        leaf_run_id = WorkflowRunId(called["payload"]["child_workflow_run_id"])
         leaf_run = store.read(leaf_run_id)
         assert leaf_run.status == WorkflowRunStatus.WAITING_FOR_INPUT
 
         # 2. Resume the leaf with a response. Build a fresh leaf
         # executor (mirrors the per-process CLI invocation).
-        leaf_workflow = load_workflow(
-            Path(catalog.lookup(leaf_run.workflow_ref).path)
-        )
+        leaf_workflow = load_workflow(Path(catalog.lookup(leaf_run.workflow_ref).path))
         leaf_registry = _build_registry(catalog=catalog, store=store)
         leaf_ex = IterativeExecutor(
             workflow=leaf_workflow,
@@ -409,19 +385,15 @@ class TestPhase4NestedPauseResume:
         wrap_completed = next(
             e
             for e in events_after
-            if e["kind"] == "workflow.node.completed"
-            and e["node_name"] == "wrap"
+            if e["kind"] == "workflow.node.completed" and e["node_name"] == "wrap"
         )
-        assert wrap_completed["payload"]["output"] == {
-            "value": "wrapped: hi"
-        }
+        assert wrap_completed["payload"]["output"] == {"value": "wrapped: hi"}
 
         # 5. The sub node's completion event carries the child_run_id.
         sub_completed = next(
             e
             for e in events_after
-            if e["kind"] == "workflow.node.completed"
-            and e["node_name"] == "sub"
+            if e["kind"] == "workflow.node.completed" and e["node_name"] == "sub"
         )
         assert sub_completed["payload"]["child_run_id"] == str(leaf_run_id)
         # 6. The parent's JSONL records the post-resume
@@ -429,20 +401,13 @@ class TestPhase4NestedPauseResume:
         cw_completed_events = [
             e
             for e in events_after
-            if e["kind"]
-            == "workflow.node.called_workflow_completed"
+            if e["kind"] == "workflow.node.called_workflow_completed"
         ]
         # Two events: the pre-pause "waiting_for_input" + the
         # post-resume "succeeded".
         assert len(cw_completed_events) == 2
-        assert (
-            cw_completed_events[0]["payload"]["child_status"]
-            == "waiting_for_input"
-        )
-        assert (
-            cw_completed_events[1]["payload"]["child_status"]
-            == "succeeded"
-        )
+        assert cw_completed_events[0]["payload"]["child_status"] == "waiting_for_input"
+        assert cw_completed_events[1]["payload"]["child_status"] == "succeeded"
 
     async def test_resuming_parent_before_leaf_surfaces_clear_error(
         self, tmp_path: Path
@@ -493,8 +458,7 @@ class TestPhase4NestedPauseResume:
         failed = next(
             e
             for e in events
-            if e["kind"] == "workflow.node.failed"
-            and e["node_name"] == "sub"
+            if e["kind"] == "workflow.node.failed" and e["node_name"] == "sub"
         )
         assert "still paused" in failed["payload"]["message"]
 
@@ -530,8 +494,7 @@ class TestPhase5MapHappyPath:
         completed = next(
             e
             for e in events
-            if e["kind"] == "workflow.node.completed"
-            and e["node_name"] == "fan_out"
+            if e["kind"] == "workflow.node.completed" and e["node_name"] == "fan_out"
         )
         assert completed["payload"]["output"] == {
             "results": [{"value": i} for i in range(1, 11)]
@@ -574,9 +537,7 @@ class TestPhase6MapNonListRaises:
 
 
 class TestPhase7StateIsolation:
-    async def test_parent_child_state_isolated(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_parent_child_state_isolated(self, tmp_path: Path) -> None:
         # Captured-state probe via a custom runner that records the
         # state dict it sees at fire time.
         parent_yaml = """
@@ -645,9 +606,7 @@ class TestPhase7StateIsolation:
 
 
 class TestPhase8NoRegressions:
-    async def test_non_composite_workflow_unchanged(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_non_composite_workflow_unchanged(self, tmp_path: Path) -> None:
         # A flat 2-node compute pipeline that uses NONE of Phase 3.7's
         # new node types. Must still run end-to-end with the Phase 3.7
         # executor topology + register_builtins extensions.
@@ -678,9 +637,5 @@ class TestPhase8NoRegressions:
         assert "workflow.node.called_workflow_completed" not in kinds
         # And the run.completed payload carries the standard outputs
         # dict keyed by terminal nodes.
-        completed = next(
-            e for e in events if e["kind"] == "workflow.run.completed"
-        )
-        assert completed["payload"]["outputs"] == {
-            "second": {"value": "alpha-omega"}
-        }
+        completed = next(e for e in events if e["kind"] == "workflow.run.completed")
+        assert completed["payload"]["outputs"] == {"second": {"value": "alpha-omega"}}

@@ -115,16 +115,11 @@ def scenario_2_workspace(tmp_path_factory: pytest.TempPathFactory) -> Path:
     bash_rule_whats = (r"tool\.bash", "kolsch/tools/bash")
     helper_path = root / "bundles" / "kolsch" / "agents" / "helper.yaml"
     if helper_path.is_file():
-        agent_payload = (
-            yaml.safe_load(helper_path.read_text(encoding="utf-8")) or {}
-        )
+        agent_payload = yaml.safe_load(helper_path.read_text(encoding="utf-8")) or {}
         agent_payload["permissions"] = [
             r
             for r in (agent_payload.get("permissions") or [])
-            if not (
-                r.get("what") in bash_rule_whats
-                and r.get("effect") == "prompt"
-            )
+            if not (r.get("what") in bash_rule_whats and r.get("effect") == "prompt")
         ]
         helper_path.write_text(
             yaml.safe_dump(agent_payload, sort_keys=False), encoding="utf-8"
@@ -318,7 +313,8 @@ async def test_scenario_1_deny_once_stops_exchange_end_to_end(
     runtime.authz.register_prompt_callback(modal)
 
     session = await runtime.store.create_session(
-        str(config.agent_id), name="scenario-1-deny-once",
+        str(config.agent_id),
+        name="scenario-1-deny-once",
     )
     threads = await runtime.store.list_threads(session.session_id)
 
@@ -359,13 +355,12 @@ async def test_scenario_1_deny_once_stops_exchange_end_to_end(
         "expected at least one tool.failed event from the deny path"
     )
     requests_after_deny = [
-        t for t in types_in_order[tool_failed_idx + 1:]
-        if t == EventType.MODEL_REQUEST
+        t for t in types_in_order[tool_failed_idx + 1 :] if t == EventType.MODEL_REQUEST
     ]
     assert len(requests_after_deny) == 0, (
         f"BUG: the LLM was invoked AGAIN after the deny — {len(requests_after_deny)} "
         f"extra model.request events found. Post-deny event types: "
-        f"{list(types_in_order[tool_failed_idx + 1:])}"
+        f"{list(types_in_order[tool_failed_idx + 1 :])}"
     )
 
     # (3) Belt + braces: the cancel token was flipped + reason stamped.
@@ -422,7 +417,8 @@ async def test_scenario_2_deny_always_persists_rule_and_restart_auto_denies(
         ],
     )
     runtime_a = await bootstrap_runtime(
-        root=root, llm=_make_fake_llm_callable(fake_a),
+        root=root,
+        llm=_make_fake_llm_callable(fake_a),
     )
     config_a = await runtime_a.build_resolved_config("kolsch/agents/helper")
 
@@ -443,7 +439,8 @@ async def test_scenario_2_deny_always_persists_rule_and_restart_auto_denies(
     runtime_a.authz.register_prompt_callback(modal_a, on_rule_added=_on_rule_added)
 
     session_a = await runtime_a.store.create_session(
-        str(config_a.agent_id), name="scenario-2a-deny-always",
+        str(config_a.agent_id),
+        name="scenario-2a-deny-always",
     )
     threads_a = await runtime_a.store.list_threads(session_a.session_id)
 
@@ -475,7 +472,8 @@ async def test_scenario_2_deny_always_persists_rule_and_restart_auto_denies(
     persisted = payload["authorization"]["config"]["rules"]
     new_deny = next(
         (
-            r for r in persisted
+            r
+            for r in persisted
             if r.get("effect") == "deny"
             and r.get("what") == "kolsch/tools/bash"
             and r.get("pattern", "").startswith("cat")
@@ -511,7 +509,8 @@ async def test_scenario_2_deny_always_persists_rule_and_restart_auto_denies(
         ],
     )
     runtime_b = await bootstrap_runtime(
-        root=root, llm=_make_fake_llm_callable(fake_b),
+        root=root,
+        llm=_make_fake_llm_callable(fake_b),
     )
     config_b = await runtime_b.build_resolved_config("kolsch/agents/helper")
 
@@ -535,7 +534,8 @@ async def test_scenario_2_deny_always_persists_rule_and_restart_auto_denies(
     runtime_b.authz.register_prompt_callback(modal_b)
 
     session_b = await runtime_b.store.create_session(
-        str(config_b.agent_id), name="scenario-2b-restart",
+        str(config_b.agent_id),
+        name="scenario-2b-restart",
     )
     threads_b = await runtime_b.store.list_threads(session_b.session_id)
 
@@ -564,7 +564,7 @@ async def test_scenario_2_deny_always_persists_rule_and_restart_auto_denies(
         i for i, t in enumerate(types_b) if t == EventType.TOOL_FAILED
     )
     requests_after_b = [
-        t for t in types_b[tool_failed_idx_b + 1:] if t == EventType.MODEL_REQUEST
+        t for t in types_b[tool_failed_idx_b + 1 :] if t == EventType.MODEL_REQUEST
     ]
     # The restart auto-deny is a different mechanism than the
     # modal-flip-cancel: this exchange's failure is the authz
@@ -673,7 +673,8 @@ async def test_scenario_3_esc_during_streaming_cancels_at_cycle_boundary(
     config = await runtime.build_resolved_config("kolsch/agents/helper")
 
     session = await runtime.store.create_session(
-        str(config.agent_id), name="scenario-3-esc",
+        str(config.agent_id),
+        name="scenario-3-esc",
     )
     threads = await runtime.store.list_threads(session.session_id)
 
@@ -686,7 +687,9 @@ async def test_scenario_3_esc_during_streaming_cancels_at_cycle_boundary(
         cancellation=cancel,
     )
     events = [e async for e in runtime.engine.execute_stream(config, ctx)]
-    _print_jsonl_excerpt("Scenario 3 — Esc during streaming (engine event stream)", events)
+    _print_jsonl_excerpt(
+        "Scenario 3 — Esc during streaming (engine event stream)", events
+    )
 
     # ---- Assertions matching the reviewer's verify list ----
 
@@ -789,7 +792,8 @@ async def test_scenario_4_ctrl_c_still_cancels_and_stamps_reason(
     runtime = await bootstrap_runtime(root=root, llm=_ctrl_c_simulator)
     config = await runtime.build_resolved_config("kolsch/agents/helper")
     session = await runtime.store.create_session(
-        str(config.agent_id), name="scenario-4-ctrl-c",
+        str(config.agent_id),
+        name="scenario-4-ctrl-c",
     )
     threads = await runtime.store.list_threads(session.session_id)
 
@@ -799,7 +803,9 @@ async def test_scenario_4_ctrl_c_still_cancels_and_stamps_reason(
         cancellation=cancel,
     )
     events = [e async for e in runtime.engine.execute_stream(config, ctx)]
-    _print_jsonl_excerpt("Scenario 4 — Ctrl-C still cancels (engine event stream)", events)
+    _print_jsonl_excerpt(
+        "Scenario 4 — Ctrl-C still cancels (engine event stream)", events
+    )
 
     # Same shape as Scenario 3 — that's the whole point.
     failed = [e for e in events if e.type == EventType.THREAD_EXCHANGE_FAILED]

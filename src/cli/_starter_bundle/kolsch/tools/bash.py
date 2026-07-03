@@ -240,9 +240,7 @@ async def _communicate_with_cancel(
     re-raises `TimeoutError` so the outer handler emits `ToolTimeout`.
     """
     if ctx.cancellation is None:
-        return await asyncio.wait_for(
-            proc.communicate(), timeout=timeout_seconds
-        )
+        return await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
 
     communicate_task = asyncio.ensure_future(proc.communicate())
     cancel_task = asyncio.ensure_future(ctx.cancellation.wait_cancelled())

@@ -71,9 +71,7 @@ class TestForkedFrom:
         # ForkedFrom) are intentionally symmetric so cross-JSONL
         # forensics tooling can switch over them uniformly. Smoke-test
         # the parallel by constructing both alongside.
-        forked = ForkedFrom(
-            run_id=_PARENT_RUN_ID, fork_event_id=_FORK_EVENT_ID
-        )
+        forked = ForkedFrom(run_id=_PARENT_RUN_ID, fork_event_id=_FORK_EVENT_ID)
         parent = ParentRunPointer(
             workflow_run_id=_PARENT_RUN_ID, invocation_id=_PARENT_INV_ID
         )
@@ -93,12 +91,8 @@ class TestForkedFromRoundTrip:
         reread = store.read(run.run_id)
         assert reread.forked_from is None
 
-    def test_forked_from_round_trips_as_nested_dict(
-        self, tmp_path: Path
-    ) -> None:
-        forked = ForkedFrom(
-            run_id=_PARENT_RUN_ID, fork_event_id=_FORK_EVENT_ID
-        )
+    def test_forked_from_round_trips_as_nested_dict(self, tmp_path: Path) -> None:
+        forked = ForkedFrom(run_id=_PARENT_RUN_ID, fork_event_id=_FORK_EVENT_ID)
         store = WorkflowRunStore(tmp_path)
         run = store.create(
             workflow_ref="demo/workflows/child",
@@ -121,9 +115,7 @@ class TestForkedFromRoundTrip:
         parent_ptr = ParentRunPointer(
             workflow_run_id=_PARENT_RUN_ID, invocation_id=_PARENT_INV_ID
         )
-        forked = ForkedFrom(
-            run_id=_PARENT_RUN_ID, fork_event_id=_FORK_EVENT_ID
-        )
+        forked = ForkedFrom(run_id=_PARENT_RUN_ID, fork_event_id=_FORK_EVENT_ID)
         store = WorkflowRunStore(tmp_path)
         run = store.create(
             workflow_ref="demo/workflows/child",
@@ -139,14 +131,10 @@ class TestForkedFromRoundTrip:
         assert reread.parent == parent_ptr
         assert reread.forked_from == forked
 
-    def test_forked_from_survives_update_status(
-        self, tmp_path: Path
-    ) -> None:
+    def test_forked_from_survives_update_status(self, tmp_path: Path) -> None:
         from workflows.run import WorkflowRunStatus
 
-        forked = ForkedFrom(
-            run_id=_PARENT_RUN_ID, fork_event_id=_FORK_EVENT_ID
-        )
+        forked = ForkedFrom(run_id=_PARENT_RUN_ID, fork_event_id=_FORK_EVENT_ID)
         store = WorkflowRunStore(tmp_path)
         run = store.create(
             workflow_ref="demo/workflows/child",
@@ -189,10 +177,7 @@ class TestWorkflowRunNotFound:
 
 class TestRunForkedFromEvent:
     def test_enum_value(self) -> None:
-        assert (
-            WorkflowEventKind.RUN_FORKED_FROM
-            == "workflow.run.forked_from"
-        )
+        assert WorkflowEventKind.RUN_FORKED_FROM == "workflow.run.forked_from"
 
     def test_event_round_trip_via_model_dump(self) -> None:
         evt = WorkflowRunForkedFromEvent(
@@ -208,9 +193,7 @@ class TestRunForkedFromEvent:
         dumped = evt.model_dump(mode="json")
         assert dumped["kind"] == "workflow.run.forked_from"
         assert dumped["parent_event_id"] is None
-        assert (
-            dumped["payload"]["forked_from_run_id"] == str(_PARENT_RUN_ID)
-        )
+        assert dumped["payload"]["forked_from_run_id"] == str(_PARENT_RUN_ID)
         assert dumped["payload"]["fork_event_id"] == str(_FORK_EVENT_ID)
         assert dumped["payload"]["input_overrides"] == {"value": "urgent"}
         reloaded = WorkflowRunForkedFromEvent.model_validate(dumped)
@@ -262,19 +245,14 @@ def _grep(pattern: str, *paths: Path) -> int:
     )
     if result.returncode == 1:  # no matches
         return 0
-    return len(
-        [line for line in result.stdout.splitlines() if line.strip()]
-    )
+    return len([line for line in result.stdout.splitlines() if line.strip()])
 
 
 class TestStepOwnershipGates:
     def test_executor_ships_start_from_fork(self) -> None:
         # Step 1 ships ``start_from_fork``. Gate against silent
         # regression that deletes the method.
-        assert (
-            _grep("start_from_fork", _SRC / "workflows" / "executor.py")
-            > 0
-        )
+        assert _grep("start_from_fork", _SRC / "workflows" / "executor.py") > 0
 
     def test_cli_ships_cmd_fork(self) -> None:
         # Step 2 ships ``_cmd_fork``. Gate against silent regression

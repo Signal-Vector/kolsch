@@ -120,9 +120,7 @@ def _registry() -> RunnerRegistry:
     return reg
 
 
-async def _run_recipe(
-    tmp_path: Path, *, expression: str
-) -> dict[str, Any]:
+async def _run_recipe(tmp_path: Path, *, expression: str) -> dict[str, Any]:
     workflow = Workflow.model_validate(
         {
             "nodes": {

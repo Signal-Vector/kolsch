@@ -996,8 +996,8 @@ nodes:
 """
     wf = load_workflow(_write(tmp_path / "wf.yaml", yaml_text))
     node = wf.nodes["fetch"]
-    assert node.timeout_seconds == 60           # executor budget
-    assert node.request_timeout_seconds == 30   # tool budget
+    assert node.timeout_seconds == 60  # executor budget
+    assert node.request_timeout_seconds == 30  # tool budget
 
 
 # ---------------------------------------------------------------------------

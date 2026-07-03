@@ -133,9 +133,7 @@ def _make_executor(
 ) -> tuple[IterativeExecutor, WorkflowRunStore, Any]:
     registry = RunnerRegistry()
     registry.register("kolsch/nodes/bash", worker_runner)
-    registry.register(
-        "kolsch/nodes/map", MapRunner(registry=registry)
-    )
+    registry.register("kolsch/nodes/map", MapRunner(registry=registry))
     store = WorkflowRunStore(tmp_path)
     run = store.create(workflow_ref="demo/workflows/map", inputs={})
     ex = IterativeExecutor(
@@ -155,15 +153,11 @@ def _make_executor(
 
 class TestParallelMapSpeedup:
     @pytest.mark.asyncio
-    async def test_parallel_with_bounded_concurrency(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_parallel_with_bounded_concurrency(self, tmp_path: Path) -> None:
         """Phase Test 3 — 10 iterations, each sleeping 100ms, under
         ``concurrency: 5`` finish in under 200ms (two batches of 5).
         Sequential variant would take ~1s."""
-        wf = _build_map_workflow(
-            over=list(range(10)), parallel=True, concurrency=5
-        )
+        wf = _build_map_workflow(over=list(range(10)), parallel=True, concurrency=5)
         ex, _store, _run = _make_executor(
             tmp_path,
             workflow=wf,
@@ -178,14 +172,10 @@ class TestParallelMapSpeedup:
         )
 
     @pytest.mark.asyncio
-    async def test_parallel_unbounded_concurrency(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_parallel_unbounded_concurrency(self, tmp_path: Path) -> None:
         """``parallel: true`` with NO ``concurrency:`` bound dispatches
         all 10 iterations at once — wall-clock under 200ms."""
-        wf = _build_map_workflow(
-            over=list(range(10)), parallel=True, concurrency=None
-        )
+        wf = _build_map_workflow(over=list(range(10)), parallel=True, concurrency=None)
         ex, _store, _run = _make_executor(
             tmp_path,
             workflow=wf,
@@ -200,14 +190,10 @@ class TestParallelMapSpeedup:
         )
 
     @pytest.mark.asyncio
-    async def test_sequential_map_runs_serially(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_sequential_map_runs_serially(self, tmp_path: Path) -> None:
         """``parallel: false`` (default) — 10 sleeps of 100ms exceeds
         900ms wall-clock; confirms the parallel speedup is real."""
-        wf = _build_map_workflow(
-            over=list(range(10)), parallel=False
-        )
+        wf = _build_map_workflow(over=list(range(10)), parallel=False)
         ex, _store, _run = _make_executor(
             tmp_path,
             workflow=wf,
@@ -217,9 +203,7 @@ class TestParallelMapSpeedup:
         status = await ex.run()
         elapsed = time.perf_counter() - t0
         assert status == WorkflowRunStatus.SUCCEEDED
-        assert elapsed > 0.9, (
-            f"sequential map wall-clock {elapsed:.3f}s ≤ 0.9s"
-        )
+        assert elapsed > 0.9, f"sequential map wall-clock {elapsed:.3f}s ≤ 0.9s"
 
 
 # ---------------------------------------------------------------------------
@@ -304,16 +288,12 @@ class _FailingAtIndexRunner:
 
 class TestParallelMapFailure:
     @pytest.mark.asyncio
-    async def test_failing_iteration_cancels_siblings(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_failing_iteration_cancels_siblings(self, tmp_path: Path) -> None:
         """A failing iteration's event carries the ORIGINAL
         ``error_class``; cancelled sibling iterations carry
         ``error_class="asyncio.CancelledError"`` +
         ``reason="sibling_failure"``."""
-        wf = _build_map_workflow(
-            over=list(range(5)), parallel=True, concurrency=None
-        )
+        wf = _build_map_workflow(over=list(range(5)), parallel=True, concurrency=None)
         ex, store, run = _make_executor(
             tmp_path,
             workflow=wf,
@@ -351,8 +331,7 @@ class TestParallelMapFailure:
         map_failed = next(
             e
             for e in events
-            if e.get("kind") == "workflow.node.failed"
-            and e.get("node_name") == "fan"
+            if e.get("kind") == "workflow.node.failed" and e.get("node_name") == "fan"
         )
         # The map's failed event wraps the underlying exception in
         # WorkflowNodeFailed; the original error class lives in the
@@ -364,29 +343,22 @@ class TestParallelMapFailure:
         )
 
     @pytest.mark.asyncio
-    async def test_run_terminates_quickly_after_failure(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_run_terminates_quickly_after_failure(self, tmp_path: Path) -> None:
         """Without sibling cancellation, slow_sibling iterations
         would sleep 500ms each. With cancellation, the run
         terminates promptly after the fast failure."""
-        wf = _build_map_workflow(
-            over=list(range(5)), parallel=True, concurrency=None
-        )
+        wf = _build_map_workflow(over=list(range(5)), parallel=True, concurrency=None)
         ex, _store, _run = _make_executor(
             tmp_path,
             workflow=wf,
-            worker_runner=_FailingAtIndexRunner(
-                fail_at=2, sleep_other=0.5
-            ),
+            worker_runner=_FailingAtIndexRunner(fail_at=2, sleep_other=0.5),
         )
         t0 = time.perf_counter()
         status = await ex.run()
         elapsed = time.perf_counter() - t0
         assert status == WorkflowRunStatus.FAILED
         assert elapsed < 0.4, (
-            f"parallel-map sibling-cancel didn't fire — "
-            f"elapsed {elapsed:.3f}s"
+            f"parallel-map sibling-cancel didn't fire — elapsed {elapsed:.3f}s"
         )
 
 
@@ -400,9 +372,7 @@ class TestEdgeCases:
     async def test_parallel_empty_over_yields_no_iterations(
         self, tmp_path: Path
     ) -> None:
-        wf = _build_map_workflow(
-            over=[], parallel=True, concurrency=4
-        )
+        wf = _build_map_workflow(over=[], parallel=True, concurrency=4)
         ex, store, run = _make_executor(
             tmp_path,
             workflow=wf,
@@ -420,9 +390,7 @@ class TestEdgeCases:
         )
         assert map_completed["payload"]["output"] == {"results": []}
         # No worker iteration events should fire on empty over.
-        worker_events = [
-            e for e in events if e.get("node_name") == "worker"
-        ]
+        worker_events = [e for e in events if e.get("node_name") == "worker"]
         assert worker_events == []
 
     @pytest.mark.asyncio

@@ -142,7 +142,7 @@ def test_fetch_url_network_error_wraps_as_network_error(
     import httpx
 
     async def _boom(self: httpx.AsyncClient, *args: Any, **kwargs: Any) -> Any:
-        raise httpx.ConnectError("dns fail")  # noqa: TRY003
+        raise httpx.ConnectError("dns fail")
 
     monkeypatch.setattr(httpx.AsyncClient, "request", _boom)
 

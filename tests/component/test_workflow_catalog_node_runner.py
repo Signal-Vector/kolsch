@@ -177,9 +177,7 @@ class TestReturnShapes:
         )
         catalog, _ = _seed_catalog_with_node(tmp_path, "branchable")
         runner = CatalogNodeRunner(catalog=catalog)
-        out = await _invoke_runner(
-            runner, type_ref="demo/nodes/branchable"
-        )
+        out = await _invoke_runner(runner, type_ref="demo/nodes/branchable")
         assert out == {"value": True, "message": "ok"}
 
     async def test_invalid_return_raises(self, tmp_path: Path) -> None:
@@ -242,9 +240,7 @@ class TestErrorPaths:
         with pytest.raises(WorkflowNodeImportFailed):
             await _invoke_runner(runner, type_ref="acme/nodes/missing")
 
-    async def test_missing_node_decorator_raises(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_missing_node_decorator_raises(self, tmp_path: Path) -> None:
         _write_node_module(
             tmp_path,
             "undecorated",
@@ -337,8 +333,7 @@ class TestModuleIsolation:
         leaked_after_run_1 = [
             name
             for name in sys.modules
-            if name not in before
-            and _module_under_workspace(name, tmp_path)
+            if name not in before and _module_under_workspace(name, tmp_path)
         ]
         assert leaked_after_run_1 == [], (
             f"bundle modules leaked after run 1: {leaked_after_run_1}"
@@ -349,8 +344,7 @@ class TestModuleIsolation:
         leaked_after_run_2 = [
             name
             for name in sys.modules
-            if name not in before
-            and _module_under_workspace(name, tmp_path)
+            if name not in before and _module_under_workspace(name, tmp_path)
         ]
         assert leaked_after_run_2 == []
         assert "pydantic" in sys.modules
@@ -399,8 +393,7 @@ class TestModuleIsolation:
         leaked = [
             name
             for name in sys.modules
-            if name not in before
-            and _module_under_workspace(name, tmp_path)
+            if name not in before and _module_under_workspace(name, tmp_path)
         ]
         assert leaked == []
 
@@ -413,9 +406,7 @@ def _module_under_workspace(module_name: str, workspace: Path) -> bool:
     if not isinstance(file_attr, str):
         return False
     try:
-        Path(file_attr).resolve().relative_to(
-            (workspace / "bundles").resolve()
-        )
+        Path(file_attr).resolve().relative_to((workspace / "bundles").resolve())
     except ValueError:
         return False
     return True
@@ -463,6 +454,4 @@ class TestRegistryDispatchPrecedence:
 
         fallback = _Stub()
         registry.set_catalog_runner(fallback)
-        assert (
-            registry.get("acme/nodes/echo", node_name="n") is fallback
-        )
+        assert registry.get("acme/nodes/echo", node_name="n") is fallback

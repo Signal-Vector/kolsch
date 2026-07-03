@@ -314,9 +314,7 @@ class AssetManagement:
             # `_render_prompt_if_needed` can see the directive and
             # route to `render_with_parents`.
             agent_partials_chain = [
-                layer
-                if i == 0
-                else {k: v for k, v in layer.items() if k != "extends"}
+                layer if i == 0 else {k: v for k, v in layer.items() if k != "extends"}
                 for i, layer in enumerate(extends_chain)
             ]
 

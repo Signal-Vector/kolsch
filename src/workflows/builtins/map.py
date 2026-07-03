@@ -105,9 +105,7 @@ class MapRunner:
         # YAML literals (already a list) flow through unchanged.
         over_raw = node_def.over
         if _is_jinja_marked(over_raw):
-            rendered_over = ctx.render_jinja(
-                over_raw, inputs_overlay=bound_inputs
-            )
+            rendered_over = ctx.render_jinja(over_raw, inputs_overlay=bound_inputs)
         else:
             rendered_over = over_raw
         if not isinstance(rendered_over, list):
@@ -337,7 +335,7 @@ class MapRunner:
                     # Drain the cancelled tasks so their per-iter
                     # arms get to fire before we re-raise.
                     for task in list(outstanding.keys()):
-                        try:
+                        try:  # noqa: SIM105 — drain reads clearer than contextlib.suppress here
                             await task
                         except BaseException:  # noqa: BLE001, S110 — drain only
                             pass
@@ -350,7 +348,7 @@ class MapRunner:
                 if not task.done():
                     task.cancel()
             for task in list(outstanding.keys()):
-                try:
+                try:  # noqa: SIM105 — drain reads clearer than contextlib.suppress here
                     await task
                 except BaseException:  # noqa: BLE001, S110 — drain only
                     pass
@@ -543,9 +541,7 @@ class MapRunner:
         if worker_inputs_model is None:
             return
         try:
-            worker_inputs_model.model_validate(
-                iteration_overlay, strict=True
-            )
+            worker_inputs_model.model_validate(iteration_overlay, strict=True)
         except ValidationError as exc:
             errors = exc.errors()
             first = errors[0] if errors else {"loc": (), "type": "unknown"}

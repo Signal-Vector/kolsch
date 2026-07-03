@@ -134,6 +134,7 @@ async def test_tc_opencode_timeout_04_timeout_classifies_as_network_error() -> N
     a code review of ``_client()`` is the last line of defence
     against a regression that silently substitutes the value.
     """
+
     def timeout_handler(request: httpx.Request) -> httpx.Response:
         raise httpx.ReadTimeout("simulated upstream timeout")
 
@@ -162,6 +163,7 @@ async def test_tc_opencode_timeout_05_fast_handler_succeeds() -> None:
     the timeout fires when exceeded, this shows it doesn't fire when
     not exceeded.
     """
+
     def fast_handler(request: httpx.Request) -> httpx.Response:
         return httpx.Response(200, json={"data": []})
 

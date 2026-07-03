@@ -128,9 +128,7 @@ def test_invalid_concurrency_canonical_single_line() -> None:
 def test_invalid_concurrency_accepts_any_offending_value(value: object) -> None:
     """The identifying ``value`` is rendered with ``repr`` so floats,
     ints, and other types all round-trip into the line."""
-    err = WorkflowInvalidConcurrency(
-        file="wf.yaml", line=1, node="m", value=value
-    )
+    err = WorkflowInvalidConcurrency(file="wf.yaml", line=1, node="m", value=value)
     assert repr(value) in str(err)
 
 
@@ -200,9 +198,7 @@ def test_run_completed_payload_peak_in_flight_int_required() -> None:
     from pydantic import ValidationError
 
     with pytest.raises(ValidationError):
-        WorkflowRunCompletedPayload.model_validate(
-            {"peak_in_flight": "four"}
-        )
+        WorkflowRunCompletedPayload.model_validate({"peak_in_flight": "four"})
 
 
 def test_event_classes_payload_field_unchanged_at_step_0() -> None:

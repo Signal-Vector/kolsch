@@ -468,7 +468,9 @@ def test_caller_message_classvar_style(cls: type[WorkflowError]) -> None:
     )
     # 1-3 sentences — count end punctuation
     sentence_count = len(re.findall(r"[.!?]", cm))
-    assert 1 <= sentence_count <= 3, f"{cls.__name__} caller_message has {sentence_count} sentences"
+    assert 1 <= sentence_count <= 3, (
+        f"{cls.__name__} caller_message has {sentence_count} sentences"
+    )
 
 
 _ABSTRACT_BASES: tuple[type[WorkflowError], ...] = (
@@ -559,9 +561,7 @@ def test_workflows_all_parity_with_module_namespace() -> None:
     }
     skip = submodules | {"annotations"}
     public_names = {
-        name
-        for name in dir(workflows)
-        if not name.startswith("_") and name not in skip
+        name for name in dir(workflows) if not name.startswith("_") and name not in skip
     }
     declared = set(workflows.__all__)
     missing = public_names - declared

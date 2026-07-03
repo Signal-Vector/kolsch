@@ -101,9 +101,7 @@ def _make_registry_with_sleep(delay: float) -> RunnerRegistry:
             output={"stdout": "x\n", "stderr": "", "exit_code": 0},
         ),
     )
-    registry.register(
-        "kolsch/nodes/noop", _SleepRunner(delay=0.0, output={})
-    )
+    registry.register("kolsch/nodes/noop", _SleepRunner(delay=0.0, output={}))
     return registry
 
 
@@ -139,9 +137,7 @@ class TestAutoModeWallClockSpeedup:
         ready nodes concurrently."""
         wf = _build_three_sibling_workflow(concurrency="auto")
         registry = _make_registry_with_sleep(delay=0.2)
-        ex, store, run = _make_executor(
-            tmp_path, workflow=wf, registry=registry
-        )
+        ex, store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
         t0 = time.perf_counter()
         status = await ex.run()
         elapsed = time.perf_counter() - t0
@@ -157,14 +153,10 @@ class TestAutoModeWallClockSpeedup:
 
         events = list(store.read_events(run.run_id))
         # The terminal event carries peak_in_flight under auto mode.
-        completed = next(
-            e for e in events if e.get("kind") == "workflow.run.completed"
-        )
+        completed = next(e for e in events if e.get("kind") == "workflow.run.completed")
         assert completed["payload"].get("peak_in_flight") == ex._peak_in_flight
         # The run.started event carries concurrency_mode.
-        started = next(
-            e for e in events if e.get("kind") == "workflow.run.started"
-        )
+        started = next(e for e in events if e.get("kind") == "workflow.run.started")
         assert started["payload"].get("concurrency_mode") == "auto"
 
     @pytest.mark.asyncio
@@ -176,9 +168,7 @@ class TestAutoModeWallClockSpeedup:
         observes a clear sequential signal."""
         wf = _build_three_sibling_workflow(concurrency="sequential")
         registry = _make_registry_with_sleep(delay=0.2)
-        ex, store, run = _make_executor(
-            tmp_path, workflow=wf, registry=registry
-        )
+        ex, store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
         t0 = time.perf_counter()
         status = await ex.run()
         elapsed = time.perf_counter() - t0
@@ -190,13 +180,9 @@ class TestAutoModeWallClockSpeedup:
         # Sequential mode does NOT emit peak_in_flight on the run.completed
         # event (byte-identity with pre-Phase-3.10 goldens).
         events = list(store.read_events(run.run_id))
-        completed = next(
-            e for e in events if e.get("kind") == "workflow.run.completed"
-        )
+        completed = next(e for e in events if e.get("kind") == "workflow.run.completed")
         assert "peak_in_flight" not in completed.get("payload", {})
-        started = next(
-            e for e in events if e.get("kind") == "workflow.run.started"
-        )
+        started = next(e for e in events if e.get("kind") == "workflow.run.started")
         assert "concurrency_mode" not in started.get("payload", {})
 
 
@@ -233,22 +219,16 @@ class TestSequentialDefaultUnchanged:
                 output={"stdout": "hi\n", "stderr": "", "exit_code": 0},
             ),
         )
-        ex, store, run = _make_executor(
-            tmp_path, workflow=wf, registry=registry
-        )
+        ex, store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
         status = await ex.run()
         assert status == WorkflowRunStatus.SUCCEEDED
 
         events = list(store.read_events(run.run_id))
         # AC 3.9 — sequential JSONL is byte-identical to Phase 3.9.
         # The two new optional fields must NOT appear in the payload.
-        started = next(
-            e for e in events if e.get("kind") == "workflow.run.started"
-        )
+        started = next(e for e in events if e.get("kind") == "workflow.run.started")
         assert "concurrency_mode" not in started["payload"]
-        completed = next(
-            e for e in events if e.get("kind") == "workflow.run.completed"
-        )
+        completed = next(e for e in events if e.get("kind") == "workflow.run.completed")
         assert "peak_in_flight" not in completed["payload"]
 
     @pytest.mark.asyncio
@@ -267,21 +247,13 @@ class TestSequentialDefaultUnchanged:
             }
         )
         registry = RunnerRegistry()
-        registry.register(
-            "kolsch/nodes/noop", _SleepRunner(delay=0.0, output={})
-        )
-        ex, store, run = _make_executor(
-            tmp_path, workflow=wf, registry=registry
-        )
+        registry.register("kolsch/nodes/noop", _SleepRunner(delay=0.0, output={}))
+        ex, store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
         status = await ex.run()
         assert status == WorkflowRunStatus.SUCCEEDED
 
         events = list(store.read_events(run.run_id))
-        started = next(
-            e for e in events if e.get("kind") == "workflow.run.started"
-        )
+        started = next(e for e in events if e.get("kind") == "workflow.run.started")
         assert "concurrency_mode" not in started["payload"]
-        completed = next(
-            e for e in events if e.get("kind") == "workflow.run.completed"
-        )
+        completed = next(e for e in events if e.get("kind") == "workflow.run.completed")
         assert "peak_in_flight" not in completed["payload"]

@@ -82,9 +82,7 @@ def test_parse_slash_workflow_args_ref_only() -> None:
 
 def test_parse_slash_workflow_args_with_single_pair() -> None:
     """Single ``with`` pair → ref + one-entry dict."""
-    ref, inputs = parse_slash_workflow_args(
-        "kolsch/workflows/hello with name=Alice"
-    )
+    ref, inputs = parse_slash_workflow_args("kolsch/workflows/hello with name=Alice")
     assert ref == "kolsch/workflows/hello"
     assert inputs == {"name": "Alice"}
 
@@ -133,9 +131,7 @@ def test_parse_slash_workflow_args_bad_pair_raises() -> None:
 def test_parse_slash_workflow_args_splits_with_only_once() -> None:
     """A pair value containing the literal substring ``with`` does
     NOT re-split (split on the FIRST ``" with "`` only)."""
-    ref, inputs = parse_slash_workflow_args(
-        "kolsch/workflows/hello with message=hello"
-    )
+    ref, inputs = parse_slash_workflow_args("kolsch/workflows/hello with message=hello")
     # Only the first ' with ' separated ref + clause; ``message=hello``
     # is intact (no spurious re-split on the substring inside the
     # value would survive because there's no literal ' with ' inside).

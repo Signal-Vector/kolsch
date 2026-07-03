@@ -173,11 +173,7 @@ async def test_catalog_build_registers_expected_assets(
     # ``kolsch/nodes/<name>`` built-in node entries unconditionally.
     # Filter them out so the assertion stays focused on the
     # user-authored assets under test.
-    refs = {
-        a.ref
-        for a in am.list_assets()
-        if not a.metadata.get("builtin")
-    }
+    refs = {a.ref for a in am.list_assets() if not a.metadata.get("builtin")}
     assert refs == {
         "acme/tools/web_search",
         "acme/skills/literature-review",
@@ -234,9 +230,7 @@ async def test_bundle_name_core_is_accepted(platform_root: Path) -> None:
     am = AssetManagement(root=platform_root)
     await am.initialize()
     # Catalog initializes cleanly — no reserved-name exception fires.
-    assert any(
-        m.name == "core" for m in am._catalog.bundles.values()
-    )
+    assert any(m.name == "core" for m in am._catalog.bundles.values())
 
 
 # ---------------------------------------------------------------------------

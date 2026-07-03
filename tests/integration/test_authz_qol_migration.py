@@ -132,9 +132,7 @@ async def test_canonical_workspace_migrates_roundtrip(tmp_path: Path) -> None:
     assert not res.allowed
 
     # read_file is silently allowed.
-    res = await provider.allow(
-        "user.local", "kolsch/tools/read_file", target="/tmp/x"
-    )
+    res = await provider.allow("user.local", "kolsch/tools/read_file", target="/tmp/x")
     assert res.allowed
 
     # agent.execute.<id> is allowed by the pre-flight rule.

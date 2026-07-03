@@ -179,8 +179,7 @@ async def test_dispatch_orders_workflow_agent_bundle_layers(
 
     names = [layer.name for layer in authz.layers_seen]
     assert names == ["workflow", "agent", "bundle"], (
-        f"Layer order must be proximate-first (workflow → agent → bundle); "
-        f"got {names}"
+        f"Layer order must be proximate-first (workflow → agent → bundle); got {names}"
     )
 
 

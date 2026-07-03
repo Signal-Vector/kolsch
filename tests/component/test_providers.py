@@ -401,7 +401,9 @@ async def test_allow_no_rule_with_callback_fires_with_rule_id_none() -> None:
 
     provider.register_prompt_callback(_cb)  # type: ignore[arg-type]
     result = await provider.allow(
-        "agent.x", "tool.bash", target="echo hi",
+        "agent.x",
+        "tool.bash",
+        target="echo hi",
     )
     assert seen["rule_id"] is None
     assert seen["action"] == "tool.bash"
@@ -411,9 +413,7 @@ async def test_allow_no_rule_with_callback_fires_with_rule_id_none() -> None:
     assert "who_chain=no_rule" in result.reason
 
 
-async def test_allow_no_rule_with_callback_persists_rule_and_fires_hook() -> (
-    None
-):
+async def test_allow_no_rule_with_callback_persists_rule_and_fires_hook() -> None:
     """The callback's ``(effect, Rule)`` tuple lands the new rule
     above the default-deny tail AND fires the ``on_rule_added``
     hook so the chat's ``cli.permissions._write_back`` persists it

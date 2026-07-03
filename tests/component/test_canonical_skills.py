@@ -49,9 +49,7 @@ def test_canonical_skill_md_exists_in_starter_template(skill_name: str) -> None:
     packaged template is what `kolsch setup` copies, so a missing
     SKILL.md here means new workspaces don't get the skill."""
     skill_md = _STARTER_BUNDLE_TEMPLATE_DIR / "skills" / skill_name / "SKILL.md"
-    assert skill_md.is_file(), (
-        f"canonical skill {skill_name!r} missing at {skill_md}"
-    )
+    assert skill_md.is_file(), f"canonical skill {skill_name!r} missing at {skill_md}"
 
 
 @pytest.mark.parametrize("skill_name", _CANONICAL_SKILLS)

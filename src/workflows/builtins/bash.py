@@ -189,9 +189,7 @@ def _render(value: str, scope: dict[str, Any]) -> str:
     return JINJA_ENV.from_string(value).render(**scope)
 
 
-def _render_optional(
-    value: str | None, scope: dict[str, Any]
-) -> str | None:
+def _render_optional(value: str | None, scope: dict[str, Any]) -> str | None:
     if value is None:
         return None
     return _render(value, scope)

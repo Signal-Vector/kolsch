@@ -73,13 +73,9 @@ def _make_workspace_with_allow_all(tmp_path: Path) -> Path:
     uses for the cancel workflow.
     """
     workspace = tmp_path / "ws"
-    rc = _run_cli(
-        ["--root", str(workspace), "setup", "--non-interactive"]
-    )
+    rc = _run_cli(["--root", str(workspace), "setup", "--non-interactive"])
     assert rc == 0
-    (workspace / "platform.yaml").write_text(
-        _ALLOW_ALL_PLATFORM_YAML, encoding="utf-8"
-    )
+    (workspace / "platform.yaml").write_text(_ALLOW_ALL_PLATFORM_YAML, encoding="utf-8")
     return workspace
 
 
@@ -157,9 +153,7 @@ def test_branching_demo_false_path_prunes_success_arm(
     assert ("on_success", "workflow.node.completed") not in per_node
 
     # Inferred outputs carry ``null`` for the pruned terminal.
-    run_completed = next(
-        e for e in events if e["kind"] == "workflow.run.completed"
-    )
+    run_completed = next(e for e in events if e["kind"] == "workflow.run.completed")
     outputs = run_completed["payload"]["outputs"]
     assert outputs["on_success"] is None
     assert outputs["on_failure"]["exit_code"] == 0
@@ -222,9 +216,7 @@ def test_non_branching_starter_unchanged(
     timestamp + id canonicalisation already applied to goldens).
     """
     workspace = tmp_path / "ws"
-    rc = _run_cli(
-        ["--root", str(workspace), "setup", "--non-interactive"]
-    )
+    rc = _run_cli(["--root", str(workspace), "setup", "--non-interactive"])
     assert rc == 0
     capsys.readouterr()
 
@@ -300,14 +292,10 @@ def _scaffold_triage_workspace(root: Path) -> None:
         ".platform",
     ):
         (root / sub).mkdir(parents=True, exist_ok=True)
-    (root / "platform.yaml").write_text(
-        _PERMISSIVE_PLATFORM_YAML, encoding="utf-8"
-    )
+    (root / "platform.yaml").write_text(_PERMISSIVE_PLATFORM_YAML, encoding="utf-8")
     (root / ".env").write_text("", encoding="utf-8")
     repo_root = __import__("pathlib").Path(__file__).resolve().parents[2]
-    starter_src = (
-        repo_root / "src" / "cli" / "_starter_bundle" / "kolsch"
-    )
+    starter_src = repo_root / "src" / "cli" / "_starter_bundle" / "kolsch"
     shutil.copytree(starter_src, root / "bundles" / "kolsch")
     # The starter bundle ships without ``bundle.yaml`` (laid down by
     # ``kolsch setup`` separately); add it so AssetManagement's
@@ -360,15 +348,11 @@ async def _drive_triage(
         inputs={"ticket_text": "any"},
     )
 
-    policy = PathPolicy(
-        allowed_paths=["data/", "bundles/"], denied_paths=[".env"]
-    )
+    policy = PathPolicy(allowed_paths=["data/", "bundles/"], denied_paths=[".env"])
     registry = RunnerRegistry()
     register_builtins(
         registry,
-        bash_defn=get_tool_definition(
-            make_bash(policy=policy, root=root)
-        ),
+        bash_defn=get_tool_definition(make_bash(policy=policy, root=root)),
         # Reuse the engine's already-built providers — bypassing
         # ``bootstrap_runtime`` keeps the test lean and matches the
         # in-process construction agent-runner e2e uses.
@@ -379,15 +363,9 @@ async def _drive_triage(
         engine=engine,
         session_store=store,
         config_builder=am.build_resolved_config,
-        read_file_defn=get_tool_definition(
-            make_read_file(policy=policy, root=root)
-        ),
-        write_file_defn=get_tool_definition(
-            make_write_file(policy=policy, root=root)
-        ),
-        list_files_defn=get_tool_definition(
-            make_list_files(policy=policy, root=root)
-        ),
+        read_file_defn=get_tool_definition(make_read_file(policy=policy, root=root)),
+        write_file_defn=get_tool_definition(make_write_file(policy=policy, root=root)),
+        list_files_defn=get_tool_definition(make_list_files(policy=policy, root=root)),
     )
     executor = IterativeExecutor(
         workflow=workflow,
@@ -401,39 +379,26 @@ async def _drive_triage(
     return status, events_path, store
 
 
-def _branch_value_of(
-    events: list[dict[str, object]], *, node_name: str
-) -> object:
+def _branch_value_of(events: list[dict[str, object]], *, node_name: str) -> object:
     completed = [
         e
         for e in events
-        if e["kind"] == "workflow.node.completed"
-        and e.get("node_name") == node_name
+        if e["kind"] == "workflow.node.completed" and e.get("node_name") == node_name
     ]
     assert len(completed) == 1, f"expected one completion for {node_name!r}"
     return completed[0]["payload"].get("branch_value")
 
 
 def _pruned_nodes(events: list[dict[str, object]]) -> set[str]:
-    return {
-        str(e["node_name"])
-        for e in events
-        if e["kind"] == "workflow.node.pruned"
-    }
+    return {str(e["node_name"]) for e in events if e["kind"] == "workflow.node.pruned"}
 
 
 def _fired_nodes(events: list[dict[str, object]]) -> set[str]:
-    return {
-        str(e["node_name"])
-        for e in events
-        if e["kind"] == "workflow.node.started"
-    }
+    return {str(e["node_name"]) for e in events if e["kind"] == "workflow.node.started"}
 
 
 class TestPhase36TriageBothArms:
-    async def test_urgent_arm_fires_normal_pruned(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_urgent_arm_fires_normal_pruned(self, tmp_path: Path) -> None:
         status, events_path, _store = await _drive_triage(
             tmp_path,
             classify_reply="urgent",
@@ -445,9 +410,7 @@ class TestPhase36TriageBothArms:
         assert "urgent_handler" in _fired_nodes(events)
         assert _pruned_nodes(events) == {"normal_handler"}
 
-    async def test_normal_arm_fires_urgent_pruned(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_normal_arm_fires_urgent_pruned(self, tmp_path: Path) -> None:
         status, events_path, _store = await _drive_triage(
             tmp_path,
             classify_reply="normal",
@@ -483,9 +446,7 @@ class TestPhase36TriageCrossJsonlLinkage:
         assert isinstance(workflow_trace_id, str)
         assert workflow_trace_id.startswith("tr_")
 
-        session_paths = sorted(
-            (tmp_path / "sessions").glob("ses_*.jsonl")
-        )
+        session_paths = sorted((tmp_path / "sessions").glob("ses_*.jsonl"))
         assert len(session_paths) == 2  # classifier + urgent_responder
         for sp in session_paths:
             for event in _read_jsonl(sp):

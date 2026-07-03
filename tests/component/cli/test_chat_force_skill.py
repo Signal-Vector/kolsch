@@ -293,9 +293,7 @@ async def test_switch_session_drops_pending_force_skill(
     state.pending_force_skill.append("kolsch/some-ref")
 
     out = _io.StringIO()
-    await _switch_session(
-        state, target_session_id=session_b.session_id, stdout=out
-    )
+    await _switch_session(state, target_session_id=session_b.session_id, stdout=out)
 
     assert state.pending_force_skill == []
     assert state.session_id == session_b.session_id

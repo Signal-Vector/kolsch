@@ -775,9 +775,7 @@ class _Exchange:
         doc_items: list[DocItem] = []
         for spec in self.config.context_files:
             doc_items.append(
-                await asyncio.to_thread(
-                    load_context_file, spec, workspace_root
-                )
+                await asyncio.to_thread(load_context_file, spec, workspace_root)
             )
         docs_var = DocsVar(doc_items)
 
@@ -845,10 +843,7 @@ class _Exchange:
         # `render_prompt` because that path's env has no loader and
         # would crash on the directive.
         template_name = f"agent:{self.config.agent_id}"
-        if (
-            self.config.extends is None
-            and prompt_uses_extends_directive(prompt)
-        ):
+        if self.config.extends is None and prompt_uses_extends_directive(prompt):
             raise ConfigExtendsTemplateWithoutInheritance(
                 agent_path=template_name,
             )
@@ -890,8 +885,7 @@ class _Exchange:
             warnings.append(
                 (
                     "tools",
-                    "prompt references {{ tools }} but agent declares "
-                    "no tools",
+                    "prompt references {{ tools }} but agent declares no tools",
                     "add tools to subsystems.tools.config.declared or "
                     "remove the reference",
                 )
@@ -900,8 +894,7 @@ class _Exchange:
             warnings.append(
                 (
                     "docs",
-                    "prompt references {{ docs }} but agent declares "
-                    "no context_files",
+                    "prompt references {{ docs }} but agent declares no context_files",
                     "add a context_files: entry or remove the reference",
                 )
             )
@@ -910,8 +903,7 @@ class _Exchange:
             warnings.append(
                 (
                     "skills",
-                    "prompt references {{ skills }} but agent declares "
-                    "no skills",
+                    "prompt references {{ skills }} but agent declares no skills",
                     "add a skills entry under subsystems.skills.config.enabled "
                     "or remove the reference",
                 )
@@ -973,10 +965,11 @@ class _Exchange:
             return
         body = tools_sub.config
 
-        declared_paths, declared_owner_bundles = (
-            await self._resolve_declared_tool_paths(
-                list(body.get("declared", []) or []),
-            )
+        (
+            declared_paths,
+            declared_owner_bundles,
+        ) = await self._resolve_declared_tool_paths(
+            list(body.get("declared", []) or []),
         )
 
         # Thread the agent's permissions + its home bundle's
@@ -1359,9 +1352,7 @@ class _Exchange:
                     classify_from_cause_chain,
                 )
 
-                classified = classify_from_cause_chain(
-                    exc, agent_id=self.agent_id
-                )
+                classified = classify_from_cause_chain(exc, agent_id=self.agent_id)
                 if classified is None:
                     raise
                 if classified.level.name != "RECOVERABLE":

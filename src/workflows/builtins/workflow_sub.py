@@ -184,9 +184,7 @@ class WorkflowSubRunner:
             raise WorkflowNodeFailed(
                 node=node_name,
                 invocation_id=str(ctx.invocation_id),
-                cause=ValueError(
-                    f"unknown workflow ref {child_ref!r}"
-                ),
+                cause=ValueError(f"unknown workflow ref {child_ref!r}"),
             )
         child_workflow = load_workflow(Path(entry.path))
 
@@ -332,7 +330,7 @@ class WorkflowSubRunner:
         self,
         *,
         node_name: str,
-        child_ref: str,
+        child_ref: str,  # noqa: ARG002 — kept for symmetry with dispatch signature; resume uses run_id
         child_run_id: WorkflowRunId,
         ctx: NodeContext,
     ) -> dict[str, Any]:
@@ -408,9 +406,7 @@ class WorkflowSubRunner:
             ),
         )
 
-    def _harvest_from_child_jsonl(
-        self, child_run_id: WorkflowRunId
-    ) -> dict[str, Any]:
+    def _harvest_from_child_jsonl(self, child_run_id: WorkflowRunId) -> dict[str, Any]:
         """Walk the child's JSONL for its terminal-output dict.
 
         At resume the child's

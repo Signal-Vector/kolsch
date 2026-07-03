@@ -61,9 +61,7 @@ def test_single_level_chain_resolves_to_two_entries(tmp_path: Path) -> None:
 
 def test_multi_level_chain_resolves_a_b_c(tmp_path: Path) -> None:
     """A extends B extends C — chain returned leaf-first."""
-    (tmp_path / "c.yaml").write_text(
-        yaml.safe_dump({"name": "c"}), encoding="utf-8"
-    )
+    (tmp_path / "c.yaml").write_text(yaml.safe_dump({"name": "c"}), encoding="utf-8")
     (tmp_path / "b.yaml").write_text(
         yaml.safe_dump({"name": "b", "extends": "workspace:c.yaml"}),
         encoding="utf-8",

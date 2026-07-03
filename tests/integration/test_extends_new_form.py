@@ -80,9 +80,7 @@ def _write_workspace(root: Path, *, extends_value: str) -> None:
     child_bundle = root / "bundles" / "child_bundle"
     (child_bundle / "agents").mkdir(parents=True, exist_ok=True)
     (child_bundle / "bundle.yaml").write_text(
-        yaml.safe_dump(
-            {"name": "child_bundle", "version": "0.1", "description": "c"}
-        ),
+        yaml.safe_dump({"name": "child_bundle", "version": "0.1", "description": "c"}),
         encoding="utf-8",
     )
     (child_bundle / "agents" / "child.yaml").write_text(

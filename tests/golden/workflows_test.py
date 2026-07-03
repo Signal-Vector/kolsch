@@ -205,7 +205,9 @@ def test_workflow_fixture(fixture_path: Path) -> None:
 
     # --- MULTI-ERROR ACCUMULATION ---------------------------------------
     if "expected_errors" in annotations:
-        names = [n.strip() for n in annotations["expected_errors"].split(",") if n.strip()]
+        names = [
+            n.strip() for n in annotations["expected_errors"].split(",") if n.strip()
+        ]
         expected_classes = [_resolve_error_class(n) for n in names]
         try:
             workflow = load_workflow(fixture_path)
@@ -262,7 +264,12 @@ def test_every_fixture_has_an_annotation_or_it_fails_loudly() -> None:
         annotations = _parse_annotations(text)
         if any(
             k in annotations
-            for k in ("expected", "expected_error", "expected_errors", "expected_warning")
+            for k in (
+                "expected",
+                "expected_error",
+                "expected_errors",
+                "expected_warning",
+            )
         ):
             annotated += 1
     # At least 10 — the actual count depends on fixture authoring tempo.

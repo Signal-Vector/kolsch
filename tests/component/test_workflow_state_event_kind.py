@@ -75,10 +75,7 @@ def _make_event(
 
 class TestEnumWireString:
     def test_state_mutated_value(self) -> None:
-        assert (
-            WorkflowEventKind.STATE_MUTATED.value
-            == "workflow.state.mutated"
-        )
+        assert WorkflowEventKind.STATE_MUTATED.value == "workflow.state.mutated"
 
 
 # ---------------------------------------------------------------------------
@@ -177,9 +174,7 @@ class TestEmitWorkflowEventHook:
 
 def _make_replay_executor(tmp_path: Path) -> IterativeExecutor:
     """A minimal executor for feeding synthetic events into replay_into."""
-    wf = Workflow.model_validate(
-        {"nodes": {"x": {"type": "kolsch/nodes/noop"}}}
-    )
+    wf = Workflow.model_validate({"nodes": {"x": {"type": "kolsch/nodes/noop"}}})
     store = WorkflowRunStore(tmp_path)
     run = store.create(workflow_ref="demo/workflows/x")
     return IterativeExecutor(
@@ -191,9 +186,7 @@ def _make_replay_executor(tmp_path: Path) -> IterativeExecutor:
     )
 
 
-def _state_event(
-    *, key: str, op: str, value: Any = None
-) -> dict[str, Any]:
+def _state_event(*, key: str, op: str, value: Any = None) -> dict[str, Any]:
     """Build the on-disk dict shape replay_into walks."""
     return {
         "kind": "workflow.state.mutated",
@@ -259,5 +252,3 @@ class TestReplayAppliesStateMutations:
             ],
         )
         assert ex._state == {"x": 1}
-
-

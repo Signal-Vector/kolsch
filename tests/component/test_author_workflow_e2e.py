@@ -112,9 +112,7 @@ def _make_workspace(tmp_path: Path) -> Path:
     """
     for sub in ("bundles", "sessions", "content", "logs", "data", "out", ".platform"):
         (tmp_path / sub).mkdir(parents=True, exist_ok=True)
-    (tmp_path / "platform.yaml").write_text(
-        _PERMISSIVE_PLATFORM_YAML, encoding="utf-8"
-    )
+    (tmp_path / "platform.yaml").write_text(_PERMISSIVE_PLATFORM_YAML, encoding="utf-8")
     (tmp_path / ".env").write_text("", encoding="utf-8")
 
     shutil.copytree(_STARTER_BUNDLE, tmp_path / "bundles" / "kolsch")
@@ -312,9 +310,7 @@ async def _run_workflow(
     runner_policy = PathPolicy(
         allowed_paths=["bundles/", "data/", "out/"], denied_paths=[".env"]
     )
-    bash_defn = get_tool_definition(
-        make_bash(policy=runner_policy, root=workspace)
-    )
+    bash_defn = get_tool_definition(make_bash(policy=runner_policy, root=workspace))
     read_defn = get_tool_definition(
         make_read_file(policy=runner_policy, root=workspace)
     )
@@ -421,9 +417,7 @@ async def test_from_scratch_authoring(tmp_path: Path) -> None:
     workflow ACTUALLY RUNS via :class:`IterativeExecutor` and the
     URGENT branch fires."""
     workspace = _make_workspace(tmp_path)
-    target_yaml = (
-        workspace / "bundles" / _TARGET_BUNDLE / "workflows" / "triage.yaml"
-    )
+    target_yaml = workspace / "bundles" / _TARGET_BUNDLE / "workflows" / "triage.yaml"
 
     scripted = [
         ToolCallResponse(
@@ -447,7 +441,8 @@ async def test_from_scratch_authoring(tmp_path: Path) -> None:
     ]
 
     fake, events, _am = await _run_author_workflow_session(
-        workspace, brief="Build a workflow that classifies a ticket.",
+        workspace,
+        brief="Build a workflow that classifies a ticket.",
         scripted_responses=scripted,
     )
 
@@ -465,7 +460,8 @@ async def test_from_scratch_authoring(tmp_path: Path) -> None:
     # AC: the second validate_workflow result is is_valid: true.
     # Read it off the TOOL_RESULT event for the second validate call.
     validate_results = [
-        e for e in events
+        e
+        for e in events
         if e.type == EventType.TOOL_RESULT
         and e.data.get("tool_name") == "validate_workflow"
     ]
@@ -547,15 +543,11 @@ async def test_amendment_loop(tmp_path: Path) -> None:
     file is updated, re-validates, runs end-to-end, and the file is
     actually written."""
     workspace = _make_workspace(tmp_path)
-    target_yaml = (
-        workspace / "bundles" / _TARGET_BUNDLE / "workflows" / "triage.yaml"
-    )
+    target_yaml = workspace / "bundles" / _TARGET_BUNDLE / "workflows" / "triage.yaml"
     target_yaml.write_text(_PT1_WORKFLOW_YAML, encoding="utf-8")
 
     scripted = [
-        ToolCallResponse(
-            tool="read_file", args={"path": str(target_yaml)}
-        ),
+        ToolCallResponse(tool="read_file", args={"path": str(target_yaml)}),
         ToolCallResponse(
             tool="write_file",
             args={"path": str(target_yaml), "content": _PT2_WORKFLOW_YAML},
@@ -586,7 +578,8 @@ async def test_amendment_loop(tmp_path: Path) -> None:
 
     assert target_yaml.read_text(encoding="utf-8") == _PT2_WORKFLOW_YAML
     last_validate = next(
-        e for e in reversed(events)
+        e
+        for e in reversed(events)
         if e.type == EventType.TOOL_RESULT
         and e.data.get("tool_name") == "validate_workflow"
     )
@@ -676,12 +669,8 @@ async def test_node_module_generation(tmp_path: Path) -> None:
     workflow runs end-to-end and the bash terminal echoes the row
     count the authored ``@node`` returned."""
     workspace = _make_workspace(tmp_path)
-    node_py = (
-        workspace / "bundles" / _TARGET_BUNDLE / "nodes" / "count_rows.py"
-    )
-    target_yaml = (
-        workspace / "bundles" / _TARGET_BUNDLE / "workflows" / "count.yaml"
-    )
+    node_py = workspace / "bundles" / _TARGET_BUNDLE / "nodes" / "count_rows.py"
+    target_yaml = workspace / "bundles" / _TARGET_BUNDLE / "workflows" / "count.yaml"
 
     csv_path = workspace / "data" / "rows.csv"
     csv_path.parent.mkdir(parents=True, exist_ok=True)
@@ -693,9 +682,7 @@ async def test_node_module_generation(tmp_path: Path) -> None:
             tool="write_file",
             args={"path": str(node_py), "content": _PT3_NODE_PY},
         ),
-        ToolCallResponse(
-            tool="introspect_node", args={"py_path": str(node_py)}
-        ),
+        ToolCallResponse(tool="introspect_node", args={"py_path": str(node_py)}),
         ToolCallResponse(
             tool="write_file",
             args={"path": str(target_yaml), "content": workflow_yaml},
@@ -730,7 +717,8 @@ async def test_node_module_generation(tmp_path: Path) -> None:
     assert target_yaml.is_file()
 
     introspect_result = next(
-        e for e in events
+        e
+        for e in events
         if e.type == EventType.TOOL_RESULT
         and e.data.get("tool_name") == "introspect_node"
     ).data["result"]
@@ -738,7 +726,8 @@ async def test_node_module_generation(tmp_path: Path) -> None:
     assert introspect_result["label"] == "Count CSV rows"
 
     validate_result = next(
-        e for e in events
+        e
+        for e in events
         if e.type == EventType.TOOL_RESULT
         and e.data.get("tool_name") == "validate_workflow"
     ).data["result"]
@@ -827,9 +816,7 @@ async def test_validation_driven_revision(tmp_path: Path) -> None:
     meta-agent reads the error class + identifying_names, renames the
     colliding bind, re-validates. Second draft passes."""
     workspace = _make_workspace(tmp_path)
-    target_yaml = (
-        workspace / "bundles" / _TARGET_BUNDLE / "workflows" / "collide.yaml"
-    )
+    target_yaml = workspace / "bundles" / _TARGET_BUNDLE / "workflows" / "collide.yaml"
 
     scripted = [
         ToolCallResponse(
@@ -870,7 +857,8 @@ async def test_validation_driven_revision(tmp_path: Path) -> None:
 
     # Assert the first validate returned the collision finding.
     validate_results = [
-        e for e in events
+        e
+        for e in events
         if e.type == EventType.TOOL_RESULT
         and e.data.get("tool_name") == "validate_workflow"
     ]
@@ -879,7 +867,8 @@ async def test_validation_driven_revision(tmp_path: Path) -> None:
     classes = {err["error_class"] for err in first_result["errors"]}
     assert "WorkflowBindCollision" in classes
     collision = next(
-        err for err in first_result["errors"]
+        err
+        for err in first_result["errors"]
         if err["error_class"] == "WorkflowBindCollision"
     )
     assert collision["identifying_names"] == {"node": "sink", "bind": "message"}
@@ -890,8 +879,11 @@ async def test_validation_driven_revision(tmp_path: Path) -> None:
 
     # The two write_file payloads differ at the colliding bind key only.
     # (Use the structured args off the FakeLLM call record.)
-    write_calls = [r for r in fake.calls if r.response.kind == "tool_call"
-                   and r.response.tool == "write_file"]
+    write_calls = [
+        r
+        for r in fake.calls
+        if r.response.kind == "tool_call" and r.response.tool == "write_file"
+    ]
     assert len(write_calls) == 2
     draft1 = write_calls[0].response.args["content"]
     draft2 = write_calls[1].response.args["content"]
@@ -941,9 +933,7 @@ async def test_max_attempts_cap(tmp_path: Path) -> None:
     exactly (5 validates, then escalation text).
     """
     workspace = _make_workspace(tmp_path)
-    target_yaml = (
-        workspace / "bundles" / _TARGET_BUNDLE / "workflows" / "doomed.yaml"
-    )
+    target_yaml = workspace / "bundles" / _TARGET_BUNDLE / "workflows" / "doomed.yaml"
 
     scripted: list[FakeLLMResponse] = []
     for attempt in range(1, 6):
@@ -984,24 +974,23 @@ async def test_max_attempts_cap(tmp_path: Path) -> None:
     # AC 3.1 — exactly 5 validate_workflow calls; the 6th attempt
     # is replaced by the escalation text.
     validate_calls = [
-        name for name, _ in _tool_call_sequence(events)
-        if name == "validate_workflow"
+        name for name, _ in _tool_call_sequence(events) if name == "validate_workflow"
     ]
     assert len(validate_calls) == 5, (
-        f"expected 5 validate_workflow calls (MAX_ATTEMPTS); got "
-        f"{len(validate_calls)}"
+        f"expected 5 validate_workflow calls (MAX_ATTEMPTS); got {len(validate_calls)}"
     )
 
     # Every validate result must be is_valid: false — the test fails
     # closed if any earlier draft accidentally passed.
     validate_results = [
-        e for e in events
+        e
+        for e in events
         if e.type == EventType.TOOL_RESULT
         and e.data.get("tool_name") == "validate_workflow"
     ]
-    assert all(
-        r.data["result"]["is_valid"] is False for r in validate_results
-    ), "every validate call must return is_valid: false in this scenario"
+    assert all(r.data["result"]["is_valid"] is False for r in validate_results), (
+        "every validate call must return is_valid: false in this scenario"
+    )
 
     # The final agent message includes the cap-reached escalation.
     final = _final_agent_message(events) or ""
@@ -1058,9 +1047,7 @@ async def test_writes_to_target_bundle_only(tmp_path: Path) -> None:
     kolsch_bundle = workspace / "bundles" / "kolsch"
     before = _snapshot_bundle(kolsch_bundle)
 
-    target_yaml = (
-        workspace / "bundles" / _TARGET_BUNDLE / "workflows" / "triage.yaml"
-    )
+    target_yaml = workspace / "bundles" / _TARGET_BUNDLE / "workflows" / "triage.yaml"
 
     scripted = [
         ToolCallResponse(
@@ -1092,7 +1079,8 @@ async def test_writes_to_target_bundle_only(tmp_path: Path) -> None:
     # AC 3.2 — every write_file invocation targets bundles/my-bundle/.
     # No accidental writes into bundles/kolsch/ or anywhere else.
     write_calls = [
-        (name, args) for name, args in _tool_call_sequence(events)
+        (name, args)
+        for name, args in _tool_call_sequence(events)
         if name == "write_file"
     ]
     assert write_calls, "expected at least one write_file invocation"
@@ -1143,9 +1131,7 @@ def _make_workspace_kolsch_only(tmp_path: Path) -> Path:
     """
     for sub in ("bundles", "sessions", "content", "logs", "data", "out", ".platform"):
         (tmp_path / sub).mkdir(parents=True, exist_ok=True)
-    (tmp_path / "platform.yaml").write_text(
-        _PERMISSIVE_PLATFORM_YAML, encoding="utf-8"
-    )
+    (tmp_path / "platform.yaml").write_text(_PERMISSIVE_PLATFORM_YAML, encoding="utf-8")
     (tmp_path / ".env").write_text("", encoding="utf-8")
     shutil.copytree(_STARTER_BUNDLE, tmp_path / "bundles" / "kolsch")
     return tmp_path
@@ -1214,8 +1200,7 @@ async def test_kolsch_only_workspace_surfaces_escalation(
     # AC — no write_file (or any other mutating tool) invocations.
     tool_calls = [name for name, _args in _tool_call_sequence(events)]
     assert "write_file" not in tool_calls, (
-        f"expected zero write_file calls in the escalation path; "
-        f"got: {tool_calls}"
+        f"expected zero write_file calls in the escalation path; got: {tool_calls}"
     )
 
     # AC — final agent message carries the prescribed escalation

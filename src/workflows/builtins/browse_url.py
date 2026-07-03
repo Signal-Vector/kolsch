@@ -112,15 +112,9 @@ class BrowseUrlRunner:
         }
         rendered_url = _render(node_def.url, scope)
         rendered_format = _render(node_def.format, scope)
-        rendered_selector = _render_optional(
-            node_def.wait_selector, scope
-        )
-        rendered_headers = _render_mapping(
-            node_def.headers, scope
-        )
-        rendered_cookies = _render_mapping(
-            node_def.cookies, scope
-        )
+        rendered_selector = _render_optional(node_def.wait_selector, scope)
+        rendered_headers = _render_mapping(node_def.headers, scope)
+        rendered_cookies = _render_mapping(node_def.cookies, scope)
 
         args: dict[str, Any] = {
             "url": rendered_url,
@@ -197,9 +191,7 @@ def _render(value: str, scope: dict[str, Any]) -> str:
     return JINJA_ENV.from_string(value).render(**scope)
 
 
-def _render_optional(
-    value: str | None, scope: dict[str, Any]
-) -> str | None:
+def _render_optional(value: str | None, scope: dict[str, Any]) -> str | None:
     if value is None:
         return None
     return _render(value, scope)

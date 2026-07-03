@@ -72,9 +72,7 @@ class WriteFileRunner:
         _ = state
         from tools.dispatch import dispatch_tool  # noqa: PLC0415
 
-        rendered_path = _render_str(
-            ctx, node_def.path, bound_inputs=bound_inputs
-        )
+        rendered_path = _render_str(ctx, node_def.path, bound_inputs=bound_inputs)
         # Bytes pass through verbatim — Jinja rendering is for strings
         # only. The parser accepts ``str | bytes`` for forward-compat.
         if isinstance(node_def.content, bytes):

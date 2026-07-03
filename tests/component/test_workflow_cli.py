@@ -166,9 +166,7 @@ class TestFormatPlacement:
             ws,
             "demo",
             {
-                "nodes": {
-                    "h": {"type": "kolsch/nodes/bash", "command": "echo"}
-                },
+                "nodes": {"h": {"type": "kolsch/nodes/bash", "command": "echo"}},
                 "graph": {"edges": []},
             },
         )
@@ -245,9 +243,7 @@ class TestFormatPlacement:
     ) -> None:
         """Neither placement → text default preserved."""
         ws = self._workspace_with_one_workflow(tmp_path)
-        rc, out, _ = _run_cli(
-            ["--root", str(ws), "workflows", "list"], capsys=capsys
-        )
+        rc, out, _ = _run_cli(["--root", str(ws), "workflows", "list"], capsys=capsys)
         assert rc == 0
         # Text output is tab-separated, not JSON.
         assert not out.startswith("{")
@@ -736,9 +732,7 @@ class TestRenderException:
         )
         rendered = render_exception(exc)
         assert rendered["class"] == "WorkflowJinjaRefUnknown"
-        assert (
-            rendered["identifying_names"]["reference"] == "nodes.foo.bar"
-        )
+        assert rendered["identifying_names"]["reference"] == "nodes.foo.bar"
         assert rendered["identifying_names"]["reason"] == "unknown_field"
 
 
@@ -806,9 +800,7 @@ class TestNodesCLI:
         assert rc == 0
         envelope = json.loads(out)
         assert envelope["command"] == "nodes list"
-        assert any(
-            n["ref"] == "kolsch/nodes/bash" for n in envelope["data"]["nodes"]
-        )
+        assert any(n["ref"] == "kolsch/nodes/bash" for n in envelope["data"]["nodes"])
 
     def test_nodes_show_text(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]

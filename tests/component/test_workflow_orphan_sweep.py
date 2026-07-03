@@ -183,9 +183,7 @@ def test_corrupt_pid_file_reconciles(tmp_path: Path) -> None:
     run = store.create(workflow_ref="demo/workflows/x", inputs={})
     _seed_started_no_terminal(store, run_id=run.run_id, pid=None)
     # Write garbage into the pid file.
-    store.directory(run.run_id).pid_path.write_text(
-        "not-a-pid\n", encoding="utf-8"
-    )
+    store.directory(run.run_id).pid_path.write_text("not-a-pid\n", encoding="utf-8")
 
     reconciled = sweep(store)
 
@@ -208,9 +206,7 @@ def test_mixed_batch_reconciles_only_orphans(tmp_path: Path) -> None:
     _seed_started_no_terminal(store, run_id=live.run_id, pid=os.getpid())
 
     terminal = store.create(workflow_ref="demo/workflows/c", inputs={})
-    store.append_event(
-        terminal.run_id, {"kind": "workflow.run.started", "payload": {}}
-    )
+    store.append_event(terminal.run_id, {"kind": "workflow.run.started", "payload": {}})
     store.append_event(
         terminal.run_id,
         {"kind": "workflow.run.aborted", "payload": {"reason": "user_cancel"}},
@@ -241,21 +237,15 @@ def test_phase_3_7_child_orphan_uses_orphaned_child_reason(
 
     store = WorkflowRunStore(tmp_path)
     parent_ptr = ParentRunPointer(
-        workflow_run_id=WorkflowRunId(
-            "wrk_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-        ),
-        invocation_id=InvocationId(
-            "inv_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
-        ),
+        workflow_run_id=WorkflowRunId("wrk_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"),
+        invocation_id=InvocationId("inv_aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"),
     )
     child_run = store.create(
         workflow_ref="demo/workflows/child",
         inputs={},
         parent=parent_ptr,
     )
-    _seed_started_no_terminal(
-        store, run_id=child_run.run_id, pid=_pick_dead_pid()
-    )
+    _seed_started_no_terminal(store, run_id=child_run.run_id, pid=_pick_dead_pid())
 
     reconciled = sweep(store)
     assert reconciled == [child_run.run_id]
@@ -272,9 +262,7 @@ def test_top_level_orphan_keeps_orphaned_reason(tmp_path: Path) -> None:
     ``orphaned_child`` variant."""
     store = WorkflowRunStore(tmp_path)
     root_run = store.create(workflow_ref="demo/workflows/root", inputs={})
-    _seed_started_no_terminal(
-        store, run_id=root_run.run_id, pid=_pick_dead_pid()
-    )
+    _seed_started_no_terminal(store, run_id=root_run.run_id, pid=_pick_dead_pid())
 
     reconciled = sweep(store)
     assert reconciled == [root_run.run_id]
@@ -301,7 +289,6 @@ def test_repeat_sweep_is_idempotent(tmp_path: Path) -> None:
     failed_lines = [
         line
         for line in text.splitlines()
-        if line.strip()
-        and json.loads(line).get("kind") == "workflow.run.failed"
+        if line.strip() and json.loads(line).get("kind") == "workflow.run.failed"
     ]
     assert len(failed_lines) == 1

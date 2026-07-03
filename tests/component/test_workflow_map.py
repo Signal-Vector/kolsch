@@ -67,9 +67,7 @@ class _FailOnNthRunner:
         self._call_count += 1
         if self._call_count > self._n:
             msg = f"worker {node_name!r} blew up on call {self._call_count}"
-            raise RuntimeError(
-                msg
-            )
+            raise RuntimeError(msg)
         return {"ok": self._call_count}
 
 
@@ -82,9 +80,7 @@ def _executor(
 ) -> tuple[IterativeExecutor, WorkflowRunStore, Any]:
     """Build a fresh executor + store with the standard runner set."""
     store = WorkflowRunStore(tmp_path)
-    run = store.create(
-        workflow_ref="demo/workflows/map_test", inputs=inputs or {}
-    )
+    run = store.create(workflow_ref="demo/workflows/map_test", inputs=inputs or {})
     registry = RunnerRegistry()
     registry.register("kolsch/nodes/noop", NoopRunner())
     registry.register("kolsch/nodes/compute", ComputeRunner())
@@ -108,9 +104,7 @@ def _executor(
 
 
 class TestHappyPath:
-    async def test_map_over_ten_elements_collects_results(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_map_over_ten_elements_collects_results(self, tmp_path: Path) -> None:
         # Worker is a compute that echoes the iteration element under
         # ``inputs.item``. The harvested results are 10 ``{value: N}``
         # dicts in order.
@@ -139,8 +133,7 @@ class TestHappyPath:
         map_completed = next(
             e
             for e in events
-            if e["kind"] == "workflow.node.completed"
-            and e["node_name"] == "fan_out"
+            if e["kind"] == "workflow.node.completed" and e["node_name"] == "fan_out"
         )
         assert map_completed["payload"]["output"] == {
             "results": [{"value": i} for i in range(1, 11)]
@@ -151,21 +144,18 @@ class TestHappyPath:
         map_started = next(
             e
             for e in events
-            if e["kind"] == "workflow.node.started"
-            and e["node_name"] == "fan_out"
+            if e["kind"] == "workflow.node.started" and e["node_name"] == "fan_out"
         )
         map_inv_id = map_started["invocation_id"]
         iter_starts = [
             e
             for e in events
-            if e["kind"] == "workflow.node.started"
-            and e["node_name"] == "echo_one"
+            if e["kind"] == "workflow.node.started" and e["node_name"] == "echo_one"
         ]
         iter_completes = [
             e
             for e in events
-            if e["kind"] == "workflow.node.completed"
-            and e["node_name"] == "echo_one"
+            if e["kind"] == "workflow.node.completed" and e["node_name"] == "echo_one"
         ]
         assert len(iter_starts) == 10
         assert len(iter_completes) == 10
@@ -177,9 +167,7 @@ class TestHappyPath:
             assert ev["payload"]["parent_invocation_id"] == map_inv_id
             assert ev["payload"]["iteration_index"] == index
 
-    async def test_custom_item_as_binds_under_named_key(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_custom_item_as_binds_under_named_key(self, tmp_path: Path) -> None:
         # The worker reads ``inputs.ticket`` so we know the map bound
         # the element under its custom ``item_as``.
         wf = Workflow.model_validate(
@@ -254,8 +242,7 @@ class TestWithConstants:
         completed = next(
             e
             for e in events
-            if e["kind"] == "workflow.node.completed"
-            and e["node_name"] == "fan"
+            if e["kind"] == "workflow.node.completed" and e["node_name"] == "fan"
         )
         assert completed["payload"]["output"] == {
             "results": [{"value": "OPS-a"}, {"value": "OPS-b"}]
@@ -282,16 +269,13 @@ class TestWithConstants:
                 "graph": {"edges": []},
             }
         )
-        ex, store, run = _executor(
-            tmp_path, workflow=wf, inputs={"tag": "ACME"}
-        )
+        ex, store, run = _executor(tmp_path, workflow=wf, inputs={"tag": "ACME"})
         await ex.run()
         events = list(store.read_events(run.run_id))
         completed = next(
             e
             for e in events
-            if e["kind"] == "workflow.node.completed"
-            and e["node_name"] == "fan"
+            if e["kind"] == "workflow.node.completed" and e["node_name"] == "fan"
         )
         assert completed["payload"]["output"] == {
             "results": [{"value": "ACME:a"}, {"value": "ACME:b"}]
@@ -322,16 +306,13 @@ class TestWithConstants:
                 "graph": {"edges": []},
             }
         )
-        ex, store, run = _executor(
-            tmp_path, workflow=wf, inputs={"tag": "abc"}
-        )
+        ex, store, run = _executor(tmp_path, workflow=wf, inputs={"tag": "abc"})
         await ex.run()
         events = list(store.read_events(run.run_id))
         iter_starts = [
             e
             for e in events
-            if e["kind"] == "workflow.node.started"
-            and e["node_name"] == "echo"
+            if e["kind"] == "workflow.node.started" and e["node_name"] == "echo"
         ]
         metas = {ev["payload"]["inputs"]["meta"] for ev in iter_starts}
         assert metas == {"ABC"}
@@ -371,20 +352,16 @@ class TestOverShapes:
         assert not any(
             e["node_name"] == "echo"
             for e in events
-            if e["kind"]
-            in {"workflow.node.started", "workflow.node.completed"}
+            if e["kind"] in {"workflow.node.started", "workflow.node.completed"}
         )
         completed = next(
             e
             for e in events
-            if e["kind"] == "workflow.node.completed"
-            and e["node_name"] == "fan"
+            if e["kind"] == "workflow.node.completed" and e["node_name"] == "fan"
         )
         assert completed["payload"]["output"] == {"results": []}
 
-    async def test_non_list_over_raises_node_failed(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_non_list_over_raises_node_failed(self, tmp_path: Path) -> None:
         wf = Workflow.model_validate(
             {
                 "nodes": {
@@ -429,9 +406,7 @@ class TestRunnerDefensiveGuards:
     async def test_undefined_worker_raises_node_failed(self) -> None:
         from workflows.parser import MapNodeDef
 
-        wf = Workflow.model_validate(
-            {"nodes": {"echo": {"type": "kolsch/nodes/noop"}}}
-        )
+        wf = Workflow.model_validate({"nodes": {"echo": {"type": "kolsch/nodes/noop"}}})
         node_def = MapNodeDef.model_validate(
             {
                 "type": "kolsch/nodes/map",
@@ -457,9 +432,7 @@ class TestRunnerDefensiveGuards:
     async def test_non_list_over_via_runner_direct(self) -> None:
         from workflows.parser import MapNodeDef
 
-        wf = Workflow.model_validate(
-            {"nodes": {"echo": {"type": "kolsch/nodes/noop"}}}
-        )
+        wf = Workflow.model_validate({"nodes": {"echo": {"type": "kolsch/nodes/noop"}}})
         node_def = MapNodeDef.model_validate(
             {
                 "type": "kolsch/nodes/map",
@@ -524,9 +497,7 @@ class TestPartialFailure:
         ex, store, run = _executor(
             tmp_path,
             workflow=wf,
-            extras={
-                "kolsch/nodes/compute": _FailOnNthRunner(n_before_failure=2)
-            },
+            extras={"kolsch/nodes/compute": _FailOnNthRunner(n_before_failure=2)},
         )
         status = await ex.run()
         assert status == WorkflowRunStatus.FAILED
@@ -535,8 +506,7 @@ class TestPartialFailure:
         worker_completed = [
             e
             for e in events
-            if e["kind"] == "workflow.node.completed"
-            and e["node_name"] == "worker"
+            if e["kind"] == "workflow.node.completed" and e["node_name"] == "worker"
         ]
         # Only two iterations completed before the third raised.
         assert len(worker_completed) == 2
@@ -545,8 +515,7 @@ class TestPartialFailure:
         worker_failed = [
             e
             for e in events
-            if e["kind"] == "workflow.node.failed"
-            and e["node_name"] == "worker"
+            if e["kind"] == "workflow.node.failed" and e["node_name"] == "worker"
         ]
         assert len(worker_failed) == 1
         assert worker_failed[0]["payload"]["iteration_index"] == 2
@@ -560,8 +529,7 @@ class TestPartialFailure:
         fan_failed = next(
             e
             for e in events
-            if e["kind"] == "workflow.node.failed"
-            and e["node_name"] == "fan"
+            if e["kind"] == "workflow.node.failed" and e["node_name"] == "fan"
         )
         # The error class on the map node's failed payload is the
         # original worker exception class (Phase 3.1 stamps the raw
@@ -602,13 +570,9 @@ class TestStrictBindValidation:
         failed = next(
             e
             for e in events
-            if e["kind"] == "workflow.node.failed"
-            and e["node_name"] == "fan"
+            if e["kind"] == "workflow.node.failed" and e["node_name"] == "fan"
         )
-        assert (
-            failed["payload"]["error_class"]
-            == "WorkflowBindTypeMismatch"
-        )
+        assert failed["payload"]["error_class"] == "WorkflowBindTypeMismatch"
 
 
 # ---------------------------------------------------------------------------
@@ -623,9 +587,7 @@ class TestWorkerOnlyNodeNotFiredIndependently:
     reachability check; the executor's topology must mirror the
     exemption."""
 
-    async def test_worker_only_node_skipped_from_worklist(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_worker_only_node_skipped_from_worklist(self, tmp_path: Path) -> None:
         wf = Workflow.model_validate(
             {
                 "nodes": {
@@ -654,8 +616,7 @@ class TestWorkerOnlyNodeNotFiredIndependently:
         worker_started = [
             e
             for e in events
-            if e["kind"] == "workflow.node.started"
-            and e["node_name"] == "worker"
+            if e["kind"] == "workflow.node.started" and e["node_name"] == "worker"
         ]
         assert len(worker_started) == 2
         # And every started carries parent_invocation_id (= iteration
@@ -670,9 +631,7 @@ class TestWorkerOnlyNodeNotFiredIndependently:
 
 
 class TestDownstreamConsumes:
-    async def test_filter_consumes_map_results(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_filter_consumes_map_results(self, tmp_path: Path) -> None:
         wf = Workflow.model_validate(
             {
                 "nodes": {
@@ -692,9 +651,7 @@ class TestDownstreamConsumes:
                         "condition": "{{ inputs.item.value >= 30 }}",
                     },
                 },
-                "graph": {
-                    "edges": [{"from": "all_scores", "to": "high_scores"}]
-                },
+                "graph": {"edges": [{"from": "all_scores", "to": "high_scores"}]},
             }
         )
         ex, store, run = _executor(tmp_path, workflow=wf)

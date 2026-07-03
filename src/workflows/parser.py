@@ -317,8 +317,10 @@ class BrowseUrlNodeDef(_BaseNodeDef):
         its 30s default. Detect the ambiguous pattern and raise with
         a clear fix-path rather than let it slip through.
         """
-        if isinstance(data, dict) and "timeout_seconds" in data and (
-            "request_timeout_seconds" not in data
+        if (
+            isinstance(data, dict)
+            and "timeout_seconds" in data
+            and ("request_timeout_seconds" not in data)
         ):
             msg = (
                 "browse_url node sets 'timeout_seconds' but not "

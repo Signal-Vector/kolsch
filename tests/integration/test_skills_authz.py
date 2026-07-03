@@ -1,4 +1,4 @@
-"""Skills × tools.read authz interaction + Sk-I2 end-to-end pins.
+"""Skills x tools.read authz interaction + Sk-I2 end-to-end pins.
 
 Two regression tests closing audit gaps surfaced in Step 1:
 
@@ -268,7 +268,9 @@ async def test_tc_skill_disable_01_excludes_listing_but_force_invocable(
     assert refs_returned == {
         "skl/skills/discoverable",
         "skl/skills/hidden-deliberate",
-    }, "get_enabled_skills must include disabled skills (force-invoke routes through them)."
+    }, (
+        "get_enabled_skills must include disabled skills (force-invoke routes through them)."
+    )
 
     # Mirror the engine's pre-flight filter at engine.py
     # (``[SkillItem(...) for s in enabled_skills if not s.disable_model_invocation]``)
@@ -313,12 +315,7 @@ async def test_tc_skill_disable_01_excludes_listing_but_force_invocable(
     ]
     assert len(synthetic_calls) == 1
     skill_md_path = (
-        tmp_path
-        / "bundles"
-        / "skl"
-        / "skills"
-        / "hidden-deliberate"
-        / "SKILL.md"
+        tmp_path / "bundles" / "skl" / "skills" / "hidden-deliberate" / "SKILL.md"
     ).resolve()
     assert synthetic_calls[0].data["arguments"]["path"] == str(skill_md_path)
 

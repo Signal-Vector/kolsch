@@ -153,9 +153,7 @@ def _scaffold_workspace(
     """
     for sub in ("bundles", "sessions", "content", "logs", "data", ".platform"):
         (root / sub).mkdir(parents=True, exist_ok=True)
-    (root / "platform.yaml").write_text(
-        _PERMISSIVE_PLATFORM_YAML, encoding="utf-8"
-    )
+    (root / "platform.yaml").write_text(_PERMISSIVE_PLATFORM_YAML, encoding="utf-8")
     (root / ".env").write_text("", encoding="utf-8")
     bundle = root / "bundles" / "kolsch"
     (bundle / "agents").mkdir(parents=True, exist_ok=True)
@@ -164,9 +162,7 @@ def _scaffold_workspace(
         'name: kolsch\nversion: "0.1"\ndescription: step4-e2e\n',
         encoding="utf-8",
     )
-    (bundle / "agents" / "greeter.yaml").write_text(
-        agent_yaml, encoding="utf-8"
-    )
+    (bundle / "agents" / "greeter.yaml").write_text(agent_yaml, encoding="utf-8")
     (bundle / "workflows" / "hello-agent.yaml").write_text(
         workflow_yaml, encoding="utf-8"
     )
@@ -197,9 +193,7 @@ async def _build_engine_with_llm(
     secrets = DotenvSecretsProvider(root=root, config={"path": ".env"})
     sandbox = NativeSandboxProvider(config={})
     memory = RecentBufferMemoryProvider(store=store)
-    path_policy = PathPolicy(
-        allowed_paths=["data/", "bundles/"], denied_paths=[".env"]
-    )
+    path_policy = PathPolicy(allowed_paths=["data/", "bundles/"], denied_paths=[".env"])
     tools_sub = ToolsSubsystem(
         secrets=secrets,
         sandbox=sandbox,
@@ -231,8 +225,7 @@ def _spawned_session_jsonl(workspace: Path) -> Path:
     sessions_dir = workspace / "sessions"
     jsonls = sorted(sessions_dir.glob("ses_*.jsonl"))
     assert len(jsonls) == 1, (
-        f"expected exactly one spawned session JSONL; got "
-        f"{[p.name for p in jsonls]}"
+        f"expected exactly one spawned session JSONL; got {[p.name for p in jsonls]}"
     )
     return jsonls[0]
 
@@ -274,9 +267,7 @@ async def _drive_workflow(
     """Scaffold a workspace, run the workflow once, return:
     (status_value, workflow_events_path, spawned_session_jsonl, store).
     """
-    _scaffold_workspace(
-        tmp_path, workflow_yaml=workflow_yaml, agent_yaml=agent_yaml
-    )
+    _scaffold_workspace(tmp_path, workflow_yaml=workflow_yaml, agent_yaml=agent_yaml)
     llm_callable = llm or _ScriptedLLM(texts=["Hello, friend!"])
 
     engine, store, am = await _build_engine_with_llm(tmp_path, llm=llm_callable)
@@ -367,9 +358,7 @@ def test_phase1_setup_then_run_workflow_succeeds(
         ]
     )
     captured = capsys.readouterr()
-    assert rc == 0, (
-        f"workflow run failed: stdout={captured.out} err={captured.err}"
-    )
+    assert rc == 0, f"workflow run failed: stdout={captured.out} err={captured.err}"
 
     runs_dir = workspace / "runs"
     runs = list(runs_dir.iterdir())
@@ -414,9 +403,7 @@ def test_phase1_setup_then_run_workflow_succeeds(
     opener = session_events[0]
     assert opener["type"] == "session.opened"
     spawned_by = opener["data"].get("spawned_by")
-    assert spawned_by is not None, (
-        f"session.opened missing spawned_by: {opener!r}"
-    )
+    assert spawned_by is not None, f"session.opened missing spawned_by: {opener!r}"
     classify_started = next(
         e
         for e in events
@@ -570,6 +557,5 @@ async def test_phase4_trace_id_propagates_to_spawned_session(
     )
     session_trace_id = session_trace_ids.pop()
     assert session_trace_id == workflow_trace_id, (
-        f"trace_id mismatch — workflow={workflow_trace_id} "
-        f"session={session_trace_id}"
+        f"trace_id mismatch — workflow={workflow_trace_id} session={session_trace_id}"
     )

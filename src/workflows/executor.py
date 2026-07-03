@@ -694,7 +694,7 @@ class IterativeExecutor:
         open_node_type = _node_type_ref(open_node_def) if open_node_def else ""
         is_workflow_node_pause = open_node_type == "kolsch/nodes/workflow"
 
-        if not is_workflow_node_pause:
+        if not is_workflow_node_pause:  # noqa: SIM102 — nested block reads clearer with the intervening comment
             # Validate response shape BEFORE any side effects that
             # would flip the status. Bad shape → retry-friendly
             # `WorkflowInputInvalid` with the run still in
@@ -1707,7 +1707,7 @@ class IterativeExecutor:
                     ),
                 )
             self._cleanup_waiting_at(run_dir)
-            return WorkflowRunStatus.SUCCEEDED
+            return WorkflowRunStatus.SUCCEEDED  # noqa: TRY300 — try guards emit-event side effects, not just the return
         except BaseException:
             # Safety net — any uncaught exception out of the dispatch
             # loop (e.g. a programming bug) must cancel orphaned tasks
@@ -1717,7 +1717,7 @@ class IterativeExecutor:
                 if not task.done():
                     task.cancel()
             for task in list(in_flight):
-                try:
+                try:  # noqa: SIM105 — drain reads clearer than contextlib.suppress here
                     await task
                 except BaseException:  # noqa: BLE001, S110 — drain only
                     pass
@@ -1968,7 +1968,7 @@ class IterativeExecutor:
         for task, _ in pending_items:
             task.cancel()
         for task, pending in pending_items:
-            try:
+            try:  # noqa: SIM105 — drain reads clearer than contextlib.suppress here
                 await task
             except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110 — drain only
                 pass

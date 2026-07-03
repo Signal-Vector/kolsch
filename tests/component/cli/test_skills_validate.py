@@ -88,10 +88,14 @@ def _write_skill_md(
     if raw_frontmatter is not None:
         fm_block = raw_frontmatter
     else:
-        fm = frontmatter if frontmatter is not None else {
-            "name": name,
-            "description": "A short description that triggers the skill.",
-        }
+        fm = (
+            frontmatter
+            if frontmatter is not None
+            else {
+                "name": name,
+                "description": "A short description that triggers the skill.",
+            }
+        )
         fm_block = yaml.safe_dump(fm, sort_keys=False)
     skill_md.write_text(f"---\n{fm_block}---\n\n{body}", encoding="utf-8")
     return skill_md

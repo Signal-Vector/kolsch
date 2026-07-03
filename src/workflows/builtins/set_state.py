@@ -68,9 +68,7 @@ class SetStateRunner:
         _ = node_name  # parent_event_id chain comes from ctx, not node_name
         for key, raw_value in node_def.keys.items():
             if _is_jinja_marked(raw_value):
-                rendered = ctx.render_jinja(
-                    raw_value, inputs_overlay=bound_inputs
-                )
+                rendered = ctx.render_jinja(raw_value, inputs_overlay=bound_inputs)
             else:
                 rendered = raw_value
             state[key] = rendered

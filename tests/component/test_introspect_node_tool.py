@@ -42,9 +42,7 @@ if TYPE_CHECKING:
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_STARTER_BUNDLE = (
-    _REPO_ROOT / "src" / "cli" / "_starter_bundle" / "kolsch"
-)
+_STARTER_BUNDLE = _REPO_ROOT / "src" / "cli" / "_starter_bundle" / "kolsch"
 _TOOL_PATH = _STARTER_BUNDLE / "tools" / "introspect_node.py"
 _ECHO_PATH = _STARTER_BUNDLE / "nodes" / "echo.py"
 
@@ -258,9 +256,7 @@ async def test_introspect_syntax_error(tmp_path: Path) -> None:
     Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
 
     target = workspace / "bundles" / "kolsch" / "nodes" / "syntax.py"
-    target.write_text(
-        "def run(inputs, ctx ->\n    return None\n", encoding="utf-8"
-    )
+    target.write_text("def run(inputs, ctx ->\n    return None\n", encoding="utf-8")
 
     result = await fn(Args(py_path=str(target)), _ctx(workspace))
 

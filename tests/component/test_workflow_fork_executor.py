@@ -133,9 +133,7 @@ def _events(store: WorkflowRunStore, run_id: WorkflowRunId) -> list[dict[str, An
     return list(store.read_events(run_id))
 
 
-def _completion_event_id_for(
-    events: Iterable[dict[str, Any]], node_name: str
-) -> str:
+def _completion_event_id_for(events: Iterable[dict[str, Any]], node_name: str) -> str:
     for event in events:
         if event.get("kind") == "workflow.node.completed" and (
             event.get("node_name") == node_name
@@ -165,9 +163,7 @@ def _node_started_names(events: Iterable[dict[str, Any]]) -> list[str]:
     for event in events:
         if event.get("kind") != "workflow.node.started":
             continue
-        name = event.get("node_name") or event.get(
-            "payload", {}
-        ).get("node_name")
+        name = event.get("node_name") or event.get("payload", {}).get("node_name")
         if name is not None:
             out.append(str(name))
     return out
@@ -264,13 +260,8 @@ class TestForkAtCompleted:
         # parent_event_id is None.
         assert fork_events[0]["kind"] == "workflow.run.forked_from"
         assert fork_events[0]["parent_event_id"] is None
-        assert (
-            fork_events[0]["payload"]["forked_from_run_id"]
-            == str(parent_run.run_id)
-        )
-        assert (
-            fork_events[0]["payload"]["fork_event_id"] == b_completed_id
-        )
+        assert fork_events[0]["payload"]["forked_from_run_id"] == str(parent_run.run_id)
+        assert fork_events[0]["payload"]["fork_event_id"] == b_completed_id
         # And no workflow.run.started ahead of it (forked runs inherit
         # the parent's started baseline via replay; they do NOT emit a
         # fresh started event — same discipline as Phase 3.4 resume).
@@ -286,14 +277,10 @@ class TestForkAtCompleted:
         # AC 1.10 — PID sidecar holds THIS process's PID, atomically
         # written (no leftover .tmp).
         pid_path = store.directory(forked_run.run_id).pid_path
-        assert pid_path.read_text(encoding="utf-8").strip() == str(
-            os.getpid()
-        )
+        assert pid_path.read_text(encoding="utf-8").strip() == str(os.getpid())
         assert not pid_path.with_suffix(".tmp").exists()
 
-    async def test_fork_at_a_completed_runs_only_b_and_c(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_fork_at_a_completed_runs_only_b_and_c(self, tmp_path: Path) -> None:
         # Reviewer-friendly variant: fork EARLIER in the pipeline; B
         # and C must both fire in the fork using A's replayed output.
         store, parent_run, wf = await _run_pipeline_to_completion(tmp_path)
@@ -395,9 +382,7 @@ class TestForkInputOverrides:
         # The forked JSONL records the overrides in the
         # workflow.run.forked_from payload for forensics.
         fork_events = _events(store, forked_run.run_id)
-        assert (
-            fork_events[0]["payload"]["input_overrides"] == {"value": 99}
-        )
+        assert fork_events[0]["payload"]["input_overrides"] == {"value": 99}
 
     async def test_override_merge_adds_new_keys_preserves_untouched(
         self, tmp_path: Path
@@ -479,9 +464,7 @@ class TestForkInputOverrides:
             workflow_ref=parent_run.workflow_ref,
             inputs=dict(parent_run.inputs),
             trace_id=parent_run.trace_id,
-            forked_from=ForkedFrom(
-                run_id=parent_run.run_id, fork_event_id=started_id
-            ),
+            forked_from=ForkedFrom(run_id=parent_run.run_id, fork_event_id=started_id),
         )
         fork_ex = IterativeExecutor(
             workflow=wf,
@@ -496,13 +479,9 @@ class TestForkInputOverrides:
         )
         assert status == WorkflowRunStatus.SUCCEEDED
         # The probe saw the OVERRIDDEN state on the fork.
-        assert fork_ex._captured == {
-            "probe": {"value": "forked"}
-        }
+        assert fork_ex._captured == {"probe": {"value": "forked"}}
 
-    async def test_override_at_started_re_runs_all_nodes(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_override_at_started_re_runs_all_nodes(self, tmp_path: Path) -> None:
         # AC for Phase Test 3 — fork at started re-runs everything;
         # no replayed completions means every node fires.
         store, parent_run, wf = await _run_pipeline_to_completion(tmp_path)
@@ -512,9 +491,7 @@ class TestForkInputOverrides:
             workflow_ref=parent_run.workflow_ref,
             inputs={},
             trace_id=parent_run.trace_id,
-            forked_from=ForkedFrom(
-                run_id=parent_run.run_id, fork_event_id=started_id
-            ),
+            forked_from=ForkedFrom(run_id=parent_run.run_id, fork_event_id=started_id),
         )
         ex = IterativeExecutor(
             workflow=wf,
@@ -523,9 +500,7 @@ class TestForkInputOverrides:
             registry=_make_registry(),
             catalog=AssetCatalog(),
         )
-        status = await ex.start_from_fork(
-            fork_event_id=started_id, input_overrides={}
-        )
+        status = await ex.start_from_fork(fork_event_id=started_id, input_overrides={})
         assert status == WorkflowRunStatus.SUCCEEDED
         # All three nodes re-fired in the fork's JSONL.
         assert _node_started_names(_events(store, forked_run.run_id)) == [
@@ -647,9 +622,7 @@ class TestForkErrorPaths:
             catalog=AssetCatalog(),
         )
         with pytest.raises(WorkflowRunNotFound) as exc_info:
-            await ex.start_from_fork(
-                fork_event_id=b_completed_id, input_overrides={}
-            )
+            await ex.start_from_fork(fork_event_id=b_completed_id, input_overrides={})
         assert exc_info.value.run_id == str(parent_run.run_id)
 
     async def test_parent_meta_deleted_raises_run_not_found(
@@ -681,13 +654,9 @@ class TestForkErrorPaths:
             catalog=AssetCatalog(),
         )
         with pytest.raises(WorkflowRunNotFound):
-            await ex.start_from_fork(
-                fork_event_id=b_completed_id, input_overrides={}
-            )
+            await ex.start_from_fork(fork_event_id=b_completed_id, input_overrides={})
 
-    async def test_missing_forked_from_raises_value_error(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_missing_forked_from_raises_value_error(self, tmp_path: Path) -> None:
         # Programming-error guard: a run without forked_from MUST NOT
         # be fork-able. ValueError (not WorkflowError) so the CLI's
         # exception arms don't accidentally render it as an envelope.
@@ -702,9 +671,7 @@ class TestForkErrorPaths:
             catalog=AssetCatalog(),
         )
         with pytest.raises(ValueError, match="forked_from"):
-            await ex.start_from_fork(
-                fork_event_id="ev_x", input_overrides={}
-            )
+            await ex.start_from_fork(fork_event_id="ev_x", input_overrides={})
 
 
 # ---------------------------------------------------------------------------
@@ -728,9 +695,7 @@ class TestForkParentCoexistence:
 
         synthetic_parent = ParentRunPointer(
             workflow_run_id=parent_run.run_id,
-            invocation_id=InvocationId(
-                "inv_11111111-1111-4111-8111-111111111111"
-            ),
+            invocation_id=InvocationId("inv_11111111-1111-4111-8111-111111111111"),
         )
         forked_run = store.create(
             workflow_ref=parent_run.workflow_ref,

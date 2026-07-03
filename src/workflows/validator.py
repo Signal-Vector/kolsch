@@ -173,10 +173,11 @@ class ValidationResult:
 
 
 _FILE_PLACEHOLDER = "<workflow>"
-"""Source-file placeholder used by error constructors when the validator runs against an in-memory `Workflow` model.
+"""Source-file placeholder used by error constructors.
 
-YAML-origin callers pass through `load_workflow` which records the
-real path on its own error sites.
+Applies when the validator runs against an in-memory `Workflow`
+model. YAML-origin callers pass through `load_workflow` which
+records the real path on its own error sites.
 """
 
 
@@ -504,7 +505,7 @@ def _check_structural(
         errors.append(WorkflowUnreachableNode(file=file, line=0, node=node_name))
 
     # ``copy_of:`` source must be graph-reachable (no template-only nodes).
-    for node_name, node in workflow.nodes.items():
+    for node in workflow.nodes.values():
         if not isinstance(node, CopyOfNodeDef):
             continue
         if node.copy_of in copy_of_sources and node.copy_of not in reachable:
@@ -967,7 +968,7 @@ def _check_value_for_refs(
 
 
 def _is_inside_same_map(
-    workflow: Workflow, consuming_node: str, worker_name: str
+    workflow: Workflow, _consuming_node: str, worker_name: str
 ) -> bool:
     """Return `True` iff `consuming_node` is the map that targets `worker_name`.
 

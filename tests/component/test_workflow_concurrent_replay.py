@@ -162,10 +162,7 @@ async def test_auto_mode_replay_matches_sequential(tmp_path: Path) -> None:
     # The captured dicts must match key-by-key (same outputs from
     # the same nodes, regardless of completion order).
     assert stub_seq._captured == stub_par._captured
-    assert (
-        stub_seq._completed_or_skipped
-        == stub_par._completed_or_skipped
-    )
+    assert stub_seq._completed_or_skipped == stub_par._completed_or_skipped
     assert stub_seq._pruned == stub_par._pruned
 
 
@@ -176,16 +173,12 @@ async def test_auto_mode_jsonl_has_all_three_completions(
     """Even when the JSONL interleaves events for three concurrent
     branches, the replay still observes one completion event per
     branch — the per-invocation correlation is intact."""
-    store, run, status = await _run(
-        tmp_path, _build_fan_out(concurrency="auto")
-    )
+    store, run, status = await _run(tmp_path, _build_fan_out(concurrency="auto"))
     assert status == WorkflowRunStatus.SUCCEEDED
 
     events = list(store.read_events(run.run_id))
     completed_by_node: list[str] = [
-        e["node_name"]
-        for e in events
-        if e.get("kind") == "workflow.node.completed"
+        e["node_name"] for e in events if e.get("kind") == "workflow.node.completed"
     ]
     # All five nodes (start, alpha, beta, gamma, done) emit a
     # completion event — order is non-deterministic for the three

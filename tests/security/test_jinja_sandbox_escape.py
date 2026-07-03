@@ -42,9 +42,9 @@ def test_int_arithmetic_returns_int() -> None:
 
 
 def test_list_length_returns_int() -> None:
-    result: Any = JINJA_ENV.from_string(
-        "{{ [1, 2, 3] | length }}"
-    ).render(items=[1, 2, 3])
+    result: Any = JINJA_ENV.from_string("{{ [1, 2, 3] | length }}").render(
+        items=[1, 2, 3]
+    )
     assert isinstance(result, int)
     assert result == 3
 

@@ -439,9 +439,7 @@ class TestSpawnedSessionIdPayload:
                 }
             }
         )
-        sid = (
-            "ses_11111111-2222-3333-4444-555555555555"
-        )
+        sid = "ses_11111111-2222-3333-4444-555555555555"
         runner = _SpawningRunner(sid, {"label": "ok"})
         registry = RunnerRegistry()
         registry.register("kolsch/nodes/agent", runner)
@@ -467,9 +465,7 @@ class TestSpawnedSessionIdPayload:
         clear ``ctx.spawned_session_id`` STILL can't pollute the
         payload because the gate is on ``node_def.type``, not on the
         attribute's presence."""
-        sid = (
-            "ses_99999999-8888-7777-6666-555555555555"
-        )
+        sid = "ses_99999999-8888-7777-6666-555555555555"
         wf = _wf(
             {
                 "nodes": {
@@ -508,9 +504,7 @@ class TestRunnerRegistry:
         ("name", "expected_phase"),
         sorted(BUILTIN_PHASE_MAP.items()),
     )
-    def test_builtin_phase_lookup(
-        self, name: str, expected_phase: str
-    ) -> None:
+    def test_builtin_phase_lookup(self, name: str, expected_phase: str) -> None:
         registry = RunnerRegistry()
         with pytest.raises(NodeTypeNotImplemented) as exc_info:
             registry.get(f"kolsch/nodes/{name}", node_name="n")
@@ -568,9 +562,7 @@ class TestDeferredTypeRejection:
         status = await ex.run()
         assert status == WorkflowRunStatus.FAILED
         events = list(store.read_events(run.run_id))
-        failed_node_events = [
-            e for e in events if e["kind"] == "workflow.node.failed"
-        ]
+        failed_node_events = [e for e in events if e["kind"] == "workflow.node.failed"]
         assert len(failed_node_events) == 1
         payload = failed_node_events[0]["payload"]
         assert payload["node_name"] == "decide"

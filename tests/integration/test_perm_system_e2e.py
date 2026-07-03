@@ -486,9 +486,7 @@ def test_perm_sys_05_tool_failed_carries_recovery_hint() -> None:
         principal="agent.test",
         matched_rule={"what": "kolsch/tools/bash", "pattern": "*", "effect": "deny"},
     )
-    hint = _derive_authz_recovery_hint(
-        exc, arguments={"command": "find / -name foo"}
-    )
+    hint = _derive_authz_recovery_hint(exc, arguments={"command": "find / -name foo"})
     assert hint == '/perm allow kolsch/tools/bash "find *"'
 
     # Step 2 — the schema carries the hint round-trip.

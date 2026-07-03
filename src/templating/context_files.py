@@ -179,7 +179,9 @@ def load_context_file(
             max_bytes=max_bytes,
         )
     content = resolved.read_text(encoding="utf-8")
-    summary = spec.summary if spec.summary is not None else _first_non_empty_line(content)
+    summary = (
+        spec.summary if spec.summary is not None else _first_non_empty_line(content)
+    )
     return DocItem(
         path=spec.path,
         summary=summary,

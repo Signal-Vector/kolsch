@@ -238,9 +238,7 @@ class _ObservedToolHandle:
             # matched rule's `what` + the in-flight args. The model
             # and the chat renderer both see this hint; the user
             # types it to un-block.
-            recovery_hint = _derive_authz_recovery_hint(
-                exc, arguments=call.arguments
-            )
+            recovery_hint = _derive_authz_recovery_hint(exc, arguments=call.arguments)
             await self._emit(
                 type_=EventType.TOOL_FAILED,
                 data=ToolFailedData(

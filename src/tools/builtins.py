@@ -234,7 +234,9 @@ def make_edit(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]
 
 
 def make_fetch_url(
-    *, policy: PathPolicy, root: Path,  # noqa: ARG001
+    *,
+    policy: PathPolicy,  # noqa: ARG001 — kept for signature symmetry across make_* factories
+    root: Path,  # noqa: ARG001
 ) -> Callable[..., Awaitable[Any]]:
     """Factory for the fetch_url tool — qol-fetch-url-tool Step 2.
 
@@ -283,7 +285,9 @@ def make_fetch_url(
 
 
 def make_browse_url(
-    *, policy: PathPolicy, root: Path,  # noqa: ARG001
+    *,
+    policy: PathPolicy,  # noqa: ARG001 — kept for signature symmetry across make_* factories
+    root: Path,  # noqa: ARG001
 ) -> Callable[..., Awaitable[Any]]:
     """Factory for the browse_url tool — qol-browse-url-tool Step 2.
 
@@ -812,7 +816,8 @@ def _persist_or_inline_stream(
         # Best-effort — fall back to the legacy truncate marker.
         preview = data[:_BASH_OUTPUT_TRUNCATE_BYTES].decode("utf-8", errors="replace")
         overflow = len(data) - _BASH_OUTPUT_TRUNCATE_BYTES
-        return preview + f"\n[... truncated {overflow} bytes (persistence failed)]", None
+        suffix = f"\n[... truncated {overflow} bytes (persistence failed)]"
+        return preview + suffix, None
 
     preview = data[:_BASH_OUTPUT_TRUNCATE_BYTES].decode("utf-8", errors="replace")
     overflow = len(data) - _BASH_OUTPUT_TRUNCATE_BYTES

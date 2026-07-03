@@ -1453,10 +1453,8 @@ def _extract_skill_relative_refs(body: str) -> list[str]:
     for match in _BACKTICKED_PATH_RE.findall(body):
         if match.startswith(("/", "http://", "https://")):
             continue
-        # Strip a leading "./" so the path normalises cleanly.
-        if match.startswith("./"):
-            match = match[2:]
-        refs.append(match)
+        ref = match[2:] if match.startswith("./") else match
+        refs.append(ref)
     return refs
 
 

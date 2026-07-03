@@ -42,13 +42,7 @@ if TYPE_CHECKING:
 
 _REPO_ROOT = Path(__file__).resolve().parents[3]
 _BASH_PATH = (
-    _REPO_ROOT
-    / "src"
-    / "cli"
-    / "_starter_bundle"
-    / "kolsch"
-    / "tools"
-    / "bash.py"
+    _REPO_ROOT / "src" / "cli" / "_starter_bundle" / "kolsch" / "tools" / "bash.py"
 )
 
 

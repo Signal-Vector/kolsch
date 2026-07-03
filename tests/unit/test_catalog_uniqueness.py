@@ -78,9 +78,7 @@ def _write_bundle(
 def test_scan_rejects_agent_and_tool_sharing_name_in_same_bundle(
     tmp_path: Path,
 ) -> None:
-    _write_bundle(
-        tmp_path, bundle="acme", agents=["butler"], tools=["butler"]
-    )
+    _write_bundle(tmp_path, bundle="acme", agents=["butler"], tools=["butler"])
     with pytest.raises(AssetsDuplicateName) as excinfo:
         scan(tmp_path)
     assert excinfo.value.detail["bundle"] == "acme"

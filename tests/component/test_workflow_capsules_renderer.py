@@ -142,9 +142,7 @@ def test_per_instance_description_wins_over_cleaned_name() -> None:
     fallback is BYPASSED). This is the load-bearing assertion that
     proves :func:`display_label` is wired correctly — no inline
     fallback in the renderer."""
-    workflow = _make_workflow_with_bash(
-        "classify", description="Take user input"
-    )
+    workflow = _make_workflow_with_bash("classify", description="Take user input")
     events = [
         _make_event(
             "workflow.node.completed",
@@ -221,9 +219,7 @@ def test_started_event_emits_dim_running_indicator() -> None:
     # The arrow glyph + ellipsis are present.
     assert "▸ classify…" in output
     # NOT a capsule — no ``│`` bar prefix on the indicator line.
-    indicator_line = next(
-        line for line in output.splitlines() if "▸" in line
-    )
+    indicator_line = next(line for line in output.splitlines() if "▸" in line)
     assert "│" not in indicator_line
     # No timestamp on the indicator (capsules have ``· HH:MM:SS``).
     assert not re.search(r"·\s+\d{2}:\d{2}:\d{2}", indicator_line)
@@ -245,11 +241,10 @@ def test_started_indicator_lands_above_matching_completion_capsule() -> None:
     output = _render(events)
     lines = output.splitlines()
     # Find both — the indicator must precede the capsule header.
-    indicator_idx = next(
-        i for i, ln in enumerate(lines) if "▸ classify…" in ln
-    )
+    indicator_idx = next(i for i, ln in enumerate(lines) if "▸ classify…" in ln)
     capsule_idx = next(
-        i for i, ln in enumerate(lines)
+        i
+        for i, ln in enumerate(lines)
         if "│" in ln and "classify" in ln and i > indicator_idx
     )
     assert indicator_idx < capsule_idx

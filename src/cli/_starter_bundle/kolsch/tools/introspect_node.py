@@ -80,8 +80,7 @@ class NodeIntrospection(BaseModel):
     errors: list[str] = Field(
         default_factory=list,
         description=(
-            "Single-line diagnostic strings. Empty list iff "
-            "``signature_ok`` is True."
+            "Single-line diagnostic strings. Empty list iff ``signature_ok`` is True."
         ),
     )
 
@@ -116,9 +115,7 @@ NodeIntrospection.model_rebuild()
     ),
     args_schema=IntrospectNodeArgs,
 )
-async def introspect_node(
-    args: IntrospectNodeArgs, ctx: ToolContext
-) -> dict[str, Any]:
+async def introspect_node(args: IntrospectNodeArgs, ctx: ToolContext) -> dict[str, Any]:
     """Run the introspector and return a `NodeIntrospection` dict."""
     if ctx.path_policy is None or ctx.workspace_root is None:
         msg = (
@@ -129,9 +126,7 @@ async def introspect_node(
             tool_name="introspect_node", error_class="RuntimeError"
         ) from RuntimeError(msg)
 
-    check_path_allowed(
-        args.py_path, policy=ctx.path_policy, root=ctx.workspace_root
-    )
+    check_path_allowed(args.py_path, policy=ctx.path_policy, root=ctx.workspace_root)
     target = _resolve(args.py_path, ctx.workspace_root)
     result = introspect_node_module(target)
     return NodeIntrospection(

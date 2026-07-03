@@ -248,6 +248,7 @@ class TestCancelBeforeStart:
         run_dir.cancel_flag_path.write_text("", encoding="utf-8")
 
         registry = RunnerRegistry()
+
         # If the executor dispatched, this runner would fail the test
         # by raising — confirming no node ever fired.
         class _Forbidden:
@@ -335,5 +336,3 @@ class TestAbortPathRunsCleanup:
             sys.modules.pop("_kolsch_test_cancel_synthetic", None)
         assert status == WorkflowRunStatus.ABORTED
         assert "_kolsch_test_cancel_synthetic" not in sys.modules
-
-

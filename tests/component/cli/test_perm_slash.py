@@ -148,9 +148,7 @@ async def test_perm_allow_writes_new_shape_rule(tmp_path: Path) -> None:
     stdout = _io.StringIO()
     ctx = _ctx(runtime, stdout)
 
-    sig = await dispatch_slash(
-        '/perm allow kolsch/tools/bash "find *"', ctx
-    )
+    sig = await dispatch_slash('/perm allow kolsch/tools/bash "find *"', ctx)
     assert sig.value == "continue"
     output = stdout.getvalue()
     assert "/perm allow:" in output
@@ -161,7 +159,9 @@ async def test_perm_allow_writes_new_shape_rule(tmp_path: Path) -> None:
     payload = yaml.safe_load((tmp_path / "platform.yaml").read_text(encoding="utf-8"))
     rules = payload["authorization"]["config"]["rules"]
     new_rule = next(
-        r for r in rules if r.get("what") == "kolsch/tools/bash" and r.get("pattern") == "find *"
+        r
+        for r in rules
+        if r.get("what") == "kolsch/tools/bash" and r.get("pattern") == "find *"
     )
     assert new_rule["effect"] == "allow"
     # `who` and `id` are absent in the new shape.
@@ -245,7 +245,8 @@ async def test_perm_allow_replaces_existing_same_rule(tmp_path: Path) -> None:
         (tmp_path / "platform.yaml").read_text(encoding="utf-8"),
     )["authorization"]["config"]["rules"]
     matching = [
-        r for r in rules
+        r
+        for r in rules
         if r.get("what") == "kolsch/tools/bash" and r.get("pattern") == "find *"
     ]
     assert len(matching) == 1

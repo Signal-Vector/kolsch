@@ -34,9 +34,7 @@ class ClassifyOutputs(BaseModel):
 
 
 @node(label="Classify")
-async def run(
-    inputs: ClassifyInputs, ctx: NodeContext
-) -> tuple[bool, ClassifyOutputs]:
+async def run(inputs: ClassifyInputs, ctx: NodeContext) -> tuple[bool, ClassifyOutputs]:
     """Return `(is_urgent, structured_payload)`.
 
     The first element drives branch dispatch — outgoing edges with

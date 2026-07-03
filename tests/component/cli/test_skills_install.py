@@ -226,13 +226,13 @@ def test_install_into_existing_bundle(tmp_path: Path) -> None:
     )
     assert exit_code == 0
 
-    skill_md = (
-        tmp_path / "bundles" / "acme" / "skills" / "test-writer" / "SKILL.md"
-    )
+    skill_md = tmp_path / "bundles" / "acme" / "skills" / "test-writer" / "SKILL.md"
     assert skill_md.is_file()
     # The original acme/skills/bundle.yaml is unchanged — no auto-create
     # touched it.
-    payload = yaml.safe_load((tmp_path / "bundles" / "acme" / "bundle.yaml").read_text())
+    payload = yaml.safe_load(
+        (tmp_path / "bundles" / "acme" / "bundle.yaml").read_text()
+    )
     assert payload["name"] == "acme"
 
 

@@ -194,9 +194,7 @@ async def test_tc_chat_11_model_switches_mid_session(
     # /model never wrote to the log. A regression that adds a
     # chat-emitted session.model_overridden event would surface
     # here as a session.* type on the leaf path.
-    session_events = [
-        e for e in events if str(e.type).startswith("session.")
-    ]
+    session_events = [e for e in events if str(e.type).startswith("session.")]
     # session.opened is the only event with a "session." prefix
     # the store legitimately emits (at create_session time);
     # anything else would be a regression of E-2.1-001's
@@ -327,9 +325,7 @@ async def test_tc_chat_14_thinking_budget_sets_value(
         pass
 
     events = [e async for e in runtime.store.read_path_to_leaf(state.thread_id)]
-    session_events = [
-        e for e in events if str(e.type).startswith("session.")
-    ]
+    session_events = [e for e in events if str(e.type).startswith("session.")]
     forbidden = [e for e in session_events if str(e.type) != "session.opened"]
     # (2) E-2.1-001 ship-as-(c): the JSONL stays clean.
     assert forbidden == [], (

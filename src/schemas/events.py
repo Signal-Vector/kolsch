@@ -153,8 +153,8 @@ class ModelRequestData(_DataModel):
     post-framework-wrap and pre-LLM-invoke. The wrapping framework
     (CrewAI's prompt-template injection, multimodal reshaping) can
     diverge from what a path-derived context would produce, so the
-    log keeps the actual bytes the model saw — the
-    [Materialization Rule](../explanation/event-log-contract.md#the-materialization-rule)
+    log keeps the actual bytes the model saw — the [Materialization
+    Rule](../explanation/event-log-contract.md#the-materialization-rule)
     requires every input that shaped the model's context to live on
     an event, verbatim. Replay reads `messages` directly rather than
     re-running the projection.

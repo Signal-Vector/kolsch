@@ -86,9 +86,7 @@ def _make_workspace(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def _make_registry(
-    tmp_path: Path, bash_defn: Any
-) -> RunnerRegistry:
+def _make_registry(tmp_path: Path, bash_defn: Any) -> RunnerRegistry:
     workspace = _make_workspace(tmp_path)
     reg = RunnerRegistry()
     register_builtins(
@@ -101,9 +99,7 @@ def _make_registry(
                 ]
             }
         ),
-        secrets=DotenvSecretsProvider(
-            root=workspace, config={"path": ".env"}
-        ),
+        secrets=DotenvSecretsProvider(root=workspace, config={"path": ".env"}),
         sandbox=NativeSandboxProvider(config={}),
     )
     return reg
@@ -340,9 +336,7 @@ def _make_registry_with_workspace_deny(
             },
             catalog=_minimal_bash_catalog(),
         ),
-        secrets=DotenvSecretsProvider(
-            root=workspace, config={"path": ".env"}
-        ),
+        secrets=DotenvSecretsProvider(root=workspace, config={"path": ".env"}),
         sandbox=NativeSandboxProvider(config={}),
     )
     return reg
@@ -597,9 +591,7 @@ class TestExecutorAppliesModifiers:
         assert failed
         assert failed[0]["payload"]["error_class"] == "NodeTimeoutExceeded"
 
-    async def test_per_node_retry_emits_only_final_event(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_per_node_retry_emits_only_final_event(self, tmp_path: Path) -> None:
         # Use a fake runner so we can fail-then-succeed deterministically
         # without invoking the bash tool. The retry wrapper is applied
         # by the executor based on node_def.retry.
@@ -652,12 +644,8 @@ class TestRegisteredVsDeferred:
 
         registry = _make_registry(tmp_path, bash_defn)
         # Sanity: bash + noop resolve.
-        assert isinstance(
-            registry.get("kolsch/nodes/bash", node_name="n"), BashRunner
-        )
-        assert isinstance(
-            registry.get("kolsch/nodes/noop", node_name="n"), NoopRunner
-        )
+        assert isinstance(registry.get("kolsch/nodes/bash", node_name="n"), BashRunner)
+        assert isinstance(registry.get("kolsch/nodes/noop", node_name="n"), NoopRunner)
         # Phase 3.4 Step 0 — ``user_input`` is now wired by
         # register_builtins (no provider deps; raises a typed pause
         # signal that the executor's worklist catches separately from

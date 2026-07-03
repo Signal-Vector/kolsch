@@ -391,9 +391,7 @@ def _resolve_tool_home_bundle(catalog: AssetCatalog, name: str) -> str | None:
 # Full 3-seg tool ref anchored at start and end (`<bundle>/tools/<name>`).
 # Distinct from `_TWO_SEG_GLOB_RE` — the middle segment must be literal
 # `tools`. Used by the orphaned-3-seg reattribution path.
-_THREE_SEG_TOOL_RE = re.compile(
-    r"^([a-z0-9][a-z0-9_-]*)/tools/([a-z][a-z0-9_-]*)$"
-)
+_THREE_SEG_TOOL_RE = re.compile(r"^([a-z0-9][a-z0-9_-]*)/tools/([a-z][a-z0-9_-]*)$")
 
 
 def _try_reattribute_orphaned_3seg(

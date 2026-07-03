@@ -216,9 +216,7 @@ class TestNodeContextRenderJinjaHook:
 
 
 class TestRunDirectoryWaitingAtPath:
-    def test_waiting_at_path_computed_under_run_root(
-        self, tmp_path: Path
-    ) -> None:
+    def test_waiting_at_path_computed_under_run_root(self, tmp_path: Path) -> None:
         rd = RunDirectory(root=tmp_path / "wrk_demo")
         assert rd.waiting_at_path == tmp_path / "wrk_demo" / "waiting_at"
 
@@ -334,9 +332,7 @@ class TestPauseEndToEnd:
         loaded = store.read(run.run_id)
         assert loaded.status == WorkflowRunStatus.WAITING_FOR_INPUT
 
-    async def test_pause_emits_no_failed_events(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_pause_emits_no_failed_events(self, tmp_path: Path) -> None:
         wf = _wf(
             {
                 "nodes": {
@@ -355,9 +351,7 @@ class TestPauseEndToEnd:
 
         await ex.run()
 
-        kinds = {
-            e["kind"] for e in store.read_events(run.run_id)
-        }
+        kinds = {e["kind"] for e in store.read_events(run.run_id)}
         assert "workflow.node.failed" not in kinds
         assert "workflow.run.failed" not in kinds
         assert "workflow.run.completed" not in kinds
@@ -372,9 +366,7 @@ class TestPauseEndToEnd:
 
 
 class TestSequentialPauseSeed:
-    async def test_first_of_two_user_input_nodes_pauses(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_first_of_two_user_input_nodes_pauses(self, tmp_path: Path) -> None:
         wf = _wf(
             {
                 "nodes": {
@@ -467,9 +459,7 @@ class TestPromptJinjaRendering:
             }
         )
         registry = RunnerRegistry()
-        registry.register(
-            "kolsch/nodes/user_input", CapturingUserInput()
-        )
+        registry.register("kolsch/nodes/user_input", CapturingUserInput())
 
         ex, _, _ = _make_executor(
             tmp_path,
@@ -508,12 +498,8 @@ class TestPromptJinjaRendering:
             }
         )
         registry = RunnerRegistry()
-        registry.register(
-            "kolsch/nodes/user_input", CapturingUserInput()
-        )
-        ex, _, _ = _make_executor(
-            tmp_path, workflow=wf, registry=registry
-        )
+        registry.register("kolsch/nodes/user_input", CapturingUserInput())
+        ex, _, _ = _make_executor(tmp_path, workflow=wf, registry=registry)
 
         await ex.run()
 
@@ -569,9 +555,7 @@ class TestPauseRunsModuleCleanup:
         )
         registry = RunnerRegistry()
         registry.register("kolsch/nodes/noop", LoaderRunner())
-        registry.register(
-            "kolsch/nodes/user_input", UserInputRunner()
-        )
+        registry.register("kolsch/nodes/user_input", UserInputRunner())
 
         # WorkflowRunStore uses ``tmp_path / "runs"`` as the runs root;
         # the executor's cleanup filter looks for ``workspace_root /
@@ -610,12 +594,8 @@ class TestRegisterBuiltinsWiring:
         # _cmd_run consumes. Spot-checking the registration directly
         # avoids standing up the full provider stack here.
         registry = RunnerRegistry()
-        registry.register(
-            "kolsch/nodes/user_input", UserInputRunner()
-        )
-        runner = registry.get(
-            "kolsch/nodes/user_input", node_name="ask"
-        )
+        registry.register("kolsch/nodes/user_input", UserInputRunner())
+        runner = registry.get("kolsch/nodes/user_input", node_name="ask")
         assert isinstance(runner, UserInputRunner)
 
 

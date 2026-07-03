@@ -358,7 +358,7 @@ def _set_cwd_to_tmp(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
 
 
 async def test_refresh_re_runs_discovery_for_named_provider(
-    _set_cwd_to_tmp: Path,  # noqa: PT019 — fixture used for side effect
+    _set_cwd_to_tmp: Path,
 ) -> None:
     tmp_path = _set_cwd_to_tmp
     # Seed: a platform.yaml with opencode connected + .env carrying the

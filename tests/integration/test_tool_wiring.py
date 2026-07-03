@@ -138,15 +138,10 @@ def _allow_bash_in_workspace(root: Path) -> None:
     # Agent-layer rule flip — same target.
     helper_path = root / "bundles" / "kolsch" / "agents" / "helper.yaml"
     if helper_path.is_file():
-        agent_payload = (
-            yaml.safe_load(helper_path.read_text(encoding="utf-8")) or {}
-        )
+        agent_payload = yaml.safe_load(helper_path.read_text(encoding="utf-8")) or {}
         agent_rules = agent_payload.get("permissions") or []
         for rule in agent_rules:
-            if (
-                rule.get("what") in bash_rule_whats
-                and rule.get("effect") == "prompt"
-            ):
+            if rule.get("what") in bash_rule_whats and rule.get("effect") == "prompt":
                 rule["effect"] = "allow"
                 break
         helper_path.write_text(

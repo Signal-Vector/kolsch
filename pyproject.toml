@@ -354,6 +354,21 @@ convention = "google"
                # for readability (e.g. `Args = fn._tool_definition.
                # args_schema`) — the local mirrors how the class
                # would be named in scope.
+    "ERA001",  # ruff's commented-out-code detector misfires on test
+               # section headers and structural comments describing
+               # the shape of the tuple/table that follows.
+    "PT017",   # Tests deliberately use `try / except X as exc:
+               # assert exc.__cause__ / exc.field` to pin exception
+               # chaining — rewriting to pytest.raises() would
+               # obscure the chain-inspection intent.
+    "PT019",   # Underscore-prefixed pytest fixture names (`_policy`,
+               # `_providers`) are a "private test helper" convention;
+               # they are genuinely used in the test bodies so
+               # `@pytest.mark.usefixtures` is not the right shape.
+    "TRY003",  # Tests routinely `raise RuntimeError("expected X")`
+               # or `raise AssertionError("boundary Y")` to exercise
+               # error paths — inventing a custom exception class per
+               # test case would be pure ceremony.
 ]
 # `src/errors/` is, by definition, the errors package. Every class is a
 # PlatformError subclass; the N818 "must end in Error" rule would force

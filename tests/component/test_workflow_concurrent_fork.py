@@ -152,9 +152,7 @@ async def test_fork_from_concurrent_parent_inherits_event_ordering(
     # The forked run's first event is workflow.run.forked_from with
     # the parent run id + the fork event id in payload.
     assert fork_events[0]["kind"] == "workflow.run.forked_from"
-    assert fork_events[0]["payload"]["forked_from_run_id"] == str(
-        parent_run.run_id
-    )
+    assert fork_events[0]["payload"]["forked_from_run_id"] == str(parent_run.run_id)
     assert fork_events[0]["payload"]["fork_event_id"] == fork_event_id
 
     # The forked run inherits the parent's `_captured["alpha"]` via
@@ -173,13 +171,7 @@ async def test_fork_from_concurrent_parent_inherits_event_ordering(
     forked_kinds_per_node: dict[str, list[str]] = {}
     for event in fork_events:
         if event.get("kind", "").startswith("workflow.node."):
-            name = event.get("node_name") or event.get(
-                "payload", {}
-            ).get("node_name")
-            forked_kinds_per_node.setdefault(str(name), []).append(
-                event["kind"]
-            )
+            name = event.get("node_name") or event.get("payload", {}).get("node_name")
+            forked_kinds_per_node.setdefault(str(name), []).append(event["kind"])
     # done MUST have completed in the forked run regardless.
-    assert (
-        "workflow.node.completed" in forked_kinds_per_node.get("done", [])
-    )
+    assert "workflow.node.completed" in forked_kinds_per_node.get("done", [])

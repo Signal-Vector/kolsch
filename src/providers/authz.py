@@ -639,9 +639,7 @@ class RuleBasedAuthorizationProvider:
             from_pattern=from_value,
         )
 
-    def _validate_from(
-        self, *, index: int, from_value: str | None
-    ) -> None:
+    def _validate_from(self, *, index: int, from_value: str | None) -> None:
         """Strict validation of a rule's `from:` caller-chain filter.
 
         Three hard-error classes (no warning fallback):
@@ -684,9 +682,7 @@ class RuleBasedAuthorizationProvider:
             return
         expected_type = "agent" if segment == "agents" else "workflow"
         if self._catalog.lookup(from_value, expected_type=expected_type) is None:
-            raise WorkflowFromNotFound(
-                file="<config>", line=index, from_ref=from_value
-            )
+            raise WorkflowFromNotFound(file="<config>", line=index, from_ref=from_value)
 
     def _validate_what(self, *, index: int, what: str) -> None:
         """Validate a rule's `what:` ref against the catalog.
@@ -773,8 +769,7 @@ class RuleBasedAuthorizationProvider:
         candidates = sorted(
             entry.ref
             for entry in self._catalog.assets.values()
-            if entry.asset_type == "tool"
-            and entry.ref.rsplit("/", 1)[-1] == what
+            if entry.asset_type == "tool" and entry.ref.rsplit("/", 1)[-1] == what
         )
         if len(candidates) > 1:
             raise AssetsAmbiguousShorthand(
@@ -1535,8 +1530,8 @@ def _maybe_emit_policy_decision(
     ctx = current_workflow_run_context()
     if ctx is None:
         return
-    normalised = audit_level if audit_level in {"all", "rule_matched"} else (
-        "rule_matched"
+    normalised = (
+        audit_level if audit_level in {"all", "rule_matched"} else ("rule_matched")
     )
     if normalised == "rule_matched" and result.matched_rule is None:
         return

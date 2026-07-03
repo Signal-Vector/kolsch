@@ -268,8 +268,7 @@ def test_browse_url_missing_binary_matches_install_hint_alone(
     from playwright.async_api._generated import BrowserType
 
     hint_only_message = (
-        "Browser binary not available. "
-        "Please run: playwright install chromium"
+        "Browser binary not available. Please run: playwright install chromium"
     )
 
     async def _boom(self: Any, *args: Any, **kwargs: Any) -> Any:

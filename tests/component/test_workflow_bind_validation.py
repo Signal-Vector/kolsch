@@ -80,9 +80,7 @@ def _make_executor(
 
 
 class TestExtraKeyRejected:
-    async def test_noop_receiver_unknown_bind_key_raises(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_noop_receiver_unknown_bind_key_raises(self, tmp_path: Path) -> None:
         """``NoopInputs`` has ``extra='forbid'`` and no required
         fields. An edge binding an unknown key violates the strict
         contract — the executor surfaces it via
@@ -107,9 +105,7 @@ class TestExtraKeyRejected:
         recorder = RecordingRunner({})
         registry = RunnerRegistry()
         registry.register("kolsch/nodes/noop", recorder)
-        ex, store, run = _make_executor(
-            tmp_path, workflow=wf, registry=registry
-        )
+        ex, store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
         status = await ex.run()
         assert status == WorkflowRunStatus.FAILED
 
@@ -245,9 +241,7 @@ class TestExceptionFields:
 
 
 class TestEmptyBindsAcceptedWhereModelAllowsIt:
-    async def test_noop_no_inbound_binds_passes_strict(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_noop_no_inbound_binds_passes_strict(self, tmp_path: Path) -> None:
         """``NoopInputs`` has ``extra='forbid'`` but NO required
         fields; an empty ``bound_inputs`` dict satisfies it under
         strict mode (Step 0 build doc §6.4.4 edge case)."""

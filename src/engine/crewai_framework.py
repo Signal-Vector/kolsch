@@ -491,9 +491,7 @@ def _build_passthrough_schema(
         for key, prop in properties.items():
             pytype = _pytype_for_property(prop)
             description = (
-                str(prop.get("description", ""))
-                if isinstance(prop, dict)
-                else ""
+                str(prop.get("description", "")) if isinstance(prop, dict) else ""
             )
             if key in required:
                 field_info = Field(..., description=description)

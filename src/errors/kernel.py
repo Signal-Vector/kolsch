@@ -137,9 +137,7 @@ class ConfigParentAgentNotFound(PlatformError):
         where: str = "templating.inheritance.resolve_extends_chain",
     ) -> None:
         super().__init__(
-            message=(
-                f"parent agent {path!r} not found (resolved to {resolved!r})"
-            ),
+            message=(f"parent agent {path!r} not found (resolved to {resolved!r})"),
             where=where,
             detail={"path": path, "resolved": resolved},
         )
@@ -163,9 +161,7 @@ class ConfigRequiredBlockMissing(PlatformError):
         where: str = "templating.inheritance.render_with_parent",
     ) -> None:
         super().__init__(
-            message=(
-                f"required block {block_name!r} missing in agent {agent_path!r}"
-            ),
+            message=(f"required block {block_name!r} missing in agent {agent_path!r}"),
             where=where,
             detail={"block_name": block_name, "agent_path": agent_path},
         )
@@ -217,9 +213,7 @@ class ContextFileNotFound(PlatformError):
         where: str = "templating.context_files.load_context_file",
     ) -> None:
         super().__init__(
-            message=(
-                f"context_file {path!r} not found (resolved to {resolved!r})"
-            ),
+            message=(f"context_file {path!r} not found (resolved to {resolved!r})"),
             where=where,
             detail={"path": path, "resolved": resolved},
         )
@@ -280,8 +274,7 @@ class ConfigDeprecatedRefForm(PlatformError):
         super().__init__(
             message=(
                 f"deprecated ref form {deprecated_form!r}; prefer "
-                f"{canonical_form!r}"
-                + (f" at {location}" if location else "")
+                f"{canonical_form!r}" + (f" at {location}" if location else "")
             ),
             where=where,
             detail={

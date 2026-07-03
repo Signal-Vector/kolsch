@@ -258,9 +258,7 @@ class _ScriptedSingleHangCall:
         if self.calls == 1:
             return LLMResponse(
                 content=None,
-                tool_calls=[
-                    {"id": "call_1", "name": "hang", "arguments": {"i": 1}}
-                ],
+                tool_calls=[{"id": "call_1", "name": "hang", "arguments": {"i": 1}}],
             )
         return LLMResponse(content="never reached")
 
