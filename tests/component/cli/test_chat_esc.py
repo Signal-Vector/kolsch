@@ -36,7 +36,7 @@ from engine import CancelToken
 # ---------------------------------------------------------------------------
 
 
-def _stub_state(cancel: CancelToken | None) -> object:
+def _stub_state(cancel: CancelToken | None) -> SimpleNamespace:
     """Minimal ``ChatSessionState`` stand-in (see test_chat_deny_stops).
 
     The Esc watcher reads ``active_cancel`` and writes

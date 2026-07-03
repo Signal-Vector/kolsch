@@ -11,7 +11,7 @@ discovery is the Tools subsystem's responsibility.
 from __future__ import annotations
 
 import importlib.util
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from errors import ToolSetupFailed
 from tools.decorator import ToolDefinition
@@ -21,7 +21,7 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-def discover_tools_in_file(path: Path) -> list[Callable[..., Awaitable[object]]]:
+def discover_tools_in_file(path: Path) -> list[Callable[..., Awaitable[Any]]]:
     """Import `path` and return every `@tool`-decorated callable.
 
     Each module is loaded under a synthetic name derived from its
@@ -64,7 +64,7 @@ def discover_tools_in_file(path: Path) -> list[Callable[..., Awaitable[object]]]
             reason=f"importing {path} raised {type(exc).__name__}: {exc}",
         ) from exc
 
-    found: list[Callable[..., Awaitable[object]]] = []
+    found: list[Callable[..., Awaitable[Any]]] = []
     for attr_name in dir(module):
         attr = getattr(module, attr_name)
         if hasattr(attr, "_tool_definition") and isinstance(
