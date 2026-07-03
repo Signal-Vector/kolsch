@@ -188,6 +188,11 @@ dev = [
     "ruff>=0.6",
     "mypy>=1.11",
     "pre-commit>=3.7",
+    # Type stubs for third-party packages that ship untyped. Kept in
+    # the dev group (not runtime) — mypy is a dev-only tool, so the
+    # stubs travel with it.
+    "types-pyyaml>=6.0",
+    "types-psutil>=6.0",
 ]
 docs = [
     "mkdocs>=1.6",
