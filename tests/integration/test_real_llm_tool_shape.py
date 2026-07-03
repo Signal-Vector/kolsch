@@ -100,9 +100,7 @@ def _configure_opencode_provider(root: Path) -> None:
             "models": [{"id": "kimi-k2.6"}],
         },
     }
-    plat_path.write_text(
-        yaml.safe_dump(plat, sort_keys=False), encoding="utf-8"
-    )
+    plat_path.write_text(yaml.safe_dump(plat, sort_keys=False), encoding="utf-8")
     env_path = root / ".env"
     env_path.write_text("OPENCODE_API_KEY=sk-test\n", encoding="utf-8")
 
@@ -218,20 +216,16 @@ async def test_bootstrap_runtime_sends_openai_envelope_tools_to_wire(
             f"src/engine/_crewai_adapter.py may have regressed."
         )
         assert "function" in entry, (
-            f"tools[{i}] missing 'function' envelope; got keys="
-            f"{list(entry.keys())}"
+            f"tools[{i}] missing 'function' envelope; got keys={list(entry.keys())}"
         )
         function = entry["function"]
         assert isinstance(function, dict), (
             f"tools[{i}].function not a dict: {function!r}"
         )
         assert function.get("name"), (
-            f"tools[{i}].function.name missing or empty; "
-            f"got={function!r}"
+            f"tools[{i}].function.name missing or empty; got={function!r}"
         )
-        assert "description" in function, (
-            f"tools[{i}].function.description missing"
-        )
+        assert "description" in function, f"tools[{i}].function.description missing"
         assert "parameters" in function, (
             f"tools[{i}].function.parameters missing — Kimi K2 "
             f"cannot populate function.arguments without it"

@@ -251,13 +251,14 @@ async def test_fresh_setup_ships_workspace_root_in_allowed_paths(
     monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
     monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
     io_ = _make_test_io(root=tmp_path)
-    assert await run_setup(
-        argparse.Namespace(non_interactive=True, root=tmp_path),
-        io_,
-    ) == 0
-    platform_payload = yaml.safe_load(
-        (tmp_path / "platform.yaml").read_text()
+    assert (
+        await run_setup(
+            argparse.Namespace(non_interactive=True, root=tmp_path),
+            io_,
+        )
+        == 0
     )
+    platform_payload = yaml.safe_load((tmp_path / "platform.yaml").read_text())
     allowed = platform_payload["file_access"]["allowed_paths"]
     assert allowed[0] == ".", (
         f"workspace root should be first in allowed_paths; got {allowed}"
@@ -275,10 +276,13 @@ async def test_setup_rerun_adds_workspace_root_to_legacy_allowed_paths(
     monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
     # First setup writes a fresh workspace.
     io_ = _make_test_io(root=tmp_path)
-    assert await run_setup(
-        argparse.Namespace(non_interactive=True, root=tmp_path),
-        io_,
-    ) == 0
+    assert (
+        await run_setup(
+            argparse.Namespace(non_interactive=True, root=tmp_path),
+            io_,
+        )
+        == 0
+    )
     # Simulate legacy state: strip `.` from allowed_paths.
     yaml_path = tmp_path / "platform.yaml"
     payload = yaml.safe_load(yaml_path.read_text())
@@ -288,15 +292,16 @@ async def test_setup_rerun_adds_workspace_root_to_legacy_allowed_paths(
     yaml_path.write_text(yaml.safe_dump(payload, sort_keys=False))
     # Re-run; the migrator should add `.` back at the front.
     rerun_io = _make_test_io(root=tmp_path)
-    assert await run_setup(
-        argparse.Namespace(non_interactive=True, root=tmp_path),
-        rerun_io,
-    ) == 0
+    assert (
+        await run_setup(
+            argparse.Namespace(non_interactive=True, root=tmp_path),
+            rerun_io,
+        )
+        == 0
+    )
     final = yaml.safe_load(yaml_path.read_text())
     allowed = final["file_access"]["allowed_paths"]
-    assert allowed[0] == ".", (
-        f"migration should put `.` first; got {allowed}"
-    )
+    assert allowed[0] == ".", f"migration should put `.` first; got {allowed}"
     # Backup written under .platform/ (per _backup_platform_yaml at
     # src/cli/_setup.py:949+).
     backups = list((tmp_path / ".platform").glob("platform.yaml.bak.*"))
@@ -320,10 +325,13 @@ async def test_setup_rerun_adds_agent_execute_allow_when_missing(
     monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
     monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
     io_ = _make_test_io(root=tmp_path)
-    assert await run_setup(
-        argparse.Namespace(non_interactive=True, root=tmp_path),
-        io_,
-    ) == 0
+    assert (
+        await run_setup(
+            argparse.Namespace(non_interactive=True, root=tmp_path),
+            io_,
+        )
+        == 0
+    )
     yaml_path = tmp_path / "platform.yaml"
     payload = yaml.safe_load(yaml_path.read_text())
     # Simulate hand-narrowing: drop the default `agent.execute.*`
@@ -341,10 +349,13 @@ async def test_setup_rerun_adds_agent_execute_allow_when_missing(
     yaml_path.write_text(yaml.safe_dump(payload, sort_keys=False))
     # Re-run; the guard should prepend a broad agent.execute.* allow.
     rerun_io = _make_test_io(root=tmp_path)
-    assert await run_setup(
-        argparse.Namespace(non_interactive=True, root=tmp_path),
-        rerun_io,
-    ) == 0
+    assert (
+        await run_setup(
+            argparse.Namespace(non_interactive=True, root=tmp_path),
+            rerun_io,
+        )
+        == 0
+    )
     final = yaml.safe_load(yaml_path.read_text())
     rules = final["authorization"]["config"]["rules"]
     assert rules[0] == {
@@ -365,19 +376,25 @@ async def test_setup_rerun_no_op_when_agent_execute_allow_present(
     monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
     monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
     io_ = _make_test_io(root=tmp_path)
-    assert await run_setup(
-        argparse.Namespace(non_interactive=True, root=tmp_path),
-        io_,
-    ) == 0
+    assert (
+        await run_setup(
+            argparse.Namespace(non_interactive=True, root=tmp_path),
+            io_,
+        )
+        == 0
+    )
     yaml_path = tmp_path / "platform.yaml"
     before = yaml.safe_load(yaml_path.read_text())
     before_rules = before["authorization"]["config"]["rules"]
     # Re-run.
     rerun_io = _make_test_io(root=tmp_path)
-    assert await run_setup(
-        argparse.Namespace(non_interactive=True, root=tmp_path),
-        rerun_io,
-    ) == 0
+    assert (
+        await run_setup(
+            argparse.Namespace(non_interactive=True, root=tmp_path),
+            rerun_io,
+        )
+        == 0
+    )
     after = yaml.safe_load(yaml_path.read_text())
     after_rules = after["authorization"]["config"]["rules"]
     assert after_rules == before_rules, (
@@ -399,10 +416,13 @@ async def test_setup_recognises_legacy_regex_agent_execute_catchall(
     monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
     monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
     io_ = _make_test_io(root=tmp_path)
-    assert await run_setup(
-        argparse.Namespace(non_interactive=True, root=tmp_path),
-        io_,
-    ) == 0
+    assert (
+        await run_setup(
+            argparse.Namespace(non_interactive=True, root=tmp_path),
+            io_,
+        )
+        == 0
+    )
     yaml_path = tmp_path / "platform.yaml"
     payload = yaml.safe_load(yaml_path.read_text())
     payload["authorization"]["config"]["rules"] = [
@@ -416,10 +436,13 @@ async def test_setup_recognises_legacy_regex_agent_execute_catchall(
     ]
     yaml_path.write_text(yaml.safe_dump(payload, sort_keys=False))
     rerun_io = _make_test_io(root=tmp_path)
-    assert await run_setup(
-        argparse.Namespace(non_interactive=True, root=tmp_path),
-        rerun_io,
-    ) == 0
+    assert (
+        await run_setup(
+            argparse.Namespace(non_interactive=True, root=tmp_path),
+            rerun_io,
+        )
+        == 0
+    )
     final = yaml.safe_load(yaml_path.read_text())
     rules = final["authorization"]["config"]["rules"]
     # The pre-existing qol-schema migrator rewrites the legacy regex

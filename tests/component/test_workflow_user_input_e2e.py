@@ -30,10 +30,12 @@ import json
 import os
 import textwrap
 from pathlib import Path
-
-import pytest
+from typing import TYPE_CHECKING
 
 from cli.main import main
+
+if TYPE_CHECKING:
+    import pytest
 
 # ---------------------------------------------------------------------------
 # Workspace fixture — installs the starter bundle so the e2e tests
@@ -156,9 +158,7 @@ class TestPhaseTest1SinglePauseAndResume:
         run_dir = workspace / "runs" / run_id
         assert (run_dir / "waiting_at").exists()
 
-        rc, out, _ = _resume_via_cli(
-            workspace, capsys, run_id=run_id, response="world"
-        )
+        rc, out, _ = _resume_via_cli(workspace, capsys, run_id=run_id, response="world")
         assert rc == 0
         assert "succeeded" in out
         # The downstream ``echo`` node's captured message lifts the
@@ -169,9 +169,7 @@ class TestPhaseTest1SinglePauseAndResume:
         # JSONL is one continuous stream spanning both processes.
         events = (run_dir / "events.jsonl").read_text(encoding="utf-8")
         kinds = [
-            json.loads(line)["kind"]
-            for line in events.splitlines()
-            if line.strip()
+            json.loads(line)["kind"] for line in events.splitlines() if line.strip()
         ]
         assert "workflow.run.started" in kinds
         assert "workflow.run.resumed" in kinds
@@ -194,16 +192,12 @@ class TestPhaseTest2SequentialPauses:
         )
 
         # First resume — workflow pauses AGAIN at ask2 (exit 0).
-        rc, out, _ = _resume_via_cli(
-            workspace, capsys, run_id=run_id, response="alpha"
-        )
+        rc, out, _ = _resume_via_cli(workspace, capsys, run_id=run_id, response="alpha")
         assert rc == 0
         assert "waiting_for_input" in out
 
         # Second resume — workflow reaches terminal.
-        rc, out, _ = _resume_via_cli(
-            workspace, capsys, run_id=run_id, response="beta"
-        )
+        rc, out, _ = _resume_via_cli(workspace, capsys, run_id=run_id, response="beta")
         assert rc == 0
         assert "succeeded" in out
         # The final ``done`` node's captured message blends both
@@ -240,9 +234,7 @@ class TestPhaseTest3ResumeRejectedWhenNotWaiting:
         events_path = workspace / "runs" / run_id / "events.jsonl"
         pre_lines = events_path.read_text(encoding="utf-8").splitlines()
 
-        rc, _, err = _resume_via_cli(
-            workspace, capsys, run_id=run_id, response="x"
-        )
+        rc, _, err = _resume_via_cli(workspace, capsys, run_id=run_id, response="x")
         assert rc == 1
         assert "WorkflowResumeRejected" in err
 
@@ -317,9 +309,7 @@ class TestPhaseTest4ReplayReconstructsState:
             workflow_ref="kolsch/workflows/prep-pause-echo",
         )
 
-        rc, out, _ = _resume_via_cli(
-            workspace, capsys, run_id=run_id, response="after"
-        )
+        rc, out, _ = _resume_via_cli(workspace, capsys, run_id=run_id, response="after")
         assert rc == 0
         # The echo node's captured message blends pre-pause (prep's
         # bash stdout) with post-resume (ask.response). Confirms
@@ -419,9 +409,7 @@ class TestPhaseTest6OrphanSweepSkipsPaused:
             capsys,
             workflow_ref="kolsch/workflows/hello-paused",
         )
-        (workspace / "runs" / run_id / "pid").write_text(
-            "99999", encoding="utf-8"
-        )
+        (workspace / "runs" / run_id / "pid").write_text("99999", encoding="utf-8")
 
         # Sweep runs implicitly as part of the next CLI invocation
         # (the main entrypoint reconciles on startup). The resume
@@ -434,7 +422,7 @@ class TestPhaseTest6OrphanSweepSkipsPaused:
         assert "succeeded" in out
         assert "post-sweep" in out
         # And the resume process's PID landed in the sidecar.
-        pid_written = (workspace / "runs" / run_id / "pid").read_text(
-            encoding="utf-8"
-        ).strip()
+        pid_written = (
+            (workspace / "runs" / run_id / "pid").read_text(encoding="utf-8").strip()
+        )
         assert pid_written == str(os.getpid())

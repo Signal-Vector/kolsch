@@ -155,9 +155,7 @@ def _make_agent_message_event(
     )
 
 
-def _make_failed_event(
-    *, session_id: SessionId, thread_id: ThreadId
-) -> Event:
+def _make_failed_event(*, session_id: SessionId, thread_id: ThreadId) -> Event:
     return Event(
         event_id=EventId(f"ev_{uuid4()}"),
         parent_event_id=None,

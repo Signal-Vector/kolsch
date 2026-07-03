@@ -147,10 +147,7 @@ async def test_bash_overflow_on_both_streams(tmp_path: Path) -> None:
     BashArgs = bash._tool_definition.args_schema  # type: ignore[attr-defined]
 
     # Push 70 KiB to stdout AND 70 KiB to stderr in one shell invocation.
-    cmd = (
-        "yes x | head -c 70000; "
-        "yes y | head -c 70000 1>&2"
-    )
+    cmd = "yes x | head -c 70000; yes y | head -c 70000 1>&2"
     result = await bash(BashArgs(command=cmd), ctx)
 
     assert result["stdout_persisted_to"] is not None
@@ -191,9 +188,7 @@ async def test_bash_persisted_path_under_workspace_logs(
         BashArgs(command="yes x | head -c 70000"),
         ctx,
     )
-    expected = (
-        tmp_path / "logs" / "tool-outputs" / session_id / f"{call_id}.stdout.txt"
-    )
+    expected = tmp_path / "logs" / "tool-outputs" / session_id / f"{call_id}.stdout.txt"
     assert Path(result["stdout_persisted_to"]) == expected
 
 

@@ -29,8 +29,7 @@ runtime.
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from pydantic import ValidationError
@@ -49,8 +48,12 @@ from workflows.events import (
 from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.ids import InvocationId, TraceId, WorkflowRunId
 from workflows.parser import Workflow
-from workflows.run import WorkflowRun
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from workflows.run import WorkflowRun
 
 _RUN_ID_A = WorkflowRunId("wrk_3b9e7e84-9a1d-4ce6-b6c1-2a4f8a91d101")
 _INV_ID_A = InvocationId("inv_2c8c01fa-4b7a-4c0c-b5fb-c19c1c0d3401")
@@ -141,9 +144,7 @@ class TestParentRoundTrip:
 
 
 def _trivial_workflow() -> Workflow:
-    return Workflow.model_validate(
-        {"nodes": {"only": {"type": "kolsch/nodes/noop"}}}
-    )
+    return Workflow.model_validate({"nodes": {"only": {"type": "kolsch/nodes/noop"}}})
 
 
 def _make_run(store: WorkflowRunStore) -> WorkflowRun:
@@ -151,9 +152,7 @@ def _make_run(store: WorkflowRunStore) -> WorkflowRun:
 
 
 class TestExecutorNestingKwargs:
-    def test_defaults_preserve_phase_3_1_signature(
-        self, tmp_path: Path
-    ) -> None:
+    def test_defaults_preserve_phase_3_1_signature(self, tmp_path: Path) -> None:
         # AC 0.8 — pre-Step-0 callers that don't pass the new kwargs
         # MUST construct cleanly. ``_call_depth`` defaults to ``0``;
         # ``_call_chain`` defaults to ``()`` which the executor
@@ -172,9 +171,7 @@ class TestExecutorNestingKwargs:
         assert ex._call_depth == 0
         assert ex._call_chain == (run.workflow_ref,)
 
-    def test_depth_at_limit_constructs_cleanly(
-        self, tmp_path: Path
-    ) -> None:
+    def test_depth_at_limit_constructs_cleanly(self, tmp_path: Path) -> None:
         # depth = 16 is the boundary — the executor MUST construct.
         store = WorkflowRunStore(tmp_path)
         run = _make_run(store)
@@ -190,9 +187,7 @@ class TestExecutorNestingKwargs:
         assert ex._call_depth == 16
         assert ex._call_chain == ("a",) * 16
 
-    def test_depth_seventeen_rejected_at_construction(
-        self, tmp_path: Path
-    ) -> None:
+    def test_depth_seventeen_rejected_at_construction(self, tmp_path: Path) -> None:
         # AC 0.4 reviewer note — the check fires at construction, NOT
         # at ``run`` time, so a nested executor that would exceed depth
         # never starts work.
@@ -216,9 +211,7 @@ class TestExecutorNestingKwargs:
 # ---------------------------------------------------------------------------
 
 
-_PARENT_INV = InvocationId(
-    "inv_77777777-7777-4777-8777-777777777777"
-)
+_PARENT_INV = InvocationId("inv_77777777-7777-4777-8777-777777777777")
 
 
 class TestDeriveForIteration:
@@ -267,10 +260,7 @@ class TestDeriveForIteration:
 
 class TestNewEventKinds:
     def test_called_workflow_enum_values(self) -> None:
-        assert (
-            WorkflowEventKind.CALLED_WORKFLOW
-            == "workflow.node.called_workflow"
-        )
+        assert WorkflowEventKind.CALLED_WORKFLOW == "workflow.node.called_workflow"
         assert (
             WorkflowEventKind.CALLED_WORKFLOW_COMPLETED
             == "workflow.node.called_workflow_completed"
@@ -311,14 +301,9 @@ class TestNewEventKinds:
             ),
         )
         dumped = evt.model_dump(mode="json")
-        assert (
-            dumped["kind"]
-            == "workflow.node.called_workflow_completed"
-        )
+        assert dumped["kind"] == "workflow.node.called_workflow_completed"
         assert dumped["payload"]["child_status"] == "waiting_for_input"
-        reloaded = (
-            WorkflowNodeCalledWorkflowCompletedEvent.model_validate(dumped)
-        )
+        reloaded = WorkflowNodeCalledWorkflowCompletedEvent.model_validate(dumped)
         assert reloaded.payload.child_workflow_run_id == "wrk_child"
 
     def test_called_workflow_payload_extra_forbidden(self) -> None:
@@ -374,9 +359,7 @@ class _StaticRunner:
 
 
 class TestWorkflowNodeCompletedPayload:
-    async def test_child_run_id_appears_for_workflow_node(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_child_run_id_appears_for_workflow_node(self, tmp_path: Path) -> None:
         # A single-node workflow whose node is ``kolsch/nodes/workflow``;
         # the fake runner stamps ``spawned_run_id`` so the executor's
         # payload builder appends ``child_run_id``.
@@ -390,9 +373,7 @@ class TestWorkflowNodeCompletedPayload:
                 },
             }
         )
-        child_id = WorkflowRunId(
-            "wrk_00000000-0000-4000-8000-000000000001"
-        )
+        child_id = WorkflowRunId("wrk_00000000-0000-4000-8000-000000000001")
         registry = RunnerRegistry()
         registry.register(
             "kolsch/nodes/workflow",
@@ -409,9 +390,7 @@ class TestWorkflowNodeCompletedPayload:
         )
         await ex.run()
         events = list(store.read_events(run.run_id))
-        completed = [
-            e for e in events if e["kind"] == "workflow.node.completed"
-        ]
+        completed = [e for e in events if e["kind"] == "workflow.node.completed"]
         assert len(completed) == 1
         assert completed[0]["payload"]["child_run_id"] == str(child_id)
 
@@ -447,9 +426,7 @@ class TestWorkflowNodeCompletedPayload:
         )
         await ex.run()
         events = list(store.read_events(run.run_id))
-        completed = [
-            e for e in events if e["kind"] == "workflow.node.completed"
-        ]
+        completed = [e for e in events if e["kind"] == "workflow.node.completed"]
         assert len(completed) == 1
         assert "child_run_id" not in completed[0]["payload"]
 
@@ -460,9 +437,7 @@ class TestWorkflowNodeCompletedPayload:
         # kolsch/nodes/workflow`` AND ``spawned_run_id is not None``.
         # A future runner that mistakenly stamps the attribute on a
         # non-workflow node MUST NOT pollute the payload.
-        wf = Workflow.model_validate(
-            {"nodes": {"only": {"type": "kolsch/nodes/noop"}}}
-        )
+        wf = Workflow.model_validate({"nodes": {"only": {"type": "kolsch/nodes/noop"}}})
 
         class _NoopStamper:
             async def run(
@@ -478,9 +453,7 @@ class TestWorkflowNodeCompletedPayload:
                 object.__setattr__(
                     ctx,
                     "spawned_run_id",
-                    WorkflowRunId(
-                        "wrk_00000000-0000-4000-8000-000000000099"
-                    ),
+                    WorkflowRunId("wrk_00000000-0000-4000-8000-000000000099"),
                 )
                 return {}
 
@@ -497,9 +470,7 @@ class TestWorkflowNodeCompletedPayload:
         )
         await ex.run()
         events = list(store.read_events(run.run_id))
-        completed = [
-            e for e in events if e["kind"] == "workflow.node.completed"
-        ]
+        completed = [e for e in events if e["kind"] == "workflow.node.completed"]
         assert len(completed) == 1
         assert "child_run_id" not in completed[0]["payload"]
 
@@ -510,9 +481,7 @@ class TestWorkflowNodeCompletedPayload:
 
 
 class TestNodeContextNestingFields:
-    async def test_runner_sees_executor_nesting_metadata(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_runner_sees_executor_nesting_metadata(self, tmp_path: Path) -> None:
         wf = _trivial_workflow()
 
         captured: dict[str, Any] = {}

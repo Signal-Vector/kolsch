@@ -13,12 +13,16 @@ case for ``list`` (must print cleanly, NOT crash).
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pytest
 import yaml
 
 from cli import main
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    import pytest
 
 # ---------------------------------------------------------------------------
 # Workspace fixtures.
@@ -80,9 +84,7 @@ def _write_bundle_with_skills(root: Path, bundle: str, skills: list[dict]) -> No
         )
 
 
-def _write_agent(
-    root: Path, bundle: str, name: str, enabled_skills: list[str]
-) -> None:
+def _write_agent(root: Path, bundle: str, name: str, enabled_skills: list[str]) -> None:
     agent_path = root / "bundles" / bundle / "agents" / f"{name}.yaml"
     agent_path.write_text(
         yaml.safe_dump(
@@ -152,7 +154,9 @@ def test_skills_list_prints_table_across_bundles(
     assert "acme/skills/hidden" in out
     assert "beta/skills/gamma" in out
     # Hidden marker on the disabled skill only.
-    hidden_line = next(line for line in out.splitlines() if "acme/skills/hidden" in line)
+    hidden_line = next(
+        line for line in out.splitlines() if "acme/skills/hidden" in line
+    )
     alpha_line = next(line for line in out.splitlines() if "acme/skills/alpha" in line)
     assert "[hidden]" in hidden_line
     assert "[hidden]" not in alpha_line

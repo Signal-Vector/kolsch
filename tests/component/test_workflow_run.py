@@ -92,18 +92,14 @@ class TestRunModel:
 
 
 class TestStoreRoundTrip:
-    def test_create_mints_fresh_id_and_writes_meta(
-        self, tmp_path: Path
-    ) -> None:
+    def test_create_mints_fresh_id_and_writes_meta(self, tmp_path: Path) -> None:
         store = WorkflowRunStore(tmp_path)
         run = store.create(workflow_ref="demo/workflows/hello", inputs={"x": 1})
         assert run.run_id.startswith("wrk_")
         assert run.trace_id.startswith("tr_")
         assert (tmp_path / "runs" / str(run.run_id) / "meta.json").exists()
 
-    def test_create_accepts_caller_supplied_trace_id(
-        self, tmp_path: Path
-    ) -> None:
+    def test_create_accepts_caller_supplied_trace_id(self, tmp_path: Path) -> None:
         trace = TraceId("tr_4b1cf4c6-2c0c-4b6a-913f-f3b9b4ab2c12")
         store = WorkflowRunStore(tmp_path)
         run = store.create(
@@ -148,9 +144,7 @@ class TestReadLiftsStatus:
     def test_terminal_event_drives_status(self, tmp_path: Path) -> None:
         store = WorkflowRunStore(tmp_path)
         run = store.create(workflow_ref="demo/workflows/hello", inputs={})
-        store.append_event(
-            run.run_id, {"kind": "workflow.run.started", "payload": {}}
-        )
+        store.append_event(run.run_id, {"kind": "workflow.run.started", "payload": {}})
         store.append_event(
             run.run_id, {"kind": "workflow.run.completed", "payload": {}}
         )
@@ -171,15 +165,11 @@ class TestReadLiftsStatus:
         assert reread.status == WorkflowRunStatus.ABORTED
         assert reread.reason == "user_cancel"
 
-    def test_no_terminal_event_preserves_meta_status(
-        self, tmp_path: Path
-    ) -> None:
+    def test_no_terminal_event_preserves_meta_status(self, tmp_path: Path) -> None:
         store = WorkflowRunStore(tmp_path)
         run = store.create(workflow_ref="demo/workflows/hello", inputs={})
         # Only a started event — no terminal yet.
-        store.append_event(
-            run.run_id, {"kind": "workflow.run.started", "payload": {}}
-        )
+        store.append_event(run.run_id, {"kind": "workflow.run.started", "payload": {}})
         reread = store.read(run.run_id)
         assert reread.status == WorkflowRunStatus.PENDING
 
@@ -275,9 +265,7 @@ class TestModuleIsolation:
         # Lay down a fake bundle Python file the test can import.
         bundle_dir = tmp_path / "bundles" / "demo" / "nodes"
         bundle_dir.mkdir(parents=True)
-        (bundle_dir / "echo.py").write_text(
-            "MARKER = 42\n", encoding="utf-8"
-        )
+        (bundle_dir / "echo.py").write_text("MARKER = 42\n", encoding="utf-8")
         # Add the workspace root to sys.path so importlib can find it.
         monkeypatch.syspath_prepend(str(tmp_path))
 
@@ -298,9 +286,7 @@ class TestModuleIsolation:
         # `if name in before: continue` guard skipped them.
         assert "pydantic" in sys.modules
 
-    def test_cleanup_returns_zero_when_no_bundle_imports(
-        self, tmp_path: Path
-    ) -> None:
+    def test_cleanup_returns_zero_when_no_bundle_imports(self, tmp_path: Path) -> None:
         before = snapshot_sys_modules()
         # Don't import anything from bundles/.
         removed = cleanup_bundle_imports(before=before, workspace_root=tmp_path)
@@ -319,11 +305,7 @@ class TestModuleIsolation:
 
 class TestNoExecutorLogic:
     def test_run_module_does_not_walk_workflow_nodes(self) -> None:
-        src = (
-            Path(__file__).resolve().parent.parent.parent
-            / "src"
-            / "workflows"
-        )
+        src = Path(__file__).resolve().parent.parent.parent / "src" / "workflows"
         for fname in ("run.py", "run_store.py", "module_isolation.py"):
             text = (src / fname).read_text(encoding="utf-8")
             assert "for node in workflow.nodes" not in text, fname
@@ -339,9 +321,7 @@ class TestNoExecutorLogic:
 def test_meta_json_round_trips(tmp_path: Path) -> None:
     store = WorkflowRunStore(tmp_path)
     run = store.create(workflow_ref="demo/workflows/hello", inputs={"x": 1})
-    raw = json.loads(
-        (tmp_path / "runs" / str(run.run_id) / "meta.json").read_text()
-    )
+    raw = json.loads((tmp_path / "runs" / str(run.run_id) / "meta.json").read_text())
     assert raw["run_id"] == run.run_id
     assert raw["workflow_ref"] == "demo/workflows/hello"
     assert raw["inputs"] == {"x": 1}

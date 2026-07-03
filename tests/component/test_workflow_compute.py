@@ -10,14 +10,16 @@ list values.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from assets.catalog import AssetCatalog
 from workflows.builtins import ComputeRunner
 from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _wf(payload: dict[str, Any]) -> Workflow:
@@ -37,9 +39,7 @@ def _executor(
     inputs: dict[str, Any] | None = None,
 ) -> tuple[IterativeExecutor, WorkflowRunStore, Any]:
     store = WorkflowRunStore(tmp_path)
-    run = store.create(
-        workflow_ref="demo/workflows/compute", inputs=inputs or {}
-    )
+    run = store.create(workflow_ref="demo/workflows/compute", inputs=inputs or {})
     ex = IterativeExecutor(
         workflow=workflow,
         run=run,
@@ -56,9 +56,7 @@ def _executor(
 
 
 class TestComputeJinja:
-    async def test_int_arithmetic_returns_typed_int(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_int_arithmetic_returns_typed_int(self, tmp_path: Path) -> None:
         wf = _wf(
             {
                 "nodes": {
@@ -84,9 +82,7 @@ class TestComputeJinja:
 
 
 class TestComputeLiteral:
-    async def test_int_literal_passes_through(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_int_literal_passes_through(self, tmp_path: Path) -> None:
         wf = _wf(
             {
                 "nodes": {
@@ -101,9 +97,7 @@ class TestComputeLiteral:
         await ex.run()
         assert ex._captured["lit"] == {"value": 42}
 
-    async def test_list_literal_passes_through(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_list_literal_passes_through(self, tmp_path: Path) -> None:
         wf = _wf(
             {
                 "nodes": {

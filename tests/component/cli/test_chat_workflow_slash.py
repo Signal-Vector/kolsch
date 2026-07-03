@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import io as _io
 import re
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -36,6 +36,9 @@ from cli._slash import (
     dispatch_slash,
 )
 from platform_runtime import PlatformRuntime, bootstrap_runtime
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -176,9 +179,7 @@ async def test_slash_workflow_runs_to_completion(chat_workspace: Path) -> None:
     out = _io.StringIO()
     ctx = _make_ctx(state=state, runtime=runtime, stdout=out)
 
-    signal = await dispatch_slash(
-        "/workflow kolsch/workflows/hello", ctx
-    )
+    signal = await dispatch_slash("/workflow kolsch/workflows/hello", ctx)
     assert signal is ControlSignal.CONTINUE
 
     # pending_workflow_run_id set to a valid-looking run id.
@@ -240,9 +241,7 @@ async def test_failed_node_renders_caller_message(
     out = _io.StringIO()
     ctx = _make_ctx(state=state, runtime=runtime, stdout=out)
 
-    signal = await dispatch_slash(
-        "/workflow phase39_test/workflows/failing", ctx
-    )
+    signal = await dispatch_slash("/workflow phase39_test/workflows/failing", ctx)
     assert signal is ControlSignal.CONTINUE
 
     rendered = out.getvalue()
@@ -326,9 +325,7 @@ async def test_subworkflow_capsules_render_indented(
     out = _io.StringIO()
     ctx = _make_ctx(state=state, runtime=runtime, stdout=out)
 
-    signal = await dispatch_slash(
-        "/workflow phase39_test/workflows/parent", ctx
-    )
+    signal = await dispatch_slash("/workflow phase39_test/workflows/parent", ctx)
     assert signal is ControlSignal.CONTINUE
 
     rendered = out.getvalue()
@@ -337,9 +334,7 @@ async def test_subworkflow_capsules_render_indented(
     # The child's capsule label appears, INDENTED by two spaces (the
     # ``  │`` prefix is the load-bearing visual contract).
     # Find any line containing the child label.
-    child_lines = [
-        line for line in rendered.splitlines() if "Child compute" in line
-    ]
+    child_lines = [line for line in rendered.splitlines() if "Child compute" in line]
     assert child_lines, (
         f"expected at least one rendered line to mention 'Child compute'; "
         f"got rendered output:\n{rendered}"
@@ -393,9 +388,7 @@ async def test_user_input_pause_renders_inline_prompt_and_arms_flag(
     out = _io.StringIO()
     ctx = _make_ctx(state=state, runtime=runtime, stdout=out)
 
-    signal = await dispatch_slash(
-        "/workflow kolsch/workflows/hello-paused", ctx
-    )
+    signal = await dispatch_slash("/workflow kolsch/workflows/hello-paused", ctx)
     assert signal is ControlSignal.CONTINUE
 
     rendered = out.getvalue()
@@ -425,18 +418,14 @@ async def test_user_input_chat_resume_completes_workflow(
     out = _io.StringIO()
     ctx = _make_ctx(state=state, runtime=runtime, stdout=out)
 
-    await dispatch_slash(
-        "/workflow kolsch/workflows/hello-paused", ctx
-    )
+    await dispatch_slash("/workflow kolsch/workflows/hello-paused", ctx)
     assert state.expecting_user_input_response is True
 
     # Operator types "world" — drives the resume helper directly
     # (mirrors what the input loop would do for a non-slash message
     # while the flag is armed).
     out_resume = _io.StringIO()
-    await _resume_pending_workflow(
-        state, stdout=out_resume, response_text="world"
-    )
+    await _resume_pending_workflow(state, stdout=out_resume, response_text="world")
 
     # Flag cleared; resume rendered downstream capsules; "world"
     # surfaced in the echo node's output.
@@ -467,9 +456,7 @@ async def test_help_during_pause_preserves_resume_expectation(
     out = _io.StringIO()
     ctx = _make_ctx(state=state, runtime=runtime, stdout=out)
 
-    await dispatch_slash(
-        "/workflow kolsch/workflows/hello-paused", ctx
-    )
+    await dispatch_slash("/workflow kolsch/workflows/hello-paused", ctx)
     assert state.expecting_user_input_response is True
 
     # Dispatch /help (info-only) — the flag must remain armed.
@@ -493,9 +480,7 @@ async def test_state_changing_slash_during_pause_clears_resume_flag(
     out = _io.StringIO()
     ctx = _make_ctx(state=state, runtime=runtime, stdout=out)
 
-    await dispatch_slash(
-        "/workflow kolsch/workflows/hello-paused", ctx
-    )
+    await dispatch_slash("/workflow kolsch/workflows/hello-paused", ctx)
     assert state.expecting_user_input_response is True
 
     # Dispatch another /workflow (state-changing default) — the flag
@@ -522,25 +507,19 @@ async def test_sequential_pauses_resume_cycle(chat_workspace: Path) -> None:
     out = _io.StringIO()
     ctx = _make_ctx(state=state, runtime=runtime, stdout=out)
 
-    await dispatch_slash(
-        "/workflow kolsch/workflows/two-pauses", ctx
-    )
+    await dispatch_slash("/workflow kolsch/workflows/two-pauses", ctx)
     assert state.expecting_user_input_response is True
 
     # First resume — workflow pauses again at the second user_input.
     out_first = _io.StringIO()
-    await _resume_pending_workflow(
-        state, stdout=out_first, response_text="alpha"
-    )
+    await _resume_pending_workflow(state, stdout=out_first, response_text="alpha")
     assert state.expecting_user_input_response is True
     # Second-pause capsule rendered.
     assert "Second answer?" in out_first.getvalue()
 
     # Second resume — workflow completes; the flag clears.
     out_second = _io.StringIO()
-    await _resume_pending_workflow(
-        state, stdout=out_second, response_text="beta"
-    )
+    await _resume_pending_workflow(state, stdout=out_second, response_text="beta")
     assert state.expecting_user_input_response is False
     # Final node's output blends both responses per the YAML.
     assert "alpha+beta" in out_second.getvalue()
@@ -567,9 +546,7 @@ async def test_slash_fork_at_event_reroutes(chat_workspace: Path) -> None:
     ctx = _make_ctx(state=state, runtime=runtime, stdout=out)
 
     # Parent run.
-    await dispatch_slash(
-        "/workflow kolsch/workflows/fork-demo with seed=urgent", ctx
-    )
+    await dispatch_slash("/workflow kolsch/workflows/fork-demo with seed=urgent", ctx)
     assert state.pending_workflow_run_id is not None
     assert "URGENT" in out.getvalue()  # urgent-arm handler ran.
 
@@ -592,9 +569,7 @@ async def test_slash_fork_at_event_reroutes(chat_workspace: Path) -> None:
     short_event_id = classify_event_id[: len("ev_") + 8]
     out_fork = _io.StringIO()
     fork_ctx = _make_ctx(state=state, runtime=runtime, stdout=out_fork)
-    signal = await dispatch_slash(
-        f"/fork {short_event_id} with value=normal", fork_ctx
-    )
+    signal = await dispatch_slash(f"/fork {short_event_id} with value=normal", fork_ctx)
     assert signal is ControlSignal.CONTINUE
     rendered = out_fork.getvalue()
     # Forked run now takes the normal arm; the urgent arm is pruned.
@@ -646,9 +621,7 @@ async def test_chained_fork_targets_previous_fork(chat_workspace: Path) -> None:
     out = _io.StringIO()
     ctx = _make_ctx(state=state, runtime=runtime, stdout=out)
 
-    await dispatch_slash(
-        "/workflow kolsch/workflows/fork-demo with seed=urgent", ctx
-    )
+    await dispatch_slash("/workflow kolsch/workflows/fork-demo with seed=urgent", ctx)
     parent_run_id = state.pending_workflow_run_id
     assert parent_run_id is not None
 
@@ -722,17 +695,13 @@ async def test_fork_bad_event_id_surfaces_friendly_error(
     out = _io.StringIO()
     ctx = _make_ctx(state=state, runtime=runtime, stdout=out)
 
-    await dispatch_slash(
-        "/workflow kolsch/workflows/fork-demo with seed=urgent", ctx
-    )
+    await dispatch_slash("/workflow kolsch/workflows/fork-demo with seed=urgent", ctx)
     parent_pending = state.pending_workflow_run_id
     assert parent_pending is not None
 
     out_fork = _io.StringIO()
     fork_ctx = _make_ctx(state=state, runtime=runtime, stdout=out_fork)
-    signal = await dispatch_slash(
-        "/fork ev_does_not_exist_anywhere", fork_ctx
-    )
+    signal = await dispatch_slash("/fork ev_does_not_exist_anywhere", fork_ctx)
     assert signal is ControlSignal.CONTINUE
     assert "does not uniquely match" in out_fork.getvalue()
     # pending stays on the parent — no fork minted for this attempt.
@@ -756,9 +725,7 @@ async def test_catalog_miss_surfaces_friendly_error(
     out = _io.StringIO()
     ctx = _make_ctx(state=state, runtime=runtime, stdout=out)
 
-    signal = await dispatch_slash(
-        "/workflow kolsch/workflows/does-not-exist", ctx
-    )
+    signal = await dispatch_slash("/workflow kolsch/workflows/does-not-exist", ctx)
     assert signal is ControlSignal.CONTINUE
     rendered = out.getvalue()
     assert "not found" in rendered

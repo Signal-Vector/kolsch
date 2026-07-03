@@ -17,8 +17,7 @@ Master spec §16.2.2 / §16.6:
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -27,6 +26,9 @@ from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class _SleepRunner:
@@ -136,9 +138,7 @@ def _failure_registry() -> RunnerRegistry:
             return {"stdout": "x", "stderr": "", "exit_code": 0}
 
     reg.register("kolsch/nodes/bash", _ByNodeRunner())
-    reg.register(
-        "kolsch/nodes/noop", _SleepRunner(delay=0.0, output={})
-    )
+    reg.register("kolsch/nodes/noop", _SleepRunner(delay=0.0, output={}))
     return reg
 
 
@@ -153,9 +153,7 @@ def _slow_registry() -> RunnerRegistry:
             output={"stdout": "x", "stderr": "", "exit_code": 0},
         ),
     )
-    reg.register(
-        "kolsch/nodes/noop", _SleepRunner(delay=0.0, output={})
-    )
+    reg.register("kolsch/nodes/noop", _SleepRunner(delay=0.0, output={}))
     return reg
 
 
@@ -184,21 +182,15 @@ class TestFirstFailureCancelsSiblings:
     async def test_failing_node_carries_original_error_class(
         self, tmp_path: Path
     ) -> None:
-        ex, store, run = _make_executor(
-            tmp_path, _wf(), _failure_registry()
-        )
+        ex, store, run = _make_executor(tmp_path, _wf(), _failure_registry())
         status = await ex.run()
         assert status == WorkflowRunStatus.FAILED
 
         events = list(store.read_events(run.run_id))
         # The first failed event should be for the fast_failer with
         # its ORIGINAL error_class (not asyncio.CancelledError).
-        failed_events = [
-            e for e in events if e.get("kind") == "workflow.node.failed"
-        ]
-        fast_failed = next(
-            e for e in failed_events if e["node_name"] == "fast_failer"
-        )
+        failed_events = [e for e in events if e.get("kind") == "workflow.node.failed"]
+        fast_failed = next(e for e in failed_events if e["node_name"] == "fast_failer")
         assert fast_failed["payload"]["error_class"] == "_SentinelError"
         # Sibling cancellations land their own workflow.node.failed
         # with error_class="asyncio.CancelledError" + reason="sibling_failure".
@@ -209,17 +201,12 @@ class TestFirstFailureCancelsSiblings:
             e for e in failed_events if e["node_name"] == "slow_sibling_b"
         )
         for sibling in (sibling_a_failed, sibling_b_failed):
-            assert (
-                sibling["payload"]["error_class"]
-                == "asyncio.CancelledError"
-            )
+            assert sibling["payload"]["error_class"] == "asyncio.CancelledError"
             assert sibling["payload"]["reason"] == "sibling_failure"
 
         # The run.failed event chains after every node.failed and
         # names fast_failer as the cause.
-        run_failed = next(
-            e for e in events if e.get("kind") == "workflow.run.failed"
-        )
+        run_failed = next(e for e in events if e.get("kind") == "workflow.run.failed")
         assert "fast_failer" in run_failed["payload"]["reason"]
 
     @pytest.mark.asyncio
@@ -231,9 +218,7 @@ class TestFirstFailureCancelsSiblings:
         the fast_failer raises."""
         import time as _time
 
-        ex, _, _ = _make_executor(
-            tmp_path, _wf(), _failure_registry()
-        )
+        ex, _, _ = _make_executor(tmp_path, _wf(), _failure_registry())
         t0 = _time.perf_counter()
         status = await ex.run()
         elapsed = _time.perf_counter() - t0
@@ -253,15 +238,11 @@ class TestFirstFailureCancelsSiblings:
 
 class TestCancelFlagMidFanOut:
     @pytest.mark.asyncio
-    async def test_cancel_flag_aborts_in_flight_batch(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_cancel_flag_aborts_in_flight_batch(self, tmp_path: Path) -> None:
         """Operator writes ``cancel.flag`` mid-fan-out. The executor
         cancels every in-flight task and emits ``workflow.run.aborted``;
         sibling cancellations land with ``reason="user_cancel"``."""
-        ex, store, run = _make_executor(
-            tmp_path, _wf(), _slow_registry()
-        )
+        ex, store, run = _make_executor(tmp_path, _wf(), _slow_registry())
         # Touch the cancel.flag shortly after kicking off the run so
         # the dispatch loop observes it AT THE TOP of an iteration.
         run_dir = store.directory(run.run_id)
@@ -279,18 +260,12 @@ class TestCancelFlagMidFanOut:
         assert status == WorkflowRunStatus.ABORTED
         events = list(store.read_events(run.run_id))
         # Confirm workflow.run.aborted lands.
-        aborted = [
-            e for e in events if e.get("kind") == "workflow.run.aborted"
-        ]
+        aborted = [e for e in events if e.get("kind") == "workflow.run.aborted"]
         assert len(aborted) == 1
         # Sibling cancellations: each in-flight sibling emits
         # workflow.node.failed with reason="user_cancel".
-        failed_events = [
-            e for e in events if e.get("kind") == "workflow.node.failed"
-        ]
+        failed_events = [e for e in events if e.get("kind") == "workflow.node.failed"]
         assert failed_events, "no sibling failed events emitted"
         for ev in failed_events:
-            assert (
-                ev["payload"]["error_class"] == "asyncio.CancelledError"
-            )
+            assert ev["payload"]["error_class"] == "asyncio.CancelledError"
             assert ev["payload"]["reason"] == "user_cancel"

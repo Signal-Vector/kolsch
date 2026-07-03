@@ -84,9 +84,7 @@ def make_llm_callable(
         # Kimi K2 in particular emits `arguments: {}` for every tool
         # call when it can't find `function.parameters`.
         tools_arg = (
-            [_tool_to_openai_spec(t) for t in request.tools]
-            if request.tools
-            else None
+            [_tool_to_openai_spec(t) for t in request.tools] if request.tools else None
         )
         # crewai's LLMMessage is a TypedDict variant we don't import
         # to avoid the heavy crewai imports at module load; our dict

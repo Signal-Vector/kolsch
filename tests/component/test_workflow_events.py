@@ -87,18 +87,14 @@ def _make_executor(
 
 
 class TestEnvelopeShape:
-    async def test_run_started_envelope_has_common_fields(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_run_started_envelope_has_common_fields(self, tmp_path: Path) -> None:
         wf = _wf({"nodes": {"a": {"type": "kolsch/nodes/noop"}}})
         registry = RunnerRegistry()
         registry.register("kolsch/nodes/noop", _StaticRunner({}))
         ex, store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
         await ex.run()
         events = list(store.read_events(run.run_id))
-        started = next(
-            e for e in events if e["kind"] == "workflow.run.started"
-        )
+        started = next(e for e in events if e["kind"] == "workflow.run.started")
         # Common-field hoist — top-level on every envelope.
         assert started["event_id"].startswith("ev_")
         assert started["parent_event_id"] is None
@@ -116,9 +112,7 @@ class TestEnvelopeShape:
         ex, store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
         await ex.run()
         events = list(store.read_events(run.run_id))
-        node_started = next(
-            e for e in events if e["kind"] == "workflow.node.started"
-        )
+        node_started = next(e for e in events if e["kind"] == "workflow.node.started")
         # Top-level fields per master spec §11.3.
         assert node_started["node_name"] == "a"
         assert node_started["invocation_id"].startswith("inv_")
@@ -137,22 +131,15 @@ class TestEnvelopeShape:
         assert len(list(WorkflowEventKind)) == 19
         assert WorkflowEventKind.NODE_PRUNED.value == "workflow.node.pruned"
         assert WorkflowEventKind.RUN_RESUMED.value == "workflow.run.resumed"
+        assert WorkflowEventKind.STATE_MUTATED.value == "workflow.state.mutated"
         assert (
-            WorkflowEventKind.STATE_MUTATED.value
-            == "workflow.state.mutated"
-        )
-        assert (
-            WorkflowEventKind.CALLED_WORKFLOW.value
-            == "workflow.node.called_workflow"
+            WorkflowEventKind.CALLED_WORKFLOW.value == "workflow.node.called_workflow"
         )
         assert (
             WorkflowEventKind.CALLED_WORKFLOW_COMPLETED.value
             == "workflow.node.called_workflow_completed"
         )
-        assert (
-            WorkflowEventKind.RUN_FORKED_FROM.value
-            == "workflow.run.forked_from"
-        )
+        assert WorkflowEventKind.RUN_FORKED_FROM.value == "workflow.run.forked_from"
 
 
 # ---------------------------------------------------------------------------
@@ -195,9 +182,7 @@ class TestEventOrdering:
             "workflow.run.completed",
         ]
 
-    async def test_node_failed_pairs_with_node_started(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_node_failed_pairs_with_node_started(self, tmp_path: Path) -> None:
         """The ``workflow.node.failed`` event's ``parent_event_id``
         points at its matching ``workflow.node.started`` — not the
         run-level start."""
@@ -220,18 +205,12 @@ class TestEventOrdering:
         status = await ex.run()
         assert status == WorkflowRunStatus.FAILED
         events = list(store.read_events(run.run_id))
-        started = next(
-            e for e in events if e["kind"] == "workflow.node.started"
-        )
-        failed = next(
-            e for e in events if e["kind"] == "workflow.node.failed"
-        )
+        started = next(e for e in events if e["kind"] == "workflow.node.started")
+        failed = next(e for e in events if e["kind"] == "workflow.node.failed")
         # Parent of node.failed is the matching node.started.
         assert failed["parent_event_id"] == started["event_id"]
         # And run.failed's parent is node.failed.
-        run_failed = next(
-            e for e in events if e["kind"] == "workflow.run.failed"
-        )
+        run_failed = next(e for e in events if e["kind"] == "workflow.run.failed")
         assert run_failed["parent_event_id"] == failed["event_id"]
 
     async def test_terminal_event_is_last(self, tmp_path: Path) -> None:
@@ -267,9 +246,7 @@ class TestCallerChain:
         ex, store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
         await ex.run()
         events = list(store.read_events(run.run_id))
-        node_started = next(
-            e for e in events if e["kind"] == "workflow.node.started"
-        )
+        node_started = next(e for e in events if e["kind"] == "workflow.node.started")
         assert "caller_chain" in node_started["payload"]
         # Root-entry run carries an empty chain; Phase 3.7 sub-workflow
         # wiring is what populates this with the parent frames.
@@ -282,9 +259,7 @@ class TestCallerChain:
 
 
 class TestPolicyDecisionMade:
-    async def test_audit_level_all_emits_on_default_deny(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_audit_level_all_emits_on_default_deny(self, tmp_path: Path) -> None:
         """With ``audit_level: "all"`` AND no matching rule (default
         deny), the policy event still lands in the JSONL."""
         from workflows.run_context import (
@@ -323,9 +298,7 @@ class TestPolicyDecisionMade:
         events = list(store.read_events(run.run_id))
         kinds = [e["kind"] for e in events]
         assert "policy.decision.made" in kinds
-        policy = next(
-            e for e in events if e["kind"] == "policy.decision.made"
-        )
+        policy = next(e for e in events if e["kind"] == "policy.decision.made")
         assert policy["payload"]["effect"] == "deny"
         assert policy["payload"]["action"] == "tool.unmapped_action_X"
 
@@ -383,11 +356,7 @@ class TestPolicyDecisionMade:
         store = WorkflowRunStore(tmp_path)
         run = store.create(workflow_ref="demo/workflows/x", inputs={})
         provider = RuleBasedAuthorizationProvider(
-            config={
-                "rules": [
-                    {"what": "*", "pattern": "*", "effect": "allow"}
-                ]
-            }
+            config={"rules": [{"what": "*", "pattern": "*", "effect": "allow"}]}
         )
         store.append_event(
             run.run_id,
@@ -411,15 +380,11 @@ class TestPolicyDecisionMade:
             reset_workflow_run_context(token)
         assert result.allowed is True
         events = list(store.read_events(run.run_id))
-        policy = next(
-            e for e in events if e["kind"] == "policy.decision.made"
-        )
+        policy = next(e for e in events if e["kind"] == "policy.decision.made")
         assert policy["payload"]["effect"] == "allow"
         assert policy["payload"]["rule_id"] is not None
 
-    async def test_no_run_context_means_no_emission(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_no_run_context_means_no_emission(self, tmp_path: Path) -> None:
         """Non-workflow callers (chat, ``kolsch run``, tests that
         don't construct a run) observe zero overhead — no contextvar
         set, no JSONL emit."""

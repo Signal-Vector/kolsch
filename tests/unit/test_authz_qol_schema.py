@@ -107,9 +107,7 @@ async def test_new_shape_pattern_narrows_by_target() -> None:
         },
         catalog=catalog,
     )
-    matched = await provider.allow(
-        "u", "kolsch/tools/bash", target="find / -name foo"
-    )
+    matched = await provider.allow("u", "kolsch/tools/bash", target="find / -name foo")
     assert matched.allowed
 
     blocked = await provider.allow("u", "kolsch/tools/bash", target="rm -rf /")
@@ -288,9 +286,7 @@ async def test_glob_question_matches_one_char() -> None:
         catalog=catalog,
     )
     assert (await provider.allow("u", "kolsch/tools/bash", target="ls")).allowed
-    assert not (
-        await provider.allow("u", "kolsch/tools/bash", target="lsa")
-    ).allowed
+    assert not (await provider.allow("u", "kolsch/tools/bash", target="lsa")).allowed
 
 
 async def test_glob_prefix_matches() -> None:

@@ -35,7 +35,6 @@ from __future__ import annotations
 import asyncio
 from typing import TYPE_CHECKING, Any
 
-from rich.console import Console
 from rich.text import Text
 
 from cli._renderer import _BAR, _CAPSULE_PALETTE, _capsule
@@ -44,6 +43,8 @@ from workflows.labels import display_label
 
 if TYPE_CHECKING:
     from collections.abc import Callable, Iterable
+
+    from rich.console import Console
 
     from workflows.ids import WorkflowRunId
     from workflows.parser import Workflow
@@ -419,7 +420,7 @@ class WorkflowCapsuleRenderer:
         # whose __name__ matches so the cleaned-name path is honest.
         return display_label(_NodeNameStub(node_name), type_label)
 
-    def _lookup_node_def(self, node_name: str) -> Any | None:  # noqa: ANN401
+    def _lookup_node_def(self, node_name: str) -> Any | None:
         if self._workflow is None or not node_name:
             return None
         return self._workflow.nodes.get(node_name)
@@ -546,7 +547,7 @@ def _short_event_id(event_id: str) -> str:
     return f"ev_{body[:_EVENT_ID_SHORT_LEN]}"
 
 
-def _single_line_preview(value: Any) -> str:  # noqa: ANN401
+def _single_line_preview(value: Any) -> str:
     """Collapse a value to a single-line preview string.
 
     Strings are stripped of newlines; everything else passes through

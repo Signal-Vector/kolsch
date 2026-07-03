@@ -1032,9 +1032,7 @@ async def test_tc_eng_11_skills_listing_in_system_prompt(tmp_path: Path) -> None
             # Prompt template renders the skills block — the
             # auto-append is gone; template owns placement now.
             "prompt": (
-                "You are a helpful test agent.\n\n"
-                "## Available skills\n\n"
-                "{{ skills }}"
+                "You are a helpful test agent.\n\n## Available skills\n\n{{ skills }}"
             ),
             "subsystems": {
                 "skills": SubsystemConfig(

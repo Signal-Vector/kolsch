@@ -89,9 +89,7 @@ class TestRunModuleNamespace:
     def test_prefix_format_matches_spec(self) -> None:
         """Master spec §16.4 Glossary — prefix is
         ``_kolsch_<run-id[:12]>.`` (i.e., ``_kolsch_wrk_<first 8>.``)."""
-        ns = RunModuleNamespace(
-            run_id="wrk_abcdef0123456789-deadbeef-feedface"
-        )
+        ns = RunModuleNamespace(run_id="wrk_abcdef0123456789-deadbeef-feedface")
         assert ns.prefix == "_kolsch_wrk_abcdef01."
 
     def test_wrap_module_name_prepends_prefix(self) -> None:
@@ -139,9 +137,7 @@ class TestRunModuleNamespace:
 class TestExecutorNamespaceConstruction:
     def test_executor_init_builds_module_ns(self, tmp_path: Path) -> None:
         (tmp_path / "runs").mkdir()
-        wf = Workflow.model_validate(
-            {"nodes": {"n": {"type": "kolsch/nodes/noop"}}}
-        )
+        wf = Workflow.model_validate({"nodes": {"n": {"type": "kolsch/nodes/noop"}}})
         ex, _ = _build_executor(tmp_path, wf, AssetCatalog())
         assert isinstance(ex._module_ns, RunModuleNamespace)
         # The prefix should embed the run id's short tag.
@@ -256,9 +252,7 @@ class TestConcurrentRunsDistinctModules:
             run_id = ex._run.run_id
             events = list(store.read_events(run_id))
             completed = next(
-                e
-                for e in events
-                if e.get("kind") == "workflow.node.completed"
+                e for e in events if e.get("kind") == "workflow.node.completed"
             )
             module_id = completed["payload"]["output"]["module_id"]
             return str(status), module_id
@@ -277,9 +271,7 @@ class TestConcurrentRunsDistinctModules:
         task_b = asyncio.create_task(_do_run(ws_b, catalog_b))
         releaser = asyncio.create_task(_releaser())
         try:
-            (status_a, mod_a), (status_b, mod_b) = await asyncio.gather(
-                task_a, task_b
-            )
+            (status_a, mod_a), (status_b, mod_b) = await asyncio.gather(task_a, task_b)
         finally:
             await releaser
 

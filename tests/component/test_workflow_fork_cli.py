@@ -30,12 +30,14 @@ from __future__ import annotations
 
 import json
 import textwrap
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from cli.main import main
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Workspace fixture — mirrors tests/component/test_workflow_resume_cli.py
@@ -83,9 +85,7 @@ def _write_workflow_bundle(
     wf_dir.mkdir(exist_ok=True)
     from _yamlio import dump
 
-    (wf_dir / f"{workflow_name}.yaml").write_text(
-        dump(workflow_yaml), encoding="utf-8"
-    )
+    (wf_dir / f"{workflow_name}.yaml").write_text(dump(workflow_yaml), encoding="utf-8")
     return bundle
 
 
@@ -185,10 +185,7 @@ def _find_event_id(
         ):
             continue
         return event["event_id"]
-    msg = (
-        f"no event matching kind={kind!r} "
-        f"preview_contains={preview_contains!r}"
-    )
+    msg = f"no event matching kind={kind!r} preview_contains={preview_contains!r}"
     raise AssertionError(msg)
 
 
@@ -216,9 +213,7 @@ class TestForkCliHelp:
     ) -> None:
         workspace = _make_workspace(tmp_path)
         with pytest.raises(SystemExit) as exc_info:
-            main(
-                ["--root", str(workspace), "workflows", "fork", "--help"]
-            )
+            main(["--root", str(workspace), "workflows", "fork", "--help"])
         assert exc_info.value.code == 0
         captured = capsys.readouterr()
         combined = (captured.out + captured.err).lower()
@@ -269,9 +264,7 @@ class TestForkCliHappyPath:
         assert "forked run wrk_" in first
         assert "succeeded" in first
         # Second line correlates the fork back to the parent.
-        assert (
-            f"forked from: {parent_id} at {b_completed}" in out
-        )
+        assert f"forked from: {parent_id} at {b_completed}" in out
 
     def test_fork_at_completed_json_envelope_has_required_fields(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
@@ -772,10 +765,7 @@ class TestForkPauseResume:
         resume_envelope = json.loads(out)
         assert resume_envelope["data"]["status"] == "succeeded"
         assert resume_envelope["data"]["run_id"] == forked_id
-        assert (
-            resume_envelope["data"]["outputs"]["echo"]["value"]
-            == "fork-said"
-        )
+        assert resume_envelope["data"]["outputs"]["echo"]["value"] == "fork-said"
 
         # AC 2.7 reviewer note — the parent's terminal output is
         # untouched. Read the parent's JSONL directly (the events
@@ -784,14 +774,10 @@ class TestForkPauseResume:
         # captured "parent-said", not "fork-said".
         import json as _json
 
-        parent_jsonl = (
-            workspace / "runs" / parent_id / "events.jsonl"
-        )
+        parent_jsonl = workspace / "runs" / parent_id / "events.jsonl"
         parent_events_after = [
             _json.loads(line)
-            for line in parent_jsonl.read_text(
-                encoding="utf-8"
-            ).splitlines()
+            for line in parent_jsonl.read_text(encoding="utf-8").splitlines()
             if line.strip()
         ]
         parent_echo_completion = next(
@@ -803,10 +789,7 @@ class TestForkPauseResume:
                 or e.get("payload", {}).get("node_name") == "echo"
             )
         )
-        assert (
-            parent_echo_completion["payload"]["output"]["value"]
-            == "parent-said"
-        )
+        assert parent_echo_completion["payload"]["output"]["value"] == "parent-said"
 
 
 # ---------------------------------------------------------------------------

@@ -69,9 +69,7 @@ class AssetCatalog(BaseModel):
     bundles: dict[str, BundleManifest] = Field(default_factory=dict)
     assets: dict[str, AssetEntry] = Field(default_factory=dict)
 
-    def lookup(
-        self, ref: str, expected_type: str | None = None
-    ) -> AssetEntry | None:
+    def lookup(self, ref: str, expected_type: str | None = None) -> AssetEntry | None:
         """Resolve a 3-segment ref to its [`AssetEntry`][assets.AssetEntry].
 
         The documented chokepoint for catalog access. Combines shape
@@ -108,7 +106,7 @@ class AssetCatalog(BaseModel):
         return entry
 
 
-def scan(root: Path) -> AssetCatalog:
+def scan(root: Path) -> AssetCatalog:  # noqa: PLR0912 — one branch per asset type (spec §2 catalog schema)
     """Walk `root/bundles/` and build the catalog.
 
     Bundles with missing or malformed `bundle.yaml` are skipped with

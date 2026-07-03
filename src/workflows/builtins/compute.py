@@ -41,9 +41,7 @@ class ComputeRunner:
         _ = (node_name, state)
         raw = node_def.value
         if _is_jinja_marked(raw):
-            rendered = ctx.render_jinja(
-                raw, inputs_overlay=bound_inputs
-            )
+            rendered = ctx.render_jinja(raw, inputs_overlay=bound_inputs)
         else:
             rendered = raw
         return {"value": rendered}

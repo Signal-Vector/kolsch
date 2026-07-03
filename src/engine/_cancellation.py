@@ -56,7 +56,7 @@ preempted.
 """
 
 
-async def race_with_cancel(
+async def race_with_cancel[T](
     coro: Coroutine[Any, Any, T],
     cancel_token: CancelToken | None,
     *,
@@ -120,9 +120,9 @@ async def race_with_cancel(
         # The work completed first — drain the cancel waiter and
         # return the work's result (or re-raise its exception).
         cancel_task.cancel()
-        try:
+        try:  # noqa: SIM105 — drain reads clearer than contextlib.suppress here
             await cancel_task
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110 — drain only
             pass
         return work_task.result()
 
@@ -134,9 +134,9 @@ async def race_with_cancel(
     except TimeoutError:
         # Genuinely hung — preempt.
         work_task.cancel()
-        try:
+        try:  # noqa: SIM105 — drain reads clearer than contextlib.suppress here
             await work_task
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110 — drain only
             pass
         raise ExchangeCancelled(
             cancelled_at_event_id="",
@@ -146,7 +146,7 @@ async def race_with_cancel(
         return result
 
 
-def wait_future_with_cancel(
+def wait_future_with_cancel[T](
     future: concurrent.futures.Future[T],
     cancel_token: CancelToken | None,
     *,
@@ -184,10 +184,7 @@ def wait_future_with_cancel(
                 future.cancel()
                 raise ExchangeCancelled(
                     cancelled_at_event_id="",
-                    where=(
-                        "engine._cancellation.wait_future_with_cancel"
-                        f"[{what}]"
-                    ),
+                    where=(f"engine._cancellation.wait_future_with_cancel[{what}]"),
                 ) from None
             continue
 

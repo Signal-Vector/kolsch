@@ -51,9 +51,7 @@ def _make_root(tmp_path: Path) -> Path:
 def _write_bundle_yaml(
     bundle_dir: Path, name: str, *, exclude: list[str] | None = None
 ) -> None:
-    body = (
-        f'name: {name}\nversion: "0.1"\ndescription: "test bundle"\n'
-    )
+    body = f'name: {name}\nversion: "0.1"\ndescription: "test bundle"\n'
     if exclude:
         body += "exclude:\n"
         for entry in exclude:
@@ -63,7 +61,11 @@ def _write_bundle_yaml(
 
 
 def _write_workflow(
-    bundle_dir: Path, name: str, *, runnable: bool = True, extends: list[str] | None = None
+    bundle_dir: Path,
+    name: str,
+    *,
+    runnable: bool = True,
+    extends: list[str] | None = None,
 ) -> Path:
     wf_dir = bundle_dir / "workflows"
     wf_dir.mkdir(exist_ok=True)
@@ -184,9 +186,7 @@ def test_workflow_kind_inference_node_library(tmp_path: Path) -> None:
     _write_workflow(bundle, "library", runnable=False)
 
     cat = scan(root)
-    assert (
-        cat.assets["demo/workflows/library"].metadata["kind"] == "node_library"
-    )
+    assert cat.assets["demo/workflows/library"].metadata["kind"] == "node_library"
 
 
 def test_workflow_empty_edges_still_runnable(tmp_path: Path) -> None:
@@ -257,9 +257,7 @@ def test_existing_tools_agents_still_discovered(tmp_path: Path) -> None:
     (bundle / "tools" / "echo.py").write_text("def main(): pass\n", encoding="utf-8")
 
     (bundle / "agents").mkdir()
-    (bundle / "agents" / "bot.yaml").write_text(
-        "name: bot\n", encoding="utf-8"
-    )
+    (bundle / "agents" / "bot.yaml").write_text("name: bot\n", encoding="utf-8")
 
     _write_workflow(bundle, "hello")
     _write_node_py(bundle, "passthru")

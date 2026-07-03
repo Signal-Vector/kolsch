@@ -27,14 +27,16 @@ Jinja, so list-typed fixtures bind as ``records`` / ``numbers``.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from assets.catalog import AssetCatalog
 from workflows.builtins import ComputeRunner, FilterRunner
 from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -98,17 +100,13 @@ async def _compute(
 
 
 class TestSingleExpressionPreservesType:
-    async def test_int_arithmetic_returns_int(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_int_arithmetic_returns_int(self, tmp_path: Path) -> None:
         value = await _compute(tmp_path, expression="{{ 1 + 1 }}")
         assert value == 2
         assert isinstance(value, int)
         assert not isinstance(value, bool)
 
-    async def test_list_length_returns_int(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_list_length_returns_int(self, tmp_path: Path) -> None:
         value = await _compute(
             tmp_path,
             expression="{{ inputs.numbers | length }}",
@@ -117,9 +115,7 @@ class TestSingleExpressionPreservesType:
         assert value == 3
         assert isinstance(value, int)
 
-    async def test_list_passes_through_typed(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_list_passes_through_typed(self, tmp_path: Path) -> None:
         value = await _compute(
             tmp_path,
             expression="{{ inputs.numbers }}",
@@ -128,16 +124,12 @@ class TestSingleExpressionPreservesType:
         assert value == [1, 2, 3]
         assert isinstance(value, list)
 
-    async def test_bool_comparison_returns_bool(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_bool_comparison_returns_bool(self, tmp_path: Path) -> None:
         value = await _compute(tmp_path, expression="{{ 1 == 1 }}")
         assert value is True
         assert isinstance(value, bool)
 
-    async def test_dict_attribute_access_returns_value(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_dict_attribute_access_returns_value(self, tmp_path: Path) -> None:
         value = await _compute(
             tmp_path,
             expression="{{ inputs.ticket.urgent }}",
@@ -153,12 +145,8 @@ class TestSingleExpressionPreservesType:
 
 
 class TestMultiSegmentReturnsString:
-    async def test_string_concatenation_returns_string(
-        self, tmp_path: Path
-    ) -> None:
-        value = await _compute(
-            tmp_path, expression="{{ 'hello ' + 'world' }}"
-        )
+    async def test_string_concatenation_returns_string(self, tmp_path: Path) -> None:
+        value = await _compute(tmp_path, expression="{{ 'hello ' + 'world' }}")
         # Single-expression with string operands — NativeEnvironment
         # returns the typed result (``str``). The "multi-segment"
         # case is structurally distinct; covered by the bash test
@@ -166,9 +154,7 @@ class TestMultiSegmentReturnsString:
         assert value == "hello world"
         assert isinstance(value, str)
 
-    async def test_multi_segment_template_returns_string(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_multi_segment_template_returns_string(self, tmp_path: Path) -> None:
         # ``"prefix-{{ inputs.x }}-suffix"`` is structurally
         # multi-segment — NativeEnvironment falls back to string
         # concatenation. The compute runner captures the str.
@@ -187,9 +173,7 @@ class TestMultiSegmentReturnsString:
 
 
 class TestBashCommandStringNonRegression:
-    async def test_bash_command_renders_string(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_bash_command_renders_string(self, tmp_path: Path) -> None:
         """Bash's ``command:`` must render to a ``str`` the shell can
         execute. A typed return (list, int, etc.) would crash the
         shell or be silently misinterpreted. This is the load-bearing
@@ -241,9 +225,7 @@ class TestBashCommandStringNonRegression:
 
 
 class TestFilterComputeTypedChain:
-    async def test_filter_then_compute_typed_chain(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_filter_then_compute_typed_chain(self, tmp_path: Path) -> None:
         """``filter`` produces ``{result: list}``; downstream
         ``compute`` consumes it via ``{{ nodes.f.result | length }}``
         and returns an ``int``. Round-trip proves typed values flow

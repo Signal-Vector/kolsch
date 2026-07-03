@@ -24,8 +24,7 @@ uses.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -34,6 +33,9 @@ from workflows.builtins import ComputeRunner
 from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Fixture data + recipe table
@@ -118,9 +120,7 @@ def _registry() -> RunnerRegistry:
     return reg
 
 
-async def _run_recipe(
-    tmp_path: Path, *, expression: str
-) -> dict[str, Any]:
+async def _run_recipe(tmp_path: Path, *, expression: str) -> dict[str, Any]:
     workflow = Workflow.model_validate(
         {
             "nodes": {

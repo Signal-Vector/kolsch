@@ -28,8 +28,7 @@ production code path.
 from __future__ import annotations
 
 import textwrap
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -40,7 +39,6 @@ from workflows.builtins import (
     WorkflowSubRunner,
     register_builtins,
 )
-from workflows.context import NodeContext
 from workflows.errors import (
     NodeTypeNotImplemented,
     WorkflowPausedForInput,
@@ -49,6 +47,11 @@ from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow, load_workflow
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from workflows.context import NodeContext
 
 # ---------------------------------------------------------------------------
 # Fixtures + helpers
@@ -191,9 +194,7 @@ def _run_parent(
     assets: dict[str, AssetEntry] = {parent_ref: _entry(parent_ref, parent_path)}
     for ref, content in children.items():
         bundle, _kind, name = ref.split("/")
-        child_path = (
-            tmp_path / "bundles" / bundle / "workflows" / f"{name}.yaml"
-        )
+        child_path = tmp_path / "bundles" / bundle / "workflows" / f"{name}.yaml"
         _write_workflow(child_path, content)
         assets[ref] = _entry(ref, child_path)
     if extra_entries:
@@ -205,9 +206,7 @@ def _run_parent(
         inputs=parent_inputs or {},
     )
     parent_workflow = load_workflow(parent_path)
-    registry = _build_registry(
-        catalog=catalog, store=store, extra=extra_runners
-    )
+    registry = _build_registry(catalog=catalog, store=store, extra=extra_runners)
     executor = IterativeExecutor(
         workflow=parent_workflow,
         run=parent_run,
@@ -224,9 +223,7 @@ def _run_parent(
 
 
 class TestHappyPath:
-    async def test_parent_harvests_child_terminal_output(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_parent_harvests_child_terminal_output(self, tmp_path: Path) -> None:
         parent_yaml = """
         nodes:
           sub:
@@ -269,16 +266,9 @@ class TestHappyPath:
         # AC 1.6 — child_run_id on parent's node.completed payload.
         assert sub_completed["payload"]["child_run_id"].startswith("wrk_")
         child_run_id = sub_completed["payload"]["child_run_id"]
-        called = next(
-            e
-            for e in events
-            if e["kind"] == "workflow.node.called_workflow"
-        )
+        called = next(e for e in events if e["kind"] == "workflow.node.called_workflow")
         assert called["payload"]["child_workflow_run_id"] == child_run_id
-        assert (
-            called["payload"]["child_workflow_ref"]
-            == "demo/workflows/child"
-        )
+        assert called["payload"]["child_workflow_ref"] == "demo/workflows/child"
 
     async def test_terminal_output_flows_to_downstream_compute(
         self, tmp_path: Path
@@ -324,8 +314,7 @@ class TestHappyPath:
         consume_completed = next(
             e
             for e in events
-            if e["kind"] == "workflow.node.completed"
-            and e["node_name"] == "consume"
+            if e["kind"] == "workflow.node.completed" and e["node_name"] == "consume"
         )
         assert consume_completed["payload"]["output"] == {"value": "v"}
 
@@ -362,9 +351,7 @@ class TestParentPointerAndTraceId:
 
         parent_events = list(store.read_events(parent_run.run_id))
         completed = next(
-            e
-            for e in parent_events
-            if e["kind"] == "workflow.node.completed"
+            e for e in parent_events if e["kind"] == "workflow.node.completed"
         )
         child_run_id = completed["payload"]["child_run_id"]
 
@@ -379,9 +366,7 @@ class TestParentPointerAndTraceId:
         # Cross-JSONL: every child event shares the same trace_id.
         child_events = list(store.read_events(WorkflowRunId(child_run_id)))
         assert child_events  # child actually ran
-        assert all(
-            e["trace_id"] == str(parent_run.trace_id) for e in child_events
-        )
+        assert all(e["trace_id"] == str(parent_run.trace_id) for e in child_events)
 
 
 # ---------------------------------------------------------------------------
@@ -403,9 +388,7 @@ class TestCycleDetection:
         path = tmp_path / "bundles" / "demo" / "workflows" / "parent.yaml"
         _write_workflow(path, parent_yaml)
         catalog = AssetCatalog(
-            assets={"demo/workflows/parent": _entry(
-                "demo/workflows/parent", path
-            )},
+            assets={"demo/workflows/parent": _entry("demo/workflows/parent", path)},
         )
         store = WorkflowRunStore(tmp_path)
         run = store.create(workflow_ref="demo/workflows/parent")
@@ -426,9 +409,7 @@ class TestCycleDetection:
         # workflow.node.failed → workflow.run.failed. The reason
         # mentions the offending node.
         assert "loop" in failed["payload"]["reason"]
-        node_failed = next(
-            e for e in events if e["kind"] == "workflow.node.failed"
-        )
+        node_failed = next(e for e in events if e["kind"] == "workflow.node.failed")
         assert "WorkflowCallCycle" in node_failed["payload"]["error_class"]
 
     async def test_indirect_cycle_rejected(self, tmp_path: Path) -> None:
@@ -458,18 +439,12 @@ class TestCycleDetection:
         # Walk the child JSONL too — B's node.failed should name the
         # cycle. Find the child run id via the called_workflow event.
         events = list(store.read_events(parent_run.run_id))
-        called = next(
-            e
-            for e in events
-            if e["kind"] == "workflow.node.called_workflow"
-        )
+        called = next(e for e in events if e["kind"] == "workflow.node.called_workflow")
         from workflows.ids import WorkflowRunId
 
         b_run_id = WorkflowRunId(called["payload"]["child_workflow_run_id"])
         b_events = list(store.read_events(b_run_id))
-        b_failed = next(
-            e for e in b_events if e["kind"] == "workflow.node.failed"
-        )
+        b_failed = next(e for e in b_events if e["kind"] == "workflow.node.failed")
         assert "WorkflowCallCycle" in b_failed["payload"]["error_class"]
 
 
@@ -506,9 +481,7 @@ class TestDepthCap:
                       edges: []
                     """
                 ).lstrip()
-            path = (
-                tmp_path / "bundles" / "demo" / "workflows" / f"w{i}.yaml"
-            )
+            path = tmp_path / "bundles" / "demo" / "workflows" / f"w{i}.yaml"
             _write_workflow(path, content)
             catalog_assets[ref] = _entry(ref, path)
         catalog = AssetCatalog(assets=catalog_assets)
@@ -536,17 +509,11 @@ class TestDepthCap:
         last_failed_class = ""
         for _ in range(depth + 1):
             events = list(store.read_events(current_run_id))
-            node_failed = [
-                e for e in events if e["kind"] == "workflow.node.failed"
-            ]
+            node_failed = [e for e in events if e["kind"] == "workflow.node.failed"]
             if not node_failed:
                 break
             last_failed_class = node_failed[-1]["payload"]["error_class"]
-            called = [
-                e
-                for e in events
-                if e["kind"] == "workflow.node.called_workflow"
-            ]
+            called = [e for e in events if e["kind"] == "workflow.node.called_workflow"]
             if not called:
                 break
             current_run_id = WorkflowRunId(
@@ -583,17 +550,13 @@ class TestChildFailurePropagates:
             parent_yaml=parent_yaml,
             parent_ref="demo/workflows/parent",
             children={"demo/workflows/child": child_yaml},
-            extra_runners={
-                "kolsch/nodes/noop": _RaisingRunner(RuntimeError("kaboom"))
-            },
+            extra_runners={"kolsch/nodes/noop": _RaisingRunner(RuntimeError("kaboom"))},
         )
         status = await ex.run()
         assert status == WorkflowRunStatus.FAILED
 
         events = list(store.read_events(parent_run.run_id))
-        node_failed = next(
-            e for e in events if e["kind"] == "workflow.node.failed"
-        )
+        node_failed = next(e for e in events if e["kind"] == "workflow.node.failed")
         # The parent's runner wraps in WorkflowNodeFailed with
         # ChildWorkflowFailed inside. ``error_class`` is the OUTER
         # error class (the executor's failure path stamps that).
@@ -602,10 +565,7 @@ class TestChildFailurePropagates:
         assert "child workflow run" in node_failed["payload"]["message"]
         # The completed marker still emits with child_status=failed.
         cw_completed = next(
-            e
-            for e in events
-            if e["kind"]
-            == "workflow.node.called_workflow_completed"
+            e for e in events if e["kind"] == "workflow.node.called_workflow_completed"
         )
         assert cw_completed["payload"]["child_status"] == "failed"
 
@@ -616,9 +576,7 @@ class TestChildFailurePropagates:
 
 
 class TestPauseCascade:
-    async def test_child_pause_pauses_parent_too(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_child_pause_pauses_parent_too(self, tmp_path: Path) -> None:
         parent_yaml = """
         nodes:
           sub:
@@ -658,29 +616,21 @@ class TestPauseCascade:
         sub_started = next(
             e
             for e in events
-            if e["kind"] == "workflow.node.started"
-            and e["node_name"] == "sub"
+            if e["kind"] == "workflow.node.started" and e["node_name"] == "sub"
         )
         assert sub_started["invocation_id"] == parent_waiting_inv
 
         # The parent emitted called_workflow_completed with
         # child_status=waiting_for_input BEFORE the re-raise.
         cw_completed = next(
-            e
-            for e in events
-            if e["kind"]
-            == "workflow.node.called_workflow_completed"
+            e for e in events if e["kind"] == "workflow.node.called_workflow_completed"
         )
-        assert (
-            cw_completed["payload"]["child_status"] == "waiting_for_input"
-        )
+        assert cw_completed["payload"]["child_status"] == "waiting_for_input"
 
         # Child sidecar exists and points at the inner pause's invocation id.
         from workflows.ids import WorkflowRunId
 
-        child_run_id = WorkflowRunId(
-            cw_completed["payload"]["child_workflow_run_id"]
-        )
+        child_run_id = WorkflowRunId(cw_completed["payload"]["child_workflow_run_id"])
         child_run_dir = store.directory(child_run_id)
         assert child_run_dir.waiting_at_path.exists()
         child_run = store.read(child_run_id)
@@ -693,9 +643,7 @@ class TestPauseCascade:
 
 
 class TestStateIsolation:
-    async def test_child_state_does_not_leak_into_parent(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_child_state_does_not_leak_into_parent(self, tmp_path: Path) -> None:
         # Parent has two nodes: ``set_x_1`` (sets state.x=1) → ``sub``
         # (calls child) → ``check`` (asserts state.x is still 1).
         # Child has one node ``set_x_99`` (sets state.x=99).
@@ -760,7 +708,7 @@ class TestStateIsolation:
                     check_state.update(state)
                 return {}
 
-        ex, store, parent_run, _ = _run_parent(
+        ex, _store, _parent_run, _ = _run_parent(
             tmp_path,
             parent_yaml=parent_yaml,
             parent_ref="demo/workflows/parent",
@@ -802,9 +750,7 @@ class TestThreeLevelNesting:
         graph:
           edges: []
         """
-        gp_path = (
-            tmp_path / "bundles" / "demo" / "workflows" / "grandparent.yaml"
-        )
+        gp_path = tmp_path / "bundles" / "demo" / "workflows" / "grandparent.yaml"
         p_path = tmp_path / "bundles" / "demo" / "workflows" / "parent.yaml"
         c_path = tmp_path / "bundles" / "demo" / "workflows" / "child.yaml"
         _write_workflow(gp_path, grandparent_yaml)
@@ -815,12 +761,8 @@ class TestThreeLevelNesting:
                 "demo/workflows/grandparent": _entry(
                     "demo/workflows/grandparent", gp_path
                 ),
-                "demo/workflows/parent": _entry(
-                    "demo/workflows/parent", p_path
-                ),
-                "demo/workflows/child": _entry(
-                    "demo/workflows/child", c_path
-                ),
+                "demo/workflows/parent": _entry("demo/workflows/parent", p_path),
+                "demo/workflows/child": _entry("demo/workflows/child", c_path),
             }
         )
         store = WorkflowRunStore(tmp_path)
@@ -840,19 +782,15 @@ class TestThreeLevelNesting:
 
         gp_events = list(store.read_events(gp_run.run_id))
         p_run_id = WorkflowRunId(
-            next(
-                e
-                for e in gp_events
-                if e["kind"] == "workflow.node.called_workflow"
-            )["payload"]["child_workflow_run_id"]
+            next(e for e in gp_events if e["kind"] == "workflow.node.called_workflow")[
+                "payload"
+            ]["child_workflow_run_id"]
         )
         p_events = list(store.read_events(p_run_id))
         c_run_id = WorkflowRunId(
-            next(
-                e
-                for e in p_events
-                if e["kind"] == "workflow.node.called_workflow"
-            )["payload"]["child_workflow_run_id"]
+            next(e for e in p_events if e["kind"] == "workflow.node.called_workflow")[
+                "payload"
+            ]["child_workflow_run_id"]
         )
         c_events = list(store.read_events(c_run_id))
         # All three JSONLs share the same trace_id.
@@ -1029,9 +967,7 @@ class TestComputeTerminalOutputDict:
 
 
 class TestUnknownChildRef:
-    async def test_unknown_ref_raises_node_failed(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_unknown_ref_raises_node_failed(self, tmp_path: Path) -> None:
         parent_yaml = """
         nodes:
           sub:
@@ -1042,9 +978,7 @@ class TestUnknownChildRef:
         _write_workflow(path, parent_yaml)
         catalog = AssetCatalog(
             assets={
-                "demo/workflows/parent": _entry(
-                    "demo/workflows/parent", path
-                ),
+                "demo/workflows/parent": _entry("demo/workflows/parent", path),
             }
         )
         store = WorkflowRunStore(tmp_path)

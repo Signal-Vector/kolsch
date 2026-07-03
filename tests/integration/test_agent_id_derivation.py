@@ -95,9 +95,7 @@ def _write_workspace(
     bundle = root / "bundles" / bundle_name
     (bundle / "agents").mkdir(parents=True, exist_ok=True)
     (bundle / "bundle.yaml").write_text(
-        yaml.safe_dump(
-            {"name": bundle_name, "version": "0.1", "description": "demo"}
-        ),
+        yaml.safe_dump({"name": bundle_name, "version": "0.1", "description": "demo"}),
         encoding="utf-8",
     )
     (bundle / "agents" / f"{agent_filename}.yaml").write_text(
@@ -230,9 +228,7 @@ async def test_tc_agentid_04_starter_helper_keeps_explicit_id(tmp_path: Path) ->
     bundle = tmp_path / "bundles" / "kolsch"
     (bundle / "agents").mkdir(parents=True, exist_ok=True)
     (bundle / "bundle.yaml").write_text(
-        yaml.safe_dump(
-            {"name": "kolsch", "version": "0.1", "description": "starter"}
-        ),
+        yaml.safe_dump({"name": "kolsch", "version": "0.1", "description": "starter"}),
         encoding="utf-8",
     )
     # Read the actual starter YAML verbatim — it has no model: field

@@ -135,9 +135,7 @@ def resolve_extends_chain(
         extends_ref = payload.get("extends")
         if not extends_ref:
             return chain
-        parent_path = _resolve_extends_to_path(
-            extends_ref, catalog, workspace_root
-        )
+        parent_path = _resolve_extends_to_path(extends_ref, catalog, workspace_root)
         if not parent_path.is_file():
             raise ConfigParentAgentNotFound(
                 path=extends_ref,
@@ -180,9 +178,7 @@ def resolve_parent_chain_from_extends(
     cycle_trail: list[str] = []
     current_ref: str | None = extends_ref
     while current_ref:
-        parent_path = _resolve_extends_to_path(
-            current_ref, catalog, workspace_root
-        )
+        parent_path = _resolve_extends_to_path(current_ref, catalog, workspace_root)
         if not parent_path.is_file():
             raise ConfigParentAgentNotFound(
                 path=current_ref,
@@ -194,9 +190,7 @@ def resolve_parent_chain_from_extends(
             raise ConfigAgentInheritanceCycle(cycle=cycle_trail)
         visited.add(resolved_path)
         cycle_trail.append(str(resolved_path))
-        payload: dict[str, Any] = load(
-            resolved_path.read_text(encoding="utf-8")
-        ) or {}
+        payload: dict[str, Any] = load(resolved_path.read_text(encoding="utf-8")) or {}
         chain.append(payload)
         current_ref = payload.get("extends")
     return chain
@@ -328,16 +322,18 @@ def render_with_parents(
         raise ValueError(msg)
 
     loader_map: dict[str, str] = {}
-    for i, src in enumerate(parent_chain):
+    for i, parent_src in enumerate(parent_chain):
         name = f"{_PARENT_NAME_PREFIX}{i}"
         if i + 1 < len(parent_chain):
             next_name = f"{_PARENT_NAME_PREFIX}{i + 1}"
-            src = _EXTENDS_PARENT_DIRECTIVE.sub(
+            rewritten = _EXTENDS_PARENT_DIRECTIVE.sub(
                 f'{{% extends "{next_name}" %}}',
-                src,
+                parent_src,
                 count=1,
             )
-        loader_map[name] = src
+        else:
+            rewritten = parent_src
+        loader_map[name] = rewritten
 
     env = Environment(
         undefined=StrictUndefined,

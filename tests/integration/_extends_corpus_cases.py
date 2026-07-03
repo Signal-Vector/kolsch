@@ -455,16 +455,34 @@ CASES: tuple[FixtureCase, ...] = (
 # Sanity check at import time — fail loudly if a category subdir
 # or fixture filename drifts.
 _EXPECTED_IDS: tuple[str, ...] = (
-    "A1", "A2",
-    "B1", "B2", "B3", "B4",
-    "C1", "C2", "C3", "C4", "C5",
-    "D1", "D2", "D3",
-    "E1", "E2",
-    "F1", "F2", "F3", "F4", "F5",
-    "G1", "G3",
-    "H1", "H2",
+    "A1",
+    "A2",
+    "B1",
+    "B2",
+    "B3",
+    "B4",
+    "C1",
+    "C2",
+    "C3",
+    "C4",
+    "C5",
+    "D1",
+    "D2",
+    "D3",
+    "E1",
+    "E2",
+    "F1",
+    "F2",
+    "F3",
+    "F4",
+    "F5",
+    "G1",
+    "G3",
+    "H1",
+    "H2",
     "I1",
-    "K1", "K2",
+    "K1",
+    "K2",
 )
 
 
@@ -480,10 +498,7 @@ def _validate_case_table() -> None:
     missing = set(_EXPECTED_IDS) - seen
     extra = seen - set(_EXPECTED_IDS)
     if missing or extra:
-        msg = (
-            f"EXT-CORPUS shape drift: missing={sorted(missing)} "
-            f"extra={sorted(extra)}"
-        )
+        msg = f"EXT-CORPUS shape drift: missing={sorted(missing)} extra={sorted(extra)}"
         raise RuntimeError(msg)
     if len(CASES) != len(seen):
         msg = "EXT-CORPUS has duplicate case_id entries"
@@ -493,10 +508,7 @@ def _validate_case_table() -> None:
         for src_name, _ in case.files:
             src_path = cat_dir / src_name
             if not src_path.is_file():
-                msg = (
-                    f"EXT-CORPUS fixture missing: {case.case_id} → "
-                    f"{src_path}"
-                )
+                msg = f"EXT-CORPUS fixture missing: {case.case_id} → {src_path}"
                 raise RuntimeError(msg)
 
 

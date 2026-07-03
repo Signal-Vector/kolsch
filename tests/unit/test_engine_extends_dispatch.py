@@ -21,7 +21,7 @@ pure-function pieces of the dispatch:
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 import yaml
@@ -36,6 +36,9 @@ from templating.inheritance import (
     render_with_parents,
     resolve_parent_chain_from_extends,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # prompt_uses_extends_directive — the AST detector.
@@ -58,9 +61,7 @@ def test_detector_true_on_literal_extends_form() -> None:
 
 
 def test_detector_false_on_plain_prompt() -> None:
-    assert not prompt_uses_extends_directive(
-        "You are an agent. Be concise."
-    )
+    assert not prompt_uses_extends_directive("You are an agent. Be concise.")
 
 
 def test_detector_false_on_jinja_without_extends() -> None:
@@ -79,9 +80,7 @@ def test_detector_false_inside_jinja_comment() -> None:
     substring must NOT false-trigger — Jinja's parser strips
     comments, so the AST has no ``Extends`` node. This is the
     reason we use an AST walk instead of a substring match."""
-    assert not prompt_uses_extends_directive(
-        "{# {% extends parent %} #}\nPlain body."
-    )
+    assert not prompt_uses_extends_directive("{# {% extends parent %} #}\nPlain body.")
 
 
 def test_detector_false_on_malformed_template() -> None:
@@ -102,10 +101,7 @@ def test_single_parent_renders_equivalently_to_legacy_helper() -> None:
     contract — leaf overrides parent's block, parent's prose
     surrounds it."""
     parent = "Header\n{% block role %}default{% endblock %}\nFooter"
-    child = (
-        "{% extends parent %}\n"
-        "{% block role %}OVERRIDDEN{% endblock %}\n"
-    )
+    child = "{% extends parent %}\n{% block role %}OVERRIDDEN{% endblock %}\n"
     out = render_with_parents(child, [parent], {})
     assert "Header" in out
     assert "Footer" in out
@@ -116,15 +112,8 @@ def test_single_parent_renders_equivalently_to_legacy_helper() -> None:
 def test_multi_parent_chain_resolves_three_levels() -> None:
     """E1 shape: A extends B extends C. A overrides C's deepest
     block. The render must walk C → B → A and emit A's value."""
-    grandparent = (
-        "ROOT_HEADER\n"
-        "{% block role %}root-default{% endblock %}\n"
-        "ROOT_FOOTER"
-    )
-    middle = (
-        "{% extends parent %}\n"
-        "{% block role %}middle-default{% endblock %}\n"
-    )
+    grandparent = "ROOT_HEADER\n{% block role %}root-default{% endblock %}\nROOT_FOOTER"
+    middle = "{% extends parent %}\n{% block role %}middle-default{% endblock %}\n"
     leaf = "{% extends parent %}\n{% block role %}leaf-wins{% endblock %}\n"
     out = render_with_parents(leaf, [middle, grandparent], {})
     assert "ROOT_HEADER" in out
@@ -139,10 +128,7 @@ def test_multi_parent_chain_inherits_unfilled_block_from_middle() -> None:
     does, the middle's value wins — Jinja's normal chain semantics
     must work across the rewritten directives."""
     grandparent = "{% block role %}root-default{% endblock %}"
-    middle = (
-        "{% extends parent %}\n"
-        "{% block role %}middle-fills-it{% endblock %}\n"
-    )
+    middle = "{% extends parent %}\n{% block role %}middle-fills-it{% endblock %}\n"
     leaf = "{% extends parent %}\n"  # no override
     out = render_with_parents(leaf, [middle, grandparent], {})
     assert "middle-fills-it" in out
@@ -165,9 +151,7 @@ def test_chain_render_required_block_missing_raises_typed() -> None:
     parent = "{% block role required %}{% endblock %}"
     leaf = "{% extends parent %}"
     with pytest.raises(ConfigRequiredBlockMissing) as excinfo:
-        render_with_parents(
-            leaf, [parent], {}, template_name="agent:ag_test"
-        )
+        render_with_parents(leaf, [parent], {}, template_name="agent:ag_test")
     assert excinfo.value.code == "config.required_block_missing"
     assert excinfo.value.detail["agent_path"] == "agent:ag_test"
 
@@ -195,9 +179,7 @@ def test_resolve_parent_chain_single_level(tmp_path: Path) -> None:
     no further extends. Returns the single parent's payload."""
     parent_path = tmp_path / "parent.yaml"
     _write_yaml(parent_path, {"name": "parent", "prompt": "P_BODY"})
-    chain = resolve_parent_chain_from_extends(
-        "workspace:parent.yaml", tmp_path
-    )
+    chain = resolve_parent_chain_from_extends("workspace:parent.yaml", tmp_path)
     assert len(chain) == 1
     assert chain[0]["name"] == "parent"
     assert chain[0]["prompt"] == "P_BODY"
@@ -206,16 +188,12 @@ def test_resolve_parent_chain_single_level(tmp_path: Path) -> None:
 def test_resolve_parent_chain_multi_level(tmp_path: Path) -> None:
     """A extends B extends C. Engine sees A.extends="…/b.yaml" →
     chain = [B, C] in that order (immediate-parent first)."""
-    _write_yaml(
-        tmp_path / "c.yaml", {"name": "root", "prompt": "C_BODY"}
-    )
+    _write_yaml(tmp_path / "c.yaml", {"name": "root", "prompt": "C_BODY"})
     _write_yaml(
         tmp_path / "b.yaml",
         {"name": "middle", "prompt": "B_BODY", "extends": "workspace:c.yaml"},
     )
-    chain = resolve_parent_chain_from_extends(
-        "workspace:b.yaml", tmp_path
-    )
+    chain = resolve_parent_chain_from_extends("workspace:b.yaml", tmp_path)
     assert [layer["name"] for layer in chain] == ["middle", "root"]
 
 
@@ -245,9 +223,7 @@ def test_orphan_error_class_carries_agent_path_detail() -> None:
     detected; the unit-level coverage is in test_errors.py, but
     re-pin the detail shape here so the dispatch contract is
     visible at this seam."""
-    err = ConfigExtendsTemplateWithoutInheritance(
-        agent_path="agent:ag_butler"
-    )
+    err = ConfigExtendsTemplateWithoutInheritance(agent_path="agent:ag_butler")
     assert err.code == "config.extends_template_without_inheritance"
     assert err.level.name == "FATAL"
     assert err.detail["agent_path"] == "agent:ag_butler"

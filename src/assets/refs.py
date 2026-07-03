@@ -101,7 +101,7 @@ def parse_three_segment(ref: str) -> tuple[str, str, str]:
         msg = f"parse_three_segment: not a 3-segment ref: {ref!r}"
         raise ValueError(msg)
     parts = ref.split("/")
-    if len(parts) != 3:
+    if len(parts) != 3:  # noqa: PLR2004 — function is literally `parse_three_segment`
         msg = f"parse_three_segment: not a 3-segment ref: {ref!r}"
         raise ValueError(msg)
     bundle, segment, name = parts

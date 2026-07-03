@@ -49,7 +49,7 @@ def _clean_name(raw: str) -> str:
     return spaced.strip().lower()
 
 
-def display_label(node: Any, type_label: str | None = None) -> str:  # noqa: ANN401
+def display_label(node: Any, type_label: str | None = None) -> str:
     """Resolve the 3-step fallback for a node's human-readable label.
 
     Args:

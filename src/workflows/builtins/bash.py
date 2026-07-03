@@ -74,10 +74,10 @@ class BashRunner:
         self,
         *,
         node_name: str,
-        node_def: Any,  # noqa: ANN401 — BashNodeDef
+        node_def: Any,
         bound_inputs: dict[str, Any],
         state: dict[str, Any],
-        ctx: Any,  # noqa: ANN401 — NodeContext
+        ctx: Any,
     ) -> dict[str, Any]:
         """Render the node's config and dispatch the bash tool.
 
@@ -189,9 +189,7 @@ def _render(value: str, scope: dict[str, Any]) -> str:
     return JINJA_ENV.from_string(value).render(**scope)
 
 
-def _render_optional(
-    value: str | None, scope: dict[str, Any]
-) -> str | None:
+def _render_optional(value: str | None, scope: dict[str, Any]) -> str | None:
     if value is None:
         return None
     return _render(value, scope)

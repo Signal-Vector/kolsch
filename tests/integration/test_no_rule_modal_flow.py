@@ -12,9 +12,9 @@ The five tests pin the load-bearing properties of the QoL:
 - TC-PERM-DISCOVERY-04: agent rule wins over bundle + platform.
 - TC-PERM-DISCOVERY-05: bundle rule wins over platform.
 
-Tests 01–03 exercise the no-rule callback path on the authz
+Tests 01-03 exercise the no-rule callback path on the authz
 provider directly (single-process, no engine wiring); tests
-04–05 use the four-level walk through ``allow``'s kwargs. The
+04-05 use the four-level walk through ``allow``'s kwargs. The
 end-to-end engine path (bundle.yaml + agent + tool + dispatcher)
 is covered separately by
 :mod:`tests.integration.test_bundle_permissions` so this file
@@ -234,13 +234,9 @@ async def test_agent_permission_overrides_bundle_and_platform() -> None:
         },
     )
     # Bundle: deny.
-    bundle_rules = (
-        Rule(what="kolsch/tools/bash", pattern="*", effect="deny"),
-    )
+    bundle_rules = (Rule(what="kolsch/tools/bash", pattern="*", effect="deny"),)
     # Agent: allow — should win.
-    agent_rules = (
-        Rule(what="kolsch/tools/bash", pattern="*", effect="allow"),
-    )
+    agent_rules = (Rule(what="kolsch/tools/bash", pattern="*", effect="allow"),)
 
     from providers.authz import PermissionLayer
 
@@ -273,9 +269,7 @@ async def test_bundle_permission_overrides_platform() -> None:
             ],
         },
     )
-    bundle_rules = (
-        Rule(what="kolsch/tools/bash", pattern="*", effect="allow"),
-    )
+    bundle_rules = (Rule(what="kolsch/tools/bash", pattern="*", effect="allow"),)
 
     from providers.authz import PermissionLayer
 

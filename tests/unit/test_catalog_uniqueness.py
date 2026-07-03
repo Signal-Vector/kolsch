@@ -10,13 +10,16 @@ must reject this at scan time.
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 import yaml
 
 from assets.catalog import scan
 from errors import AssetsDuplicateName
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _write_bundle(
@@ -75,9 +78,7 @@ def _write_bundle(
 def test_scan_rejects_agent_and_tool_sharing_name_in_same_bundle(
     tmp_path: Path,
 ) -> None:
-    _write_bundle(
-        tmp_path, bundle="acme", agents=["butler"], tools=["butler"]
-    )
+    _write_bundle(tmp_path, bundle="acme", agents=["butler"], tools=["butler"])
     with pytest.raises(AssetsDuplicateName) as excinfo:
         scan(tmp_path)
     assert excinfo.value.detail["bundle"] == "acme"

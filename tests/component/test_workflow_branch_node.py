@@ -15,8 +15,7 @@ Covers Step 0 ACs:
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from assets.catalog import AssetCatalog
 from workflows.branching import compute_branch_value
@@ -25,6 +24,9 @@ from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import BranchNodeDef, Workflow
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -57,9 +59,7 @@ def _executor(
     inputs: dict[str, Any] | None = None,
 ) -> tuple[IterativeExecutor, WorkflowRunStore, Any]:
     store = WorkflowRunStore(tmp_path)
-    run = store.create(
-        workflow_ref="demo/workflows/branch", inputs=inputs or {}
-    )
+    run = store.create(workflow_ref="demo/workflows/branch", inputs=inputs or {})
     ex = IterativeExecutor(
         workflow=workflow,
         run=run,
@@ -87,9 +87,7 @@ class TestBranchRunnerShape:
                 }
             }
         )
-        ex, _store, _run = _executor(
-            tmp_path, workflow=wf, inputs={"x": 10}
-        )
+        ex, _store, _run = _executor(tmp_path, workflow=wf, inputs={"x": 10})
         await ex.run()
         assert ex._captured["gate"] == {"value": True}
 
@@ -104,9 +102,7 @@ class TestBranchRunnerShape:
                 }
             }
         )
-        ex, _store, _run = _executor(
-            tmp_path, workflow=wf, inputs={"x": 2}
-        )
+        ex, _store, _run = _executor(tmp_path, workflow=wf, inputs={"x": 2})
         await ex.run()
         assert ex._captured["gate"] == {"value": False}
 
@@ -140,9 +136,7 @@ class TestBranchRunnerShape:
         await ex.run()
         assert ex._captured["gate"] == {"value": False}
 
-    async def test_truthy_non_bool_coerces(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_truthy_non_bool_coerces(self, tmp_path: Path) -> None:
         # Defensive: a Jinja expression returning an int (e.g.
         # ``length``) coerces to a bool via ``bool(...)``. Otherwise
         # ``compute_branch_value``'s ``isinstance(value, bool)`` guard
@@ -158,9 +152,7 @@ class TestBranchRunnerShape:
                 }
             }
         )
-        ex, _store, _run = _executor(
-            tmp_path, workflow=wf, inputs={"numbers": [1, 2]}
-        )
+        ex, _store, _run = _executor(tmp_path, workflow=wf, inputs={"numbers": [1, 2]})
         await ex.run()
         captured = ex._captured["gate"]
         assert captured == {"value": True}
@@ -175,41 +167,25 @@ class TestBranchRunnerShape:
 
 class TestComputeBranchValueExtension:
     def test_true_routes_true(self) -> None:
-        node_def = BranchNodeDef(
-            type="kolsch/nodes/branch", condition=True
-        )
-        assert (
-            compute_branch_value(node_def, {"value": True}) is True
-        )
+        node_def = BranchNodeDef(type="kolsch/nodes/branch", condition=True)
+        assert compute_branch_value(node_def, {"value": True}) is True
 
     def test_false_routes_false(self) -> None:
-        node_def = BranchNodeDef(
-            type="kolsch/nodes/branch", condition=False
-        )
-        assert (
-            compute_branch_value(node_def, {"value": False}) is False
-        )
+        node_def = BranchNodeDef(type="kolsch/nodes/branch", condition=False)
+        assert compute_branch_value(node_def, {"value": False}) is False
 
     def test_int_one_is_not_routed_as_bool(self) -> None:
         # ``isinstance(1, bool)`` is False — the guard rejects ints
         # so a stray non-bool capture doesn't accidentally route.
-        node_def = BranchNodeDef(
-            type="kolsch/nodes/branch", condition=True
-        )
+        node_def = BranchNodeDef(type="kolsch/nodes/branch", condition=True)
         assert compute_branch_value(node_def, {"value": 1}) is None
 
     def test_string_value_returns_none(self) -> None:
-        node_def = BranchNodeDef(
-            type="kolsch/nodes/branch", condition=True
-        )
-        assert (
-            compute_branch_value(node_def, {"value": "true"}) is None
-        )
+        node_def = BranchNodeDef(type="kolsch/nodes/branch", condition=True)
+        assert compute_branch_value(node_def, {"value": "true"}) is None
 
     def test_missing_value_returns_none(self) -> None:
-        node_def = BranchNodeDef(
-            type="kolsch/nodes/branch", condition=True
-        )
+        node_def = BranchNodeDef(type="kolsch/nodes/branch", condition=True)
         assert compute_branch_value(node_def, {}) is None
 
 
@@ -219,9 +195,7 @@ class TestComputeBranchValueExtension:
 
 
 class TestBranchDispatch:
-    async def test_true_arm_fires_false_pruned(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_true_arm_fires_false_pruned(self, tmp_path: Path) -> None:
         wf = _wf(
             {
                 "nodes": {
@@ -248,9 +222,7 @@ class TestBranchDispatch:
                 },
             }
         )
-        ex, store, run = _executor(
-            tmp_path, workflow=wf, inputs={"go": True}
-        )
+        ex, store, run = _executor(tmp_path, workflow=wf, inputs={"go": True})
         status = await ex.run()
         assert status == WorkflowRunStatus.SUCCEEDED
         events = list(store.read_events(run.run_id))
@@ -262,9 +234,7 @@ class TestBranchDispatch:
         assert ("on_true", "workflow.node.completed") in kinds_for
         assert ("on_false", "workflow.node.pruned") in kinds_for
 
-    async def test_false_arm_fires_true_pruned(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_false_arm_fires_true_pruned(self, tmp_path: Path) -> None:
         wf = _wf(
             {
                 "nodes": {
@@ -291,9 +261,7 @@ class TestBranchDispatch:
                 },
             }
         )
-        ex, store, run = _executor(
-            tmp_path, workflow=wf, inputs={"go": False}
-        )
+        ex, store, run = _executor(tmp_path, workflow=wf, inputs={"go": False})
         status = await ex.run()
         assert status == WorkflowRunStatus.SUCCEEDED
         events = list(store.read_events(run.run_id))

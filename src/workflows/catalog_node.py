@@ -168,7 +168,7 @@ class NodeIntrospectionResult:
     errors: list[str] = field(default_factory=list)
 
 
-def introspect_node_module(path: Path) -> NodeIntrospectionResult:  # noqa: PLR0911
+def introspect_node_module(path: Path) -> NodeIntrospectionResult:
     """Load an authored `@node` module and return its signature info.
 
     Mirrors the run-start gate's
@@ -280,7 +280,7 @@ def _safe_import_module(path: Path) -> ModuleType | Exception:
 # PLR0911 acknowledged — each early-return carries a distinct
 # diagnostic string. Collapsing into one exit would lose the
 # per-failure detail the meta-agent needs to iterate.
-def _check_signature(run_fn: Any) -> str | None:  # noqa: ANN401, PLR0911
+def _check_signature(run_fn: Any) -> str | None:
     """Verify `run`'s signature matches the authored-node contract.
 
     Returns `None` on success or a one-line diagnostic string. Mirrors
@@ -331,7 +331,7 @@ def _check_signature(run_fn: Any) -> str | None:  # noqa: ANN401, PLR0911
 
 
 def _schemas_from_run(
-    run_fn: Any,  # noqa: ANN401 — user-authored function
+    run_fn: Any,
 ) -> tuple[dict[str, Any] | None, dict[str, Any] | None, str | None]:
     """Extract `inputs_schema` / `outputs_schema` plus a return-shape error.
 

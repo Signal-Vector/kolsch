@@ -27,8 +27,7 @@ recording double whose only job is to capture the ``layers=`` kwarg
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -39,6 +38,9 @@ from providers.authz import Rule
 from schemas import AgentId, SessionId, ThreadId
 from tools.decorator import ToolContext, ToolDefinition
 from tools.dispatch import dispatch_tool
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Recording authz double — records the ``layers=`` kwarg dispatch sends.
@@ -177,8 +179,7 @@ async def test_dispatch_orders_workflow_agent_bundle_layers(
 
     names = [layer.name for layer in authz.layers_seen]
     assert names == ["workflow", "agent", "bundle"], (
-        f"Layer order must be proximate-first (workflow → agent → bundle); "
-        f"got {names}"
+        f"Layer order must be proximate-first (workflow → agent → bundle); got {names}"
     )
 
 

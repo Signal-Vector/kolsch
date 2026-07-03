@@ -930,9 +930,7 @@ async def _perm_list(ctx: SlashContext) -> None:
     ctx.stdout.write("rules (first-match-wins, top to bottom):\n")
     for index, rule in enumerate(rules):
         if rule.who is None:
-            from_str = (
-                f"  from={rule.from_!r}" if rule.from_ is not None else ""
-            )
+            from_str = f"  from={rule.from_!r}" if rule.from_ is not None else ""
             ctx.stdout.write(
                 f"  {index:>2}  what={rule.what!r:<22}  "
                 f"pattern={rule.pattern!r:<14}"
@@ -945,7 +943,7 @@ async def _perm_list(ctx: SlashContext) -> None:
             )
 
 
-async def _perm_upsert(  # noqa: PLR0913
+async def _perm_upsert(
     ctx: SlashContext,
     *,
     verb: str,
@@ -1022,7 +1020,10 @@ async def _perm_remove(
         ctx.stdout.write("/perm: authz variant doesn't support editing rules.\n")
         return
     removed = await _remove_matching_new_rule(
-        authz, what=tool, pattern=pattern, from_=from_ref,
+        authz,
+        what=tool,
+        pattern=pattern,
+        from_=from_ref,
     )
     if removed is None:
         from_str = f" from={from_ref!r}" if from_ref is not None else ""
@@ -1060,11 +1061,7 @@ async def _remove_matching_new_rule(
     for index, rule in enumerate(rules):
         if rule.who is not None:
             continue  # never touch legacy rules from /perm
-        if (
-            rule.what == what
-            and rule.pattern == pattern
-            and rule.from_ == from_
-        ):
+        if rule.what == what and rule.pattern == pattern and rule.from_ == from_:
             await authz.remove_rule(rule.id)
             return index
     return None
@@ -1332,8 +1329,8 @@ async def _handler_fork(arg_text: str, ctx: SlashContext) -> ControlSignal:
 
 
 def _resolve_event_id_prefix(
-    store: Any,  # noqa: ANN401 — WorkflowRunStore
-    run_id: Any,  # noqa: ANN401 — WorkflowRunId
+    store: Any,
+    run_id: Any,
     candidate: str,
 ) -> str | None:
     """Resolve a possibly-short event_id against the parent run's JSONL.

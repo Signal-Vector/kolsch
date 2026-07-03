@@ -61,9 +61,7 @@ def test_model_view_accepts_explicit_metadata() -> None:
     """The pre-flight wiring path — Step 14 passes metadata
     sourced from the provider catalog."""
     spec = ModelSpec(provider="anthropic", model="claude-opus-4-7")
-    view = ModelView.from_model_spec(
-        spec, context_length=200_000, supports_tools=True
-    )
+    view = ModelView.from_model_spec(spec, context_length=200_000, supports_tools=True)
     assert view.context_length == 200_000
     assert view.supports_tools is True
 

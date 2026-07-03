@@ -48,9 +48,7 @@ class FilterRunner:
             TypeError: `over:` did not resolve to a list.
         """
         _ = state
-        rendered_over = self._render(
-            node_def.over, ctx=ctx, overlay=bound_inputs
-        )
+        rendered_over = self._render(node_def.over, ctx=ctx, overlay=bound_inputs)
         if not isinstance(rendered_over, list):
             msg = (
                 f"node {node_name!r} filter.over must resolve to a "

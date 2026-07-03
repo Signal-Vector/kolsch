@@ -68,7 +68,7 @@ def test_simple_variable_substitution_renders() -> None:
 def test_nested_attribute_access_renders() -> None:
     """The five Phase 2.2 variables expose attribute access
     (e.g. ``{{ agent.name }}``). Pin that the harness honours
-    standard Jinja attribute resolution against a dict — Steps 3–7's
+    standard Jinja attribute resolution against a dict — Steps 3-7's
     variable objects also expose attributes, so the same path
     exercises both."""
     out = render_prompt(
@@ -160,9 +160,7 @@ def test_default_filter_compensates_for_undefined_variable() -> None:
 def test_default_filter_passes_through_when_value_is_defined() -> None:
     """Counterpart to the gate above — when the variable IS in the
     context, ``default`` is a no-op."""
-    assert (
-        render_prompt('{{ var | default("x") }}', {"var": "real"}) == "real"
-    )
+    assert render_prompt('{{ var | default("x") }}', {"var": "real"}) == "real"
 
 
 def test_default_filter_works_with_attribute_access() -> None:

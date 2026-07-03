@@ -75,9 +75,7 @@ async def test_race_with_cancel_work_wins() -> None:
 
 
 @pytest.mark.asyncio
-async def test_race_with_cancel_fast_work_after_cancel_completes_within_grace() -> (
-    None
-):
+async def test_race_with_cancel_fast_work_after_cancel_completes_within_grace() -> None:
     """Cancel fires THEN work completes within the grace window →
     the work's result is returned (preserves modal-deny flow where
     the tool flips cancel as part of returning its DENY error)."""
@@ -131,9 +129,7 @@ async def test_race_with_cancel_pre_flipped_with_fast_work_returns_result() -> N
         await asyncio.sleep(0.01)
         return "ok"
 
-    result = await race_with_cancel(
-        _work(), token, what="fast_after_preflip"
-    )
+    result = await race_with_cancel(_work(), token, what="fast_after_preflip")
     assert result == "ok"
 
 
@@ -209,9 +205,7 @@ def test_wait_future_with_cancel_cancels_hung_future() -> None:
     threading.Thread(target=_flip_cancel_after_delay, daemon=True).start()
     start = time.monotonic()
     with pytest.raises(ExchangeCancelled):
-        wait_future_with_cancel(
-            future, token, what="hung_future", poll_interval=0.01
-        )
+        wait_future_with_cancel(future, token, what="hung_future", poll_interval=0.01)
     elapsed = time.monotonic() - start
     # Should observe cancel within poll_interval + small slack.
     assert elapsed < 1.0

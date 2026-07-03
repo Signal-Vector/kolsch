@@ -14,14 +14,16 @@ Covers Step 1 ACs:
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from assets.catalog import AssetCatalog
 from workflows.builtins import SetStateRunner
 from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -47,9 +49,7 @@ def _run_executor(
     inputs: dict[str, Any] | None = None,
 ) -> tuple[IterativeExecutor, WorkflowRunStore, Any]:
     store = WorkflowRunStore(tmp_path)
-    run = store.create(
-        workflow_ref="demo/workflows/x", inputs=inputs or {}
-    )
+    run = store.create(workflow_ref="demo/workflows/x", inputs=inputs or {})
     ex = IterativeExecutor(
         workflow=workflow,
         run=run,
@@ -69,11 +69,7 @@ class _StaticRunner:
 
 
 def _state_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        e["payload"]
-        for e in events
-        if e["kind"] == "workflow.state.mutated"
-    ]
+    return [e["payload"] for e in events if e["kind"] == "workflow.state.mutated"]
 
 
 def _state_event_envelopes(
@@ -93,9 +89,7 @@ class TestRegistration:
             SetStateRunner as _SetStateRunner,
         )
 
-        runner = _registry().get(
-            "kolsch/nodes/set_state", node_name="x"
-        )
+        runner = _registry().get("kolsch/nodes/set_state", node_name="x")
         assert isinstance(runner, _SetStateRunner)
 
 
@@ -105,9 +99,7 @@ class TestRegistration:
 
 
 class TestBasicMutation:
-    async def test_single_set_mutates_and_emits(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_single_set_mutates_and_emits(self, tmp_path: Path) -> None:
         wf = _wf(
             {
                 "nodes": {
@@ -128,14 +120,11 @@ class TestBasicMutation:
         completed = next(
             e
             for e in events
-            if e["kind"] == "workflow.node.completed"
-            and e["node_name"] == "init"
+            if e["kind"] == "workflow.node.completed" and e["node_name"] == "init"
         )
         assert completed["payload"]["output"] == {}
 
-    async def test_multiple_keys_declaration_order(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_multiple_keys_declaration_order(self, tmp_path: Path) -> None:
         # AC 1.1 — z BEFORE a in YAML → z BEFORE a on the wire,
         # NOT alphabetical. Python 3.7+ dict preserves insertion.
         wf = _wf(
@@ -181,9 +170,7 @@ class TestBasicMutation:
 
 
 class TestLiteralVsJinja:
-    async def test_yaml_literals_pass_through_verbatim(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_yaml_literals_pass_through_verbatim(self, tmp_path: Path) -> None:
         wf = _wf(
             {
                 "nodes": {
@@ -201,7 +188,7 @@ class TestLiteralVsJinja:
                 }
             }
         )
-        ex, store, run = _run_executor(tmp_path, workflow=wf)
+        ex, _store, _run = _run_executor(tmp_path, workflow=wf)
         await ex.run()
         assert ex._state == {
             "flag": True,
@@ -212,9 +199,7 @@ class TestLiteralVsJinja:
             "num": 42,
         }
 
-    async def test_jinja_expression_evaluated(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_jinja_expression_evaluated(self, tmp_path: Path) -> None:
         # Per Phase 3.3 Jinja env — NativeEnvironment returns the
         # raw Python value (int), not the string "2".
         wf = _wf(
@@ -233,9 +218,7 @@ class TestLiteralVsJinja:
         payloads = _state_events(list(store.read_events(run.run_id)))
         assert payloads[0]["value"] == 2
 
-    async def test_jinja_reads_workflow_inputs(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_jinja_reads_workflow_inputs(self, tmp_path: Path) -> None:
         # Workflow-level ``inputs.*`` lands in the run's inputs dict;
         # the executor populates ``_state`` from it at run start AND
         # exposes it via ``{{ inputs.* }}`` in the Jinja scope.
@@ -255,9 +238,7 @@ class TestLiteralVsJinja:
         await ex.run()
         assert ex._state["msg"] == "hi!"
 
-    async def test_mixed_literal_and_jinja(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_mixed_literal_and_jinja(self, tmp_path: Path) -> None:
         wf = _wf(
             {
                 "nodes": {
@@ -265,9 +246,7 @@ class TestLiteralVsJinja:
                         "type": "kolsch/nodes/set_state",
                         "keys": {
                             "status": "pending",
-                            "attempts": (
-                                "{{ state.attempts | default(0) + 1 }}"
-                            ),
+                            "attempts": ("{{ state.attempts | default(0) + 1 }}"),
                         },
                     },
                 }
@@ -285,9 +264,7 @@ class TestLiteralVsJinja:
 
 
 class TestMultiWriteEvolution:
-    async def test_three_writes_evolve_value(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_three_writes_evolve_value(self, tmp_path: Path) -> None:
         # The canonical "evolving variable" pattern per master spec
         # §4.3.1 — three sequential writes to ``attempts`` produce
         # events with values 0, 1, 2 and downstream sees 2.
@@ -323,11 +300,7 @@ class TestMultiWriteEvolution:
         await ex.run()
         assert ex._state["attempts"] == 2
         events = list(store.read_events(run.run_id))
-        values = [
-            p["value"]
-            for p in _state_events(events)
-            if p["key"] == "attempts"
-        ]
+        values = [p["value"] for p in _state_events(events) if p["key"] == "attempts"]
         assert values == [0, 1, 2]
 
 
@@ -337,9 +310,7 @@ class TestMultiWriteEvolution:
 
 
 class TestEventChain:
-    async def test_events_between_started_and_completed(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_events_between_started_and_completed(self, tmp_path: Path) -> None:
         wf = _wf(
             {
                 "nodes": {
@@ -371,9 +342,7 @@ class TestEventChain:
             "workflow.node.completed",
         ]
 
-    async def test_state_event_parent_chains_to_started(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_state_event_parent_chains_to_started(self, tmp_path: Path) -> None:
         # Master spec §11.3 — each state.mutated event's
         # parent_event_id is the node's started id (not the previous
         # state.mutated). Mirrors the workflow.node.logged pattern.
@@ -390,17 +359,13 @@ class TestEventChain:
         ex, store, run = _run_executor(tmp_path, workflow=wf)
         await ex.run()
         events = list(store.read_events(run.run_id))
-        started = next(
-            e for e in events if e["kind"] == "workflow.node.started"
-        )
+        started = next(e for e in events if e["kind"] == "workflow.node.started")
         state_evs = _state_event_envelopes(events)
         assert len(state_evs) == 3
         for ev in state_evs:
             assert ev["parent_event_id"] == started["event_id"]
 
-    async def test_completed_chains_to_last_state_mutated(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_completed_chains_to_last_state_mutated(self, tmp_path: Path) -> None:
         # Master spec §11.3 — node.completed chains to the LAST
         # state.mutated event for the node.
         wf = _wf(
@@ -420,8 +385,7 @@ class TestEventChain:
         completed = next(
             e
             for e in events
-            if e["kind"] == "workflow.node.completed"
-            and e["node_name"] == "init"
+            if e["kind"] == "workflow.node.completed" and e["node_name"] == "init"
         )
         assert completed["parent_event_id"] == last_state["event_id"]
 
@@ -432,9 +396,7 @@ class TestEventChain:
 
 
 class TestDownstreamVisibility:
-    async def test_downstream_node_reads_state(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_downstream_node_reads_state(self, tmp_path: Path) -> None:
         # State writes ARE observable via ``{{ state.* }}`` — exercise
         # via a second set_state node that reads + writes a derived
         # value.

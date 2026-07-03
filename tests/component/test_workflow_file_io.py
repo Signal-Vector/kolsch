@@ -21,8 +21,7 @@ Covers Step 2 ACs:
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from assets.catalog import AssetCatalog
 from files import PathPolicy
@@ -37,6 +36,9 @@ from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -59,15 +61,9 @@ def _registry(root: Path, *, allowed: list[str]) -> RunnerRegistry:
     catalog = AssetCatalog()
     registry = RunnerRegistry()
     bash_defn = get_tool_definition(make_bash(policy=policy, root=root))
-    read_file_defn = get_tool_definition(
-        make_read_file(policy=policy, root=root)
-    )
-    write_file_defn = get_tool_definition(
-        make_write_file(policy=policy, root=root)
-    )
-    list_files_defn = get_tool_definition(
-        make_list_files(policy=policy, root=root)
-    )
+    read_file_defn = get_tool_definition(make_read_file(policy=policy, root=root))
+    write_file_defn = get_tool_definition(make_write_file(policy=policy, root=root))
+    list_files_defn = get_tool_definition(make_list_files(policy=policy, root=root))
     register_builtins(
         registry,
         bash_defn=bash_defn,
@@ -95,9 +91,7 @@ def _make_executor(
     """Build an executor rooted at ``tmp_path`` with workspace-relative file IO."""
     registry = _registry(tmp_path, allowed=allowed or ["."])
     store = WorkflowRunStore(tmp_path)
-    run = store.create(
-        workflow_ref="demo/workflows/file-io", inputs=inputs or {}
-    )
+    run = store.create(workflow_ref="demo/workflows/file-io", inputs=inputs or {})
     ex = IterativeExecutor(
         workflow=workflow,
         run=run,
@@ -146,9 +140,7 @@ class TestRegistration:
 
 
 class TestReadWriteRoundtrip:
-    async def test_write_then_read_via_jinja(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_write_then_read_via_jinja(self, tmp_path: Path) -> None:
         # write_file uses ``{{ inputs.filename }}`` for path and
         # ``{{ inputs.body }}`` for content. read_file reads it back.
         wf = _wf(
@@ -186,9 +178,7 @@ class TestReadWriteRoundtrip:
         assert set(ex._captured["read"].keys()) == {"content"}
         _ = store, run
 
-    async def test_bytes_written_reflects_size(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_bytes_written_reflects_size(self, tmp_path: Path) -> None:
         wf = _wf(
             {
                 "nodes": {
@@ -211,9 +201,7 @@ class TestReadWriteRoundtrip:
 
 
 class TestListFiles:
-    async def test_entries_are_leaf_names(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_entries_are_leaf_names(self, tmp_path: Path) -> None:
         (tmp_path / "a.txt").write_text("x")
         (tmp_path / "b.txt").write_text("x")
         (tmp_path / "c.py").write_text("x")
@@ -237,9 +225,7 @@ class TestListFiles:
         assert all(isinstance(e, str) for e in entries)
         assert {"a.txt", "b.txt", "c.py"}.issubset(set(entries))
 
-    async def test_pattern_filters_via_tool_glob(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_pattern_filters_via_tool_glob(self, tmp_path: Path) -> None:
         (tmp_path / "keep.txt").write_text("x")
         (tmp_path / "skip.py").write_text("x")
         wf = _wf(
@@ -273,9 +259,7 @@ class TestListFiles:
                 }
             }
         )
-        ex, _store, _run = _make_executor(
-            tmp_path, workflow=wf, inputs={"ext": "py"}
-        )
+        ex, _store, _run = _make_executor(tmp_path, workflow=wf, inputs={"ext": "py"})
         await ex.run()
         entries = set(ex._captured["ls"]["entries"])
         assert "hit.py" in entries
@@ -288,9 +272,7 @@ class TestListFiles:
 
 
 class TestFileAccessDenied:
-    async def test_path_outside_workspace_denied(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_path_outside_workspace_denied(self, tmp_path: Path) -> None:
         # Allowed paths are restricted to ``tmp_path/data``; the node
         # tries to read /etc/passwd which sits outside.
         (tmp_path / "data").mkdir()
@@ -304,21 +286,15 @@ class TestFileAccessDenied:
                 }
             }
         )
-        ex, store, run = _make_executor(
-            tmp_path, workflow=wf, allowed=["data/"]
-        )
+        ex, store, run = _make_executor(tmp_path, workflow=wf, allowed=["data/"])
         status = await ex.run()
         # AC 2.3 / Phase Test 2 — run aborts via the existing failure
         # path; node.failed emitted with the denial details.
         assert status == WorkflowRunStatus.FAILED
         events = list(store.read_events(run.run_id))
-        failed = [
-            e for e in events if e["kind"] == "workflow.node.failed"
-        ]
+        failed = [e for e in events if e["kind"] == "workflow.node.failed"]
         assert len(failed) == 1
-        assert failed[0]["payload"]["error_class"] == (
-            "WorkflowFileAccessDenied"
-        )
+        assert failed[0]["payload"]["error_class"] == ("WorkflowFileAccessDenied")
         # JSONL ends with workflow.run.failed (terminal envelope).
         assert events[-1]["kind"] == "workflow.run.failed"
 
@@ -337,9 +313,7 @@ class TestFileAccessDenied:
                     reason="outside scope",
                 )
             except FileAccessDenied as exc:
-                raise WorkflowFileAccessDenied(
-                    path="/etc/passwd", node="r"
-                ) from exc
+                raise WorkflowFileAccessDenied(path="/etc/passwd", node="r") from exc
         except WorkflowFileAccessDenied as wrapped:
             assert isinstance(wrapped.__cause__, FileAccessDenied)
             assert wrapped.path == "/etc/passwd"

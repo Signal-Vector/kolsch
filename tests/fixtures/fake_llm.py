@@ -179,7 +179,7 @@ class FakeLLM(BaseModel):
         )
 
 
-def platform_error_for_scripted(  # noqa: PLR0911 — one return per mapped code is the point
+def platform_error_for_scripted(
     exc: FakeLLMScriptedError, *, provider: str = "fake", model: str = "fake-model"
 ) -> "PlatformError":
     """Map a ``FakeLLMScriptedError`` into the catalogued PlatformError.

@@ -179,9 +179,7 @@ async def test_modal_a_with_lookup_writes_new_shape() -> None:
     modal = ApprovalModal(
         stdout=out,
         input_fn=_scripted_input(["a", ""]),
-        tool_ref_lookup=lambda action: (
-            "kolsch/bash" if action == "tool.bash" else None
-        ),
+        tool_ref_lookup=lambda action: "kolsch/bash" if action == "tool.bash" else None,
     )
     result = await modal(rule_id="rl_bash_any", action="tool.bash", target="rg foo")
     assert isinstance(result, tuple)
@@ -735,9 +733,7 @@ async def test_modal_short_circuits_when_active_cancel_already_cancelled() -> No
         input_fn=_never_called,
         state=state,  # type: ignore[arg-type]
     )
-    result = await modal(
-        rule_id="rl_test", action="tool.bash", target="rg foo"
-    )
+    result = await modal(rule_id="rl_test", action="tool.bash", target="rg foo")
     assert result is AuthzEffect.DENY
     # Panel never rendered — fan-out is silent for the remaining
     # tool calls.
@@ -764,9 +760,7 @@ async def test_modal_deny_once_flips_active_cancel() -> None:
         input_fn=_scripted_input(["n"]),
         state=state,  # type: ignore[arg-type]
     )
-    result = await modal(
-        rule_id="rl_test", action="tool.bash", target="rm -rf /"
-    )
+    result = await modal(rule_id="rl_test", action="tool.bash", target="rm -rf /")
     assert result is AuthzEffect.DENY
     assert cancel.is_cancelled() is True
     assert state.last_cancel_reason == "denied"  # type: ignore[attr-defined]
@@ -790,9 +784,7 @@ async def test_modal_deny_always_flips_cancel_and_returns_rule() -> None:
         input_fn=_scripted_input(["d", ""]),
         state=state,  # type: ignore[arg-type]
     )
-    result = await modal(
-        rule_id="rl_bash_any", action="tool.bash", target="rm -rf /"
-    )
+    result = await modal(rule_id="rl_bash_any", action="tool.bash", target="rm -rf /")
     assert isinstance(result, tuple)
     effect, rule = result
     assert effect is AuthzEffect.DENY
@@ -818,9 +810,7 @@ async def test_modal_allow_does_not_flip_active_cancel() -> None:
         input_fn=_scripted_input(["y"]),
         state=state,  # type: ignore[arg-type]
     )
-    result = await modal(
-        rule_id="rl_test", action="tool.bash", target="ls"
-    )
+    result = await modal(rule_id="rl_test", action="tool.bash", target="ls")
     assert result is AuthzEffect.ALLOW
     assert cancel.is_cancelled() is False
     assert state.last_cancel_reason is None  # type: ignore[attr-defined]
@@ -842,9 +832,7 @@ async def test_modal_allow_always_does_not_flip_active_cancel() -> None:
         input_fn=_scripted_input(["a", ""]),
         state=state,  # type: ignore[arg-type]
     )
-    result = await modal(
-        rule_id="rl_bash_any", action="tool.bash", target="rg foo"
-    )
+    result = await modal(rule_id="rl_bash_any", action="tool.bash", target="rg foo")
     assert isinstance(result, tuple)
     effect, _rule = result
     assert effect is AuthzEffect.ALLOW
@@ -875,9 +863,7 @@ async def test_modal_bind_state_late_binds() -> None:
     # Late-bind, mirroring _run_input_loop's call.
     modal.bind_state(state)  # type: ignore[arg-type]
 
-    result = await modal(
-        rule_id="rl_test", action="tool.bash", target="ls"
-    )
+    result = await modal(rule_id="rl_test", action="tool.bash", target="ls")
     # Short-circuit fired post-bind — proves bind_state took effect.
     assert result is AuthzEffect.DENY
 
@@ -890,9 +876,7 @@ async def test_modal_without_state_still_returns_pre_fix_shape() -> None:
     """
     out = _io.StringIO()
     modal = ApprovalModal(stdout=out, input_fn=_scripted_input(["n"]))
-    result = await modal(
-        rule_id="rl_test", action="tool.bash", target="rm -rf /"
-    )
+    result = await modal(rule_id="rl_test", action="tool.bash", target="rm -rf /")
     assert result is AuthzEffect.DENY
 
 

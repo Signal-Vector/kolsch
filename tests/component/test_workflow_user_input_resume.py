@@ -22,8 +22,7 @@ Covers Step 1 ACs:
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -42,6 +41,9 @@ from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -100,9 +102,7 @@ def _make_executor(
     inputs: dict[str, Any] | None = None,
 ) -> tuple[IterativeExecutor, WorkflowRunStore, Any]:
     store = WorkflowRunStore(tmp_path)
-    run = store.create(
-        workflow_ref="demo/workflows/x", inputs=inputs or {}
-    )
+    run = store.create(workflow_ref="demo/workflows/x", inputs=inputs or {})
     ex = IterativeExecutor(
         workflow=workflow,
         run=run,
@@ -118,9 +118,7 @@ def _registry_with_user_input(
 ) -> RunnerRegistry:
     registry = RunnerRegistry()
     registry.register("kolsch/nodes/noop", StaticRunner({}))
-    registry.register(
-        "kolsch/nodes/user_input", UserInputRunner()
-    )
+    registry.register("kolsch/nodes/user_input", UserInputRunner())
     if agent_output is not None:
         registry.register(
             "kolsch/nodes/agent",
@@ -161,10 +159,7 @@ def _executor_for_resume(
 
 class TestRunResumedEventShape:
     def test_event_kind_constant(self) -> None:
-        assert (
-            WorkflowEventKind.RUN_RESUMED.value
-            == "workflow.run.resumed"
-        )
+        assert WorkflowEventKind.RUN_RESUMED.value == "workflow.run.resumed"
 
     def test_serialised_event_carries_resumed_at_invocation_id(
         self,
@@ -180,10 +175,7 @@ class TestRunResumedEventShape:
         )
         serialised = ev.model_dump(mode="json")
         assert serialised["kind"] == "workflow.run.resumed"
-        assert (
-            serialised["payload"]["resumed_at_invocation_id"]
-            == "inv_demo"
-        )
+        assert serialised["payload"]["resumed_at_invocation_id"] == "inv_demo"
 
 
 # ---------------------------------------------------------------------------
@@ -208,12 +200,8 @@ class TestReplayInto:
             }
         )
         registry = RunnerRegistry()
-        registry.register(
-            "kolsch/nodes/noop", StaticRunner({"k": "v"})
-        )
-        ex, store, run = _make_executor(
-            tmp_path, workflow=wf, registry=registry
-        )
+        registry.register("kolsch/nodes/noop", StaticRunner({"k": "v"}))
+        ex, store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
         await ex.run()
         events = list(store.read_events(run.run_id))
 
@@ -275,10 +263,7 @@ class TestReplayInto:
         # Cross-check: the open invocation id matches the sidecar.
         run_dir = store.directory(run.run_id)
         assert (
-            opens["ask"]
-            == run_dir.waiting_at_path.read_text(
-                encoding="utf-8"
-            ).strip()
+            opens["ask"] == run_dir.waiting_at_path.read_text(encoding="utf-8").strip()
         )
 
     def test_replay_raises_resume_rejected_on_failed_event(
@@ -286,9 +271,7 @@ class TestReplayInto:
     ) -> None:
         # Synthetic event list containing a workflow.node.failed —
         # the defensive check inside replay_into should raise.
-        wf = _wf(
-            {"nodes": {"x": {"type": "kolsch/nodes/noop"}}}
-        )
+        wf = _wf({"nodes": {"x": {"type": "kolsch/nodes/noop"}}})
         store = WorkflowRunStore(tmp_path)
         run = store.create(workflow_ref="demo/workflows/x")
         ex = IterativeExecutor(
@@ -322,17 +305,11 @@ class TestReplayInto:
 
 
 class TestResumeStatusGate:
-    async def test_resume_on_succeeded_run_rejects(
-        self, tmp_path: Path
-    ) -> None:
-        wf = _wf(
-            {"nodes": {"n": {"type": "kolsch/nodes/noop"}}}
-        )
+    async def test_resume_on_succeeded_run_rejects(self, tmp_path: Path) -> None:
+        wf = _wf({"nodes": {"n": {"type": "kolsch/nodes/noop"}}})
         registry = RunnerRegistry()
         registry.register("kolsch/nodes/noop", StaticRunner({}))
-        ex, store, run = _make_executor(
-            tmp_path, workflow=wf, registry=registry
-        )
+        ex, store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
         await ex.run()  # SUCCEEDED
 
         # Fresh executor pointing at the succeeded run.
@@ -347,9 +324,7 @@ class TestResumeStatusGate:
         assert exc_info.value.status == "succeeded"
         # The succeeded run's JSONL is unchanged — no spurious
         # workflow.run.resumed event added.
-        kinds = {
-            e["kind"] for e in store.read_events(run.run_id)
-        }
+        kinds = {e["kind"] for e in store.read_events(run.run_id)}
         assert "workflow.run.resumed" not in kinds
 
     async def test_resume_with_no_waiting_at_sidecar_rejects(
@@ -429,9 +404,7 @@ class TestResumeHappyPath:
             registry=_registry_with_user_input(),
             run_id=run.run_id,
         )
-        final_status = await fresh.resume(
-            response={"response": "hello"}
-        )
+        final_status = await fresh.resume(response={"response": "hello"})
         assert final_status == WorkflowRunStatus.SUCCEEDED
 
         # Sidecar cleaned up at terminal.
@@ -480,11 +453,7 @@ class TestResumeHappyPath:
                         {
                             "from": "ask",
                             "to": "use",
-                            "binds": {
-                                "received": (
-                                    "{{ nodes.ask.response }}"
-                                )
-                            },
+                            "binds": {"received": ("{{ nodes.ask.response }}")},
                         }
                     ]
                 },
@@ -494,16 +463,12 @@ class TestResumeHappyPath:
         registry = _registry_with_user_input()
         registry.register("kolsch/nodes/agent", capture)
 
-        ex, store, run = _make_executor(
-            tmp_path, workflow=wf, registry=registry
-        )
+        ex, _store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
         await ex.run()  # pauses
 
         registry_after = _registry_with_user_input()
         capture_after = CapturingRunner({})
-        registry_after.register(
-            "kolsch/nodes/agent", capture_after
-        )
+        registry_after.register("kolsch/nodes/agent", capture_after)
         fresh = _executor_for_resume(
             tmp_path,
             workflow=wf,
@@ -561,9 +526,7 @@ class TestBadResponsePreservesStatus:
         run_dir = store.directory(run.run_id)
         assert run_dir.waiting_at_path.exists()
         # No spurious workflow.run.resumed event.
-        kinds = {
-            e["kind"] for e in store.read_events(run.run_id)
-        }
+        kinds = {e["kind"] for e in store.read_events(run.run_id)}
         assert "workflow.run.resumed" not in kinds
 
     async def test_wrong_type_response_rejects_without_status_flip(
@@ -611,7 +574,7 @@ class TestBadResponsePreservesStatus:
                 }
             }
         )
-        ex, store, run = _make_executor(
+        ex, _store, run = _make_executor(
             tmp_path,
             workflow=wf,
             registry=_registry_with_user_input(),
@@ -667,10 +630,7 @@ class TestParentEventIdChain:
         pre_pause_events = list(store.read_events(run.run_id))
         pre_pause_tail_id = pre_pause_events[-1]["event_id"]
         # The pre-pause tail is the user_input's started event.
-        assert (
-            pre_pause_events[-1]["kind"]
-            == "workflow.node.started"
-        )
+        assert pre_pause_events[-1]["kind"] == "workflow.node.started"
 
         fresh = _executor_for_resume(
             tmp_path,
@@ -682,16 +642,11 @@ class TestParentEventIdChain:
 
         all_events = list(store.read_events(run.run_id))
         resumed_event = next(
-            e
-            for e in all_events
-            if e["kind"] == "workflow.run.resumed"
+            e for e in all_events if e["kind"] == "workflow.run.resumed"
         )
         # AC 1.6 — the resumed event's parent_event_id IS the
         # last event in the JSONL at pause time.
-        assert (
-            resumed_event["parent_event_id"]
-            == pre_pause_tail_id
-        )
+        assert resumed_event["parent_event_id"] == pre_pause_tail_id
         # The user_input completion event chains to the resumed
         # event (continuous chain across processes).
         completion = next(
@@ -700,10 +655,7 @@ class TestParentEventIdChain:
             if e["kind"] == "workflow.node.completed"
             and e["payload"].get("node_name") == "ask"
         )
-        assert (
-            completion["parent_event_id"]
-            == resumed_event["event_id"]
-        )
+        assert completion["parent_event_id"] == resumed_event["event_id"]
 
 
 # ---------------------------------------------------------------------------
@@ -715,9 +667,7 @@ class TestReplayHandlesPruned:
     def test_replay_marks_pruned_node_and_completed_or_skipped(
         self, tmp_path: Path
     ) -> None:
-        wf = _wf(
-            {"nodes": {"x": {"type": "kolsch/nodes/noop"}}}
-        )
+        wf = _wf({"nodes": {"x": {"type": "kolsch/nodes/noop"}}})
         store = WorkflowRunStore(tmp_path)
         run = store.create(workflow_ref="demo/workflows/x")
         ex = IterativeExecutor(

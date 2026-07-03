@@ -112,9 +112,7 @@ async def test_allow_uses_layers_tuple_not_per_layer_kwargs() -> None:
         name="workflow",
         rules=(Rule(what="*", effect="allow"),),
     )
-    result = await provider.allow(
-        "user.local", "tool.bash", layers=(workflow_layer,)
-    )
+    result = await provider.allow("user.local", "tool.bash", layers=(workflow_layer,))
     assert result.allowed is True
     assert "who_chain=workflow" in result.reason
 
@@ -159,9 +157,7 @@ async def test_omitting_workflow_layer_simulates_embedded_agent() -> None:
         name="agent",
         rules=(Rule(what="tool.bash", effect="allow"),),
     )
-    result = await provider.allow(
-        "user.local", "tool.bash", layers=(agent_layer,)
-    )
+    result = await provider.allow("user.local", "tool.bash", layers=(agent_layer,))
     assert result.allowed is True
     assert "who_chain=agent" in result.reason
     assert "workflow" not in result.reason

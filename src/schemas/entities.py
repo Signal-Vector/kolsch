@@ -149,7 +149,7 @@ def _resolve_forward_refs() -> None:
 # initial cycle-busting load (when `workflows.ids` triggers
 # `schemas/__init__.py` mid-init) doesn't crash; the eager retry
 # happens via `_eager_resolve_when_workflows_loaded` below.
-try:
+try:  # noqa: SIM105 — try/except reads clearer than contextlib.suppress at module scope for a documented cycle-bust
     _resolve_forward_refs()
 except (ImportError, AttributeError):
     # Pre-cycle: workflows.ids hasn't finished loading yet. The retry

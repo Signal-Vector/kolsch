@@ -321,9 +321,7 @@ class TestStateReadSet:
                 "nodes": {
                     "n": {
                         "type": "kolsch/nodes/bash",
-                        "command": (
-                            "echo {{ state.a }} and {{ state.b }}"
-                        ),
+                        "command": ("echo {{ state.a }} and {{ state.b }}"),
                     },
                 },
             }
@@ -383,8 +381,7 @@ class TestConflictDetection:
         )
         result = validate_workflow(wf, AssetCatalog())
         conflicts = [
-            e for e in result.errors
-            if isinstance(e, WorkflowParallelStateConflict)
+            e for e in result.errors if isinstance(e, WorkflowParallelStateConflict)
         ]
         assert len(conflicts) == 1
         conflict = conflicts[0]
@@ -452,8 +449,7 @@ class TestConflictDetection:
         )
         result = validate_workflow(wf, AssetCatalog())
         conflicts = [
-            e for e in result.errors
-            if isinstance(e, WorkflowParallelStateConflict)
+            e for e in result.errors if isinstance(e, WorkflowParallelStateConflict)
         ]
         assert conflicts == []
 
@@ -493,8 +489,7 @@ class TestConflictDetection:
         )
         result = validate_workflow(wf, AssetCatalog())
         conflicts = [
-            e for e in result.errors
-            if isinstance(e, WorkflowParallelStateConflict)
+            e for e in result.errors if isinstance(e, WorkflowParallelStateConflict)
         ]
         # 3 sibling branches, all-pairs combinations = C(3, 2) = 3.
         assert len(conflicts) == 3
@@ -527,8 +522,7 @@ class TestParallelMapStateRejection:
         )
         result = validate_workflow(wf, AssetCatalog())
         conflicts = [
-            e for e in result.errors
-            if isinstance(e, WorkflowParallelStateConflict)
+            e for e in result.errors if isinstance(e, WorkflowParallelStateConflict)
         ]
         assert any(c.node_a == "fan" for c in conflicts)
 
@@ -551,10 +545,7 @@ class TestParallelMapStateRejection:
             }
         )
         result = validate_workflow(wf, AssetCatalog())
-        assert any(
-            isinstance(e, WorkflowParallelStateConflict)
-            for e in result.errors
-        )
+        assert any(isinstance(e, WorkflowParallelStateConflict) for e in result.errors)
 
     def test_parallel_map_nested_map_worker_rejected(self) -> None:
         """A parallel map whose worker is itself a (sequential) map
@@ -585,10 +576,7 @@ class TestParallelMapStateRejection:
             }
         )
         result = validate_workflow(wf, AssetCatalog())
-        assert any(
-            isinstance(e, WorkflowParallelStateConflict)
-            for e in result.errors
-        )
+        assert any(isinstance(e, WorkflowParallelStateConflict) for e in result.errors)
 
     def test_parallel_map_pure_worker_allowed(self) -> None:
         wf = _wf(
@@ -611,8 +599,7 @@ class TestParallelMapStateRejection:
         )
         result = validate_workflow(wf, AssetCatalog())
         assert not any(
-            isinstance(e, WorkflowParallelStateConflict)
-            for e in result.errors
+            isinstance(e, WorkflowParallelStateConflict) for e in result.errors
         )
 
 
@@ -641,8 +628,7 @@ class TestInvalidConcurrency:
         )
         result = validate_workflow(wf, AssetCatalog())
         matches = [
-            e for e in result.errors
-            if isinstance(e, WorkflowInvalidConcurrency)
+            e for e in result.errors if isinstance(e, WorkflowInvalidConcurrency)
         ]
         assert len(matches) == 1
         assert matches[0].node == "fan"
@@ -665,10 +651,7 @@ class TestInvalidConcurrency:
             }
         )
         result = validate_workflow(wf, AssetCatalog())
-        assert not any(
-            isinstance(e, WorkflowInvalidConcurrency)
-            for e in result.errors
-        )
+        assert not any(isinstance(e, WorkflowInvalidConcurrency) for e in result.errors)
 
 
 # ---------------------------------------------------------------------------
@@ -708,8 +691,7 @@ class TestSequentialSkipsCrossBranchAnalysis:
         )
         result = validate_workflow(wf, AssetCatalog())
         assert not any(
-            isinstance(e, WorkflowParallelStateConflict)
-            for e in result.errors
+            isinstance(e, WorkflowParallelStateConflict) for e in result.errors
         )
 
     def test_sequential_mode_still_rejects_parallel_map_state_writes(
@@ -737,10 +719,7 @@ class TestSequentialSkipsCrossBranchAnalysis:
             }
         )
         result = validate_workflow(wf, AssetCatalog())
-        assert any(
-            isinstance(e, WorkflowParallelStateConflict)
-            for e in result.errors
-        )
+        assert any(isinstance(e, WorkflowParallelStateConflict) for e in result.errors)
 
 
 # ---------------------------------------------------------------------------
@@ -781,8 +760,7 @@ class TestSubWorkflowOpacity:
         )
         result = validate_workflow(wf, AssetCatalog())
         assert not any(
-            isinstance(e, WorkflowParallelStateConflict)
-            for e in result.errors
+            isinstance(e, WorkflowParallelStateConflict) for e in result.errors
         )
 
 

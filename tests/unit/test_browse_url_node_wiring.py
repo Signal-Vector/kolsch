@@ -18,7 +18,6 @@ Covers Step 4 of ``qol-browse-url-node`` (Tests 3, 3b, 8):
 from __future__ import annotations
 
 import typing
-from pathlib import Path
 
 import pytest
 
@@ -30,6 +29,9 @@ from workflows.parser import (
     BrowseUrlNodeDef,
     NodeDefUnion,
 )
+
+if typing.TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _make_root(tmp_path: Path) -> Path:

@@ -74,10 +74,10 @@ class CatalogNodeRunner:
         self,
         *,
         node_name: str,
-        node_def: Any,  # noqa: ANN401 — CatalogNodeDef
+        node_def: Any,
         bound_inputs: dict[str, Any],
         state: dict[str, Any],  # noqa: ARG002 — NodeRunner protocol
-        ctx: Any,  # noqa: ANN401 — NodeContext
+        ctx: Any,
     ) -> dict[str, Any]:
         """Import the authored module, validate inputs, and dispatch `run`.
 
@@ -91,10 +91,7 @@ class CatalogNodeRunner:
         """
         type_ref = getattr(node_def, "type", None)
         if not isinstance(type_ref, str):
-            msg = (
-                "CatalogNodeRunner requires node_def.type; got "
-                f"{type_ref!r}"
-            )
+            msg = f"CatalogNodeRunner requires node_def.type; got {type_ref!r}"
             raise NodeTypeNotImplemented(
                 node=node_name, type_ref="<unknown>", phase="3.1"
             ) from ValueError(msg)
@@ -163,9 +160,7 @@ class CatalogNodeRunner:
         if entry.metadata.get("builtin") is True:
             return None
         try:
-            _, _, inputs_model = self._resolve(
-                type_ref=type_ref, entry_path=entry.path
-            )
+            _, _, inputs_model = self._resolve(type_ref=type_ref, entry_path=entry.path)
         except Exception:  # noqa: BLE001 — defensive; raise path runs at dispatch
             return None
         return inputs_model
@@ -194,21 +189,15 @@ class CatalogNodeRunner:
         module = _import_module(type_ref=type_ref, entry_path=entry_path)
         run_fn = getattr(module, "run", None)
         if run_fn is None:
-            raise WorkflowNodeMissingRun(
-                file="<workflow>", line=0, ref=type_ref
-            )
+            raise WorkflowNodeMissingRun(file="<workflow>", line=0, ref=type_ref)
         if getattr(run_fn, "_kolsch_node", None) is None:
-            raise WorkflowNodeNotDecorated(
-                file="<workflow>", line=0, ref=type_ref
-            )
-        inputs_model = _extract_inputs_model(
-            run_fn=run_fn, type_ref=type_ref
-        )
+            raise WorkflowNodeNotDecorated(file="<workflow>", line=0, ref=type_ref)
+        inputs_model = _extract_inputs_model(run_fn=run_fn, type_ref=type_ref)
         self._cache[type_ref] = (module, run_fn, inputs_model)
         return self._cache[type_ref]
 
 
-def _import_module(*, type_ref: str, entry_path: str) -> Any:  # noqa: ANN401
+def _import_module(*, type_ref: str, entry_path: str) -> Any:
     """Load the authored node module via `importlib.util`.
 
     The synthetic module name embeds the ref so concurrent runs
@@ -232,9 +221,7 @@ def _import_module(*, type_ref: str, entry_path: str) -> Any:  # noqa: ANN401
         # without the executor's lifecycle — preserves baseline
         # behavior byte-for-byte.
         module_name = canonical
-    spec = importlib.util.spec_from_file_location(
-        module_name, Path(entry_path)
-    )
+    spec = importlib.util.spec_from_file_location(module_name, Path(entry_path))
     if spec is None or spec.loader is None:
         raise WorkflowNodeImportFailed(
             file="<workflow>",
@@ -261,7 +248,7 @@ def _import_module(*, type_ref: str, entry_path: str) -> Any:  # noqa: ANN401
 
 def _extract_inputs_model(
     *,
-    run_fn: Any,  # noqa: ANN401
+    run_fn: Any,
     type_ref: str,
 ) -> type[BaseModel] | None:
     """Inspect `run_fn` and return its `inputs` parameter's Pydantic class.
@@ -295,14 +282,12 @@ def _extract_inputs_model(
     annotation = hints.get(inputs_param.name)
     if annotation is None:
         return None
-    if not (
-        isinstance(annotation, type) and issubclass(annotation, BaseModel)
-    ):
+    if not (isinstance(annotation, type) and issubclass(annotation, BaseModel)):
         return None
     return annotation
 
 
-def _coerce_return(*, type_ref: str, result: Any) -> dict[str, Any]:  # noqa: ANN401
+def _coerce_return(*, type_ref: str, result: Any) -> dict[str, Any]:
     """Parse the run function's return into the canonical captured dict.
 
     Three accepted return shapes:
@@ -321,7 +306,7 @@ def _coerce_return(*, type_ref: str, result: Any) -> dict[str, Any]:  # noqa: AN
         return {"value": result}
     if isinstance(result, BaseModel):
         return dict(result.model_dump())
-    if isinstance(result, tuple) and len(result) == 2:  # noqa: PLR2004 — (flag, payload) tuple shape
+    if isinstance(result, tuple) and len(result) == 2:
         flag, payload = result
         if isinstance(flag, bool) and isinstance(payload, BaseModel):
             return {"value": flag, **payload.model_dump()}

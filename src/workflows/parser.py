@@ -241,7 +241,7 @@ class _BaseNodeDef(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _reject_legacy_keys(cls, data: Any) -> Any:  # noqa: ANN401
+    def _reject_legacy_keys(cls, data: Any) -> Any:
         """Reject deprecated YAML keys at parse-time.
 
         - `instance_of` → fix-path to `copy_of`.
@@ -304,7 +304,7 @@ class BrowseUrlNodeDef(_BaseNodeDef):
 
     @model_validator(mode="before")
     @classmethod
-    def _disambiguate_timeout_fields(cls, data: Any) -> Any:  # noqa: ANN401
+    def _disambiguate_timeout_fields(cls, data: Any) -> Any:
         """Refuse the confusion case where only ``timeout_seconds`` is set.
 
         The base ``_BaseNodeDef`` field ``timeout_seconds`` bounds the
@@ -317,8 +317,10 @@ class BrowseUrlNodeDef(_BaseNodeDef):
         its 30s default. Detect the ambiguous pattern and raise with
         a clear fix-path rather than let it slip through.
         """
-        if isinstance(data, dict) and "timeout_seconds" in data and (
-            "request_timeout_seconds" not in data
+        if (
+            isinstance(data, dict)
+            and "timeout_seconds" in data
+            and ("request_timeout_seconds" not in data)
         ):
             msg = (
                 "browse_url node sets 'timeout_seconds' but not "
@@ -516,7 +518,7 @@ NodeDefUnion = Union[  # noqa: UP007 — Annotated unions over Pydantic models
 ]
 
 
-def _dispatch_node_def(value: Any) -> Any:  # noqa: ANN401
+def _dispatch_node_def(value: Any) -> Any:
     """Route a raw `nodes:` entry to the matching Pydantic class.
 
     Called as the `BeforeValidator` on `NodeDef`. The returned value
@@ -619,7 +621,7 @@ class EdgeDef(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _reject_legacy_keys(cls, data: Any) -> Any:  # noqa: ANN401
+    def _reject_legacy_keys(cls, data: Any) -> Any:
         """Reject deprecated edge-level keys with fix-path messages.
 
         - `condition` → `when` rename.
@@ -698,7 +700,7 @@ class Workflow(BaseModel):
 
     @model_validator(mode="before")
     @classmethod
-    def _reject_permissions_key(cls, data: Any) -> Any:  # noqa: ANN401
+    def _reject_permissions_key(cls, data: Any) -> Any:
         """Reject the deprecated `permissions:` key with a fix-path message.
 
         Silently accepting it would defeat the migration goal.

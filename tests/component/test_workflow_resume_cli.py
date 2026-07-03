@@ -22,12 +22,14 @@ from __future__ import annotations
 import json
 import os
 import textwrap
-from pathlib import Path
-from typing import Any
-
-import pytest
+from typing import TYPE_CHECKING, Any
 
 from cli.main import main
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    import pytest
 
 # ---------------------------------------------------------------------------
 # Workspace fixture — mirrors tests/component/test_workflow_cli.py's pattern
@@ -75,9 +77,7 @@ def _write_workflow_bundle(
     wf_dir.mkdir(exist_ok=True)
     from _yamlio import dump
 
-    (wf_dir / f"{workflow_name}.yaml").write_text(
-        dump(workflow_yaml), encoding="utf-8"
-    )
+    (wf_dir / f"{workflow_name}.yaml").write_text(dump(workflow_yaml), encoding="utf-8")
     return bundle
 
 
@@ -167,9 +167,7 @@ class TestResumeCliHappyPath:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         workspace = _make_workspace(tmp_path)
-        _write_workflow_bundle(
-            workspace, "demo", _paused_then_bash_workflow_yaml()
-        )
+        _write_workflow_bundle(workspace, "demo", _paused_then_bash_workflow_yaml())
         run_id = _pause_workflow_via_cli(workspace, capsys)
 
         rc, out, _ = _run_cli(
@@ -194,9 +192,7 @@ class TestResumeCliHappyPath:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
         workspace = _make_workspace(tmp_path)
-        _write_workflow_bundle(
-            workspace, "demo", _paused_then_bash_workflow_yaml()
-        )
+        _write_workflow_bundle(workspace, "demo", _paused_then_bash_workflow_yaml())
         run_id = _pause_workflow_via_cli(workspace, capsys)
 
         rc, out, _ = _run_cli(
@@ -454,9 +450,7 @@ class TestOrphanSweepSkipsPaused:
         # Pause a workflow via the CLI so meta.json + waiting_at +
         # JSONL are all coherent.
         workspace = _make_workspace(tmp_path)
-        _write_workflow_bundle(
-            workspace, "demo", _paused_workflow_yaml()
-        )
+        _write_workflow_bundle(workspace, "demo", _paused_workflow_yaml())
         run_id = _pause_workflow_via_cli(workspace, capsys)
 
         # Plant a guaranteed-dead PID in the sidecar so the orphan
@@ -480,9 +474,7 @@ class TestOrphanSweepSkipsPaused:
         loaded = store.read(WorkflowRunId(run_id))
         assert loaded.status == WorkflowRunStatus.WAITING_FOR_INPUT
 
-    def test_non_paused_orphaned_run_still_reconciled(
-        self, tmp_path: Path
-    ) -> None:
+    def test_non_paused_orphaned_run_still_reconciled(self, tmp_path: Path) -> None:
         # Regression guard: the paused-skip check must not absolve
         # NON-paused orphans. A run with ``workflow.run.started`` +
         # no terminal + a dead PID + status != waiting_for_input
@@ -507,9 +499,7 @@ class TestOrphanSweepSkipsPaused:
             status=WorkflowRunStatus.RUNNING,
             created_at=datetime.now(UTC),
         )
-        run_dir.meta_path.write_text(
-            run.model_dump_json(), encoding="utf-8"
-        )
+        run_dir.meta_path.write_text(run.model_dump_json(), encoding="utf-8")
         store.append_event(
             run_id,
             {"kind": "workflow.run.started", "payload": {}},

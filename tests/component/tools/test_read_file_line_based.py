@@ -198,9 +198,7 @@ async def test_read_file_large_file_soft_truncates(tmp_path: Path) -> None:
     Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
 
     body = "\n".join(f"L{i}" for i in range(1, 10_001))
-    (tmp_path / "huge-but-paginates.txt").write_text(
-        body + "\n", encoding="utf-8"
-    )
+    (tmp_path / "huge-but-paginates.txt").write_text(body + "\n", encoding="utf-8")
 
     result = await fn(Args(path="huge-but-paginates.txt"), _ctx(tmp_path))
 

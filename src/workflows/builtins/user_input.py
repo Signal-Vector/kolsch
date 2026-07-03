@@ -36,10 +36,10 @@ class UserInputRunner:
         self,
         *,
         node_name: str,
-        node_def: Any,  # noqa: ANN401 — UserInputNodeDef
+        node_def: Any,
         bound_inputs: dict[str, Any],
         state: dict[str, Any],
-        ctx: Any,  # noqa: ANN401 — NodeContext
+        ctx: Any,
     ) -> dict[str, Any]:
         """Render `prompt:` and raise the pause signal — never returns.
 

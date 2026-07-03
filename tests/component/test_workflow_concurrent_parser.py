@@ -17,12 +17,15 @@ These fields are SHAPE-ONLY at Step 0; no runtime behavior change.
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 from pydantic import ValidationError
 
 from workflows.parser import MapNodeDef, Workflow, load_workflow
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _write(path: Path, text: str) -> Path:

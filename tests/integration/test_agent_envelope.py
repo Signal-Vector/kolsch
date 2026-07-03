@@ -26,7 +26,7 @@ pins the END-TO-END composition.
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import yaml
@@ -34,6 +34,9 @@ import yaml
 from engine import ExecutionContext, LLMRequest, LLMResponse
 from platform_runtime import bootstrap_runtime
 from schemas import EventType
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Workspace fixture.
@@ -132,9 +135,7 @@ async def test_tc_env_04_plain_text_prompt_renders_unchanged(tmp_path: Path) -> 
 
     runtime = await bootstrap_runtime(root=tmp_path, llm=_stub_llm)
     config = await runtime.build_resolved_config("demo/agents/demo")
-    session = await runtime.store.create_session(
-        str(config.agent_id), name="tc-env-04"
-    )
+    session = await runtime.store.create_session(str(config.agent_id), name="tc-env-04")
     threads = await runtime.store.list_threads(session.session_id)
     ctx = ExecutionContext(
         thread_id=threads[0].thread_id,
@@ -240,9 +241,7 @@ async def test_tc_env_11_template_warning_for_empty_data_reference(
 
     runtime = await bootstrap_runtime(root=tmp_path, llm=_stub_llm)
     config = await runtime.build_resolved_config("demo/agents/demo")
-    session = await runtime.store.create_session(
-        str(config.agent_id), name="tc-env-11"
-    )
+    session = await runtime.store.create_session(str(config.agent_id), name="tc-env-11")
     threads = await runtime.store.list_threads(session.session_id)
     ctx = ExecutionContext(
         thread_id=threads[0].thread_id,
@@ -274,9 +273,7 @@ async def test_tc_env_12_template_warning_for_empty_skills_reference(
 
     runtime = await bootstrap_runtime(root=tmp_path, llm=_stub_llm)
     config = await runtime.build_resolved_config("demo/agents/demo")
-    session = await runtime.store.create_session(
-        str(config.agent_id), name="tc-env-12"
-    )
+    session = await runtime.store.create_session(str(config.agent_id), name="tc-env-12")
     threads = await runtime.store.list_threads(session.session_id)
     ctx = ExecutionContext(
         thread_id=threads[0].thread_id,
@@ -333,9 +330,7 @@ async def test_tc_env_13_template_warning_for_skills_declared_but_not_referenced
 
     runtime = await bootstrap_runtime(root=tmp_path, llm=_stub_llm)
     config = await runtime.build_resolved_config("demo/agents/demo")
-    session = await runtime.store.create_session(
-        str(config.agent_id), name="tc-env-13"
-    )
+    session = await runtime.store.create_session(str(config.agent_id), name="tc-env-13")
     threads = await runtime.store.list_threads(session.session_id)
     ctx = ExecutionContext(
         thread_id=threads[0].thread_id,

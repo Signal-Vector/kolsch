@@ -72,7 +72,6 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 
-
 # ---------------------------------------------------------------------------
 # Test fixture frameworks — minimal Framework implementations that
 # emulate specific failure shapes.
@@ -343,8 +342,7 @@ async def test_tc_eng_classify_02_fatal_cause_chain_typed_surface_no_retry(
     # Hard guard against the wrong retry behavior.
     assert failed.data["error"]["type"] != "model.retry_exhausted"
     assert framework.call_count == 1, (
-        f"auth failures must NOT retry; framework called "
-        f"{framework.call_count} times"
+        f"auth failures must NOT retry; framework called {framework.call_count} times"
     )
 
 
@@ -471,19 +469,19 @@ async def test_tc_eng_classify_05_crewai_framework_wrap_translates_connection_er
     # CrewAI's OpenAI adapter would produce.
     class _BadCrew:
         async def kickoff_async(self) -> Any:
-            raise ConnectionError(
-                "Failed to connect to OpenAI API: Request timed out."
-            )
+            raise ConnectionError("Failed to connect to OpenAI API: Request timed out.")
 
-    with patch("engine.crewai_framework.Crew", return_value=_BadCrew()):
-        with pytest.raises(ModelUpstreamError) as exc_info:
-            await framework.run_exchange(
-                system_prompt="hi",
-                user_message="hi",
-                history=(),
-                llm=_llm_handle,  # type: ignore[arg-type]
-                tools=(),
-            )
+    with (
+        patch("engine.crewai_framework.Crew", return_value=_BadCrew()),
+        pytest.raises(ModelUpstreamError) as exc_info,
+    ):
+        await framework.run_exchange(
+            system_prompt="hi",
+            user_message="hi",
+            history=(),
+            llm=_llm_handle,  # type: ignore[arg-type]
+            tools=(),
+        )
 
     assert exc_info.value.level.name == "RECOVERABLE"
     assert "Failed to connect" in exc_info.value.detail["response"]

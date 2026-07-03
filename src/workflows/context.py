@@ -227,7 +227,7 @@ class NodeContext:
         expression: str,
         *,
         inputs_overlay: Mapping[str, Any] | None = None,
-    ) -> Any:  # noqa: ANN401 — Jinja returns Any-shaped values
+    ) -> Any:
         """Render `expression` via the executor's Jinja environment.
 
         The `user_input` runner uses this to render the node's

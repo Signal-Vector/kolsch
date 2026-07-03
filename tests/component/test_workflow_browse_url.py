@@ -29,7 +29,6 @@ import threading
 import time
 from collections.abc import Callable
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -52,6 +51,7 @@ from workflows.run_store import WorkflowRunStore
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from pathlib import Path
 
 # All tests in this file launch headless Chromium via the browse_url
 # tool, so they cost seconds even on a warm cache.
@@ -202,9 +202,7 @@ def _make_registry(
         # identity is irrelevant.
         bash_defn=browse_url_defn,
         authz=authz,
-        secrets=DotenvSecretsProvider(
-            root=workspace, config={"path": ".env"}
-        ),
+        secrets=DotenvSecretsProvider(root=workspace, config={"path": ".env"}),
         sandbox=NativeSandboxProvider(config={}),
         browse_url_defn=browse_url_defn,
     )
@@ -230,9 +228,7 @@ async def _run_workflow(
 ) -> tuple[WorkflowRunStatus, list[dict[str, Any]]]:
     """Execute ``workflow`` through the real ``IterativeExecutor``."""
     store = WorkflowRunStore(tmp_path)
-    run = store.create(
-        workflow_ref="demo/workflows/x", inputs=inputs or {}
-    )
+    run = store.create(workflow_ref="demo/workflows/x", inputs=inputs or {})
     executor = IterativeExecutor(
         workflow=workflow,
         run=run,
@@ -280,9 +276,7 @@ async def test_browse_url_node_happy_narrows_return_shape(
     runner = BrowseUrlRunner(
         tool_defn=browse_defn,
         authz=_allow_all_authz(),
-        secrets=DotenvSecretsProvider(
-            root=workspace, config={"path": ".env"}
-        ),
+        secrets=DotenvSecretsProvider(root=workspace, config={"path": ".env"}),
         sandbox=NativeSandboxProvider(config={}),
     )
     _ = registry  # constructed for side-effect coverage of register_builtins
@@ -344,15 +338,11 @@ async def test_browse_url_node_jinja_renders_url_from_workflow_inputs(
     workspace = _make_workspace(tmp_path)
     url = _register_happy_page(local_http_server, "/target")
 
-    _, browse_defn = _make_registry(
-        workspace=workspace, authz=_allow_all_authz()
-    )
+    _, browse_defn = _make_registry(workspace=workspace, authz=_allow_all_authz())
     runner = BrowseUrlRunner(
         tool_defn=browse_defn,
         authz=_allow_all_authz(),
-        secrets=DotenvSecretsProvider(
-            root=workspace, config={"path": ".env"}
-        ),
+        secrets=DotenvSecretsProvider(root=workspace, config={"path": ".env"}),
         sandbox=NativeSandboxProvider(config={}),
     )
 
@@ -418,9 +408,7 @@ async def test_browse_url_node_authz_denied_raises_workflow_node_failed(
     runner = BrowseUrlRunner(
         tool_defn=browse_defn,
         authz=deny,
-        secrets=DotenvSecretsProvider(
-            root=workspace, config={"path": ".env"}
-        ),
+        secrets=DotenvSecretsProvider(root=workspace, config={"path": ".env"}),
         sandbox=NativeSandboxProvider(config={}),
     )
 
@@ -452,9 +440,7 @@ async def test_browse_url_node_authz_denied_raises_workflow_node_failed(
 # ---------------------------------------------------------------------------
 
 
-def _register_sleep_forever_route(
-    server: _LocalHttpServer, path: str
-) -> None:
+def _register_sleep_forever_route(server: _LocalHttpServer, path: str) -> None:
     """Route whose handler thread blocks — Playwright's goto never returns."""
 
     def _sleep_handler(handler: BaseHTTPRequestHandler) -> Route:
@@ -481,15 +467,11 @@ async def test_browse_url_node_timeout_propagates_unwrapped(
     workspace = _make_workspace(tmp_path)
     _register_sleep_forever_route(local_http_server, "/sleep")
 
-    _, browse_defn = _make_registry(
-        workspace=workspace, authz=_allow_all_authz()
-    )
+    _, browse_defn = _make_registry(workspace=workspace, authz=_allow_all_authz())
     runner = BrowseUrlRunner(
         tool_defn=browse_defn,
         authz=_allow_all_authz(),
-        secrets=DotenvSecretsProvider(
-            root=workspace, config={"path": ".env"}
-        ),
+        secrets=DotenvSecretsProvider(root=workspace, config={"path": ".env"}),
         sandbox=NativeSandboxProvider(config={}),
     )
 
@@ -539,9 +521,7 @@ async def test_browse_url_node_downstream_binds_content(
     workspace = _make_workspace(tmp_path)
     url = _register_happy_page(local_http_server)
 
-    registry, _ = _make_registry(
-        workspace=workspace, authz=_allow_all_authz()
-    )
+    registry, _ = _make_registry(workspace=workspace, authz=_allow_all_authz())
 
     wf = Workflow.model_validate(
         {

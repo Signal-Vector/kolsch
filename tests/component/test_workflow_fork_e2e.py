@@ -33,11 +33,14 @@ from __future__ import annotations
 
 import json
 import shutil
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from cli.main import main
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Workspace fixture — `kolsch setup --non-interactive` materialises the
@@ -106,9 +109,7 @@ def _events_json(
     return json.loads(out)["data"]["events"]
 
 
-def _find_completed_event_id(
-    events: list[dict], node_name: str
-) -> str:
+def _find_completed_event_id(events: list[dict], node_name: str) -> str:
     for event in events:
         if event["kind"] != "workflow.node.completed":
             continue
@@ -132,9 +133,9 @@ class TestPhaseTest1Events:
         # event id set; the CLI output must contain ALL of them.
         on_disk = [
             json.loads(line)
-            for line in (
-                workspace / "runs" / run_id / "events.jsonl"
-            ).read_text(encoding="utf-8").splitlines()
+            for line in (workspace / "runs" / run_id / "events.jsonl")
+            .read_text(encoding="utf-8")
+            .splitlines()
             if line.strip()
         ]
         assert on_disk, "fork-demo produced no events"
@@ -310,9 +311,7 @@ class TestPhaseTest5SpawnedSessionGuidance:
         # The error message in text mode goes to stderr per
         # ``_emit_error_envelope``. It should mention session / agent
         # so the operator knows where they went wrong.
-        assert (
-            "session" in err.lower() or "agent" in err.lower()
-        ), err
+        assert "session" in err.lower() or "agent" in err.lower(), err
 
 
 # ---------------------------------------------------------------------------
@@ -477,9 +476,7 @@ def _write_inline_subworkflow_bundle(workspace: Path) -> None:
     (bundle / "workflows" / "parent.yaml").write_text(
         dump(parent_yaml), encoding="utf-8"
     )
-    (bundle / "workflows" / "child.yaml").write_text(
-        dump(child_yaml), encoding="utf-8"
-    )
+    (bundle / "workflows" / "child.yaml").write_text(dump(child_yaml), encoding="utf-8")
 
 
 def _count_runs(workspace: Path) -> int:

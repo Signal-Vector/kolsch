@@ -86,9 +86,7 @@ def _strip_agent_bash_prompt(root: Path) -> None:
             and r.get("effect") == "prompt"
         )
     ]
-    helper_path.write_text(
-        yaml.safe_dump(payload, sort_keys=False), encoding="utf-8"
-    )
+    helper_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
 
 def _set_bundle_permissions(root: Path, rules: list[dict[str, str]]) -> None:
@@ -97,9 +95,7 @@ def _set_bundle_permissions(root: Path, rules: list[dict[str, str]]) -> None:
     bundle_path = root / "bundles" / "kolsch" / "bundle.yaml"
     payload = yaml.safe_load(bundle_path.read_text(encoding="utf-8")) or {}
     payload["permissions"] = rules
-    bundle_path.write_text(
-        yaml.safe_dump(payload, sort_keys=False), encoding="utf-8"
-    )
+    bundle_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
 
 def _make_fake_llm_callable(
@@ -168,9 +164,7 @@ async def test_bundle_allow_rule_passes_through_in_non_chat_context(
             TextResponse(text="Done — bundle-allow-rule-01"),
         ],
     )
-    runtime = await bootstrap_runtime(
-        root=root, llm=_make_fake_llm_callable(fake)
-    )
+    runtime = await bootstrap_runtime(root=root, llm=_make_fake_llm_callable(fake))
     config = await runtime.build_resolved_config("kolsch/agents/helper")
     session = await runtime.store.create_session(
         str(config.agent_id), name="permdisc-int-01"
@@ -237,9 +231,7 @@ async def test_bundle_deny_rule_wins_over_platform_allow(
             TextResponse(text="should not be reached"),
         ],
     )
-    runtime = await bootstrap_runtime(
-        root=root, llm=_make_fake_llm_callable(fake)
-    )
+    runtime = await bootstrap_runtime(root=root, llm=_make_fake_llm_callable(fake))
     config = await runtime.build_resolved_config("kolsch/agents/helper")
     session = await runtime.store.create_session(
         str(config.agent_id), name="permdisc-int-02"
@@ -256,7 +248,6 @@ async def test_bundle_deny_rule_wins_over_platform_allow(
 
     tool_failures = [e for e in events if e.type == EventType.TOOL_FAILED]
     assert len(tool_failures) >= 1, (
-        f"expected tool.failed (bundle deny wins); got types "
-        f"{[e.type for e in events]}"
+        f"expected tool.failed (bundle deny wins); got types {[e.type for e in events]}"
     )
     assert tool_failures[0].data["error"]["type"] == "tool.unauthorized"

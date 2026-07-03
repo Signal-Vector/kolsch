@@ -16,12 +16,16 @@ rejection, the "no skills to validate" friendly line, and the
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pytest
 import yaml
 
 from cli import main
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    import pytest
 
 # ---------------------------------------------------------------------------
 # Workspace fixture.
@@ -84,10 +88,14 @@ def _write_skill_md(
     if raw_frontmatter is not None:
         fm_block = raw_frontmatter
     else:
-        fm = frontmatter if frontmatter is not None else {
-            "name": name,
-            "description": "A short description that triggers the skill.",
-        }
+        fm = (
+            frontmatter
+            if frontmatter is not None
+            else {
+                "name": name,
+                "description": "A short description that triggers the skill.",
+            }
+        )
         fm_block = yaml.safe_dump(fm, sort_keys=False)
     skill_md.write_text(f"---\n{fm_block}---\n\n{body}", encoding="utf-8")
     return skill_md

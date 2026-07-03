@@ -9,14 +9,16 @@ list of dicts.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from assets.catalog import AssetCatalog
 from workflows.builtins import FilterRunner
 from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _wf(payload: dict[str, Any]) -> Workflow:
@@ -36,9 +38,7 @@ def _executor(
     inputs: dict[str, Any] | None = None,
 ) -> tuple[IterativeExecutor, WorkflowRunStore, Any]:
     store = WorkflowRunStore(tmp_path)
-    run = store.create(
-        workflow_ref="demo/workflows/filter", inputs=inputs or {}
-    )
+    run = store.create(workflow_ref="demo/workflows/filter", inputs=inputs or {})
     ex = IterativeExecutor(
         workflow=workflow,
         run=run,
@@ -55,9 +55,7 @@ def _executor(
 
 
 class TestFilterDefaultItemAs:
-    async def test_filter_primitives_default_item_as(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_filter_primitives_default_item_as(self, tmp_path: Path) -> None:
         # Per-element binding lands at ``inputs.<item_as>`` — the
         # Phase 3.3 ``inputs.*`` namespace is the single Jinja scope
         # for receiver-side per-iteration bindings (master spec §6.4.1).
@@ -87,9 +85,7 @@ class TestFilterDefaultItemAs:
 
 
 class TestFilterCustomItemAs:
-    async def test_filter_objects_custom_item_as(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_filter_objects_custom_item_as(self, tmp_path: Path) -> None:
         tickets = [
             {"id": 1, "urgent": True},
             {"id": 2, "urgent": False},
@@ -107,9 +103,7 @@ class TestFilterCustomItemAs:
                 }
             }
         )
-        ex, _store, _run = _executor(
-            tmp_path, workflow=wf, inputs={"tickets": tickets}
-        )
+        ex, _store, _run = _executor(tmp_path, workflow=wf, inputs={"tickets": tickets})
         await ex.run()
         captured = ex._captured["urgents"]
         assert captured == {
@@ -126,9 +120,7 @@ class TestFilterCustomItemAs:
 
 
 class TestFilterEdgeCases:
-    async def test_filter_empty_list_returns_empty(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_filter_empty_list_returns_empty(self, tmp_path: Path) -> None:
         wf = _wf(
             {
                 "nodes": {
@@ -140,15 +132,11 @@ class TestFilterEdgeCases:
                 }
             }
         )
-        ex, _store, _run = _executor(
-            tmp_path, workflow=wf, inputs={"empty": []}
-        )
+        ex, _store, _run = _executor(tmp_path, workflow=wf, inputs={"empty": []})
         await ex.run()
         assert ex._captured["f"] == {"result": []}
 
-    async def test_filter_non_list_raises(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_filter_non_list_raises(self, tmp_path: Path) -> None:
         from workflows.run import (
             WorkflowRunStatus,
         )
@@ -172,16 +160,12 @@ class TestFilterEdgeCases:
         status = await ex.run()
         assert status == WorkflowRunStatus.FAILED
         events = list(store.read_events(run.run_id))
-        failed = [
-            e for e in events if e["kind"] == "workflow.node.failed"
-        ]
+        failed = [e for e in events if e["kind"] == "workflow.node.failed"]
         assert len(failed) == 1
         assert failed[0]["payload"]["error_class"] == "TypeError"
         assert events[-1]["kind"] == "workflow.run.failed"
 
-    async def test_filter_item_as_shadows_bound_input(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_filter_item_as_shadows_bound_input(self, tmp_path: Path) -> None:
         # The bind delivers ``item: "fallback"`` to the filter; the
         # per-element overlay MUST win on the same key so the
         # predicate sees the element, not the bound default.
@@ -230,9 +214,7 @@ class TestFilterEdgeCases:
         await ex.run()
         assert ex._captured["f"] == {"result": [7, 10]}
 
-    async def test_filter_predicate_raises_aborts_run(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_filter_predicate_raises_aborts_run(self, tmp_path: Path) -> None:
         # Predicate fails on second element — ``10 / 0`` raises
         # ZeroDivisionError → executor's failure path → run aborts.
         # The first element's truthy result is DISCARDED; no partial

@@ -15,12 +15,16 @@ the one-shot CLI. Three cases per the build prompt:
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pytest
 import yaml
 
 from cli import main
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    import pytest
 
 # ---------------------------------------------------------------------------
 # Workspace fixture — a bundle with two skills + an agent enabling both.

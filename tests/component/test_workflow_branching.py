@@ -107,9 +107,7 @@ def _write_node_module(workspace: Path, ref_name: str, body: str) -> Path:
     return path
 
 
-def _seed_catalog_with_node(
-    workspace: Path, node_name: str
-) -> AssetCatalog:
+def _seed_catalog_with_node(workspace: Path, node_name: str) -> AssetCatalog:
     catalog = AssetCatalog()
     path = workspace / "bundles" / "demo" / "nodes" / f"{node_name}.py"
     entry = AssetEntry(
@@ -204,9 +202,7 @@ class TestComputeBranchValue:
         # Defensive: ``bool`` is a subclass of ``int`` in Python, but
         # the executor MUST NOT route on truthy/falsy ints.
         assert (
-            compute_branch_value(
-                _CatalogStubNodeDef("demo/nodes/x"), {"value": 1}
-            )
+            compute_branch_value(_CatalogStubNodeDef("demo/nodes/x"), {"value": 1})
             is None
         )
 
@@ -217,9 +213,7 @@ class TestComputeBranchValue:
 
 
 class TestBashBranchDispatch:
-    async def test_bash_zero_exit_fires_true_arm(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_bash_zero_exit_fires_true_arm(self, tmp_path: Path) -> None:
         wf = _wf(
             {
                 "nodes": {
@@ -246,9 +240,7 @@ class TestBashBranchDispatch:
                 },
             }
         )
-        bash = BashStubRunner(
-            {"stdout": "ok", "stderr": "", "exit_code": 0}
-        )
+        bash = BashStubRunner({"stdout": "ok", "stderr": "", "exit_code": 0})
         registry = RunnerRegistry()
         registry.register("kolsch/nodes/bash", bash)
         # The registry maps type→runner, so register a single noop
@@ -274,9 +266,7 @@ class TestBashBranchDispatch:
 
         noop = MuxedNoopRunner()
         registry.register("kolsch/nodes/noop", noop)
-        ex, store, run = _make_executor(
-            tmp_path, workflow=wf, registry=registry
-        )
+        ex, store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
         status = await ex.run()
         assert status == WorkflowRunStatus.SUCCEEDED
         # True-arm fired; false-arm was pruned.
@@ -285,15 +275,11 @@ class TestBashBranchDispatch:
 
         events = list(store.read_events(run.run_id))
         # Pruned node emits NO started/completed in Step 1.
-        per_node = [
-            (e["payload"].get("node_name"), e["kind"]) for e in events
-        ]
+        per_node = [(e["payload"].get("node_name"), e["kind"]) for e in events]
         assert ("on_failure", "workflow.node.started") not in per_node
         assert ("on_failure", "workflow.node.completed") not in per_node
 
-    async def test_bash_nonzero_exit_fires_false_arm(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_bash_nonzero_exit_fires_false_arm(self, tmp_path: Path) -> None:
         wf = _wf(
             {
                 "nodes": {
@@ -320,9 +306,7 @@ class TestBashBranchDispatch:
                 },
             }
         )
-        bash = BashStubRunner(
-            {"stdout": "", "stderr": "err", "exit_code": 1}
-        )
+        bash = BashStubRunner({"stdout": "", "stderr": "err", "exit_code": 1})
 
         class MuxedNoopRunner:
             def __init__(self) -> None:
@@ -345,9 +329,7 @@ class TestBashBranchDispatch:
         registry = RunnerRegistry()
         registry.register("kolsch/nodes/bash", bash)
         registry.register("kolsch/nodes/noop", noop)
-        ex, _, _ = _make_executor(
-            tmp_path, workflow=wf, registry=registry
-        )
+        ex, _, _ = _make_executor(tmp_path, workflow=wf, registry=registry)
         status = await ex.run()
         # The non-zero is success-of-the-false-arm; the run completes.
         assert status == WorkflowRunStatus.SUCCEEDED
@@ -371,15 +353,11 @@ class TestBashBranchDispatch:
                 },
             }
         )
-        bash = BashStubRunner(
-            {"stdout": "", "stderr": "fatal", "exit_code": 2}
-        )
+        bash = BashStubRunner({"stdout": "", "stderr": "fatal", "exit_code": 2})
         registry = RunnerRegistry()
         registry.register("kolsch/nodes/bash", bash)
         registry.register("kolsch/nodes/noop", StaticRunner({}))
-        ex, store, run = _make_executor(
-            tmp_path, workflow=wf, registry=registry
-        )
+        ex, store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
         status = await ex.run()
         assert status == WorkflowRunStatus.FAILED
         events = list(store.read_events(run.run_id))
@@ -615,14 +593,10 @@ class TestBranchValuePayload:
         registry = RunnerRegistry()
         registry.register(
             "kolsch/nodes/bash",
-            BashStubRunner(
-                {"stdout": "ok", "stderr": "", "exit_code": 0}
-            ),
+            BashStubRunner({"stdout": "ok", "stderr": "", "exit_code": 0}),
         )
         registry.register("kolsch/nodes/noop", StaticRunner({}))
-        ex, store, run = _make_executor(
-            tmp_path, workflow=wf, registry=registry
-        )
+        ex, store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
         await ex.run()
         events = list(store.read_events(run.run_id))
         completed = next(
@@ -639,9 +613,7 @@ class TestBranchValuePayload:
         wf = _wf({"nodes": {"n": {"type": "kolsch/nodes/noop"}}})
         registry = RunnerRegistry()
         registry.register("kolsch/nodes/noop", StaticRunner({}))
-        ex, store, run = _make_executor(
-            tmp_path, workflow=wf, registry=registry
-        )
+        ex, store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
         await ex.run()
         events = list(store.read_events(run.run_id))
         completed = next(
@@ -659,9 +631,7 @@ class TestBranchValuePayload:
 
 
 class TestInputsModelForAuthoredPython:
-    def test_catalog_runner_introspects_inputs_model(
-        self, tmp_path: Path
-    ) -> None:
+    def test_catalog_runner_introspects_inputs_model(self, tmp_path: Path) -> None:
         _write_node_module(
             tmp_path,
             "echo",
@@ -687,9 +657,7 @@ class TestInputsModelForAuthoredPython:
         # The introspected model retains the declared field.
         assert "message" in model.model_fields
 
-    def test_inputs_model_for_threads_catalog_runner(
-        self, tmp_path: Path
-    ) -> None:
+    def test_inputs_model_for_threads_catalog_runner(self, tmp_path: Path) -> None:
         from workflows._inputs_models import inputs_model_for
 
         _write_node_module(
@@ -725,9 +693,7 @@ class TestInputsModelForAuthoredPython:
 
 
 class TestPrunedEvent:
-    async def test_immediate_terminal_emits_pruned_event(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_immediate_terminal_emits_pruned_event(self, tmp_path: Path) -> None:
         wf = _wf(
             {
                 "nodes": {
@@ -757,19 +723,13 @@ class TestPrunedEvent:
         registry = RunnerRegistry()
         registry.register(
             "kolsch/nodes/bash",
-            BashStubRunner(
-                {"stdout": "", "stderr": "", "exit_code": 0}
-            ),
+            BashStubRunner({"stdout": "", "stderr": "", "exit_code": 0}),
         )
         registry.register("kolsch/nodes/noop", StaticRunner({}))
-        ex, store, run = _make_executor(
-            tmp_path, workflow=wf, registry=registry
-        )
+        ex, store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
         await ex.run()
         events = list(store.read_events(run.run_id))
-        pruned = [
-            e for e in events if e["kind"] == "workflow.node.pruned"
-        ]
+        pruned = [e for e in events if e["kind"] == "workflow.node.pruned"]
         assert len(pruned) == 1
         payload = pruned[0]["payload"]
         assert payload == {
@@ -779,9 +739,7 @@ class TestPrunedEvent:
             "branch_value": True,
         }
         # Pruned target emits no started/completed framing.
-        per_node = [
-            (e["payload"].get("node_name"), e["kind"]) for e in events
-        ]
+        per_node = [(e["payload"].get("node_name"), e["kind"]) for e in events]
         assert ("pruned_target", "workflow.node.started") not in per_node
         assert ("pruned_target", "workflow.node.completed") not in per_node
         # The pruned event chains directly to ``check``'s completion.
@@ -800,9 +758,7 @@ class TestPrunedEvent:
 
 
 class TestCascade:
-    async def test_cascade_marks_descendants_pruned(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_cascade_marks_descendants_pruned(self, tmp_path: Path) -> None:
         """``A → B → C``; A branches false; edge A→B is ``branch:
         true`` (pruned). C is downstream of B only, so the cascade
         marks both B and C pruned and emits two
@@ -828,36 +784,26 @@ class TestCascade:
         registry = RunnerRegistry()
         registry.register(
             "kolsch/nodes/bash",
-            BashStubRunner(
-                {"stdout": "", "stderr": "", "exit_code": 1}
-            ),
+            BashStubRunner({"stdout": "", "stderr": "", "exit_code": 1}),
         )
         recorder = StaticRunner({})
         registry.register("kolsch/nodes/noop", recorder)
-        ex, store, run = _make_executor(
-            tmp_path, workflow=wf, registry=registry
-        )
+        ex, store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
         status = await ex.run()
         assert status == WorkflowRunStatus.SUCCEEDED
         # Neither downstream fired.
         assert recorder.calls == 0
         events = list(store.read_events(run.run_id))
-        pruned = [
-            e for e in events if e["kind"] == "workflow.node.pruned"
-        ]
+        pruned = [e for e in events if e["kind"] == "workflow.node.pruned"]
         # Both descendants pruned with the same upstream source.
         names = {p["payload"]["node_name"] for p in pruned}
         assert names == {"b", "c"}
         sources = {p["payload"]["upstream_source"] for p in pruned}
         assert sources == {"a"}
         # branch_value=False on every pruned event.
-        assert all(
-            p["payload"]["branch_value"] is False for p in pruned
-        )
+        assert all(p["payload"]["branch_value"] is False for p in pruned)
 
-    async def test_partial_fan_in_does_not_prune_receiver(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_partial_fan_in_does_not_prune_receiver(self, tmp_path: Path) -> None:
         """``A → R, B → R``. A branches in a way that prunes A→R;
         B fires normally. R is NOT pruned; it fires with B's binds
         only — A's pruned bind is absent from ``inputs.*``."""
@@ -895,9 +841,7 @@ class TestCascade:
         registry = RunnerRegistry()
         registry.register(
             "kolsch/nodes/bash",
-            BashStubRunner(
-                {"stdout": "ok", "stderr": "", "exit_code": 0}
-            ),
+            BashStubRunner({"stdout": "ok", "stderr": "", "exit_code": 0}),
         )
         registry.register("kolsch/nodes/noop", StaticRunner({}))
         # Use a capturing runner so we can read R's bound_inputs.
@@ -918,9 +862,7 @@ class TestCascade:
                 return {}
 
         registry.register("kolsch/nodes/agent", CapturingAgent())
-        ex, store, run = _make_executor(
-            tmp_path, workflow=wf, registry=registry
-        )
+        ex, store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
         status = await ex.run()
         assert status == WorkflowRunStatus.SUCCEEDED
         # R fired with B's binds only (pruned A→R is skipped).
@@ -941,9 +883,7 @@ class TestCascade:
 
 
 class TestPrunedTerminalOutputs:
-    async def test_pruned_terminal_carries_none(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_pruned_terminal_carries_none(self, tmp_path: Path) -> None:
         wf = _wf(
             {
                 "nodes": {
@@ -973,21 +913,13 @@ class TestPrunedTerminalOutputs:
         registry = RunnerRegistry()
         registry.register(
             "kolsch/nodes/bash",
-            BashStubRunner(
-                {"stdout": "", "stderr": "", "exit_code": 0}
-            ),
+            BashStubRunner({"stdout": "", "stderr": "", "exit_code": 0}),
         )
-        registry.register(
-            "kolsch/nodes/noop", StaticRunner({"done": True})
-        )
-        ex, store, run = _make_executor(
-            tmp_path, workflow=wf, registry=registry
-        )
+        registry.register("kolsch/nodes/noop", StaticRunner({"done": True}))
+        ex, store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
         await ex.run()
         events = list(store.read_events(run.run_id))
-        run_completed = next(
-            e for e in events if e["kind"] == "workflow.run.completed"
-        )
+        run_completed = next(e for e in events if e["kind"] == "workflow.run.completed")
         outputs = run_completed["payload"]["outputs"]
         assert outputs["left_terminal"] == {"done": True}
         assert outputs["right_terminal"] is None
@@ -999,9 +931,7 @@ class TestPrunedTerminalOutputs:
 
 
 class TestWhenSkipCascade:
-    async def test_when_false_cascades_to_downstream(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_when_false_cascades_to_downstream(self, tmp_path: Path) -> None:
         """``s`` has ``when: false``; downstream ``d`` has only ``s``
         as predecessor. Phase 3.3 Step 2 unifies the when-skip cascade
         with branch-not-taken cascade — d is structurally pruned and
@@ -1024,23 +954,17 @@ class TestWhenSkipCascade:
         recorder = StaticRunner({})
         registry = RunnerRegistry()
         registry.register("kolsch/nodes/noop", recorder)
-        ex, store, run = _make_executor(
-            tmp_path, workflow=wf, registry=registry
-        )
+        ex, store, run = _make_executor(tmp_path, workflow=wf, registry=registry)
         status = await ex.run()
         assert status == WorkflowRunStatus.SUCCEEDED
         # Neither node fired.
         assert recorder.calls == 0
         events = list(store.read_events(run.run_id))
-        per_node = [
-            (e["payload"].get("node_name"), e["kind"]) for e in events
-        ]
+        per_node = [(e["payload"].get("node_name"), e["kind"]) for e in events]
         assert ("s", "workflow.node.started") not in per_node
         assert ("d", "workflow.node.started") not in per_node
         # No pruned event for when-skip cascade (no parent completion).
-        assert "workflow.node.pruned" not in [
-            e["kind"] for e in events
-        ]
+        assert "workflow.node.pruned" not in [e["kind"] for e in events]
 
     async def test_partial_when_skip_fan_in_still_fires_receiver(
         self, tmp_path: Path
@@ -1168,9 +1092,7 @@ class TestPartialFanInMissingRequired:
                             "from": "branch_src",
                             "to": "receiver",
                             "branch": False,
-                            "binds": {
-                                "required": "{{ inputs.greeting }}"
-                            },
+                            "binds": {"required": "{{ inputs.greeting }}"},
                         },
                         {
                             "from": "decoy",
@@ -1183,9 +1105,7 @@ class TestPartialFanInMissingRequired:
         registry = RunnerRegistry()
         registry.register(
             "kolsch/nodes/bash",
-            BashStubRunner(
-                {"stdout": "", "stderr": "", "exit_code": 0}
-            ),
+            BashStubRunner({"stdout": "", "stderr": "", "exit_code": 0}),
         )
         registry.register("kolsch/nodes/agent", StaticRunner({}))
         registry.set_catalog_runner(CatalogNodeRunner(catalog=catalog))

@@ -78,7 +78,7 @@ __all__ = [
 ]
 
 
-def register_builtins(  # noqa: PLR0913 — wide-by-design wiring surface; see docstring
+def register_builtins(
     registry: RunnerRegistry,
     *,
     bash_defn: ToolDefinition,
@@ -88,17 +88,13 @@ def register_builtins(  # noqa: PLR0913 — wide-by-design wiring surface; see d
     catalog: AssetCatalog | None = None,
     engine: AgentEngine | None = None,
     session_store: SessionStore | None = None,
-    config_builder: (
-        Callable[[str], Awaitable[ResolvedAgentConfig]] | None
-    ) = None,
+    config_builder: (Callable[[str], Awaitable[ResolvedAgentConfig]] | None) = None,
     read_file_defn: ToolDefinition | None = None,
     write_file_defn: ToolDefinition | None = None,
     list_files_defn: ToolDefinition | None = None,
     browse_url_defn: ToolDefinition | None = None,
     workflow_store: WorkflowRunStore | None = None,
-    executor_factory: (
-        Callable[..., IterativeExecutor] | None
-    ) = None,
+    executor_factory: (Callable[..., IterativeExecutor] | None) = None,
 ) -> None:
     """Install the built-in runners against `registry`.
 

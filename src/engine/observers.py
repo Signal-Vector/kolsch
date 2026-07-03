@@ -238,9 +238,7 @@ class _ObservedToolHandle:
             # matched rule's `what` + the in-flight args. The model
             # and the chat renderer both see this hint; the user
             # types it to un-block.
-            recovery_hint = _derive_authz_recovery_hint(
-                exc, arguments=call.arguments
-            )
+            recovery_hint = _derive_authz_recovery_hint(exc, arguments=call.arguments)
             await self._emit(
                 type_=EventType.TOOL_FAILED,
                 data=ToolFailedData(
@@ -342,10 +340,7 @@ def _derive_authz_recovery_hint(
     # — we suppress the hint so we never tell the user to type
     # `/perm allow bash` (which would fail validation).
     what = matched_rule.get("what") if isinstance(matched_rule, dict) else None
-    if isinstance(what, str) and "/" in what:
-        tool_ref = what
-    else:
-        tool_ref = None
+    tool_ref = what if isinstance(what, str) and "/" in what else None
 
     if tool_ref is None:
         return None

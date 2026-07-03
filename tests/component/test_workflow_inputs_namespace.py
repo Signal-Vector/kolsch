@@ -20,13 +20,15 @@ config-string rendering picks up the overlay.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from assets.catalog import AssetCatalog
 from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class CapturingRunner:
@@ -121,10 +123,7 @@ class TestInputsOverlayScope:
             inputs={"greeting": "hi"},
         )
         ex._state = dict(ex._run.inputs)
-        assert (
-            ex._render_jinja("{{ inputs.greeting }}!")
-            == "hi!"
-        )
+        assert ex._render_jinja("{{ inputs.greeting }}!") == "hi!"
 
 
 class TestBoundInputsExposeOverlay:
@@ -177,9 +176,7 @@ class TestBoundInputsExposeOverlay:
         )
         await ex.run()
         # The agent receiver saw the rendered bind dict.
-        assert agent_capture.calls == [
-            {"greeting": "howdy", "literal": 5}
-        ]
+        assert agent_capture.calls == [{"greeting": "howdy", "literal": 5}]
 
 
 class TestBashCommandReadsOverlay:
@@ -211,18 +208,14 @@ class TestBashCommandReadsOverlay:
 
                 scope = {
                     "inputs": {
-                        **dict(
-                            getattr(ctx, "workflow_inputs", {}) or {}
-                        ),
+                        **dict(getattr(ctx, "workflow_inputs", {}) or {}),
                         **dict(bound_inputs),
                     },
                     "state": dict(state),
                 }
                 command = node_def.command
                 if "{{" in command:
-                    command = (
-                        JINJA_ENV.from_string(command).render(**scope)
-                    )
+                    command = JINJA_ENV.from_string(command).render(**scope)
                 captured_commands.append(command)
                 return {"stdout": command, "stderr": "", "exit_code": 0}
 
@@ -287,18 +280,14 @@ class TestBashCommandReadsOverlay:
 
                 scope = {
                     "inputs": {
-                        **dict(
-                            getattr(ctx, "workflow_inputs", {}) or {}
-                        ),
+                        **dict(getattr(ctx, "workflow_inputs", {}) or {}),
                         **dict(bound_inputs),
                     },
                     "state": dict(state),
                 }
                 command = node_def.command
                 if "{{" in command:
-                    command = (
-                        JINJA_ENV.from_string(command).render(**scope)
-                    )
+                    command = JINJA_ENV.from_string(command).render(**scope)
                 captured_commands.append(command)
                 return {"stdout": command, "stderr": "", "exit_code": 0}
 
@@ -357,18 +346,14 @@ class TestBashCommandReadsOverlay:
 
                 scope = {
                     "inputs": {
-                        **dict(
-                            getattr(ctx, "workflow_inputs", {}) or {}
-                        ),
+                        **dict(getattr(ctx, "workflow_inputs", {}) or {}),
                         **dict(bound_inputs),
                     },
                     "state": dict(state),
                 }
                 command = node_def.command
                 if "{{" in command:
-                    command = (
-                        JINJA_ENV.from_string(command).render(**scope)
-                    )
+                    command = JINJA_ENV.from_string(command).render(**scope)
                 captured_commands.append(command)
                 return {"stdout": command, "stderr": "", "exit_code": 0}
 

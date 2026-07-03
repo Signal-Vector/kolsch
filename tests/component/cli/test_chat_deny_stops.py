@@ -214,7 +214,9 @@ async def test_tc_chat_deny_02_always_deny_flips_cancel_and_returns_rule() -> No
 # ===========================================================================
 
 
-async def test_tc_chat_deny_03_modal_short_circuits_when_cancel_already_flipped() -> None:
+async def test_tc_chat_deny_03_modal_short_circuits_when_cancel_already_flipped() -> (
+    None
+):
     """TC-CHAT-DENY-03: When the modal is invoked AFTER active_cancel
     was already cancelled, it returns DENY immediately without
     calling input_fn.

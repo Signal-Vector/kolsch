@@ -183,9 +183,7 @@ async def validate_workflow(
         assert yaml_path is not None  # noqa: S101 — narrow for type-checker
         # Enforce the workspace's path policy on direct paths so the
         # agent can't read arbitrary disk locations via this tool.
-        check_path_allowed(
-            yaml_path, policy=ctx.path_policy, root=ctx.workspace_root
-        )
+        check_path_allowed(yaml_path, policy=ctx.path_policy, root=ctx.workspace_root)
         path = _resolve(yaml_path, ctx.workspace_root)
 
     try:
@@ -199,12 +197,9 @@ async def validate_workflow(
     result = engine_validate_workflow(workflow, catalog, file=str(path))
     return _output(
         is_valid=result.is_valid,
-        errors=[
-            _finding_from(err, default_file=str(path)) for err in result.errors
-        ],
+        errors=[_finding_from(err, default_file=str(path)) for err in result.errors],
         warnings=[
-            _finding_from(warn, default_file=str(path))
-            for warn in result.warnings
+            _finding_from(warn, default_file=str(path)) for warn in result.warnings
         ],
     )
 
@@ -252,7 +247,7 @@ def _finding_from(
     )
 
 
-def _jsonable(value: Any) -> Any:  # noqa: ANN401 — heterogeneous attr values
+def _jsonable(value: Any) -> Any:
     """Coerce identifying-name values into JSON-serialisable shapes.
 
     Tuples become lists (the validator uses tuples for cycle paths

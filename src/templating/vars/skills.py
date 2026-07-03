@@ -85,9 +85,7 @@ class SkillsVar:
 
     def __init__(self, items: list[SkillItem]) -> None:
         self._items: list[SkillItem] = list(items)
-        self._by_name: dict[str, SkillItem] = {
-            item.name: item for item in self._items
-        }
+        self._by_name: dict[str, SkillItem] = {item.name: item for item in self._items}
 
     # ---- Standardised method family --------------------------------------
 
@@ -108,9 +106,7 @@ class SkillsVar:
 
     def summary(self) -> str:
         """Render one line per skill: `<name>: <description>`."""
-        return "\n".join(
-            f"{item.name}: {item.description}" for item in self._items
-        )
+        return "\n".join(f"{item.name}: {item.description}" for item in self._items)
 
     def names(self) -> str:
         """Comma-separated skill names — the minimal context form."""

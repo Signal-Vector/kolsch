@@ -68,7 +68,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import yaml
@@ -76,7 +76,6 @@ import yaml
 from assets import AssetManagement
 from errors import PlatformError
 from kernel.findings import ValidationResult
-from schemas import ResolvedAgentConfig
 from templating import render_prompt
 from templating.inheritance import (
     prompt_uses_extends_directive,
@@ -97,9 +96,12 @@ from templating.vars._platform import (
     PlatformVar,
     ProvidersVar,
 )
-from templating.vars.docs import DocItem
 from templating.vars.tools import ToolItem
 from tests.integration._extends_corpus_cases import CASES, FixtureCase
+
+if TYPE_CHECKING:
+    from schemas import ResolvedAgentConfig
+    from templating.vars.docs import DocItem
 
 pytestmark = pytest.mark.asyncio
 
@@ -128,9 +130,7 @@ def _write_platform_yaml(root: Path) -> None:
         },
         "file_access": {"allowed_paths": [], "denied_paths": []},
     }
-    (root / "platform.yaml").write_text(
-        yaml.safe_dump(payload), encoding="utf-8"
-    )
+    (root / "platform.yaml").write_text(yaml.safe_dump(payload), encoding="utf-8")
 
 
 def _write_bundle_manifest(root: Path) -> None:
@@ -325,7 +325,7 @@ async def _run_case(case: FixtureCase, tmp_path: Path) -> None:
     # build_resolved_config — captures F*/D2/H2 errors at the
     # asset-manager layer.
     if case.expected_outcome == "error_at_load":
-        with pytest.raises(PlatformError) as excinfo:
+        with pytest.raises(PlatformError) as excinfo:  # noqa: PT012 — comment inline explains why the block spans both build + render
             cfg = await am.build_resolved_config(
                 case.target_agent_ref,
                 subsystem_validators=_CORPUS_SUBSYSTEM_VALIDATORS,
@@ -334,9 +334,7 @@ async def _run_case(case: FixtureCase, tmp_path: Path) -> None:
             # not build_resolved_config — keep the dispatch in the
             # `try` so an error_at_load case that reaches render
             # still surfaces.
-            ctx = _build_render_context(
-                cfg, tmp_path, case_id=case.case_id
-            )
+            ctx = _build_render_context(cfg, tmp_path, case_id=case.case_id)
             _dispatch_render(cfg, ctx, tmp_path, am.catalog())
         assert excinfo.value.code == case.expected_error_code, (
             f"{case.case_id}: expected {case.expected_error_code}, "
@@ -374,9 +372,7 @@ async def _run_case(case: FixtureCase, tmp_path: Path) -> None:
 
     # Render-side assertions.
     if case.expected_outcome == "loads_with_render":
-        context = _build_render_context(
-            cfg, tmp_path, case_id=case.case_id
-        )
+        context = _build_render_context(cfg, tmp_path, case_id=case.case_id)
         rendered = _dispatch_render(cfg, context, tmp_path, am.catalog())
         for needle in case.expected_render_contains:
             assert needle in rendered, (
@@ -400,8 +396,6 @@ async def _run_case(case: FixtureCase, tmp_path: Path) -> None:
     CASES,
     ids=lambda c: c.case_id,
 )
-async def test_ext_corpus_case(
-    case: FixtureCase, tmp_path: Path
-) -> None:
+async def test_ext_corpus_case(case: FixtureCase, tmp_path: Path) -> None:
     """Walk Part 4's table; one parametrize per case."""
     await _run_case(case, tmp_path)

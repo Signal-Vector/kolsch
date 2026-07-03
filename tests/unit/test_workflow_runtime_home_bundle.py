@@ -18,7 +18,7 @@ plumbing cannot silently drop the stamp again.
 
 from __future__ import annotations
 
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -31,6 +31,9 @@ from tools.builtins import (
     make_write_file,
 )
 from tools.decorator import get_tool_definition
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @pytest.fixture

@@ -105,9 +105,7 @@ class MapRunner:
         # YAML literals (already a list) flow through unchanged.
         over_raw = node_def.over
         if _is_jinja_marked(over_raw):
-            rendered_over = ctx.render_jinja(
-                over_raw, inputs_overlay=bound_inputs
-            )
+            rendered_over = ctx.render_jinja(over_raw, inputs_overlay=bound_inputs)
         else:
             rendered_over = over_raw
         if not isinstance(rendered_over, list):
@@ -201,7 +199,7 @@ class MapRunner:
             )
         return {"results": results}
 
-    async def _run_sequential(  # noqa: PLR0913 — passes through the run() context
+    async def _run_sequential(
         self,
         *,
         node_def: MapNodeDef,
@@ -240,7 +238,7 @@ class MapRunner:
             results.append(captured)
         return results
 
-    async def _run_parallel(  # noqa: PLR0913 — concurrent algorithm
+    async def _run_parallel(
         self,
         *,
         node_def: MapNodeDef,
@@ -337,9 +335,9 @@ class MapRunner:
                     # Drain the cancelled tasks so their per-iter
                     # arms get to fire before we re-raise.
                     for task in list(outstanding.keys()):
-                        try:
+                        try:  # noqa: SIM105 — drain reads clearer than contextlib.suppress here
                             await task
-                        except BaseException:  # noqa: BLE001 — drain
+                        except BaseException:  # noqa: BLE001, S110 — drain only
                             pass
                         outstanding.pop(task, None)
                     break
@@ -350,9 +348,9 @@ class MapRunner:
                 if not task.done():
                     task.cancel()
             for task in list(outstanding.keys()):
-                try:
+                try:  # noqa: SIM105 — drain reads clearer than contextlib.suppress here
                     await task
-                except BaseException:  # noqa: BLE001 — drain
+                except BaseException:  # noqa: BLE001, S110 — drain only
                     pass
                 outstanding.pop(task, None)
 
@@ -365,7 +363,7 @@ class MapRunner:
         # Flatten in index order — the documented contract.
         return [results[i] for i in range(total)]
 
-    async def _run_one_iteration(  # noqa: PLR0913 — shared per-iteration helper
+    async def _run_one_iteration(
         self,
         *,
         node_def: MapNodeDef,
@@ -525,7 +523,7 @@ class MapRunner:
     def _validate_iteration_overlay_strict(
         *,
         worker_name: str,
-        worker_def: Any,  # noqa: ANN401 — NodeDefUnion is a Pydantic alias
+        worker_def: Any,
         iteration_overlay: dict[str, Any],
     ) -> None:
         """Validate the iteration overlay against the worker's input model.
@@ -543,9 +541,7 @@ class MapRunner:
         if worker_inputs_model is None:
             return
         try:
-            worker_inputs_model.model_validate(
-                iteration_overlay, strict=True
-            )
+            worker_inputs_model.model_validate(iteration_overlay, strict=True)
         except ValidationError as exc:
             errors = exc.errors()
             first = errors[0] if errors else {"loc": (), "type": "unknown"}

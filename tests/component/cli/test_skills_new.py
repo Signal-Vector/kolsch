@@ -20,14 +20,18 @@ proxy for "the next ``kolsch ...`` invocation will see it".
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
+from typing import TYPE_CHECKING
 
-import pytest
 import yaml
 
 from assets import AssetManagement
 from assets.skill_metadata import parse_skill_frontmatter
 from cli import main
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    import pytest
 
 # ---------------------------------------------------------------------------
 # Workspace fixture — platform.yaml + a kolsch bundle (the default).
@@ -101,7 +105,9 @@ def test_skills_new_creates_skeleton_and_ref_resolves_on_rescan(
     exit_code = main(["--root", str(tmp_path), "skills", "new", "literature-review"])
     assert exit_code == 0
 
-    skill_md = tmp_path / "bundles" / "kolsch" / "skills" / "literature-review" / "SKILL.md"
+    skill_md = (
+        tmp_path / "bundles" / "kolsch" / "skills" / "literature-review" / "SKILL.md"
+    )
     assert skill_md.is_file()
 
     # Frontmatter parses via the SAME parser the catalog uses, so a
@@ -163,12 +169,7 @@ def test_skills_new_description_flag_lands_in_frontmatter(
     assert exit_code == 0
 
     fm = parse_skill_frontmatter(
-        tmp_path
-        / "bundles"
-        / "kolsch"
-        / "skills"
-        / "literature-review"
-        / "SKILL.md"
+        tmp_path / "bundles" / "kolsch" / "skills" / "literature-review" / "SKILL.md"
     )
     assert fm["description"] == custom
 

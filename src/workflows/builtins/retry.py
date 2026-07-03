@@ -69,10 +69,10 @@ def with_retry(
             self,
             *,
             node_name: str,
-            node_def: Any,  # noqa: ANN401
+            node_def: Any,
             bound_inputs: dict[str, Any],
             state: dict[str, Any],
-            ctx: Any,  # noqa: ANN401
+            ctx: Any,
         ) -> dict[str, Any]:
             last_exc: BaseException | None = None
             for attempt in range(total_attempts):

@@ -48,6 +48,7 @@ from workflows.run_store import WorkflowRunStore
 # Canonicaliser
 # ---------------------------------------------------------------------------
 
+
 def canonicalize_jsonl(text: str) -> str:
     """Thin shim — delegates to the shared
     :func:`tests.golden._helpers.canonicalize_text`. Kept as a named
@@ -282,6 +283,7 @@ def _build_branching_bash(
         }
     )
     registry = RunnerRegistry()
+
     # ``check`` exits non-zero; ``on_success`` / ``on_failure`` use a
     # success-exit stub. The registry maps type→runner, so a single
     # bash runner can't differentiate by node name. We use the typed
@@ -304,9 +306,7 @@ def _build_branching_bash(
             _ = (node_def, bound_inputs, state, ctx)
             captured = dict(self._by_node[node_name])
             if captured.get("exit_code", 0) != 0:
-                raise BashNonZeroExit(
-                    node=node_name, captured=captured
-                )
+                raise BashNonZeroExit(node=node_name, captured=captured)
             return captured
 
     registry.register(
@@ -404,9 +404,7 @@ def _build_branching_python(
     registry = RunnerRegistry()
     registry.register(
         "demo/nodes/classify",
-        _StaticRunner(
-            {"value": True, "category": "urgent", "score": 0.95}
-        ),
+        _StaticRunner({"value": True, "category": "urgent", "score": 0.95}),
     )
     registry.register("kolsch/nodes/noop", _StaticRunner({}))
     from assets.catalog import AssetEntry
@@ -461,9 +459,7 @@ def _build_user_input_single_pause(
     from workflows.builtins.user_input import UserInputRunner
 
     registry = RunnerRegistry()
-    registry.register(
-        "kolsch/nodes/user_input", UserInputRunner()
-    )
+    registry.register("kolsch/nodes/user_input", UserInputRunner())
     # ``demo/nodes/echo`` mirrors the catalog-runner's BaseModel-
     # returning shape — see :func:`_build_authored_python_basemodel`.
     registry.register(
@@ -484,10 +480,14 @@ def _build_user_input_single_pause(
         }
     )
     _ = tmp_path
-    return workflow, registry, {
-        "catalog": catalog,
-        "resume_responses": [{"response": "world"}],
-    }
+    return (
+        workflow,
+        registry,
+        {
+            "catalog": catalog,
+            "resume_responses": [{"response": "world"}],
+        },
+    )
 
 
 def _build_user_input_sequential_pauses(
@@ -529,8 +529,7 @@ def _build_user_input_sequential_pauses(
                         "to": "done",
                         "binds": {
                             "message": (
-                                "{{ nodes.ask1.response }}+"
-                                "{{ nodes.ask2.response }}"
+                                "{{ nodes.ask1.response }}+{{ nodes.ask2.response }}"
                             ),
                         },
                     },
@@ -541,9 +540,7 @@ def _build_user_input_sequential_pauses(
     from workflows.builtins.user_input import UserInputRunner
 
     registry = RunnerRegistry()
-    registry.register(
-        "kolsch/nodes/user_input", UserInputRunner()
-    )
+    registry.register("kolsch/nodes/user_input", UserInputRunner())
 
     # Per-node-name echo runner so ``between`` and ``done`` surface
     # distinct captured payloads in the golden.
@@ -586,13 +583,17 @@ def _build_user_input_sequential_pauses(
         }
     )
     _ = tmp_path
-    return workflow, registry, {
-        "catalog": catalog,
-        "resume_responses": [
-            {"response": "alpha"},
-            {"response": "beta"},
-        ],
-    }
+    return (
+        workflow,
+        registry,
+        {
+            "catalog": catalog,
+            "resume_responses": [
+                {"response": "alpha"},
+                {"response": "beta"},
+            ],
+        },
+    )
 
 
 def _build_user_input_rejected_resume(
@@ -618,19 +619,21 @@ def _build_user_input_rejected_resume(
     from workflows.builtins.user_input import UserInputRunner
 
     registry = RunnerRegistry()
-    registry.register(
-        "kolsch/nodes/user_input", UserInputRunner()
-    )
+    registry.register("kolsch/nodes/user_input", UserInputRunner())
     _ = tmp_path
-    return workflow, registry, {
-        # Bad resume — ``WorkflowInputInvalid`` is raised; the
-        # harness asserts the JSONL is unchanged afterward.
-        "resume_responses": [{"wrong_key": "x"}],
-        "expect_resume_exception": "WorkflowInputInvalid",
-        # The run stays paused — terminal status is
-        # ``waiting_for_input``.
-        "final_status_override": "waiting_for_input",
-    }
+    return (
+        workflow,
+        registry,
+        {
+            # Bad resume — ``WorkflowInputInvalid`` is raised; the
+            # harness asserts the JSONL is unchanged afterward.
+            "resume_responses": [{"wrong_key": "x"}],
+            "expect_resume_exception": "WorkflowInputInvalid",
+            # The run stays paused — terminal status is
+            # ``waiting_for_input``.
+            "final_status_override": "waiting_for_input",
+        },
+    )
 
 
 def _build_state_evolves(
@@ -763,20 +766,12 @@ def _build_file_roundtrip(
     registry = RunnerRegistry()
     register_builtins(
         registry,
-        bash_defn=get_tool_definition(
-            make_bash(policy=policy, root=tmp_path)
-        ),
+        bash_defn=get_tool_definition(make_bash(policy=policy, root=tmp_path)),
         authz=RuleBasedAuthorizationProvider(
-            config={
-                "rules": [
-                    {"who": ".*", "what": ".*", "effect": "allow"}
-                ]
-            },
+            config={"rules": [{"who": ".*", "what": ".*", "effect": "allow"}]},
             catalog=catalog,
         ),
-        secrets=DotenvSecretsProvider(
-            root=tmp_path, config={"path": ".env"}
-        ),
+        secrets=DotenvSecretsProvider(root=tmp_path, config={"path": ".env"}),
         sandbox=NativeSandboxProvider(config={}),
         catalog=catalog,
         read_file_defn=get_tool_definition(
@@ -831,20 +826,12 @@ def _build_file_access_denied(
     registry = RunnerRegistry()
     register_builtins(
         registry,
-        bash_defn=get_tool_definition(
-            make_bash(policy=policy, root=tmp_path)
-        ),
+        bash_defn=get_tool_definition(make_bash(policy=policy, root=tmp_path)),
         authz=RuleBasedAuthorizationProvider(
-            config={
-                "rules": [
-                    {"who": ".*", "what": ".*", "effect": "allow"}
-                ]
-            },
+            config={"rules": [{"who": ".*", "what": ".*", "effect": "allow"}]},
             catalog=catalog,
         ),
-        secrets=DotenvSecretsProvider(
-            root=tmp_path, config={"path": ".env"}
-        ),
+        secrets=DotenvSecretsProvider(root=tmp_path, config={"path": ".env"}),
         sandbox=NativeSandboxProvider(config={}),
         catalog=catalog,
         read_file_defn=get_tool_definition(
@@ -1060,10 +1047,14 @@ def _build_state_resume(
         }
     )
     _ = tmp_path
-    return workflow, registry, {
-        "catalog": catalog,
-        "resume_responses": [{"response": "ok"}],
-    }
+    return (
+        workflow,
+        registry,
+        {
+            "catalog": catalog,
+            "resume_responses": [{"response": "ok"}],
+        },
+    )
 
 
 def _build_branching_multi_input(
@@ -1113,9 +1104,7 @@ def _build_branching_multi_input(
     registry = RunnerRegistry()
     registry.register(
         "kolsch/nodes/bash",
-        _BashStubRunner(
-            {"stdout": "", "stderr": "", "exit_code": 0}
-        ),
+        _BashStubRunner({"stdout": "", "stderr": "", "exit_code": 0}),
     )
     registry.register("kolsch/nodes/noop", _StaticRunner({}))
     registry.register("kolsch/nodes/agent", _StaticRunner({}))
@@ -1144,9 +1133,7 @@ def _ext_compose_write_workflow(path: Path, content: str) -> None:
     path.write_text(_tw.dedent(content).lstrip(), encoding="utf-8")
 
 
-def _ext_compose_catalog(
-    *, tmp_path: Path, refs: dict[str, str]
-) -> AssetCatalog:
+def _ext_compose_catalog(*, tmp_path: Path, refs: dict[str, str]) -> AssetCatalog:
     """Build an AssetCatalog pointing at the on-disk workflow YAMLs
     declared in ``refs`` (``{ref: yaml_contents}``)."""
     from assets.catalog import AssetCatalog, AssetEntry
@@ -1154,9 +1141,7 @@ def _ext_compose_catalog(
     assets: dict[str, AssetEntry] = {}
     for ref, content in refs.items():
         bundle, _kind, name = ref.split("/")
-        path = (
-            tmp_path / "bundles" / bundle / "workflows" / f"{name}.yaml"
-        )
+        path = tmp_path / "bundles" / bundle / "workflows" / f"{name}.yaml"
         _ext_compose_write_workflow(path, content)
         assets[ref] = AssetEntry(
             ref=ref,
@@ -1364,14 +1349,12 @@ def _build_composition_depth_exceeded(
     for i in range(depth + 1):
         ref = f"demo/workflows/w{i}"
         if i < depth:
-            content = (
-                f"""
+            content = f"""
                 nodes:
                   next:
                     type: kolsch/nodes/workflow
                     ref: demo/workflows/w{i + 1}
                 """
-            )
         else:
             content = """
             nodes:
@@ -1413,9 +1396,7 @@ def _build_composition_depth_exceeded(
 _FIXTURES: tuple[
     tuple[
         str,
-        Callable[
-            [Path], tuple[Workflow, RunnerRegistry, dict[str, Any]]
-        ],
+        Callable[[Path], tuple[Workflow, RunnerRegistry, dict[str, Any]]],
         str,
     ],
     ...,
@@ -1475,9 +1456,7 @@ _GOLDEN_DIR = Path(__file__).parent / "runs"
 )
 async def test_workflow_run_matches_golden(
     fixture_name: str,
-    builder: Callable[
-        [Path], tuple[Workflow, RunnerRegistry, dict[str, Any]]
-    ],
+    builder: Callable[[Path], tuple[Workflow, RunnerRegistry, dict[str, Any]]],
     expected_status: str,
     tmp_path: Path,
 ) -> None:
@@ -1514,9 +1493,7 @@ async def test_workflow_run_matches_golden(
     status = await ex.run()
     assert status.value == expected_status
 
-    actual_raw = store.directory(run.run_id).events_path.read_text(
-        encoding="utf-8"
-    )
+    actual_raw = store.directory(run.run_id).events_path.read_text(encoding="utf-8")
     actual = canonicalize_jsonl(actual_raw)
 
     golden_path = _GOLDEN_DIR / f"{fixture_name}.jsonl"
@@ -1543,9 +1520,7 @@ async def test_workflow_run_matches_golden(
 _PAUSE_RESUME_FIXTURES: tuple[
     tuple[
         str,
-        Callable[
-            [Path], tuple[Workflow, RunnerRegistry, dict[str, Any]]
-        ],
+        Callable[[Path], tuple[Workflow, RunnerRegistry, dict[str, Any]]],
         str,
     ],
     ...,
@@ -1578,9 +1553,7 @@ _PAUSE_RESUME_FIXTURES: tuple[
 )
 async def test_workflow_pause_resume_matches_golden(
     fixture_name: str,
-    builder: Callable[
-        [Path], tuple[Workflow, RunnerRegistry, dict[str, Any]]
-    ],
+    builder: Callable[[Path], tuple[Workflow, RunnerRegistry, dict[str, Any]]],
     expected_status: str,
     tmp_path: Path,
 ) -> None:
@@ -1610,9 +1583,7 @@ async def test_workflow_pause_resume_matches_golden(
 
     workflow, registry, extras = builder(tmp_path)
     catalog = extras.get("catalog") or AssetCatalog()
-    resume_responses = list(
-        extras.get("resume_responses") or []
-    )
+    resume_responses = list(extras.get("resume_responses") or [])
     expect_exc_name = extras.get("expect_resume_exception")
     final_status_override = extras.get("final_status_override")
 
@@ -1628,8 +1599,7 @@ async def test_workflow_pause_resume_matches_golden(
     )
     initial_status = await ex.run()
     assert initial_status.value == "waiting_for_input", (
-        f"fixture {fixture_name!r} expected initial pause; "
-        f"got {initial_status.value}"
+        f"fixture {fixture_name!r} expected initial pause; got {initial_status.value}"
     )
 
     last_status = initial_status
@@ -1658,9 +1628,7 @@ async def test_workflow_pause_resume_matches_golden(
         f"{expected_value!r}; got {last_status.value!r}"
     )
 
-    actual_raw = store.directory(run.run_id).events_path.read_text(
-        encoding="utf-8"
-    )
+    actual_raw = store.directory(run.run_id).events_path.read_text(encoding="utf-8")
     actual = canonicalize_jsonl(actual_raw)
 
     golden_path = _GOLDEN_DIR / f"{fixture_name}.jsonl"
@@ -1679,9 +1647,7 @@ async def test_workflow_pause_resume_matches_golden(
     )
 
 
-async def _read_status(
-    store: WorkflowRunStore, run_id: Any
-) -> Any:
+async def _read_status(store: WorkflowRunStore, run_id: Any) -> Any:
     """Re-read the run's current status from the store."""
     return store.read(run_id).status
 
@@ -1764,11 +1730,15 @@ def _build_fork_at_completed(
     replayed ``value=20`` via the edge bind).
     """
     workflow, registry, _ = _build_fork_pipeline(tmp_path)
-    return workflow, registry, {
-        "fork_at_kind": "workflow.node.completed",
-        "fork_at_node_name": "B",
-        "input_overrides": {},
-    }
+    return (
+        workflow,
+        registry,
+        {
+            "fork_at_kind": "workflow.node.completed",
+            "fork_at_node_name": "B",
+            "input_overrides": {},
+        },
+    )
 
 
 def _build_fork_at_started(
@@ -1781,11 +1751,15 @@ def _build_fork_at_started(
     re-fires every node.
     """
     workflow, registry, _ = _build_fork_pipeline(tmp_path)
-    return workflow, registry, {
-        "fork_at_kind": "workflow.run.started",
-        "fork_at_node_name": None,
-        "input_overrides": {},
-    }
+    return (
+        workflow,
+        registry,
+        {
+            "fork_at_kind": "workflow.run.started",
+            "fork_at_node_name": None,
+            "input_overrides": {},
+        },
+    )
 
 
 def _build_fork_with_input_override(
@@ -1798,11 +1772,15 @@ def _build_fork_with_input_override(
     semantics on the forked JSONL.
     """
     workflow, registry, _ = _build_fork_pipeline(tmp_path)
-    return workflow, registry, {
-        "fork_at_kind": "workflow.node.completed",
-        "fork_at_node_name": "B",
-        "input_overrides": {"value": 99},
-    }
+    return (
+        workflow,
+        registry,
+        {
+            "fork_at_kind": "workflow.node.completed",
+            "fork_at_node_name": "B",
+            "input_overrides": {"value": 99},
+        },
+    )
 
 
 def _build_fork_subworkflow_after(
@@ -1855,20 +1833,22 @@ def _build_fork_subworkflow_after(
         refs={"demo/workflows/child": child_yaml},
     )
     registry = _ext_compose_registry(catalog=catalog, store=store)
-    return workflow, registry, {
-        "catalog": catalog,
-        "fork_at_kind": "workflow.node.completed",
-        "fork_at_node_name": "sub",
-        "input_overrides": {},
-    }
+    return (
+        workflow,
+        registry,
+        {
+            "catalog": catalog,
+            "fork_at_kind": "workflow.node.completed",
+            "fork_at_node_name": "sub",
+            "input_overrides": {},
+        },
+    )
 
 
 _FORK_FIXTURES: tuple[
     tuple[
         str,
-        Callable[
-            [Path], tuple[Workflow, RunnerRegistry, dict[str, Any]]
-        ],
+        Callable[[Path], tuple[Workflow, RunnerRegistry, dict[str, Any]]],
     ],
     ...,
 ] = (
@@ -1890,9 +1870,7 @@ def _find_fork_event_id(
             continue
         if node_name is None:
             return event["event_id"]
-        en = event.get("node_name") or event.get("payload", {}).get(
-            "node_name"
-        )
+        en = event.get("node_name") or event.get("payload", {}).get("node_name")
         if en == node_name:
             return event["event_id"]
     msg = (
@@ -1909,9 +1887,7 @@ def _find_fork_event_id(
 )
 async def test_workflow_fork_matches_paired_goldens(
     fixture_name: str,
-    builder: Callable[
-        [Path], tuple[Workflow, RunnerRegistry, dict[str, Any]]
-    ],
+    builder: Callable[[Path], tuple[Workflow, RunnerRegistry, dict[str, Any]]],
     tmp_path: Path,
 ) -> None:
     """Phase 3.8 — paired (parent, fork) goldens for fork scenarios.
@@ -1932,9 +1908,7 @@ async def test_workflow_fork_matches_paired_goldens(
     overrides: dict[str, Any] = extras.get("input_overrides") or {}
 
     store = WorkflowRunStore(tmp_path)
-    parent_run = store.create(
-        workflow_ref="demo/workflows/x", inputs={}
-    )
+    parent_run = store.create(workflow_ref="demo/workflows/x", inputs={})
     parent_ex = IterativeExecutor(
         workflow=workflow,
         run=parent_run,
@@ -2086,9 +2060,7 @@ async def test_workflow_agent_roundtrip_matches_paired_goldens(
     for name, actual in pairs:
         golden_path = _GOLDEN_DIR / f"{name}.jsonl"
         if not golden_path.exists():
-            missing.append(
-                f"# write to {golden_path}\n{actual}"
-            )
+            missing.append(f"# write to {golden_path}\n{actual}")
     if missing:
         msg = "Missing paired goldens.\n" + "\n---\n".join(missing)
         raise AssertionError(msg)
@@ -2107,5 +2079,11 @@ async def test_workflow_agent_roundtrip_matches_paired_goldens(
     # the same sentinel; explicitly verifying tr_001 appears in
     # both is the documentary insurance against a future refactor
     # that accidentally splits the canonicaliser per file.
-    assert '"trace_id":"tr_001"' in workflow_actual or '"trace_id": "tr_001"' in workflow_actual
-    assert '"trace_id":"tr_001"' in session_actual or '"trace_id": "tr_001"' in session_actual
+    assert (
+        '"trace_id":"tr_001"' in workflow_actual
+        or '"trace_id": "tr_001"' in workflow_actual
+    )
+    assert (
+        '"trace_id":"tr_001"' in session_actual
+        or '"trace_id": "tr_001"' in session_actual
+    )

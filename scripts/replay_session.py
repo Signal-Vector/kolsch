@@ -202,7 +202,7 @@ def _pct(values: list[int], pct: float) -> int | None:
     if not values:
         return None
     sorted_v = sorted(values)
-    k = max(0, min(len(sorted_v) - 1, int(round(pct * (len(sorted_v) - 1)))))
+    k = max(0, min(len(sorted_v) - 1, round(pct * (len(sorted_v) - 1))))
     return sorted_v[k]
 
 
@@ -255,7 +255,13 @@ async def replay_kolsch(
                 k: v
                 for k, v in entry.items()
                 if k
-                not in {"type", "api_key_secret", "base_url", "timeout_seconds", "models"}
+                not in {
+                    "type",
+                    "api_key_secret",
+                    "base_url",
+                    "timeout_seconds",
+                    "models",
+                }
             },
             models=list(entry.get("models") or []),
         )
@@ -368,7 +374,9 @@ async def replay_curl(
     """POST OpenAI-shape chat-completions JSON directly to opencode."""
     import yaml  # noqa: PLC0415
 
-    raw = yaml.safe_load((workspace / "platform.yaml").read_text(encoding="utf-8")) or {}
+    raw = (
+        yaml.safe_load((workspace / "platform.yaml").read_text(encoding="utf-8")) or {}
+    )
     opencode_cfg = (raw.get("llm_providers") or {}).get("opencode") or {}
     base_url = (opencode_cfg.get("base_url") or "").rstrip("/")
     if not base_url:
@@ -376,12 +384,12 @@ async def replay_curl(
     api_key_secret = opencode_cfg.get("api_key_secret") or "OPENCODE_API_KEY"
 
     # Resolve api key — dotenv only (matches DotenvSecretsProvider behavior).
-    dotenv_path = workspace / ((raw.get("secrets") or {}).get("config", {}).get("path", ".env"))
+    dotenv_path = workspace / (
+        (raw.get("secrets") or {}).get("config", {}).get("path", ".env")
+    )
     api_key = _read_dotenv_value(dotenv_path, api_key_secret)
     if not api_key:
-        raise SystemExit(
-            f"secret {api_key_secret!r} not found in {dotenv_path}"
-        )
+        raise SystemExit(f"secret {api_key_secret!r} not found in {dotenv_path}")
 
     results: list[CallResult] = []
     async with httpx.AsyncClient(timeout=PER_CALL_TIMEOUT_SECONDS) as client:

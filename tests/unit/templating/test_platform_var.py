@@ -125,9 +125,8 @@ def test_providers_get_returns_none_for_unknown(platform_var: PlatformVar) -> No
 
 def test_providers_subscript_equals_get(platform_var: PlatformVar) -> None:
     """Spec §4.3 subscript-equivalence."""
-    assert (
-        platform_var.providers["openrouter"]
-        is platform_var.providers.get("openrouter")
+    assert platform_var.providers["openrouter"] is platform_var.providers.get(
+        "openrouter"
     )
 
 

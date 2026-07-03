@@ -17,6 +17,8 @@ Pins (post qol-prefix-defaults-and-unified-refs.md Step 2):
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from errors import (
@@ -31,7 +33,7 @@ from templating.context_files import (
     resolve_path,
 )
 
-if True:
+if TYPE_CHECKING:
     from pathlib import Path
 
 
@@ -60,9 +62,7 @@ def test_workspace_prefix_resolves_nested_path(tmp_path: Path) -> None:
     (tmp_path / "docs").mkdir()
     (tmp_path / "docs" / "x.md").write_text("x", encoding="utf-8")
     warnings: list[ConfigDeprecatedRefForm] = []
-    path = resolve_path(
-        "workspace:docs/x.md", tmp_path, emit_warning=warnings.append
-    )
+    path = resolve_path("workspace:docs/x.md", tmp_path, emit_warning=warnings.append)
     assert path == (tmp_path / "docs" / "x.md").resolve()
     assert len(warnings) == 1
 
@@ -94,9 +94,7 @@ def test_nested_plain_path_resolves_under_workspace_root(tmp_path: Path) -> None
     (tmp_path / "bundles" / "X").mkdir(parents=True)
     (tmp_path / "bundles" / "X" / "notes.md").write_text("n", encoding="utf-8")
     warnings: list[ConfigDeprecatedRefForm] = []
-    path = resolve_path(
-        "bundles/X/notes.md", tmp_path, emit_warning=warnings.append
-    )
+    path = resolve_path("bundles/X/notes.md", tmp_path, emit_warning=warnings.append)
     assert path == (tmp_path / "bundles" / "X" / "notes.md").resolve()
     assert warnings == []
 
@@ -124,9 +122,7 @@ def test_load_context_file_summary_fallback_first_non_empty_line(
 ) -> None:
     """When the spec has no summary, derive from the file's first
     non-empty line — Phase 2.2 §6.1."""
-    (tmp_path / "x.md").write_text(
-        "\n\n   first real line\nbelow\n", encoding="utf-8"
-    )
+    (tmp_path / "x.md").write_text("\n\n   first real line\nbelow\n", encoding="utf-8")
     spec = ContextFileSpec(path="workspace:x.md")
     doc = load_context_file(spec, tmp_path)
     assert doc.summary == "first real line"

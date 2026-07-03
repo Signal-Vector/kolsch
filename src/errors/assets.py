@@ -55,8 +55,7 @@ class AssetsDuplicateName(PlatformError):
     ) -> None:
         super().__init__(
             message=(
-                f"Bundle {bundle!r} has multiple assets named {name!r}: "
-                f"{sorted(refs)}"
+                f"Bundle {bundle!r} has multiple assets named {name!r}: {sorted(refs)}"
             ),
             where=where,
             detail={"bundle": bundle, "name": name, "refs": sorted(refs)},

@@ -1,4 +1,4 @@
-"""Skills × tools.read authz interaction + Sk-I2 end-to-end pins.
+"""Skills x tools.read authz interaction + Sk-I2 end-to-end pins.
 
 Two regression tests closing audit gaps surfaced in Step 1:
 
@@ -20,8 +20,7 @@ Two regression tests closing audit gaps surfaced in Step 1:
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import yaml
@@ -37,6 +36,9 @@ from schemas import EventType
 # Sk-I2 filter at the Var construction step (mirroring the engine's
 # pre-flight at engine._render_prompt_if_needed).
 from templating.vars import SkillItem, SkillsVar
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Workspace fixture.
@@ -266,7 +268,9 @@ async def test_tc_skill_disable_01_excludes_listing_but_force_invocable(
     assert refs_returned == {
         "skl/skills/discoverable",
         "skl/skills/hidden-deliberate",
-    }, "get_enabled_skills must include disabled skills (force-invoke routes through them)."
+    }, (
+        "get_enabled_skills must include disabled skills (force-invoke routes through them)."
+    )
 
     # Mirror the engine's pre-flight filter at engine.py
     # (``[SkillItem(...) for s in enabled_skills if not s.disable_model_invocation]``)
@@ -311,12 +315,7 @@ async def test_tc_skill_disable_01_excludes_listing_but_force_invocable(
     ]
     assert len(synthetic_calls) == 1
     skill_md_path = (
-        tmp_path
-        / "bundles"
-        / "skl"
-        / "skills"
-        / "hidden-deliberate"
-        / "SKILL.md"
+        tmp_path / "bundles" / "skl" / "skills" / "hidden-deliberate" / "SKILL.md"
     ).resolve()
     assert synthetic_calls[0].data["arguments"]["path"] == str(skill_md_path)
 

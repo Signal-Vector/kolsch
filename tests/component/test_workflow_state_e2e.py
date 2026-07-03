@@ -21,8 +21,7 @@ exact JSONL byte sequences (see ``tests/golden/runs/state-*.jsonl``).
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from assets.catalog import AssetCatalog
 from workflows.builtins import (
@@ -34,6 +33,9 @@ from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -104,11 +106,7 @@ def _catalog_with_demo_echo() -> AssetCatalog:
 
 
 def _state_payloads(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        e["payload"]
-        for e in events
-        if e["kind"] == "workflow.state.mutated"
-    ]
+    return [e["payload"] for e in events if e["kind"] == "workflow.state.mutated"]
 
 
 # ---------------------------------------------------------------------------
@@ -117,9 +115,7 @@ def _state_payloads(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 
 class TestPhase3StateEvolvesAcrossWrites:
-    async def test_state_evolves_across_writes(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_state_evolves_across_writes(self, tmp_path: Path) -> None:
         # init (attempts=0) → bump1 (++) → bump2 (++)  expect 0/1/2
         wf = _wf(
             {
@@ -159,9 +155,7 @@ class TestPhase3StateEvolvesAcrossWrites:
         # Three events for ``attempts`` with values 0, 1, 2 in order.
         events = list(store.read_events(run.run_id))
         attempts_values = [
-            p["value"]
-            for p in _state_payloads(events)
-            if p["key"] == "attempts"
+            p["value"] for p in _state_payloads(events) if p["key"] == "attempts"
         ]
         assert attempts_values == [0, 1, 2]
 
@@ -172,9 +166,7 @@ class TestPhase3StateEvolvesAcrossWrites:
 
 
 class TestPhase4ResumeReconstructsState:
-    async def test_resume_reconstructs_state_via_replay(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_resume_reconstructs_state_via_replay(self, tmp_path: Path) -> None:
         # prep (noop) → set_state(attempts=5) → ask (pause) → echo
         # The echo's bind references ``{{ state.attempts }}``; resume
         # → echo renders 5 because the JSONL state.mutated event was
@@ -209,6 +201,7 @@ class TestPhase4ResumeReconstructsState:
             }
         )
         reg = _registry_with_state(include_user_input=True)
+
         # ``demo/nodes/echo`` captures its bound ``message`` so we can
         # assert it landed as ``5`` post-replay.
         class _CapturingEcho:
@@ -224,15 +217,13 @@ class TestPhase4ResumeReconstructsState:
                 ctx: Any,
             ) -> dict[str, Any]:
                 _ = (node_name, node_def, state, ctx)
-                _CapturingEcho.captured_message = bound_inputs.get(
-                    "message"
-                )
+                _CapturingEcho.captured_message = bound_inputs.get("message")
                 return {"message": bound_inputs.get("message")}
 
         reg.register("demo/nodes/echo", _CapturingEcho())
         catalog = _catalog_with_demo_echo()
 
-        ex, store, run = _executor(
+        ex, _store, run = _executor(
             tmp_path, workflow=wf, registry=reg, catalog=catalog
         )
         first = await ex.run()
@@ -264,9 +255,7 @@ class TestPhase4ResumeReconstructsState:
 
 
 class TestPhase5DeleteStateSilentOnAbsent:
-    async def test_delete_state_silent_on_absent(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_delete_state_silent_on_absent(self, tmp_path: Path) -> None:
         wf = _wf(
             {
                 "nodes": {
@@ -284,8 +273,6 @@ class TestPhase5DeleteStateSilentOnAbsent:
         assert status == WorkflowRunStatus.SUCCEEDED
         # Event still emitted (forensic + replay parity).
         payloads = _state_payloads(list(store.read_events(run.run_id)))
-        assert payloads == [
-            {"key": "foo", "op": "delete", "value": None}
-        ]
+        assert payloads == [{"key": "foo", "op": "delete", "value": None}]
         # State unchanged — no exception.
         assert ex._state == {}

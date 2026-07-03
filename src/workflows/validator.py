@@ -173,10 +173,11 @@ class ValidationResult:
 
 
 _FILE_PLACEHOLDER = "<workflow>"
-"""Source-file placeholder used by error constructors when the validator runs against an in-memory `Workflow` model.
+"""Source-file placeholder used by error constructors.
 
-YAML-origin callers pass through `load_workflow` which records the
-real path on its own error sites.
+Applies when the validator runs against an in-memory `Workflow`
+model. YAML-origin callers pass through `load_workflow` which
+records the real path on its own error sites.
 """
 
 
@@ -370,7 +371,7 @@ def _check_extends_policy(
             continue
         try:
             raw = load(Path(entry.path).read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001 — defensive; resolver re-raises
+        except Exception:  # noqa: BLE001, S112 — defensive; resolver re-raises
             continue
         if not isinstance(raw, dict):
             continue
@@ -504,7 +505,7 @@ def _check_structural(
         errors.append(WorkflowUnreachableNode(file=file, line=0, node=node_name))
 
     # ``copy_of:`` source must be graph-reachable (no template-only nodes).
-    for node_name, node in workflow.nodes.items():
+    for node in workflow.nodes.values():
         if not isinstance(node, CopyOfNodeDef):
             continue
         if node.copy_of in copy_of_sources and node.copy_of not in reachable:
@@ -967,7 +968,7 @@ def _check_value_for_refs(
 
 
 def _is_inside_same_map(
-    workflow: Workflow, consuming_node: str, worker_name: str
+    workflow: Workflow, _consuming_node: str, worker_name: str
 ) -> bool:
     """Return `True` iff `consuming_node` is the map that targets `worker_name`.
 
@@ -1110,7 +1111,7 @@ def _check_catalog_node_defs(
     return errors, warnings
 
 
-def _import_node_module(path: str) -> Any:  # noqa: ANN401
+def _import_node_module(path: str) -> Any:
     """Best-effort import the authored node module from `path`.
 
     Returns the loaded module on success or the original `Exception`
@@ -1153,11 +1154,11 @@ def _import_node_module(path: str) -> Any:  # noqa: ANN401
 # string. Collapsing into a single exit would lose the per-failure
 # `reason` text. The `run_fn` parameter is intrinsically `Any` — it's
 # a user-authored function we just inspect, not call.
-def _check_run_signature(  # noqa: PLR0911
+def _check_run_signature(
     *,
     file: str,
     ref: str,
-    run_fn: Any,  # noqa: ANN401
+    run_fn: Any,
 ) -> WorkflowNodeSignatureInvalid | None:
     """Verify `run` matches the authored-node signature rules.
 
@@ -1233,7 +1234,7 @@ def _check_run_return_type(
     *,
     file: str,
     ref: str,
-    run_fn: Any,  # noqa: ANN401 — user fn
+    run_fn: Any,
 ) -> WorkflowNodeReturnTypeInvalid | None:
     """Verify `run`'s return annotation is one of the accepted shapes.
 
@@ -1553,7 +1554,7 @@ def _branch_state_read_set(workflow: Workflow, branch: set[str]) -> dict[str, st
     reads: dict[str, str] = {}
     visited_workers: set[str] = set()
 
-    def _scan_value(value: Any, owner: str) -> None:  # noqa: ANN401
+    def _scan_value(value: Any, owner: str) -> None:
         if isinstance(value, str):
             for match in _STATE_REF_RE.finditer(value):
                 reads.setdefault(match.group(1), owner)

@@ -42,8 +42,7 @@ def test_default_summary_derived_from_first_sentence() -> None:
     @tool(
         name="t2",
         description=(
-            "Read a file's text. When to use: blah blah blah. "
-            "More details follow."
+            "Read a file's text. When to use: blah blah blah. More details follow."
         ),
         args_schema=_EmptyArgs,
     )

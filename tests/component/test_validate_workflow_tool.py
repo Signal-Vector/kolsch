@@ -36,9 +36,7 @@ if TYPE_CHECKING:
 
 
 _REPO_ROOT = Path(__file__).resolve().parents[2]
-_STARTER_BUNDLE = (
-    _REPO_ROOT / "src" / "cli" / "_starter_bundle" / "kolsch"
-)
+_STARTER_BUNDLE = _REPO_ROOT / "src" / "cli" / "_starter_bundle" / "kolsch"
 _TOOL_PATH = _STARTER_BUNDLE / "tools" / "validate_workflow.py"
 
 
@@ -125,7 +123,9 @@ async def test_validate_yaml_parse_error_surfaces_finding(tmp_path: Path) -> Non
 
     broken = workspace / "bundles" / "kolsch" / "workflows" / "broken.yaml"
     # Unterminated mapping → ruamel.yaml ScannerError.
-    broken.write_text("nodes:\n  ready:\n    type: kolsch/nodes/noop\n  bad: [\n", encoding="utf-8")
+    broken.write_text(
+        "nodes:\n  ready:\n    type: kolsch/nodes/noop\n  bad: [\n", encoding="utf-8"
+    )
 
     result = await fn(Args(yaml_path=str(broken)), _ctx(workspace))
 
@@ -212,9 +212,7 @@ async def test_validate_missing_catalog_ref(tmp_path: Path) -> None:
     assert len(result["errors"]) == 1
     finding = result["errors"][0]
     assert finding["error_class"] == "WorkflowNotFound"
-    assert finding["identifying_names"] == {
-        "ref": "kolsch/workflows/does-not-exist"
-    }
+    assert finding["identifying_names"] == {"ref": "kolsch/workflows/does-not-exist"}
     assert finding["file"] == "<catalog>"
 
 

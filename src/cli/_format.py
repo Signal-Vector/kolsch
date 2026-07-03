@@ -41,7 +41,7 @@ _STATUS = EnvelopeStatus()
 # that want a pre-rendered text payload when ``fmt="text"``. Each
 # kwarg is part of the contract; collapsing behind a dataclass would
 # only shuffle the arity.
-def render(  # noqa: PLR0913
+def render(
     *,
     command: str,
     fmt: str = "text",
@@ -177,7 +177,7 @@ def _public_attrs(exc: BaseException) -> dict[str, Any]:
     return out
 
 
-def _make_jsonable(value: Any) -> Any:  # noqa: ANN401
+def _make_jsonable(value: Any) -> Any:
     """Best-effort JSON-serialisable shim.
 
     Tuples → lists; sets → sorted lists; everything else passes

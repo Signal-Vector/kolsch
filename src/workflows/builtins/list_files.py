@@ -75,16 +75,12 @@ class ListFilesRunner:
         _ = state
         from tools.dispatch import dispatch_tool  # noqa: PLC0415
 
-        rendered_path = _render_str(
-            ctx, node_def.path, bound_inputs=bound_inputs
-        )
+        rendered_path = _render_str(ctx, node_def.path, bound_inputs=bound_inputs)
         args: dict[str, Any] = {"path": rendered_path}
         if node_def.pattern is not None:
             # NodeDef.pattern → tool arg.glob (naming mismatch — see
             # module docstring).
-            args["glob"] = _render_str(
-                ctx, node_def.pattern, bound_inputs=bound_inputs
-            )
+            args["glob"] = _render_str(ctx, node_def.pattern, bound_inputs=bound_inputs)
 
         tool_ctx = _build_tool_ctx(ctx)
         # Workflow-scoped `policy:` rules — see bug-workflow-policy-not-enforced.

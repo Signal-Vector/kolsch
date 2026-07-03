@@ -12,13 +12,15 @@ Layer 3 validator is what this file holds the line on.
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
 from engine import LLMRequest, LLMResponse
 from platform_runtime import bootstrap_runtime
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Workspace fixture — two skills + a parent agent + two child agents.

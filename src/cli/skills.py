@@ -1151,7 +1151,7 @@ def _list_skill_files(skill_root: Path) -> list[str]:
     return out
 
 
-def _cmd_install(  # noqa: PLR0913 — install owns the full URL → destination flow; bundling further hurts readability
+def _cmd_install(
     root: Path,
     *,
     url: str,
@@ -1453,10 +1453,8 @@ def _extract_skill_relative_refs(body: str) -> list[str]:
     for match in _BACKTICKED_PATH_RE.findall(body):
         if match.startswith(("/", "http://", "https://")):
             continue
-        # Strip a leading "./" so the path normalises cleanly.
-        if match.startswith("./"):
-            match = match[2:]
-        refs.append(match)
+        ref = match[2:] if match.startswith("./") else match
+        refs.append(ref)
     return refs
 
 

@@ -332,9 +332,43 @@ convention = "google"
     "S107",    # Same — default arg values in helper factories.
     "PLR0913", # Test helper factories naturally take many kwargs to
                # build varied ProviderConfig / SecretsProvider shapes.
+    "PLR0911", # Table-driven test cases with per-shape early-returns
+               # legitimately hit the 6-branch return limit.
+    "PLR0912", # Same — parametrized test bodies scan many arms.
     "E501",    # Long test names + parametrized table rows occasionally
                # exceed 88 cols; the docs/process catalog test names
                # are deliberate.
+    "S108",    # `/tmp/...` string literals in tests are synthetic
+               # parameter values (workspace paths, bundle paths)
+               # passed to view constructors — nothing actually opens
+               # a temp file. Same rationale as S101: the security
+               # check is a false positive when the test isn't
+               # exercising insecure I/O.
+    "ASYNC240",# Sync `pathlib` inside `async def` tests blocks the
+               # event loop, but pytest-asyncio runs tests one
+               # coroutine at a time — no concurrent tasks are
+               # starved. Rewriting `tmp_path.write_text(...)` to
+               # `await anyio.Path(tmp_path).write_text(...)` in
+               # every fixture setup would be pure line noise.
+    "N806",    # Tests frequently bind classes to PascalCase locals
+               # for readability (e.g. `Args = fn._tool_definition.
+               # args_schema`) — the local mirrors how the class
+               # would be named in scope.
+    "ERA001",  # ruff's commented-out-code detector misfires on test
+               # section headers and structural comments describing
+               # the shape of the tuple/table that follows.
+    "PT017",   # Tests deliberately use `try / except X as exc:
+               # assert exc.__cause__ / exc.field` to pin exception
+               # chaining — rewriting to pytest.raises() would
+               # obscure the chain-inspection intent.
+    "PT019",   # Underscore-prefixed pytest fixture names (`_policy`,
+               # `_providers`) are a "private test helper" convention;
+               # they are genuinely used in the test bodies so
+               # `@pytest.mark.usefixtures` is not the right shape.
+    "TRY003",  # Tests routinely `raise RuntimeError("expected X")`
+               # or `raise AssertionError("boundary Y")` to exercise
+               # error paths — inventing a custom exception class per
+               # test case would be pure ceremony.
 ]
 # `src/errors/` is, by definition, the errors package. Every class is a
 # PlatformError subclass; the N818 "must end in Error" rule would force
@@ -353,7 +387,28 @@ convention = "google"
 "src/workflows/context.py" = ["PLR0913"]
 # `src/workflows/jinja_env.py` — Pydantic-style at-runtime imports
 # (TC003 false positive) + the sandbox env subclasses jinja2 internals.
-"src/workflows/**" = ["TC001", "TC003"]
+# ANN401 — Any is the contract at the workflow-runtime boundary:
+# `worker_def`, `worker_runner`, and `element` are dispatched
+# through the generic RunnerRegistry (spec §5); the validator
+# traverses arbitrary parsed-YAML nodes; Jinja render callbacks
+# return arbitrary shapes. No narrower type exists at this layer.
+# PLR0911/0912/0913/0915 — validator.py's layered rule gates and
+# executor.py's dispatch orchestrator match the engine/** rationale:
+# high branch/return counts are the shape of a layered check gate,
+# not a refactor signal. PLR2004 — structural pattern checks
+# (`len(parts) == 2` for 2-segment tool refs, `_call_depth > 16`
+# for the extends depth limit) are self-documenting; extracting
+# every one to a module constant hurts readability.
+"src/workflows/**" = [
+    "TC001",
+    "TC003",
+    "ANN401",
+    "PLR0911",
+    "PLR0912",
+    "PLR0913",
+    "PLR0915",
+    "PLR2004",
+]
 # Pydantic v2 resolves field annotations at runtime via
 # `typing.get_type_hints()`. With `from __future__ import annotations`
 # in place, those imports look TYPE_CHECKING-only to ruff but must
@@ -375,8 +430,23 @@ convention = "google"
 "src/skills/**" = ["TC001", "TC003"]
 # CLI module — entry-point script doesn't need ANN coverage on
 # argparse handlers; argparse Namespace attribute access trips
-# inferred-Any checks.
-"src/cli/**" = ["TC001", "TC003"]
+# inferred-Any checks. ANN401 — slash-command handlers accept
+# `authz` / `yaml_path` values parsed from user-typed input and
+# variadic `**kwargs` forwarded to workflow runners; those are
+# Any by construction (spec §7 slash-command dispatch shape).
+# PLR complexity + PLR2004 — the slash dispatcher and skills
+# subcommands are wide type-dispatch surfaces (many arms, many
+# early-return validation paths). Same shape as engine/**.
+"src/cli/**" = [
+    "TC001",
+    "TC003",
+    "ANN401",
+    "PLR0911",
+    "PLR0912",
+    "PLR0913",
+    "PLR0915",
+    "PLR2004",
+]
 # API module — FastAPI routes accept Pydantic models via dependency
 # injection; type-checking blocks would break Pydantic field
 # inspection. Plus FBT for FastAPI's Query(default=False) idiom is
@@ -413,6 +483,27 @@ convention = "google"
 # Package-level docstring optional — each module under the package
 # carries its own docstring, which is where the contract lives.
 "src/**/__init__.py" = ["D104"]
+# `src/cli/_slash.py` — slash-command handlers use `assert ctx.state is
+# not None` as a caller-guarded type-narrowing invariant. The dispatcher
+# gates all handlers on `ctx.state` being set; the assert exists so the
+# type checker sees the narrowing.
+"src/cli/_slash.py" = ["S101"]
+# `src/providers/authz.py` — the rule matcher asserts on compile-time
+# invariants (e.g. `compiled.who_re is not None` on the branch that
+# only runs after a successful compile). Same type-narrowing pattern
+# as above; not a security-sensitive assertion.
+"src/providers/authz.py" = ["S101"]
+# `src/templating/**` — the Jinja environments render LLM prompts,
+# not HTML. Enabling autoescape would break prompt syntax (e.g. a
+# literal `<system>` becomes `&lt;system&gt;`), so `autoescape=False`
+# is the correct choice for this domain, not a XSS bug.
+"src/templating/**" = ["S701"]
+# `scripts/` — one-off utility scripts (replay tools, migration
+# helpers). They print progress to stderr by design (T201), often
+# raise SystemExit with vanilla strings (TRY003/EM101/EM102) which
+# is idiomatic for CLIs, and don't carry pydocstyle contracts (D).
+# Long f-strings in reporting occasionally exceed 88 cols (E501).
+"scripts/**" = ["T201", "TRY003", "EM101", "EM102", "D", "E501", "PLR2004"]
 
 [tool.ruff.lint.flake8-annotations]
 mypy-init-return = true

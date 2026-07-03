@@ -10,14 +10,16 @@ Covers Step 1 ACs:
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from assets.catalog import AssetCatalog
 from workflows.builtins import DeleteStateRunner, SetStateRunner
 from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -42,9 +44,7 @@ def _run_executor(
     inputs: dict[str, Any] | None = None,
 ) -> tuple[IterativeExecutor, WorkflowRunStore, Any]:
     store = WorkflowRunStore(tmp_path)
-    run = store.create(
-        workflow_ref="demo/workflows/x", inputs=inputs or {}
-    )
+    run = store.create(workflow_ref="demo/workflows/x", inputs=inputs or {})
     ex = IterativeExecutor(
         workflow=workflow,
         run=run,
@@ -56,11 +56,7 @@ def _run_executor(
 
 
 def _state_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
-    return [
-        e["payload"]
-        for e in events
-        if e["kind"] == "workflow.state.mutated"
-    ]
+    return [e["payload"] for e in events if e["kind"] == "workflow.state.mutated"]
 
 
 # ---------------------------------------------------------------------------
@@ -74,9 +70,7 @@ class TestRegistration:
             DeleteStateRunner as _DeleteStateRunner,
         )
 
-        runner = _registry().get(
-            "kolsch/nodes/delete_state", node_name="x"
-        )
+        runner = _registry().get("kolsch/nodes/delete_state", node_name="x")
         assert isinstance(runner, _DeleteStateRunner)
 
 
@@ -115,9 +109,7 @@ class TestDeleteSemantics:
             "value": None,
         }
 
-    async def test_delete_absent_silent_emits_event(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_delete_absent_silent_emits_event(self, tmp_path: Path) -> None:
         # AC 1.3 — idempotent. ``state.pop(key, None)`` silently does
         # nothing; the event still fires (forensic + replay parity).
         wf = _wf(
@@ -134,13 +126,9 @@ class TestDeleteSemantics:
         await ex.run()
         assert ex._state == {}
         payloads = _state_events(list(store.read_events(run.run_id)))
-        assert payloads == [
-            {"key": "never_set", "op": "delete", "value": None}
-        ]
+        assert payloads == [{"key": "never_set", "op": "delete", "value": None}]
 
-    async def test_delete_multiple_keys_in_order(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_delete_multiple_keys_in_order(self, tmp_path: Path) -> None:
         wf = _wf(
             {
                 "nodes": {
@@ -174,9 +162,7 @@ class TestDeleteSemantics:
 
 
 class TestEmptyOutput:
-    async def test_completed_payload_output_is_empty(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_completed_payload_output_is_empty(self, tmp_path: Path) -> None:
         wf = _wf(
             {
                 "nodes": {
@@ -193,7 +179,6 @@ class TestEmptyOutput:
         completed = next(
             e
             for e in events
-            if e["kind"] == "workflow.node.completed"
-            and e["node_name"] == "drop"
+            if e["kind"] == "workflow.node.completed" and e["node_name"] == "drop"
         )
         assert completed["payload"]["output"] == {}

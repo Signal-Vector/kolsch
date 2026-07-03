@@ -190,9 +190,7 @@ class TestStructural:
             }
         )
         result = validate_workflow(wf, AssetCatalog())
-        assert not any(
-            isinstance(e, WorkflowUnreachableNode) for e in result.errors
-        )
+        assert not any(isinstance(e, WorkflowUnreachableNode) for e in result.errors)
 
 
 class TestBindCollision:
@@ -223,9 +221,7 @@ class TestBindCollision:
             }
         )
         result = validate_workflow(wf, AssetCatalog())
-        assert any(
-            isinstance(e, WorkflowBindCollision) for e in result.errors
-        )
+        assert any(isinstance(e, WorkflowBindCollision) for e in result.errors)
 
     def test_multi_input_edges_with_distinct_keys_legal(self) -> None:
         """Round 4 item #11 — multi-input edges with DIFFERENT bind
@@ -247,9 +243,7 @@ class TestBindCollision:
         )
         result = validate_workflow(wf, AssetCatalog())
         # No bind collision; reachability also fine.
-        assert not any(
-            isinstance(e, WorkflowBindCollision) for e in result.errors
-        )
+        assert not any(isinstance(e, WorkflowBindCollision) for e in result.errors)
 
 
 class TestNodeNotDefined:
@@ -356,8 +350,7 @@ class TestJinjaRefs:
         )
         result = validate_workflow(wf, AssetCatalog())
         assert any(
-            isinstance(e, WorkflowJinjaRefUnknown)
-            and e.reason == "unknown_field"
+            isinstance(e, WorkflowJinjaRefUnknown) and e.reason == "unknown_field"
             for e in result.errors
         )
 
@@ -381,8 +374,7 @@ class TestJinjaRefs:
         )
         result = validate_workflow(wf, AssetCatalog())
         assert any(
-            isinstance(e, WorkflowJinjaRefUnknown)
-            and e.reason == "not_predecessor"
+            isinstance(e, WorkflowJinjaRefUnknown) and e.reason == "not_predecessor"
             for e in result.errors
         )
 
@@ -473,9 +465,7 @@ class TestBranching:
             }
         )
         result = validate_workflow(wf, AssetCatalog())
-        assert any(
-            isinstance(e, WorkflowBranchMissingArm) for e in result.errors
-        )
+        assert any(isinstance(e, WorkflowBranchMissingArm) for e in result.errors)
 
     def test_branch_on_non_branchable_node(self) -> None:
         wf = _wf(
@@ -484,16 +474,11 @@ class TestBranching:
                     "a": {"type": "kolsch/nodes/noop"},
                     "b": {"type": "kolsch/nodes/noop"},
                 },
-                "graph": {
-                    "edges": [{"from": "a", "to": "b", "branch": True}]
-                },
+                "graph": {"edges": [{"from": "a", "to": "b", "branch": True}]},
             }
         )
         result = validate_workflow(wf, AssetCatalog())
-        assert any(
-            isinstance(e, WorkflowBranchOnNonBranchable)
-            for e in result.errors
-        )
+        assert any(isinstance(e, WorkflowBranchOnNonBranchable) for e in result.errors)
 
 
 # ---------------------------------------------------------------------------
@@ -549,15 +534,9 @@ class TestTimeouts:
             }
         )
         result = validate_workflow(wf, AssetCatalog())
-        assert any(
-            isinstance(w, WorkflowTimeoutShadowsNode)
-            for w in result.warnings
-        )
+        assert any(isinstance(w, WorkflowTimeoutShadowsNode) for w in result.warnings)
         # The warning does NOT block validity.
-        assert all(
-            not isinstance(e, WorkflowTimeoutShadowsNode)
-            for e in result.errors
-        )
+        assert all(not isinstance(e, WorkflowTimeoutShadowsNode) for e in result.errors)
 
     def test_clean_timeouts_no_findings(self) -> None:
         wf = _wf(
@@ -597,9 +576,7 @@ class TestFromStrictValidation:
             }
         )
         result = validate_workflow(wf, _seed_catalog(agents=["triage"]))
-        assert any(
-            isinstance(e, WorkflowFromShapeError) for e in result.errors
-        )
+        assert any(isinstance(e, WorkflowFromShapeError) for e in result.errors)
 
     def test_from_asset_type_error_for_wrong_segment(self) -> None:
         wf = _wf(
@@ -616,9 +593,7 @@ class TestFromStrictValidation:
             }
         )
         result = validate_workflow(wf, _seed_catalog(agents=["triage"]))
-        assert any(
-            isinstance(e, WorkflowFromAssetTypeError) for e in result.errors
-        )
+        assert any(isinstance(e, WorkflowFromAssetTypeError) for e in result.errors)
 
     def test_from_not_found_for_unknown_agent(self) -> None:
         wf = _wf(
@@ -635,9 +610,7 @@ class TestFromStrictValidation:
             }
         )
         result = validate_workflow(wf, _seed_catalog(agents=["triage"]))
-        assert any(
-            isinstance(e, WorkflowFromNotFound) for e in result.errors
-        )
+        assert any(isinstance(e, WorkflowFromNotFound) for e in result.errors)
 
     def test_valid_from_passes(self) -> None:
         wf = _wf(
@@ -704,10 +677,7 @@ class TestExtends:
             }
         )
         result = validate_workflow(wf, cat)
-        assert any(
-            isinstance(e, WorkflowExtendsPolicyForbidden)
-            for e in result.errors
-        )
+        assert any(isinstance(e, WorkflowExtendsPolicyForbidden) for e in result.errors)
 
 
 # ---------------------------------------------------------------------------
@@ -735,8 +705,7 @@ class TestAccumulation:
             validate_workflow_or_raise(wf, AssetCatalog())
         assert len(exc_info.value.exceptions) == 3
         assert all(
-            isinstance(e, WorkflowNodeNotDefined)
-            for e in exc_info.value.exceptions
+            isinstance(e, WorkflowNodeNotDefined) for e in exc_info.value.exceptions
         )
 
     def test_single_error_raises_specific_class_not_group(self) -> None:
@@ -946,9 +915,7 @@ class TestCatalogNodeDefIntrospection:
     def test_happy_path_clean(self, tmp_path: Path) -> None:
         node_file = tmp_path / "echo.py"
         node_file.write_text(_GOOD_NODE_SOURCE)
-        cat = _seed_catalog_with_node(
-            bundle="acme", name="echo", path=str(node_file)
-        )
+        cat = _seed_catalog_with_node(bundle="acme", name="echo", path=str(node_file))
         wf = _wf_with_catalog_node(ref="acme/nodes/echo")
         result = validate_workflow(wf, cat, file="wf.yaml")
         assert result.is_valid, [type(e).__name__ for e in result.errors]
@@ -972,40 +939,30 @@ class TestCatalogNodeDefIntrospection:
     def test_import_failed_raises(self, tmp_path: Path) -> None:
         node_file = tmp_path / "broken.py"
         node_file.write_text("def this is not valid python(\n")
-        cat = _seed_catalog_with_node(
-            bundle="acme", name="broken", path=str(node_file)
-        )
+        cat = _seed_catalog_with_node(bundle="acme", name="broken", path=str(node_file))
         wf = _wf_with_catalog_node(ref="acme/nodes/broken")
         with pytest.raises(WorkflowNodeImportFailed):
             validate_workflow_or_raise(wf, cat, file="wf.yaml")
 
-    def test_missing_node_in_catalog_raises_import_failed(
-        self, tmp_path: Path
-    ) -> None:
+    def test_missing_node_in_catalog_raises_import_failed(self, tmp_path: Path) -> None:
         """A CatalogNodeDef whose ref isn't in the catalog surfaces as
         WorkflowNodeImportFailed (the §7.6 check can't proceed)."""
         cat = AssetCatalog()
         wf = _wf_with_catalog_node(ref="acme/nodes/missing")
         result = validate_workflow(wf, cat, file="wf.yaml")
-        assert any(
-            isinstance(e, WorkflowNodeImportFailed) for e in result.errors
-        )
+        assert any(isinstance(e, WorkflowNodeImportFailed) for e in result.errors)
 
     def test_missing_run_raises(self, tmp_path: Path) -> None:
         node_file = tmp_path / "no_run.py"
         node_file.write_text("def other(): pass\n")
-        cat = _seed_catalog_with_node(
-            bundle="acme", name="no_run", path=str(node_file)
-        )
+        cat = _seed_catalog_with_node(bundle="acme", name="no_run", path=str(node_file))
         wf = _wf_with_catalog_node(ref="acme/nodes/no_run")
         with pytest.raises(WorkflowNodeMissingRun):
             validate_workflow_or_raise(wf, cat, file="wf.yaml")
 
     def test_undecorated_run_raises(self, tmp_path: Path) -> None:
         node_file = tmp_path / "undecorated.py"
-        node_file.write_text(
-            "def run(inputs, ctx):\n    return None\n"
-        )
+        node_file.write_text("def run(inputs, ctx):\n    return None\n")
         cat = _seed_catalog_with_node(
             bundle="acme", name="undecorated", path=str(node_file)
         )
@@ -1013,23 +970,17 @@ class TestCatalogNodeDefIntrospection:
         with pytest.raises(WorkflowNodeNotDecorated):
             validate_workflow_or_raise(wf, cat, file="wf.yaml")
 
-    def test_bad_signature_too_few_params_raises(
-        self, tmp_path: Path
-    ) -> None:
+    def test_bad_signature_too_few_params_raises(self, tmp_path: Path) -> None:
         node_file = tmp_path / "thin.py"
         node_file.write_text(
             "from workflows import node\n@node()\ndef run(only_one): return None\n"
         )
-        cat = _seed_catalog_with_node(
-            bundle="acme", name="thin", path=str(node_file)
-        )
+        cat = _seed_catalog_with_node(bundle="acme", name="thin", path=str(node_file))
         wf = _wf_with_catalog_node(ref="acme/nodes/thin")
         with pytest.raises(WorkflowNodeSignatureInvalid):
             validate_workflow_or_raise(wf, cat, file="wf.yaml")
 
-    def test_bad_signature_wrong_ctx_type_raises(
-        self, tmp_path: Path
-    ) -> None:
+    def test_bad_signature_wrong_ctx_type_raises(self, tmp_path: Path) -> None:
         node_file = tmp_path / "wrong_ctx.py"
         node_file.write_text(
             "from pydantic import BaseModel\n"
@@ -1107,9 +1058,7 @@ class TestRelatedIssuesTail:
             pytest.fail("expected raise")
         except WorkflowNodeNotDefined as e:
             tail_notes = [
-                n
-                for n in getattr(e, "__notes__", [])
-                if "Related issues" in n
+                n for n in getattr(e, "__notes__", []) if "Related issues" in n
             ]
             assert tail_notes == [], tail_notes
 
@@ -1148,5 +1097,3 @@ class TestRelatedIssuesTail:
         assert len(related) == 1, group_notes
         assert "structural" in related[0]
         assert "timeouts" in related[0]
-
-

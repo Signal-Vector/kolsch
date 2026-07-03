@@ -383,9 +383,7 @@ async def test_tc_eng_11_skills_listing_against_crewai(tmp_path: Path) -> None:
     cfg = _config().model_copy(
         update={
             "prompt": (
-                "You are a helpful test agent.\n\n"
-                "## Available skills\n\n"
-                "{{ skills }}"
+                "You are a helpful test agent.\n\n## Available skills\n\n{{ skills }}"
             ),
             "subsystems": {
                 "skills": SubsystemConfig(

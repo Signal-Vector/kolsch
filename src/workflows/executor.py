@@ -20,6 +20,7 @@ the same iterative shape per-child.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
 import os
 import uuid
@@ -127,7 +128,7 @@ class NodeRunner(Protocol):
         self,
         *,
         node_name: str,
-        node_def: Any,  # noqa: ANN401 — NodeDefUnion is a Pydantic alias
+        node_def: Any,
         bound_inputs: dict[str, Any],
         state: dict[str, Any],
         ctx: NodeContext,
@@ -693,7 +694,7 @@ class IterativeExecutor:
         open_node_type = _node_type_ref(open_node_def) if open_node_def else ""
         is_workflow_node_pause = open_node_type == "kolsch/nodes/workflow"
 
-        if not is_workflow_node_pause:
+        if not is_workflow_node_pause:  # noqa: SIM102 — nested block reads clearer with the intervening comment
             # Validate response shape BEFORE any side effects that
             # would flip the status. Bad shape → retry-friendly
             # `WorkflowInputInvalid` with the run still in
@@ -853,7 +854,7 @@ class IterativeExecutor:
     @staticmethod
     def _last_event_id_from_events(
         events: list[dict[str, Any]],
-    ) -> Any:  # noqa: ANN401 — EventId envelope field
+    ) -> Any:
         """Return the `event_id` of the last event in `events`.
 
         `parent_event_id` chains form the causal-parent backbone. The
@@ -870,7 +871,7 @@ class IterativeExecutor:
     # Fork entry point.
     # ------------------------------------------------------------------
 
-    async def start_from_fork(  # noqa: PLR0915 — fork is structurally replay+continue; splitting hides the ordering
+    async def start_from_fork(
         self,
         *,
         fork_event_id: str,
@@ -1125,7 +1126,7 @@ class IterativeExecutor:
     # Worklist body — shared by initial-run and resume paths.
     # ------------------------------------------------------------------
 
-    async def _continue_worklist(  # noqa: PLR0915, PLR0912 — sequential algorithm; splitting hides the ordering
+    async def _continue_worklist(
         self,
         *,
         run_id: WorkflowRunId,
@@ -1545,7 +1546,7 @@ class IterativeExecutor:
     # Concurrent worklist for `auto` mode.
     # ------------------------------------------------------------------
 
-    async def _continue_worklist_concurrent(  # noqa: PLR0915, PLR0912 — concurrent algorithm; splitting hides the ordering
+    async def _continue_worklist_concurrent(
         self,
         *,
         run_id: WorkflowRunId,
@@ -1706,7 +1707,7 @@ class IterativeExecutor:
                     ),
                 )
             self._cleanup_waiting_at(run_dir)
-            return WorkflowRunStatus.SUCCEEDED
+            return WorkflowRunStatus.SUCCEEDED  # noqa: TRY300 — try guards emit-event side effects, not just the return
         except BaseException:
             # Safety net — any uncaught exception out of the dispatch
             # loop (e.g. a programming bug) must cancel orphaned tasks
@@ -1716,9 +1717,9 @@ class IterativeExecutor:
                 if not task.done():
                     task.cancel()
             for task in list(in_flight):
-                try:
+                try:  # noqa: SIM105 — drain reads clearer than contextlib.suppress here
                     await task
-                except BaseException:  # noqa: BLE001 — drain only
+                except BaseException:  # noqa: BLE001, S110 — drain only
                     pass
             raise
 
@@ -1967,9 +1968,9 @@ class IterativeExecutor:
         for task, _ in pending_items:
             task.cancel()
         for task, pending in pending_items:
-            try:
+            try:  # noqa: SIM105 — drain reads clearer than contextlib.suppress here
                 await task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001 — drain
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110 — drain only
                 pass
             async with self._emit_lock:
                 cancelled_id = emit_event(
@@ -2030,10 +2031,8 @@ class IterativeExecutor:
         """
         if not run_dir.waiting_at_path.exists():
             return
-        try:
+        with contextlib.suppress(FileNotFoundError):
             run_dir.waiting_at_path.unlink()
-        except FileNotFoundError:
-            pass
 
     # ------------------------------------------------------------------
     # Topology + predecessor closure.
@@ -2115,7 +2114,7 @@ class IterativeExecutor:
     # `when:` gate evaluation.
     # ------------------------------------------------------------------
 
-    def _when_holds(self, node_def: Any) -> bool:  # noqa: ANN401
+    def _when_holds(self, node_def: Any) -> bool:
         """Evaluate the node-level `when:` modifier.
 
         `None` → no gate (always fires). A bare YAML literal
@@ -2139,7 +2138,7 @@ class IterativeExecutor:
         self,
         *,
         node_name: str,
-        node_def: Any,  # noqa: ANN401 — NodeDefUnion is a Pydantic alias
+        node_def: Any,
         bound_inputs: dict[str, Any],
     ) -> None:
         """Validate `bound_inputs` against the receiver's `Inputs(BaseModel)`.
@@ -2312,7 +2311,7 @@ class IterativeExecutor:
         self,
         *,
         source: str,
-        source_completion_event_id: Any,  # noqa: ANN401 — EventId | None
+        source_completion_event_id: Any,
         branch_value: bool | None,
     ) -> None:
         """Reverse-reachability cascade from `source`.
@@ -2372,7 +2371,7 @@ class IterativeExecutor:
         node_name: str,
         upstream_source: str,
         branch_value: bool,
-        parent_event_id: Any,  # noqa: ANN401 — EventId envelope field
+        parent_event_id: Any,
     ) -> None:
         """Append a `WorkflowNodePrunedEvent` to the run's JSONL.
 
@@ -2413,7 +2412,7 @@ class IterativeExecutor:
         expression: str,
         *,
         inputs_overlay: dict[str, Any] | None = None,
-    ) -> Any:  # noqa: ANN401 — Jinja returns Any-shaped values
+    ) -> Any:
         """Render a Jinja-marked string under `JINJA_ENV`.
 
         The scope exposes `nodes` (captured outputs), `state`
@@ -2445,8 +2444,8 @@ class IterativeExecutor:
         self,
         *,
         inv_id: InvocationId,
-        node_def: Any,  # noqa: ANN401
-        parent_event_id: Any = None,  # noqa: ANN401 — typed EventId in workflows.context
+        node_def: Any,
+        parent_event_id: Any = None,
         is_resume_mode: bool = False,
         recorded_child_run_id: WorkflowRunId | None = None,
     ) -> NodeContext:
@@ -2602,7 +2601,7 @@ class IterativeExecutor:
 # ---------------------------------------------------------------------------
 
 
-def _is_jinja_marked(value: Any) -> bool:  # noqa: ANN401
+def _is_jinja_marked(value: Any) -> bool:
     """Return `True` iff `value` is a string containing `"{{"`."""
     return isinstance(value, str) and "{{" in value
 
@@ -2610,7 +2609,7 @@ def _is_jinja_marked(value: Any) -> bool:  # noqa: ANN401
 def _apply_node_modifiers(
     runner: NodeRunner,
     *,
-    node_def: Any,  # noqa: ANN401
+    node_def: Any,
 ) -> NodeRunner:
     """Apply per-node `retry` and `timeout_seconds` modifiers.
 
@@ -2632,7 +2631,7 @@ def _apply_node_modifiers(
     return runner
 
 
-def _node_type_ref(node_def: Any) -> str:  # noqa: ANN401
+def _node_type_ref(node_def: Any) -> str:
     """Return the node's 3-seg `type:` ref.
 
     The `copy_of:` shape carries no `type:` — the validator resolves

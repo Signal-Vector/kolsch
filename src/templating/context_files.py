@@ -29,8 +29,6 @@ from __future__ import annotations
 
 import importlib.resources
 import logging
-from collections.abc import Callable
-from importlib.resources.abc import Traversable
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -41,6 +39,9 @@ from errors import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+    from importlib.resources.abc import Traversable
+
     from schemas import ContextFileSpec
 
 from templating.vars.docs import DocItem
@@ -133,8 +134,7 @@ def _resolve_kolsch_resource(relative: str) -> Path:
     import kolsch  # noqa: PLC0415
 
     repo_root = Path(kolsch.__file__).parent.parent.parent
-    fallback = (repo_root / relative).resolve()
-    return fallback
+    return (repo_root / relative).resolve()
 
 
 # ---------------------------------------------------------------------------
@@ -179,7 +179,9 @@ def load_context_file(
             max_bytes=max_bytes,
         )
     content = resolved.read_text(encoding="utf-8")
-    summary = spec.summary if spec.summary is not None else _first_non_empty_line(content)
+    summary = (
+        spec.summary if spec.summary is not None else _first_non_empty_line(content)
+    )
     return DocItem(
         path=spec.path,
         summary=summary,

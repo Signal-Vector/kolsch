@@ -127,7 +127,7 @@ async def cmd_nodes(
 
 
 def _cmd_list(
-    catalog: Any,  # noqa: ANN401
+    catalog: Any,
     *,
     bundle: str | None,
     fmt: str,
@@ -182,7 +182,7 @@ def _cmd_list(
 
 
 def _cmd_show(
-    catalog: Any,  # noqa: ANN401
+    catalog: Any,
     ref: str,
     *,
     fmt: str,
