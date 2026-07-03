@@ -1224,6 +1224,7 @@ async def _handler_fork(arg_text: str, ctx: SlashContext) -> ControlSignal:
         WorkflowRunNotFound,
         WorkflowRuntimeError,
     )
+    from schemas import EventId  # noqa: PLC0415
     from workflows.ids import WorkflowRunId  # noqa: PLC0415
     from workflows.parser import load_workflow  # noqa: PLC0415
     from workflows.run import WorkflowRunStatus  # noqa: PLC0415
@@ -1291,7 +1292,7 @@ async def _handler_fork(arg_text: str, ctx: SlashContext) -> ControlSignal:
         trace_id=parent_run.trace_id,
         forked_from=ForkedFrom(
             run_id=parent_run.run_id,
-            fork_event_id=event_id,
+            fork_event_id=EventId(event_id),
         ),
     )
     # Chained-fork support — point pending at the fork so a
@@ -1305,7 +1306,7 @@ async def _handler_fork(arg_text: str, ctx: SlashContext) -> ControlSignal:
             store=store,
             workflow=workflow,
             run=forked_run,
-            fork_event_id=event_id,
+            fork_event_id=EventId(event_id),
             input_overrides=overrides,
         )
     except WorkflowRunNotFound as exc:

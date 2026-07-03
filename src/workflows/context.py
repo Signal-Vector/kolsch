@@ -203,6 +203,47 @@ class NodeContext:
             iteration_total=iteration_total,
         )
 
+    def require_trace_id(self) -> TraceId:
+        """Return `self.trace_id`, raising if it is `None`.
+
+        `trace_id` is `Optional` on the dataclass so `for_test`
+        can construct a `NodeContext` without standing up the
+        trace-id minting layer. Executor-populated contexts always
+        set it, so runtime paths (the ones that construct
+        `Workflow*Event` payloads) can call this to narrow the type
+        without threading a per-site assertion.
+
+        Raises:
+            RuntimeError: `trace_id` is `None` — only reachable from
+                a test factory that forgot to set it.
+        """
+        if self.trace_id is None:
+            raise RuntimeError(
+                "NodeContext.trace_id is None; executor-populated contexts "
+                "always set it — this call path is test-only."
+            )
+        return self.trace_id
+
+    def require_parent_event_id(self) -> EventId:
+        """Return `self.parent_event_id`, raising if it is `None`.
+
+        Same shape as `require_trace_id`: `parent_event_id` is
+        `Optional` for `for_test` construction, but any runtime code
+        that threads it into a payload (e.g. the agent runner
+        stamping `FromWorkflowRun.event_id`) can call this to
+        narrow the type in one place.
+
+        Raises:
+            RuntimeError: `parent_event_id` is `None` — only
+                reachable from a test factory that forgot to set it.
+        """
+        if self.parent_event_id is None:
+            raise RuntimeError(
+                "NodeContext.parent_event_id is None; executor-populated "
+                "contexts always set it — this call path is test-only."
+            )
+        return self.parent_event_id
+
     async def emit_workflow_event(self, event: WorkflowEvent) -> EventId:
         """Append `event` to the run's JSONL via the executor hook.
 
