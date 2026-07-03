@@ -31,7 +31,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
-    from collections.abc import Iterator
+    from collections.abc import Iterator, Sequence
 
 
 # ---------------------------------------------------------------------------
@@ -205,7 +205,7 @@ class DocsVar:
     # ---- Internal rendering helpers ---------------------------------------
 
     @staticmethod
-    def _render_primaries(items: list[DocItem]) -> str:
+    def _render_primaries(items: Sequence[DocItem]) -> str:
         r"""Render primaries as `### <path>\n<content>` blocks joined by `---`.
 
         Empty input produces the empty string so callers can safely
@@ -218,7 +218,7 @@ class DocsVar:
         )
 
     @staticmethod
-    def _render_secondaries(items: list[DocItem]) -> str:
+    def _render_secondaries(items: Sequence[DocItem]) -> str:
         """Render secondaries as a bulleted "Also available" section.
 
         Header line followed by one `- **<path>** — <summary>` entry
