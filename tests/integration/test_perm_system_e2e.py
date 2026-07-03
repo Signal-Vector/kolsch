@@ -35,7 +35,7 @@ from __future__ import annotations
 
 import io as _io
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import pytest
@@ -407,7 +407,7 @@ async def test_perm_sys_03b_perm_allow_with_from_scopes_rule(
 def _denied_tool_failed_event(
     *,
     tool_name: str = "bash",
-    matched_rule: dict[str, object] | None = None,
+    matched_rule: dict[str, Any] | None = None,
     recovery_hint: str = '/perm allow kolsch/tools/bash "find *"',
 ) -> Event:
     """Mirror what

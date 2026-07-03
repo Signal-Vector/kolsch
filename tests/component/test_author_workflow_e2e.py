@@ -138,7 +138,7 @@ def _scripted_llm_callable(
     and ``TextResponse`` into ``LLMResponse(content=...)``."""
 
     async def call(request: LLMRequest) -> LLMResponse:
-        context: dict[str, object] = {
+        context: dict[str, Any] = {
             "messages": [m.model_dump() for m in request.messages],
             "tools": list(request.tools),
             "model": request.model,

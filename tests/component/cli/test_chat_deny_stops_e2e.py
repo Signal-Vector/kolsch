@@ -26,7 +26,7 @@ import os
 import subprocess
 import sys
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import yaml
@@ -145,7 +145,7 @@ def _make_fake_llm_callable(
     from uuid import uuid4
 
     async def _llm(request: LLMRequest) -> LLMResponse:
-        context: dict[str, object] = {
+        context: dict[str, Any] = {
             "messages": [m.model_dump() for m in request.messages],
             "tools": list(request.tools),
             "model": request.model,
@@ -209,7 +209,7 @@ def _print_jsonl_excerpt(label: str, events: list) -> None:
     """
     lines: list[str] = [f"=== {label} ==="]
     for evt in events:
-        summary: dict[str, object] = {
+        summary: dict[str, Any] = {
             "type": str(evt.type.value if hasattr(evt.type, "value") else evt.type),
         }
         if evt.type == EventType.MODEL_REQUEST:

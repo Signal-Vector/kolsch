@@ -18,6 +18,8 @@ rule and a platform rule apply, agent wins (per Phase 2.2 §1.2).
 
 from __future__ import annotations
 
+from typing import Any
+
 import pytest
 
 from errors import AuthzDenied, ToolPermissionsNoContext
@@ -226,7 +228,7 @@ class _PassthroughSandbox:
     async def execute(
         self,
         work: object,
-        policy: dict[str, object],
+        policy: dict[str, Any],
     ) -> object:
         _ = policy
         return await work()  # type: ignore[operator]
@@ -271,7 +273,7 @@ async def test_dispatcher_binds_permissions_around_tool_function() -> None:
     class _Args(BaseModel):
         path: str
 
-    captured: dict[str, object] = {}
+    captured: dict[str, Any] = {}
 
     async def _body(_args: _Args, _ctx: ToolContext) -> str:
         captured["pre_effect"] = await permissions.check("workspace.git.write")

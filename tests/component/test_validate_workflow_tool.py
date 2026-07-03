@@ -21,7 +21,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -40,7 +40,7 @@ _STARTER_BUNDLE = _REPO_ROOT / "src" / "cli" / "_starter_bundle" / "kolsch"
 _TOOL_PATH = _STARTER_BUNDLE / "tools" / "validate_workflow.py"
 
 
-def _tool() -> Callable[..., Awaitable[object]]:
+def _tool() -> Callable[..., Awaitable[dict[str, Any]]]:
     for fn in discover_tools_in_file(_TOOL_PATH):
         defn = fn._tool_definition
         if defn.name == "validate_workflow":

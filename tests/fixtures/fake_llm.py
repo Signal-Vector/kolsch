@@ -17,7 +17,7 @@ shipped). When it lands, this Fake conforms to it without changing
 test call sites.
 """
 
-from typing import TYPE_CHECKING, Annotated, Literal
+from typing import TYPE_CHECKING, Annotated, Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -41,7 +41,7 @@ class ToolCallResponse(BaseModel):
 
     kind: Literal["tool_call"] = "tool_call"
     tool: str
-    args: dict[str, object]
+    args: dict[str, Any]
     tool_call_id: str | None = None
 
 
@@ -96,7 +96,7 @@ class RecordedCall(BaseModel):
 
     model_config = ConfigDict(frozen=True)
 
-    context: dict[str, object]
+    context: dict[str, Any]
     response: FakeLLMResponse
 
 
@@ -122,7 +122,7 @@ class FakeLLM(BaseModel):
     script: list[FakeLLMResponse] = Field(default_factory=list)
     calls: list[RecordedCall] = Field(default_factory=list)
 
-    async def agenerate(self, context: dict[str, object]) -> FakeLLMResponse:
+    async def agenerate(self, context: dict[str, Any]) -> FakeLLMResponse:
         """Return the next scripted response and record the call.
 
         `context` is whatever the engine assembled and would have sent

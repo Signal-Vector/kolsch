@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import argparse
 import io
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -38,7 +38,7 @@ if TYPE_CHECKING:
     import pytest
 
 
-def _accept_anything(_body: dict[str, object]) -> ValidationResult:
+def _accept_anything(_body: dict[str, Any]) -> ValidationResult:
     """Stand-in Layer-3 validator for the standard tools subsystem so
     resolution succeeds without needing the real Tools subsystem."""
     return ValidationResult(ok=True)

@@ -379,7 +379,7 @@ async def _drive_triage(
     return status, events_path, store
 
 
-def _branch_value_of(events: list[dict[str, object]], *, node_name: str) -> object:
+def _branch_value_of(events: list[dict[str, Any]], *, node_name: str) -> object:
     completed = [
         e
         for e in events
@@ -389,11 +389,11 @@ def _branch_value_of(events: list[dict[str, object]], *, node_name: str) -> obje
     return completed[0]["payload"].get("branch_value")
 
 
-def _pruned_nodes(events: list[dict[str, object]]) -> set[str]:
+def _pruned_nodes(events: list[dict[str, Any]]) -> set[str]:
     return {str(e["node_name"]) for e in events if e["kind"] == "workflow.node.pruned"}
 
 
-def _fired_nodes(events: list[dict[str, object]]) -> set[str]:
+def _fired_nodes(events: list[dict[str, Any]]) -> set[str]:
     return {str(e["node_name"]) for e in events if e["kind"] == "workflow.node.started"}
 
 

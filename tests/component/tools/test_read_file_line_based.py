@@ -25,7 +25,7 @@ The five paths exercised:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -51,7 +51,7 @@ _BUNDLE_READ_FILE = (
 )
 
 
-def _bundle_read_file() -> Callable[..., Awaitable[object]]:
+def _bundle_read_file() -> Callable[..., Awaitable[dict[str, Any]]]:
     for fn in discover_tools_in_file(_BUNDLE_READ_FILE):
         defn = fn._tool_definition
         if defn.name == "read_file":

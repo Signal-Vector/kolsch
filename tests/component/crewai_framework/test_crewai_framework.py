@@ -43,7 +43,7 @@ class _RecordingLLM:
     async def __call__(self, request: LLMRequest) -> LLMResponse:
         self._events.append(f"llm.before:{len(request.messages)}")
         # Adapt to FakeLLM's dict-context shape.
-        context: dict[str, object] = {
+        context: dict[str, Any] = {
             "messages": [m.model_dump() for m in request.messages],
             "tools": list(request.tools),
             "model": request.model,

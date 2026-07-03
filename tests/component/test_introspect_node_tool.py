@@ -27,7 +27,7 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -47,7 +47,7 @@ _TOOL_PATH = _STARTER_BUNDLE / "tools" / "introspect_node.py"
 _ECHO_PATH = _STARTER_BUNDLE / "nodes" / "echo.py"
 
 
-def _tool() -> Callable[..., Awaitable[object]]:
+def _tool() -> Callable[..., Awaitable[dict[str, Any]]]:
     for fn in discover_tools_in_file(_TOOL_PATH):
         defn = fn._tool_definition
         if defn.name == "introspect_node":

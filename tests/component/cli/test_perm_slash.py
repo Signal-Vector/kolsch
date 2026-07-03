@@ -20,7 +20,7 @@ from __future__ import annotations
 
 import io as _io
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import yaml
@@ -54,7 +54,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-def _platform_seed() -> dict[str, object]:
+def _platform_seed() -> dict[str, Any]:
     """Build a minimal but complete platform.yaml payload.
 
     Reuses :func:`assets.platform_config.default_platform_payload`
@@ -308,7 +308,7 @@ async def test_perm_missing_args_emits_usage(tmp_path: Path) -> None:
 def _denied_event(
     *,
     tool_name: str = "bash",
-    matched_rule: dict[str, object] | None = None,
+    matched_rule: dict[str, Any] | None = None,
     recovery_hint: str = "/perm allow kolsch/tools/bash *",
 ) -> Event:
     """Build a synthetic tool.failed event the renderer can consume.

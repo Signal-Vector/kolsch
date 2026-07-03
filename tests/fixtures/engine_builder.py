@@ -91,7 +91,7 @@ def make_fake_llm_callable(
     """
 
     async def llm_callable(request: LLMRequest) -> LLMResponse:
-        context: dict[str, object] = {
+        context: dict[str, Any] = {
             "messages": [m.model_dump() for m in request.messages],
             "tools": list(request.tools),
             "model": request.model,

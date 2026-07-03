@@ -21,7 +21,7 @@ pure-function pieces of the dispatch:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import yaml
@@ -169,7 +169,7 @@ def test_empty_chain_raises_value_error() -> None:
 # ---------------------------------------------------------------------------
 
 
-def _write_yaml(path: Path, payload: dict[str, object]) -> None:
+def _write_yaml(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(yaml.safe_dump(payload), encoding="utf-8")
 
