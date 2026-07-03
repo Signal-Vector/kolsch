@@ -43,7 +43,6 @@ from workflows.parser import Workflow
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -170,9 +169,9 @@ class TestRunResumedEventShape:
     def test_serialised_event_carries_resumed_at_invocation_id(
         self,
     ) -> None:
-        import uuid  # noqa: PLC0415
+        import uuid
 
-        from workflows.ids import TraceId, WorkflowRunId  # noqa: PLC0415
+        from workflows.ids import TraceId, WorkflowRunId
 
         ev = WorkflowRunResumedEvent(
             workflow_run_id=WorkflowRunId(f"wrk_{uuid.uuid4()}"),
@@ -229,11 +228,11 @@ class TestReplayInto:
             catalog=AssetCatalog(),
         )
         opens = replay_into(fresh, events)
-        assert fresh._captured == {  # noqa: SLF001 — coupling documented
+        assert fresh._captured == {
             "first": {"k": "v"},
             "second": {"k": "v"},
         }
-        assert fresh._completed_or_skipped == {  # noqa: SLF001
+        assert fresh._completed_or_skipped == {
             "first",
             "second",
         }
@@ -742,5 +741,5 @@ class TestReplayHandlesPruned:
             }
         ]
         replay_into(ex, events)
-        assert "downstream" in ex._pruned  # noqa: SLF001
-        assert "downstream" in ex._completed_or_skipped  # noqa: SLF001
+        assert "downstream" in ex._pruned
+        assert "downstream" in ex._completed_or_skipped

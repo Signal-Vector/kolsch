@@ -36,7 +36,6 @@ from errors import ConfigInvalid
 from kernel import ValidationResult
 from schemas import ResolvedAgentConfig
 
-
 # ---------------------------------------------------------------------------
 # Workspace harness — inline minimal version of test_assets.py's helpers.
 # ---------------------------------------------------------------------------

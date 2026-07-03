@@ -39,7 +39,6 @@ import pytest
 
 from cli.main import main
 
-
 # ---------------------------------------------------------------------------
 # Workspace fixture — `kolsch setup --non-interactive` materialises the
 # starter bundle including ``kolsch/workflows/fork-demo`` (shipped in
@@ -437,7 +436,7 @@ def _write_inline_subworkflow_bundle(workspace: Path) -> None:
     a compute-only inline bundle exercises the SAME spec §9.3
     fork-with-subworkflow path without the agent dependency.
     """
-    from _yamlio import dump  # noqa: PLC0415
+    from _yamlio import dump
 
     bundle = workspace / "bundles" / "subdemo"
     (bundle / "workflows").mkdir(parents=True, exist_ok=True)

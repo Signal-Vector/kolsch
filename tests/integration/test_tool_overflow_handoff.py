@@ -22,7 +22,6 @@ process/test-catalog.md Part 9.8.1.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import pytest
@@ -36,10 +35,6 @@ from providers import (
 )
 from schemas import AgentId, SessionId, ThreadId
 from tools import ToolContext, ToolsSubsystem
-
-if TYPE_CHECKING:
-    pass
-
 
 # ---------------------------------------------------------------------------
 # Fixtures

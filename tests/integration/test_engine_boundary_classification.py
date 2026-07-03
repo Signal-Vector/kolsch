@@ -62,17 +62,15 @@ from unittest.mock import patch
 
 import pytest
 
-from engine import ExecutionContext, MinimalFramework
-from errors import ModelUpstreamError, PlatformError
+from engine import MinimalFramework
+from errors import ModelUpstreamError
 from schemas import EventType
 from tests.fixtures.engine_builder import build_engine, new_session_context
 from tests.fixtures.fake_llm import FakeLLM, TextResponse
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable, Sequence
     from pathlib import Path
 
-    from engine.framework import LLMHandle, Message, ToolHandle
 
 
 # ---------------------------------------------------------------------------
@@ -120,7 +118,7 @@ class _CauseChainRecoverableFramework:
         )
         try:
             raise typed
-        except Exception as cause:  # noqa: BLE001 — intentional re-raise
+        except Exception as cause:
             # Generic wrapper with `from cause` preserves the chain
             # — mirrors what CrewAI's adapter does
             # (raise ConnectionError(...) from APIConnectionError).
@@ -152,7 +150,7 @@ class _CauseChainFatalFramework:
         )
         try:
             raise typed
-        except Exception as cause:  # noqa: BLE001 — intentional re-raise
+        except Exception as cause:
             raise RuntimeError("opaque framework wrapper") from cause
 
 
@@ -179,7 +177,7 @@ class _TransientCauseChainFramework:
             )
             try:
                 raise typed
-            except Exception as cause:  # noqa: BLE001 — intentional re-raise
+            except Exception as cause:
                 raise RuntimeError("opaque framework wrapper") from cause
         return "Recovered after retry."
 
@@ -204,13 +202,13 @@ async def _drive_one_exchange(
     )
     ctx = await new_session_context(store)
     # Bump max_retries on the config Phase 2.2 envelope uses.
-    from schemas import RuntimeSpec  # noqa: PLC0415
+    from schemas import RuntimeSpec
 
     # _drive_one_exchange uses build_engine's stock _config(); patch
     # runtime.max_retries by passing a modified config to execute. The
     # helper here re-uses the engine's default-config builder, so we
     # need to call execute_stream with an explicit config. Inline that:
-    from tests.component.test_engine import _config  # noqa: PLC0415
+    from tests.component.test_engine import _config
 
     cfg = _config().model_copy(update={"runtime": RuntimeSpec(max_retries=max_retries)})
     events: list[Any] = []
@@ -381,7 +379,7 @@ async def test_tc_eng_classify_03_real_engine_bug_still_internal_error(
     def _broken_assemble(*_args: Any, **_kwargs: Any) -> Any:
         raise AttributeError("'NoneType' object has no attribute 'foo'")
 
-    from tests.component.test_engine import _config  # noqa: PLC0415
+    from tests.component.test_engine import _config
 
     cfg = _config()
     with patch("engine.engine.assemble_context", side_effect=_broken_assemble):
@@ -458,7 +456,7 @@ async def test_tc_eng_classify_05_crewai_framework_wrap_translates_connection_er
     retry pipeline.
     """
     _ = tmp_path  # unused — this test exercises the wrap directly
-    from engine.crewai_framework import CrewAIFramework  # noqa: PLC0415
+    from engine.crewai_framework import CrewAIFramework
 
     framework = CrewAIFramework()
 

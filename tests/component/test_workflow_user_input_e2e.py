@@ -30,7 +30,6 @@ import json
 import os
 import textwrap
 from pathlib import Path
-from typing import Any
 
 import pytest
 
@@ -51,7 +50,7 @@ def _make_workspace_with_starter(tmp_path: Path) -> Path:
     instead of inline YAML keeps the e2e tests testing the SAME
     artifacts the operator runs.
     """
-    import shutil  # noqa: PLC0415
+    import shutil
 
     for sub in (
         "bundles",
@@ -275,7 +274,7 @@ class TestPhaseTest4ReplayReconstructsState:
         # (see ``validator._check_value_for_refs``).
         workspace = _make_workspace_with_starter(tmp_path)
         wf_dir = workspace / "bundles" / "kolsch" / "workflows"
-        from _yamlio import dump  # noqa: PLC0415
+        from _yamlio import dump
 
         (wf_dir / "prep-pause-echo.yaml").write_text(
             dump(
@@ -395,15 +394,15 @@ class TestPhaseTest6OrphanSweepSkipsPaused:
         run_dir = workspace / "runs" / run_id
         (run_dir / "pid").write_text("99999", encoding="utf-8")
 
-        from workflows.orphan_sweep import sweep  # noqa: PLC0415
-        from workflows.run_store import WorkflowRunStore  # noqa: PLC0415
+        from workflows.orphan_sweep import sweep
+        from workflows.run_store import WorkflowRunStore
 
         store = WorkflowRunStore(workspace)
         reconciled = sweep(store)
         assert reconciled == []
 
-        from workflows.ids import WorkflowRunId  # noqa: PLC0415
-        from workflows.run import WorkflowRunStatus  # noqa: PLC0415
+        from workflows.ids import WorkflowRunId
+        from workflows.run import WorkflowRunStatus
 
         loaded = store.read(WorkflowRunId(run_id))
         assert loaded.status == WorkflowRunStatus.WAITING_FOR_INPUT

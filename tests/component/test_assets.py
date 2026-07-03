@@ -235,7 +235,7 @@ async def test_bundle_name_core_is_accepted(platform_root: Path) -> None:
     await am.initialize()
     # Catalog initializes cleanly — no reserved-name exception fires.
     assert any(
-        m.name == "core" for m in am._catalog.bundles.values()  # noqa: SLF001
+        m.name == "core" for m in am._catalog.bundles.values()
     )
 
 

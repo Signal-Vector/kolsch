@@ -20,17 +20,12 @@ This catches integration regressions the unit tests miss:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import yaml
 
 from assets import AssetManagement
 from cli._migrations.authz_rules import migrate_authz_rules
 from providers import RuleBasedAuthorizationProvider
-
-if TYPE_CHECKING:
-    pass
-
 
 _CANONICAL_LEGACY_RULES = [
     {"id": "rl_a", "who": ".*", "what": r"agent\.execute\..*", "effect": "allow"},
@@ -160,8 +155,9 @@ async def test_provider_rejects_bare_tool_ref_in_real_workspace(
 
     # Hand-authored rule list with a bare tool name. The provider
     # should refuse to load with AuthzBareToolRef.
-    from errors import AuthzBareToolRef  # noqa: PLC0415
-    import pytest  # noqa: PLC0415
+    import pytest
+
+    from errors import AuthzBareToolRef
 
     with pytest.raises(AuthzBareToolRef) as excinfo:
         RuleBasedAuthorizationProvider(

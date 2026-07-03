@@ -22,7 +22,6 @@ from kernel.partials import PartialAgentConfig
 from kernel.validation import validate_partial, validate_resolved
 from schemas import ContextFileSpec, PermissionRule
 
-
 # ---------------------------------------------------------------------------
 # ContextFileSpec — prefix grammar at construction time.
 # ---------------------------------------------------------------------------

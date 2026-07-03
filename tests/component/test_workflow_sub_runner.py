@@ -40,21 +40,15 @@ from workflows.builtins import (
     WorkflowSubRunner,
     register_builtins,
 )
-from workflows.builtins.bash import BashRunner
 from workflows.context import NodeContext
 from workflows.errors import (
-    ChildWorkflowFailed,
     NodeTypeNotImplemented,
-    WorkflowCallCycle,
-    WorkflowExtendsDepthExceeded,
-    WorkflowNodeFailed,
     WorkflowPausedForInput,
 )
 from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow, load_workflow
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
-
 
 # ---------------------------------------------------------------------------
 # Fixtures + helpers
@@ -374,7 +368,7 @@ class TestParentPointerAndTraceId:
         )
         child_run_id = completed["payload"]["child_run_id"]
 
-        from workflows.ids import WorkflowRunId  # noqa: PLC0415
+        from workflows.ids import WorkflowRunId
 
         child_run = store.read(WorkflowRunId(child_run_id))
         # Trace id inheritance — child's run carries the parent's id.
@@ -469,7 +463,7 @@ class TestCycleDetection:
             for e in events
             if e["kind"] == "workflow.node.called_workflow"
         )
-        from workflows.ids import WorkflowRunId  # noqa: PLC0415
+        from workflows.ids import WorkflowRunId
 
         b_run_id = WorkflowRunId(called["payload"]["child_workflow_run_id"])
         b_events = list(store.read_events(b_run_id))
@@ -536,7 +530,7 @@ class TestDepthCap:
         # Walk the deepest child whose runner raised the depth error.
         # Easiest assertion: the deepest workflow.run.failed reason
         # mentions ``WorkflowExtendsDepthExceeded``. Walk from root.
-        from workflows.ids import WorkflowRunId  # noqa: PLC0415
+        from workflows.ids import WorkflowRunId
 
         current_run_id = root_run.run_id
         last_failed_class = ""
@@ -682,7 +676,7 @@ class TestPauseCascade:
         )
 
         # Child sidecar exists and points at the inner pause's invocation id.
-        from workflows.ids import WorkflowRunId  # noqa: PLC0415
+        from workflows.ids import WorkflowRunId
 
         child_run_id = WorkflowRunId(
             cw_completed["payload"]["child_workflow_run_id"]
@@ -842,7 +836,7 @@ class TestThreeLevelNesting:
         status = await executor.run()
         assert status == WorkflowRunStatus.SUCCEEDED
 
-        from workflows.ids import WorkflowRunId  # noqa: PLC0415
+        from workflows.ids import WorkflowRunId
 
         gp_events = list(store.read_events(gp_run.run_id))
         p_run_id = WorkflowRunId(
@@ -952,14 +946,14 @@ def _stub_register_builtins_without_factory(
     so the workflow-sub slot's catalog gate passes.
     """
     _ = store  # parent-test fixture; passed for symmetry
-    from files import PathPolicy  # noqa: PLC0415
-    from providers.authz import (  # noqa: PLC0415
+    from files import PathPolicy
+    from providers.authz import (
         RuleBasedAuthorizationProvider,
     )
-    from providers.sandbox import NativeSandboxProvider  # noqa: PLC0415
-    from providers.secrets import DotenvSecretsProvider  # noqa: PLC0415
-    from tools.builtins import make_bash  # noqa: PLC0415
-    from tools.decorator import get_tool_definition  # noqa: PLC0415
+    from providers.sandbox import NativeSandboxProvider
+    from providers.secrets import DotenvSecretsProvider
+    from tools.builtins import make_bash
+    from tools.decorator import get_tool_definition
 
     policy = PathPolicy(allowed_paths=["."], denied_paths=[])
     bash_fn = make_bash(policy=policy, root=tmp_path)
@@ -984,7 +978,7 @@ def _stub_register_builtins_without_factory(
 
 class TestComputeTerminalOutputDict:
     def test_terminals_only_with_pruned_as_none(self) -> None:
-        from workflows._terminal import compute_terminal_output_dict  # noqa: PLC0415
+        from workflows._terminal import compute_terminal_output_dict
 
         wf = Workflow.model_validate(
             {
@@ -1010,7 +1004,7 @@ class TestComputeTerminalOutputDict:
         assert out == {"b": {"y": 2}, "c": {"z": 3}}
 
     def test_pruned_terminal_resolves_to_none(self) -> None:
-        from workflows._terminal import compute_terminal_output_dict  # noqa: PLC0415
+        from workflows._terminal import compute_terminal_output_dict
 
         wf = Workflow.model_validate(
             {

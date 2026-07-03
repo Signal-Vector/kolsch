@@ -20,8 +20,6 @@ they stay in the `unit/` tree.
 
 from __future__ import annotations
 
-from pathlib import Path
-
 import pytest
 from pydantic import ValidationError
 
@@ -31,12 +29,10 @@ from cli._migrations.authz_rules import migrate_authz_rules
 from errors import (
     AssetsAmbiguousShorthand,
     AuthzBareToolRef,
-    AuthzMalformedRule,
     AuthzPatternInvalid,
     AuthzToolRefUnknown,
 )
 from providers import Rule, RuleBasedAuthorizationProvider
-
 
 # ---------------------------------------------------------------------------
 # Catalog fixtures

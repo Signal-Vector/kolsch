@@ -240,7 +240,7 @@ class MapRunner:
             results.append(captured)
         return results
 
-    async def _run_parallel(  # noqa: PLR0913, PLR0915 — concurrent algorithm
+    async def _run_parallel(  # noqa: PLR0913 — concurrent algorithm
         self,
         *,
         node_def: MapNodeDef,

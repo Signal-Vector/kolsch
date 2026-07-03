@@ -851,7 +851,7 @@ async def test_declared_owner_bundles_overrides_home_bundle(
     """
     bundle = tmp_path / "bundles" / "kolsch" / "tools"
     bundle.mkdir(parents=True)
-    source = '''
+    source = """
 from pydantic import BaseModel
 from tools import tool
 
@@ -863,7 +863,7 @@ class GreetArgs(BaseModel):
 @tool(name="greet", description="Greets the caller", args_schema=GreetArgs)
 async def greet(args, ctx):
     return {"text": f"hi, {args.name}"}
-'''
+"""
     tool_file = bundle / "greet.py"
     tool_file.write_text(source, encoding="utf-8")
 
@@ -902,7 +902,7 @@ async def test_declared_paths_without_owner_map_uses_home_bundle_fallback(
     """
     bundle = tmp_path / "bundles" / "programmatic" / "tools"
     bundle.mkdir(parents=True)
-    source = '''
+    source = """
 from pydantic import BaseModel
 from tools import tool
 
@@ -914,7 +914,7 @@ class NoopArgs(BaseModel):
 @tool(name="noop", description="does nothing", args_schema=NoopArgs)
 async def noop(args, ctx):
     return {"ok": True}
-'''
+"""
     tool_file = bundle / "noop.py"
     tool_file.write_text(source, encoding="utf-8")
 

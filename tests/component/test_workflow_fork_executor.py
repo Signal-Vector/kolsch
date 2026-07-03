@@ -50,7 +50,6 @@ from workflows.parser import Workflow
 from workflows.run import WorkflowRun, WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
 
-
 # ---------------------------------------------------------------------------
 # Pipeline fixture — A→B→C using kolsch/nodes/compute.
 #
@@ -118,7 +117,7 @@ async def _run_pipeline_to_completion(
     status = await ex.run()
     assert status == WorkflowRunStatus.SUCCEEDED
     # Sanity — parent's three compute nodes all fired with expected values.
-    assert ex._captured == {  # noqa: SLF001
+    assert ex._captured == {
         "A": {"value": 10},
         "B": {"value": 20},
         "C": {"value": 20},
@@ -387,9 +386,9 @@ class TestForkInputOverrides:
         )
         assert status == WorkflowRunStatus.SUCCEEDED
         # C captured the OVERRIDDEN value, not the parent's 20.
-        assert ex._captured["C"] == {"value": 99}  # noqa: SLF001
+        assert ex._captured["C"] == {"value": 99}
         # And B's captured dict reflects the override.
-        assert ex._captured["B"] == {"value": 99}  # noqa: SLF001
+        assert ex._captured["B"] == {"value": 99}
 
         # The forked JSONL records the overrides in the
         # workflow.run.forked_from payload for forensics.
@@ -435,12 +434,12 @@ class TestForkInputOverrides:
         )
         assert status == WorkflowRunStatus.SUCCEEDED
         # Both keys present — ``value`` survived, ``extra`` was added.
-        assert ex._captured["B"] == {  # noqa: SLF001
+        assert ex._captured["B"] == {
             "value": 20,
             "extra": "patched",
         }
         # C still sees the untouched value.
-        assert ex._captured["C"] == {"value": 20}  # noqa: SLF001
+        assert ex._captured["C"] == {"value": 20}
 
     async def test_override_at_started_event_patches_workflow_inputs(
         self, tmp_path: Path
@@ -471,7 +470,7 @@ class TestForkInputOverrides:
             catalog=AssetCatalog(),
         )
         await ex.run()
-        assert ex._captured == {"probe": {"value": "parent"}}  # noqa: SLF001
+        assert ex._captured == {"probe": {"value": "parent"}}
 
         started_id = _started_event_id(_events(store, parent_run.run_id))
         forked_run = store.create(
@@ -495,7 +494,7 @@ class TestForkInputOverrides:
         )
         assert status == WorkflowRunStatus.SUCCEEDED
         # The probe saw the OVERRIDDEN state on the fork.
-        assert fork_ex._captured == {  # noqa: SLF001
+        assert fork_ex._captured == {
             "probe": {"value": "forked"}
         }
 

@@ -35,7 +35,6 @@ from workflows.parser import Workflow
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -89,7 +88,7 @@ def _executor(
 def _catalog_with_demo_echo() -> AssetCatalog:
     """Catalog entry that short-circuits importlib so the in-test
     runner registered for ``demo/nodes/echo`` carries the load."""
-    from assets.catalog import AssetEntry  # noqa: PLC0415
+    from assets.catalog import AssetEntry
 
     return AssetCatalog(
         assets={
@@ -156,7 +155,7 @@ class TestPhase3StateEvolvesAcrossWrites:
         status = await ex.run()
         assert status == WorkflowRunStatus.SUCCEEDED
         # Final live value.
-        assert ex._state["attempts"] == 2  # noqa: SLF001
+        assert ex._state["attempts"] == 2
         # Three events for ``attempts`` with values 0, 1, 2 in order.
         events = list(store.read_events(run.run_id))
         attempts_values = [
@@ -289,4 +288,4 @@ class TestPhase5DeleteStateSilentOnAbsent:
             {"key": "foo", "op": "delete", "value": None}
         ]
         # State unchanged — no exception.
-        assert ex._state == {}  # noqa: SLF001
+        assert ex._state == {}

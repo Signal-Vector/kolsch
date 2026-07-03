@@ -271,12 +271,12 @@ def test_non_branching_starter_unchanged(
 # ---------------------------------------------------------------------------
 
 
-import shutil  # noqa: E402, PLC0415
+import shutil  # noqa: E402
 
 from tests.component.test_workflow_agent_runner_e2e import (  # noqa: E402
     _PERMISSIVE_PLATFORM_YAML,
-    _ScriptedLLM,
     _build_engine_with_llm,
+    _ScriptedLLM,
 )
 from workflows.builtins import register_builtins  # noqa: E402
 from workflows.executor import IterativeExecutor, RunnerRegistry  # noqa: E402
@@ -285,7 +285,7 @@ from workflows.run import WorkflowRunStatus  # noqa: E402
 from workflows.run_store import WorkflowRunStore  # noqa: E402
 
 
-def _scaffold_triage_workspace(root: "Path") -> None:
+def _scaffold_triage_workspace(root: Path) -> None:
     """Lay down a workspace seeded with the actual starter ``kolsch``
     bundle (so the e2e test exercises the same YAMLs the operator
     runs). Mirrors the pattern in
@@ -319,11 +319,11 @@ def _scaffold_triage_workspace(root: "Path") -> None:
 
 
 async def _drive_triage(
-    root: "Path",
+    root: Path,
     *,
     classify_reply: str,
     handler_reply: str,
-) -> tuple[WorkflowRunStatus, "Path", object]:
+) -> tuple[WorkflowRunStatus, Path, object]:
     """Drive the triage workflow once with a scripted LLM.
 
     Returns ``(status, events_path, session_store)``. The scripted
@@ -332,16 +332,16 @@ async def _drive_triage(
     branch condition) then ``handler_reply`` (consumed by whichever
     responder agent fires).
     """
-    import yaml  # noqa: PLC0415
+    import yaml
 
-    from files import PathPolicy  # noqa: PLC0415
-    from tools.builtins import (  # noqa: PLC0415
+    from files import PathPolicy
+    from tools.builtins import (
         make_bash,
         make_list_files,
         make_read_file,
         make_write_file,
     )
-    from tools.decorator import get_tool_definition  # noqa: PLC0415
+    from tools.decorator import get_tool_definition
 
     _scaffold_triage_workspace(root)
 
@@ -372,9 +372,9 @@ async def _drive_triage(
         # Reuse the engine's already-built providers — bypassing
         # ``bootstrap_runtime`` keeps the test lean and matches the
         # in-process construction agent-runner e2e uses.
-        authz=engine._authz,  # noqa: SLF001
-        secrets=engine._secrets,  # noqa: SLF001
-        sandbox=engine._sandbox,  # noqa: SLF001
+        authz=engine._authz,
+        secrets=engine._secrets,
+        sandbox=engine._sandbox,
         catalog=catalog,
         engine=engine,
         session_store=store,
@@ -432,7 +432,7 @@ def _fired_nodes(events: list[dict[str, object]]) -> set[str]:
 
 class TestPhase36TriageBothArms:
     async def test_urgent_arm_fires_normal_pruned(
-        self, tmp_path: "Path"
+        self, tmp_path: Path
     ) -> None:
         status, events_path, _store = await _drive_triage(
             tmp_path,
@@ -446,7 +446,7 @@ class TestPhase36TriageBothArms:
         assert _pruned_nodes(events) == {"normal_handler"}
 
     async def test_normal_arm_fires_urgent_pruned(
-        self, tmp_path: "Path"
+        self, tmp_path: Path
     ) -> None:
         status, events_path, _store = await _drive_triage(
             tmp_path,
@@ -462,7 +462,7 @@ class TestPhase36TriageBothArms:
 
 class TestPhase36TriageCrossJsonlLinkage:
     async def test_spawned_sessions_share_workflow_trace_id(
-        self, tmp_path: "Path"
+        self, tmp_path: Path
     ) -> None:
         """Spawned agent sessions inherit the workflow's ``trace_id``
         unchanged — Phase 3.2 §11.6.4. The branching context shouldn't

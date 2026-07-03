@@ -25,7 +25,6 @@ from providers.authz import AuthzEffect, RuleBasedAuthorizationProvider
 from providers.authz import Rule as AuthzRule
 from tools import permissions
 
-
 # ---------------------------------------------------------------------------
 # Fixtures.
 # ---------------------------------------------------------------------------
@@ -192,7 +191,7 @@ async def test_context_var_cleared_after_exception_path(
     token = permissions.bind(binding)
     try:
         # Simulate the tool raising mid-execution.
-        raise RuntimeError("tool blew up")  # noqa: TRY301
+        raise RuntimeError("tool blew up")
     except RuntimeError:
         pass
     finally:

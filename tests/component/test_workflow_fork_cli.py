@@ -37,7 +37,6 @@ import pytest
 
 from cli.main import main
 
-
 # ---------------------------------------------------------------------------
 # Workspace fixture — mirrors tests/component/test_workflow_resume_cli.py
 # ---------------------------------------------------------------------------
@@ -82,7 +81,7 @@ def _write_workflow_bundle(
     )
     wf_dir = bundle / "workflows"
     wf_dir.mkdir(exist_ok=True)
-    from _yamlio import dump  # noqa: PLC0415
+    from _yamlio import dump
 
     (wf_dir / f"{workflow_name}.yaml").write_text(
         dump(workflow_yaml), encoding="utf-8"
@@ -347,8 +346,8 @@ class TestForkCliHappyPath:
         assert rc == 0
         forked_id = json.loads(out)["data"]["new_run_id"]
 
-        from workflows.ids import WorkflowRunId  # noqa: PLC0415
-        from workflows.run_store import WorkflowRunStore  # noqa: PLC0415
+        from workflows.ids import WorkflowRunId
+        from workflows.run_store import WorkflowRunStore
 
         store = WorkflowRunStore(workspace)
         run = store.read(WorkflowRunId(forked_id))
@@ -783,7 +782,7 @@ class TestForkPauseResume:
         # CLI's payload_preview truncates at 50 chars and drops the
         # full output dict) and verify the parent's echo node
         # captured "parent-said", not "fork-said".
-        import json as _json  # noqa: PLC0415
+        import json as _json
 
         parent_jsonl = (
             workspace / "runs" / parent_id / "events.jsonl"
@@ -879,8 +878,8 @@ class TestReForkChains:
 
         # AC 2.8 — meta.json on fork_b carries forked_from = fork_a,
         # not root.
-        from workflows.ids import WorkflowRunId  # noqa: PLC0415
-        from workflows.run_store import WorkflowRunStore  # noqa: PLC0415
+        from workflows.ids import WorkflowRunId
+        from workflows.run_store import WorkflowRunStore
 
         store = WorkflowRunStore(workspace)
         fork_b = store.read(WorkflowRunId(fork_b_id))

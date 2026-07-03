@@ -45,7 +45,6 @@ from engine._cancellation import (
 from engine.context import CancelToken
 from errors import ExchangeCancelled
 
-
 # ---------------------------------------------------------------------------
 # race_with_cancel
 # ---------------------------------------------------------------------------

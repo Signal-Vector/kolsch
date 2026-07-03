@@ -21,7 +21,7 @@ from __future__ import annotations
 import io as _io
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import yaml
@@ -38,7 +38,6 @@ from schemas import (
     Event,
     EventId,
     EventType,
-    ResolvedAgentConfig,
     SessionId,
     ThreadId,
     ToolFailedData,
@@ -61,7 +60,7 @@ def _platform_seed() -> dict[str, object]:
     so we get every required section (secrets, sandbox, storage,
     event_bus, file_access) — then overrides the authorization
     rules with the new-shape catch-all the /perm tests want."""
-    from assets.platform_config import default_platform_payload  # noqa: PLC0415
+    from assets.platform_config import default_platform_payload
 
     payload = default_platform_payload()
     payload["authorization"] = {
@@ -128,13 +127,13 @@ def _ctx(runtime: PlatformRuntime, stdout: _io.StringIO) -> SlashContext:
     The handler reads only ``ctx.state.runtime`` — no other state
     fields. We bypass the heavy ResolvedAgentConfig fixture by
     duck-typing a ``_StubState`` and casting it through ``Any``."""
-    from typing import cast  # noqa: PLC0415
+    from typing import cast
 
     class _StubState:
         def __init__(self, runtime: PlatformRuntime) -> None:
             self.runtime = runtime
 
-    state = cast(ChatSessionState, _StubState(runtime))
+    state = cast("ChatSessionState", _StubState(runtime))
     return SlashContext(stdout=stdout, state=state)
 
 
@@ -457,8 +456,8 @@ def test_tool_failed_data_recovery_hint_defaults_to_none() -> None:
 def test_engine_derives_hint_for_bash_authz_denial() -> None:
     """The engine helper produces ``/perm allow <tool_ref> "<first-token> *"``
     for a bash invocation that was denied by a new-shape rule."""
-    from engine.observers import _derive_authz_recovery_hint  # noqa: PLC0415
-    from errors import ToolUnauthorized  # noqa: PLC0415
+    from engine.observers import _derive_authz_recovery_hint
+    from errors import ToolUnauthorized
 
     exc = ToolUnauthorized(
         tool_name="bash",
@@ -473,8 +472,8 @@ def test_engine_derives_hint_for_bash_authz_denial() -> None:
 def test_engine_skips_hint_when_matched_rule_lacks_qualified_ref() -> None:
     """Legacy matched rule (regex `what`) → no hint (we'd have to
     guess the qualified ref, and a wrong guess is worse than no hint)."""
-    from engine.observers import _derive_authz_recovery_hint  # noqa: PLC0415
-    from errors import ToolUnauthorized  # noqa: PLC0415
+    from engine.observers import _derive_authz_recovery_hint
+    from errors import ToolUnauthorized
 
     exc = ToolUnauthorized(
         tool_name="bash",
@@ -492,8 +491,8 @@ def test_engine_skips_hint_when_matched_rule_lacks_qualified_ref() -> None:
 
 def test_engine_hint_uses_star_when_no_args() -> None:
     """No args → `*` pattern, since we have nothing better to suggest."""
-    from engine.observers import _derive_authz_recovery_hint  # noqa: PLC0415
-    from errors import ToolUnauthorized  # noqa: PLC0415
+    from engine.observers import _derive_authz_recovery_hint
+    from errors import ToolUnauthorized
 
     exc = ToolUnauthorized(
         tool_name="bash",

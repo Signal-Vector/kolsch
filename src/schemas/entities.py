@@ -61,8 +61,8 @@ class FromWorkflowRun(BaseModel):
 
     # String forward refs — see `_resolve_forward_refs` below for the
     # lazy import that breaks the schemas↔workflows.ids cycle.
-    workflow_run_id: "WorkflowRunId"
-    invocation_id: "InvocationId"
+    workflow_run_id: WorkflowRunId
+    invocation_id: InvocationId
     event_id: EventId  # workflow.node.started event that spawned this session
 
 
@@ -86,8 +86,8 @@ class ParentRunPointer(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     # String forward refs — see `_resolve_forward_refs` below.
-    workflow_run_id: "WorkflowRunId"
-    invocation_id: "InvocationId"
+    workflow_run_id: WorkflowRunId
+    invocation_id: InvocationId
 
 
 class ForkedFrom(BaseModel):
@@ -111,7 +111,7 @@ class ForkedFrom(BaseModel):
     model_config = ConfigDict(frozen=True, extra="forbid")
 
     # String forward refs — see `_resolve_forward_refs` below.
-    run_id: "WorkflowRunId"
+    run_id: WorkflowRunId
     fork_event_id: EventId
 
 

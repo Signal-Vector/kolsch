@@ -17,6 +17,7 @@ from errors import (
     ToolNotFound,
     ToolSetupFailed,
 )
+from providers.authz import PermissionLayer
 from tools.decorator import (
     ToolContext,
     ToolDefinition,
@@ -27,8 +28,6 @@ from tools.decorator import (
 from tools.discovery import discover_tools_in_file
 from tools.dispatch import dispatch_tool
 from tools.registry import ToolRegistry, _MCPRegistration
-
-from providers.authz import PermissionLayer
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable

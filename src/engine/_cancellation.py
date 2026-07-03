@@ -131,7 +131,7 @@ async def race_with_cancel(
     # and we don't want to truncate their tool.failed emit.
     try:
         result = await asyncio.wait_for(work_task, timeout=post_cancel_grace_seconds)
-    except (asyncio.TimeoutError, TimeoutError):
+    except TimeoutError:
         # Genuinely hung — preempt.
         work_task.cancel()
         try:

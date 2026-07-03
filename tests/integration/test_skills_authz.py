@@ -23,21 +23,20 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import yaml
-
 import pytest
+import yaml
 
 from engine import ExecutionContext, LLMRequest, LLMResponse
 from engine.context import AgentExecutionError
 from platform_runtime import bootstrap_runtime
 from schemas import EventType
+
 # qol-skills-jinja-variable-symmetric-with-tools — the post-append
 # projection is gone; SkillsVar from templating.vars is the new
 # in-prompt rendering surface. This test now exercises the same
 # Sk-I2 filter at the Var construction step (mirroring the engine's
 # pre-flight at engine._render_prompt_if_needed).
 from templating.vars import SkillItem, SkillsVar
-
 
 # ---------------------------------------------------------------------------
 # Workspace fixture.

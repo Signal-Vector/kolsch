@@ -439,7 +439,7 @@ _JSON_TYPE_TO_PYTHON: dict[str, Any] = {
 }
 
 
-def _pytype_for_property(prop: Any) -> Any:  # noqa: ANN401 — Pydantic annotations
+def _pytype_for_property(prop: Any) -> Any:
     """Map a JSON-schema property's `type` to a Python type.
 
     Handles both scalar `"type": "string"` and array-form `"type":

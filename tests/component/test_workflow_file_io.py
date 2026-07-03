@@ -24,8 +24,6 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from assets.catalog import AssetCatalog
 from files import PathPolicy
 from providers.authz import RuleBasedAuthorizationProvider
@@ -39,7 +37,6 @@ from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -56,7 +53,7 @@ def _policy(allowed: list[str]) -> PathPolicy:
 
 def _registry(root: Path, *, allowed: list[str]) -> RunnerRegistry:
     """Wire register_builtins with all four tool defs against ``root``."""
-    from tools.builtins import make_bash  # noqa: PLC0415
+    from tools.builtins import make_bash
 
     policy = _policy(allowed)
     catalog = AssetCatalog()
@@ -118,9 +115,13 @@ def _make_executor(
 
 class TestRegistration:
     def test_three_runners_resolve(self, tmp_path: Path) -> None:
-        from workflows.builtins import (  # noqa: PLC0415
+        from workflows.builtins import (
             ListFilesRunner as _ListFilesRunner,
+        )
+        from workflows.builtins import (
             ReadFileRunner as _ReadFileRunner,
+        )
+        from workflows.builtins import (
             WriteFileRunner as _WriteFileRunner,
         )
 
@@ -176,13 +177,13 @@ class TestReadWriteRoundtrip:
         # File landed at workspace-relative path.
         assert (tmp_path / "hello.txt").read_text() == "greetings"
         # Captured output narrowed to spec contract.
-        assert ex._captured["write"] == {"bytes_written": 9}  # noqa: SLF001
+        assert ex._captured["write"] == {"bytes_written": 9}
         # read_file's content carries cat -n line numbering; we check
         # the body is present somewhere in the rendered content.
-        assert "greetings" in ex._captured["read"]["content"]  # noqa: SLF001
+        assert "greetings" in ex._captured["read"]["content"]
         # Narrowing — captured dict has ONLY ``content`` (no
         # lines_returned / total_lines / next_offset / truncated).
-        assert set(ex._captured["read"].keys()) == {"content"}  # noqa: SLF001
+        assert set(ex._captured["read"].keys()) == {"content"}
         _ = store, run
 
     async def test_bytes_written_reflects_size(
@@ -201,7 +202,7 @@ class TestReadWriteRoundtrip:
         )
         ex, _store, _run = _make_executor(tmp_path, workflow=wf)
         await ex.run()
-        assert ex._captured["write"]["bytes_written"] == 3  # noqa: SLF001
+        assert ex._captured["write"]["bytes_written"] == 3
 
 
 # ---------------------------------------------------------------------------
@@ -228,9 +229,9 @@ class TestListFiles:
         )
         ex, _store, _run = _make_executor(tmp_path, workflow=wf)
         await ex.run()
-        entries = ex._captured["ls"]["entries"]  # noqa: SLF001
+        entries = ex._captured["ls"]["entries"]
         # Narrowing — only ``entries`` key.
-        assert set(ex._captured["ls"].keys()) == {"entries"}  # noqa: SLF001
+        assert set(ex._captured["ls"].keys()) == {"entries"}
         # Names only (no paths / is_dir / size_bytes).
         assert isinstance(entries, list)
         assert all(isinstance(e, str) for e in entries)
@@ -254,7 +255,7 @@ class TestListFiles:
         )
         ex, _store, _run = _make_executor(tmp_path, workflow=wf)
         await ex.run()
-        entries = set(ex._captured["ls"]["entries"])  # noqa: SLF001
+        entries = set(ex._captured["ls"]["entries"])
         assert "keep.txt" in entries
         assert "skip.py" not in entries
 
@@ -276,7 +277,7 @@ class TestListFiles:
             tmp_path, workflow=wf, inputs={"ext": "py"}
         )
         await ex.run()
-        entries = set(ex._captured["ls"]["entries"])  # noqa: SLF001
+        entries = set(ex._captured["ls"]["entries"])
         assert "hit.py" in entries
         assert "miss.txt" not in entries
 
@@ -324,9 +325,8 @@ class TestFileAccessDenied:
     async def test_remap_preserves_cause(self, tmp_path: Path) -> None:
         # Direct unit check on the runner remap — sanity check that
         # ``raise ... from exc`` keeps ``__cause__`` populated.
-        from errors import FileAccessDenied  # noqa: PLC0415
-
-        from workflows.builtins.read_file import (  # noqa: PLC0415
+        from errors import FileAccessDenied
+        from workflows.builtins.read_file import (
             ReadFileRunner,
         )
 

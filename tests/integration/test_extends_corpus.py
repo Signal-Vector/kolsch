@@ -99,7 +99,6 @@ from templating.vars._platform import (
 )
 from templating.vars.docs import DocItem
 from templating.vars.tools import ToolItem
-
 from tests.integration._extends_corpus_cases import CASES, FixtureCase
 
 pytestmark = pytest.mark.asyncio
@@ -208,7 +207,7 @@ def _build_render_context(
     # 12's loader against the workspace.
     doc_items: list[DocItem] = []
     if case_id == "I1":
-        from templating.context_files import (  # noqa: PLC0415
+        from templating.context_files import (
             load_context_file,
         )
 

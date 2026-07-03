@@ -33,7 +33,7 @@ from tools.builtins import (
 from tools.decorator import get_tool_definition
 
 
-@pytest.fixture()
+@pytest.fixture
 def _policy(tmp_path: Path) -> PathPolicy:
     """Match the shape ``build_workflow_executor`` gets from the runtime."""
     return PathPolicy(allowed_paths=[str(tmp_path)], denied_paths=[])

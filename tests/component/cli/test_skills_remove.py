@@ -22,7 +22,6 @@ Six cases:
 
 from __future__ import annotations
 
-import io as _io
 from pathlib import Path
 from typing import TYPE_CHECKING
 

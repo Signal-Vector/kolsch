@@ -73,7 +73,7 @@ def _write_workflow_bundle(
     )
     wf_dir = bundle / "workflows"
     wf_dir.mkdir(exist_ok=True)
-    from _yamlio import dump  # noqa: PLC0415
+    from _yamlio import dump
 
     (wf_dir / f"{workflow_name}.yaml").write_text(
         dump(workflow_yaml), encoding="utf-8"
@@ -466,16 +466,16 @@ class TestOrphanSweepSkipsPaused:
         run_dir = workspace / "runs" / run_id
         (run_dir / "pid").write_text("99999", encoding="utf-8")
 
-        from workflows.orphan_sweep import sweep  # noqa: PLC0415
-        from workflows.run_store import WorkflowRunStore  # noqa: PLC0415
+        from workflows.orphan_sweep import sweep
+        from workflows.run_store import WorkflowRunStore
 
         store = WorkflowRunStore(workspace)
         reconciled = sweep(store)
         assert reconciled == []
 
         # Run still reads as WAITING_FOR_INPUT.
-        from workflows.ids import WorkflowRunId  # noqa: PLC0415
-        from workflows.run import WorkflowRunStatus  # noqa: PLC0415
+        from workflows.ids import WorkflowRunId
+        from workflows.run import WorkflowRunStatus
 
         loaded = store.read(WorkflowRunId(run_id))
         assert loaded.status == WorkflowRunStatus.WAITING_FOR_INPUT
@@ -487,12 +487,13 @@ class TestOrphanSweepSkipsPaused:
         # NON-paused orphans. A run with ``workflow.run.started`` +
         # no terminal + a dead PID + status != waiting_for_input
         # should still be reconciled to ``failed``.
-        from workflows.ids import TraceId, WorkflowRunId  # noqa: PLC0415
-        from workflows.orphan_sweep import sweep  # noqa: PLC0415
-        from workflows.run import WorkflowRun, WorkflowRunStatus  # noqa: PLC0415
-        from workflows.run_store import WorkflowRunStore  # noqa: PLC0415
-        import uuid  # noqa: PLC0415
-        from datetime import UTC, datetime  # noqa: PLC0415
+        import uuid
+        from datetime import UTC, datetime
+
+        from workflows.ids import TraceId, WorkflowRunId
+        from workflows.orphan_sweep import sweep
+        from workflows.run import WorkflowRun, WorkflowRunStatus
+        from workflows.run_store import WorkflowRunStore
 
         workspace = tmp_path
         store = WorkflowRunStore(workspace)

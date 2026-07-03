@@ -1011,7 +1011,7 @@ def _archive_fetch(parsed: _ParsedInstallUrl, scratch_dir: Path) -> Path:
             zf.extractall(extracted)  # noqa: S202 — tmp dir, content validated downstream
     else:
         with tarfile.open(archive_path) as tf:
-            tf.extractall(extracted, filter="data")  # noqa: S202 — same
+            tf.extractall(extracted, filter="data")
 
     # Many archives wrap content in a single top-level dir (e.g.
     # github's `repo-<sha>/`). When that's the case, descend into
@@ -1605,7 +1605,7 @@ def _get_catalog_entry_sync(am: AssetManagement, ref: str) -> AssetEntry:
     # this resolver stays disciplined alongside the rest of the
     # codebase; only the 1-seg fallback iterates entries (no ref
     # to look up — it's a whole-catalog scan by trailing name).
-    catalog = am._catalog  # noqa: SLF001 — read-only catalog access
+    catalog = am._catalog
     if catalog is None:
         msg = "AssetManagement not initialized"
         raise RuntimeError(msg)

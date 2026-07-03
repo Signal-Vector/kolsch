@@ -233,8 +233,8 @@ def test_phase_3_7_child_orphan_uses_orphaned_child_reason(
     dead reconciles with ``reason="orphaned_child"`` so operators can
     distinguish parent-crash orphans from top-level orphans.
     """
-    from schemas.entities import ParentRunPointer  # noqa: PLC0415
-    from workflows.ids import (  # noqa: PLC0415
+    from schemas.entities import ParentRunPointer
+    from workflows.ids import (
         InvocationId,
         WorkflowRunId,
     )

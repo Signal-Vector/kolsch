@@ -20,8 +20,8 @@ providers don't depend on Asset Management directly.
 
 from __future__ import annotations
 
-from dataclasses import dataclass, field
 from collections.abc import Mapping
+from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, Any, ClassVar, Literal, Protocol
 
 if TYPE_CHECKING:

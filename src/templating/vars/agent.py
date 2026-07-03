@@ -99,7 +99,7 @@ class AgentVar:
     """
 
     name: str
-    id: str  # noqa: A003 — the attribute name is part of the template surface
+    id: str
     model: ModelView
     tools: ToolsVar
     permissions: list[Rule] = field(default_factory=list)

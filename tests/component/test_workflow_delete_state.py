@@ -19,7 +19,6 @@ from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run_store import WorkflowRunStore
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -71,7 +70,7 @@ def _state_events(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 class TestRegistration:
     def test_delete_state_resolves_to_runner(self) -> None:
-        from workflows.builtins import (  # noqa: PLC0415
+        from workflows.builtins import (
             DeleteStateRunner as _DeleteStateRunner,
         )
 
@@ -107,7 +106,7 @@ class TestDeleteSemantics:
         )
         ex, store, run = _run_executor(tmp_path, workflow=wf)
         await ex.run()
-        assert ex._state == {"y": 2}  # noqa: SLF001
+        assert ex._state == {"y": 2}
         payloads = _state_events(list(store.read_events(run.run_id)))
         # Three events total: init's two sets + drop's one delete.
         assert payloads[-1] == {
@@ -133,7 +132,7 @@ class TestDeleteSemantics:
         )
         ex, store, run = _run_executor(tmp_path, workflow=wf)
         await ex.run()
-        assert ex._state == {}  # noqa: SLF001
+        assert ex._state == {}
         payloads = _state_events(list(store.read_events(run.run_id)))
         assert payloads == [
             {"key": "never_set", "op": "delete", "value": None}
@@ -161,7 +160,7 @@ class TestDeleteSemantics:
         )
         ex, store, run = _run_executor(tmp_path, workflow=wf)
         await ex.run()
-        assert ex._state == {}  # noqa: SLF001
+        assert ex._state == {}
         payloads = _state_events(list(store.read_events(run.run_id)))
         # 2 sets + 3 deletes (one for "missing" too — silent, still
         # emitted). Drop events in declaration order.

@@ -93,13 +93,13 @@ class TestInputsOverlayScope:
         )
         # Hand-prime the run's inputs so the scope is wired without
         # walking the worklist.
-        ex._state = dict(ex._run.inputs)  # noqa: SLF001
-        rendered = ex._render_jinja(  # noqa: SLF001
+        ex._state = dict(ex._run.inputs)
+        rendered = ex._render_jinja(
             "{{ inputs.greeting }}-{{ inputs.shared }}-{{ inputs.bound or 'absent' }}"
         )
         assert rendered == "hello-workflow-absent"
 
-        overlaid = ex._render_jinja(  # noqa: SLF001
+        overlaid = ex._render_jinja(
             "{{ inputs.greeting }}-{{ inputs.shared }}-{{ inputs.bound }}",
             inputs_overlay={"shared": "edge", "bound": "from-edge"},
         )
@@ -120,9 +120,9 @@ class TestInputsOverlayScope:
             registry=registry,
             inputs={"greeting": "hi"},
         )
-        ex._state = dict(ex._run.inputs)  # noqa: SLF001
+        ex._state = dict(ex._run.inputs)
         assert (
-            ex._render_jinja("{{ inputs.greeting }}!")  # noqa: SLF001
+            ex._render_jinja("{{ inputs.greeting }}!")
             == "hi!"
         )
 
@@ -207,7 +207,7 @@ class TestBashCommandReadsOverlay:
                 # Mirror BashRunner's scope build verbatim — Phase 3.3
                 # AC 0.4: ``inputs.*`` = workflow_inputs + bound_inputs
                 # overlay.
-                from workflows.jinja_env import JINJA_ENV  # noqa: PLC0415
+                from workflows.jinja_env import JINJA_ENV
 
                 scope = {
                     "inputs": {
@@ -257,7 +257,7 @@ class TestBashCommandReadsOverlay:
             registry=registry,
             inputs={"greeting": "hello"},
         )
-        from workflows.run import WorkflowRunStatus  # noqa: PLC0415
+        from workflows.run import WorkflowRunStatus
 
         status = await ex.run()
         assert status == WorkflowRunStatus.SUCCEEDED
@@ -283,7 +283,7 @@ class TestBashCommandReadsOverlay:
                 ctx: Any,
             ) -> dict[str, Any]:
                 _ = (node_name, state)
-                from workflows.jinja_env import JINJA_ENV  # noqa: PLC0415
+                from workflows.jinja_env import JINJA_ENV
 
                 scope = {
                     "inputs": {
@@ -353,7 +353,7 @@ class TestBashCommandReadsOverlay:
                 ctx: Any,
             ) -> dict[str, Any]:
                 _ = (node_name, bound_inputs, state)
-                from workflows.jinja_env import JINJA_ENV  # noqa: PLC0415
+                from workflows.jinja_env import JINJA_ENV
 
                 scope = {
                     "inputs": {

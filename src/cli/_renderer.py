@@ -48,15 +48,13 @@ rendered.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any, TextIO
-
 from datetime import datetime
+from typing import TYPE_CHECKING, Any, TextIO
 
 from rich.console import Console
 from rich.text import Text
 
 from schemas import EventType
-
 
 # ---------------------------------------------------------------------------
 # Capsule primitive

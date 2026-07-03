@@ -23,7 +23,6 @@ import pytest
 
 from cli.main import main
 
-
 # ---------------------------------------------------------------------------
 # Workspace fixture — mirrors tests/component/test_workflow_resume_cli.py
 # ---------------------------------------------------------------------------
@@ -68,7 +67,7 @@ def _write_workflow_bundle(
     )
     wf_dir = bundle / "workflows"
     wf_dir.mkdir(exist_ok=True)
-    from _yamlio import dump  # noqa: PLC0415
+    from _yamlio import dump
 
     (wf_dir / f"{workflow_name}.yaml").write_text(
         dump(workflow_yaml), encoding="utf-8"
@@ -228,7 +227,7 @@ class TestEventsText:
         # A run that exists (meta.json present) but has no JSONL
         # entries is a freshly-minted-but-never-executed state — the
         # ``store.create`` surface produces exactly this shape.
-        from workflows.run_store import WorkflowRunStore  # noqa: PLC0415
+        from workflows.run_store import WorkflowRunStore
 
         workspace = _make_workspace(tmp_path)
         store = WorkflowRunStore(workspace)
@@ -314,7 +313,7 @@ class TestEventsJson:
     def test_empty_events_json_envelope(
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str]
     ) -> None:
-        from workflows.run_store import WorkflowRunStore  # noqa: PLC0415
+        from workflows.run_store import WorkflowRunStore
 
         workspace = _make_workspace(tmp_path)
         store = WorkflowRunStore(workspace)

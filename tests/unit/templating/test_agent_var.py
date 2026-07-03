@@ -29,7 +29,6 @@ from schemas import ModelSpec
 from templating.vars.agent import AgentVar, ModelView
 from templating.vars.tools import ToolItem, ToolsVar
 
-
 # ---------------------------------------------------------------------------
 # ModelView — the presentation wrapper around ModelSpec.
 # ---------------------------------------------------------------------------
@@ -90,7 +89,7 @@ def test_model_view_typo_raises_attribute_error() -> None:
         ModelSpec(provider="anthropic", model="claude-opus-4-7")
     )
     with pytest.raises(AttributeError):
-        _ = view.contxt_length  # noqa: SLF001 — deliberate typo
+        _ = view.contxt_length
 
 
 # ---------------------------------------------------------------------------
@@ -196,7 +195,7 @@ def test_agent_typo_attribute_raises() -> None:
         tools=tools,
     )
     with pytest.raises(AttributeError):
-        _ = agent.nme  # noqa: SLF001 — deliberate typo
+        _ = agent.nme
 
 
 # ---------------------------------------------------------------------------

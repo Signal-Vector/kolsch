@@ -33,7 +33,6 @@ import pytest
 from errors import ConfigTemplateRenderFailed
 from templating import render_prompt
 
-
 # ---------------------------------------------------------------------------
 # Floor + plain-text + substitution.
 # ---------------------------------------------------------------------------

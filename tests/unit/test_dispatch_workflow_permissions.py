@@ -40,7 +40,6 @@ from schemas import AgentId, SessionId, ThreadId
 from tools.decorator import ToolContext, ToolDefinition
 from tools.dispatch import dispatch_tool
 
-
 # ---------------------------------------------------------------------------
 # Recording authz double — records the ``layers=`` kwarg dispatch sends.
 # We use a real object rather than mock/patch because the shape of what
@@ -54,12 +53,12 @@ class _RecordingAuthz:
 
     async def allow(
         self,
-        principal: str,  # noqa: ARG002
-        action: str,  # noqa: ARG002
+        principal: str,
+        action: str,
         *,
-        target: str | None = None,  # noqa: ARG002
+        target: str | None = None,
         layers: tuple[Any, ...] = (),
-        caller_chain: tuple[str, ...] = (),  # noqa: ARG002
+        caller_chain: tuple[str, ...] = (),
     ) -> Any:
         self.layers_seen = layers
 
@@ -80,7 +79,7 @@ class _EmptyArgs(BaseModel):
     pass
 
 
-async def _no_op_tool(args: _EmptyArgs, ctx: ToolContext) -> dict[str, Any]:  # noqa: ARG001
+async def _no_op_tool(args: _EmptyArgs, ctx: ToolContext) -> dict[str, Any]:
     return {"ok": True}
 
 
@@ -107,7 +106,7 @@ def _ctx() -> ToolContext:
     )
 
 
-@pytest.fixture()
+@pytest.fixture
 def _providers(tmp_path: Path) -> tuple[DotenvSecretsProvider, NativeSandboxProvider]:
     """Real providers, per the pattern in tests/component/test_tools.py."""
     (tmp_path / ".env").write_text("", encoding="utf-8")
@@ -126,7 +125,7 @@ def _rule(what: str, effect: str = "allow") -> Rule:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.asyncio()
+@pytest.mark.asyncio
 async def test_dispatch_forwards_workflow_permissions_as_first_layer(
     _providers: tuple[DotenvSecretsProvider, NativeSandboxProvider],
 ) -> None:
@@ -156,7 +155,7 @@ async def test_dispatch_forwards_workflow_permissions_as_first_layer(
     assert layer.rules == (wf_rule,)
 
 
-@pytest.mark.asyncio()
+@pytest.mark.asyncio
 async def test_dispatch_orders_workflow_agent_bundle_layers(
     _providers: tuple[DotenvSecretsProvider, NativeSandboxProvider],
 ) -> None:
@@ -183,7 +182,7 @@ async def test_dispatch_orders_workflow_agent_bundle_layers(
     )
 
 
-@pytest.mark.asyncio()
+@pytest.mark.asyncio
 async def test_dispatch_no_workflow_permissions_preserves_prior_shape(
     _providers: tuple[DotenvSecretsProvider, NativeSandboxProvider],
 ) -> None:
@@ -212,7 +211,7 @@ async def test_dispatch_no_workflow_permissions_preserves_prior_shape(
     assert not any(layer.name == "workflow" for layer in authz.layers_seen)
 
 
-@pytest.mark.asyncio()
+@pytest.mark.asyncio
 async def test_dispatch_no_layers_at_all_when_all_perms_omitted(
     _providers: tuple[DotenvSecretsProvider, NativeSandboxProvider],
 ) -> None:

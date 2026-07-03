@@ -45,7 +45,6 @@ from workflows.parser import Workflow
 from workflows.run import RunDirectory, WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -545,7 +544,7 @@ class TestPauseRunsModuleCleanup:
             """Imports the seeded module mid-run, then returns."""
 
             async def run(self, **_: Any) -> dict[str, Any]:
-                import importlib.util  # noqa: PLC0415
+                import importlib.util
 
                 spec = importlib.util.spec_from_file_location(
                     loaded_module_name, module_path

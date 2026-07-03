@@ -28,7 +28,6 @@ import sys
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-import pytest
 import yaml
 
 from engine import ExecutionContext, LLMRequest, LLMResponse

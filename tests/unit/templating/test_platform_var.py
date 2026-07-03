@@ -31,7 +31,6 @@ from templating.vars._platform import (
     ProvidersVar,
 )
 
-
 # ---------------------------------------------------------------------------
 # Fixtures.
 # ---------------------------------------------------------------------------
@@ -226,6 +225,6 @@ def test_module_uses_underscore_prefix_to_avoid_stdlib_clash() -> None:
     so ``import platform`` (the stdlib) still works alongside.
     Pinning the import path makes a future rename a deliberate
     edit."""
-    import templating.vars._platform as plat_mod  # noqa: PLC0415
+    import templating.vars._platform as plat_mod
 
     assert plat_mod.__name__ == "templating.vars._platform"

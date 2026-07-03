@@ -78,7 +78,7 @@ class TestFilterDefaultItemAs:
             inputs={"numbers": [3, 7, 5, 10]},
         )
         await ex.run()
-        assert ex._captured["evens"] == {"result": [7, 10]}  # noqa: SLF001
+        assert ex._captured["evens"] == {"result": [7, 10]}
 
 
 # ---------------------------------------------------------------------------
@@ -111,7 +111,7 @@ class TestFilterCustomItemAs:
             tmp_path, workflow=wf, inputs={"tickets": tickets}
         )
         await ex.run()
-        captured = ex._captured["urgents"]  # noqa: SLF001
+        captured = ex._captured["urgents"]
         assert captured == {
             "result": [
                 {"id": 1, "urgent": True},
@@ -144,12 +144,12 @@ class TestFilterEdgeCases:
             tmp_path, workflow=wf, inputs={"empty": []}
         )
         await ex.run()
-        assert ex._captured["f"] == {"result": []}  # noqa: SLF001
+        assert ex._captured["f"] == {"result": []}
 
     async def test_filter_non_list_raises(
         self, tmp_path: Path
     ) -> None:
-        from workflows.run import (  # noqa: PLC0415
+        from workflows.run import (
             WorkflowRunStatus,
         )
 
@@ -211,7 +211,7 @@ class TestFilterEdgeCases:
                 },
             }
         )
-        from workflows.builtins import NoopRunner  # noqa: PLC0415
+        from workflows.builtins import NoopRunner
 
         registry = _registry()
         registry.register("kolsch/nodes/noop", NoopRunner())
@@ -228,7 +228,7 @@ class TestFilterEdgeCases:
             catalog=AssetCatalog(),
         )
         await ex.run()
-        assert ex._captured["f"] == {"result": [7, 10]}  # noqa: SLF001
+        assert ex._captured["f"] == {"result": [7, 10]}
 
     async def test_filter_predicate_raises_aborts_run(
         self, tmp_path: Path
@@ -237,7 +237,7 @@ class TestFilterEdgeCases:
         # ZeroDivisionError → executor's failure path → run aborts.
         # The first element's truthy result is DISCARDED; no partial
         # capture leaks through.
-        from workflows.run import (  # noqa: PLC0415
+        from workflows.run import (
             WorkflowRunStatus,
         )
 
@@ -261,6 +261,6 @@ class TestFilterEdgeCases:
         assert status == WorkflowRunStatus.FAILED
         # No captured output for the filter node — partial state
         # doesn't leak through despite the first element matching.
-        assert "f" not in ex._captured  # noqa: SLF001
+        assert "f" not in ex._captured
         events = list(store.read_events(run.run_id))
         assert events[-1]["kind"] == "workflow.run.failed"

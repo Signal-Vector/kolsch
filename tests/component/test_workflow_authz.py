@@ -64,7 +64,7 @@ def _catalog_with_assets() -> AssetCatalog:
             ref=ref,
             asset_type=asset_type,
             bundle=bundle,
-            path=f"/var/empty/{ref}",  # noqa: S108 — synthetic test path; never read
+            path=f"/var/empty/{ref}",
             metadata={},
         )
     return cat

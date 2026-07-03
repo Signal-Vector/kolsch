@@ -23,7 +23,7 @@ import pytest
 from engine import LLMRequest, LLMResponse, crewai_framework
 
 
-class _AgentConstructed(Exception):  # noqa: N818
+class _AgentConstructed(Exception):
     """Sentinel exception raised by the patched ``Agent`` so the test
     short-circuits BEFORE CrewAI's Crew construction tries to
     validate a real Agent. We only need to inspect what was passed

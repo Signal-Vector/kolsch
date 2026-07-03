@@ -29,9 +29,10 @@ from __future__ import annotations
 
 import importlib.resources
 import logging
+from collections.abc import Callable
 from importlib.resources.abc import Traversable
 from pathlib import Path
-from typing import TYPE_CHECKING, Callable
+from typing import TYPE_CHECKING
 
 from errors import (
     ConfigDeprecatedRefForm,

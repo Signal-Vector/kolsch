@@ -28,7 +28,6 @@ import pytest
 
 from templating.vars.tools import ToolItem, ToolsVar
 
-
 # ---------------------------------------------------------------------------
 # Fixtures — three mock items per the build plan's sample.
 # ---------------------------------------------------------------------------

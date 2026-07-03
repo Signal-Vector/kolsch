@@ -38,7 +38,6 @@ from workflows.ids import TraceId, WorkflowRunId
 from workflows.parser import Workflow
 from workflows.run_store import WorkflowRunStore
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -205,26 +204,26 @@ def _state_event(
 class TestReplayAppliesStateMutations:
     def test_set_writes_value(self, tmp_path: Path) -> None:
         ex = _make_replay_executor(tmp_path)
-        ex._state = {"x": 1}  # noqa: SLF001 — replay coupling documented
+        ex._state = {"x": 1}
         replay_into(ex, [_state_event(key="x", op="set", value=2)])
-        assert ex._state["x"] == 2  # noqa: SLF001
+        assert ex._state["x"] == 2
 
     def test_delete_pops_existing(self, tmp_path: Path) -> None:
         ex = _make_replay_executor(tmp_path)
-        ex._state = {"x": 1}  # noqa: SLF001
+        ex._state = {"x": 1}
         replay_into(ex, [_state_event(key="x", op="delete")])
-        assert "x" not in ex._state  # noqa: SLF001
+        assert "x" not in ex._state
 
     def test_delete_silent_on_absent(self, tmp_path: Path) -> None:
         ex = _make_replay_executor(tmp_path)
-        ex._state = {}  # noqa: SLF001
+        ex._state = {}
         # No exception — replay matches DeleteStateRunner's silent semantics.
         replay_into(ex, [_state_event(key="missing", op="delete")])
-        assert ex._state == {}  # noqa: SLF001
+        assert ex._state == {}
 
     def test_in_order_last_set_wins(self, tmp_path: Path) -> None:
         ex = _make_replay_executor(tmp_path)
-        ex._state = {}  # noqa: SLF001
+        ex._state = {}
         events = [
             _state_event(key="x", op="set", value=1),
             _state_event(key="x", op="set", value=2),
@@ -232,24 +231,24 @@ class TestReplayAppliesStateMutations:
             _state_event(key="x", op="set", value=3),
         ]
         replay_into(ex, events)
-        assert ex._state["x"] == 3  # noqa: SLF001
+        assert ex._state["x"] == 3
 
     def test_multi_key_independent(self, tmp_path: Path) -> None:
         ex = _make_replay_executor(tmp_path)
-        ex._state = {}  # noqa: SLF001
+        ex._state = {}
         events = [
             _state_event(key="a", op="set", value=1),
             _state_event(key="b", op="set", value=[1, 2, 3]),
             _state_event(key="a", op="delete"),
         ]
         replay_into(ex, events)
-        assert ex._state == {"b": [1, 2, 3]}  # noqa: SLF001
+        assert ex._state == {"b": [1, 2, 3]}
 
     def test_unknown_op_ignored(self, tmp_path: Path) -> None:
         # Defensive — a future event kind extension shouldn't poison
         # in-flight resumes (replay's forward-compat promise).
         ex = _make_replay_executor(tmp_path)
-        ex._state = {"x": 1}  # noqa: SLF001
+        ex._state = {"x": 1}
         replay_into(
             ex,
             [
@@ -259,6 +258,6 @@ class TestReplayAppliesStateMutations:
                 }
             ],
         )
-        assert ex._state == {"x": 1}  # noqa: SLF001
+        assert ex._state == {"x": 1}
 
 

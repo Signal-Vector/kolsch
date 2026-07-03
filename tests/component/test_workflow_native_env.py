@@ -31,11 +31,10 @@ from pathlib import Path
 from typing import Any
 
 from assets.catalog import AssetCatalog
-from workflows.builtins import BashRunner, ComputeRunner, FilterRunner
+from workflows.builtins import ComputeRunner, FilterRunner
 from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run_store import WorkflowRunStore
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -90,7 +89,7 @@ async def _compute(
     )
     ex, _store, _run = _make_executor(tmp_path, workflow=wf, inputs=inputs)
     await ex.run()
-    return ex._captured["calc"]["value"]  # noqa: SLF001
+    return ex._captured["calc"]["value"]
 
 
 # ---------------------------------------------------------------------------
@@ -197,7 +196,7 @@ class TestBashCommandStringNonRegression:
         non-regression — if NativeEnvironment ever stringifies
         differently, this fires first.
         """
-        from tests.golden.runs_test import _StaticRunner  # noqa: PLC0415
+        from tests.golden.runs_test import _StaticRunner
 
         # Use the existing static bash stub to avoid standing up the
         # full tool-dispatch pipeline; the assertion is on the
@@ -228,7 +227,7 @@ class TestBashCommandStringNonRegression:
         await ex.run()
         # Render via the executor's surface — this is the path
         # BashRunner uses internally.
-        rendered = ex._render_jinja(  # noqa: SLF001
+        rendered = ex._render_jinja(
             "echo {{ inputs.name }}",
             inputs_overlay={"name": "world"},
         )
@@ -272,7 +271,7 @@ class TestFilterComputeTypedChain:
             tmp_path, workflow=wf, inputs={"numbers": [3, 7, 5, 10]}
         )
         await ex.run()
-        captured = ex._captured["c"]["value"]  # noqa: SLF001
+        captured = ex._captured["c"]["value"]
         assert captured == 2
         assert isinstance(captured, int)
         assert not isinstance(captured, bool)

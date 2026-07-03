@@ -64,7 +64,7 @@ def classify_from_cause_chain(
     exc: BaseException,
     *,
     agent_id: str = "",
-) -> "PlatformError | None":
+) -> PlatformError | None:
     """Walk the cause chain and re-classify a known provider exception.
 
     Walks `exc` → `exc.__cause__` → ... up to `_MAX_DEPTH`. Returns a

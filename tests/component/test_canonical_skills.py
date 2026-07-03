@@ -14,7 +14,6 @@ from __future__ import annotations
 
 import shutil
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
 import yaml
@@ -22,10 +21,6 @@ import yaml
 from assets import AssetManagement
 from assets.skill_metadata import parse_skill_frontmatter
 from cli._setup import _STARTER_BUNDLE_TEMPLATE_DIR
-
-if TYPE_CHECKING:
-    pass
-
 
 _CANONICAL_SKILLS: tuple[str, ...] = (
     "write-python-test",

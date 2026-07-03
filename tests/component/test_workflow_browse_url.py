@@ -36,10 +36,10 @@ import pytest
 
 from assets.catalog import AssetCatalog
 from errors import ToolTimeout, ToolUnauthorized
+from files import PathPolicy
 from providers.authz import RuleBasedAuthorizationProvider
 from providers.sandbox import NativeSandboxProvider
 from providers.secrets import DotenvSecretsProvider
-from files import PathPolicy
 from tools.builtins import make_browse_url
 from tools.decorator import get_tool_definition
 from workflows.builtins import BrowseUrlRunner, register_builtins

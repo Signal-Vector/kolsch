@@ -86,11 +86,11 @@ class ReadFileArgs(BaseModel):
         "code, config, logs, YAML. "
         "\n\n"
         "Examples:\n"
-        "  read_file({path: \"src/main.py\"})\n"
+        '  read_file({path: "src/main.py"})\n'
         "    — first 2000 lines, numbered.\n"
-        "  read_file({path: \"src/main.py\", offset: 50, limit: 100})\n"
+        '  read_file({path: "src/main.py", offset: 50, limit: 100})\n'
         "    — lines 51 through 150 (offset is 0-indexed).\n"
-        "  read_file({path: \"logs/tool-outputs/.../bash.stdout.txt\"})\n"
+        '  read_file({path: "logs/tool-outputs/.../bash.stdout.txt"})\n'
         "    — read a persisted bash output (see the bash tool). "
         "\n\n"
         "DO NOT use ``bash`` with ``cat``, ``head``, ``tail``, "

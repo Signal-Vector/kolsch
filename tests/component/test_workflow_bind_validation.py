@@ -188,9 +188,9 @@ class TestExceptionFields:
         registry = RunnerRegistry()
         registry.register("kolsch/nodes/noop", RecordingRunner({}))
         ex, _, _ = _make_executor(tmp_path, workflow=wf, registry=registry)
-        target_def = ex._workflow.nodes["target"]  # noqa: SLF001
+        target_def = ex._workflow.nodes["target"]
         with pytest.raises(WorkflowBindTypeMismatch) as exc_info:
-            ex._validate_bound_inputs_strict(  # noqa: SLF001
+            ex._validate_bound_inputs_strict(
                 node_name="target",
                 node_def=target_def,
                 bound_inputs={"stranger": 42},
@@ -226,7 +226,7 @@ class TestExceptionFields:
         # subsequent registry.get() call would still raise
         # NodeTypeNotImplemented — but that's downstream of the
         # validator).
-        from workflows._inputs_models import (  # noqa: PLC0415
+        from workflows._inputs_models import (
             inputs_model_for,
         )
 
@@ -235,7 +235,7 @@ class TestExceptionFields:
 
         # Direct call to the validator: no raise.
         ex, _, _ = _make_executor(tmp_path, workflow=wf, registry=registry)
-        ex._validate_bound_inputs_strict(  # noqa: SLF001
+        ex._validate_bound_inputs_strict(
             node_name="demo",
             node_def=node_def,
             bound_inputs={"anything": "goes"},

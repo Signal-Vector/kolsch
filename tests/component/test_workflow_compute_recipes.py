@@ -35,7 +35,6 @@ from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run_store import WorkflowRunStore
 
-
 # ---------------------------------------------------------------------------
 # Fixture data + recipe table
 # ---------------------------------------------------------------------------
@@ -145,7 +144,7 @@ async def _run_recipe(
         catalog=AssetCatalog(),
     )
     await ex.run()
-    return ex._captured["agg"]  # noqa: SLF001 — coupling documented
+    return ex._captured["agg"]
 
 
 # ---------------------------------------------------------------------------

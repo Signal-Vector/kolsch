@@ -316,7 +316,7 @@ async def replay_kolsch(
                     response_kind=kind,
                 )
             )
-        except asyncio.TimeoutError:
+        except TimeoutError:
             latency_ms = int((time.monotonic() - t0) * 1000)
             results.append(
                 CallResult(
@@ -428,7 +428,7 @@ async def replay_curl(
                             response_kind=None,
                         )
                     )
-            except (httpx.TimeoutException, asyncio.TimeoutError) as exc:
+            except (TimeoutError, httpx.TimeoutException) as exc:
                 latency_ms = int((time.monotonic() - t0) * 1000)
                 results.append(
                     CallResult(

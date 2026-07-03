@@ -30,7 +30,7 @@ import contextlib
 import signal
 import time
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from uuid import uuid4
 
 from pydantic import BaseModel, Field
@@ -38,9 +38,6 @@ from pydantic import BaseModel, Field
 from errors import ExchangeCancelled, ToolExecutionFailed, ToolTimeout
 from files import check_path_allowed
 from tools.decorator import ToolContext, tool
-
-if TYPE_CHECKING:
-    pass
 
 _SIGINT_GRACE_SECONDS = 0.5
 """Seconds to wait after SIGINT before escalating to SIGKILL.

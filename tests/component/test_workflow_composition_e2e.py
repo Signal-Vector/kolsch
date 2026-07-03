@@ -26,8 +26,6 @@ import textwrap
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from assets.catalog import AssetCatalog, AssetEntry
 from workflows.builtins import (
     ComputeRunner,
@@ -38,14 +36,12 @@ from workflows.builtins import (
 from workflows.builtins.user_input import UserInputRunner
 from workflows.errors import (
     WorkflowExtendsDepthExceeded,
-    WorkflowPausedForInput,
 )
 from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.ids import WorkflowRunId
-from workflows.parser import Workflow, load_workflow
+from workflows.parser import load_workflow
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
-
 
 # ---------------------------------------------------------------------------
 # Fixture helpers — write YAML to disk, build catalog, build registry.

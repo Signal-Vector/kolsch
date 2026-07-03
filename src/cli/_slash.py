@@ -965,7 +965,7 @@ async def _perm_upsert(  # noqa: PLR0913
     landed.
     """
     from cli.permissions import _write_back  # noqa: PLC0415
-    from providers import RuleBasedAuthorizationProvider, Rule  # noqa: PLC0415
+    from providers import Rule, RuleBasedAuthorizationProvider  # noqa: PLC0415
 
     assert ctx.state is not None  # guarded by caller
     authz = ctx.state.runtime.authz
@@ -1213,14 +1213,13 @@ async def _handler_fork(arg_text: str, ctx: SlashContext) -> ControlSignal:
     """
     from pathlib import Path  # noqa: PLC0415
 
-    from schemas.entities import ForkedFrom  # noqa: PLC0415
-
     from cli._workflow_chat_runner import (  # noqa: PLC0415
         execute_workflow_with_renderer,
     )
     from cli._workflow_slash_args import (  # noqa: PLC0415
         parse_slash_fork_args,
     )
+    from schemas.entities import ForkedFrom  # noqa: PLC0415
     from workflows.errors import (  # noqa: PLC0415
         WorkflowError,
         WorkflowInputInvalid,

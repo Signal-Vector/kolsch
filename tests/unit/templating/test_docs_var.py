@@ -24,7 +24,6 @@ import pytest
 
 from templating.vars.docs import DocItem, DocsVar
 
-
 # ---------------------------------------------------------------------------
 # Fixtures — 2 primary + 2 secondary mock docs per the build plan.
 # ---------------------------------------------------------------------------

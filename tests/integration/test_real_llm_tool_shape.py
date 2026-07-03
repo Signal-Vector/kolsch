@@ -87,7 +87,7 @@ def _configure_opencode_provider(root: Path) -> None:
     The dummy API key never leaves the test — ``crewai.LLM.call`` is
     patched below so the actual HTTP call never fires.
     """
-    import yaml  # noqa: PLC0415
+    import yaml
 
     plat_path = root / "platform.yaml"
     plat = yaml.safe_load(plat_path.read_text(encoding="utf-8")) or {}
@@ -153,14 +153,14 @@ async def test_bootstrap_runtime_sends_openai_envelope_tools_to_wire(
     captured: dict[str, Any] = {"tools": None, "n_calls": 0}
 
     def _intercept(
-        self: Any,  # noqa: ARG001 — the crewai.LLM instance; unused
+        self: Any,
         messages: Any,
         tools: Any = None,
-        callbacks: Any = None,  # noqa: ARG001
-        available_functions: Any = None,  # noqa: ARG001
-        from_task: Any = None,  # noqa: ARG001
-        from_agent: Any = None,  # noqa: ARG001
-        response_model: Any = None,  # noqa: ARG001
+        callbacks: Any = None,
+        available_functions: Any = None,
+        from_task: Any = None,
+        from_agent: Any = None,
+        response_model: Any = None,
     ) -> str:
         # Capture on the FIRST call so we don't overwrite with a
         # follow-up turn. The helper agent may loop through tool calls
@@ -225,7 +225,7 @@ async def test_bootstrap_runtime_sends_openai_envelope_tools_to_wire(
         assert isinstance(function, dict), (
             f"tools[{i}].function not a dict: {function!r}"
         )
-        assert "name" in function and function["name"], (
+        assert function.get("name"), (
             f"tools[{i}].function.name missing or empty; "
             f"got={function!r}"
         )

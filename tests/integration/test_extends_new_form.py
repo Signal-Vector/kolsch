@@ -25,7 +25,6 @@ import yaml
 from assets import AssetManagement
 from schemas import ResolvedAgentConfig
 
-
 _PLATFORM_PAYLOAD: dict[str, Any] = {
     "secrets": {"variant": "dotenv", "config": {"path": ".env"}},
     "sandbox": {"variant": "native", "config": {}},

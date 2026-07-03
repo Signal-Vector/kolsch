@@ -26,7 +26,6 @@ from workflows.parser import BranchNodeDef, Workflow
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
 
-
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -92,7 +91,7 @@ class TestBranchRunnerShape:
             tmp_path, workflow=wf, inputs={"x": 10}
         )
         await ex.run()
-        assert ex._captured["gate"] == {"value": True}  # noqa: SLF001
+        assert ex._captured["gate"] == {"value": True}
 
     async def test_jinja_condition_false(self, tmp_path: Path) -> None:
         wf = _wf(
@@ -109,7 +108,7 @@ class TestBranchRunnerShape:
             tmp_path, workflow=wf, inputs={"x": 2}
         )
         await ex.run()
-        assert ex._captured["gate"] == {"value": False}  # noqa: SLF001
+        assert ex._captured["gate"] == {"value": False}
 
     async def test_yaml_literal_true(self, tmp_path: Path) -> None:
         wf = _wf(
@@ -124,7 +123,7 @@ class TestBranchRunnerShape:
         )
         ex, _store, _run = _executor(tmp_path, workflow=wf)
         await ex.run()
-        assert ex._captured["gate"] == {"value": True}  # noqa: SLF001
+        assert ex._captured["gate"] == {"value": True}
 
     async def test_yaml_literal_false(self, tmp_path: Path) -> None:
         wf = _wf(
@@ -139,7 +138,7 @@ class TestBranchRunnerShape:
         )
         ex, _store, _run = _executor(tmp_path, workflow=wf)
         await ex.run()
-        assert ex._captured["gate"] == {"value": False}  # noqa: SLF001
+        assert ex._captured["gate"] == {"value": False}
 
     async def test_truthy_non_bool_coerces(
         self, tmp_path: Path
@@ -163,7 +162,7 @@ class TestBranchRunnerShape:
             tmp_path, workflow=wf, inputs={"numbers": [1, 2]}
         )
         await ex.run()
-        captured = ex._captured["gate"]  # noqa: SLF001
+        captured = ex._captured["gate"]
         assert captured == {"value": True}
         # The captured value is a real ``bool`` — not an ``int``.
         assert isinstance(captured["value"], bool)

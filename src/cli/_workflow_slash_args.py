@@ -24,7 +24,7 @@ from typing import Any
 
 from workflows._args import parse_input_pairs
 
-__all__ = ["parse_slash_workflow_args", "parse_slash_fork_args"]
+__all__ = ["parse_slash_fork_args", "parse_slash_workflow_args"]
 
 
 _WITH_SEPARATOR = " with "

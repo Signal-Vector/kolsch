@@ -857,7 +857,7 @@ class _Exchange:
                 resolve_parent_chain_from_extends,
                 self.config.extends,
                 workspace_root,
-                self.engine._assets.catalog(),  # noqa: SLF001
+                self.engine._assets.catalog(),
             )
             parent_chain_prompts = [
                 str(layer.get("prompt", "")) for layer in parent_chain_yaml
@@ -1327,7 +1327,7 @@ class _Exchange:
                 raise ExchangeCancelled(
                     cancelled_at_event_id=self.exchange_started_id or "",
                 ) from None
-            except Exception as exc:  # noqa: BLE001 — in-loop classifier
+            except Exception as exc:
                 # IN-LOOP cause-chain classifier. A transport failure
                 # whose `__cause__` carries a known typed exception
                 # (e.g. `openai.APITimeoutError` through CrewAI's

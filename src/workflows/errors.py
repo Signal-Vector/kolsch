@@ -61,7 +61,6 @@ __all__ = [
     "WorkflowInvalidConcurrency",
     "WorkflowInvalidRef",
     "WorkflowInvalidTimeout",
-    "WorkflowParallelStateConflict",
     "WorkflowJinjaRefUnknown",
     "WorkflowJinjaSecurityError",
     "WorkflowMapperWorkerMissingField",
@@ -75,6 +74,7 @@ __all__ = [
     "WorkflowNodeReturnTypeInvalid",
     "WorkflowNodeSignatureInvalid",
     "WorkflowNotRunnable",
+    "WorkflowParallelStateConflict",
     "WorkflowPausedForInput",
     "WorkflowResumeRejected",
     "WorkflowRunNotFound",
@@ -1643,7 +1643,7 @@ class NodeTypeNotImplemented(WorkflowRuntimeError):
 # ---------------------------------------------------------------------------
 
 
-class WorkflowPausedForInput(Exception):  # noqa: N818 — control-flow signal, not an error
+class WorkflowPausedForInput(Exception):
     """The `user_input` runner's pause signal.
 
     NOT a `WorkflowError` subclass: pause is normal control flow, not

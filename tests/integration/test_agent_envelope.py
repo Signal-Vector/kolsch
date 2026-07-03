@@ -27,19 +27,13 @@ pins the END-TO-END composition.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
 from uuid import uuid4
 
-import pytest
 import yaml
 
 from engine import ExecutionContext, LLMRequest, LLMResponse
 from platform_runtime import bootstrap_runtime
 from schemas import EventType
-
-if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
-
 
 # ---------------------------------------------------------------------------
 # Workspace fixture.

@@ -32,10 +32,10 @@ from pydantic import ValidationError
 
 from assets.refs import is_three_segment, parse_three_segment
 from workflows._inputs_models import inputs_model_for
+from workflows._replay import find_event_by_id, replay_into
 from workflows.branching import compute_branch_value
 from workflows.catalog_node import BUILTIN_TYPE_NAMES
 from workflows.context import NodeContext
-from workflows._replay import find_event_by_id, replay_into
 from workflows.errors import (
     BashNonZeroExit,
     NodeTypeNotImplemented,
@@ -410,7 +410,7 @@ class IterativeExecutor:
     # Public entry point.
     # ------------------------------------------------------------------
 
-    async def run(self) -> WorkflowRunStatus:  # noqa: PLR0915, PLR0912 — sequential algorithm; splitting hides the ordering
+    async def run(self) -> WorkflowRunStatus:
         """Walk the worklist and return the terminal status.
 
         Emits the framing `workflow.run.started` event, evaluates
@@ -870,7 +870,7 @@ class IterativeExecutor:
     # Fork entry point.
     # ------------------------------------------------------------------
 
-    async def start_from_fork(  # noqa: PLR0915, PLR0912 — fork is structurally replay+continue; splitting hides the ordering
+    async def start_from_fork(  # noqa: PLR0915 — fork is structurally replay+continue; splitting hides the ordering
         self,
         *,
         fork_event_id: str,
@@ -1625,8 +1625,7 @@ class IterativeExecutor:
                         self._invoke_node_runner_for_dispatch(pending)
                     )
                     in_flight[task] = pending
-                    if len(in_flight) > self._peak_in_flight:
-                        self._peak_in_flight = len(in_flight)
+                    self._peak_in_flight = max(self._peak_in_flight, len(in_flight))
 
                 # Nothing left to do? Terminal success.
                 if not in_flight:

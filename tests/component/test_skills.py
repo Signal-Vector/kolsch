@@ -31,6 +31,7 @@ from skills import (
     SkillsSubsystem,
     make_standard_validator,
 )
+
 # qol-skills-jinja-variable-symmetric-with-tools — SkillsVar replaces
 # the pre-QoL ``format_skills_listing`` projection. Tests that used to
 # assert on the post-append string assert on the Var's ``.list()`` /

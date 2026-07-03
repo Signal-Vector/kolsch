@@ -254,7 +254,7 @@ def _grep(pattern: str, *paths: Path) -> int:
     asserting on STATIC source-file content as it lands on disk,
     not on runtime import behaviour.
     """
-    result = subprocess.run(  # noqa: S603 — fixed paths only
+    result = subprocess.run(
         ["grep", "-rn", pattern, *(str(p) for p in paths)],
         capture_output=True,
         text=True,

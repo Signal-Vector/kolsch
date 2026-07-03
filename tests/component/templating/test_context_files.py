@@ -32,7 +32,7 @@ from templating.context_files import (
 )
 
 if True:
-    from pathlib import Path  # noqa: E402
+    from pathlib import Path
 
 
 # ---------------------------------------------------------------------------

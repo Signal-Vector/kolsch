@@ -21,7 +21,6 @@ import pytest
 
 from templating.vars.workspace import WorkspaceVar
 
-
 # ---------------------------------------------------------------------------
 # Attribute access — four typed fields, no extras.
 # ---------------------------------------------------------------------------
@@ -54,7 +53,7 @@ def test_typoed_attribute_raises_attribute_error() -> None:
         denied_paths=[],
     )
     with pytest.raises(AttributeError):
-        _ = ws.allowd_paths  # noqa: SLF001 — deliberate typo
+        _ = ws.allowd_paths
 
 
 # ---------------------------------------------------------------------------

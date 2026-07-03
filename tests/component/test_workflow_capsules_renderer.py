@@ -29,7 +29,6 @@ from rich.console import Console
 from cli._workflow_capsules import WorkflowCapsuleRenderer
 from workflows.parser import BashNodeDef, Workflow
 
-
 # ---------------------------------------------------------------------------
 # Helpers.
 # ---------------------------------------------------------------------------

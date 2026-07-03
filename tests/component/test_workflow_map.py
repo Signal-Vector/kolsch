@@ -36,7 +36,6 @@ from workflows.parser import Workflow
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
 
-
 # ---------------------------------------------------------------------------
 # Helpers / fakes
 # ---------------------------------------------------------------------------
@@ -425,7 +424,7 @@ class TestRunnerDefensiveGuards:
     """
 
     async def test_undefined_worker_raises_node_failed(self) -> None:
-        from workflows.parser import MapNodeDef  # noqa: PLC0415
+        from workflows.parser import MapNodeDef
 
         wf = Workflow.model_validate(
             {"nodes": {"echo": {"type": "kolsch/nodes/noop"}}}
@@ -453,7 +452,7 @@ class TestRunnerDefensiveGuards:
         assert "i_do_not_exist" in str(exc_info.value)
 
     async def test_non_list_over_via_runner_direct(self) -> None:
-        from workflows.parser import MapNodeDef  # noqa: PLC0415
+        from workflows.parser import MapNodeDef
 
         wf = Workflow.model_validate(
             {"nodes": {"echo": {"type": "kolsch/nodes/noop"}}}

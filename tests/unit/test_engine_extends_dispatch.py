@@ -37,7 +37,6 @@ from templating.inheritance import (
     resolve_parent_chain_from_extends,
 )
 
-
 # ---------------------------------------------------------------------------
 # prompt_uses_extends_directive — the AST detector.
 # ---------------------------------------------------------------------------

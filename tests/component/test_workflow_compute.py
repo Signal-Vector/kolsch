@@ -71,7 +71,7 @@ class TestComputeJinja:
         )
         ex, _store, _run = _executor(tmp_path, workflow=wf)
         await ex.run()
-        captured = ex._captured["calc"]  # noqa: SLF001
+        captured = ex._captured["calc"]
         assert captured == {"value": 2}
         # NativeEnvironment preserves the int type — not "2".
         assert isinstance(captured["value"], int)
@@ -99,7 +99,7 @@ class TestComputeLiteral:
         )
         ex, _store, _run = _executor(tmp_path, workflow=wf)
         await ex.run()
-        assert ex._captured["lit"] == {"value": 42}  # noqa: SLF001
+        assert ex._captured["lit"] == {"value": 42}
 
     async def test_list_literal_passes_through(
         self, tmp_path: Path
@@ -116,4 +116,4 @@ class TestComputeLiteral:
         )
         ex, _store, _run = _executor(tmp_path, workflow=wf)
         await ex.run()
-        assert ex._captured["lit"] == {"value": [1, 2, 3]}  # noqa: SLF001
+        assert ex._captured["lit"] == {"value": [1, 2, 3]}

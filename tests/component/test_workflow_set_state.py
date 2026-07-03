@@ -17,14 +17,11 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import pytest
-
 from assets.catalog import AssetCatalog
 from workflows.builtins import SetStateRunner
 from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run_store import WorkflowRunStore
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -92,7 +89,7 @@ def _state_event_envelopes(
 
 class TestRegistration:
     def test_set_state_resolves_to_runner(self) -> None:
-        from workflows.builtins import (  # noqa: PLC0415
+        from workflows.builtins import (
             SetStateRunner as _SetStateRunner,
         )
 
@@ -123,7 +120,7 @@ class TestBasicMutation:
         )
         ex, store, run = _run_executor(tmp_path, workflow=wf)
         await ex.run()
-        assert ex._state["x"] == 5  # noqa: SLF001 — coupling documented
+        assert ex._state["x"] == 5
         events = list(store.read_events(run.run_id))
         payloads = _state_events(events)
         assert payloads == [{"key": "x", "op": "set", "value": 5}]
@@ -156,7 +153,7 @@ class TestBasicMutation:
         events = list(store.read_events(run.run_id))
         keys_in_order = [p["key"] for p in _state_events(events)]
         assert keys_in_order == ["z", "a", "m"]
-        assert ex._state == {"z": 1, "a": 2, "m": 3}  # noqa: SLF001
+        assert ex._state == {"z": 1, "a": 2, "m": 3}
 
     async def test_empty_keys_no_events(self, tmp_path: Path) -> None:
         # Edge case — author-allowed empty keys dict. Runner still
@@ -175,7 +172,7 @@ class TestBasicMutation:
         await ex.run()
         events = list(store.read_events(run.run_id))
         assert _state_events(events) == []
-        assert ex._state == {}  # noqa: SLF001
+        assert ex._state == {}
 
 
 # ---------------------------------------------------------------------------
@@ -206,7 +203,7 @@ class TestLiteralVsJinja:
         )
         ex, store, run = _run_executor(tmp_path, workflow=wf)
         await ex.run()
-        assert ex._state == {  # noqa: SLF001
+        assert ex._state == {
             "flag": True,
             "list": [1, 2, 3],
             "obj": {"a": 1},
@@ -232,7 +229,7 @@ class TestLiteralVsJinja:
         )
         ex, store, run = _run_executor(tmp_path, workflow=wf)
         await ex.run()
-        assert ex._state["x"] == 2  # noqa: SLF001
+        assert ex._state["x"] == 2
         payloads = _state_events(list(store.read_events(run.run_id)))
         assert payloads[0]["value"] == 2
 
@@ -256,7 +253,7 @@ class TestLiteralVsJinja:
             tmp_path, workflow=wf, inputs={"greeting": "hi"}
         )
         await ex.run()
-        assert ex._state["msg"] == "hi!"  # noqa: SLF001
+        assert ex._state["msg"] == "hi!"
 
     async def test_mixed_literal_and_jinja(
         self, tmp_path: Path
@@ -278,8 +275,8 @@ class TestLiteralVsJinja:
         )
         ex, _store, _run = _run_executor(tmp_path, workflow=wf)
         await ex.run()
-        assert ex._state["status"] == "pending"  # noqa: SLF001
-        assert ex._state["attempts"] == 1  # noqa: SLF001
+        assert ex._state["status"] == "pending"
+        assert ex._state["attempts"] == 1
 
 
 # ---------------------------------------------------------------------------
@@ -324,7 +321,7 @@ class TestMultiWriteEvolution:
         )
         ex, store, run = _run_executor(tmp_path, workflow=wf)
         await ex.run()
-        assert ex._state["attempts"] == 2  # noqa: SLF001
+        assert ex._state["attempts"] == 2
         events = list(store.read_events(run.run_id))
         values = [
             p["value"]
@@ -460,7 +457,7 @@ class TestDownstreamVisibility:
         )
         ex, _store, _run = _run_executor(tmp_path, workflow=wf)
         await ex.run()
-        assert ex._state == {"base": 10, "doubled": 20}  # noqa: SLF001
+        assert ex._state == {"base": 10, "doubled": 20}
 
 
 # ---------------------------------------------------------------------------
@@ -492,7 +489,7 @@ class TestPartialFailure:
         ex, store, run = _run_executor(tmp_path, workflow=wf)
         status = await ex.run()
         # Run failed via the existing abort path.
-        from workflows.run import (  # noqa: PLC0415
+        from workflows.run import (
             WorkflowRunStatus,
         )
 

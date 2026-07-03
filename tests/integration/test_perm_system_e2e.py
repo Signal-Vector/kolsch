@@ -33,11 +33,10 @@ PERM-SYS-01/-02/-03 exercise the actual ``cli/_setup.py``,
 
 from __future__ import annotations
 
-import argparse
 import io as _io
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 from uuid import uuid4
 
 import pytest
@@ -45,7 +44,6 @@ import yaml
 
 from assets import AssetManagement
 from cli._renderer import Renderer
-from cli._setup import run_setup
 from cli._slash import (
     ChatSessionState,
     SlashContext,
@@ -53,7 +51,7 @@ from cli._slash import (
 )
 from errors import AuthzBareToolRef
 from platform_runtime import bootstrap_runtime
-from providers import Rule, RuleBasedAuthorizationProvider
+from providers import RuleBasedAuthorizationProvider
 from schemas import (
     Actor,
     Event,
@@ -101,7 +99,7 @@ def _seed_pre_qol_workspace(root: Path) -> Path:
 
     Mirrors the canonical post-Phase-2.0 user workspace before
     the QoL Step 4 migration runs."""
-    from assets.platform_config import default_platform_payload  # noqa: PLC0415
+    from assets.platform_config import default_platform_payload
 
     _seed_kolsch_bundle(root)
     payload = default_platform_payload()
@@ -170,7 +168,7 @@ def _seed_new_shape_workspace(root: Path) -> Path:
     the catch-all is the smart-insertion shadow case tracked at
     E-QOL-PERMSYS-004 (Step 4 doc carryover); it isn't part of
     PERM-SYS-03's acceptance criterion."""
-    from assets.platform_config import default_platform_payload  # noqa: PLC0415
+    from assets.platform_config import default_platform_payload
 
     _seed_kolsch_bundle(root)
     payload = default_platform_payload()
@@ -198,7 +196,7 @@ def _slash_ctx(runtime: PlatformRuntime, stdout: _io.StringIO) -> SlashContext:
         def __init__(self, runtime: PlatformRuntime) -> None:
             self.runtime = runtime
 
-    state = cast(ChatSessionState, _StubState(runtime))
+    state = cast("ChatSessionState", _StubState(runtime))
     return SlashContext(stdout=stdout, state=state)
 
 
@@ -222,10 +220,10 @@ async def test_perm_sys_01_migration_roundtrip(tmp_path: Path) -> None:
     # runner calls this unconditionally on re-run (the public
     # ``run_setup`` path additionally drives provider-config and
     # test-exchange steps that aren't part of this assertion).
-    from cli._setup import (  # noqa: PLC0415
+    from cli._setup import (
         NonInteractivePrompter,
-        _SetupIO,
         _maybe_migrate_authz_rules_to_qol_schema,
+        _SetupIO,
     )
 
     stdout = _io.StringIO()
@@ -281,7 +279,7 @@ async def test_perm_sys_02_bare_tool_name_blocks_startup(tmp_path: Path) -> None
     (``what: bash``) refuses to bootstrap: the provider's
     ``_validate_what`` raises :class:`AuthzBareToolRef` naming the
     qualified candidate."""
-    from assets.platform_config import default_platform_payload  # noqa: PLC0415
+    from assets.platform_config import default_platform_payload
 
     _seed_kolsch_bundle(tmp_path)
     payload = default_platform_payload()
@@ -477,8 +475,8 @@ def test_perm_sys_05_tool_failed_carries_recovery_hint() -> None:
     and the JSONL (the replay view) both see the actionable text.
     The engine's ``_derive_authz_recovery_hint`` produces it from
     the matched rule + the in-flight args."""
-    from engine.observers import _derive_authz_recovery_hint  # noqa: PLC0415
-    from errors import ToolUnauthorized  # noqa: PLC0415
+    from engine.observers import _derive_authz_recovery_hint
+    from errors import ToolUnauthorized
 
     # Step 1 — derive the hint from a denied invocation.
     exc = ToolUnauthorized(

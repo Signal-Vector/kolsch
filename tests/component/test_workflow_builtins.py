@@ -267,7 +267,7 @@ def _minimal_bash_catalog() -> AssetCatalog:
     new-shape matches need the catalog to include the referenced
     tool.
     """
-    from assets.catalog import AssetEntry, BundleManifest  # noqa: PLC0415
+    from assets.catalog import AssetEntry, BundleManifest
 
     return AssetCatalog(
         bundles={
@@ -648,7 +648,7 @@ class TestRegisteredVsDeferred:
     def test_register_builtins_only_installs_bash_and_noop(
         self, tmp_path: Path, bash_defn: Any
     ) -> None:
-        from workflows.builtins import UserInputRunner  # noqa: PLC0415
+        from workflows.builtins import UserInputRunner
 
         registry = _make_registry(tmp_path, bash_defn)
         # Sanity: bash + noop resolve.

@@ -36,9 +36,6 @@ from cli._slash import (
     dispatch_slash,
 )
 from platform_runtime import PlatformRuntime, bootstrap_runtime
-from schemas import SessionId, ThreadId
-from uuid import uuid4
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -99,18 +96,18 @@ def workspace_with_test_workflows(chat_workspace: Path) -> Path:
     workflows_dir = bundle_dir / "workflows"
     workflows_dir.mkdir(parents=True, exist_ok=True)
     (bundle_dir / "bundle.yaml").write_text(
-        "name: phase39_test\nversion: \"0.1\"\ndescription: phase 3.9 test workflows\n",
+        'name: phase39_test\nversion: "0.1"\ndescription: phase 3.9 test workflows\n',
         encoding="utf-8",
     )
     (workflows_dir / "child.yaml").write_text(
         # A trivial non-pausing child workflow used by the
         # sub-workflow nesting test. Compute-only so it runs end-to-end
         # under the starter platform's authz config.
-        "description: \"Phase 3.9 Test 9 — child of nesting demo.\"\n"
+        'description: "Phase 3.9 Test 9 — child of nesting demo."\n'
         "nodes:\n"
         "  child_step:\n"
         "    type: kolsch/nodes/compute\n"
-        "    description: \"Child compute — terminal node.\"\n"
+        '    description: "Child compute — terminal node."\n'
         "    value: \"child output: {{ inputs.label | default('default') }}\"\n"
         "graph:\n"
         "  edges: []\n",
@@ -122,16 +119,16 @@ def workspace_with_test_workflows(chat_workspace: Path) -> Path:
         # ``workflow.node.called_workflow`` handler spawns a child
         # WorkflowCapsuleRenderer at indent_depth+1 tailing the child
         # run's JSONL.
-        "description: \"Phase 3.9 Test 9 — parent of nesting demo.\"\n"
+        'description: "Phase 3.9 Test 9 — parent of nesting demo."\n'
         "nodes:\n"
         "  parent_prep:\n"
         "    type: kolsch/nodes/compute\n"
-        "    description: \"Parent prep — pre-call.\"\n"
-        "    value: \"parent ready\"\n"
+        '    description: "Parent prep — pre-call."\n'
+        '    value: "parent ready"\n'
         "  sub:\n"
         "    type: kolsch/nodes/workflow\n"
         "    ref: phase39_test/workflows/child\n"
-        "    description: \"Sub-workflow node — calls child.\"\n"
+        '    description: "Sub-workflow node — calls child."\n'
         "graph:\n"
         "  edges:\n"
         "    - from: parent_prep\n"
@@ -146,12 +143,12 @@ def workspace_with_test_workflows(chat_workspace: Path) -> Path:
         # Undefined sentinel — not a node failure. A hard arithmetic
         # error is the most reliable way to provoke
         # ``workflow.node.failed`` from a compute node.
-        "description: \"Phase 3.9 Test 7 — failing compute node.\"\n"
+        'description: "Phase 3.9 Test 7 — failing compute node."\n'
         "nodes:\n"
         "  doomed:\n"
         "    type: kolsch/nodes/compute\n"
-        "    description: \"Compute node — divide by zero.\"\n"
-        "    value: \"{{ 1 / 0 }}\"\n"
+        '    description: "Compute node — divide by zero."\n'
+        '    value: "{{ 1 / 0 }}"\n'
         "graph:\n"
         "  edges: []\n",
         encoding="utf-8",
@@ -351,8 +348,8 @@ async def test_subworkflow_capsules_render_indented(
     # bar lands on its own line; the body lines also indent).
     indented_child = [line for line in child_lines if line.startswith("  ")]
     assert indented_child, (
-        f"expected child capsule lines to start with two spaces (indent);\n"
-        f"all child lines:\n" + "\n".join(repr(line) for line in child_lines)
+        "expected child capsule lines to start with two spaces (indent);\n"
+        "all child lines:\n" + "\n".join(repr(line) for line in child_lines)
     )
 
 

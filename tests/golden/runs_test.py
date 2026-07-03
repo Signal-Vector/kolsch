@@ -98,7 +98,7 @@ class _BashStubRunner:
         state: dict[str, Any],
         ctx: Any,
     ) -> dict[str, Any]:
-        from workflows.errors import BashNonZeroExit  # noqa: PLC0415
+        from workflows.errors import BashNonZeroExit
 
         _ = (node_def, bound_inputs, state, ctx)
         captured = dict(self._captured)
@@ -299,7 +299,7 @@ def _build_branching_bash(
             state: dict[str, Any],
             ctx: Any,
         ) -> dict[str, Any]:
-            from workflows.errors import BashNonZeroExit  # noqa: PLC0415
+            from workflows.errors import BashNonZeroExit
 
             _ = (node_def, bound_inputs, state, ctx)
             captured = dict(self._by_node[node_name])
@@ -344,7 +344,7 @@ def _build_branching_python(
     ``{"value": True, "category": "urgent", "score": 0.95}`` so the
     JSONL stays reproducible across hosts (no importlib roundtrip).
     """
-    import textwrap  # noqa: PLC0415
+    import textwrap
 
     nodes_dir = tmp_path / "bundles" / "demo" / "nodes"
     nodes_dir.mkdir(parents=True, exist_ok=True)
@@ -409,7 +409,7 @@ def _build_branching_python(
         ),
     )
     registry.register("kolsch/nodes/noop", _StaticRunner({}))
-    from assets.catalog import AssetEntry  # noqa: PLC0415
+    from assets.catalog import AssetEntry
 
     catalog = AssetCatalog(
         assets={
@@ -458,7 +458,7 @@ def _build_user_input_single_pause(
             },
         }
     )
-    from workflows.builtins.user_input import UserInputRunner  # noqa: PLC0415
+    from workflows.builtins.user_input import UserInputRunner
 
     registry = RunnerRegistry()
     registry.register(
@@ -470,7 +470,7 @@ def _build_user_input_single_pause(
         "demo/nodes/echo",
         _StaticRunner({"message": "world"}),
     )
-    from assets.catalog import AssetEntry  # noqa: PLC0415
+    from assets.catalog import AssetEntry
 
     catalog = AssetCatalog(
         assets={
@@ -538,7 +538,7 @@ def _build_user_input_sequential_pauses(
             },
         }
     )
-    from workflows.builtins.user_input import UserInputRunner  # noqa: PLC0415
+    from workflows.builtins.user_input import UserInputRunner
 
     registry = RunnerRegistry()
     registry.register(
@@ -572,7 +572,7 @@ def _build_user_input_sequential_pauses(
             }
         ),
     )
-    from assets.catalog import AssetEntry  # noqa: PLC0415
+    from assets.catalog import AssetEntry
 
     catalog = AssetCatalog(
         assets={
@@ -615,7 +615,7 @@ def _build_user_input_rejected_resume(
             }
         }
     )
-    from workflows.builtins.user_input import UserInputRunner  # noqa: PLC0415
+    from workflows.builtins.user_input import UserInputRunner
 
     registry = RunnerRegistry()
     registry.register(
@@ -644,7 +644,7 @@ def _build_state_evolves(
     ``parent_event_id`` chains to the LAST state-mutated event per
     master spec §11.3.
     """
-    from workflows.builtins.set_state import SetStateRunner  # noqa: PLC0415
+    from workflows.builtins.set_state import SetStateRunner
 
     workflow = Workflow.model_validate(
         {
@@ -685,7 +685,7 @@ def _build_delete_state_idempotent(
     parity). The golden pins the ``{key, op: "delete", value: null}``
     payload shape.
     """
-    from workflows.builtins.delete_state import (  # noqa: PLC0415
+    from workflows.builtins.delete_state import (
         DeleteStateRunner,
     )
 
@@ -717,20 +717,20 @@ def _build_file_roundtrip(
     ``entries`` payload stays deterministic across hosts (no
     leakage from sibling tmp dirs).
     """
-    from files import PathPolicy  # noqa: PLC0415
-    from providers.authz import (  # noqa: PLC0415
+    from files import PathPolicy
+    from providers.authz import (
         RuleBasedAuthorizationProvider,
     )
-    from providers.sandbox import NativeSandboxProvider  # noqa: PLC0415
-    from providers.secrets import DotenvSecretsProvider  # noqa: PLC0415
-    from tools.builtins import (  # noqa: PLC0415
+    from providers.sandbox import NativeSandboxProvider
+    from providers.secrets import DotenvSecretsProvider
+    from tools.builtins import (
         make_bash,
         make_list_files,
         make_read_file,
         make_write_file,
     )
-    from tools.decorator import get_tool_definition  # noqa: PLC0415
-    from workflows.builtins import register_builtins  # noqa: PLC0415
+    from tools.decorator import get_tool_definition
+    from workflows.builtins import register_builtins
 
     workflow = Workflow.model_validate(
         {
@@ -799,18 +799,18 @@ def _build_file_access_denied(
     ``WorkflowFileAccessDenied``; run aborts via the existing failure
     path. The golden pins ``error_class`` + run.failed terminal.
     """
-    from files import PathPolicy  # noqa: PLC0415
-    from providers.authz import (  # noqa: PLC0415
+    from files import PathPolicy
+    from providers.authz import (
         RuleBasedAuthorizationProvider,
     )
-    from providers.sandbox import NativeSandboxProvider  # noqa: PLC0415
-    from providers.secrets import DotenvSecretsProvider  # noqa: PLC0415
-    from tools.builtins import (  # noqa: PLC0415
+    from providers.sandbox import NativeSandboxProvider
+    from providers.secrets import DotenvSecretsProvider
+    from tools.builtins import (
         make_bash,
         make_read_file,
     )
-    from tools.decorator import get_tool_definition  # noqa: PLC0415
-    from workflows.builtins import register_builtins  # noqa: PLC0415
+    from tools.decorator import get_tool_definition
+    from workflows.builtins import register_builtins
 
     workflow = Workflow.model_validate(
         {
@@ -873,7 +873,7 @@ def _build_triage(
     edge dispatcher routes the matching arm, and the other arm emits
     ``workflow.node.pruned`` via the Phase 3.3 cascade.
     """
-    from workflows.builtins.branch import BranchRunner  # noqa: PLC0415
+    from workflows.builtins.branch import BranchRunner
 
     workflow = Workflow.model_validate(
         {
@@ -959,7 +959,7 @@ def _build_triage(
     # ``catalog-node-defs`` pass accepts them. ``builtin=True``
     # short-circuits the importlib introspection; the static runner
     # carries the load.
-    from assets.catalog import AssetEntry  # noqa: PLC0415
+    from assets.catalog import AssetEntry
 
     catalog = AssetCatalog(
         assets={
@@ -1007,8 +1007,8 @@ def _build_state_resume(
     fixed alongside Step 3 (resume now initialises ``_state`` BEFORE
     replay rather than overwriting after).
     """
-    from workflows.builtins.set_state import SetStateRunner  # noqa: PLC0415
-    from workflows.builtins.user_input import UserInputRunner  # noqa: PLC0415
+    from workflows.builtins.set_state import SetStateRunner
+    from workflows.builtins.user_input import UserInputRunner
 
     workflow = Workflow.model_validate(
         {
@@ -1046,7 +1046,7 @@ def _build_state_resume(
         "demo/nodes/echo",
         _StaticRunner({"message": 5}),
     )
-    from assets.catalog import AssetEntry  # noqa: PLC0415
+    from assets.catalog import AssetEntry
 
     catalog = AssetCatalog(
         assets={
@@ -1138,7 +1138,7 @@ def _build_branching_multi_input(
 
 def _ext_compose_write_workflow(path: Path, content: str) -> None:
     """Helper — write a sibling workflow YAML to disk."""
-    import textwrap as _tw  # noqa: PLC0415
+    import textwrap as _tw
 
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(_tw.dedent(content).lstrip(), encoding="utf-8")
@@ -1146,10 +1146,10 @@ def _ext_compose_write_workflow(path: Path, content: str) -> None:
 
 def _ext_compose_catalog(
     *, tmp_path: Path, refs: dict[str, str]
-) -> "AssetCatalog":
+) -> AssetCatalog:
     """Build an AssetCatalog pointing at the on-disk workflow YAMLs
     declared in ``refs`` (``{ref: yaml_contents}``)."""
-    from assets.catalog import AssetCatalog, AssetEntry  # noqa: PLC0415
+    from assets.catalog import AssetCatalog, AssetEntry
 
     assets: dict[str, AssetEntry] = {}
     for ref, content in refs.items():
@@ -1168,13 +1168,13 @@ def _ext_compose_catalog(
 
 
 def _ext_compose_registry(
-    *, catalog: "AssetCatalog", store: WorkflowRunStore
+    *, catalog: AssetCatalog, store: WorkflowRunStore
 ) -> RunnerRegistry:
     """Build a registry pre-wired for sub-workflow + map dispatch."""
-    from workflows.builtins.compute import ComputeRunner  # noqa: PLC0415
-    from workflows.builtins.map import MapRunner  # noqa: PLC0415
-    from workflows.builtins.noop import NoopRunner  # noqa: PLC0415
-    from workflows.builtins.workflow_sub import (  # noqa: PLC0415
+    from workflows.builtins.compute import ComputeRunner
+    from workflows.builtins.map import MapRunner
+    from workflows.builtins.noop import NoopRunner
+    from workflows.builtins.workflow_sub import (
         WorkflowSubRunner,
     )
 
@@ -1602,7 +1602,7 @@ async def test_workflow_pause_resume_matches_golden(
     Same canonicalisation table as the run-only goldens — the JSONL
     spans multiple process invocations but is one continuous file.
     """
-    from workflows.errors import WorkflowInputInvalid  # noqa: PLC0415
+    from workflows.errors import WorkflowInputInvalid
 
     exception_map: dict[str, type[Exception]] = {
         "WorkflowInputInvalid": WorkflowInputInvalid,
@@ -1680,8 +1680,8 @@ async def test_workflow_pause_resume_matches_golden(
 
 
 async def _read_status(
-    store: WorkflowRunStore, run_id: Any  # noqa: ANN401
-) -> Any:  # noqa: ANN401
+    store: WorkflowRunStore, run_id: Any
+) -> Any:
     """Re-read the run's current status from the store."""
     return store.read(run_id).status
 
@@ -1718,7 +1718,7 @@ def _build_fork_pipeline(
     completion replays only A and runs B + C; forking at
     ``workflow.run.started`` re-runs everything.
     """
-    from workflows.builtins.compute import ComputeRunner  # noqa: PLC0415
+    from workflows.builtins.compute import ComputeRunner
 
     workflow = Workflow.model_validate(
         {
@@ -1923,7 +1923,7 @@ async def test_workflow_fork_matches_paired_goldens(
     sentinels in both goldens. Reviewer note from the build doc:
     canonicalisation MUST share state across the pair.
     """
-    from schemas.entities import ForkedFrom  # noqa: PLC0415
+    from schemas.entities import ForkedFrom
 
     workflow, registry, extras = builder(tmp_path)
     catalog = extras.get("catalog") or AssetCatalog()
