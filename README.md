@@ -1,5 +1,6 @@
 # Kolsch
 
+[![ci](https://github.com/Signal-Vector/kolsch/actions/workflows/ci.yml/badge.svg)](https://github.com/Signal-Vector/kolsch/actions/workflows/ci.yml)
 [![docs](https://github.com/Signal-Vector/kolsch/actions/workflows/docs.yml/badge.svg)](https://signal-vector.github.io/kolsch/)
 
 A local-first, definition-orchestrated multi-agent workflow platform.
