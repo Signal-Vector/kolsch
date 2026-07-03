@@ -25,7 +25,10 @@ from __future__ import annotations
 
 import io
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
+
+if TYPE_CHECKING:
+    from cli._slash import ChatSessionState
 
 from cli._modal import ApprovalModal
 from engine import CancelToken
@@ -62,15 +65,19 @@ def _scripted_input(answers: list[str]) -> Callable[[str], Awaitable[str]]:
     return _fn
 
 
-def _stub_state(cancel: CancelToken) -> SimpleNamespace:
+def _stub_state(cancel: CancelToken) -> ChatSessionState:
     """Minimal ``ChatSessionState`` stand-in.
 
     The modal reads ``active_cancel`` and writes
     ``last_cancel_reason`` — nothing else. A SimpleNamespace mirrors
     the dataclass shape; constructing a real ChatSessionState would
     require bootstrapping a runtime/config/session, which is pure
-    setup cost for these tests."""
-    return SimpleNamespace(active_cancel=cancel, last_cancel_reason=None)
+    setup cost for these tests.
+    """
+    return cast(
+        "ChatSessionState",
+        SimpleNamespace(active_cancel=cancel, last_cancel_reason=None),
+    )
 
 
 def _provider_with_bash_prompt() -> RuleBasedAuthorizationProvider:

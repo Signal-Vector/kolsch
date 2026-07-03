@@ -27,7 +27,7 @@ recording double whose only job is to capture the ``layers=`` kwarg
 from __future__ import annotations
 
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import pytest
@@ -41,6 +41,8 @@ from tools.dispatch import dispatch_tool
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from providers.authz import AuthorizationProvider
 
 # ---------------------------------------------------------------------------
 # Recording authz double — records the ``layers=`` kwarg dispatch sends.
@@ -145,7 +147,7 @@ async def test_dispatch_forwards_workflow_permissions_as_first_layer(
         defn=_make_defn(),
         args={},
         context=_ctx(),
-        authz=authz,
+        authz=cast("AuthorizationProvider", authz),
         secrets=secrets,
         sandbox=sandbox,
         workflow_permissions=[wf_rule],
@@ -169,7 +171,7 @@ async def test_dispatch_orders_workflow_agent_bundle_layers(
         defn=_make_defn(),
         args={},
         context=_ctx(),
-        authz=authz,
+        authz=cast("AuthorizationProvider", authz),
         secrets=secrets,
         sandbox=sandbox,
         workflow_permissions=[_rule("w")],
@@ -200,7 +202,7 @@ async def test_dispatch_no_workflow_permissions_preserves_prior_shape(
         defn=_make_defn(),
         args={},
         context=_ctx(),
-        authz=authz,
+        authz=cast("AuthorizationProvider", authz),
         secrets=secrets,
         sandbox=sandbox,
         agent_permissions=[_rule("a")],
@@ -224,7 +226,7 @@ async def test_dispatch_no_layers_at_all_when_all_perms_omitted(
         defn=_make_defn(),
         args={},
         context=_ctx(),
-        authz=authz,
+        authz=cast("AuthorizationProvider", authz),
         secrets=secrets,
         sandbox=sandbox,
     )
