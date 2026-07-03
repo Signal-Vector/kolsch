@@ -1516,22 +1516,21 @@ class IterativeExecutor:
                 self._cleanup_waiting_at(run_dir)
                 return WorkflowRunStatus.ABORTED
 
-        # Assemble terminal-keyed outputs. `peak_in_flight` is added
-        # to the payload ONLY when the workflow opts into `auto` so
-        # sequential JSONL stays byte-identical to the sequential
-        # baseline; the CLI envelope defaults to `1` when the field
-        # is absent.
+        # Assemble terminal-keyed outputs. `peak_in_flight` is NOT
+        # added here — this is the sequential path (`_continue_worklist`
+        # returns early at line 1150 for `concurrency == "auto"`). The
+        # concurrent path (`_continue_worklist_concurrent`) assembles
+        # its own run-completed payload with `peak_in_flight` populated.
+        # The CLI envelope defaults to `1` when the field is absent.
         outputs = self._assemble_terminal_outputs(topo)
-        completed_payload: dict[str, Any] = {"outputs": outputs}
-        if self._workflow.concurrency == "auto":
-            completed_payload["peak_in_flight"] = self._peak_in_flight
+        run_completed_payload: dict[str, Any] = {"outputs": outputs}
         self._last_event_id = emit_event(
             self._store,
             WorkflowRunCompletedEvent(
                 workflow_run_id=run_id,
                 trace_id=self._run.trace_id,
                 parent_event_id=self._last_event_id,
-                payload=completed_payload,
+                payload=run_completed_payload,
             ),
         )
         # Successful terminal post-resume: the `waiting_at` sidecar
@@ -2069,12 +2068,12 @@ class IterativeExecutor:
         for edge in graph_edges:
             edge_participants.add(edge.from_)
             edge_participants.add(edge.to)
-        map_worker_only: set[str] = {
-            getattr(node_def, "apply", None)
-            for node_def in self._workflow.nodes.values()
-            if hasattr(node_def, "apply")
-            and isinstance(getattr(node_def, "apply", None), str)
-        } - edge_participants
+        map_worker_only: set[str] = set()
+        for node_def in self._workflow.nodes.values():
+            apply = getattr(node_def, "apply", None)
+            if isinstance(apply, str):
+                map_worker_only.add(apply)
+        map_worker_only -= edge_participants
         node_names = [n for n in all_node_names if n not in map_worker_only]
 
         incoming: dict[str, list[str]] = {n: [] for n in node_names}

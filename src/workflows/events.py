@@ -294,7 +294,9 @@ class WorkflowRunForkedFromEvent(WorkflowEvent):
     """
 
     kind: Literal[WorkflowEventKind.RUN_FORKED_FROM] = WorkflowEventKind.RUN_FORKED_FROM
-    payload: WorkflowRunForkedFromPayload
+    # Narrower payload than the base's `dict[str, Any]`. Pydantic
+    # accepts the override; mypy's strict mode reads it as invariant.
+    payload: WorkflowRunForkedFromPayload  # type: ignore[assignment]
 
 
 class WorkflowNodeStartedEvent(NodeScopedWorkflowEvent):
@@ -398,7 +400,7 @@ class WorkflowStateMutatedEvent(WorkflowEvent):
     """
 
     kind: Literal[WorkflowEventKind.STATE_MUTATED] = WorkflowEventKind.STATE_MUTATED
-    payload: WorkflowStateMutatedPayload
+    payload: WorkflowStateMutatedPayload  # type: ignore[assignment]  # narrower payload; see WorkflowRunForkedFromEvent
 
 
 class WorkflowNodeCalledWorkflowPayload(BaseModel):
@@ -428,7 +430,7 @@ class WorkflowNodeCalledWorkflowEvent(NodeScopedWorkflowEvent):
     """
 
     kind: Literal[WorkflowEventKind.CALLED_WORKFLOW] = WorkflowEventKind.CALLED_WORKFLOW
-    payload: WorkflowNodeCalledWorkflowPayload
+    payload: WorkflowNodeCalledWorkflowPayload  # type: ignore[assignment]  # narrower payload; see WorkflowRunForkedFromEvent
 
 
 class WorkflowNodeCalledWorkflowCompletedPayload(BaseModel):
@@ -465,7 +467,7 @@ class WorkflowNodeCalledWorkflowCompletedEvent(NodeScopedWorkflowEvent):
     kind: Literal[WorkflowEventKind.CALLED_WORKFLOW_COMPLETED] = (
         WorkflowEventKind.CALLED_WORKFLOW_COMPLETED
     )
-    payload: WorkflowNodeCalledWorkflowCompletedPayload
+    payload: WorkflowNodeCalledWorkflowCompletedPayload  # type: ignore[assignment]  # narrower payload; see WorkflowRunForkedFromEvent
 
 
 class PolicyDecisionMadeEvent(WorkflowEvent):

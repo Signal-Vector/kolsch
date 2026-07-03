@@ -907,7 +907,7 @@ def _action_to_tool_ref_map(ctx: SlashContext) -> dict[str, str] | None:
     return getter
 
 
-_VERB_TO_EFFECT: dict[str, str] = {
+_VERB_TO_EFFECT: dict[str, Literal["allow", "deny", "prompt"]] = {
     "allow": "allow",
     "deny": "deny",
     "prompt": "prompt",
