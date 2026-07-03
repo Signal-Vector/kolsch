@@ -77,7 +77,7 @@ def _state(config: ResolvedAgentConfig) -> ChatSessionState:
     # checks in the handler; passing a sentinel object keeps the
     # dataclass invariant honest while staying inert.
     return ChatSessionState(
-        runtime=object(),  # type: ignore[arg-type] — handler ignores it
+        runtime=object(),  # handler ignores it
         config=config,
         session_id=SessionId(f"ses_{uuid4()}"),
         thread_id=ThreadId(f"th_{uuid4()}"),

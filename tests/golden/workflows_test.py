@@ -248,10 +248,10 @@ def test_workflow_fixture(fixture_path: Path) -> None:
         )
 
     # Validator-level errors raise on validate_workflow_or_raise.
-    with pytest.raises(expected_cls) as exc_info:
+    with pytest.raises(expected_cls) as validate_exc_info:
         validate_workflow_or_raise(workflow, catalog, file=str(fixture_path))
-    if isinstance(exc_info.value, WorkflowValidationError):
-        _assert_yaml_origin_format(exc_info.value)
+    if isinstance(validate_exc_info.value, WorkflowValidationError):
+        _assert_yaml_origin_format(validate_exc_info.value)
 
 
 def test_every_fixture_has_an_annotation_or_it_fails_loudly() -> None:

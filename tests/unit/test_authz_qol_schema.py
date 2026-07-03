@@ -630,4 +630,4 @@ def test_rule_pattern_default_is_star() -> None:
 def test_rule_rejects_unknown_extra_field() -> None:
     """The model still has `extra="forbid"` — typos surface clearly."""
     with pytest.raises(ValidationError):
-        Rule(what="*", pattern="*", effect="allow", typo="x")
+        Rule(what="*", pattern="*", effect="allow", typo="x")  # type: ignore[call-arg]

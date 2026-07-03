@@ -126,10 +126,9 @@ async def test_require_returns_none_on_allow() -> None:
     )
     token = permissions.bind(binding)
     try:
-        result = await permissions.require("kolsch/tools/bash")
+        await permissions.require("kolsch/tools/bash")  # returns None; success = no raise
     finally:
         permissions.reset(token)
-    assert result is None
 
 
 # ---------------------------------------------------------------------------

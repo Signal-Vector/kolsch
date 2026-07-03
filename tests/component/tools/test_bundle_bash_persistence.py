@@ -17,7 +17,7 @@ These tests load the bundle's ``bash.py`` directly via
 from __future__ import annotations
 
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -42,7 +42,7 @@ _BUNDLE_BASH = (
 )
 
 
-def _bundle_bash() -> Callable[..., Awaitable[object]]:
+def _bundle_bash() -> Callable[..., Awaitable[dict[str, Any]]]:
     """Load the bundle ``bash`` tool function (the @tool-decorated callable)."""
     found = discover_tools_in_file(_BUNDLE_BASH)
     for fn in found:

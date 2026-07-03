@@ -25,7 +25,7 @@ from __future__ import annotations
 
 import json
 import textwrap
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from cli.main import main
 
@@ -56,7 +56,7 @@ def _run_cli(argv: list[str]) -> int:
     return main(argv)
 
 
-def _read_jsonl(path: Path) -> list[dict[str, object]]:
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     return [
         json.loads(line)
         for line in path.read_text(encoding="utf-8").splitlines()
