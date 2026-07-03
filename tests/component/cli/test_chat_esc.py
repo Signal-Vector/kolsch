@@ -25,23 +25,33 @@ from __future__ import annotations
 import asyncio
 import contextlib
 from types import SimpleNamespace
+from typing import TYPE_CHECKING, cast
 
 from prompt_toolkit.input.defaults import create_pipe_input
 
 from cli.chat import _watch_esc_during_streaming
 from engine import CancelToken
 
+if TYPE_CHECKING:
+    from cli._slash import ChatSessionState
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
 
 
-def _stub_state(cancel: CancelToken | None) -> SimpleNamespace:
+def _stub_state(cancel: CancelToken | None) -> ChatSessionState:
     """Minimal ``ChatSessionState`` stand-in (see test_chat_deny_stops).
 
     The Esc watcher reads ``active_cancel`` and writes
-    ``last_cancel_reason``."""
-    return SimpleNamespace(active_cancel=cancel, last_cancel_reason=None)
+    ``last_cancel_reason``. Duck-typed via ``SimpleNamespace`` — the
+    watcher's touched surface is a two-attribute pinhole, not the
+    full frozen dataclass.
+    """
+    return cast(
+        "ChatSessionState",
+        SimpleNamespace(active_cancel=cancel, last_cancel_reason=None),
+    )
 
 
 # ===========================================================================

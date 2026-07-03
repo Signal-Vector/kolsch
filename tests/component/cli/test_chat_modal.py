@@ -23,7 +23,7 @@ from __future__ import annotations
 import io as _io
 import sys
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, cast
 
 import pytest
 import yaml
@@ -34,6 +34,8 @@ from providers.authz import AuthzEffect, Rule
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from cli._slash import ChatSessionState
 
 
 # ---------------------------------------------------------------------------
@@ -695,7 +697,7 @@ async def test_cmd_chat_clears_modal_callback_even_when_loop_raises(
 #     above, which is unchanged because that test omits state).
 
 
-def _stub_state_with_cancel(cancel: object) -> SimpleNamespace:
+def _stub_state_with_cancel(cancel: object) -> ChatSessionState:
     """Build a minimal stand-in for :class:`ChatSessionState`.
 
     The modal only reads ``active_cancel`` and writes
@@ -705,7 +707,10 @@ def _stub_state_with_cancel(cancel: object) -> SimpleNamespace:
     shape exactly and the modal's type-check is permissive
     (TYPE_CHECKING import only).
     """
-    return SimpleNamespace(active_cancel=cancel, last_cancel_reason=None)
+    return cast(
+        "ChatSessionState",
+        SimpleNamespace(active_cancel=cancel, last_cancel_reason=None),
+    )
 
 
 async def test_modal_short_circuits_when_active_cancel_already_cancelled() -> None:

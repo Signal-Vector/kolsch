@@ -37,6 +37,7 @@ from typing import TYPE_CHECKING, Any
 import pytest
 
 from assets.catalog import AssetCatalog
+from schemas import EventId
 from schemas.entities import ForkedFrom, ParentRunPointer
 from workflows._replay import find_event_by_id
 from workflows.builtins import ComputeRunner
@@ -133,21 +134,23 @@ def _events(store: WorkflowRunStore, run_id: WorkflowRunId) -> list[dict[str, An
     return list(store.read_events(run_id))
 
 
-def _completion_event_id_for(events: Iterable[dict[str, Any]], node_name: str) -> str:
+def _completion_event_id_for(
+    events: Iterable[dict[str, Any]], node_name: str
+) -> EventId:
     for event in events:
         if event.get("kind") == "workflow.node.completed" and (
             event.get("node_name") == node_name
             or event.get("payload", {}).get("node_name") == node_name
         ):
-            return event["event_id"]
+            return EventId(event["event_id"])
     msg = f"no workflow.node.completed event for node {node_name!r}"
     raise AssertionError(msg)
 
 
-def _started_event_id(events: Iterable[dict[str, Any]]) -> str:
+def _started_event_id(events: Iterable[dict[str, Any]]) -> EventId:
     for event in events:
         if event.get("kind") == "workflow.run.started":
-            return event["event_id"]
+            return EventId(event["event_id"])
     msg = "no workflow.run.started event"
     raise AssertionError(msg)
 
@@ -566,7 +569,7 @@ class TestForkErrorPaths:
         # EventId validates a UUID body; pick a syntactically-valid
         # but never-issued sentinel so the validator passes and we
         # exercise the executor's missing-event arm.
-        bogus_event_id = "ev_99999999-9999-4999-8999-999999999999"
+        bogus_event_id = EventId("ev_99999999-9999-4999-8999-999999999999")
         forked_run = store.create(
             workflow_ref=parent_run.workflow_ref,
             inputs={},
