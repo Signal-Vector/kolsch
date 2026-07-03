@@ -301,7 +301,7 @@ async def test_dispatcher_binds_permissions_around_tool_function() -> None:
         args={"path": "/tmp/x"},
         context=_ctx_for("probe"),  # type: ignore[arg-type]
         authz=provider,
-        secrets=_StubSecrets(),  # type: ignore[arg-type]
+        secrets=_StubSecrets(),
         sandbox=_PassthroughSandbox(),  # type: ignore[arg-type]
     )
     assert result == "ok"
@@ -371,7 +371,7 @@ async def test_dispatcher_binding_includes_bundle_layer() -> None:
         args={"path": "/tmp/x"},
         context=_ctx_for("probe"),  # type: ignore[arg-type]
         authz=provider,
-        secrets=_StubSecrets(),  # type: ignore[arg-type]
+        secrets=_StubSecrets(),
         sandbox=_PassthroughSandbox(),  # type: ignore[arg-type]
         bundle_permissions=bundle_rules,
     )

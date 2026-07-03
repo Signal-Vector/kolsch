@@ -399,7 +399,7 @@ async def test_allow_no_rule_with_callback_fires_with_rule_id_none() -> None:
         seen["target"] = target
         return AuthzEffect.ALLOW
 
-    provider.register_prompt_callback(_cb)  # type: ignore[arg-type]
+    provider.register_prompt_callback(_cb)
     result = await provider.allow(
         "agent.x",
         "tool.bash",
@@ -439,7 +439,7 @@ async def test_allow_no_rule_with_callback_persists_rule_and_fires_hook() -> Non
     def _on_rule_added(rules: list[Rule]) -> None:
         hook_called_with.append(list(rules))
 
-    provider.register_prompt_callback(_cb, on_rule_added=_on_rule_added)  # type: ignore[arg-type]
+    provider.register_prompt_callback(_cb, on_rule_added=_on_rule_added)
     first = await provider.allow("agent.x", "tool.bash")
     assert first.allowed is True
 

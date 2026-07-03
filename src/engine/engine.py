@@ -736,7 +736,7 @@ class _Exchange:
         )
         tool_items: list[ToolItem] = []
         for info in registered:
-            defn = self.engine._tools._registry.get_tool(  # type: ignore[arg-type]
+            defn = self.engine._tools._registry.get_tool(
                 self.agent_id,  # type: ignore[arg-type]
                 info.name,
             )
@@ -771,7 +771,7 @@ class _Exchange:
             load_context_file,
         )
 
-        workspace_root = Path(self.engine._assets._root)  # type: ignore[attr-defined]
+        workspace_root = Path(self.engine._assets._root)
         doc_items: list[DocItem] = []
         for spec in self.config.context_files:
             doc_items.append(
@@ -780,7 +780,7 @@ class _Exchange:
         docs_var = DocsVar(doc_items)
 
         # WorkspaceVar from platform.yaml.
-        platform_cfg = self.engine._assets._platform_config or {}  # type: ignore[attr-defined]
+        platform_cfg = self.engine._assets._platform_config or {}
         file_access = platform_cfg.get("file_access") or {}
         workspace_summary = platform_cfg.get("workspace_summary")
         workspace_var = WorkspaceVar(

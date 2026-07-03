@@ -602,7 +602,7 @@ async def test_browse_url_cancellation_raises_exchange_cancelled(
     flipper = asyncio.create_task(_flip_after_delay())
     start = time.monotonic()
     with pytest.raises(ExchangeCancelled):
-        await browse_url(args, ctx)  # type: ignore[arg-type]
+        await browse_url(args, ctx)
     elapsed = time.monotonic() - start
     await flipper
 
