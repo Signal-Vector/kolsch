@@ -370,7 +370,7 @@ def _check_extends_policy(
             continue
         try:
             raw = load(Path(entry.path).read_text(encoding="utf-8"))
-        except Exception:  # noqa: BLE001 — defensive; resolver re-raises
+        except Exception:  # noqa: BLE001, S112 — defensive; resolver re-raises
             continue
         if not isinstance(raw, dict):
             continue

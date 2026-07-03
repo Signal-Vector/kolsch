@@ -122,7 +122,7 @@ async def race_with_cancel[T](
         cancel_task.cancel()
         try:
             await cancel_task
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110 — drain only
             pass
         return work_task.result()
 
@@ -136,7 +136,7 @@ async def race_with_cancel[T](
         work_task.cancel()
         try:
             await work_task
-        except (asyncio.CancelledError, Exception):  # noqa: BLE001
+        except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110 — drain only
             pass
         raise ExchangeCancelled(
             cancelled_at_event_id="",

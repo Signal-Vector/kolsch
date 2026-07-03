@@ -1719,7 +1719,7 @@ class IterativeExecutor:
             for task in list(in_flight):
                 try:
                     await task
-                except BaseException:  # noqa: BLE001 — drain only
+                except BaseException:  # noqa: BLE001, S110 — drain only
                     pass
             raise
 
@@ -1970,7 +1970,7 @@ class IterativeExecutor:
         for task, pending in pending_items:
             try:
                 await task
-            except (asyncio.CancelledError, Exception):  # noqa: BLE001 — drain
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110 — drain only
                 pass
             async with self._emit_lock:
                 cancelled_id = emit_event(

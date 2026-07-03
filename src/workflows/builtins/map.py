@@ -339,7 +339,7 @@ class MapRunner:
                     for task in list(outstanding.keys()):
                         try:
                             await task
-                        except BaseException:  # noqa: BLE001 — drain
+                        except BaseException:  # noqa: BLE001, S110 — drain only
                             pass
                         outstanding.pop(task, None)
                     break
@@ -352,7 +352,7 @@ class MapRunner:
             for task in list(outstanding.keys()):
                 try:
                     await task
-                except BaseException:  # noqa: BLE001 — drain
+                except BaseException:  # noqa: BLE001, S110 — drain only
                     pass
                 outstanding.pop(task, None)
 

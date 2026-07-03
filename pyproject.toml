@@ -435,6 +435,11 @@ convention = "google"
 # only runs after a successful compile). Same type-narrowing pattern
 # as above; not a security-sensitive assertion.
 "src/providers/authz.py" = ["S101"]
+# `src/templating/**` — the Jinja environments render LLM prompts,
+# not HTML. Enabling autoescape would break prompt syntax (e.g. a
+# literal `<system>` becomes `&lt;system&gt;`), so `autoescape=False`
+# is the correct choice for this domain, not a XSS bug.
+"src/templating/**" = ["S701"]
 # `scripts/` — one-off utility scripts (replay tools, migration
 # helpers). They print progress to stderr by design (T201), often
 # raise SystemExit with vanilla strings (TRY003/EM101/EM102) which
