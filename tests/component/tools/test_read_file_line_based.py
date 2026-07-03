@@ -53,7 +53,7 @@ _BUNDLE_READ_FILE = (
 
 def _bundle_read_file() -> Callable[..., Awaitable[object]]:
     for fn in discover_tools_in_file(_BUNDLE_READ_FILE):
-        defn = fn._tool_definition  # type: ignore[attr-defined]
+        defn = fn._tool_definition
         if defn.name == "read_file":
             return fn
     msg = f"could not find bundle read_file tool in {_BUNDLE_READ_FILE}"
@@ -87,7 +87,7 @@ async def test_read_file_default_returns_numbered_lines(
     next_offset=None. cat -n style numbering with right-aligned
     width based on total_lines."""
     fn = _bundle_read_file()
-    Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
+    Args = fn._tool_definition.args_schema
     (tmp_path / "a.txt").write_text("alpha\nbeta\ngamma\n", encoding="utf-8")
 
     result = await fn(Args(path="a.txt"), _ctx(tmp_path))
@@ -111,7 +111,7 @@ async def test_read_file_offset_limit_paginates(tmp_path: Path) -> None:
     truncated=True and next_offset=150. Width is 3 because
     total_lines=200 → '<3-wide-right-aligned>\\t<line>'."""
     fn = _bundle_read_file()
-    Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
+    Args = fn._tool_definition.args_schema
 
     body = "\n".join(f"line-{i}" for i in range(1, 201))  # 200 lines
     (tmp_path / "big.txt").write_text(body + "\n", encoding="utf-8")
@@ -140,7 +140,7 @@ async def test_read_file_eof_within_limit(tmp_path: Path) -> None:
     """50-line file with default limit=2000 returns all 50 lines,
     truncated=False, next_offset=None."""
     fn = _bundle_read_file()
-    Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
+    Args = fn._tool_definition.args_schema
 
     body = "\n".join(f"row-{i}" for i in range(1, 51))
     (tmp_path / "short.txt").write_text(body + "\n", encoding="utf-8")
@@ -164,7 +164,7 @@ async def test_read_file_line_too_long_raises(tmp_path: Path) -> None:
     file.line_too_long with line_number=0, the actual byte length,
     and the configured max_bytes."""
     fn = _bundle_read_file()
-    Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
+    Args = fn._tool_definition.args_schema
 
     huge = b"x" * (2 * 1024 * 1024)  # 2 MiB, no newline
     (tmp_path / "huge.txt").write_bytes(huge)
@@ -195,7 +195,7 @@ async def test_read_file_large_file_soft_truncates(tmp_path: Path) -> None:
     is that no read returns 'nothing' — large files paginate.
     """
     fn = _bundle_read_file()
-    Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
+    Args = fn._tool_definition.args_schema
 
     body = "\n".join(f"L{i}" for i in range(1, 10_001))
     (tmp_path / "huge-but-paginates.txt").write_text(body + "\n", encoding="utf-8")
@@ -224,7 +224,7 @@ async def test_read_file_backward_compat_no_offset_limit(
     limit, no max_bytes) gets the defaults — confirms the args
     schema didn't break old configs."""
     fn = _bundle_read_file()
-    Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
+    Args = fn._tool_definition.args_schema
     (tmp_path / "x.txt").write_text("only line", encoding="utf-8")
 
     # Mimics an older config dispatching with the legacy single arg.

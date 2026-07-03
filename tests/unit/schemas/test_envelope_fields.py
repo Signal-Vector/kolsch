@@ -82,7 +82,7 @@ def test_permission_rule_accepts_three_effect_values() -> None:
 
 def test_permission_rule_rejects_unknown_effect() -> None:
     with pytest.raises(ValidationError):
-        PermissionRule(who=".*", what=r"tool\.bash", effect="wrong")  # type: ignore[arg-type]
+        PermissionRule(who=".*", what=r"tool\.bash", effect="wrong")
 
 
 # ---------------------------------------------------------------------------

@@ -353,7 +353,7 @@ def test_node_decorator_rejects_non_callable() -> None:
 
 def test_node_decorator_rejects_bad_secrets_needed() -> None:
     with pytest.raises(TypeError):
-        node(secrets_needed="api_key")  # type: ignore[arg-type]
+        node(secrets_needed="api_key")
 
 
 # ---------------------------------------------------------------------------

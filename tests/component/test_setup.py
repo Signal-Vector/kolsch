@@ -957,7 +957,7 @@ async def test_api_make_app_returns_app_when_workspace_initialized(
     io_ = _make_test_io(root=tmp_path)
     await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
     app = await make_app(root=tmp_path)
-    paths = {route.path for route in app.routes}  # type: ignore[attr-defined]
+    paths = {route.path for route in app.routes}
     assert any("sessions" in p for p in paths)
 
 

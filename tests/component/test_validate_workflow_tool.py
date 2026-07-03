@@ -42,7 +42,7 @@ _TOOL_PATH = _STARTER_BUNDLE / "tools" / "validate_workflow.py"
 
 def _tool() -> Callable[..., Awaitable[object]]:
     for fn in discover_tools_in_file(_TOOL_PATH):
-        defn = fn._tool_definition  # type: ignore[attr-defined]
+        defn = fn._tool_definition
         if defn.name == "validate_workflow":
             return fn
     msg = f"could not find validate_workflow tool in {_TOOL_PATH}"
@@ -83,7 +83,7 @@ def _make_workspace(tmp_path: Path) -> Path:
 async def test_validate_valid_workflow_via_ref(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path)
     fn = _tool()
-    Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
+    Args = fn._tool_definition.args_schema
 
     result = await fn(Args(workflow_ref="kolsch/workflows/hello"), _ctx(workspace))
 
@@ -101,7 +101,7 @@ async def test_validate_valid_workflow_via_ref(tmp_path: Path) -> None:
 async def test_validate_valid_workflow_via_path(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path)
     fn = _tool()
-    Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
+    Args = fn._tool_definition.args_schema
 
     path = workspace / "bundles" / "kolsch" / "workflows" / "hello.yaml"
     result = await fn(Args(yaml_path=str(path)), _ctx(workspace))
@@ -119,7 +119,7 @@ async def test_validate_valid_workflow_via_path(tmp_path: Path) -> None:
 async def test_validate_yaml_parse_error_surfaces_finding(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path)
     fn = _tool()
-    Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
+    Args = fn._tool_definition.args_schema
 
     broken = workspace / "bundles" / "kolsch" / "workflows" / "broken.yaml"
     # Unterminated mapping → ruamel.yaml ScannerError.
@@ -147,7 +147,7 @@ async def test_validate_yaml_parse_error_surfaces_finding(tmp_path: Path) -> Non
 async def test_validate_duplicate_node_finding(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path)
     fn = _tool()
-    Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
+    Args = fn._tool_definition.args_schema
 
     # Two outbound edges into the same target with the same bind key —
     # the classic WorkflowBindCollision pattern (master spec §7.1).
@@ -201,7 +201,7 @@ graph:
 async def test_validate_missing_catalog_ref(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path)
     fn = _tool()
-    Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
+    Args = fn._tool_definition.args_schema
 
     result = await fn(
         Args(workflow_ref="kolsch/workflows/does-not-exist"),
@@ -225,7 +225,7 @@ async def test_validate_missing_catalog_ref(tmp_path: Path) -> None:
 async def test_validate_both_args_set(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path)
     fn = _tool()
-    Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
+    Args = fn._tool_definition.args_schema
 
     result = await fn(
         Args(workflow_ref="kolsch/workflows/hello", yaml_path="/dev/null"),
@@ -246,7 +246,7 @@ async def test_validate_both_args_set(tmp_path: Path) -> None:
 async def test_validate_neither_arg_set(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path)
     fn = _tool()
-    Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
+    Args = fn._tool_definition.args_schema
 
     result = await fn(Args(), _ctx(workspace))
 
@@ -268,7 +268,7 @@ async def test_validate_warnings_roundtrip(tmp_path: Path) -> None:
     leave ``is_valid`` True."""
     workspace = _make_workspace(tmp_path)
     fn = _tool()
-    Args = fn._tool_definition.args_schema  # type: ignore[attr-defined]
+    Args = fn._tool_definition.args_schema
 
     yaml_path = workspace / "bundles" / "kolsch" / "workflows" / "shadow.yaml"
     yaml_path.write_text(

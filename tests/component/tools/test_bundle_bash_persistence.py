@@ -46,7 +46,7 @@ def _bundle_bash() -> Callable[..., Awaitable[object]]:
     """Load the bundle ``bash`` tool function (the @tool-decorated callable)."""
     found = discover_tools_in_file(_BUNDLE_BASH)
     for fn in found:
-        defn = fn._tool_definition  # type: ignore[attr-defined]
+        defn = fn._tool_definition
         if defn.name == "bash":
             return fn
     msg = f"could not find bundle bash tool in {_BUNDLE_BASH}"
@@ -83,7 +83,7 @@ async def test_bash_output_under_threshold_no_persistence(
     unconditionally — Step 2 reviewer check #3)."""
     bash = _bundle_bash()
     ctx = _ctx(tmp_path)
-    BashArgs = bash._tool_definition.args_schema  # type: ignore[attr-defined]
+    BashArgs = bash._tool_definition.args_schema
 
     result = await bash(BashArgs(command="echo hello-bash"), ctx)
 
@@ -110,7 +110,7 @@ async def test_bash_output_over_threshold_persists_stdout(
     pinned footer mentioning the path + read_file handoff."""
     bash = _bundle_bash()
     ctx = _ctx(tmp_path)
-    BashArgs = bash._tool_definition.args_schema  # type: ignore[attr-defined]
+    BashArgs = bash._tool_definition.args_schema
 
     # `yes` truncated by head — 70 KiB ≈ 35000 "x\n" lines.
     result = await bash(
@@ -144,7 +144,7 @@ async def test_bash_overflow_on_both_streams(tmp_path: Path) -> None:
     bytes (not just the preview)."""
     bash = _bundle_bash()
     ctx = _ctx(tmp_path, tool_call_id="tc_both_streams")
-    BashArgs = bash._tool_definition.args_schema  # type: ignore[attr-defined]
+    BashArgs = bash._tool_definition.args_schema
 
     # Push 70 KiB to stdout AND 70 KiB to stderr in one shell invocation.
     cmd = "yes x | head -c 70000; yes y | head -c 70000 1>&2"
@@ -182,7 +182,7 @@ async def test_bash_persisted_path_under_workspace_logs(
         path_policy=PathPolicy(allowed_paths=["logs/"], denied_paths=[]),
         tool_call_id=call_id,
     )
-    BashArgs = bash._tool_definition.args_schema  # type: ignore[attr-defined]
+    BashArgs = bash._tool_definition.args_schema
 
     result = await bash(
         BashArgs(command="yes x | head -c 70000"),
@@ -201,7 +201,7 @@ async def test_bash_persisted_dir_created_lazily(tmp_path: Path) -> None:
 
     bash = _bundle_bash()
     ctx = _ctx(tmp_path, tool_call_id="tc_lazy_create")
-    BashArgs = bash._tool_definition.args_schema  # type: ignore[attr-defined]
+    BashArgs = bash._tool_definition.args_schema
 
     await bash(BashArgs(command="yes x | head -c 70000"), ctx)
 
@@ -220,7 +220,7 @@ async def test_bash_persisted_path_fallback_when_no_call_id(
     shape."""
     bash = _bundle_bash()
     ctx = _ctx(tmp_path, tool_call_id=None)
-    BashArgs = bash._tool_definition.args_schema  # type: ignore[attr-defined]
+    BashArgs = bash._tool_definition.args_schema
 
     result = await bash(BashArgs(command="yes x | head -c 70000"), ctx)
 

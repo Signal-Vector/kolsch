@@ -43,7 +43,7 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-def _scripted_input(answers: list[str]):  # type: ignore[no-untyped-def]
+def _scripted_input(answers: list[str]):
     """Return an ``input_fn`` that pops one line per prompt."""
     iterator = iter(answers)
 
@@ -178,7 +178,7 @@ async def test_no_rule_deny_once_does_not_persist() -> None:
     # has no state across calls, so re-using ``modal`` is fine but
     # we need fresh scripted input.
     second_input = _scripted_input(["n"])
-    modal._input_fn = second_input  # type: ignore[attr-defined]
+    modal._input_fn = second_input
 
     second = await provider.allow(
         principal="agent.helper",

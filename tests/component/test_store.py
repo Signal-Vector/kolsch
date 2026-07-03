@@ -61,7 +61,7 @@ def _new_event(
         session_id=session_id,
         type=event_type,
         data=data or {"content": "hi"},
-        actor=Actor(kind=actor_kind, id=actor_id),  # type: ignore[arg-type]
+        actor=Actor(kind=actor_kind, id=actor_id),
         created_at=datetime.now(UTC),
         content_ref=None,
     )

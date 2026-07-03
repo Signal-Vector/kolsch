@@ -333,7 +333,7 @@ async def test_unsubscribe_unknown_handle_is_noop(bus: EventBus) -> None:
     # Per Module API Reference §4.1: unsubscribe is idempotent / never
     # raises.
     fake = "sub_does_not_exist"
-    await bus.unsubscribe(fake)  # type: ignore[arg-type]
+    await bus.unsubscribe(fake)
 
 
 async def test_multiple_subscribers_to_same_topic_all_invoked(

@@ -66,7 +66,7 @@ async def test_tc_chat_esc_01_esc_during_streaming_flips_cancel_token() -> None:
     with create_pipe_input() as pipe_inp:
         watcher = asyncio.create_task(
             _watch_esc_during_streaming(
-                state,  # type: ignore[arg-type]
+                state,
                 cancel,
                 inp_factory=lambda: pipe_inp,
             ),
@@ -89,7 +89,7 @@ async def test_tc_chat_esc_01_esc_during_streaming_flips_cancel_token() -> None:
     # The framework's next iteration poll observes it; the engine
     # emits ``thread.exchange_failed`` with code ``exchange.cancelled``.
     assert cancel.is_cancelled() is True
-    assert state.last_cancel_reason == "interrupted"  # type: ignore[attr-defined]
+    assert state.last_cancel_reason == "interrupted"
 
 
 async def test_tc_chat_esc_01b_non_esc_keys_do_not_flip_cancel() -> None:
@@ -111,7 +111,7 @@ async def test_tc_chat_esc_01b_non_esc_keys_do_not_flip_cancel() -> None:
     with create_pipe_input() as pipe_inp:
         watcher = asyncio.create_task(
             _watch_esc_during_streaming(
-                state,  # type: ignore[arg-type]
+                state,
                 cancel,
                 inp_factory=lambda: pipe_inp,
             ),
@@ -125,7 +125,7 @@ async def test_tc_chat_esc_01b_non_esc_keys_do_not_flip_cancel() -> None:
         # Cancel must still be un-flipped — the watcher only
         # responds to Esc.
         assert cancel.is_cancelled() is False
-        assert state.last_cancel_reason is None  # type: ignore[attr-defined]
+        assert state.last_cancel_reason is None
 
         # Tear the watcher down to match production's finally
         # branch.
@@ -164,7 +164,7 @@ async def test_tc_chat_esc_02_listener_stops_when_exchange_ends() -> None:
     with create_pipe_input() as pipe_inp:
         watcher = asyncio.create_task(
             _watch_esc_during_streaming(
-                state,  # type: ignore[arg-type]
+                state,
                 cancel,
                 inp_factory=lambda: pipe_inp,
             ),
@@ -177,9 +177,9 @@ async def test_tc_chat_esc_02_listener_stops_when_exchange_ends() -> None:
         watcher.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await watcher
-        active_cancel_before = state.active_cancel  # type: ignore[attr-defined]
-        state.active_cancel = None  # type: ignore[attr-defined]
-        state.last_cancel_reason = None  # type: ignore[attr-defined]
+        active_cancel_before = state.active_cancel
+        state.active_cancel = None
+        state.last_cancel_reason = None
 
         # Watcher is done. Now deliver Esc after teardown — must
         # NOT mutate state or raise.
@@ -187,9 +187,9 @@ async def test_tc_chat_esc_02_listener_stops_when_exchange_ends() -> None:
         await asyncio.sleep(0.1)
 
         # state.active_cancel is None — the finally cleared it.
-        assert state.active_cancel is None  # type: ignore[attr-defined]
+        assert state.active_cancel is None
         # last_cancel_reason stays None — no stray callback fired.
-        assert state.last_cancel_reason is None  # type: ignore[attr-defined]
+        assert state.last_cancel_reason is None
         # And the original cancel handle is NOT cancelled by the
         # post-teardown Esc (no callback was attached when the
         # byte arrived).

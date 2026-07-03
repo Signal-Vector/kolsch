@@ -108,7 +108,7 @@ async def test_tc_chat_deny_01_deny_once_flips_cancel_token() -> None:
     modal = ApprovalModal(
         stdout=out,
         input_fn=_scripted_input(["n"]),
-        state=state,  # type: ignore[arg-type]
+        state=state,
     )
     provider.register_prompt_callback(modal)
 
@@ -124,7 +124,7 @@ async def test_tc_chat_deny_01_deny_once_flips_cancel_token() -> None:
     # Cancel-token side effect: framework will observe this on the
     # next iteration poll (fake_framework.py:78-79).
     assert cancel.is_cancelled() is True
-    assert state.last_cancel_reason == "denied"  # type: ignore[attr-defined]
+    assert state.last_cancel_reason == "denied"
 
 
 # ===========================================================================
@@ -157,7 +157,7 @@ async def test_tc_chat_deny_02_always_deny_flips_cancel_and_returns_rule() -> No
         stdout=out,
         # ``[d]`` then empty submit accepts the suggested pattern.
         input_fn=_scripted_input(["d", ""]),
-        state=state,  # type: ignore[arg-type]
+        state=state,
     )
     provider.register_prompt_callback(modal, on_rule_added=_on_rule_added)
 
@@ -174,7 +174,7 @@ async def test_tc_chat_deny_02_always_deny_flips_cancel_and_returns_rule() -> No
     # Cancel flipped + reason stamped — the exchange stops on the
     # next framework iteration poll.
     assert cancel.is_cancelled() is True
-    assert state.last_cancel_reason == "denied"  # type: ignore[attr-defined]
+    assert state.last_cancel_reason == "denied"
 
     # Rule write fired — the chat's platform.yaml hook would now
     # atomically rewrite the file. Inspect the captured rule list:
@@ -250,7 +250,7 @@ async def test_tc_chat_deny_03_modal_short_circuits_when_cancel_already_flipped(
     modal = ApprovalModal(
         stdout=out,
         input_fn=_never_called,
-        state=state,  # type: ignore[arg-type]
+        state=state,
     )
     provider.register_prompt_callback(modal)
 

@@ -307,7 +307,7 @@ async def test_scenario_1_deny_once_stops_exchange_end_to_end(
     modal = ApprovalModal(
         stdout=modal_out,
         input_fn=_scripted_input(["n"]),
-        state=state,  # type: ignore[arg-type]
+        state=state,
     )
     assert isinstance(runtime.authz, RuleBasedAuthorizationProvider)
     runtime.authz.register_prompt_callback(modal)
@@ -427,7 +427,7 @@ async def test_scenario_2_deny_always_persists_rule_and_restart_auto_denies(
     modal_a = ApprovalModal(
         stdout=io.StringIO(),
         input_fn=_scripted_input(["d", ""]),  # [d] then accept suggested
-        state=state_a,  # type: ignore[arg-type]
+        state=state_a,
     )
     assert isinstance(runtime_a.authz, RuleBasedAuthorizationProvider)
 
@@ -528,7 +528,7 @@ async def test_scenario_2_deny_always_persists_rule_and_restart_auto_denies(
     modal_b = ApprovalModal(
         stdout=io.StringIO(),
         input_fn=_never_called,
-        state=state_b,  # type: ignore[arg-type]
+        state=state_b,
     )
     assert isinstance(runtime_b.authz, RuleBasedAuthorizationProvider)
     runtime_b.authz.register_prompt_callback(modal_b)

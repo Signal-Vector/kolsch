@@ -62,7 +62,7 @@ from tools.decorator import ToolContext
 pytestmark = pytest.mark.slow
 
 
-def _load_fetch_url_module():  # type: ignore[no-untyped-def]
+def _load_fetch_url_module():
     """Load the starter-bundle template as an importable module.
 
     Shares the module-name key with ``tests/unit/test_fetch_url.py`` so
@@ -630,7 +630,7 @@ async def test_fetch_url_cancellation_raises_exchange_cancelled(
     flipper = asyncio.create_task(_flip_after_delay())
     start = time.monotonic()
     with pytest.raises(ExchangeCancelled):
-        await fetch_url(args, ctx)  # type: ignore[arg-type]
+        await fetch_url(args, ctx)
     elapsed = time.monotonic() - start
     await flipper
 

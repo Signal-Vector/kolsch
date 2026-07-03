@@ -52,7 +52,7 @@ def _scripted_input(answers: list[str]) -> _Iter:
             msg = "modal asked for more input than the test scripted"
             raise AssertionError(msg) from exc
 
-    return _fn  # type: ignore[return-value]
+    return _fn
 
 
 class _Iter:  # purely for typing the helper above
@@ -661,7 +661,7 @@ async def test_cmd_chat_clears_modal_callback_even_when_loop_raises(
     assert isinstance(runtime, type(runtime))
     # The same provider that had the callback registered now
     # has it cleared.
-    rt_authz = runtime.authz  # type: ignore[attr-defined]
+    rt_authz = runtime.authz
     assert isinstance(rt_authz, RuleBasedAuthorizationProvider)
     assert rt_authz._registered_prompt_callback is None
     assert rt_authz._rule_added_hook is None
@@ -731,7 +731,7 @@ async def test_modal_short_circuits_when_active_cancel_already_cancelled() -> No
     modal = ApprovalModal(
         stdout=out,
         input_fn=_never_called,
-        state=state,  # type: ignore[arg-type]
+        state=state,
     )
     result = await modal(rule_id="rl_test", action="tool.bash", target="rg foo")
     assert result is AuthzEffect.DENY
@@ -758,12 +758,12 @@ async def test_modal_deny_once_flips_active_cancel() -> None:
     modal = ApprovalModal(
         stdout=out,
         input_fn=_scripted_input(["n"]),
-        state=state,  # type: ignore[arg-type]
+        state=state,
     )
     result = await modal(rule_id="rl_test", action="tool.bash", target="rm -rf /")
     assert result is AuthzEffect.DENY
     assert cancel.is_cancelled() is True
-    assert state.last_cancel_reason == "denied"  # type: ignore[attr-defined]
+    assert state.last_cancel_reason == "denied"
 
 
 async def test_modal_deny_always_flips_cancel_and_returns_rule() -> None:
@@ -782,7 +782,7 @@ async def test_modal_deny_always_flips_cancel_and_returns_rule() -> None:
         stdout=out,
         # [d] then accept the suggested pattern via empty submit.
         input_fn=_scripted_input(["d", ""]),
-        state=state,  # type: ignore[arg-type]
+        state=state,
     )
     result = await modal(rule_id="rl_bash_any", action="tool.bash", target="rm -rf /")
     assert isinstance(result, tuple)
@@ -792,7 +792,7 @@ async def test_modal_deny_always_flips_cancel_and_returns_rule() -> None:
     assert rule.what == "^rm .*$"  # suggest_pattern's bash heuristic
     # AND the cancel token is flipped — the exchange stops too.
     assert cancel.is_cancelled() is True
-    assert state.last_cancel_reason == "denied"  # type: ignore[attr-defined]
+    assert state.last_cancel_reason == "denied"
 
 
 async def test_modal_allow_does_not_flip_active_cancel() -> None:
@@ -808,12 +808,12 @@ async def test_modal_allow_does_not_flip_active_cancel() -> None:
     modal = ApprovalModal(
         stdout=out,
         input_fn=_scripted_input(["y"]),
-        state=state,  # type: ignore[arg-type]
+        state=state,
     )
     result = await modal(rule_id="rl_test", action="tool.bash", target="ls")
     assert result is AuthzEffect.ALLOW
     assert cancel.is_cancelled() is False
-    assert state.last_cancel_reason is None  # type: ignore[attr-defined]
+    assert state.last_cancel_reason is None
 
 
 async def test_modal_allow_always_does_not_flip_active_cancel() -> None:
@@ -830,14 +830,14 @@ async def test_modal_allow_always_does_not_flip_active_cancel() -> None:
     modal = ApprovalModal(
         stdout=out,
         input_fn=_scripted_input(["a", ""]),
-        state=state,  # type: ignore[arg-type]
+        state=state,
     )
     result = await modal(rule_id="rl_bash_any", action="tool.bash", target="rg foo")
     assert isinstance(result, tuple)
     effect, _rule = result
     assert effect is AuthzEffect.ALLOW
     assert cancel.is_cancelled() is False
-    assert state.last_cancel_reason is None  # type: ignore[attr-defined]
+    assert state.last_cancel_reason is None
 
 
 async def test_modal_bind_state_late_binds() -> None:
@@ -861,7 +861,7 @@ async def test_modal_bind_state_late_binds() -> None:
     # Modal constructed WITHOUT state — pre-fix construction.
     modal = ApprovalModal(stdout=out, input_fn=_never_called)
     # Late-bind, mirroring _run_input_loop's call.
-    modal.bind_state(state)  # type: ignore[arg-type]
+    modal.bind_state(state)
 
     result = await modal(rule_id="rl_test", action="tool.bash", target="ls")
     # Short-circuit fired post-bind — proves bind_state took effect.

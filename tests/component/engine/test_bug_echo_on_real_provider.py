@@ -152,14 +152,14 @@ async def test_tc_bug_echo_01_real_provider_does_not_echo(tmp_path: Path) -> Non
         _ = request
         return LLMResponse(content=_DISTINCTIVE)
 
-    async def stub_factory(spec):  # type: ignore[no-untyped-def]
+    async def stub_factory(spec):
         _ = spec
         return stub_llm_callable
 
     # Reach into the engine; this is intentional for a runtime-wiring
     # test. The bug exists EXACTLY because the engine's per-spec
     # factory wasn't reached.
-    runtime.engine._llm_for_model = stub_factory  # type: ignore[assignment]
+    runtime.engine._llm_for_model = stub_factory
 
     # Run the agent.
     config = await runtime.build_resolved_config("demo/agents/realagent")

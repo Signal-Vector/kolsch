@@ -145,7 +145,7 @@ async def test_dispatch_forwards_workflow_permissions_as_first_layer(
         defn=_make_defn(),
         args={},
         context=_ctx(),
-        authz=authz,  # type: ignore[arg-type]
+        authz=authz,
         secrets=secrets,
         sandbox=sandbox,
         workflow_permissions=[wf_rule],
@@ -169,7 +169,7 @@ async def test_dispatch_orders_workflow_agent_bundle_layers(
         defn=_make_defn(),
         args={},
         context=_ctx(),
-        authz=authz,  # type: ignore[arg-type]
+        authz=authz,
         secrets=secrets,
         sandbox=sandbox,
         workflow_permissions=[_rule("w")],
@@ -200,7 +200,7 @@ async def test_dispatch_no_workflow_permissions_preserves_prior_shape(
         defn=_make_defn(),
         args={},
         context=_ctx(),
-        authz=authz,  # type: ignore[arg-type]
+        authz=authz,
         secrets=secrets,
         sandbox=sandbox,
         agent_permissions=[_rule("a")],
@@ -224,7 +224,7 @@ async def test_dispatch_no_layers_at_all_when_all_perms_omitted(
         defn=_make_defn(),
         args={},
         context=_ctx(),
-        authz=authz,  # type: ignore[arg-type]
+        authz=authz,
         secrets=secrets,
         sandbox=sandbox,
     )

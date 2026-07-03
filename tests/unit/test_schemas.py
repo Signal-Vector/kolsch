@@ -152,7 +152,7 @@ def test_id_rejects_empty_body(cls: type, bad_value: str) -> None:
 )
 def test_uuid_id_rejects_non_uuid_body(cls: type) -> None:
     # AgentId is exempt — its body is user-chosen, not a UUID.
-    bad = f"{cls.prefix}not-a-uuid"  # type: ignore[attr-defined]
+    bad = f"{cls.prefix}not-a-uuid"
     with pytest.raises(ValueError, match="uuid"):
         cls(bad)
 
@@ -217,7 +217,7 @@ def test_pydantic_field_rejects_wrong_prefix() -> None:
     # Pydantic should refuse a string that doesn't validate as an EventId.
     with pytest.raises(ValidationError):
         Event(
-            event_id="bad-id",  # type: ignore[arg-type]
+            event_id="bad-id",
             parent_event_id=None,
             thread_id=_th(),
             session_id=_ses(),
@@ -280,7 +280,7 @@ def test_event_parent_is_optional_for_root() -> None:
 
 def test_actor_rejects_unknown_kind() -> None:
     with pytest.raises(ValidationError):
-        Actor(kind="alien")  # type: ignore[arg-type]
+        Actor(kind="alien")
 
 
 # ---------------------------------------------------------------------------
@@ -294,7 +294,7 @@ def test_session_opened_data() -> None:
         initial_agent={"id": "ag_x", "name": "x"},
     )
     with pytest.raises(ValidationError):
-        SessionOpenedData(session_id="not-a-session-id")  # type: ignore[arg-type, call-arg]
+        SessionOpenedData(session_id="not-a-session-id")
 
 
 def test_thread_exchange_started_data() -> None:
@@ -344,7 +344,7 @@ def test_model_request_data() -> None:
         config_event_id=_ev(),
     )
     with pytest.raises(ValidationError):
-        ModelRequestData(call_id="bad")  # type: ignore[arg-type, call-arg]
+        ModelRequestData(call_id="bad")
 
 
 def test_model_response_data() -> None:
@@ -360,7 +360,7 @@ def test_model_response_data() -> None:
         ModelResponseData(
             call_id=AgentCallId(f"cl_{_uuid()}"),
             content={"text": "x"},
-            cost="cheap",  # type: ignore[arg-type]
+            cost="cheap",
             usage={},
             latency_ms=1,
             stop_reason="end_turn",
@@ -434,7 +434,7 @@ def test_memory_retrieved_data() -> None:
 def test_memory_deleted_data() -> None:
     MemoryDeletedData(item_id=MemoryItemId(f"mem_{_uuid()}"))
     with pytest.raises(ValidationError):
-        MemoryDeletedData(item_id="not-mem")  # type: ignore[arg-type]
+        MemoryDeletedData(item_id="not-mem")
 
 
 def test_context_compacted_data() -> None:
@@ -615,7 +615,7 @@ def _resolved_kwargs_without_versions() -> dict[str, object]:
 def test_resolved_default_schema_version_when_missing() -> None:
     cfg = ResolvedAgentConfig(
         assembly_version="1",
-        **_resolved_kwargs_without_versions(),  # type: ignore[arg-type]
+        **_resolved_kwargs_without_versions(),
     )
     assert cfg.schema_version == "0.1"
 
@@ -623,14 +623,14 @@ def test_resolved_default_schema_version_when_missing() -> None:
 def test_resolved_default_assembly_version_when_missing() -> None:
     cfg = ResolvedAgentConfig(
         schema_version="0.1",
-        **_resolved_kwargs_without_versions(),  # type: ignore[arg-type]
+        **_resolved_kwargs_without_versions(),
     )
     assert cfg.assembly_version == "1"
 
 
 def test_resolved_default_both_when_missing() -> None:
     cfg = ResolvedAgentConfig(
-        **_resolved_kwargs_without_versions(),  # type: ignore[arg-type]
+        **_resolved_kwargs_without_versions(),
     )
     assert cfg.schema_version == "0.1"
     assert cfg.assembly_version == "1"
@@ -640,7 +640,7 @@ def test_resolved_preserves_explicit_versions() -> None:
     cfg = ResolvedAgentConfig(
         schema_version="0.2",
         assembly_version="2",
-        **_resolved_kwargs_without_versions(),  # type: ignore[arg-type]
+        **_resolved_kwargs_without_versions(),
     )
     assert cfg.schema_version == "0.2"
     assert cfg.assembly_version == "2"
@@ -650,7 +650,7 @@ def test_io_spec_mode_constrained() -> None:
     IOSpec(mode="conversational")
     IOSpec(mode="single_shot")
     with pytest.raises(ValidationError):
-        IOSpec(mode="weird")  # type: ignore[arg-type]
+        IOSpec(mode="weird")
 
 
 def test_prompt_spec_alias_accepts_both_shapes() -> None:

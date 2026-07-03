@@ -42,7 +42,7 @@ from schemas import AgentId, SessionId, ThreadId
 from tools.decorator import ToolContext
 
 
-def _load_browse_url_module():  # type: ignore[no-untyped-def]
+def _load_browse_url_module():
     """Load the starter-bundle template as an importable module."""
     module_name = "_test_kolsch_starter_bundle_browse_url"
     cached = sys.modules.get(module_name)

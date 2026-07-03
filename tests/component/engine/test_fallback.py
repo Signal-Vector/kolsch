@@ -965,12 +965,12 @@ def test_classification_guard_raises_on_unclassified_model_code() -> None:
         import errors as errors_mod
 
         original_list = errors_mod.list_catalog_codes
-        errors_mod.list_catalog_codes = lambda: fake_codes  # type: ignore[assignment]
+        errors_mod.list_catalog_codes = lambda: fake_codes
         try:
             with pytest.raises(ImportError, match=r"model\.new_unclassified"):
                 fb._assert_classification_exhaustive()
         finally:
-            errors_mod.list_catalog_codes = original_list  # type: ignore[assignment]
+            errors_mod.list_catalog_codes = original_list
     finally:
         # `original` is the immutable frozenset; nothing to restore.
         _ = original

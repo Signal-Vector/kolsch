@@ -148,7 +148,7 @@ async def test_tc_e2e_01_feasibility_crewai_with_real_llm(
         tools_arg = list(request.tools) if request.tools else None
         # Cast to Any so mypy doesn't try to fit our dict shape into
         # CrewAI's LLMMessage TypedDict (LLM.call accepts either).
-        text: Any = await asyncio.to_thread(real_provider.call, msgs, tools_arg)  # type: ignore[arg-type]
+        text: Any = await asyncio.to_thread(real_provider.call, msgs, tools_arg)
         if isinstance(text, list):
             # Tool-call list — translate CrewAI shape back to ours.
             return LLMResponse(

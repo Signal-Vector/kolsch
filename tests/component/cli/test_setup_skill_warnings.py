@@ -48,7 +48,7 @@ def _make_test_io(root: Path) -> _SetupIO:
         out=io.StringIO(),
         err=io.StringIO(),
         prompter=NonInteractivePrompter(),
-        connect_io_factory=lambda _root, _provider, _api_key: None,  # type: ignore[arg-type]
+        connect_io_factory=lambda _root, _provider, _api_key: None,
         run_handler=_noop_run_handler,
     )
 
