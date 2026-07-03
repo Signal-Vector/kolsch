@@ -1,5 +1,7 @@
 # Kolsch
 
+[![docs](https://github.com/Signal-Vector/kolsch/actions/workflows/docs.yml/badge.svg)](https://signal-vector.github.io/kolsch/)
+
 A local-first, definition-orchestrated multi-agent workflow platform.
 YAML is the source of truth; a Python/CrewAI backend executes agents;
 everything is captured in an append-only event log (JSONL) that serves
