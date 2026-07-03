@@ -92,7 +92,7 @@ class MigrationResult:
 
 
 def migrate_authz_rules(
-    rules: list[dict[str, Any]],
+    rules: list[Any],
     *,
     catalog: AssetCatalog | None = None,
 ) -> MigrationResult:

@@ -102,4 +102,7 @@ def inputs_model_for(
     lookup = getattr(catalog_runner, "inputs_model_for", None)
     if lookup is None:
         return None
-    return lookup(type_ref)
+    result = lookup(type_ref)
+    if result is None or (isinstance(result, type) and issubclass(result, BaseModel)):
+        return result
+    return None

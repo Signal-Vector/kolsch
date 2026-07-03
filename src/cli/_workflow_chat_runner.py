@@ -131,7 +131,7 @@ async def execute_workflow_with_renderer(
         executor_coro = executor.run()
     executor_task = asyncio.create_task(executor_coro)
 
-    async def _await_executor() -> Any:
+    async def _await_executor() -> WorkflowRunStatus:
         try:
             return await executor_task
         finally:
