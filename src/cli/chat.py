@@ -362,7 +362,7 @@ def _build_key_bindings() -> KeyBindings:
     return kb
 
 
-async def _run_input_loop(  # noqa: PLR0913, PLR0912, PLR0915 — loop owns all the chat state + per-exchange branching; bundling further hurts readability
+async def _run_input_loop(
     prompt_session: PromptSession[str],
     *,
     stdout: TextIO,

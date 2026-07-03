@@ -332,6 +332,9 @@ convention = "google"
     "S107",    # Same — default arg values in helper factories.
     "PLR0913", # Test helper factories naturally take many kwargs to
                # build varied ProviderConfig / SecretsProvider shapes.
+    "PLR0911", # Table-driven test cases with per-shape early-returns
+               # legitimately hit the 6-branch return limit.
+    "PLR0912", # Same — parametrized test bodies scan many arms.
     "E501",    # Long test names + parametrized table rows occasionally
                # exceed 88 cols; the docs/process catalog test names
                # are deliberate.
@@ -374,7 +377,23 @@ convention = "google"
 # through the generic RunnerRegistry (spec §5); the validator
 # traverses arbitrary parsed-YAML nodes; Jinja render callbacks
 # return arbitrary shapes. No narrower type exists at this layer.
-"src/workflows/**" = ["TC001", "TC003", "ANN401"]
+# PLR0911/0912/0913/0915 — validator.py's layered rule gates and
+# executor.py's dispatch orchestrator match the engine/** rationale:
+# high branch/return counts are the shape of a layered check gate,
+# not a refactor signal. PLR2004 — structural pattern checks
+# (`len(parts) == 2` for 2-segment tool refs, `_call_depth > 16`
+# for the extends depth limit) are self-documenting; extracting
+# every one to a module constant hurts readability.
+"src/workflows/**" = [
+    "TC001",
+    "TC003",
+    "ANN401",
+    "PLR0911",
+    "PLR0912",
+    "PLR0913",
+    "PLR0915",
+    "PLR2004",
+]
 # Pydantic v2 resolves field annotations at runtime via
 # `typing.get_type_hints()`. With `from __future__ import annotations`
 # in place, those imports look TYPE_CHECKING-only to ruff but must
@@ -400,7 +419,19 @@ convention = "google"
 # `authz` / `yaml_path` values parsed from user-typed input and
 # variadic `**kwargs` forwarded to workflow runners; those are
 # Any by construction (spec §7 slash-command dispatch shape).
-"src/cli/**" = ["TC001", "TC003", "ANN401"]
+# PLR complexity + PLR2004 — the slash dispatcher and skills
+# subcommands are wide type-dispatch surfaces (many arms, many
+# early-return validation paths). Same shape as engine/**.
+"src/cli/**" = [
+    "TC001",
+    "TC003",
+    "ANN401",
+    "PLR0911",
+    "PLR0912",
+    "PLR0913",
+    "PLR0915",
+    "PLR2004",
+]
 # API module — FastAPI routes accept Pydantic models via dependency
 # injection; type-checking blocks would break Pydantic field
 # inspection. Plus FBT for FastAPI's Query(default=False) idiom is

@@ -945,7 +945,7 @@ async def _perm_list(ctx: SlashContext) -> None:
             )
 
 
-async def _perm_upsert(  # noqa: PLR0913
+async def _perm_upsert(
     ctx: SlashContext,
     *,
     verb: str,

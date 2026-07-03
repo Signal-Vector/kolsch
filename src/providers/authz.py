@@ -988,7 +988,7 @@ class RuleBasedAuthorizationProvider:
         return None
 
     @staticmethod
-    def _rule_matches(
+    def _rule_matches(  # noqa: PLR0913 — spec §3.2 matcher takes the full (principal, action, target, tool_ref) tuple
         *,
         compiled: _CompiledRule,
         principal: str,
@@ -1599,7 +1599,7 @@ class AllowAllTestAuthorizationProvider:
                 where="providers.authz.allow_all_test.init",
             )
 
-    async def allow(
+    async def allow(  # noqa: PLR0913 — Protocol signature; the full authz-check tuple
         self,
         principal: str,
         action: str,

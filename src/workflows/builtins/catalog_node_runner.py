@@ -321,7 +321,7 @@ def _coerce_return(*, type_ref: str, result: Any) -> dict[str, Any]:
         return {"value": result}
     if isinstance(result, BaseModel):
         return dict(result.model_dump())
-    if isinstance(result, tuple) and len(result) == 2:  # noqa: PLR2004 — (flag, payload) tuple shape
+    if isinstance(result, tuple) and len(result) == 2:
         flag, payload = result
         if isinstance(flag, bool) and isinstance(payload, BaseModel):
             return {"value": flag, **payload.model_dump()}

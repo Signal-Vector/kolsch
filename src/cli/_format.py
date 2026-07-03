@@ -41,7 +41,7 @@ _STATUS = EnvelopeStatus()
 # that want a pre-rendered text payload when ``fmt="text"``. Each
 # kwarg is part of the contract; collapsing behind a dataclass would
 # only shuffle the arity.
-def render(  # noqa: PLR0913
+def render(
     *,
     command: str,
     fmt: str = "text",

@@ -1151,7 +1151,7 @@ def _list_skill_files(skill_root: Path) -> list[str]:
     return out
 
 
-def _cmd_install(  # noqa: PLR0913 — install owns the full URL → destination flow; bundling further hurts readability
+def _cmd_install(
     root: Path,
     *,
     url: str,

@@ -246,7 +246,7 @@ def add_workflows_subparser(
 # return tunnels the leaf's own exit code; collapsing into a mapping
 # would lose the type-checker visibility of each leaf's signature
 # differences (args.ref vs args.run_id vs no positional).
-async def cmd_workflows(  # noqa: PLR0911
+async def cmd_workflows(
     args: argparse.Namespace,
     *,
     out: TextIO = sys.stdout,
@@ -582,7 +582,7 @@ def _cmd_cancel(
 # captured out/err streams. Collapsing into an args object would only
 # shift the parameter count behind another constructor; the dispatcher
 # already passes them by keyword.
-async def _cmd_run(  # noqa: PLR0913
+async def _cmd_run(
     *,
     root: Path,
     ref: str,
@@ -687,7 +687,7 @@ async def _cmd_run(  # noqa: PLR0913
 # ---------------------------------------------------------------------------
 
 
-async def _cmd_resume(  # noqa: PLR0913 — five explicit kw args; mirrors _cmd_run's shape
+async def _cmd_resume(
     *,
     root: Path,
     run_id_str: str,
@@ -856,7 +856,7 @@ async def _cmd_resume(  # noqa: PLR0913 — five explicit kw args; mirrors _cmd_
 # ---------------------------------------------------------------------------
 
 
-async def _cmd_fork(  # noqa: PLR0913 — seven explicit kw args; mirrors _cmd_resume's shape
+async def _cmd_fork(
     *,
     root: Path,
     parent_run_id_str: str,
@@ -1061,7 +1061,7 @@ async def _cmd_fork(  # noqa: PLR0913 — seven explicit kw args; mirrors _cmd_r
     )
 
 
-def _render_fork_terminal(  # noqa: PLR0913 — eight explicit kw args; fork-specific shape
+def _render_fork_terminal(
     *,
     store: Any,
     forked_run_id: Any,
@@ -1335,7 +1335,7 @@ def _compute_dry_run_topology(workflow: Any) -> list[str]:
     return topo
 
 
-def _emit_dry_run_plan(  # noqa: PLR0913 — six explicit kw args; collapsing them into an args object would only shift the count
+def _emit_dry_run_plan(
     *,
     workflow: Any,
     ref: str,
@@ -1402,7 +1402,7 @@ def _node_binds_preview(node_def: Any) -> dict[str, Any]:
     return {}
 
 
-async def _run_blocking(  # noqa: PLR0913 — six explicit kw args; shared with _run_with_follow
+async def _run_blocking(
     *,
     executor: Any,
     store: Any,
@@ -1432,7 +1432,7 @@ async def _run_blocking(  # noqa: PLR0913 — six explicit kw args; shared with 
     )
 
 
-def _render_terminal_for_command(  # noqa: PLR0913 — seven explicit kw args; shared rendering for run + resume
+def _render_terminal_for_command(
     *,
     command: str,
     store: Any,
@@ -1527,7 +1527,7 @@ def _render_terminal_for_command(  # noqa: PLR0913 — seven explicit kw args; s
     return 1
 
 
-async def _run_with_follow(  # noqa: PLR0913 — six explicit kw args; shared with _run_blocking
+async def _run_with_follow(
     *,
     executor: Any,
     store: Any,

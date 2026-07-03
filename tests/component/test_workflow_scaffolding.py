@@ -177,7 +177,7 @@ def test_removed_or_renamed_classes_not_importable(name: str) -> None:
 
 
 @pytest.mark.parametrize("cls", _yaml_origin_classes())
-def test_yaml_origin_str_is_strict_single_line(cls: type[WorkflowError]) -> None:  # noqa: PLR0912
+def test_yaml_origin_str_is_strict_single_line(cls: type[WorkflowError]) -> None:
     # Build a minimal-args instance via reflection — pull init kwargs
     # from the dataclass-ish signature.
     sig = inspect.signature(cls)

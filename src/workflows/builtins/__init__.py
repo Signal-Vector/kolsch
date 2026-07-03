@@ -78,7 +78,7 @@ __all__ = [
 ]
 
 
-def register_builtins(  # noqa: PLR0913 — wide-by-design wiring surface; see docstring
+def register_builtins(
     registry: RunnerRegistry,
     *,
     bash_defn: ToolDefinition,

@@ -1153,7 +1153,7 @@ def _import_node_module(path: str) -> Any:
 # string. Collapsing into a single exit would lose the per-failure
 # `reason` text. The `run_fn` parameter is intrinsically `Any` — it's
 # a user-authored function we just inspect, not call.
-def _check_run_signature(  # noqa: PLR0911
+def _check_run_signature(
     *,
     file: str,
     ref: str,

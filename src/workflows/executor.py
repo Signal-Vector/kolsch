@@ -871,7 +871,7 @@ class IterativeExecutor:
     # Fork entry point.
     # ------------------------------------------------------------------
 
-    async def start_from_fork(  # noqa: PLR0915 — fork is structurally replay+continue; splitting hides the ordering
+    async def start_from_fork(
         self,
         *,
         fork_event_id: str,
@@ -1126,7 +1126,7 @@ class IterativeExecutor:
     # Worklist body — shared by initial-run and resume paths.
     # ------------------------------------------------------------------
 
-    async def _continue_worklist(  # noqa: PLR0915, PLR0912 — sequential algorithm; splitting hides the ordering
+    async def _continue_worklist(
         self,
         *,
         run_id: WorkflowRunId,
@@ -1546,7 +1546,7 @@ class IterativeExecutor:
     # Concurrent worklist for `auto` mode.
     # ------------------------------------------------------------------
 
-    async def _continue_worklist_concurrent(  # noqa: PLR0915, PLR0912 — concurrent algorithm; splitting hides the ordering
+    async def _continue_worklist_concurrent(
         self,
         *,
         run_id: WorkflowRunId,

@@ -201,7 +201,7 @@ class MapRunner:
             )
         return {"results": results}
 
-    async def _run_sequential(  # noqa: PLR0913 — passes through the run() context
+    async def _run_sequential(
         self,
         *,
         node_def: MapNodeDef,
@@ -240,7 +240,7 @@ class MapRunner:
             results.append(captured)
         return results
 
-    async def _run_parallel(  # noqa: PLR0913 — concurrent algorithm
+    async def _run_parallel(
         self,
         *,
         node_def: MapNodeDef,
@@ -365,7 +365,7 @@ class MapRunner:
         # Flatten in index order — the documented contract.
         return [results[i] for i in range(total)]
 
-    async def _run_one_iteration(  # noqa: PLR0913 — shared per-iteration helper
+    async def _run_one_iteration(
         self,
         *,
         node_def: MapNodeDef,

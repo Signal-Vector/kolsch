@@ -108,7 +108,7 @@ class AssetCatalog(BaseModel):
         return entry
 
 
-def scan(root: Path) -> AssetCatalog:
+def scan(root: Path) -> AssetCatalog:  # noqa: PLR0912 — one branch per asset type (spec §2 catalog schema)
     """Walk `root/bundles/` and build the catalog.
 
     Bundles with missing or malformed `bundle.yaml` are skipped with

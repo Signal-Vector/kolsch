@@ -518,7 +518,7 @@ def _alias_lookup(aliases: dict[str, Any]) -> dict[tuple[str, str], str]:
     return out
 
 
-def _emit_models_text(  # noqa: PLR0913 — keyword-only render args; splitting hides intent
+def _emit_models_text(
     io: _CommandIO,
     *,
     providers: dict[str, Any],
