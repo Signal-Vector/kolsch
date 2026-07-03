@@ -52,10 +52,10 @@ def with_timeout(
             self,
             *,
             node_name: str,
-            node_def: Any,  # noqa: ANN401
+            node_def: Any,
             bound_inputs: dict[str, Any],
             state: dict[str, Any],
-            ctx: Any,  # noqa: ANN401
+            ctx: Any,
         ) -> dict[str, Any]:
             try:
                 return await asyncio.wait_for(

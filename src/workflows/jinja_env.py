@@ -61,7 +61,7 @@ class WorkflowJinjaEnvironment(ImmutableSandboxedEnvironment):
     concat = staticmethod(native_concat)  # type: ignore[assignment]
 
 
-def _from_json_filter(value: str) -> Any:  # noqa: ANN401
+def _from_json_filter(value: str) -> Any:
     """The `from_json` Jinja filter.
 
     Wraps `json.loads` so a parse error surfaces as a
@@ -91,7 +91,7 @@ JINJA_ENV: WorkflowJinjaEnvironment = WorkflowJinjaEnvironment()
 _register_builtin_filters(JINJA_ENV)
 
 
-def render_jinja(expression: str, *, location: str, **context: Any) -> Any:  # noqa: ANN401
+def render_jinja(expression: str, *, location: str, **context: Any) -> Any:
     """Render a Jinja expression under the singleton sandbox.
 
     The convenience wrapper that the validator and executor call

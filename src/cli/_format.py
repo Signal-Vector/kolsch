@@ -177,7 +177,7 @@ def _public_attrs(exc: BaseException) -> dict[str, Any]:
     return out
 
 
-def _make_jsonable(value: Any) -> Any:  # noqa: ANN401
+def _make_jsonable(value: Any) -> Any:
     """Best-effort JSON-serialisable shim.
 
     Tuples → lists; sets → sorted lists; everything else passes

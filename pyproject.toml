@@ -347,6 +347,10 @@ convention = "google"
                # starved. Rewriting `tmp_path.write_text(...)` to
                # `await anyio.Path(tmp_path).write_text(...)` in
                # every fixture setup would be pure line noise.
+    "N806",    # Tests frequently bind classes to PascalCase locals
+               # for readability (e.g. `Args = fn._tool_definition.
+               # args_schema`) — the local mirrors how the class
+               # would be named in scope.
 ]
 # `src/errors/` is, by definition, the errors package. Every class is a
 # PlatformError subclass; the N818 "must end in Error" rule would force
@@ -365,7 +369,12 @@ convention = "google"
 "src/workflows/context.py" = ["PLR0913"]
 # `src/workflows/jinja_env.py` — Pydantic-style at-runtime imports
 # (TC003 false positive) + the sandbox env subclasses jinja2 internals.
-"src/workflows/**" = ["TC001", "TC003"]
+# ANN401 — Any is the contract at the workflow-runtime boundary:
+# `worker_def`, `worker_runner`, and `element` are dispatched
+# through the generic RunnerRegistry (spec §5); the validator
+# traverses arbitrary parsed-YAML nodes; Jinja render callbacks
+# return arbitrary shapes. No narrower type exists at this layer.
+"src/workflows/**" = ["TC001", "TC003", "ANN401"]
 # Pydantic v2 resolves field annotations at runtime via
 # `typing.get_type_hints()`. With `from __future__ import annotations`
 # in place, those imports look TYPE_CHECKING-only to ruff but must
@@ -387,8 +396,11 @@ convention = "google"
 "src/skills/**" = ["TC001", "TC003"]
 # CLI module — entry-point script doesn't need ANN coverage on
 # argparse handlers; argparse Namespace attribute access trips
-# inferred-Any checks.
-"src/cli/**" = ["TC001", "TC003"]
+# inferred-Any checks. ANN401 — slash-command handlers accept
+# `authz` / `yaml_path` values parsed from user-typed input and
+# variadic `**kwargs` forwarded to workflow runners; those are
+# Any by construction (spec §7 slash-command dispatch shape).
+"src/cli/**" = ["TC001", "TC003", "ANN401"]
 # API module — FastAPI routes accept Pydantic models via dependency
 # injection; type-checking blocks would break Pydantic field
 # inspection. Plus FBT for FastAPI's Query(default=False) idiom is

@@ -60,7 +60,7 @@ async def execute_workflow_with_renderer(
     stdout: TextIO,
     store: WorkflowRunStore,
     workflow: Workflow,
-    run: Any,  # noqa: ANN401 — WorkflowRun; avoids the type import at module level
+    run: Any,
     resume_response: dict[str, Any] | None = None,
     fork_event_id: str | None = None,
     input_overrides: dict[str, Any] | None = None,
@@ -131,7 +131,7 @@ async def execute_workflow_with_renderer(
         executor_coro = executor.run()
     executor_task = asyncio.create_task(executor_coro)
 
-    async def _await_executor() -> Any:  # noqa: ANN401 — WorkflowRunStatus, hidden from module imports
+    async def _await_executor() -> Any:
         try:
             return await executor_task
         finally:
@@ -157,7 +157,7 @@ async def execute_workflow_with_renderer(
 
 def resolve_paused_node_name(
     store: WorkflowRunStore,
-    run_id: Any,  # noqa: ANN401 — WorkflowRunId
+    run_id: Any,
 ) -> str | None:
     """Resolve the paused `user_input` node's `node_name` from disk.
 

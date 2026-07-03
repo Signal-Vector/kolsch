@@ -1110,7 +1110,7 @@ def _check_catalog_node_defs(
     return errors, warnings
 
 
-def _import_node_module(path: str) -> Any:  # noqa: ANN401
+def _import_node_module(path: str) -> Any:
     """Best-effort import the authored node module from `path`.
 
     Returns the loaded module on success or the original `Exception`
@@ -1157,7 +1157,7 @@ def _check_run_signature(  # noqa: PLR0911
     *,
     file: str,
     ref: str,
-    run_fn: Any,  # noqa: ANN401
+    run_fn: Any,
 ) -> WorkflowNodeSignatureInvalid | None:
     """Verify `run` matches the authored-node signature rules.
 
@@ -1233,7 +1233,7 @@ def _check_run_return_type(
     *,
     file: str,
     ref: str,
-    run_fn: Any,  # noqa: ANN401 — user fn
+    run_fn: Any,
 ) -> WorkflowNodeReturnTypeInvalid | None:
     """Verify `run`'s return annotation is one of the accepted shapes.
 
@@ -1553,7 +1553,7 @@ def _branch_state_read_set(workflow: Workflow, branch: set[str]) -> dict[str, st
     reads: dict[str, str] = {}
     visited_workers: set[str] = set()
 
-    def _scan_value(value: Any, owner: str) -> None:  # noqa: ANN401
+    def _scan_value(value: Any, owner: str) -> None:
         if isinstance(value, str):
             for match in _STATE_REF_RE.finditer(value):
                 reads.setdefault(match.group(1), owner)

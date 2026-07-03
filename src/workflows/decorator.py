@@ -81,7 +81,7 @@ def node(
         msg = f"@node(label=...) must be a str or None; got {label!r}"  # type: ignore[unreachable]
         raise TypeError(msg)
 
-    def decorate(fn: Any) -> Any:  # noqa: ANN401 — decorator validates
+    def decorate(fn: Any) -> Any:
         if not callable(fn):
             msg = f"@node can only decorate callables; got {fn!r}"
             raise TypeError(msg)

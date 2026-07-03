@@ -20,10 +20,10 @@ class NoopRunner:
         self,
         *,
         node_name: str,
-        node_def: Any,  # noqa: ANN401
+        node_def: Any,
         bound_inputs: dict[str, Any],
         state: dict[str, Any],
-        ctx: Any,  # noqa: ANN401
+        ctx: Any,
     ) -> dict[str, Any]:
         """Return an empty dict; no side effects, no state read or write."""
         _ = (node_name, node_def, bound_inputs, state, ctx)

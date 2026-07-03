@@ -23,7 +23,7 @@ _BRANCH_TYPE_REF = "kolsch/nodes/branch"
 
 
 def compute_branch_value(
-    node_def: Any,  # noqa: ANN401 — NodeDefUnion is a Pydantic alias
+    node_def: Any,
     captured: dict[str, Any],
 ) -> bool | None:
     """Extract the branchable boolean for edge dispatch.

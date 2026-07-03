@@ -420,7 +420,7 @@ class WorkflowCapsuleRenderer:
         # whose __name__ matches so the cleaned-name path is honest.
         return display_label(_NodeNameStub(node_name), type_label)
 
-    def _lookup_node_def(self, node_name: str) -> Any | None:  # noqa: ANN401
+    def _lookup_node_def(self, node_name: str) -> Any | None:
         if self._workflow is None or not node_name:
             return None
         return self._workflow.nodes.get(node_name)
@@ -547,7 +547,7 @@ def _short_event_id(event_id: str) -> str:
     return f"ev_{body[:_EVENT_ID_SHORT_LEN]}"
 
 
-def _single_line_preview(value: Any) -> str:  # noqa: ANN401
+def _single_line_preview(value: Any) -> str:
     """Collapse a value to a single-line preview string.
 
     Strings are stripped of newlines; everything else passes through

@@ -711,7 +711,7 @@ async def cmd_refresh(args: argparse.Namespace, io: _CommandIO) -> int:
 # ---------------------------------------------------------------------------
 
 
-def _build_refresh_secrets(root: Path, payload: dict[str, Any]) -> Any:  # noqa: ANN401 — opaque SecretsProvider
+def _build_refresh_secrets(root: Path, payload: dict[str, Any]) -> Any:
     """Instantiate a Secrets provider from platform.yaml's `secrets` section.
 
     Used by `refresh` so the command doesn't require a full runtime

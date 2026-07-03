@@ -1188,7 +1188,7 @@ _AGENT_EXECUTE_CATCHALL_REGEX_FORMS = frozenset(
 )
 
 
-def _rule_covers_broad_agent_execute(rule: Any) -> bool:  # noqa: ANN401
+def _rule_covers_broad_agent_execute(rule: Any) -> bool:
     r"""Return True when the rule allows the pre-flight `agent.execute.*` check.
 
     Accepted shapes:

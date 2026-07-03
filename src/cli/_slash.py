@@ -1332,8 +1332,8 @@ async def _handler_fork(arg_text: str, ctx: SlashContext) -> ControlSignal:
 
 
 def _resolve_event_id_prefix(
-    store: Any,  # noqa: ANN401 — WorkflowRunStore
-    run_id: Any,  # noqa: ANN401 — WorkflowRunId
+    store: Any,
+    run_id: Any,
     candidate: str,
 ) -> str | None:
     """Resolve a possibly-short event_id against the parent run's JSONL.

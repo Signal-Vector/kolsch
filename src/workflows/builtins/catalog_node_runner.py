@@ -74,10 +74,10 @@ class CatalogNodeRunner:
         self,
         *,
         node_name: str,
-        node_def: Any,  # noqa: ANN401 — CatalogNodeDef
+        node_def: Any,
         bound_inputs: dict[str, Any],
         state: dict[str, Any],  # noqa: ARG002 — NodeRunner protocol
-        ctx: Any,  # noqa: ANN401 — NodeContext
+        ctx: Any,
     ) -> dict[str, Any]:
         """Import the authored module, validate inputs, and dispatch `run`.
 
@@ -208,7 +208,7 @@ class CatalogNodeRunner:
         return self._cache[type_ref]
 
 
-def _import_module(*, type_ref: str, entry_path: str) -> Any:  # noqa: ANN401
+def _import_module(*, type_ref: str, entry_path: str) -> Any:
     """Load the authored node module via `importlib.util`.
 
     The synthetic module name embeds the ref so concurrent runs
@@ -261,7 +261,7 @@ def _import_module(*, type_ref: str, entry_path: str) -> Any:  # noqa: ANN401
 
 def _extract_inputs_model(
     *,
-    run_fn: Any,  # noqa: ANN401
+    run_fn: Any,
     type_ref: str,
 ) -> type[BaseModel] | None:
     """Inspect `run_fn` and return its `inputs` parameter's Pydantic class.
@@ -302,7 +302,7 @@ def _extract_inputs_model(
     return annotation
 
 
-def _coerce_return(*, type_ref: str, result: Any) -> dict[str, Any]:  # noqa: ANN401
+def _coerce_return(*, type_ref: str, result: Any) -> dict[str, Any]:
     """Parse the run function's return into the canonical captured dict.
 
     Three accepted return shapes:

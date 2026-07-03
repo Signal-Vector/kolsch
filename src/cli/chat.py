@@ -332,12 +332,12 @@ def _build_key_bindings() -> KeyBindings:
     kb = KeyBindings()
 
     @kb.add("enter")
-    def _submit(event: Any) -> None:  # noqa: ANN401
+    def _submit(event: Any) -> None:
         """Enter submits the current input."""
         event.current_buffer.validate_and_handle()
 
     @kb.add("c-j")
-    def _newline_ctrl_j(event: Any) -> None:  # noqa: ANN401
+    def _newline_ctrl_j(event: Any) -> None:
         r"""Ctrl-J inserts a literal newline.
 
         Universal because every terminal sends `\n` for Ctrl-J.
@@ -348,7 +348,7 @@ def _build_key_bindings() -> KeyBindings:
         event.current_buffer.insert_text("\n")
 
     @kb.add("escape", "enter")
-    def _newline_alt_enter(event: Any) -> None:  # noqa: ANN401
+    def _newline_alt_enter(event: Any) -> None:
         """Alt-Enter (Esc-Enter) inserts a newline — universal fallback.
 
         Cross-terminal fallback for macOS Terminal.app and
@@ -566,7 +566,7 @@ async def _watch_esc_during_streaming(
     state: ChatSessionState,
     cancel: CancelToken,
     *,
-    inp_factory: Any = None,  # noqa: ANN401 — Callable[[], prompt_toolkit.Input]; tests inject create_pipe_input
+    inp_factory: Any = None,
 ) -> None:
     """Watch stdin for a bare Esc keystroke; flip the cancel token when seen.
 
@@ -795,7 +795,7 @@ def _parse_startup_model_override(
     raw: str,
     runtime: PlatformRuntime,
     root: Path,
-) -> Any:  # noqa: ANN401 — concrete ModelSpec; Any sidesteps a TYPE_CHECKING import cycle
+) -> Any:
     """Parse the `--model <ref>` CLI override into a ModelSpec.
 
     Same alias-resolution path as `/model` so the two surfaces

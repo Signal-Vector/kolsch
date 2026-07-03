@@ -128,7 +128,7 @@ class NodeRunner(Protocol):
         self,
         *,
         node_name: str,
-        node_def: Any,  # noqa: ANN401 — NodeDefUnion is a Pydantic alias
+        node_def: Any,
         bound_inputs: dict[str, Any],
         state: dict[str, Any],
         ctx: NodeContext,
@@ -854,7 +854,7 @@ class IterativeExecutor:
     @staticmethod
     def _last_event_id_from_events(
         events: list[dict[str, Any]],
-    ) -> Any:  # noqa: ANN401 — EventId envelope field
+    ) -> Any:
         """Return the `event_id` of the last event in `events`.
 
         `parent_event_id` chains form the causal-parent backbone. The
@@ -2114,7 +2114,7 @@ class IterativeExecutor:
     # `when:` gate evaluation.
     # ------------------------------------------------------------------
 
-    def _when_holds(self, node_def: Any) -> bool:  # noqa: ANN401
+    def _when_holds(self, node_def: Any) -> bool:
         """Evaluate the node-level `when:` modifier.
 
         `None` → no gate (always fires). A bare YAML literal
@@ -2138,7 +2138,7 @@ class IterativeExecutor:
         self,
         *,
         node_name: str,
-        node_def: Any,  # noqa: ANN401 — NodeDefUnion is a Pydantic alias
+        node_def: Any,
         bound_inputs: dict[str, Any],
     ) -> None:
         """Validate `bound_inputs` against the receiver's `Inputs(BaseModel)`.
@@ -2311,7 +2311,7 @@ class IterativeExecutor:
         self,
         *,
         source: str,
-        source_completion_event_id: Any,  # noqa: ANN401 — EventId | None
+        source_completion_event_id: Any,
         branch_value: bool | None,
     ) -> None:
         """Reverse-reachability cascade from `source`.
@@ -2371,7 +2371,7 @@ class IterativeExecutor:
         node_name: str,
         upstream_source: str,
         branch_value: bool,
-        parent_event_id: Any,  # noqa: ANN401 — EventId envelope field
+        parent_event_id: Any,
     ) -> None:
         """Append a `WorkflowNodePrunedEvent` to the run's JSONL.
 
@@ -2412,7 +2412,7 @@ class IterativeExecutor:
         expression: str,
         *,
         inputs_overlay: dict[str, Any] | None = None,
-    ) -> Any:  # noqa: ANN401 — Jinja returns Any-shaped values
+    ) -> Any:
         """Render a Jinja-marked string under `JINJA_ENV`.
 
         The scope exposes `nodes` (captured outputs), `state`
@@ -2444,8 +2444,8 @@ class IterativeExecutor:
         self,
         *,
         inv_id: InvocationId,
-        node_def: Any,  # noqa: ANN401
-        parent_event_id: Any = None,  # noqa: ANN401 — typed EventId in workflows.context
+        node_def: Any,
+        parent_event_id: Any = None,
         is_resume_mode: bool = False,
         recorded_child_run_id: WorkflowRunId | None = None,
     ) -> NodeContext:
@@ -2601,7 +2601,7 @@ class IterativeExecutor:
 # ---------------------------------------------------------------------------
 
 
-def _is_jinja_marked(value: Any) -> bool:  # noqa: ANN401
+def _is_jinja_marked(value: Any) -> bool:
     """Return `True` iff `value` is a string containing `"{{"`."""
     return isinstance(value, str) and "{{" in value
 
@@ -2609,7 +2609,7 @@ def _is_jinja_marked(value: Any) -> bool:  # noqa: ANN401
 def _apply_node_modifiers(
     runner: NodeRunner,
     *,
-    node_def: Any,  # noqa: ANN401
+    node_def: Any,
 ) -> NodeRunner:
     """Apply per-node `retry` and `timeout_seconds` modifiers.
 
@@ -2631,7 +2631,7 @@ def _apply_node_modifiers(
     return runner
 
 
-def _node_type_ref(node_def: Any) -> str:  # noqa: ANN401
+def _node_type_ref(node_def: Any) -> str:
     """Return the node's 3-seg `type:` ref.
 
     The `copy_of:` shape carries no `type:` — the validator resolves

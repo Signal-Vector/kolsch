@@ -84,10 +84,10 @@ class BrowseUrlRunner:
         self,
         *,
         node_name: str,
-        node_def: Any,  # noqa: ANN401 — BrowseUrlNodeDef
+        node_def: Any,
         bound_inputs: dict[str, Any],
         state: dict[str, Any],
-        ctx: Any,  # noqa: ANN401 — NodeContext
+        ctx: Any,
     ) -> dict[str, Any]:
         """Render the node's config and dispatch the browse_url tool.
 

@@ -252,7 +252,7 @@ def _finding_from(
     )
 
 
-def _jsonable(value: Any) -> Any:  # noqa: ANN401 — heterogeneous attr values
+def _jsonable(value: Any) -> Any:
     """Coerce identifying-name values into JSON-serialisable shapes.
 
     Tuples become lists (the validator uses tuples for cycle paths

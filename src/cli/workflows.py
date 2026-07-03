@@ -323,7 +323,7 @@ async def cmd_workflows(  # noqa: PLR0911
 # ---------------------------------------------------------------------------
 
 
-def _cmd_list(catalog: Any, *, fmt: str, out: TextIO) -> int:  # noqa: ANN401
+def _cmd_list(catalog: Any, *, fmt: str, out: TextIO) -> int:
     rows = [
         {
             "ref": entry.ref,
@@ -365,7 +365,7 @@ def _cmd_list(catalog: Any, *, fmt: str, out: TextIO) -> int:  # noqa: ANN401
 
 
 def _cmd_show(
-    catalog: Any,  # noqa: ANN401
+    catalog: Any,
     ref: str,
     *,
     fmt: str,
@@ -442,7 +442,7 @@ def _cmd_show(
 
 
 def _cmd_validate(
-    catalog: Any,  # noqa: ANN401
+    catalog: Any,
     ref: str,
     *,
     fmt: str,
@@ -1063,11 +1063,11 @@ async def _cmd_fork(  # noqa: PLR0913 — seven explicit kw args; mirrors _cmd_r
 
 def _render_fork_terminal(  # noqa: PLR0913 — eight explicit kw args; fork-specific shape
     *,
-    store: Any,  # noqa: ANN401
-    forked_run_id: Any,  # noqa: ANN401
-    parent_run_id: Any,  # noqa: ANN401
+    store: Any,
+    forked_run_id: Any,
+    parent_run_id: Any,
     fork_event_id: str,
-    status: Any,  # noqa: ANN401 — WorkflowRunStatus
+    status: Any,
     fmt: str,
     out: TextIO,
     err: TextIO,
@@ -1253,7 +1253,7 @@ def _cmd_events(
     return 0
 
 
-def _preview_payload(payload: Any) -> str:  # noqa: ANN401
+def _preview_payload(payload: Any) -> str:
     """Render a single-line, length-bounded preview of a payload dict.
 
     Operators scan this column to disambiguate near-identical events
@@ -1304,7 +1304,7 @@ def _input_pairs_or_exit(pairs: list[str]) -> dict[str, Any]:
         raise SystemExit(msg) from exc
 
 
-def _compute_dry_run_topology(workflow: Any) -> list[str]:  # noqa: ANN401
+def _compute_dry_run_topology(workflow: Any) -> list[str]:
     """Kahn's algorithm replicated here for the dry-run path.
 
     Duplicates
@@ -1337,7 +1337,7 @@ def _compute_dry_run_topology(workflow: Any) -> list[str]:  # noqa: ANN401
 
 def _emit_dry_run_plan(  # noqa: PLR0913 — six explicit kw args; collapsing them into an args object would only shift the count
     *,
-    workflow: Any,  # noqa: ANN401
+    workflow: Any,
     ref: str,
     topo: list[str],
     inputs: dict[str, str],
@@ -1390,7 +1390,7 @@ def _emit_dry_run_plan(  # noqa: PLR0913 — six explicit kw args; collapsing th
     return 0
 
 
-def _node_binds_preview(node_def: Any) -> dict[str, Any]:  # noqa: ANN401
+def _node_binds_preview(node_def: Any) -> dict[str, Any]:
     """Return the node's ``binds`` mapping in its raw, unrendered form.
 
     Jinja-marked values (``"{{ ... }}"``) are reported verbatim so the
@@ -1404,9 +1404,9 @@ def _node_binds_preview(node_def: Any) -> dict[str, Any]:  # noqa: ANN401
 
 async def _run_blocking(  # noqa: PLR0913 — six explicit kw args; shared with _run_with_follow
     *,
-    executor: Any,  # noqa: ANN401
-    store: Any,  # noqa: ANN401
-    run_id: Any,  # noqa: ANN401
+    executor: Any,
+    store: Any,
+    run_id: Any,
     fmt: str,
     out: TextIO,
     err: TextIO,
@@ -1435,9 +1435,9 @@ async def _run_blocking(  # noqa: PLR0913 — six explicit kw args; shared with 
 def _render_terminal_for_command(  # noqa: PLR0913 — seven explicit kw args; shared rendering for run + resume
     *,
     command: str,
-    store: Any,  # noqa: ANN401
-    run_id: Any,  # noqa: ANN401
-    status: Any,  # noqa: ANN401 — WorkflowRunStatus
+    store: Any,
+    run_id: Any,
+    status: Any,
     fmt: str,
     out: TextIO,
     err: TextIO,
@@ -1529,9 +1529,9 @@ def _render_terminal_for_command(  # noqa: PLR0913 — seven explicit kw args; s
 
 async def _run_with_follow(  # noqa: PLR0913 — six explicit kw args; shared with _run_blocking
     *,
-    executor: Any,  # noqa: ANN401
-    store: Any,  # noqa: ANN401
-    run_id: Any,  # noqa: ANN401
+    executor: Any,
+    store: Any,
+    run_id: Any,
     fmt: str,
     out: TextIO,
     err: TextIO,
@@ -1565,7 +1565,7 @@ async def _run_with_follow(  # noqa: PLR0913 — six explicit kw args; shared wi
     return 1
 
 
-def _drain_tail_to_writer(store: Any, run_id: Any, out: TextIO) -> None:  # noqa: ANN401
+def _drain_tail_to_writer(store: Any, run_id: Any, out: TextIO) -> None:
     """Synchronous-thread JSONL tail printer.
 
     Runs inside `asyncio.to_thread` so the `time.sleep` polls in
@@ -1579,7 +1579,7 @@ def _drain_tail_to_writer(store: Any, run_id: Any, out: TextIO) -> None:  # noqa
         out.flush()
 
 
-def _concurrency_envelope(store: Any, run_id: Any) -> tuple[str, int]:  # noqa: ANN401
+def _concurrency_envelope(store: Any, run_id: Any) -> tuple[str, int]:
     """Surface `concurrency_mode` + `peak_in_flight`.
 
     Defaults to `("sequential", 1)` so older runs (and
@@ -1609,7 +1609,7 @@ def _concurrency_envelope(store: Any, run_id: Any) -> tuple[str, int]:  # noqa: 
     return mode, peak
 
 
-def _terminal_payload(store: Any, run_id: Any) -> dict[str, Any]:  # noqa: ANN401
+def _terminal_payload(store: Any, run_id: Any) -> dict[str, Any]:
     """Read the run's last ``workflow.run.*`` event and return its payload."""
     terminal_kinds = {
         "workflow.run.completed",

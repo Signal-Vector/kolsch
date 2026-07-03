@@ -525,7 +525,7 @@ class MapRunner:
     def _validate_iteration_overlay_strict(
         *,
         worker_name: str,
-        worker_def: Any,  # noqa: ANN401 — NodeDefUnion is a Pydantic alias
+        worker_def: Any,
         iteration_overlay: dict[str, Any],
     ) -> None:
         """Validate the iteration overlay against the worker's input model.
