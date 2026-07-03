@@ -1,0 +1,71 @@
+# Build the MkDocs site and deploy it to GitHub Pages on every push
+# to main. PRs get a build-only run so broken docs fail loud before
+# they land — no deploy on PR, since Pages has a single live target.
+#
+# Repo setting required once: Settings → Pages → Source = "GitHub
+# Actions". After that, the deploy-pages step publishes the artifact
+# produced by upload-pages-artifact directly — no gh-pages branch.
+
+name: docs
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+jobs:
+  build:
+    name: build mkdocs site
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install docs dependencies
+        # mkdocstrings imports the package to render API pages, so we
+        # sync the project alongside the docs group rather than
+        # installing mkdocs bare. The group lives in the PEP 735
+        # [dependency-groups] table in pyproject.toml.
+        run: uv sync --group docs
+
+      - name: Build site (strict)
+        run: uv run mkdocs build --strict --site-dir _site
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    name: deploy to github pages
+    needs: build
+    if: github.event_name != 'pull_request'
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deployment
+        uses: actions/deploy-pages@v4
