@@ -53,6 +53,7 @@ import pytest
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from types import ModuleType
 
 from engine.context import CancelToken
 from errors import ExchangeCancelled, ToolTimeout
@@ -62,7 +63,7 @@ from tools.decorator import ToolContext
 pytestmark = pytest.mark.slow
 
 
-def _load_fetch_url_module():
+def _load_fetch_url_module() -> ModuleType:
     """Load the starter-bundle template as an importable module.
 
     Shares the module-name key with ``tests/unit/test_fetch_url.py`` so

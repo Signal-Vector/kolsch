@@ -28,18 +28,21 @@ import asyncio
 import importlib.util
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
 from pydantic import ValidationError
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 from errors import ToolExecutionFailed
 from schemas import AgentId, SessionId, ThreadId
 from tools.decorator import ToolContext
 
 
-def _load_fetch_url_module():
+def _load_fetch_url_module() -> ModuleType:
     """Load the starter-bundle template as an importable module."""
     module_name = "_test_kolsch_starter_bundle_fetch_url"
     cached = sys.modules.get(module_name)

@@ -67,6 +67,7 @@ import pytest
 
 if TYPE_CHECKING:
     from collections.abc import Iterator
+    from types import ModuleType
 
 # browse_url is the Tier 2 (opt-in `browse` extra) web-fetch tool —
 # it drives headless Chromium via Playwright. When either the
@@ -84,7 +85,7 @@ from tools.decorator import ToolContext
 pytestmark = pytest.mark.slow
 
 
-def _load_browse_url_module():
+def _load_browse_url_module() -> ModuleType:
     """Load the starter-bundle template as an importable module.
 
     Shares the module-name key with ``tests/unit/test_browse_url.py``

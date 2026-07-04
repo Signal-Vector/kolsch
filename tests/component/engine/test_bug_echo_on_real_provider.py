@@ -40,7 +40,7 @@ simultaneously.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -152,7 +152,7 @@ async def test_tc_bug_echo_01_real_provider_does_not_echo(tmp_path: Path) -> Non
         _ = request
         return LLMResponse(content=_DISTINCTIVE)
 
-    async def stub_factory(spec):
+    async def stub_factory(spec: Any) -> Any:
         _ = spec
         return stub_llm_callable
 

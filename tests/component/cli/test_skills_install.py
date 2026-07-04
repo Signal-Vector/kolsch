@@ -33,6 +33,7 @@ import yaml
 from cli.skills import _cmd_install, _ParsedInstallUrl
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
 # ---------------------------------------------------------------------------
@@ -113,7 +114,9 @@ def _build_skill_source(
     return source
 
 
-def _fake_fetcher(source: Path, *, calls: list[int] | None = None):
+def _fake_fetcher(
+    source: Path, *, calls: list[int] | None = None
+) -> Callable[[_ParsedInstallUrl, Path], Path]:
     """Build a fake fetcher that copies ``source`` into the install
     pipeline's scratch dir. ``calls`` (optional) is a counter list
     the test can inspect to assert the fetcher was (or wasn't)
