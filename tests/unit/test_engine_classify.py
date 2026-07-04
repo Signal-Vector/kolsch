@@ -31,7 +31,8 @@ def _exception_with_module(module: str, name: str, msg: str) -> Exception:
     imports."""
     cls = type(name, (Exception,), {})
     cls.__module__ = module
-    return cls(msg)
+    instance: Exception = cls(msg)
+    return instance
 
 
 # ---------------------------------------------------------------------------

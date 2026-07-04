@@ -20,7 +20,7 @@ proxy for "the next ``kolsch ...`` invocation will see it".
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -134,7 +134,7 @@ def test_skills_new_creates_skeleton_and_ref_resolves_on_rescan(
 
     # The escalation-path assertion: a fresh AssetManagement (proxy
     # for the next CLI invocation) finds the ref.
-    async def _resolve() -> tuple[str, dict]:
+    async def _resolve() -> tuple[str, dict[str, Any]]:
         am = AssetManagement(root=tmp_path)
         await am.initialize()
         entry = await am.get_asset("kolsch/skills/literature-review")

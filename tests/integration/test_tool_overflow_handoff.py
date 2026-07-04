@@ -22,6 +22,7 @@ process/test-catalog.md Part 9.8.1.
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -171,7 +172,7 @@ async def test_tc_tools_overflow_02_read_file_paginated_full_read(
     (tmp_path / "data" / "huge.txt").write_text(body + "\n", encoding="utf-8")
 
     ctx = _ctx(tmp_path, tool_call_id="tc_paginate_02")
-    pages: list[dict] = []
+    pages: list[dict[str, Any]] = []
     offset = 0
     for _ in range(5):
         r = await subsystem.invoke_tool(

@@ -153,7 +153,8 @@ class TestEmitWorkflowEventHook:
 
         async def _cb(event: Any) -> str:
             captured.append(event)
-            return event.event_id
+            event_id: str = event.event_id
+            return event_id
 
         ctx = self._ctx(callback=_cb)
         ev = _make_event(key="x", op="set", value=42)

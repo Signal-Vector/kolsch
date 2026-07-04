@@ -13,7 +13,7 @@ case for ``list`` (must print cleanly, NOT crash).
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -60,7 +60,7 @@ def _platform_yaml(root: Path) -> None:
     (root / ".env").write_text("", encoding="utf-8")
 
 
-def _write_bundle_with_skills(root: Path, bundle: str, skills: list[dict]) -> None:
+def _write_bundle_with_skills(root: Path, bundle: str, skills: list[dict[str, Any]]) -> None:
     bundle_dir = root / "bundles" / bundle
     (bundle_dir / "agents").mkdir(parents=True, exist_ok=True)
     (bundle_dir / "bundle.yaml").write_text(
@@ -70,7 +70,7 @@ def _write_bundle_with_skills(root: Path, bundle: str, skills: list[dict]) -> No
     for spec in skills:
         skill_dir = bundle_dir / "skills" / spec["name"]
         skill_dir.mkdir(parents=True, exist_ok=True)
-        fm: dict = {"name": spec["name"], "description": spec["description"]}
+        fm: dict[str, Any] = {"name": spec["name"], "description": spec["description"]}
         if spec.get("disable_model_invocation"):
             fm["disable-model-invocation"] = True
         if spec.get("license"):

@@ -45,7 +45,8 @@ async def store(tmp_path: Path, backend: EntityBackend) -> SessionStore:
 def _read_first_event(root: Path, session_id: str) -> dict[str, Any]:
     jsonl = root / "sessions" / f"{session_id}.jsonl"
     with jsonl.open() as f:
-        return json.loads(f.readline())
+        payload: dict[str, Any] = json.loads(f.readline())
+        return payload
 
 
 def _new_pointer() -> FromWorkflowRun:

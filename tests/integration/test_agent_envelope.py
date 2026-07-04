@@ -50,8 +50,8 @@ def _write_workspace(
     root: Path,
     *,
     prompt: str,
-    permissions: list[dict] | None = None,
-    context_files: list[dict] | None = None,
+    permissions: list[dict[str, Any]] | None = None,
+    context_files: list[dict[str, Any]] | None = None,
 ) -> None:
     """Lay down a minimal workspace for an agent test."""
     for sub in ("bundles", "sessions", "content", "logs", "data", ".platform"):

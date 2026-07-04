@@ -196,7 +196,7 @@ test harness sets this to ``/tmp/step3-evidence.txt`` (or wherever
 the writeup wants to read from) before invoking pytest."""
 
 
-def _print_jsonl_excerpt(label: str, events: list) -> None:
+def _print_jsonl_excerpt(label: str, events: list[dict[str, Any]]) -> None:
     """Emit event types + key fields as a JSONL excerpt.
 
     Writes to:

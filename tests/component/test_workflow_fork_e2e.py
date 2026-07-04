@@ -33,7 +33,7 @@ from __future__ import annotations
 
 import json
 import shutil
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -92,7 +92,7 @@ def _events_json(
     workspace: Path,
     run_id: str,
     capsys: pytest.CaptureFixture[str],
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     rc, out, _ = _run_cli(
         [
             "--root",
@@ -106,15 +106,17 @@ def _events_json(
         capsys=capsys,
     )
     assert rc == 0
-    return json.loads(out)["data"]["events"]
+    events: list[dict[str, Any]] = json.loads(out)["data"]["events"]
+    return events
 
 
-def _find_completed_event_id(events: list[dict], node_name: str) -> str:
+def _find_completed_event_id(events: list[dict[str, Any]], node_name: str) -> str:
     for event in events:
         if event["kind"] != "workflow.node.completed":
             continue
         if f"node_name={node_name}" in event.get("payload_preview", ""):
-            return event["event_id"]
+            event_id: str = event["event_id"]
+            return event_id
     msg = f"no completion event for node {node_name!r}"
     raise AssertionError(msg)
 

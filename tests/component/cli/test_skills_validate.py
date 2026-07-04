@@ -16,7 +16,7 @@ rejection, the "no skills to validate" friendly line, and the
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -78,7 +78,7 @@ def _write_skill_md(
     bundle: str,
     name: str,
     *,
-    frontmatter: dict | None = None,
+    frontmatter: dict[str, Any] | None = None,
     body: str = "# A skill\n\nUseful instructions go here.\n",
     raw_frontmatter: str | None = None,
 ) -> Path:

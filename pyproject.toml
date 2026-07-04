@@ -590,10 +590,6 @@ module = ["tests.*"]
 # Add a new code here only after auditing that it too has zero
 # real bugs in the current corpus.
 disable_error_code = [
-    # dict-walking parsed JSONL — event["kind"] where the reader
-    # trusts the runtime shape more than the declared dict[str, Any]
-    # value narrowing.
-    "index",
     # pytest.raises(BaseError) as exc: assert exc.subclass_field —
     # the base class exposes union, tests inspect the concrete arm.
     "union-attr",
@@ -605,25 +601,31 @@ disable_error_code = [
     # where Foo expects Literal[...] or a NewType) — the mismatch
     # is the whole point of the test.
     "arg-type",
-    # bare `dict` / `list` in helper signatures — the tests-are-
-    # loose convention (also carried by the ruff tests/** ignore).
-    "type-arg",
-    # test helpers returning Any-typed values pulled from parsed
-    # JSONL / dict walks — declaring the narrow return type + adding
-    # cast() at every site is pure ceremony for scaffolding code.
-    "no-any-return",
-    # calls to test helpers that are themselves untyped by design
-    # (test helpers deliberately return Any for flexibility).
-    "no-untyped-call",
-    # test functions returning None implicitly and kwargs helpers
-    # without full signatures — pytest test bodies live under the
-    # "tests are loose" convention.
-    "no-untyped-def",
-    # test stubs that return None / partial shapes for paths the
-    # test never exercises (e.g., ``connect_io_factory`` in the
-    # no-network setup tests).
-    "return-value",
 ]
+# Removed 2026-07-04 (Q8 fifth pass):
+#   no-untyped-def, no-untyped-call — every remaining site was
+#     annotated or covered by a helper return type; the codes now
+#     fail loud on new sloppy signatures instead of silently.
+#   return-value — the three remaining sites (setup_io fake
+#     factories that the no-network paths don't reach) are marked
+#     with per-line `# type: ignore[return-value, arg-type]`.
+#   call-arg — never fired on its own (only as `note:` follow-ups
+#     from arg-type findings); dropping it is a no-op.
+#   type-arg — the 16 bare-`dict` / bare-`list` sites were tightened
+#     to `dict[str, Any]` / `list[dict[str, Any]]` in-file. Cost was
+#     one-line-per-site plus a `from typing import Any` in a few
+#     helper modules; the payoff is that new bare-generic drift
+#     fails loud rather than silently landing.
+#   no-any-return — the 13 sites were helper functions pulling
+#     values out of `json.loads(...)`, `dict[str, Any]`, or `getattr`
+#     of unknown-typed modules. The fix at each site was an explicit
+#     narrow-typed local (`x: str = payload["event_id"]; return x`)
+#     rather than `return payload["event_id"]`. Same pattern as
+#     type-arg above: cheap ceremony to unblock new-drift detection.
+#   index — after the type-arg + no-any-return passes tightened
+#     helper signatures, mypy no longer flags any dict-index sites
+#     in tests/. Dropping it is a no-op today AND surfaces future
+#     regressions the moment they're written.
 
 [tool.pydantic-mypy]
 init_forbid_extra = true

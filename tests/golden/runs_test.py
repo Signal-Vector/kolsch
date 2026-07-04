@@ -1869,10 +1869,12 @@ def _find_fork_event_id(
         if event.get("kind") != kind:
             continue
         if node_name is None:
-            return event["event_id"]
+            event_id: str = event["event_id"]
+            return event_id
         en = event.get("node_name") or event.get("payload", {}).get("node_name")
         if en == node_name:
-            return event["event_id"]
+            matched_event_id: str = event["event_id"]
+            return matched_event_id
     msg = (
         f"no event matching kind={kind!r} node_name={node_name!r}; "
         f"available kinds: {sorted({e['kind'] for e in events})}"

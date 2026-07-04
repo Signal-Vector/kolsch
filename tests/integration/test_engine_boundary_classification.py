@@ -87,7 +87,8 @@ def _synth_openai_typed_exc(name: str, msg: str) -> Exception:
     test free of any ``openai`` SDK import."""
     cls = type(name, (Exception,), {})
     cls.__module__ = "openai"
-    return cls(msg)
+    instance: Exception = cls(msg)
+    return instance
 
 
 class _CauseChainRecoverableFramework:

@@ -1464,7 +1464,8 @@ def _seed_pre_phase_2_workspace(
 
 def _rules_in(yaml_path: Path) -> list[dict[str, str]]:
     payload = yaml.safe_load(yaml_path.read_text())
-    return payload["authorization"]["config"]["rules"]
+    rules: list[dict[str, str]] = payload["authorization"]["config"]["rules"]
+    return rules
 
 
 _PHASE_2_0_DEFAULT_WHATS: tuple[str, ...] = (

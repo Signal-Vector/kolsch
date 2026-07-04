@@ -140,6 +140,7 @@ def _resolve_error_class(name: str) -> type[BaseException]:
     if cls is None:
         msg = f"unknown exception class in fixture annotation: {name!r}"
         raise ValueError(msg)
+    assert isinstance(cls, type) and issubclass(cls, BaseException)
     return cls
 
 

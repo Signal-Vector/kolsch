@@ -368,7 +368,8 @@ def _tool_call_sequence(events: list[Event]) -> list[tuple[str, dict[str, Any]]]
 def _final_agent_message(events: list[Event]) -> str | None:
     for e in reversed(events):
         if e.type == EventType.AGENT_MESSAGE:
-            return e.data.get("content", {}).get("text")
+            text: str | None = e.data.get("content", {}).get("text")
+            return text
     return None
 
 

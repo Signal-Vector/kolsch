@@ -26,6 +26,7 @@ import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -206,7 +207,7 @@ class TestTail:
         store = WorkflowRunStore(tmp_path)
         run = store.create(workflow_ref="demo/workflows/hello", inputs={})
 
-        produced: list[dict] = []
+        produced: list[dict[str, Any]] = []
 
         def producer() -> None:
             # Stagger the writes so the consumer observes them via polling.
