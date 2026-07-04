@@ -31,8 +31,11 @@ import asyncio
 import importlib.util
 import sys
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
+
+if TYPE_CHECKING:
+    from types import ModuleType
 
 import pytest
 from pydantic import ValidationError
@@ -47,7 +50,7 @@ from schemas import AgentId, SessionId, ThreadId
 from tools.decorator import ToolContext
 
 
-def _load_browse_url_module():
+def _load_browse_url_module() -> ModuleType:
     """Load the starter-bundle template as an importable module."""
     module_name = "_test_kolsch_starter_bundle_browse_url"
     cached = sys.modules.get(module_name)

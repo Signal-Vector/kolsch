@@ -582,15 +582,46 @@ ignore_missing_imports = true
 # exclusively in tests; real typing invariants (assignment,
 # no-redef, unreachable, valid-type, syntax) stay enforced.
 module = ["tests.*"]
+# Per-code rationale (Q8 audit: process/qol-audit-tests-mypy-override.md).
+# Every code here has been sampled and confirmed to fire dominantly
+# on false-positive test-scaffolding shapes; sites that surfaced
+# genuine typing bugs during the audit were fixed in PRs #8, #9,
+# and #10 (see the qol-audit spec's Notes section for the trail).
+# Add a new code here only after auditing that it too has zero
+# real bugs in the current corpus.
 disable_error_code = [
+    # dict-walking parsed JSONL — event["kind"] where the reader
+    # trusts the runtime shape more than the declared dict[str, Any]
+    # value narrowing.
     "index",
+    # pytest.raises(BaseError) as exc: assert exc.subclass_field —
+    # the base class exposes union, tests inspect the concrete arm.
     "union-attr",
+    # deliberate typo tests (WorkspaceVar.allowd_paths, ModelView.
+    # contxt_length) + the @tool decorator's dynamically attached
+    # _tool_definition attribute.
     "attr-defined",
+    # pytest.raises + deliberate-bad-input tests (Foo(field="str")
+    # where Foo expects Literal[...] or a NewType) — the mismatch
+    # is the whole point of the test.
     "arg-type",
+    # bare `dict` / `list` in helper signatures — the tests-are-
+    # loose convention (also carried by the ruff tests/** ignore).
     "type-arg",
+    # test helpers returning Any-typed values pulled from parsed
+    # JSONL / dict walks — declaring the narrow return type + adding
+    # cast() at every site is pure ceremony for scaffolding code.
     "no-any-return",
+    # calls to test helpers that are themselves untyped by design
+    # (test helpers deliberately return Any for flexibility).
     "no-untyped-call",
+    # test functions returning None implicitly and kwargs helpers
+    # without full signatures — pytest test bodies live under the
+    # "tests are loose" convention.
     "no-untyped-def",
+    # test stubs that return None / partial shapes for paths the
+    # test never exercises (e.g., ``connect_io_factory`` in the
+    # no-network setup tests).
     "return-value",
 ]
 

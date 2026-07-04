@@ -15,7 +15,7 @@ end-to-end layer).
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import pytest
@@ -97,7 +97,7 @@ def _as_engine(fake: _FakeEngine) -> AgentEngine:
     """Cast the fake to satisfy the runner's annotation. The runner
     only invokes ``execute(...)`` — full structural conformance
     isn't needed for these unit tests."""
-    return fake
+    return cast("AgentEngine", fake)
 
 
 def _make_resolved_config(

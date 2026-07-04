@@ -55,7 +55,7 @@ def _scripted_input(answers: list[str]) -> _Iter:
             msg = "modal asked for more input than the test scripted"
             raise AssertionError(msg) from exc
 
-    return _fn
+    return cast("_Iter", _fn)
 
 
 class _Iter:  # purely for typing the helper above

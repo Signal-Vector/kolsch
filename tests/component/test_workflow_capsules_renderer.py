@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import io
 import re
+from typing import Any
 
 from rich.console import Console
 
@@ -57,7 +58,7 @@ def _render(
     return out.getvalue()
 
 
-def _make_event(kind: str, **overrides) -> dict:
+def _make_event(kind: str, **overrides: Any) -> dict[str, Any]:
     base = {
         "event_id": "ev_abcd1234567890abcd",
         "kind": kind,
@@ -72,7 +73,7 @@ def _make_event(kind: str, **overrides) -> dict:
     return base
 
 
-def _make_workflow_with_bash(node_name: str, **node_kwargs) -> Workflow:
+def _make_workflow_with_bash(node_name: str, **node_kwargs: Any) -> Workflow:
     """Build a minimal :class:`Workflow` carrying one bash node."""
     node = BashNodeDef(
         type="kolsch/nodes/bash",

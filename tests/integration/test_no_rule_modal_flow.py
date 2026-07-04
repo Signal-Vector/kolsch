@@ -25,7 +25,7 @@ semantics.
 from __future__ import annotations
 
 import io as _io
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -35,6 +35,7 @@ from providers import RuleBasedAuthorizationProvider
 from providers.authz import AuthzEffect, Rule
 
 if TYPE_CHECKING:
+    from collections.abc import Callable, Coroutine
     from pathlib import Path
 
 
@@ -43,7 +44,9 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 
 
-def _scripted_input(answers: list[str]):
+def _scripted_input(
+    answers: list[str],
+) -> Callable[[str], Coroutine[Any, Any, str]]:
     """Return an ``input_fn`` that pops one line per prompt."""
     iterator = iter(answers)
 
