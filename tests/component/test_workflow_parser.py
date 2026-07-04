@@ -27,6 +27,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from pydantic import BaseModel
 
 from workflows.catalog_node import BUILTIN_TYPE_NAMES, CatalogNodeDef
 from workflows.errors import WorkflowInvalidRef, WorkflowValidationError
@@ -721,7 +722,7 @@ nodes:
     ],
 )
 def test_per_builtin_inputs_extra_config_matches_locked_table(
-    inputs_cls: type, expected_extra: str
+    inputs_cls: type[BaseModel], expected_extra: str
 ) -> None:
     assert inputs_cls.model_config["extra"] == expected_extra
 

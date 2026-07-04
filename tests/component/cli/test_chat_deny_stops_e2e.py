@@ -35,7 +35,7 @@ from cli._modal import ApprovalModal
 from engine import CancelToken, ExecutionContext, LLMRequest, LLMResponse
 from platform_runtime import bootstrap_runtime
 from providers import Rule, RuleBasedAuthorizationProvider
-from schemas import EventType
+from schemas import Event, EventType
 from tests.fixtures.fake_llm import (
     FakeLLM,
     TextResponse,
@@ -196,7 +196,7 @@ test harness sets this to ``/tmp/step3-evidence.txt`` (or wherever
 the writeup wants to read from) before invoking pytest."""
 
 
-def _print_jsonl_excerpt(label: str, events: list[dict[str, Any]]) -> None:
+def _print_jsonl_excerpt(label: str, events: list[Event]) -> None:
     """Emit event types + key fields as a JSONL excerpt.
 
     Writes to:

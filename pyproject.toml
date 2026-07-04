@@ -583,10 +583,13 @@ ignore_missing_imports = true
 # no-redef, unreachable, valid-type, syntax) stay enforced.
 module = ["tests.*"]
 # Per-code rationale (Q8 audit: process/qol-audit-tests-mypy-override.md).
-# Every code here has been sampled and confirmed to fire dominantly
-# on false-positive test-scaffolding shapes; sites that surfaced
+# Every code here has been triaged site-by-site — the full 141-row
+# per-site table lives at process/qol-audit-tests-mypy-override-triage.md
+# (gitignored working doc). Every remaining code was confirmed to
+# have ZERO real-bug sites after the triage; sites that surfaced
 # genuine typing bugs during the audit were fixed in PRs #8, #9,
-# and #10 (see the qol-audit spec's Notes section for the trail).
+# #10, #11, #12, and #13 (the last two under the tests-mypy-per-code
+# branch — see the qol-audit spec's Notes section for the trail).
 # Add a new code here only after auditing that it too has zero
 # real bugs in the current corpus.
 disable_error_code = [
