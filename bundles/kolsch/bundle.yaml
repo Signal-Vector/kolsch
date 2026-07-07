@@ -1,0 +1,14 @@
+name: kolsch
+version: "0.1"
+description: |
+  Example tools bundle demonstrating the four v1 card kinds and the
+  Prompts service. Ships three tools under `tools/`:
+
+  - `hello_card` — streaming markdown card.
+  - `download_with_progress` — determinate progress bar.
+  - `confirm_dangerous_action` — direct `Prompts.choice` with
+    `PromptBusy` catch-and-retry.
+
+  Tutorial: `docs/tutorials/write-a-card-tool.md`. These tools are
+  the runnable landing page for bundle authors — copy one, edit the
+  args, ship your own.

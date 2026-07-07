@@ -1,0 +1,5 @@
+name: download_with_progress
+description: Simulate a file download with a progress bar.
+entry: download_with_progress.py
+requires:
+  - cards
