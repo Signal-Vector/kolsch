@@ -61,6 +61,12 @@ class EventType(StrEnum):
     # Model interaction
     MODEL_REQUEST = "model.request"
     MODEL_RESPONSE = "model.response"
+    # Per-chunk delta emitted by streaming-capable framework paths
+    # between `MODEL_REQUEST` and `MODEL_RESPONSE`. Non-streaming
+    # framework paths emit zero of these; the whole response still
+    # arrives on `MODEL_RESPONSE`. See
+    # `process/spec-textual-chat-ui.md` for the wire contract.
+    MODEL_STREAMING_TOKEN = "model.streaming_token"
     # Emitted once per fallback transition.
     MODEL_FALLBACK = "model.fallback"
 
@@ -186,6 +192,29 @@ class ModelResponseData(_DataModel):
     # When `stop_reason == "error"`, `error` carries the canonical
     # Error envelope. Optional otherwise.
     error: Error | None = None
+
+
+class ModelStreamingTokenData(_DataModel):
+    """`model.streaming_token.data` — one chunk of a streamed model response.
+
+    Emitted by streaming-capable framework paths between the
+    `MODEL_REQUEST` and `MODEL_RESPONSE` for the same `call_id`. The
+    concatenation of every delta for a given `call_id` (in event
+    order) must equal the `content` text on the final
+    `MODEL_RESPONSE`; consumers verify this defensively.
+    Non-streaming framework paths emit zero deltas — behaviour is
+    unchanged and the whole response arrives on `MODEL_RESPONSE`.
+
+    Fields are minimal by design. If a future spec needs to
+    distinguish extended-thinking tokens from assistant tokens it
+    can either add a `channel` field via migration or introduce a
+    separate `MODEL_THINKING_TOKEN` event; both paths are cheap and
+    premature reservation isn't warranted (see
+    `process/spec-textual-chat-ui.md` Coordinator decision 1).
+    """
+
+    call_id: AgentCallId
+    text_delta: str
 
 
 class ModelFallbackData(_DataModel):

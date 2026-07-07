@@ -412,7 +412,7 @@ async def test_user_input_chat_resume_completes_workflow(
     message resumes the workflow via ``executor.resume`` and the run
     completes. The expectation flag is cleared.
     """
-    from cli.chat import _resume_pending_workflow
+    from cli.chat.session import _resume_pending_workflow
 
     state, runtime = await _build_state(chat_workspace)
     out = _io.StringIO()
@@ -501,7 +501,7 @@ async def test_sequential_pauses_resume_cycle(chat_workspace: Path) -> None:
     """``two-pauses.yaml`` pauses twice; the chat handles both
     pause-resume cycles independently. After the second resume the
     workflow completes and the flag clears."""
-    from cli.chat import _resume_pending_workflow
+    from cli.chat.session import _resume_pending_workflow
 
     state, runtime = await _build_state(chat_workspace)
     out = _io.StringIO()

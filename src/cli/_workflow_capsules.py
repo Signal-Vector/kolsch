@@ -37,7 +37,7 @@ from typing import TYPE_CHECKING, Any
 
 from rich.text import Text
 
-from cli._renderer import _BAR, _CAPSULE_PALETTE, _capsule
+from cli._rich_capsule import _BAR, _CAPSULE_PALETTE, _capsule
 from workflows.errors import WorkflowError
 from workflows.labels import display_label
 
@@ -474,7 +474,7 @@ class WorkflowCapsuleRenderer:
     ) -> None:
         """Emit a capsule whose every line is prefixed with the renderer's indent.
 
-        `cli._renderer._capsule` writes `│ <source> · ts` as the
+        `cli._rich_capsule._capsule` writes `│ <source> · ts` as the
         header — the workflow renderer wants the NODE LABEL in the
         header slot (the identity of what just ran), so pass `label`
         as `source` and override the bar color directly from the

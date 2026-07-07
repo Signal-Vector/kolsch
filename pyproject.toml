@@ -78,6 +78,14 @@ dependencies = [
     # docs/explanation/framework-protocol-design.md §2.
     # Release notes: https://github.com/crewAIInc/crewAI/releases
     "crewai==1.14.6",
+    # spec-textual-chat-ui — inline Textual UI for `kolsch chat`.
+    # Pinned to match crewai==1.14.6's transitive constraint
+    # (crewai-cli depends on textual>=7.5.0). We take the ceiling
+    # at <8 to avoid future major-version surprises.
+    # `prompt_toolkit` above stays as a runtime dep because
+    # `src/cli/_slash.py` still uses its `Completer`; the
+    # Textual chat + prompt_toolkit slash completer coexist in v1.
+    "textual>=7.5.0,<8",
 ]
 
 [project.optional-dependencies]
@@ -430,6 +438,22 @@ convention = "google"
 # signature matches spec §2.2 directly (5 kwargs + the function it
 # decorates), and validator branching mirrors spec §3.4's checklist.
 "src/tools/**" = ["TC001", "TC003", "PLR0913", "PLR0912"]
+# `src/tools/services/` — the `AbstractCards` / `AbstractPrompts` /
+# `AbstractWorkflows` ABCs are the structural-typing partner of their
+# sibling `Protocol` classes (spec-001 §Service Contracts). Methods
+# raise `NotImplementedError` by default rather than being
+# `@abstractmethod`, so subclasses can override incrementally without
+# being forced to implement the full surface up front. B024 flags the
+# missing `@abstractmethod` decorators; the pattern is intentional.
+"src/tools/services/cards.py" = ["B024"]
+"src/tools/services/prompts.py" = ["B024"]
+"src/tools/services/workflows.py" = ["B024"]
+# `src/tools/services/exceptions.py` — service-layer errors follow the
+# same "no Error suffix" naming convention as `src/errors/` and
+# `src/workflows/errors.py`. Names like `ToolNotAvailable`, `PromptBusy`,
+# and `CardClosed` read as states/conditions in raise sites, per
+# spec-001 §Errors.
+"src/tools/services/exceptions.py" = ["N818"]
 # Same for skills — EnabledSkill and SkillInvocation are Pydantic
 # models per Module API Reference §10.2.
 "src/skills/**" = ["TC001", "TC003"]

@@ -34,6 +34,7 @@ from schemas import (
     ToolFailedData,
     ToolResultData,
 )
+from schemas.events import ModelStreamingTokenData
 from tools import ToolContext
 
 if TYPE_CHECKING:
@@ -106,8 +107,28 @@ class _ObservedLLMHandle:
             actor=Actor(kind="agent", id=self._agent_id),
         )
 
+        # Streaming hook: if the wrapped LLM callable exposes a
+        # `stream` async method taking (request, on_delta), we call
+        # it and emit `MODEL_STREAMING_TOKEN` events per chunk.
+        # `on_delta` is a coroutine the observer supplies that emits
+        # the event. Non-streaming providers stay on the non-streaming
+        # `__call__` path — behaviour parity with today's flow.
+        stream_method = getattr(self._llm, "stream", None)
         try:
-            response = await self._llm(request)
+            if callable(stream_method):
+                async def _on_delta(text_delta: str) -> None:
+                    await self._emit(
+                        type_=EventType.MODEL_STREAMING_TOKEN,
+                        data=ModelStreamingTokenData(
+                            call_id=call_id,
+                            text_delta=text_delta,
+                        ).model_dump(mode="json"),
+                        actor=Actor(kind="agent", id=self._agent_id),
+                    )
+
+                response = await stream_method(request, _on_delta)
+            else:
+                response = await self._llm(request)
         except PlatformError as exc:
             err = Error.from_platform_error(exc)
             await self._emit(

@@ -48,6 +48,8 @@ import subprocess
 import sys
 from typing import TYPE_CHECKING
 
+import pytest
+
 if TYPE_CHECKING:
     from pathlib import Path
 
@@ -67,6 +69,15 @@ _CREWAI_SIGNATURES: tuple[str, ...] = (
 )
 
 
+@pytest.mark.skip(
+    reason=(
+        "Retired by spec-textual-chat-ui: the Textual App(inline=True) "
+        "surface can't be driven via piped stdin. The 'no CrewAI stdout "
+        "leak' invariant is still covered by the in-process test at "
+        "tests/component/engine/test_crewai_adapter.py which uses the "
+        "adapter directly. See process/spec-textual-chat-ui.md."
+    ),
+)
 def test_chat_does_not_leak_crewai_output(chat_workspace: Path) -> None:
     """TC-CREWAI-NOLEAK-01 — drive a fake-LLM chat session via
     subprocess; assert no CrewAI signatures appear in the captured

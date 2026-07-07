@@ -446,7 +446,7 @@ class ApprovalModal:
         (surfaces the proximate frame the `[a]/[d]` rule will scope
         to), blank, choice rows, blank, cursor line.
         """
-        from cli._renderer import _capsule, _now_hhmmss  # noqa: PLC0415
+        from cli._rich_capsule import _capsule, _now_hhmmss  # noqa: PLC0415
 
         sig = f"{tool}({target})" if target is not None else f"{tool}()"
         suffix = f"  —  matched {rule_id}" if rule_id is not None else ""

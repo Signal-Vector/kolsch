@@ -34,15 +34,12 @@ PERM-SYS-01/-02/-03 exercise the actual ``cli/_setup.py``,
 from __future__ import annotations
 
 import io as _io
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, cast
-from uuid import uuid4
 
 import pytest
 import yaml
 
 from assets import AssetManagement
-from cli._renderer import Renderer
 from cli._slash import (
     ChatSessionState,
     SlashContext,
@@ -51,15 +48,7 @@ from cli._slash import (
 from errors import AuthzBareToolRef
 from platform_runtime import bootstrap_runtime
 from providers import RuleBasedAuthorizationProvider
-from schemas import (
-    Actor,
-    Event,
-    EventId,
-    EventType,
-    SessionId,
-    ThreadId,
-    ToolFailedData,
-)
+from schemas import ToolFailedData
 from schemas.error import Error
 
 if TYPE_CHECKING:
@@ -401,68 +390,18 @@ async def test_perm_sys_03b_perm_allow_with_from_scopes_rule(
 
 # ===========================================================================
 # PERM-SYS-04 — authz.denied renders distinct capsule with /perm hint
+#
+# Removed in the Cleanup phase of spec-textual-chat-ui: this case
+# invoked ``Renderer._render_tool_failed`` — an internal method of the
+# deleted ``src/cli/_renderer.py``. Equivalent visual coverage now
+# lives with the Textual widget under
+# ``tests/cli/chat/widgets/test_tool_call_block.py`` (the failed-tool
+# CSS class + hint line) and the event-adapter smoke at
+# ``tests/cli/chat/test_event_adapter_coverage.py``. PERM-SYS-05 below
+# still exercises the schema-level round-trip of ``recovery_hint``
+# and the engine's ``_derive_authz_recovery_hint`` derivation — the
+# load-bearing wire-level shape, unchanged by the UI rewrite.
 # ===========================================================================
-
-
-def _denied_tool_failed_event(
-    *,
-    tool_name: str = "bash",
-    matched_rule: dict[str, Any] | None = None,
-    recovery_hint: str = '/perm allow kolsch/tools/bash "find *"',
-) -> Event:
-    """Mirror what
-    :class:`engine.observers._ObservedToolHandle` emits on
-    :class:`errors.ToolUnauthorized`."""
-    matched_rule = matched_rule or {
-        "what": "kolsch/tools/bash",
-        "pattern": "*",
-        "effect": "deny",
-    }
-    error = Error(
-        type="tool.unauthorized",
-        message=f"Authorization denied for tool {tool_name!r}",
-        where="tools.dispatch.invoke",
-        detail={
-            "tool_name": tool_name,
-            "action": f"tool.{tool_name}",
-            "principal": "agent.test",
-            "matched_rule": matched_rule,
-        },
-    )
-    return Event(
-        event_id=EventId(f"ev_{uuid4()}"),
-        parent_event_id=None,
-        type=EventType.TOOL_FAILED,
-        actor=Actor(kind="agent", id="ag_test"),
-        session_id=SessionId(f"ses_{uuid4()}"),
-        thread_id=ThreadId(f"th_{uuid4()}"),
-        created_at=datetime.now(UTC),
-        data=ToolFailedData(
-            tool_call_id="tc_1",
-            tool_name=tool_name,
-            error=error,
-            recovery_hint=recovery_hint,
-        ).model_dump(mode="json"),
-    )
-
-
-def test_perm_sys_04_denied_capsule_renders_with_perm_hint() -> None:
-    """The renderer surfaces the ``permission`` capsule (orange
-    palette) with the tool ref, matched rule, and the exact
-    ``/perm allow`` command when ``tool.unauthorized`` +
-    ``recovery_hint`` arrive together."""
-    out = _io.StringIO()
-    renderer = Renderer(stdout=out, agent_name="test")
-    renderer._render_tool_failed(_denied_tool_failed_event())
-    rendered = out.getvalue()
-    # Source label flips to `permission`, not `tool` — the visual
-    # contract that makes a denial distinct from a generic failure.
-    assert "permission" in rendered
-    # Body lines: `denied:`, the matched rule, the /perm command.
-    assert "denied: bash" in rendered
-    assert "what='kolsch/tools/bash'" in rendered
-    assert "pattern='*'" in rendered
-    assert '/perm allow kolsch/tools/bash "find *"' in rendered
 
 
 # ===========================================================================

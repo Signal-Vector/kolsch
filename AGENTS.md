@@ -193,11 +193,18 @@ These are non-negotiable. Violating them blocks merges.
   it returns its decision through the callback's tuple shape so
   Phase 2.0's authz provider — not the chat — appends the new
   rule and rewrites `platform.yaml`. The chat also MUST NOT
-  enter full-screen / alternate-screen mode (it stays in
-  prompt_toolkit's bottom-toolbar idiom) so terminal-native
-  scrolling and selection keep working; TC-CHAT-18 enforces
-  this architecturally by introspecting `src/cli/chat.py` for
-  `Application.run(full_screen=True)` and equivalents.
+  enter full-screen / alternate-screen mode. It renders
+  **inline** (via Textual's `App(inline=True)` today) so
+  terminal-native scrolling and selection keep working.
+  TC-CHAT-18 enforces this by AST-parsing every `.py` file
+  under `src/cli/chat/` and rejecting any `App(...).run(...)`
+  or `App(...).run_async(...)` call whose kwargs do not include
+  `inline=True`, and by continuing to reject the legacy
+  `Application.run(full_screen=True)` idiom. Approvals are the
+  one carve-out to the "pure consumer" rule: the four-choice
+  callback registered via `authz.register_prompt_callback`
+  fires from a worker and mounts an inline widget; this is a
+  pre-existing carve-out documented at `src/cli/_modal.py:168`.
 - **Agent prompts are Jinja2 templates.** Variable names are
   resolved via the standardized API (`tools`, `docs`,
   `workspace`, `agent`, `platform`) defined in

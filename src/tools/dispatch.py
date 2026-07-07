@@ -37,6 +37,7 @@ from providers.authz import PermissionLayer
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
+    from cli.chat.service_registry import ChatServiceRegistry
     from providers import (
         AuthorizationProvider,
         SandboxProvider,
@@ -44,6 +45,33 @@ if TYPE_CHECKING:
     )
     from providers.authz import Rule
     from tools.decorator import ToolContext, ToolDefinition
+    from tools.services import ServiceName
+
+
+def _populate_service_fields(
+    ctx: ToolContext,
+    requires: list[ServiceName],
+    chat_services: ChatServiceRegistry | None,
+) -> ToolContext:
+    """Return a new `ToolContext` with the declared service fields populated.
+
+    `ToolContext` is a frozen Pydantic model, so we cannot mutate the
+    incoming instance — we call `model_copy(update=...)` to produce a
+    fresh frozen instance with the four service fields set from the
+    supplied `ChatServiceRegistry`. In headless mode
+    (`chat_services=None`), the original context is returned unchanged
+    and all four service fields stay `None`.
+
+    Only the fields listed in `requires` are pulled off the registry;
+    undeclared caps stay `None` on the resulting context. See spec-001
+    §Dispatcher wiring.
+    """
+    if chat_services is None:
+        return ctx
+    if not requires:
+        return ctx
+    updates: dict[str, Any] = {name: getattr(chat_services, name) for name in requires}
+    return ctx.model_copy(update=updates)
 
 
 async def dispatch_tool(
@@ -57,6 +85,7 @@ async def dispatch_tool(
     workflow_permissions: list[Rule] | None = None,
     agent_permissions: list[Rule] | None = None,
     bundle_permissions: list[Rule] | None = None,
+    chat_services: ChatServiceRegistry | None = None,
 ) -> Any:  # noqa: ANN401 — caller knows the return type for their tool
     """Run a tool through the full dispatch pipeline.
 
@@ -94,6 +123,15 @@ async def dispatch_tool(
             ``bug-workflow-policy-not-enforced.md``.
         agent_permissions: The agent's resolved permission rules.
         bundle_permissions: The bundle's resolved permission rules.
+        chat_services: Optional
+            [`ChatServiceRegistry`][cli.chat.service_registry.ChatServiceRegistry]
+            sidecar the chat runtime passes so tools declaring
+            ``requires=[...]`` see the corresponding service handles
+            on `ToolContext`. Headless callers (tests, workflow
+            runners, one-shot CLI) omit it — every service field
+            on the resulting `ToolContext` stays `None` and
+            `require_services(ctx, [...])` raises `ToolNotAvailable`
+            for any tool that asked for one.
 
     Returns:
         Whatever the tool function returned.
@@ -176,6 +214,17 @@ async def dispatch_tool(
         resolved_secrets[secret_name] = await secrets.resolve(secret_name)
     invocation_context = context.model_copy(
         update={"secrets": resolved_secrets},
+    )
+
+    # spec-001 — populate the four capability-scoped service fields on
+    # `ToolContext` from the `ChatServiceRegistry` sidecar. Only the
+    # services listed in `defn.requires` get populated; undeclared caps
+    # stay `None`. In headless mode (`chat_services=None`), the helper
+    # returns the context unchanged and all four fields remain `None`.
+    invocation_context = _populate_service_fields(
+        invocation_context,
+        defn.requires,
+        chat_services,
     )
 
     # Step 4 — wrap in the sandbox. Every invocation goes through

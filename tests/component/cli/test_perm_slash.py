@@ -19,28 +19,17 @@ narrower than the integration suite.
 from __future__ import annotations
 
 import io as _io
-from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
-from uuid import uuid4
 
 import yaml
 
-from cli._renderer import Renderer
 from cli._slash import (
     ChatSessionState,
     SlashContext,
     dispatch_slash,
 )
 from platform_runtime import bootstrap_runtime
-from schemas import (
-    Actor,
-    Event,
-    EventId,
-    EventType,
-    SessionId,
-    ThreadId,
-    ToolFailedData,
-)
+from schemas import ToolFailedData
 from schemas.error import Error
 
 if TYPE_CHECKING:
@@ -302,122 +291,23 @@ async def test_perm_missing_args_emits_usage(tmp_path: Path) -> None:
 
 # ===========================================================================
 # Group 3 — denied capsule renders with /perm hint
+#
+# Removed in the Cleanup phase of spec-textual-chat-ui: the three
+# renderer capsule tests (``test_denied_capsule_renders_with_perm_hint``,
+# ``test_denied_capsule_legacy_rule_renders_without_pattern``,
+# ``test_generic_tool_failure_still_renders_tool_capsule``) exercised
+# ``Renderer._render_tool_failed`` — an internal method of the deleted
+# ``src/cli/_renderer.py``. The new Textual chat renders tool-failed
+# events through ``cli.chat.widgets.tool_call_block.ToolCallBlock``;
+# equivalent coverage is provided by the per-widget Pilot test at
+# ``tests/cli/chat/widgets/test_tool_call_block.py`` and the
+# event-adapter smoke at
+# ``tests/cli/chat/test_event_adapter_coverage.py``. The
+# ``ToolFailedData.recovery_hint`` round-trip and the engine's
+# ``_derive_authz_recovery_hint`` helper are still tested by Group 4
+# and Group 5 below (schema-level + pure-function contracts, both
+# unchanged by the UI rewrite).
 # ===========================================================================
-
-
-def _denied_event(
-    *,
-    tool_name: str = "bash",
-    matched_rule: dict[str, Any] | None = None,
-    recovery_hint: str = "/perm allow kolsch/tools/bash *",
-) -> Event:
-    """Build a synthetic tool.failed event the renderer can consume.
-
-    The shape mirrors what
-    :class:`engine.observers._ObservedToolHandle` emits when
-    :class:`errors.ToolUnauthorized` fires."""
-    matched_rule = matched_rule or {
-        "what": "kolsch/tools/bash",
-        "pattern": "*",
-        "effect": "deny",
-    }
-    error = Error(
-        type="tool.unauthorized",
-        message=f"Authorization denied for tool {tool_name!r}",
-        where="tools.dispatch.invoke",
-        detail={
-            "tool_name": tool_name,
-            "action": f"tool.{tool_name}",
-            "principal": "agent.test",
-            "matched_rule": matched_rule,
-        },
-    )
-    return Event(
-        event_id=EventId(f"ev_{uuid4()}"),
-        parent_event_id=None,
-        type=EventType.TOOL_FAILED,
-        actor=Actor(kind="agent", id="ag_test"),
-        session_id=SessionId(f"ses_{uuid4()}"),
-        thread_id=ThreadId(f"th_{uuid4()}"),
-        created_at=datetime.now(UTC),
-        data=ToolFailedData(
-            tool_call_id="tc_1",
-            tool_name=tool_name,
-            error=error,
-            recovery_hint=recovery_hint,
-        ).model_dump(mode="json"),
-    )
-
-
-def test_denied_capsule_renders_with_perm_hint() -> None:
-    """The capsule names the tool, the matched rule, and the exact
-    /perm command — the load-bearing usability property."""
-    out = _io.StringIO()
-    renderer = Renderer(stdout=out, agent_name="test")
-    renderer._render_tool_failed(_denied_event())
-    output = out.getvalue()
-    # Source label flips to `permission` (orange palette), not `tool`.
-    assert "permission" in output
-    assert "denied: bash" in output
-    assert "what='kolsch/tools/bash'" in output
-    assert "pattern='*'" in output
-    assert "/perm allow kolsch/tools/bash *" in output
-
-
-def test_denied_capsule_legacy_rule_renders_without_pattern() -> None:
-    """A legacy-shape matched rule (``who`` present) renders cleanly
-    without a `pattern=` field — both schema shapes work."""
-    out = _io.StringIO()
-    renderer = Renderer(stdout=out, agent_name="test")
-    legacy_rule = {
-        "id": "rl_abc",
-        "who": ".*",
-        "what": r"tool\.bash",
-        "effect": "deny",
-    }
-    renderer._render_tool_failed(
-        _denied_event(
-            matched_rule=legacy_rule,
-            recovery_hint="/perm allow kolsch/tools/bash *",
-        ),
-    )
-    output = out.getvalue()
-    assert "permission" in output
-    assert "pattern=" not in output  # legacy → no pattern field
-    assert "/perm allow kolsch/tools/bash *" in output
-
-
-def test_generic_tool_failure_still_renders_tool_capsule() -> None:
-    """A non-authz failure (no recovery_hint) keeps the dim
-    cyan tool-failure capsule — the new path is opt-in."""
-    out = _io.StringIO()
-    renderer = Renderer(stdout=out, agent_name="test")
-    error = Error(
-        type="tool.execution_failed",
-        message="kaboom",
-        where="tools.dispatch.invoke",
-        detail={},
-    )
-    event = Event(
-        event_id=EventId(f"ev_{uuid4()}"),
-        parent_event_id=None,
-        type=EventType.TOOL_FAILED,
-        actor=Actor(kind="agent", id="ag_test"),
-        session_id=SessionId(f"ses_{uuid4()}"),
-        thread_id=ThreadId(f"th_{uuid4()}"),
-        created_at=datetime.now(UTC),
-        data=ToolFailedData(
-            tool_call_id="tc_1",
-            tool_name="bash",
-            error=error,
-            recovery_hint=None,
-        ).model_dump(mode="json"),
-    )
-    renderer._render_tool_failed(event)
-    output = out.getvalue()
-    # Permission capsule NOT used; generic `tool` capsule is.
-    assert "denied:" not in output
-    assert "tool.execution_failed" in output
 
 
 # ===========================================================================

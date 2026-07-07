@@ -103,16 +103,23 @@ def test_tc_cli_smoke_chat_01_chat_help_exits_zero() -> None:
 # ===========================================================================
 
 
+@pytest.mark.skip(
+    reason=(
+        "Retired by spec-textual-chat-ui: the Textual App(inline=True) "
+        "surface requires a TTY and does not exit on empty-stdin EOF. "
+        "The invariant this test guarded (a chat process that doesn't "
+        "hang without a TTY) is now covered by "
+        "tests/cli/test_chat_headless_construct.py which uses Pilot "
+        "instead of a subprocess with piped stdin."
+    ),
+)
 def test_tc_cli_smoke_chat_02_minimal_args_exits_on_eof(
     initialized_workspace_for_chat: Path,
 ) -> None:
-    """``kolsch chat <agent>`` against an initialized workspace with
-    EOF (empty stdin) on the input prompt exits 0 cleanly.
+    """Legacy subprocess-driven REPL smoke — replaced by Pilot test.
 
-    24a stub: each submitted line echoes; EOF on stdin terminates
-    the input loop via ``EOFError``. The test verifies the
-    subprocess exits cleanly (no traceback, no hung process)
-    without the full slash-command surface (which lands in 24b).
+    See the retire reason above. Original body preserved so the
+    intent is legible if a reviewer wants context.
     """
     result = _run(
         "chat",

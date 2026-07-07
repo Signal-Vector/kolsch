@@ -381,6 +381,16 @@ def _add_chat_subparser(sub: argparse._SubParsersAction[Any]) -> None:
         default=None,
         help="Session-scoped model override (ModelSpec input shape).",
     )
+    chat.add_argument(
+        "--full-history",
+        dest="full_history",
+        action="store_true",
+        default=False,
+        help=(
+            "Replay the whole session history on --session resume "
+            "instead of the default tail-20 turns."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -768,9 +778,32 @@ async def _cmd_skills(args: argparse.Namespace) -> int:
 
 
 async def _cmd_chat(args: argparse.Namespace) -> int:
-    from cli.chat import cmd_chat  # noqa: PLC0415
+    from cli.chat.app import ChatApp, register_chat_slash_commands  # noqa: PLC0415
+    from cli.chat.session import build_session  # noqa: PLC0415
 
-    return await cmd_chat(args)
+    # Register ChatApp-owned slash commands (`/export`) on the shared
+    # registry only when the chat entry point actually runs. Doing this
+    # at module import time would mutate `COMMAND_REGISTRY` for every
+    # test that imports `cli.chat`, breaking base-registry-shape
+    # assertions (`test_chat_slash`).
+    register_chat_slash_commands()
+
+    try:
+        session = await build_session(args)
+    except ValueError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 1
+
+    app = ChatApp(
+        session=session,
+        engine=session.runtime.engine,
+        full_history=getattr(args, "full_history", False),
+    )
+    # `inline_no_clear=True` bakes the transcript into terminal
+    # scrollback on exit — so the conversation stays visible where
+    # the user quit the app instead of vanishing.
+    await app.run_async(inline=True, inline_no_clear=True)
+    return int(app.return_code or 0)
 
 
 async def _cmd_setup(args: argparse.Namespace) -> int:

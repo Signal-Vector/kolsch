@@ -21,12 +21,8 @@ from __future__ import annotations
 import io as _io
 from typing import TYPE_CHECKING
 
-from prompt_toolkit.application import create_app_session
 from prompt_toolkit.document import Document
-from prompt_toolkit.input import create_pipe_input
-from prompt_toolkit.output import DummyOutput
 
-from cli import chat
 from cli._slash import (
     COMMAND_REGISTRY,
     ControlSignal,
@@ -316,55 +312,6 @@ def test_footer_hint_unknown_command_falls_back_to_default() -> None:
     hint = footer_hint_for_buffer("/exotic")
     assert "/help" in hint
     assert "Ctrl-D" in hint
-
-
-# ===========================================================================
-# TC-CHAT-05 — input loop exits cleanly on /exit (in-process)
-# ===========================================================================
-
-
-async def test_tc_chat_05_input_loop_exits_on_slash_exit(
-    chat_workspace: Path,
-) -> None:
-    """TC-CHAT-05: ``/exit`` submitted to the input loop returns 0
-    (and the input loop terminates — the subprocess smoke in
-    test_chat_smoke.py exercises the same shape end-to-end via
-    the CLI entry point).
-
-    24c: ``_run_input_loop`` now requires runtime, config, and
-    thread_id (the engine wiring lands here). Bootstrap a real
-    runtime against the session-scoped chat_workspace fixture so
-    the input loop has something to wire to. The engine never
-    runs in this test because the user input is a slash command,
-    not a message.
-    """
-    out = _io.StringIO()
-    runtime = await bootstrap_runtime(root=chat_workspace)
-    config = await runtime.build_resolved_config("kolsch/agents/helper")
-    session = await runtime.store.create_session(
-        str(config.agent_id),
-        name="tc-chat-05",
-    )
-    threads = await runtime.store.list_threads(session.session_id)
-    thread_id = threads[0].thread_id
-    with (
-        create_pipe_input() as pipe_input,
-        create_app_session(input=pipe_input, output=DummyOutput()),
-    ):
-        prompt_session = chat._build_prompt_session(
-            input=pipe_input, output=DummyOutput()
-        )
-        # Feed "/exit" + Enter — the loop dispatches the slash
-        # command, the handler returns EXIT, the loop exits with 0.
-        pipe_input.send_text("/exit\r")
-        rc = await chat._run_input_loop(
-            prompt_session,
-            stdout=out,
-            runtime=runtime,
-            config=config,
-            thread_id=thread_id,
-        )
-    assert rc == 0
 
 
 # ===========================================================================
