@@ -22,13 +22,21 @@ import json
 import logging
 from collections import OrderedDict
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Protocol
 from uuid import uuid4
 
 from schemas.entities import Actor
 from schemas.events import Event, EventType
-from schemas.identifiers import EventId
+from schemas.identifiers import CardId, EventId
 from schemas.wire_kinds import (
+    WIRE_CARD_APPENDED,
+    WIRE_CARD_CLOSED,
+    WIRE_CARD_NOTICE,
+    WIRE_CARD_OPENED,
+    WIRE_CARD_SET,
+    WIRE_CARD_SET_PROGRESS,
+    WIRE_CARD_SNAPSHOT,
+    WIRE_CARD_STATUS,
     WIRE_PROMPT_ANSWERED,
     WIRE_PROMPT_CANCELLED,
     WIRE_PROMPT_REQUESTED,
@@ -88,6 +96,142 @@ class _BoundedLRUSet:
 
 
 _LOGGER = logging.getLogger(__name__)
+
+
+# ---------------------------------------------------------------------------
+# spec-006: CardMountState Protocol + in-memory stub
+# ---------------------------------------------------------------------------
+
+_CARD_APPEND_LRU_MAXSIZE = 1000
+"""Per-card LRU bound for applied append `event_id`s. spec-006 AC #11."""
+
+_CARD_SNAPSHOT_LRU_MAXSIZE = 100
+"""Per-card LRU bound for applied snapshot `event_id`s. spec-006 AC #11."""
+
+_CARD_NOTICE_LRU_MAXSIZE = 200
+"""Bound for applied notice ids across the adapter. spec-006 AC #11."""
+
+
+class CardMountState(Protocol):
+    """spec-006 r-review r1 seam.
+
+    Every `EventAdapter._handle_card_*` handler reads/writes state via
+    this Protocol only — no direct field access on the concrete impl.
+    spec-006 ships a stub impl (`_CardMountStub`) behind the Protocol;
+    spec-007 fills the real widget-backed impl (`CardWidget`) without
+    rewriting handler code.
+
+    LOCKED contract: handlers on this Protocol MUST be idempotent (per
+    foundation r3 dispatcher-idempotence invariant). Every mutation
+    method returns silently on a duplicate `event_id`.
+    """
+
+    card_id: CardId
+    kind: str
+    applied_appends: _BoundedLRUSet
+    applied_snapshots: _BoundedLRUSet
+    state: str  # "initializing" | "running" | ... | "success" | "error" | "cancelled"
+    content: str
+
+    def apply_append(self, event_id: str, chunk: str) -> None:
+        """Idempotent — same `event_id` twice is a no-op."""
+        ...
+
+    def apply_snapshot(self, event_id: str, content: str) -> None:
+        """Idempotent — same `event_id` twice is a no-op."""
+        ...
+
+    def apply_status(self, status: str) -> None:
+        """Last-writer-wins on `state`."""
+        ...
+
+    def apply_close(
+        self,
+        final_status: str,
+        error_message: str | None,
+    ) -> None:
+        """Idempotent — a card that's already terminal stays put."""
+        ...
+
+
+class _CardMountStub:
+    """spec-006 stub impl of `CardMountState`.
+
+    Accumulates content in memory; no DOM mount. Handlers exercise the
+    idempotence contract on this stub; swapping in spec-007's
+    widget-backed impl preserves the invariants because the seam is
+    the Protocol.
+    """
+
+    __slots__ = (
+        "applied_appends",
+        "applied_snapshots",
+        "card_id",
+        "content",
+        "error_message",
+        "kind",
+        "state",
+    )
+
+    def __init__(self, card_id: CardId, kind: str) -> None:
+        self.card_id = card_id
+        self.kind = kind
+        self.applied_appends: _BoundedLRUSet = _BoundedLRUSet(
+            maxsize=_CARD_APPEND_LRU_MAXSIZE,
+        )
+        self.applied_snapshots: _BoundedLRUSet = _BoundedLRUSet(
+            maxsize=_CARD_SNAPSHOT_LRU_MAXSIZE,
+        )
+        self.state: str = "initializing"
+        self.content: str = ""
+        self.error_message: str | None = None
+
+    def apply_append(self, event_id: str, chunk: str) -> None:
+        """Apply an appended chunk; idempotent by `event_id`."""
+        if event_id in self.applied_appends:
+            return
+        self.applied_appends.add(event_id)
+        self.content += chunk
+        if self.state == "initializing":
+            self.state = "running"
+
+    def apply_snapshot(self, event_id: str, content: str) -> None:
+        """Apply a snapshot — replace content, clear applied_appends."""
+        if event_id in self.applied_snapshots:
+            return
+        self.applied_snapshots.add(event_id)
+        self.content = content
+        # Snapshot supersedes prior appends; the LRU is cleared so a
+        # post-snapshot non-superseded append still applies cleanly.
+        self.applied_appends = _BoundedLRUSet(
+            maxsize=_CARD_APPEND_LRU_MAXSIZE,
+        )
+        if self.state == "initializing":
+            self.state = "running"
+
+    def apply_status(self, status: str) -> None:
+        """Last-writer-wins."""
+        self.state = status
+
+    def apply_close(
+        self,
+        final_status: str,
+        error_message: str | None,
+    ) -> None:
+        """Terminal transition — no-op once already terminal."""
+        if self.state in ("success", "error", "cancelled"):
+            return
+        self.state = final_status
+        self.error_message = error_message
+
+
+class CardTrackingEntry(_CardMountStub):
+    """spec-006 backward-compat alias for `_CardMountStub`.
+
+    Retained for the one-milestone transition window until spec-007
+    lands the widget-backed impl. New code uses `_CardMountStub` or
+    the spec-007 impl directly.
+    """
 
 
 # ---------------------------------------------------------------------------
@@ -282,6 +426,15 @@ class EventAdapter:
         # when the adapter runs without a live prompts service
         # (headless replay-only paths, spec-003 tests).
         self._prompts_impl: PromptsImpl | None = prompts_impl
+
+        # spec-006: per-card tracking for the `_handle_card_*` handlers.
+        # `_card_widgets` keys are `CardId`; values are the
+        # `_CardMountStub` (spec-007 swaps in `CardWidget`).
+        # `_applied_notice_ids` dedupes `kolsch.card.notice` events.
+        self._card_widgets: dict[CardId, CardTrackingEntry] = {}
+        self._applied_notice_ids: _BoundedLRUSet = _BoundedLRUSet(
+            maxsize=_CARD_NOTICE_LRU_MAXSIZE,
+        )
 
         # spec-003 bookmark state. Optional deps — when not wired,
         # `start()` is a no-op. `ChatApp` today constructs the adapter
@@ -824,8 +977,33 @@ class EventAdapter:
         if kind == WIRE_PROMPT_CANCELLED:
             self._handle_prompt_cancelled(payload)
             return
-        # Card / workflow-UI kinds land here as silent no-ops until
-        # their service specs wire the routing.
+        # spec-006: card kinds route to the `_handle_card_*` branch.
+        if kind == WIRE_CARD_OPENED:
+            self._handle_card_opened(event, payload)
+            return
+        if kind == WIRE_CARD_APPENDED:
+            self._handle_card_appended(event, payload)
+            return
+        if kind == WIRE_CARD_SET:
+            self._handle_card_set(event, payload)
+            return
+        if kind == WIRE_CARD_SET_PROGRESS:
+            self._handle_card_set_progress(event, payload)
+            return
+        if kind == WIRE_CARD_STATUS:
+            self._handle_card_status(event, payload)
+            return
+        if kind == WIRE_CARD_CLOSED:
+            self._handle_card_closed(event, payload)
+            return
+        if kind == WIRE_CARD_SNAPSHOT:
+            self._handle_card_snapshot(event, payload)
+            return
+        if kind == WIRE_CARD_NOTICE:
+            self._handle_card_notice(event, payload)
+            return
+        # Unknown or workflow-UI kinds land here as silent no-ops
+        # until their service specs wire the routing.
 
     async def _handle_prompt_requested(self, payload: dict[str, Any]) -> None:
         """Mount the approval widget for a fresh `kolsch.prompt.requested`.
@@ -901,5 +1079,183 @@ class EventAdapter:
         if self._prompts_impl is not None:
             self._prompts_impl.cancel_pending(prompt_id)
 
+    # ------------------------------------------------------------------
+    # spec-006: card dispatch handlers
+    # ------------------------------------------------------------------
 
-__all__ = ["EventAdapter"]
+    def _get_card_id(self, payload: dict[str, Any]) -> CardId | None:
+        """Extract + validate `card_id` from a card event's payload.
+
+        Returns `None` (silent no-op) when the payload is malformed —
+        replay of a mis-shaped future JSONL row shouldn't crash the
+        adapter.
+        """
+        raw = payload.get("card_id")
+        if not isinstance(raw, str) or not raw:
+            return None
+        try:
+            return CardId(raw)
+        except (ValueError, TypeError):
+            return None
+
+    def _handle_card_opened(
+        self,
+        event: Event,
+        payload: dict[str, Any],
+    ) -> None:
+        """Mount a tracking entry for a fresh `kolsch.card.opened`.
+
+        Idempotent per `card_id`: if the card is already tracked
+        (replay + live path racing, or a duplicate emission) return
+        silently — no second `_CardMountStub` mounted.
+        """
+        _ = event
+        card_id = self._get_card_id(payload)
+        if card_id is None:
+            return
+        if card_id in self._card_widgets:
+            return
+        raw_kind = payload.get("kind")
+        kind = raw_kind if isinstance(raw_kind, str) else "markdown"
+        entry: CardTrackingEntry = CardTrackingEntry(card_id, kind)
+        self._card_widgets[card_id] = entry
+
+    def _handle_card_appended(
+        self,
+        event: Event,
+        payload: dict[str, Any],
+    ) -> None:
+        """Route an `appended` chunk through the CardMountState Protocol.
+
+        Idempotent via the entry's bounded LRU on `event_id` (maxsize
+        1000 per card). If the `opened` event has not applied yet
+        (out-of-order replay), the append is silently dropped —
+        `opened` is critical-lane so this shouldn't happen in practice.
+        """
+        card_id = self._get_card_id(payload)
+        if card_id is None:
+            return
+        entry = self._card_widgets.get(card_id)
+        if entry is None:
+            return
+        chunk = payload.get("chunk")
+        if not isinstance(chunk, str):
+            return
+        # Protocol call — writes through the CardMountState seam.
+        entry.apply_append(str(event.event_id), chunk)
+
+    def _handle_card_set(
+        self,
+        event: Event,
+        payload: dict[str, Any],
+    ) -> None:
+        """Route a `set` (content replace) — last-writer-wins."""
+        _ = event
+        card_id = self._get_card_id(payload)
+        if card_id is None:
+            return
+        entry = self._card_widgets.get(card_id)
+        if entry is None:
+            return
+        content = payload.get("content")
+        if isinstance(content, str):
+            # `set` replaces via the same Protocol seam as snapshot.
+            entry.content = content
+
+    def _handle_card_set_progress(
+        self,
+        event: Event,
+        payload: dict[str, Any],
+    ) -> None:
+        """Route a `set_progress` — no-op on the stub; widget in spec-007."""
+        _ = event
+        _ = payload
+        # The stub tracks no progress state — spec-007's CardWidget
+        # implements the progress bar mutation. Idempotence is not
+        # required here because the payload carries no cumulative
+        # state (last-writer-wins).
+
+    def _handle_card_status(
+        self,
+        event: Event,
+        payload: dict[str, Any],
+    ) -> None:
+        """Route a `status` update — last-writer-wins on `state`."""
+        _ = event
+        card_id = self._get_card_id(payload)
+        if card_id is None:
+            return
+        entry = self._card_widgets.get(card_id)
+        if entry is None:
+            return
+        status = payload.get("status")
+        if isinstance(status, str):
+            entry.apply_status(status)
+
+    def _handle_card_closed(
+        self,
+        event: Event,
+        payload: dict[str, Any],
+    ) -> None:
+        """Route a terminal transition through the Protocol.
+
+        Idempotent — a card whose state is already terminal
+        (`success` / `error` / `cancelled`) stays put.
+        """
+        _ = event
+        card_id = self._get_card_id(payload)
+        if card_id is None:
+            return
+        entry = self._card_widgets.get(card_id)
+        if entry is None:
+            return
+        raw_final = payload.get("final_status")
+        final_status = raw_final if isinstance(raw_final, str) else "success"
+        raw_msg = payload.get("error_message")
+        error_message = raw_msg if isinstance(raw_msg, str) else None
+        entry.apply_close(final_status, error_message)
+
+    def _handle_card_snapshot(
+        self,
+        event: Event,
+        payload: dict[str, Any],
+    ) -> None:
+        """Apply a snapshot — replace content; clear applied_appends.
+
+        Idempotent via the entry's bounded LRU on `event_id` (maxsize
+        100 per card). Snapshot replay is inline (Coordinator lock);
+        the standalone helper deferred to spec-007.
+        """
+        card_id = self._get_card_id(payload)
+        if card_id is None:
+            return
+        entry = self._card_widgets.get(card_id)
+        if entry is None:
+            return
+        content = payload.get("content")
+        if not isinstance(content, str):
+            return
+        entry.apply_snapshot(str(event.event_id), content)
+
+    def _handle_card_notice(
+        self,
+        event: Event,
+        payload: dict[str, Any],
+    ) -> None:
+        """Track notice emission for idempotence; no widget mount here.
+
+        spec-008 lands the widget-mount + `card=` overload. This spec
+        just counts the notice so a duplicate dispatch on replay
+        doesn't double-mount later.
+        """
+        _ = event
+        raw_id = payload.get("notice_id")
+        if not isinstance(raw_id, str) or not raw_id:
+            # Legacy notice with no id — dedupe on `event.event_id`.
+            raw_id = str(event.event_id)
+        if raw_id in self._applied_notice_ids:
+            return
+        self._applied_notice_ids.add(raw_id)
+
+
+__all__ = ["CardMountState", "CardTrackingEntry", "EventAdapter"]

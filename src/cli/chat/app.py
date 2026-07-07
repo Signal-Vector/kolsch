@@ -37,6 +37,7 @@ from cli.chat.cancel import request_cancel
 from cli.chat.event_adapter import EventAdapter
 from cli.chat.keybindings import CHAT_BINDINGS
 from cli.chat.service_registry import ChatServiceRegistry
+from cli.chat.services.cards_impl import CardsImpl
 from cli.chat.services.prompts_impl import PromptsImpl
 from cli.chat.session import ChatSessionBundle, _build_user_trigger, replay_session
 from cli.chat.widgets import (
@@ -240,12 +241,17 @@ class ChatApp(App):
         # `InlineApprovalCallback` so approval prompts route through
         # the event bus instead of directly mounting a widget.
         #
+        # spec-006: same construction pattern for `CardsImpl` — tools
+        # that `requires=["cards"]` reach it through the registry.
+        #
         # Preserve any pre-set services on the registry (test fixtures
         # inject stubs before mount to exercise the teardown loop);
-        # only fill in the `prompts` slot when nothing is there yet.
+        # only fill in slots that are still `None`.
         prompts_impl: PromptsImpl | None = None
+        cards_impl: CardsImpl | None = None
         existing = self._service_registry
         pre_set_prompts = existing.prompts if existing is not None else None
+        pre_set_cards = existing.cards if existing is not None else None
         if pre_set_prompts is None:
             try:
                 prompts_impl = PromptsImpl(
@@ -259,13 +265,33 @@ class ChatApp(App):
                     exc_info=True,
                 )
                 prompts_impl = None
+        if pre_set_cards is None:
+            try:
+                cards_impl = CardsImpl(
+                    session_store=self.session.runtime.store,
+                    session_id=self.session.session_id,
+                    thread_id=self.session.thread_id,
+                )
+            except Exception:  # noqa: BLE001 — headless fixtures may lack a real store
+                _LOGGER.debug(
+                    "ChatApp.on_mount: CardsImpl construction skipped",
+                    exc_info=True,
+                )
+                cards_impl = None
         if existing is None:
-            self._service_registry = ChatServiceRegistry(prompts=prompts_impl)
-        elif pre_set_prompts is None and prompts_impl is not None:
-            # Merge: keep the pre-set fields; fill in `prompts`.
             self._service_registry = ChatServiceRegistry(
-                cards=existing.cards,
+                cards=cards_impl,
                 prompts=prompts_impl,
+            )
+        elif (pre_set_prompts is None and prompts_impl is not None) or (
+            pre_set_cards is None and cards_impl is not None
+        ):
+            # Merge: keep the pre-set fields; fill in what was empty.
+            self._service_registry = ChatServiceRegistry(
+                cards=cards_impl if pre_set_cards is None else existing.cards,
+                prompts=(
+                    prompts_impl if pre_set_prompts is None else existing.prompts
+                ),
                 workflows=existing.workflows,
                 session=existing.session,
             )
