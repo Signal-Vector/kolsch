@@ -74,10 +74,12 @@ async def test_create_session_without_pointer_omits_spawned_by(
     assert first["type"] == "session.opened"
     data = first["data"]
     assert isinstance(data, dict)
-    # The session.opened payload must be byte-identical to the pre-3.2 shape:
-    # only `session_id` + `initial_agent`. No `spawned_by` key.
-    assert set(data.keys()) == {"session_id", "initial_agent"}
+    # The session.opened payload carries only session-identity + the
+    # (spec-003) `logical_seq` allocated inside the store's flock.
+    # No `spawned_by` key on chat-spawned sessions.
+    assert set(data.keys()) == {"session_id", "initial_agent", "logical_seq"}
     assert "spawned_by" not in data
+    assert data["logical_seq"] == 1
 
 
 async def test_create_session_without_pointer_round_trips_none(

@@ -19,13 +19,28 @@ them without an ``App``.
 from __future__ import annotations
 
 import json
+import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
+from schemas.entities import Actor
 from schemas.events import Event, EventType
+from schemas.identifiers import EventId
+from schemas.wire_kinds import (
+    WIRE_PROMPT_ANSWERED,
+    WIRE_PROMPT_CANCELLED,
+    WIRE_PROMPT_REQUESTED,
+)
 
 if TYPE_CHECKING:
     from cli.chat.app import ChatApp
+    from schemas import SessionMeta
+    from schemas.identifiers import SessionId, ThreadId
+    from store.session_store import SessionStore
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 # ---------------------------------------------------------------------------
@@ -181,7 +196,15 @@ class EventAdapter:
         EventType.UI_EVENT: "_handle_ui_event",
     }
 
-    def __init__(self, app: ChatApp) -> None:
+    def __init__(
+        self,
+        app: ChatApp,
+        *,
+        session_store: SessionStore | None = None,
+        session_id: SessionId | None = None,
+        thread_id: ThreadId | None = None,
+        session_meta: SessionMeta | None = None,
+    ) -> None:
         self._app = app
         # tool_call_id → arguments dict (captured on TOOL_CALLED so
         # TOOL_RESULT / TOOL_FAILED can render the full signature).
@@ -193,6 +216,25 @@ class EventAdapter:
         # Concatenated deltas per call_id (for the "concat matches
         # final text" defensive check on MODEL_RESPONSE).
         self._streaming_buffers: dict[str, str] = {}
+
+        # spec-003 bookmark state. Optional deps — when not wired,
+        # `start()` is a no-op. `ChatApp` today constructs the adapter
+        # without a session_store handle; the future integration will
+        # wire it and call `start()` before subscribing to the live
+        # bus (see docs/explanation/event-bus-contract.md §Replay-on-boot).
+        self._session_store: SessionStore | None = session_store
+        self._session_id: SessionId | None = session_id
+        self._thread_id: ThreadId | None = thread_id
+        self._bookmark: EventId | None = (
+            session_meta.event_adapter_bookmark if session_meta is not None else None
+        )
+        self._bookmark_dispatch_count = 0
+        self._bookmark_persist_every = 100
+        # Coordinator decision Q4: idempotency guard. A second
+        # `start()` returns early without re-dispatching.
+        self._started = False
+        # Coordinator decision Q3: bounded scan window.
+        self._scan_tail = 1000
 
     # ------------------------------------------------------------------
     # Public surface
@@ -212,6 +254,276 @@ class EventAdapter:
         method_name = self._DISPATCH[event.type]
         handler = getattr(self, method_name)
         await handler(event)
+
+    # ------------------------------------------------------------------
+    # spec-003: replay-on-boot bookmark + prompt-mid-crash synthesis
+    # ------------------------------------------------------------------
+
+    async def start(self) -> None:
+        """Idempotent startup — replay from bookmark, then scan for dangling prompts.
+
+        Must be called before the live bus subscription so no events
+        between the last-dispatched bookmark and the log tail are
+        silently dropped. Second call returns early (Coordinator
+        decision Q4 for spec-003).
+
+        No-op when the store/session/thread deps aren't wired — the
+        chat runtime today constructs the adapter without them; the
+        wiring lands together with the concrete service impls in M2+.
+        """
+        if self._started:
+            return
+        self._started = True
+        if (
+            self._session_store is None
+            or self._session_id is None
+            or self._thread_id is None
+        ):
+            return
+        await self._replay_from_bookmark()
+        await self._scan_dangling_prompts()
+
+    async def _replay_from_bookmark(self) -> None:
+        """Read events from bookmark to log tail; dispatch each; persist every 100.
+
+        Missing / stale bookmark (points at a non-existent event_id):
+        logs a warning and replays the entire log. This matches AC #6.
+
+        Handler exceptions are swallowed and logged — replay is
+        best-effort, a bad event shouldn't crash the chat (mirrors
+        `ChatApp._replay_history`).
+        """
+        assert self._session_store is not None
+        assert self._session_id is not None
+        assert self._thread_id is not None
+
+        # First, sanity-check the bookmark by scanning the full log
+        # for the bookmark event. If the bookmark points at an event
+        # that doesn't exist (log rotated / corrupted meta), warn and
+        # fall back to a full replay.
+        replay_from: EventId | None = self._bookmark
+        if self._bookmark is not None:
+            all_events: list[Event] = []
+            async for ev in self._session_store.read_events(self._thread_id):
+                all_events.append(ev)
+            if not any(str(e.event_id) == str(self._bookmark) for e in all_events):
+                _LOGGER.warning(
+                    "event_adapter bookmark %r not found in session %r log; "
+                    "replaying entire log",
+                    self._bookmark,
+                    self._session_id,
+                )
+                replay_from = None
+
+        async for event in self._session_store.read_events(
+            self._thread_id,
+            from_event_id=str(replay_from) if replay_from is not None else None,
+        ):
+            try:
+                await self.handle(event)
+            except Exception:  # noqa: BLE001 — replay is best-effort
+                _LOGGER.exception(
+                    "event_adapter handler raised during replay of %r",
+                    event.event_id,
+                )
+            self._bookmark = event.event_id
+            self._bookmark_dispatch_count += 1
+            if self._bookmark_dispatch_count >= self._bookmark_persist_every:
+                await self._persist_bookmark()
+
+    async def _scan_dangling_prompts(self) -> None:
+        """Synthesise `.cancelled` + `tool.failed` for unresolved prompt requests.
+
+        Bounded scan (Coordinator decision Q3): only the last
+        `self._scan_tail` events (default 1000) are considered. A
+        dangling prompt is a `kolsch.prompt.requested` UI event with
+        no matching `.answered` or `.cancelled` in the same window.
+        For each dangling prompt:
+
+        - Append synthetic `kolsch.prompt.cancelled` with
+          `reason="session_interrupted"`.
+        - If the parent `tool.called` (looked up via
+          `source.tool_call_id` in the request's payload) has no
+          `tool.result` or `tool.failed`, append synthetic
+          `tool.failed` with `error.type="session.interrupted"`.
+
+        Idempotent: on the second boot after synthesis, the newly-
+        appended `.cancelled` closes the request, so the scan finds
+        no dangling entries and does nothing. Pre-spec-004 (no
+        `kolsch.prompt.requested` events exist anywhere), this is a
+        silent no-op.
+        """
+        assert self._session_store is not None
+        assert self._session_id is not None
+        assert self._thread_id is not None
+
+        events: list[Event] = []
+        async for ev in self._session_store.read_events(
+            self._thread_id,
+            tail=self._scan_tail,
+        ):
+            events.append(ev)
+
+        # First pass: index requested/resolved prompts + tool.called
+        # + tool terminals within the scan window.
+        requested: dict[str, Event] = {}
+        resolved: set[str] = set()
+        tool_calls: dict[str, Event] = {}
+        tool_terminals: set[str] = set()
+
+        for ev in events:
+            if ev.type == EventType.UI_EVENT:
+                data = ev.data if isinstance(ev.data, dict) else {}
+                kind = data.get("kind")
+                payload = data.get("payload") or {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                prompt_id = payload.get("prompt_id")
+                if not isinstance(prompt_id, str):
+                    continue
+                if kind == WIRE_PROMPT_REQUESTED:
+                    requested[prompt_id] = ev
+                elif kind in (WIRE_PROMPT_ANSWERED, WIRE_PROMPT_CANCELLED):
+                    resolved.add(prompt_id)
+            elif ev.type == EventType.TOOL_CALLED:
+                data = ev.data if isinstance(ev.data, dict) else {}
+                call_id = data.get("tool_call_id")
+                if isinstance(call_id, str):
+                    tool_calls[call_id] = ev
+            elif ev.type in (EventType.TOOL_RESULT, EventType.TOOL_FAILED):
+                data = ev.data if isinstance(ev.data, dict) else {}
+                call_id = data.get("tool_call_id")
+                if isinstance(call_id, str):
+                    tool_terminals.add(call_id)
+
+        # Second pass: synthesize for dangling requests.
+        for prompt_id, req_ev in requested.items():
+            if prompt_id in resolved:
+                continue
+            await self._append_synthetic_prompt_cancelled(prompt_id, req_ev)
+            data = req_ev.data if isinstance(req_ev.data, dict) else {}
+            source = data.get("payload", {}).get("source") if isinstance(
+                data.get("payload"), dict
+            ) else None
+            tool_call_id = (
+                source.get("tool_call_id")
+                if isinstance(source, dict)
+                else None
+            )
+            if (
+                isinstance(tool_call_id, str)
+                and tool_call_id in tool_calls
+                and tool_call_id not in tool_terminals
+            ):
+                await self._append_synthetic_tool_failed(
+                    tool_call_id,
+                    tool_calls[tool_call_id],
+                )
+
+    async def _append_synthetic_prompt_cancelled(
+        self,
+        prompt_id: str,
+        req_event: Event,
+    ) -> None:
+        """Append a synthetic `kolsch.prompt.cancelled` UI event.
+
+        Reason is `session_interrupted`; payload also carries the
+        `prompt_id` so downstream consumers can correlate with the
+        original request.
+        """
+        assert self._session_store is not None
+        assert self._thread_id is not None
+        assert self._session_id is not None
+
+        cancelled = Event(
+            event_id=EventId(f"ev_{uuid4()}"),
+            parent_event_id=None,
+            thread_id=req_event.thread_id,
+            session_id=req_event.session_id,
+            type=EventType.UI_EVENT,
+            data={
+                "schema_version": 1,
+                "kind": WIRE_PROMPT_CANCELLED,
+                "payload": {
+                    "prompt_id": prompt_id,
+                    "reason": "session_interrupted",
+                },
+            },
+            actor=Actor(kind="system"),
+            created_at=datetime.now(UTC),
+        )
+        try:
+            await self._session_store.append_event(self._thread_id, cancelled)
+        except Exception:  # noqa: BLE001 — synthesis is best-effort
+            _LOGGER.exception(
+                "failed to append synthetic prompt.cancelled for %r",
+                prompt_id,
+            )
+
+    async def _append_synthetic_tool_failed(
+        self,
+        tool_call_id: str,
+        tool_called: Event,
+    ) -> None:
+        """Append a synthetic `tool.failed` for an interrupted tool call.
+
+        `error.type` is `session.interrupted`; the message explains
+        the retry path so the model can pick up cleanly on its next
+        turn.
+        """
+        assert self._session_store is not None
+        assert self._thread_id is not None
+
+        called_data = tool_called.data if isinstance(tool_called.data, dict) else {}
+        tool_name = called_data.get("tool_name", "<unknown>")
+        failed = Event(
+            event_id=EventId(f"ev_{uuid4()}"),
+            parent_event_id=None,
+            thread_id=tool_called.thread_id,
+            session_id=tool_called.session_id,
+            type=EventType.TOOL_FAILED,
+            data={
+                "tool_call_id": tool_call_id,
+                "tool_name": tool_name,
+                "error": {
+                    "type": "session.interrupted",
+                    "message": (
+                        "The chat session ended while this tool was awaiting "
+                        "user input. Retry to continue."
+                    ),
+                },
+            },
+            actor=Actor(kind="system"),
+            created_at=datetime.now(UTC),
+        )
+        try:
+            await self._session_store.append_event(self._thread_id, failed)
+        except Exception:  # noqa: BLE001 — synthesis is best-effort
+            _LOGGER.exception(
+                "failed to append synthetic tool.failed for %r",
+                tool_call_id,
+            )
+
+    async def _persist_bookmark(self) -> None:
+        """Persist the current bookmark to the session's `meta.json`.
+
+        Called every `_bookmark_persist_every` (default 100) dispatches
+        during replay, and on `aclose()`. Best-effort — a failed write
+        does not raise (see `SessionStore._write_meta_sync`).
+        """
+        if self._session_store is None or self._session_id is None:
+            return
+        await self._session_store.update_meta(
+            self._session_id,
+            event_adapter_bookmark=self._bookmark,
+        )
+        self._bookmark_dispatch_count = 0
+
+    async def aclose(self) -> None:
+        """Persist the bookmark on unmount. Idempotent."""
+        if self._session_store is None or self._session_id is None:
+            return
+        await self._persist_bookmark()
 
     # ------------------------------------------------------------------
     # Handlers — one per EventType member

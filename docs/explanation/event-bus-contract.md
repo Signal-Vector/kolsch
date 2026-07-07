@@ -272,6 +272,69 @@ tier; strict subscribers should not use the bus.
 
 The bus and the log work together for subscribers that need durability.
 
+### 5.0 The replay-on-boot bookmark pattern (spec-003)
+
+The `EventAdapter` at `src/cli/chat/event_adapter.py` is v1's first
+strict subscriber. It persists a bookmark (`event_adapter_bookmark`)
+in the session's `meta.json` sidecar and uses it on boot to close the
+gap between the last-dispatched event and the log tail. Together with
+the append-then-publish contract (§4.1), this is what stops events
+being silently dropped between the JSONL append and the in-process
+bus enqueue.
+
+Flow:
+
+1. **On startup** (`EventAdapter.start()`, before the live bus
+   subscription):
+   1. Read `event_adapter_bookmark` from `SessionMeta.event_adapter_bookmark`
+      (`None` on first boot).
+   2. Call `SessionStore.read_events(thread_id, from_event_id=<bookmark>)`
+      to fetch every event since the bookmark. If the bookmark points
+      at an event that doesn't exist (log rotated, corrupted meta),
+      log a warning and replay the entire log.
+   3. Dispatch each returned event through the normal `handle()`
+      chain — the same code path the live bus uses.
+   4. Advance the bookmark to the last-dispatched event's `event_id`.
+   5. Persist the bookmark to `meta.json` every N dispatches (v1: 100)
+      and again on `aclose()` at unmount.
+2. **Then** subscribe to the live bus. Any event published while the
+   replay was running lands in the subscriber queue behind the
+   already-dispatched replay events.
+3. **Idempotency guard.** A second `start()` call is a no-op — the
+   `_started` flag pins it. This makes double-start safe.
+
+Two invariants:
+
+- **The JSONL log is authoritative.** The bookmark is an optimisation
+  ("don't re-dispatch what we already did"). If the meta.json is
+  missing or corrupt, replay from the top; correctness is preserved,
+  only performance degrades.
+- **Handlers are idempotent** (per §4.3 subscriber obligation).
+  Replay may re-dispatch events the previous run already handled if
+  the bookmark write raced with a crash mid-window; handlers absorb
+  duplicates rather than error.
+
+### 5.0.1 Prompt-mid-crash synthesis
+
+The same `start()` pass also runs `_scan_dangling_prompts`: it walks
+the last 1000 events (bounded scan, per Coordinator decision for
+spec-003) for unresolved `kolsch.prompt.requested` UI events (no
+matching `.answered` or `.cancelled` in the window). For each dangling
+prompt:
+
+- A synthetic `kolsch.prompt.cancelled` is appended with
+  `reason="session_interrupted"`.
+- If the parent `tool.called` (looked up via
+  `payload.source.tool_call_id`) has no matching `tool.result` /
+  `tool.failed`, a synthetic `tool.failed` is appended with
+  `error.type="session.interrupted"` and a retry-hint message.
+
+The model reads the synthetic `tool.failed` on its next turn and can
+retry cleanly. Nothing user-visible fires from this synthesis in v1
+(the `Cards.notice` retry hint is deferred to spec-006). The scan
+is a no-op until spec-004 ships `PromptsImpl` — no
+`kolsch.prompt.requested` events exist in any log before then.
+
 ### 5.1 The strict subscriber pattern
 
 A subscriber that cannot miss events does this:

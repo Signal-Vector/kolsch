@@ -33,6 +33,7 @@ from schemas.entities import (
     FromWorkflowRun,
     ParentRunPointer,
     Session,
+    SessionMeta,
     Thread,
 )
 from schemas.error import Error
@@ -105,6 +106,7 @@ __all__ = [
     "RuntimeSpec",
     "Session",
     "SessionId",
+    "SessionMeta",
     "SessionOpenedData",
     "SubscriptionId",
     "SubsystemConfig",

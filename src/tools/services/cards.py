@@ -46,3 +46,13 @@ class AbstractCards(ABC):
     def notice(self, text: str, *, kind: str = "info") -> None:
         """Default stub — subclasses override. Raises `NotImplementedError`."""
         raise NotImplementedError
+
+    async def aclose(self) -> None:
+        """Called from ChatApp.on_unmount. Cancels drain tasks, snapshot timers, cancel tokens. Idempotent. Post-aclose, subsequent mutation raises RuntimeError.
+
+        The ABC default is a no-op — test fakes and the placeholder
+        `ChatServiceRegistry` fields (all `None` today) don't need real
+        teardown. Concrete impls in spec-006 override with real
+        teardown logic.
+        """
+        return None

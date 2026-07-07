@@ -13,6 +13,7 @@ alt-screen / full-screen.
 from __future__ import annotations
 
 import io
+import logging
 import os
 from datetime import datetime
 from pathlib import Path
@@ -53,7 +54,10 @@ from providers import RuleBasedAuthorizationProvider
 from schemas.events import Event, EventType
 
 if TYPE_CHECKING:
-    pass
+    from cli.chat.service_registry import ChatServiceRegistry
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 def register_chat_slash_commands() -> None:
@@ -181,6 +185,11 @@ class ChatApp(App):
         # Mutable session state used by the legacy slash handlers.
         # Populated in `on_mount` once the runtime handles are wired.
         self._chat_state: ChatSessionState | None = None
+        # spec-003: service registry. Placeholder / all-None today —
+        # concrete impls wire in specs 004/006/012. `on_unmount`
+        # iterates the registry's fields and calls `aclose` on any
+        # non-None value; the plumbing is in place for M2+ specs.
+        self._service_registry: ChatServiceRegistry | None = None
 
     # ------------------------------------------------------------------
     # Compose
@@ -236,10 +245,17 @@ class ChatApp(App):
             pass
 
     async def on_unmount(self) -> None:
-        """Clear the modal registration on exit.
+        """Clear the modal registration on exit + tear down services.
 
         Load-bearing for tests that share a runtime across cases —
         a leaked callback would fire against a torn-down App.
+
+        spec-003: iterates `self._service_registry` fields and calls
+        `await service.aclose()` on any non-None value with an
+        `aclose` attribute. Today the registry is all-None so this is
+        dead code, but the plumbing is in place for M2+ specs.
+        Per-service exceptions are caught and logged so one bad
+        `aclose` doesn't stop teardown of the others.
         """
         authz = self.session.runtime.authz
         if isinstance(authz, RuleBasedAuthorizationProvider):
@@ -247,6 +263,22 @@ class ChatApp(App):
                 authz.clear_prompt_callback()
             except Exception:
                 pass
+
+        if self._service_registry is not None:
+            for field_name in ("cards", "prompts", "workflows", "session"):
+                service = getattr(self._service_registry, field_name, None)
+                if service is None:
+                    continue
+                aclose = getattr(service, "aclose", None)
+                if aclose is None:
+                    continue
+                try:
+                    await aclose()
+                except Exception:  # noqa: BLE001 — one bad aclose can't stop the others
+                    _LOGGER.exception(
+                        "ChatApp.on_unmount: service %r aclose raised",
+                        field_name,
+                    )
 
     async def _replay_history(self) -> None:
         """Replay the thread's JSONL through the event adapter.
