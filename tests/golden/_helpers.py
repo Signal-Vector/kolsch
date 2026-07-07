@@ -144,6 +144,16 @@ def normalize_events(events: list[Event]) -> list[dict[str, Any]]:
         # trace_id is actually set.
         if raw.get("trace_id") is None:
             raw.pop("trace_id", None)
+        # spec-002 — ``logical_seq`` is additive on ``_DataModel``; the
+        # field defaults to 0 and populated values only arrive from
+        # SessionStore in spec-003. Strip the key from ``data`` when the
+        # value is still the default so goldens committed before this
+        # field landed stay byte-stable. Non-zero values continue to
+        # surface in the normalized output (spec-003 tests will assert
+        # them explicitly).
+        data = raw.get("data")
+        if isinstance(data, dict) and data.get("logical_seq") == 0:
+            data.pop("logical_seq", None)
         normalized = _normalize_value(raw, id_map, counters)
         assert isinstance(normalized, dict)
         out.append(normalized)

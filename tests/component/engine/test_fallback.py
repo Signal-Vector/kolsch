@@ -435,12 +435,19 @@ def test_tc_fb_06_event_shape_matches_patch_3_1() -> None:
         attempt=1,
     )
     serialised = data.model_dump(mode="json", by_alias=True)
+    # spec-002 adds ``logical_seq: int = 0`` on ``_DataModel``;
+    # populated in spec-003 by ``SessionStore`` inside its flock
+    # critical section. Present as a defaulted key on every payload
+    # dump from here on. Store's JSONL writer strips the default 0 at
+    # write time (``src/store/jsonl.py``) so on-disk byte shapes stay
+    # compat; in-memory ``model_dump`` still carries it.
     assert set(serialised.keys()) == {
         "from",
         "to",
         "reason",
         "reason_detail",
         "attempt",
+        "logical_seq",
     }
     assert serialised["from"] == {
         "provider": "openrouter",

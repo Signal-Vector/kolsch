@@ -21,7 +21,7 @@ from datetime import datetime
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from schemas.entities import Actor, ContentRef
 from schemas.error import Error
@@ -33,6 +33,7 @@ from schemas.identifiers import (
     SessionId,
     ThreadId,
 )
+from schemas.wire_kinds import is_valid_kind
 
 
 class EventType(StrEnum):
@@ -88,6 +89,13 @@ class EventType(StrEnum):
     # `{{ tools }}` referenced but no tools declared).
     AGENT_TEMPLATE_WARNING = "agent.template_warning"
 
+    # UI mutation envelope emitted by the tool-services layer
+    # (CardsImpl, PromptsImpl, WorkflowsImpl). Discriminated by
+    # `UIEventData.kind` (a dotted `kolsch.<domain>.<verb>` string)
+    # rather than by adding one `EventType` member per UI verb. See
+    # `src/schemas/wire_kinds.py` for the canonical platform set.
+    UI_EVENT = "ui.event"
+
 
 # ---------------------------------------------------------------------------
 # Per-event-type `data` payload models
@@ -97,12 +105,24 @@ class EventType(StrEnum):
 class _DataModel(BaseModel):
     """Common base for event-data payloads.
 
-    `extra="forbid"` enforces the per-type shape: a typo in a field
-    name fails validation rather than silently passing through into
-    the JSONL.
+    `extra="ignore"` (relaxed from the pre-spec-002 `extra="forbid"`)
+    keeps forward-compat replay tolerant: newer JSONL entries with
+    added payload fields don't fail validation on older readers. See
+    the roadmap's cross-cutting invariants and
+    `process/spec-002-ui-event-schema.md` for the rationale.
+
+    Every payload subclass inherits `logical_seq: int = 0`, the
+    cross-log ordering key populated by :class:`SessionStore` inside
+    its flock critical section (allocation logic lands in spec-003).
+    Default `0` means legacy events without the field validate
+    cleanly on replay.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    # spec-002: field-in-place; spec-003 populates on write. Default
+    # zero keeps legacy log entries validating without a migration.
+    logical_seq: int = 0
 
 
 class SessionOpenedData(_DataModel):
@@ -365,6 +385,46 @@ class AgentTemplateWarningData(_DataModel):
     reference: str
     reason: str
     hint: str
+
+
+class UIEventData(_DataModel):
+    """`ui.event.data` — one UI mutation.
+
+    `kind` is the discriminator: a dotted `<owner>.<domain>.<verb>`
+    string (see :mod:`schemas.wire_kinds` for the platform set). Every
+    subsequent UI reader switches on `kind` to reach the
+    kind-specific `payload` shape.
+
+    `schema_version` enables forward-compatible payload evolution:
+    older readers ignore unknown extra fields (see
+    :attr:`_DataModel.model_config`); a semantic break bumps the int
+    and adds a migration handler (deferred until the first migration
+    is needed — see spec-002 §Coordinator decisions).
+
+    Kinds MUST be dotted `<owner>.<domain>.<verb>`:
+
+    - `<owner>` is `kolsch` (platform-emitted) or a bundle name
+      (v1.1). The platform reserves `kolsch.*`.
+    - Non-dotted kinds fail construction via :func:`is_valid_kind`.
+    - Deeper hierarchies are allowed
+      (e.g. `kolsch.workflow.node.awaiting_approval`).
+    """
+
+    schema_version: int = 1
+    kind: str
+    payload: dict[str, Any]
+
+    @field_validator("kind")
+    @classmethod
+    def _validate_dotted(cls, v: str) -> str:
+        if not is_valid_kind(v):
+            raise ValueError(
+                f"kind must be dotted <owner>.<domain>.<verb>; got {v!r}. "
+                "See src/schemas/wire_kinds.py for the platform set "
+                "(all `kolsch.*`). Bundle authors: prefix with your "
+                "bundle name."
+            )
+        return v
 
 
 # ---------------------------------------------------------------------------

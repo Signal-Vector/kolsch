@@ -82,6 +82,15 @@ def _serialise(event: Event) -> bytes:
     # key surfaces in their lines verbatim.
     if payload.get("trace_id") is None:
         payload.pop("trace_id", None)
+    # spec-002 — `logical_seq` is additive on `_DataModel`. It defaults
+    # to 0; populated values arrive from SessionStore in spec-003.
+    # Strip the key from `data` when the default is in force so JSONL
+    # rows produced by pre-spec-003 emitters remain byte-identical to
+    # the pre-spec-002 shape. Non-zero values (once spec-003 lands)
+    # continue to surface verbatim.
+    data = payload.get("data")
+    if isinstance(data, dict) and data.get("logical_seq") == 0:
+        data.pop("logical_seq", None)
     return (
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         + b"\n"

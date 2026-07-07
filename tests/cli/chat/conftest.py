@@ -117,6 +117,15 @@ def _canonical_data(event_type: EventType) -> dict[str, Any]:
             return {"before_tokens": 100, "after_tokens": 50}
         case EventType.AGENT_TEMPLATE_WARNING:
             return {"message": "canonical warning"}
+        case EventType.UI_EVENT:
+            # spec-002 envelope: dotted `kind` + free-shape `payload`.
+            # No emitter ships yet (spec-003+); adapter handles it as a
+            # silent no-op so replay of a future JSONL row doesn't raise.
+            return {
+                "schema_version": 1,
+                "kind": "kolsch.card.opened",
+                "payload": {"card_id": "canonical"},
+            }
     # Fail loud on any missing branch; the coverage test relies on this.
     raise KeyError(f"conftest.canonical_event: no branch for {event_type!r}")
 

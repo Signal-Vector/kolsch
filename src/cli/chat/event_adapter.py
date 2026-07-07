@@ -173,6 +173,12 @@ class EventAdapter:
         EventType.MEMORY_DELETED: "_handle_memory_deleted",
         EventType.CONTEXT_COMPACTED: "_handle_context_compacted",
         EventType.AGENT_TEMPLATE_WARNING: "_handle_agent_template_warning",
+        # spec-002 registers the UI event envelope. Emission +
+        # per-kind dispatch land in spec-003 / spec-006 / spec-012+;
+        # the adapter's branch here is a silent no-op so replay of a
+        # future JSONL row doesn't raise `KeyError` on the dispatch
+        # table lookup.
+        EventType.UI_EVENT: "_handle_ui_event",
     }
 
     def __init__(self, app: ChatApp) -> None:
@@ -393,6 +399,17 @@ class EventAdapter:
         message = str(event.data.get("message") or event.data.get("reason", ""))
         if message:
             await self._app.mount_notice(f"template warning: {message}")
+
+    async def _handle_ui_event(self, event: Event) -> None:
+        """Silent — spec-002 registers the envelope only.
+
+        Per-kind UI dispatch (card / prompt / workflow-UI verbs) lands
+        in spec-003 (SessionStore's `logical_seq` allocation +
+        EventAdapter bookmark) and the follow-up service specs. Until
+        then the adapter is a no-op sink so replay of any future JSONL
+        row typed `ui.event` doesn't raise.
+        """
+        _ = event
 
 
 __all__ = ["EventAdapter"]
