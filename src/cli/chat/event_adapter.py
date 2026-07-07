@@ -20,6 +20,7 @@ from __future__ import annotations
 
 import json
 import logging
+from collections import OrderedDict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -35,9 +36,55 @@ from schemas.wire_kinds import (
 
 if TYPE_CHECKING:
     from cli.chat.app import ChatApp
+    from cli.chat.services.prompts_impl import PromptsImpl
     from schemas import SessionMeta
     from schemas.identifiers import SessionId, ThreadId
     from store.session_store import SessionStore
+
+
+_PROMPT_LRU_MAXSIZE = 1000
+"""spec-004 AC #7: bounded LRU maxsize for the prompt-idempotence set.
+
+At 1000 unique `prompt_id`s the LRU is best-effort — the 1001st
+insert evicts the earliest. Legitimate chat sessions never approach
+this bound within a single boot; the cap is a memory guard, not a
+correctness invariant.
+"""
+
+
+class _BoundedLRUSet:
+    """Insertion-ordered set with an upper size bound.
+
+    On `add`, evicts the oldest entry once `len` exceeds `maxsize`.
+    Membership tests are O(1). No stdlib LRU set exists so the
+    adapter carries this tiny helper; the invariant matches spec-004
+    AC #7.
+    """
+
+    __slots__ = ("_maxsize", "_seen")
+
+    def __init__(self, *, maxsize: int) -> None:
+        self._maxsize = maxsize
+        self._seen: OrderedDict[str, None] = OrderedDict()
+
+    def __contains__(self, key: str) -> bool:
+        return key in self._seen
+
+    def __len__(self) -> int:
+        return len(self._seen)
+
+    def add(self, key: str) -> None:
+        """Insert `key`, evicting the oldest entry if the bound is hit.
+
+        Idempotent: re-adding a present key refreshes its position
+        so it stays fresh in the LRU.
+        """
+        if key in self._seen:
+            self._seen.move_to_end(key)
+            return
+        self._seen[key] = None
+        while len(self._seen) > self._maxsize:
+            self._seen.popitem(last=False)
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -204,6 +251,7 @@ class EventAdapter:
         session_id: SessionId | None = None,
         thread_id: ThreadId | None = None,
         session_meta: SessionMeta | None = None,
+        prompts_impl: PromptsImpl | None = None,
     ) -> None:
         self._app = app
         # tool_call_id → arguments dict (captured on TOOL_CALLED so
@@ -216,6 +264,24 @@ class EventAdapter:
         # Concatenated deltas per call_id (for the "concat matches
         # final text" defensive check on MODEL_RESPONSE).
         self._streaming_buffers: dict[str, str] = {}
+        # spec-004: idempotence LRUs for the prompt-routing branch of
+        # `_handle_ui_event`. `_applied_prompt_ids` guards duplicate
+        # `.requested` dispatches from mounting a second widget;
+        # `_resolved_prompt_ids` guards duplicate `.answered` /
+        # `.cancelled` dispatches from double-resolving the future
+        # (would raise `InvalidStateError`).
+        self._applied_prompt_ids: _BoundedLRUSet = _BoundedLRUSet(
+            maxsize=_PROMPT_LRU_MAXSIZE,
+        )
+        self._resolved_prompt_ids: _BoundedLRUSet = _BoundedLRUSet(
+            maxsize=_PROMPT_LRU_MAXSIZE,
+        )
+        # spec-004: handle to the concrete Prompts service so the
+        # adapter's prompt routing can resolve pending futures. Set
+        # by `ChatApp.on_mount` once `PromptsImpl` is registered; None
+        # when the adapter runs without a live prompts service
+        # (headless replay-only paths, spec-003 tests).
+        self._prompts_impl: PromptsImpl | None = prompts_impl
 
         # spec-003 bookmark state. Optional deps — when not wired,
         # `start()` is a no-op. `ChatApp` today constructs the adapter
@@ -244,6 +310,19 @@ class EventAdapter:
     def handles(cls, event_type: EventType) -> bool:
         """True if a handler is registered for ``event_type``."""
         return event_type in cls._DISPATCH
+
+    def register_prompts_impl(self, prompts_impl: PromptsImpl) -> None:
+        """Wire a live `PromptsImpl` in after construction.
+
+        `ChatApp.__init__` builds the adapter before `on_mount`
+        constructs the concrete services (order is a Textual
+        lifecycle constraint — some services need the session
+        bundle handles the app receives at mount time). This setter
+        closes the loop from `ChatApp.on_mount` so the adapter's
+        `.answered` / `.cancelled` routing can reach the impl's
+        pending future.
+        """
+        self._prompts_impl = prompts_impl
 
     async def handle(self, event: Event) -> None:
         """Dispatch ``event`` to the registered handler.
@@ -713,15 +792,114 @@ class EventAdapter:
             await self._app.mount_notice(f"template warning: {message}")
 
     async def _handle_ui_event(self, event: Event) -> None:
-        """Silent — spec-002 registers the envelope only.
+        """Dispatch `ui.event` on `data.kind` to the per-kind route.
 
-        Per-kind UI dispatch (card / prompt / workflow-UI verbs) lands
-        in spec-003 (SessionStore's `logical_seq` allocation +
-        EventAdapter bookmark) and the follow-up service specs. Until
-        then the adapter is a no-op sink so replay of any future JSONL
-        row typed `ui.event` doesn't raise.
+        spec-004 adds routing for the `kolsch.prompt.*` kinds:
+
+        - `WIRE_PROMPT_REQUESTED` → mount the `ApprovalBlock` widget
+          via `ChatApp.mount_approval_block`. Idempotent per
+          `prompt_id` (a second dispatch is a no-op).
+        - `WIRE_PROMPT_ANSWERED` → resolve the `PromptsImpl` future
+          with the payload's `response`. Idempotent per `prompt_id`.
+        - `WIRE_PROMPT_CANCELLED` → cancel the `PromptsImpl` future
+          (raises `CancelledError` from the awaiting `choice()` —
+          Coordinator-locked). Idempotent per `prompt_id`.
+
+        Card / workflow-UI kinds route through their own services
+        (spec-006 / spec-012+). Unknown kinds are a silent no-op so
+        replay of a future JSONL row typed `ui.event` doesn't raise.
         """
-        _ = event
+        data = event.data if isinstance(event.data, dict) else {}
+        kind = data.get("kind")
+        payload = data.get("payload") or {}
+        if not isinstance(payload, dict):
+            payload = {}
+
+        if kind == WIRE_PROMPT_REQUESTED:
+            await self._handle_prompt_requested(payload)
+            return
+        if kind == WIRE_PROMPT_ANSWERED:
+            self._handle_prompt_answered(payload)
+            return
+        if kind == WIRE_PROMPT_CANCELLED:
+            self._handle_prompt_cancelled(payload)
+            return
+        # Card / workflow-UI kinds land here as silent no-ops until
+        # their service specs wire the routing.
+
+    async def _handle_prompt_requested(self, payload: dict[str, Any]) -> None:
+        """Mount the approval widget for a fresh `kolsch.prompt.requested`.
+
+        Idempotent per `prompt_id` — a duplicate dispatch (from
+        replay + live path racing, or a broken publisher) is silently
+        dropped so the transcript never grows a second approval block
+        for the same request.
+
+        Extracts `rule_id` / `action` / `target` from the payload's
+        `source` when available (the InlineApprovalCallback shape).
+        Falls back to bare `action` / no target when the caller
+        hasn't wired the extra fields — the widget renders `(no
+        matching rule)` in that case.
+        """
+        prompt_id = payload.get("prompt_id")
+        if not isinstance(prompt_id, str) or not prompt_id:
+            return
+        if prompt_id in self._applied_prompt_ids:
+            return
+        self._applied_prompt_ids.add(prompt_id)
+        rule_id = payload.get("rule_id")
+        action = payload.get("action") or ""
+        target = payload.get("target")
+        rule_id_val = rule_id if isinstance(rule_id, str) else None
+        action_val = action if isinstance(action, str) else ""
+        target_val = target if isinstance(target, str) else None
+        try:
+            await self._app.mount_approval_block(
+                rule_id_val,
+                action_val,
+                target_val,
+            )
+        except Exception:  # noqa: BLE001 — mount failure logged, not raised
+            _LOGGER.exception(
+                "event_adapter: mount_approval_block raised for prompt_id=%r",
+                prompt_id,
+            )
+
+    def _handle_prompt_answered(self, payload: dict[str, Any]) -> None:
+        """Resolve the in-flight `PromptsImpl` future on `.answered`.
+
+        Idempotent per `prompt_id`; a second dispatch is a no-op
+        (setting a done future's result would raise
+        `InvalidStateError`).
+        """
+        prompt_id = payload.get("prompt_id")
+        if not isinstance(prompt_id, str) or not prompt_id:
+            return
+        if prompt_id in self._resolved_prompt_ids:
+            return
+        self._resolved_prompt_ids.add(prompt_id)
+        response = payload.get("response", payload.get("answer", ""))
+        if not isinstance(response, str):
+            response = str(response)
+        if self._prompts_impl is not None:
+            self._prompts_impl.resolve_pending(prompt_id, response)
+
+    def _handle_prompt_cancelled(self, payload: dict[str, Any]) -> None:
+        """Cancel the in-flight `PromptsImpl` future on `.cancelled`.
+
+        Raises `asyncio.CancelledError` from the awaiting `choice()`
+        / `text()` — Coordinator-locked behaviour matching the Esc
+        → deny-once semantics of the shipped approval UX. Idempotent
+        per `prompt_id`.
+        """
+        prompt_id = payload.get("prompt_id")
+        if not isinstance(prompt_id, str) or not prompt_id:
+            return
+        if prompt_id in self._resolved_prompt_ids:
+            return
+        self._resolved_prompt_ids.add(prompt_id)
+        if self._prompts_impl is not None:
+            self._prompts_impl.cancel_pending(prompt_id)
 
 
 __all__ = ["EventAdapter"]

@@ -57,6 +57,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from assets.catalog import AssetCatalog
+    from engine.context import ExecutionContext
 
 
 # ---------------------------------------------------------------------------
@@ -342,8 +343,18 @@ if TYPE_CHECKING:
             action: str,
             target: str | None,
             caller_chain: tuple[str, ...] = (),
+            execution_context: ExecutionContext | None = None,
         ) -> AuthzEffect | tuple[AuthzEffect, Rule]:
-            """Resolve a `prompt` rule and optionally append a new rule."""
+            """Resolve a `prompt` rule and optionally append a new rule.
+
+            `execution_context` is spec-004 r-review r1's optional
+            workflow-context passthrough. Existing call sites pass
+            `None`; the workflow executor (spec-011) forwards its
+            active `ExecutionContext` so
+            `InlineApprovalCallback._derive_source` can tag the
+            emitted `kolsch.prompt.requested` event as
+            workflow-scoped. Backward-compatible via the default.
+            """
 
 
 # ---------------------------------------------------------------------------

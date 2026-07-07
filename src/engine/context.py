@@ -19,7 +19,7 @@ from typing import TYPE_CHECKING, Any
 from pydantic import BaseModel, ConfigDict, Field
 
 from schemas import ThreadId
-from workflows.ids import TraceId
+from workflows.ids import TraceId, WorkflowRunId
 
 if TYPE_CHECKING:
     from schemas import Event
@@ -103,6 +103,15 @@ class ExecutionContext(BaseModel):
     cancellation: CancelToken | None = None
     trace_id: TraceId | None = None
     caller_chain: tuple[str, ...] = Field(default_factory=tuple)
+
+    # spec-004 r-review r1 — populated by the workflow executor
+    # (spec-011) when it invokes a sub-agent inside a workflow node.
+    # `None` for every other caller (chat, `kolsch run`, tests). The
+    # `InlineApprovalCallback._derive_source` helper reads these to
+    # tag emitted `kolsch.prompt.requested` events as workflow-scoped
+    # so a downstream renderer can group approvals by run.
+    workflow_run_id: WorkflowRunId | None = None
+    workflow_node_name: str | None = None
 
 
 # ---------------------------------------------------------------------------

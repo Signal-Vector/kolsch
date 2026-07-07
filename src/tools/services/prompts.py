@@ -18,24 +18,42 @@ Also exports:
 - [`PromptSource`][tools.services.prompts.PromptSource] — the
   identity dict recorded with the arbitration state.
 
-No `run_chain` field on `PromptSource` yet; that arrives in spec-017
-when nested workflows land.
+`run_chain` is defined here as an optional field (spec-004); it is
+empty by default and populated only for nested-workflow approval
+breadcrumbs in spec-017.
 """
 
 from __future__ import annotations
 
 from abc import ABC
-from typing import Any, Literal, Protocol, TypedDict
+from typing import Any, Literal, NotRequired, Protocol, TypedDict
 
 PromptSourceKind = Literal["butler", "workflow", "tool"]
 """Closed set of sources that may claim the single prompt slot."""
 
 
 class PromptSource(TypedDict):
-    """Identity of a prompt's owner used by slot arbitration."""
+    """Identity of a prompt's owner used by slot arbitration.
+
+    `kind` + `id` form the baseline identity every source carries.
+    The remaining keys are optional and shape-per-kind:
+
+    - `tool_call_id` — set on `kind="tool"` so the crash-scan can
+      correlate the request back to the parent `tool.called` event
+      (see `EventAdapter._scan_dangling_prompts`).
+    - `run_id` / `node_name` — set on `kind="workflow"` so the
+      approval renderer can group prompts by workflow run and node.
+    - `run_chain` — spec-004 stub for spec-017's nested-workflow
+      breadcrumbs. Defaults to an empty list; today's readers ignore
+      it.
+    """
 
     kind: PromptSourceKind
     id: str
+    tool_call_id: NotRequired[str]
+    run_id: NotRequired[str]
+    node_name: NotRequired[str]
+    run_chain: NotRequired[list[dict[str, str]]]
 
 
 class Prompts(Protocol):

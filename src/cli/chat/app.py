@@ -36,6 +36,8 @@ from cli.chat.approval import InlineApprovalCallback
 from cli.chat.cancel import request_cancel
 from cli.chat.event_adapter import EventAdapter
 from cli.chat.keybindings import CHAT_BINDINGS
+from cli.chat.service_registry import ChatServiceRegistry
+from cli.chat.services.prompts_impl import PromptsImpl
 from cli.chat.session import ChatSessionBundle, _build_user_trigger, replay_session
 from cli.chat.widgets import (
     ApprovalBlock,
@@ -54,7 +56,7 @@ from providers import RuleBasedAuthorizationProvider
 from schemas.events import Event, EventType
 
 if TYPE_CHECKING:
-    from cli.chat.service_registry import ChatServiceRegistry
+    pass
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -172,7 +174,12 @@ class ChatApp(App):
         self.session = session
         self.engine = engine
         self.event_adapter = EventAdapter(self)
-        self.approval_callback = InlineApprovalCallback(self)
+        # spec-004: `InlineApprovalCallback` needs a live `PromptsImpl`
+        # handle for `.choice(...)` routing; construction now defers
+        # to `on_mount` where `PromptsImpl` is built with the session
+        # store + thread handles the runtime carries. Populated in
+        # `on_mount` before authz registration.
+        self.approval_callback: InlineApprovalCallback | None = None
         self.full_history = full_history
         # Set by the exchange worker; cleared in a finally.
         self.active_cancel: Any = None
@@ -227,12 +234,68 @@ class ChatApp(App):
             thread_id=self.session.thread_id,
         )
 
-        # Register the approval callback with the runtime's authz
-        # provider so tool checks with `prompt` effects surface as
-        # inline ApprovalBlock widgets.
-        authz = self.session.runtime.authz
-        if isinstance(authz, RuleBasedAuthorizationProvider):
-            authz.register_prompt_callback(self.approval_callback)
+        # spec-004: construct `PromptsImpl` and register it in the
+        # service registry so tools that `requires=["prompts"]` can
+        # reach it (spec-014 wires the declaration). Also feeds the
+        # `InlineApprovalCallback` so approval prompts route through
+        # the event bus instead of directly mounting a widget.
+        #
+        # Preserve any pre-set services on the registry (test fixtures
+        # inject stubs before mount to exercise the teardown loop);
+        # only fill in the `prompts` slot when nothing is there yet.
+        prompts_impl: PromptsImpl | None = None
+        existing = self._service_registry
+        pre_set_prompts = existing.prompts if existing is not None else None
+        if pre_set_prompts is None:
+            try:
+                prompts_impl = PromptsImpl(
+                    session_store=self.session.runtime.store,
+                    session_id=self.session.session_id,
+                    thread_id=self.session.thread_id,
+                )
+            except Exception:  # noqa: BLE001 — headless fixtures may lack a real store
+                _LOGGER.debug(
+                    "ChatApp.on_mount: PromptsImpl construction skipped",
+                    exc_info=True,
+                )
+                prompts_impl = None
+        if existing is None:
+            self._service_registry = ChatServiceRegistry(prompts=prompts_impl)
+        elif pre_set_prompts is None and prompts_impl is not None:
+            # Merge: keep the pre-set fields; fill in `prompts`.
+            self._service_registry = ChatServiceRegistry(
+                cards=existing.cards,
+                prompts=prompts_impl,
+                workflows=existing.workflows,
+                session=existing.session,
+            )
+
+        # Wire the adapter so `.answered` / `.cancelled` UI events
+        # resolve the impl's pending future. Skip when no impl exists
+        # (headless test fixtures).
+        active_prompts = (
+            self._service_registry.prompts
+            if self._service_registry is not None
+            else None
+        )
+        if active_prompts is not None and hasattr(
+            active_prompts, "resolve_pending",
+        ):
+            self.event_adapter.register_prompts_impl(active_prompts)
+
+        # `InlineApprovalCallback` needs a live `Prompts` handle; skip
+        # authz registration when no impl exists (the headless
+        # teardown fixtures don't exercise the approval flow).
+        if active_prompts is not None:
+            self.approval_callback = InlineApprovalCallback(
+                self, active_prompts,
+            )
+            # Register the approval callback with the runtime's authz
+            # provider so tool checks with `prompt` effects surface as
+            # inline ApprovalBlock widgets (via the adapter's routing).
+            authz = self.session.runtime.authz
+            if isinstance(authz, RuleBasedAuthorizationProvider):
+                authz.register_prompt_callback(self.approval_callback)
 
         # Replay history (tail-20 by default) if this is a resume.
         if self.session.is_resume:
