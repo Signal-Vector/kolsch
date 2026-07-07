@@ -24,6 +24,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from engine.context import CancelToken
     from schemas import EventId, SessionId
     from workflows.events import WorkflowEvent
     from workflows.ids import InvocationId, TraceId, WorkflowRunId
@@ -166,6 +167,15 @@ class NodeContext:
     # dispatch.
     is_resume_mode: bool = False
     recorded_child_run_id: WorkflowRunId | None = None
+    # spec-011: the executor's in-process cancel handle. When set, the
+    # `AgentRunner` (and any other sub-agent invocation runner)
+    # composes it into the sub-agent's `ExecutionContext.cancellation`
+    # via `CombinedCancelToken(cancel_token, existing_or_new)` so the
+    # cancel reaches the sub-agent's LLM stream mid-node. `None` when
+    # the executor was constructed without a cancel token (chat, CLI,
+    # tests). Frozen dataclass — the executor plumbs this through
+    # `_build_ctx` at NodeContext construction; no runtime mutation.
+    cancel_token: CancelToken | None = None
 
     def derive_for_iteration(
         self,

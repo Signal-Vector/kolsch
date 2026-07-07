@@ -25,13 +25,14 @@ import logging
 import os
 import uuid
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import ValidationError
 
 from assets.refs import is_three_segment, parse_three_segment
+from engine.context import CancelToken
 from workflows._inputs_models import inputs_model_for
 from workflows._replay import find_event_by_id, replay_into
 from workflows.branching import compute_branch_value
@@ -73,6 +74,8 @@ if TYPE_CHECKING:
     from workflows.parser import EdgeDef, Workflow
     from workflows.run import RunDirectory, WorkflowRun
     from workflows.run_store import WorkflowRunStore
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "BUILTIN_PHASE_MAP",
@@ -278,6 +281,8 @@ class IterativeExecutor:
         catalog: AssetCatalog,
         _call_depth: int = 0,
         _call_chain: tuple[str, ...] = (),
+        event_observer: Callable[[WorkflowEvent], None] | None = None,
+        cancel_token: CancelToken | None = None,
     ) -> None:
         # Nested-executor depth cap (shared with `extends:`; same
         # error class, same limit). The check at CONSTRUCTION (not at
@@ -406,6 +411,54 @@ class IterativeExecutor:
         # `workflow.run.completed.payload.peak_in_flight` and in the
         # CLI envelope. Sequential runs always report `1`.
         self._peak_in_flight: int = 1
+        # spec-011 plumbing.
+        #
+        # `_event_observer` is a synchronous callable invoked once per
+        # emitted `WorkflowEvent` AFTER the store append succeeds
+        # (durable-first). Observer exceptions are caught and logged
+        # via `logger.exception` so a bad observer never kills the run.
+        # `None` means "no observer" — the emit path skips the
+        # callback entirely.
+        #
+        # `_cancel_token` is an in-process cooperative cancel handle.
+        # When set, every sub-agent invocation composes its
+        # `ExecutionContext.cancellation` as
+        # `CombinedCancelToken(cancel_token, existing_or_new)` so the
+        # cancel reaches the sub-agent's LLM stream via the same
+        # cooperative poll the engine already uses. The between-node
+        # file-based poll (`run_dir.cancel_flag_path.exists()`) is
+        # complementary — this token targets mid-node LLM streams.
+        self._event_observer = event_observer
+        self._cancel_token = cancel_token
+
+    # ------------------------------------------------------------------
+    # spec-011: emit + observer seam.
+    # ------------------------------------------------------------------
+
+    def _emit_event(self, event: WorkflowEvent) -> EventId:
+        """Append `event` to the store and fan out to the observer.
+
+        Durable-first: the store append runs BEFORE the observer
+        callback so a subscriber that raises never leaves a run in a
+        "notified but unpersisted" state. Observer exceptions are
+        caught and logged via `logger.exception` per spec-011 AC #3 —
+        a raising observer must NOT propagate up into the executor
+        run loop.
+
+        This helper wraps the module-level
+        [`emit_event`][workflows.events.emit_event] so every executor
+        emit site funnels through the same observer fan-out; grep
+        `_emit_event` to enumerate them.
+        """
+        event_id = emit_event(self._store, event)
+        if self._event_observer is not None:
+            try:
+                self._event_observer(event)
+            except Exception:  # noqa: BLE001 — observer is untrusted
+                logger.exception(
+                    "event_observer raised on event %s", event.kind,
+                )
+        return event_id
 
     # ------------------------------------------------------------------
     # Public entry point.
@@ -497,8 +550,7 @@ class IterativeExecutor:
         }
         if self._workflow.concurrency == "auto":
             started_payload["concurrency_mode"] = "auto"
-        self._last_event_id = emit_event(
-            self._store,
+        self._last_event_id = self._emit_event(
             WorkflowRunStartedEvent(
                 workflow_run_id=run_id,
                 trace_id=self._run.trace_id,
@@ -743,8 +795,7 @@ class IterativeExecutor:
             # Emit `workflow.run.resumed` — chained to the JSONL tail
             # event (typically the paused `user_input`'s
             # `workflow.node.started`).
-            resumed_id = emit_event(
-                self._store,
+            resumed_id = self._emit_event(
                 WorkflowRunResumedEvent(
                     workflow_run_id=run_id,
                     trace_id=self._run.trace_id,
@@ -809,8 +860,7 @@ class IterativeExecutor:
                     "invocation_id": waiting_invocation_id,
                     "output": dict(response),
                 }
-                completion_id = emit_event(
-                    self._store,
+                completion_id = self._emit_event(
                     WorkflowNodeCompletedEvent(
                         workflow_run_id=run_id,
                         trace_id=self._run.trace_id,
@@ -1085,8 +1135,7 @@ class IterativeExecutor:
             # to the parent run lives in the payload
             # (`forked_from_run_id` + `fork_event_id`) plus the
             # inherited `trace_id`.
-            forked_id = emit_event(
-                self._store,
+            forked_id = self._emit_event(
                 WorkflowRunForkedFromEvent(
                     workflow_run_id=run_id,
                     trace_id=self._run.trace_id,
@@ -1268,8 +1317,7 @@ class IterativeExecutor:
                     started_payload["concurrency"] = getattr(
                         node_def, "concurrency", None
                     )
-                started_id = emit_event(
-                    self._store,
+                started_id = self._emit_event(
                     WorkflowNodeStartedEvent(
                         workflow_run_id=run_id,
                         trace_id=self._run.trace_id,
@@ -1380,8 +1428,7 @@ class IterativeExecutor:
                 self._store.update_status(run_id, WorkflowRunStatus.WAITING_FOR_INPUT)
                 return WorkflowRunStatus.WAITING_FOR_INPUT
             except Exception as exc:  # noqa: BLE001 — record + abort
-                failed_id = emit_event(
-                    self._store,
+                failed_id = self._emit_event(
                     WorkflowNodeFailedEvent(
                         workflow_run_id=run_id,
                         trace_id=self._run.trace_id,
@@ -1396,8 +1443,7 @@ class IterativeExecutor:
                         },
                     ),
                 )
-                self._last_event_id = emit_event(
-                    self._store,
+                self._last_event_id = self._emit_event(
                     WorkflowRunFailedEvent(
                         workflow_run_id=run_id,
                         trace_id=self._run.trace_id,
@@ -1475,8 +1521,7 @@ class IterativeExecutor:
             # `_invocation_last_event_id` is seeded with `started_id`
             # at fire time and only advanced by
             # `ctx.emit_workflow_event`).
-            completion_id = emit_event(
-                self._store,
+            completion_id = self._emit_event(
                 WorkflowNodeCompletedEvent(
                     workflow_run_id=run_id,
                     trace_id=self._run.trace_id,
@@ -1524,8 +1569,7 @@ class IterativeExecutor:
         # The CLI envelope defaults to `1` when the field is absent.
         outputs = self._assemble_terminal_outputs(topo)
         run_completed_payload: dict[str, Any] = {"outputs": outputs}
-        self._last_event_id = emit_event(
-            self._store,
+        self._last_event_id = self._emit_event(
             WorkflowRunCompletedEvent(
                 workflow_run_id=run_id,
                 trace_id=self._run.trace_id,
@@ -1696,8 +1740,7 @@ class IterativeExecutor:
                 "peak_in_flight": self._peak_in_flight,
             }
             async with self._emit_lock:
-                self._last_event_id = emit_event(
-                    self._store,
+                self._last_event_id = self._emit_event(
                     WorkflowRunCompletedEvent(
                         workflow_run_id=run_id,
                         trace_id=self._run.trace_id,
@@ -1764,8 +1807,7 @@ class IterativeExecutor:
             "caller_chain": list(getattr(self._run, "caller_chain", ()) or ()),
         }
         async with self._emit_lock:
-            started_id = emit_event(
-                self._store,
+            started_id = self._emit_event(
                 WorkflowNodeStartedEvent(
                     workflow_run_id=run_id,
                     trace_id=self._run.trace_id,
@@ -1893,8 +1935,7 @@ class IterativeExecutor:
             completed_payload["child_run_id"] = str(pending.ctx.spawned_run_id)
 
         async with self._emit_lock:
-            completion_id = emit_event(
-                self._store,
+            completion_id = self._emit_event(
                 WorkflowNodeCompletedEvent(
                     workflow_run_id=run_id,
                     trace_id=self._run.trace_id,
@@ -1929,8 +1970,7 @@ class IterativeExecutor:
         `parent_event_id` chains to the node's started event.
         """
         async with self._emit_lock:
-            failed_id = emit_event(
-                self._store,
+            failed_id = self._emit_event(
                 WorkflowNodeFailedEvent(
                     workflow_run_id=run_id,
                     trace_id=self._run.trace_id,
@@ -1972,8 +2012,7 @@ class IterativeExecutor:
             except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110 — drain only
                 pass
             async with self._emit_lock:
-                cancelled_id = emit_event(
-                    self._store,
+                cancelled_id = self._emit_event(
                     WorkflowNodeFailedEvent(
                         workflow_run_id=run_id,
                         trace_id=self._run.trace_id,
@@ -2007,8 +2046,7 @@ class IterativeExecutor:
             "peak_in_flight": self._peak_in_flight,
         }
         async with self._emit_lock:
-            self._last_event_id = emit_event(
-                self._store,
+            self._last_event_id = self._emit_event(
                 WorkflowRunFailedEvent(
                     workflow_run_id=run_id,
                     trace_id=self._run.trace_id,
@@ -2389,8 +2427,7 @@ class IterativeExecutor:
         from workflows.events import WorkflowNodePrunedEvent  # noqa: PLC0415
 
         pruned_inv = InvocationId(f"inv_{uuid.uuid4()}")
-        self._last_event_id = emit_event(
-            self._store,
+        self._last_event_id = self._emit_event(
             WorkflowNodePrunedEvent(
                 workflow_run_id=self._run.run_id,
                 trace_id=self._run.trace_id,
@@ -2514,7 +2551,7 @@ class IterativeExecutor:
             # is uncontended in sequential mode so JSONL byte output
             # is byte-identical to the sequential baseline.
             async with self._emit_lock:
-                new_id = emit_event(self._store, event)
+                new_id = self._emit_event(event)
             self._last_event_id = new_id
             self._invocation_last_event_id[inv_id] = new_id
             return new_id
@@ -2549,6 +2586,13 @@ class IterativeExecutor:
             # status instead.
             is_resume_mode=is_resume_mode,
             recorded_child_run_id=recorded_child_run_id,
+            # spec-011: the executor's in-process cancel handle. The
+            # `AgentRunner` reads this from the NodeContext at
+            # sub-agent invocation time and composes it into the
+            # `ExecutionContext.cancellation` alongside any existing
+            # exchange-scoped token. `None` when the executor was
+            # constructed without a cancel token.
+            cancel_token=self._cancel_token,
         )
 
     # ------------------------------------------------------------------
@@ -2566,8 +2610,7 @@ class IterativeExecutor:
         boundary). `reason: user_cancel` is the standard vocabulary
         for an operator-initiated abort.
         """
-        self._last_event_id = emit_event(
-            self._store,
+        self._last_event_id = self._emit_event(
             WorkflowRunAbortedEvent(
                 workflow_run_id=run_id,
                 trace_id=self._run.trace_id,

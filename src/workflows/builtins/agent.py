@@ -18,7 +18,7 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from engine import ExecutionContext
-from engine.context import AgentExecutionError
+from engine.context import AgentExecutionError, CancelToken, CombinedCancelToken
 from schemas import FromWorkflowRun, IOSpec
 from workflows.errors import AgentRefUnresolved, WorkflowNodeFailed
 from workflows.ids import InvocationId, WorkflowRunId
@@ -214,7 +214,31 @@ class AgentRunner:
             trigger=trigger,
             trace_id=ctx.trace_id,
             caller_chain=(node_def.agent, *ctx.caller_chain),
+            # spec-011 r-review r1: stamp the workflow context onto
+            # the sub-agent's ExecutionContext so downstream consumers
+            # (spec-014's `InlineApprovalCallback._derive_source`) can
+            # tag emitted `kolsch.prompt.requested` events as
+            # workflow-scoped. `ctx.workflow_run_id` is a plain str on
+            # NodeContext; wrap in the typed `WorkflowRunId` for the
+            # engine surface.
+            workflow_run_id=WorkflowRunId(ctx.workflow_run_id),
+            workflow_node_name=node_name,
         )
+
+        # spec-011: compose the workflow-level cancel token into the
+        # sub-agent's cancellation handle. When the executor was
+        # constructed with a `cancel_token`, `NodeContext.cancel_token`
+        # carries it here; compose with any exchange-scoped token
+        # (typically `None` at this point — the engine mints a no-op
+        # if unset) via `CombinedCancelToken` so cancel-on-any
+        # semantics reach the sub-agent's LLM stream.
+        # `ExecutionContext` is a pydantic model with `extra="forbid"`
+        # but NOT frozen, so assignment to existing fields works.
+        if ctx.cancel_token is not None:
+            exec_ctx.cancellation = CombinedCancelToken(
+                ctx.cancel_token,
+                exec_ctx.cancellation or CancelToken(),
+            )
 
         # Step 7: invoke + error remap. The engine's only documented
         # surface failure is `AgentExecutionError`; we remap to
