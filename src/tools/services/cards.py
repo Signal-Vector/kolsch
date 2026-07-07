@@ -272,8 +272,20 @@ class Cards(Protocol):
         """
         ...
 
-    def notice(self, text: str, *, kind: str = "info") -> None:
-        """Emit a short-lived notice card that closes itself."""
+    def notice(
+        self,
+        text: str,
+        *,
+        kind: str = "info",
+        card: Card | None = None,
+    ) -> None:
+        """Emit a short-lived notice.
+
+        spec-008: when ``card`` is provided the notice mounts INSIDE
+        that card's
+        [`NoticeSlot`][cli.chat.widgets.notice_slot.NoticeSlot];
+        otherwise it lands at the transcript root.
+        """
         ...
 
 
@@ -288,7 +300,13 @@ class AbstractCards(ABC):
         """Default stub — subclasses override. Raises `NotImplementedError`."""
         raise NotImplementedError
 
-    def notice(self, text: str, *, kind: str = "info") -> None:
+    def notice(
+        self,
+        text: str,
+        *,
+        kind: str = "info",
+        card: Card | None = None,
+    ) -> None:
         """Default stub — subclasses override. Raises `NotImplementedError`."""
         raise NotImplementedError
 

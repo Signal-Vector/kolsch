@@ -51,6 +51,7 @@ from cli.chat.widgets import (
     TurnStatus,
     UserChatbox,
 )
+from cli.chat.widgets.notice import NoticeWidget
 from textual.widgets import TextArea as _TextArea  # noqa: E402 — Changed msg source
 from engine import ExecutionContext
 from providers import RuleBasedAuthorizationProvider
@@ -309,6 +310,18 @@ class ChatApp(App):
         ):
             self.event_adapter.register_prompts_impl(active_prompts)
 
+        # spec-008: wire the ``Cards`` handle into the adapter so the
+        # boot-time interruption notice from
+        # ``_scan_dangling_prompts`` fires through the same
+        # ``Cards.notice`` seam every other notice uses.
+        active_cards = (
+            self._service_registry.cards
+            if self._service_registry is not None
+            else None
+        )
+        if active_cards is not None and hasattr(active_cards, "notice"):
+            self.event_adapter.register_cards_impl(active_cards)
+
         # `InlineApprovalCallback` needs a live `Prompts` handle; skip
         # authz registration when no impl exists (the headless
         # teardown fixtures don't exercise the approval flow).
@@ -507,11 +520,26 @@ class ChatApp(App):
         await transcript.mount(block)
         transcript.scroll_end(animate=False)
 
-    async def mount_notice(self, text: str) -> None:
-        """Mount a dim italic notice line (used by MODEL_FALLBACK etc.)."""
+    async def _mount_transcript_notice(
+        self,
+        text: str,
+        *,
+        kind: str = "info",
+    ) -> None:
+        """Internal helper — mount a
+        [`NoticeWidget`][cli.chat.widgets.notice.NoticeWidget] at the
+        transcript root.
+
+        spec-008 retired the public ``ChatApp.mount_notice`` in favour
+        of ``Cards.notice()`` as the single notice-mount seam. This
+        private helper preserves the "slash output → transcript
+        notice" and "internal error line" paths that don't go through
+        the ``Cards`` service (slash commands, ``/export`` results).
+        Callers outside ``ChatApp`` should route through
+        ``Cards.notice(...)`` instead.
+        """
         transcript = self.query_one("#transcript", VerticalScroll)
-        notice = Static(text, classes="notice")
-        notice.styles.text_style = "dim italic"
+        notice = NoticeWidget(text=text, kind=kind)
         await transcript.mount(notice)
         transcript.scroll_end(animate=False)
 
@@ -638,7 +666,7 @@ class ChatApp(App):
 
         command = _resolve_command_name(head)
         if command is None:
-            await self.mount_notice(
+            await self._mount_transcript_notice(
                 f"unknown command: {head}. Try /help for the list."
             )
             return
@@ -650,12 +678,12 @@ class ChatApp(App):
             return
 
         if command.handler is None:
-            await self.mount_notice(
+            await self._mount_transcript_notice(
                 f"{command.name}: registered but no handler wired yet."
             )
             return
         if self._chat_state is None:
-            await self.mount_notice(
+            await self._mount_transcript_notice(
                 f"{command.name}: chat runtime not ready yet."
             )
             return
@@ -672,7 +700,7 @@ class ChatApp(App):
         try:
             signal = await command.handler(arg_text, ctx)
         except Exception as exc:  # noqa: BLE001 — handler safety net
-            await self.mount_notice(
+            await self._mount_transcript_notice(
                 f"{command.name}: {type(exc).__name__}: {exc}"
             )
             return
@@ -689,7 +717,7 @@ class ChatApp(App):
 
         stripped = output.rstrip("\n")
         if stripped:
-            await self.mount_notice(stripped)
+            await self._mount_transcript_notice(stripped)
 
         # Pending flags: consume the ones we can honour locally now;
         # flag the others as "coming soon" so behaviour is honest.
@@ -698,14 +726,14 @@ class ChatApp(App):
             await self._clear_transcript()
             state.pending_clear = False
         if state.pending_new_session or state.pending_session_id:
-            await self.mount_notice(
+            await self._mount_transcript_notice(
                 "session lifecycle (/new, /session) is deferred to the "
                 "slash follow-up spec; state noted, no switch performed."
             )
             state.pending_new_session = False
             state.pending_session_id = None
         if state.pending_workflow_run_id:
-            await self.mount_notice(
+            await self._mount_transcript_notice(
                 "/workflow binding recorded; workflow-runner integration "
                 "arrives with the workflow bridge event spec."
             )
@@ -754,11 +782,11 @@ class ChatApp(App):
                     lines.append(block)
             target.write_text("\n".join(lines) + "\n")
         except Exception as exc:  # noqa: BLE001
-            await self.mount_notice(
+            await self._mount_transcript_notice(
                 f"/export failed: {type(exc).__name__}: {exc}"
             )
             return
-        await self.mount_notice(f"transcript exported → {target}")
+        await self._mount_transcript_notice(f"transcript exported → {target}")
 
     async def _clear_transcript(self) -> None:
         """Remove every mounted widget from the transcript.

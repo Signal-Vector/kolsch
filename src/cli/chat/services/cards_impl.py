@@ -25,6 +25,7 @@ import asyncio
 import contextlib
 import logging
 import os
+from collections import defaultdict
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -42,6 +43,7 @@ from schemas.wire_kinds import (
     WIRE_CARD_SNAPSHOT,
     WIRE_CARD_STATUS,
 )
+from tools.dispatch import _current_tool_open_cards
 from tools.services.card_kinds import CardKindLiteral, CardKindSpec, get_kind_spec
 from tools.services.cards import (
     AbstractCard,
@@ -69,6 +71,17 @@ events increment `_dropped_events` on `QueueFull`."""
 
 _DEFAULT_SNAPSHOT_N = 50
 _DEFAULT_SNAPSHOT_MS = 2000
+
+_DROP_NOTICE_THRESHOLD = 10
+"""spec-008 §Drop-notice rate limit: fire one ``Cards.notice`` every
+N drops per card (default 10). Prevents a saturated stream from
+firing a notice for every dropped append; the notice text updates in
+place via the shared ``notice_id`` on subsequent 10-multiples."""
+
+_DROP_NOTICE_PREFIX = "⚠ dropped"
+"""Prefix used by drop-notice text ("⚠ dropped N events"). Also the
+key that ``CardsImpl.notice`` uses to reuse the per-card
+``notice_id`` for the update-in-place path."""
 
 
 def _new_event_id() -> EventId:
@@ -115,6 +128,17 @@ class CardsImpl(AbstractCards):
         )
         self._drain_task: asyncio.Task[None] | None = None
         self._dropped_events: int = 0
+        # spec-008: per-card drop counters + per-card notice_ids for
+        # the drop-notice rate-limit path. ``_dropped_events_per_card``
+        # is incremented on every streaming-lane drop where the
+        # payload carries a ``card_id``; every N-th (see
+        # ``_DROP_NOTICE_THRESHOLD``) increment fires a
+        # ``Cards.notice(kind="warning", card=<card>)``.
+        # ``_notice_ids_per_card`` keys the drop-notice ``notice_id``
+        # so repeat fires update the same widget in-place instead of
+        # mounting a second one.
+        self._dropped_events_per_card: dict[CardId, int] = defaultdict(int)
+        self._notice_ids_per_card: dict[CardId, str] = {}
         # Track spawned `notice` fire-and-forget tasks so `aclose` can
         # wait for them / cancel them; without this a task started
         # right before shutdown would leak.
@@ -150,6 +174,15 @@ class CardsImpl(AbstractCards):
             impl=self,
         )
         self._live_cards[card_id] = card
+        # spec-008: register with the current tool's open-cards list
+        # if inside a tool invocation. The finalizer in
+        # ``tools.dispatch._invoke_tool`` sets the contextvar to a
+        # fresh ``list[Card]`` before running the tool body; outside
+        # a tool call the var is ``None`` and we skip the append
+        # (workflow-invoked cards, headless tests).
+        open_cards = _current_tool_open_cards.get()
+        if open_cards is not None:
+            open_cards.append(card)
         # Lazy-start the drain worker on the first open. Do this
         # BEFORE the critical emit so a saturated queue doesn't
         # deadlock the first-ever call. In practice the queue starts
@@ -166,26 +199,57 @@ class CardsImpl(AbstractCards):
         )
         return card
 
-    def notice(self, text: str, *, kind: str = "info") -> None:
+    def notice(
+        self,
+        text: str,
+        *,
+        kind: str = "info",
+        card: Card | None = None,
+    ) -> None:
         """Fire-and-forget emit of `kolsch.card.notice` on the critical lane.
 
         The Cards Protocol declares `notice` as synchronous — tools call
         it without `await` so the notice fire path can't deadlock a
         long-running tool. We spawn a task that emits the UI event on
         the critical lane; failures are logged and swallowed.
+
+        spec-008: when ``card`` is passed the payload includes
+        ``card_id=str(card.id)`` so
+        ``EventAdapter._handle_card_notice`` mounts the notice INSIDE
+        that card's
+        [`NoticeSlot`][cli.chat.widgets.notice_slot.NoticeSlot]. For
+        drop-notice text (``text.startswith("⚠ dropped")``) the
+        per-card ``notice_id`` is reused so repeat drops update the
+        existing widget's text in place instead of stacking a second
+        notice.
         """
         if self._closed:
             msg = "CardsImpl is closed"
             raise RuntimeError(msg)
         loop = asyncio.get_running_loop()
+
+        # Pick a notice_id — reuse the per-card one for drop-notices
+        # so downstream dedup UPDATES the mounted widget rather than
+        # mounting a second one.
+        if card is not None and text.startswith(_DROP_NOTICE_PREFIX):
+            notice_id = self._notice_ids_per_card.setdefault(
+                card.id, f"ntc_{uuid4()}",
+            )
+        else:
+            notice_id = f"ntc_{uuid4()}"
+
+        payload: dict[str, Any] = {
+            "notice_id": notice_id,
+            "text": text,
+            "kind": kind,
+        }
+        if card is not None:
+            payload["card_id"] = str(card.id)
+
         task = loop.create_task(
             self._emit_ui_event(
                 WIRE_CARD_NOTICE,
-                {
-                    "notice_id": f"ntc_{uuid4()}",
-                    "text": text,
-                    "kind": kind,
-                },
+                payload,
                 critical=True,
             ),
         )
@@ -273,9 +337,47 @@ class CardsImpl(AbstractCards):
                 self._stream_queue.put_nowait(event)
             except asyncio.QueueFull:
                 self._dropped_events += 1
-                # spec-008 concern: rate-limited drop notice. For now
-                # we just count.
+                # spec-008: rate-limited per-card drop notice. Extract
+                # ``card_id`` from the payload if present; fire one
+                # notice per N drops (default N=10). Fire-and-forget
+                # via ``self.notice`` — the critical-lane emit for the
+                # notice itself won't drop (it's `critical=True`).
+                self._maybe_fire_drop_notice(payload)
         return event.event_id
+
+    def _maybe_fire_drop_notice(self, payload: dict[str, Any]) -> None:
+        """Emit a drop-notice on every N-th drop per card.
+
+        Extracts ``card_id`` from the dropped event's payload; when
+        absent, silently skips (drops with no card association can't
+        be routed to an in-card notice, and firing a bare notice
+        would spam the transcript on saturated streams).
+
+        Called from ``_emit_ui_event`` inside the ``QueueFull``
+        handler. Any failure to fire the notice is swallowed — the
+        drop counter update above already succeeded, so telemetry is
+        preserved even if the notice itself couldn't schedule.
+        """
+        raw_card_id = payload.get("card_id")
+        if not isinstance(raw_card_id, str) or not raw_card_id:
+            return
+        try:
+            card_id = CardId(raw_card_id)
+        except (ValueError, TypeError):
+            return
+        self._dropped_events_per_card[card_id] += 1
+        count = self._dropped_events_per_card[card_id]
+        if count % _DROP_NOTICE_THRESHOLD != 0:
+            return
+        card = self._live_cards.get(card_id)
+        if card is None:
+            return
+        with contextlib.suppress(Exception):
+            self.notice(
+                f"{_DROP_NOTICE_PREFIX} {count} events",
+                kind="warning",
+                card=card,
+            )
 
     async def _drain_stream_queue(self) -> None:
         """Drain queued events onto the in-process bus.

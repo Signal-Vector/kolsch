@@ -11,7 +11,7 @@ of handler code.
 Composition (inside `Collapsible.Contents`):
 
 - `CardHeader` — glyph + title, top row.
-- `_NoticeSlot` — empty container for spec-008 in-card notices.
+- `NoticeSlot` — in-card notice mount point (spec-008).
 - Body renderer (one of the four kinds from
   [`KIND_TO_RENDERER`][cli.chat.widgets.card_body.KIND_TO_RENDERER]).
 - `CardFooter` — empty by default; renders `✗ error: <msg>` on
@@ -29,11 +29,11 @@ from __future__ import annotations
 from typing import Any
 
 from textual.app import ComposeResult
-from textual.containers import Container
 from textual.reactive import reactive
 from textual.widgets import Collapsible, Static
 
 from cli.chat.widgets.card_body import KIND_TO_RENDERER
+from cli.chat.widgets.notice_slot import NoticeSlot
 from tools.services.card_kinds import get_kind_spec
 
 
@@ -61,16 +61,34 @@ class CardHeader(Static):
         super().__init__("", id=id)
         self._glyph = "⠋"
         self._title = ""
+        self._warning_indicator = False
 
     def set_glyph(self, glyph: str) -> None:
         """Replace the header glyph; re-render."""
         self._glyph = glyph
-        self.update(f"{self._glyph} {self._title}")
+        self._rerender()
 
     def set_title(self, title: str) -> None:
         """Replace the header title; re-render."""
         self._title = title
-        self.update(f"{self._glyph} {self._title}")
+        self._rerender()
+
+    def add_warning_indicator(self) -> None:
+        """Turn on the ``⚠`` indicator next to the title.
+
+        Called by
+        [`CardWidget.mount_notice`][cli.chat.widgets.card_widget.CardWidget.mount_notice]
+        when a ``warning``-kind notice lands in the
+        [`NoticeSlot`][cli.chat.widgets.notice_slot.NoticeSlot]. Idempotent
+        — a second call keeps the single ``⚠`` glyph.
+        """
+        self._warning_indicator = True
+        self._rerender()
+
+    def _rerender(self) -> None:
+        """Redraw the header text with the current glyph + title + warning."""
+        suffix = " ⚠" if self._warning_indicator else ""
+        self.update(f"{self._glyph} {self._title}{suffix}")
 
 
 class CardFooter(Static):
@@ -78,21 +96,6 @@ class CardFooter(Static):
 
     def __init__(self, *, id: str | None = None) -> None:
         super().__init__("", id=id)
-
-
-class _NoticeSlot(Container):
-    """Empty container reserved for spec-008 in-card notice widgets.
-
-    Mounts nothing today. spec-008 lands the `Cards.notice(card=...)`
-    overload which appends a `NoticeWidget` here.
-    """
-
-    DEFAULT_CSS = """
-    _NoticeSlot {
-        height: auto;
-        padding: 0;
-    }
-    """
 
 
 class _BoundedLRUSet:
@@ -226,7 +229,7 @@ class CardWidget(Collapsible):
         # `Collapsible.__init__` can collect them into `_contents_list`.
         card_id_str = str(card_id) if card_id is not None else "unknown"
         self._header = CardHeader(id=f"card-{card_id_str}-header")
-        self._notice_slot = _NoticeSlot(id=f"card-{card_id_str}-notices")
+        self._notice_slot = NoticeSlot(id=f"card-{card_id_str}-notices")
         renderer_cls = KIND_TO_RENDERER[kind]
         self._body = renderer_cls(id=f"card-{card_id_str}-body")
         self._footer = CardFooter(id=f"card-{card_id_str}-footer")
@@ -380,8 +383,29 @@ class CardWidget(Collapsible):
             if self.state == "initializing":
                 self.state = "running"
         elif kind == "kolsch.card.notice":
-            # spec-008 wires notice-slot mounts; no-op here.
+            # In-card notice routing lives on ``mount_notice`` — the
+            # adapter's ``_handle_card_notice`` calls it directly with
+            # the parsed text + kind. This branch stays a no-op for
+            # any raw event a caller happens to pipe through
+            # ``apply_event``.
             return
+
+    def mount_notice(self, text: str, kind: str) -> Any:
+        """Mount a notice inside the card's
+        [`NoticeSlot`][cli.chat.widgets.notice_slot.NoticeSlot].
+
+        Delegates to
+        [`NoticeSlot.add_notice`][cli.chat.widgets.notice_slot.NoticeSlot.add_notice].
+        Warning-kind notices additionally trip the header's ``⚠``
+        indicator via
+        [`CardHeader.add_warning_indicator`][cli.chat.widgets.card_widget.CardHeader.add_warning_indicator].
+        Returns the mounted widget so callers can hold a handle for
+        the update-in-place path (drop-notice count increment).
+        """
+        widget = self._notice_slot.add_notice(text, kind)
+        if kind == "warning":
+            self._header.add_warning_indicator()
+        return widget
 
     def watch_state(self, old: str, new: str) -> None:
         """Reactive: apply CSS class + header glyph on state change."""

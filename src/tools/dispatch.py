@@ -22,6 +22,9 @@ The dispatch order is exact:
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
+import contextvars
 from typing import TYPE_CHECKING, Any
 
 from pydantic import ValidationError as PydanticValidationError
@@ -46,6 +49,87 @@ if TYPE_CHECKING:
     from providers.authz import Rule
     from tools.decorator import ToolContext, ToolDefinition
     from tools.services import ServiceName
+    from tools.services.cards import Card
+
+
+# ---------------------------------------------------------------------------
+# spec-008 — auto-close finalizer contextvar
+# ---------------------------------------------------------------------------
+#
+# Cards opened via ``Cards.open`` during a tool invocation register
+# themselves on the current tool's ``open_cards`` list via this
+# ContextVar (``CardsImpl.open`` peeks + appends). The finalizer wraps
+# the tool body in ``_invoke_tool`` and closes every non-transferred
+# card on the exit path. Outside a tool call the var is ``None`` and
+# ``CardsImpl.open`` skips the append (workflow-invoked cards, tests).
+_current_tool_open_cards: contextvars.ContextVar[list["Card"] | None] = (
+    contextvars.ContextVar("_current_tool_open_cards", default=None)
+)
+
+
+async def _invoke_tool(
+    tool_func: Callable[..., Awaitable[Any]],
+    validated_args: Any,  # noqa: ANN401
+    ctx: Any,  # noqa: ANN401
+) -> Any:  # noqa: ANN401
+    """Run the tool body with the spec-008 auto-close finalizer.
+
+    Tracks cards opened during the call via ``_current_tool_open_cards``
+    (a ``contextvars.ContextVar`` scoped per-invocation). On the exit
+    path, closes each non-transferred, still-open card with a
+    ``final_status`` derived from the exit kind:
+
+    - Normal return → ``"success"``.
+    - ``asyncio.CancelledError`` → ``"cancelled"``; re-raised.
+    - Other exception → ``"error"`` with ``error_message=str(exc)[:200]``;
+      re-raised.
+
+    Cards with ``_owner_transferred=True`` are SKIPPED in all three
+    exit paths — the workflow service (spec-017) owns their terminal
+    transition. The contextvar is reset via ``.reset(token)`` in the
+    outer ``finally`` so nested tool calls (tool A → tool B) each get
+    their own tracking list without leaking across the boundary.
+    """
+    open_cards: list[Card] = []
+    token = _current_tool_open_cards.set(open_cards)
+    try:
+        try:
+            result = await tool_func(validated_args, ctx)
+        except asyncio.CancelledError:
+            for card in open_cards:
+                if getattr(card, "_owner_transferred", False):
+                    continue
+                if getattr(card, "is_closed", False):
+                    continue
+                with contextlib.suppress(Exception):
+                    await card.close(final_status="cancelled")
+            raise
+        except Exception as exc:
+            # Truncate the error message HERE (finalizer) — spec AC #4.
+            error_message = str(exc)[:200]
+            for card in open_cards:
+                if getattr(card, "_owner_transferred", False):
+                    continue
+                if getattr(card, "is_closed", False):
+                    continue
+                with contextlib.suppress(Exception):
+                    await card.close(
+                        final_status="error",
+                        error_message=error_message,
+                    )
+            raise
+        else:
+            # Normal return — close remaining cards as success.
+            for card in open_cards:
+                if getattr(card, "_owner_transferred", False):
+                    continue
+                if getattr(card, "is_closed", False):
+                    continue
+                with contextlib.suppress(Exception):
+                    await card.close(final_status="success")
+            return result
+    finally:
+        _current_tool_open_cards.reset(token)
 
 
 def _populate_service_fields(
@@ -251,7 +335,17 @@ async def dispatch_tool(
     async def _work() -> Any:  # noqa: ANN401
         token = _tool_permissions.bind(binding)
         try:
-            return await defn.func(validated_args, invocation_context)
+            # spec-008 — wrap the tool body with the auto-close
+            # finalizer. Runs INSIDE the sandbox work closure so the
+            # existing `ToolExecutionFailed` translation below still
+            # sees any exception the tool raises (the finalizer
+            # re-raises), and so the permissions binding stays live
+            # throughout the finalizer's card-close writes.
+            return await _invoke_tool(
+                defn.func,
+                validated_args,
+                invocation_context,
+            )
         finally:
             _tool_permissions.reset(token)
 

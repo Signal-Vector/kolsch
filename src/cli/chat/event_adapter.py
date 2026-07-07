@@ -18,6 +18,8 @@ them without an ``App``.
 
 from __future__ import annotations
 
+import asyncio
+import contextlib
 import json
 import logging
 from collections import OrderedDict
@@ -416,6 +418,7 @@ class EventAdapter:
         thread_id: ThreadId | None = None,
         session_meta: SessionMeta | None = None,
         prompts_impl: PromptsImpl | None = None,
+        cards: Any | None = None,
     ) -> None:
         self._app = app
         # tool_call_id → arguments dict (captured on TOOL_CALLED so
@@ -459,6 +462,25 @@ class EventAdapter:
         self._applied_notice_ids: _BoundedLRUSet = _BoundedLRUSet(
             maxsize=_CARD_NOTICE_LRU_MAXSIZE,
         )
+        # spec-008: notice_id → mounted widget (either an in-card
+        # ``NoticeWidget`` inside a ``NoticeSlot`` or a
+        # transcript-root ``NoticeWidget``). Used by the update-in-
+        # place path: a repeat dispatch with the same notice_id calls
+        # ``widget.update_text(new_text)`` rather than mounting a
+        # second widget. Simple dict — bounded implicitly by
+        # ``_applied_notice_ids`` LRU (once the id evicts, a later
+        # dispatch is treated as fresh; the stale widget entry stays
+        # in the dict until eviction happens on the next add — for
+        # test purposes we don't age the widget dict independently).
+        self._notice_widgets: dict[str, Any] = {}
+
+        # spec-008: reference to the ``Cards`` service so the
+        # boot-time interruption notice (fired from
+        # ``_scan_dangling_prompts``) can go through the same seam
+        # ``Cards.notice(kind="warning")`` uses everywhere else.
+        # Populated by ``ChatApp.on_mount`` after the service registry
+        # comes up; ``None`` in headless / replay-only tests.
+        self._cards: Any | None = cards
 
         # spec-003 bookmark state. Optional deps — when not wired,
         # `start()` is a no-op. `ChatApp` today constructs the adapter
@@ -487,6 +509,19 @@ class EventAdapter:
     def handles(cls, event_type: EventType) -> bool:
         """True if a handler is registered for ``event_type``."""
         return event_type in cls._DISPATCH
+
+    def register_cards_impl(self, cards: Any) -> None:
+        """Wire a live ``Cards`` handle after construction.
+
+        Mirrors ``register_prompts_impl``: the adapter is built before
+        ``ChatApp.on_mount`` constructs the concrete services (Textual
+        lifecycle constraint), so the ``cards=`` kwarg is optional at
+        ``__init__`` time and this setter closes the loop. Used by
+        the boot-time interruption notice from
+        ``_scan_dangling_prompts`` when the session's replay
+        synthesises at least one ``tool.failed``.
+        """
+        self._cards = cards
 
     def register_prompts_impl(self, prompts_impl: PromptsImpl) -> None:
         """Wire a live `PromptsImpl` in after construction.
@@ -653,6 +688,7 @@ class EventAdapter:
                     tool_terminals.add(call_id)
 
         # Second pass: synthesize for dangling requests.
+        tool_failed_synthesised = 0
         for prompt_id, req_ev in requested.items():
             if prompt_id in resolved:
                 continue
@@ -674,6 +710,22 @@ class EventAdapter:
                 await self._append_synthetic_tool_failed(
                     tool_call_id,
                     tool_calls[tool_call_id],
+                )
+                tool_failed_synthesised += 1
+
+        # spec-008: fire a boot-time interruption notice ONLY when we
+        # synthesised at least one ``tool.failed``. Uses the same
+        # ``Cards.notice`` seam every other in-transcript notice goes
+        # through; the adapter's ``_handle_card_notice`` mounts a
+        # ``NoticeWidget`` at the transcript root (no ``card_id`` in
+        # the payload). Headless tests without a live ``Cards`` skip
+        # silently.
+        if tool_failed_synthesised > 0 and self._cards is not None:
+            with contextlib.suppress(Exception):
+                self._cards.notice(
+                    "↻ Previous session was interrupted; ask the "
+                    "assistant to retry.",
+                    kind="warning",
                 )
 
     async def _append_synthetic_prompt_cancelled(
@@ -940,7 +992,14 @@ class EventAdapter:
             else str(to)
         )
         reason = str(event.data.get("reason", "transient model failure"))
-        await self._app.mount_notice(f"falling back to {to_label} because {reason}")
+        # spec-008: ``ChatApp.mount_notice`` retired — mount a
+        # ``NoticeWidget`` at the transcript root via the same helper
+        # ``_handle_card_notice`` uses for the transcript-root branch.
+        await self._mount_root_notice(
+            f"model-fallback-{event.event_id}",
+            f"falling back to {to_label} because {reason}",
+            "info",
+        )
 
     async def _handle_config_set(self, event: Event) -> None:
         """Silent — config is diagnostic-only in the JSONL."""
@@ -966,7 +1025,11 @@ class EventAdapter:
         """Surface template warnings as a dim inline notice."""
         message = str(event.data.get("message") or event.data.get("reason", ""))
         if message:
-            await self._app.mount_notice(f"template warning: {message}")
+            await self._mount_root_notice(
+                f"template-warning-{event.event_id}",
+                f"template warning: {message}",
+                "warning",
+            )
 
     async def _handle_ui_event(self, event: Event) -> None:
         """Dispatch `ui.event` on `data.kind` to the per-kind route.
@@ -1380,20 +1443,129 @@ class EventAdapter:
         event: Event,
         payload: dict[str, Any],
     ) -> None:
-        """Track notice emission for idempotence; no widget mount here.
+        """Route a ``kolsch.card.notice`` event to the right mount.
 
-        spec-008 lands the widget-mount + `card=` overload. This spec
-        just counts the notice so a duplicate dispatch on replay
-        doesn't double-mount later.
+        Two payload shapes, both keyed by ``notice_id``:
+
+        - Payload with ``card_id`` — mount inside the target card's
+          [`NoticeSlot`][cli.chat.widgets.notice_slot.NoticeSlot] via
+          ``CardWidget.mount_notice``. Silent no-op when the card
+          isn't tracked (out-of-order dispatch / replay of a notice
+          for a card that never mounted).
+        - Payload without ``card_id`` — mount a
+          [`NoticeWidget`][cli.chat.widgets.notice.NoticeWidget] at
+          the transcript root.
+
+        Repeat dispatch with the same ``notice_id`` (drop-notice
+        count increment) calls ``update_text`` on the tracked widget
+        instead of mounting a second widget. Idempotent per
+        ``notice_id`` via ``_applied_notice_ids`` bounded LRU; the
+        widget handle for update-in-place lives in
+        ``_notice_widgets``.
         """
-        _ = event
         raw_id = payload.get("notice_id")
         if not isinstance(raw_id, str) or not raw_id:
             # Legacy notice with no id — dedupe on `event.event_id`.
             raw_id = str(event.event_id)
+
+        text = payload.get("text")
+        text_str = text if isinstance(text, str) else ""
+        raw_kind = payload.get("kind")
+        kind_str = raw_kind if isinstance(raw_kind, str) else "info"
+
         if raw_id in self._applied_notice_ids:
+            # Update-in-place: same notice_id, new text.
+            existing = self._notice_widgets.get(raw_id)
+            if existing is not None:
+                update = getattr(existing, "update_text", None)
+                if callable(update):
+                    with contextlib.suppress(Exception):
+                        update(text_str)
             return
         self._applied_notice_ids.add(raw_id)
+
+        card_id_str = payload.get("card_id")
+        if isinstance(card_id_str, str) and card_id_str:
+            self._mount_in_card_notice(
+                raw_id, card_id_str, text_str, kind_str,
+            )
+            return
+
+        # Transcript-root notice — schedule the async mount.
+        # `_handle_card_notice` is sync (called from
+        # ``_handle_ui_event``); schedule the mount as a task.
+        asyncio.create_task(
+            self._mount_root_notice(raw_id, text_str, kind_str),
+        )
+
+    def _mount_in_card_notice(
+        self,
+        notice_id: str,
+        card_id_str: str,
+        text: str,
+        kind: str,
+    ) -> None:
+        """Mount a notice inside a specific card's ``NoticeSlot``.
+
+        Called by ``_handle_card_notice`` when the payload carries a
+        ``card_id``. Silent no-op when the card isn't in
+        ``_card_widgets`` (unmounted / unknown — the notice is
+        dropped by design).
+        """
+        try:
+            card_id = CardId(card_id_str)
+        except (ValueError, TypeError):
+            return
+        entry = self._card_widgets.get(card_id)
+        if entry is None:
+            return
+        mount = getattr(entry, "mount_notice", None)
+        if not callable(mount):
+            return
+        try:
+            widget = mount(text, kind)
+        except Exception:  # noqa: BLE001 — mount failures logged, not raised
+            _LOGGER.exception(
+                "event_adapter: mount_notice raised for card_id=%r",
+                card_id_str,
+            )
+            return
+        if widget is not None:
+            self._notice_widgets[notice_id] = widget
+
+    async def _mount_root_notice(
+        self,
+        notice_id: str,
+        text: str,
+        kind: str,
+    ) -> None:
+        """Mount a
+        [`NoticeWidget`][cli.chat.widgets.notice.NoticeWidget] at the
+        transcript root.
+
+        Falls back silently when ``#transcript`` isn't available
+        (headless service tests). The widget handle is tracked under
+        ``notice_id`` so a repeat dispatch's update-in-place path
+        can replace the text.
+        """
+        transcript = self._locate_transcript()
+        if transcript is None:
+            return
+        try:
+            from cli.chat.widgets.notice import NoticeWidget  # noqa: PLC0415
+        except Exception:  # noqa: BLE001 — import failure is fatal for this branch only
+            _LOGGER.exception("event_adapter: NoticeWidget import failed")
+            return
+        try:
+            widget = NoticeWidget(text=text, kind=kind)
+            await transcript.mount(widget)
+        except Exception:  # noqa: BLE001 — mount is best-effort
+            _LOGGER.exception(
+                "event_adapter: root notice mount failed for notice_id=%r",
+                notice_id,
+            )
+            return
+        self._notice_widgets[notice_id] = widget
 
 
 __all__ = ["CardMountState", "CardTrackingEntry", "EventAdapter"]
