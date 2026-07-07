@@ -34,8 +34,26 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Literal, get_args
 
-from tools.services.cards import AbstractCards, Cards
-from tools.services.exceptions import CardClosed, PromptBusy, ToolNotAvailable
+from tools.services.card_kinds import (
+    CARD_KIND_REGISTRY,
+    CardKindLiteral,
+    CardKindSpec,
+    get_kind_spec,
+)
+from tools.services.cards import (
+    AbstractCard,
+    AbstractCards,
+    Card,
+    CardFinalStatus,
+    Cards,
+    CardStatus,
+)
+from tools.services.exceptions import (
+    CardClosed,
+    PromptBusy,
+    ToolNotAvailable,
+    UnknownCardKind,
+)
 from tools.services.prompts import (
     AbstractPrompts,
     Prompts,
@@ -117,11 +135,18 @@ def require_services(
 
 
 __all__ = [
+    "CARD_KIND_REGISTRY",
+    "AbstractCard",
     "AbstractCards",
     "AbstractPrompts",
     "AbstractSessionView",
     "AbstractWorkflows",
+    "Card",
     "CardClosed",
+    "CardFinalStatus",
+    "CardKindLiteral",
+    "CardKindSpec",
+    "CardStatus",
     "Cards",
     "PromptBusy",
     "PromptSource",
@@ -131,6 +156,8 @@ __all__ = [
     "ServiceName",
     "SessionView",
     "ToolNotAvailable",
+    "UnknownCardKind",
     "Workflows",
+    "get_kind_spec",
     "require_services",
 ]

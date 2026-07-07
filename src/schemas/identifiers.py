@@ -186,6 +186,29 @@ class AgentCallId(PrefixedId):
     body_must_be_uuid = True
 
 
+class CardId(PrefixedId):
+    """`crd_<uuid>` — identifies one card handle mounted in the chat UI.
+
+    Emitted by [`Cards.open`][tools.services.cards.Cards.open] when it
+    mounts a new card and stamped on every UI event the handle fires
+    (open, mutation, close). Downstream renderers key on this id so
+    subsequent mutations route to the same card widget.
+    """
+
+    prefix = "crd_"
+    body_must_be_uuid = True
+
+
+def new_card_id() -> CardId:
+    """Build a fresh [`CardId`][schemas.identifiers.CardId].
+
+    Wraps a uuid4 in the `crd_` prefix; used at every
+    [`Cards.open`][tools.services.cards.Cards.open] call site so each
+    card carries a unique id downstream widgets can dedupe on.
+    """
+    return CardId(f"crd_{uuid.uuid4()}")
+
+
 class AgentId(PrefixedId):
     """`ag_<user-chosen-id>` — identifies an agent.
 

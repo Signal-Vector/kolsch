@@ -64,6 +64,7 @@ from schemas.events import (
 from schemas.identifiers import (
     AgentCallId,
     AgentId,
+    CardId,
     EventId,
     MemoryItemId,
     PrefixedId,
@@ -71,6 +72,7 @@ from schemas.identifiers import (
     SubscriptionId,
     ThreadId,
     derive_agent_id,
+    new_card_id,
 )
 
 __all__ = [
@@ -79,6 +81,7 @@ __all__ = [
     "AgentId",
     "AgentMessageData",
     "AgentTemplateWarningData",
+    "CardId",
     "ConfigSetData",
     "ContentRef",
     "ContextCompactedData",
@@ -121,4 +124,5 @@ __all__ = [
     "UIEventData",
     "UserMessageData",
     "derive_agent_id",
+    "new_card_id",
 ]
