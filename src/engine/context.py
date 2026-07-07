@@ -14,6 +14,7 @@ cancellation guarantees — see the
 from __future__ import annotations
 
 import asyncio
+import contextlib
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -53,6 +54,72 @@ class CancelToken:
     async def wait_cancelled(self) -> None:
         """Suspend until `cancel` is called."""
         await self._event.wait()
+
+
+# ---------------------------------------------------------------------------
+# CombinedCancelToken — cancel-on-any composition
+# ---------------------------------------------------------------------------
+
+
+class CombinedCancelToken(CancelToken):
+    """Cancel-on-any composition of two or more CancelTokens.
+
+    Used by the workflow service (spec-012) to thread a workflow's
+    cancel token into sub-agent `ExecutionContext.cancellation`
+    alongside the exchange's existing token. Neither wins; whichever
+    fires first triggers cancellation.
+
+    `.is_cancelled()` returns True if either the combined token's OWN
+    local flag was fired via `.cancel()` OR any wrapped inner token
+    reports `is_cancelled() == True`.
+
+    `.cancel()` sets the LOCAL flag only. It does NOT propagate to
+    inner tokens. This is deliberate: a sub-agent's local abort
+    shouldn't accidentally cancel the parent workflow or exchange.
+    Callers that want to cascade must call `.cancel()` on each inner
+    token explicitly.
+
+    `.wait_cancelled()` awaits ANY of {local flag, inner_1, inner_2,
+    ...}. Uses `asyncio.wait(..., FIRST_COMPLETED)` over the inner
+    tokens' `wait_cancelled()` coroutines plus the local event's
+    `.wait()`. The ephemeral inner-wait tasks are cancelled in the
+    `finally` clause so no tasks leak past resolution.
+    """
+
+    def __init__(self, *inner: CancelToken) -> None:
+        super().__init__()
+        if len(inner) < 1:
+            raise ValueError(
+                "CombinedCancelToken requires at least one inner token",
+            )
+        self._inner: tuple[CancelToken, ...] = inner
+
+    def is_cancelled(self) -> bool:
+        """Return `True` if this token's local flag OR any inner is cancelled."""
+        return self._event.is_set() or any(
+            t.is_cancelled() for t in self._inner
+        )
+
+    async def wait_cancelled(self) -> None:
+        """Suspend until the first of {local flag, any inner token} fires."""
+        # If already cancelled, short-circuit without spawning tasks.
+        if self.is_cancelled():
+            return
+
+        waits: list[asyncio.Task[Any]] = [
+            asyncio.create_task(t.wait_cancelled()) for t in self._inner
+        ]
+        waits.append(asyncio.create_task(self._event.wait()))
+        try:
+            await asyncio.wait(
+                waits, return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            for w in waits:
+                if not w.done():
+                    w.cancel()
+                    with contextlib.suppress(asyncio.CancelledError):
+                        await w
 
 
 # ---------------------------------------------------------------------------
