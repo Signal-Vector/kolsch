@@ -234,6 +234,26 @@ class CardTrackingEntry(_CardMountStub):
     """
 
 
+class _UIEventDataView:
+    """Duck-typed view over an `Event` + payload for widget dispatch.
+
+    `CardWidget.apply_event` / body renderers expect an object with
+    `.kind`, `.payload`, and `.event_id`. The adapter synthesises
+    this view from the incoming `Event` + payload dict so the
+    spec-007 widget layer can be fed without materialising a full
+    `UIEventData` schema instance.
+    """
+
+    __slots__ = ("event_id", "kind", "payload")
+
+    def __init__(self, event: Event, payload: dict[str, Any]) -> None:
+        data = event.data if isinstance(event.data, dict) else {}
+        kind_val = data.get("kind")
+        self.kind = kind_val if isinstance(kind_val, str) else ""
+        self.payload = payload
+        self.event_id = str(event.event_id)
+
+
 # ---------------------------------------------------------------------------
 # Helpers ported from `_renderer.py`
 # ---------------------------------------------------------------------------
@@ -427,11 +447,15 @@ class EventAdapter:
         # (headless replay-only paths, spec-003 tests).
         self._prompts_impl: PromptsImpl | None = prompts_impl
 
-        # spec-006: per-card tracking for the `_handle_card_*` handlers.
-        # `_card_widgets` keys are `CardId`; values are the
-        # `_CardMountStub` (spec-007 swaps in `CardWidget`).
+        # spec-006/007: per-card tracking for the `_handle_card_*`
+        # handlers. `_card_widgets` keys are `CardId`; values are
+        # `CardMountState` Protocol impls — spec-006 shipped
+        # `_CardMountStub`; spec-007 promotes to `CardWidget`
+        # (widget-backed) via the Protocol seam. Handler code below
+        # is UNCHANGED from spec-006 apart from `_handle_card_opened`,
+        # which now also mounts the widget in the transcript.
         # `_applied_notice_ids` dedupes `kolsch.card.notice` events.
-        self._card_widgets: dict[CardId, CardTrackingEntry] = {}
+        self._card_widgets: dict[CardId, CardMountState] = {}
         self._applied_notice_ids: _BoundedLRUSet = _BoundedLRUSet(
             maxsize=_CARD_NOTICE_LRU_MAXSIZE,
         )
@@ -977,9 +1001,11 @@ class EventAdapter:
         if kind == WIRE_PROMPT_CANCELLED:
             self._handle_prompt_cancelled(payload)
             return
-        # spec-006: card kinds route to the `_handle_card_*` branch.
+        # spec-006/007: card kinds route to the `_handle_card_*`
+        # branch. Only `_handle_card_opened` is async (widget mount);
+        # the other handlers stay sync per spec-006's Protocol seam.
         if kind == WIRE_CARD_OPENED:
-            self._handle_card_opened(event, payload)
+            await self._handle_card_opened(event, payload)
             return
         if kind == WIRE_CARD_APPENDED:
             self._handle_card_appended(event, payload)
@@ -1098,16 +1124,30 @@ class EventAdapter:
         except (ValueError, TypeError):
             return None
 
-    def _handle_card_opened(
+    async def _handle_card_opened(
         self,
         event: Event,
         payload: dict[str, Any],
     ) -> None:
-        """Mount a tracking entry for a fresh `kolsch.card.opened`.
+        """Mount a `CardWidget` for a fresh `kolsch.card.opened`.
 
         Idempotent per `card_id`: if the card is already tracked
         (replay + live path racing, or a duplicate emission) return
-        silently — no second `_CardMountStub` mounted.
+        silently — no second widget mounted.
+
+        spec-006 shipped a `_CardMountStub` here; spec-007 swaps in
+        `CardWidget` behind the `CardMountState` Protocol seam.
+        Handler code below (`_handle_card_appended`,
+        `_handle_card_set`, `_handle_card_status`, `_handle_card_closed`,
+        `_handle_card_snapshot`) is unchanged — every mutation still
+        goes through the Protocol methods
+        (`apply_append` / `apply_snapshot` / `apply_status` /
+        `apply_close`) which `CardWidget` implements identically.
+
+        Falls back to `_CardMountStub` when the app has no
+        `#transcript` container (headless service tests never mount
+        an app; the stub's in-memory state suffices for the
+        adapter's idempotence checks).
         """
         _ = event
         card_id = self._get_card_id(payload)
@@ -1117,8 +1157,89 @@ class EventAdapter:
             return
         raw_kind = payload.get("kind")
         kind = raw_kind if isinstance(raw_kind, str) else "markdown"
-        entry: CardTrackingEntry = CardTrackingEntry(card_id, kind)
+        raw_title = payload.get("title")
+        title = raw_title if isinstance(raw_title, str) else ""
+
+        # spec-007: try to mount a `CardWidget` in the transcript.
+        # Headless tests without a live `#transcript` fall back to
+        # the spec-006 in-memory stub so idempotence + LRU tests
+        # still exercise the Protocol seam without booting Textual.
+        entry: CardMountState
+        transcript = self._locate_transcript()
+        if transcript is not None:
+            widget = self._try_build_card_widget(card_id, kind, title)
+            if widget is not None:
+                entry = widget
+                self._card_widgets[card_id] = entry
+                await self._mount_card_widget(widget, transcript)
+                return
+        # Fallback: no transcript container available (headless
+        # service tests) — track in memory via the spec-006 stub.
+        entry = _CardMountStub(card_id, kind)
         self._card_widgets[card_id] = entry
+
+    def _locate_transcript(self) -> Any | None:
+        """Return the `#transcript` container, or `None` if absent.
+
+        Headless service tests use a stub app with no compose tree;
+        `query_one` raises. We treat that as "widget mount not
+        available" so the adapter falls back to the spec-006 stub
+        seamlessly.
+        """
+        try:
+            return self._app.query_one("#transcript")
+        except Exception:  # noqa: BLE001 — headless / partial mount
+            return None
+
+    def _try_build_card_widget(
+        self,
+        card_id: CardId,
+        kind: str,
+        title: str,
+    ) -> Any | None:
+        """Construct a `CardWidget` if the app supports widget mounts.
+
+        Returns `None` when import or construction fails (headless
+        tests without Textual mounted, or an unknown kind). The
+        caller falls back to `_CardMountStub` in that case.
+        """
+        try:
+            from cli.chat.widgets.card_widget import CardWidget
+        except Exception:  # noqa: BLE001 — widget layer optional
+            return None
+        try:
+            return CardWidget(card_id=card_id, kind=kind, title=title)
+        except Exception:  # noqa: BLE001 — unknown kind, missing DOM, etc.
+            _LOGGER.exception(
+                "event_adapter: CardWidget construction failed for %r",
+                card_id,
+            )
+            return None
+
+    async def _mount_card_widget(
+        self,
+        widget: Any,
+        transcript: Any,
+    ) -> None:
+        """Mount `widget` in `transcript` — best-effort.
+
+        A mount failure is logged and swallowed so the adapter's
+        tracking state stays consistent with the spec-006 stub.
+        """
+        try:
+            await transcript.mount(widget)
+        except Exception:  # noqa: BLE001 — mount raced with unmount, etc.
+            _LOGGER.exception(
+                "event_adapter: CardWidget mount raised for %r",
+                getattr(widget, "card_id", "<unknown>"),
+            )
+            return
+        # Scroll to the newly-mounted card. Best-effort — a missing
+        # `scroll_end` (non-VerticalScroll transcript) is fine.
+        try:
+            transcript.scroll_end(animate=False)
+        except Exception:  # noqa: BLE001 — some containers don't scroll
+            pass
 
     def _handle_card_appended(
         self,
@@ -1149,8 +1270,12 @@ class EventAdapter:
         event: Event,
         payload: dict[str, Any],
     ) -> None:
-        """Route a `set` (content replace) — last-writer-wins."""
-        _ = event
+        """Route a `set` (content replace) — last-writer-wins.
+
+        Direct `.content` write preserves spec-006's stub contract; a
+        widget-backed impl also forwards the payload into
+        `apply_event` so the body renderer refreshes.
+        """
         card_id = self._get_card_id(payload)
         if card_id is None:
             return
@@ -1161,19 +1286,32 @@ class EventAdapter:
         if isinstance(content, str):
             # `set` replaces via the same Protocol seam as snapshot.
             entry.content = content
+        # spec-007: forward to the widget's `apply_event` so the body
+        # renderer refreshes. Stub impls have no `apply_event` — the
+        # `getattr` check keeps the spec-006 handler UNCHANGED for
+        # them.
+        if hasattr(entry, "apply_event"):
+            entry.apply_event(_UIEventDataView(event, payload))
 
     def _handle_card_set_progress(
         self,
         event: Event,
         payload: dict[str, Any],
     ) -> None:
-        """Route a `set_progress` — no-op on the stub; widget in spec-007."""
-        _ = event
-        _ = payload
-        # The stub tracks no progress state — spec-007's CardWidget
-        # implements the progress bar mutation. Idempotence is not
-        # required here because the payload carries no cumulative
-        # state (last-writer-wins).
+        """Route a `set_progress` — forwards to the widget's `apply_event`.
+
+        No-op on the spec-006 stub (which has no progress state);
+        the widget-backed impl updates the `ProgressBar` via its
+        body renderer.
+        """
+        card_id = self._get_card_id(payload)
+        if card_id is None:
+            return
+        entry = self._card_widgets.get(card_id)
+        if entry is None:
+            return
+        if hasattr(entry, "apply_event"):
+            entry.apply_event(_UIEventDataView(event, payload))
 
     def _handle_card_status(
         self,
