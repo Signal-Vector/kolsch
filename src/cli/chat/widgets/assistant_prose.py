@@ -27,13 +27,94 @@ markdown parser, no custom stream loop, no per-character styling.
 
 from __future__ import annotations
 
+import logging
 import os
+import re
 from contextlib import asynccontextmanager
 from typing import AsyncIterator
 
+from textual import events
 from textual.content import Content
-from textual.widgets import Markdown
+from textual.widgets import Markdown, Static
 from textual.widgets._markdown import MarkdownFence, MarkdownStream
+
+_LOGGER = logging.getLogger(__name__)
+
+
+ANCHOR_PATTERN = re.compile(
+    r"\[([^\]]+)\]\(kolsch-anchor://workflow_card/([^)]+)\)"
+)
+"""feat-018 anchor markup — ``[<label>](kolsch-anchor://workflow_card/<run_id>)``.
+
+Coordinator-locked convention: the assistant embeds the anchor as
+markdown-URL-syntax; :class:`AssistantProse` swaps the match for a
+focusable :class:`WorkflowAnchorButton` widget inline with the prose
+flow. Enter or click on the button routes to
+``EventAdapter._scroll_to_workflow_card`` via
+``ChatApp.action_scroll_to_workflow_card``.
+"""
+
+
+class WorkflowAnchorButton(Static):
+    """Focusable inline reference to a workflow card.
+
+    Rendered by :class:`AssistantProse` when the assistant's markdown
+    contains ``[<label>](kolsch-anchor://workflow_card/<run_id>)``
+    markup. The button is a :class:`Static` (widget-simple, no
+    layout box), ``can_focus=True`` so Tab reaches it, and both
+    ``on_click`` and the Enter binding trigger the app-level
+    ``action_scroll_to_workflow_card`` action that delegates to
+    the ``EventAdapter``.
+    """
+
+    DEFAULT_CSS = """
+    WorkflowAnchorButton {
+        color: #4dd0e1;
+        text-style: bold;
+        height: 1;
+        width: auto;
+        background: transparent;
+    }
+    WorkflowAnchorButton:focus {
+        text-style: bold reverse;
+    }
+    """
+
+    BINDINGS = [
+        ("enter", "activate", "Scroll to workflow card"),
+    ]
+
+    can_focus = True
+
+    def __init__(self, *, label: str, run_id: str) -> None:
+        super().__init__(f"[▸ {label}]")
+        self._run_id = run_id
+        self._label = label
+
+    @property
+    def run_id(self) -> str:
+        """The workflow ``run_id`` this anchor points at."""
+        return self._run_id
+
+    def on_click(self, event: events.Click) -> None:  # pragma: no cover - via Pilot
+        _ = event
+        self._activate()
+
+    def action_activate(self) -> None:
+        """Enter binding — scroll transcript to the workflow card."""
+        self._activate()
+
+    def _activate(self) -> None:
+        app = self.app
+        action = getattr(app, "action_scroll_to_workflow_card", None)
+        if action is None:
+            _LOGGER.warning(
+                "assistant_prose: app has no action_scroll_to_workflow_card; "
+                "anchor click for run_id=%r ignored",
+                self._run_id,
+            )
+            return
+        action(self._run_id)
 
 
 class _PlainFence(MarkdownFence):
@@ -130,5 +211,58 @@ class AssistantProse(Markdown):
         callers get a plain coroutine. Non-streaming providers use
         this on `MODEL_RESPONSE`; streaming providers should use
         `stream()` instead so writes are debounced.
+
+        feat-018: when `text` contains
+        ``[<label>](kolsch-anchor://workflow_card/<run_id>)`` markup,
+        the anchor spans are split out and mounted as
+        :class:`WorkflowAnchorButton` widgets inline with the prose
+        blocks. The surrounding text is appended to the markdown
+        stream as normal.
         """
-        await Markdown.append(self, text)
+        if ANCHOR_PATTERN.search(text) is None:
+            await Markdown.append(self, text)
+            return
+        # Split text into (prose, anchor?, prose, anchor?, ...) chunks.
+        pieces = self._split_anchors(text)
+        for kind, prose_text, label, run_id in pieces:
+            if kind == "prose":
+                if prose_text:
+                    await Markdown.append(self, prose_text)
+                continue
+            # kind == "anchor"
+            button = WorkflowAnchorButton(label=label, run_id=run_id)
+            try:
+                await self.mount(button)
+            except Exception:  # noqa: BLE001 — mount failure logged
+                _LOGGER.exception(
+                    "assistant_prose: WorkflowAnchorButton mount "
+                    "failed for run_id=%r", run_id,
+                )
+
+    @staticmethod
+    def _split_anchors(text: str) -> list[tuple[str, str, str, str]]:
+        """Split ``text`` around anchor matches into ordered chunks.
+
+        Returns a list of ``(kind, prose_text, anchor_label,
+        anchor_run_id)`` tuples where exactly one of ``prose_text`` or
+        the anchor pair is meaningful per row:
+
+        - ``kind="prose"`` — ``prose_text`` is the segment; label/run_id
+          are empty strings.
+        - ``kind="anchor"`` — ``label`` and ``run_id`` are the
+          anchor's payload; ``prose_text`` is the empty string.
+
+        A flat 4-tuple keeps the return type mypy-friendly without
+        needing a `Union[str, tuple[str, str]]` per element.
+        """
+        pieces: list[tuple[str, str, str, str]] = []
+        cursor = 0
+        for match in ANCHOR_PATTERN.finditer(text):
+            start, end = match.span()
+            if start > cursor:
+                pieces.append(("prose", text[cursor:start], "", ""))
+            pieces.append(("anchor", "", match.group(1), match.group(2)))
+            cursor = end
+        if cursor < len(text):
+            pieces.append(("prose", text[cursor:], "", ""))
+        return pieces

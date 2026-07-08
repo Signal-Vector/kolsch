@@ -121,6 +121,13 @@ class WorkflowRunStatusView:
             is only known via cold-read.
         last_event_ts: Timestamp of the most recent observed
             executor event; None for queued or cold-read runs.
+        ref: The workflow's 3-seg ref (``bundle/workflows/name``)
+            when known — populated from the registry record on the
+            in-memory path and from ``meta.json`` on the cold-read
+            path. ``None`` when the ``run_id`` is fully unknown
+            (``phase="unknown"``). Added by feat-018 so butler-facing
+            tools (``workflow_status``) can echo the ref back in
+            their ``_chat_anchor`` payload without a second lookup.
     """
 
     run_id: WorkflowRunId
@@ -128,6 +135,7 @@ class WorkflowRunStatusView:
     node_counts: NodeCounts | None = None
     elapsed_seconds: float | None = None
     last_event_ts: datetime | None = None
+    ref: str | None = None
 
 
 # ---------------------------------------------------------------------------

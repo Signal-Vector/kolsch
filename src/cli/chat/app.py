@@ -960,6 +960,22 @@ class ChatApp(App):
         elif direction == "end":
             transcript.scroll_end(animate=False)
 
+    def action_scroll_to_workflow_card(self, run_id: str) -> None:
+        """feat-018 — scroll the transcript to a workflow card by ``run_id``.
+
+        Invoked by :class:`WorkflowAnchorButton` widgets mounted in
+        :class:`AssistantProse` when the assistant's prose contains
+        ``[<label>](kolsch-anchor://workflow_card/<run_id>)`` markup.
+        Delegates to
+        :meth:`cli.chat.event_adapter.EventAdapter._scroll_to_workflow_card`
+        so the actual lookup + scroll live at the adapter level next
+        to :attr:`_card_widgets`.
+        """
+        adapter = getattr(self, "event_adapter", None)
+        if adapter is None:
+            return
+        adapter._scroll_to_workflow_card(run_id)
+
     def action_quit_if_idle(self) -> None:
         """``ctrl+d`` — exit if the composer is empty."""
         try:

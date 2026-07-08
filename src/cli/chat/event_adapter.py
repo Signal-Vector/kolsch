@@ -2144,6 +2144,82 @@ class EventAdapter:
             with contextlib.suppress(Exception):
                 body.apply_event(data_view)
 
+    def _scroll_to_workflow_card(self, run_id: str) -> bool:
+        """Scroll the transcript to the workflow card bound to ``run_id``.
+
+        feat-018 AC #8/#9. Iterates ``_card_widgets`` for a
+        ``workflow``-kind entry whose bound ``WorkflowsImpl`` record
+        matches ``run_id``, then calls
+        ``transcript.scroll_to_widget(card_widget)`` on the located
+        widget. Returns ``True`` on a successful scroll, ``False`` on
+        any lookup miss (unknown run_id, card scrolled off / not
+        widget-backed, transcript absent). Misses log a warning and
+        do nothing else — the caller (an anchor button click) treats
+        the miss as a no-op.
+        """
+        card_widget = self._find_workflow_card_widget(run_id)
+        if card_widget is None:
+            _LOGGER.warning(
+                "event_adapter: no live workflow card for run_id=%r; "
+                "anchor scroll no-op",
+                run_id,
+            )
+            return False
+        transcript = self._locate_transcript()
+        if transcript is None:
+            _LOGGER.warning(
+                "event_adapter: transcript absent; anchor scroll no-op "
+                "for run_id=%r",
+                run_id,
+            )
+            return False
+        try:
+            transcript.scroll_to_widget(card_widget, animate=False)
+        except Exception:  # noqa: BLE001 — scroll is best-effort
+            _LOGGER.exception(
+                "event_adapter: scroll_to_widget raised for run_id=%r",
+                run_id,
+            )
+            return False
+        return True
+
+    def _find_workflow_card_widget(self, run_id: str) -> Any | None:
+        """Return the ``CardWidget`` bound to ``run_id``, or ``None``.
+
+        Lookup path: walk :attr:`WorkflowsImpl._workflow_registry` for
+        a record with matching ``run_id`` whose ``card`` field points
+        at a live entry in :attr:`_card_widgets`. A run whose card was
+        never widget-backed (headless stub) OR whose card_id is no
+        longer tracked (scrolled off, evicted) returns ``None``.
+        """
+        if self._workflows_impl is None:
+            return None
+        registry = getattr(self._workflows_impl, "_workflow_registry", None)
+        if not isinstance(registry, dict):
+            return None
+        target = str(run_id)
+        for record_run_id, record in registry.items():
+            if str(record_run_id) != target:
+                continue
+            card = getattr(record, "card", None)
+            if card is None:
+                return None
+            card_id = getattr(card, "id", None) or getattr(card, "card_id", None)
+            if card_id is None:
+                return None
+            entry = self._card_widgets.get(card_id)
+            # Only widget-backed entries scroll — the spec-006
+            # `_CardMountStub` is an in-memory tracker and can't be
+            # scrolled to.
+            if entry is None:
+                return None
+            if not hasattr(entry, "scroll_visible"):
+                # Anything that isn't a Textual widget can't be a
+                # scroll target — fall through to the None miss.
+                return None
+            return entry
+        return None
+
     async def _mount_root_notice(
         self,
         notice_id: str,

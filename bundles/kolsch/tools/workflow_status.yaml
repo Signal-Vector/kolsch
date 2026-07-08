@@ -1,0 +1,5 @@
+name: workflow_status
+description: Read workflow status. Returns phase + node counts + anchor.
+entry: workflow_status.py
+requires:
+  - workflows

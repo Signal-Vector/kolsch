@@ -437,6 +437,7 @@ class WorkflowsImpl(AbstractWorkflows):
                 node_counts=record.node_counts,
                 elapsed_seconds=elapsed,
                 last_event_ts=record.last_event_ts,
+                ref=record.ref,
             )
         # Cold-read: neither the registry nor the store may know the run.
         return self._status_from_meta_and_tail(
@@ -1063,7 +1064,11 @@ class WorkflowsImpl(AbstractWorkflows):
         )
         effective_status = terminal_status or base_status
         phase = executor_status_to_phase(effective_status)
-        return WorkflowRunStatusView(run_id=run_id, phase=phase)
+        # feat-018: surface the workflow's ref from the meta sidecar
+        # so butler-facing tools see the ref even on cold-read.
+        ref_raw = meta.get("workflow_ref")
+        ref = ref_raw if isinstance(ref_raw, str) else None
+        return WorkflowRunStatusView(run_id=run_id, phase=phase, ref=ref)
 
     # ------------------------------------------------------------------
     # spec-014: approval lifecycle emit hooks.

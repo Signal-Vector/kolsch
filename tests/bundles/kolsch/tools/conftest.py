@@ -174,6 +174,12 @@ async def chat_app(tmp_path: Path) -> AsyncIterator[ChatApp]:
             self.store = store
             self.authz = _FakeAuthz()
             self.engine = _FakeEngine()
+            # feat-018: butler workflow tools need
+            # ``WorkflowsImpl`` at ``on_mount``; the impl's constructor
+            # builds a ``WorkflowRunStore(self.session.runtime.root)``
+            # for cold-read paths. spec-009 example tools don't touch
+            # workflows, so exposing ``root`` here is additive.
+            self.root = tmp_path
 
     bundle = _FakeBundle(
         runtime=_R(),
