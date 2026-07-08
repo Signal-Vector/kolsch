@@ -33,6 +33,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
     from pathlib import Path
 
+    from cli.chat.service_registry import ChatServiceRegistry
     from files import PathPolicy
     from providers import (
         AuthorizationProvider,
@@ -70,6 +71,42 @@ class ToolsSubsystem:
         self._path_policy = path_policy
         self._root = root
         self._registry = ToolRegistry()
+        # bug-020: the chat runtime injects its `ChatServiceRegistry`
+        # sidecar here via `set_chat_services`. When present,
+        # `invoke_tool` forwards it into every `dispatch_tool` call so
+        # tools declaring `requires=[...]` see the corresponding
+        # service handles on `ToolContext`. Default `None` preserves
+        # headless callers (workflow runner, one-shot CLI, tests) —
+        # every service field on the resulting `ToolContext` stays
+        # `None` and `require_services(ctx, [...])` raises
+        # `ToolNotAvailable` for any tool that asked for one.
+        self._chat_services: ChatServiceRegistry | None = None
+
+    def set_chat_services(
+        self,
+        registry: ChatServiceRegistry | None,
+    ) -> None:
+        """Register the chat runtime's `ChatServiceRegistry` sidecar.
+
+        bug-020: `ChatApp.on_mount` calls this immediately after
+        building `CardsImpl` / `PromptsImpl` / `WorkflowsImpl` so a
+        tool declaring `requires=["cards", "workflows"]` sees a
+        populated `ToolContext` at dispatch time. Passing `None`
+        detaches (used by test teardown or a headless caller that
+        rebooted the sidecar).
+
+        The registry lands on `self._chat_services` and is forwarded
+        into every subsequent `dispatch_tool` call as the
+        `chat_services=` kwarg. Headless callers that never call this
+        setter see the default `None` and the dispatcher's
+        `_populate_service_fields` short-circuits — every service
+        field on `ToolContext` stays `None`.
+
+        Args:
+            registry: The chat runtime's `ChatServiceRegistry`, or
+                `None` to detach.
+        """
+        self._chat_services = registry
 
     async def register_for_agent(
         self,
@@ -289,6 +326,12 @@ class ToolsSubsystem:
             sandbox=self._sandbox,
             agent_permissions=registration.agent_permissions,
             bundle_permissions=registration.bundle_permissions,
+            # bug-020: forward the chat runtime's `ChatServiceRegistry`
+            # so tools declaring `requires=[...]` see populated
+            # service fields on `ToolContext`. `None` in headless
+            # mode; dispatch's `_populate_service_fields` short-
+            # circuits and every service field stays `None`.
+            chat_services=self._chat_services,
         )
         return ToolResult(result=result, metadata={})
 

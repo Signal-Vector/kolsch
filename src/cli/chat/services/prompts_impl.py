@@ -30,6 +30,7 @@ from tools.services.exceptions import PromptBusy
 from tools.services.prompts import AbstractPrompts, PromptSource
 
 if TYPE_CHECKING:
+    from bus.event_bus import EventBus
     from schemas.identifiers import SessionId, ThreadId
     from store.session_store import SessionStore
 
@@ -65,10 +66,19 @@ class PromptsImpl(AbstractPrompts):
         session_store: SessionStore,
         session_id: SessionId,
         thread_id: ThreadId,
+        bus: "EventBus | None" = None,
     ) -> None:
         self._session_store = session_store
         self._session_id = session_id
         self._thread_id = thread_id
+        # bug-020: symmetric with `CardsImpl` / `WorkflowsImpl` — when
+        # a runtime bus is injected, `_append_ui_event` publishes each
+        # WIRE_PROMPT_* event on `UI_EVENT_TOPIC` so the live
+        # `EventAdapter.handle` subscription in `ChatApp.on_mount`
+        # dispatches the ApprovalBlock mount in the SAME session
+        # rather than only on next-boot replay. `None` in headless
+        # tests / adapter-less fixtures.
+        self._bus: "EventBus | None" = bus
         self._pending_future: asyncio.Future[str] | None = None
         self._pending_prompt_id: PromptId | None = None
         self._closed = False
@@ -267,7 +277,15 @@ class PromptsImpl(AbstractPrompts):
         allocation (spec-003) covers this write. Emits with
         `actor=system` — the prompt request is a platform-owned
         surface, not a user or agent utterance.
+
+        bug-020: after the store append, publish the SAME `Event`
+        onto the runtime bus (if injected) so the live
+        `EventAdapter.handle` subscription reaches the ApprovalBlock
+        mount site in the SAME session. Bus failures are swallowed —
+        the store append is the durability contract.
         """
+        import contextlib as _cl  # noqa: PLC0415
+
         event = Event(
             event_id=_new_event_id(),
             parent_event_id=None,
@@ -283,6 +301,9 @@ class PromptsImpl(AbstractPrompts):
             created_at=datetime.now(UTC),
         )
         await self._session_store.append_event(self._thread_id, event)
+        if self._bus is not None:
+            with _cl.suppress(Exception):
+                await self._bus.publish(event)
 
 
 __all__ = ["PromptsImpl"]

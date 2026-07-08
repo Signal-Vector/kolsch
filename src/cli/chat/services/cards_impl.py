@@ -57,8 +57,30 @@ from tools.services.exceptions import CardClosed
 if TYPE_CHECKING:
     from types import TracebackType
 
+    from bus.event_bus import EventBus
     from schemas.identifiers import SessionId, ThreadId
     from store.session_store import SessionStore
+
+
+# ---------------------------------------------------------------------------
+# bug-020: shared bus topic constant.
+# ---------------------------------------------------------------------------
+
+UI_EVENT_TOPIC = "ui.event"
+"""In-process bus topic name for `UI_EVENT` events.
+
+Deliberately equal to ``EventType.UI_EVENT.value`` so the topic
+match on the ``InProcessEventBus`` (which matches on
+``event.type``) fires for every ``kolsch.card.*`` /
+``kolsch.workflow.progress`` / ``kolsch.prompt.*`` event this impl
+appends to the store. Also used by ``WorkflowsImpl._emit_ui_event``
+and ``ChatApp.on_mount``'s subscribe call — the three must agree on
+the string, so it lives here as a module constant per bug-020 AC #4.
+
+Not a wire kind (D-007): wire kinds are dotted
+``kolsch.<domain>.<verb>`` constants stamped INSIDE the event
+payload. This is the transport-side topic the bus dispatch uses.
+"""
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -115,10 +137,19 @@ class CardsImpl(AbstractCards):
         session_store: SessionStore,
         session_id: SessionId,
         thread_id: ThreadId,
+        bus: EventBus | None = None,
     ) -> None:
         self._session_store = session_store
         self._session_id = session_id
         self._thread_id = thread_id
+        # bug-020: in-process runtime bus. When present,
+        # `_publish_to_bus` fans every drained UI event out on the
+        # `UI_EVENT_TOPIC` so the live `EventAdapter.handle`
+        # subscription in `ChatApp.on_mount` sees the event in the
+        # SAME session (not on next-boot replay). `None` in headless
+        # tests / adapter-less fixtures — `_publish_to_bus` becomes a
+        # silent no-op, matching the pre-bug-020 stub behaviour.
+        self._bus: EventBus | None = bus
         self._closed = False
         self._live_cards: dict[CardId, CardImpl] = {}
         # Two-lane bounded queue. Critical events bypass drop via
@@ -407,16 +438,39 @@ class CardsImpl(AbstractCards):
                 self._stream_queue.task_done()
 
     async def _publish_to_bus(self, event: Event) -> None:
-        """Publish `event` to the in-process bus.
+        """Publish `event` to the in-process bus (bug-020).
 
-        No-op stub in this spec — see `_drain_stream_queue` docstring.
-        The append-then-publish contract from spec-003 means the
-        adapter's live subscription (when wired) will observe the
-        event via its own replay mechanism; the drain worker exists
-        as the queue back-pressure surface.
+        Publishes onto `UI_EVENT_TOPIC` so the live
+        `EventAdapter.handle` subscription registered in
+        `ChatApp.on_mount` picks the event up in the SAME session,
+        rather than only on next-boot replay via
+        `_replay_from_bookmark`. Store append has already happened by
+        the time we get here (see `_emit_ui_event` — append THEN
+        publish); the durability invariant is preserved and the live
+        adapter fires one instant later than the JSONL row.
+
+        When no bus was injected at construction (headless fixtures,
+        adapter-less tests) this method is a silent no-op so the
+        drain worker still runs (back-pressure surface stays live)
+        without a null-deref.
+
+        Idempotence gate (AC #12): the adapter's bounded-LRU
+        (1000 for appends, 100 for snapshots, 200 for notices)
+        dedupes if a cold-boot replay of the same event id lands
+        alongside a live bus dispatch — verified by
+        `test_event_adapter_replay.py`.
+
+        Bus failures are swallowed at the bus level (see
+        `InProcessEventBus.publish`) — the caller's primary work (the
+        store append) already committed.
         """
-        _ = event
-        return None
+        if self._bus is None:
+            return
+        # Fire and forget from the drain worker's POV — the caller's
+        # try/except in `_drain_stream_queue` already logs any
+        # exception. Route through the bus's own best-effort publish
+        # (which swallows transport failures per the contract).
+        await self._bus.publish(event)
 
 
 class CardImpl(AbstractCard):

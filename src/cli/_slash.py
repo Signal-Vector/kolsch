@@ -166,6 +166,18 @@ class ChatSessionState:
     flag while leaving the workflow paused (resume later via the
     CLI). Info-only commands (`/help`) do not clear the flag."""
 
+    service_registry: Any = None
+    """The chat's `ChatServiceRegistry`, threaded through from
+    `ChatApp.on_mount` (bug-020).
+
+    Slash handlers that need to open cards or start workflows
+    (`/workflow`, future `/fork`) reach the runtime's `CardsImpl` /
+    `WorkflowsImpl` through this handle rather than reconstructing
+    them per-invocation. `None` in headless slash tests that
+    construct a bare `ChatSessionState` — those handlers surface a
+    friendly notice and bail rather than crash.
+    """
+
 
 @dataclass(frozen=True)
 class SlashContext:
@@ -1116,31 +1128,32 @@ async def _handler_clear(arg_text: str, ctx: SlashContext) -> ControlSignal:
 async def _handler_workflow(arg_text: str, ctx: SlashContext) -> ControlSignal:
     """`/workflow <ref> [with k=v ...]` — invoke a workflow inline.
 
-    Parses args via
-    [`parse_slash_workflow_args`][cli._workflow_slash_args.parse_slash_workflow_args];
-    resolves the catalog ref; mints a fresh `WorkflowRun`; delegates
-    the executor + renderer wiring to
-    [`execute_workflow_with_renderer`][cli._workflow_chat_runner.execute_workflow_with_renderer].
-    The pending workflow_run id is stashed on
-    `ChatSessionState.pending_workflow_run_id` so a subsequent
-    `/fork` or the `user_input` chat-resume path can find it.
+    bug-020: routes through the chat runtime's
+    [`WorkflowsImpl.start`][cli.chat.services.workflows_impl.WorkflowsImpl.start]
+    so the workflow-card pipeline surfaces in the running chat. The
+    handler opens a `workflow`-kind card via
+    ``state.service_registry.cards.open``, hands the card to
+    ``workflows.start(card=...)``, and returns immediately —
+    `WorkflowsImpl` owns the card's terminal close (auto-close
+    finalizer is skipped because `start` flips
+    ``card._owner_transferred=True``). The pending workflow_run id is
+    stashed on `ChatSessionState.pending_workflow_run_id` so a
+    subsequent `/fork` finds it.
+
+    Previously (pre-bug-020) this handler called
+    ``execute_workflow_with_renderer`` (rich-Console renderer to
+    stdout) which bypassed `WorkflowsImpl.start` entirely and never
+    emitted any `kolsch.workflow.progress` UI event. That path
+    remains valid for the headless ``kolsch workflows run`` CLI —
+    only the chat surface has been narrowed here.
 
     Always returns `ControlSignal.CONTINUE` so chat keeps going.
-    Parse errors / catalog misses / load failures surface as
-    one-line errors on `ctx.stdout`.
+    Parse errors / catalog misses / missing runtime service surfaces
+    as a one-line notice on `ctx.stdout`.
     """
-    from pathlib import Path  # noqa: PLC0415
-
-    from cli._workflow_chat_runner import (  # noqa: PLC0415
-        execute_workflow_with_renderer,
-    )
     from cli._workflow_slash_args import (  # noqa: PLC0415
         parse_slash_workflow_args,
     )
-    from workflows.errors import WorkflowError  # noqa: PLC0415
-    from workflows.parser import load_workflow  # noqa: PLC0415
-    from workflows.run import WorkflowRunStatus  # noqa: PLC0415
-    from workflows.run_store import WorkflowRunStore  # noqa: PLC0415
 
     if ctx.state is None:
         ctx.stdout.write("/workflow requires a chat runtime; not available here.\n")
@@ -1160,29 +1173,54 @@ async def _handler_workflow(arg_text: str, ctx: SlashContext) -> ControlSignal:
         ctx.stdout.write(f"/workflow: workflow {ref!r} not found in catalog.\n")
         return ControlSignal.CONTINUE
 
-    try:
-        workflow = load_workflow(Path(entry.path))
-    except WorkflowError as exc:
-        # `caller_message` is the chat-facing surface.
-        message = getattr(exc, "caller_message", None) or str(exc)
-        ctx.stdout.write(f"/workflow: {message}\n")
+    # bug-020: reach the chat runtime's service registry through the
+    # ``state.service_registry`` handle threaded onto
+    # `ChatSessionState`. Fail fast with a friendly notice when the
+    # chat runtime hasn't wired the registry (headless slash tests
+    # that construct a bare `ChatSessionState`).
+    service_registry = getattr(state, "service_registry", None)
+    if service_registry is None:
+        ctx.stdout.write(
+            "/workflow: chat service registry not available; "
+            "workflow cards need a live ChatApp.\n"
+        )
+        return ControlSignal.CONTINUE
+    cards_service = getattr(service_registry, "cards", None)
+    workflows_service = getattr(service_registry, "workflows", None)
+    if cards_service is None or workflows_service is None:
+        ctx.stdout.write(
+            "/workflow: cards/workflows service not wired; "
+            "cannot open a workflow card.\n"
+        )
         return ControlSignal.CONTINUE
 
-    store = WorkflowRunStore(runtime.root)
-    run = store.create(workflow_ref=entry.ref, inputs=inputs)
-    state.pending_workflow_run_id = str(run.run_id)
+    # Open the workflow card via the Cards service, then hand it to
+    # `WorkflowsImpl.start` so the impl owns the terminal close.
+    # Title uses the resolved catalog ref so both `/workflow ref` and
+    # a partial-match resolution surface the canonical name on the
+    # card header.
+    try:
+        card = await cards_service.open(title=entry.ref, kind="workflow")
+    except Exception as exc:  # noqa: BLE001 — surface as one-line notice
+        ctx.stdout.write(f"/workflow: card open failed: {exc}\n")
+        return ControlSignal.CONTINUE
 
-    status = await execute_workflow_with_renderer(
-        state=state,
-        stdout=ctx.stdout,
-        store=store,
-        workflow=workflow,
-        run=run,
-    )
+    try:
+        run_id = await workflows_service.start(
+            entry.ref, inputs, card=card,
+        )
+    except Exception as exc:  # noqa: BLE001 — surface as one-line notice
+        # A failed start leaves the card ownership uncertain; close
+        # it as an error so the widget shows the terminal state
+        # rather than a stuck "running" glyph. Best-effort.
+        import contextlib as _cl  # noqa: PLC0415
 
-    if status == WorkflowRunStatus.WAITING_FOR_INPUT:
-        state.expecting_user_input_response = True
+        with _cl.suppress(Exception):
+            await card.close(final_status="error", error_message=str(exc)[:200])
+        ctx.stdout.write(f"/workflow: start failed: {exc}\n")
+        return ControlSignal.CONTINUE
 
+    state.pending_workflow_run_id = str(run_id)
     return ControlSignal.CONTINUE
 
 

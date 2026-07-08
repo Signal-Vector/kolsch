@@ -38,7 +38,6 @@ from engine.context import CancelToken
 from tests.bundles.kolsch.tools.conftest import (
     _headless_ctx,
     _invoke_tool_via_pilot,
-    _replay_ui_events_since,
 )
 from tests.cli.chat.services.fakes import (
     FakeExecutorSpec,
@@ -143,17 +142,18 @@ async def test_run_workflow_smoke(
         _install_scripted_workflows(
             pilot, refs=["kolsch/workflows/test"],
         )
-        seen: set[str] = set()
 
         result = await _invoke_tool_via_pilot(
             pilot,
             run_workflow_tool,
             {"ref": "kolsch/workflows/test", "inputs": {}},
         )
-        # Drain the card.opened UI event into the adapter so the
-        # transcript mounts the CardWidget.
-        await _replay_ui_events_since(pilot, seen)
-        await pilot.pause()
+        # bug-020: live bus subscription mounts the CardWidget in the
+        # same session — pump the pilot until it appears.
+        for _ in range(20):
+            await pilot.pause()
+            if pilot.app.query("CardWidget"):
+                break
 
         # Return shape.
         assert isinstance(result, dict)
@@ -211,15 +211,17 @@ async def test_workflow_status_smoke(
             pilot, refs=["kolsch/workflows/probe"],
             per_event_delay=1.0,  # keep the workflow running for the read
         )
-        seen: set[str] = set()
 
         run_result = await _invoke_tool_via_pilot(
             pilot,
             run_workflow_tool,
             {"ref": "kolsch/workflows/probe", "inputs": {}},
         )
-        await _replay_ui_events_since(pilot, seen)
-        await pilot.pause()
+        # bug-020: pump the pilot for the live bus dispatch.
+        for _ in range(20):
+            await pilot.pause()
+            if pilot.app.query("CardWidget"):
+                break
 
         run_id = run_result["run_id"]
 
@@ -270,15 +272,17 @@ async def test_cancel_workflow_smoke(
             pilot, refs=["kolsch/workflows/long"],
             per_event_delay=5.0,
         )
-        seen: set[str] = set()
 
         run_result = await _invoke_tool_via_pilot(
             pilot,
             run_workflow_tool,
             {"ref": "kolsch/workflows/long", "inputs": {}},
         )
-        await _replay_ui_events_since(pilot, seen)
-        await pilot.pause()
+        # bug-020: live bus subscription for CardWidget mount.
+        for _ in range(20):
+            await pilot.pause()
+            if pilot.app.query("CardWidget"):
+                break
 
         run_id = run_result["run_id"]
 

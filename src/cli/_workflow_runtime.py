@@ -11,6 +11,11 @@ The CLI surface still owns its own `WorkflowRunStore` instantiation
 store once per `/workflow` invocation but reuses the chat's already-
 bootstrapped [`PlatformRuntime`][platform_runtime.PlatformRuntime] for
 everything else.
+
+bug-020 grew the helper to accept the two spec-011 kwargs
+(`event_observer`, `cancel_token`) so
+`WorkflowsImpl._default_executor_factory` no longer re-builds the
+executor to attach them. One construction site.
 """
 
 from __future__ import annotations
@@ -29,9 +34,12 @@ from workflows.builtins import register_builtins
 from workflows.executor import IterativeExecutor, RunnerRegistry
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
     from pathlib import Path
 
+    from engine.context import CancelToken
     from platform_runtime import PlatformRuntime
+    from workflows.events import WorkflowEvent
     from workflows.parser import Workflow
     from workflows.run import WorkflowRun
     from workflows.run_store import WorkflowRunStore
@@ -47,6 +55,8 @@ def build_workflow_executor(
     workflow: Workflow,
     run: WorkflowRun,
     store: WorkflowRunStore,
+    event_observer: Callable[[WorkflowEvent], None] | None = None,
+    cancel_token: CancelToken | None = None,
 ) -> IterativeExecutor:
     """Construct a fully-wired `IterativeExecutor`.
 
@@ -60,6 +70,30 @@ def build_workflow_executor(
     Caller-owned: the `WorkflowRunStore` and the `WorkflowRun` are
     passed in. The store's directory layout is created lazily by
     `WorkflowRunStore.create`; the executor's `run` writes the JSONL.
+
+    Args:
+        root: Workspace root — same as `runtime.root`, passed
+            explicitly so callers can spin executors under a different
+            root at test time.
+        runtime: The platform runtime for authz/secrets/sandbox/engine
+            wiring.
+        workflow: The parsed workflow document.
+        run: The `WorkflowRun` the executor writes the JSONL for.
+        store: The workflow run store; the executor appends events
+            here.
+        event_observer: bug-020 — optional synchronous callable the
+            executor invokes once per emitted `WorkflowEvent`. When
+            provided, threaded onto the `IterativeExecutor` so the
+            chat runtime's bridge drain
+            (`WorkflowsImpl._drain_workflow_bridge`) picks up events.
+            Default `None` preserves the existing headless-CLI
+            (`kolsch workflows run`) call site, which does not need
+            an observer — it reads the JSONL after termination.
+        cancel_token: bug-020 — optional in-process cooperative cancel
+            token. When provided, threaded onto the executor so a
+            mid-run cancel from `WorkflowsImpl.cancel` unwinds the
+            executor's LLM streams. Default `None` for the headless
+            CLI (no cancellation surface).
     """
     catalog = runtime.asset_management.catalog()
 
@@ -119,4 +153,6 @@ def build_workflow_executor(
         store=store,
         registry=registry,
         catalog=catalog,
+        event_observer=event_observer,
+        cancel_token=cancel_token,
     )

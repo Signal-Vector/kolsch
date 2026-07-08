@@ -39,7 +39,7 @@ from cli.chat.cancel import request_cancel
 from cli.chat.event_adapter import EventAdapter
 from cli.chat.keybindings import CHAT_BINDINGS
 from cli.chat.service_registry import ChatServiceRegistry
-from cli.chat.services.cards_impl import CardsImpl
+from cli.chat.services.cards_impl import UI_EVENT_TOPIC, CardsImpl
 from cli.chat.services.prompts_impl import PromptsImpl
 from cli.chat.services.workflows_impl import WorkflowsImpl
 from cli.chat.session import ChatSessionBundle, _build_user_trigger, replay_session
@@ -241,6 +241,14 @@ class ChatApp(App):
         # inside the window (which cancels the oldest workflow) or by
         # the timer callback (which flips the reactive back to False).
         self._esc_toast_timer: asyncio.TimerHandle | None = None
+        # bug-020: subscription handle for the runtime-bus
+        # ``UI_EVENT_TOPIC`` subscription. ``on_mount`` registers
+        # ``event_adapter.handle`` on the bus so ``CardsImpl`` /
+        # ``WorkflowsImpl`` publishes surface in the SAME session (not
+        # only on next-boot replay); ``on_unmount`` unsubscribes via
+        # this handle so a re-mount does not stack duplicate handlers
+        # (D-008 aclose idempotence).
+        self._ui_event_bus_sub: Any = None
 
     # ------------------------------------------------------------------
     # Compose
@@ -309,6 +317,11 @@ class ChatApp(App):
                     session_store=self.session.runtime.store,
                     session_id=self.session.session_id,
                     thread_id=self.session.thread_id,
+                    # bug-020: inject the runtime bus so prompt
+                    # WIRE_PROMPT_* events publish to the live
+                    # adapter subscription (ApprovalBlock mounts in
+                    # the SAME session).
+                    bus=getattr(self.session.runtime, "bus", None),
                 )
             except Exception:  # noqa: BLE001 — headless fixtures may lack a real store
                 _LOGGER.debug(
@@ -322,6 +335,10 @@ class ChatApp(App):
                     session_store=self.session.runtime.store,
                     session_id=self.session.session_id,
                     thread_id=self.session.thread_id,
+                    # bug-020: inject the runtime bus so
+                    # `_publish_to_bus` reaches the live adapter
+                    # subscription in the SAME session.
+                    bus=getattr(self.session.runtime, "bus", None),
                 )
             except Exception:  # noqa: BLE001 — headless fixtures may lack a real store
                 _LOGGER.debug(
@@ -345,6 +362,11 @@ class ChatApp(App):
                     session_id=self.session.session_id,
                     thread_id=self.session.thread_id,
                     run_store=run_store,
+                    # bug-020: inject the runtime bus so
+                    # `_emit_ui_event` publishes reach the live
+                    # adapter subscription (workflow progress card
+                    # updates in the SAME session).
+                    bus=getattr(self.session.runtime, "bus", None),
                 )
             except Exception:  # noqa: BLE001 — headless fixtures may lack a real runtime
                 _LOGGER.debug(
@@ -415,6 +437,55 @@ class ChatApp(App):
             active_workflows, "emit_awaiting_approval",
         ):
             self.event_adapter.register_workflows_impl(active_workflows)
+
+        # bug-020: thread the finalised service registry into the
+        # slash-handler `ChatSessionState` so `/workflow` can reach
+        # `cards.open` + `workflows.start` without reconstructing
+        # anything. Handlers guard on `state.service_registry is None`
+        # for headless slash tests that construct a bare state.
+        if self._chat_state is not None:
+            self._chat_state.service_registry = self._service_registry
+
+        # bug-020: inject the `ChatServiceRegistry` into the runtime's
+        # `ToolsSubsystem` so `invoke_tool` forwards it into
+        # `dispatch_tool` as `chat_services=...`. Without this,
+        # `_populate_service_fields` short-circuits, every service
+        # field on `ToolContext` stays `None`, and butler workflow
+        # tools like `run_workflow` raise `ToolNotAvailable` on
+        # `require_services(["cards", "workflows"])` — the model then
+        # falls back to raw `bash`/`read_file`/`write_file`.
+        try:
+            tools_sub = getattr(
+                self.session.runtime, "tools_subsystem", None,
+            )
+            if tools_sub is not None and hasattr(
+                tools_sub, "set_chat_services",
+            ):
+                tools_sub.set_chat_services(self._service_registry)
+        except Exception:  # noqa: BLE001 — headless fixtures may lack the subsystem
+            _LOGGER.debug(
+                "ChatApp.on_mount: tools_subsystem chat_services wiring skipped",
+                exc_info=True,
+            )
+
+        # bug-020: subscribe the event adapter's `handle` to the
+        # runtime bus on `UI_EVENT_TOPIC` so every UI_EVENT
+        # `CardsImpl` / `WorkflowsImpl` publishes reaches the live
+        # adapter in the SAME session (not only on next-boot replay).
+        # Store the subscription handle on `self._ui_event_bus_sub`
+        # so `on_unmount` can unwind cleanly (D-008). Skipped when
+        # the runtime has no bus (headless fixtures).
+        try:
+            bus = getattr(self.session.runtime, "bus", None)
+            if bus is not None and hasattr(bus, "subscribe"):
+                self._ui_event_bus_sub = await bus.subscribe(
+                    UI_EVENT_TOPIC,
+                    self.event_adapter.handle,
+                )
+        except Exception:  # noqa: BLE001 — best-effort; a failed sub is not fatal
+            _LOGGER.exception(
+                "ChatApp.on_mount: UI-event bus subscription failed",
+            )
 
         # spec-016: construct the WorkflowLayoutManager so multi-workflow
         # cards reorder into the two-group layout with the divider. The
@@ -526,6 +597,39 @@ class ChatApp(App):
                 authz.clear_prompt_callback()
             except Exception:
                 pass
+
+        # bug-020: unsubscribe the UI-event bus handler BEFORE the
+        # service registry tear-down so any late-fired publish from
+        # a not-yet-cancelled drain worker does not re-enter the
+        # torn-down adapter. Idempotent on unknown handles (see
+        # `InProcessEventBus.unsubscribe`). Also detach the tools
+        # subsystem's `chat_services` sidecar so a subsequent process
+        # reboot of the same runtime does not carry a stale registry
+        # into a fresh `ChatApp` (D-008 unwind contract).
+        if self._ui_event_bus_sub is not None:
+            try:
+                bus = getattr(self.session.runtime, "bus", None)
+                if bus is not None and hasattr(bus, "unsubscribe"):
+                    await bus.unsubscribe(self._ui_event_bus_sub)
+            except Exception:  # noqa: BLE001 — teardown best-effort
+                _LOGGER.exception(
+                    "ChatApp.on_unmount: UI-event bus unsubscribe raised",
+                )
+            finally:
+                self._ui_event_bus_sub = None
+        try:
+            tools_sub = getattr(
+                self.session.runtime, "tools_subsystem", None,
+            )
+            if tools_sub is not None and hasattr(
+                tools_sub, "set_chat_services",
+            ):
+                tools_sub.set_chat_services(None)
+        except Exception:  # noqa: BLE001 — teardown best-effort
+            _LOGGER.debug(
+                "ChatApp.on_unmount: tools_subsystem detach skipped",
+                exc_info=True,
+            )
 
         if self._service_registry is not None:
             for field_name in ("cards", "prompts", "workflows", "session"):

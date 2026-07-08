@@ -29,7 +29,6 @@ from tools.services.exceptions import ToolNotAvailable
 from tests.bundles.kolsch.tools.conftest import (
     _headless_ctx,
     _invoke_tool_via_pilot,
-    _replay_ui_events_since,
 )
 
 
@@ -46,12 +45,15 @@ async def test_hello_card_smoke(
     """hello_card streams three chunks + closes as success."""
     async with chat_app.run_test() as pilot:
         await pilot.pause()
-        seen: set[str] = set()
         result = await _invoke_tool_via_pilot(pilot, hello_card_tool, {})
-        # Drain UI events from the store into the adapter — the live
-        # bus subscription seam is a no-op stub in v1.
-        await _replay_ui_events_since(pilot, seen)
-        await pilot.pause()
+        # bug-020: the runtime bus subscription in `ChatApp.on_mount`
+        # forwards each `CardsImpl` publish to `EventAdapter.handle`
+        # in the SAME session — no manual store drain. Yield to the
+        # loop so the bus dispatch and adapter mount complete.
+        for _ in range(20):
+            await pilot.pause()
+            if pilot.app.query("CardWidget"):
+                break
 
         assert result == {"message": "hello card demo complete"}
 
@@ -79,14 +81,16 @@ async def test_download_with_progress_smoke(
     """download_with_progress advances the bar to total_kb / total_kb."""
     async with chat_app.run_test() as pilot:
         await pilot.pause()
-        seen: set[str] = set()
         result = await _invoke_tool_via_pilot(
             pilot,
             download_with_progress_tool,
             {"total_kb": 30, "step_kb": 10},
         )
-        await _replay_ui_events_since(pilot, seen)
-        await pilot.pause()
+        # bug-020: live bus dispatch; poll until the CardWidget mounts.
+        for _ in range(20):
+            await pilot.pause()
+            if pilot.app.query("CardWidget"):
+                break
 
         assert result == {"downloaded_kb": 30}
 
@@ -115,7 +119,6 @@ async def test_confirm_dangerous_action_smoke(
     """confirm_dangerous_action mounts an ApprovalBlock; ``y`` resolves it."""
     async with chat_app.run_test() as pilot:
         await pilot.pause()
-        seen: set[str] = set()
 
         # Fire the tool in a task so the pilot loop can advance while
         # the tool body awaits the prompt future.
@@ -127,15 +130,14 @@ async def test_confirm_dangerous_action_smoke(
             ),
         )
 
-        # Drain UI events until the ApprovalBlock mounts. The
-        # `WIRE_PROMPT_REQUESTED` event lands on the store as soon as
-        # `PromptsImpl.choice` awaits its future; the adapter's
-        # `_handle_prompt_requested` calls `mount_approval_block` on
-        # dispatch.
+        # bug-020: `PromptsImpl` doesn't (yet) publish to the runtime
+        # bus, but `Cards.notice` / card mounts on the same bus DO.
+        # For this smoke, we still poll for the ApprovalBlock — the
+        # WIRE_PROMPT_REQUESTED event is appended to the store; the
+        # adapter's bookmark path picks it up on the next handle
+        # (no drain needed for card mounts). Simply pump the pilot.
         approval = None
         for _ in range(50):  # ~1s worst case
-            await pilot.pause()
-            await _replay_ui_events_since(pilot, seen)
             await pilot.pause()
             found = pilot.app.query("ApprovalBlock")
             if len(found) == 1:

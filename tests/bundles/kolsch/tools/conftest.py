@@ -31,7 +31,6 @@ from uuid import uuid4
 import pytest
 
 from cli.chat.app import ChatApp
-from schemas.events import EventType
 from schemas.identifiers import AgentId, SessionId, ThreadId
 from tools.decorator import ToolContext, get_tool_definition
 from tools.discovery import discover_tools_in_file
@@ -169,6 +168,8 @@ async def chat_app(tmp_path: Path) -> AsyncIterator[ChatApp]:
     session = await store.create_session("ag_fake", name="c")
     threads = await store.list_threads(session.session_id)
 
+    from bus.in_process import InProcessEventBus
+
     class _R:
         def __init__(self) -> None:
             self.store = store
@@ -180,6 +181,11 @@ async def chat_app(tmp_path: Path) -> AsyncIterator[ChatApp]:
             # for cold-read paths. spec-009 example tools don't touch
             # workflows, so exposing ``root`` here is additive.
             self.root = tmp_path
+            # bug-020: `CardsImpl`/`WorkflowsImpl` publish onto this
+            # bus so `EventAdapter.handle` fires in the SAME session
+            # (no manual store drain). Matches the production runtime
+            # (`PlatformRuntime.bus` is `InProcessEventBus`).
+            self.bus = InProcessEventBus()
 
     bundle = _FakeBundle(
         runtime=_R(),
@@ -254,35 +260,6 @@ async def _invoke_tool_via_pilot(
     return await _invoke_tool(tool_fn, validated_args, ctx)
 
 
-async def _replay_ui_events_since(
-    pilot: Any,
-    seen: set[str],
-) -> None:
-    """Dispatch every fresh ``UI_EVENT`` on the store to the app's adapter.
-
-    ``CardsImpl._drain_stream_queue`` publishes to an in-process bus
-    that is a no-op stub in v1 — the adapter's live subscription
-    path is not wired yet (spec-008+ / bus wiring). To exercise the
-    mount seam end-to-end from a tool call, we read every UI_EVENT
-    off the store and dispatch it through the adapter's ``handle``
-    manually.
-
-    ``seen`` is a set of event ids the caller mutates across calls
-    so repeat drains don't re-mount / re-apply events.
-    """
-    app = pilot.app
-    store = app.session.runtime.store
-    thread_id = app.session.thread_id
-    async for event in store.read_events(thread_id):
-        eid = str(event.event_id)
-        if eid in seen:
-            continue
-        seen.add(eid)
-        if event.type != EventType.UI_EVENT:
-            continue
-        await app.event_adapter.handle(event)
-
-
 def _headless_ctx() -> ToolContext:
     """Return a ``ToolContext`` with every service field ``None``.
 
@@ -303,10 +280,16 @@ def _headless_ctx() -> ToolContext:
 # Public re-exports so tests can `from tests.bundles.kolsch.tools.conftest
 # import _invoke_tool_via_pilot`. Named with the leading underscore per
 # spec §Coordinator-Locked; the module boundary makes them public.
+#
+# bug-020: `_replay_ui_events_since` deleted. The runtime bus now
+# subscribes `event_adapter.handle` on `UI_EVENT_TOPIC` from
+# `ChatApp.on_mount` (via `CardsImpl` / `WorkflowsImpl` publish
+# calls), so tool-driven mounts surface in the live session without
+# a manual drain. Callers replaced with a bounded `pilot.pause()`
+# poll on the widget query.
 __all__ = [
     "_headless_ctx",
     "_invoke_tool_via_pilot",
-    "_replay_ui_events_since",
 ]
 
 

@@ -1,24 +1,29 @@
 """Phase 3.9 Step 1 — `/workflow` slash command end-to-end.
 
-Phase Tests 1, 2, 7, 8 + ancillary coverage:
+**RETIRED by bug-020 (2026-07-08).** The `/workflow` slash handler
+now routes through `state.service_registry.workflows.start(...)` —
+the executor no longer streams `WorkflowCapsuleRenderer` output to
+`ctx.stdout`. Instead it opens a `workflow`-kind card via
+`cards.open` and hands it to `WorkflowsImpl.start` so the
+`WorkflowRenderer` inside the chat's `CardWidget` renders the run.
 
-- **Phase Test 1** — ``/workflow kolsch/workflows/hello`` runs the
-  starter hello workflow end-to-end; capsules stream to stdout; the
-  final capsule shows the terminal output.
-- **Phase Test 2** — ``/workflow ... with name=Alice`` — the input
-  flows through to the workflow.
-- **Phase Test 7** — failed node renders ``caller_message`` (NOT
-  ``str(exc)``).
-- **Phase Test 8** — branch-not-taken capsules render muted with body
-  ``(not taken)``.
-- ``pending_workflow_run_id`` set after a successful invocation.
-- Catalog-miss surfaces a friendly error and chat continues.
-- Bad arg parsing surfaces a friendly error and chat continues.
+Every test in this module asserted on the retired stdout-capsule
+surface (node event_id subscripts, capsule labels, inline pause
+capsules, `pending_workflow_run_id` populated via the old renderer's
+side-effect). The new live-mount coverage lives at:
 
-The tests reuse the session-scoped ``chat_workspace`` fixture
-(``kolsch setup --non-interactive`` once per session) and craft a
-``SlashContext`` to dispatch ``/workflow`` directly — this exercises
-the same code path as the live chat REPL would.
+* `tests/cli/chat/test_workflow_card_live_mount.py` — flagship
+  Pilot regression (AC #11).
+* `tests/cli/_slash/test_workflow_handler_routes_through_impl.py` —
+  the routing invariant + card-open ordering + no-legacy-renderer
+  contract (AC #7).
+* `tests/bundles/kolsch/tools/test_butler_tools_smoke.py` — the
+  `run_workflow` butler-tool path (same `WorkflowsImpl.start` seam,
+  reachable from the model side).
+
+This module is skipped in its entirety. Deletion is deferred so
+`git log` on the retired assertions stays inspectable; the module
+will be removed in a follow-up cleanup pass.
 """
 
 from __future__ import annotations
@@ -28,6 +33,16 @@ import re
 from typing import TYPE_CHECKING
 
 import pytest
+
+# bug-020: retired — see module docstring.
+pytestmark = pytest.mark.skip(
+    reason=(
+        "bug-020 retired the /workflow stdout-capsule surface; the "
+        "handler now routes through WorkflowsImpl.start. Live-mount "
+        "coverage lives at tests/cli/chat/test_workflow_card_live_mount.py "
+        "and tests/cli/_slash/test_workflow_handler_routes_through_impl.py."
+    ),
+)
 
 from cli._slash import (
     ChatSessionState,

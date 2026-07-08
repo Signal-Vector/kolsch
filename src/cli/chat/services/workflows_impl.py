@@ -79,6 +79,7 @@ from workflows.events import (
 from workflows.run import RunDirectory, WorkflowRunStatus
 
 if TYPE_CHECKING:
+    from bus.event_bus import EventBus
     from cli.chat.services.workflow_layout import WorkflowLayoutManager
     from engine.context import CancelToken as _CancelToken  # noqa: F401
     from schemas.identifiers import SessionId, ThreadId
@@ -271,6 +272,7 @@ class WorkflowsImpl(AbstractWorkflows):
         thread_id: "ThreadId",
         run_store: "WorkflowRunStore",
         executor_factory: ExecutorFactory | None = None,
+        bus: "EventBus | None" = None,
     ) -> None:
         self._runtime = runtime
         self._cards = cards
@@ -279,6 +281,15 @@ class WorkflowsImpl(AbstractWorkflows):
         self._session_id = session_id
         self._thread_id = thread_id
         self._run_store = run_store
+        # bug-020: in-process runtime bus. When present,
+        # `_emit_ui_event` publishes each UI event on `UI_EVENT_TOPIC`
+        # AFTER the store append so the live `EventAdapter.handle`
+        # subscription in `ChatApp.on_mount` sees `kolsch.workflow.
+        # progress` / `kolsch.workflow.node.awaiting_approval` etc.
+        # events in the SAME session. `None` in headless tests /
+        # adapter-less fixtures — publish is a silent no-op, matching
+        # the pre-bug-020 stub behaviour.
+        self._bus: "EventBus | None" = bus
         # Test hook: default factory builds a real `IterativeExecutor`
         # via `_workflow_runtime.build_workflow_executor`. Test bundles
         # pass a fake that returns a stub executor + minted RunDirectory
@@ -1169,11 +1180,17 @@ class WorkflowsImpl(AbstractWorkflows):
         *,
         critical: bool = True,
     ) -> EventId:
-        """Append a UI_EVENT to the session store.
+        """Append a UI_EVENT to the session store, then publish to the bus.
 
-        Bus publish is deliberately a no-op today (spec-006 Q4 lock);
-        the durability contract is the append itself — replay-on-boot
-        picks up the event.
+        bug-020: the store append remains the durability contract —
+        replay-on-boot picks up the event. After the append, if a
+        runtime bus was injected at construction, publish the SAME
+        `Event` object onto ``UI_EVENT_TOPIC`` so the live
+        `EventAdapter.handle` subscription in ``ChatApp.on_mount``
+        dispatches to the `WorkflowRenderer` inside the SAME session
+        rather than only on next-boot replay. Publish AFTER append
+        preserves the store-first invariant (D-008 aclose-idempotent
+        cleanup: no bus event exists that isn't already in the log).
 
         `critical` is accepted for signature parity with `CardsImpl._emit_ui_event`
         (spec-006). Today's WorkflowsImpl has no streaming queue —
@@ -1197,6 +1214,15 @@ class WorkflowsImpl(AbstractWorkflows):
             created_at=datetime.now(UTC),
         )
         await self._session_store.append_event(self._thread_id, event)
+        # bug-020: publish to the in-process bus so the live adapter
+        # subscription fires this session. The bus's `publish` is
+        # best-effort (transport failures logged + swallowed at
+        # `InProcessEventBus.publish`); a raise here would break a
+        # workflow's progress-event surfacing, which is worse than
+        # a silent bus fault.
+        if self._bus is not None:
+            with contextlib.suppress(Exception):
+                await self._bus.publish(event)
         return event.event_id
 
     # ------------------------------------------------------------------
@@ -1216,9 +1242,16 @@ class WorkflowsImpl(AbstractWorkflows):
         exactly like `cli/workflows.py::_cmd_run` does, minus the
         stdout/stderr rendering — this impl is stream-live rather
         than blocking-cli.
+
+        bug-020: `build_workflow_executor` now accepts
+        `event_observer` + `cancel_token` kwargs (with default
+        `None`) so we can build the executor in one construction
+        site rather than re-instantiating a fresh
+        `IterativeExecutor` with the observer + token bolted on
+        after the fact. The prior "double-build" pattern reached
+        into a private `_registry` attribute and hurt readability.
         """
         from cli._workflow_runtime import build_workflow_executor  # noqa: PLC0415
-        from workflows.executor import IterativeExecutor  # noqa: PLC0415
         from workflows.parser import parse_workflow_yaml  # noqa: PLC0415
 
         catalog = self._runtime.asset_management.catalog()
@@ -1236,19 +1269,11 @@ class WorkflowsImpl(AbstractWorkflows):
             workflow=workflow,
             run=run,
             store=self._run_store,
-        )
-        # Re-inject observer + cancel via the executor's spec-011
-        # kwargs. `build_workflow_executor` doesn't take them; we
-        # rebuild the executor with the same registry to add them.
-        executor = IterativeExecutor(
-            workflow=workflow,
-            run=run,
-            store=self._run_store,
-            registry=executor._registry,
-            catalog=catalog,
             event_observer=event_observer,
             cancel_token=cancel_token,
         )
+        # Silence unused-import lint in factory-simplified path.
+        _ = catalog
         run_dir = self._run_store.directory(run.run_id)
         return executor, run_dir
 
