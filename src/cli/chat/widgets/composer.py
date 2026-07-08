@@ -31,7 +31,7 @@ class Composer(TextArea):
 
     DEFAULT_PLACEHOLDER = (
         "Message… (Enter=send · Alt+Enter=newline · "
-        "Ctrl+Shift+C=copy · /help)"
+        "Ctrl+Shift+C=copy · /help · Ctrl+D or 'exit' to quit)"
     )
     AWAITING_PLACEHOLDER = "Approval required — respond in the block above"
 
@@ -67,6 +67,16 @@ class Composer(TextArea):
             super().__init__()
             self.content = content
 
+    class QuitRequested(Message):
+        """Posted when the user asks to quit via an empty-composer Ctrl+D.
+
+        Payloadless — the composer only knows the *intent* ("user wants
+        to quit"); it does NOT know whether the app can honour that
+        (the app may still be in the middle of a turn). The app-level
+        handler is the single decision point (see
+        ``ChatApp.on_composer_quit_requested`` — bug-023).
+        """
+
     def __init__(
         self,
         text: str = "",
@@ -93,10 +103,23 @@ class Composer(TextArea):
     )
 
     async def _on_key(self, event: events.Key) -> None:
-        """Intercept Enter (submit) and newline keys.
+        """Intercept Enter (submit), newline keys, and empty-composer Ctrl+D.
 
-        Any other key is delegated to `TextArea._on_key` so the widget
-        continues to behave like a normal editor.
+        - ``Enter`` → post ``Submitted``.
+        - ``Alt+Enter`` / ``Ctrl+J`` / ``Shift+Enter`` → literal newline.
+        - ``Ctrl+D`` on an empty (or whitespace-only) composer → post
+          ``QuitRequested``. TextArea's own ``ctrl+d,delete`` binding
+          for ``delete_right`` is claimed by the focused widget's
+          binding chain BEFORE app-level bindings can run — so unless
+          this handler intercepts and stops the event, the app-level
+          ``ctrl+d`` binding at ``keybindings.py:32`` never fires
+          (bug-023 root cause).
+        - ``Ctrl+D`` on a non-empty composer → let it fall through so
+          TextArea's ``delete_right`` runs (users mid-edit expect
+          forward-delete to work — that's why TextArea's binding
+          exists).
+        - Any other key delegates to ``TextArea._on_key`` so the
+          widget continues to behave like a normal editor.
         """
         if self.disabled:
             return
@@ -111,6 +134,15 @@ class Composer(TextArea):
             event.stop()
             event.prevent_default()
             self.post_message(self.Submitted(self.text))
+            return
+        if key == "ctrl+d" and not self.text.strip():
+            # Empty composer: stop the event so TextArea's
+            # ``delete_right`` binding does NOT fire, then let the app
+            # decide whether to actually quit (it only quits when idle;
+            # ``action_quit_if_idle`` is the single quit site).
+            event.stop()
+            event.prevent_default()
+            self.post_message(self.QuitRequested())
             return
         await super()._on_key(event)
 

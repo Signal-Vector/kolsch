@@ -38,7 +38,7 @@ async def test_default_placeholder_matches_spec(fake_app_factory) -> None:
         # follow-up spec wires the completer.
         assert composer.placeholder == (
             "Message… (Enter=send · Alt+Enter=newline · "
-            "Ctrl+Shift+C=copy · /help)"
+            "Ctrl+Shift+C=copy · /help · Ctrl+D or 'exit' to quit)"
         )
         assert composer.disabled is False
 

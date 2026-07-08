@@ -928,6 +928,15 @@ class ChatApp(App):
             return
         popup.prefix = event.text_area.text
 
+    #: bug-023 — bare REPL-style exit verbs. A submission whose
+    #: trimmed, case-insensitive text is in this set is treated as
+    #: ``/exit`` so users with muscle memory from ``python`` / ``bash``
+    #: / ``sqlite3`` / ``psql`` / ``node`` / ``ipython`` don't send
+    #: prose to the model when they meant to quit. Kept intentionally
+    #: narrow — anything longer (``"I exit the room"``) falls through
+    #: to prose.
+    _BARE_EXIT_VERBS = frozenset({"exit", "quit", ":q", ":wq"})
+
     async def on_composer_submitted(self, message: Composer.Submitted) -> None:
         """Composer sent a submit — route through slash / engine.
 
@@ -937,6 +946,11 @@ class ChatApp(App):
         two chatboxes per submission (see the adapter's own docstring:
         the adapter is the single mount site so replay + live paths
         share it).
+
+        bug-023: bare exit verbs (``exit`` / ``quit`` / ``:q`` /
+        ``:wq``, case-insensitive) are routed to ``/exit`` before the
+        ``/`` prefix check, so REPL muscle-memory doesn't send prose
+        to the engine.
         """
         message.stop()
         text = message.content
@@ -951,11 +965,33 @@ class ChatApp(App):
         text = text.strip()
         if not text:
             return
+        # bug-023 — bare REPL-style exit verbs → treat as `/exit`.
+        # Must run BEFORE the `/` prefix check (bare `exit` has no
+        # leading slash). Uses `_handle_slash("/exit")` so the exit
+        # logic stays in one place.
+        if text.casefold() in self._BARE_EXIT_VERBS:
+            await self._handle_slash("/exit")
+            return
         # Slash / @ / ! prefix routing.
         if text.startswith("/"):
             await self._handle_slash(text)
             return
         self._run_exchange(text)
+
+    def on_composer_quit_requested(
+        self, message: Composer.QuitRequested,
+    ) -> None:
+        """bug-023 — Ctrl+D on an empty composer → quit if idle.
+
+        Composer intercepted ``ctrl+d`` (TextArea's own binding for
+        ``delete_right`` would otherwise consume the key before the
+        app-level ``ctrl+d`` binding at ``keybindings.py:32`` fired).
+        Route to ``action_quit_if_idle`` — the existing single quit
+        site — so the "only quit when idle" semantics stay in one
+        place. Direct ``self.exit(0)`` here would bypass that guard.
+        """
+        message.stop()
+        self.action_quit_if_idle()
 
     async def _handle_slash(self, text: str) -> None:
         """Dispatch a slash command through ``cli._slash``'s registry.
