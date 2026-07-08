@@ -217,6 +217,13 @@ class WorkflowRunRecord:
     parent_run_id: WorkflowRunId | None = None
     terminal_at: datetime | None = None
     acked: bool = False
+    # feat-019: True while at least one node on this run is waiting on an
+    # approval. Flipped by ``emit_awaiting_approval`` / cleared by
+    # ``emit_approval_resolved``. Read by
+    # :func:`cli.chat.services.workflow_layout.format_live_workflow_strip`
+    # to count the ``⚠ N paused`` suffix. Default False so pre-feat-019
+    # test fixtures that build records via minimal kwargs still parse.
+    awaiting_approval: bool = False
 
 
 # ---------------------------------------------------------------------------
@@ -1089,7 +1096,21 @@ class WorkflowsImpl(AbstractWorkflows):
 
         `run_id` / `node_name` are strings — the adapter carries the
         payload's `source` dict verbatim and passes both through.
+
+        feat-019: also flips the matching record's
+        ``awaiting_approval`` flag so the status-line-2 strip's
+        ``⚠ N paused`` counter picks the run up on the next layout
+        flush.
         """
+        # feat-019: flag the record for the status-line-2 ⚠ counter.
+        # `run_id` arrives as a str from the adapter; look up the
+        # typed WorkflowRunId key by string match.
+        for rid, record in self._workflow_registry.items():
+            if str(rid) == run_id:
+                record.awaiting_approval = True
+                self._notify_layout(rid)
+                break
+
         payload: dict[str, Any] = {
             "run_id": run_id,
             "node_name": node_name,
@@ -1114,7 +1135,18 @@ class WorkflowsImpl(AbstractWorkflows):
         `resolution` is one of `"approved"` / `"denied"` /
         `"cancelled"`; downstream the renderer transitions the row
         back to `running` (glyph `▸`).
+
+        feat-019: clears the matching record's ``awaiting_approval``
+        flag so the status-line-2 strip's ``⚠ N paused`` counter drops
+        this run on the next layout flush.
         """
+        # feat-019: clear the pending flag so the ⚠ counter drops.
+        for rid, record in self._workflow_registry.items():
+            if str(rid) == run_id:
+                record.awaiting_approval = False
+                self._notify_layout(rid)
+                break
+
         payload: dict[str, Any] = {
             "run_id": run_id,
             "node_name": node_name,

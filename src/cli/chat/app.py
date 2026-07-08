@@ -12,6 +12,7 @@ alt-screen / full-screen.
 
 from __future__ import annotations
 
+import asyncio
 import io
 import logging
 import os
@@ -19,9 +20,10 @@ from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from textual import work
+from textual import events, work
 from textual.app import App, ComposeResult
 from textual.containers import Vertical, VerticalScroll
+from textual.reactive import reactive
 from textual.widgets import Static
 
 from cli._slash import (
@@ -48,6 +50,7 @@ from cli.chat.widgets import (
     InfoBar,
     ScrollbackCue,
     SlashPopup,
+    StatusBar,
     ToolCallBlock,
     TurnStatus,
     UserChatbox,
@@ -112,6 +115,24 @@ def _resolve_css_path() -> str:
     return str(_THEMES_DIR / theme)
 
 
+_ESC_TOAST_SECONDS = 3.0
+"""feat-019: the Esc-Esc toast auto-dismiss window.
+
+After the user cancels a butler turn with the first ``Esc`` — and at
+least one workflow is live — the toast surfaces for this many seconds.
+A second ``Esc`` within the window cancels the oldest workflow; past
+the window, ``Esc`` returns to FIFO semantics (cancel oldest workflow
+directly). Coordinator lock in the spec.
+"""
+
+_ESC_TOAST_TEXT = "↳ butler cancelled · press Esc again to cancel workflow"
+"""feat-019 AC #6: the exact toast string set on the status bar.
+
+Best-effort 78-char target (Coordinator Q2 lock) — this line is 60
+chars so it fits comfortably on standard terminals.
+"""
+
+
 class ChatApp(App):
     """Textual chat surface.
 
@@ -124,6 +145,15 @@ class ChatApp(App):
     """
 
     BINDINGS = CHAT_BINDINGS
+
+    # feat-019: reactive flag for the Esc-Esc toast window. True during
+    # the 3s window after the first ``Esc`` cancelled a butler turn
+    # AND ≥ 1 workflow is live. A second ``Esc`` inside the window
+    # cancels the oldest workflow; past the window the flag flips back
+    # to False via ``call_later`` and ``Esc`` returns to FIFO
+    # semantics. Watched by :meth:`watch__esc_toast_active` which
+    # pushes / clears the toast text on the :class:`StatusBar`.
+    _esc_toast_active: reactive[bool] = reactive(False)
 
     # In inline mode, Textual's Screen sizes itself to
     # `get_content_height` (sum of children) unless the Screen has an
@@ -205,6 +235,12 @@ class ChatApp(App):
         # adapter are up. None in headless / adapter-less fixtures —
         # `WorkflowsImpl._notify_layout` silently no-ops in that case.
         self._workflow_layout_manager: Any = None
+        # feat-019: handle for the 3s Esc-Esc toast auto-dismiss timer.
+        # Set by ``on_key`` when the first ``Esc`` cancels a butler
+        # turn AND a workflow is live; cleared by the second ``Esc``
+        # inside the window (which cancels the oldest workflow) or by
+        # the timer callback (which flips the reactive back to False).
+        self._esc_toast_timer: asyncio.TimerHandle | None = None
 
     # ------------------------------------------------------------------
     # Compose
@@ -214,6 +250,12 @@ class ChatApp(App):
         yield VerticalScroll(id="transcript")
         with Vertical(id="bottom-stack"):
             yield TurnStatus(id="turn-status")
+            # feat-019: line 2 — workflow-strip / Esc-toast surface.
+            # Sits BELOW ``TurnStatus`` so the turn spinner (line-2
+            # transient) still wins when active; the StatusBar's
+            # ``turn_active`` flag suppresses the workflow strip while
+            # the turn owns the row (Coordinator Q1 lock).
+            yield StatusBar(id="status-bar")
             yield SlashPopup(id="slash-popup")
             yield Composer(id="composer")
             yield InfoBar(id="info-bar")
@@ -405,6 +447,17 @@ class ChatApp(App):
                     )
                     active_workflows.register_layout_manager(layout_manager)
                     self._workflow_layout_manager = layout_manager
+                    # feat-019: register the StatusBar handle so the
+                    # layout manager's `_flush_reorder` pushes the
+                    # live-workflow strip on every tick.
+                    try:
+                        status_bar = self.query_one("#status-bar", StatusBar)
+                        layout_manager.register_status_bar(status_bar)
+                    except Exception:  # noqa: BLE001 — headless / unmounted
+                        _LOGGER.debug(
+                            "ChatApp.on_mount: StatusBar wire skipped",
+                            exc_info=True,
+                        )
             except Exception:  # noqa: BLE001 — layout wiring best-effort
                 _LOGGER.debug(
                     "ChatApp.on_mount: WorkflowLayoutManager wiring skipped",
@@ -718,6 +771,14 @@ class ChatApp(App):
             turn.target = target
         except Exception:
             pass
+        # feat-019: keep the StatusBar's ``turn_active`` in lockstep so
+        # the workflow strip is suppressed during an active turn
+        # (Coordinator Q1 lock). Empty verb clears the flag.
+        try:
+            status_bar = self.query_one("#status-bar", StatusBar)
+            status_bar.set_turn_active(bool(verb))
+        except Exception:
+            pass
 
     def last_assistant_text(self) -> str:
         return self._last_assistant_text
@@ -937,6 +998,185 @@ class ChatApp(App):
     def action_cancel_exchange(self) -> None:
         """``escape`` / ``ctrl+c`` — cancel the active exchange."""
         request_cancel(self)
+
+    # ------------------------------------------------------------------
+    # feat-019 — Esc-Esc discrimination
+    # ------------------------------------------------------------------
+
+    def _butler_turn_active(self) -> bool:
+        """True when a butler exchange is in flight.
+
+        Read of :attr:`active_cancel` — the exchange worker sets it
+        when it enters ``_run_exchange`` and clears it in the finally
+        block, so the presence of a cancel token = a butler turn is
+        active.
+        """
+        return self.active_cancel is not None
+
+    def _has_live_workflow(self) -> bool:
+        """True when at least one workflow is ``running`` / ``cancelling``.
+
+        Reads the ``WorkflowsImpl._workflow_registry`` directly (via
+        ``getattr`` so headless fixtures without a full impl skip
+        cleanly). Values are :class:`WorkflowRunRecord` instances;
+        their ``phase`` field is the source of truth.
+        """
+        workflows_impl = self._active_workflows()
+        if workflows_impl is None:
+            return False
+        registry = getattr(workflows_impl, "_workflow_registry", None)
+        if registry is None:
+            return False
+        for record in registry.values():
+            if getattr(record, "phase", None) in ("running", "cancelling"):
+                return True
+        return False
+
+    def _find_oldest_running_workflow(self) -> Any:
+        """Return the ``run_id`` of the oldest live workflow, or None.
+
+        Uses ``started_at`` (with ``created_at`` fallback) as the age
+        anchor — matches :func:`sort_workflow_cards`'s in-progress
+        band ordering so the FIFO semantics are consistent across the
+        UI. Skips terminal / cancelled records.
+        """
+        workflows_impl = self._active_workflows()
+        if workflows_impl is None:
+            return None
+        registry = getattr(workflows_impl, "_workflow_registry", None)
+        if registry is None:
+            return None
+        live = []
+        for run_id, record in registry.items():
+            phase = getattr(record, "phase", None)
+            if phase not in ("running", "cancelling"):
+                continue
+            anchor = (
+                getattr(record, "started_at", None)
+                or getattr(record, "created_at", None)
+            )
+            if anchor is None:
+                continue
+            live.append((anchor, run_id))
+        if not live:
+            return None
+        live.sort(key=lambda pair: pair[0])
+        return live[0][1]
+
+    def _active_workflows(self) -> Any:
+        """Return the wired :class:`WorkflowsImpl` handle or ``None``."""
+        registry = self._service_registry
+        if registry is None:
+            return None
+        return getattr(registry, "workflows", None)
+
+    def _cancel_butler_turn(self) -> None:
+        """Cancel the in-flight butler turn via the shared helper."""
+        request_cancel(self)
+
+    async def on_key(self, event: events.Key) -> None:
+        """feat-019 Esc-Esc discrimination.
+
+        Non-escape keys fall through to Textual's default handling
+        (bindings + widget dispatch). ``escape`` fires the FIFO state
+        machine described in :func:`process/feat-019...` — see the
+        spec for the full acceptance criteria.
+        """
+        if event.key != "escape":
+            return
+        # spec-014 approval takes precedence (existing behaviour).
+        # Check composer's ``awaiting_approval`` flag as a proxy.
+        try:
+            composer = self.query_one(Composer)
+            if getattr(composer, "awaiting_approval", False):
+                return  # let default handling run
+        except Exception:
+            pass
+
+        # Second Esc inside the toast window — cancel the oldest workflow.
+        if self._esc_toast_active:
+            event.stop()
+            self._esc_toast_active = False
+            if self._esc_toast_timer is not None:
+                try:
+                    self._esc_toast_timer.cancel()
+                except Exception:
+                    pass
+                self._esc_toast_timer = None
+            oldest_id = self._find_oldest_running_workflow()
+            if oldest_id is not None:
+                workflows_impl = self._active_workflows()
+                if workflows_impl is not None:
+                    try:
+                        await workflows_impl.cancel(oldest_id)
+                    except Exception:  # noqa: BLE001 — cancel best-effort
+                        _LOGGER.exception(
+                            "ChatApp.on_key: workflow cancel raised",
+                        )
+            return
+
+        # First Esc — FIFO logic.
+        cancelled_butler = False
+        if self._butler_turn_active():
+            self._cancel_butler_turn()
+            cancelled_butler = True
+        else:
+            oldest_id = self._find_oldest_running_workflow()
+            if oldest_id is not None:
+                event.stop()
+                workflows_impl = self._active_workflows()
+                if workflows_impl is not None:
+                    try:
+                        await workflows_impl.cancel(oldest_id)
+                    except Exception:  # noqa: BLE001 — cancel best-effort
+                        _LOGGER.exception(
+                            "ChatApp.on_key: workflow cancel raised",
+                        )
+                return
+
+        # Toast if cancelled butler AND workflow live.
+        if cancelled_butler:
+            event.stop()
+            if self._has_live_workflow():
+                self._esc_toast_active = True
+                try:
+                    loop = asyncio.get_running_loop()
+                    self._esc_toast_timer = loop.call_later(
+                        _ESC_TOAST_SECONDS,
+                        self._dismiss_esc_toast,
+                    )
+                except RuntimeError:
+                    # No running loop — headless fixtures. Toast is a
+                    # UX affordance; skip.
+                    pass
+            return
+
+        # No butler turn AND no live workflow — let default handling
+        # run (Textual will fire the ``escape`` binding, which routes
+        # to ``action_cancel_exchange`` — a safe no-op with no active
+        # cancel token).
+
+    def _dismiss_esc_toast(self) -> None:
+        """Timer callback — clear the toast reactive."""
+        self._esc_toast_active = False
+        self._esc_toast_timer = None
+
+    def watch__esc_toast_active(self, _old: bool, new: bool) -> None:
+        """React to Esc-toast flag changes: push / clear the toast text.
+
+        feat-019 AC #6 — the status bar renders the toast text while
+        the reactive is True and clears it on transition to False.
+        Widget-level rendering happens inside :class:`StatusBar` via
+        its own reactive watchers.
+        """
+        try:
+            status_bar = self.query_one("#status-bar", StatusBar)
+        except Exception:
+            return
+        if new:
+            status_bar.set_toast(_ESC_TOAST_TEXT)
+        else:
+            status_bar.set_toast(None)
 
     def action_scroll_transcript(self, direction: str) -> None:
         """Scroll the transcript ``VerticalScroll`` by keyboard.

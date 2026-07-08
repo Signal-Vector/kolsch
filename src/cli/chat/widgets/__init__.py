@@ -17,9 +17,11 @@ from cli.chat.widgets.approval_pattern_edit import ApprovalPatternEdit
 from cli.chat.widgets.approval_save_confirm import ApprovalSaveConfirm
 from cli.chat.widgets.assistant_prose import AssistantProse
 from cli.chat.widgets.composer import Composer
+from cli.chat.widgets.force_kill_confirm import ForceKillConfirm
 from cli.chat.widgets.info_bar import InfoBar
 from cli.chat.widgets.scrollback_cue import ScrollbackCue
 from cli.chat.widgets.slash_popup import SlashPopup
+from cli.chat.widgets.status_bar import StatusBar
 from cli.chat.widgets.tool_call_block import ToolCallBlock
 from cli.chat.widgets.turn_status import TurnStatus
 from cli.chat.widgets.user_chatbox import UserChatbox
@@ -33,9 +35,11 @@ __all__ = [
     "ApprovalSaveConfirm",
     "AssistantProse",
     "Composer",
+    "ForceKillConfirm",
     "InfoBar",
     "ScrollbackCue",
     "SlashPopup",
+    "StatusBar",
     "ToolCallBlock",
     "TurnStatus",
     "UserChatbox",

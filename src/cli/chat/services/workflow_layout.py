@@ -38,6 +38,7 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any, Callable
 
 from textual.widgets import Static
@@ -46,12 +47,14 @@ if TYPE_CHECKING:
     from textual.containers import VerticalScroll
 
     from cli.chat.services.workflows_impl import WorkflowRunRecord
+    from cli.chat.widgets.status_bar import StatusBar
 
 
 __all__ = [
     "DIVIDER_ID",
     "DIVIDER_TEXT",
     "WorkflowLayoutManager",
+    "format_live_workflow_strip",
     "sort_workflow_cards",
 ]
 
@@ -77,6 +80,95 @@ pass (spec-016 AC #3).
 
 _TERMINAL_SUCCESS_PHASES = frozenset({"success", "cancelled"})
 _IN_PROGRESS_PHASES = frozenset({"queued", "running", "cancelling"})
+
+
+# ---------------------------------------------------------------------------
+# feat-019: status line 2 live-workflow strip.
+# ---------------------------------------------------------------------------
+
+
+_LIVE_PHASES = frozenset({"running", "cancelling"})
+"""Phases that count as "live" for the status-line-2 strip.
+
+``queued`` is separately surfaced via the ``⋯ N queued`` suffix; only
+records with ``running`` or ``cancelling`` populate the leading
+``▸ <ref> N/M`` slot (feat-019 §Scope, "1 workflow" case).
+"""
+
+
+def _has_pending_approval(record: "WorkflowRunRecord") -> bool:
+    """Return True when a running record has a pending approval.
+
+    feat-019 uses this to bump the strip's ``⚠ N paused`` counter.
+    Reads the optional ``awaiting_approval`` bool the record grows in
+    feat-019 (default False for backward compatibility with fixtures
+    that build records via positional / minimal kwargs).
+    """
+    return bool(getattr(record, "awaiting_approval", False))
+
+
+def format_live_workflow_strip(
+    records: list["WorkflowRunRecord"],
+) -> str | None:
+    """Return the status-line-2 strip string, or ``None`` if idle.
+
+    feat-019 AC #2 — six shapes:
+
+    - Empty / no live records → ``None`` (StatusBar clears the strip).
+    - Single ``running`` / ``cancelling`` → ``"▸ <ref> N/M · Ns"``
+      (with ``N`` from ``node_counts.completed`` and ``M`` from
+      ``node_counts.total``; the ``Ns`` suffix is wall-time since
+      ``started_at``, ``created_at`` fallback for still-queued cases
+      that leak into the live set).
+    - Two or more live → single-workflow head + ``⋯ N queued`` suffix
+      (queued count is the ``phase == "queued"`` bucket).
+    - Any live + at least one awaiting-approval → append
+      ``· ⚠ N paused``.
+
+    Best-effort 78-char target (Coordinator Q2 lock) — no elision
+    applied here; Textual's CSS collapse handles narrow terminals.
+
+    Args:
+        records: The full :class:`WorkflowRunRecord` list from
+            ``WorkflowsImpl._workflow_registry``. Filtering into live /
+            queued / paused buckets happens inside this helper so the
+            caller passes the raw registry.
+
+    Returns:
+        The strip string, or ``None`` when no live workflows exist.
+    """
+    live = [r for r in records if r.phase in _LIVE_PHASES]
+    queued = [r for r in records if r.phase == "queued"]
+    paused = [
+        r for r in records
+        if r.phase in _LIVE_PHASES and _has_pending_approval(r)
+    ]
+    if not live:
+        return None
+
+    head = live[0]
+    counts = head.node_counts
+    completed = counts.completed
+    total = counts.total
+    anchor = head.started_at or head.created_at
+    try:
+        elapsed = int((datetime.now(tz=UTC) - anchor).total_seconds())
+    except (TypeError, ValueError):
+        elapsed = 0
+    elapsed = max(0, elapsed)
+
+    parts = [f"▸ {head.ref} {completed}/{total}"]
+
+    # Compact suffixes — queued count present iff any queued records
+    # exist (independent of live cardinality); paused present iff any
+    # live records are awaiting approval; elapsed always tacked on
+    # after the discrete counts.
+    if queued:
+        parts.append(f"⋯ {len(queued)} queued")
+    parts.append(f"{elapsed}s")
+    if paused:
+        parts.append(f"⚠ {len(paused)} paused")
+    return " · ".join(parts)
 
 
 def sort_workflow_cards(
@@ -154,16 +246,56 @@ class WorkflowLayoutManager:
         get_records: Callable[[], list["WorkflowRunRecord"]],
         get_card_widget: Callable[[Any], Any | None],
         reorder_tick: float = _REORDER_TICK_SECONDS,
+        status_bar: "StatusBar | None" = None,
     ) -> None:
         self._transcript = transcript
         self._get_records = get_records
         self._get_card_widget = get_card_widget
         self._reorder_tick = reorder_tick
+        # feat-019: optional StatusBar reference; when wired the
+        # manager pushes the live-workflow strip on every flush so the
+        # line-2 rendering stays in lockstep with the card layout.
+        self._status_bar: "StatusBar | None" = status_bar
         self._divider: Static | None = None
         self._pending_reorder = False
         # Test-facing counter — how many `_flush_reorder` passes have
         # actually run. Test 5 reads this to verify batching.
         self.flush_count = 0
+
+    def register_status_bar(self, status_bar: "StatusBar") -> None:
+        """Wire a :class:`StatusBar` handle after construction.
+
+        Called from ``ChatApp.on_mount`` once the widget is composed —
+        the manager only exists once the transcript is up, so the
+        widget handle is not necessarily known at construction time
+        (headless fixtures skip this entirely). Idempotent — a second
+        call replaces the reference.
+        """
+        self._status_bar = status_bar
+        # Push whatever state is current so a late-mount status bar
+        # picks up in-flight workflows without waiting for the next
+        # phase transition.
+        self._push_workflow_strip()
+
+    def _push_workflow_strip(self) -> None:
+        """Recompute the strip via ``format_live_workflow_strip`` and
+        push into the registered :class:`StatusBar`.
+
+        Silent no-op when no status bar is wired (headless fixtures /
+        adapter-less paths). Best-effort — any raise from the widget
+        seam is swallowed so a bad status-bar can't kill the layout
+        drain.
+        """
+        if self._status_bar is None:
+            return
+        try:
+            records = self._get_records()
+            text = format_live_workflow_strip(records)
+            self._status_bar.set_workflow_strip(text)
+        except Exception:  # noqa: BLE001 — status bar is best-effort
+            _LOGGER.exception(
+                "WorkflowLayoutManager: status bar push failed",
+            )
 
     # ------------------------------------------------------------------
     # Public surface
@@ -232,6 +364,11 @@ class WorkflowLayoutManager:
             )
             has_in_progress = len(in_progress) > 0
             await self._sync_divider(ordered, has_terminal, has_in_progress)
+
+            # feat-019: push the current live-workflow strip into the
+            # registered StatusBar. Done AFTER the DOM shuffle so the
+            # strip lags card state by at most one 250ms tick.
+            self._push_workflow_strip()
         except Exception:  # noqa: BLE001 — reorder is best-effort
             _LOGGER.exception(
                 "WorkflowLayoutManager: _flush_reorder raised",

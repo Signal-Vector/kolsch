@@ -26,6 +26,7 @@ readable.
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 from textual.app import ComposeResult
@@ -35,6 +36,12 @@ from textual.widgets import Collapsible, Static
 from cli.chat.widgets.card_body import KIND_TO_RENDERER
 from cli.chat.widgets.notice_slot import NoticeSlot
 from tools.services.card_kinds import get_kind_spec
+
+
+# feat-019: hardcoded threshold — the ``x`` force-kill binding only
+# fires when a card has been in ``cancelling`` state for more than this
+# many seconds. Coordinator Q3 lock: no env-var override in v1.
+_FORCE_KILL_THRESHOLD_SECONDS = 5.0
 
 
 # ---------------------------------------------------------------------------
@@ -190,6 +197,11 @@ class CardWidget(Collapsible):
     BINDINGS = [
         ("enter", "expand_or_ack", "Expand or acknowledge"),
         ("c", "collapse", "Collapse"),
+        # feat-019: force-kill escalation. Guarded inside
+        # ``action_force_kill`` — only fires when the card is focused,
+        # in ``cancelling`` state, AND has been there for more than
+        # ``_FORCE_KILL_THRESHOLD_SECONDS``.
+        ("x", "force_kill", "Force-kill (when cancelling >5s)"),
     ]
 
     state = reactive("initializing", init=False)
@@ -226,6 +238,30 @@ class CardWidget(Collapsible):
         # its own closure and flips ``record.acked = True`` plus
         # triggers a layout reorder.
         self._on_error_ack: Any = None
+        # feat-019: monotonic timestamp recording when the card most
+        # recently entered its current ``state``. Used by
+        # :meth:`_time_in_state` to gate the ``x`` force-kill binding
+        # (>5s in ``cancelling``). Updated inside ``watch_state`` on
+        # every transition. Seeded here to the mount time so the
+        # initial ``initializing`` state has a well-defined entry
+        # timestamp — safer than ``None`` for the arithmetic path.
+        self._state_entered_at: float = time.monotonic()
+        # feat-019: optional wiring for the ``x`` force-kill escalation.
+        # ``_workflows_impl`` is the concrete WorkflowsImpl handle
+        # (or a stub) that ``action_force_kill`` calls to compute the
+        # cascade tree size and construct ``ForceKillConfirm``.
+        # ``_run_id`` is the run this card is bound to. Both left
+        # unset on non-workflow cards; ``action_force_kill`` no-ops
+        # cleanly when they're absent.
+        self._workflows_impl: Any = None
+        self._run_id: Any = None
+        # feat-019: session store handle passed through to
+        # ``ForceKillConfirm`` so the 500ms fallback can synthesise
+        # the ``workflow.run.aborted`` event. Kept as ``Any`` so the
+        # widget stays decoupled from concrete store implementations.
+        self._session_store: Any = None
+        self._thread_id: Any = None
+        self._session_id: Any = None
         self.applied_appends: _BoundedLRUSet = _BoundedLRUSet(
             maxsize=_CARD_APPEND_LRU_MAXSIZE,
         )
@@ -415,8 +451,17 @@ class CardWidget(Collapsible):
         return widget
 
     def watch_state(self, old: str, new: str) -> None:
-        """Reactive: apply CSS class + header glyph on state change."""
+        """Reactive: apply CSS class + header glyph on state change.
+
+        feat-019: also records the monotonic entry timestamp for the
+        new state so :meth:`_time_in_state` can gate the ``x``
+        force-kill binding on ``cancelling`` residency.
+        """
         _ = old
+        # feat-019: reset the state-entry clock on every transition so
+        # ``_time_in_state`` returns the residency in the *current*
+        # state (not since mount).
+        self._state_entered_at = time.monotonic()
         for cls in ("-queued", "-paused", "-cancelling", "-error", "-cancelled"):
             self.remove_class(cls)
         if new in _CSS_CLASS_STATES:
@@ -469,6 +514,104 @@ class CardWidget(Collapsible):
     def _collapse_after_success(self) -> None:
         """Callback for the 1s auto-collapse timer."""
         self.collapsed = True
+
+    # ------------------------------------------------------------------
+    # feat-019: force-kill escalation
+    # ------------------------------------------------------------------
+
+    def _time_in_state(self, target_state: str) -> float:
+        """Return seconds since the card entered ``target_state``.
+
+        When the card's current ``state`` doesn't match ``target_state``
+        the result is ``0.0`` — the caller should read this as "not
+        applicable" rather than "just entered". Uses ``time.monotonic``
+        so wall-clock skew doesn't affect the threshold.
+
+        feat-019 AC #8: consumed by :meth:`action_force_kill` to gate
+        the ``x`` binding on ``cancelling`` residency.
+        """
+        if self.state != target_state:
+            return 0.0
+        return time.monotonic() - self._state_entered_at
+
+    def bind_workflow(
+        self,
+        *,
+        workflows_impl: Any,
+        run_id: Any,
+        session_store: Any = None,
+        thread_id: Any = None,
+        session_id: Any = None,
+    ) -> None:
+        """Wire the workflow context needed by the ``x`` force-kill.
+
+        Called by ``ChatApp`` / ``EventAdapter`` after mounting a
+        workflow-kind card so ``action_force_kill`` can compute the
+        cascade tree size + construct :class:`ForceKillConfirm` with
+        the right cancel target. Idempotent; a second call replaces
+        the reference.
+        """
+        self._workflows_impl = workflows_impl
+        self._run_id = run_id
+        self._session_store = session_store
+        self._thread_id = thread_id
+        self._session_id = session_id
+
+    def action_force_kill(self) -> None:
+        """``x`` binding — mount :class:`ForceKillConfirm` when guarded.
+
+        Guards (feat-019 AC #8):
+
+        - Card must be in ``cancelling`` state.
+        - Time-in-state must exceed ``_FORCE_KILL_THRESHOLD_SECONDS``
+          (Coordinator Q3 lock: 5s hardcoded).
+        - Widget must have a bound :class:`WorkflowsImpl` handle +
+          run id (via :meth:`bind_workflow`).
+
+        Any guard failure is a silent no-op — the binding stays
+        registered globally but only fires when the escalation makes
+        sense.
+        """
+        if self.state != "cancelling":
+            return
+        if self._time_in_state("cancelling") < _FORCE_KILL_THRESHOLD_SECONDS:
+            return
+        if self._workflows_impl is None or self._run_id is None:
+            return
+
+        # Compute the cascade tree size — total minus the target run
+        # itself gives the "N related" count for the modal question
+        # (feat-019 AC #9).
+        collect = getattr(self._workflows_impl, "_collect_cancel_tree", None)
+        if collect is not None:
+            try:
+                tree = collect(self._run_id)
+                n_related = max(0, len(tree) - 1)
+            except Exception:  # noqa: BLE001 — cascade tree best-effort
+                n_related = 0
+        else:
+            n_related = 0
+
+        # Lazy import — the widget module shouldn't import
+        # ForceKillConfirm at module import time so tests that mount
+        # CardWidget in isolation don't drag in the modal.
+        from cli.chat.widgets.force_kill_confirm import (  # noqa: PLC0415
+            ForceKillConfirm,
+        )
+
+        modal = ForceKillConfirm(
+            run_id=self._run_id,
+            n_related=n_related,
+            workflows_impl=self._workflows_impl,
+            session_store=self._session_store,
+            thread_id=self._thread_id,
+            session_id=self._session_id,
+        )
+        try:
+            if self.app is not None:
+                self.app.mount(modal)
+        except Exception:  # noqa: BLE001 — mount is best-effort
+            pass
 
 
 # Generic fallbacks for state → glyph when the card's kind-spec map
