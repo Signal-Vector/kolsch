@@ -56,7 +56,11 @@ from typing import TYPE_CHECKING, Any, Callable
 from schemas.entities import Actor
 from schemas.events import Event, EventType
 from schemas.identifiers import EventId
-from schemas.wire_kinds import WIRE_WORKFLOW_PROGRESS
+from schemas.wire_kinds import (
+    WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED,
+    WIRE_WORKFLOW_NODE_AWAITING_APPROVAL,
+    WIRE_WORKFLOW_PROGRESS,
+)
 from tools.services.workflows import (
     AbstractWorkflows,
     NodeCounts,
@@ -759,6 +763,62 @@ class WorkflowsImpl(AbstractWorkflows):
         return WorkflowRunStatusView(run_id=run_id, phase=phase)
 
     # ------------------------------------------------------------------
+    # spec-014: approval lifecycle emit hooks.
+    # ------------------------------------------------------------------
+
+    async def emit_awaiting_approval(
+        self,
+        *,
+        run_id: str,
+        node_name: str,
+    ) -> EventId:
+        """Emit `kolsch.workflow.node.awaiting_approval` durably.
+
+        Called from `EventAdapter._handle_prompt_requested` on the
+        workflow-source branch. The `WorkflowNodeRow` transitions to
+        `paused` (glyph `⚠`) when the matching `WorkflowRenderer`
+        applies the resulting UI event.
+
+        `run_id` / `node_name` are strings — the adapter carries the
+        payload's `source` dict verbatim and passes both through.
+        """
+        payload: dict[str, Any] = {
+            "run_id": run_id,
+            "node_name": node_name,
+        }
+        return await self._emit_ui_event(
+            WIRE_WORKFLOW_NODE_AWAITING_APPROVAL,
+            payload,
+            critical=True,
+        )
+
+    async def emit_approval_resolved(
+        self,
+        *,
+        run_id: str,
+        node_name: str,
+        resolution: str,
+    ) -> EventId:
+        """Emit `kolsch.workflow.node.approval_resolved` durably.
+
+        Called from `EventAdapter._handle_prompt_answered` /
+        `_handle_prompt_cancelled` on the workflow-source branch.
+        `resolution` is one of `"approved"` / `"denied"` /
+        `"cancelled"`; downstream the renderer transitions the row
+        back to `running` (glyph `▸`).
+        """
+        payload: dict[str, Any] = {
+            "run_id": run_id,
+            "node_name": node_name,
+            "resolution": resolution,
+        }
+        return await self._emit_ui_event(
+            WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED,
+            payload,
+            critical=True,
+        )
+
+    # ------------------------------------------------------------------
     # UI-event emit (spec-006 pattern).
     # ------------------------------------------------------------------
 
@@ -766,13 +826,22 @@ class WorkflowsImpl(AbstractWorkflows):
         self,
         kind: str,
         payload: dict[str, Any],
+        *,
+        critical: bool = True,
     ) -> EventId:
         """Append a UI_EVENT to the session store.
 
         Bus publish is deliberately a no-op today (spec-006 Q4 lock);
         the durability contract is the append itself — replay-on-boot
         picks up the event.
+
+        `critical` is accepted for signature parity with `CardsImpl._emit_ui_event`
+        (spec-006). Today's WorkflowsImpl has no streaming queue —
+        every emit is durable via `append_event` — so the kwarg is a
+        no-op today. spec-014's approval events pass `critical=True`
+        so future bus wiring preserves the guarantee.
         """
+        _ = critical
         event = Event(
             event_id=_new_event_id(),
             parent_event_id=None,

@@ -131,6 +131,11 @@ class ApprovalBlock(Vertical):
     ApprovalBlock > .resolved.-denied {
         color: $error;
     }
+    ApprovalBlock > .parent-hint {
+        color: $hint;
+        padding: 0 0 0 1;
+        height: 1;
+    }
     """
 
     # Step ids used in the breadcrumb builder.
@@ -143,6 +148,8 @@ class ApprovalBlock(Vertical):
         rule_id: str | None,
         action: str,
         target: str | None,
+        *,
+        parent_hint: str | None = None,
     ) -> None:
         super().__init__()
         # Preserve the exact strings the callback was fired with so the
@@ -152,6 +159,11 @@ class ApprovalBlock(Vertical):
         self._rule_id = rule_id or "(no matching rule)"
         self._action = action
         self._target = target or ""
+        # spec-014: when non-None, `compose` yields a leading
+        # `Static(" ↳", classes="parent-hint")` BEFORE the border box
+        # so the workflow-scoped approval visually connects back to
+        # the source workflow card via the `↳` gutter connector.
+        self._parent_hint = parent_hint
         # Current step index; drives the breadcrumb rendering.
         self._step: int = self._STEP_CHOOSE
         # The current pane child. Kept as an attribute so message
@@ -175,6 +187,12 @@ class ApprovalBlock(Vertical):
     # ------------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
+        # spec-014: `parent_hint` renders as `↳` above the border box
+        # so the workflow-scoped approval visually anchors to the
+        # workflow card that spawned it. When `None` (the default —
+        # standard tool-scoped approvals) no hint row is emitted.
+        if self._parent_hint is not None:
+            yield Static(" ↳", classes="parent-hint", markup=False)
         self.border_title = "⚠  Tool approval"
         yield Static(self._breadcrumb_text(), classes="breadcrumb", markup=True)
         yield Static(f"Tool  {self._action}", classes="context", markup=False)

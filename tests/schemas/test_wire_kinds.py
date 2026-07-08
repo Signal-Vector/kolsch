@@ -23,6 +23,8 @@ from schemas.wire_kinds import (
     WIRE_PROMPT_ANSWERED,
     WIRE_PROMPT_CANCELLED,
     WIRE_PROMPT_REQUESTED,
+    WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED,
+    WIRE_WORKFLOW_NODE_AWAITING_APPROVAL,
     WIRE_WORKFLOW_PROGRESS,
     is_valid_kind,
 )
@@ -54,10 +56,11 @@ def test_workflow_ui_constant_has_canonical_value() -> None:
     assert WIRE_WORKFLOW_PROGRESS == "kolsch.workflow.progress"
 
 
-def test_all_platform_kinds_has_exactly_twelve_members() -> None:
-    """The aggregate frozenset is exactly the 12 platform constants —
-    no duplicates, no extras, no drift."""
-    assert len(ALL_PLATFORM_KINDS) == 12
+def test_all_platform_kinds_has_exactly_fourteen_members() -> None:
+    """The aggregate frozenset is exactly the 14 platform constants —
+    no duplicates, no extras, no drift. (spec-014 added the two
+    workflow-node approval-lifecycle kinds.)"""
+    assert len(ALL_PLATFORM_KINDS) == 14
     assert ALL_PLATFORM_KINDS == frozenset(
         {
             WIRE_CARD_OPENED,
@@ -72,6 +75,8 @@ def test_all_platform_kinds_has_exactly_twelve_members() -> None:
             WIRE_PROMPT_ANSWERED,
             WIRE_PROMPT_CANCELLED,
             WIRE_WORKFLOW_PROGRESS,
+            WIRE_WORKFLOW_NODE_AWAITING_APPROVAL,
+            WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED,
         }
     )
 

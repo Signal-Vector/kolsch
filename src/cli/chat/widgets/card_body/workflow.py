@@ -52,6 +52,12 @@ _WIRE_KIND = "kolsch.workflow.progress"
 [`WorkflowsImpl._drain_workflow_bridge`][cli.chat.services.workflows_impl.WorkflowsImpl._drain_workflow_bridge].
 """
 
+_WIRE_KIND_AWAITING_APPROVAL = "kolsch.workflow.node.awaiting_approval"
+"""spec-014 UI event kind — `WorkflowsImpl.emit_awaiting_approval`."""
+
+_WIRE_KIND_APPROVAL_RESOLVED = "kolsch.workflow.node.approval_resolved"
+"""spec-014 UI event kind — `WorkflowsImpl.emit_approval_resolved`."""
+
 
 _TERMINAL_RUN_KINDS = frozenset({
     WorkflowEventKind.RUN_COMPLETED.value,
@@ -201,6 +207,11 @@ class WorkflowRenderer(Vertical):
     def apply_event(self, event_data: Any) -> None:
         """Dispatch a `kolsch.workflow.progress` payload to sub-widgets.
 
+        Also handles the spec-014 approval-lifecycle kinds
+        (`kolsch.workflow.node.awaiting_approval` /
+        `.approval_resolved`) which transition the matching
+        `WorkflowNodeRow` between `paused` and `running`.
+
         Non-workflow kinds (any other card wire event) are silently
         ignored — the CardWidget's own dispatcher handles them.
         Malformed payloads are silently dropped so a replayed
@@ -209,12 +220,21 @@ class WorkflowRenderer(Vertical):
         kind = getattr(event_data, "kind", None)
         if kind is None and isinstance(event_data, dict):
             kind = event_data.get("kind")
-        if kind != _WIRE_KIND:
-            return
         payload = getattr(event_data, "payload", None)
         if payload is None and isinstance(event_data, dict):
             payload = event_data.get("payload")
         if not isinstance(payload, dict):
+            return
+
+        # spec-014: approval-lifecycle kinds transition a matching
+        # `WorkflowNodeRow` without touching header / footer / counts.
+        if kind == _WIRE_KIND_AWAITING_APPROVAL:
+            self._on_awaiting_approval(payload)
+            return
+        if kind == _WIRE_KIND_APPROVAL_RESOLVED:
+            self._on_approval_resolved(payload)
+            return
+        if kind != _WIRE_KIND:
             return
 
         workflow_event_kind = payload.get("kind")
@@ -350,6 +370,38 @@ class WorkflowRenderer(Vertical):
         self._unregister_node_from_adapter(
             trace_id if isinstance(trace_id, str) else None,
         )
+
+    def _on_awaiting_approval(self, payload: dict[str, Any]) -> None:
+        """Transition the matching row to `paused` (glyph `⚠`).
+
+        spec-014 §Renderer wiring. `run_id` scoping is enforced by
+        `EventAdapter._handle_workflow_node_awaiting_approval` before
+        the dispatch reaches this renderer, so we route purely on
+        `node_name` here.
+        """
+        node_name = payload.get("node_name")
+        if not isinstance(node_name, str) or not node_name:
+            return
+        row = self._node_rows.get(node_name)
+        if row is None:
+            return
+        row.set_state("paused")
+
+    def _on_approval_resolved(self, payload: dict[str, Any]) -> None:
+        """Transition the matching row back to `running` (glyph `▸`).
+
+        Fires on `kolsch.workflow.node.approval_resolved` regardless
+        of the payload's `resolution` (`approved` / `denied` /
+        `cancelled`) — the executor's follow-up NODE_* events drive
+        any subsequent terminal transition.
+        """
+        node_name = payload.get("node_name")
+        if not isinstance(node_name, str) or not node_name:
+            return
+        row = self._node_rows.get(node_name)
+        if row is None:
+            return
+        row.set_state("running")
 
     def _on_terminal(self, kind: str, payload: dict[str, Any]) -> None:
         """Populate the footer with `✓ done in Ns` / `✗ done in Ns`."""

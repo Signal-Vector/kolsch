@@ -125,7 +125,23 @@ class InlineApprovalCallback:
         see spec-011); tool-scoped otherwise. The `run_chain`
         breadcrumb stays empty here; spec-017 populates it for
         nested workflows.
+
+        spec-014 r-review r1: workflow branch carries `tool_call_id`
+        alongside `run_id` / `node_name` so downstream renderers can
+        correlate the approval back to the invoking tool call even
+        when it fires inside a workflow node. `ExecutionContext` today
+        doesn't surface `tool_call_id` (the field is on
+        `ToolInvocationContext` which is a different envelope), so this
+        helper falls back to an empty string — the workflow-scoped
+        renderer routes by `run_id` + `node_name` and doesn't require
+        the call id.
         """
+        raw_call_id = (
+            getattr(execution_context, "tool_call_id", None)
+            if execution_context is not None
+            else None
+        )
+        tool_call_id = str(raw_call_id) if raw_call_id is not None else ""
         if (
             execution_context is not None
             and execution_context.workflow_run_id is not None
@@ -135,10 +151,15 @@ class InlineApprovalCallback:
                 "id": str(execution_context.workflow_run_id),
                 "run_id": str(execution_context.workflow_run_id),
                 "node_name": execution_context.workflow_node_name or "",
+                "tool_call_id": tool_call_id,
                 "run_chain": [],
             }
             return source
-        return {"kind": "tool", "id": ""}
+        return {
+            "kind": "tool",
+            "id": tool_call_id,
+            "tool_call_id": tool_call_id,
+        }
 
 
 def _format_question(

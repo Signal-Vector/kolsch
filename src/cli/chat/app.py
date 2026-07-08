@@ -355,6 +355,20 @@ class ChatApp(App):
         if active_cards is not None and hasattr(active_cards, "notice"):
             self.event_adapter.register_cards_impl(active_cards)
 
+        # spec-014: wire ``WorkflowsImpl`` into the adapter so the
+        # prompt-routing workflow branch can emit the durable
+        # ``awaiting_approval`` / ``approval_resolved`` UI events
+        # without ``PromptsImpl`` learning about workflows.
+        active_workflows = (
+            self._service_registry.workflows
+            if self._service_registry is not None
+            else None
+        )
+        if active_workflows is not None and hasattr(
+            active_workflows, "emit_awaiting_approval",
+        ):
+            self.event_adapter.register_workflows_impl(active_workflows)
+
         # `InlineApprovalCallback` needs a live `Prompts` handle; skip
         # authz registration when no impl exists (the headless
         # teardown fixtures don't exercise the approval flow).
@@ -588,9 +602,13 @@ class ChatApp(App):
         rule_id: str | None,
         action: str,
         target: str | None,
+        *,
+        parent_hint: str | None = None,
     ) -> ApprovalBlock:
         transcript = self.query_one("#transcript", VerticalScroll)
-        block = ApprovalBlock(rule_id, action, target)
+        block = ApprovalBlock(
+            rule_id, action, target, parent_hint=parent_hint,
+        )
         await transcript.mount(block)
         # Freeze composer.
         try:

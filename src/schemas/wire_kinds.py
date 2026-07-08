@@ -39,6 +39,11 @@ WIRE_PROMPT_CANCELLED = "kolsch.prompt.cancelled"
 # events. spec-012 wires the translation path.
 WIRE_WORKFLOW_PROGRESS = "kolsch.workflow.progress"
 
+# spec-014: workflow-scoped approval lifecycle. Emitted durably at
+# critical lane so `--resume` replays the paused/running transition.
+WIRE_WORKFLOW_NODE_AWAITING_APPROVAL = "kolsch.workflow.node.awaiting_approval"
+WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED = "kolsch.workflow.node.approval_resolved"
+
 
 # --- Aggregate set — for validator + tests ----------------------------
 ALL_PLATFORM_KINDS: frozenset[str] = frozenset(
@@ -55,6 +60,8 @@ ALL_PLATFORM_KINDS: frozenset[str] = frozenset(
         WIRE_PROMPT_ANSWERED,
         WIRE_PROMPT_CANCELLED,
         WIRE_WORKFLOW_PROGRESS,
+        WIRE_WORKFLOW_NODE_AWAITING_APPROVAL,
+        WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED,
     }
 )
 
@@ -91,6 +98,8 @@ __all__ = [
     "WIRE_PROMPT_ANSWERED",
     "WIRE_PROMPT_CANCELLED",
     "WIRE_PROMPT_REQUESTED",
+    "WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED",
+    "WIRE_WORKFLOW_NODE_AWAITING_APPROVAL",
     "WIRE_WORKFLOW_PROGRESS",
     "is_valid_kind",
 ]

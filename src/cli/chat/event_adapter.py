@@ -42,12 +42,15 @@ from schemas.wire_kinds import (
     WIRE_PROMPT_ANSWERED,
     WIRE_PROMPT_CANCELLED,
     WIRE_PROMPT_REQUESTED,
+    WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED,
+    WIRE_WORKFLOW_NODE_AWAITING_APPROVAL,
     WIRE_WORKFLOW_PROGRESS,
 )
 
 if TYPE_CHECKING:
     from cli.chat.app import ChatApp
     from cli.chat.services.prompts_impl import PromptsImpl
+    from cli.chat.services.workflows_impl import WorkflowsImpl
     from schemas import SessionMeta
     from schemas.identifiers import SessionId, ThreadId
     from store.session_store import SessionStore
@@ -99,6 +102,38 @@ class _BoundedLRUSet:
 
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _response_to_resolution(response: str) -> str:
+    """Map a `PromptsImpl` response string to a `resolution` verb.
+
+    spec-014: `emit_approval_resolved` payload's `resolution` is one
+    of `"approved"` / `"denied"` / `"cancelled"`. `PromptsImpl`
+    surfaces the raw key (`y` / `a` / `n` / `d`) via
+    `.answered.response`; `.cancelled` reaches this via the sync
+    handler with `response="cancelled"` synthesised.
+    """
+    if response == "cancelled":
+        return "cancelled"
+    if response in ("y", "a"):
+        return "approved"
+    return "denied"
+
+
+def _log_task_exception(task: asyncio.Task[Any]) -> None:
+    """Done-callback that surfaces a failed fire-and-forget task.
+
+    Prevents a silent-swallow on the spec-014 emit path: if
+    `emit_approval_resolved` raises, the logger records it.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        _LOGGER.exception(
+            "event_adapter: fire-and-forget task raised",
+            exc_info=exc,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -420,6 +455,7 @@ class EventAdapter:
         session_meta: SessionMeta | None = None,
         prompts_impl: PromptsImpl | None = None,
         cards: Any | None = None,
+        workflows_impl: "WorkflowsImpl | None" = None,
     ) -> None:
         self._app = app
         # tool_call_id → arguments dict (captured on TOOL_CALLED so
@@ -450,6 +486,19 @@ class EventAdapter:
         # when the adapter runs without a live prompts service
         # (headless replay-only paths, spec-003 tests).
         self._prompts_impl: PromptsImpl | None = prompts_impl
+        # spec-014: reference to the concrete `WorkflowsImpl` so the
+        # adapter's prompt-routing branch can emit the durable
+        # `awaiting_approval` / `approval_resolved` UI events when a
+        # workflow-scoped approval fires. `None` in headless / tests
+        # that never boot workflows. `PromptsImpl` remains unaware of
+        # workflows (Coordinator #2).
+        self._workflows_impl: "WorkflowsImpl | None" = workflows_impl
+        # spec-014: prompt_id → (run_id, node_name) so
+        # `_handle_prompt_answered` / `_handle_prompt_cancelled` can
+        # emit `emit_approval_resolved` without re-consulting the
+        # source dict (the `.answered` / `.cancelled` payloads don't
+        # carry `source` by spec-004 shape).
+        self._workflow_prompt_sources: dict[str, tuple[str, str]] = {}
 
         # spec-006/007: per-card tracking for the `_handle_card_*`
         # handlers. `_card_widgets` keys are `CardId`; values are
@@ -539,6 +588,18 @@ class EventAdapter:
         synthesises at least one ``tool.failed``.
         """
         self._cards = cards
+
+    def register_workflows_impl(self, workflows_impl: "WorkflowsImpl") -> None:
+        """Wire a live ``WorkflowsImpl`` in after construction.
+
+        spec-014: mirror of ``register_prompts_impl``. Populated by
+        ``ChatApp.on_mount`` once the service registry is up. Enables
+        the adapter's workflow-source prompt branch to emit the
+        durable ``awaiting_approval`` / ``approval_resolved`` UI
+        events without ``PromptsImpl`` learning about workflows
+        (Coordinator #2 lock).
+        """
+        self._workflows_impl = workflows_impl
 
     def register_prompts_impl(self, prompts_impl: PromptsImpl) -> None:
         """Wire a live `PromptsImpl` in after construction.
@@ -1155,6 +1216,12 @@ class EventAdapter:
         if kind == WIRE_WORKFLOW_PROGRESS:
             self._handle_workflow_progress(event, payload)
             return
+        if kind == WIRE_WORKFLOW_NODE_AWAITING_APPROVAL:
+            self._handle_workflow_node_awaiting_approval(event, payload)
+            return
+        if kind == WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED:
+            self._handle_workflow_node_approval_resolved(event, payload)
+            return
         # Unknown or workflow-UI kinds land here as silent no-ops
         # until their service specs wire the routing.
 
@@ -1171,6 +1238,13 @@ class EventAdapter:
         Falls back to bare `action` / no target when the caller
         hasn't wired the extra fields — the widget renders `(no
         matching rule)` in that case.
+
+        spec-014: when `source.kind == "workflow"` this handler ALSO
+        fires `WorkflowsImpl.emit_awaiting_approval` (Coordinator #2
+        lock — adapter routes, PromptsImpl unaware of workflows) and
+        constructs the `ApprovalBlock` with a `parent_hint` derived
+        from the workflow run's `ref` so the `↳` gutter connector
+        renders above the border box.
         """
         prompt_id = payload.get("prompt_id")
         if not isinstance(prompt_id, str) or not prompt_id:
@@ -1184,17 +1258,100 @@ class EventAdapter:
         rule_id_val = rule_id if isinstance(rule_id, str) else None
         action_val = action if isinstance(action, str) else ""
         target_val = target if isinstance(target, str) else None
+
+        # spec-014: detect workflow-source prompts and route through
+        # WorkflowsImpl for the durable awaiting_approval emit + the
+        # parent_hint construction on the ApprovalBlock.
+        source = payload.get("source")
+        parent_hint: str | None = None
+        if isinstance(source, dict) and source.get("kind") == "workflow":
+            run_id_raw = source.get("run_id")
+            node_name_raw = source.get("node_name")
+            run_id = run_id_raw if isinstance(run_id_raw, str) else ""
+            node_name = (
+                node_name_raw if isinstance(node_name_raw, str) else ""
+            )
+            # Track the (run_id, node_name) tuple so the follow-up
+            # `.answered` / `.cancelled` dispatch can fire
+            # `emit_approval_resolved` without re-parsing `source`.
+            if run_id:
+                self._workflow_prompt_sources[prompt_id] = (
+                    run_id, node_name,
+                )
+            # Look up the workflow's record to derive the `parent_hint`
+            # from the run's `ref`. Falls back to a bare `run_id` label
+            # when the registry doesn't know the run (replay-only
+            # paths where the registry hasn't been populated).
+            parent_hint = self._derive_workflow_parent_hint(run_id)
+            # Fire the durable `awaiting_approval` UI event — the
+            # matching WorkflowRenderer transitions the node row to
+            # `paused` on the resulting dispatch.
+            if self._workflows_impl is not None and run_id:
+                try:
+                    await self._workflows_impl.emit_awaiting_approval(
+                        run_id=run_id,
+                        node_name=node_name,
+                    )
+                except Exception:  # noqa: BLE001 — emit failures logged
+                    _LOGGER.exception(
+                        "event_adapter: emit_awaiting_approval raised "
+                        "for prompt_id=%r run_id=%r",
+                        prompt_id,
+                        run_id,
+                    )
+
         try:
             await self._app.mount_approval_block(
                 rule_id_val,
                 action_val,
                 target_val,
+                parent_hint=parent_hint,
             )
+        except TypeError:
+            # Back-compat with fake apps that don't accept the
+            # spec-014 `parent_hint` kwarg (older test doubles from
+            # spec-004). Fall back to the positional-only call so
+            # existing tests keep passing.
+            try:
+                await self._app.mount_approval_block(
+                    rule_id_val,
+                    action_val,
+                    target_val,
+                )
+            except Exception:  # noqa: BLE001 — mount failure logged
+                _LOGGER.exception(
+                    "event_adapter: mount_approval_block raised "
+                    "for prompt_id=%r",
+                    prompt_id,
+                )
         except Exception:  # noqa: BLE001 — mount failure logged, not raised
             _LOGGER.exception(
                 "event_adapter: mount_approval_block raised for prompt_id=%r",
                 prompt_id,
             )
+
+    def _derive_workflow_parent_hint(self, run_id: str) -> str:
+        """Build the ↳ parent hint string for a workflow-scoped prompt.
+
+        Uses the workflow record's `ref` when available (registry hit);
+        falls back to the bare `run_id` when the registry doesn't
+        know the run (replay-only paths). Returns an empty string only
+        when `run_id` itself is empty — callers pre-check that.
+        """
+        if self._workflows_impl is None:
+            return f"workflow {run_id}"
+        # `_workflow_registry` keys are `WorkflowRunId` — a `str`
+        # subclass — so a plain-str `run_id` compares equal. Guard
+        # against a missing attribute (test doubles).
+        registry = getattr(self._workflows_impl, "_workflow_registry", None)
+        if isinstance(registry, dict):
+            for key, record in registry.items():
+                if str(key) == run_id:
+                    ref = getattr(record, "ref", None)
+                    if isinstance(ref, str) and ref:
+                        return f"workflow {ref}"
+                    break
+        return f"workflow {run_id}"
 
     def _handle_prompt_answered(self, payload: dict[str, Any]) -> None:
         """Resolve the in-flight `PromptsImpl` future on `.answered`.
@@ -1202,6 +1359,13 @@ class EventAdapter:
         Idempotent per `prompt_id`; a second dispatch is a no-op
         (setting a done future's result would raise
         `InvalidStateError`).
+
+        spec-014: if the answered prompt was workflow-scoped
+        (tracked in `_workflow_prompt_sources` from the matching
+        `_handle_prompt_requested`), fire
+        `WorkflowsImpl.emit_approval_resolved` so the matching
+        `WorkflowNodeRow` transitions back to `running` via the
+        renderer's dispatch of the resulting UI event.
         """
         prompt_id = payload.get("prompt_id")
         if not isinstance(prompt_id, str) or not prompt_id:
@@ -1214,6 +1378,11 @@ class EventAdapter:
             response = str(response)
         if self._prompts_impl is not None:
             self._prompts_impl.resolve_pending(prompt_id, response)
+        # spec-014: workflow branch — schedule the durable
+        # `approval_resolved` emit. Fire-and-forget so the sync
+        # handler stays sync; the awaiting `choice()` unblocks via
+        # the resolve above.
+        self._maybe_emit_approval_resolved(prompt_id, response)
 
     def _handle_prompt_cancelled(self, payload: dict[str, Any]) -> None:
         """Cancel the in-flight `PromptsImpl` future on `.cancelled`.
@@ -1222,6 +1391,10 @@ class EventAdapter:
         / `text()` — Coordinator-locked behaviour matching the Esc
         → deny-once semantics of the shipped approval UX. Idempotent
         per `prompt_id`.
+
+        spec-014: same workflow-source branch as
+        `_handle_prompt_answered`; the emitted `.approval_resolved`
+        payload's `resolution` is `"cancelled"`.
         """
         prompt_id = payload.get("prompt_id")
         if not isinstance(prompt_id, str) or not prompt_id:
@@ -1231,6 +1404,50 @@ class EventAdapter:
         self._resolved_prompt_ids.add(prompt_id)
         if self._prompts_impl is not None:
             self._prompts_impl.cancel_pending(prompt_id)
+        self._maybe_emit_approval_resolved(prompt_id, "cancelled")
+
+    def _maybe_emit_approval_resolved(
+        self,
+        prompt_id: str,
+        response: str,
+    ) -> None:
+        """Fire the durable `approval_resolved` UI event, if workflow-scoped.
+
+        spec-014: reads `_workflow_prompt_sources` for the matching
+        `(run_id, node_name)` tuple. Deletes the entry to avoid a
+        second emit on a duplicate `.answered` dispatch (belt +
+        braces with `_resolved_prompt_ids`). Schedules the async
+        emit as a fire-and-forget task so the sync handler surface
+        stays sync.
+
+        `response` becomes the payload's `resolution` field:
+        `"y"`/`"a"` map to `"approved"`, `"n"`/`"d"` map to
+        `"denied"`, `"cancelled"` (from `_handle_prompt_cancelled`)
+        passes through verbatim.
+        """
+        entry = self._workflow_prompt_sources.pop(prompt_id, None)
+        if entry is None:
+            return
+        if self._workflows_impl is None:
+            return
+        run_id, node_name = entry
+        resolution = _response_to_resolution(response)
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # No running loop (rare: sync test path). Skip; the
+            # durability guarantee is best-effort in that regime.
+            return
+        coro = self._workflows_impl.emit_approval_resolved(
+            run_id=run_id,
+            node_name=node_name,
+            resolution=resolution,
+        )
+        task = loop.create_task(coro)
+        # Track the task so `aclose`-style teardowns can await it if
+        # needed; a bare fire-and-forget would drop the reference and
+        # potentially GC-cancel the coroutine on Python 3.11+.
+        task.add_done_callback(_log_task_exception)
 
     # ------------------------------------------------------------------
     # spec-006: card dispatch handlers
@@ -1639,6 +1856,74 @@ class EventAdapter:
             # Filter by run_id when the renderer already has one
             # anchored (post-`RUN_STARTED`); pre-anchor, forward all
             # payloads so the anchor lands.
+            renderer_run_id = getattr(body, "_run_id", None)
+            if (
+                renderer_run_id is not None
+                and target_run_id is not None
+                and renderer_run_id != target_run_id
+            ):
+                continue
+            data_view = _UIEventDataView(event, payload)
+            with contextlib.suppress(Exception):
+                body.apply_event(data_view)
+
+    def _handle_workflow_node_awaiting_approval(
+        self,
+        event: Event,
+        payload: dict[str, Any],
+    ) -> None:
+        """Route a `kolsch.workflow.node.awaiting_approval` to the renderer.
+
+        spec-014 §Renderer wiring. Fans out to every mounted
+        `WorkflowRenderer` (same cardinality-preserving pattern as
+        `_handle_workflow_progress`); each renderer filters on its own
+        anchored `run_id`. Sub-widget transition to `paused` (glyph
+        `⚠`) happens on the renderer's `_on_awaiting_approval` call.
+        """
+        self._route_workflow_node_approval_event(
+            event,
+            payload,
+            kind_label="awaiting_approval",
+        )
+
+    def _handle_workflow_node_approval_resolved(
+        self,
+        event: Event,
+        payload: dict[str, Any],
+    ) -> None:
+        """Route a `kolsch.workflow.node.approval_resolved` to the renderer.
+
+        spec-014 §Renderer wiring. Same fan-out pattern as
+        `_handle_workflow_node_awaiting_approval`; each renderer
+        transitions its matching row back to `running` (glyph `▸`).
+        """
+        self._route_workflow_node_approval_event(
+            event,
+            payload,
+            kind_label="approval_resolved",
+        )
+
+    def _route_workflow_node_approval_event(
+        self,
+        event: Event,
+        payload: dict[str, Any],
+        *,
+        kind_label: str,
+    ) -> None:
+        """Shared fan-out for the two spec-014 approval-lifecycle events.
+
+        Payload carries `run_id` + `node_name`; renderers filter on
+        their anchored `_run_id` when set.
+        """
+        _ = event
+        _ = kind_label
+        target_run_id = payload.get("run_id")
+        for entry in self._card_widgets.values():
+            body = getattr(entry, "_body", None)
+            if body is None:
+                continue
+            if not hasattr(body, "_node_rows"):
+                continue
             renderer_run_id = getattr(body, "_run_id", None)
             if (
                 renderer_run_id is not None
