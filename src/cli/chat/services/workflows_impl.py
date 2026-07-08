@@ -635,17 +635,30 @@ class WorkflowsImpl(AbstractWorkflows):
                 self._update_node_counts(record.node_counts, event.kind)
 
             # Emit the UI event via the session store (durability
-            # first — spec-006 pattern).
+            # first — spec-006 pattern). Node-scoped envelope fields
+            # (`invocation_id`, `node_name`) and the common
+            # `trace_id` are hoisted alongside the raw executor
+            # `payload` so downstream consumers (spec-013's
+            # `WorkflowRenderer`) can dispatch without re-parsing the
+            # WorkflowEvent envelope.
+            ui_payload: dict[str, Any] = {
+                "run_id": str(run_id),
+                "workflow_ref": spec.ref,
+                "kind": str(event.kind),
+                "event_id": str(event.event_id),
+                "ts": event.ts.isoformat(),
+                "trace_id": str(event.trace_id),
+                "payload": event.payload,
+            }
+            node_name = getattr(event, "node_name", None)
+            if node_name is not None:
+                ui_payload["node_name"] = node_name
+            invocation_id = getattr(event, "invocation_id", None)
+            if invocation_id is not None:
+                ui_payload["invocation_id"] = str(invocation_id)
             await self._emit_ui_event(
                 WIRE_WORKFLOW_PROGRESS,
-                {
-                    "run_id": str(run_id),
-                    "workflow_ref": spec.ref,
-                    "kind": str(event.kind),
-                    "event_id": str(event.event_id),
-                    "ts": event.ts.isoformat(),
-                    "payload": event.payload,
-                },
+                ui_payload,
             )
 
             # Terminal-kind bookkeeping.

@@ -42,6 +42,7 @@ from schemas.wire_kinds import (
     WIRE_PROMPT_ANSWERED,
     WIRE_PROMPT_CANCELLED,
     WIRE_PROMPT_REQUESTED,
+    WIRE_WORKFLOW_PROGRESS,
 )
 
 if TYPE_CHECKING:
@@ -459,6 +460,22 @@ class EventAdapter:
         # which now also mounts the widget in the transcript.
         # `_applied_notice_ids` dedupes `kolsch.card.notice` events.
         self._card_widgets: dict[CardId, CardMountState] = {}
+        # spec-013: trace_id → live `WorkflowNodeRow` map. Populated
+        # by `WorkflowRenderer._on_node_started` via
+        # `register_adapter`; popped by the same renderer on any
+        # terminal node event (`NODE_COMPLETED` / `NODE_FAILED` /
+        # `NODE_PRUNED`). Session-event handlers
+        # (`_handle_agent_message`, `_handle_tool_called`,
+        # `_handle_user_message`, `_handle_tool_result`) consult this
+        # map: when `event.trace_id` matches a live node's trace,
+        # dispatch to `WorkflowNodeRow.apply_sub_agent_event` and
+        # short-circuit the default transcript-root mount.
+        # Typed as `dict[str, Any]` (rather than `dict[TraceId,
+        # WorkflowNodeRow]`) to keep this adapter free of an upward
+        # dependency on `workflows/`; the concrete key is a
+        # `TraceId` — a `str` subclass — and the value is the row
+        # widget.
+        self._live_nodes_by_trace_id: dict[str, Any] = {}
         self._applied_notice_ids: _BoundedLRUSet = _BoundedLRUSet(
             maxsize=_CARD_NOTICE_LRU_MAXSIZE,
         )
@@ -862,12 +879,37 @@ class EventAdapter:
         await self._app.set_turn_verb("", target="")
         await self._app.mount_exchange_failed(message)
 
+    def _route_to_workflow_node(self, event: Event) -> bool:
+        """Return True if `event` matched a live workflow node's trace.
+
+        spec-013 §EventAdapter trace_id routing: when the incoming
+        event's `trace_id` (an optional str on `Event`) matches a
+        `WorkflowNodeRow` registered by `WorkflowRenderer`, dispatch
+        into that row's `apply_sub_agent_event` and short-circuit
+        the caller's default transcript-root mount. When no match
+        (unrelated trace or bare chat surface without `trace_id`),
+        return `False` and let the caller carry on.
+        """
+        trace_id = getattr(event, "trace_id", None)
+        if not isinstance(trace_id, str) or not trace_id:
+            return False
+        node_row = self._live_nodes_by_trace_id.get(trace_id)
+        if node_row is None:
+            return False
+        with contextlib.suppress(Exception):
+            node_row.apply_sub_agent_event(event)
+        return True
+
     async def _handle_user_message(self, event: Event) -> None:
         """Mount a ``UserChatbox`` for the just-submitted turn.
 
         The adapter mounts the user chatbox from the event so replay
-        and live paths share a single mount site.
+        and live paths share a single mount site. spec-013: when the
+        event's `trace_id` matches a live workflow node, route into
+        that node instead of the transcript root.
         """
+        if self._route_to_workflow_node(event):
+            return
         content = event.data.get("content") or {}
         text = _extract_text(content)
         if not text:
@@ -875,7 +917,14 @@ class EventAdapter:
         await self._app.mount_user_message(text, _now_ts(event))
 
     async def _handle_agent_message(self, event: Event) -> None:
-        """Mount assistant prose only if MODEL_RESPONSE didn't already."""
+        """Mount assistant prose only if MODEL_RESPONSE didn't already.
+
+        spec-013: `trace_id` match short-circuits into the matching
+        `WorkflowNodeRow`; unmatched events fall through to the
+        legacy transcript-root behaviour.
+        """
+        if self._route_to_workflow_node(event):
+            return
         content = event.data.get("content") or {}
         text = _extract_text(content)
         if not text:
@@ -891,7 +940,13 @@ class EventAdapter:
         self._app.set_last_assistant_text(text)
 
     async def _handle_tool_called(self, event: Event) -> None:
-        """Capture the call's arguments for the eventual result/failure."""
+        """Capture the call's arguments for the eventual result/failure.
+
+        spec-013: `trace_id` match dispatches into the workflow
+        node row instead of updating the top-level turn verb.
+        """
+        if self._route_to_workflow_node(event):
+            return
         tool_call_id = str(event.data.get("tool_call_id", ""))
         if tool_call_id:
             self._tool_call_args[tool_call_id] = dict(
@@ -906,7 +961,13 @@ class EventAdapter:
             )
 
     async def _handle_tool_result(self, event: Event) -> None:
-        """Mount a ``ToolCallBlock`` with the completed result."""
+        """Mount a ``ToolCallBlock`` with the completed result.
+
+        spec-013: `trace_id` match dispatches into the workflow
+        node row.
+        """
+        if self._route_to_workflow_node(event):
+            return
         tool_name = str(event.data.get("tool_name", "<unknown>"))
         tool_call_id = str(event.data.get("tool_call_id", ""))
         args = self._tool_call_args.pop(tool_call_id, {})
@@ -1090,6 +1151,9 @@ class EventAdapter:
             return
         if kind == WIRE_CARD_NOTICE:
             self._handle_card_notice(event, payload)
+            return
+        if kind == WIRE_WORKFLOW_PROGRESS:
+            self._handle_workflow_progress(event, payload)
             return
         # Unknown or workflow-UI kinds land here as silent no-ops
         # until their service specs wire the routing.
@@ -1532,6 +1596,59 @@ class EventAdapter:
             return
         if widget is not None:
             self._notice_widgets[notice_id] = widget
+
+    def _handle_workflow_progress(
+        self,
+        event: Event,
+        payload: dict[str, Any],
+    ) -> None:
+        """Route a `kolsch.workflow.progress` event to the workflow card body.
+
+        spec-013 §Renderer wiring. The `WorkflowsImpl` bridge drain
+        emits one of these per executor `WorkflowEvent`. The event
+        carries no `card_id` (workflows_impl doesn't know which card
+        is bound at emission time), so this handler fans out to every
+        tracked `WorkflowRenderer` and lets each renderer decide via
+        `run_id` whether the payload is theirs — a
+        cardinality-preserving broadcast that scales fine at M5's
+        one-workflow-at-a-time cadence.
+
+        Also wires the renderer to this adapter on first sight — the
+        renderer's `_live_nodes_by_trace_id` registration happens on
+        `NODE_STARTED` and depends on `register_adapter` having been
+        called.
+        """
+        _ = event
+        # Locate every mounted workflow-kind CardWidget's body
+        # renderer and forward the payload. In the common one-live-
+        # workflow case this fans out to a single renderer.
+        target_run_id = payload.get("run_id")
+        for entry in self._card_widgets.values():
+            body = getattr(entry, "_body", None)
+            if body is None:
+                continue
+            # Duck-type on the presence of `_node_rows` (a
+            # WorkflowRenderer-only attribute) so we don't
+            # `isinstance`-couple the adapter to the widget class.
+            if not hasattr(body, "_node_rows"):
+                continue
+            # Register the adapter on first sight — the renderer's
+            # `register_adapter` is idempotent.
+            with contextlib.suppress(Exception):
+                body.register_adapter(self)
+            # Filter by run_id when the renderer already has one
+            # anchored (post-`RUN_STARTED`); pre-anchor, forward all
+            # payloads so the anchor lands.
+            renderer_run_id = getattr(body, "_run_id", None)
+            if (
+                renderer_run_id is not None
+                and target_run_id is not None
+                and renderer_run_id != target_run_id
+            ):
+                continue
+            data_view = _UIEventDataView(event, payload)
+            with contextlib.suppress(Exception):
+                body.apply_event(data_view)
 
     async def _mount_root_notice(
         self,

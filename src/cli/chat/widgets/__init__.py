@@ -23,6 +23,7 @@ from cli.chat.widgets.slash_popup import SlashPopup
 from cli.chat.widgets.tool_call_block import ToolCallBlock
 from cli.chat.widgets.turn_status import TurnStatus
 from cli.chat.widgets.user_chatbox import UserChatbox
+from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 
 __all__ = [
     "ApprovalBlock",
@@ -38,4 +39,5 @@ __all__ = [
     "ToolCallBlock",
     "TurnStatus",
     "UserChatbox",
+    "WorkflowNodeRow",
 ]

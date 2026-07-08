@@ -1,0 +1,30 @@
+"""spec-013 Test 6 — `WorkflowRenderer.apply_snapshot` no-op.
+
+One pass:
+
+- `WorkflowRenderer().apply_snapshot("content")` returns `None`
+  without touching internal state or raising.
+"""
+
+from __future__ import annotations
+
+import pytest
+
+from cli.chat.widgets.card_body.workflow import WorkflowRenderer
+
+
+@pytest.mark.asyncio
+async def test_apply_snapshot_is_noop(fake_app_factory) -> None:
+    renderer = WorkflowRenderer()
+    app = fake_app_factory(renderer)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # Snapshot with arbitrary content — must not raise.
+        result = renderer.apply_snapshot("arbitrary markdown content")
+        assert result is None
+        # State stays fresh: no run anchored, no nodes mounted, no
+        # footer content populated.
+        assert renderer._run_id is None
+        assert renderer._node_rows == {}
+        # A follow-up snapshot with an empty string is equally silent.
+        assert renderer.apply_snapshot("") is None

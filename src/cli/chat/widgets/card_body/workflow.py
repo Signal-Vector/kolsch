@@ -1,44 +1,455 @@
-"""`WorkflowRenderer` — STUB body renderer for the `workflow` kind.
+"""`WorkflowRenderer` — body renderer for the `workflow` card kind.
 
-spec-007 §Body renderers. Registered in
+spec-013 §WorkflowRenderer. Registered in
 [`KIND_TO_RENDERER`][cli.chat.widgets.card_body.KIND_TO_RENDERER]
-so `Cards.open(kind="workflow")` doesn't raise `KeyError` at widget
-dispatch time. Full impl lands with **spec-013** (workflow card
-renderer). Both `apply_event` and `apply_snapshot` raise
-`NotImplementedError` — a workflow card being fed content before
-spec-013 is a caller bug, not a silent fallback.
+so `Cards.open(kind="workflow")` mounts this renderer inside the
+card's body slot. Consumes `kolsch.workflow.progress` UI events
+(spec-012 emit format) and routes each executor event kind to
+per-node state machines.
+
+Composition (yielded from `compose`):
+
+- [`WorkflowProgressHeader`][cli.chat.widgets.card_body.workflow.WorkflowProgressHeader]
+  — `[N/M]  ▓▓░░░░░  Ns` progress bar + elapsed.
+- [`WorkflowNodeList`][cli.chat.widgets.card_body.workflow.WorkflowNodeList]
+  — container of
+  [`WorkflowNodeRow`][cli.chat.widgets.workflow_node_row.WorkflowNodeRow]
+  instances, one per node the executor spins up.
+- [`WorkflowSummaryFooter`][cli.chat.widgets.card_body.workflow.WorkflowSummaryFooter]
+  — empty by default; on a terminal `RUN_*` event renders
+  `✓ done in Ns` / `✗ done in Ns`.
+
+`apply_event(event_data)` decodes the wire kind (`kolsch.workflow.progress`)
+and dispatches on the wrapped `WorkflowEventKind` value. `apply_snapshot`
+is a documented no-op — workflow cards don't snapshot content the
+way markdown cards do (spec-013 AC #14).
+
+Sub-agent event routing is wired via
+[`register_adapter`][cli.chat.widgets.card_body.workflow.WorkflowRenderer.register_adapter]:
+when set, `NODE_STARTED` populates the adapter's
+`_live_nodes_by_trace_id` map so incoming `agent.message` /
+`tool.called` / `user.message` / `tool.result` events with a
+matching `trace_id` route into the node row (see
+`EventAdapter._handle_agent_message` et al.).
 """
 
 from __future__ import annotations
 
+import contextlib
+from datetime import UTC, datetime
 from typing import Any
 
+from textual.app import ComposeResult
+from textual.containers import Vertical
 from textual.widgets import Static
 
+from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
+from workflows.events import WorkflowEventKind
 
-_STUB_MSG = "WorkflowRenderer stub; full impl in spec-013"
+
+_WIRE_KIND = "kolsch.workflow.progress"
+"""The UI event envelope kind emitted by
+[`WorkflowsImpl._drain_workflow_bridge`][cli.chat.services.workflows_impl.WorkflowsImpl._drain_workflow_bridge].
+"""
 
 
-class WorkflowRenderer(Static):
-    """STUB — full impl in spec-013.
+_TERMINAL_RUN_KINDS = frozenset({
+    WorkflowEventKind.RUN_COMPLETED.value,
+    WorkflowEventKind.RUN_FAILED.value,
+    WorkflowEventKind.RUN_ABORTED.value,
+    WorkflowEventKind.RUN_TIMED_OUT.value,
+})
+"""The four terminal run kinds the footer summarises."""
 
-    Registered under `"workflow"` in `KIND_TO_RENDERER`. Any
-    content-bearing call raises `NotImplementedError` pointing at
-    the spec that will replace this class.
+
+class WorkflowProgressHeader(Static):
+    """Progress line: `[completed/total]  ▓▓░░░░░  Ns`.
+
+    Updated by `WorkflowRenderer._update_header` on every event; the
+    glyph bar is an 8-cell fill ratio (not pixel-precise; a coarse
+    visual cue is enough for the terminal). Empty totals render as
+    `[0/0]  ░░░░░░░░  0s`.
+    """
+
+    _BAR_WIDTH = 8
+    """Fixed number of glyph cells in the progress bar."""
+
+    def __init__(self, *, id: str | None = None) -> None:
+        self._run_id: str | None = None
+        self._completed = 0
+        self._total = 0
+        self._elapsed_seconds: float = 0.0
+        super().__init__(self._compute_text(), id=id)
+
+    def set_run_id(self, run_id: str | None) -> None:
+        """Store the run id anchor; re-render."""
+        self._run_id = run_id
+        self._refresh_progress()
+
+    def update_progress(
+        self,
+        completed: int,
+        total: int,
+        elapsed: float,
+    ) -> None:
+        """Refresh the counters + elapsed; re-render."""
+        self._completed = completed
+        self._total = total
+        self._elapsed_seconds = elapsed
+        self._refresh_progress()
+
+    def _compute_text(self) -> str:
+        """Compose the current progress-line text; no widget mutation."""
+        total = max(self._total, 0)
+        completed = max(0, min(self._completed, total)) if total else 0
+        if total > 0:
+            filled = int(round(self._BAR_WIDTH * completed / total))
+        else:
+            filled = 0
+        bar = "▓" * filled + "░" * (self._BAR_WIDTH - filled)
+        return f"[{completed}/{total}]  {bar}  {int(self._elapsed_seconds)}s"
+
+    def _refresh_progress(self) -> None:
+        """Redraw the progress line from the current counters."""
+        self.update(self._compute_text())
+
+
+class WorkflowNodeList(Vertical):
+    """Container for `WorkflowNodeRow` instances."""
+
+    def add_node(self, node_row: WorkflowNodeRow) -> None:
+        """Mount `node_row` at the end of the list.
+
+        Best-effort — headless tests exercise the renderer without a
+        live mount tree, so a mount failure is swallowed. The row is
+        still tracked in `WorkflowRenderer._nodes` so state
+        transitions land without a DOM handle.
+        """
+        with contextlib.suppress(Exception):
+            self.mount(node_row)
+
+
+class WorkflowSummaryFooter(Static):
+    """Post-terminal one-liner (`✓ done in Ns` / `✗ done in Ns`).
+
+    Empty by default; `WorkflowRenderer._on_terminal` populates on
+    the first terminal `RUN_*` event.
+    """
+
+
+class WorkflowRenderer(Vertical):
+    """`workflow` card body renderer.
+
+    Wraps a progress header + node list + summary footer. Every
+    `kolsch.workflow.progress` UI event flows through `apply_event`
+    which decodes the wrapped `WorkflowEventKind` and dispatches to
+    the appropriate sub-widget update.
+    """
+
+    DEFAULT_CSS = """
+    WorkflowRenderer {
+        height: auto;
+        background: transparent;
+    }
+    WorkflowRenderer WorkflowProgressHeader { height: 1; }
+    WorkflowRenderer WorkflowNodeList { height: auto; }
+    WorkflowRenderer WorkflowSummaryFooter { height: auto; }
     """
 
     def __init__(self, *, id: str | None = None) -> None:
-        super().__init__("", id=id)
+        super().__init__(id=id)
+        self._node_rows: dict[str, WorkflowNodeRow] = {}
+        self._run_id: str | None = None
+        self._start_time: datetime | None = None
+        self._last_ts: datetime | None = None
+        # spec-013: adapter reference for `_live_nodes_by_trace_id`
+        # registration. `register_adapter` (called by the mount
+        # helper on the ChatApp side) sets this. When `None`, node
+        # registration is a no-op — headless tests exercise the
+        # renderer without a live adapter and rely on the state
+        # transitions only.
+        self._adapter: Any | None = None
+        # Body sub-widgets — instantiated in `__init__` so headless
+        # tests can access them BEFORE `compose` runs (mypy prefers
+        # attribute-init in `__init__`). `compose` yields the same
+        # instances into the DOM.
+        self._header = WorkflowProgressHeader(id=(f"{id}-header" if id else None))
+        self._node_list = WorkflowNodeList(id=(f"{id}-nodes" if id else None))
+        self._footer = WorkflowSummaryFooter(id=(f"{id}-footer" if id else None))
+
+    def compose(self) -> ComposeResult:
+        """Yield header + node list + footer."""
+        yield self._header
+        yield self._node_list
+        yield self._footer
+
+    # ------------------------------------------------------------------
+    # Public seams
+    # ------------------------------------------------------------------
+
+    def register_adapter(self, adapter: Any) -> None:
+        """Wire an `EventAdapter` so node starts populate its trace map.
+
+        Called from the ChatApp mount hook once the adapter is
+        available. When set, `NODE_STARTED` inserts the row into
+        `adapter._live_nodes_by_trace_id[trace_id]` and node
+        terminals pop it — this is the seam the adapter uses to
+        route sub-agent events into the right node.
+        """
+        self._adapter = adapter
 
     def apply_event(self, event_data: Any) -> None:
-        """Stub — raises. Full dispatch lands with spec-013."""
-        _ = event_data
-        raise NotImplementedError(_STUB_MSG)
+        """Dispatch a `kolsch.workflow.progress` payload to sub-widgets.
+
+        Non-workflow kinds (any other card wire event) are silently
+        ignored — the CardWidget's own dispatcher handles them.
+        Malformed payloads are silently dropped so a replayed
+        malformed row can't crash the renderer.
+        """
+        kind = getattr(event_data, "kind", None)
+        if kind is None and isinstance(event_data, dict):
+            kind = event_data.get("kind")
+        if kind != _WIRE_KIND:
+            return
+        payload = getattr(event_data, "payload", None)
+        if payload is None and isinstance(event_data, dict):
+            payload = event_data.get("payload")
+        if not isinstance(payload, dict):
+            return
+
+        workflow_event_kind = payload.get("kind")
+        if not isinstance(workflow_event_kind, str):
+            return
+
+        if workflow_event_kind == WorkflowEventKind.RUN_STARTED.value:
+            self._on_run_started(payload)
+        elif workflow_event_kind == WorkflowEventKind.NODE_STARTED.value:
+            self._on_node_started(payload)
+        elif workflow_event_kind == WorkflowEventKind.NODE_COMPLETED.value:
+            self._on_node_completed(payload)
+        elif workflow_event_kind in (
+            WorkflowEventKind.NODE_FAILED.value,
+            WorkflowEventKind.NODE_TIMED_OUT.value,
+        ):
+            self._on_node_failed(payload)
+        elif workflow_event_kind == WorkflowEventKind.NODE_PRUNED.value:
+            self._on_node_pruned(payload)
+        elif workflow_event_kind in _TERMINAL_RUN_KINDS:
+            self._on_terminal(workflow_event_kind, payload)
+        # Non-terminal / non-dispatched kinds are ignored — the
+        # header still refreshes below so elapsed advances.
+
+        self._track_ts(payload)
+        self._update_header()
 
     def apply_snapshot(self, content: str) -> None:
-        """Stub — raises. Full dispatch lands with spec-013."""
+        """No-op — workflow cards don't snapshot content (AC #14).
+
+        Documented in spec-013 §AC 14: markdown cards use snapshots
+        to replace the whole document; workflow cards derive their
+        display from the streaming executor event log and have no
+        equivalent snapshot payload. `content` is accepted for
+        Protocol conformance and dropped without side effects.
+        """
         _ = content
-        raise NotImplementedError(_STUB_MSG)
+
+    # ------------------------------------------------------------------
+    # Per-kind handlers
+    # ------------------------------------------------------------------
+
+    def _on_run_started(self, payload: dict[str, Any]) -> None:
+        """Stash `run_id` + `start_time`; header refreshes below."""
+        run_id = payload.get("run_id")
+        if isinstance(run_id, str):
+            self._run_id = run_id
+            self._header.set_run_id(run_id)
+        ts = self._parse_ts(payload.get("ts"))
+        if ts is not None:
+            self._start_time = ts
+            self._last_ts = ts
+
+    def _on_node_started(self, payload: dict[str, Any]) -> None:
+        """Mount a `WorkflowNodeRow`; register the row's trace_id."""
+        node_name = payload.get("node_name")
+        if not isinstance(node_name, str) or not node_name:
+            return
+        trace_id = payload.get("trace_id")
+        trace_id_val = trace_id if isinstance(trace_id, str) else None
+        if node_name in self._node_rows:
+            # Idempotent — a replay of the same NODE_STARTED shouldn't
+            # mount a second row.
+            return
+        row = WorkflowNodeRow(node_name=node_name, trace_id=trace_id_val)
+        self._node_rows[node_name] = row
+        self._node_list.add_node(row)
+        self._register_node_with_adapter(row, trace_id_val)
+
+    def _on_node_completed(self, payload: dict[str, Any]) -> None:
+        """Transition the row to `completed`; inline any summary."""
+        node_name = payload.get("node_name")
+        if not isinstance(node_name, str):
+            return
+        row = self._node_rows.get(node_name)
+        if row is None:
+            return
+        details = None
+        inner = payload.get("payload")
+        if isinstance(inner, dict):
+            candidate = inner.get("summary")
+            if isinstance(candidate, str):
+                details = candidate
+        # Fallback: top-level `summary` (in case the emitter hoists).
+        if details is None:
+            candidate = payload.get("summary")
+            if isinstance(candidate, str):
+                details = candidate
+        row.set_state("completed", details=details)
+        trace_id = payload.get("trace_id")
+        self._unregister_node_from_adapter(
+            trace_id if isinstance(trace_id, str) else None,
+        )
+
+    def _on_node_failed(self, payload: dict[str, Any]) -> None:
+        """Transition the row to `failed`; inline the error preview."""
+        node_name = payload.get("node_name")
+        if not isinstance(node_name, str):
+            return
+        row = self._node_rows.get(node_name)
+        if row is None:
+            return
+        error_preview: str | None = None
+        inner = payload.get("payload")
+        if isinstance(inner, dict):
+            for key in ("error_message", "message", "error"):
+                candidate = inner.get(key)
+                if isinstance(candidate, str):
+                    error_preview = candidate
+                    break
+        if error_preview is None:
+            for key in ("error_message", "message", "error"):
+                candidate = payload.get(key)
+                if isinstance(candidate, str):
+                    error_preview = candidate
+                    break
+        row.set_state("failed", error_preview=error_preview)
+        trace_id = payload.get("trace_id")
+        self._unregister_node_from_adapter(
+            trace_id if isinstance(trace_id, str) else None,
+        )
+
+    def _on_node_pruned(self, payload: dict[str, Any]) -> None:
+        """Transition the row to `pruned` (glyph `─`)."""
+        node_name = payload.get("node_name")
+        if not isinstance(node_name, str):
+            return
+        row = self._node_rows.get(node_name)
+        if row is None:
+            return
+        row.set_state("pruned")
+        trace_id = payload.get("trace_id")
+        self._unregister_node_from_adapter(
+            trace_id if isinstance(trace_id, str) else None,
+        )
+
+    def _on_terminal(self, kind: str, payload: dict[str, Any]) -> None:
+        """Populate the footer with `✓ done in Ns` / `✗ done in Ns`."""
+        success = kind == WorkflowEventKind.RUN_COMPLETED.value
+        elapsed = self._elapsed_seconds(payload)
+        prefix = "✓" if success else "✗"
+        self._footer.update(f"{prefix} done in {int(elapsed)}s")
+
+    # ------------------------------------------------------------------
+    # Helpers
+    # ------------------------------------------------------------------
+
+    def _track_ts(self, payload: dict[str, Any]) -> None:
+        """Advance `_last_ts` from the payload's ISO timestamp."""
+        ts = self._parse_ts(payload.get("ts"))
+        if ts is not None:
+            self._last_ts = ts
+            if self._start_time is None:
+                self._start_time = ts
+
+    def _elapsed_seconds(self, payload: dict[str, Any]) -> float:
+        """Prefer payload's explicit `elapsed_seconds`; else derive from ts."""
+        inner = payload.get("payload")
+        if isinstance(inner, dict):
+            for key in ("elapsed_seconds", "duration_seconds"):
+                candidate = inner.get(key)
+                if isinstance(candidate, (int, float)):
+                    return float(candidate)
+        candidate_top = payload.get("elapsed_seconds")
+        if isinstance(candidate_top, (int, float)):
+            return float(candidate_top)
+        if self._start_time is None:
+            return 0.0
+        end_ts = self._parse_ts(payload.get("ts")) or self._last_ts
+        if end_ts is None:
+            return 0.0
+        return max(0.0, (end_ts - self._start_time).total_seconds())
+
+    @staticmethod
+    def _parse_ts(raw: Any) -> datetime | None:
+        """Parse an ISO-8601 string / datetime into a `datetime`.
+
+        Returns `None` for anything else — the caller falls back to
+        the renderer's own bookkeeping.
+        """
+        if isinstance(raw, datetime):
+            return raw
+        if isinstance(raw, str):
+            with contextlib.suppress(ValueError):
+                return datetime.fromisoformat(raw)
+        return None
+
+    def _update_header(self) -> None:
+        """Refresh the header counters from the current node state."""
+        total = len(self._node_rows)
+        completed = sum(
+            1
+            for row in self._node_rows.values()
+            if row.state in ("completed", "failed", "pruned")
+        )
+        elapsed = self._elapsed_now()
+        self._header.update_progress(completed, total, elapsed)
+
+    def _elapsed_now(self) -> float:
+        """Return seconds since `_start_time` using the last-seen ts."""
+        if self._start_time is None:
+            return 0.0
+        anchor = self._last_ts or datetime.now(tz=UTC)
+        with contextlib.suppress(TypeError):
+            return max(0.0, (anchor - self._start_time).total_seconds())
+        return 0.0
+
+    # ------------------------------------------------------------------
+    # Adapter registration hooks (spec-013 §EventAdapter trace_id routing)
+    # ------------------------------------------------------------------
+
+    def _register_node_with_adapter(
+        self,
+        row: WorkflowNodeRow,
+        trace_id: str | None,
+    ) -> None:
+        """Store `row` in the adapter's `_live_nodes_by_trace_id` map."""
+        if self._adapter is None or trace_id is None:
+            return
+        live_map = getattr(self._adapter, "_live_nodes_by_trace_id", None)
+        if isinstance(live_map, dict):
+            live_map[trace_id] = row
+
+    def _unregister_node_from_adapter(self, trace_id: str | None) -> None:
+        """Pop `trace_id` from the adapter's live-nodes map."""
+        if self._adapter is None or trace_id is None:
+            return
+        live_map = getattr(self._adapter, "_live_nodes_by_trace_id", None)
+        if isinstance(live_map, dict):
+            live_map.pop(trace_id, None)
 
 
-__all__ = ["WorkflowRenderer"]
+__all__ = [
+    "WorkflowNodeList",
+    "WorkflowProgressHeader",
+    "WorkflowRenderer",
+    "WorkflowSummaryFooter",
+]
