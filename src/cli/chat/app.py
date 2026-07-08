@@ -383,6 +383,25 @@ class ChatApp(App):
             if isinstance(authz, RuleBasedAuthorizationProvider):
                 authz.register_prompt_callback(self.approval_callback)
 
+        # feat-015: run the in-process orphan sweep BEFORE replay so
+        # any synthetic `workflow.run.aborted` events land in the run
+        # JSONLs before `EventAdapter` picks them up. Subprocess-hosted
+        # runs are UNTOUCHED — they use the PID-based sweep at
+        # `workflows.orphan_sweep.sweep`, which runs on CLI dispatch.
+        # Best-effort: a failing sweep (headless fixtures without a
+        # real run store, permission errors) is logged and swallowed.
+        if active_workflows is not None and hasattr(
+            active_workflows, "sweep_orphans",
+        ):
+            try:
+                await active_workflows.sweep_orphans()
+                if hasattr(active_workflows, "fire_orphan_notice"):
+                    active_workflows.fire_orphan_notice()
+            except Exception:  # noqa: BLE001 — sweep is boot-time best-effort
+                _LOGGER.exception(
+                    "ChatApp.on_mount: workflow orphan sweep raised",
+                )
+
         # Replay history (tail-20 by default) if this is a resume.
         if self.session.is_resume:
             await self._replay_history()

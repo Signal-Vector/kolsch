@@ -69,7 +69,12 @@ from tools.services.workflows import (
     WorkflowRunStatusView,
     executor_status_to_phase,
 )
-from workflows.events import WorkflowEvent, WorkflowEventKind
+from workflows.events import (
+    WorkflowEvent,
+    WorkflowEventKind,
+    WorkflowRunAbortedEvent,
+    WorkflowRunAbortedPayload,
+)
 from workflows.run import RunDirectory, WorkflowRunStatus
 
 if TYPE_CHECKING:
@@ -264,6 +269,12 @@ class WorkflowsImpl(AbstractWorkflows):
         self._drain_started: bool = False
         self._closed: bool = False
 
+        # feat-015: boot-time orphan sweep bookkeeping. `sweep_orphans`
+        # counts reconciled in-process runs into this field; the
+        # matching `fire_orphan_notice` call surfaces the count via
+        # `Cards.notice` and resets to zero (idempotent second call).
+        self._pending_orphan_count: int = 0
+
     # ------------------------------------------------------------------
     # Public surface — Workflows Protocol.
     # ------------------------------------------------------------------
@@ -422,6 +433,111 @@ class WorkflowsImpl(AbstractWorkflows):
             self._workflow_drain_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._workflow_drain_task
+
+    # ------------------------------------------------------------------
+    # feat-015 — boot-time in-process orphan sweep.
+    # ------------------------------------------------------------------
+
+    async def sweep_orphans(self) -> int:
+        """Reconcile in-process orphans left by a prior chat quit.
+
+        Iterates every meta sidecar under the run store. For each run
+        with `run_started_by="in-process"` AND a non-terminal executor
+        status (`PENDING`, `RUNNING`, `WAITING_FOR_INPUT`), the sweep:
+
+        1. Appends a synthetic `workflow.run.aborted` event with
+           `reason="chat-quit"` and `terminal_at=<now>` to the run's
+           JSONL (via
+           [`WorkflowRunStore.append_event`][workflows.run_store.WorkflowRunStore.append_event]).
+        2. Updates the meta sidecar status to `ABORTED` so a fresh
+           cold-read reflects the terminal reconciliation without
+           re-scanning the JSONL.
+
+        Subprocess-hosted runs (`run_started_by="subprocess"`) are
+        UNTOUCHED — they use the existing PID-based sweep at
+        [`workflows.orphan_sweep.sweep`][workflows.orphan_sweep.sweep].
+
+        Returns:
+            The count of runs reconciled. Cached internally so a
+            following `fire_orphan_notice()` can surface the number.
+        """
+        aborted_count = 0
+        now = datetime.now(tz=UTC)
+        for meta in self._run_store.list_all_meta():
+            if meta.run_started_by != "in-process":
+                continue
+            if meta.status in WorkflowRunStatus.terminal_set():
+                continue
+
+            # Synthesise a durable `workflow.run.aborted` event so the
+            # run's JSONL reconciles on the next `read` / `tail`. Using
+            # the typed envelope keeps replay consumers happy — the
+            # renderer picks the event up via replay just like a live
+            # abort. The payload model is `extra="allow"` so `reason`
+            # rides alongside the declared `terminal_at` field; we
+            # merge via `model_validate` on a dict rather than kwargs
+            # so mypy's strict-kwarg check is satisfied.
+            aborted_payload = WorkflowRunAbortedPayload.model_validate(
+                {"terminal_at": now, "reason": "chat-quit"},
+            )
+            aborted_event = WorkflowRunAbortedEvent(
+                workflow_run_id=meta.run_id,
+                trace_id=meta.trace_id,
+                ts=now,
+                payload=aborted_payload.model_dump(mode="json"),
+            )
+            try:
+                self._run_store.append_event(
+                    meta.run_id,
+                    aborted_event.model_dump(mode="json"),
+                )
+                self._run_store.update_status(
+                    meta.run_id, WorkflowRunStatus.ABORTED,
+                )
+            except (OSError, FileNotFoundError):
+                # One bad run must not derail the sweep; log + continue.
+                _LOGGER.exception(
+                    "WorkflowsImpl.sweep_orphans: reconcile failed for %s",
+                    meta.run_id,
+                )
+                continue
+            aborted_count += 1
+
+        self._pending_orphan_count = aborted_count
+        return aborted_count
+
+    def fire_orphan_notice(self) -> None:
+        """Fire a `Cards.notice` if `sweep_orphans` reconciled anything.
+
+        Idempotent — the internal counter is reset after firing so a
+        second call is a no-op. Called from `ChatApp.on_mount` right
+        after `sweep_orphans()`; a `Cards` handle without a `notice`
+        attribute (headless fixtures) is silently skipped.
+        """
+        if self._pending_orphan_count == 0:
+            return
+        n = self._pending_orphan_count
+        # Reset first so a raise in `notice()` doesn't leave the
+        # counter primed for a duplicate fire on a retry.
+        self._pending_orphan_count = 0
+
+        cards = self._cards
+        if cards is None:
+            return
+        notice = getattr(cards, "notice", None)
+        if notice is None:
+            return
+        suffix = "workflow" if n == 1 else "workflows"
+        text = (
+            f"↻ {n} {suffix} aborted on last chat quit "
+            f"— `kolsch workflows list` to view"
+        )
+        try:
+            notice(text, kind="warning")
+        except Exception:  # noqa: BLE001 — notice is best-effort
+            _LOGGER.exception(
+                "WorkflowsImpl.fire_orphan_notice: notice fire failed",
+            )
 
     # ------------------------------------------------------------------
     # FIFO drain worker.
@@ -888,6 +1004,7 @@ class WorkflowsImpl(AbstractWorkflows):
         run = self._run_store.create(
             workflow_ref=ref,
             inputs=inputs,
+            started_by="in-process",
         )
         executor = build_workflow_executor(
             root=self._runtime.root,
