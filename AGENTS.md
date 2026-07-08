@@ -225,6 +225,31 @@ These are non-negotiable. Violating them blocks merges.
   live in `.env` per Phase 1.1's `dotenv` provider; agent code
   reaches them via `ctx.secrets` after the Secrets provider
   resolves names listed in `@tool(secrets_needed=[...])`.
+- **Multi-spec refactors require a composition invariant and a
+  live-runtime gate at each milestone.** Component-scoped specs
+  cannot ship a working feature on their own — the seams between
+  them (bus subscription, service-registry injection, adapter
+  handler registration) are load-bearing and easy to leave
+  unwired. Every refactor spanning ≥ 2 specs owes:
+    (a) an invariant in `process/design-decisions-ledger.md` of
+        the form _"no spec in this refactor ships until a real
+        Pilot ChatApp (or equivalent live-runtime harness) proves
+        the composed pipeline surfaces the feature end-to-end"_;
+    (b) a **milestone smoke check** — actually boot the shipped
+        surface and use the feature — before flipping the
+        milestone gate. Green component tests are necessary, not
+        sufficient. If your tests use a `_replay_*` /
+        `_drain_events_manually` / `handle_directly(...)`
+        scaffold to simulate the live path, that scaffold is a
+        documented gap, not a shortcut — promote it to a blocker
+        and wire the live path instead of shipping around it.
+    Exhibit A: the 19-spec Textual chat refactor (specs
+    001-019, 2026-07). Shipped green with 2713 passing tests, but
+    invoking a workflow in the running chat produced no
+    `WorkflowCard` because two seams (tool-dispatch
+    `chat_services=` forwarding, runtime bus subscription) were
+    never wired. Bug-020 documents the fix; this rule prevents
+    the recurrence.
 
 
 ---
