@@ -223,7 +223,16 @@ async def test_e2e_workflow_approval_paused(
 
     # ApprovalBlock mounted with parent_hint.
     assert len(app.mount_calls) == 1
-    assert app.mount_calls[0]["parent_hint"] == "workflow kolsch/workflows/test"
+    # spec-017 extends the breadcrumb to append `· node <name>` when
+    # the innermost source carries a node_name; the spec-014 shape
+    # (bare `workflow <ref>`) is preserved only when node_name is
+    # empty. The Q3-locked breadcrumb builder walks the registry's
+    # `parent_run_id` chain to construct the full lineage; a
+    # single-level run collapses to `workflow <ref> · node <name>`.
+    assert (
+        app.mount_calls[0]["parent_hint"]
+        == "workflow kolsch/workflows/test · node build"
+    )
 
     # WIRE_WORKFLOW_NODE_AWAITING_APPROVAL was appended.
     async def _find_awaiting() -> Event | None:

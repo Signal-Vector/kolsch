@@ -46,6 +46,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import json
 import logging
 import uuid
@@ -114,6 +115,34 @@ _COLD_READ_TAIL_BYTES = 8192
 tail scan for terminal events reads at most this many bytes from the
 end of the file so a huge log never blocks a single `status()`
 call."""
+
+
+# ---------------------------------------------------------------------------
+# spec-017: nested-detection contextvar.
+# ---------------------------------------------------------------------------
+
+
+_current_workflow_run_id: contextvars.ContextVar[
+    "WorkflowRunId | None"
+] = contextvars.ContextVar(
+    "_current_workflow_run_id", default=None,
+)
+"""spec-017 nested detection.
+
+Set by :meth:`WorkflowsImpl._run_one_workflow` immediately before the
+executor's ``run()`` call and reset in the ``finally``. A subsequent
+:meth:`WorkflowsImpl.start` invocation reads this contextvar to
+populate :attr:`WorkflowRunRecord.parent_run_id`; a non-None value
+means the start call was fired from inside another live run's task
+(either a nested ``kolsch/nodes/workflow`` node or a peer
+``ctx.workflows.start`` call from a tool). Contextvars propagate
+across ``asyncio`` task boundaries, so downstream ``ensure_future``
+descendants of the executor task still see the parent's id.
+
+The peer-vs-nested ambiguity is documented (spec-017 Q3 lock):
+both look like nested to this contextvar. Butler-tool call sites
+that want explicit peer semantics reset it before calling ``start``.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -345,14 +374,28 @@ class WorkflowsImpl(AbstractWorkflows):
         if card is not None:
             card._owner_transferred = True
 
+        # spec-017: nested detection. If a `_run_one_workflow` frame is
+        # active up-task, the contextvar carries its run_id and we
+        # stamp this new run as its child. Peer detection is
+        # documented as ambiguous — a tool-side `ctx.workflows.start`
+        # from inside a workflow's node also looks nested from the
+        # contextvar's POV. Spec-017 Q3 lock: accept as-is.
+        parent_run_id = _current_workflow_run_id.get()
+
         record = WorkflowRunRecord(
             run_id=run_id,
             ref=ref,
             phase="queued",
             card=card,
             created_at=datetime.now(tz=UTC),
+            parent_run_id=parent_run_id,
         )
         self._workflow_registry[run_id] = record
+
+        # spec-017: populate the reverse map so `_collect_cancel_tree`
+        # can walk descendants during a cascade cancel.
+        if parent_run_id is not None:
+            self._children_of.setdefault(parent_run_id, []).append(run_id)
 
         spec = WorkflowRunSpec(
             run_id=run_id,
@@ -414,37 +457,98 @@ class WorkflowsImpl(AbstractWorkflows):
         `cancel.flag` sidecar. Both are complementary — the executor
         needs both to cancel from any state.
 
-        `cascade` is accepted for forward compatibility with
-        spec-017; this spec only cancels the single run regardless
-        of the flag.
+        spec-017: `cascade=True` walks ancestors up (via
+        :attr:`WorkflowRunRecord.parent_run_id`) AND descendants down
+        (via :attr:`_children_of`) and cancels every reachable live
+        run. Terminal runs are skipped inside the walk so a
+        long-terminal ancestor doesn't derail the cascade. Returns
+        True when at least one target was cancelled; False when the
+        `run_id` is unknown or every reachable run is already
+        terminal.
         """
-        _ = cascade  # spec-017 wires the walk; kwarg is accepted here.
-        token = self._workflow_cancels.get(run_id)
-        record = self._workflow_registry.get(run_id)
-        if token is None or record is None:
-            return False
-        # Skip terminal runs — cancel doesn't apply.
-        if record.phase in ("success", "error", "cancelled"):
-            return False
+        if cascade:
+            targets = self._collect_cancel_tree(run_id)
+        else:
+            targets = [run_id] if run_id in self._workflow_registry else []
 
-        token.cancel()
+        fired_any = False
+        for target_id in targets:
+            token = self._workflow_cancels.get(target_id)
+            record = self._workflow_registry.get(target_id)
+            if token is None or record is None:
+                # Cascade walk may include a terminal run whose token +
+                # bridge were dropped by `_finalize_terminal`; skip.
+                continue
+            # Skip terminal runs — cancel doesn't apply.
+            if record.phase in ("success", "error", "cancelled"):
+                continue
 
-        if record.run_dir is not None:
-            try:
-                record.run_dir.cancel_flag_path.write_text("user_cancel")
-            except OSError:
-                _LOGGER.exception(
-                    "WorkflowsImpl: cancel flag write failed for %s",
-                    run_id,
-                )
+            token.cancel()
 
-        record.phase = "cancelling"
-        if record.card is not None:
-            with contextlib.suppress(Exception):
-                await record.card.set_status("cancelling")
-        # spec-016: running -> cancelling.
-        self._notify_layout(run_id)
-        return True
+            if record.run_dir is not None:
+                try:
+                    record.run_dir.cancel_flag_path.write_text("user_cancel")
+                except OSError:
+                    _LOGGER.exception(
+                        "WorkflowsImpl: cancel flag write failed for %s",
+                        target_id,
+                    )
+
+            record.phase = "cancelling"
+            if record.card is not None:
+                with contextlib.suppress(Exception):
+                    await record.card.set_status("cancelling")
+            # spec-016: running -> cancelling.
+            self._notify_layout(target_id)
+            fired_any = True
+
+        return fired_any
+
+    def _collect_cancel_tree(
+        self,
+        run_id: WorkflowRunId,
+    ) -> list[WorkflowRunId]:
+        """Return ``run_id`` + its live ancestors + its live descendants.
+
+        Walks :attr:`WorkflowRunRecord.parent_run_id` upward from
+        ``run_id`` to build the ancestor set, then BFS's
+        :attr:`_children_of` downward from every collected id to
+        gather descendants. Cycle-safe via a ``seen`` set — the
+        registry shouldn't carry cycles by construction (a start
+        stamps its parent BEFORE the child stamps a grandchild), but
+        the check makes the walker robust to future changes.
+
+        Terminal-liveness is NOT filtered here — the returned list
+        includes runs whose registry record has flipped to a terminal
+        phase. :meth:`cancel` filters those out inside its per-target
+        loop so cascade semantics stay uniform with the single-run
+        path (both skip terminals; both skip unknowns).
+
+        A ``run_id`` unknown to :attr:`_workflow_registry` returns an
+        empty list — the caller's :meth:`cancel` handles the empty
+        case as "no work; return False".
+        """
+        seen: set[WorkflowRunId] = set()
+        # Ancestor walk — only starts when the id is known.
+        if run_id not in self._workflow_registry:
+            return []
+
+        cur: WorkflowRunId | None = run_id
+        while cur is not None and cur not in seen:
+            seen.add(cur)
+            rec = self._workflow_registry.get(cur)
+            cur = rec.parent_run_id if rec is not None else None
+
+        # Descendant BFS from every collected id.
+        stack: list[WorkflowRunId] = list(seen)
+        while stack:
+            rid = stack.pop()
+            for child_id in self._children_of.get(rid, []):
+                if child_id not in seen:
+                    seen.add(child_id)
+                    stack.append(child_id)
+
+        return list(seen)
 
     async def aclose(self) -> None:
         """Cancel drain worker + per-run drains + all live tokens.
@@ -610,7 +714,18 @@ class WorkflowsImpl(AbstractWorkflows):
                 )
 
     async def _run_one_workflow(self, spec: WorkflowRunSpec) -> None:
-        """Build the executor, wire observer + cancel, drive to terminal."""
+        """Build the executor, wire observer + cancel, drive to terminal.
+
+        spec-017: sets the ``_current_workflow_run_id`` contextvar for
+        the entire body so any downstream :meth:`start` call (from a
+        `kolsch/nodes/workflow` runner or a tool via
+        ``ctx.workflows.start``) stamps this run's id as the child's
+        ``parent_run_id``. The set happens BEFORE executor
+        construction because factory callbacks (e.g., the fake
+        executor's ``on_construct``) may already schedule nested
+        starts. Reset happens in ``finally`` — even on a construction-
+        time raise — so the outer ambient context is always restored.
+        """
         from engine.context import CancelToken  # noqa: PLC0415
 
         run_id = spec.run_id
@@ -618,6 +733,10 @@ class WorkflowsImpl(AbstractWorkflows):
         if record is None:
             # Aclose raced with drain — bail cleanly.
             return
+
+        # spec-017: set the nested-detection contextvar for the
+        # whole `_run_one_workflow` body. See method docstring.
+        _ctxvar_token = _current_workflow_run_id.set(run_id)
 
         cancel_token = CancelToken()
         self._workflow_cancels[run_id] = cancel_token
@@ -655,55 +774,64 @@ class WorkflowsImpl(AbstractWorkflows):
                 record.dropped_events += 1
 
         try:
-            executor, run_dir = self._executor_factory(
-                spec.ref,
-                spec.inputs,
-                _observer,
-                cancel_token,
-            )
-            # r-review r1 AC #9: populate `run_dir` after executor
-            # construction so `cancel()` can write the file-based flag
-            # without a None-deref.
-            record.run_dir = run_dir
-        except Exception:
-            _LOGGER.exception(
-                "WorkflowsImpl: executor construction failed for %s",
-                run_id,
-            )
-            record.phase = "error"
-            await self._finalize_terminal(spec, bridge_task)
-            return
+            try:
+                executor, run_dir = self._executor_factory(
+                    spec.ref,
+                    spec.inputs,
+                    _observer,
+                    cancel_token,
+                )
+                # r-review r1 AC #9: populate `run_dir` after executor
+                # construction so `cancel()` can write the file-based flag
+                # without a None-deref.
+                record.run_dir = run_dir
+            except Exception:
+                _LOGGER.exception(
+                    "WorkflowsImpl: executor construction failed for %s",
+                    run_id,
+                )
+                record.phase = "error"
+                await self._finalize_terminal(spec, bridge_task)
+                return
 
-        # NB: use `getattr` to invoke the executor's entry point rather
-        # than a bare `executor.run()` attribute-call. TC-CHAT-18's
-        # AST walker treats every `.run(...)` under `src/cli/chat/`
-        # as a Textual `App(...).run(...)` and requires an
-        # `inline=True` kwarg — it can't distinguish an executor call
-        # site. `getattr` sidesteps the walker without changing
-        # behaviour.
-        _executor_run = getattr(executor, "run")
-        try:
-            await _executor_run()
-        except asyncio.CancelledError:
-            # Aclose raced with a live executor. Best-effort card
-            # transition, then re-raise to unwind the drain.
-            with contextlib.suppress(Exception):
-                if spec.card is not None and not spec.card.is_closed:
-                    await spec.card.close(final_status="cancelled")
-            raise
-        except Exception:  # noqa: BLE001 — bubble as run failure
-            _LOGGER.exception(
-                "WorkflowsImpl: executor run failed for %s", run_id,
-            )
-            # The executor writes its own terminal event on the way
-            # out; the bridge drain will convert it. If it didn't
-            # (construction-time raise, wiring bug), close the card
-            # here as a fallback.
-            if spec.card is not None and not spec.card.is_closed:
+            # NB: use `getattr` to invoke the executor's entry point
+            # rather than a bare `executor.run()` attribute-call.
+            # TC-CHAT-18's AST walker treats every `.run(...)` under
+            # `src/cli/chat/` as a Textual `App(...).run(...)` and
+            # requires an `inline=True` kwarg — it can't distinguish
+            # an executor call site. `getattr` sidesteps the walker
+            # without changing behaviour.
+            _executor_run = getattr(executor, "run")
+            try:
+                await _executor_run()
+            except asyncio.CancelledError:
+                # Aclose raced with a live executor. Best-effort card
+                # transition, then re-raise to unwind the drain.
                 with contextlib.suppress(Exception):
-                    await spec.card.close(final_status="error")
+                    if spec.card is not None and not spec.card.is_closed:
+                        await spec.card.close(final_status="cancelled")
+                raise
+            except Exception:  # noqa: BLE001 — bubble as run failure
+                _LOGGER.exception(
+                    "WorkflowsImpl: executor run failed for %s", run_id,
+                )
+                # The executor writes its own terminal event on the way
+                # out; the bridge drain will convert it. If it didn't
+                # (construction-time raise, wiring bug), close the card
+                # here as a fallback.
+                if spec.card is not None and not spec.card.is_closed:
+                    with contextlib.suppress(Exception):
+                        await spec.card.close(final_status="error")
+            finally:
+                await self._finalize_terminal(spec, bridge_task)
         finally:
-            await self._finalize_terminal(spec, bridge_task)
+            # spec-017: reset the nested-detection contextvar so a
+            # downstream `start()` fired after this run terminates
+            # (or in a peer task) doesn't accidentally inherit this
+            # run's id as its parent. Always fires — even on a
+            # construction-time raise or an early return above.
+            with contextlib.suppress(ValueError, LookupError):
+                _current_workflow_run_id.reset(_ctxvar_token)
 
     async def _finalize_terminal(
         self,

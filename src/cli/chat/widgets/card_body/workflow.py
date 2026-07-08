@@ -76,21 +76,49 @@ class WorkflowProgressHeader(Static):
     glyph bar is an 8-cell fill ratio (not pixel-precise; a coarse
     visual cue is enough for the terminal). Empty totals render as
     `[0/0]  ░░░░░░░░  0s`.
+
+    spec-017 adds an optional ``parent_ref``: when set, the header
+    prepends a ``↳ from <parent-ref>`` hint line above the progress
+    bar so a nested workflow's card visually threads its causal
+    parent without introducing a visual-hierarchy nest (r4
+    flat-cards invariant). ``parent_ref=None`` (top-level or peer
+    from an outer POV) restores the single-line render.
     """
 
     _BAR_WIDTH = 8
     """Fixed number of glyph cells in the progress bar."""
 
-    def __init__(self, *, id: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        id: str | None = None,
+        parent_ref: str | None = None,
+    ) -> None:
         self._run_id: str | None = None
         self._completed = 0
         self._total = 0
         self._elapsed_seconds: float = 0.0
+        # spec-017: cache the parent's ref string so the render
+        # can prepend `↳ from <parent-ref>` on its own line above
+        # the progress bar. `None` (the top-level case) restores
+        # the single-line render.
+        self._parent_ref: str | None = parent_ref
         super().__init__(self._compute_text(), id=id)
 
     def set_run_id(self, run_id: str | None) -> None:
         """Store the run id anchor; re-render."""
         self._run_id = run_id
+        self._refresh_progress()
+
+    def set_parent_ref(self, parent_ref: str | None) -> None:
+        """Set / clear the ``↳ from <parent-ref>`` header hint.
+
+        spec-017 lets the adapter update the hint after construction
+        (e.g., when the parent record's ``ref`` isn't known at
+        widget-mount time and lands via a follow-up event). Idempotent
+        — passing the same value is a no-op refresh.
+        """
+        self._parent_ref = parent_ref
         self._refresh_progress()
 
     def update_progress(
@@ -106,7 +134,13 @@ class WorkflowProgressHeader(Static):
         self._refresh_progress()
 
     def _compute_text(self) -> str:
-        """Compose the current progress-line text; no widget mutation."""
+        """Compose the current progress-line text; no widget mutation.
+
+        spec-017: when ``parent_ref`` is set, prepend
+        ``↳ from <parent-ref>`` on its own line above the progress
+        bar. A ``None`` parent_ref (top-level or peer from an outer
+        POV) restores the single-line render.
+        """
         total = max(self._total, 0)
         completed = max(0, min(self._completed, total)) if total else 0
         if total > 0:
@@ -114,7 +148,12 @@ class WorkflowProgressHeader(Static):
         else:
             filled = 0
         bar = "▓" * filled + "░" * (self._BAR_WIDTH - filled)
-        return f"[{completed}/{total}]  {bar}  {int(self._elapsed_seconds)}s"
+        progress_line = (
+            f"[{completed}/{total}]  {bar}  {int(self._elapsed_seconds)}s"
+        )
+        if self._parent_ref:
+            return f"↳ from {self._parent_ref}\n{progress_line}"
+        return progress_line
 
     def _refresh_progress(self) -> None:
         """Redraw the progress line from the current counters."""
@@ -166,7 +205,7 @@ class WorkflowRenderer(Vertical):
         height: auto;
         background: transparent;
     }
-    WorkflowRenderer WorkflowProgressHeader { height: 1; }
+    WorkflowRenderer WorkflowProgressHeader { height: auto; }
     WorkflowRenderer WorkflowNodeList { height: auto; }
     WorkflowRenderer WorkflowSummaryFooter { height: auto; }
     WorkflowRenderer.-compact WorkflowNodeList { display: none; }
@@ -183,13 +222,22 @@ class WorkflowRenderer(Vertical):
     writes this from its 250ms reorder tick.
     """
 
-    def __init__(self, *, id: str | None = None) -> None:
+    def __init__(
+        self,
+        *,
+        id: str | None = None,
+        parent_ref: str | None = None,
+    ) -> None:
         super().__init__(id=id)
         self._node_rows: dict[str, WorkflowNodeRow] = {}
         self._run_id: str | None = None
         self._workflow_ref: str | None = None
         self._start_time: datetime | None = None
         self._last_ts: datetime | None = None
+        # spec-017: cache the parent ref so `set_parent_ref` calls
+        # after construction (adapter learns the parent after mount)
+        # keep the header in sync.
+        self._parent_ref: str | None = parent_ref
         # spec-013: adapter reference for `_live_nodes_by_trace_id`
         # registration. `register_adapter` (called by the mount
         # helper on the ChatApp side) sets this. When `None`, node
@@ -201,7 +249,10 @@ class WorkflowRenderer(Vertical):
         # tests can access them BEFORE `compose` runs (mypy prefers
         # attribute-init in `__init__`). `compose` yields the same
         # instances into the DOM.
-        self._header = WorkflowProgressHeader(id=(f"{id}-header" if id else None))
+        self._header = WorkflowProgressHeader(
+            id=(f"{id}-header" if id else None),
+            parent_ref=parent_ref,
+        )
         self._node_list = WorkflowNodeList(id=(f"{id}-nodes" if id else None))
         self._footer = WorkflowSummaryFooter(id=(f"{id}-footer" if id else None))
         # spec-016: compact-mode summary line (hidden by default).
@@ -222,6 +273,19 @@ class WorkflowRenderer(Vertical):
     # ------------------------------------------------------------------
     # Public seams
     # ------------------------------------------------------------------
+
+    def set_parent_ref(self, parent_ref: str | None) -> None:
+        """Update the ``↳ from <parent-ref>`` header hint after mount.
+
+        spec-017: the adapter learns a run's ``parent_run_id`` on the
+        first ``kolsch.workflow.progress`` fan-out (workflow-scoped
+        prompts have a different path), so it may need to refresh the
+        hint after the renderer already mounted. Idempotent —
+        passing the same value re-renders the header without other
+        side effects.
+        """
+        self._parent_ref = parent_ref
+        self._header.set_parent_ref(parent_ref)
 
     def register_adapter(self, adapter: Any) -> None:
         """Wire an `EventAdapter` so node starts populate its trace map.

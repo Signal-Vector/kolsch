@@ -1278,11 +1278,23 @@ class EventAdapter:
                 self._workflow_prompt_sources[prompt_id] = (
                     run_id, node_name,
                 )
-            # Look up the workflow's record to derive the `parent_hint`
-            # from the run's `ref`. Falls back to a bare `run_id` label
-            # when the registry doesn't know the run (replay-only
-            # paths where the registry hasn't been populated).
-            parent_hint = self._derive_workflow_parent_hint(run_id)
+            # spec-017: build the run_chain and populate it on the
+            # source dict so downstream consumers (renderers, replay
+            # tooling) can walk the nested lineage without querying
+            # the registry themselves. Then derive the parent_hint
+            # from the same chain so the ApprovalBlock breadcrumb and
+            # the source's `run_chain` never diverge.
+            run_chain = self._build_run_chain(run_id, node_name)
+            source["run_chain"] = run_chain
+            # spec-014 fallback: when the registry doesn't know the
+            # run (replay-only paths), emit a bare `workflow <run_id>`
+            # label so the breadcrumb still anchors to something.
+            if run_chain:
+                parent_hint = self._format_run_chain(run_chain)
+            else:
+                parent_hint = self._derive_workflow_parent_hint(
+                    run_id, node_name=node_name,
+                )
             # Fire the durable `awaiting_approval` UI event — the
             # matching WorkflowRenderer transitions the node row to
             # `paused` on the resulting dispatch.
@@ -1330,28 +1342,104 @@ class EventAdapter:
                 prompt_id,
             )
 
-    def _derive_workflow_parent_hint(self, run_id: str) -> str:
+    def _derive_workflow_parent_hint(
+        self,
+        run_id: str,
+        *,
+        node_name: str = "",
+    ) -> str:
         """Build the ↳ parent hint string for a workflow-scoped prompt.
 
-        Uses the workflow record's `ref` when available (registry hit);
-        falls back to the bare `run_id` when the registry doesn't
-        know the run (replay-only paths). Returns an empty string only
-        when `run_id` itself is empty — callers pre-check that.
+        spec-014 baseline: uses the workflow record's ``ref`` when
+        available (registry hit); falls back to the bare ``run_id``
+        when the registry doesn't know the run (replay-only paths).
+
+        spec-017: when the innermost prompt-source run has a
+        non-None ``parent_run_id``, this walks the chain via
+        :meth:`_build_run_chain` and returns the formatted breadcrumb
+        ``workflow A.ref → B.ref · node <node_name>``. A single-entry
+        chain (top-level workflow, no nesting) collapses to
+        ``workflow <ref>`` — the same shape spec-014 shipped so
+        existing renderers stay stable.
+        """
+        chain = self._build_run_chain(run_id, node_name)
+        if chain:
+            return self._format_run_chain(chain)
+        # No registry hit — fall back to the bare run_id label.
+        return f"workflow {run_id}"
+
+    def _build_run_chain(
+        self,
+        innermost_run_id: str,
+        innermost_node_name: str,
+    ) -> list[dict[str, str]]:
+        """Walk ``parent_run_id`` up; return the chain outermost-first.
+
+        spec-017 AC #9-10. Returned entries have the shape
+        ``{"run_id": str, "ref": str, "node_name": str}``; the innermost
+        entry carries the ``node_name`` supplied by the caller (the
+        source's ``node_name``), while ancestor entries carry
+        ``node_name=""`` (they didn't fire the prompt themselves).
+
+        Returns an empty list when the ``innermost_run_id`` is unknown
+        to the registry — the caller can then fall back to a bare
+        label without pretending to know the chain.
         """
         if self._workflows_impl is None:
-            return f"workflow {run_id}"
-        # `_workflow_registry` keys are `WorkflowRunId` — a `str`
-        # subclass — so a plain-str `run_id` compares equal. Guard
-        # against a missing attribute (test doubles).
+            return []
         registry = getattr(self._workflows_impl, "_workflow_registry", None)
-        if isinstance(registry, dict):
-            for key, record in registry.items():
-                if str(key) == run_id:
-                    ref = getattr(record, "ref", None)
-                    if isinstance(ref, str) and ref:
-                        return f"workflow {ref}"
-                    break
-        return f"workflow {run_id}"
+        if not isinstance(registry, dict):
+            return []
+
+        # `_workflow_registry` keys are `WorkflowRunId` (a `str`
+        # subclass). Build a plain-str lookup once so the walk stays
+        # O(chain_depth) rather than O(chain_depth * registry_size).
+        by_str: dict[str, Any] = {
+            str(key): record for key, record in registry.items()
+        }
+
+        chain: list[dict[str, str]] = []
+        cur: str | None = innermost_run_id
+        seen: set[str] = set()
+        while cur is not None and cur not in seen:
+            seen.add(cur)
+            rec = by_str.get(cur)
+            if rec is None:
+                break
+            ref = getattr(rec, "ref", None)
+            ref_str = ref if isinstance(ref, str) else ""
+            chain.append({
+                "run_id": cur,
+                "ref": ref_str,
+                "node_name": (
+                    innermost_node_name if cur == innermost_run_id else ""
+                ),
+            })
+            parent = getattr(rec, "parent_run_id", None)
+            cur = str(parent) if parent is not None else None
+
+        return list(reversed(chain))
+
+    @staticmethod
+    def _format_run_chain(run_chain: list[dict[str, str]]) -> str:
+        """Format a run_chain as ``workflow A.ref → B.ref · node X``.
+
+        spec-017 AC #11: single-entry chain renders as
+        ``workflow <ref>`` (no arrow, no trailing node clause when
+        the node name is empty) so existing single-workflow renderers
+        stay stable with spec-014's shipped shape.
+        """
+        if not run_chain:
+            return ""
+        refs = " → ".join(
+            entry.get("ref") or entry.get("run_id", "")
+            for entry in run_chain
+        )
+        innermost = run_chain[-1]
+        node_name = innermost.get("node_name") or ""
+        if node_name:
+            return f"workflow {refs} · node {node_name}"
+        return f"workflow {refs}"
 
     def _handle_prompt_answered(self, payload: dict[str, Any]) -> None:
         """Resolve the in-flight `PromptsImpl` future on `.answered`.
@@ -1516,11 +1604,76 @@ class EventAdapter:
                 entry = widget
                 self._card_widgets[card_id] = entry
                 await self._mount_card_widget(widget, transcript)
+                # spec-017: workflow-kind cards whose bound run
+                # already has a `parent_run_id` populated (i.e.,
+                # `Workflows.start()` fired the card-open BEFORE
+                # this dispatch reached us) get their header's
+                # `↳ from <parent-ref>` hint applied immediately.
+                # The common flow is card-open first, `start()`
+                # second — the fan-out in `_handle_workflow_progress`
+                # handles that path via `_refresh_workflow_parent_ref`.
+                if kind == "workflow":
+                    self._apply_workflow_parent_ref_from_card(
+                        card_id, widget,
+                    )
                 return
         # Fallback: no transcript container available (headless
         # service tests) — track in memory via the spec-006 stub.
         entry = _CardMountStub(card_id, kind)
         self._card_widgets[card_id] = entry
+
+    def _apply_workflow_parent_ref_from_card(
+        self,
+        card_id: CardId,
+        widget: Any,
+    ) -> None:
+        """Push the header ``↳ from <parent-ref>`` hint at card-open time.
+
+        spec-017 AC #8. Called immediately after a workflow-kind
+        `CardWidget` mounts; iterates
+        `WorkflowsImpl._workflow_registry` for a record bound to this
+        card_id whose `parent_run_id` is populated. When found, looks
+        up the parent's `ref` and calls the renderer's
+        `set_parent_ref`. Silent no-op when:
+
+        - `WorkflowsImpl` isn't wired (headless tests).
+        - No record is bound to this card yet (the common flow — the
+          `start()` call that binds the card follows the card-open
+          dispatch; the fan-out in `_handle_workflow_progress` then
+          applies the hint via `_refresh_workflow_parent_ref`).
+        - The record has no `parent_run_id` (top-level workflow).
+        - The parent's record isn't in the registry (already
+          evicted; the fallback bare-label path).
+        """
+        if self._workflows_impl is None:
+            return
+        registry = getattr(self._workflows_impl, "_workflow_registry", None)
+        if not isinstance(registry, dict):
+            return
+        body = getattr(widget, "_body", None)
+        if body is None or not hasattr(body, "set_parent_ref"):
+            return
+        card_id_str = str(card_id)
+        for record in registry.values():
+            bound_card = getattr(record, "card", None)
+            bound_card_id = getattr(bound_card, "card_id", None)
+            if bound_card_id is None or str(bound_card_id) != card_id_str:
+                continue
+            parent_run_id = getattr(record, "parent_run_id", None)
+            if parent_run_id is None:
+                return
+            parent_ref: str | None = None
+            for candidate_key, candidate in registry.items():
+                if str(candidate_key) == str(parent_run_id):
+                    ref = getattr(candidate, "ref", None)
+                    if isinstance(ref, str) and ref:
+                        parent_ref = ref
+                    break
+            if parent_ref is None:
+                return
+            with contextlib.suppress(Exception):
+                body.set_parent_ref(parent_ref)
+            return
 
     def _locate_transcript(self) -> Any | None:
         """Return the `#transcript` container, or `None` if absent.
@@ -1863,9 +2016,65 @@ class EventAdapter:
                 and renderer_run_id != target_run_id
             ):
                 continue
+            # spec-017: if this run has a `parent_run_id` and the
+            # renderer's `_parent_ref` isn't already set, refresh the
+            # header hint with the parent's `ref`. Idempotent —
+            # `set_parent_ref` no-ops when the value is unchanged.
+            if isinstance(target_run_id, str):
+                self._refresh_workflow_parent_ref(body, target_run_id)
             data_view = _UIEventDataView(event, payload)
             with contextlib.suppress(Exception):
                 body.apply_event(data_view)
+
+    def _refresh_workflow_parent_ref(
+        self,
+        body: Any,
+        run_id: str,
+    ) -> None:
+        """Push the parent workflow's ``ref`` onto the renderer's header.
+
+        spec-017 AC #7-8. No-op when the run is top-level (no
+        ``parent_run_id``) or the parent's record isn't in the
+        registry (replay-only path). Silently drops any renderer
+        without a ``set_parent_ref`` seam so headless / test doubles
+        stay compatible.
+        """
+        if self._workflows_impl is None:
+            return
+        registry = getattr(self._workflows_impl, "_workflow_registry", None)
+        if not isinstance(registry, dict):
+            return
+        # `_workflow_registry` keys are `WorkflowRunId` (a `str`
+        # subclass). Find the record by str-equality.
+        rec = None
+        for key, candidate in registry.items():
+            if str(key) == run_id:
+                rec = candidate
+                break
+        if rec is None:
+            return
+        parent_run_id = getattr(rec, "parent_run_id", None)
+        if parent_run_id is None:
+            return
+        parent_rec = None
+        for key, candidate in registry.items():
+            if str(key) == str(parent_run_id):
+                parent_rec = candidate
+                break
+        if parent_rec is None:
+            return
+        parent_ref = getattr(parent_rec, "ref", None)
+        if not isinstance(parent_ref, str) or not parent_ref:
+            return
+        # Only refresh when the value changes so we don't churn the
+        # widget on every progress event.
+        current = getattr(body, "_parent_ref", None)
+        if current == parent_ref:
+            return
+        set_parent_ref = getattr(body, "set_parent_ref", None)
+        if callable(set_parent_ref):
+            with contextlib.suppress(Exception):
+                set_parent_ref(parent_ref)
 
     def _handle_workflow_node_awaiting_approval(
         self,
