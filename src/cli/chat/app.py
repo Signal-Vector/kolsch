@@ -200,6 +200,11 @@ class ChatApp(App):
         # iterates the registry's fields and calls `aclose` on any
         # non-None value; the plumbing is in place for M2+ specs.
         self._service_registry: ChatServiceRegistry | None = None
+        # spec-016: multi-workflow layout manager. Constructed in
+        # `on_mount` once the `#transcript` container and the event
+        # adapter are up. None in headless / adapter-less fixtures —
+        # `WorkflowsImpl._notify_layout` silently no-ops in that case.
+        self._workflow_layout_manager: Any = None
 
     # ------------------------------------------------------------------
     # Compose
@@ -369,6 +374,43 @@ class ChatApp(App):
         ):
             self.event_adapter.register_workflows_impl(active_workflows)
 
+        # spec-016: construct the WorkflowLayoutManager so multi-workflow
+        # cards reorder into the two-group layout with the divider. The
+        # manager needs a live `#transcript` VerticalScroll and the
+        # adapter's `_card_widgets` map to resolve card widgets. Skip
+        # when either is unavailable (headless fixtures) — the notify
+        # hook on WorkflowsImpl silently no-ops without a manager.
+        if active_workflows is not None and hasattr(
+            active_workflows, "register_layout_manager",
+        ):
+            try:
+                from cli.chat.services.workflow_layout import (  # noqa: PLC0415
+                    WorkflowLayoutManager,
+                )
+
+                transcript = self.query_one("#transcript", VerticalScroll)
+                registry = getattr(
+                    active_workflows, "_workflow_registry", None,
+                )
+                card_widgets = getattr(
+                    self.event_adapter, "_card_widgets", None,
+                )
+                if registry is not None and card_widgets is not None:
+                    layout_manager = WorkflowLayoutManager(
+                        transcript=transcript,
+                        get_records=lambda reg=registry: list(reg.values()),
+                        get_card_widget=(
+                            lambda cid, cw=card_widgets: cw.get(cid)
+                        ),
+                    )
+                    active_workflows.register_layout_manager(layout_manager)
+                    self._workflow_layout_manager = layout_manager
+            except Exception:  # noqa: BLE001 — layout wiring best-effort
+                _LOGGER.debug(
+                    "ChatApp.on_mount: WorkflowLayoutManager wiring skipped",
+                    exc_info=True,
+                )
+
         # `InlineApprovalCallback` needs a live `Prompts` handle; skip
         # authz registration when no impl exists (the headless
         # teardown fixtures don't exercise the approval flow).
@@ -482,6 +524,20 @@ class ChatApp(App):
                 # Replay is best-effort; a bad event shouldn't crash
                 # the chat. Continue.
                 continue
+
+        # spec-016 AC #10: at end of chronological replay, flush the
+        # layout manager once so multi-workflow cards land in canonical
+        # order (terminal successes at top by `terminal_at` ASC, failed
+        # pinned at boundary, in-progress by `started_at` ASC). Ordering
+        # is deterministic because `terminal_at` + `started_at` are
+        # durable fields from spec-002 + spec-012.
+        if self._workflow_layout_manager is not None:
+            try:
+                await self._workflow_layout_manager._flush_reorder()
+            except Exception:  # noqa: BLE001 — flush is best-effort
+                _LOGGER.exception(
+                    "ChatApp._replay_history: layout flush raised",
+                )
 
     # ------------------------------------------------------------------
     # Exchange worker

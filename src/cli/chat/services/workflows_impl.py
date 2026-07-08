@@ -78,6 +78,7 @@ from workflows.events import (
 from workflows.run import RunDirectory, WorkflowRunStatus
 
 if TYPE_CHECKING:
+    from cli.chat.services.workflow_layout import WorkflowLayoutManager
     from engine.context import CancelToken as _CancelToken  # noqa: F401
     from schemas.identifiers import SessionId, ThreadId
     from store.session_store import SessionStore
@@ -275,6 +276,47 @@ class WorkflowsImpl(AbstractWorkflows):
         # `Cards.notice` and resets to zero (idempotent second call).
         self._pending_orphan_count: int = 0
 
+        # spec-016: multi-workflow layout manager. Set by ChatApp.on_mount
+        # after the transcript container and event adapter are up (the
+        # manager needs a live transcript + card-widget lookup). Left
+        # None in headless tests / adapter-less paths — the notify hook
+        # is a silent no-op in that case.
+        self._layout_manager: "WorkflowLayoutManager | None" = None
+
+    # ------------------------------------------------------------------
+    # spec-016: WorkflowLayoutManager wiring
+    # ------------------------------------------------------------------
+
+    def register_layout_manager(
+        self, layout_manager: "WorkflowLayoutManager",
+    ) -> None:
+        """Wire a live layout manager after construction.
+
+        Called by ``ChatApp.on_mount`` once the transcript container
+        and event adapter are up. Enables the impl's phase-transition
+        hooks (``_run_one_workflow``, ``_finalize_terminal``, etc.) to
+        fire ``notify_card_state_changed`` so the multi-workflow
+        layout batches reorders on the 250ms tick.
+        """
+        self._layout_manager = layout_manager
+
+    def _notify_layout(self, run_id: WorkflowRunId) -> None:
+        """Schedule a layout reorder if a manager is registered.
+
+        No-op when the layout manager hasn't been wired (headless
+        tests, adapter-less paths). Best-effort — any raise from the
+        manager is swallowed so a bad layout callback can't kill the
+        drain worker.
+        """
+        if self._layout_manager is None:
+            return
+        try:
+            self._layout_manager.notify_card_state_changed(run_id)
+        except Exception:  # noqa: BLE001 — layout hook is best-effort
+            _LOGGER.exception(
+                "WorkflowsImpl: layout notify failed for %s", run_id,
+            )
+
     # ------------------------------------------------------------------
     # Public surface — Workflows Protocol.
     # ------------------------------------------------------------------
@@ -328,6 +370,10 @@ class WorkflowsImpl(AbstractWorkflows):
             self._workflow_drain_task = loop.create_task(
                 self._drain_workflow_queue(),
             )
+
+        # spec-016: notify the layout manager about the queued->
+        # tracked transition so the card lands in the sorted layout.
+        self._notify_layout(run_id)
 
         return run_id
 
@@ -396,6 +442,8 @@ class WorkflowsImpl(AbstractWorkflows):
         if record.card is not None:
             with contextlib.suppress(Exception):
                 await record.card.set_status("cancelling")
+        # spec-016: running -> cancelling.
+        self._notify_layout(run_id)
         return True
 
     async def aclose(self) -> None:
@@ -587,6 +635,8 @@ class WorkflowsImpl(AbstractWorkflows):
         if spec.card is not None:
             with contextlib.suppress(Exception):
                 await spec.card.set_status("running")
+        # spec-016: queued -> running phase transition.
+        self._notify_layout(run_id)
 
         # Bridge drain — one task per live run.
         loop = asyncio.get_running_loop()
@@ -697,6 +747,10 @@ class WorkflowsImpl(AbstractWorkflows):
             with contextlib.suppress(Exception):
                 await spec.card.close(final_status=final)
 
+        # spec-016: notify layout of the terminal transition BEFORE
+        # eviction so the card can float up into the terminal band.
+        self._notify_layout(run_id)
+
         # 60s registry eviction — non-blocking, uses `get_running_loop`
         # per Coordinator lock.
         if not self._closed:
@@ -802,6 +856,11 @@ class WorkflowsImpl(AbstractWorkflows):
                     final = self._card_final_status_for_phase(phase)
                     with contextlib.suppress(Exception):
                         await spec.card.close(final_status=final)
+                # spec-016: bridge-drain terminal — notify layout so
+                # the card moves into the terminal band on the next
+                # 250ms tick. `_finalize_terminal` also notifies but
+                # firing here is idempotent (the manager batches).
+                self._notify_layout(run_id)
                 # Drain terminates on the sentinel; keep looping so
                 # any late in-flight events land before we shut down.
 

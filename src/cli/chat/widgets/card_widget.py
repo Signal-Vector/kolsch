@@ -188,7 +188,7 @@ class CardWidget(Collapsible):
     """
 
     BINDINGS = [
-        ("enter", "expand", "Expand"),
+        ("enter", "expand_or_ack", "Expand or acknowledge"),
         ("c", "collapse", "Collapse"),
     ]
 
@@ -219,6 +219,13 @@ class CardWidget(Collapsible):
         self._kind_spec = get_kind_spec(kind)
         self.content: str = ""
         self.error_message: str | None = None
+        # spec-016: optional callback fired when Enter is pressed on a
+        # card in ``error`` state. Set by ``WorkflowsImpl`` at card-bind
+        # time on workflow-kind cards; None for every other kind. The
+        # callback receives no args — it looks up the run record via
+        # its own closure and flips ``record.acked = True`` plus
+        # triggers a layout reorder.
+        self._on_error_ack: Any = None
         self.applied_appends: _BoundedLRUSet = _BoundedLRUSet(
             maxsize=_CARD_APPEND_LRU_MAXSIZE,
         )
@@ -423,8 +430,34 @@ class CardWidget(Collapsible):
             glyph = _GENERIC_GLYPH_BY_STATE.get(new, "?")
         self._header.set_glyph(glyph)
 
+    def action_expand_or_ack(self) -> None:
+        """`Enter` binding — ack an error card, else expand.
+
+        spec-016 AC #11: when the card is in ``error`` state (e.g. a
+        failed workflow pinned at the boundary between terminal and
+        in-progress groups), pressing ``Enter`` fires the
+        ``_on_error_ack`` callback (set at card-bind time by
+        ``WorkflowsImpl``). The callback flips
+        ``WorkflowRunRecord.acked = True`` and schedules a reorder so
+        the card moves into the terminal band.
+
+        For every other state (or a card without an ack callback),
+        the binding behaves like the legacy ``action_expand`` — expand
+        a collapsed card.
+        """
+        if self.state == "error" and self._on_error_ack is not None:
+            try:
+                self._on_error_ack()
+            except Exception:  # noqa: BLE001 — ack callback best-effort
+                pass
+            return
+        if self.collapsed:
+            self.collapsed = False
+
+    # Retained as a compatibility alias — tests written against the
+    # spec-007 binding name still call `action_expand`.
     def action_expand(self) -> None:
-        """`Enter` binding — expand a collapsed card."""
+        """`Enter` binding — expand a collapsed card (compat alias)."""
         if self.collapsed:
             self.collapsed = False
 

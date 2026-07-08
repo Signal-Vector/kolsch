@@ -41,6 +41,7 @@ from typing import Any
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
+from textual.reactive import reactive
 from textual.widgets import Static
 
 from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
@@ -150,6 +151,14 @@ class WorkflowRenderer(Vertical):
     `kolsch.workflow.progress` UI event flows through `apply_event`
     which decodes the wrapped `WorkflowEventKind` and dispatches to
     the appropriate sub-widget update.
+
+    spec-016 adds ``compact_mode`` — a reactive flag that hides the
+    node list + footer and swaps in a one-line summary
+    (``▸ workflow · <ref>  N/M · Ns``). The
+    [`WorkflowLayoutManager`][cli.chat.services.workflow_layout.WorkflowLayoutManager]
+    flips this when more than two workflows are in-flight so the
+    transcript stays legible under load. Focused cards remain full-
+    render; terminal-group cards are always compact.
     """
 
     DEFAULT_CSS = """
@@ -160,12 +169,25 @@ class WorkflowRenderer(Vertical):
     WorkflowRenderer WorkflowProgressHeader { height: 1; }
     WorkflowRenderer WorkflowNodeList { height: auto; }
     WorkflowRenderer WorkflowSummaryFooter { height: auto; }
+    WorkflowRenderer.-compact WorkflowNodeList { display: none; }
+    WorkflowRenderer.-compact WorkflowSummaryFooter { display: none; }
+    """
+
+    compact_mode: reactive[bool] = reactive(False, init=False)
+    """Compact-mode toggle (spec-016).
+
+    ``True`` hides the node list + footer and shows a single-line
+    summary via ``_compact_line``. ``False`` restores the full render.
+    The
+    [`WorkflowLayoutManager`][cli.chat.services.workflow_layout.WorkflowLayoutManager]
+    writes this from its 250ms reorder tick.
     """
 
     def __init__(self, *, id: str | None = None) -> None:
         super().__init__(id=id)
         self._node_rows: dict[str, WorkflowNodeRow] = {}
         self._run_id: str | None = None
+        self._workflow_ref: str | None = None
         self._start_time: datetime | None = None
         self._last_ts: datetime | None = None
         # spec-013: adapter reference for `_live_nodes_by_trace_id`
@@ -182,12 +204,20 @@ class WorkflowRenderer(Vertical):
         self._header = WorkflowProgressHeader(id=(f"{id}-header" if id else None))
         self._node_list = WorkflowNodeList(id=(f"{id}-nodes" if id else None))
         self._footer = WorkflowSummaryFooter(id=(f"{id}-footer" if id else None))
+        # spec-016: compact-mode summary line (hidden by default).
+        # Uses a distinct id so tests can query it. The line is empty
+        # until the watcher populates it on a compact flip.
+        self._compact_line = Static(
+            "", id=(f"{id}-compact" if id else None),
+        )
+        self._compact_line.display = False
 
     def compose(self) -> ComposeResult:
-        """Yield header + node list + footer."""
+        """Yield header + node list + footer + compact summary."""
         yield self._header
         yield self._node_list
         yield self._footer
+        yield self._compact_line
 
     # ------------------------------------------------------------------
     # Public seams
@@ -283,6 +313,10 @@ class WorkflowRenderer(Vertical):
         if isinstance(run_id, str):
             self._run_id = run_id
             self._header.set_run_id(run_id)
+        # spec-016: cache the workflow ref for the compact-mode summary.
+        workflow_ref = payload.get("workflow_ref")
+        if isinstance(workflow_ref, str):
+            self._workflow_ref = workflow_ref
         ts = self._parse_ts(payload.get("ts"))
         if ts is not None:
             self._start_time = ts
@@ -464,6 +498,46 @@ class WorkflowRenderer(Vertical):
         )
         elapsed = self._elapsed_now()
         self._header.update_progress(completed, total, elapsed)
+        # spec-016: keep the compact-summary line in sync so a compact
+        # card's single-line stays current under streaming updates.
+        if self.compact_mode:
+            self._compact_line.update(self._render_compact_summary())
+
+    # ------------------------------------------------------------------
+    # spec-016: compact mode
+    # ------------------------------------------------------------------
+
+    def watch_compact_mode(self, old: bool, new: bool) -> None:
+        """React to a ``compact_mode`` flip — hide/show node list + footer.
+
+        Also toggles the ``.-compact`` CSS class on the renderer so
+        stylesheet rules can key off the mode without a reactive
+        subscription.
+        """
+        _ = old
+        if new:
+            self._node_list.display = False
+            self._footer.display = False
+            self._compact_line.display = True
+            self._compact_line.update(self._render_compact_summary())
+            self.add_class("-compact")
+        else:
+            self._node_list.display = True
+            self._footer.display = True
+            self._compact_line.display = False
+            self.remove_class("-compact")
+
+    def _render_compact_summary(self) -> str:
+        """Return the ``▸ workflow · <ref>  N/M · Ns`` one-liner.
+
+        Ref falls back to the run id (or ``?``) when unset — replay
+        may leave the renderer with no workflow_ref anchor.
+        """
+        completed = self._header._completed
+        total = self._header._total
+        elapsed = int(self._header._elapsed_seconds)
+        ref = self._workflow_ref or self._run_id or "?"
+        return f"▸ workflow · {ref}  {completed}/{total} · {elapsed}s"
 
     def _elapsed_now(self) -> float:
         """Return seconds since `_start_time` using the last-seen ts."""
