@@ -39,6 +39,7 @@ from cli.chat.keybindings import CHAT_BINDINGS
 from cli.chat.service_registry import ChatServiceRegistry
 from cli.chat.services.cards_impl import CardsImpl
 from cli.chat.services.prompts_impl import PromptsImpl
+from cli.chat.services.workflows_impl import WorkflowsImpl
 from cli.chat.session import ChatSessionBundle, _build_user_trigger, replay_session
 from cli.chat.widgets import (
     ApprovalBlock,
@@ -250,9 +251,11 @@ class ChatApp(App):
         # only fill in slots that are still `None`.
         prompts_impl: PromptsImpl | None = None
         cards_impl: CardsImpl | None = None
+        workflows_impl: WorkflowsImpl | None = None
         existing = self._service_registry
         pre_set_prompts = existing.prompts if existing is not None else None
         pre_set_cards = existing.cards if existing is not None else None
+        pre_set_workflows = existing.workflows if existing is not None else None
         if pre_set_prompts is None:
             try:
                 prompts_impl = PromptsImpl(
@@ -279,13 +282,39 @@ class ChatApp(App):
                     exc_info=True,
                 )
                 cards_impl = None
+        # spec-012: same construction pattern for `WorkflowsImpl`.
+        # Headless fixtures may lack a real runtime / workspace root;
+        # boot even if construction fails.
+        if pre_set_workflows is None:
+            try:
+                from workflows.run_store import WorkflowRunStore  # noqa: PLC0415
+
+                run_store = WorkflowRunStore(self.session.runtime.root)
+                workflows_impl = WorkflowsImpl(
+                    runtime=self.session.runtime,
+                    cards=cards_impl,
+                    prompts=prompts_impl,
+                    session_store=self.session.runtime.store,
+                    session_id=self.session.session_id,
+                    thread_id=self.session.thread_id,
+                    run_store=run_store,
+                )
+            except Exception:  # noqa: BLE001 — headless fixtures may lack a real runtime
+                _LOGGER.debug(
+                    "ChatApp.on_mount: WorkflowsImpl construction skipped",
+                    exc_info=True,
+                )
+                workflows_impl = None
         if existing is None:
             self._service_registry = ChatServiceRegistry(
                 cards=cards_impl,
                 prompts=prompts_impl,
+                workflows=workflows_impl,
             )
-        elif (pre_set_prompts is None and prompts_impl is not None) or (
-            pre_set_cards is None and cards_impl is not None
+        elif (
+            (pre_set_prompts is None and prompts_impl is not None)
+            or (pre_set_cards is None and cards_impl is not None)
+            or (pre_set_workflows is None and workflows_impl is not None)
         ):
             # Merge: keep the pre-set fields; fill in what was empty.
             self._service_registry = ChatServiceRegistry(
@@ -293,7 +322,11 @@ class ChatApp(App):
                 prompts=(
                     prompts_impl if pre_set_prompts is None else existing.prompts
                 ),
-                workflows=existing.workflows,
+                workflows=(
+                    workflows_impl
+                    if pre_set_workflows is None
+                    else existing.workflows
+                ),
                 session=existing.session,
             )
 

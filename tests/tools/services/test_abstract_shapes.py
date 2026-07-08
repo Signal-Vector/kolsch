@@ -102,15 +102,22 @@ async def test_abstract_prompts_methods_raise_not_implemented() -> None:
 
 @pytest.mark.asyncio
 async def test_abstract_workflows_methods_raise_not_implemented() -> None:
+    from uuid import uuid4
+
     from tools.services.workflows import WorkflowRunId
+
+    # spec-012 uses the shipped `wrk_<uuid>` prefixed id; keep the
+    # stub happy by minting a real one.
+    rid = WorkflowRunId(f"wrk_{uuid4()}")
 
     stub = _WorkflowsStub()
     with pytest.raises(NotImplementedError):
         await stub.start("kolsch/workflows/x", {})
     with pytest.raises(NotImplementedError):
-        await stub.status(WorkflowRunId("run_1"))
+        # spec-012: `status` is synchronous.
+        stub.status(rid)
     with pytest.raises(NotImplementedError):
-        await stub.cancel(WorkflowRunId("run_1"))
+        await stub.cancel(rid)
 
 
 def test_abstract_session_view_read_context_file_raises_not_implemented() -> None:
