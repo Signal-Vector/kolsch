@@ -18,13 +18,14 @@ import logging
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 from textual import events, work
 from textual.app import App, ComposeResult
 from textual.containers import Vertical, VerticalScroll
 from textual.reactive import reactive
 from textual.widgets import Static
+from textual.widgets import TextArea as _TextArea
 
 from cli._slash import (
     COMMAND_REGISTRY,
@@ -42,7 +43,7 @@ from cli.chat.service_registry import ChatServiceRegistry
 from cli.chat.services.cards_impl import UI_EVENT_TOPIC, CardsImpl
 from cli.chat.services.prompts_impl import PromptsImpl
 from cli.chat.services.workflows_impl import WorkflowsImpl
-from cli.chat.session import ChatSessionBundle, _build_user_trigger, replay_session
+from cli.chat.session import ChatSessionBundle, _build_user_trigger
 from cli.chat.widgets import (
     ApprovalBlock,
     AssistantProse,
@@ -56,14 +57,9 @@ from cli.chat.widgets import (
     UserChatbox,
 )
 from cli.chat.widgets.notice import NoticeWidget
-from textual.widgets import TextArea as _TextArea  # noqa: E402 — Changed msg source
 from engine import ExecutionContext
 from providers import RuleBasedAuthorizationProvider
 from schemas.events import Event, EventType
-
-if TYPE_CHECKING:
-    pass
-
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -206,7 +202,29 @@ class ChatApp(App):
         super().__init__()
         self.session = session
         self.engine = engine
-        self.event_adapter = EventAdapter(self)
+        # bug-021: wire the session_store + ids into the adapter so
+        # the widget→store bridge task (spawned from
+        # `_handle_prompt_requested`) can append `WIRE_PROMPT_ANSWERED`
+        # to the durable JSONL. Pre-bug-021 the adapter was constructed
+        # bare, so the bridge silently skipped the append and the
+        # `.answered` event never dispatched through the live bus —
+        # Symptom 2 in bug-021.
+        #
+        # `getattr(...)` guards so headless / partial-bundle fixtures
+        # (spec-003 replay-only paths) that construct a bare bundle
+        # without a runtime still work — the adapter's constructor
+        # already accepts `None` for every kwarg.
+        _session_store = getattr(
+            getattr(session, "runtime", None), "store", None,
+        )
+        _session_id = getattr(session, "session_id", None)
+        _thread_id = getattr(session, "thread_id", None)
+        self.event_adapter = EventAdapter(
+            self,
+            session_store=_session_store,
+            session_id=_session_id,
+            thread_id=_thread_id,
+        )
         # spec-004: `InlineApprovalCallback` needs a live `PromptsImpl`
         # handle for `.choice(...)` routing; construction now defers
         # to `on_mount` where `PromptsImpl` is built with the session
@@ -482,7 +500,7 @@ class ChatApp(App):
                     UI_EVENT_TOPIC,
                     self.event_adapter.handle,
                 )
-        except Exception:  # noqa: BLE001 — best-effort; a failed sub is not fatal
+        except Exception:
             _LOGGER.exception(
                 "ChatApp.on_mount: UI-event bus subscription failed",
             )
@@ -563,7 +581,7 @@ class ChatApp(App):
                 await active_workflows.sweep_orphans()
                 if hasattr(active_workflows, "fire_orphan_notice"):
                     active_workflows.fire_orphan_notice()
-            except Exception:  # noqa: BLE001 — sweep is boot-time best-effort
+            except Exception:
                 _LOGGER.exception(
                     "ChatApp.on_mount: workflow orphan sweep raised",
                 )
@@ -611,7 +629,7 @@ class ChatApp(App):
                 bus = getattr(self.session.runtime, "bus", None)
                 if bus is not None and hasattr(bus, "unsubscribe"):
                     await bus.unsubscribe(self._ui_event_bus_sub)
-            except Exception:  # noqa: BLE001 — teardown best-effort
+            except Exception:
                 _LOGGER.exception(
                     "ChatApp.on_unmount: UI-event bus unsubscribe raised",
                 )
@@ -641,7 +659,7 @@ class ChatApp(App):
                     continue
                 try:
                     await aclose()
-                except Exception:  # noqa: BLE001 — one bad aclose can't stop the others
+                except Exception:
                     _LOGGER.exception(
                         "ChatApp.on_unmount: service %r aclose raised",
                         field_name,
@@ -691,7 +709,7 @@ class ChatApp(App):
         if self._workflow_layout_manager is not None:
             try:
                 await self._workflow_layout_manager._flush_reorder()
-            except Exception:  # noqa: BLE001 — flush is best-effort
+            except Exception:
                 _LOGGER.exception(
                     "ChatApp._replay_history: layout flush raised",
                 )
@@ -1057,7 +1075,7 @@ class ChatApp(App):
             target = exports_dir / f"chat-{session_slug}-{stamp}.txt"
         try:
             lines = [
-                f"# kolsch chat transcript",
+                "# kolsch chat transcript",
                 f"# session: {self.session.session_id}",
                 f"# thread:  {self.session.thread_id}",
                 f"# agent:   {self.session.config.name}",
@@ -1213,7 +1231,7 @@ class ChatApp(App):
                 if workflows_impl is not None:
                     try:
                         await workflows_impl.cancel(oldest_id)
-                    except Exception:  # noqa: BLE001 — cancel best-effort
+                    except Exception:
                         _LOGGER.exception(
                             "ChatApp.on_key: workflow cancel raised",
                         )
@@ -1232,7 +1250,7 @@ class ChatApp(App):
                 if workflows_impl is not None:
                     try:
                         await workflows_impl.cancel(oldest_id)
-                    except Exception:  # noqa: BLE001 — cancel best-effort
+                    except Exception:
                         _LOGGER.exception(
                             "ChatApp.on_key: workflow cancel raised",
                         )

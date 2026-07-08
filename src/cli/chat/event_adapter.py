@@ -455,7 +455,7 @@ class EventAdapter:
         session_meta: SessionMeta | None = None,
         prompts_impl: PromptsImpl | None = None,
         cards: Any | None = None,
-        workflows_impl: "WorkflowsImpl | None" = None,
+        workflows_impl: WorkflowsImpl | None = None,
     ) -> None:
         self._app = app
         # tool_call_id → arguments dict (captured on TOOL_CALLED so
@@ -492,7 +492,7 @@ class EventAdapter:
         # workflow-scoped approval fires. `None` in headless / tests
         # that never boot workflows. `PromptsImpl` remains unaware of
         # workflows (Coordinator #2).
-        self._workflows_impl: "WorkflowsImpl | None" = workflows_impl
+        self._workflows_impl: WorkflowsImpl | None = workflows_impl
         # spec-014: prompt_id → (run_id, node_name) so
         # `_handle_prompt_answered` / `_handle_prompt_cancelled` can
         # emit `emit_approval_resolved` without re-consulting the
@@ -589,7 +589,7 @@ class EventAdapter:
         """
         self._cards = cards
 
-    def register_workflows_impl(self, workflows_impl: "WorkflowsImpl") -> None:
+    def register_workflows_impl(self, workflows_impl: WorkflowsImpl) -> None:
         """Wire a live ``WorkflowsImpl`` in after construction.
 
         spec-014: mirror of ``register_prompts_impl``. Populated by
@@ -690,7 +690,7 @@ class EventAdapter:
         ):
             try:
                 await self.handle(event)
-            except Exception:  # noqa: BLE001 — replay is best-effort
+            except Exception:
                 _LOGGER.exception(
                     "event_adapter handler raised during replay of %r",
                     event.event_id,
@@ -840,7 +840,7 @@ class EventAdapter:
         )
         try:
             await self._session_store.append_event(self._thread_id, cancelled)
-        except Exception:  # noqa: BLE001 — synthesis is best-effort
+        except Exception:
             _LOGGER.exception(
                 "failed to append synthetic prompt.cancelled for %r",
                 prompt_id,
@@ -884,7 +884,7 @@ class EventAdapter:
         )
         try:
             await self._session_store.append_event(self._thread_id, failed)
-        except Exception:  # noqa: BLE001 — synthesis is best-effort
+        except Exception:
             _LOGGER.exception(
                 "failed to append synthetic tool.failed for %r",
                 tool_call_id,
@@ -1304,7 +1304,7 @@ class EventAdapter:
                         run_id=run_id,
                         node_name=node_name,
                     )
-                except Exception:  # noqa: BLE001 — emit failures logged
+                except Exception:
                     _LOGGER.exception(
                         "event_adapter: emit_awaiting_approval raised "
                         "for prompt_id=%r run_id=%r",
@@ -1312,8 +1312,9 @@ class EventAdapter:
                         run_id,
                     )
 
+        block: Any = None
         try:
-            await self._app.mount_approval_block(
+            block = await self._app.mount_approval_block(
                 rule_id_val,
                 action_val,
                 target_val,
@@ -1325,22 +1326,169 @@ class EventAdapter:
             # spec-004). Fall back to the positional-only call so
             # existing tests keep passing.
             try:
-                await self._app.mount_approval_block(
+                block = await self._app.mount_approval_block(
                     rule_id_val,
                     action_val,
                     target_val,
                 )
-            except Exception:  # noqa: BLE001 — mount failure logged
+            except Exception:
                 _LOGGER.exception(
                     "event_adapter: mount_approval_block raised "
                     "for prompt_id=%r",
                     prompt_id,
                 )
-        except Exception:  # noqa: BLE001 — mount failure logged, not raised
+        except Exception:
             _LOGGER.exception(
                 "event_adapter: mount_approval_block raised for prompt_id=%r",
                 prompt_id,
             )
+
+        # bug-021 Symptom 2: bridge the widget's local resolution back
+        # onto the store as a `WIRE_PROMPT_ANSWERED` event.
+        # Pre-bug-021 no production code awaited `block.resolved()`, so
+        # `PromptsImpl.choice()`'s future never resolved and the tool
+        # call hung indefinitely.
+        #
+        # The bridge lives HERE (adapter, not `ChatApp.mount_approval_block`)
+        # because the adapter owns `prompt_id` + the `session_store`
+        # for the append; the app helper stays purely UI-mount
+        # (Coordinator open Q resolution).
+        #
+        # `mount_approval_block` returns `None` in some fake-app
+        # fixtures (spec-014 doubles swallow the mount) — skip the
+        # bridge in that case.
+        if block is not None and hasattr(block, "resolved"):
+            try:
+                loop = asyncio.get_running_loop()
+            except RuntimeError:
+                # No running loop (rare sync-test path). The bridge is
+                # skipped; the durability guarantee is best-effort.
+                return
+            task = loop.create_task(
+                self._bridge_widget_resolution(prompt_id, block),
+            )
+            task.add_done_callback(_log_task_exception)
+
+    async def _bridge_widget_resolution(
+        self,
+        prompt_id: str,
+        block: Any,
+    ) -> None:
+        """Await the mounted `ApprovalBlock`; emit `WIRE_PROMPT_ANSWERED`.
+
+        bug-021 Symptom 2 fix. Fire-and-forget task spawned from
+        :meth:`_handle_prompt_requested`. Awaits
+        :meth:`ApprovalBlock.resolved`, maps the widget's
+        ``PromptCallbackReturn`` to a response-key string via
+        :func:`response_key_from`, and appends a fresh
+        ``WIRE_PROMPT_ANSWERED`` event to the session store with the
+        matching ``prompt_id``.
+
+        The store append triggers the same
+        :meth:`_handle_prompt_answered` branch a manually-fabricated
+        answered event would — the pending
+        :class:`PromptsImpl` future resolves and the awaiting
+        ``choice()`` returns to the caller.
+
+        Cancellation contract: if the widget's ``resolved()`` raises
+        :class:`asyncio.CancelledError` (e.g. the app tore down while
+        the user was still deciding), the bridge logs at debug and
+        returns silently — the `WIRE_PROMPT_CANCELLED` path handled
+        the cleanup already.
+
+        Idempotence: relies on
+        :attr:`_resolved_prompt_ids` (via
+        :meth:`_handle_prompt_answered`) — a second dispatch of the
+        same `prompt_id` is a no-op.
+        """
+        try:
+            result = await block.resolved()
+        except asyncio.CancelledError:
+            _LOGGER.debug(
+                "event_adapter: approval bridge cancelled for prompt_id=%r",
+                prompt_id,
+            )
+            return
+        except Exception:
+            _LOGGER.exception(
+                "event_adapter: block.resolved() raised for prompt_id=%r",
+                prompt_id,
+            )
+            return
+
+        try:
+            # Local import to avoid a circular src/cli/chat/widgets ↔
+            # src/cli/chat/event_adapter cycle at module load time.
+            from cli.chat.widgets.approval_block import (
+                response_key_from,
+            )
+            response = response_key_from(result)
+        except Exception:
+            _LOGGER.exception(
+                "event_adapter: response_key_from failed for prompt_id=%r",
+                prompt_id,
+            )
+            return
+
+        if (
+            self._session_store is None
+            or self._session_id is None
+            or self._thread_id is None
+        ):
+            # Headless / partial-mount test paths: no store to append
+            # to. The bridge is a durability + composition seam; the
+            # widget's `_resolved_event` still fires so any direct
+            # awaiter (widget-level tests) unblocks.
+            _LOGGER.debug(
+                "event_adapter: approval bridge skipped (no store) "
+                "for prompt_id=%r",
+                prompt_id,
+            )
+            return
+
+        answered = Event(
+            event_id=EventId(f"ev_{uuid4()}"),
+            parent_event_id=None,
+            thread_id=self._thread_id,
+            session_id=self._session_id,
+            type=EventType.UI_EVENT,
+            data={
+                "schema_version": 1,
+                "kind": WIRE_PROMPT_ANSWERED,
+                "payload": {
+                    "prompt_id": prompt_id,
+                    "response": response,
+                },
+            },
+            actor=Actor(kind="system"),
+            created_at=datetime.now(UTC),
+        )
+        try:
+            await self._session_store.append_event(self._thread_id, answered)
+        except Exception:
+            _LOGGER.exception(
+                "event_adapter: append_event(WIRE_PROMPT_ANSWERED) failed "
+                "for prompt_id=%r",
+                prompt_id,
+            )
+            return
+
+        # Publish to the runtime bus so the live UI_EVENT subscription
+        # (registered in `ChatApp.on_mount` per bug-020) delivers the
+        # answered event to `event_adapter.handle` in the SAME session.
+        # Without this the store durability is fine but
+        # `PromptsImpl.choice()`'s future only resolves on next-boot
+        # replay — which is Symptom 2 verbatim. Mirrors
+        # `PromptsImpl._append_ui_event`'s append-then-publish shape;
+        # bus failures are swallowed (durability is the store append,
+        # delivery is best-effort).
+        bus = getattr(
+            getattr(self._app, "session", None), "runtime", None,
+        )
+        bus = getattr(bus, "bus", None) if bus is not None else None
+        if bus is not None and hasattr(bus, "publish"):
+            with contextlib.suppress(Exception):
+                await bus.publish(answered)
 
     def _derive_workflow_parent_hint(
         self,
@@ -1706,7 +1854,7 @@ class EventAdapter:
             return None
         try:
             return CardWidget(card_id=card_id, kind=kind, title=title)
-        except Exception:  # noqa: BLE001 — unknown kind, missing DOM, etc.
+        except Exception:
             _LOGGER.exception(
                 "event_adapter: CardWidget construction failed for %r",
                 card_id,
@@ -1725,7 +1873,7 @@ class EventAdapter:
         """
         try:
             await transcript.mount(widget)
-        except Exception:  # noqa: BLE001 — mount raced with unmount, etc.
+        except Exception:
             _LOGGER.exception(
                 "event_adapter: CardWidget mount raised for %r",
                 getattr(widget, "card_id", "<unknown>"),
@@ -1958,7 +2106,7 @@ class EventAdapter:
             return
         try:
             widget = mount(text, kind)
-        except Exception:  # noqa: BLE001 — mount failures logged, not raised
+        except Exception:
             _LOGGER.exception(
                 "event_adapter: mount_notice raised for card_id=%r",
                 card_id_str,
@@ -2175,7 +2323,7 @@ class EventAdapter:
             return False
         try:
             transcript.scroll_to_widget(card_widget, animate=False)
-        except Exception:  # noqa: BLE001 — scroll is best-effort
+        except Exception:
             _LOGGER.exception(
                 "event_adapter: scroll_to_widget raised for run_id=%r",
                 run_id,
@@ -2240,13 +2388,13 @@ class EventAdapter:
             return
         try:
             from cli.chat.widgets.notice import NoticeWidget  # noqa: PLC0415
-        except Exception:  # noqa: BLE001 — import failure is fatal for this branch only
+        except Exception:
             _LOGGER.exception("event_adapter: NoticeWidget import failed")
             return
         try:
             widget = NoticeWidget(text=text, kind=kind)
             await transcript.mount(widget)
-        except Exception:  # noqa: BLE001 — mount is best-effort
+        except Exception:
             _LOGGER.exception(
                 "event_adapter: root notice mount failed for notice_id=%r",
                 notice_id,

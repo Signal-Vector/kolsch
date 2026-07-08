@@ -65,8 +65,20 @@ class Prompts(Protocol):
         options: list[str],
         *,
         source: PromptSource,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
-        """Ask a multiple-choice prompt; return the user's selection."""
+        """Ask a multiple-choice prompt; return the user's selection.
+
+        bug-021: ``metadata`` (optional) is a free-form dict of
+        top-level payload keys forwarded onto the emitted
+        ``kolsch.prompt.requested`` event. Callers use this to
+        supply widget-header context (``rule_id`` / ``action`` /
+        ``target`` for the approval flow). Impls MUST merge these
+        keys at the top level of the payload but MUST NOT let a
+        metadata key clobber a reserved payload key
+        (``prompt_id`` / ``kind`` / ``prompt`` / ``options`` /
+        ``placeholder`` / ``source``).
+        """
         ...
 
     async def text(
@@ -74,8 +86,13 @@ class Prompts(Protocol):
         prompt: str,
         *,
         source: PromptSource,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
-        """Ask a free-text prompt; return the user's response."""
+        """Ask a free-text prompt; return the user's response.
+
+        bug-021: ``metadata`` mirrors ``choice`` — see the docstring
+        there for merge semantics.
+        """
         ...
 
     async def wait_for_slot(
@@ -96,8 +113,14 @@ class AbstractPrompts(ABC):
         options: list[str],
         *,
         source: PromptSource,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
-        """Default stub — subclasses override. Raises `NotImplementedError`."""
+        """Default stub — subclasses override. Raises `NotImplementedError`.
+
+        bug-021 signature parity: accepts the optional ``metadata``
+        kwarg so test doubles subclassing this ABC don't have to
+        re-declare the shape.
+        """
         raise NotImplementedError
 
     async def text(
@@ -105,8 +128,13 @@ class AbstractPrompts(ABC):
         prompt: str,
         *,
         source: PromptSource,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
-        """Default stub — subclasses override. Raises `NotImplementedError`."""
+        """Default stub — subclasses override. Raises `NotImplementedError`.
+
+        bug-021 signature parity: accepts the optional ``metadata``
+        kwarg.
+        """
         raise NotImplementedError
 
     async def wait_for_slot(
@@ -125,4 +153,4 @@ class AbstractPrompts(ABC):
         teardown. Concrete impls in spec-004 override with real
         teardown logic.
         """
-        return None
+        return

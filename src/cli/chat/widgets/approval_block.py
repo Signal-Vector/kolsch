@@ -64,6 +64,31 @@ from providers.authz import AuthzEffect, Rule
 PromptCallbackReturn = AuthzEffect | tuple[AuthzEffect, Rule]
 
 
+def response_key_from(result: PromptCallbackReturn) -> str:
+    """Map an :data:`PromptCallbackReturn` back to a choice-pane key.
+
+    bug-021 AC #8. The widget owns the vocabulary — this helper is
+    the inverse of :func:`cli.chat.approval._translate_response`:
+
+    - :attr:`AuthzEffect.ALLOW` → ``"y"``
+    - :attr:`AuthzEffect.DENY` → ``"n"``
+    - ``(AuthzEffect.ALLOW, Rule)`` → ``"a"``
+    - ``(AuthzEffect.DENY, Rule)`` → ``"d"``
+
+    The tuple case round-trips through
+    :func:`cli.chat.approval._translate_response` back to allow-once /
+    deny-once today — the Rule is dropped on the widget → store
+    bridge. See ``# TODO(bug-022)`` in :meth:`ApprovalBlock._resolve`
+    around the tuple-persist path — restoring Rule persistence needs
+    a richer ``WIRE_PROMPT_ANSWERED`` payload than the shipped
+    string-only response.
+    """
+    if isinstance(result, tuple):
+        effect, _rule = result
+        return "a" if effect is AuthzEffect.ALLOW else "d"
+    return "y" if result is AuthzEffect.ALLOW else "n"
+
+
 class ApprovalBlock(Vertical):
     """Bordered three-step approval flow.
 
@@ -305,6 +330,18 @@ class ApprovalBlock(Vertical):
             # default users want (per the live-smoke feedback).
             if self._pending_effect is None or self._pending_pattern is None:
                 return
+            # TODO(bug-022): The Rule constructed here is bound to the
+            # widget's local resolution only — it does NOT round-trip
+            # through the WIRE_PROMPT_ANSWERED payload. The event
+            # carries a plain response-key string (via
+            # `response_key_from`), so `InlineApprovalCallback._translate_response`
+            # collapses the tuple back to allow-once / deny-once when
+            # the callback returns. Fix: extend WIRE_PROMPT_ANSWERED
+            # to optionally carry a serialised Rule dict, and have the
+            # adapter's bridge task include it when the widget resolved
+            # via `(effect, Rule)` — then `_translate_response` can
+            # rebuild the tuple. Scope was explicitly deferred out of
+            # bug-021 (see bug-021 spec §"Out of scope").
             rule = Rule(
                 what=self._action,
                 pattern=self._pending_pattern,
@@ -321,21 +358,20 @@ class ApprovalBlock(Vertical):
                 footer=footer,
                 allowed=allowed,
             )
+        # `n` / `esc` — fall back to a one-shot effect matching the
+        # rule the user was about to save.
+        elif self._pending_effect is AuthzEffect.ALLOW:
+            await self._resolve(
+                AuthzEffect.ALLOW,
+                footer="✓ Allowed once",
+                allowed=True,
+            )
         else:
-            # `n` / `esc` — fall back to a one-shot effect matching the
-            # rule the user was about to save.
-            if self._pending_effect is AuthzEffect.ALLOW:
-                await self._resolve(
-                    AuthzEffect.ALLOW,
-                    footer="✓ Allowed once",
-                    allowed=True,
-                )
-            else:
-                await self._resolve(
-                    AuthzEffect.DENY,
-                    footer="✗ Denied once",
-                    allowed=False,
-                )
+            await self._resolve(
+                AuthzEffect.DENY,
+                footer="✗ Denied once",
+                allowed=False,
+            )
 
     # ------------------------------------------------------------------
     # Internals

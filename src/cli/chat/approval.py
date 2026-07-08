@@ -22,7 +22,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from providers.authz import AuthzEffect, Rule
 
@@ -94,11 +94,26 @@ class InlineApprovalCallback:
 
         source = self._derive_source(execution_context)
         question = _format_question(rule_id, action, target)
+        # bug-021 Symptom 1: forward the raw fields into `metadata` so
+        # `PromptsImpl.choice` merges them into the `WIRE_PROMPT_REQUESTED`
+        # payload at the top level, where
+        # `EventAdapter._handle_prompt_requested` already reads them.
+        # Pre-bug-021 the payload only carried the composite question
+        # string, so the ApprovalBlock's `Tool` / `Args` / `Rule`
+        # context lines rendered empty. `metadata` is a superset —
+        # existing headless callers keep the composite `prompt` string
+        # verbatim for their own rendering.
+        metadata: dict[str, Any] = {
+            "rule_id": rule_id,
+            "action": action,
+            "target": target,
+        }
         try:
             response = await self._prompts.choice(
                 question,
                 _APPROVAL_OPTIONS,
                 source=source,
+                metadata=metadata,
             )
         finally:
             # The composer freezes while awaiting approval (mounted

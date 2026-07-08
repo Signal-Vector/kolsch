@@ -66,7 +66,7 @@ class PromptsImpl(AbstractPrompts):
         session_store: SessionStore,
         session_id: SessionId,
         thread_id: ThreadId,
-        bus: "EventBus | None" = None,
+        bus: EventBus | None = None,
     ) -> None:
         self._session_store = session_store
         self._session_id = session_id
@@ -78,7 +78,7 @@ class PromptsImpl(AbstractPrompts):
         # dispatches the ApprovalBlock mount in the SAME session
         # rather than only on next-boot replay. `None` in headless
         # tests / adapter-less fixtures.
-        self._bus: "EventBus | None" = bus
+        self._bus: EventBus | None = bus
         self._pending_future: asyncio.Future[str] | None = None
         self._pending_prompt_id: PromptId | None = None
         self._closed = False
@@ -87,12 +87,26 @@ class PromptsImpl(AbstractPrompts):
     # Public surface (Prompts Protocol)
     # ------------------------------------------------------------------
 
+    # bug-021: reserved payload keys that MUST NOT be clobbered by
+    # a caller-supplied `metadata` dict. Keeping this at the class
+    # level so `choice` and `text` share a single source of truth
+    # and the test that asserts precedence can import it.
+    _RESERVED_PAYLOAD_KEYS: frozenset[str] = frozenset({
+        "prompt_id",
+        "kind",
+        "prompt",
+        "options",
+        "placeholder",
+        "source",
+    })
+
     async def choice(
         self,
         prompt: str,
         options: list[str],
         *,
         source: PromptSource,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Emit `kolsch.prompt.requested` with `kind="choice"`; await the answer.
 
@@ -110,6 +124,12 @@ class PromptsImpl(AbstractPrompts):
           shipped approval UX.
         - `aclose()` while awaiting → same
           `asyncio.CancelledError`.
+
+        bug-021: ``metadata`` (optional) is merged into the emitted
+        payload as top-level keys. Reserved keys (see
+        ``_RESERVED_PAYLOAD_KEYS``) win — a metadata key with the
+        same name is silently dropped. The default ``None`` keeps
+        every pre-bug-021 caller shape byte-identical.
         """
         self._guard_open_and_free()
         prompt_id = new_prompt_id()
@@ -118,13 +138,22 @@ class PromptsImpl(AbstractPrompts):
         self._pending_future = future
         self._pending_prompt_id = prompt_id
 
-        payload: dict[str, Any] = {
-            "prompt_id": str(prompt_id),
-            "kind": "choice",
-            "prompt": prompt,
-            "options": list(options),
-            "source": dict(source),
-        }
+        payload: dict[str, Any] = {}
+        # bug-021: metadata keys land FIRST so the reserved-key
+        # assignment below overwrites any accidental collision.
+        # Precedence: reserved keys always win. This is safer than
+        # a post-filter loop because the reserved-key contract is
+        # expressed by simple dict-assignment order.
+        if metadata:
+            for key, value in metadata.items():
+                if key in self._RESERVED_PAYLOAD_KEYS:
+                    continue
+                payload[key] = value
+        payload["prompt_id"] = str(prompt_id)
+        payload["kind"] = "choice"
+        payload["prompt"] = prompt
+        payload["options"] = list(options)
+        payload["source"] = dict(source)
         try:
             await self._append_ui_event(WIRE_PROMPT_REQUESTED, payload)
             return await future
@@ -138,10 +167,14 @@ class PromptsImpl(AbstractPrompts):
         *,
         placeholder: str = "",
         source: PromptSource,
+        metadata: dict[str, Any] | None = None,
     ) -> str:
         """Emit `kolsch.prompt.requested` with `kind="text"`; await the answer.
 
         Same serial + cancellation semantics as `choice`.
+
+        bug-021: signature-parity ``metadata`` kwarg. Merge semantics
+        match ``choice`` — see the docstring there.
         """
         self._guard_open_and_free()
         prompt_id = new_prompt_id()
@@ -150,13 +183,17 @@ class PromptsImpl(AbstractPrompts):
         self._pending_future = future
         self._pending_prompt_id = prompt_id
 
-        payload: dict[str, Any] = {
-            "prompt_id": str(prompt_id),
-            "kind": "text",
-            "prompt": prompt,
-            "placeholder": placeholder,
-            "source": dict(source),
-        }
+        payload: dict[str, Any] = {}
+        if metadata:
+            for key, value in metadata.items():
+                if key in self._RESERVED_PAYLOAD_KEYS:
+                    continue
+                payload[key] = value
+        payload["prompt_id"] = str(prompt_id)
+        payload["kind"] = "text"
+        payload["prompt"] = prompt
+        payload["placeholder"] = placeholder
+        payload["source"] = dict(source)
         try:
             await self._append_ui_event(WIRE_PROMPT_REQUESTED, payload)
             return await future
@@ -187,7 +224,7 @@ class PromptsImpl(AbstractPrompts):
             return
         try:
             await asyncio.wait_for(asyncio.shield(pending), timeout=timeout)
-        except asyncio.TimeoutError as exc:
+        except TimeoutError as exc:
             msg = (
                 f"Prompts.wait_for_slot: timed out after {timeout}s waiting for "
                 f"prompt {self._pending_prompt_id} to resolve"
