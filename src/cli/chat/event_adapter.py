@@ -1430,6 +1430,31 @@ class EventAdapter:
             )
             return
 
+        # bug-025 / closes bug-022: serialise the (effect, Rule) tuple
+        # so the answered wire event carries the Rule dict alongside
+        # the response key. The callback side
+        # (`InlineApprovalCallback._translate_response`) rebuilds the
+        # tuple and hands it back to
+        # `src/providers/authz.py:1106`'s persist branch. Fast paths
+        # (bare `AuthzEffect`) omit the `rule` field so the wire
+        # payload stays byte-identical to the pre-bug-025 shape —
+        # WIRE_PROMPT_ANSWERED gains an OPTIONAL field only (D-007,
+        # no new wire kinds).
+        rule_dict: dict[str, Any] | None = None
+        if isinstance(result, tuple):
+            _effect, _rule = result
+            try:
+                rule_dict = _rule.model_dump(mode="json", by_alias=True)
+            except Exception:
+                _LOGGER.exception(
+                    "event_adapter: Rule.model_dump failed for prompt_id=%r",
+                    prompt_id,
+                )
+                # A serialisation failure is a bug in Rule shape, not
+                # the flow — proceed with rule_dict=None so at least
+                # the response key still lands (fast-path degradation).
+                rule_dict = None
+
         if (
             self._session_store is None
             or self._session_id is None
@@ -1446,6 +1471,16 @@ class EventAdapter:
             )
             return
 
+        answered_payload: dict[str, Any] = {
+            "prompt_id": prompt_id,
+            "response": response,
+        }
+        # bug-025: OPTIONAL rule field — only present when the widget
+        # resolved via `(AuthzEffect, Rule)`. Backward-compat: consumers
+        # that read only `prompt_id` + `response` are unchanged.
+        if rule_dict is not None:
+            answered_payload["rule"] = rule_dict
+
         answered = Event(
             event_id=EventId(f"ev_{uuid4()}"),
             parent_event_id=None,
@@ -1455,10 +1490,7 @@ class EventAdapter:
             data={
                 "schema_version": 1,
                 "kind": WIRE_PROMPT_ANSWERED,
-                "payload": {
-                    "prompt_id": prompt_id,
-                    "response": response,
-                },
+                "payload": answered_payload,
             },
             actor=Actor(kind="system"),
             created_at=datetime.now(UTC),
@@ -1612,8 +1644,19 @@ class EventAdapter:
         response = payload.get("response", payload.get("answer", ""))
         if not isinstance(response, str):
             response = str(response)
+        # bug-025: forward the optional `rule` dict through to
+        # `PromptsImpl.resolve_pending` so the awaiting `choice()`
+        # future returns a `PromptResponse` carrying the widget-built
+        # Rule. Missing `rule` (backward-compat + fast-path `y`/`n`) is
+        # the pre-bug-025 shape byte-identical.
+        rule_payload = payload.get("rule")
+        rule_dict: dict[str, Any] | None = (
+            rule_payload if isinstance(rule_payload, dict) else None
+        )
         if self._prompts_impl is not None:
-            self._prompts_impl.resolve_pending(prompt_id, response)
+            self._prompts_impl.resolve_pending(
+                prompt_id, response, rule=rule_dict,
+            )
         # spec-014: workflow branch — schedule the durable
         # `approval_resolved` emit. Fire-and-forget so the sync
         # handler stays sync; the awaiting `choice()` unblocks via

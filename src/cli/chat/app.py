@@ -721,7 +721,39 @@ class ChatApp(App):
             # inline ApprovalBlock widgets (via the adapter's routing).
             authz = self.session.runtime.authz
             if isinstance(authz, RuleBasedAuthorizationProvider):
-                authz.register_prompt_callback(self.approval_callback)
+                # bug-025 (closes bug-022): wire the `on_rule_added`
+                # hook so a Rule the user builds via `a`/`d` in the
+                # ApprovalBlock survives chat exit — the hook writes
+                # the updated rules list back to `platform.yaml` via
+                # the same `cli.permissions._write_back` helper the
+                # `kolsch permissions add` slash uses. Without this
+                # wire-up the (effect, Rule) tuple branch at
+                # `src/providers/authz.py:1106` fires (in-memory
+                # insert works) but the rule vanishes on chat exit.
+                # The legacy modal path (`src/cli/chat/_legacy.py:922`)
+                # already wired this hook; the modern Textual
+                # ChatApp lost it during the spec-004 refactor.
+                from cli.permissions import (  # noqa: PLC0415
+                    _write_back as _persist_authz_rules,
+                )
+                yaml_path = self.session.root / "platform.yaml"
+
+                def _on_rule_added(rules: list[Any]) -> None:
+                    """Atomically rewrite `platform.yaml` with the new rules list.
+
+                    Called by the authz provider inside its persist
+                    branch (see ``src/providers/authz.py:1117-1127``)
+                    AFTER the in-memory insert completes. Failures
+                    are swallowed by the provider — a bad write
+                    means the rule vanishes on chat exit but the
+                    current exchange still sees it.
+                    """
+                    _persist_authz_rules(yaml_path, rules)
+
+                authz.register_prompt_callback(
+                    self.approval_callback,
+                    on_rule_added=_on_rule_added,
+                )
 
         # feat-015: run the in-process orphan sweep BEFORE replay so
         # any synthetic `workflow.run.aborted` events land in the run

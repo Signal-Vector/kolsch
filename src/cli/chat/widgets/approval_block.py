@@ -75,13 +75,15 @@ def response_key_from(result: PromptCallbackReturn) -> str:
     - ``(AuthzEffect.ALLOW, Rule)`` → ``"a"``
     - ``(AuthzEffect.DENY, Rule)`` → ``"d"``
 
-    The tuple case round-trips through
-    :func:`cli.chat.approval._translate_response` back to allow-once /
-    deny-once today — the Rule is dropped on the widget → store
-    bridge. See ``# TODO(bug-022)`` in :meth:`ApprovalBlock._resolve`
-    around the tuple-persist path — restoring Rule persistence needs
-    a richer ``WIRE_PROMPT_ANSWERED`` payload than the shipped
-    string-only response.
+    bug-025 (closes bug-022): the tuple case now round-trips FULLY.
+    The adapter bridge at
+    :meth:`cli.chat.event_adapter.EventAdapter._bridge_widget_resolution`
+    serialises the Rule dict alongside this key into the
+    ``WIRE_PROMPT_ANSWERED`` payload, and
+    :func:`cli.chat.approval._translate_response` rebuilds the
+    ``(effect, Rule)`` tuple so
+    :meth:`providers.authz.RuleBasedAuthorizationProvider._resolve_prompt`
+    persists the rule to ``platform.yaml``.
     """
     if isinstance(result, tuple):
         effect, _rule = result
@@ -330,22 +332,18 @@ class ApprovalBlock(Vertical):
             # default users want (per the live-smoke feedback).
             if self._pending_effect is None or self._pending_pattern is None:
                 return
-            # TODO(bug-022): The Rule constructed here is bound to the
-            # widget's local resolution only — it does NOT round-trip
-            # through the WIRE_PROMPT_ANSWERED payload. The event
-            # carries a plain response-key string (via
-            # `response_key_from`), so `InlineApprovalCallback._translate_response`
-            # collapses the tuple back to allow-once / deny-once when
-            # the callback returns. Fix: extend WIRE_PROMPT_ANSWERED
-            # to optionally carry a serialised Rule dict, and have the
-            # adapter's bridge task include it when the widget resolved
-            # via `(effect, Rule)` — then `_translate_response` can
-            # rebuild the tuple. Scope was explicitly deferred out of
-            # bug-021 (see bug-021 spec §"Out of scope").
+            # bug-025 (closes bug-022): the Rule now round-trips
+            # through the WIRE_PROMPT_ANSWERED payload — the adapter
+            # bridge at `event_adapter.py::_bridge_widget_resolution`
+            # serialises `rule.model_dump()` into the wire event's
+            # payload when this branch fires, and
+            # `InlineApprovalCallback._translate_response` rebuilds
+            # the tuple so `src/providers/authz.py:1106` persists to
+            # `platform.yaml`.
             rule = Rule(
                 what=self._action,
                 pattern=self._pending_pattern,
-                effect=self._pending_effect.value,  # type: ignore[arg-type]
+                effect=self._pending_effect.value,
             )
             if self._pending_effect is AuthzEffect.ALLOW:
                 footer = "✓ Rule saved (allow)"

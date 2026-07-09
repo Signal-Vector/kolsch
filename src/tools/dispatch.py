@@ -363,30 +363,74 @@ async def dispatch_tool(
         ) from exc
 
 
-_TARGET_ARG_PRIORITY = ("path", "command", "url")
+_TARGET_ARG_PRIORITY = ("path", "command", "url", "ref", "run_id")
 """Argument names dispatch_tool looks at to derive an authz target.
 
 The convention: file tools use ``path``, shell tools use ``command``,
-network tools (future) use ``url``. The authz rule's ``what``
-matches against the tool's target string — the resolved path for
-file tools, the command for ``bash``. First-hit-wins so tools that
-declare both a path and a command (none today, but possible later)
-pick a stable one.
+network tools use ``url``. bug-025 extends the tuple with ``ref``
+(workflow-service tools ``run_workflow`` / ``introspect_node`` /
+``validate_workflow``) and ``run_id`` (``cancel_workflow`` /
+``workflow_status``) so those tools' approval widgets render a
+meaningful ``Args`` line instead of an empty tail.
+
+The authz rule's ``what`` matches against the tool's target string —
+the resolved path for file tools, the command for ``bash``, the
+workflow ref for ``run_workflow``. First-hit-wins so tools that
+declare multiple priority attrs pick a stable one (``path`` beats
+``ref`` — the existing convention wins for the tools that had it
+first).
+
+_TARGET_ARG_FALLBACK_CHAR_LIMIT is the maximum length of the
+last-resort ``model_dump_json(exclude_defaults=True)`` truncation —
+any longer args model is elided with a ``…`` suffix so the widget's
+single-line ``Args`` row stays legible.
 """
+
+_TARGET_ARG_FALLBACK_CHAR_LIMIT = 80
+"""Truncation cap for the ``model_dump_json`` fallback (bug-025 AC #11)."""
 
 
 def _extract_target_from_args(validated_args: object) -> str | None:
     """Return the conventional target string from a tool's args, if any.
 
-    Tools whose declared args lack ``path``/``command``/``url``
-    return None — the authz provider's matcher then falls back to
-    matching ``what`` against ``action``, so this is safe to call
-    for every tool.
+    bug-025 AC #10 + #11:
+
+    1. Priority walk — return the first stringy attr found on
+       ``validated_args`` from :data:`_TARGET_ARG_PRIORITY`. Preserves
+       backward-compat for tools with ``path``/``command``/``url``
+       args.
+    2. Fallback — when no priority attr matches, dump the args model
+       to JSON (excluding defaults) and truncate to 80 chars with a
+       ``…`` suffix if longer. Ensures every tool with non-empty
+       args renders SOMETHING in the approval widget's ``Args`` row
+       instead of an empty tail. Returns ``None`` only when the args
+       model has literally no non-default content (rare — most tools
+       declare at least one required field).
     """
     for attr in _TARGET_ARG_PRIORITY:
         value = getattr(validated_args, attr, None)
         if isinstance(value, str):
             return value
+
+    # bug-025 AC #11: fallback to a truncated JSON dump. Uses
+    # `exclude_defaults=True` so a tool with all-default args doesn't
+    # render `"{}"` — that path returns `None` and the authz
+    # matcher's action-namespace fallback kicks in as before.
+    dump = getattr(validated_args, "model_dump_json", None)
+    if callable(dump):
+        try:
+            rendered = dump(exclude_defaults=True)
+        except Exception:  # noqa: BLE001 — best-effort
+            return None
+        if isinstance(rendered, str) and rendered and rendered != "{}":
+            if len(rendered) > _TARGET_ARG_FALLBACK_CHAR_LIMIT:
+                # Trim to N-1 then append the ellipsis for a total of
+                # N chars — the widget's single-line row prefers a
+                # bounded length.
+                return (
+                    rendered[: _TARGET_ARG_FALLBACK_CHAR_LIMIT - 1] + "…"
+                )
+            return rendered
     return None
 
 

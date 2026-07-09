@@ -225,6 +225,15 @@ class WorkflowRunRecord:
     # to count the ``⚠ N paused`` suffix. Default False so pre-feat-019
     # test fixtures that build records via minimal kwargs still parse.
     awaiting_approval: bool = False
+    # bug-025: terminal-error diagnostic. Populated by
+    # ``_finalize_terminal`` (construction-failure path — no node ran)
+    # AND by ``_drain_workflow_bridge`` when a ``RUN_FAILED`` /
+    # ``NODE_FAILED`` event lands. ``status()`` reads these into the
+    # matching ``WorkflowRunStatusView`` fields so butler-facing tools
+    # (``workflow_status``) can surface the failure back to the model —
+    # closing the "silent retry loop" symptom from session ses_629b626e.
+    error_message: str | None = None
+    failed_node: str | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -456,6 +465,9 @@ class WorkflowsImpl(AbstractWorkflows):
                 elapsed_seconds=elapsed,
                 last_event_ts=record.last_event_ts,
                 ref=record.ref,
+                # bug-025: hot-path diagnostic surfacing.
+                error_message=record.error_message,
+                failed_node=record.failed_node,
             )
         # Cold-read: neither the registry nor the store may know the run.
         return self._status_from_meta_and_tail(
@@ -804,12 +816,20 @@ class WorkflowsImpl(AbstractWorkflows):
                 # construction so `cancel()` can write the file-based flag
                 # without a None-deref.
                 record.run_dir = run_dir
-            except Exception:
+            except Exception as _factory_exc:
                 _LOGGER.exception(
                     "WorkflowsImpl: executor construction failed for %s",
                     run_id,
                 )
                 record.phase = "error"
+                # bug-025: capture the construction-failure diagnostic
+                # so `status()` surfaces a legible reason to the model.
+                # The factory-time raise is the "workflow failed before
+                # any node ran" path — no `failed_node` because no
+                # node fired; the exception message is the load-
+                # bearing diagnostic.
+                if record.error_message is None:
+                    record.error_message = str(_factory_exc)[:400]
                 await self._finalize_terminal(spec, bridge_task)
                 return
 
@@ -830,10 +850,19 @@ class WorkflowsImpl(AbstractWorkflows):
                     if spec.card is not None and not spec.card.is_closed:
                         await spec.card.close(final_status="cancelled")
                 raise
-            except Exception:  # noqa: BLE001 — bubble as run failure
+            except Exception as _run_exc:  # noqa: BLE001 — bubble as run failure
                 _LOGGER.exception(
                     "WorkflowsImpl: executor run failed for %s", run_id,
                 )
+                # bug-025: capture the run-time raise as a fallback
+                # diagnostic. The bridge drain converts a proper
+                # terminal event's payload into `error_message` first
+                # (see `_drain_workflow_bridge`); this only fires when
+                # the executor raised BEFORE emitting a terminal event
+                # (wiring bug / infra failure). Do not clobber a
+                # previously-captured message.
+                if record.error_message is None:
+                    record.error_message = str(_run_exc)[:400]
                 # The executor writes its own terminal event on the way
                 # out; the bridge drain will convert it. If it didn't
                 # (construction-time raise, wiring bug), close the card
@@ -954,6 +983,14 @@ class WorkflowsImpl(AbstractWorkflows):
             if record is not None:
                 record.last_event_ts = event.ts
                 self._update_node_counts(record.node_counts, event.kind)
+                # bug-025: capture terminal-error diagnostics on
+                # `NODE_FAILED` / `NODE_TIMED_OUT` / `RUN_FAILED` so
+                # `status()` surfaces the reason back to the model.
+                # First-writer-wins: the earliest failure carries the
+                # attribution (a per-node failure that later triggers
+                # RUN_FAILED shouldn't get its message clobbered by
+                # the parent's "node X raised Y" summary).
+                self._maybe_capture_error(record, event)
 
             # Emit the UI event via the session store (durability
             # first — spec-006 pattern). Node-scoped envelope fields
@@ -1010,6 +1047,50 @@ class WorkflowsImpl(AbstractWorkflows):
                 self._notify_layout(run_id)
                 # Drain terminates on the sentinel; keep looping so
                 # any late in-flight events land before we shut down.
+
+    @staticmethod
+    def _maybe_capture_error(
+        record: WorkflowRunRecord,
+        event: WorkflowEvent,
+    ) -> None:
+        """Capture terminal-error diagnostics from a bridge event, if any.
+
+        bug-025. Reads the executor payload for
+        ``NODE_FAILED`` / ``NODE_TIMED_OUT`` / ``RUN_FAILED``
+        envelopes and populates the record's ``error_message`` /
+        ``failed_node``. First-writer-wins so an earlier
+        node-scoped failure isn't clobbered by a later
+        `run.failed` "node X raised Y" summary.
+
+        Payload keys read:
+
+        - Node failure: ``message`` (executor emit; see
+          ``src/workflows/executor.py:1984``) + ``node_name``.
+        - Node timeout: same shape as node failure.
+        - Run failure: ``reason`` (executor emit; see
+          ``src/workflows/executor.py:2045``); ``failed_node`` stays
+          ``None`` when no node-scoped failure preceded it.
+        """
+        if record.error_message is not None:
+            return
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        if event.kind in (
+            WorkflowEventKind.NODE_FAILED,
+            WorkflowEventKind.NODE_TIMED_OUT,
+        ):
+            msg = payload.get("message")
+            if isinstance(msg, str) and msg:
+                record.error_message = msg[:400]
+            node_name = payload.get("node_name") or getattr(
+                event, "node_name", None,
+            )
+            if isinstance(node_name, str) and node_name:
+                record.failed_node = node_name
+            return
+        if event.kind == WorkflowEventKind.RUN_FAILED:
+            reason = payload.get("reason")
+            if isinstance(reason, str) and reason:
+                record.error_message = reason[:400]
 
     @staticmethod
     def _update_node_counts(
@@ -1077,7 +1158,7 @@ class WorkflowsImpl(AbstractWorkflows):
         # Bounded tail scan for a terminal event. Any of
         # `workflow.run.{completed,failed,timed_out,aborted}` wins
         # over the meta's status.
-        terminal_status = _scan_tail_for_terminal(
+        terminal_status, terminal_diag = _scan_tail_for_terminal(
             run_dir.events_path, tail_bytes=tail_bytes,
         )
         effective_status = terminal_status or base_status
@@ -1086,7 +1167,21 @@ class WorkflowsImpl(AbstractWorkflows):
         # so butler-facing tools see the ref even on cold-read.
         ref_raw = meta.get("workflow_ref")
         ref = ref_raw if isinstance(ref_raw, str) else None
-        return WorkflowRunStatusView(run_id=run_id, phase=phase, ref=ref)
+        # bug-025: also surface error_message / failed_node from the
+        # JSONL tail when the terminal was a failure. `terminal_diag`
+        # is `None` on success / cold-read miss / non-failure
+        # terminals.
+        error_message: str | None = None
+        failed_node: str | None = None
+        if terminal_diag is not None:
+            error_message, failed_node = terminal_diag
+        return WorkflowRunStatusView(
+            run_id=run_id,
+            phase=phase,
+            ref=ref,
+            error_message=error_message,
+            failed_node=failed_node,
+        )
 
     # ------------------------------------------------------------------
     # spec-014: approval lifecycle emit hooks.
@@ -1229,6 +1324,46 @@ class WorkflowsImpl(AbstractWorkflows):
     # Default executor factory (production path).
     # ------------------------------------------------------------------
 
+    # ------------------------------------------------------------------
+    # bug-025: input-validation seam for run_workflow.
+    # ------------------------------------------------------------------
+
+    def resolve_workflow_yaml(self, ref: str) -> str | None:
+        """Return the workflow YAML source for ``ref``, or ``None``.
+
+        bug-025. The ``run_workflow`` tool uses this to load the
+        workflow's node config strings + edge binds and scan for
+        ``{{ inputs.X }}`` references at the tool boundary — BEFORE
+        the fire-and-forget queue accepts the spec. Any missing
+        ``inputs.<name>`` reference surfaces as a ``ToolExecutionFailed``
+        with an actionable message so the model sees a legible
+        failure signal instead of an optimistic ``run_id`` for a run
+        that will error 2s later.
+
+        Duck-typed in the tool via ``getattr(services.workflows,
+        "resolve_workflow_yaml", None)`` — the ``Workflows`` Protocol
+        stays byte-identical (no new abstract method), and headless
+        fixtures / test doubles that don't expose this method fall
+        back to the pre-bug-025 no-validation path (the workflow just
+        errors 2s later, as before).
+
+        Returns ``None`` when the catalog can't find the ref or the
+        file can't be read; ``ToolExecutionFailed`` on a raise is the
+        tool's job, not the service's.
+        """
+        try:
+            catalog = self._runtime.asset_management.catalog()
+            entry = catalog.lookup(ref)
+        except Exception:  # noqa: BLE001 — best-effort probe
+            return None
+        if entry is None:
+            return None
+        try:
+            from pathlib import Path  # noqa: PLC0415
+            return Path(entry.path).read_text(encoding="utf-8")
+        except OSError:
+            return None
+
     def _default_executor_factory(
         self,
         ref: str,
@@ -1308,26 +1443,36 @@ def _scan_tail_for_terminal(
     events_path: Any,
     *,
     tail_bytes: int,
-) -> WorkflowRunStatus | None:
+) -> tuple[WorkflowRunStatus | None, tuple[str | None, str | None] | None]:
     """Read the last `tail_bytes` of the JSONL; return a terminal status if found.
 
     Best-effort — a missing file, unreadable bytes, or a partial
-    trailing line all return None so the caller falls back to the
-    meta sidecar's status.
+    trailing line all return ``(None, None)`` so the caller falls back
+    to the meta sidecar's status.
+
+    bug-025: returns a ``(status, diag)`` tuple. ``diag`` is
+    ``(error_message, failed_node)`` when a failure-shaped terminal
+    was found, otherwise ``None``. Callers on non-failure terminals
+    (COMPLETED / TIMED_OUT / ABORTED) get ``diag=None``; a failed
+    terminal populates as many fields as the JSONL row exposes.
+
+    NODE_FAILED entries can also seed the diagnostic when a
+    ``RUN_FAILED`` didn't carry a `reason` (older JSONL rows) —
+    walking bottom-up, we take the first failure-shaped row.
     """
     if not events_path.exists():
-        return None
+        return None, None
     try:
         size = events_path.stat().st_size
     except OSError:
-        return None
+        return None, None
     start = max(0, size - tail_bytes)
     try:
         with events_path.open("rb") as fh:
             fh.seek(start)
             data = fh.read()
     except OSError:
-        return None
+        return None, None
 
     text = data.decode("utf-8", errors="ignore")
     for line in reversed(text.splitlines()):
@@ -1340,5 +1485,19 @@ def _scan_tail_for_terminal(
             continue
         kind = row.get("kind")
         if kind in _TERMINAL_JSONL_KIND_TO_STATUS:
-            return _TERMINAL_JSONL_KIND_TO_STATUS[kind]
-    return None
+            status = _TERMINAL_JSONL_KIND_TO_STATUS[kind]
+            # bug-025: pull the failure diagnostic when applicable.
+            if status is WorkflowRunStatus.FAILED:
+                payload = row.get("payload")
+                error_message: str | None = None
+                failed_node: str | None = None
+                if isinstance(payload, dict):
+                    reason = payload.get("reason") or payload.get("message")
+                    if isinstance(reason, str) and reason:
+                        error_message = reason[:400]
+                    node_name = payload.get("node_name") or row.get("node_name")
+                    if isinstance(node_name, str) and node_name:
+                        failed_node = node_name
+                return status, (error_message, failed_node)
+            return status, None
+    return None, None

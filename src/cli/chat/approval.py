@@ -198,23 +198,63 @@ def _format_question(
 def _translate_response(response: str) -> PromptCallbackReturn:
     """Map an `ApprovalChoicePane` key back to a `PromptCallbackReturn`.
 
+    Fast paths:
+
     - ``y`` → allow-once (`AuthzEffect.ALLOW`).
     - ``n`` (or an empty / unknown response — treated as deny) →
       deny-once (`AuthzEffect.DENY`).
-    - ``a`` / ``d`` are pattern-persist paths that go through the
-      widget's multi-step flow. Today the `Prompts` service returns
-      only the final resolved key; the widget-side pattern-persist
-      round-trip is not yet expressed on the event surface (spec-006
-      lands `CardsImpl` and the widget retirement). Until then, `a`
-      resolves to allow-once and `d` to deny-once — safe defaults
-      that match the widget's fast-path behaviour.
+
+    bug-025 (closes bug-022) — Rule persistence round-trip:
+
+    - ``a`` (allow-persist) / ``d`` (deny-persist) with a rebuilt
+      widget-side ``Rule`` return the tuple form
+      ``(AuthzEffect.ALLOW|DENY, Rule)``. The persist branch at
+      ``src/providers/authz.py:1106`` fires and writes the rule to
+      ``platform.yaml`` via ``_rule_added_hook``.
+    - ``a`` / ``d`` WITHOUT a rebuilt Rule (e.g. the wire event
+      dropped the ``rule`` payload — a pre-bug-025 caller or a
+      partial-mount degraded path) fall back to allow-once / deny-once
+      so the flow still resolves, matching the pre-bug-025 behaviour.
+
+    The Rule is carried via the
+    [`PromptResponse`][cli.chat.services.prompts_impl.PromptResponse]
+    `str` subclass — reading `.rule` on any bare ``str`` returns
+    ``None`` via the ``isinstance`` guard so non-widget callers
+    (headless surfaces, existing tests using ``AsyncMock`` on
+    ``Prompts.choice``) stay byte-identical.
 
     The return contract is the `PromptCallback` Protocol's
-    `AuthzEffect | tuple[AuthzEffect, Rule]`; only the effect leg is
-    exercised here.
+    `AuthzEffect | tuple[AuthzEffect, Rule]`.
     """
-    if response == "y" or response == "a":
+    # bug-025: local import to avoid touching module-import ordering.
+    from cli.chat.services.prompts_impl import PromptResponse  # noqa: PLC0415
+
+    rule_dict: dict[str, Any] | None = None
+    if isinstance(response, PromptResponse):
+        rule_dict = response.rule
+
+    if response == "y":
         return AuthzEffect.ALLOW
+    if response == "a":
+        if rule_dict is not None:
+            try:
+                return (AuthzEffect.ALLOW, Rule(**rule_dict))
+            except Exception:
+                _LOGGER.exception(
+                    "InlineApprovalCallback: Rule(**rule_dict) failed; "
+                    "collapsing to allow-once",
+                )
+        return AuthzEffect.ALLOW
+    if response == "d":
+        if rule_dict is not None:
+            try:
+                return (AuthzEffect.DENY, Rule(**rule_dict))
+            except Exception:
+                _LOGGER.exception(
+                    "InlineApprovalCallback: Rule(**rule_dict) failed; "
+                    "collapsing to deny-once",
+                )
+        return AuthzEffect.DENY
     return AuthzEffect.DENY
 
 

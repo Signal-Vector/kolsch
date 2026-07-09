@@ -49,14 +49,36 @@ class CancelWorkflowArgs(BaseModel):
 async def cancel_workflow(
     args: CancelWorkflowArgs, ctx: ToolContext,
 ) -> dict[str, object]:
-    """Fire the cancel; return `{cancelled, run_id, cascade}`."""
+    """Fire the cancel; return `{cancelled, run_id, cascade}`.
+
+    bug-025: when the target run is already terminal, the return
+    payload also carries ``phase`` and ``reason`` so the model sees
+    a structured no-op instead of a silent ``cancelled=false``.
+    ``reason`` mirrors :attr:`WorkflowRunStatusView.error_message`
+    when available (the failure's diagnostic); falls back to
+    ``"already terminal"``. Fixes the "cancel returns false; model
+    keeps retrying" symptom from session ses_629b626e.
+    """
     services = require_services(ctx, ["workflows"])
     assert services.workflows is not None  # narrowed by require_services
-    fired = await services.workflows.cancel(
-        WorkflowRunId(args.run_id), cascade=args.cascade,
-    )
-    return {
+    run_id = WorkflowRunId(args.run_id)
+    fired = await services.workflows.cancel(run_id, cascade=args.cascade)
+    result: dict[str, object] = {
         "cancelled": bool(fired),
         "run_id": args.run_id,
         "cascade": args.cascade,
     }
+    if not fired:
+        # bug-025: enrich the no-op response with the terminal reason.
+        # `status()` is sync + non-blocking; on a fully unknown run it
+        # returns `phase="unknown"` and both diagnostic fields `None`.
+        try:
+            view = services.workflows.status(run_id)
+        except Exception:  # noqa: BLE001 — best-effort enrichment
+            return result
+        if view.phase in ("success", "error", "cancelled", "unknown"):
+            result["phase"] = view.phase
+            result["reason"] = view.error_message or "already terminal"
+            if view.failed_node is not None:
+                result["failed_node"] = view.failed_node
+    return result

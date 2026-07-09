@@ -379,11 +379,15 @@ async def test_cancel_workflow_unknown_returns_false(
             cancel_workflow_tool,
             {"run_id": stray, "cascade": False},
         )
-        assert result == {
-            "cancelled": False,
-            "run_id": stray,
-            "cascade": False,
-        }
+        # bug-025: cancel_workflow now enriches the no-op response with
+        # `phase` + `reason` so the model sees a structured signal
+        # instead of a bare `cancelled=false`. The unknown-run path
+        # surfaces `phase="unknown"` + `reason="already terminal"`.
+        assert result["cancelled"] is False
+        assert result["run_id"] == stray
+        assert result["cascade"] is False
+        assert result["phase"] == "unknown"
+        assert result["reason"] == "already terminal"
 
 
 # --------------------------------------------------------------------

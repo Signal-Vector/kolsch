@@ -51,7 +51,17 @@ class _FakePromptsImpl:
         self.resolves: list[tuple[str, str]] = []
         self.cancels: list[str] = []
 
-    def resolve_pending(self, prompt_id: str, response: str) -> None:
+    def resolve_pending(
+        self,
+        prompt_id: str,
+        response: str,
+        *,
+        rule: dict[str, Any] | None = None,
+    ) -> None:
+        # bug-025: accept the optional `rule=` kwarg for wire-payload
+        # forwarding; this fake ignores it (idempotence tests don't
+        # exercise the rule-persist path).
+        _ = rule
         self.resolves.append((prompt_id, response))
 
     def cancel_pending(self, prompt_id: str) -> None:

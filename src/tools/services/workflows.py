@@ -128,6 +128,20 @@ class WorkflowRunStatusView:
             (``phase="unknown"``). Added by feat-018 so butler-facing
             tools (``workflow_status``) can echo the ref back in
             their ``_chat_anchor`` payload without a second lookup.
+        error_message: Terminal-error diagnostic. Populated when
+            ``phase == "error"`` (or a cancel that carried a reason);
+            ``None`` on every other phase and on cold-read paths that
+            couldn't reconstruct the reason. Butler-facing tools
+            (``workflow_status``) surface this back to the model so a
+            retry loop isn't the model's only option after an
+            immediate-failure workflow — added by bug-025 to fix the
+            "workflow errors silently, model retries same args"
+            symptom from session ses_629b626e.
+        failed_node: Name of the node whose failure produced the
+            terminal error. ``None`` for construction-time failures
+            (no node ran), successful runs, and cold-read paths that
+            can't attribute the failure. Added by bug-025 alongside
+            ``error_message``.
     """
 
     run_id: WorkflowRunId
@@ -136,6 +150,9 @@ class WorkflowRunStatusView:
     elapsed_seconds: float | None = None
     last_event_ts: datetime | None = None
     ref: str | None = None
+    # bug-025: terminal-error diagnostic. See dataclass docstring.
+    error_message: str | None = None
+    failed_node: str | None = None
 
 
 # ---------------------------------------------------------------------------
