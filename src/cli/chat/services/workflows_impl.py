@@ -869,7 +869,16 @@ class WorkflowsImpl(AbstractWorkflows):
                 # here as a fallback.
                 if spec.card is not None and not spec.card.is_closed:
                     with contextlib.suppress(Exception):
-                        await spec.card.close(final_status="error")
+                        # bug-030 Fix 2 (site 1/3): pipe
+                        # ``record.error_message`` into the fallback
+                        # close so the WorkflowCard widget renders the
+                        # underlying diagnostic instead of a bare red X.
+                        # bug-025 already stashed the reason on the
+                        # record above.
+                        await spec.card.close(
+                            final_status="error",
+                            error_message=record.error_message,
+                        )
             finally:
                 await self._finalize_terminal(spec, bridge_task)
         finally:
@@ -921,7 +930,17 @@ class WorkflowsImpl(AbstractWorkflows):
                 record.phase if record is not None else "error"
             )
             with contextlib.suppress(Exception):
-                await spec.card.close(final_status=final)
+                # bug-030 Fix 2 (site 2/3): pipe
+                # ``record.error_message`` into ``_finalize_terminal``'s
+                # fallback close. This covers the construction-failure
+                # path AND any bridge-drain that terminated without
+                # closing the card (e.g. sentinel-first race).
+                await spec.card.close(
+                    final_status=final,
+                    error_message=(
+                        record.error_message if record is not None else None
+                    ),
+                )
 
         # spec-016: notify layout of the terminal transition BEFORE
         # eviction so the card can float up into the terminal band.
@@ -1039,7 +1058,23 @@ class WorkflowsImpl(AbstractWorkflows):
                 if spec.card is not None and not spec.card.is_closed:
                     final = self._card_final_status_for_phase(phase)
                     with contextlib.suppress(Exception):
-                        await spec.card.close(final_status=final)
+                        # bug-030 Fix 2 (site 3/3): pipe
+                        # ``record.error_message`` into the bridge-drain
+                        # terminal close. ``_maybe_capture_error`` above
+                        # populates ``record.error_message`` from
+                        # ``NODE_FAILED`` / ``NODE_TIMED_OUT`` /
+                        # ``RUN_FAILED`` payloads before we land here on
+                        # a matching terminal kind — first-writer-wins,
+                        # so the earliest node-scoped attribution is
+                        # what surfaces to the widget.
+                        await spec.card.close(
+                            final_status=final,
+                            error_message=(
+                                record.error_message
+                                if record is not None
+                                else None
+                            ),
+                        )
                 # spec-016: bridge-drain terminal — notify layout so
                 # the card moves into the terminal band on the next
                 # 250ms tick. `_finalize_terminal` also notifies but
@@ -1410,12 +1445,61 @@ class WorkflowsImpl(AbstractWorkflows):
         after the fact. The prior "double-build" pattern reached
         into a private `_registry` attribute and hurt readability.
         """
+        from pathlib import Path  # noqa: PLC0415
+
         from cli._workflow_runtime import build_workflow_executor  # noqa: PLC0415
+        from errors import WrappedError  # noqa: PLC0415
         from workflows.parser import load_workflow  # noqa: PLC0415
 
         catalog = self._runtime.asset_management.catalog()
-        entry = catalog.get(ref)
-        workflow = load_workflow(entry.path)
+        # bug-030: sibling of bug-026. The pre-bug-030 code called
+        # ``catalog.get(ref)`` — a method that does NOT exist on
+        # ``AssetCatalog`` (only ``.lookup(ref, expected_type=...)`` is
+        # public; see ``src/assets/catalog.py:72``). Every chat-side
+        # workflow invocation raised ``AttributeError`` before
+        # ``RUN_STARTED``. The test blind spot bug-026 flagged
+        # (``_default_executor_factory`` is only reached in production
+        # because every workflow test injects a custom factory)
+        # covered this too — hence the D-010-extension regression at
+        # ``tests/cli/chat/services/test_default_executor_factory_e2e.py``.
+        entry = catalog.lookup(ref, expected_type="workflow")
+        if entry is None:
+            available = sorted(
+                a.ref
+                for a in catalog.assets.values()
+                if a.asset_type == "workflow"
+            )
+            available_hint = (
+                ", ".join(repr(r) for r in available[:20])
+                if available
+                else "<none>"
+            )
+            msg = (
+                f"Workflow ref {ref!r} not found in catalog. "
+                f"Available workflow refs: {available_hint}."
+            )
+            raise WrappedError(
+                message=msg,
+                where=(
+                    "cli.chat.services.workflows_impl."
+                    "_default_executor_factory"
+                ),
+                detail={
+                    "ref": ref,
+                    "available_refs": available,
+                },
+            )
+        # bug-030 (adjacent): `AssetEntry.path` is typed as ``str``
+        # (see ``src/assets/catalog.py:50``); ``load_workflow``
+        # takes a ``Path``. The CLI wraps it via ``Path(entry.path)``
+        # at every call site (``src/cli/workflows.py:383, 461, 622,
+        # 751, 933``). The chat-side factory dropped the wrap, so
+        # even after fixing ``catalog.get`` this line raised
+        # ``AttributeError: 'str' object has no attribute 'read_text'``
+        # inside ``parser.load_workflow``. Same test blind spot
+        # (production-only path); the AC #4 e2e regression pins this
+        # too.
+        workflow = load_workflow(Path(entry.path))
 
         run = self._run_store.create(
             workflow_ref=ref,

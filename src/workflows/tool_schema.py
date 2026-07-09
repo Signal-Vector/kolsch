@@ -422,6 +422,21 @@ def _describe_virtual(ref: str, yaml_source: str) -> str:
         f"you don't need `workflow_inspect` or a JSON `inputs` dict. "
         f"Returns `{{run_id, card_id, _chat_anchor}}` — same shape as "
         f"`run_workflow`.",
+        # bug-030 Fix 4: anti-hallucination sentence propagated to
+        # every per-workflow virtual so Kimi (and every other model)
+        # sees "no dropdown; do not tell the user to expand" verbatim
+        # regardless of whether the generic ``run_workflow`` tool is
+        # in the tool list this turn.
+        (
+            "The workflow card renders progress INLINE in the "
+            "transcript — header, per-node rows, and status footer "
+            "are all visible on mount and update live. There is no "
+            "dropdown, expand-to-view, or user gesture required to "
+            "see progress. Do NOT instruct the user to expand, open, "
+            "click, or drop down anything on the card. To draw the "
+            "user's eye to it, emit the `_chat_anchor` markdown "
+            "`[label](kolsch-anchor://workflow_card/<run_id>)`."
+        ),
     ]
     if yaml_desc:
         lines.append(f"Workflow description: {yaml_desc}")

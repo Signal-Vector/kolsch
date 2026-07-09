@@ -83,7 +83,16 @@ prompt: |
 
   {{ docs }}
 
-  {% block special_instructions %}{% endblock %}
+  {% block special_instructions %}
+  ## Workflow tool prose rule
+
+  When you call `run_workflow` (or any `run_workflow_*` virtual), the
+  mounted `WorkflowCard` IS your response — do NOT follow it with a
+  text turn narrating what you just did ("the workflow is running",
+  "expand the card", etc.). Return an empty text turn, or emit ONLY
+  the anchor markup `[label](kolsch-anchor://workflow_card/<run_id>)`
+  with no surrounding prose.
+  {% endblock %}
 
   Be concise. If the question is ambiguous, ask one clarifying
   question before acting.

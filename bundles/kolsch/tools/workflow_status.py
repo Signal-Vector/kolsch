@@ -39,7 +39,15 @@ class WorkflowStatusArgs(BaseModel):
         "tool returns a structured dict AND a `_chat_anchor` you can "
         "embed as `[label](kolsch-anchor://workflow_card/<run_id>)` "
         "so the user's prose links back to the live card. Non-"
-        "blocking; safe to call while the run is executing."
+        "blocking; safe to call while the run is executing.\n\n"
+        "The workflow card renders progress INLINE in the transcript "
+        "— header, per-node rows, and status footer are all visible "
+        "on mount and update live. There is no dropdown, expand-to-"
+        "view, or user gesture required to see progress. Do NOT "
+        "instruct the user to expand, open, click, or drop down "
+        "anything on the card. To draw the user's eye to it, emit "
+        "the `_chat_anchor` markdown "
+        "`[label](kolsch-anchor://workflow_card/<run_id>)`."
     ),
     args_schema=WorkflowStatusArgs,
     requires=["workflows"],
