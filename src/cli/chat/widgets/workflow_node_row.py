@@ -26,14 +26,23 @@ Sub-agent event routing lands via
 [`apply_sub_agent_event`][cli.chat.widgets.workflow_node_row.WorkflowNodeRow.apply_sub_agent_event]:
 
 - Increments the row's `_sub_agent_turn_count` on every call.
-- Mounts the matching sub-agent widget inside the collapsed body
-  ONLY when the row is expanded (Coordinator #3 lock — no
-  buffering; events received while collapsed are counted, not
-  buffered).
+- Appends the event to a bounded ring buffer (`_event_buffer`,
+  `maxlen=50`) so a user who expands a row AFTER events have
+  arrived can see the recent history (spec-021 — amends spec-013
+  Coordinator #3 which dropped collapsed-row events on the floor).
+- Mounts the matching sub-agent widget inside the row body when
+  the row is expanded. On collapse -> expand transitions, the
+  buffer is replayed into the body via `_replay_buffer_to_body`;
+  already-mounted event_ids are skipped so live mounts don't
+  double up.
+- Terminal state transition freezes the buffer (spec-021 AC #7)
+  so post-run events are dropped rather than mounted after the
+  node has settled.
 """
 
 from __future__ import annotations
 
+import collections
 import contextlib
 import json
 from datetime import UTC, datetime
@@ -62,6 +71,25 @@ _ANIMATED_STATES = frozenset({"starting", "running"})
 static glyph. Terminal states (``completed`` / ``failed`` /
 ``paused`` / ``cancelling`` / ``pruned``) use the static glyph as
 today — the row is done moving.
+"""
+
+
+_EVENT_BUFFER_MAX = 50
+"""spec-021: bounded ring-buffer capacity for sub-agent events.
+
+Sized for ~10 tool calls + ~10 agent messages — enough for a typical
+agent turn without unbounded memory. Overflow drops oldest
+(``collections.deque(maxlen=...)`` handles it automatically).
+"""
+
+
+_TERMINAL_STATES = frozenset({"completed", "failed", "cancelling", "pruned"})
+"""spec-021: states that freeze the event buffer.
+
+On transition into any of these, ``apply_sub_agent_event`` becomes
+a no-op — the node has settled and any post-terminal events
+would render into an already-finalised row. ``paused`` is NOT
+terminal (spec-014 unpauses back to ``running``).
 """
 
 
@@ -133,6 +161,22 @@ class WorkflowNodeRow(Collapsible):
         # widget so ``set_output`` can remove the previous mount
         # before mounting a fresh one (idempotent).
         self._output_widget: Widget | None = None
+        # spec-021: bounded ring buffer for sub-agent events. Grows
+        # while the row is collapsed (or after live mounts, so future
+        # collapse -> expand cycles can replay). Overflow drops the
+        # oldest entry automatically (``deque(maxlen=...)``).
+        self._event_buffer: collections.deque[Any] = collections.deque(
+            maxlen=_EVENT_BUFFER_MAX,
+        )
+        # spec-021: dedupe key set for events already mounted into the
+        # body. Consulted by ``_replay_buffer_to_body`` so a re-expand
+        # after a live-expanded run doesn't double-mount the widgets
+        # that arrived while the row was already open.
+        self._mounted_event_ids: set[Any] = set()
+        # spec-021: latch flipped by ``watch_state`` on terminal
+        # transition. Once frozen, ``apply_sub_agent_event`` short-
+        # circuits — no append, no mount, no turn-count bump.
+        self._buffer_frozen: bool = False
         title = f"{self.STATE_GLYPHS['starting']} {node_name}"
         super().__init__(title=title, collapsed=True)
 
@@ -231,11 +275,19 @@ class WorkflowNodeRow(Collapsible):
     def apply_sub_agent_event(self, event: Any) -> None:
         """Route a sub-agent `Event` to this row.
 
-        Coordinator #3 lock: events received while COLLAPSED only
-        increment `_sub_agent_turn_count` (no buffering, no
-        deferred mount). When EXPANDED, `_mount_sub_agent_widget`
-        renders the matching widget inside the row's body.
+        spec-021: unconditionally append to the ring buffer + bump
+        the turn count; when EXPANDED, also mount the widget live.
+        When COLLAPSED, the event lives in ``_event_buffer`` until
+        ``watch_collapsed`` fires ``_replay_buffer_to_body``.
+
+        Terminal-state rows short-circuit: once ``_buffer_frozen``
+        is set (by ``watch_state`` on the terminal transition), any
+        further sub-agent events are dropped — no append, no mount,
+        no count bump. This keeps a settled row from mutating.
         """
+        if self._buffer_frozen:
+            return
+        self._event_buffer.append(event)
         self._sub_agent_turn_count += 1
         self._update_title()
         if not self.collapsed:
@@ -255,6 +307,12 @@ class WorkflowNodeRow(Collapsible):
         timer so the widget goes quiescent (no wake-ups after the
         node has settled). The ``starting`` -> ``running`` transition
         keeps the timer alive.
+
+        spec-021: on transition into any terminal state (``completed``
+        / ``failed`` / ``cancelling`` / ``pruned``) freeze the event
+        buffer so any post-terminal ``apply_sub_agent_event`` calls
+        become no-ops. ``paused`` is deliberately excluded — the
+        row can resume back to ``running`` via spec-014.
         """
         _ = old
         for cls in self._TERMINAL_CSS_STATES:
@@ -266,6 +324,60 @@ class WorkflowNodeRow(Collapsible):
             with contextlib.suppress(Exception):
                 self._spinner_handle.stop()
             self._spinner_handle = None
+        # spec-021: freeze the event buffer on terminal transition.
+        if new in _TERMINAL_STATES:
+            self._buffer_frozen = True
+
+    def watch_collapsed(self, old: bool, new: bool) -> None:
+        """spec-021: replay the event buffer into the body on expand.
+
+        Fired by Textual's reactive machinery whenever the parent
+        ``Collapsible.collapsed`` reactive flips. The parent's own
+        ``_watch_collapsed`` still runs alongside this (private +
+        public watchers are dispatched independently), so the
+        ``Expanded`` / ``Collapsed`` messages continue to post and
+        the ``-collapsed`` CSS class continues to toggle — this
+        override only adds the buffer-replay side effect on the
+        collapsed -> expanded edge.
+        """
+        _ = old
+        if not new:
+            self._replay_buffer_to_body()
+
+    def _replay_buffer_to_body(self) -> None:
+        """Mount any un-mounted buffered events into the body.
+
+        spec-021: iterates ``_event_buffer`` in insertion order and
+        forwards each event to ``_mount_sub_agent_widget`` unless
+        its dedupe key already sits in ``_mounted_event_ids``. The
+        guard set is what lets live-mount + re-expand cycles work
+        without duplicating widgets — events that arrived while the
+        row was expanded live-mount immediately (which also stamps
+        the dedupe key), and a later collapse -> expand cycle finds
+        them already stamped and skips the replay.
+        """
+        for event in list(self._event_buffer):
+            key = self._event_dedupe_key(event)
+            if key in self._mounted_event_ids:
+                continue
+            self._mount_sub_agent_widget(event)
+
+    @staticmethod
+    def _event_dedupe_key(event: Any) -> Any:
+        """Return a stable per-event key for the mount dedupe set.
+
+        Real pydantic ``Event`` objects carry ``event_id`` (a string
+        newtype). The wire-reconstructed stub in
+        ``cli.chat.widgets.card_body.workflow._ReconstructedSubAgentEvent``
+        deliberately omits it (see the stub's docstring), so we fall
+        back to ``id(event)`` — the CPython object identity is stable
+        for the life of the event object, which is long enough because
+        the same event instance is what's stored in the buffer.
+        """
+        event_id = getattr(event, "event_id", None)
+        if event_id is not None:
+            return str(event_id)
+        return id(event)
 
     def _update_title(self) -> None:
         """Refresh the collapsed title from state + details + count.
@@ -373,6 +485,13 @@ class WorkflowNodeRow(Collapsible):
             return
         with contextlib.suppress(Exception):
             self.mount(widget)
+        # spec-021: stamp the dedupe key AFTER attempting the mount so
+        # a live-expanded arrival + later re-expand skips a duplicate
+        # replay. We stamp even on a swallowed mount failure — the
+        # buffer replay is best-effort and re-mounting a widget that
+        # already failed once won't get further, so treat "attempted"
+        # as "mounted" for dedupe purposes.
+        self._mounted_event_ids.add(self._event_dedupe_key(event))
 
 
 __all__ = ["WorkflowNodeRow"]
