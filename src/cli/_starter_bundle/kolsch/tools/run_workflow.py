@@ -23,18 +23,23 @@ references are treated as optional — matches the
 Fixes the "workflow errors silently 2s later, model retries same
 args" symptom from session ses_629b626e.
 
+bug-027 (inputs guidance): the error message now carries a JSON
+retry template, and the ``@tool`` description primes the model to
+identify required inputs from ``{{ inputs.X }}`` refs in the
+workflow YAML. See ``workflow_inspect`` for the introspection
+affordance.
+
 See ``process/feat-018-butler-workflow-tools.md`` for the walkthrough.
 """
 
 from __future__ import annotations
-
-from typing import Any  # noqa: F401 — used in helper's recursive type hint
 
 from pydantic import BaseModel, Field
 
 from errors import WrappedError
 from tools.decorator import ToolContext, tool
 from tools.services import require_services
+from workflows.inputs_scan import extract_required_inputs
 
 
 class RunWorkflowArgs(BaseModel):
@@ -45,90 +50,12 @@ class RunWorkflowArgs(BaseModel):
     )
     inputs: dict[str, object] = Field(
         default_factory=dict,
-        description="Input dict forwarded to the workflow.",
+        description=(
+            "Input dict forwarded to the workflow. Keys MUST match the "
+            "workflow's declared ``{{ inputs.<name> }}`` references. "
+            'Example: ``{"url": "https://example.com/job"}``.'
+        ),
     )
-
-
-def _extract_required_inputs(yaml_source: str) -> set[str]:
-    """Return the top-level ``inputs.<name>`` refs without a ``default(...)``.
-
-    Walks the parsed workflow YAML for every string field, parses
-    each string as a Jinja template, and collects the first-level
-    attribute name off every ``{{ inputs.<name> }}`` chain — but
-    ONLY when the reference isn't wrapped in a ``| default(...)``
-    filter. Matches the semantics of the shipped
-    ``kolsch/workflows/hello`` sample (``inputs.message | default(...)``
-    is optional).
-
-    Returns an empty set when parsing fails or the workflow has no
-    inputs references (best-effort probe — bad YAML surfaces later
-    via the parser, not here).
-    """
-    from jinja2 import Environment  # noqa: PLC0415
-    from jinja2.exceptions import TemplateError  # noqa: PLC0415
-    from jinja2.nodes import (  # noqa: PLC0415
-        Filter,
-        Getattr,
-        Getitem,
-        Name,
-    )
-
-    from _yamlio import load  # noqa: PLC0415
-
-    try:
-        payload = load(yaml_source)
-    except Exception:  # noqa: BLE001 — best-effort
-        return set()
-    if not isinstance(payload, dict):
-        return set()
-
-    env = Environment()  # noqa: S701 — parse-only, no rendering
-    required: set[str] = set()
-
-    def _extract_key(node: Any) -> str | None:  # noqa: ANN401
-        if isinstance(node, Getattr) and isinstance(node.node, Name) and node.node.name == "inputs":
-            return str(node.attr)
-        if isinstance(node, Getitem) and isinstance(node.node, Name) and node.node.name == "inputs":
-            arg = node.arg
-            val = getattr(arg, "value", None)
-            if isinstance(val, str) and val:
-                return val
-        return None
-
-    def _walk_string(s: str) -> None:
-        try:
-            ast = env.parse(s)
-        except TemplateError:
-            return
-        guarded: set[int] = set()
-        for filt in ast.find_all(Filter):
-            if getattr(filt, "name", None) == "default":
-                _collect_guarded_ids(filt.node, guarded)
-        for chain in ast.find_all((Getattr, Getitem)):
-            key = _extract_key(chain)
-            if key is None:
-                continue
-            if id(chain) in guarded:
-                continue
-            required.add(key)
-
-    def _collect_guarded_ids(node: Any, out: set[int]) -> None:  # noqa: ANN401
-        out.add(id(node))
-        for child in getattr(node, "iter_child_nodes", lambda: [])():
-            _collect_guarded_ids(child, out)
-
-    def _walk(node: Any) -> None:  # noqa: ANN401
-        if isinstance(node, str):
-            _walk_string(node)
-        elif isinstance(node, dict):
-            for v in node.values():
-                _walk(v)
-        elif isinstance(node, list):
-            for v in node:
-                _walk(v)
-
-    _walk(payload)
-    return required
 
 
 @tool(
@@ -142,7 +69,16 @@ def _extract_required_inputs(yaml_source: str) -> set[str]:
         "per-node progress rows, pause/approval prompts, and terminal "
         "status inline. Returns `{run_id, card_id, _chat_anchor}`; the "
         "anchor lets your prose reference the mounted card via "
-        "`[label](kolsch-anchor://workflow_card/<run_id>)`."
+        "`[label](kolsch-anchor://workflow_card/<run_id>)`.\n\n"
+        "BEFORE CALLING: identify required inputs by reading the "
+        "workflow YAML. Every `{{ inputs.X }}` reference is a required "
+        "key in `inputs`; a `{{ inputs.X | default(...) }}` reference "
+        "is optional. `inputs` MUST be a dict keyed by those names, "
+        "with the values sourced from the user's request. If unsure, "
+        "call `workflow_inspect(ref=...)` first — it returns the "
+        "required/optional input names and an example call.\n\n"
+        "Example: run_workflow(ref=\"andre/workflows/job_description_review\", "
+        "inputs={\"url\": \"https://example.com/job\"})."
     ),
     args_schema=RunWorkflowArgs,
     requires=["cards", "workflows"],
@@ -154,6 +90,9 @@ async def run_workflow(
 
     bug-025: input validation runs BEFORE the card is opened and
     BEFORE the run enters the FIFO queue.
+
+    bug-027: the error message now includes a JSON retry template so
+    the model can copy the shape and fill in values.
     """
     services = require_services(ctx, ["cards", "workflows"])
     assert services.cards is not None  # narrowed by require_services
@@ -168,14 +107,23 @@ async def run_workflow(
     if resolver is not None:
         yaml_source = resolver(args.ref)
         if isinstance(yaml_source, str):
-            required = _extract_required_inputs(yaml_source)
+            required = extract_required_inputs(yaml_source)
             supplied = set(args.inputs.keys())
             missing = sorted(required - supplied)
             if missing:
+                # bug-027: emit a JSON retry template as part of the
+                # error so the model has a shape to copy, not just a
+                # key name to guess about.
                 names = ", ".join(f"'{n}'" for n in missing)
+                template_pairs = ", ".join(
+                    f'"{n}": "<value from user request>"' for n in missing
+                )
+                template = "{" + template_pairs + "}"
                 msg = (
-                    f"Workflow {args.ref} requires input {names}; "
-                    f"got inputs={sorted(supplied)!r}"
+                    f"Workflow {args.ref} requires input(s) {names}. "
+                    f"Retry with: inputs={template} "
+                    f"(fill each missing key with the value from the "
+                    f"user's request). You sent: inputs={sorted(supplied)!r}."
                 )
                 raise WrappedError(
                     message=msg,

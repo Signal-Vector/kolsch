@@ -1364,6 +1364,30 @@ class WorkflowsImpl(AbstractWorkflows):
         except OSError:
             return None
 
+    def list_workflow_refs(self) -> list[str]:
+        """Return every catalogued workflow ref (bug-027).
+
+        Duck-typed on the ``Workflows`` Protocol just like
+        ``resolve_workflow_yaml`` — the introspection tool
+        ``workflow_inspect`` calls it to render a helpful "workflow
+        not found; available refs: ..." message when the model
+        supplies an unknown ref. Test fixtures without this method
+        fall back to a generic error text.
+
+        Returns an empty list on any catalog failure — the caller
+        should degrade to a generic not-found message rather than
+        raise, matching ``resolve_workflow_yaml`` semantics.
+        """
+        try:
+            catalog = self._runtime.asset_management.catalog()
+        except Exception:  # noqa: BLE001 — best-effort probe
+            return []
+        return sorted(
+            entry.ref
+            for entry in catalog.assets.values()
+            if entry.asset_type == "workflow"
+        )
+
     def _default_executor_factory(
         self,
         ref: str,

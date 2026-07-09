@@ -107,3 +107,7 @@ subsystems:
         - ref: kolsch/tools/run_workflow
         - ref: kolsch/tools/workflow_status
         - ref: kolsch/tools/cancel_workflow
+        # bug-027: introspection tool — model can ask "what inputs
+        # does workflow X need?" before calling `run_workflow`.
+        # Read-only; safe to allow by default.
+        - ref: kolsch/tools/workflow_inspect

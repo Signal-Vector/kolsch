@@ -884,6 +884,11 @@ def _workspace_only_default_rules() -> list[dict[str, str]]:
         {"what": "kolsch/tools/run_workflow", "pattern": "*", "effect": "prompt"},
         {"what": "kolsch/tools/workflow_status", "pattern": "*", "effect": "allow"},
         {"what": "kolsch/tools/cancel_workflow", "pattern": "*", "effect": "allow"},
+        # bug-027: `workflow_inspect` is read-only introspection —
+        # the model calls it to discover a workflow's required
+        # inputs before `run_workflow`. Safe to `allow`; no side
+        # effects, no run started.
+        {"what": "kolsch/tools/workflow_inspect", "pattern": "*", "effect": "allow"},
         # Default-deny tail (protected).
         {"what": "*", "pattern": "*", "effect": "deny"},
     ]

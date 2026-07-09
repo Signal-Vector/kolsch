@@ -549,6 +549,7 @@ def test_workflows_all_parity_with_module_namespace() -> None:
         "events",
         "executor",
         "ids",
+        "inputs_scan",  # bug-027: shared workflow-inputs scanner.
         "jinja_env",
         "labels",
         "module_isolation",
