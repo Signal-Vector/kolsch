@@ -69,11 +69,17 @@ def _mk_agent_event(trace_id: str | None) -> Event:
 
 @pytest.mark.asyncio
 async def test_matching_trace_id_routes_to_node() -> None:
-    """Matched trace: sub-agent event dispatches to the node row."""
+    """Matched trace: sub-agent event dispatches to the node row.
+
+    bug-033: composite key is `(trace_id, invocation_id)`; when the
+    event's data dict doesn't carry `invocation_id`, the router
+    falls back to a trace-only scan and still routes to the sole
+    entry sharing that trace. Exercises that fallback here.
+    """
     app = _FakeChatApp()
     adapter = EventAdapter(app)
     row = WorkflowNodeRow(node_name="n", trace_id="t1")
-    adapter._live_nodes_by_trace_id["t1"] = row
+    adapter._live_nodes_by_trace_and_invocation[("t1", "inv_a")] = row
 
     event = _mk_agent_event(trace_id="t1")
     await adapter.handle(event)
@@ -89,7 +95,7 @@ async def test_unrelated_trace_id_falls_through_to_transcript() -> None:
     app = _FakeChatApp()
     adapter = EventAdapter(app)
     row = WorkflowNodeRow(node_name="n", trace_id="t1")
-    adapter._live_nodes_by_trace_id["t1"] = row
+    adapter._live_nodes_by_trace_and_invocation[("t1", "inv_a")] = row
 
     event = _mk_agent_event(trace_id="t-unrelated")
     await adapter.handle(event)
@@ -139,15 +145,18 @@ async def test_terminal_node_unregisters_from_live_map() -> None:
     renderer.apply_event(_FakeEventData("kolsch.workflow.progress", start_payload))
     renderer.apply_event(_FakeEventData("kolsch.workflow.progress", node_start_payload))
 
-    assert "tr_run" in adapter._live_nodes_by_trace_id
+    assert ("tr_run", "inv_1") in adapter._live_nodes_by_trace_and_invocation
 
     node_complete_payload = dict(node_start_payload)
     node_complete_payload["kind"] = WorkflowEventKind.NODE_COMPLETED.value
     node_complete_payload["event_id"] = "ev_3"
     renderer.apply_event(_FakeEventData("kolsch.workflow.progress", node_complete_payload))
 
-    # Cleanup: trace_id evicted from the map.
-    assert "tr_run" not in adapter._live_nodes_by_trace_id
+    # Cleanup: composite key evicted from the map.
+    assert (
+        ("tr_run", "inv_1")
+        not in adapter._live_nodes_by_trace_and_invocation
+    )
 
     # Follow-up event with the same trace falls through.
     event = _mk_agent_event(trace_id="tr_run")

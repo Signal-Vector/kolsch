@@ -509,22 +509,37 @@ class EventAdapter:
         # which now also mounts the widget in the transcript.
         # `_applied_notice_ids` dedupes `kolsch.card.notice` events.
         self._card_widgets: dict[CardId, CardMountState] = {}
-        # spec-013: trace_id → live `WorkflowNodeRow` map. Populated
-        # by `WorkflowRenderer._on_node_started` via
+        # bug-033: `(trace_id, invocation_id)` → live `WorkflowNodeRow`
+        # map. Populated by `WorkflowRenderer._on_node_started` via
         # `register_adapter`; popped by the same renderer on any
         # terminal node event (`NODE_COMPLETED` / `NODE_FAILED` /
         # `NODE_PRUNED`). Session-event handlers
         # (`_handle_agent_message`, `_handle_tool_called`,
         # `_handle_user_message`, `_handle_tool_result`) consult this
-        # map: when `event.trace_id` matches a live node's trace,
-        # dispatch to `WorkflowNodeRow.apply_sub_agent_event` and
-        # short-circuit the default transcript-root mount.
-        # Typed as `dict[str, Any]` (rather than `dict[TraceId,
-        # WorkflowNodeRow]`) to keep this adapter free of an upward
-        # dependency on `workflows/`; the concrete key is a
-        # `TraceId` — a `str` subclass — and the value is the row
-        # widget.
-        self._live_nodes_by_trace_id: dict[str, Any] = {}
+        # map: when `(event.trace_id, event.invocation_id)` matches a
+        # live node, dispatch to
+        # `WorkflowNodeRow.apply_sub_agent_event` and short-circuit
+        # the default transcript-root mount.
+        #
+        # Pre-bug-033 this was keyed on `trace_id` alone (spec-013),
+        # but `trace_id` is run-wide (executor.py:1321-1328): every
+        # workflow node in a single run shares it, so sibling
+        # NODE_STARTED events clobbered each other's registrations
+        # and NODE_COMPLETED for one node evicted a still-live
+        # sibling. The `(trace_id, invocation_id)` composite key
+        # gives per-node uniqueness while keeping the trace scoping.
+        #
+        # Fallback: payloads that predate the `invocation_id` hoist
+        # (very old replay data) fall back to `(trace_id, "")` — the
+        # writer logs a WARNING. See `_register_node_with_adapter`
+        # in `widgets/card_body/workflow.py`.
+        #
+        # Typed as `dict[tuple[str, str], Any]` (rather than
+        # `dict[tuple[TraceId, InvocationId], WorkflowNodeRow]`) to
+        # keep this adapter free of an upward dependency on
+        # `workflows/`; the concrete keys are string subclasses and
+        # the value is the row widget.
+        self._live_nodes_by_trace_and_invocation: dict[tuple[str, str], Any] = {}
         self._applied_notice_ids: _BoundedLRUSet = _BoundedLRUSet(
             maxsize=_CARD_NOTICE_LRU_MAXSIZE,
         )
@@ -941,20 +956,61 @@ class EventAdapter:
         await self._app.mount_exchange_failed(message)
 
     def _route_to_workflow_node(self, event: Event) -> bool:
-        """Return True if `event` matched a live workflow node's trace.
+        """Return True if `event` matched a live workflow node.
 
-        spec-013 §EventAdapter trace_id routing: when the incoming
-        event's `trace_id` (an optional str on `Event`) matches a
-        `WorkflowNodeRow` registered by `WorkflowRenderer`, dispatch
-        into that row's `apply_sub_agent_event` and short-circuit
-        the caller's default transcript-root mount. When no match
-        (unrelated trace or bare chat surface without `trace_id`),
-        return `False` and let the caller carry on.
+        spec-013 §EventAdapter trace_id routing (bug-033: extended
+        to `(trace_id, invocation_id)`): when the incoming event's
+        composite key matches a `WorkflowNodeRow` registered by
+        `WorkflowRenderer`, dispatch into that row's
+        `apply_sub_agent_event` and short-circuit the caller's
+        default transcript-root mount. When no match (unrelated
+        trace, bare chat surface without `trace_id`, or a run whose
+        nodes have all terminated), return `False` and let the
+        caller carry on.
+
+        bug-033: `Event` doesn't currently hoist `invocation_id` at
+        the top level — spec-020 will thread it through the
+        sub-agent forwarder. Until then this reads a best-effort
+        value from `event.data["invocation_id"]` (some emit paths
+        set it there) and falls back to the trace-only lookup
+        (`(trace_id, "")` sentinel key) so today's session-scoped
+        routing keeps working. When the composite key doesn't hit,
+        we scan the map for any registration whose `trace_id`
+        matches — this preserves the pre-bug-033 behaviour for
+        callers that haven't been plumbed through spec-020 yet
+        (one entry per trace in the single-agent-per-trace world
+        the router runs in today).
         """
         trace_id = getattr(event, "trace_id", None)
         if not isinstance(trace_id, str) or not trace_id:
             return False
-        node_row = self._live_nodes_by_trace_id.get(trace_id)
+        invocation_id = ""
+        raw_data = getattr(event, "data", None)
+        if isinstance(raw_data, dict):
+            candidate = raw_data.get("invocation_id")
+            if isinstance(candidate, str):
+                invocation_id = candidate
+        node_row = self._live_nodes_by_trace_and_invocation.get(
+            (trace_id, invocation_id),
+        )
+        if node_row is None and invocation_id:
+            # Composite miss with a real invocation_id → try the
+            # sentinel-key fallback so old writers still route.
+            node_row = self._live_nodes_by_trace_and_invocation.get(
+                (trace_id, ""),
+            )
+        if node_row is None:
+            # Best-effort trace-only match: pick any registration
+            # sharing this trace_id. Preserves pre-bug-033 behaviour
+            # for consumers that don't yet plumb `invocation_id`
+            # through to the routed event (e.g. plain session
+            # `agent.message` events during a single-node run).
+            for (mapped_trace, _mapped_inv), row in (
+                self._live_nodes_by_trace_and_invocation.items()
+            ):
+                if mapped_trace == trace_id:
+                    node_row = row
+                    break
         if node_row is None:
             return False
         with contextlib.suppress(Exception):
@@ -2175,9 +2231,9 @@ class EventAdapter:
         one-workflow-at-a-time cadence.
 
         Also wires the renderer to this adapter on first sight — the
-        renderer's `_live_nodes_by_trace_id` registration happens on
-        `NODE_STARTED` and depends on `register_adapter` having been
-        called.
+        renderer's `_live_nodes_by_trace_and_invocation` registration
+        happens on `NODE_STARTED` and depends on `register_adapter`
+        having been called.
         """
         _ = event
         # Locate every mounted workflow-kind CardWidget's body

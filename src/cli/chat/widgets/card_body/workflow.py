@@ -27,15 +27,20 @@ way markdown cards do (spec-013 AC #14).
 Sub-agent event routing is wired via
 [`register_adapter`][cli.chat.widgets.card_body.workflow.WorkflowRenderer.register_adapter]:
 when set, `NODE_STARTED` populates the adapter's
-`_live_nodes_by_trace_id` map so incoming `agent.message` /
-`tool.called` / `user.message` / `tool.result` events with a
-matching `trace_id` route into the node row (see
-`EventAdapter._handle_agent_message` et al.).
+`_live_nodes_by_trace_and_invocation` map so incoming
+`agent.message` / `tool.called` / `user.message` / `tool.result`
+events with a matching `(trace_id, invocation_id)` route into the
+node row (see `EventAdapter._handle_agent_message` et al.).
+bug-033 rekeyed the map from `trace_id` alone to
+`(trace_id, invocation_id)` because `trace_id` is run-wide —
+without the composite key, sibling nodes clobbered each other's
+registrations.
 """
 
 from __future__ import annotations
 
 import contextlib
+import logging
 from datetime import UTC, datetime
 from typing import Any
 
@@ -46,6 +51,9 @@ from textual.widgets import Static
 
 from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 from workflows.events import WorkflowEventKind
+
+
+_LOGGER = logging.getLogger(__name__)
 
 
 _WIRE_KIND = "kolsch.workflow.progress"
@@ -250,12 +258,12 @@ class WorkflowRenderer(Vertical):
         # convention: ``turn_status.py::_start_timers`` uses
         # ``set_interval(1.0, ...)``.
         self._tick_handle: Any | None = None
-        # spec-013: adapter reference for `_live_nodes_by_trace_id`
-        # registration. `register_adapter` (called by the mount
-        # helper on the ChatApp side) sets this. When `None`, node
-        # registration is a no-op — headless tests exercise the
-        # renderer without a live adapter and rely on the state
-        # transitions only.
+        # spec-013 / bug-033: adapter reference for
+        # `_live_nodes_by_trace_and_invocation` registration.
+        # `register_adapter` (called by the mount helper on the
+        # ChatApp side) sets this. When `None`, node registration
+        # is a no-op — headless tests exercise the renderer without
+        # a live adapter and rely on the state transitions only.
         self._adapter: Any | None = None
         # Body sub-widgets — instantiated in `__init__` so headless
         # tests can access them BEFORE `compose` runs (mypy prefers
@@ -331,9 +339,14 @@ class WorkflowRenderer(Vertical):
 
         Called from the ChatApp mount hook once the adapter is
         available. When set, `NODE_STARTED` inserts the row into
-        `adapter._live_nodes_by_trace_id[trace_id]` and node
-        terminals pop it — this is the seam the adapter uses to
-        route sub-agent events into the right node.
+        `adapter._live_nodes_by_trace_and_invocation[(trace_id,
+        invocation_id)]` and node terminals pop it — this is the
+        seam the adapter uses to route sub-agent events into the
+        right node.
+
+        bug-033: the map key is a `(trace_id, invocation_id)` tuple
+        because `trace_id` alone is run-wide and sibling nodes
+        would clobber each other's registrations.
         """
         self._adapter = adapter
 
@@ -426,12 +439,25 @@ class WorkflowRenderer(Vertical):
             self._last_ts = ts
 
     def _on_node_started(self, payload: dict[str, Any]) -> None:
-        """Mount a `WorkflowNodeRow`; register the row's trace_id."""
+        """Mount a `WorkflowNodeRow`; register `(trace_id, invocation_id)`.
+
+        bug-033: extracts `invocation_id` from the payload alongside
+        `trace_id` so the adapter's routing map can key on the
+        per-node composite. `invocation_id` is hoisted at the
+        envelope top level by
+        `WorkflowsImpl._drain_workflow_bridge`; a missing value
+        (older payload shape) falls back to the trace-only sentinel
+        with a WARNING log inside `_register_node_with_adapter`.
+        """
         node_name = payload.get("node_name")
         if not isinstance(node_name, str) or not node_name:
             return
         trace_id = payload.get("trace_id")
         trace_id_val = trace_id if isinstance(trace_id, str) else None
+        invocation_id = payload.get("invocation_id")
+        invocation_id_val = (
+            invocation_id if isinstance(invocation_id, str) else None
+        )
         if node_name in self._node_rows:
             # Idempotent — a replay of the same NODE_STARTED shouldn't
             # mount a second row.
@@ -439,7 +465,9 @@ class WorkflowRenderer(Vertical):
         row = WorkflowNodeRow(node_name=node_name, trace_id=trace_id_val)
         self._node_rows[node_name] = row
         self._node_list.add_node(row)
-        self._register_node_with_adapter(row, trace_id_val)
+        self._register_node_with_adapter(
+            row, trace_id_val, invocation_id_val,
+        )
 
     def _on_node_completed(self, payload: dict[str, Any]) -> None:
         """Transition the row to `completed`; inline any summary.
@@ -481,8 +509,10 @@ class WorkflowRenderer(Vertical):
         # can call it unconditionally.
         row.set_output(output)
         trace_id = payload.get("trace_id")
+        invocation_id = payload.get("invocation_id")
         self._unregister_node_from_adapter(
             trace_id if isinstance(trace_id, str) else None,
+            invocation_id if isinstance(invocation_id, str) else None,
         )
 
     def _on_node_failed(self, payload: dict[str, Any]) -> None:
@@ -509,8 +539,10 @@ class WorkflowRenderer(Vertical):
                     break
         row.set_state("failed", error_preview=error_preview)
         trace_id = payload.get("trace_id")
+        invocation_id = payload.get("invocation_id")
         self._unregister_node_from_adapter(
             trace_id if isinstance(trace_id, str) else None,
+            invocation_id if isinstance(invocation_id, str) else None,
         )
 
     def _on_node_pruned(self, payload: dict[str, Any]) -> None:
@@ -523,8 +555,10 @@ class WorkflowRenderer(Vertical):
             return
         row.set_state("pruned")
         trace_id = payload.get("trace_id")
+        invocation_id = payload.get("invocation_id")
         self._unregister_node_from_adapter(
             trace_id if isinstance(trace_id, str) else None,
+            invocation_id if isinstance(invocation_id, str) else None,
         )
 
     def _on_awaiting_approval(self, payload: dict[str, Any]) -> None:
@@ -701,21 +735,61 @@ class WorkflowRenderer(Vertical):
         self,
         row: WorkflowNodeRow,
         trace_id: str | None,
+        invocation_id: str | None,
     ) -> None:
-        """Store `row` in the adapter's `_live_nodes_by_trace_id` map."""
-        if self._adapter is None or trace_id is None:
-            return
-        live_map = getattr(self._adapter, "_live_nodes_by_trace_id", None)
-        if isinstance(live_map, dict):
-            live_map[trace_id] = row
+        """Store `row` in the adapter's routing map.
 
-    def _unregister_node_from_adapter(self, trace_id: str | None) -> None:
-        """Pop `trace_id` from the adapter's live-nodes map."""
+        bug-033: keyed on `(trace_id, invocation_id)` — the
+        `trace_id`-only key clobbered sibling nodes because
+        `trace_id` is run-wide. Missing `invocation_id` (older
+        payload shape or replay) falls back to the empty-string
+        sentinel and logs a WARNING; the fallback preserves
+        pre-bug-033 behaviour (single map entry per trace) so
+        replay of old sessions doesn't crash.
+        """
         if self._adapter is None or trace_id is None:
             return
-        live_map = getattr(self._adapter, "_live_nodes_by_trace_id", None)
-        if isinstance(live_map, dict):
-            live_map.pop(trace_id, None)
+        live_map = getattr(
+            self._adapter, "_live_nodes_by_trace_and_invocation", None,
+        )
+        if not isinstance(live_map, dict):
+            return
+        key_invocation = invocation_id
+        if key_invocation is None:
+            node_name = getattr(row, "_node_name", "<unknown>")
+            _LOGGER.warning(
+                "bug-033: NODE_STARTED payload for node %s "
+                "(trace_id=%s) missing invocation_id; falling "
+                "back to trace-only routing key. Sibling nodes "
+                "may collide.",
+                node_name,
+                trace_id,
+            )
+            key_invocation = ""
+        live_map[(trace_id, key_invocation)] = row
+
+    def _unregister_node_from_adapter(
+        self,
+        trace_id: str | None,
+        invocation_id: str | None,
+    ) -> None:
+        """Pop the `(trace_id, invocation_id)` key from the routing map.
+
+        bug-033: pops the exact composite key so terminal events
+        can't evict a still-live sibling node. Missing
+        `invocation_id` falls back to the sentinel key that
+        `_register_node_with_adapter` wrote in the same-payload-
+        shape case (both writer and unwriter use ``""``).
+        """
+        if self._adapter is None or trace_id is None:
+            return
+        live_map = getattr(
+            self._adapter, "_live_nodes_by_trace_and_invocation", None,
+        )
+        if not isinstance(live_map, dict):
+            return
+        key_invocation = invocation_id if invocation_id is not None else ""
+        live_map.pop((trace_id, key_invocation), None)
 
 
 __all__ = [
