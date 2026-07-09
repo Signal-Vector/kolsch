@@ -875,6 +875,15 @@ def _workspace_only_default_rules() -> list[dict[str, str]]:
         # extra). Same conservative prompt default as fetch_url so the
         # chat surface asks before the agent drives headless Chromium.
         {"what": "kolsch/tools/browse_url", "pattern": "*", "effect": "prompt"},
+        # bug-024: workflow-service tools. `run_workflow` opens a
+        # WorkflowCard AND queues a run; conservative `prompt` so the
+        # user confirms the run before any nodes fire. `workflow_status`
+        # is read-only; safe to `allow`. `cancel_workflow` is user-
+        # initiated safety; `allow` so the model can react to an Esc
+        # or an explicit "cancel that" instruction without a modal.
+        {"what": "kolsch/tools/run_workflow", "pattern": "*", "effect": "prompt"},
+        {"what": "kolsch/tools/workflow_status", "pattern": "*", "effect": "allow"},
+        {"what": "kolsch/tools/cancel_workflow", "pattern": "*", "effect": "allow"},
         # Default-deny tail (protected).
         {"what": "*", "pattern": "*", "effect": "deny"},
     ]

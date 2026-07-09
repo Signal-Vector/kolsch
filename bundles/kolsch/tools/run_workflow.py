@@ -39,7 +39,17 @@ class RunWorkflowArgs(BaseModel):
 
 @tool(
     name="run_workflow",
-    description="Start a workflow. Returns run_id + card anchor.",
+    description=(
+        "Start a workflow by ref (`bundle/workflows/name`) and mount a "
+        "live workflow card in the chat transcript. Prefer this over "
+        "invoking `kolsch workflows run` through the `bash` tool — "
+        "`bash` streams raw stdout into a plain tool-call block, while "
+        "`run_workflow` opens a `WorkflowCard` widget that renders "
+        "per-node progress rows, pause/approval prompts, and terminal "
+        "status inline. Returns `{run_id, card_id, _chat_anchor}`; the "
+        "anchor lets your prose reference the mounted card via "
+        "`[label](kolsch-anchor://workflow_card/<run_id>)`."
+    ),
     args_schema=RunWorkflowArgs,
     requires=["cards", "workflows"],
 )

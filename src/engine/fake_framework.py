@@ -74,7 +74,22 @@ class MinimalFramework:
             *history,
             Message(role="user", content=user_message),
         ]
-        tool_schemas = [{"name": t.name, "schema": t.schema} for t in tools]
+        # bug-024: include the tool's rich description so
+        # `_tool_to_openai_spec` can populate `function.description`
+        # instead of the `"Tool: <name>"` placeholder. Without this,
+        # Kimi K2.6 (workspace default) prefers `bash` for anything
+        # that could conceivably be a subprocess. `getattr` guards
+        # test stubs that ship a ToolHandle-shaped duck without the
+        # Protocol's `description` attribute — the widening is
+        # backward-compat by default (see D-010 note in bug-024).
+        tool_schemas = [
+            {
+                "name": t.name,
+                "description": getattr(t, "description", "") or "",
+                "schema": t.schema,
+            }
+            for t in tools
+        ]
         tool_map = {t.name: t for t in tools}
 
         while True:

@@ -391,7 +391,19 @@ def _make_crewai_tool(
 
     name = handle.name
     schema = handle.schema or {}
-    description = str(schema.get("description") or f"Tool: {name}")
+    # bug-024: prefer the handle's `description` (populated from the
+    # tool's `@tool(description=...)` copy) over the args JSON
+    # schema's description (which is the args model's docstring, not
+    # the tool's). Falling back to `"Tool: <name>"` here shipped
+    # every tool with a useless placeholder, and Kimi K2.6 —
+    # sensitive to missing descriptions — then defaulted to `bash`
+    # for anything it could spawn.
+    handle_description = getattr(handle, "description", None)
+    description = str(
+        handle_description
+        or schema.get("description")
+        or f"Tool: {name}",
+    )
 
     # Build a minimal Pydantic schema that accepts whatever the LLM
     # emits as arguments — CrewAI will call _run with **kwargs. The

@@ -142,9 +142,16 @@ class ToolHandle(Protocol):
     tool-result message instead of raising — the engine contract
     forbids in-exchange failures from raising into the framework
     loop.
+
+    `description` was added by bug-024. The framework needs the tool's
+    prose description (from `@tool(description=...)`) to build the
+    outgoing OpenAI-spec `tools=` payload — without it every advertised
+    tool ships as `"Tool: <name>"` and models (Kimi K2.6 especially)
+    fall back to `bash` for anything they can spawn as a subprocess.
     """
 
     name: str
+    description: str
     schema: dict[str, Any]
 
     async def __call__(self, call: ToolCall) -> Any:

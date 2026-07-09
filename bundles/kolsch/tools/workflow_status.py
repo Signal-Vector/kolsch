@@ -31,7 +31,16 @@ class WorkflowStatusArgs(BaseModel):
 
 @tool(
     name="workflow_status",
-    description="Read workflow status. Returns phase + node counts + anchor.",
+    description=(
+        "Read the current phase, node counts, and last-event timestamp "
+        "for a workflow run started via `run_workflow` (or any other "
+        "in-session start). Prefer this over probing status through "
+        "the `bash` tool (`kolsch workflows status <run_id>`) — this "
+        "tool returns a structured dict AND a `_chat_anchor` you can "
+        "embed as `[label](kolsch-anchor://workflow_card/<run_id>)` "
+        "so the user's prose links back to the live card. Non-"
+        "blocking; safe to call while the run is executing."
+    ),
     args_schema=WorkflowStatusArgs,
     requires=["workflows"],
 )

@@ -32,7 +32,17 @@ class CancelWorkflowArgs(BaseModel):
 
 @tool(
     name="cancel_workflow",
-    description="Cancel a running workflow. Optional cascade to tree.",
+    description=(
+        "Cancel an in-flight workflow run by id. Optional "
+        "`cascade=True` cancels the run's whole ancestor/descendant "
+        "tree (spec-017). Prefer this over `bash kolsch workflows "
+        "cancel <run_id>` — this tool cooperates with the live "
+        "`WorkflowsImpl` service so the `WorkflowCard` in the chat "
+        "transcript transitions to `cancelling`/`cancelled` in place, "
+        "instead of leaving the card in a stale state while a "
+        "subprocess signals the executor. Returns `{cancelled, "
+        "run_id, cascade}`."
+    ),
     args_schema=CancelWorkflowArgs,
     requires=["workflows"],
 )

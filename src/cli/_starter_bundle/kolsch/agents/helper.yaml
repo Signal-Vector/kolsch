@@ -100,3 +100,10 @@ subsystems:
         - ref: kolsch/tools/write_file
         - ref: kolsch/tools/list_files
         - ref: kolsch/tools/bash
+        # bug-024: workflow-service tools so the model can invoke
+        # workflows through the chat card surface instead of falling
+        # back to `bash kolsch workflows run …` (which streams stdout
+        # to a bash tool-call block instead of mounting a WorkflowCard).
+        - ref: kolsch/tools/run_workflow
+        - ref: kolsch/tools/workflow_status
+        - ref: kolsch/tools/cancel_workflow

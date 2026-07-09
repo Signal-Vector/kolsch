@@ -223,6 +223,12 @@ class _ObservedToolHandle:
         self._cancel = cancel
         # Public attributes required by the ToolHandle Protocol.
         self.name = defn.name
+        # bug-024: expose the tool's rich `@tool(description=...)`
+        # copy so `MinimalFramework.run_exchange` can advertise it to
+        # the LLM. Without this attribute the model saw every tool as
+        # `"Tool: <name>"` and Kimi K2.6 (the workspace default)
+        # fell back to `bash` whenever a workflow ref was requested.
+        self.description = defn.description
         self.schema = defn.args_schema.model_json_schema()
 
     async def __call__(self, call: ToolCall) -> Any:

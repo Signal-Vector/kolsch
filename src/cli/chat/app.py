@@ -129,6 +129,141 @@ chars so it fits comfortably on standard terminals.
 """
 
 
+# bug-024 (AC #11): the exact WARN message the guardrail fires when
+# `WorkflowsImpl` is live but the mounted agent's declared tool set
+# has no workflow-service tool. The message names the file the
+# operator has to edit and the ref they're missing — no diagnostic
+# pass needed. Extracted as a module constant so unit tests can
+# assert on it byte-identically.
+_WORKFLOW_TOOLS_MISSING_WARNING = (
+    "WorkflowsImpl is running but the agent's declared tool set has "
+    "no workflow-service tools (no tool declares "
+    "`requires=[\"workflows\"]`). Users prompting for workflow "
+    "invocation will see the model fall back to `bash kolsch "
+    "workflows run` instead of mounting a live WorkflowCard. Add "
+    "`kolsch/tools/run_workflow` (and optionally "
+    "`kolsch/tools/workflow_status`, `kolsch/tools/cancel_workflow`) "
+    "to helper.yaml's `subsystems.tools.config.declared:` list."
+)
+
+
+def _declared_tool_refs(config: Any) -> list[str] | None:
+    """Read `subsystems.tools.config.declared[*].ref` off a resolved config.
+
+    Returns `None` when the resolved config has no `tools` subsystem
+    or when the shape doesn't match the expected `declared:` list —
+    the caller then falls back to the runtime-registry check.
+    Returns an empty list when `tools` is declared but the list is
+    empty (the agent explicitly opted out of every tool).
+    """
+    subsystems = getattr(config, "subsystems", None) or {}
+    tools_entry = subsystems.get("tools") if isinstance(subsystems, dict) else None
+    if tools_entry is None:
+        return None
+    body = getattr(tools_entry, "config", None)
+    if not isinstance(body, dict):
+        return None
+    declared = body.get("declared")
+    if not isinstance(declared, list):
+        return None
+    refs: list[str] = []
+    for entry in declared:
+        if isinstance(entry, dict):
+            ref = entry.get("ref")
+            if isinstance(ref, str):
+                refs.append(ref)
+        elif isinstance(entry, str):
+            refs.append(entry)
+    return refs
+
+
+#: Suffix on declared refs (e.g. `kolsch/tools/run_workflow`) that the
+#: shipped bundle uses to mark tools declaring `requires=["workflows"]`.
+#: If a bundle adds a differently-named workflow tool, it must also add
+#: its final segment here or edit `_warn_if_workflow_tools_missing`. The
+#: guardrail is best-effort — it errs on the side of NOT warning when
+#: it can't tell.
+_WORKFLOW_TOOL_REF_NAMES: frozenset[str] = frozenset(
+    {"run_workflow", "workflow_status", "cancel_workflow"},
+)
+
+
+def _warn_if_workflow_tools_missing(
+    *,
+    logger: logging.Logger,
+    tools_subsystem: Any,
+    agent_id: Any,
+    workflows_impl: Any,
+    declared_refs: list[str] | None = None,
+) -> None:
+    """Emit AC #11's WARN when `WorkflowsImpl` is live but no workflow tool.
+
+    Two signals in priority order:
+
+    1. If the caller supplied `declared_refs`, inspect them — the
+       agent config's `subsystems.tools.config.declared:` list. This
+       runs at `on_mount` (BEFORE the engine's per-exchange
+       `_register_tools_with_subsystem` fires), so it's the earliest
+       reliable signal. A ref's final segment matches
+       `_WORKFLOW_TOOL_REF_NAMES` → the tool is (assumed to be) a
+       workflow-service tool → no warning.
+    2. If `declared_refs` is `None`, fall back to the runtime
+       registry: iterate `list_registered_tools(agent_id)` and check
+       each `ToolDefinition.requires`. This is what the operator's
+       live subsystem would report AFTER an exchange has fired.
+
+    Skips silently on any headless-fixture shape the runtime hands us
+    (missing tools_subsystem, no agent id, or `WorkflowsImpl` not
+    constructed — a common case in the unit-test suite). The warning
+    fires only for the specific composition mismatch the guardrail
+    exists to catch.
+    """
+    if workflows_impl is None:
+        return
+
+    # Signal 1: declared refs (config-time, most reliable at mount).
+    if declared_refs is not None:
+        for ref in declared_refs:
+            tail = ref.rsplit("/", 1)[-1]
+            if tail in _WORKFLOW_TOOL_REF_NAMES:
+                return
+        logger.warning(_WORKFLOW_TOOLS_MISSING_WARNING)
+        return
+
+    # Signal 2: runtime registry (registered-tools introspection).
+    if tools_subsystem is None or agent_id is None:
+        return
+    try:
+        registered = tools_subsystem.list_registered_tools(agent_id)
+    except Exception:  # noqa: BLE001 — headless fixtures may lack the accessor
+        logger.debug(
+            "ChatApp.on_mount: workflow-tools guardrail: "
+            "list_registered_tools raised; skipping",
+            exc_info=True,
+        )
+        return
+
+    def _has_workflows_requirement(tool_info: Any) -> bool:
+        # The internal registry carries the full `ToolDefinition`
+        # (which has `requires`). Walk through the accessor the
+        # engine already uses so we honour identical semantics.
+        registry = getattr(tools_subsystem, "_registry", None)
+        get_tool = getattr(registry, "get_tool", None) if registry is not None else None
+        if get_tool is None:
+            return False
+        try:
+            defn = get_tool(agent_id, tool_info.name)
+        except Exception:  # noqa: BLE001 — defensive; stub registries vary
+            return False
+        requires = getattr(defn, "requires", None) or []
+        return "workflows" in list(requires)
+
+    if any(_has_workflows_requirement(t) for t in registered):
+        return
+
+    logger.warning(_WORKFLOW_TOOLS_MISSING_WARNING)
+
+
 class ChatApp(App):
     """Textual chat surface.
 
@@ -485,6 +620,27 @@ class ChatApp(App):
                 "ChatApp.on_mount: tools_subsystem chat_services wiring skipped",
                 exc_info=True,
             )
+
+        # bug-024: guardrail. If `WorkflowsImpl` is live in the
+        # service registry but the mounted agent's declared tool
+        # set contains no `run_workflow` / `workflow_status` /
+        # `cancel_workflow` ref, the model will fall back to
+        # `bash kolsch workflows run` when asked to invoke a
+        # workflow. Read the declared refs off the resolved config
+        # so the check fires at mount (BEFORE the engine's
+        # per-exchange `_register_tools_with_subsystem`); the
+        # runtime-registry fallback in
+        # `_warn_if_workflow_tools_missing` runs later if config
+        # inspection isn't available.
+        _warn_if_workflow_tools_missing(
+            logger=_LOGGER,
+            tools_subsystem=getattr(
+                self.session.runtime, "tools_subsystem", None,
+            ),
+            agent_id=getattr(self.session.config, "agent_id", None),
+            workflows_impl=active_workflows,
+            declared_refs=_declared_tool_refs(self.session.config),
+        )
 
         # bug-020: subscribe the event adapter's `handle` to the
         # runtime bus on `UI_EVENT_TOPIC` so every UI_EVENT
