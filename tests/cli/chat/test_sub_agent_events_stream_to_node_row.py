@@ -454,9 +454,11 @@ async def test_sub_agent_widgets_mount_in_expanded_node_row(
         node_row.collapsed = False
         await pilot.pause()
 
-        # Wait for the three sub-agent widget classes to mount inside
-        # the row's DOM subtree.
-        want = {UserChatbox, ToolCallBlock, AssistantProse}
+        # bug-035: USER_MESSAGE inside a workflow node is
+        # intentionally skipped (the scheduler's invocation payload
+        # isn't semantically a user turn). Only AGENT_MESSAGE +
+        # TOOL_CALLED render widgets in the body.
+        want = {ToolCallBlock, AssistantProse}
         seen: set[type] = set()
         for _ in range(160):  # 160 * 50ms = 8s worst case
             await pilot.pause()
@@ -486,8 +488,15 @@ async def test_sub_agent_widgets_mount_in_expanded_node_row(
             f"got {sorted(t.__name__ for t in seen)}"
         )
 
-        # The row's turn counter reflects the number of sub-agent
-        # events routed to it — MUST be at least 3 (one per widget).
+        # bug-035: USER_MESSAGE was intentionally NOT mounted as a
+        # UserChatbox — verify no UserChatbox landed under the row.
+        assert not list(node_row.query(UserChatbox)), (
+            "UserChatbox should NOT mount inside a workflow node row"
+        )
+
+        # The row's turn counter reflects ALL sub-agent events routed
+        # to it (including the skipped USER_MESSAGE) — MUST be at
+        # least 3.
         assert node_row._sub_agent_turn_count >= 3, (
             f"sub_agent_turn_count = {node_row._sub_agent_turn_count}"
         )

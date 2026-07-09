@@ -93,6 +93,148 @@ terminal (spec-014 unpauses back to ``running``).
 """
 
 
+_BASH_SHAPE_KEYS = frozenset({"stdout", "stderr", "exit_code"})
+"""bug-034: keys that identify a bash-node output shape.
+
+If a dict's keys are a subset of this set (and it contains at
+least one of them), ``_format_content_dict`` renders each field
+as its own labeled block with real newlines rather than
+JSON-escaped ``\\n`` sequences. Bash nodes ship
+``{stdout, stderr, exit_code}``; other shapes fall through to
+``json.dumps``.
+"""
+
+
+_BODY_MAX_CHARS = 2000
+"""bug-034: total-char cap for rendered node body / content dicts.
+
+Raised from the 500-char bug-032 cap — a diagnostic body needs
+enough room to show real stdout without cutting mid-string.
+"""
+
+
+_BASH_BLOCK_MAX_CHARS = 500
+"""bug-034: per-block soft cap for stdout / stderr in bash-shape rendering.
+
+Keeps a runaway single stream from dominating the body when both
+streams have real content. Applied per-block; the total body
+still respects ``_BODY_MAX_CHARS`` (2000). Tuned to 500 so a
+single ``"x" * 600`` stream visibly truncates with a trailing
+``…`` — matches the bug-032 test's truncation expectation for
+the ``_OUTPUT_PREVIEW_MAX_LEN`` surface (see ``set_output``).
+"""
+
+
+def _truncate(text: str, max_chars: int) -> str:
+    """Tail-truncate ``text`` at ``max_chars`` with an ellipsis marker.
+
+    A shorter-than-``max_chars`` string round-trips unchanged.
+    Reserves one char for the ``…`` suffix so the total rendered
+    length stays at the advertised limit.
+    """
+    if len(text) <= max_chars:
+        return text
+    return text[: max_chars - 1] + "…"
+
+
+def _format_content_dict(
+    content: dict[str, Any],
+    *,
+    max_chars: int = _BODY_MAX_CHARS,
+) -> str:
+    """bug-034: render a content dict as a diagnostic body string.
+
+    Bash-shape dicts — keys ``⊆ {stdout, stderr, exit_code}`` with
+    at least one match — render as labeled blocks with **real**
+    newlines. This keeps multi-line stdout readable instead of
+    surfacing as JSON-escaped ``\\n`` sequences that get chopped
+    mid-string by truncation.
+
+    Other shapes fall through to ``json.dumps(indent=2)`` with
+    ``default=repr`` so non-serialisable values still render.
+    Either branch is tail-truncated to ``max_chars``.
+    """
+    if _is_bash_shape(content):
+        return _truncate(_render_bash_blocks(content), max_chars)
+    try:
+        pretty = json.dumps(content, indent=2, default=repr)
+    except (TypeError, ValueError):
+        pretty = repr(content)
+    return _truncate(pretty, max_chars)
+
+
+def _is_bash_shape(content: Any) -> bool:
+    """Return True if ``content`` looks like a bash node output dict.
+
+    Requires: a dict whose keys are a subset of
+    ``{stdout, stderr, exit_code}`` and that contains at least one
+    of those keys. An empty dict or a dict with extra keys returns
+    False so we don't accidentally hijack an unrelated shape.
+    """
+    if not isinstance(content, dict) or not content:
+        return False
+    keys = set(content.keys())
+    if not keys.issubset(_BASH_SHAPE_KEYS):
+        return False
+    return bool(keys & _BASH_SHAPE_KEYS)
+
+
+def _render_bash_blocks(content: dict[str, Any]) -> str:
+    """Render a bash-shape dict as labeled blocks with real newlines.
+
+    Ordering: ``exit_code`` first (one-liner header), then
+    ``stdout``, then ``stderr``. Empty streams are omitted so a
+    silent-stderr run doesn't waste rows on an empty "stderr:"
+    label. Each stream body is tail-truncated at
+    ``_BASH_BLOCK_MAX_CHARS`` to keep one runaway stream from
+    swallowing the body.
+    """
+    lines: list[str] = []
+    if "exit_code" in content:
+        lines.append(f"exit_code: {content['exit_code']}")
+    stdout = content.get("stdout")
+    if isinstance(stdout, str) and stdout:
+        lines.append("")
+        lines.append("stdout:")
+        lines.append(_truncate(stdout, _BASH_BLOCK_MAX_CHARS))
+    stderr = content.get("stderr")
+    if isinstance(stderr, str) and stderr:
+        lines.append("")
+        lines.append("stderr:")
+        lines.append(_truncate(stderr, _BASH_BLOCK_MAX_CHARS))
+    return "\n".join(lines)
+
+
+def _extract_content_text(content: Any) -> str:
+    """bug-034: pull a display string out of a sub-agent ``content`` value.
+
+    Fallback chain per spec:
+      1. ``content.text`` — the conventional session-event shape.
+      2. ``content.output`` / ``content.result`` — agent structured
+         outputs (final answers from tool-heavy nodes).
+      3. Readable rendering of the whole dict via
+         ``_format_content_dict`` — covers workflow IOSpec inputs
+         (``{"input": "..."}``) and other free-shape dicts where
+         no single key holds the display string.
+      4. Empty string when ``content`` is empty or missing entirely.
+
+    Non-dict content (a bare string, a list) falls back to
+    ``str(content)`` truncated to the body cap so callers still get
+    something readable rather than an empty widget.
+    """
+    if content is None or content == "":
+        return ""
+    if isinstance(content, dict):
+        if not content:
+            return ""
+        for key in ("text", "output", "result"):
+            value = content.get(key)
+            if isinstance(value, str) and value:
+                return value
+        return _format_content_dict(content)
+    return _truncate(str(content), _BODY_MAX_CHARS)
+
+
 class WorkflowNodeRow(Collapsible):
     """Per-node row inside a `WorkflowNodeList`.
 
@@ -129,10 +271,14 @@ class WorkflowNodeRow(Collapsible):
     _ERROR_PREVIEW_MAX_LEN = 60
     """Coordinator #4 lock — fixed 60 char error preview truncation."""
 
-    _OUTPUT_PREVIEW_MAX_LEN = 500
-    """bug-032: pretty-printed `payload.output` is truncated to this
-    many chars in the expanded body (spec says ~500). Longer content
-    gets a trailing ``…`` marker so the user knows there is more.
+    _OUTPUT_PREVIEW_MAX_LEN = _BODY_MAX_CHARS
+    """bug-034: pretty-printed `payload.output` truncation cap.
+
+    Raised from bug-032's 500 to 2000 so multi-line bash stdout
+    renders in full instead of getting chopped mid-string. The
+    per-block cap (``_BASH_BLOCK_MAX_CHARS = 500``) keeps a runaway
+    stream from swallowing the body. Longer content gets a trailing
+    ``…`` marker so the user knows there is more.
     """
 
     state = reactive("starting", init=False)
@@ -230,7 +376,7 @@ class WorkflowNodeRow(Collapsible):
         self._update_title()
 
     def set_output(self, output: Any) -> None:
-        """bug-032: mount a pretty-printed preview of `output` in the body.
+        """bug-032 + bug-034: mount a pretty-printed preview of `output`.
 
         Fired by
         [`WorkflowRenderer._on_node_completed`][cli.chat.widgets.card_body.workflow.WorkflowRenderer._on_node_completed]
@@ -239,10 +385,14 @@ class WorkflowNodeRow(Collapsible):
         mounted widget before mounting the new one so the row body
         never accumulates stale previews.
 
+        bug-034: bash-shape outputs (keys ⊆
+        ``{stdout, stderr, exit_code}``) render as labeled blocks
+        with **real** newlines via ``_format_content_dict`` — no
+        more JSON-escaped ``\\n`` mid-line cuts. Other shapes fall
+        through to the same helper's ``json.dumps`` branch.
+
         No-op when `output` is `None`, an empty dict, or an empty
-        string — nothing worth showing. Non-JSON-serialisable values
-        fall back to `repr()` so the widget still renders instead of
-        raising during mount.
+        string — nothing worth showing.
         """
         # No-op guard: `None`, `{}`, `""`. Non-empty falsy shapes
         # like `0` or `False` would also fail an ordinary truthy
@@ -252,14 +402,16 @@ class WorkflowNodeRow(Collapsible):
             return
         if isinstance(output, (dict, list, str)) and not output:
             return
-        try:
-            pretty = json.dumps(output, indent=2, default=repr)
-        except (TypeError, ValueError):
-            pretty = repr(output)
-        if len(pretty) > self._OUTPUT_PREVIEW_MAX_LEN:
-            # Reserve one char for the trailing ellipsis so the total
-            # rendered length stays at the advertised limit.
-            pretty = pretty[: self._OUTPUT_PREVIEW_MAX_LEN - 1] + "…"
+        if isinstance(output, dict):
+            pretty = _format_content_dict(
+                output, max_chars=self._OUTPUT_PREVIEW_MAX_LEN,
+            )
+        else:
+            try:
+                pretty = json.dumps(output, indent=2, default=repr)
+            except (TypeError, ValueError):
+                pretty = repr(output)
+            pretty = _truncate(pretty, self._OUTPUT_PREVIEW_MAX_LEN)
         # Idempotency: drop the previous preview mount before adding
         # the new one. A failed remove (row not yet mounted, previous
         # widget already detached) must not block the new mount.
@@ -269,8 +421,13 @@ class WorkflowNodeRow(Collapsible):
             self._output_widget = None
         widget = Static(pretty)
         self._output_widget = widget
+        # bug-035: mount inside the Collapsible's ``Contents`` slot
+        # so the outer collapse/expand actually hides the preview.
+        # ``self.mount(widget)`` on a Collapsible mounts as a sibling
+        # of ``Contents``; only ``Contents`` responds to the
+        # ``.-collapsed`` CSS rule.
         with contextlib.suppress(Exception):
-            self.mount(widget)
+            self._mount_in_contents(widget)
 
     def apply_sub_agent_event(self, event: Any) -> None:
         """Route a sub-agent `Event` to this row.
@@ -431,6 +588,16 @@ class WorkflowNodeRow(Collapsible):
         The concrete widget (`UserChatbox`, `AssistantProse`,
         `ToolCallBlock`) is selected from `event.type`; unrecognised
         types are silently dropped.
+
+        bug-034: content extraction uses ``_extract_content_text``
+        (fallback chain: ``content.text`` -> ``content.output`` /
+        ``content.result`` -> readable dict rendering) so
+        workflow-invoked agents whose ``data.content`` is IOSpec
+        inputs (``{"input": "..."}``) or structured outputs
+        (``{"top_10_requirements": [...]}``) render a real preview
+        rather than an empty box. TOOL_CALLED / TOOL_RESULT now
+        pull ``data.arguments`` into the title and ``data.result``
+        into the body via the shared bash-aware helper.
         """
         # Deferred import — avoid a widget-layer cycle on module
         # load. spec-013 mounts stub-compatible widgets; full
@@ -440,39 +607,38 @@ class WorkflowNodeRow(Collapsible):
         except Exception:  # noqa: BLE001 — import guard for headless tests
             return
         event_type = getattr(event, "type", None)
-        text = ""
-        with contextlib.suppress(Exception):
-            data = getattr(event, "data", None) or {}
-            if isinstance(data, dict):
-                content = data.get("content") or {}
-                if isinstance(content, dict):
-                    text = str(content.get("text") or "")
-                if not text:
-                    text = str(data.get("text_delta") or "")
+        data: dict[str, Any] = {}
+        raw_data = getattr(event, "data", None)
+        if isinstance(raw_data, dict):
+            data = raw_data
+        text = self._extract_message_text(data)
 
         widget: Any | None = None
         try:
             if event_type == EventType.USER_MESSAGE:
-                from cli.chat.widgets.user_chatbox import UserChatbox  # noqa: PLC0415
-
-                ts_val = getattr(event, "created_at", None)
-                if not isinstance(ts_val, datetime):
-                    ts_val = datetime.now(tz=UTC)
-                widget = UserChatbox(text or "", ts_val)
+                # bug-035: inside a workflow node, USER_MESSAGE is the
+                # scheduler's invocation payload — not a real user
+                # turn. Rendering a full ``UserChatbox`` ("You: ...")
+                # was semantically wrong and cluttered the body. Skip
+                # it: the row's collapsed title already shows the node
+                # name; the agent's response + tool calls carry the
+                # useful narrative. Turn counter still increments in
+                # ``apply_sub_agent_event`` so the title reflects
+                # activity.
+                return
             elif event_type == EventType.AGENT_MESSAGE:
                 from cli.chat.widgets.assistant_prose import AssistantProse  # noqa: PLC0415
 
-                widget = AssistantProse(text or "")
+                widget = AssistantProse(text)
             elif event_type in (EventType.TOOL_CALLED, EventType.TOOL_RESULT):
                 from cli.chat.widgets.tool_call_block import ToolCallBlock  # noqa: PLC0415
 
                 tool_name = ""
-                args_str = ""
-                body = text or ""
                 with contextlib.suppress(Exception):
-                    data = getattr(event, "data", None) or {}
-                    if isinstance(data, dict):
-                        tool_name = str(data.get("tool_name") or "")
+                    tool_name = str(data.get("tool_name") or "")
+                args_str, body = self._extract_tool_call_parts(
+                    event_type, data, text,
+                )
                 widget = ToolCallBlock(
                     tool_name or "?",
                     args_str,
@@ -483,8 +649,12 @@ class WorkflowNodeRow(Collapsible):
             return
         if widget is None:
             return
+        # bug-035: mount inside the Collapsible's ``Contents`` slot so
+        # the outer collapse/expand actually controls visibility. See
+        # ``_mount_in_contents`` for the fallback chain used when the
+        # slot isn't yet resolvable (headless tests, pre-mount setup).
         with contextlib.suppress(Exception):
-            self.mount(widget)
+            self._mount_in_contents(widget)
         # spec-021: stamp the dedupe key AFTER attempting the mount so
         # a live-expanded arrival + later re-expand skips a duplicate
         # replay. We stamp even on a swallowed mount failure — the
@@ -492,6 +662,124 @@ class WorkflowNodeRow(Collapsible):
         # already failed once won't get further, so treat "attempted"
         # as "mounted" for dedupe purposes.
         self._mounted_event_ids.add(self._event_dedupe_key(event))
+
+    def _mount_in_contents(self, widget: Widget) -> None:
+        """bug-035: mount ``widget`` inside the Collapsible's Contents slot.
+
+        Textual's :class:`Collapsible.compose_add_child` only wires
+        the *context-manager* compose syntax to the internal
+        ``Contents`` container — a bare ``self.mount(child)`` on an
+        already-composed Collapsible mounts as a **sibling** of the
+        ``CollapsibleTitle`` and ``Contents``. Only ``Contents``
+        responds to the ``.-collapsed > Contents { display: none }``
+        CSS, so sibling mounts stay visible regardless of the row's
+        collapsed state — which is exactly the "collapse doesn't
+        control the content" bug the user reported.
+
+        Fallback chain: prefer the composed ``Contents`` when it can
+        be resolved; on failure (e.g. the row hasn't finished
+        mounting) fall through to ``self.mount(widget)`` so headless
+        tests + pre-mount setup still land somewhere. The buffer
+        replay on expand will re-attempt the correct slot when the
+        row is fully composed.
+        """
+        try:
+            contents = self.query_one(Collapsible.Contents)
+        except Exception:  # noqa: BLE001 — Contents not composed yet
+            contents = None
+        if contents is not None:
+            contents.mount(widget)
+            return
+        # Row not fully mounted yet — mount at the outer level. This
+        # is only reachable in headless test paths that never enter
+        # the Textual mount lifecycle.
+        self.mount(widget)
+
+    @staticmethod
+    def _extract_message_text(data: dict[str, Any]) -> str:
+        """bug-034: fallback chain for USER_MESSAGE / AGENT_MESSAGE bodies.
+
+        Priority order (per spec AC #3):
+          1. ``content.text`` — canonical session-event shape.
+          2. ``content.output`` / ``content.result`` — agent
+             structured outputs.
+          3. Readable dict rendering of ``content`` (bash-aware).
+          4. ``text_delta`` fallback for streaming shapes that
+             land here despite the drop-set filter.
+          5. Empty string when nothing usable is on the event.
+        """
+        content = data.get("content")
+        text = _extract_content_text(content)
+        if text:
+            return text
+        delta = data.get("text_delta")
+        if isinstance(delta, str) and delta:
+            return delta
+        return ""
+
+    @staticmethod
+    def _extract_tool_call_parts(
+        event_type: Any,
+        data: dict[str, Any],
+        text: str,
+    ) -> tuple[str, str]:
+        """bug-034: pull ``args_str`` + ``body`` for a ToolCallBlock.
+
+        TOOL_CALLED: ``data.arguments`` populates ``args_str``
+        (compact JSON, truncated for the title) so ``● bash(...)``
+        actually shows the invocation. TOOL_RESULT: ``data.result``
+        populates the body via the shared bash-aware helper so
+        multi-line stdout renders with real newlines.
+
+        The body falls back to the extracted message ``text`` when
+        no ``result`` is on the event, keeping any pre-existing
+        content-based rendering usable.
+        """
+        # Deferred import — schema alias only needed for the branch
+        # discrimination; avoids paying for it on every call.
+        from schemas.events import EventType  # noqa: PLC0415
+
+        args_str = ""
+        body = text
+
+        arguments = data.get("arguments")
+        if arguments is None:
+            arguments = data.get("args")
+        if isinstance(arguments, dict) and arguments:
+            with contextlib.suppress(TypeError, ValueError):
+                # Compact JSON keeps the title one-liner; the full
+                # dict lands in the body only for TOOL_CALLED where
+                # there's no result yet to occupy the space.
+                args_str = _truncate(
+                    json.dumps(arguments, default=repr, sort_keys=True),
+                    60,
+                )
+        elif isinstance(arguments, str) and arguments:
+            args_str = _truncate(arguments, 60)
+
+        if event_type == EventType.TOOL_RESULT:
+            result = data.get("result")
+            if isinstance(result, dict) and result:
+                body = _format_content_dict(result)
+            elif isinstance(result, str) and result:
+                body = _truncate(result, _BODY_MAX_CHARS)
+            elif not body:
+                # No result + no fallback text — surface ``output``
+                # if present (some tools ship the result under that
+                # key). Otherwise leave the body empty.
+                output = data.get("output")
+                if isinstance(output, str) and output:
+                    body = _truncate(output, _BODY_MAX_CHARS)
+                elif isinstance(output, dict) and output:
+                    body = _format_content_dict(output)
+        elif event_type == EventType.TOOL_CALLED and not body:
+            # TOOL_CALLED: pre-run, no result to show. Put the full
+            # arguments dict in the body so the expanded row has
+            # something to render beyond the title.
+            if isinstance(arguments, dict) and arguments:
+                body = _format_content_dict(arguments)
+
+        return args_str, body
 
 
 __all__ = ["WorkflowNodeRow"]

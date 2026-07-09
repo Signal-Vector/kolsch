@@ -371,14 +371,23 @@ class CardWidget(Collapsible):
         if final_status == "error" and error_message:
             self._footer.update(f"✗ error: {error_message}")
         if final_status == "success":
-            # Match ToolCallBlock's collapse cadence. Guard with
+            # Match ToolCallBlock's collapse cadence for concise
+            # kinds (text / progress / confirm). Guard with
             # `is_mounted` — headless tests may exercise `apply_close`
             # before mount (no timer scheduler yet).
-            try:
-                if self.is_mounted:
-                    self.set_timer(1.0, self._collapse_after_success)
-            except Exception:  # noqa: BLE001 — timer scheduling is best-effort
-                pass
+            #
+            # bug-035: workflow cards STAY expanded on success. The
+            # user's mental model is "the workflow finished, show me
+            # what it did" — auto-collapsing hides the whole node
+            # timeline behind a title that says only "✓". For other
+            # card kinds the timeline is trivial (one line of text /
+            # a bar) and auto-collapse keeps the transcript tidy.
+            if self.kind != "workflow":
+                try:
+                    if self.is_mounted:
+                        self.set_timer(1.0, self._collapse_after_success)
+                except Exception:  # noqa: BLE001 — timer scheduling is best-effort
+                    pass
 
     # ------------------------------------------------------------------
     # Additional `CardWidget`-only surface
