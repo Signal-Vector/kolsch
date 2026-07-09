@@ -1387,11 +1387,11 @@ class WorkflowsImpl(AbstractWorkflows):
         into a private `_registry` attribute and hurt readability.
         """
         from cli._workflow_runtime import build_workflow_executor  # noqa: PLC0415
-        from workflows.parser import parse_workflow_yaml  # noqa: PLC0415
+        from workflows.parser import load_workflow  # noqa: PLC0415
 
         catalog = self._runtime.asset_management.catalog()
         entry = catalog.get(ref)
-        workflow = parse_workflow_yaml(entry.path.read_text(encoding="utf-8"))
+        workflow = load_workflow(entry.path)
 
         run = self._run_store.create(
             workflow_ref=ref,
