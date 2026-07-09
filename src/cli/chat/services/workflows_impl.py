@@ -60,6 +60,7 @@ from schemas.identifiers import EventId
 from schemas.wire_kinds import (
     WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED,
     WIRE_WORKFLOW_NODE_AWAITING_APPROVAL,
+    WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT,
     WIRE_WORKFLOW_PROGRESS,
 )
 from tools.services.workflows import (
@@ -118,6 +119,28 @@ end of the file so a huge log never blocks a single `status()`
 call."""
 
 
+_SUB_AGENT_EVENT_TYPES_DROP: frozenset[str] = frozenset(
+    {
+        # spec-020 §Open questions — drop noise. `model.request` is
+        # structurally redundant with the follow-up `model.response`
+        # (the request carries the outgoing prompt bytes; the
+        # response carries the incoming completion + tool calls the
+        # UI actually renders). `model.streaming_token` is very high
+        # frequency (one per delta) and dominates the queue budget
+        # without offering per-chunk UI value in the current
+        # `WorkflowNodeRow` — the closing `model.response` /
+        # `agent.message` carries the full text. Both filters are
+        # v1-safe: the child session's JSONL still carries these
+        # events unchanged.
+        "model.request",
+        "model.streaming_token",
+    }
+)
+"""Session-scoped event types dropped BEFORE bridge translation.
+Everything else (`tool.called`, `tool.result`, `agent.message`,
+`user.message`, `model.response`, ...) is forwarded verbatim."""
+
+
 # ---------------------------------------------------------------------------
 # spec-017: nested-detection contextvar.
 # ---------------------------------------------------------------------------
@@ -156,6 +179,25 @@ class _StopSentinel:
 
 
 _STOP_SENTINEL = _StopSentinel()
+
+
+@dataclass(frozen=True)
+class _SubAgentBridgeItem:
+    """spec-020 bridge envelope for a session-scoped sub-agent `Event`.
+
+    The executor's `sub_agent_event_observer` enqueues one of these
+    per event yielded by `AgentEngine.execute_stream(...)` inside an
+    `AgentRunner`. The bridge drain translates each into a
+    `kolsch.workflow.node.sub_agent_event` UI event keyed on the
+    owning `(node_name, invocation_id)` so the receiver
+    (`WorkflowRenderer.apply_event`) can route it into the matching
+    `WorkflowNodeRow` via bug-033's `(trace_id, invocation_id)`
+    composite map.
+    """
+
+    node_name: str
+    invocation_id: str
+    event: Event
 
 
 def _new_run_id() -> WorkflowRunId:
@@ -254,13 +296,17 @@ class WorkflowRunRecord:
 # `_default_executor_factory` below); tests inject a fake so the
 # executor's full dependency graph (Workflow, RunnerRegistry,
 # catalog) isn't required to exercise the queue/bridge/aclose paths.
+#
+# spec-020: the factory now accepts an optional
+# `sub_agent_event_observer` — the executor calls it per session-
+# scoped `Event` yielded by `AgentEngine.execute_stream(...)` inside
+# an `AgentRunner`. Existing fake factories (test doubles) that only
+# accept the 4-arg shape are supported via a compatibility shim in
+# `_run_one_workflow` (introspect the callable's arity and call the
+# appropriate signature) so pre-spec-020 test fixtures don't need to
+# be rewritten.
 ExecutorFactory = Callable[
-    [
-        str,                       # ref
-        dict[str, Any],            # inputs
-        Callable[[WorkflowEvent], None],  # event_observer
-        "_CancelToken",            # cancel_token
-    ],
+    ...,
     "tuple[IterativeExecutor, RunDirectory]",
 ]
 
@@ -816,14 +862,58 @@ class WorkflowsImpl(AbstractWorkflows):
             except asyncio.QueueFull:
                 record.dropped_events += 1
 
+        # spec-020: sub-agent event forwarder. The executor invokes
+        # this per session-scoped `Event` yielded by
+        # `AgentEngine.execute_stream(...)` inside an `AgentRunner`.
+        # We wrap each in a `_SubAgentBridgeItem` so the drain can
+        # distinguish it from a `WorkflowEvent`. The observer
+        # terminates naturally when the workflow node reaches
+        # terminal — `AgentEngine.execute_stream(...)` closes its
+        # iterator, `AgentRunner.run` returns, and the runner never
+        # calls the forwarder again. No explicit unwire needed
+        # (matches the `_event_observer` discipline; the bridge
+        # drain shuts down on the `_STOP_SENTINEL` posted by
+        # `_finalize_terminal`).
+        def _sub_agent_observer(
+            node_name: str, invocation_id: str, event: Event,
+        ) -> None:
+            try:
+                bridge_queue.put_nowait(
+                    _SubAgentBridgeItem(
+                        node_name=node_name,
+                        invocation_id=invocation_id,
+                        event=event,
+                    ),
+                )
+            except asyncio.QueueFull:
+                record.dropped_events += 1
+
         try:
             try:
-                executor, run_dir = self._executor_factory(
-                    spec.ref,
-                    spec.inputs,
-                    _observer,
-                    cancel_token,
-                )
+                # spec-020: pass the sub-agent observer as a fifth
+                # positional argument. Pre-spec-020 test fakes with
+                # the 4-arg signature raise `TypeError`; catch that
+                # and fall back to the 4-arg shape so those tests
+                # keep passing (they don't exercise sub-agent
+                # forwarding). `_default_executor_factory` accepts
+                # the 5-arg form; `tests/.../fakes/workflow_executor.py`
+                # is being extended in the same commit to accept it
+                # too via a keyword-with-default.
+                try:
+                    executor, run_dir = self._executor_factory(
+                        spec.ref,
+                        spec.inputs,
+                        _observer,
+                        cancel_token,
+                        _sub_agent_observer,
+                    )
+                except TypeError:
+                    executor, run_dir = self._executor_factory(
+                        spec.ref,
+                        spec.inputs,
+                        _observer,
+                        cancel_token,
+                    )
                 # r-review r1 AC #9: populate `run_dir` after executor
                 # construction so `cancel()` can write the file-based flag
                 # without a None-deref.
@@ -982,6 +1072,56 @@ class WorkflowsImpl(AbstractWorkflows):
         return "error"
 
     # ------------------------------------------------------------------
+    # spec-020: sub-agent event bridge translation.
+    # ------------------------------------------------------------------
+
+    async def _emit_sub_agent_ui_event(
+        self,
+        spec: "WorkflowRunSpec",
+        item: _SubAgentBridgeItem,
+    ) -> None:
+        """Translate a `_SubAgentBridgeItem` into a UI event.
+
+        Emits a `kolsch.workflow.node.sub_agent_event` payload matching
+        the envelope shape from spec-020:
+
+            {
+              "run_id": str,          # workflow run id
+              "node_name": str,       # owning workflow node
+              "invocation_id": str,   # per-node discriminant
+              "trace_id": str,        # parity with WorkflowEvent
+              "event_type": str,      # e.g. "tool.called"
+              "event_id": str,        # original Event.event_id
+              "payload": dict,        # original Event.data
+            }
+
+        Noise-filter: `model.request` events are structurally
+        redundant with the follow-up `model.response` (they carry
+        the outgoing prompt; the response carries the incoming
+        completion + tool calls the UI actually cares about) so we
+        drop them here rather than paying the round-trip cost. All
+        other event types are forwarded for v1 — filter later if
+        users complain about noise (spec-020 §Open questions).
+        """
+        event = item.event
+        event_type_value = str(event.type.value)
+        if event_type_value in _SUB_AGENT_EVENT_TYPES_DROP:
+            return
+        payload: dict[str, Any] = {
+            "run_id": str(spec.run_id),
+            "node_name": item.node_name,
+            "invocation_id": item.invocation_id,
+            "trace_id": str(event.trace_id) if event.trace_id else "",
+            "event_type": event_type_value,
+            "event_id": str(event.event_id),
+            "payload": dict(event.data or {}),
+        }
+        await self._emit_ui_event(
+            WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT,
+            payload,
+        )
+
+    # ------------------------------------------------------------------
     # Bridge drain (per-run).
     # ------------------------------------------------------------------
 
@@ -1008,6 +1148,14 @@ class WorkflowsImpl(AbstractWorkflows):
             item = await bridge_queue.get()
             if isinstance(item, _StopSentinel):
                 return
+            if isinstance(item, _SubAgentBridgeItem):
+                # spec-020: session-scoped sub-agent event. Translate
+                # to a `kolsch.workflow.node.sub_agent_event` UI event
+                # and short-circuit — the WorkflowEvent path below
+                # doesn't apply (no `.kind` / no counters / no
+                # terminal transitions to trigger).
+                await self._emit_sub_agent_ui_event(spec, item)
+                continue
             event: WorkflowEvent = item
 
             # Update the record's live-view fields.
@@ -1496,6 +1644,9 @@ class WorkflowsImpl(AbstractWorkflows):
         inputs: dict[str, Any],
         event_observer: Callable[[WorkflowEvent], None],
         cancel_token: "_CancelToken",
+        sub_agent_event_observer: (
+            Callable[[str, str, Event], None] | None
+        ) = None,
     ) -> "tuple[IterativeExecutor, RunDirectory]":
         """Build a real `IterativeExecutor` via the shared helper.
 
@@ -1581,6 +1732,7 @@ class WorkflowsImpl(AbstractWorkflows):
             store=self._run_store,
             event_observer=event_observer,
             cancel_token=cancel_token,
+            sub_agent_event_observer=sub_agent_event_observer,
         )
         # Silence unused-import lint in factory-simplified path.
         _ = catalog

@@ -39,6 +39,7 @@ if TYPE_CHECKING:
 
     from engine.context import CancelToken
     from platform_runtime import PlatformRuntime
+    from schemas.events import Event
     from workflows.events import WorkflowEvent
     from workflows.parser import Workflow
     from workflows.run import WorkflowRun
@@ -57,6 +58,9 @@ def build_workflow_executor(
     store: WorkflowRunStore,
     event_observer: Callable[[WorkflowEvent], None] | None = None,
     cancel_token: CancelToken | None = None,
+    sub_agent_event_observer: (
+        Callable[[str, str, Event], None] | None
+    ) = None,
 ) -> IterativeExecutor:
     """Construct a fully-wired `IterativeExecutor`.
 
@@ -94,6 +98,16 @@ def build_workflow_executor(
             mid-run cancel from `WorkflowsImpl.cancel` unwinds the
             executor's LLM streams. Default `None` for the headless
             CLI (no cancellation surface).
+        sub_agent_event_observer: spec-020 — optional synchronous
+            callable the executor invokes once per session-scoped
+            `Event` yielded by `AgentEngine.execute_stream(...)`
+            inside an `AgentRunner`. When provided, threaded onto
+            the executor so the chat runtime's bridge drain
+            (`WorkflowsImpl._drain_workflow_bridge`) translates each
+            into a `kolsch.workflow.node.sub_agent_event` UI event
+            keyed on the owning `(trace_id, invocation_id)`.
+            Default `None` preserves the headless-CLI path (which
+            reads the child session's JSONL after termination).
     """
     catalog = runtime.asset_management.catalog()
 
@@ -155,4 +169,5 @@ def build_workflow_executor(
         catalog=catalog,
         event_observer=event_observer,
         cancel_token=cancel_token,
+        sub_agent_event_observer=sub_agent_event_observer,
     )

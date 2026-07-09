@@ -41,8 +41,9 @@ from __future__ import annotations
 
 import contextlib
 import logging
+from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from textual.app import ComposeResult
 from textual.containers import Vertical
@@ -50,7 +51,11 @@ from textual.reactive import reactive
 from textual.widgets import Static
 
 from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
+from schemas.wire_kinds import WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT
 from workflows.events import WorkflowEventKind
+
+if TYPE_CHECKING:
+    from schemas.events import EventType as _EventType
 
 
 _LOGGER = logging.getLogger(__name__)
@@ -67,6 +72,13 @@ _WIRE_KIND_AWAITING_APPROVAL = "kolsch.workflow.node.awaiting_approval"
 _WIRE_KIND_APPROVAL_RESOLVED = "kolsch.workflow.node.approval_resolved"
 """spec-014 UI event kind — `WorkflowsImpl.emit_approval_resolved`."""
 
+_WIRE_KIND_SUB_AGENT_EVENT = WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT
+"""spec-020 UI event kind — `WorkflowsImpl._emit_sub_agent_ui_event`.
+Envelope carries `{run_id, node_name, invocation_id, trace_id,
+event_type, event_id, payload}`; the renderer reconstructs a
+lightweight event object and hands it to
+`WorkflowNodeRow.apply_sub_agent_event`."""
+
 
 _TERMINAL_RUN_KINDS = frozenset({
     WorkflowEventKind.RUN_COMPLETED.value,
@@ -75,6 +87,31 @@ _TERMINAL_RUN_KINDS = frozenset({
     WorkflowEventKind.RUN_TIMED_OUT.value,
 })
 """The four terminal run kinds the footer summarises."""
+
+
+@dataclass(frozen=True)
+class _ReconstructedSubAgentEvent:
+    """spec-020 event stub for `WorkflowNodeRow.apply_sub_agent_event`.
+
+    The row's mount hook (`_mount_sub_agent_widget`) only reads three
+    attributes off the passed event: `type` (compared against
+    `EventType` members), `data` (a dict), and `created_at` (a
+    datetime, used only by `UserChatbox`). We reconstruct a lightweight
+    duck-typed object rather than paying the cost of building a full
+    pydantic `Event` per session-scoped emit — the wire envelope
+    doesn't carry the `session_id` / `thread_id` / `actor` /
+    `event_id` fields the pydantic model requires, and none of them
+    are load-bearing at the widget layer.
+
+    `trace_id` is carried for symmetry with the real `Event` shape;
+    it's not currently read by any consumer downstream of this
+    dispatch, but future spec-021 (backfill) may want it.
+    """
+
+    type: "_EventType"
+    data: dict[str, Any]
+    created_at: datetime
+    trace_id: str
 
 
 class WorkflowProgressHeader(Static):
@@ -380,6 +417,12 @@ class WorkflowRenderer(Vertical):
         if kind == _WIRE_KIND_APPROVAL_RESOLVED:
             self._on_approval_resolved(payload)
             return
+        # spec-020: sub-agent event forwarder. Routes into the
+        # matching `WorkflowNodeRow` via bug-033's
+        # `(trace_id, invocation_id)` composite map.
+        if kind == _WIRE_KIND_SUB_AGENT_EVENT:
+            self._on_sub_agent_event(payload)
+            return
         if kind != _WIRE_KIND:
             return
 
@@ -576,6 +619,83 @@ class WorkflowRenderer(Vertical):
         if row is None:
             return
         row.set_state("paused")
+
+    def _on_sub_agent_event(self, payload: dict[str, Any]) -> None:
+        """Route a `kolsch.workflow.node.sub_agent_event` to a row.
+
+        spec-020. Reads `trace_id` + `invocation_id` off the envelope,
+        looks up the target `WorkflowNodeRow` in the adapter's
+        `_live_nodes_by_trace_and_invocation[(trace_id, invocation_id)]`
+        map (bug-033 composite key), reconstructs a lightweight event
+        object with the surface `WorkflowNodeRow.apply_sub_agent_event`
+        + `_mount_sub_agent_widget` consume (`type`, `data`,
+        `created_at`, `trace_id`), and dispatches.
+
+        Malformed / stale payloads (missing trace_id, missing
+        invocation_id, invalid event_type, no matching row) are
+        silently dropped — the whole spec-020 stream is best-effort,
+        matching the existing `_route_to_workflow_node` shape on
+        `EventAdapter`.
+        """
+        trace_id = payload.get("trace_id")
+        invocation_id = payload.get("invocation_id")
+        event_type_raw = payload.get("event_type")
+        if (
+            not isinstance(trace_id, str)
+            or not isinstance(invocation_id, str)
+            or not isinstance(event_type_raw, str)
+            or not trace_id
+        ):
+            return
+        # Resolve the target row. Prefer the adapter's routing map
+        # (populated on NODE_STARTED via `_register_node_with_adapter`);
+        # fall back to the local `_node_rows` when the adapter isn't
+        # wired (headless tests exercise the renderer directly).
+        row: WorkflowNodeRow | None = None
+        if self._adapter is not None:
+            live_map = getattr(
+                self._adapter, "_live_nodes_by_trace_and_invocation", None,
+            )
+            if isinstance(live_map, dict):
+                candidate = live_map.get((trace_id, invocation_id))
+                if isinstance(candidate, WorkflowNodeRow):
+                    row = candidate
+        if row is None:
+            # Adapter-less fallback: the node name isn't on the
+            # envelope, but bug-033's routing map keys on
+            # `(trace_id, invocation_id)` — scan the local rows and
+            # match by invocation. In practice this only fires from
+            # the adapter-less unit test harness.
+            node_name = payload.get("node_name")
+            if isinstance(node_name, str):
+                row = self._node_rows.get(node_name)
+        if row is None:
+            return
+        # Reconstruct a minimal event object with the surface the
+        # row's `_mount_sub_agent_widget` reads: `type` (compared to
+        # `EventType.*`), `data` (dict), `created_at`. We DON'T
+        # rebuild a full pydantic `Event` — the envelope-level
+        # `event_id` / `session_id` / `thread_id` / `actor` are not
+        # consumed by any downstream widget, and running Pydantic
+        # validation on every sub-agent event would tax the drain
+        # for zero UI benefit. `SimpleNamespace` matches the duck-
+        # typed surface exactly.
+        try:
+            from schemas.events import EventType  # noqa: PLC0415
+            event_type = EventType(event_type_raw)
+        except (ValueError, ImportError):
+            # Unknown event type — nothing to render.
+            return
+        raw_data = payload.get("payload")
+        data = dict(raw_data) if isinstance(raw_data, dict) else {}
+        reconstructed = _ReconstructedSubAgentEvent(
+            type=event_type,
+            data=data,
+            created_at=datetime.now(tz=UTC),
+            trace_id=trace_id,
+        )
+        with contextlib.suppress(Exception):
+            row.apply_sub_agent_event(reconstructed)
 
     def _on_approval_resolved(self, payload: dict[str, Any]) -> None:
         """Transition the matching row back to `running` (glyph `▸`).

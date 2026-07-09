@@ -2,8 +2,8 @@
 
 Pins:
 
-- Each of the 12 platform constants equals its canonical wire string.
-- :data:`ALL_PLATFORM_KINDS` is exactly the 12-member frozenset.
+- Each of the 15 platform constants equals its canonical wire string.
+- :data:`ALL_PLATFORM_KINDS` is exactly the 15-member frozenset.
 - :func:`is_valid_kind` returns True / False across the 7 edge cases
   named in spec-002 AC #8 (plus a bundle-prefixed pass case).
 """
@@ -25,6 +25,7 @@ from schemas.wire_kinds import (
     WIRE_PROMPT_REQUESTED,
     WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED,
     WIRE_WORKFLOW_NODE_AWAITING_APPROVAL,
+    WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT,
     WIRE_WORKFLOW_PROGRESS,
     is_valid_kind,
 )
@@ -56,11 +57,20 @@ def test_workflow_ui_constant_has_canonical_value() -> None:
     assert WIRE_WORKFLOW_PROGRESS == "kolsch.workflow.progress"
 
 
-def test_all_platform_kinds_has_exactly_fourteen_members() -> None:
-    """The aggregate frozenset is exactly the 14 platform constants —
+def test_workflow_node_sub_agent_event_has_canonical_value() -> None:
+    """spec-020 — the workflow → sub-agent forwarder wire kind."""
+    assert (
+        WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT
+        == "kolsch.workflow.node.sub_agent_event"
+    )
+
+
+def test_all_platform_kinds_has_exactly_fifteen_members() -> None:
+    """The aggregate frozenset is exactly the 15 platform constants —
     no duplicates, no extras, no drift. (spec-014 added the two
-    workflow-node approval-lifecycle kinds.)"""
-    assert len(ALL_PLATFORM_KINDS) == 14
+    workflow-node approval-lifecycle kinds; spec-020 added the
+    sub-agent event forwarder kind.)"""
+    assert len(ALL_PLATFORM_KINDS) == 15
     assert ALL_PLATFORM_KINDS == frozenset(
         {
             WIRE_CARD_OPENED,
@@ -77,6 +87,7 @@ def test_all_platform_kinds_has_exactly_fourteen_members() -> None:
             WIRE_WORKFLOW_PROGRESS,
             WIRE_WORKFLOW_NODE_AWAITING_APPROVAL,
             WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED,
+            WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT,
         }
     )
 

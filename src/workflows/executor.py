@@ -69,6 +69,7 @@ from workflows.run import WorkflowRunStatus
 
 if TYPE_CHECKING:
     from assets.catalog import AssetCatalog
+    from schemas.events import Event
     from schemas.identifiers import EventId
     from workflows.events import WorkflowEvent
     from workflows.parser import EdgeDef, Workflow
@@ -283,6 +284,9 @@ class IterativeExecutor:
         _call_chain: tuple[str, ...] = (),
         event_observer: Callable[[WorkflowEvent], None] | None = None,
         cancel_token: CancelToken | None = None,
+        sub_agent_event_observer: (
+            Callable[[str, str, "Event"], None] | None
+        ) = None,
     ) -> None:
         # Nested-executor depth cap (shared with `extends:`; same
         # error class, same limit). The check at CONSTRUCTION (not at
@@ -430,6 +434,22 @@ class IterativeExecutor:
         # complementary — this token targets mid-node LLM streams.
         self._event_observer = event_observer
         self._cancel_token = cancel_token
+        # spec-020 plumbing.
+        #
+        # `_sub_agent_event_observer` is a synchronous callable the
+        # executor invokes once per session-scoped `Event` yielded from
+        # `AgentEngine.execute_stream(...)` inside an `AgentRunner`
+        # (or any other runner that spawns a sub-agent stream). The
+        # callable receives the owning `(node_name, invocation_id,
+        # event)` tuple so the bridge on the other end can translate
+        # each into a `kolsch.workflow.node.sub_agent_event` UI event
+        # keyed on bug-033's `(trace_id, invocation_id)` map.
+        #
+        # Observer exceptions are caught and logged — a raising
+        # observer must NOT propagate up into the executor run loop
+        # (same discipline as `_event_observer`; a bad UI-side
+        # translator can't kill the workflow).
+        self._sub_agent_event_observer = sub_agent_event_observer
 
     # ------------------------------------------------------------------
     # spec-011: emit + observer seam.
@@ -459,6 +479,43 @@ class IterativeExecutor:
                     "event_observer raised on event %s", event.kind,
                 )
         return event_id
+
+    def _emit_sub_agent_event(
+        self,
+        node_name: str,
+        invocation_id: str,
+        event: "Event",
+    ) -> None:
+        """Fan a session-scoped sub-agent `Event` to the observer.
+
+        spec-020 sibling to
+        [`_emit_event`][workflows.executor.IterativeExecutor._emit_event].
+        Unlike its sibling, this method DOES NOT touch the workflow-
+        run JSONL — session-scoped events already land on their own
+        child-session JSONL from the engine's normal emit path. This
+        seam exists purely to fan the same event to a UI-side
+        translator (`WorkflowsImpl._drain_workflow_bridge` → the
+        `kolsch.workflow.node.sub_agent_event` wire kind) keyed on
+        the owning `(node_name, invocation_id)` so the receiver can
+        route into the matching `WorkflowNodeRow` via bug-033's
+        composite map.
+
+        No-ops when `sub_agent_event_observer` is unset (the CLI
+        headless path never wires one). Observer exceptions are
+        caught + logged, matching the `_event_observer` discipline.
+        """
+        if self._sub_agent_event_observer is None:
+            return
+        try:
+            self._sub_agent_event_observer(node_name, invocation_id, event)
+        except Exception:  # noqa: BLE001 — observer is untrusted
+            logger.exception(
+                "sub_agent_event_observer raised on event %s "
+                "(node=%s, invocation_id=%s)",
+                getattr(event, "type", "<unknown>"),
+                node_name,
+                invocation_id,
+            )
 
     # ------------------------------------------------------------------
     # Public entry point.
@@ -1347,6 +1404,7 @@ class IterativeExecutor:
                 parent_event_id=self._invocation_last_event_id.get(inv_id, started_id),
                 is_resume_mode=is_resume_mode,
                 recorded_child_run_id=recorded_child,
+                node_name=node_name,
             )
             try:
                 # Strict-mode bind validation against the receiver's
@@ -1827,6 +1885,7 @@ class IterativeExecutor:
             parent_event_id=started_id,
             is_resume_mode=False,
             recorded_child_run_id=None,
+            node_name=node_name,
         )
         return _PendingNode(
             node_name=node_name,
@@ -2484,6 +2543,7 @@ class IterativeExecutor:
         parent_event_id: Any = None,
         is_resume_mode: bool = False,
         recorded_child_run_id: WorkflowRunId | None = None,
+        node_name: str | None = None,
     ) -> NodeContext:
         """Mint a per-invocation [`NodeContext`][workflows.context.NodeContext].
 
@@ -2495,6 +2555,17 @@ class IterativeExecutor:
         threads through so the agent runner can stamp the spawned
         session's `spawned_by` payload with the originating
         `workflow.node.started` id.
+
+        spec-020: when `node_name` is provided AND the executor was
+        wired with a `sub_agent_event_observer`, the context's
+        `on_sub_agent_event_callback` fans each session-scoped
+        `Event` yielded by `AgentEngine.execute_stream(...)` to the
+        observer with the owning `(node_name, invocation_id)` so the
+        bridge on the other end can route the payload into the
+        matching `WorkflowNodeRow`. When `node_name` is unset (older
+        call sites that haven't been threaded through) the callback
+        is a no-op — every sub-agent event still lands on the child
+        session's JSONL via the engine's normal emit path.
         """
         type_ref = _node_type_ref(node_def)
         bundle = (
@@ -2556,6 +2627,25 @@ class IterativeExecutor:
             self._invocation_last_event_id[inv_id] = new_id
             return new_id
 
+        # spec-020: the sub-agent event forwarder seam. `AgentRunner`
+        # calls this per-event as it iterates
+        # `AgentEngine.execute_stream(...)`. We bind `node_name` +
+        # `inv_id` into the closure so the observer always sees the
+        # owning `(node_name, invocation_id)` tuple. When `node_name`
+        # is unset (older call site) OR no observer is wired, the
+        # callback still runs but `_emit_sub_agent_event` short-
+        # circuits — a wired runner can call it unconditionally.
+        _node_name_for_sub_agent = node_name
+
+        def _on_sub_agent_event(event: "Event") -> None:
+            if _node_name_for_sub_agent is None:
+                return
+            self._emit_sub_agent_event(
+                _node_name_for_sub_agent,
+                str(inv_id),
+                event,
+            )
+
         return NodeContext(
             workflow_run_id=str(run_id),
             invocation_id=str(inv_id),
@@ -2593,6 +2683,11 @@ class IterativeExecutor:
             # exchange-scoped token. `None` when the executor was
             # constructed without a cancel token.
             cancel_token=self._cancel_token,
+            # spec-020: the sub-agent event forwarder seam. Every
+            # session-scoped event `AgentEngine.execute_stream(...)`
+            # yields lands here; the closure fans to the executor's
+            # `_sub_agent_event_observer` (see `_emit_sub_agent_event`).
+            on_sub_agent_event_callback=_on_sub_agent_event,
         )
 
     # ------------------------------------------------------------------

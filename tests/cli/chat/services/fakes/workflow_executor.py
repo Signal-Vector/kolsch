@@ -107,8 +107,10 @@ def install_fake_executor_factory(
         inputs: dict[str, Any],
         observer: Callable[[WorkflowEvent], None],
         cancel_token: Any,
+        sub_agent_event_observer: Any = None,
     ) -> tuple[FakeExecutor, RunDirectory]:
         _ = inputs
+        _ = sub_agent_event_observer  # spec-020 — fake doesn't fire
         spec = programming[ref]
         run_dir = RunDirectory(root=runs_root / f"wrk_{_uuid.uuid4()}")
         run_dir.root.mkdir(parents=True, exist_ok=True)

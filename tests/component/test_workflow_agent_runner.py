@@ -61,10 +61,19 @@ _AGENT_REF = "demo/agents/classifier"
 class _FakeEngine:
     """Minimal :class:`AgentEngine` stand-in.
 
-    The runner consumes only ``execute(config, context, *, inputs)``;
-    fakes can record the call shape without standing up the full
-    engine wiring. Tests that need to exercise real engine integration
-    end-to-end live in Step 4's ``tests/component/test_workflow_agent_runner_e2e.py``.
+    The runner consumes ``execute_stream(config, context, *, inputs)``
+    (spec-020); fakes can record the call shape without standing up
+    the full engine wiring. Tests that need to exercise real engine
+    integration end-to-end live in Step 4's
+    ``tests/component/test_workflow_agent_runner_e2e.py``.
+
+    spec-020: the runner switched from ``execute`` to
+    ``execute_stream``. This fake now yields the single
+    ``agent.message`` event (matching the pre-spec-020 return shape)
+    so existing tests continue to observe the same runner-return
+    behaviour. On a Fatal-path test (``raise_on_next``), we still
+    raise (mirroring ``AgentEngine.execute``'s legacy-Fatal path); the
+    runner catches ``AgentExecutionError`` in a dedicated ``except``.
     """
 
     def __init__(self, *, response_content: dict[str, Any] | None = None) -> None:
@@ -87,6 +96,31 @@ class _FakeEngine:
             self.raise_on_next = None
             raise exc
         return _make_agent_message_event(
+            session_id=SessionId(f"ses_{uuid4()}"),
+            thread_id=context.thread_id,
+            content=self.response_content,
+        )
+
+    async def execute_stream(
+        self,
+        config: ResolvedAgentConfig,
+        context: ExecutionContext,
+        *,
+        inputs: dict[str, Any] | None = None,
+    ) -> Any:
+        """Yield the single ``agent.message`` — mirrors ``execute``.
+
+        A real engine yields intermediate ``tool.called`` /
+        ``model.response`` events too; this fake stays minimal so
+        pre-spec-020 assertion shapes (single ``agent.message``
+        returned) don't need to change.
+        """
+        self.calls.append((config, context, dict(inputs or {})))
+        if self.raise_on_next is not None:
+            exc = self.raise_on_next
+            self.raise_on_next = None
+            raise exc
+        yield _make_agent_message_event(
             session_id=SessionId(f"ses_{uuid4()}"),
             thread_id=context.thread_id,
             content=self.response_content,

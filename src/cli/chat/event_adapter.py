@@ -44,6 +44,7 @@ from schemas.wire_kinds import (
     WIRE_PROMPT_REQUESTED,
     WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED,
     WIRE_WORKFLOW_NODE_AWAITING_APPROVAL,
+    WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT,
     WIRE_WORKFLOW_PROGRESS,
 )
 
@@ -1278,6 +1279,15 @@ class EventAdapter:
         if kind == WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED:
             self._handle_workflow_node_approval_resolved(event, payload)
             return
+        if kind == WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT:
+            # spec-020: fan the sub-agent event to every tracked
+            # workflow renderer. Each renderer filters on `run_id`
+            # before routing into the matching `WorkflowNodeRow` via
+            # bug-033's `(trace_id, invocation_id)` map (the adapter
+            # owns the map; the renderer reads it via
+            # `self._adapter._live_nodes_by_trace_and_invocation`).
+            self._handle_workflow_node_sub_agent_event(event, payload)
+            return
         # Unknown or workflow-UI kinds land here as silent no-ops
         # until their service specs wire the routing.
 
@@ -2269,6 +2279,46 @@ class EventAdapter:
             # `set_parent_ref` no-ops when the value is unchanged.
             if isinstance(target_run_id, str):
                 self._refresh_workflow_parent_ref(body, target_run_id)
+            data_view = _UIEventDataView(event, payload)
+            with contextlib.suppress(Exception):
+                body.apply_event(data_view)
+
+    def _handle_workflow_node_sub_agent_event(
+        self,
+        event: Event,
+        payload: dict[str, Any],
+    ) -> None:
+        """Route a `kolsch.workflow.node.sub_agent_event` to the renderer.
+
+        spec-020. Same cardinality-preserving fan-out as
+        `_handle_workflow_progress`: forward the envelope to every
+        tracked `WorkflowRenderer`, filtering on `run_id` when the
+        renderer has anchored. The renderer's `apply_event`
+        `_on_sub_agent_event` branch looks up the target
+        `WorkflowNodeRow` via bug-033's
+        `(trace_id, invocation_id)` composite map and dispatches
+        `row.apply_sub_agent_event(reconstructed_event)`.
+        """
+        _ = event
+        target_run_id = payload.get("run_id")
+        for entry in self._card_widgets.values():
+            body = getattr(entry, "_body", None)
+            if body is None:
+                continue
+            if not hasattr(body, "_node_rows"):
+                continue
+            # Register the adapter on first sight so the row's
+            # `(trace_id, invocation_id)` routing map is populated.
+            # Idempotent — `register_adapter` accepts repeat calls.
+            with contextlib.suppress(Exception):
+                body.register_adapter(self)
+            renderer_run_id = getattr(body, "_run_id", None)
+            if (
+                renderer_run_id is not None
+                and target_run_id is not None
+                and renderer_run_id != target_run_id
+            ):
+                continue
             data_view = _UIEventDataView(event, payload)
             with contextlib.suppress(Exception):
                 body.apply_event(data_view)

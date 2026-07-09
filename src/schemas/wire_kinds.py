@@ -44,6 +44,16 @@ WIRE_WORKFLOW_PROGRESS = "kolsch.workflow.progress"
 WIRE_WORKFLOW_NODE_AWAITING_APPROVAL = "kolsch.workflow.node.awaiting_approval"
 WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED = "kolsch.workflow.node.approval_resolved"
 
+# spec-020: sub-agent event forwarder — tees the agent engine's per-
+# event stream (from the child session spawned by a workflow's agent
+# node) into UI events routed to the matching `WorkflowNodeRow` via
+# bug-033's `(trace_id, invocation_id)` map. Envelope:
+#     {run_id, node_name, invocation_id, trace_id,
+#      event_type, event_id, payload}
+# where `event_type` is the original session `Event.type` value and
+# `payload` is the original `Event.data`.
+WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT = "kolsch.workflow.node.sub_agent_event"
+
 
 # --- Aggregate set — for validator + tests ----------------------------
 ALL_PLATFORM_KINDS: frozenset[str] = frozenset(
@@ -62,6 +72,7 @@ ALL_PLATFORM_KINDS: frozenset[str] = frozenset(
         WIRE_WORKFLOW_PROGRESS,
         WIRE_WORKFLOW_NODE_AWAITING_APPROVAL,
         WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED,
+        WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT,
     }
 )
 
@@ -100,6 +111,7 @@ __all__ = [
     "WIRE_PROMPT_REQUESTED",
     "WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED",
     "WIRE_WORKFLOW_NODE_AWAITING_APPROVAL",
+    "WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT",
     "WIRE_WORKFLOW_PROGRESS",
     "is_valid_kind",
 ]

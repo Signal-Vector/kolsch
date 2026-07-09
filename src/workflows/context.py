@@ -26,6 +26,7 @@ from typing import TYPE_CHECKING, Any
 if TYPE_CHECKING:
     from engine.context import CancelToken
     from schemas import EventId, SessionId
+    from schemas.events import Event
     from workflows.events import WorkflowEvent
     from workflows.ids import InvocationId, TraceId, WorkflowRunId
 
@@ -176,6 +177,20 @@ class NodeContext:
     # tests). Frozen dataclass — the executor plumbs this through
     # `_build_ctx` at NodeContext construction; no runtime mutation.
     cancel_token: CancelToken | None = None
+    # spec-020: the sub-agent event forwarder seam. When set, the
+    # `AgentRunner` (or any other runner that spawns a sub-agent) calls
+    # this per-event as it iterates
+    # `AgentEngine.execute_stream(...)` so each session-scoped
+    # `tool.called` / `agent.message` / etc. reaches the executor's
+    # observer channel and, eventually, the `WorkflowNodeRow` that
+    # owns this invocation. `None` outside the executor's worklist
+    # (e.g., `for_test`); production contexts (built by the executor's
+    # `_build_ctx`) always set it. The runner MUST NOT raise on a
+    # bound callback that itself raises — best-effort like the other
+    # NodeContext seams.
+    on_sub_agent_event_callback: Callable[[Event], None] | None = field(
+        default=None, repr=False,
+    )
 
     def derive_for_iteration(
         self,
