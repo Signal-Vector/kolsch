@@ -9,6 +9,7 @@ contract.
 
 from __future__ import annotations
 
+import os
 from typing import TYPE_CHECKING, Any, Literal
 
 from errors import (
@@ -253,7 +254,83 @@ class ToolsSubsystem:
         registration.agent_permissions = list(agent_permissions or [])
         registration.bundle_permissions = list(bundle_permissions or [])
 
+        # bug-028: per-workflow typed virtual tools. Session 6962
+        # proved Kimi K2.6 (the workspace default) can't fill the
+        # generic ``run_workflow``'s opaque ``dict[str, object]``
+        # ``inputs`` slot even with bug-025's validation error and
+        # bug-027's JSON retry template. Fix is structural: emit one
+        # TYPED ``ToolDefinition`` per catalogued workflow at
+        # tool-list-assembly time so the model sees ``url: str`` as a
+        # real schema slot. The generic tool STAYS registered as a
+        # fallback for dynamic-discovery paths (``workflow_inspect``
+        # etc.) and for pre-catalog workflows.
+        self._register_virtual_workflow_tools(registration)
+
         return [defn.to_info() for defn in registration.tools.values()]
+
+    def _register_virtual_workflow_tools(
+        self,
+        registration: Any,  # noqa: ANN401 — _AgentRegistration; local import loop avoidance
+    ) -> None:
+        """Emit typed per-workflow virtuals when the seams line up.
+
+        bug-028. Guarded by four independent checks:
+
+        1. ``KOLSCH_VIRTUAL_WORKFLOW_TOOLS`` env var — default
+           ``"1"`` (enabled). Setting to ``"0"``/``"false"``/``""``
+           short-circuits so the operator can trivially disable this
+           behaviour without a code edit.
+        2. The generic ``run_workflow`` MUST already be registered
+           for the agent — its absence is the signal that this agent
+           doesn't have workflow-service access (didn't declare the
+           ref). Adding virtuals for such an agent would be a
+           permission-model violation.
+        3. ``self._chat_services`` is non-None — the ``ChatApp``
+           wired the ``ChatServiceRegistry`` sidecar. Headless
+           callers (tests, one-shot CLI, workflow runner) skip.
+        4. ``chat_services.workflows`` is non-None AND exposes the
+           duck-typed ``list_workflow_refs()`` +
+           ``resolve_workflow_yaml(ref)`` seams (bug-025/-027
+           discovery seams). Missing either seam degrades to
+           "generic only" without raising.
+
+        Idempotent: re-registration overwrites the same virtual
+        name-keyed slot with a fresh ``ToolDefinition``, matching the
+        registry's dict-based overwrite semantics for regular tools.
+        """
+        if not _virtual_tools_enabled():
+            return
+        generic = registration.tools.get("run_workflow")
+        if generic is None:
+            return
+        chat_services = self._chat_services
+        if chat_services is None:
+            return
+        workflows_impl = getattr(chat_services, "workflows", None)
+        if workflows_impl is None:
+            return
+        # Local import to avoid a startup import cycle
+        # (workflows → tools.decorator → tools.subsystem).
+        from workflows.tool_schema import (  # noqa: PLC0415
+            build_virtual_tool_definitions,
+        )
+
+        # Route every virtual's authz through the generic tool's
+        # own ``action_name`` — a single ``kolsch/tools/run_workflow``
+        # allow rule then covers every virtual. Per-virtual actions
+        # would need pattern rules and would fragment the permission
+        # model. The generic tool's ``action_name`` picks up its
+        # explicit ``action=`` override if the caller set one; falls
+        # through to ``<home_bundle>/tools/run_workflow`` otherwise.
+        home_bundle = generic.home_bundle
+        authz_action = generic.action_name
+        virtuals = build_virtual_tool_definitions(
+            workflows_impl=workflows_impl,
+            home_bundle=home_bundle,
+            authz_action=authz_action,
+        )
+        for defn in virtuals:
+            registration.tools[defn.name] = defn
 
     async def invoke_tool(
         self,
@@ -441,3 +518,25 @@ class ToolsSubsystem:
                 response=str(exc),
             ) from exc
         return ToolResult(result=result, metadata={"source": "mcp"})
+
+
+# ---------------------------------------------------------------------------
+# bug-028 — per-workflow typed virtuals kill switch.
+# ---------------------------------------------------------------------------
+
+
+def _virtual_tools_enabled() -> bool:
+    """Read the ``KOLSCH_VIRTUAL_WORKFLOW_TOOLS`` kill switch.
+
+    Defaults to enabled — the whole point of bug-028 is that
+    non-frontier models CAN'T call workflows without typed schemas.
+    The env var is the escape hatch when the tool-list bloat proves
+    noisy for a specific setup; scope is "env var only for v1", per
+    the spec's Open questions.
+
+    Recognised falsy values: ``"0"``, ``"false"``, ``"no"``,
+    ``"off"``, empty string. Anything else (including ``"1"``) is
+    truthy.
+    """
+    raw = os.environ.get("KOLSCH_VIRTUAL_WORKFLOW_TOOLS", "1")
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}

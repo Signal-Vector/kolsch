@@ -29,6 +29,10 @@ identify required inputs from ``{{ inputs.X }}`` refs in the
 workflow YAML. See ``workflow_inspect`` for the introspection
 affordance.
 
+bug-028 (per-workflow typed virtuals): a per-workflow typed variant
+of this tool is emitted at tool-list-assembly time. The description
+below points the model at the virtual when it exists.
+
 See ``process/feat-018-butler-workflow-tools.md`` for the walkthrough.
 """
 
@@ -70,6 +74,11 @@ class RunWorkflowArgs(BaseModel):
         "status inline. Returns `{run_id, card_id, _chat_anchor}`; the "
         "anchor lets your prose reference the mounted card via "
         "`[label](kolsch-anchor://workflow_card/<run_id>)`.\n\n"
+        "When a per-workflow tool like "
+        "`run_workflow_<bundle>_workflows_<workflow>` exists in your "
+        "tool list, prefer that over calling this generic tool — the "
+        "per-workflow variant surfaces each input as a typed argument "
+        "so you don't need to construct a JSON `inputs` dict.\n\n"
         "BEFORE CALLING: identify required inputs by reading the "
         "workflow YAML. Every `{{ inputs.X }}` reference is a required "
         "key in `inputs`; a `{{ inputs.X | default(...) }}` reference "

@@ -15,11 +15,18 @@ Contract:
 - Unknown ref: raises ``WrappedError`` with a helpful "workflow not
   found; available refs: ..." message.
 
+bug-028: when per-workflow virtual tools are registered (default),
+``example_call`` uses the virtual tool name and typed args shape.
+Falls back to bug-027's ``run_workflow(ref=..., inputs={...})``
+shape when ``KOLSCH_VIRTUAL_WORKFLOW_TOOLS=0``.
+
 Reuses ``scan_inputs`` from ``src/workflows/inputs_scan.py``
 (bug-025's walker, extracted for this bug per AC #13).
 """
 
 from __future__ import annotations
+
+import os
 
 from pydantic import BaseModel, Field
 
@@ -27,6 +34,7 @@ from errors import WrappedError
 from tools.decorator import ToolContext, tool
 from tools.services import require_services
 from workflows.inputs_scan import scan_inputs
+from workflows.tool_schema import virtual_tool_name
 
 
 class WorkflowInspectArgs(BaseModel):
@@ -40,8 +48,31 @@ class WorkflowInspectArgs(BaseModel):
     )
 
 
-def _build_example_call(ref: str, required: list[str]) -> str:
-    """Return a copy-pasteable ``run_workflow(...)`` invocation string."""
+def _virtuals_enabled() -> bool:
+    """Mirror ``ToolsSubsystem._virtual_tools_enabled`` — env-only kill switch."""
+    raw = os.environ.get("KOLSCH_VIRTUAL_WORKFLOW_TOOLS", "1")
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+def _build_example_call(
+    ref: str,
+    required: list[str],
+    *,
+    prefer_virtual: bool,
+) -> str:
+    """Return a copy-pasteable invocation string for the model.
+
+    bug-028: prefers the per-workflow virtual tool shape
+    (``run_workflow_<bundle>_<name>(url="<value>")``) when
+    ``prefer_virtual=True``; falls back to bug-027's
+    ``run_workflow(ref="...", inputs={...})`` shape otherwise.
+    """
+    if prefer_virtual:
+        tool_name = virtual_tool_name(ref)
+        if not required:
+            return f"{tool_name}()"
+        pairs = ", ".join(f'{n}="<value from user request>"' for n in required)
+        return f"{tool_name}({pairs})"
     if not required:
         return f'run_workflow(ref="{ref}", inputs={{}})'
     pairs = ", ".join(f'"{n}": "<value from user request>"' for n in required)
@@ -108,7 +139,11 @@ async def workflow_inspect(
 
     scan = scan_inputs(yaml_source)
     description = _extract_description(yaml_source)
-    example = _build_example_call(args.ref, scan.required)
+    example = _build_example_call(
+        args.ref,
+        scan.required,
+        prefer_virtual=_virtuals_enabled(),
+    )
     return {
         "ref": args.ref,
         "description": description,

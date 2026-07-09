@@ -17,6 +17,14 @@ Contract:
   ``list_workflow_refs`` seam when present; falls back to a generic
   message otherwise).
 
+bug-028: when the per-workflow virtual tool
+(``run_workflow_<bundle>_workflows_<name>``) has been registered for
+this agent, ``example_call`` uses that name so the model sees a
+copy-pasteable typed-arg invocation. Falls back to bug-027's
+``run_workflow(ref=..., inputs={...})`` shape when the virtuals are
+disabled via ``KOLSCH_VIRTUAL_WORKFLOW_TOOLS=0`` — the generic tool
+stays registered for that path.
+
 Reuses ``extract_required_inputs`` + ``scan_inputs`` from
 ``src/workflows/inputs_scan.py`` (bug-025's walker, extracted for
 this bug per AC #13). Requires the ``workflows`` service so it can
@@ -26,12 +34,15 @@ direct catalog reach-through from the tool.
 
 from __future__ import annotations
 
+import os
+
 from pydantic import BaseModel, Field
 
 from errors import WrappedError
 from tools.decorator import ToolContext, tool
 from tools.services import require_services
 from workflows.inputs_scan import scan_inputs
+from workflows.tool_schema import virtual_tool_name
 
 
 class WorkflowInspectArgs(BaseModel):
@@ -45,14 +56,44 @@ class WorkflowInspectArgs(BaseModel):
     )
 
 
-def _build_example_call(ref: str, required: list[str]) -> str:
-    """Return a copy-pasteable ``run_workflow(...)`` invocation string.
+def _virtuals_enabled() -> bool:
+    """Mirror ``ToolsSubsystem._virtual_tools_enabled`` — env-only kill switch.
+
+    bug-028: kept in-tool (rather than reading from a passed-through
+    services flag) so the example-call shape stays symmetric with
+    the actual registration behaviour. Both sites read the same env
+    var so an operator can trivially disable both with one setting.
+    """
+    raw = os.environ.get("KOLSCH_VIRTUAL_WORKFLOW_TOOLS", "1")
+    return raw.strip().lower() not in {"0", "false", "no", "off", ""}
+
+
+def _build_example_call(
+    ref: str,
+    required: list[str],
+    *,
+    prefer_virtual: bool,
+) -> str:
+    """Return a copy-pasteable invocation string for the model.
 
     When the workflow has required inputs, each name maps to a
     ``"<value from user request>"`` placeholder — matches the
     ``run_workflow`` error message shape (bug-027 FIX-D) so the model
     can copy either surface into a valid call.
+
+    bug-028: when ``prefer_virtual=True`` (the virtuals are
+    registered), returns the per-workflow tool shape
+    ``run_workflow_<bundle>_<name>(url="<value>")`` so the model
+    sees a copy-pasteable TYPED-ARG call. When ``False`` (virtuals
+    disabled), falls back to bug-027's
+    ``run_workflow(ref="...", inputs={...})`` shape.
     """
+    if prefer_virtual:
+        tool_name = virtual_tool_name(ref)
+        if not required:
+            return f"{tool_name}()"
+        pairs = ", ".join(f'{n}="<value from user request>"' for n in required)
+        return f"{tool_name}({pairs})"
     if not required:
         return f'run_workflow(ref="{ref}", inputs={{}})'
     pairs = ", ".join(f'"{n}": "<value from user request>"' for n in required)
@@ -132,7 +173,11 @@ async def workflow_inspect(
 
     scan = scan_inputs(yaml_source)
     description = _extract_description(yaml_source)
-    example = _build_example_call(args.ref, scan.required)
+    example = _build_example_call(
+        args.ref,
+        scan.required,
+        prefer_virtual=_virtuals_enabled(),
+    )
     return {
         "ref": args.ref,
         "description": description,

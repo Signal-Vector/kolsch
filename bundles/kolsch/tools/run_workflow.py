@@ -34,6 +34,19 @@ explicitly primes the model to identify required inputs from
 ``bundles/kolsch/tools/workflow_inspect.py`` for the introspection
 affordance.
 
+bug-028 (per-workflow typed virtuals): session 6962 proved even
+bug-027's rich prose + retry template isn't enough for Kimi K2.6 —
+the model saw the description, called ``workflow_inspect``, read
+the error template 13 times, and STILL called ``inputs={}`` byte-
+identically. Root cause is structural: ``dict[str, object]``
+serialises to ``{additionalProperties: true}`` — no ``properties``,
+no ``required``. Fix is per-workflow virtual tools emitted at
+tool-list-assembly time with TYPED args models (see
+``src/workflows/tool_schema.py`` +
+``src/tools/subsystem.py::_register_virtual_workflow_tools``). The
+``@tool`` description below now tells the model to prefer the
+per-workflow variant when it exists.
+
 See ``process/feat-018-butler-workflow-tools.md`` for the walkthrough.
 """
 
@@ -75,6 +88,11 @@ class RunWorkflowArgs(BaseModel):
         "status inline. Returns `{run_id, card_id, _chat_anchor}`; the "
         "anchor lets your prose reference the mounted card via "
         "`[label](kolsch-anchor://workflow_card/<run_id>)`.\n\n"
+        "When a per-workflow tool like "
+        "`run_workflow_<bundle>_workflows_<workflow>` exists in your "
+        "tool list, prefer that over calling this generic tool — the "
+        "per-workflow variant surfaces each input as a typed argument "
+        "so you don't need to construct a JSON `inputs` dict.\n\n"
         "BEFORE CALLING: identify required inputs by reading the "
         "workflow YAML. Every `{{ inputs.X }}` reference is a required "
         "key in `inputs`; a `{{ inputs.X | default(...) }}` reference "

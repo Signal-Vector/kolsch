@@ -201,8 +201,20 @@ async def test_required_and_optional_correctly_partitioned() -> None:
 
 
 @pytest.mark.asyncio
-async def test_example_call_is_valid_run_workflow_template() -> None:
-    """`example_call` matches `run_workflow(ref="...", inputs={...})`."""
+async def test_example_call_is_valid_run_workflow_template(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`example_call` matches `run_workflow(ref="...", inputs={...})`.
+
+    bug-028: this test asserts the LEGACY bug-027 example_call
+    shape. bug-028 flipped the default to prefer the virtual-tool
+    shape (``run_workflow_<bundle>_<workflow>(url="<value>")``); the
+    original assertion still holds when the operator sets
+    ``KOLSCH_VIRTUAL_WORKFLOW_TOOLS=0``. See
+    ``test_workflow_inspect_example_call.py`` for the new-default
+    coverage of the virtual-name shape.
+    """
+    monkeypatch.setenv("KOLSCH_VIRTUAL_WORKFLOW_TOOLS", "0")
     workflow_inspect = _load_workflow_inspect()
     workflows = _FakeWorkflows(
         yaml_by_ref={"andre/workflows/job_description_review": _JD_YAML},
@@ -226,8 +238,16 @@ async def test_example_call_is_valid_run_workflow_template() -> None:
 
 
 @pytest.mark.asyncio
-async def test_example_call_empty_inputs_when_no_required() -> None:
-    """A workflow with only optional inputs → example uses ``inputs={}``."""
+async def test_example_call_empty_inputs_when_no_required(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A workflow with only optional inputs → example uses ``inputs={}``.
+
+    bug-028: pinned to ``KOLSCH_VIRTUAL_WORKFLOW_TOOLS=0`` so this
+    test continues asserting the legacy bug-027 shape. See
+    ``test_workflow_inspect_example_call.py`` for the new default.
+    """
+    monkeypatch.setenv("KOLSCH_VIRTUAL_WORKFLOW_TOOLS", "0")
     yaml_src = """
 description: "optional-only inputs"
 nodes:

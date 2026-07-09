@@ -558,6 +558,7 @@ def test_workflows_all_parity_with_module_namespace() -> None:
         "run",
         "run_context",
         "run_store",
+        "tool_schema",  # bug-028: per-workflow typed tool schemas.
         "validator",
     }
     skip = submodules | {"annotations"}
