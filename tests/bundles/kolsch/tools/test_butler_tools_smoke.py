@@ -136,7 +136,15 @@ async def test_run_workflow_smoke(
     chat_app,
     run_workflow_tool: Callable[..., Awaitable[Any]],
 ) -> None:
-    """run_workflow mounts a workflow card + transfers ownership."""
+    """run_workflow blocks until terminal + returns phase/outputs.
+
+    bug-031: the tool now blocks until the workflow reaches a terminal
+    phase (or ``timeout_seconds`` elapses). The scripted fake fires
+    RUN_STARTED + RUN_COMPLETED with a small per-event delay so the
+    tool returns ``phase="success"`` when the poll observes the
+    terminal registry record. Assertions moved to reflect the
+    blocking shape.
+    """
     async with chat_app.run_test() as pilot:
         await pilot.pause()
         _install_scripted_workflows(
@@ -149,16 +157,24 @@ async def test_run_workflow_smoke(
             {"ref": "kolsch/workflows/test", "inputs": {}},
         )
         # bug-020: live bus subscription mounts the CardWidget in the
-        # same session — pump the pilot until it appears.
+        # same session — pump the pilot until it appears (the card
+        # will have already closed successfully, but the widget
+        # remains mounted).
         for _ in range(20):
             await pilot.pause()
             if pilot.app.query("CardWidget"):
                 break
 
-        # Return shape.
+        # bug-031: return shape now carries phase + outputs +
+        # error_message alongside the anchor.
         assert isinstance(result, dict)
         assert result["run_id"].startswith("wrk_")
         assert isinstance(result["card_id"], str)
+        assert result["phase"] in ("success", "error", "cancelled")
+        # ``outputs`` may be None (fake events carry no outputs
+        # payload) — assert the key is present.
+        assert "outputs" in result
+        assert "error_message" in result
         anchor = result["_chat_anchor"]
         assert anchor == {
             "kind": "workflow_card",
@@ -172,25 +188,19 @@ async def test_run_workflow_smoke(
         widget = cards.first()
         assert widget.kind == "workflow"
 
-        # Card ownership transferred — the tool's auto-close finalizer
-        # skipped this card. Look up the underlying `AbstractCard`
-        # in the CardsImpl live registry.
-        cards_impl = pilot.app._service_registry.cards
-        registry = getattr(cards_impl, "_live_cards", None)
-        assert isinstance(registry, dict)
-        assert len(registry) >= 1
-        impl_card = next(iter(registry.values()))
-        assert getattr(impl_card, "_owner_transferred", False) is True
-
-        # Cleanup — wait for the fake executor to complete.
-        for _ in range(20):
-            await asyncio.sleep(0.05)
-            workflows_impl = pilot.app._service_registry.workflows
-            rec = workflows_impl._workflow_registry.get(
-                WorkflowRunId(result["run_id"]),
-            )
-            if rec is None or rec.phase in ("success", "error", "cancelled"):
-                break
+        # bug-031: card ownership transfer still fires — but the card
+        # has closed by return so it's no longer in ``_live_cards``
+        # (the workflow terminal path popped it via
+        # ``CardImpl.close``). Assert against the underlying
+        # ``_workflow_registry`` record instead.
+        workflows_impl = pilot.app._service_registry.workflows
+        rec = workflows_impl._workflow_registry.get(
+            WorkflowRunId(result["run_id"]),
+        )
+        # The record may have evicted after 60s; if present, its phase
+        # must be terminal.
+        if rec is not None:
+            assert rec.phase in ("success", "error", "cancelled")
 
 
 # --------------------------------------------------------------------
@@ -204,18 +214,32 @@ async def test_workflow_status_smoke(
     run_workflow_tool: Callable[..., Awaitable[Any]],
     workflow_status_tool: Callable[..., Awaitable[Any]],
 ) -> None:
-    """workflow_status returns phase + anchor; unknown run_id -> unknown."""
+    """workflow_status returns phase + anchor; unknown run_id -> unknown.
+
+    bug-031: ``run_workflow`` now blocks until terminal (or timeout).
+    Pass ``timeout_seconds=1`` with a scripted per-event-delay of
+    5.0s so the poll times out with ``phase="running"`` — that's
+    exactly the case where the model would follow up with
+    ``workflow_status`` to check progress, so it's the right shape
+    for this smoke.
+    """
     async with chat_app.run_test() as pilot:
         await pilot.pause()
         _install_scripted_workflows(
             pilot, refs=["kolsch/workflows/probe"],
-            per_event_delay=1.0,  # keep the workflow running for the read
+            per_event_delay=5.0,  # keep the workflow running past the timeout
         )
 
         run_result = await _invoke_tool_via_pilot(
             pilot,
             run_workflow_tool,
-            {"ref": "kolsch/workflows/probe", "inputs": {}},
+            {
+                "ref": "kolsch/workflows/probe",
+                "inputs": {},
+                # bug-031: force the poll to time out so we can then
+                # exercise workflow_status against a still-live run.
+                "timeout_seconds": 1,
+            },
         )
         # bug-020: pump the pilot for the live bus dispatch.
         for _ in range(20):
@@ -224,6 +248,9 @@ async def test_workflow_status_smoke(
                 break
 
         run_id = run_result["run_id"]
+        # bug-031: timeout shape — phase="running" with a note.
+        assert run_result["phase"] == "running"
+        assert "note" in run_result
 
         # Poll until the drain worker picks the run up (queued -> running).
         for _ in range(20):
@@ -245,6 +272,10 @@ async def test_workflow_status_smoke(
         # node_counts field is present (may be zeros while queued).
         assert status["node_counts"] is not None
         assert "total" in status["node_counts"]
+        # bug-031: outputs field now surfaces on the workflow_status
+        # return; None while still running.
+        assert "outputs" in status
+        assert status["outputs"] is None
 
         # Unknown run_id -> phase="unknown".
         unknown = await _invoke_tool_via_pilot(
@@ -265,7 +296,13 @@ async def test_cancel_workflow_smoke(
     run_workflow_tool: Callable[..., Awaitable[Any]],
     cancel_workflow_tool: Callable[..., Awaitable[Any]],
 ) -> None:
-    """cancel_workflow(run_id) flips phase to cancelling."""
+    """cancel_workflow(run_id) flips phase to cancelling.
+
+    bug-031: pass ``timeout_seconds=1`` so ``run_workflow`` returns
+    with ``phase="running"`` while the fake executor is still cycling
+    events (per_event_delay=5.0). That gives the follow-up
+    ``cancel_workflow`` call a live registry record to hit.
+    """
     async with chat_app.run_test() as pilot:
         await pilot.pause()
         workflows_impl = _install_scripted_workflows(
@@ -276,7 +313,11 @@ async def test_cancel_workflow_smoke(
         run_result = await _invoke_tool_via_pilot(
             pilot,
             run_workflow_tool,
-            {"ref": "kolsch/workflows/long", "inputs": {}},
+            {
+                "ref": "kolsch/workflows/long",
+                "inputs": {},
+                "timeout_seconds": 1,
+            },
         )
         # bug-020: live bus subscription for CardWidget mount.
         for _ in range(20):
@@ -285,6 +326,7 @@ async def test_cancel_workflow_smoke(
                 break
 
         run_id = run_result["run_id"]
+        assert run_result["phase"] == "running"
 
         # Wait for the drain to pick it up so a cancel has something
         # live to fire on.

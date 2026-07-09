@@ -42,6 +42,27 @@ from textual.reactive import reactive
 from textual.widgets import Collapsible
 
 
+_SPINNER_FRAMES = ("⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷")
+"""bug-031: 8-cell braille spinner frames rotated at ~12.5 Hz.
+
+Matches the convention established by
+``cli.chat.widgets.turn_status._SPINNER_FRAMES`` (module-level
+constant, ``set_interval(0.08, ...)``). Frame rotation drives the
+"card is animating" cue the user reads to know a running node
+hasn't stalled — session ``ses_af5980ab`` had a 90.4s dead zone on
+the ``deduper`` node with the static ``▸`` glyph, indistinguishable
+from a hang.
+"""
+
+
+_ANIMATED_STATES = frozenset({"starting", "running"})
+"""bug-031: states whose title uses the spinner frame instead of the
+static glyph. Terminal states (``completed`` / ``failed`` /
+``paused`` / ``cancelling`` / ``pruned``) use the static glyph as
+today — the row is done moving.
+"""
+
+
 class WorkflowNodeRow(Collapsible):
     """Per-node row inside a `WorkflowNodeList`.
 
@@ -92,12 +113,44 @@ class WorkflowNodeRow(Collapsible):
         self._sub_agent_turn_count = 0
         self._error_preview: str | None = None
         self._details: str | None = None
+        # bug-031: rotating spinner frame index. ``_advance_spinner``
+        # bumps this on the 0.08s interval; ``_update_title`` reads it
+        # into the collapsed-title glyph while ``state`` is animated.
+        self._frame_idx: int = 0
+        # bug-031: spinner interval handle. Installed by ``on_mount``;
+        # stopped by ``watch_state`` when the row transitions to a
+        # terminal state so the widget goes quiescent post-run.
+        self._spinner_handle: Any | None = None
         title = f"{self.STATE_GLYPHS['starting']} {node_name}"
         super().__init__(title=title, collapsed=True)
 
     # ------------------------------------------------------------------
     # Public state surface
     # ------------------------------------------------------------------
+
+    def on_mount(self) -> None:
+        """bug-031: install the ~12.5 Hz spinner-frame timer.
+
+        Mirrors the convention at
+        ``cli.chat.widgets.turn_status.TurnStatus._start_timers``
+        (line 201, ``set_interval(0.08, self._advance_spinner)``).
+        The interval runs unconditionally — ``_update_title`` only
+        surfaces the spinner while ``self.state`` is in
+        ``_ANIMATED_STATES``. On the terminal state transition,
+        ``watch_state`` stops the handle.
+        """
+        self._spinner_handle = self.set_interval(0.08, self._advance_spinner)
+
+    def _advance_spinner(self) -> None:
+        """bug-031: bump the frame index and repaint the title.
+
+        Terminal-state rows short-circuit inside ``_update_title``
+        (they use the static glyph). Keeping the tick running past
+        the transition until ``watch_state`` stops it is harmless.
+        """
+        self._frame_idx = (self._frame_idx + 1) % len(_SPINNER_FRAMES)
+        if self.state in _ANIMATED_STATES:
+            self._update_title()
 
     def set_state(
         self,
@@ -142,12 +195,22 @@ class WorkflowNodeRow(Collapsible):
 
         The default `starting` / `running` states render without a
         `.-<state>` suffix — bare CSS covers them.
+
+        bug-031: on transition to a terminal state stop the spinner
+        timer so the widget goes quiescent (no wake-ups after the
+        node has settled). The ``starting`` -> ``running`` transition
+        keeps the timer alive.
         """
         _ = old
         for cls in self._TERMINAL_CSS_STATES:
             self.remove_class(f"-{cls}")
         if new in self._TERMINAL_CSS_STATES:
             self.add_class(f"-{new}")
+        # bug-031: terminal transition — stop the spinner frames.
+        if new not in _ANIMATED_STATES and self._spinner_handle is not None:
+            with contextlib.suppress(Exception):
+                self._spinner_handle.stop()
+            self._spinner_handle = None
 
     def _update_title(self) -> None:
         """Refresh the collapsed title from state + details + count.
@@ -156,8 +219,16 @@ class WorkflowNodeRow(Collapsible):
         ` · N sub-agent turns` when count > 0. Failed rows prefer the
         truncated `_error_preview`; completed / running rows use
         `_details`.
+
+        bug-031: while ``self.state`` is animated (``starting`` /
+        ``running``) the glyph is the current braille spinner frame
+        so the row visibly ticks even during long-running nodes.
+        Terminal states retain their static ``STATE_GLYPHS`` entry.
         """
-        glyph = self.STATE_GLYPHS.get(self.state, "?")
+        if self.state in _ANIMATED_STATES:
+            glyph = _SPINNER_FRAMES[self._frame_idx]
+        else:
+            glyph = self.STATE_GLYPHS.get(self.state, "?")
         base = f"{glyph} {self._node_name}"
         if self.state == "failed" and self._error_preview:
             base += f"   {self._truncate_preview(self._error_preview)}"

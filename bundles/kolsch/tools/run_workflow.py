@@ -47,10 +47,27 @@ tool-list-assembly time with TYPED args models (see
 ``@tool`` description below now tells the model to prefer the
 per-workflow variant when it exists.
 
+bug-031 (blocking + outputs surfacing): pre-bug-031 the tool was
+fire-and-forget — it returned ``{run_id, card_id, _chat_anchor}``
+at 2ms and exited. Session ``ses_af5980ab-...`` showed this leaves
+the model with no way to narrate the outcome: the workflow ran
+for 3 min, ``thread.exchange_completed`` fired at second 5, then
+a 12 min 59s dead zone before the user asked "what was the
+outcome?" — at which point ``workflow_status`` returned
+``phase=unknown`` (registry aged out) and the model had to
+``bash grep`` the JSONL to reconstruct. The fix converts the tool
+to a blocking long-poll at ~500ms until phase is terminal OR
+``timeout_seconds`` (default 300) elapses. On terminal the return
+carries ``phase`` + ``outputs`` + ``error_message``; on timeout it
+returns ``phase="running"`` with a hint to use ``workflow_status``.
+
 See ``process/feat-018-butler-workflow-tools.md`` for the walkthrough.
 """
 
 from __future__ import annotations
+
+import asyncio
+from typing import Any
 
 from pydantic import BaseModel, Field
 
@@ -58,6 +75,29 @@ from errors import WrappedError
 from tools.decorator import ToolContext, tool
 from tools.services import require_services
 from workflows.inputs_scan import extract_required_inputs
+
+
+_POLL_INTERVAL_SECONDS = 0.5
+"""bug-031: how often the blocking tool re-reads ``status()``.
+
+500ms matches the spec. The impl's ``_workflow_registry`` update is
+sync — bumping this smaller only trades event-loop time for a shorter
+observed tail latency. Bumping it larger widens the "tool_result
+arrives after status flipped terminal" gap the user sees on the
+transcript.
+"""
+
+_DEFAULT_TIMEOUT_SECONDS = 300
+"""bug-031: bounded upper limit before the tool falls through.
+
+Session ``ses_af5980ab`` recorded the JD-review workflow at 3 min
+23s wall-clock — comfortably inside the 5 min bound. Longer runs
+should return ``phase="running"`` so the model narrates the pending
+state and can re-check via ``workflow_status``.
+"""
+
+_TERMINAL_PHASES = frozenset({"success", "error", "cancelled"})
+"""bug-031: services phase vocabulary the poll loop treats as done."""
 
 
 class RunWorkflowArgs(BaseModel):
@@ -74,6 +114,15 @@ class RunWorkflowArgs(BaseModel):
             'Example: ``{"url": "https://example.com/job"}``.'
         ),
     )
+    timeout_seconds: int = Field(
+        default=_DEFAULT_TIMEOUT_SECONDS,
+        description=(
+            "bug-031: upper bound on how long the tool blocks waiting "
+            "for terminal. Default 300s. On timeout the tool returns "
+            "``phase=\"running\"`` with a note telling the model to "
+            "check ``workflow_status`` later."
+        ),
+    )
 
 
 @tool(
@@ -85,9 +134,16 @@ class RunWorkflowArgs(BaseModel):
         "`bash` streams raw stdout into a plain tool-call block, while "
         "`run_workflow` opens a `WorkflowCard` widget that renders "
         "per-node progress rows, pause/approval prompts, and terminal "
-        "status inline. Returns `{run_id, card_id, _chat_anchor}`; the "
-        "anchor lets your prose reference the mounted card via "
-        "`[label](kolsch-anchor://workflow_card/<run_id>)`.\n\n"
+        "status inline.\n\n"
+        "This tool BLOCKS until the workflow reaches a terminal phase "
+        "(`success` / `error` / `cancelled`) OR the `timeout_seconds` "
+        "bound elapses (default 300s). On terminal, returns "
+        "`{run_id, card_id, phase, outputs, error_message, "
+        "_chat_anchor}` — narrate the `outputs` to the user in prose "
+        "after the tool returns. On timeout, returns "
+        "`{run_id, card_id, phase: \"running\", _chat_anchor, note}` — "
+        "tell the user the workflow is still running and offer to "
+        "check `workflow_status(run_id=...)` later.\n\n"
         "The workflow card renders progress INLINE in the transcript "
         "— header, per-node rows, and status footer are all visible "
         "on mount and update live. There is no dropdown, expand-to-"
@@ -117,7 +173,7 @@ class RunWorkflowArgs(BaseModel):
 async def run_workflow(
     args: RunWorkflowArgs, ctx: ToolContext,
 ) -> dict[str, object]:
-    """Open a workflow-kind card + queue the run; return ids + anchor.
+    """Open a workflow-kind card + queue the run; block until terminal.
 
     bug-025: input validation runs BEFORE the card is opened and
     BEFORE the run enters the FIFO queue. A missing required input
@@ -129,6 +185,17 @@ async def run_workflow(
     template so the model can copy the shape and fill in values —
     the "read the text 11 times without figuring out where to put
     the URL" symptom from session 4778.
+
+    bug-031: after ``services.workflows.start(...)`` returns the
+    ``run_id``, long-poll ``services.workflows.status(run_id)`` at
+    ``_POLL_INTERVAL_SECONDS`` (500ms) until the phase transitions
+    to a terminal value or ``args.timeout_seconds`` elapses. On
+    terminal return the outputs + error_message alongside the anchor
+    so the model narrates the outcome in the same turn. On timeout
+    return ``phase="running"`` with a note so the model tells the
+    user the workflow is still going and offers a follow-up
+    ``workflow_status`` check. Uses ``asyncio.sleep`` per the
+    codebase's ``get_running_loop`` convention (D-006).
     """
     services = require_services(ctx, ["cards", "workflows"])
     assert services.cards is not None  # narrowed by require_services
@@ -192,12 +259,64 @@ async def run_workflow(
     run_id = await services.workflows.start(
         args.ref, dict(args.inputs), card=card,
     )
+
+    anchor: dict[str, object] = {
+        "kind": "workflow_card",
+        "run_id": str(run_id),
+        "ref": args.ref,
+    }
+
+    # bug-031: long-poll until terminal or timeout. ``status`` is
+    # duck-typed on the ``Workflows`` Protocol — headless test fakes
+    # that predate bug-031 don't implement it, so guard the probe
+    # and fall back to the pre-bug-031 fire-and-forget return (with
+    # ``phase="running"`` and a note) so those tests still pass. The
+    # duck-typing keeps the Protocol byte-identical.
+    status_probe = getattr(services.workflows, "status", None)
+    if status_probe is None:
+        return {
+            "run_id": str(run_id),
+            "card_id": str(card.id),
+            "phase": "running",
+            "_chat_anchor": anchor,
+            "note": (
+                "Workflow started; this service does not expose "
+                "status polling. Use `workflow_status` later if the "
+                "service supports it."
+            ),
+        }
+
+    deadline_polls = max(1, int(args.timeout_seconds / _POLL_INTERVAL_SECONDS))
+    for _ in range(deadline_polls):
+        await asyncio.sleep(_POLL_INTERVAL_SECONDS)
+        status_view = status_probe(run_id)
+        phase = getattr(status_view, "phase", None)
+        if isinstance(phase, str) and phase in _TERMINAL_PHASES:
+            outputs: dict[str, Any] | None = getattr(
+                status_view, "outputs", None,
+            )
+            error_message = getattr(status_view, "error_message", None)
+            return {
+                "run_id": str(run_id),
+                "card_id": str(card.id),
+                "phase": phase,
+                "outputs": outputs,
+                "error_message": error_message,
+                "_chat_anchor": anchor,
+            }
+
+    # Timeout — return the running phase so the model can tell the
+    # user the workflow's still going. ``workflow_status`` is the
+    # follow-up affordance; the note phrasing mirrors the tool's
+    # description so the model recognises the pattern.
     return {
         "run_id": str(run_id),
         "card_id": str(card.id),
-        "_chat_anchor": {
-            "kind": "workflow_card",
-            "run_id": str(run_id),
-            "ref": args.ref,
-        },
+        "phase": "running",
+        "_chat_anchor": anchor,
+        "note": (
+            f"Workflow still running after {args.timeout_seconds} "
+            f"seconds; call workflow_status(run_id={str(run_id)!r}) "
+            f"to check later."
+        ),
     }

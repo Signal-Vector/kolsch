@@ -142,6 +142,16 @@ class WorkflowRunStatusView:
             (no node ran), successful runs, and cold-read paths that
             can't attribute the failure. Added by bug-025 alongside
             ``error_message``.
+        outputs: Terminal-outputs dict from
+            ``workflow.run.completed.payload.outputs``. Populated on
+            the hot path when the ``RUN_COMPLETED`` event lands on the
+            bridge, and on the cold-read path when the JSONL tail
+            carries a completed row. ``None`` on every non-terminal
+            phase, on failures/aborts (which don't carry an outputs
+            dict), and on cold-read misses. Added by bug-031 so the
+            blocking ``run_workflow`` tool can return the outputs in
+            the same turn — closing the "workflow completes, model
+            silent 12 min" symptom from session ses_af5980ab.
     """
 
     run_id: WorkflowRunId
@@ -153,6 +163,8 @@ class WorkflowRunStatusView:
     # bug-025: terminal-error diagnostic. See dataclass docstring.
     error_message: str | None = None
     failed_node: str | None = None
+    # bug-031: terminal-outputs dict — see dataclass docstring.
+    outputs: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------

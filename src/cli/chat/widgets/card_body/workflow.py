@@ -238,6 +238,18 @@ class WorkflowRenderer(Vertical):
         # after construction (adapter learns the parent after mount)
         # keep the header in sync.
         self._parent_ref: str | None = parent_ref
+        # bug-031: terminal flag — flipped by ``_on_terminal`` so the
+        # 1Hz tick timer stops advancing elapsed once the summary
+        # footer has landed. Wall-clock elapsed prior to that keeps
+        # the header ticking even when the executor bridge goes
+        # quiet mid-run (session ses_af5980ab: 90.4s dead zone on
+        # deduper node without a widget tick).
+        self._is_terminal: bool = False
+        # bug-031: 1Hz elapsed tick timer handle. Installed in
+        # ``on_mount``; stopped in ``_on_terminal``. Established
+        # convention: ``turn_status.py::_start_timers`` uses
+        # ``set_interval(1.0, ...)``.
+        self._tick_handle: Any | None = None
         # spec-013: adapter reference for `_live_nodes_by_trace_id`
         # registration. `register_adapter` (called by the mount
         # helper on the ChatApp side) sets this. When `None`, node
@@ -269,6 +281,33 @@ class WorkflowRenderer(Vertical):
         yield self._node_list
         yield self._footer
         yield self._compact_line
+
+    def on_mount(self) -> None:
+        """bug-031: install the 1Hz elapsed-tick timer.
+
+        Session ``ses_af5980ab`` had a 90.4s dead zone on the
+        ``deduper`` node and a 65s dead zone on ``synthesize`` because
+        the pre-bug-031 renderer only refreshed the header on an
+        incoming ``kolsch.workflow.progress`` UI event. Between
+        executor events the elapsed counter froze. Convention
+        established at ``turn_status.py::_start_timers`` (line 197,
+        ``set_interval(1.0, self._tick_elapsed)``) — apply the same
+        pattern here. ``_tick_elapsed`` early-outs on
+        ``self._is_terminal`` so the terminal footer stays quiescent.
+        """
+        self._tick_handle = self.set_interval(1.0, self._tick_elapsed)
+
+    def _tick_elapsed(self) -> None:
+        """bug-031: re-render the header from wall-clock elapsed.
+
+        Runs on the 1Hz interval installed in ``on_mount``. Skips
+        while ``_start_time`` is unset (renderer hasn't seen
+        RUN_STARTED yet) or after ``_is_terminal`` (summary footer
+        has landed and should stop moving).
+        """
+        if self._start_time is None or self._is_terminal:
+            return
+        self._update_header()
 
     # ------------------------------------------------------------------
     # Public seams
@@ -502,11 +541,23 @@ class WorkflowRenderer(Vertical):
         row.set_state("running")
 
     def _on_terminal(self, kind: str, payload: dict[str, Any]) -> None:
-        """Populate the footer with `✓ done in Ns` / `✗ done in Ns`."""
+        """Populate the footer with `✓ done in Ns` / `✗ done in Ns`.
+
+        bug-031: flip ``_is_terminal`` so the ``_tick_elapsed`` timer
+        stops refreshing the header — the footer is now the frozen
+        summary. Also stop the tick handle to avoid unnecessary
+        wake-ups (best-effort — Textual's ``Timer.stop`` swallows
+        the double-stop shutdown case).
+        """
         success = kind == WorkflowEventKind.RUN_COMPLETED.value
         elapsed = self._elapsed_seconds(payload)
         prefix = "✓" if success else "✗"
         self._footer.update(f"{prefix} done in {int(elapsed)}s")
+        self._is_terminal = True
+        if self._tick_handle is not None:
+            with contextlib.suppress(Exception):
+                self._tick_handle.stop()
+            self._tick_handle = None
 
     # ------------------------------------------------------------------
     # Helpers
@@ -604,10 +655,21 @@ class WorkflowRenderer(Vertical):
         return f"▸ workflow · {ref}  {completed}/{total} · {elapsed}s"
 
     def _elapsed_now(self) -> float:
-        """Return seconds since `_start_time` using the last-seen ts."""
+        """Return seconds since `_start_time`.
+
+        bug-031: prefer WALL-CLOCK once ``_start_time`` is set. The
+        pre-bug-031 code anchored on ``self._last_ts or
+        datetime.now(UTC)`` — but ``_last_ts`` advances with each
+        emitted event, so between events the anchor froze and the
+        header displayed the same integer indefinitely (session
+        ses_af5980ab: 90.4s ``deduper`` dead zone). Wall-clock
+        matches the 1Hz ``_tick_elapsed`` cadence + the impl-side
+        ``format_live_workflow_strip`` wall-clock read
+        (``workflow_layout.py:150-158``).
+        """
         if self._start_time is None:
             return 0.0
-        anchor = self._last_ts or datetime.now(tz=UTC)
+        anchor = datetime.now(tz=UTC)
         with contextlib.suppress(TypeError):
             return max(0.0, (anchor - self._start_time).total_seconds())
         return 0.0

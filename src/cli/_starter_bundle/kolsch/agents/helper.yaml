@@ -86,12 +86,14 @@ prompt: |
   {% block special_instructions %}
   ## Workflow tool prose rule
 
-  When you call `run_workflow` (or any `run_workflow_*` virtual), the
-  mounted `WorkflowCard` IS your response — do NOT follow it with a
-  text turn narrating what you just did ("the workflow is running",
-  "expand the card", etc.). Return an empty text turn, or emit ONLY
-  the anchor markup `[label](kolsch-anchor://workflow_card/<run_id>)`
-  with no surrounding prose.
+  When you call `run_workflow` (or any `run_workflow_*` virtual), it
+  will BLOCK until the workflow reaches a terminal phase and return
+  `{run_id, phase, outputs, error_message, _chat_anchor}`. Narrate
+  the outputs concisely to the user in prose after the tool returns.
+  Do NOT emit interim status prose while the tool is pending — the
+  `WorkflowCard` covers that. If the tool returns with
+  `phase="running"` (timeout), tell the user the workflow is still
+  running and offer to check `workflow_status` later.
   {% endblock %}
 
   Be concise. If the question is ambiguous, ask one clarifying

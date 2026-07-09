@@ -459,6 +459,26 @@ def _extract_yaml_description(yaml_source: str) -> str:
     return ""
 
 
+_VIRTUAL_POLL_INTERVAL_SECONDS = 0.5
+"""bug-031: same 500ms poll interval as the generic ``run_workflow``.
+
+Kept as a module-level constant so a future perf tune can hit both
+tools in one place.
+"""
+
+_VIRTUAL_DEFAULT_TIMEOUT_SECONDS = 300
+"""bug-031: same 300s default timeout as the generic ``run_workflow``.
+
+Session ``ses_af5980ab`` recorded the JD-review workflow at 3 min
+23s wall-clock — comfortably inside the 5 min bound. Longer runs
+return ``phase="running"`` so the model narrates the pending state
+and can re-check via ``workflow_status``.
+"""
+
+_VIRTUAL_TERMINAL_PHASES = frozenset({"success", "error", "cancelled"})
+"""bug-031: services phase vocabulary the poll loop treats as done."""
+
+
 def _make_virtual_invoker(
     ref: str,
     args_model: type[BaseModel],
@@ -470,8 +490,16 @@ def _make_virtual_invoker(
     opens a workflow-kind card via ``cards.open``, calls
     ``workflows.start(ref, inputs, card=card)`` with the typed args
     flattened into a plain dict, and returns the standard
-    ``{run_id, card_id, _chat_anchor}`` payload the assistant prose
-    references via ``kolsch-anchor://workflow_card/<run_id>``.
+    ``{run_id, card_id, phase, outputs, error_message, _chat_anchor}``
+    payload the assistant prose references via
+    ``kolsch-anchor://workflow_card/<run_id>``.
+
+    bug-031: this virtual variant BLOCKS until the workflow reaches a
+    terminal phase (or the 300s timeout elapses) — same shape as the
+    generic tool. Without this, the virtual tool's tool_result
+    payload would remain the pre-bug-031 fire-and-forget shape and
+    the model would be silent about the outcome, defeating the whole
+    point of bug-031.
 
     Args:
         ref: The workflow's catalog ref — fixed at emit time,
@@ -490,6 +518,8 @@ def _make_virtual_invoker(
         args: BaseModel,
         ctx: ToolContext,
     ) -> dict[str, object]:
+        import asyncio as _asyncio  # noqa: PLC0415
+
         from tools.services import require_services  # noqa: PLC0415
 
         services = require_services(ctx, ["cards", "workflows"])
@@ -507,14 +537,60 @@ def _make_virtual_invoker(
         run_id = await services.workflows.start(
             ref, dict(inputs), card=card,
         )
+        anchor: dict[str, object] = {
+            "kind": "workflow_card",
+            "run_id": str(run_id),
+            "ref": ref,
+        }
+
+        # bug-031: long-poll until terminal or timeout. Duck-typed on
+        # ``status`` so test fakes without the method fall back to a
+        # ``phase="running"`` return (matches the generic tool's
+        # fallback semantics).
+        status_probe = getattr(services.workflows, "status", None)
+        if status_probe is None:
+            return {
+                "run_id": str(run_id),
+                "card_id": str(card.id),
+                "phase": "running",
+                "_chat_anchor": anchor,
+                "note": (
+                    "Workflow started; this service does not expose "
+                    "status polling."
+                ),
+            }
+
+        timeout_seconds = _VIRTUAL_DEFAULT_TIMEOUT_SECONDS
+        deadline_polls = max(
+            1,
+            int(timeout_seconds / _VIRTUAL_POLL_INTERVAL_SECONDS),
+        )
+        for _ in range(deadline_polls):
+            await _asyncio.sleep(_VIRTUAL_POLL_INTERVAL_SECONDS)
+            status_view = status_probe(run_id)
+            phase = getattr(status_view, "phase", None)
+            if isinstance(phase, str) and phase in _VIRTUAL_TERMINAL_PHASES:
+                outputs = getattr(status_view, "outputs", None)
+                error_message = getattr(status_view, "error_message", None)
+                return {
+                    "run_id": str(run_id),
+                    "card_id": str(card.id),
+                    "phase": phase,
+                    "outputs": outputs,
+                    "error_message": error_message,
+                    "_chat_anchor": anchor,
+                }
+
         return {
             "run_id": str(run_id),
             "card_id": str(card.id),
-            "_chat_anchor": {
-                "kind": "workflow_card",
-                "run_id": str(run_id),
-                "ref": ref,
-            },
+            "phase": "running",
+            "_chat_anchor": anchor,
+            "note": (
+                f"Workflow still running after {timeout_seconds} "
+                f"seconds; call workflow_status(run_id={str(run_id)!r}) "
+                f"to check later."
+            ),
         }
 
     return virtual_invoker

@@ -79,6 +79,16 @@ async def workflow_status(
             if status.last_event_ts is not None
             else None
         ),
+        # bug-025: terminal-error diagnostics surface here so the model
+        # sees a legible failure reason instead of ``phase="error"``
+        # with no attribution.
+        "error_message": status.error_message,
+        "failed_node": status.failed_node,
+        # bug-031: terminal outputs from ``workflow.run.completed`` so
+        # a late poll (past ``_REGISTRY_EVICTION_SECONDS``) still
+        # returns the outputs dict. On a live/in-flight run this is
+        # ``None`` — call this tool again once the phase flips.
+        "outputs": status.outputs,
         "_chat_anchor": {
             "kind": "workflow_card",
             "run_id": str(status.run_id),

@@ -1,13 +1,21 @@
 """spec-013 Test 2 — `WorkflowNodeRow` state machine + CSS.
 
 Seven passes — one per state in the state machine.
+
+bug-031: ``starting`` and ``running`` states now render a rotating
+braille spinner frame instead of the static ``⠋`` / ``▸`` glyphs so
+the row visibly ticks during long-running nodes. Terminal states
+still use the static ``STATE_GLYPHS`` entries.
 """
 
 from __future__ import annotations
 
 import pytest
 
-from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
+from cli.chat.widgets.workflow_node_row import (
+    _SPINNER_FRAMES,
+    WorkflowNodeRow,
+)
 
 
 @pytest.mark.asyncio
@@ -15,9 +23,14 @@ async def test_initial_starting_state(fake_app_factory) -> None:
     row = WorkflowNodeRow(node_name="x")
     app = fake_app_factory(row)
     async with app.run_test() as pilot:
-        await pilot.pause()
+        # bug-031: wait past the 0.08s spinner interval so the tick
+        # replaces the ``__init__`` placeholder glyph.
+        await pilot.pause(0.1)
         assert row.state == "starting"
-        assert "⠋" in row.title
+        # bug-031: the row now renders a braille spinner frame while
+        # in an animated state — assert one of the eight frames is
+        # present rather than the pre-bug-031 static ``⠋``.
+        assert any(frame in row.title for frame in _SPINNER_FRAMES)
         assert "x" in row.title
         # No CSS class applied for the default state.
         assert "-completed" not in row.classes
@@ -31,9 +44,13 @@ async def test_running_state_no_css(fake_app_factory) -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         row.set_state("running")
-        await pilot.pause()
+        # bug-031: wait past the 0.08s spinner interval so the tick
+        # rewrites the title with a spinner frame.
+        await pilot.pause(0.1)
         assert row.state == "running"
-        assert "▸" in row.title
+        # bug-031: ``running`` is an animated state — spinner frame,
+        # not the pre-bug-031 static ``▸``.
+        assert any(frame in row.title for frame in _SPINNER_FRAMES)
         # `running` is a default-palette state — no CSS class.
         assert "-completed" not in row.classes
         assert "-failed" not in row.classes

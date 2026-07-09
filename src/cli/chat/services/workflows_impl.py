@@ -234,6 +234,14 @@ class WorkflowRunRecord:
     # closing the "silent retry loop" symptom from session ses_629b626e.
     error_message: str | None = None
     failed_node: str | None = None
+    # bug-031: terminal outputs from ``workflow.run.completed.payload.
+    # outputs``. Populated by ``_drain_workflow_bridge`` on the
+    # ``RUN_COMPLETED`` event (see ``_maybe_capture_outputs``).
+    # ``status()`` surfaces this into ``WorkflowRunStatusView.outputs``
+    # so the blocking ``run_workflow`` tool can return the outputs in
+    # the same turn as the tool call — closing the "12 min dead zone
+    # after workflow completes" symptom from session ses_af5980ab.
+    outputs: dict[str, Any] | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -468,6 +476,10 @@ class WorkflowsImpl(AbstractWorkflows):
                 # bug-025: hot-path diagnostic surfacing.
                 error_message=record.error_message,
                 failed_node=record.failed_node,
+                # bug-031: hot-path outputs surfacing so the blocking
+                # ``run_workflow`` tool sees the terminal payload as
+                # soon as ``_drain_workflow_bridge`` caches it.
+                outputs=record.outputs,
             )
         # Cold-read: neither the registry nor the store may know the run.
         return self._status_from_meta_and_tail(
@@ -1010,6 +1022,11 @@ class WorkflowsImpl(AbstractWorkflows):
                 # RUN_FAILED shouldn't get its message clobbered by
                 # the parent's "node X raised Y" summary).
                 self._maybe_capture_error(record, event)
+                # bug-031: capture terminal outputs on RUN_COMPLETED so
+                # the blocking ``run_workflow`` tool's poll sees a
+                # populated ``outputs`` dict on ``status()`` in the same
+                # turn — closes the "workflow completes silently" gap.
+                self._maybe_capture_outputs(record, event)
 
             # Emit the UI event via the session store (durability
             # first — spec-006 pattern). Node-scoped envelope fields
@@ -1037,6 +1054,17 @@ class WorkflowsImpl(AbstractWorkflows):
                 WIRE_WORKFLOW_PROGRESS,
                 ui_payload,
             )
+
+            # bug-031 Fix 5: notify the layout manager on EVERY bridge
+            # emit — not just the terminal transition. The manager's
+            # ``notify_card_state_changed`` idempotence window (250ms)
+            # collapses N node-level notifications into a single
+            # reorder pass, which pushes ``format_live_workflow_strip``
+            # (wall-clock elapsed) so the status-line-2 strip keeps
+            # ticking between phase transitions. Session ses_af5980ab
+            # showed 90.4s + 65s dead zones on the strip because the
+            # pre-bug-031 code only pinged the manager on terminal.
+            self._notify_layout(run_id)
 
             # Terminal-kind bookkeeping.
             if event.kind in _TERMINAL_EXECUTOR_KINDS:
@@ -1128,6 +1156,38 @@ class WorkflowsImpl(AbstractWorkflows):
                 record.error_message = reason[:400]
 
     @staticmethod
+    def _maybe_capture_outputs(
+        record: WorkflowRunRecord,
+        event: WorkflowEvent,
+    ) -> None:
+        """Capture terminal outputs from a ``workflow.run.completed`` bridge event.
+
+        bug-031. The executor's ``WorkflowRunCompletedEvent`` carries
+        the run's terminal outputs under ``payload.outputs`` (see
+        ``src/workflows/executor.py:1571``). The blocking
+        ``run_workflow`` tool polls ``status()`` at ~500ms; once this
+        method stashes ``payload.outputs`` on the record,
+        ``WorkflowsImpl.status()`` surfaces it into
+        ``WorkflowRunStatusView.outputs`` and the tool returns to the
+        model in the same turn — closing the "workflow completes
+        silently, model 12min silent" symptom from ses_af5980ab.
+
+        First-writer-wins: replaying a duplicate ``RUN_COMPLETED``
+        won't clobber a prior capture. Non-``RUN_COMPLETED`` kinds are
+        no-ops; ``RUN_FAILED`` / ``RUN_TIMED_OUT`` / ``RUN_ABORTED``
+        payloads don't carry ``outputs`` and ``error_message`` covers
+        their diagnostic surface.
+        """
+        if record.outputs is not None:
+            return
+        if event.kind is not WorkflowEventKind.RUN_COMPLETED:
+            return
+        payload = event.payload if isinstance(event.payload, dict) else {}
+        outputs = payload.get("outputs")
+        if isinstance(outputs, dict):
+            record.outputs = outputs
+
+    @staticmethod
     def _update_node_counts(
         counts: NodeCounts,
         kind: WorkflowEventKind,
@@ -1193,8 +1253,12 @@ class WorkflowsImpl(AbstractWorkflows):
         # Bounded tail scan for a terminal event. Any of
         # `workflow.run.{completed,failed,timed_out,aborted}` wins
         # over the meta's status.
-        terminal_status, terminal_diag = _scan_tail_for_terminal(
-            run_dir.events_path, tail_bytes=tail_bytes,
+        # bug-031: tuple is now (status, diag, outputs) so late polls
+        # past ``_REGISTRY_EVICTION_SECONDS`` still see the outputs.
+        terminal_status, terminal_diag, terminal_outputs = (
+            _scan_tail_for_terminal(
+                run_dir.events_path, tail_bytes=tail_bytes,
+            )
         )
         effective_status = terminal_status or base_status
         phase = executor_status_to_phase(effective_status)
@@ -1216,6 +1280,9 @@ class WorkflowsImpl(AbstractWorkflows):
             ref=ref,
             error_message=error_message,
             failed_node=failed_node,
+            # bug-031: cold-read outputs — populated when the JSONL
+            # tail carries a ``workflow.run.completed`` row.
+            outputs=terminal_outputs,
         )
 
     # ------------------------------------------------------------------
@@ -1551,36 +1618,48 @@ def _scan_tail_for_terminal(
     events_path: Any,
     *,
     tail_bytes: int,
-) -> tuple[WorkflowRunStatus | None, tuple[str | None, str | None] | None]:
+) -> tuple[
+    WorkflowRunStatus | None,
+    tuple[str | None, str | None] | None,
+    dict[str, Any] | None,
+]:
     """Read the last `tail_bytes` of the JSONL; return a terminal status if found.
 
     Best-effort — a missing file, unreadable bytes, or a partial
-    trailing line all return ``(None, None)`` so the caller falls back
-    to the meta sidecar's status.
+    trailing line all return ``(None, None, None)`` so the caller
+    falls back to the meta sidecar's status.
 
-    bug-025: returns a ``(status, diag)`` tuple. ``diag`` is
+    bug-025: returns a ``(status, diag, outputs)`` tuple. ``diag`` is
     ``(error_message, failed_node)`` when a failure-shaped terminal
     was found, otherwise ``None``. Callers on non-failure terminals
     (COMPLETED / TIMED_OUT / ABORTED) get ``diag=None``; a failed
     terminal populates as many fields as the JSONL row exposes.
+
+    bug-031: extends the return with a third element — ``outputs`` —
+    populated on a ``workflow.run.completed`` row with a
+    ``payload.outputs`` dict. Non-completion terminals return
+    ``outputs=None``. Late polls of the blocking ``run_workflow``
+    tool that miss the 60s registry window (``_REGISTRY_EVICTION_SECONDS``)
+    still get the outputs through this cold-read fallback so a slow
+    workflow's model-facing prose surface isn't lost.
 
     NODE_FAILED entries can also seed the diagnostic when a
     ``RUN_FAILED`` didn't carry a `reason` (older JSONL rows) —
     walking bottom-up, we take the first failure-shaped row.
     """
     if not events_path.exists():
-        return None, None
+        return None, None, None
     try:
         size = events_path.stat().st_size
     except OSError:
-        return None, None
+        return None, None, None
     start = max(0, size - tail_bytes)
     try:
         with events_path.open("rb") as fh:
             fh.seek(start)
             data = fh.read()
     except OSError:
-        return None, None
+        return None, None, None
 
     text = data.decode("utf-8", errors="ignore")
     for line in reversed(text.splitlines()):
@@ -1606,6 +1685,16 @@ def _scan_tail_for_terminal(
                     node_name = payload.get("node_name") or row.get("node_name")
                     if isinstance(node_name, str) and node_name:
                         failed_node = node_name
-                return status, (error_message, failed_node)
-            return status, None
-    return None, None
+                return status, (error_message, failed_node), None
+            # bug-031: SUCCEEDED terminals carry outputs. Pull them so
+            # late polls (past ``_REGISTRY_EVICTION_SECONDS``) still
+            # see the outputs dict on cold-read.
+            outputs: dict[str, Any] | None = None
+            if status is WorkflowRunStatus.SUCCEEDED:
+                payload = row.get("payload")
+                if isinstance(payload, dict):
+                    payload_outputs = payload.get("outputs")
+                    if isinstance(payload_outputs, dict):
+                        outputs = payload_outputs
+            return status, None, outputs
+    return None, None, None
