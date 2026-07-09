@@ -35,11 +35,13 @@ Sub-agent event routing lands via
 from __future__ import annotations
 
 import contextlib
+import json
 from datetime import UTC, datetime
 from typing import Any
 
 from textual.reactive import reactive
-from textual.widgets import Collapsible
+from textual.widget import Widget
+from textual.widgets import Collapsible, Static
 
 
 _SPINNER_FRAMES = ("⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷")
@@ -99,6 +101,12 @@ class WorkflowNodeRow(Collapsible):
     _ERROR_PREVIEW_MAX_LEN = 60
     """Coordinator #4 lock — fixed 60 char error preview truncation."""
 
+    _OUTPUT_PREVIEW_MAX_LEN = 500
+    """bug-032: pretty-printed `payload.output` is truncated to this
+    many chars in the expanded body (spec says ~500). Longer content
+    gets a trailing ``…`` marker so the user knows there is more.
+    """
+
     state = reactive("starting", init=False)
     """Reactive; `watch_state` applies the `.-<state>` CSS class."""
 
@@ -121,6 +129,10 @@ class WorkflowNodeRow(Collapsible):
         # stopped by ``watch_state`` when the row transitions to a
         # terminal state so the widget goes quiescent post-run.
         self._spinner_handle: Any | None = None
+        # bug-032: reference to the last-mounted output preview
+        # widget so ``set_output`` can remove the previous mount
+        # before mounting a fresh one (idempotent).
+        self._output_widget: Widget | None = None
         title = f"{self.STATE_GLYPHS['starting']} {node_name}"
         super().__init__(title=title, collapsed=True)
 
@@ -172,6 +184,49 @@ class WorkflowNodeRow(Collapsible):
             self._error_preview = error_preview
         self.state = state
         self._update_title()
+
+    def set_output(self, output: Any) -> None:
+        """bug-032: mount a pretty-printed preview of `output` in the body.
+
+        Fired by
+        [`WorkflowRenderer._on_node_completed`][cli.chat.widgets.card_body.workflow.WorkflowRenderer._on_node_completed]
+        when a `WorkflowNodeCompletedEvent`'s `payload.output` is
+        present. Idempotent — a second call removes the previously
+        mounted widget before mounting the new one so the row body
+        never accumulates stale previews.
+
+        No-op when `output` is `None`, an empty dict, or an empty
+        string — nothing worth showing. Non-JSON-serialisable values
+        fall back to `repr()` so the widget still renders instead of
+        raising during mount.
+        """
+        # No-op guard: `None`, `{}`, `""`. Non-empty falsy shapes
+        # like `0` or `False` would also fail an ordinary truthy
+        # check, so match on the exact three "nothing worth showing"
+        # values enumerated in the spec.
+        if output is None:
+            return
+        if isinstance(output, (dict, list, str)) and not output:
+            return
+        try:
+            pretty = json.dumps(output, indent=2, default=repr)
+        except (TypeError, ValueError):
+            pretty = repr(output)
+        if len(pretty) > self._OUTPUT_PREVIEW_MAX_LEN:
+            # Reserve one char for the trailing ellipsis so the total
+            # rendered length stays at the advertised limit.
+            pretty = pretty[: self._OUTPUT_PREVIEW_MAX_LEN - 1] + "…"
+        # Idempotency: drop the previous preview mount before adding
+        # the new one. A failed remove (row not yet mounted, previous
+        # widget already detached) must not block the new mount.
+        if self._output_widget is not None:
+            with contextlib.suppress(Exception):
+                self._output_widget.remove()
+            self._output_widget = None
+        widget = Static(pretty)
+        self._output_widget = widget
+        with contextlib.suppress(Exception):
+            self.mount(widget)
 
     def apply_sub_agent_event(self, event: Any) -> None:
         """Route a sub-agent `Event` to this row.

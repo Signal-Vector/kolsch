@@ -442,7 +442,15 @@ class WorkflowRenderer(Vertical):
         self._register_node_with_adapter(row, trace_id_val)
 
     def _on_node_completed(self, payload: dict[str, Any]) -> None:
-        """Transition the row to `completed`; inline any summary."""
+        """Transition the row to `completed`; inline any summary.
+
+        bug-032: also extract `payload.output` (the real emitter
+        field — bash: `{stdout, stderr, exit_code}`; agent: bound
+        outputs) and forward it to
+        [`WorkflowNodeRow.set_output`][cli.chat.widgets.workflow_node_row.WorkflowNodeRow.set_output]
+        so the expanded body renders the completed-node data instead
+        of staying empty.
+        """
         node_name = payload.get("node_name")
         if not isinstance(node_name, str):
             return
@@ -450,17 +458,28 @@ class WorkflowRenderer(Vertical):
         if row is None:
             return
         details = None
+        output: Any = None
         inner = payload.get("payload")
         if isinstance(inner, dict):
             candidate = inner.get("summary")
             if isinstance(candidate, str):
                 details = candidate
+            # bug-032: `output` is the real field the executor emits
+            # at ``src/workflows/executor.py:1482-1536``. Pre-bug-032
+            # the renderer read only ``summary`` (never emitted) and
+            # dropped ``output`` on the floor.
+            output = inner.get("output")
         # Fallback: top-level `summary` (in case the emitter hoists).
         if details is None:
             candidate = payload.get("summary")
             if isinstance(candidate, str):
                 details = candidate
         row.set_state("completed", details=details)
+        # bug-032: forward the preview AFTER `set_state` so the row
+        # is already in its terminal palette when the body mounts.
+        # `set_output` is a no-op for `None` / empty containers so we
+        # can call it unconditionally.
+        row.set_output(output)
         trace_id = payload.get("trace_id")
         self._unregister_node_from_adapter(
             trace_id if isinstance(trace_id, str) else None,
