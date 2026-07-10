@@ -137,6 +137,17 @@ def _log_task_exception(task: asyncio.Task[Any]) -> None:
         )
 
 
+def _is_card_mounting_tool(tool_name: str) -> bool:
+    """True when the tool opens its own card, making the transcript block redundant.
+
+    bug-036a: catches ``run_workflow`` and bug-028's per-workflow
+    virtuals (``run_workflow_<bundle>_<name>``). Both open a
+    ``WorkflowCard`` — the transcript-root ToolCallBlock underneath
+    is redundant with the card body.
+    """
+    return tool_name == "run_workflow" or tool_name.startswith("run_workflow_")
+
+
 # ---------------------------------------------------------------------------
 # spec-006: CardMountState Protocol + in-memory stub
 # ---------------------------------------------------------------------------
@@ -462,6 +473,13 @@ class EventAdapter:
         # tool_call_id → arguments dict (captured on TOOL_CALLED so
         # TOOL_RESULT / TOOL_FAILED can render the full signature).
         self._tool_call_args: dict[str, dict[str, Any]] = {}
+        # TODO(bug-036a): bound this set — currently grows for the
+        # session lifetime.
+        # bug-036a: tool_call_ids whose transcript-root ToolCallBlock
+        # was suppressed on TOOL_CALLED because the tool mounts its
+        # own card. Consulted on TOOL_RESULT to skip the matching
+        # result-side mount.
+        self._suppressed_tool_calls: set[str] = set()
         # call_id → AssistantProse widget (streaming assistant text).
         # Populated on first MODEL_STREAMING_TOKEN for a call; cleared
         # on MODEL_RESPONSE for the same call.
@@ -1062,6 +1080,11 @@ class EventAdapter:
 
         spec-013: `trace_id` match dispatches into the workflow
         node row instead of updating the top-level turn verb.
+
+        bug-036a: on the transcript-root branch, the ToolCallBlock
+        mount is skipped for card-mounting tools (`run_workflow` +
+        `run_workflow_*` virtuals). Argument capture + turn-verb
+        update are unchanged.
         """
         if self._route_to_workflow_node(event):
             return
@@ -1077,12 +1100,20 @@ class EventAdapter:
                 f"Calling {tool_name}",
                 target=args_summary,
             )
+            if _is_card_mounting_tool(tool_name) and tool_call_id:
+                self._suppressed_tool_calls.add(tool_call_id)
 
     async def _handle_tool_result(self, event: Event) -> None:
         """Mount a ``ToolCallBlock`` with the completed result.
 
         spec-013: `trace_id` match dispatches into the workflow
         node row.
+
+        bug-036a: transcript-root mount is skipped when the matching
+        call was suppressed on TOOL_CALLED, when the tool is
+        card-mounting by name, or when the result payload carries a
+        ``card_id`` (belt-and-braces for future card-mounting tools
+        the predicate doesn't yet know about).
         """
         if self._route_to_workflow_node(event):
             return
@@ -1091,6 +1122,12 @@ class EventAdapter:
         args = self._tool_call_args.pop(tool_call_id, {})
         args_str = _format_args(args)
         result = event.data.get("result") or {}
+        suppressed = tool_call_id in self._suppressed_tool_calls
+        card_id_present = isinstance(result, dict) and bool(result.get("card_id"))
+        if suppressed or _is_card_mounting_tool(tool_name) or card_id_present:
+            self._suppressed_tool_calls.discard(tool_call_id)
+            await self._app.set_turn_verb("Thinking…", target="")
+            return
         body = _format_tool_result(result)
         await self._app.mount_tool_call(tool_name, args_str, body, failed=False)
         await self._app.set_turn_verb("Thinking…", target="")

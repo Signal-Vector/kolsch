@@ -1,0 +1,240 @@
+"""bug-036a — rendered-output snapshot tests (Layer 2 infrastructure).
+
+Snapshots capture the app's actual rendered screen text (via
+``app.screen.render_lines``) and diff against a checked-in
+``.txt`` golden. This catches mount-tree bugs, visibility bugs,
+and content bugs — the classes bug-035 shipped past because
+``row.query(AssistantProse)`` returns a widget regardless of
+whether it landed inside ``Contents`` (bug-035's root cause) or
+is visible at all.
+
+Update goldens explicitly:
+
+    SNAPSHOT_UPDATE=1 pytest tests/cli/chat/test_bug036a_snapshot.py
+
+Any future regression is a character-level diff against the
+golden files under ``tests/snapshots/bug036a/``.
+"""
+
+from __future__ import annotations
+
+import json
+from pathlib import Path
+from typing import Any
+from uuid import uuid4
+
+import pytest
+from textual.app import App, ComposeResult
+from textual.containers import VerticalScroll
+
+from cli.chat.event_adapter import EventAdapter
+from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
+from schemas.entities import Actor
+from schemas.events import Event, EventType
+from schemas.identifiers import EventId, SessionId, ThreadId
+from tests.cli.chat.snapshot_helpers import assert_snapshot_matches
+
+_FIXTURE_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "fixtures" / "sessions" / "ses_bug036a_jd_review_excerpt.jsonl"
+)
+_APP_SIZE = (200, 100)
+
+
+def _load_fixture() -> list[dict[str, Any]]:
+    return [
+        json.loads(line)
+        for line in _FIXTURE_PATH.read_text().splitlines()
+        if line
+    ]
+
+
+def _event_from_row(row: dict[str, Any]) -> Event:
+    return Event(
+        event_id=EventId(row["event_id"]),
+        parent_event_id=row.get("parent_event_id"),
+        thread_id=ThreadId(row["thread_id"]),
+        session_id=SessionId(row["session_id"]),
+        type=EventType(row["type"]),
+        data=row.get("data") or {},
+        actor=Actor(**(row.get("actor") or {"kind": "system"})),
+        created_at=row["created_at"],
+        trace_id=row.get("trace_id"),
+    )
+
+
+class _StubTranscriptApp(App[None]):
+    """Same stub used by ``test_bug036a_fixture_replay.py``.
+
+    A ``#transcript`` VerticalScroll is the only widget the adapter
+    needs to mount CardWidgets into; every other ``ChatApp`` surface
+    is a no-op stub. This keeps the snapshot golden focused on
+    exactly what bug-036a changes — the transcript region.
+
+    CSS: make the transcript fill the screen height + width so the
+    snapshot captures the mounted widgets. Without this the
+    VerticalScroll auto-sizes to ``height: auto`` and the golden
+    ends up blank.
+    """
+
+    CSS = """
+    Screen { height: 100vh; }
+    #transcript { height: 1fr; width: 100%; }
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+
+    def compose(self) -> ComposeResult:
+        yield VerticalScroll(id="transcript")
+
+    async def mount_user_message(self, text: str, timestamp: Any) -> None:
+        _ = text, timestamp
+
+    async def mount_assistant_message(self, text: str) -> None:
+        _ = text
+
+    async def mount_assistant_streaming_widget(self) -> Any:
+        class _P:
+            async def append(self, text: str) -> None:
+                _ = text
+        return _P()
+
+    async def mount_tool_call(
+        self,
+        tool_name: str,
+        args: str,
+        body: str,
+        *,
+        failed: bool = False,
+        recovery_hint: str | None = None,
+    ) -> None:
+        _ = tool_name, args, body, failed, recovery_hint
+
+    async def mount_notice(self, text: str) -> None:
+        _ = text
+
+    async def mount_exchange_failed(self, message: str) -> None:
+        _ = message
+
+    async def mount_approval_block(self, *args: Any, **kwargs: Any) -> Any:
+        _ = args, kwargs
+        return None
+
+    async def set_turn_verb(self, verb: str, *, target: str = "") -> None:
+        _ = verb, target
+
+    def clear_awaiting_approval(self) -> None:
+        return None
+
+    def last_assistant_text(self) -> str:
+        return ""
+
+    def set_last_assistant_text(self, text: str) -> None:
+        _ = text
+
+
+async def _replay_fixture(app: _StubTranscriptApp) -> EventAdapter:
+    adapter = EventAdapter(app)
+    for row in _load_fixture():
+        event = _event_from_row(row)
+        await adapter.handle(event)
+    return adapter
+
+
+@pytest.mark.asyncio
+async def test_snapshot_dedupe_transcript_all_expanded() -> None:
+    """Golden: fixture replay with every node row expanded.
+
+    Expected content: workflow card body visible, each agent node's
+    ``AssistantProse`` rendered exactly once (no JSON preview
+    underneath), no standalone ``ToolCallBlock`` for the
+    ``run_workflow*`` invocation.
+    """
+    app = _StubTranscriptApp()
+    async with app.run_test(size=_APP_SIZE) as pilot:
+        await _replay_fixture(app)
+        await pilot.pause()
+
+        for row in pilot.app.query(WorkflowNodeRow):
+            row.collapsed = False
+        await pilot.pause()
+
+        assert_snapshot_matches(
+            pilot.app, "bug036a/dedupe_transcript_all_expanded",
+        )
+
+
+@pytest.mark.asyncio
+async def test_snapshot_dedupe_transcript_all_collapsed() -> None:
+    """Golden: fixture replay with every row still collapsed.
+
+    Expected content: workflow card + node row titles only, no
+    bodies visible. Catches "widget landed as sibling of Contents"
+    — a sibling would remain visible when collapsed, and the
+    golden would contain response text where it shouldn't.
+    """
+    app = _StubTranscriptApp()
+    async with app.run_test(size=_APP_SIZE) as pilot:
+        await _replay_fixture(app)
+        await pilot.pause()
+        # Rows are collapsed by default — no expand needed.
+
+        assert_snapshot_matches(
+            pilot.app, "bug036a/dedupe_transcript_all_collapsed",
+        )
+
+
+@pytest.mark.asyncio
+async def test_snapshot_late_message_race_fallback() -> None:
+    """Golden: bug-032-shape late-message race falls back to set_output.
+
+    Simulates AC #4 sub-test 2: ``_on_node_completed`` fires first
+    (freezing the buffer + running the JSON-preview ``set_output``),
+    then a late ``agent.message`` arrives via
+    ``apply_sub_agent_event`` — dropped by ``_buffer_frozen``. The
+    gate does NOT fire because ``_saw_agent_message`` stayed False;
+    the ``set_output`` preview remains mounted, so the row is
+    never blank. Golden shows the JSON-preview text under the row.
+    """
+    app = _StubTranscriptApp()
+    async with app.run_test(size=_APP_SIZE) as pilot:
+        await pilot.pause()
+
+        # Build the row in isolation — this scenario is per-row, not
+        # a full fixture replay.
+        row = WorkflowNodeRow(
+            node_name="review",
+            node_type="kolsch/nodes/agent",
+        )
+        transcript = pilot.app.query_one("#transcript", VerticalScroll)
+        await transcript.mount(row)
+        await pilot.pause()
+
+        # Race: NODE_COMPLETED first. `set_state("completed")`
+        # freezes the buffer via `watch_state`; `set_output` mounts
+        # the JSON preview because `_saw_agent_message` is False.
+        row.set_state("completed")
+        row.set_output({"summary": "the answer is 42"})
+        await pilot.pause()
+
+        # Late `agent.message` — dropped by `_buffer_frozen`.
+        late = Event(
+            event_id=EventId(f"ev_{uuid4()}"),
+            parent_event_id=None,
+            thread_id=ThreadId(f"th_{uuid4()}"),
+            session_id=SessionId(f"ses_{uuid4()}"),
+            type=EventType.AGENT_MESSAGE,
+            data={"content": {"text": "the answer is 42"}, "exchange_id": "x"},
+            actor=Actor(kind="agent", id="ag_snap"),
+            created_at="2026-07-09T00:00:00Z",
+        )
+        row.apply_sub_agent_event(late)
+
+        # Expand so the JSON preview is visible for the snapshot.
+        row.collapsed = False
+        await pilot.pause()
+
+        assert_snapshot_matches(
+            pilot.app, "bug036a/late_race_shows_output_widget",
+        )

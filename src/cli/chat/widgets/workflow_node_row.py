@@ -289,9 +289,16 @@ class WorkflowNodeRow(Collapsible):
         *,
         node_name: str,
         trace_id: str | None = None,
+        node_type: str | None = None,
     ) -> None:
         self._node_name = node_name
         self._trace_id = trace_id
+        # bug-036a: node type string from ``NODE_STARTED.payload.type``
+        # (e.g. ``"kolsch/nodes/agent"``). Used by ``set_output`` to
+        # skip the JSON preview when the row already rendered the
+        # agent's response via ``agent.message`` → ``AssistantProse``.
+        # bug-036b will reuse this same slot for the title suffix.
+        self._node_type = node_type
         self._sub_agent_turn_count = 0
         self._error_preview: str | None = None
         self._details: str | None = None
@@ -323,6 +330,11 @@ class WorkflowNodeRow(Collapsible):
         # transition. Once frozen, ``apply_sub_agent_event`` short-
         # circuits — no append, no mount, no turn-count bump.
         self._buffer_frozen: bool = False
+        # bug-036a: latched by ``apply_sub_agent_event`` when the
+        # inner event is ``agent.message``. Read by ``set_output`` to
+        # skip the JSON-preview fallback for agent nodes whose
+        # response already rendered via ``AssistantProse``.
+        self._saw_agent_message: bool = False
         title = f"{self.STATE_GLYPHS['starting']} {node_name}"
         super().__init__(title=title, collapsed=True)
 
@@ -402,6 +414,14 @@ class WorkflowNodeRow(Collapsible):
             return
         if isinstance(output, (dict, list, str)) and not output:
             return
+        # bug-036a: agent nodes render their response via
+        # ``agent.message`` → ``AssistantProse`` in the sub-agent
+        # stream. The completed-node ``payload.output`` echoes the
+        # same content as JSON — showing both is the duplicate the
+        # user reported. Skip the fallback when the row already
+        # observed at least one ``agent.message``.
+        if self._node_type == "kolsch/nodes/agent" and self._saw_agent_message:
+            return
         if isinstance(output, dict):
             pretty = _format_content_dict(
                 output, max_chars=self._OUTPUT_PREVIEW_MAX_LEN,
@@ -445,10 +465,34 @@ class WorkflowNodeRow(Collapsible):
         if self._buffer_frozen:
             return
         self._event_buffer.append(event)
+        # bug-036a: latch the "saw an agent.message" flag BEFORE the
+        # collapsed check so a row that stays collapsed through the
+        # whole run still gates ``set_output`` correctly.
+        if self._extract_inner_event_type(event) == "agent.message":
+            self._saw_agent_message = True
         self._sub_agent_turn_count += 1
         self._update_title()
         if not self.collapsed:
             self._mount_sub_agent_widget(event)
+
+    @staticmethod
+    def _extract_inner_event_type(event: Any) -> str:
+        """Return the inner event's type as a string, or ``""``.
+
+        bug-036a: both the real pydantic ``Event`` and
+        ``_ReconstructedSubAgentEvent`` (workflow.py) expose ``type``.
+        The real ``Event.type`` is an ``EventType`` enum whose
+        ``value`` is the wire string (e.g. ``"agent.message"``); the
+        reconstructed stub carries the enum itself. Coerce both to
+        the string surface.
+        """
+        raw = getattr(event, "type", None)
+        if raw is None:
+            return ""
+        value = getattr(raw, "value", None)
+        if isinstance(value, str):
+            return value
+        return str(raw)
 
     # ------------------------------------------------------------------
     # Reactive + rendering

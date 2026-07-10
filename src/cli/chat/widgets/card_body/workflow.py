@@ -501,11 +501,31 @@ class WorkflowRenderer(Vertical):
         invocation_id_val = (
             invocation_id if isinstance(invocation_id, str) else None
         )
+        # bug-036a: forward the node type (e.g. ``"kolsch/nodes/agent"``)
+        # so the row's ``set_output`` gate can suppress the JSON
+        # preview when an agent response already rendered. Executor
+        # emits ``type`` nested under ``payload.payload`` (see the
+        # NODE_STARTED envelope shape); fall back to a top-level
+        # ``payload.type`` for older payload shapes just in case.
+        node_type_val: str | None = None
+        inner = payload.get("payload")
+        if isinstance(inner, dict):
+            candidate = inner.get("type")
+            if isinstance(candidate, str):
+                node_type_val = candidate
+        if node_type_val is None:
+            candidate = payload.get("type")
+            if isinstance(candidate, str):
+                node_type_val = candidate
         if node_name in self._node_rows:
             # Idempotent — a replay of the same NODE_STARTED shouldn't
             # mount a second row.
             return
-        row = WorkflowNodeRow(node_name=node_name, trace_id=trace_id_val)
+        row = WorkflowNodeRow(
+            node_name=node_name,
+            trace_id=trace_id_val,
+            node_type=node_type_val,
+        )
         self._node_rows[node_name] = row
         self._node_list.add_node(row)
         self._register_node_with_adapter(

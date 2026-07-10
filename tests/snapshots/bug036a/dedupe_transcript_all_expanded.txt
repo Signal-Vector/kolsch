@@ -1,0 +1,31 @@
+╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
+│ ▸ Workflow · andre/workflows/job_description_review                                                                                                                                                  │
+│ [1/1]  ▓▓▓▓▓▓▓▓  <ELAPSED>s                                                                                                                                                                              │
+│ ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ │
+│   ▼ ✓ headhunter_review · 1 sub-agent turns                                                                                                                                                          │
+│                                                                                                                                                                                                      │
+│     ╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮  │
+│     │ [ {"requirement": "Deep blockchain expertise including L1/L2 protocol design, security, and shipped production systems", "score": 10, "rationale": "This is the scarcest skill set in the   │  │
+│     │ market and the role's core technical differentiator; candidates without demonstrated shipped protocol work will be screened out immediately by both the founders and technical              │  │
+│     │ investors."}, {"requirement": "12+ years engineering experience with significant architecture ownership", "score": 9, "rationale": "The equity-partner CTO mandate requires executive       │  │
+│     │ credibility and deep scar tissue that only comes from over a decade of architecture ownership; shorter tenures won't pass founder or investor diligence."}, {"requirement": "Hands-on Rust  │  │
+│     │ programming proficiency with systems-level engineering strength", "score": 9, "rationale": "Rust is a niche systems language and explicitly labeled as mandatory; this single requirement   │  │
+│     │ eliminates the vast majority of otherwise qualified platform engineers and architects."}, {"requirement": "Deep Google Cloud Platform (GCP) architecture and infrastructure mastery",       │  │
+│     │ "score": 8, "rationale": "The entire infrastructure strategy is explicitly anchored to Google Cloud with no flexibility; candidates lacking production-grade GCP depth cannot execute the   │  │
+│     │ cloud foundation regardless of other strengths."}, {"requirement": "Distributed systems, scalability patterns, and high-traffic platform architecture expertise", "score": 8, "rationale":  │  │
+│     │ "The role demands designing a global entertainment ecosystem from scratch; absence of proven high-traffic distributed systems ownership is a dealbreaker for platform reliability and       │  │
+│     │ scale."}, {"requirement": "Practical production security instincts, threat modeling, and secure SDLC leadership", "score": 8, "rationale": "A blockchain-based creator platform is a        │  │
+│     │ high-value attack target; weak security credentials or lack of practical threat modeling experience will kill candidacy during technical diligence."}, {"requirement": "Proven track record │  │
+│     │ of shipping high-impact technical decisions into production", "score": 7, "rationale": "In a founding-equity role without guaranteed salary, founders and investors need hard evidence of   │  │
+│     │ production outcomes; architects who have only designed without shipping are too risky."}, {"requirement": "Demonstrated ability to build and lead distributed engineering teams in          │  │
+│     │ remote/async environments", "score": 7, "rationale": "The team is globally distributed and the role operates part-time remotely; candidates without proven experience forming and           │  │
+│     │ motivating distributed teams will fail in this operating model."}, {"requirement": "Strong written communication and async-native leadership capability", "score": 6, "rationale": "The     │  │
+│     │ role explicitly requires async-native leadership; poor written communication skills will fragment a distributed part-time team and slow velocity regardless of technical brilliance."},     │  │
+│     │ {"requirement": "Product-focused mindset that aligns technical decisions with user impact", "score": 5, "rationale": "Early-stage equity CTOs who are purely infrastructure-focused often   │  │
+│     │ build without market fit; this filter ensures the candidate can translate technical vision into investor-respectable product value."} ]                                                     │  │
+│     │                                                                                                                                                                                             │  │
+│     ╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯  │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+│                                                                                                                                                                                                      │
+╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

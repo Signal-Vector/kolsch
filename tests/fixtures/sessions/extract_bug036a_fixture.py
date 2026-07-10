@@ -1,0 +1,210 @@
+"""Extract the bug-036a JSONL fixture from a real user session.
+
+The fixture backs ``tests/cli/chat/test_bug036a_fixture_replay.py``
+(the AC #3 flagship test) + the AC #5 snapshot tests. It is a slice
+of a real session, not synthetic — the whole point of AC #3 is
+"replay the events a real user's chat produced and prove the fix
+holds against that shape".
+
+Refresh the fixture:
+
+    uv run python tests/fixtures/sessions/extract_bug036a_fixture.py \\
+        ~/Documents/kolsch/sessions/ses_<any-recent-successful-jd-run>.jsonl
+
+The canonical source used at spec-write time is
+``ses_d3029e63-7157-46c2-8834-070d0210f073.jsonl``. Any session that
+invokes ``run_workflow_*`` on the ``job_description_review`` workflow
+and completes at least one agent node with a ``sub_agent_event`` of
+kind ``agent.message`` will produce an equivalent fixture.
+
+The extracted excerpt keeps:
+
+- The session bootstrap (``session.opened`` + ``config.set`` +
+  ``thread.exchange_started`` + the ``user.message`` that triggered
+  the workflow).
+- The ``tool.called`` for ``run_workflow*``.
+- ``ui.event`` envelopes: ``kolsch.card.opened`` (WorkflowCard
+  mount), ``kolsch.workflow.progress`` for at least
+  ``run.started`` + one ``node.started`` (agent type) +
+  one ``node.completed`` for that node.
+- ``ui.event`` envelopes: ``kolsch.workflow.node.sub_agent_event``
+  containing at least one inner ``agent.message`` scoped to the
+  agent node.
+- The ``tool.result`` for the workflow call (must carry ``card_id``).
+
+Everything else (secondary nodes, extra sub-agent chatter, model
+request/response chatter that isn't inside the workflow scope) is
+dropped so the fixture stays small.
+"""
+
+from __future__ import annotations
+
+import argparse
+import json
+import sys
+from pathlib import Path
+from typing import Any
+
+_FIXTURE_OUT = (
+    Path(__file__).resolve().parent / "ses_bug036a_jd_review_excerpt.jsonl"
+)
+
+
+def _load(path: Path) -> list[dict[str, Any]]:
+    return [json.loads(line) for line in path.read_text().splitlines() if line]
+
+
+def _extract(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Return a small representative excerpt covering the fixture shape."""
+    out: list[dict[str, Any]] = []
+
+    def keep(evt: dict[str, Any]) -> None:
+        out.append(evt)
+
+    # Bootstrap: first session.opened + config.set + thread.exchange_started
+    # + user.message.
+    bootstrap_kinds = {
+        "session.opened",
+        "config.set",
+        "thread.exchange_started",
+        "user.message",
+    }
+    seen_bootstrap: set[str] = set()
+    for evt in events:
+        t = evt.get("type", "")
+        if t in bootstrap_kinds and t not in seen_bootstrap:
+            keep(evt)
+            seen_bootstrap.add(t)
+            if bootstrap_kinds <= seen_bootstrap:
+                break
+
+    # Workflow call: first tool.called for run_workflow* (transcript-root).
+    workflow_call: dict[str, Any] | None = None
+    for evt in events:
+        if evt.get("type") != "tool.called":
+            continue
+        name = evt.get("data", {}).get("tool_name", "")
+        if isinstance(name, str) and (
+            name == "run_workflow" or name.startswith("run_workflow_")
+        ):
+            workflow_call = evt
+            break
+    if workflow_call is None:
+        raise SystemExit("no run_workflow tool.called in source session")
+    keep(workflow_call)
+    tool_call_id = workflow_call.get("data", {}).get("tool_call_id")
+
+    # ui.event: card.opened (workflow card mount).
+    for evt in events:
+        if evt.get("type") != "ui.event":
+            continue
+        data = evt.get("data", {})
+        if data.get("kind") == "kolsch.card.opened":
+            keep(evt)
+            break
+
+    # ui.event: workflow.run.started.
+    for evt in events:
+        if evt.get("type") != "ui.event":
+            continue
+        data = evt.get("data", {})
+        if data.get("kind") != "kolsch.workflow.progress":
+            continue
+        payload = data.get("payload", {})
+        if payload.get("kind") == "workflow.run.started":
+            keep(evt)
+            break
+
+    # Find the first agent-type node's started/completed + its
+    # sub_agent_event(agent.message).
+    target_node_name: str | None = None
+    target_invocation_id: str | None = None
+    node_started_evt: dict[str, Any] | None = None
+    for evt in events:
+        if evt.get("type") != "ui.event":
+            continue
+        data = evt.get("data", {})
+        if data.get("kind") != "kolsch.workflow.progress":
+            continue
+        payload = data.get("payload", {})
+        if payload.get("kind") != "workflow.node.started":
+            continue
+        inner = payload.get("payload") or {}
+        if inner.get("type") == "kolsch/nodes/agent":
+            target_node_name = payload.get("node_name")
+            target_invocation_id = payload.get("invocation_id")
+            node_started_evt = evt
+            break
+
+    if node_started_evt is None or target_node_name is None:
+        raise SystemExit("no agent-type node in source session")
+
+    keep(node_started_evt)
+
+    # sub_agent_event(agent.message) scoped to this node.
+    for evt in events:
+        if evt.get("type") != "ui.event":
+            continue
+        data = evt.get("data", {})
+        if data.get("kind") != "kolsch.workflow.node.sub_agent_event":
+            continue
+        payload = data.get("payload", {})
+        if payload.get("invocation_id") != target_invocation_id:
+            continue
+        if payload.get("event_type") == "agent.message":
+            keep(evt)
+            break
+
+    # workflow.node.completed for this node.
+    for evt in events:
+        if evt.get("type") != "ui.event":
+            continue
+        data = evt.get("data", {})
+        if data.get("kind") != "kolsch.workflow.progress":
+            continue
+        payload = data.get("payload", {})
+        if payload.get("kind") != "workflow.node.completed":
+            continue
+        if payload.get("invocation_id") == target_invocation_id:
+            keep(evt)
+            break
+
+    # tool.result for the workflow call (must carry card_id).
+    for evt in events:
+        if evt.get("type") != "tool.result":
+            continue
+        data = evt.get("data", {})
+        if data.get("tool_call_id") != tool_call_id:
+            continue
+        keep(evt)
+        break
+
+    return out
+
+
+def main() -> int:
+    ap = argparse.ArgumentParser(
+        description="Extract bug-036a JSONL fixture from a real session.",
+    )
+    ap.add_argument("source", type=Path, help="Path to a source session JSONL.")
+    ap.add_argument(
+        "--out",
+        type=Path,
+        default=_FIXTURE_OUT,
+        help=f"Output path (default: {_FIXTURE_OUT}).",
+    )
+    args = ap.parse_args()
+
+    events = _load(args.source)
+    excerpt = _extract(events)
+    args.out.parent.mkdir(parents=True, exist_ok=True)
+    with args.out.open("w") as f:
+        for evt in excerpt:
+            f.write(json.dumps(evt))
+            f.write("\n")
+    print(f"wrote {len(excerpt)} events -> {args.out}", file=sys.stderr)  # noqa: T201
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
