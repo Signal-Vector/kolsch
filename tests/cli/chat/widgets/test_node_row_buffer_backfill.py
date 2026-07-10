@@ -1,281 +1,166 @@
-"""spec-021 — `WorkflowNodeRow` event buffer + backfill on expand.
+"""spec-021 (bug-036d shape) — pending-mount queue + backfill on expand.
 
-Five regressions guarding the fix for spec-020's Reviewer flag:
-users who expand a row AFTER a sub-agent has already produced
-events used to see nothing but the turn counter (spec-013's
-Coordinator #3 lock dropped collapsed-row events on the floor).
-spec-021 lifts the lock — a bounded ring buffer holds recent
-events, and expanding replays them into the body.
+bug-036d reshapes spec-021: the row buffers *mount closures*, not
+raw events. Users who expand a row AFTER a sub-agent has produced
+events see those mounts replayed into ``Contents`` in the order the
+sink methods were called. Terminal-state rows freeze the queue.
 
-1. `test_events_while_collapsed_land_in_buffer` — N events fired
-   at a collapsed row → buffer size N, turn count N, no live mount.
-2. `test_expand_replays_buffer_to_body` — same setup + expand →
-   N `_mount_sub_agent_widget` calls fire in order.
-3. `test_live_expanded_mounts_do_not_duplicate_on_recollapse` —
-   events into an expanded row live-mount; a collapse -> expand
-   cycle does NOT re-mount them (dedupe by `event_id`).
-4. `test_buffer_overflow_drops_oldest` — 51 events fired collapsed
-   → buffer holds 50; the first event is the one dropped.
-5. `test_terminal_state_freezes_buffer` — events after a terminal
-   `set_state` transition are dropped (no append, no count, no
-   mount).
+Sub-tests:
+
+1. Sink calls while collapsed queue closures + bump the counter;
+   nothing lands in ``Contents``.
+2. Expanding drains the queue in insertion order — the widgets
+   land inside ``Contents``.
+3. Live-mounted events (row expanded when call arrived) don't get
+   re-mounted on a collapse -> expand cycle (dedupe by event_id).
+4. Overflow past 50 pending mounts drops the oldest closure.
+5. Terminal ``set_state`` freezes further mounts.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
-from typing import Any
-from uuid import uuid4
+from typing import Callable
 
 import pytest
+from textual.app import App
+from textual.widget import Widget
+from textual.widgets import Collapsible
 
+from cli.chat.widgets.assistant_prose import AssistantProse
 from cli.chat.widgets.workflow_node_row import (
     _EVENT_BUFFER_MAX,
     WorkflowNodeRow,
 )
-from schemas.entities import Actor
-from schemas.events import Event, EventType
-from schemas.identifiers import EventId, SessionId, ThreadId
 
-
-def _mk_agent_event(text: str = "hi") -> Event:
-    """Build a well-formed `AGENT_MESSAGE` Event.
-
-    Each call generates a fresh `event_id` so the dedupe set in
-    `WorkflowNodeRow._mounted_event_ids` has a distinct key per
-    event — matches the real per-event uniqueness the wire path
-    delivers.
-    """
-    return Event(
-        event_id=EventId(f"ev_{uuid4()}"),
-        thread_id=ThreadId(f"th_{uuid4()}"),
-        session_id=SessionId(f"ses_{uuid4()}"),
-        type=EventType.AGENT_MESSAGE,
-        data={"content": {"type": "text", "text": text}},
-        actor=Actor(kind="system"),
-        created_at=datetime.now(tz=UTC),
-    )
+_AppFactory = Callable[[Widget], App[None]]
 
 
 @pytest.mark.asyncio
-async def test_events_while_collapsed_land_in_buffer(
-    fake_app_factory,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_events_while_collapsed_queue_closures(
+    fake_app_factory: _AppFactory,
 ) -> None:
-    """spec-021 AC #2 + AC #3 — collapsed row buffers without mounting.
-
-    Fires three events at a fresh (collapsed) row and asserts:
-    - `_event_buffer` holds all three in order (AC #2).
-    - `_sub_agent_turn_count` reflects the count.
-    - `_mount_sub_agent_widget` is NOT called (AC #3 — no live mount
-      while collapsed; the parent's Coordinator #3 no-mount behavior
-      is preserved for the collapsed case).
-    """
+    """AC #2 + AC #3 — collapsed row buffers without live-mounting."""
     row = WorkflowNodeRow(node_name="n")
     app = fake_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         assert row.collapsed is True
 
-        mount_calls: list[Any] = []
-        monkeypatch.setattr(
-            row,
-            "_mount_sub_agent_widget",
-            lambda ev: mount_calls.append(ev),
-        )
-
-        events = [_mk_agent_event(f"m{i}") for i in range(3)]
-        for event in events:
-            row.apply_sub_agent_event(event)
+        for i in range(3):
+            await row.mount_assistant_message(f"m{i}", event_id=f"ev-{i}")
         await pilot.pause()
 
-        assert list(row._event_buffer) == events
+        # Queued (not live-mounted).
+        assert len(row._pending_mounts) == 3
         assert row._sub_agent_turn_count == 3
-        assert mount_calls == []
+        contents = row.query_one(Collapsible.Contents)
+        assert not list(contents.query(AssistantProse))
         assert "3 sub-agent events" in row.title
 
 
 @pytest.mark.asyncio
-async def test_expand_replays_buffer_to_body(
-    fake_app_factory,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_expand_drains_queue_in_order(
+    fake_app_factory: _AppFactory,
 ) -> None:
-    """spec-021 AC #4 — collapsed -> expanded drains the buffer.
-
-    Fires N events at a collapsed row (nothing mounts), then flips
-    `collapsed = False`. The `watch_collapsed` reactive watcher
-    fires `_replay_buffer_to_body`, which mounts each buffered
-    event in order.
-    """
+    """AC #4 — collapsed -> expanded drains the queue in insertion order."""
     row = WorkflowNodeRow(node_name="n")
     app = fake_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
-        mount_calls: list[Any] = []
-        monkeypatch.setattr(
-            row,
-            "_mount_sub_agent_widget",
-            lambda ev: mount_calls.append(ev),
+        await row.mount_assistant_message("first", event_id="ev-a")
+        await row.mount_assistant_message("second", event_id="ev-b")
+        await pilot.pause()
+
+        contents = row.query_one(Collapsible.Contents)
+        assert not list(contents.query(AssistantProse))
+
+        row.collapsed = False
+        # Drain runs via `call_after_refresh`; two pauses guarantee it.
+        await pilot.pause()
+        await pilot.pause()
+
+        prose = list(contents.query(AssistantProse))
+        assert len(prose) == 2, (
+            f"expected two AssistantProse widgets; got {len(prose)}"
         )
 
-        # Buffer up while collapsed — no mount fires.
-        events = [_mk_agent_event(f"m{i}") for i in range(4)]
-        for event in events:
-            row.apply_sub_agent_event(event)
-        await pilot.pause()
-        assert mount_calls == []
-
-        # Expand — watch_collapsed replays the buffer in order.
-        row.collapsed = False
-        await pilot.pause()
-
-        assert mount_calls == events
-
 
 @pytest.mark.asyncio
-async def test_live_expanded_mounts_do_not_duplicate_on_recollapse(
-    fake_app_factory,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_live_mounted_events_do_not_replay_on_recollapse(
+    fake_app_factory: _AppFactory,
 ) -> None:
-    """spec-021 AC #5 — collapse -> re-expand cycle doesn't duplicate.
+    """AC #5 — dedupe by event_id across live-mount + replay.
 
-    Row starts expanded. Events arrive → live-mount (each stamps
-    its dedupe key into `_mounted_event_ids`). Collapse → expand
-    again: `_replay_buffer_to_body` walks the buffer but skips
-    every event whose key is already stamped, so no widget is
-    mounted twice.
-
-    This is the "prefer (b)" semantic from spec-021 Q3 — track
-    already-mounted event_ids and skip on replay.
+    Row starts expanded; events live-mount. Collapse and re-expand;
+    the drain finds the dedupe keys stamped and skips.
     """
     row = WorkflowNodeRow(node_name="n")
     app = fake_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
-        mount_calls: list[Any] = []
-        # Wrap the real method so `_mounted_event_ids` still gets
-        # stamped — we're testing the dedupe behavior, not the mount.
-        real_mount = row._mount_sub_agent_widget
-
-        def _spy(ev: Any) -> None:
-            mount_calls.append(ev)
-            real_mount(ev)
-
-        monkeypatch.setattr(row, "_mount_sub_agent_widget", _spy)
-
-        # Start expanded — events live-mount.
         row.collapsed = False
         await pilot.pause()
 
-        events = [_mk_agent_event(f"m{i}") for i in range(3)]
-        for event in events:
-            row.apply_sub_agent_event(event)
+        for i in range(3):
+            await row.mount_assistant_message(f"m{i}", event_id=f"ev-{i}")
         await pilot.pause()
-        assert mount_calls == events
 
-        # Collapse — no additional mounts.
+        contents = row.query_one(Collapsible.Contents)
+        assert len(list(contents.query(AssistantProse))) == 3
+
+        # Collapse and re-expand — no re-mount.
         row.collapsed = True
         await pilot.pause()
-        assert mount_calls == events
-
-        # Re-expand — replay walks the buffer but the dedupe guard
-        # skips every event that already stamped its key.
         row.collapsed = False
         await pilot.pause()
+        await pilot.pause()
 
-        # mount_calls unchanged — no duplicate.
-        assert mount_calls == events
+        assert len(list(contents.query(AssistantProse))) == 3
 
 
 @pytest.mark.asyncio
-async def test_buffer_overflow_drops_oldest(
-    fake_app_factory,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    """spec-021 AC #6 — 51st event drops the oldest.
-
-    `_event_buffer` is `deque(maxlen=50)`; appending past capacity
-    evicts the leftmost element. We fire `_EVENT_BUFFER_MAX + 1`
-    events at a collapsed row and assert:
-    - buffer length is exactly `_EVENT_BUFFER_MAX` (50).
-    - the first event is NOT in the buffer.
-    - the last event IS the buffer's tail.
-    """
+async def test_overflow_drops_oldest(fake_app_factory: _AppFactory) -> None:
+    """AC #6 — 51st queued closure drops the oldest."""
     row = WorkflowNodeRow(node_name="n")
     app = fake_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
-        # Suppress mount side-effects — we're testing buffer sizing.
-        monkeypatch.setattr(row, "_mount_sub_agent_widget", lambda _ev: None)
-
-        events = [_mk_agent_event(f"m{i}") for i in range(_EVENT_BUFFER_MAX + 1)]
-        for event in events:
-            row.apply_sub_agent_event(event)
+        for i in range(_EVENT_BUFFER_MAX + 1):
+            await row.mount_assistant_message(f"m{i}", event_id=f"ev-{i}")
         await pilot.pause()
 
-        assert len(row._event_buffer) == _EVENT_BUFFER_MAX
-        # Oldest dropped.
-        assert events[0] not in row._event_buffer
-        # Newest retained at the tail.
-        assert row._event_buffer[-1] is events[-1]
-        # Turn count is NOT capped — it reflects total arrivals so the
-        # collapsed title stays truthful about how much happened.
+        assert len(row._pending_mounts) == _EVENT_BUFFER_MAX
+        # Turn count is NOT capped — reflects total arrivals.
         assert row._sub_agent_turn_count == _EVENT_BUFFER_MAX + 1
 
 
 @pytest.mark.asyncio
-async def test_terminal_state_freezes_buffer(
-    fake_app_factory,
-    monkeypatch: pytest.MonkeyPatch,
+async def test_terminal_state_freezes_queue(
+    fake_app_factory: _AppFactory,
 ) -> None:
-    """spec-021 AC #7 — terminal transition freezes the buffer.
-
-    Fires two events (row alive), transitions to `completed`, then
-    fires two more. The post-terminal events must be dropped:
-    - `_event_buffer` still holds only the first two.
-    - `_sub_agent_turn_count` stops at 2.
-    - `_mount_sub_agent_widget` fires only for the pre-terminal pair
-      (and only when the row happens to be expanded — here we start
-      collapsed so no mounts fire at all before the terminal cut).
-    """
+    """AC #7 — terminal transition freezes further mounts."""
     row = WorkflowNodeRow(node_name="n")
     app = fake_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
-        mount_calls: list[Any] = []
-        monkeypatch.setattr(
-            row,
-            "_mount_sub_agent_widget",
-            lambda ev: mount_calls.append(ev),
-        )
-
-        pre = [_mk_agent_event(f"pre{i}") for i in range(2)]
-        for event in pre:
-            row.apply_sub_agent_event(event)
+        await row.mount_assistant_message("pre-a", event_id="ev-a")
+        await row.mount_assistant_message("pre-b", event_id="ev-b")
         await pilot.pause()
 
-        assert list(row._event_buffer) == pre
         assert row._sub_agent_turn_count == 2
+        assert len(row._pending_mounts) == 2
 
-        # Terminal transition — watch_state flips the ``_buffer_frozen``
-        # latch. mypy strict can't see the reactive side effect (the
-        # write happens in ``watch_state`` via the ``state`` descriptor),
-        # so we assert the observable consequences below rather than the
-        # latch itself.
         row.set_state("completed", details="done")
         await pilot.pause()
 
-        # Post-terminal events are dropped on the floor.
-        post = [_mk_agent_event(f"post{i}") for i in range(2)]
-        for event in post:
-            row.apply_sub_agent_event(event)
+        # Post-terminal mounts are dropped: neither the queue nor
+        # the counter grow.
+        await row.mount_assistant_message("post-a", event_id="ev-c")
+        await row.mount_assistant_message("post-b", event_id="ev-d")
         await pilot.pause()
 
-        assert list(row._event_buffer) == pre
         assert row._sub_agent_turn_count == 2
-        # Row started collapsed → no live mounts fired for either pair.
-        assert mount_calls == []

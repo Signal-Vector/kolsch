@@ -454,11 +454,12 @@ async def test_sub_agent_widgets_mount_in_expanded_node_row(
         node_row.collapsed = False
         await pilot.pause()
 
-        # bug-035: USER_MESSAGE inside a workflow node is
-        # intentionally skipped (the scheduler's invocation payload
-        # isn't semantically a user turn). Only AGENT_MESSAGE +
-        # TOOL_CALLED render widgets in the body.
-        want = {ToolCallBlock, AssistantProse}
+        # bug-036d: USER_MESSAGE inside a workflow node NOW mounts
+        # a UserChatbox (reverses bug-035's suppression — the row
+        # IS a chat container). TOOL_CALLED alone doesn't mount a
+        # ToolCallBlock (main-chat parity — mount happens on
+        # TOOL_RESULT); the fake fires only TOOL_CALLED.
+        want = {UserChatbox, AssistantProse}
         seen: set[type] = set()
         for _ in range(160):  # 160 * 50ms = 8s worst case
             await pilot.pause()
@@ -486,12 +487,6 @@ async def test_sub_agent_widgets_mount_in_expanded_node_row(
         assert seen == want, (
             f"expected sub-agent widgets to mount inside the row; "
             f"got {sorted(t.__name__ for t in seen)}"
-        )
-
-        # bug-035: USER_MESSAGE was intentionally NOT mounted as a
-        # UserChatbox — verify no UserChatbox landed under the row.
-        assert not list(node_row.query(UserChatbox)), (
-            "UserChatbox should NOT mount inside a workflow node row"
         )
 
         # The row's turn counter reflects ALL sub-agent events routed

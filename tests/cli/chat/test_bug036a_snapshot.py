@@ -88,11 +88,16 @@ class _StubTranscriptApp(App[None]):
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="transcript")
 
-    async def mount_user_message(self, text: str, timestamp: Any) -> None:
-        _ = text, timestamp
+    async def mount_user_message(
+        self, text: str, timestamp: Any = None,
+        *, event_id: Any = None,
+    ) -> None:
+        _ = text, timestamp, event_id
 
-    async def mount_assistant_message(self, text: str) -> None:
-        _ = text
+    async def mount_assistant_message(
+        self, text: str, *, event_id: Any = None,
+    ) -> None:
+        _ = text, event_id
 
     async def mount_assistant_streaming_widget(self) -> Any:
         class _P:
@@ -108,11 +113,15 @@ class _StubTranscriptApp(App[None]):
         *,
         failed: bool = False,
         recovery_hint: str | None = None,
+        event_id: Any = None,
     ) -> None:
-        _ = tool_name, args, body, failed, recovery_hint
+        _ = tool_name, args, body, failed, recovery_hint, event_id
 
-    async def mount_notice(self, text: str) -> None:
-        _ = text
+    async def mount_notice(
+        self, notice_id: str, text: str,
+        *, level: str = "info", event_id: Any = None,
+    ) -> None:
+        _ = notice_id, text, level, event_id
 
     async def mount_exchange_failed(self, message: str) -> None:
         _ = message
@@ -190,12 +199,12 @@ async def test_snapshot_late_message_race_fallback() -> None:
     """Golden: bug-032-shape late-message race falls back to set_output.
 
     Simulates AC #4 sub-test 2: ``_on_node_completed`` fires first
-    (freezing the buffer + running the JSON-preview ``set_output``),
-    then a late ``agent.message`` arrives via
-    ``apply_sub_agent_event`` — dropped by ``_buffer_frozen``. The
-    gate does NOT fire because ``_saw_agent_message`` stayed False;
-    the ``set_output`` preview remains mounted, so the row is
-    never blank. Golden shows the JSON-preview text under the row.
+    (freezing the row + running the JSON-preview ``set_output``),
+    then a late assistant-message arrives via the sink method —
+    dropped by ``_buffer_frozen``. The gate does NOT fire because
+    ``_last_assistant_text`` stayed empty; the ``set_output`` preview
+    remains mounted, so the row is never blank. Golden shows the
+    JSON-preview text under the row.
     """
     app = _StubTranscriptApp()
     async with app.run_test(size=_APP_SIZE) as pilot:
@@ -211,25 +220,18 @@ async def test_snapshot_late_message_race_fallback() -> None:
         await transcript.mount(row)
         await pilot.pause()
 
-        # Race: NODE_COMPLETED first. `set_state("completed")`
-        # freezes the buffer via `watch_state`; `set_output` mounts
-        # the JSON preview because `_saw_agent_message` is False.
+        # Race: NODE_COMPLETED first. ``set_state("completed")``
+        # freezes further mounts; ``set_output`` mounts the JSON
+        # preview because ``_last_assistant_text`` is empty.
         row.set_state("completed")
         row.set_output({"summary": "the answer is 42"})
         await pilot.pause()
 
-        # Late `agent.message` — dropped by `_buffer_frozen`.
-        late = Event(
-            event_id=EventId(f"ev_{uuid4()}"),
-            parent_event_id=None,
-            thread_id=ThreadId(f"th_{uuid4()}"),
-            session_id=SessionId(f"ses_{uuid4()}"),
-            type=EventType.AGENT_MESSAGE,
-            data={"content": {"text": "the answer is 42"}, "exchange_id": "x"},
-            actor=Actor(kind="agent", id="ag_snap"),
-            created_at="2026-07-09T00:00:00Z",
+        # Late assistant message via the sink — dropped by
+        # ``_buffer_frozen``.
+        await row.mount_assistant_message(
+            "the answer is 42", event_id="ev_late",
         )
-        row.apply_sub_agent_event(late)
 
         # Expand so the JSON preview is visible for the snapshot.
         row.collapsed = False

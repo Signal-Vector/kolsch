@@ -39,7 +39,9 @@ registrations.
 
 from __future__ import annotations
 
+import asyncio
 import contextlib
+import json
 import logging
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -62,6 +64,25 @@ if TYPE_CHECKING:
 
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _swallow_task_exception(task: asyncio.Task[Any]) -> None:
+    """bug-036d: log-and-swallow for fire-and-forget sink dispatches.
+
+    ``_on_sub_agent_event`` is sync (the renderer's dispatch table is
+    a sync branch); the sink methods are async. We schedule the
+    coroutine on the running loop and let it complete without
+    joining — the task's exception must be pulled so Python doesn't
+    warn about it going unretrieved.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        _LOGGER.warning(
+            "workflow_renderer: sub-agent dispatch task raised",
+            exc_info=exc,
+        )
 
 
 _WIRE_KIND = "kolsch.workflow.progress"
@@ -94,27 +115,26 @@ _TERMINAL_RUN_KINDS = frozenset({
 
 @dataclass(frozen=True)
 class _ReconstructedSubAgentEvent:
-    """spec-020 event stub for `WorkflowNodeRow.apply_sub_agent_event`.
+    """spec-020 event stub reconstructed from a sub-agent UI envelope.
 
-    The row's mount hook (`_mount_sub_agent_widget`) only reads three
-    attributes off the passed event: `type` (compared against
-    `EventType` members), `data` (a dict), and `created_at` (a
-    datetime, used only by `UserChatbox`). We reconstruct a lightweight
-    duck-typed object rather than paying the cost of building a full
-    pydantic `Event` per session-scoped emit — the wire envelope
-    doesn't carry the `session_id` / `thread_id` / `actor` /
-    `event_id` fields the pydantic model requires, and none of them
-    are load-bearing at the widget layer.
+    bug-036d: fields expanded to include ``event_id`` so the
+    adapter's sink-based handlers can pass a stable dedupe key to
+    :class:`~cli.chat.widgets.workflow_node_row.WorkflowNodeRow`'s
+    ``_mounted_event_ids`` set. Everything else stays duck-typed to
+    keep the drain cost per event low — a full pydantic ``Event``
+    would tax the fan-out for zero widget-layer benefit.
 
-    `trace_id` is carried for symmetry with the real `Event` shape;
-    it's not currently read by any consumer downstream of this
-    dispatch, but future spec-021 (backfill) may want it.
+    ``trace_id`` is carried so
+    :meth:`EventAdapter._route_to_workflow_node` can look up the
+    row by the same ``(trace_id, invocation_id)`` map the renderer
+    populated on NODE_STARTED.
     """
 
     type: "_EventType"
     data: dict[str, Any]
     created_at: datetime
     trace_id: str
+    event_id: str | None = None
 
 
 class WorkflowProgressHeader(Static):
@@ -724,19 +744,16 @@ class WorkflowRenderer(Vertical):
     def _on_sub_agent_event(self, payload: dict[str, Any]) -> None:
         """Route a `kolsch.workflow.node.sub_agent_event` to a row.
 
-        spec-020. Reads `trace_id` + `invocation_id` off the envelope,
-        looks up the target `WorkflowNodeRow` in the adapter's
-        `_live_nodes_by_trace_and_invocation[(trace_id, invocation_id)]`
-        map (bug-033 composite key), reconstructs a lightweight event
-        object with the surface `WorkflowNodeRow.apply_sub_agent_event`
-        + `_mount_sub_agent_widget` consume (`type`, `data`,
-        `created_at`, `trace_id`), and dispatches.
+        bug-036d: instead of calling ``row.apply_sub_agent_event``
+        (deleted), this reconstructs the inner event and delegates
+        to :meth:`EventAdapter.dispatch_sub_agent_event`, which
+        picks the row as the sink via ``_route_to_workflow_node``.
+        The trace-id safety check is enforced by the adapter.
 
         Malformed / stale payloads (missing trace_id, missing
-        invocation_id, invalid event_type, no matching row) are
-        silently dropped — the whole spec-020 stream is best-effort,
-        matching the existing `_route_to_workflow_node` shape on
-        `EventAdapter`.
+        invocation_id, invalid event_type) are silently dropped.
+        Adapter-less headless tests dispatch through a local row
+        fallback via the renderer's ``_node_rows`` map.
         """
         trace_id = payload.get("trace_id")
         invocation_id = payload.get("invocation_id")
@@ -748,55 +765,157 @@ class WorkflowRenderer(Vertical):
             or not trace_id
         ):
             return
-        # Resolve the target row. Prefer the adapter's routing map
-        # (populated on NODE_STARTED via `_register_node_with_adapter`);
-        # fall back to the local `_node_rows` when the adapter isn't
-        # wired (headless tests exercise the renderer directly).
-        row: WorkflowNodeRow | None = None
-        if self._adapter is not None:
-            live_map = getattr(
-                self._adapter, "_live_nodes_by_trace_and_invocation", None,
-            )
-            if isinstance(live_map, dict):
-                candidate = live_map.get((trace_id, invocation_id))
-                if isinstance(candidate, WorkflowNodeRow):
-                    row = candidate
-        if row is None:
-            # Adapter-less fallback: the node name isn't on the
-            # envelope, but bug-033's routing map keys on
-            # `(trace_id, invocation_id)` — scan the local rows and
-            # match by invocation. In practice this only fires from
-            # the adapter-less unit test harness.
-            node_name = payload.get("node_name")
-            if isinstance(node_name, str):
-                row = self._node_rows.get(node_name)
-        if row is None:
-            return
-        # Reconstruct a minimal event object with the surface the
-        # row's `_mount_sub_agent_widget` reads: `type` (compared to
-        # `EventType.*`), `data` (dict), `created_at`. We DON'T
-        # rebuild a full pydantic `Event` — the envelope-level
-        # `event_id` / `session_id` / `thread_id` / `actor` are not
-        # consumed by any downstream widget, and running Pydantic
-        # validation on every sub-agent event would tax the drain
-        # for zero UI benefit. `SimpleNamespace` matches the duck-
-        # typed surface exactly.
         try:
             from schemas.events import EventType  # noqa: PLC0415
             event_type = EventType(event_type_raw)
         except (ValueError, ImportError):
-            # Unknown event type — nothing to render.
             return
         raw_data = payload.get("payload")
         data = dict(raw_data) if isinstance(raw_data, dict) else {}
+        # bug-036d: adapter path — reconstruct a lightweight event
+        # object carrying the fields the adapter's handlers read
+        # (type / data / created_at / trace_id / event_id) and
+        # dispatch via the adapter's public entrypoint. The
+        # adapter's ``_route_to_workflow_node`` looks up the same
+        # row in ``_live_nodes_by_trace_and_invocation``.
+        wire_event_id = payload.get("event_id")
         reconstructed = _ReconstructedSubAgentEvent(
             type=event_type,
             data=data,
             created_at=datetime.now(tz=UTC),
             trace_id=trace_id,
+            event_id=wire_event_id if isinstance(wire_event_id, str) else None,
         )
-        with contextlib.suppress(Exception):
-            row.apply_sub_agent_event(reconstructed)
+        if self._adapter is not None:
+            dispatch = getattr(
+                self._adapter, "dispatch_sub_agent_event", None,
+            )
+            if callable(dispatch):
+                try:
+                    import asyncio  # noqa: PLC0415
+                    loop = asyncio.get_running_loop()
+                except RuntimeError:
+                    return
+                task = loop.create_task(
+                    dispatch(reconstructed, outer_trace_id=trace_id),
+                )
+                task.add_done_callback(_swallow_task_exception)
+                return
+        # Adapter-less fallback: dispatch through the row's sink
+        # methods directly. Used by unit tests that construct the
+        # renderer without an EventAdapter.
+        node_name = payload.get("node_name")
+        row = (
+            self._node_rows.get(node_name)
+            if isinstance(node_name, str)
+            else None
+        )
+        if row is None:
+            return
+        self._dispatch_reconstructed_to_row(row, reconstructed)
+
+    def _dispatch_reconstructed_to_row(
+        self,
+        row: WorkflowNodeRow,
+        event: _ReconstructedSubAgentEvent,
+    ) -> None:
+        """bug-036d: adapter-less headless dispatch to a row's sink.
+
+        Mirrors the subset of :class:`EventAdapter` handler shape
+        this test path exercises — the renderer's headless unit
+        tests construct the renderer without an adapter and expect
+        the sub-agent event to reach the row.
+        """
+        try:
+            import asyncio  # noqa: PLC0415
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            return
+        event_id = getattr(event, "event_id", None)
+        event_id_str = str(event_id) if event_id is not None else None
+        from schemas.events import EventType  # noqa: PLC0415
+        data = event.data
+        if event.type == EventType.USER_MESSAGE:
+            content = data.get("content") or {}
+            text = ""
+            if isinstance(content, dict):
+                candidate = content.get("text")
+                if isinstance(candidate, str):
+                    text = candidate
+                elif content:
+                    from cli.chat.widgets.workflow_node_row import (  # noqa: PLC0415
+                        _extract_content_text,
+                    )
+                    text = _extract_content_text(content) or ""
+            if text:
+                task = loop.create_task(
+                    row.mount_user_message(
+                        text, event.created_at, event_id=event_id_str,
+                    ),
+                )
+                task.add_done_callback(_swallow_task_exception)
+            else:
+                row.count_lifecycle_event()
+        elif event.type == EventType.AGENT_MESSAGE:
+            content = data.get("content") or {}
+            text = ""
+            if isinstance(content, dict):
+                candidate = content.get("text")
+                if isinstance(candidate, str):
+                    text = candidate
+                elif content:
+                    from cli.chat.widgets.workflow_node_row import (  # noqa: PLC0415
+                        _extract_content_text,
+                    )
+                    text = _extract_content_text(content) or ""
+            if text and row.last_assistant_text() != text:
+                task = loop.create_task(
+                    row.mount_assistant_message(text, event_id=event_id_str),
+                )
+                task.add_done_callback(_swallow_task_exception)
+                row.set_last_assistant_text(text)
+            else:
+                row.count_lifecycle_event()
+        elif event.type in (EventType.TOOL_CALLED, EventType.TOOL_RESULT):
+            tool_name = str(data.get("tool_name") or "?")
+            args = data.get("arguments") or data.get("args") or {}
+            args_str = ""
+            body = ""
+            if isinstance(args, dict) and args:
+                try:
+                    args_str = json.dumps(
+                        args, default=repr, sort_keys=True,
+                    )[:60]
+                except (TypeError, ValueError):
+                    args_str = ""
+            elif isinstance(args, str):
+                args_str = args[:60]
+            if event.type == EventType.TOOL_RESULT:
+                result = data.get("result") or {}
+                if isinstance(result, dict) and result:
+                    from cli.chat.widgets.workflow_node_row import (  # noqa: PLC0415
+                        _format_content_dict,
+                    )
+                    body = _format_content_dict(result)
+                elif isinstance(result, str):
+                    body = result
+            else:
+                # TOOL_CALLED — no result yet; put args in body.
+                if isinstance(args, dict) and args:
+                    from cli.chat.widgets.workflow_node_row import (  # noqa: PLC0415
+                        _format_content_dict,
+                    )
+                    body = _format_content_dict(args)
+            task = loop.create_task(
+                row.mount_tool_call(
+                    tool_name, args_str, body,
+                    failed=False,
+                    event_id=event_id_str,
+                ),
+            )
+            task.add_done_callback(_swallow_task_exception)
+        else:
+            row.count_lifecycle_event()
 
     def _on_approval_resolved(self, payload: dict[str, Any]) -> None:
         """Transition the matching row back to `running` (glyph `▸`).

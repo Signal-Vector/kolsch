@@ -33,10 +33,17 @@ class _FakeChatApp:
         self.notices: list[str] = []
         self._last_assistant: str = ""
 
-    async def mount_user_message(self, text: str, timestamp: Any) -> None:
+    async def mount_user_message(
+        self, text: str, timestamp: Any = None,
+        *, event_id: Any = None,
+    ) -> None:
+        _ = timestamp, event_id
         self.notices.append(f"user:{text}")
 
-    async def mount_assistant_message(self, text: str) -> None:
+    async def mount_assistant_message(
+        self, text: str, *, event_id: Any = None,
+    ) -> None:
+        _ = event_id
         self.notices.append(f"assistant:{text}")
 
     async def mount_assistant_streaming_widget(self) -> Any:
@@ -47,9 +54,14 @@ class _FakeChatApp:
         return _FakeProse()
 
     async def mount_tool_call(self, *args: Any, **kwargs: Any) -> None:
+        _ = kwargs
         self.notices.append(f"tool:{args}")
 
-    async def mount_notice(self, text: str) -> None:
+    async def mount_notice(
+        self, notice_id: str = "", text: str = "",
+        *, level: str = "info", event_id: Any = None,
+    ) -> None:
+        _ = notice_id, level, event_id
         self.notices.append(f"notice:{text}")
 
     async def mount_exchange_failed(self, message: str) -> None:

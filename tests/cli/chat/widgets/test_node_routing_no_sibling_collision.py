@@ -55,13 +55,21 @@ class _FakeChatApp:
         self.mounts: list[str] = []
         self._last_assistant: str = ""
 
-    async def mount_user_message(self, text: str, timestamp: Any) -> None:
+    async def mount_user_message(
+        self, text: str, timestamp: Any = None,
+        *, event_id: Any = None,
+    ) -> None:
+        _ = timestamp, event_id
         self.mounts.append(f"user:{text}")
 
-    async def mount_assistant_message(self, text: str) -> None:
+    async def mount_assistant_message(
+        self, text: str, *, event_id: Any = None,
+    ) -> None:
+        _ = event_id
         self.mounts.append(f"assistant:{text}")
 
     async def mount_tool_call(self, *args: Any, **kwargs: Any) -> None:
+        _ = args, kwargs
         self.mounts.append("tool")
 
     async def set_turn_verb(self, verb: str, *, target: str = "") -> None:
@@ -255,21 +263,21 @@ async def test_route_finds_correct_row_by_invocation_id() -> None:
 
     row_alpha = adapter._live_nodes_by_trace_and_invocation[("tr_1", "inv_A")]
     row_beta = adapter._live_nodes_by_trace_and_invocation[("tr_1", "inv_B")]
-    # Spy: replace `apply_sub_agent_event` on both rows with a
-    # counter so we can prove which one received the event without
-    # standing up a full CardWidget.
+    # bug-036d spy: replace ``mount_assistant_message`` on both rows.
+    # Which row's sink method fires proves which row received the
+    # event without standing up a full CardWidget.
     hits: dict[str, int] = {"alpha": 0, "beta": 0}
 
-    def _spy_alpha(event: Any) -> None:
-        _ = event
+    async def _spy_alpha(*args: Any, **kwargs: Any) -> None:
+        _ = args, kwargs
         hits["alpha"] += 1
 
-    def _spy_beta(event: Any) -> None:
-        _ = event
+    async def _spy_beta(*args: Any, **kwargs: Any) -> None:
+        _ = args, kwargs
         hits["beta"] += 1
 
-    row_alpha.apply_sub_agent_event = _spy_alpha
-    row_beta.apply_sub_agent_event = _spy_beta
+    row_alpha.mount_assistant_message = _spy_alpha  # type: ignore[method-assign]
+    row_beta.mount_assistant_message = _spy_beta  # type: ignore[method-assign]
 
     event = _mk_agent_event(trace_id="tr_1", invocation_id="inv_A")
     await adapter.handle(event)

@@ -103,8 +103,9 @@ async def test_counter_label_reads_events_not_turns(
     app = fake_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
-        for _ in range(3):
-            row.apply_sub_agent_event(_mk_agent_event())
+        # bug-036d: any three sink calls bump the counter to 3.
+        for i in range(3):
+            await row.mount_assistant_message(f"m{i}", event_id=f"ev-{i}")
         await pilot.pause()
         assert "· 3 sub-agent events" in row.title
         assert "turns" not in row.title

@@ -1,24 +1,21 @@
-"""bug-036a — flagship fixture-replay test.
+"""bug-036a + bug-036d — flagship fixture-replay test.
 
-Replays a slice of a real user session (JSONL from
-``~/Documents/kolsch/sessions/``) through the real
-:class:`~cli.chat.event_adapter.EventAdapter` and asserts the two
-dedupe invariants:
+Replays a slice of a real user session through the real
+:class:`~cli.chat.event_adapter.EventAdapter` and asserts:
 
-- AC #1: no transcript-root :class:`ToolCallBlock` for the
-  ``run_workflow*`` call — the tool mounts its own
-  :class:`WorkflowCard`, so the additional block underneath is a
-  duplicate.
-- AC #2: each agent node's :class:`WorkflowNodeRow` renders its
-  response exactly once — through the sub-agent stream
-  (``agent.message`` → :class:`AssistantProse`), not both through
-  the sub-agent stream and through
-  :meth:`WorkflowNodeRow.set_output` (which would echo the same
-  content as JSON).
+- **bug-036a AC #1** — no transcript-root :class:`ToolCallBlock`
+  for the ``run_workflow*`` call.
+- **bug-036a AC #2** — each agent node's :class:`WorkflowNodeRow`
+  renders its response exactly once.
+- **bug-036d AC #10** — the fixture (extended with sub-agent
+  USER_MESSAGE + MODEL_RESPONSE events) mounts exactly one
+  ``UserChatbox`` and one ``AssistantProse`` inside each agent
+  row. bug-036d migrated ``USER_MESSAGE`` inside a workflow row
+  from suppressed to sink-routed.
 
-The fixture is a real session excerpt, not synthetic. See
-``tests/fixtures/sessions/extract_bug036a_fixture.py`` for the
-refresh workflow.
+The fixture is a real session excerpt extended for the 036d test
+surface. See ``tests/fixtures/sessions/extract_bug036a_fixture.py``
+for the refresh workflow.
 """
 
 from __future__ import annotations
@@ -93,11 +90,16 @@ class _StubTranscriptApp(App[None]):
 
     # ChatApp surface the adapter calls.
 
-    async def mount_user_message(self, text: str, timestamp: Any) -> None:
-        _ = text, timestamp
+    async def mount_user_message(
+        self, text: str, timestamp: Any = None,
+        *, event_id: Any = None,
+    ) -> None:
+        _ = text, timestamp, event_id
 
-    async def mount_assistant_message(self, text: str) -> None:
-        _ = text
+    async def mount_assistant_message(
+        self, text: str, *, event_id: Any = None,
+    ) -> None:
+        _ = text, event_id
 
     async def mount_assistant_streaming_widget(self) -> Any:
         class _P:
@@ -113,17 +115,21 @@ class _StubTranscriptApp(App[None]):
         *,
         failed: bool = False,
         recovery_hint: str | None = None,
+        event_id: Any = None,
     ) -> None:
         """Record every mount at transcript root.
 
         AC #1 assertion: none of these should be for a
         card-mounting tool.
         """
-        _ = failed, recovery_hint
+        _ = failed, recovery_hint, event_id
         self.mounted_tool_calls.append((tool_name, args, body))
 
-    async def mount_notice(self, text: str) -> None:
-        _ = text
+    async def mount_notice(
+        self, notice_id: str, text: str,
+        *, level: str = "info", event_id: Any = None,
+    ) -> None:
+        _ = notice_id, text, level, event_id
 
     async def mount_exchange_failed(self, message: str) -> None:
         _ = message
@@ -238,6 +244,16 @@ async def test_fixture_replay_dedupe_invariants() -> None:
                 f"gated when agent.message already rendered — "
                 f"_output_widget should be None"
             )
+            # bug-036d AC #10: extended fixture ships a sub-agent
+            # USER_MESSAGE for headhunter_review — the row should
+            # mount exactly one UserChatbox.
+            from cli.chat.widgets.user_chatbox import UserChatbox
+            user_boxes = list(node_row.query(UserChatbox))
+            if node_row._node_name == "headhunter_review":
+                assert len(user_boxes) == 1, (
+                    f"row {node_row._node_name!r} should render "
+                    f"exactly one UserChatbox; got {len(user_boxes)}"
+                )
 
         # Any transcript-root ToolCallBlock is fine if it's not a
         # card-mounting tool — verify no card-mounting tool leaked.

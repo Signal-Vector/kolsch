@@ -363,26 +363,28 @@ async def test_collapse_hides_sub_agent_widgets_in_live_app(
         node_row.collapsed = False
         await pilot.pause()
 
-        # Wait for two sub-agent widgets (ToolCallBlock + AssistantProse)
-        # to arrive. USER_MESSAGE is skipped by bug-035 design.
+        # bug-036d: parity with main-chat handlers — TOOL_CALLED
+        # captures args only; a ToolCallBlock lands on TOOL_RESULT.
+        # The fake executor fires USER_MESSAGE + TOOL_CALLED +
+        # AGENT_MESSAGE (no TOOL_RESULT), so we expect UserChatbox
+        # + AssistantProse only.
         for _ in range(200):
             await pilot.pause()
             seen = {
                 type(w) for w in node_row.query("*")
-                if type(w) in {ToolCallBlock, AssistantProse}
+                if type(w) in {UserChatbox, AssistantProse}
             }
-            if seen == {ToolCallBlock, AssistantProse}:
+            if seen == {UserChatbox, AssistantProse}:
                 break
             await asyncio.sleep(0.05)
         assert list(node_row.query(AssistantProse)), "AssistantProse missing"
-        assert list(node_row.query(ToolCallBlock)), "ToolCallBlock missing"
 
         # -- Both widgets are inside Contents (bug-035 invariant) --
         contents = node_row.query_one(Collapsible.Contents)
         prose_in_contents = list(contents.query(AssistantProse))
-        tool_in_contents = list(contents.query(ToolCallBlock))
+        user_in_contents = list(contents.query(UserChatbox))
         assert prose_in_contents, "AssistantProse not inside Contents"
-        assert tool_in_contents, "ToolCallBlock not inside Contents"
+        assert user_in_contents, "UserChatbox not inside Contents"
 
         # -- With the row EXPANDED, Contents is visible --
         assert not node_row.has_class("-collapsed"), (
@@ -420,15 +422,16 @@ async def test_collapse_hides_sub_agent_widgets_in_live_app(
 
 
 @pytest.mark.asyncio
-async def test_user_message_produces_no_widget_in_live_app(
+async def test_user_message_produces_userchatbox_widget_in_live_app(
     chat_app: Any,
     run_workflow_tool: Callable[..., Awaitable[Any]],
 ) -> None:
-    """User complaint #2: no 'You:' box under workflow node rows.
+    """bug-036d: USER_MESSAGE inside a workflow row DOES mount a UserChatbox.
 
-    USER_MESSAGE inside a workflow node is the scheduler's invocation
-    payload, not a real user turn. Bug-035 skips its widget mount.
-    Only AssistantProse + ToolCallBlock render inside the body.
+    Reverses bug-035's suppression: the row is a full chat container
+    now. The scheduler's invocation payload gets its own UserChatbox
+    at the top of the body (Mockup 3), so a reader can see what
+    inputs the sub-agent was called with.
     """
     async with chat_app.run_test() as pilot:
         await pilot.pause()
@@ -438,15 +441,13 @@ async def test_user_message_produces_no_widget_in_live_app(
         node_row.collapsed = False
         for _ in range(200):
             await pilot.pause()
-            if list(node_row.query(AssistantProse)) and list(
-                node_row.query(ToolCallBlock),
-            ):
+            if list(node_row.query(UserChatbox)):
                 break
             await asyncio.sleep(0.05)
 
-        assert not list(node_row.query(UserChatbox)), (
-            f"UserChatbox should not mount inside a workflow node "
-            f"row; got {list(node_row.query(UserChatbox))}"
+        assert list(node_row.query(UserChatbox)), (
+            "bug-036d: UserChatbox SHOULD mount inside a workflow "
+            "row for the sub-agent's invocation payload"
         )
 
         tool_task.cancel()

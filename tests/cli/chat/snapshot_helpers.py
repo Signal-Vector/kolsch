@@ -42,6 +42,12 @@ _ELAPSED_RE = re.compile(r"(\]  \S+\s+)\d+s")
 # so goldens stay comparable.
 _SPINNER_RE = re.compile(r"[⣾⣽⣻⢿⡿⣟⣯⣷]")
 
+# bug-036d: mask ``You · HH:MM:SS`` timestamps in ``UserChatbox``
+# borders. The timestamp is wall-clock derived (or fixture-event
+# derived, which drifts with fixture re-generation) — replace with a
+# stable ``<TS>`` token so goldens compare cleanly.
+_USER_TS_RE = re.compile(r"You · \d{2}:\d{2}:\d{2}")
+
 
 def _render_app_text(app: App[object]) -> str:
     """Return the current screen as plain text (styling stripped).
@@ -58,7 +64,8 @@ def _render_app_text(app: App[object]) -> str:
     rendered = [strip.text.rstrip() for strip in strips]
     text = "\n".join(rendered).rstrip() + "\n"
     text = _ELAPSED_RE.sub(r"\1<ELAPSED>s", text)
-    return _SPINNER_RE.sub("⠋", text)
+    text = _SPINNER_RE.sub("⠋", text)
+    return _USER_TS_RE.sub("You · <TS>", text)
 
 
 def assert_snapshot_matches(app: App[object], name: str) -> None:

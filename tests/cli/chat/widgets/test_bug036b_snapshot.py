@@ -169,9 +169,9 @@ async def test_snapshot_titles_drop_type_when_details_set() -> None:
 async def test_snapshot_counter_label_reads_events() -> None:
     """Golden: title trails with ``· 3 sub-agent events`` (not ``turns``).
 
-    Three ``apply_sub_agent_event`` calls push the row's counter to
-    3; the golden captures the renamed label so a future regression
-    reintroducing ``turns`` fails the diff.
+    Three sink-method calls push the row's counter to 3; the golden
+    captures the renamed label so a future regression reintroducing
+    ``turns`` fails the diff.
     """
     app = _StubTranscriptApp()
     async with app.run_test(size=_APP_SIZE) as pilot:
@@ -183,8 +183,9 @@ async def test_snapshot_counter_label_reads_events() -> None:
         await transcript.mount(row)
         await pilot.pause()
 
-        for _ in range(3):
-            row.apply_sub_agent_event(_mk_agent_event())
+        # bug-036d: sink-method calls bump ``_sub_agent_turn_count``.
+        for i in range(3):
+            await row.mount_assistant_message(f"m{i}", event_id=f"ev-{i}")
         # Freeze after events so the trailing "· 3 sub-agent events"
         # counter renders alongside a stable starting glyph.
         _freeze_starting(row)

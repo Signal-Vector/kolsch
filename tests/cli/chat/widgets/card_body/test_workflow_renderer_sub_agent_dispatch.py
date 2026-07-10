@@ -1,26 +1,28 @@
-"""spec-020 — `WorkflowRenderer.apply_event` sub-agent dispatch.
+"""spec-020 (bug-036d shape) — `WorkflowRenderer.apply_event` sub-agent dispatch.
 
-Isolated tests for the new dispatch case in
-`WorkflowRenderer.apply_event` handling
-`kolsch.workflow.node.sub_agent_event`. The renderer resolves the
-target `WorkflowNodeRow` via bug-033's
-`(trace_id, invocation_id)` composite map (or the local
-`_node_rows` fallback for adapter-less tests) and hands a
-reconstructed event to `row.apply_sub_agent_event(event)`.
+bug-036d: the renderer no longer calls
+``row.apply_sub_agent_event`` (deleted). Instead:
+
+- With an adapter wired, ``_on_sub_agent_event`` reconstructs the
+  inner event and hands it to
+  :meth:`EventAdapter.dispatch_sub_agent_event`. The adapter's
+  handler picks the row as sink via ``_route_to_workflow_node``
+  and calls the row's typed ``mount_*`` method.
+- Without an adapter, the renderer falls back to the row's sink
+  methods directly.
 
 Three passes:
 
-1. Adapter path — a sub-agent UI event routes into the row that was
-   registered under the matching `(trace_id, invocation_id)`.
-2. Local fallback — with no adapter wired, the renderer resolves by
-   `node_name` on `_node_rows`.
+1. Adapter path — the fan-out reaches the adapter's dispatch
+   entrypoint with the reconstructed inner event.
+2. Local fallback — the row's sink method fires.
 3. Malformed / stale payloads (missing trace_id, unknown
-   `event_type`, no matching row) are dropped silently.
+   ``event_type``, no matching row) are dropped silently.
 """
 
 from __future__ import annotations
 
-from datetime import UTC, datetime
+from datetime import datetime
 from typing import Any
 
 import pytest
@@ -43,12 +45,21 @@ class _FakeEvent:
 
 
 class _StubAdapter:
-    """Minimal `EventAdapter` stand-in for the routing map."""
+    """Records ``dispatch_sub_agent_event`` calls."""
 
     def __init__(self) -> None:
         self._live_nodes_by_trace_and_invocation: dict[
             tuple[str, str], WorkflowNodeRow,
         ] = {}
+        self.dispatched: list[tuple[Any, str | None]] = []
+
+    async def dispatch_sub_agent_event(
+        self,
+        inner_event: Any,
+        *,
+        outer_trace_id: str | None = None,
+    ) -> None:
+        self.dispatched.append((inner_event, outer_trace_id))
 
 
 def _mk_sub_agent_payload(
@@ -71,17 +82,12 @@ def _mk_sub_agent_payload(
     }
 
 
-# ---------------------------------------------------------------------------
-# Test 1 — Adapter path routes to the registered row.
-# ---------------------------------------------------------------------------
-
-
 @pytest.mark.asyncio
-async def test_sub_agent_event_routes_via_adapter_map(
+async def test_sub_agent_event_dispatched_via_adapter(
     fake_app_factory: Any,
 ) -> None:
-    """When the adapter's map has `(trace_id, invocation_id) → row`,
-    the sub-agent event fires `row.apply_sub_agent_event`."""
+    """Adapter path: renderer forwards the reconstructed event to
+    ``EventAdapter.dispatch_sub_agent_event``."""
     renderer = WorkflowRenderer()
     app = fake_app_factory(renderer)
     async with app.run_test() as pilot:
@@ -94,10 +100,6 @@ async def test_sub_agent_event_routes_via_adapter_map(
         renderer._node_rows["classify"] = row
         adapter._live_nodes_by_trace_and_invocation[("tr_x", "inv_1")] = row
 
-        # Capture calls to the row's dispatch.
-        received: list[Any] = []
-        row.apply_sub_agent_event = received.append  # type: ignore[method-assign]
-
         payload = _mk_sub_agent_payload(
             trace_id="tr_x",
             invocation_id="inv_1",
@@ -107,28 +109,25 @@ async def test_sub_agent_event_routes_via_adapter_map(
         renderer.apply_event(
             _FakeEvent(WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT, payload),
         )
+        # The dispatch is scheduled as a task from the sync handler;
+        # a pause lets the loop run it.
         await pilot.pause()
 
-    assert len(received) == 1
-    evt = received[0]
+    assert len(adapter.dispatched) == 1
+    evt, outer_trace = adapter.dispatched[0]
     assert isinstance(evt, _ReconstructedSubAgentEvent)
     assert evt.type == EventType.AGENT_MESSAGE
     assert evt.data == {"content": {"text": "hello"}}
     assert isinstance(evt.created_at, datetime)
     assert evt.trace_id == "tr_x"
-
-
-# ---------------------------------------------------------------------------
-# Test 2 — Local fallback when no adapter wired.
-# ---------------------------------------------------------------------------
+    assert outer_trace == "tr_x"
 
 
 @pytest.mark.asyncio
-async def test_sub_agent_event_falls_back_to_local_rows(
+async def test_sub_agent_event_falls_back_to_row_sink(
     fake_app_factory: Any,
 ) -> None:
-    """Adapter-less rendering (headless) resolves the row via
-    `_node_rows[node_name]` — the envelope carries `node_name`."""
+    """No adapter wired: renderer calls the row's sink method directly."""
     renderer = WorkflowRenderer()
     app = fake_app_factory(renderer)
     async with app.run_test() as pilot:
@@ -136,28 +135,31 @@ async def test_sub_agent_event_falls_back_to_local_rows(
 
         row = WorkflowNodeRow(node_name="classify", trace_id="tr_x")
         renderer._node_rows["classify"] = row
+        row.collapsed = False
+        await pilot.pause()
 
-        received: list[Any] = []
-        row.apply_sub_agent_event = received.append  # type: ignore[method-assign]
+        received: list[str] = []
+
+        async def _spy(text: str, *args: Any, **kwargs: Any) -> None:
+            _ = args, kwargs
+            received.append(text)
+
+        row.mount_assistant_message = _spy  # type: ignore[method-assign]
 
         payload = _mk_sub_agent_payload(
             trace_id="tr_x",
             invocation_id="inv_missing",
-            event_type="tool.called",
-            payload={"tool_name": "bash"},
+            event_type="agent.message",
+            payload={"content": {"text": "hello"}},
         )
         renderer.apply_event(
             _FakeEvent(WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT, payload),
         )
+        # Fallback dispatch schedules the sink call as a task.
+        await pilot.pause()
         await pilot.pause()
 
-    assert len(received) == 1
-    assert received[0].type == EventType.TOOL_CALLED
-
-
-# ---------------------------------------------------------------------------
-# Test 3 — Malformed / stale payloads are dropped.
-# ---------------------------------------------------------------------------
+    assert received == ["hello"]
 
 
 @pytest.mark.parametrize(
@@ -192,20 +194,20 @@ async def test_sub_agent_malformed_payloads_dropped(
     async with app.run_test() as pilot:
         await pilot.pause()
 
+        adapter = _StubAdapter()
+        renderer.register_adapter(adapter)
         row = WorkflowNodeRow(node_name="classify", trace_id="tr_x")
         renderer._node_rows["classify"] = row
-        received: list[Any] = []
-        row.apply_sub_agent_event = received.append  # type: ignore[method-assign]
+        adapter._live_nodes_by_trace_and_invocation[("tr_x", "inv_1")] = row
 
         payload = _mk_sub_agent_payload(
             trace_id="tr_x",
             invocation_id="inv_1",
         )
         mutate(payload)
-        # Must not raise.
         renderer.apply_event(
             _FakeEvent(WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT, payload),
         )
         await pilot.pause()
 
-    assert received == []
+    assert adapter.dispatched == []

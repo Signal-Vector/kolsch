@@ -1,39 +1,26 @@
-"""spec-013 Test 3 — `WorkflowNodeRow` sub-agent turn count + collapsed mount.
+"""bug-036d — `WorkflowNodeRow` as a `ChatMountSink`.
 
-Three passes:
+Pre-bug-036d this exercised ``apply_sub_agent_event`` +
+``_mount_sub_agent_widget``; both are gone. Post-036d the row is a
+``ChatMountSink`` — the adapter's handlers call ``mount_*`` on the
+row directly. These regressions cover:
 
-1. Three `apply_sub_agent_event` calls → `_sub_agent_turn_count == 3`
-   and title contains "3 sub-agent events".
-2. Row collapsed — sub-agent events only increment the counter (no
-   body mount).
-3. Row expanded — new sub-agent event triggers a
-   `_mount_sub_agent_widget` invocation (verified via monkeypatch).
+1. Three sink mount calls increment ``_sub_agent_turn_count`` and
+   the "N sub-agent events" title.
+2. Collapsed row queues mount closures (no live mount) but the
+   counter still bumps.
+3. Expanded row live-mounts widgets into ``Contents``.
 """
 
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
-from uuid import uuid4
 
 import pytest
+from textual.widgets import Collapsible
 
+from cli.chat.widgets.assistant_prose import AssistantProse
 from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
-from schemas.entities import Actor
-from schemas.events import Event, EventType
-from schemas.identifiers import EventId, SessionId, ThreadId
-
-
-def _mk_agent_event() -> Event:
-    return Event(
-        event_id=EventId(f"ev_{uuid4()}"),
-        thread_id=ThreadId(f"th_{uuid4()}"),
-        session_id=SessionId(f"ses_{uuid4()}"),
-        type=EventType.AGENT_MESSAGE,
-        data={"content": {"type": "text", "text": "hi"}},
-        actor=Actor(kind="system"),
-        created_at=datetime.now(tz=UTC),
-    )
 
 
 @pytest.mark.asyncio
@@ -42,8 +29,8 @@ async def test_three_sub_agent_events_increment_count(fake_app_factory) -> None:
     app = fake_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
-        for _ in range(3):
-            row.apply_sub_agent_event(_mk_agent_event())
+        for i in range(3):
+            await row.mount_assistant_message(f"msg-{i}")
         await pilot.pause()
         assert row._sub_agent_turn_count == 3
         assert "3 sub-agent events" in row.title
@@ -52,8 +39,8 @@ async def test_three_sub_agent_events_increment_count(fake_app_factory) -> None:
 @pytest.mark.asyncio
 async def test_collapsed_row_does_not_mount_sub_agent(
     fake_app_factory,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
+    """Collapsed row: closures queued in ``_pending_mounts``; counter still bumps."""
     row = WorkflowNodeRow(node_name="n")
     app = fake_app_factory(row)
     async with app.run_test() as pilot:
@@ -61,27 +48,19 @@ async def test_collapsed_row_does_not_mount_sub_agent(
         # Row starts collapsed (Collapsible default in __init__).
         assert row.collapsed is True
 
-        calls: list[Any] = []
-
-        def _spy(event: Any) -> None:
-            calls.append(event)
-
-        monkeypatch.setattr(row, "_mount_sub_agent_widget", _spy)
-
-        row.apply_sub_agent_event(_mk_agent_event())
+        await row.mount_assistant_message("hi")
         await pilot.pause()
 
-        # Coordinator #3 lock: no mount on collapsed.
-        assert calls == []
-        # Counter still incremented.
+        # Nothing mounted in Contents yet (queued).
+        contents = row.query_one(Collapsible.Contents)
+        assert not list(contents.query(AssistantProse))
+        # Queued closure present, counter bumped.
+        assert len(row._pending_mounts) == 1
         assert row._sub_agent_turn_count == 1
 
 
 @pytest.mark.asyncio
-async def test_expanded_row_mounts_sub_agent(
-    fake_app_factory,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
+async def test_expanded_row_mounts_sub_agent(fake_app_factory) -> None:
     row = WorkflowNodeRow(node_name="n")
     app = fake_app_factory(row)
     async with app.run_test() as pilot:
@@ -89,17 +68,11 @@ async def test_expanded_row_mounts_sub_agent(
         row.collapsed = False
         await pilot.pause()
 
-        calls: list[Any] = []
-
-        def _spy(event: Any) -> None:
-            calls.append(event)
-
-        monkeypatch.setattr(row, "_mount_sub_agent_widget", _spy)
-
-        event = _mk_agent_event()
-        row.apply_sub_agent_event(event)
+        await row.mount_assistant_message("hello")
         await pilot.pause()
 
-        # Expanded — mount fires.
-        assert calls == [event]
+        contents = row.query_one(Collapsible.Contents)
+        assert list(contents.query(AssistantProse)), (
+            "expanded row should live-mount the AssistantProse"
+        )
         assert row._sub_agent_turn_count == 1

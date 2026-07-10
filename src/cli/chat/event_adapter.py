@@ -327,6 +327,57 @@ def _extract_text(content: dict[str, object] | None) -> str:
     return str(text)
 
 
+def _event_id_str(event: Any) -> str | None:
+    """bug-036d: safe ``event_id`` accessor for sink method dedupe keys.
+
+    Real pydantic :class:`Event` values carry a string-newtype
+    ``event_id``; the wire-reconstructed sub-agent event stub
+    (``_ReconstructedSubAgentEvent``) may leave it ``None`` when
+    the outer envelope omits the field. Returns a stringified id or
+    ``None`` so the row's ``_mounted_event_ids`` doesn't dedupe on
+    the literal string ``"None"``.
+    """
+    event_id = getattr(event, "event_id", None)
+    if event_id is None:
+        return None
+    return str(event_id)
+
+
+def _count_row_lifecycle(sink: Any) -> None:
+    """bug-036d AC #8: bump a row sink's lifecycle-event counter.
+
+    Lifecycle events (``config.set``, ``thread.exchange_*``,
+    ``agent.template_warning``) don't have a widget mount path but
+    still count toward the row's "N sub-agent events" label. When
+    the sink is a workflow row (not the main App), forward the
+    counter bump via the row's ``count_lifecycle_event`` hook.
+    """
+    hook = getattr(sink, "count_lifecycle_event", None)
+    if callable(hook):
+        with contextlib.suppress(Exception):
+            hook()
+
+
+def _content_dict_text(content: dict[str, object]) -> str:
+    """bug-036d fallback: readable text for a non-``text``-keyed content.
+
+    Workflow-invoked agents receive their bound inputs under
+    ``data.content = {"job_description": "..."}`` — no ``text``
+    key means ``_extract_text`` returns ``""``. The row's sink
+    still wants something to render (Mockup 4 renders each key
+    on its own labeled line). Delegates to the row-module helper
+    that already handles bash-shape + generic dict rendering.
+    """
+    try:
+        from cli.chat.widgets.workflow_node_row import (  # noqa: PLC0415
+            _extract_content_text as _row_extract,
+        )
+    except Exception:  # noqa: BLE001 — widget layer optional
+        return ""
+    result = _row_extract(content)
+    return result if isinstance(result, str) else ""
+
+
 _PANEL_HEADER_ARG_MAX_LEN = 60
 """Match `_renderer.py:674` — truncation width for arg values so
 the tool-block header stays one line."""
@@ -609,6 +660,53 @@ class EventAdapter:
     def handles(cls, event_type: EventType) -> bool:
         """True if a handler is registered for ``event_type``."""
         return event_type in cls._DISPATCH
+
+    async def dispatch_sub_agent_event(
+        self,
+        inner_event: Any,
+        *,
+        outer_trace_id: str | None = None,
+    ) -> None:
+        """bug-036d: unwrap + re-dispatch a sub-agent event through the sink.
+
+        Called by both call sites of the (deleted)
+        ``row.apply_sub_agent_event``:
+
+        - :meth:`_handle_ui_event`'s sub-agent branch reconstructs
+          the inner event from the outer envelope's payload and
+          hands it here.
+        - :class:`~cli.chat.widgets.card_body.workflow.WorkflowRenderer`'s
+          ``_on_sub_agent_event`` does the same when the renderer
+          receives a fan-out.
+
+        Trace-id safety (Reviewer #1 finding): if
+        ``outer_trace_id`` is supplied, it must match the inner
+        event's ``trace_id``. A mismatch drops the event with a
+        WARNING log — prevents a re-dispatch that would mis-route
+        into a different row than the outer envelope was addressed
+        to.
+        """
+        inner_trace = getattr(inner_event, "trace_id", None)
+        if (
+            outer_trace_id is not None
+            and isinstance(inner_trace, str)
+            and inner_trace != outer_trace_id
+        ):
+            _LOGGER.warning(
+                "event_adapter: dispatch_sub_agent_event trace mismatch "
+                "outer=%r inner=%r — dropped",
+                outer_trace_id,
+                inner_trace,
+            )
+            return
+        try:
+            await self.handle(inner_event)
+        except Exception:
+            _LOGGER.warning(
+                "event_adapter: sub-agent handler raised for %r",
+                getattr(inner_event, "event_id", "<unknown>"),
+                exc_info=True,
+            )
 
     def register_cards_impl(self, cards: Any) -> None:
         """Wire a live ``Cards`` handle after construction.
@@ -956,53 +1054,65 @@ class EventAdapter:
     async def _handle_thread_exchange_started(self, event: Event) -> None:
         """Kick off the transient turn status.
 
-        Sets the verb to ``Thinking…`` so the user sees immediate
-        feedback while the engine spins up the first model call.
+        bug-036d: only fires the verb when the event is main-chat
+        scoped. Sub-agent thread.exchange_started events count
+        toward the row's activity counter but don't rewrite the
+        outer chat's status line.
         """
-        _ = event
-        await self._app.set_turn_verb("Thinking…", target="")
+        sink = self._route_to_workflow_node(event) or self._app
+        if sink is self._app:
+            await self._app.set_turn_verb("Thinking…", target="")
+        else:
+            _count_row_lifecycle(sink)
 
     async def _handle_thread_exchange_completed(self, event: Event) -> None:
         """Clear the transient turn status; the transcript speaks for itself."""
-        _ = event
-        await self._app.set_turn_verb("", target="")
+        sink = self._route_to_workflow_node(event) or self._app
+        if sink is self._app:
+            await self._app.set_turn_verb("", target="")
+        else:
+            _count_row_lifecycle(sink)
 
     async def _handle_thread_exchange_failed(self, event: Event) -> None:
-        """Clear the turn status and surface the failure in the transcript."""
+        """Clear the turn status and surface the failure in the transcript.
+
+        bug-036d: an exchange failure inside a workflow row routes
+        the failure notice into the row instead of the transcript.
+        """
         error = event.data.get("error") or {}
         message = str(error.get("message", "") or error.get("type", "exchange failed"))
-        await self._app.set_turn_verb("", target="")
-        await self._app.mount_exchange_failed(message)
+        sink = self._route_to_workflow_node(event) or self._app
+        if sink is self._app:
+            await self._app.set_turn_verb("", target="")
+            await self._app.mount_exchange_failed(message)
+        else:
+            await sink.mount_notice(
+                f"exchange-failed-{event.event_id}",
+                f"exchange failed — {message}",
+                level="error",
+                event_id=_event_id_str(event),
+            )
 
-    def _route_to_workflow_node(self, event: Event) -> bool:
-        """Return True if `event` matched a live workflow node.
+    def _route_to_workflow_node(self, event: Event) -> Any:
+        """Return the matching `WorkflowNodeRow`, or `None`.
 
-        spec-013 §EventAdapter trace_id routing (bug-033: extended
-        to `(trace_id, invocation_id)`): when the incoming event's
-        composite key matches a `WorkflowNodeRow` registered by
-        `WorkflowRenderer`, dispatch into that row's
-        `apply_sub_agent_event` and short-circuit the caller's
-        default transcript-root mount. When no match (unrelated
-        trace, bare chat surface without `trace_id`, or a run whose
-        nodes have all terminated), return `False` and let the
-        caller carry on.
+        bug-036d: the return type flipped from ``bool`` to the
+        row-or-``None`` shape so callers write::
 
-        bug-033: `Event` doesn't currently hoist `invocation_id` at
-        the top level — spec-020 will thread it through the
-        sub-agent forwarder. Until then this reads a best-effort
-        value from `event.data["invocation_id"]` (some emit paths
-        set it there) and falls back to the trace-only lookup
-        (`(trace_id, "")` sentinel key) so today's session-scoped
-        routing keeps working. When the composite key doesn't hit,
-        we scan the map for any registration whose `trace_id`
-        matches — this preserves the pre-bug-033 behaviour for
-        callers that haven't been plumbed through spec-020 yet
-        (one entry per trace in the single-agent-per-trace world
-        the router runs in today).
+            sink = self._route_to_workflow_node(event) or self._app
+            await sink.mount_X(...)
+
+        Same trace_id / invocation_id matching semantic as pre-036d;
+        the difference is the caller now uses the returned row as a
+        ``ChatMountSink`` rather than firing
+        ``row.apply_sub_agent_event(event)`` inside this helper.
+
+        spec-013 § trace_id routing (bug-033: extended to
+        `(trace_id, invocation_id)`).
         """
         trace_id = getattr(event, "trace_id", None)
         if not isinstance(trace_id, str) or not trace_id:
-            return False
+            return None
         invocation_id = ""
         raw_data = getattr(event, "data", None)
         if isinstance(raw_data, dict):
@@ -1013,110 +1123,106 @@ class EventAdapter:
             (trace_id, invocation_id),
         )
         if node_row is None and invocation_id:
-            # Composite miss with a real invocation_id → try the
-            # sentinel-key fallback so old writers still route.
             node_row = self._live_nodes_by_trace_and_invocation.get(
                 (trace_id, ""),
             )
         if node_row is None:
-            # Best-effort trace-only match: pick any registration
-            # sharing this trace_id. Preserves pre-bug-033 behaviour
-            # for consumers that don't yet plumb `invocation_id`
-            # through to the routed event (e.g. plain session
-            # `agent.message` events during a single-node run).
             for (mapped_trace, _mapped_inv), row in (
                 self._live_nodes_by_trace_and_invocation.items()
             ):
                 if mapped_trace == trace_id:
                     node_row = row
                     break
-        if node_row is None:
-            return False
-        with contextlib.suppress(Exception):
-            node_row.apply_sub_agent_event(event)
-        return True
+        return node_row
 
     async def _handle_user_message(self, event: Event) -> None:
         """Mount a ``UserChatbox`` for the just-submitted turn.
 
-        The adapter mounts the user chatbox from the event so replay
-        and live paths share a single mount site. spec-013: when the
-        event's `trace_id` matches a live workflow node, route into
-        that node instead of the transcript root.
+        bug-036d: routes to a workflow node row when trace_id
+        matches. Inside a row, the USER_MESSAGE is the scheduler's
+        bound-inputs invocation (e.g. ``{"job_description": "..."}``).
         """
-        if self._route_to_workflow_node(event):
-            return
+        sink = self._route_to_workflow_node(event) or self._app
         content = event.data.get("content") or {}
         text = _extract_text(content)
         if not text:
+            # Fallback: extract via the row's readable-dict path so
+            # workflow bound-inputs (no ``text`` key) still render.
+            if isinstance(content, dict) and content:
+                text = _content_dict_text(content)
+        if not text:
             return
-        await self._app.mount_user_message(text, _now_ts(event))
+        await sink.mount_user_message(
+            text, _now_ts(event), event_id=_event_id_str(event),
+        )
 
     async def _handle_agent_message(self, event: Event) -> None:
-        """Mount assistant prose only if MODEL_RESPONSE didn't already.
+        """Mount assistant prose only if the sink didn't already.
 
-        spec-013: `trace_id` match short-circuits into the matching
-        `WorkflowNodeRow`; unmatched events fall through to the
-        legacy transcript-root behaviour.
+        bug-036d: sink-based dedupe — the same
+        ``last_assistant_text`` check the main chat runs now applies
+        to workflow rows too. Card-mounting-tool suppression is
+        adapter-scoped and still runs before dispatch.
         """
-        if self._route_to_workflow_node(event):
-            return
+        sink = self._route_to_workflow_node(event) or self._app
         content = event.data.get("content") or {}
         text = _extract_text(content)
+        if not text and isinstance(content, dict) and content:
+            text = _content_dict_text(content)
         if not text:
             return
-        # AGENT_MESSAGE fires after MODEL_RESPONSE with the same text
-        # for the common case; the adapter defers to MODEL_RESPONSE
-        # for streaming or single-shot mount. Only re-mount when the
-        # transcript's last assistant text differs — matches the
-        # legacy renderer behaviour at `_renderer.py:387`.
-        if self._app.last_assistant_text() == text:
+        if sink.last_assistant_text() == text:
             return
-        await self._app.mount_assistant_message(text)
-        self._app.set_last_assistant_text(text)
+        await sink.mount_assistant_message(text, event_id=_event_id_str(event))
+        sink.set_last_assistant_text(text)
 
     async def _handle_tool_called(self, event: Event) -> None:
-        """Capture the call's arguments for the eventual result/failure.
+        """Capture args + fire the turn verb on the main-chat surface.
 
-        spec-013: `trace_id` match dispatches into the workflow
-        node row instead of updating the top-level turn verb.
-
-        bug-036a: on the transcript-root branch, the ToolCallBlock
-        mount is skipped for card-mounting tools (`run_workflow` +
-        `run_workflow_*` virtuals). Argument capture + turn-verb
-        update are unchanged.
+        bug-036d: arg capture is adapter-scoped (survives across
+        sink boundaries so ``_handle_tool_result`` can still look up
+        the args). Turn verb is main-chat-only — sub-agent calls
+        must not trample the outer chat's status line.
         """
-        if self._route_to_workflow_node(event):
-            return
         tool_call_id = str(event.data.get("tool_call_id", ""))
         if tool_call_id:
             self._tool_call_args[tool_call_id] = dict(
                 event.data.get("arguments") or {},
             )
         tool_name = str(event.data.get("tool_name", ""))
-        if tool_name:
+        if not tool_name:
+            return
+        sink = self._route_to_workflow_node(event) or self._app
+        # bug-036a: card-mounting tools skip the ToolCallBlock mount
+        # (the tool opens its own card). Suppression is set on the
+        # adapter regardless of sink so the matching TOOL_RESULT
+        # can consult it.
+        if _is_card_mounting_tool(tool_name) and tool_call_id:
+            self._suppressed_tool_calls.add(tool_call_id)
+        # bug-036d: only the main App has a turn verb. Sub-agent
+        # calls inside a workflow row bump the row's counter via
+        # the sub-agent bridge; touching the outer chat's verb
+        # would trample it.
+        if sink is self._app:
             args_summary = _format_args(event.data.get("arguments") or {})
             await self._app.set_turn_verb(
                 f"Calling {tool_name}",
                 target=args_summary,
             )
-            if _is_card_mounting_tool(tool_name) and tool_call_id:
-                self._suppressed_tool_calls.add(tool_call_id)
+        else:
+            # Row sink: TOOL_CALLED doesn't mount (main-chat parity —
+            # the widget lands on TOOL_RESULT). Still bump the row's
+            # activity counter so the collapsed title reflects that
+            # a sub-agent tool call happened.
+            _count_row_lifecycle(sink)
 
     async def _handle_tool_result(self, event: Event) -> None:
         """Mount a ``ToolCallBlock`` with the completed result.
 
-        spec-013: `trace_id` match dispatches into the workflow
-        node row.
-
-        bug-036a: transcript-root mount is skipped when the matching
-        call was suppressed on TOOL_CALLED, when the tool is
-        card-mounting by name, or when the result payload carries a
-        ``card_id`` (belt-and-braces for future card-mounting tools
-        the predicate doesn't yet know about).
+        bug-036d: sink-based routing. bug-036a suppression precedes
+        the dispatch so card-mounting sub-agent tools skip the
+        row-scoped mount too.
         """
-        if self._route_to_workflow_node(event):
-            return
         tool_name = str(event.data.get("tool_name", "<unknown>"))
         tool_call_id = str(event.data.get("tool_call_id", ""))
         args = self._tool_call_args.pop(tool_call_id, {})
@@ -1124,16 +1230,28 @@ class EventAdapter:
         result = event.data.get("result") or {}
         suppressed = tool_call_id in self._suppressed_tool_calls
         card_id_present = isinstance(result, dict) and bool(result.get("card_id"))
+        sink = self._route_to_workflow_node(event) or self._app
         if suppressed or _is_card_mounting_tool(tool_name) or card_id_present:
             self._suppressed_tool_calls.discard(tool_call_id)
-            await self._app.set_turn_verb("Thinking…", target="")
+            if sink is self._app:
+                await self._app.set_turn_verb("Thinking…", target="")
             return
         body = _format_tool_result(result)
-        await self._app.mount_tool_call(tool_name, args_str, body, failed=False)
-        await self._app.set_turn_verb("Thinking…", target="")
+        await sink.mount_tool_call(
+            tool_name, args_str, body,
+            failed=False,
+            event_id=_event_id_str(event),
+        )
+        if sink is self._app:
+            await self._app.set_turn_verb("Thinking…", target="")
 
     async def _handle_tool_failed(self, event: Event) -> None:
-        """Mount a ``ToolCallBlock`` with ``failed=True`` styling."""
+        """Mount a ``ToolCallBlock`` with ``failed=True`` styling.
+
+        bug-036d: routes through the sink — closes the bug-037 M1
+        gap where a workflow's inner tool failure mounted the block
+        at the transcript root instead of inside the owning row.
+        """
         tool_name = str(event.data.get("tool_name", "<unknown>"))
         tool_call_id = str(event.data.get("tool_call_id", ""))
         args = self._tool_call_args.pop(tool_call_id, {})
@@ -1144,31 +1262,48 @@ class EventAdapter:
         body = f"{code}: {message}" if code else message
         recovery_hint = event.data.get("recovery_hint")
         recovery_hint = recovery_hint if isinstance(recovery_hint, str) else None
-        await self._app.mount_tool_call(
+        sink = self._route_to_workflow_node(event) or self._app
+        await sink.mount_tool_call(
             tool_name,
             args_str,
             body,
             failed=True,
             recovery_hint=recovery_hint,
+            event_id=_event_id_str(event),
         )
 
     async def _handle_model_request(self, event: Event) -> None:
-        """MODEL_REQUEST fires the "Thinking…" verb.
+        """MODEL_REQUEST fires the "Thinking…" verb on the main chat.
 
-        No transcript widget mounted — the assistant prose widget
-        lands on MODEL_STREAMING_TOKEN (streaming path) or
-        MODEL_RESPONSE (non-streaming path).
+        bug-036d: turn verb is app-scoped — a sub-agent
+        MODEL_REQUEST inside a workflow node doesn't rewrite the
+        outer chat's status line.
         """
-        _ = event
-        await self._app.set_turn_verb("Thinking…", target="")
+        sink = self._route_to_workflow_node(event) or self._app
+        if sink is self._app:
+            await self._app.set_turn_verb("Thinking…", target="")
+        else:
+            _count_row_lifecycle(sink)
 
     async def _handle_model_response(self, event: Event) -> None:
-        """Finalise the streaming widget or mount a fresh one."""
+        """Finalise the streaming widget or mount a fresh one.
+
+        bug-036d: MODEL_RESPONSE now routes to the sink like
+        AGENT_MESSAGE. Inside a workflow row this fixes the
+        visibility gap the user reported (rows previously looked
+        "empty" between NODE_STARTED and NODE_COMPLETED).
+
+        Streaming stays adapter-scoped — sub-agent
+        MODEL_STREAMING_TOKEN events are dropped by
+        ``_SUB_AGENT_EVENT_TYPES_DROP`` upstream, so the streaming
+        widget lookup only ever hits for main-chat calls.
+        """
         call_id = str(event.data.get("call_id", ""))
         content = event.data.get("content") or {}
         text = _extract_text(content)
         # Streaming path: the widget was mounted on the first
-        # STREAMING_TOKEN; nothing further to append.
+        # STREAMING_TOKEN. Streaming is app-only (no sub-agent
+        # streaming exists), so this branch runs against the App.
         if call_id and call_id in self._streaming_widgets:
             self._streaming_widgets.pop(call_id, None)
             self._streaming_buffers.pop(call_id, None)
@@ -1176,11 +1311,19 @@ class EventAdapter:
                 self._app.set_last_assistant_text(text)
             await self._app.set_turn_verb("Thinking…", target="")
             return
-        # Non-streaming path: mount once with the final text.
+        sink = self._route_to_workflow_node(event) or self._app
         if text:
-            await self._app.mount_assistant_message(text)
-            self._app.set_last_assistant_text(text)
-        await self._app.set_turn_verb("Thinking…", target="")
+            # bug-036d dedupe against the sink's last-assistant-text
+            # (matches _handle_agent_message shape). Prevents double-
+            # mount when both MODEL_RESPONSE and AGENT_MESSAGE fire
+            # with identical content.
+            if sink.last_assistant_text() != text:
+                await sink.mount_assistant_message(
+                    text, event_id=_event_id_str(event),
+                )
+                sink.set_last_assistant_text(text)
+        if sink is self._app:
+            await self._app.set_turn_verb("Thinking…", target="")
 
     async def _handle_model_streaming_token(self, event: Event) -> None:
         """Append one delta to the assistant prose widget for this call."""
@@ -1200,7 +1343,12 @@ class EventAdapter:
         await self._app.set_turn_verb("Streaming…", target="")
 
     async def _handle_model_fallback(self, event: Event) -> None:
-        """Surface the fallback transition as a dim italic notice."""
+        """Surface the fallback transition as a dim italic notice.
+
+        bug-036d: routes through the sink so a fallback fired inside
+        a workflow node lands inside the owning row rather than
+        orphaning at the transcript root.
+        """
         to = event.data.get("to") or {}
         to_label = (
             f"{to.get('provider', '?')}/{to.get('model', '?')}"
@@ -1208,14 +1356,16 @@ class EventAdapter:
             else str(to)
         )
         reason = str(event.data.get("reason", "transient model failure"))
-        # spec-008: ``ChatApp.mount_notice`` retired — mount a
-        # ``NoticeWidget`` at the transcript root via the same helper
-        # ``_handle_card_notice`` uses for the transcript-root branch.
-        await self._mount_root_notice(
-            f"model-fallback-{event.event_id}",
-            f"falling back to {to_label} because {reason}",
-            "info",
-        )
+        notice_id = f"model-fallback-{event.event_id}"
+        text = f"falling back to {to_label} because {reason}"
+        sink = self._route_to_workflow_node(event) or self._app
+        if sink is self._app:
+            await self._mount_root_notice(notice_id, text, "info")
+        else:
+            await sink.mount_notice(
+                notice_id, text, level="info",
+                event_id=_event_id_str(event),
+            )
 
     async def _handle_config_set(self, event: Event) -> None:
         """Silent — config is diagnostic-only in the JSONL."""
@@ -1238,13 +1388,23 @@ class EventAdapter:
         _ = event
 
     async def _handle_agent_template_warning(self, event: Event) -> None:
-        """Surface template warnings as a dim inline notice."""
+        """Surface template warnings as a dim inline notice.
+
+        bug-036d: routes through the sink so a sub-agent template
+        warning lands inside the owning workflow row.
+        """
         message = str(event.data.get("message") or event.data.get("reason", ""))
-        if message:
-            await self._mount_root_notice(
-                f"template-warning-{event.event_id}",
-                f"template warning: {message}",
-                "warning",
+        if not message:
+            return
+        notice_id = f"template-warning-{event.event_id}"
+        text = f"template warning: {message}"
+        sink = self._route_to_workflow_node(event) or self._app
+        if sink is self._app:
+            await self._mount_root_notice(notice_id, text, "warning")
+        else:
+            await sink.mount_notice(
+                notice_id, text, level="warning",
+                event_id=_event_id_str(event),
             )
 
     async def _handle_ui_event(self, event: Event) -> None:
@@ -1317,13 +1477,15 @@ class EventAdapter:
             self._handle_workflow_node_approval_resolved(event, payload)
             return
         if kind == WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT:
-            # spec-020: fan the sub-agent event to every tracked
-            # workflow renderer. Each renderer filters on `run_id`
-            # before routing into the matching `WorkflowNodeRow` via
-            # bug-033's `(trace_id, invocation_id)` map (the adapter
-            # owns the map; the renderer reads it via
-            # `self._adapter._live_nodes_by_trace_and_invocation`).
-            self._handle_workflow_node_sub_agent_event(event, payload)
+            # bug-036d: fully async dispatch chain — unwrap the inner
+            # event here and hand it to ``dispatch_sub_agent_event``.
+            # The pre-036d fan-out kept the renderer path around for
+            # multi-workflow layout, but the dispatch itself no
+            # longer needs the renderer as intermediary (the adapter
+            # owns the routing map). We still fan out to every
+            # renderer so any per-renderer bookkeeping (e.g., row
+            # counter registration) runs.
+            await self._dispatch_sub_agent_ui_event(event, payload)
             return
         # Unknown or workflow-UI kinds land here as silent no-ops
         # until their service specs wire the routing.
@@ -2320,45 +2482,81 @@ class EventAdapter:
             with contextlib.suppress(Exception):
                 body.apply_event(data_view)
 
-    def _handle_workflow_node_sub_agent_event(
+    async def _dispatch_sub_agent_ui_event(
         self,
         event: Event,
         payload: dict[str, Any],
     ) -> None:
-        """Route a `kolsch.workflow.node.sub_agent_event` to the renderer.
+        """bug-036d: unwrap a sub-agent UI envelope and dispatch async.
 
-        spec-020. Same cardinality-preserving fan-out as
-        `_handle_workflow_progress`: forward the envelope to every
-        tracked `WorkflowRenderer`, filtering on `run_id` when the
-        renderer has anchored. The renderer's `apply_event`
-        `_on_sub_agent_event` branch looks up the target
-        `WorkflowNodeRow` via bug-033's
-        `(trace_id, invocation_id)` composite map and dispatches
-        `row.apply_sub_agent_event(reconstructed_event)`.
+        Fires from :meth:`_handle_ui_event`'s sub-agent branch. The
+        outer envelope carries the ``event_type`` string, the
+        ``trace_id``, ``invocation_id``, ``event_id`` and the inner
+        ``payload`` dict (session-event data). We reconstruct a
+        lightweight :class:`_ReconstructedSubAgentEvent`-shaped
+        object and forward it to :meth:`dispatch_sub_agent_event`
+        so the standard handler chain runs.
+
+        Also runs the renderer fan-out for pre-036d compatibility —
+        the renderer's ``register_adapter`` bookkeeping still needs
+        to fire so the ``(trace_id, invocation_id)`` map is populated.
         """
-        _ = event
-        target_run_id = payload.get("run_id")
+        trace_id = payload.get("trace_id")
+        invocation_id = payload.get("invocation_id")
+        event_type_raw = payload.get("event_type")
+        if (
+            not isinstance(trace_id, str)
+            or not isinstance(invocation_id, str)
+            or not isinstance(event_type_raw, str)
+            or not trace_id
+        ):
+            return
+        try:
+            event_type = EventType(event_type_raw)
+        except ValueError:
+            return
+        raw_data = payload.get("payload")
+        data = dict(raw_data) if isinstance(raw_data, dict) else {}
+        # bug-033: the composite key lookup wants ``invocation_id``
+        # on the inner event data. Stamp it here so
+        # ``_route_to_workflow_node`` finds the right row.
+        if "invocation_id" not in data:
+            data["invocation_id"] = invocation_id
+        wire_event_id = payload.get("event_id")
+        # Reconstruct via a duck-typed object with the fields the
+        # adapter's handlers + ``_route_to_workflow_node`` read.
+        # Prefer the outer envelope's ``created_at`` so downstream
+        # timestamp rendering (``UserChatbox`` header) stays stable
+        # across replays.
+        from cli.chat.widgets.card_body.workflow import (  # noqa: PLC0415
+            _ReconstructedSubAgentEvent,
+        )
+        outer_ts = _now_ts(event)
+        inner = _ReconstructedSubAgentEvent(
+            type=event_type,
+            data=data,
+            created_at=outer_ts,
+            trace_id=trace_id,
+            event_id=(
+                wire_event_id if isinstance(wire_event_id, str) else None
+            ),
+        )
+        # Register adapter with any tracked renderers so the map
+        # stays populated. This mirrors the pre-036d fan-out
+        # without dispatching through the renderer.
         for entry in self._card_widgets.values():
             body = getattr(entry, "_body", None)
-            if body is None:
+            if body is None or not hasattr(body, "_node_rows"):
                 continue
-            if not hasattr(body, "_node_rows"):
-                continue
-            # Register the adapter on first sight so the row's
-            # `(trace_id, invocation_id)` routing map is populated.
-            # Idempotent — `register_adapter` accepts repeat calls.
             with contextlib.suppress(Exception):
                 body.register_adapter(self)
-            renderer_run_id = getattr(body, "_run_id", None)
-            if (
-                renderer_run_id is not None
-                and target_run_id is not None
-                and renderer_run_id != target_run_id
-            ):
-                continue
-            data_view = _UIEventDataView(event, payload)
-            with contextlib.suppress(Exception):
-                body.apply_event(data_view)
+        # bug-036d: async dispatch through the standard handler
+        # chain. The trace_id safety check inside
+        # ``dispatch_sub_agent_event`` is a no-op here (outer +
+        # inner trace_id are identical by construction).
+        await self.dispatch_sub_agent_event(
+            inner, outer_trace_id=trace_id,
+        )
 
     def _refresh_workflow_parent_ref(
         self,

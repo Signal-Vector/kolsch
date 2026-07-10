@@ -1,11 +1,10 @@
-"""spec-013 Test 4 — `EventAdapter` trace_id routing.
+"""spec-013 (bug-036d shape) — `EventAdapter` trace_id routing.
 
 Three passes:
 
 1. Register a live workflow node with trace_id=t1. Emit
-   `agent.message` with trace_id=t1. Assert
-   `WorkflowNodeRow.apply_sub_agent_event` fires; no transcript
-   mount happens.
+   `agent.message` with trace_id=t1. Assert the row's sink method
+   (``mount_assistant_message``) fires; no transcript mount.
 2. Emit `agent.message` with trace_id=t-unrelated. Assert the
    transcript-root mount fires; no node dispatch.
 3. Node terminal (`NODE_COMPLETED`) unregisters the row; a
@@ -35,13 +34,21 @@ class _FakeChatApp:
         self.mounts: list[str] = []
         self._last_assistant: str = ""
 
-    async def mount_user_message(self, text: str, timestamp: Any) -> None:
+    async def mount_user_message(
+        self, text: str, timestamp: Any = None,
+        *, event_id: Any = None,
+    ) -> None:
+        _ = timestamp, event_id
         self.mounts.append(f"user:{text}")
 
-    async def mount_assistant_message(self, text: str) -> None:
+    async def mount_assistant_message(
+        self, text: str, *, event_id: Any = None,
+    ) -> None:
+        _ = event_id
         self.mounts.append(f"assistant:{text}")
 
     async def mount_tool_call(self, *args: Any, **kwargs: Any) -> None:
+        _ = args, kwargs
         self.mounts.append("tool")
 
     async def set_turn_verb(self, verb: str, *, target: str = "") -> None:

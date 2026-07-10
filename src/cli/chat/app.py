@@ -953,9 +953,17 @@ class ChatApp(App):
     # Mount helpers — called by EventAdapter and InlineApprovalCallback
     # ------------------------------------------------------------------
 
-    async def mount_user_message(self, text: str, timestamp: datetime) -> None:
+    async def mount_user_message(
+        self,
+        text: str,
+        timestamp: datetime | None = None,
+        *,
+        event_id: str | None = None,
+    ) -> None:
+        _ = event_id  # bug-036d: sink-protocol dedupe key — App ignores.
+        ts = timestamp if timestamp is not None else datetime.now()
         transcript = self.query_one("#transcript", VerticalScroll)
-        await transcript.mount(UserChatbox(text, timestamp))
+        await transcript.mount(UserChatbox(text, ts))
         transcript.scroll_end(animate=False)
 
     def _assistant_border_title(self) -> str:
@@ -967,7 +975,10 @@ class ChatApp(App):
         agent = self.session.config.name
         return f"{agent} · {datetime.now().strftime('%H:%M:%S')}"
 
-    async def mount_assistant_message(self, text: str) -> None:
+    async def mount_assistant_message(
+        self, text: str, *, event_id: str | None = None,
+    ) -> None:
+        _ = event_id  # bug-036d: sink-protocol dedupe key — App ignores.
         transcript = self.query_one("#transcript", VerticalScroll)
         prose = AssistantProse()
         prose.border_title = self._assistant_border_title()
@@ -993,7 +1004,9 @@ class ChatApp(App):
         *,
         failed: bool = False,
         recovery_hint: str | None = None,
+        event_id: str | None = None,
     ) -> None:
+        _ = event_id  # bug-036d: sink-protocol dedupe key — App ignores.
         transcript = self.query_one("#transcript", VerticalScroll)
         block = ToolCallBlock(
             tool_name,
@@ -1003,6 +1016,29 @@ class ChatApp(App):
             recovery_hint=recovery_hint,
         )
         await transcript.mount(block)
+        transcript.scroll_end(animate=False)
+
+    async def mount_notice(
+        self,
+        notice_id: str,
+        text: str,
+        *,
+        level: str = "info",
+        event_id: str | None = None,
+    ) -> None:
+        """bug-036d: sink-protocol notice mount at transcript root.
+
+        Mirrors ``_mount_transcript_notice`` but takes the sink
+        protocol shape so ``EventAdapter._handle_model_fallback`` /
+        ``_handle_agent_template_warning`` can call the sink without
+        knowing whether the sink is the App or a workflow row.
+        Idempotent per ``notice_id`` is NOT enforced here — the
+        adapter's ``_applied_notice_ids`` LRU handles that upstream.
+        """
+        _ = notice_id, event_id  # tracked by the adapter's LRU
+        transcript = self.query_one("#transcript", VerticalScroll)
+        notice = NoticeWidget(text=text, kind=level)
+        await transcript.mount(notice)
         transcript.scroll_end(animate=False)
 
     async def _mount_transcript_notice(

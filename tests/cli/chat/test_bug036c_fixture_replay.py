@@ -78,11 +78,16 @@ class _StubTranscriptApp(App[None]):
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="transcript")
 
-    async def mount_user_message(self, text: str, timestamp: Any) -> None:
-        _ = text, timestamp
+    async def mount_user_message(
+        self, text: str, timestamp: Any = None,
+        *, event_id: Any = None,
+    ) -> None:
+        _ = text, timestamp, event_id
 
-    async def mount_assistant_message(self, text: str) -> None:
-        _ = text
+    async def mount_assistant_message(
+        self, text: str, *, event_id: Any = None,
+    ) -> None:
+        _ = text, event_id
 
     async def mount_assistant_streaming_widget(self) -> Any:
         class _P:
@@ -98,11 +103,15 @@ class _StubTranscriptApp(App[None]):
         *,
         failed: bool = False,
         recovery_hint: str | None = None,
+        event_id: Any = None,
     ) -> None:
-        _ = tool_name, args, body, failed, recovery_hint
+        _ = tool_name, args, body, failed, recovery_hint, event_id
 
-    async def mount_notice(self, text: str) -> None:
-        _ = text
+    async def mount_notice(
+        self, notice_id: str, text: str,
+        *, level: str = "info", event_id: Any = None,
+    ) -> None:
+        _ = notice_id, text, level, event_id
 
     async def mount_exchange_failed(self, message: str) -> None:
         _ = message

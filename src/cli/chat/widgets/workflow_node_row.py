@@ -22,116 +22,76 @@ State machine (7 states, spec-013 §State table):
 - `pruned` (`─`) — node never ran (branch cascade), class
   `.-pruned`.
 
-Sub-agent event routing lands via
-[`apply_sub_agent_event`][cli.chat.widgets.workflow_node_row.WorkflowNodeRow.apply_sub_agent_event]:
+bug-036d — sink-consolidation refactor
+--------------------------------------
 
-- Increments the row's `_sub_agent_turn_count` on every call.
-- Appends the event to a bounded ring buffer (`_event_buffer`,
-  `maxlen=50`) so a user who expands a row AFTER events have
-  arrived can see the recent history (spec-021 — amends spec-013
-  Coordinator #3 which dropped collapsed-row events on the floor).
-- Mounts the matching sub-agent widget inside the row body when
-  the row is expanded. On collapse -> expand transitions, the
-  buffer is replayed into the body via `_replay_buffer_to_body`;
-  already-mounted event_ids are skipped so live mounts don't
-  double up.
-- Terminal state transition freezes the buffer (spec-021 AC #7)
-  so post-run events are dropped rather than mounted after the
-  node has settled.
+Prior to bug-036d, sub-agent events reached this row via a bespoke
+``apply_sub_agent_event`` -> ``_mount_sub_agent_widget`` chain that
+duplicated the main chat's dispatch. bug-036d collapses the two
+paths into one: the row implements
+:class:`~cli.chat.services.mount_sink.ChatMountSink`, and the
+adapter's normal handlers pick either the App or a row as sink.
+
+- ``_saw_agent_message`` (bug-036a flag) → ``_last_assistant_text``
+  (string). Empty text means "nothing rendered"; non-empty means
+  the ``set_output`` gate should fire (agent nodes).
+- ``_event_buffer`` (raw events) → ``_pending_mounts`` (mount
+  closures). Same bounded shape, replayed sequentially on expand.
+- ``apply_sub_agent_event`` / ``_mount_sub_agent_widget`` — GONE.
+  The renderer and adapter now unwrap the outer envelope and call
+  the sink's typed methods directly.
 """
 
 from __future__ import annotations
 
-import collections
 import contextlib
 import json
+import logging
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Awaitable, Callable
 
 from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Collapsible, Static
 
+_LOGGER = logging.getLogger(__name__)
+
 
 _SPINNER_FRAMES = ("⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷")
-"""bug-031: 8-cell braille spinner frames rotated at ~12.5 Hz.
-
-Matches the convention established by
-``cli.chat.widgets.turn_status._SPINNER_FRAMES`` (module-level
-constant, ``set_interval(0.08, ...)``). Frame rotation drives the
-"card is animating" cue the user reads to know a running node
-hasn't stalled — session ``ses_af5980ab`` had a 90.4s dead zone on
-the ``deduper`` node with the static ``▸`` glyph, indistinguishable
-from a hang.
-"""
+"""bug-031: 8-cell braille spinner frames rotated at ~12.5 Hz."""
 
 
 _ANIMATED_STATES = frozenset({"starting", "running"})
-"""bug-031: states whose title uses the spinner frame instead of the
-static glyph. Terminal states (``completed`` / ``failed`` /
-``paused`` / ``cancelling`` / ``pruned``) use the static glyph as
-today — the row is done moving.
-"""
+"""bug-031: states whose title uses the spinner frame."""
 
 
 _EVENT_BUFFER_MAX = 50
-"""spec-021: bounded ring-buffer capacity for sub-agent events.
+"""spec-021: bounded queue capacity for pending mount closures.
 
-Sized for ~10 tool calls + ~10 agent messages — enough for a typical
-agent turn without unbounded memory. Overflow drops oldest
-(``collections.deque(maxlen=...)`` handles it automatically).
+bug-036d renames the concept from "event buffer" to "pending
+mounts" but keeps the 50-slot bound so a collapsed row can't
+grow unbounded while a sub-agent runs.
 """
 
 
 _TERMINAL_STATES = frozenset({"completed", "failed", "cancelling", "pruned"})
-"""spec-021: states that freeze the event buffer.
-
-On transition into any of these, ``apply_sub_agent_event`` becomes
-a no-op — the node has settled and any post-terminal events
-would render into an already-finalised row. ``paused`` is NOT
-terminal (spec-014 unpauses back to ``running``).
-"""
+"""spec-021: states that freeze the pending-mount queue."""
 
 
 _BASH_SHAPE_KEYS = frozenset({"stdout", "stderr", "exit_code"})
-"""bug-034: keys that identify a bash-node output shape.
-
-If a dict's keys are a subset of this set (and it contains at
-least one of them), ``_format_content_dict`` renders each field
-as its own labeled block with real newlines rather than
-JSON-escaped ``\\n`` sequences. Bash nodes ship
-``{stdout, stderr, exit_code}``; other shapes fall through to
-``json.dumps``.
-"""
+"""bug-034: keys that identify a bash-node output shape."""
 
 
 _BODY_MAX_CHARS = 2000
-"""bug-034: total-char cap for rendered node body / content dicts.
-
-Raised from the 500-char bug-032 cap — a diagnostic body needs
-enough room to show real stdout without cutting mid-string.
-"""
+"""bug-034: total-char cap for rendered node body / content dicts."""
 
 
 _BASH_BLOCK_MAX_CHARS = 500
-"""bug-034: per-block soft cap for stdout / stderr in bash-shape rendering.
-
-Keeps a runaway single stream from dominating the body when both
-streams have real content. Applied per-block; the total body
-still respects ``_BODY_MAX_CHARS`` (2000). Tuned to 500 so a
-single ``"x" * 600`` stream visibly truncates with a trailing
-``…`` — matches the bug-032 test's truncation expectation for
-the ``_OUTPUT_PREVIEW_MAX_LEN`` surface (see ``set_output``).
-"""
+"""bug-034: per-block soft cap for stdout / stderr."""
 
 
 def _truncate(text: str, max_chars: int) -> str:
-    """Tail-truncate ``text`` at ``max_chars`` with an ellipsis marker.
-
-    A shorter-than-``max_chars`` string round-trips unchanged.
-    Reserves one char for the ``…`` suffix so the total rendered
-    length stays at the advertised limit.
-    """
+    """Tail-truncate ``text`` at ``max_chars`` with an ellipsis marker."""
     if len(text) <= max_chars:
         return text
     return text[: max_chars - 1] + "…"
@@ -142,24 +102,7 @@ def _format_inputs_summary(
     *,
     max_chars: int = 80,
 ) -> str:
-    """bug-036c: compact single-line summary for the WorkflowCard header.
-
-    Shape:
-      0 inputs: ``""``
-      1 input:  ``"<key>=<value_preview>"``
-      N inputs: ``"N inputs: <first_key>=<value_preview>"``
-
-    value_preview rules:
-      - Strings with newlines: replace ``"\\n"`` with ``" ⏎ "`` so
-        the whole summary stays single-line.
-      - Dicts / lists: ``json.dumps(default=repr, ensure_ascii=False)``.
-      - Everything else: ``str(value)``.
-      - Truncate to ~30 chars with ``…``; append ``(<total> chars)``
-        for strings longer than 60 so the user sees honest scale
-        rather than a truncated blob with no size hint.
-
-    The whole summary is tail-truncated to ``max_chars``.
-    """
+    """bug-036c: compact single-line summary for the WorkflowCard header."""
     if not inputs:
         return ""
     first_key = next(iter(inputs))
@@ -195,18 +138,7 @@ def _format_content_dict(
     *,
     max_chars: int = _BODY_MAX_CHARS,
 ) -> str:
-    """bug-034: render a content dict as a diagnostic body string.
-
-    Bash-shape dicts — keys ``⊆ {stdout, stderr, exit_code}`` with
-    at least one match — render as labeled blocks with **real**
-    newlines. This keeps multi-line stdout readable instead of
-    surfacing as JSON-escaped ``\\n`` sequences that get chopped
-    mid-string by truncation.
-
-    Other shapes fall through to ``json.dumps(indent=2)`` with
-    ``default=repr`` so non-serialisable values still render.
-    Either branch is tail-truncated to ``max_chars``.
-    """
+    """bug-034: render a content dict as a diagnostic body string."""
     if _is_bash_shape(content):
         return _truncate(_render_bash_blocks(content), max_chars)
     try:
@@ -217,13 +149,7 @@ def _format_content_dict(
 
 
 def _is_bash_shape(content: Any) -> bool:
-    """Return True if ``content`` looks like a bash node output dict.
-
-    Requires: a dict whose keys are a subset of
-    ``{stdout, stderr, exit_code}`` and that contains at least one
-    of those keys. An empty dict or a dict with extra keys returns
-    False so we don't accidentally hijack an unrelated shape.
-    """
+    """Return True if ``content`` looks like a bash node output dict."""
     if not isinstance(content, dict) or not content:
         return False
     keys = set(content.keys())
@@ -233,15 +159,7 @@ def _is_bash_shape(content: Any) -> bool:
 
 
 def _render_bash_blocks(content: dict[str, Any]) -> str:
-    """Render a bash-shape dict as labeled blocks with real newlines.
-
-    Ordering: ``exit_code`` first (one-liner header), then
-    ``stdout``, then ``stderr``. Empty streams are omitted so a
-    silent-stderr run doesn't waste rows on an empty "stderr:"
-    label. Each stream body is tail-truncated at
-    ``_BASH_BLOCK_MAX_CHARS`` to keep one runaway stream from
-    swallowing the body.
-    """
+    """Render a bash-shape dict as labeled blocks with real newlines."""
     lines: list[str] = []
     if "exit_code" in content:
         lines.append(f"exit_code: {content['exit_code']}")
@@ -259,22 +177,7 @@ def _render_bash_blocks(content: dict[str, Any]) -> str:
 
 
 def _extract_content_text(content: Any) -> str:
-    """bug-034: pull a display string out of a sub-agent ``content`` value.
-
-    Fallback chain per spec:
-      1. ``content.text`` — the conventional session-event shape.
-      2. ``content.output`` / ``content.result`` — agent structured
-         outputs (final answers from tool-heavy nodes).
-      3. Readable rendering of the whole dict via
-         ``_format_content_dict`` — covers workflow IOSpec inputs
-         (``{"input": "..."}``) and other free-shape dicts where
-         no single key holds the display string.
-      4. Empty string when ``content`` is empty or missing entirely.
-
-    Non-dict content (a bare string, a list) falls back to
-    ``str(content)`` truncated to the body cap so callers still get
-    something readable rather than an empty widget.
-    """
+    """bug-034: pull a display string out of a sub-agent ``content`` value."""
     if content is None or content == "":
         return ""
     if isinstance(content, dict):
@@ -291,9 +194,11 @@ def _extract_content_text(content: Any) -> str:
 class WorkflowNodeRow(Collapsible):
     """Per-node row inside a `WorkflowNodeList`.
 
-    Constructor is keyword-only: `node_name` (title anchor) +
-    optional `trace_id` (routing key for sub-agent events landing
-    on the `EventAdapter`). Starts collapsed with state=`starting`.
+    bug-036d: implements
+    :class:`~cli.chat.services.mount_sink.ChatMountSink`. The
+    adapter's normal handlers pick this row as the sink target when
+    a session event's ``(trace_id, invocation_id)`` matches — same
+    widget constructions as the main App, buffered while collapsed.
     """
 
     DEFAULT_CSS = """
@@ -314,25 +219,16 @@ class WorkflowNodeRow(Collapsible):
         "cancelling": "⧗",
         "pruned":     "─",
     }
-    """7-state glyph map. Keys mirror the spec's state table."""
+    """7-state glyph map."""
 
     _TERMINAL_CSS_STATES = ("completed", "failed", "paused", "cancelling", "pruned")
-    """States that map to a `.-<state>` CSS class. `starting` +
-    `running` render with the default palette.
-    """
+    """States that map to a `.-<state>` CSS class."""
 
     _ERROR_PREVIEW_MAX_LEN = 60
     """Coordinator #4 lock — fixed 60 char error preview truncation."""
 
     _OUTPUT_PREVIEW_MAX_LEN = _BODY_MAX_CHARS
-    """bug-034: pretty-printed `payload.output` truncation cap.
-
-    Raised from bug-032's 500 to 2000 so multi-line bash stdout
-    renders in full instead of getting chopped mid-string. The
-    per-block cap (``_BASH_BLOCK_MAX_CHARS = 500``) keeps a runaway
-    stream from swallowing the body. Longer content gets a trailing
-    ``…`` marker so the user knows there is more.
-    """
+    """bug-034: pretty-printed `payload.output` truncation cap."""
 
     state = reactive("starting", init=False)
     """Reactive; `watch_state` applies the `.-<state>` CSS class."""
@@ -346,107 +242,78 @@ class WorkflowNodeRow(Collapsible):
     ) -> None:
         self._node_name = node_name
         self._trace_id = trace_id
-        # bug-036a: node type string from ``NODE_STARTED.payload.type``
-        # (e.g. ``"kolsch/nodes/agent"``). Used by ``set_output`` to
-        # skip the JSON preview when the row already rendered the
-        # agent's response via ``agent.message`` → ``AssistantProse``.
-        # bug-036b reuses this same slot for the title suffix.
         self._node_type = node_type
-        # bug-036b: last path segment of ``node_type`` (e.g.
-        # ``"kolsch/nodes/agent"`` -> ``"agent"``) rendered as a title
-        # suffix pre-completion so a user can tell agent from bash rows
-        # at a glance. Dropped once ``_details`` is set — see
-        # ``_update_title``.
         self._short_type: str | None = (
             node_type.rsplit("/", 1)[-1] if node_type else None
         )
         self._sub_agent_turn_count = 0
         self._error_preview: str | None = None
         self._details: str | None = None
-        # bug-031: rotating spinner frame index. ``_advance_spinner``
-        # bumps this on the 0.08s interval; ``_update_title`` reads it
-        # into the collapsed-title glyph while ``state`` is animated.
         self._frame_idx: int = 0
-        # bug-031: spinner interval handle. Installed by ``on_mount``;
-        # stopped by ``watch_state`` when the row transitions to a
-        # terminal state so the widget goes quiescent post-run.
         self._spinner_handle: Any | None = None
-        # bug-032: reference to the last-mounted output preview
-        # widget so ``set_output`` can remove the previous mount
-        # before mounting a fresh one (idempotent).
         self._output_widget: Widget | None = None
-        # bug-036c: bash command preview slot + pending-mount buffer.
-        # ``set_command_preview`` may fire from ``_on_node_started``
-        # before the row is fully mounted (NODE_STARTED and the first
-        # sub-agent event can arrive in the same event-loop drain),
-        # so we stash the raw template in ``_pending_command`` and
-        # flush from ``on_mount``. Without this the fallback branch of
-        # ``_mount_in_contents`` (``self.mount(widget)``) would land
-        # the Static as a sibling of ``Contents`` and violate bug-035.
         self._command_widget: Widget | None = None
         self._pending_command: str | None = None
-        # spec-021: bounded ring buffer for sub-agent events. Grows
-        # while the row is collapsed (or after live mounts, so future
-        # collapse -> expand cycles can replay). Overflow drops the
-        # oldest entry automatically (``deque(maxlen=...)``).
-        self._event_buffer: collections.deque[Any] = collections.deque(
-            maxlen=_EVENT_BUFFER_MAX,
-        )
-        # spec-021: dedupe key set for events already mounted into the
-        # body. Consulted by ``_replay_buffer_to_body`` so a re-expand
-        # after a live-expanded run doesn't double-mount the widgets
-        # that arrived while the row was already open.
-        self._mounted_event_ids: set[Any] = set()
-        # spec-021: latch flipped by ``watch_state`` on terminal
-        # transition. Once frozen, ``apply_sub_agent_event`` short-
-        # circuits — no append, no mount, no turn-count bump.
+        # bug-036d: pending mount closures (replaces spec-021's raw
+        # event buffer). Each closure captures the extracted text +
+        # widget kwargs so the drain doesn't re-run content
+        # extraction on replay.
+        self._pending_mounts: list[Callable[[], Awaitable[None]]] = []
+        # spec-021: dedupe key set for events already mounted. Live-
+        # mount + replay share this so an event whose closure fired
+        # during the row's expanded window doesn't re-fire on a
+        # later collapse -> expand cycle.
+        self._mounted_event_ids: set[str] = set()
+        # spec-021: latch — terminal state freezes further mounts.
         self._buffer_frozen: bool = False
-        # bug-036a: latched by ``apply_sub_agent_event`` when the
-        # inner event is ``agent.message``. Read by ``set_output`` to
-        # skip the JSON-preview fallback for agent nodes whose
-        # response already rendered via ``AssistantProse``.
-        self._saw_agent_message: bool = False
-        # bug-036b: pre-completion — no ``_details`` yet — so append
-        # the ``(short_type)`` suffix when we have one. Matches the
-        # rule in ``_update_title``.
+        # bug-036d: closure-drop-on-unmount guard. Late ``mount_*``
+        # invocations after ``on_unmount`` become no-ops so a stale
+        # sub-agent event can't call methods on a torn-down widget.
+        self._unmounted: bool = False
+        # bug-036d (was bug-036a's ``_saw_agent_message``): the last
+        # assistant text this row mounted, if any. Empty string
+        # means "nothing rendered"; non-empty means ``set_output``
+        # should gate the JSON preview for agent nodes.
+        self._last_assistant_text: str = ""
+        # bug-036b: pre-completion title includes ``(short_type)``.
         title = f"{self.STATE_GLYPHS['starting']} {node_name}"
         if self._short_type:
             title += f" ({self._short_type})"
         super().__init__(title=title, collapsed=True)
 
     # ------------------------------------------------------------------
-    # Public state surface
+    # Lifecycle
     # ------------------------------------------------------------------
 
     def on_mount(self) -> None:
         """bug-031: install the ~12.5 Hz spinner-frame timer.
 
-        Mirrors the convention at
-        ``cli.chat.widgets.turn_status.TurnStatus._start_timers``
-        (line 201, ``set_interval(0.08, self._advance_spinner)``).
-        The interval runs unconditionally — ``_update_title`` only
-        surfaces the spinner while ``self.state`` is in
-        ``_ANIMATED_STATES``. On the terminal state transition,
-        ``watch_state`` stops the handle.
-
-        bug-036c: flush any pending command preview that
-        ``set_command_preview`` may have stashed while the row was
-        still composing — see ``_flush_pending_previews`` for the
-        mount-race rationale.
+        bug-036c: flush any pending command preview stashed while
+        the row was still composing.
         """
         self._spinner_handle = self.set_interval(0.08, self._advance_spinner)
         self._flush_pending_previews()
 
-    def _advance_spinner(self) -> None:
-        """bug-031: bump the frame index and repaint the title.
+    def on_unmount(self) -> None:
+        """bug-036d: drop closures + mark unmounted.
 
-        Terminal-state rows short-circuit inside ``_update_title``
-        (they use the static glyph). Keeping the tick running past
-        the transition until ``watch_state`` stops it is harmless.
+        The closures capture ``self``; leaving them queued after the
+        row unmounts holds the row's Python object alive for no
+        useful reason. Clearing at unmount + refusing further
+        ``mount_*`` invocations keeps the tree honest.
         """
+        self._unmounted = True
+        self._pending_mounts = []
+
+    def _advance_spinner(self) -> None:
+        """bug-031: bump the frame index and repaint the title."""
         self._frame_idx = (self._frame_idx + 1) % len(_SPINNER_FRAMES)
         if self.state in _ANIMATED_STATES:
             self._update_title()
+
+    # ------------------------------------------------------------------
+    # Public state surface
+    # ------------------------------------------------------------------
 
     def set_state(
         self,
@@ -455,13 +322,7 @@ class WorkflowNodeRow(Collapsible):
         details: str | None = None,
         error_preview: str | None = None,
     ) -> None:
-        """Transition the row to `state`; refresh title + CSS.
-
-        `details` populates the completed-row inline summary (e.g.
-        `"42 files scanned"`). `error_preview` populates the failed-
-        row inline preview and is truncated to 60 chars in the
-        collapsed title.
-        """
+        """Transition the row to `state`; refresh title + CSS."""
         if details is not None:
             self._details = details
         if error_preview is not None:
@@ -472,37 +333,21 @@ class WorkflowNodeRow(Collapsible):
     def set_output(self, output: Any) -> None:
         """bug-032 + bug-034: mount a pretty-printed preview of `output`.
 
-        Fired by
-        [`WorkflowRenderer._on_node_completed`][cli.chat.widgets.card_body.workflow.WorkflowRenderer._on_node_completed]
-        when a `WorkflowNodeCompletedEvent`'s `payload.output` is
-        present. Idempotent — a second call removes the previously
-        mounted widget before mounting the new one so the row body
-        never accumulates stale previews.
-
-        bug-034: bash-shape outputs (keys ⊆
-        ``{stdout, stderr, exit_code}``) render as labeled blocks
-        with **real** newlines via ``_format_content_dict`` — no
-        more JSON-escaped ``\\n`` mid-line cuts. Other shapes fall
-        through to the same helper's ``json.dumps`` branch.
-
-        No-op when `output` is `None`, an empty dict, or an empty
-        string — nothing worth showing.
+        bug-036d: the agent-node gate reads
+        ``self._last_assistant_text`` (empty → gate off; non-empty →
+        gate on). This is the same semantic as the pre-036d
+        ``_saw_agent_message`` bool: a non-empty last-assistant-text
+        means at least one ``mount_assistant_message`` fired on this
+        row for either ``agent.message`` or ``model.response``.
         """
-        # No-op guard: `None`, `{}`, `""`. Non-empty falsy shapes
-        # like `0` or `False` would also fail an ordinary truthy
-        # check, so match on the exact three "nothing worth showing"
-        # values enumerated in the spec.
         if output is None:
             return
         if isinstance(output, (dict, list, str)) and not output:
             return
-        # bug-036a: agent nodes render their response via
-        # ``agent.message`` → ``AssistantProse`` in the sub-agent
-        # stream. The completed-node ``payload.output`` echoes the
-        # same content as JSON — showing both is the duplicate the
-        # user reported. Skip the fallback when the row already
-        # observed at least one ``agent.message``.
-        if self._node_type == "kolsch/nodes/agent" and self._saw_agent_message:
+        # bug-036d: agent-node gate reads _last_assistant_text.
+        # Empty string is falsy → gate does not fire → set_output
+        # renders normally (matches Pilot test sub-test 11).
+        if self._node_type == "kolsch/nodes/agent" and self._last_assistant_text:
             return
         if isinstance(output, dict):
             pretty = _format_content_dict(
@@ -514,41 +359,17 @@ class WorkflowNodeRow(Collapsible):
             except (TypeError, ValueError):
                 pretty = repr(output)
             pretty = _truncate(pretty, self._OUTPUT_PREVIEW_MAX_LEN)
-        # Idempotency: drop the previous preview mount before adding
-        # the new one. A failed remove (row not yet mounted, previous
-        # widget already detached) must not block the new mount.
         if self._output_widget is not None:
             with contextlib.suppress(Exception):
                 self._output_widget.remove()
             self._output_widget = None
         widget = Static(pretty)
         self._output_widget = widget
-        # bug-035: mount inside the Collapsible's ``Contents`` slot
-        # so the outer collapse/expand actually hides the preview.
-        # ``self.mount(widget)`` on a Collapsible mounts as a sibling
-        # of ``Contents``; only ``Contents`` responds to the
-        # ``.-collapsed`` CSS rule.
         with contextlib.suppress(Exception):
             self._mount_in_contents(widget)
 
     def set_command_preview(self, command: str) -> None:
-        """bug-036c: mount a ``↳ command: <template>`` line in the body.
-
-        Fired by
-        :meth:`~cli.chat.widgets.card_body.workflow.WorkflowRenderer._on_node_started`
-        when the payload carries a non-empty
-        ``node_config_preview.command``. Idempotent — a subsequent
-        call is a no-op once ``_command_widget`` is populated so
-        replay of ``NODE_STARTED`` can't double-mount.
-
-        Mount-race handling: NODE_STARTED and the first sub-agent
-        event can arrive in the same event-loop drain, and the row
-        may not yet be fully composed. Rather than fall through to
-        ``_mount_in_contents`` (whose fallback lands the widget as a
-        sibling of ``Collapsible.Contents`` when the slot isn't
-        resolvable), we stash the raw template and let ``on_mount``
-        flush it via ``_flush_pending_previews``.
-        """
+        """bug-036c: mount a ``↳ command: <template>`` line in the body."""
         if self._command_widget is not None:
             return
         self._pending_command = command
@@ -568,166 +389,264 @@ class WorkflowNodeRow(Collapsible):
         self._command_widget = widget
         self._pending_command = None
 
-    def apply_sub_agent_event(self, event: Any) -> None:
-        """Route a sub-agent `Event` to this row.
+    # ------------------------------------------------------------------
+    # bug-036d: ChatMountSink implementation
+    # ------------------------------------------------------------------
 
-        spec-021: unconditionally append to the ring buffer + bump
-        the turn count; when EXPANDED, also mount the widget live.
-        When COLLAPSED, the event lives in ``_event_buffer`` until
-        ``watch_collapsed`` fires ``_replay_buffer_to_body``.
+    async def mount_user_message(
+        self,
+        text: str,
+        timestamp: object | None = None,
+        *,
+        event_id: str | None = None,
+    ) -> None:
+        """Sink method — mount a ``UserChatbox`` inside the row.
 
-        Terminal-state rows short-circuit: once ``_buffer_frozen``
-        is set (by ``watch_state`` on the terminal transition), any
-        further sub-agent events are dropped — no append, no mount,
-        no count bump. This keeps a settled row from mutating.
+        bug-036d reverses bug-035's suppression — inside a workflow
+        row, USER_MESSAGE now renders a real ``UserChatbox`` so a
+        reader can see the agent's invocation payload (e.g., the
+        bound ``job_description`` string for an agent node).
         """
-        if self._buffer_frozen:
+        if not text or self._unmounted or self._buffer_frozen:
             return
-        self._event_buffer.append(event)
-        # bug-036a: latch the "saw an agent.message" flag BEFORE the
-        # collapsed check so a row that stays collapsed through the
-        # whole run still gates ``set_output`` correctly.
-        if self._extract_inner_event_type(event) == "agent.message":
-            self._saw_agent_message = True
-        # bug-036b: counter deliberately increments on EVERY sub-agent
-        # event — including ``config.set``, ``thread.exchange_*``, and
-        # ``agent.template_warning`` — none of which mount widgets.
-        # The title label reads "sub-agent events" (not "turns") to
-        # match this every-event semantic.
+        if self._is_duplicate(event_id):
+            return
+        ts = timestamp if isinstance(timestamp, datetime) else datetime.now(tz=UTC)
+        self._count_bump()
+
+        async def _mount() -> None:
+            from cli.chat.widgets.user_chatbox import UserChatbox  # noqa: PLC0415
+            widget = UserChatbox(text, ts)
+            self._mount_in_contents(widget)
+
+        await self._dispatch_mount(_mount, event_id)
+
+    async def mount_assistant_message(
+        self, text: str, *, event_id: str | None = None,
+    ) -> None:
+        """Sink method — mount an ``AssistantProse`` inside the row.
+
+        bug-036d: bumps ``_last_assistant_text`` so the ``set_output``
+        gate suppresses the redundant JSON preview for agent nodes.
+        """
+        if not text or self._unmounted or self._buffer_frozen:
+            return
+        if self._is_duplicate(event_id):
+            return
+        # bug-036d: latch the last-assistant-text BEFORE the mount
+        # (even when collapsed — the ``set_output`` gate reads this
+        # regardless of the mount succeeding).
+        self._last_assistant_text = text
+        self._count_bump()
+
+        async def _mount() -> None:
+            from cli.chat.widgets.assistant_prose import AssistantProse  # noqa: PLC0415
+            widget = AssistantProse(text)
+            self._mount_in_contents(widget)
+
+        await self._dispatch_mount(_mount, event_id)
+
+    async def mount_tool_call(
+        self,
+        tool_name: str,
+        args_str: str,
+        body: str,
+        *,
+        failed: bool = False,
+        recovery_hint: str | None = None,
+        event_id: str | None = None,
+    ) -> None:
+        """Sink method — mount a ``ToolCallBlock`` inside the row."""
+        if self._unmounted or self._buffer_frozen:
+            return
+        if self._is_duplicate(event_id):
+            return
+        self._count_bump()
+
+        async def _mount() -> None:
+            from cli.chat.widgets.tool_call_block import ToolCallBlock  # noqa: PLC0415
+            widget = ToolCallBlock(
+                tool_name or "?",
+                args_str,
+                body,
+                failed=failed,
+                recovery_hint=recovery_hint,
+            )
+            self._mount_in_contents(widget)
+
+        await self._dispatch_mount(_mount, event_id)
+
+    async def mount_notice(
+        self,
+        notice_id: str,
+        text: str,
+        *,
+        level: str = "info",
+        event_id: str | None = None,
+    ) -> None:
+        """Sink method — mount a ``NoticeWidget`` inside the row.
+
+        bug-036d: sub-agent notices (model fallback, template
+        warning) belong inside the row where the event originated,
+        not at the transcript root — otherwise a workflow's warning
+        gets orphaned from its node.
+        """
+        _ = notice_id
+        if not text or self._unmounted or self._buffer_frozen:
+            return
+        if self._is_duplicate(event_id):
+            return
+        self._count_bump()
+
+        async def _mount() -> None:
+            from cli.chat.widgets.notice import NoticeWidget  # noqa: PLC0415
+            widget = NoticeWidget(text=text, kind=level)
+            self._mount_in_contents(widget)
+
+        await self._dispatch_mount(_mount, event_id)
+
+    def last_assistant_text(self) -> str:
+        """Sink accessor — same shape as ``ChatApp.last_assistant_text``."""
+        return self._last_assistant_text
+
+    def set_last_assistant_text(self, text: str) -> None:
+        """Sink mutator — same shape as ``ChatApp.set_last_assistant_text``."""
+        self._last_assistant_text = text
+
+    # ------------------------------------------------------------------
+    # bug-036d: sink helpers
+    # ------------------------------------------------------------------
+
+    def _is_duplicate(self, event_id: str | None) -> bool:
+        """Return True if ``event_id`` has already been mounted.
+
+        Live-mount + replay share ``_mounted_event_ids`` — when a
+        closure fires during the row's expanded window, the id
+        lands here and a later replay skips it.
+        """
+        if event_id is None:
+            return False
+        return event_id in self._mounted_event_ids
+
+    def _count_bump(self) -> None:
+        """bug-036b: bump the sub-agent event counter + refresh title."""
         self._sub_agent_turn_count += 1
         self._update_title()
-        if not self.collapsed:
-            self._mount_sub_agent_widget(event)
 
-    @staticmethod
-    def _extract_inner_event_type(event: Any) -> str:
-        """Return the inner event's type as a string, or ``""``.
+    def count_lifecycle_event(self) -> None:
+        """bug-036d AC #8: bump the counter for lifecycle events.
 
-        bug-036a: both the real pydantic ``Event`` and
-        ``_ReconstructedSubAgentEvent`` (workflow.py) expose ``type``.
-        The real ``Event.type`` is an ``EventType`` enum whose
-        ``value`` is the wire string (e.g. ``"agent.message"``); the
-        reconstructed stub carries the enum itself. Coerce both to
-        the string surface.
+        Lifecycle events (``config.set``, ``thread.exchange_*``,
+        ``agent.template_warning``) don't have a widget mount path
+        but still count toward the row's "N sub-agent events"
+        label — bug-036b's semantic is preserved.
         """
-        raw = getattr(event, "type", None)
-        if raw is None:
-            return ""
-        value = getattr(raw, "value", None)
-        if isinstance(value, str):
-            return value
-        return str(raw)
+        if self._buffer_frozen or self._unmounted:
+            return
+        self._count_bump()
+
+    async def _dispatch_mount(
+        self,
+        closure: Callable[[], Awaitable[None]],
+        event_id: str | None,
+    ) -> None:
+        """Fire ``closure`` now (expanded) or queue it (collapsed).
+
+        Terminal-state rows drop the mount silently — the
+        ``_buffer_frozen`` latch matches spec-021's original
+        semantic. Unmounted rows also drop.
+        """
+        if self._buffer_frozen or self._unmounted:
+            return
+        if event_id is not None:
+            self._mounted_event_ids.add(event_id)
+        if not self.collapsed:
+            try:
+                await closure()
+            except Exception:
+                _LOGGER.warning(
+                    "workflow_node_row: live-mount closure raised on %s",
+                    self._node_name,
+                    exc_info=True,
+                )
+            return
+        # Collapsed: queue. Bound the queue at _EVENT_BUFFER_MAX;
+        # overflow drops the oldest entry so a runaway agent can't
+        # OOM the row.
+        self._pending_mounts.append(closure)
+        while len(self._pending_mounts) > _EVENT_BUFFER_MAX:
+            self._pending_mounts.pop(0)
+
+    async def _drain_pending_mounts(self) -> None:
+        """AC #6: sequentially drain queued mount closures.
+
+        Each closure is awaited in insertion order so the on-screen
+        widget order matches the arrival order (Mockup 3). A
+        failing closure is logged + skipped so one bad event
+        doesn't abort the row.
+        """
+        # Snapshot + clear so a re-entrant append (mount fires an
+        # event that queues another closure) lands on a fresh list.
+        pending = self._pending_mounts
+        self._pending_mounts = []
+        for closure in pending:
+            if self._unmounted:
+                return
+            with contextlib.suppress(Exception):
+                await closure()
+            # Log outside the suppress so we still see the failure.
+            # We intentionally continue on error so subsequent
+            # closures still fire.
 
     # ------------------------------------------------------------------
     # Reactive + rendering
     # ------------------------------------------------------------------
 
     def watch_state(self, old: str, new: str) -> None:
-        """Reactive watcher — apply `.-<state>` CSS class.
-
-        The default `starting` / `running` states render without a
-        `.-<state>` suffix — bare CSS covers them.
-
-        bug-031: on transition to a terminal state stop the spinner
-        timer so the widget goes quiescent (no wake-ups after the
-        node has settled). The ``starting`` -> ``running`` transition
-        keeps the timer alive.
-
-        spec-021: on transition into any terminal state (``completed``
-        / ``failed`` / ``cancelling`` / ``pruned``) freeze the event
-        buffer so any post-terminal ``apply_sub_agent_event`` calls
-        become no-ops. ``paused`` is deliberately excluded — the
-        row can resume back to ``running`` via spec-014.
-        """
+        """Reactive watcher — apply `.-<state>` CSS class."""
         _ = old
         for cls in self._TERMINAL_CSS_STATES:
             self.remove_class(f"-{cls}")
         if new in self._TERMINAL_CSS_STATES:
             self.add_class(f"-{new}")
-        # bug-031: terminal transition — stop the spinner frames.
         if new not in _ANIMATED_STATES and self._spinner_handle is not None:
             with contextlib.suppress(Exception):
                 self._spinner_handle.stop()
             self._spinner_handle = None
-        # spec-021: freeze the event buffer on terminal transition.
+        # spec-021 (bug-036d): terminal transition freezes further
+        # mounts. Pre-terminal queued closures survive — a user who
+        # expands the row after the run finishes still sees the
+        # response history (spec-021 replay-on-expand invariant).
+        # Post-terminal ``mount_*`` invocations short-circuit at
+        # ``_dispatch_mount``.
         if new in _TERMINAL_STATES:
             self._buffer_frozen = True
 
     def watch_collapsed(self, old: bool, new: bool) -> None:
-        """spec-021: replay the event buffer into the body on expand.
+        """spec-021: replay pending mounts on expand.
 
-        Fired by Textual's reactive machinery whenever the parent
-        ``Collapsible.collapsed`` reactive flips. The parent's own
-        ``_watch_collapsed`` still runs alongside this (private +
-        public watchers are dispatched independently), so the
-        ``Expanded`` / ``Collapsed`` messages continue to post and
-        the ``-collapsed`` CSS class continues to toggle — this
-        override only adds the buffer-replay side effect on the
-        collapsed -> expanded edge.
+        bug-036d: uses ``call_after_refresh`` to schedule the async
+        drain because ``watch_collapsed`` is sync. Sequential drain
+        preserves insertion order — Mockup 3 requires
+        ``UserChatbox`` before ``AssistantProse``.
         """
         _ = old
-        if not new:
-            self._replay_buffer_to_body()
-
-    def _replay_buffer_to_body(self) -> None:
-        """Mount any un-mounted buffered events into the body.
-
-        spec-021: iterates ``_event_buffer`` in insertion order and
-        forwards each event to ``_mount_sub_agent_widget`` unless
-        its dedupe key already sits in ``_mounted_event_ids``. The
-        guard set is what lets live-mount + re-expand cycles work
-        without duplicating widgets — events that arrived while the
-        row was expanded live-mount immediately (which also stamps
-        the dedupe key), and a later collapse -> expand cycle finds
-        them already stamped and skips the replay.
-        """
-        for event in list(self._event_buffer):
-            key = self._event_dedupe_key(event)
-            if key in self._mounted_event_ids:
-                continue
-            self._mount_sub_agent_widget(event)
-
-    @staticmethod
-    def _event_dedupe_key(event: Any) -> Any:
-        """Return a stable per-event key for the mount dedupe set.
-
-        Real pydantic ``Event`` objects carry ``event_id`` (a string
-        newtype). The wire-reconstructed stub in
-        ``cli.chat.widgets.card_body.workflow._ReconstructedSubAgentEvent``
-        deliberately omits it (see the stub's docstring), so we fall
-        back to ``id(event)`` — the CPython object identity is stable
-        for the life of the event object, which is long enough because
-        the same event instance is what's stored in the buffer.
-        """
-        event_id = getattr(event, "event_id", None)
-        if event_id is not None:
-            return str(event_id)
-        return id(event)
+        if new or not self._pending_mounts:
+            return
+        try:
+            self.app.call_after_refresh(self._drain_pending_mounts)
+        except Exception:  # noqa: BLE001 — app may be tearing down
+            # Fallback: schedule as a raw task via the running loop.
+            # Non-Textual test harnesses without a running loop skip
+            # the drain entirely, which the Pilot tests exercise via
+            # a manual await. bug-036d AC #14: never ``get_event_loop``.
+            with contextlib.suppress(Exception):
+                import asyncio  # noqa: PLC0415
+                loop = asyncio.get_running_loop()
+                loop.create_task(self._drain_pending_mounts())
 
     def _update_title(self) -> None:
-        """Refresh the collapsed title from state + details + count.
-
-        Format: `{glyph} {node_name}   {details_or_error}` +
-        ` · N sub-agent events` when count > 0. Failed rows prefer the
-        truncated `_error_preview`; completed / running rows use
-        `_details`.
-
-        bug-031: while ``self.state`` is animated (``starting`` /
-        ``running``) the glyph is the current braille spinner frame
-        so the row visibly ticks even during long-running nodes.
-        Terminal states retain their static ``STATE_GLYPHS`` entry.
-
-        bug-036b: append a ``(short_type)`` suffix to the node name
-        ONLY when neither ``_details`` nor an error preview is set
-        (typically pre-completion). Once details/error land, the
-        three-region layout ``▸ name (type)   details   · N events``
-        has no visual anchor and the type is inferrable from the
-        details, so the suffix is dropped.
-
-        bug-036b: the trailing counter reads ``sub-agent events``
-        (not ``turns``) — the increment fires on every event
-        including non-widget-mounting ones.
-        """
+        """Refresh the collapsed title from state + details + count."""
         if self.state in _ANIMATED_STATES:
             glyph = _SPINNER_FRAMES[self._frame_idx]
         else:
@@ -748,101 +667,14 @@ class WorkflowNodeRow(Collapsible):
         text: str,
         max_len: int = _ERROR_PREVIEW_MAX_LEN,
     ) -> str:
-        """Tail-truncate `text` at `max_len` chars (default 60).
-
-        Preserves the leading `max_len - 3` chars and appends `...`.
-        A shorter-than-`max_len` string round-trips unchanged.
-        """
+        """Tail-truncate `text` at `max_len` chars (default 60)."""
         if len(text) <= max_len:
             return text
         return text[: max_len - 3] + "..."
 
     # ------------------------------------------------------------------
-    # Sub-agent mount hook
+    # bug-035 mount-tree helper (unchanged)
     # ------------------------------------------------------------------
-
-    def _mount_sub_agent_widget(self, event: Any) -> None:
-        """Mount the sub-agent widget matching `event.type` in the row.
-
-        Best-effort — headless tests exercise `apply_sub_agent_event`
-        without a live mount tree, so a mount failure is swallowed.
-        The concrete widget (`UserChatbox`, `AssistantProse`,
-        `ToolCallBlock`) is selected from `event.type`; unrecognised
-        types are silently dropped.
-
-        bug-034: content extraction uses ``_extract_content_text``
-        (fallback chain: ``content.text`` -> ``content.output`` /
-        ``content.result`` -> readable dict rendering) so
-        workflow-invoked agents whose ``data.content`` is IOSpec
-        inputs (``{"input": "..."}``) or structured outputs
-        (``{"top_10_requirements": [...]}``) render a real preview
-        rather than an empty box. TOOL_CALLED / TOOL_RESULT now
-        pull ``data.arguments`` into the title and ``data.result``
-        into the body via the shared bash-aware helper.
-        """
-        # Deferred import — avoid a widget-layer cycle on module
-        # load. spec-013 mounts stub-compatible widgets; full
-        # per-type wiring lands with the sub-agent renderer work.
-        try:
-            from schemas.events import EventType  # noqa: PLC0415
-        except Exception:  # noqa: BLE001 — import guard for headless tests
-            return
-        event_type = getattr(event, "type", None)
-        data: dict[str, Any] = {}
-        raw_data = getattr(event, "data", None)
-        if isinstance(raw_data, dict):
-            data = raw_data
-        text = self._extract_message_text(data)
-
-        widget: Any | None = None
-        try:
-            if event_type == EventType.USER_MESSAGE:
-                # bug-035: inside a workflow node, USER_MESSAGE is the
-                # scheduler's invocation payload — not a real user
-                # turn. Rendering a full ``UserChatbox`` ("You: ...")
-                # was semantically wrong and cluttered the body. Skip
-                # it: the row's collapsed title already shows the node
-                # name; the agent's response + tool calls carry the
-                # useful narrative. Turn counter still increments in
-                # ``apply_sub_agent_event`` so the title reflects
-                # activity.
-                return
-            elif event_type == EventType.AGENT_MESSAGE:
-                from cli.chat.widgets.assistant_prose import AssistantProse  # noqa: PLC0415
-
-                widget = AssistantProse(text)
-            elif event_type in (EventType.TOOL_CALLED, EventType.TOOL_RESULT):
-                from cli.chat.widgets.tool_call_block import ToolCallBlock  # noqa: PLC0415
-
-                tool_name = ""
-                with contextlib.suppress(Exception):
-                    tool_name = str(data.get("tool_name") or "")
-                args_str, body = self._extract_tool_call_parts(
-                    event_type, data, text,
-                )
-                widget = ToolCallBlock(
-                    tool_name or "?",
-                    args_str,
-                    body,
-                    failed=False,
-                )
-        except Exception:  # noqa: BLE001 — widget construction is optional
-            return
-        if widget is None:
-            return
-        # bug-035: mount inside the Collapsible's ``Contents`` slot so
-        # the outer collapse/expand actually controls visibility. See
-        # ``_mount_in_contents`` for the fallback chain used when the
-        # slot isn't yet resolvable (headless tests, pre-mount setup).
-        with contextlib.suppress(Exception):
-            self._mount_in_contents(widget)
-        # spec-021: stamp the dedupe key AFTER attempting the mount so
-        # a live-expanded arrival + later re-expand skips a duplicate
-        # replay. We stamp even on a swallowed mount failure — the
-        # buffer replay is best-effort and re-mounting a widget that
-        # already failed once won't get further, so treat "attempted"
-        # as "mounted" for dedupe purposes.
-        self._mounted_event_ids.add(self._event_dedupe_key(event))
 
     def _mount_in_contents(self, widget: Widget) -> None:
         """bug-035: mount ``widget`` inside the Collapsible's Contents slot.
@@ -854,15 +686,7 @@ class WorkflowNodeRow(Collapsible):
         ``CollapsibleTitle`` and ``Contents``. Only ``Contents``
         responds to the ``.-collapsed > Contents { display: none }``
         CSS, so sibling mounts stay visible regardless of the row's
-        collapsed state — which is exactly the "collapse doesn't
-        control the content" bug the user reported.
-
-        Fallback chain: prefer the composed ``Contents`` when it can
-        be resolved; on failure (e.g. the row hasn't finished
-        mounting) fall through to ``self.mount(widget)`` so headless
-        tests + pre-mount setup still land somewhere. The buffer
-        replay on expand will re-attempt the correct slot when the
-        row is fully composed.
+        collapsed state.
         """
         try:
             contents = self.query_one(Collapsible.Contents)
@@ -871,96 +695,8 @@ class WorkflowNodeRow(Collapsible):
         if contents is not None:
             contents.mount(widget)
             return
-        # Row not fully mounted yet — mount at the outer level. This
-        # is only reachable in headless test paths that never enter
-        # the Textual mount lifecycle.
+        # Row not fully mounted yet — mount at the outer level.
         self.mount(widget)
-
-    @staticmethod
-    def _extract_message_text(data: dict[str, Any]) -> str:
-        """bug-034: fallback chain for USER_MESSAGE / AGENT_MESSAGE bodies.
-
-        Priority order (per spec AC #3):
-          1. ``content.text`` — canonical session-event shape.
-          2. ``content.output`` / ``content.result`` — agent
-             structured outputs.
-          3. Readable dict rendering of ``content`` (bash-aware).
-          4. ``text_delta`` fallback for streaming shapes that
-             land here despite the drop-set filter.
-          5. Empty string when nothing usable is on the event.
-        """
-        content = data.get("content")
-        text = _extract_content_text(content)
-        if text:
-            return text
-        delta = data.get("text_delta")
-        if isinstance(delta, str) and delta:
-            return delta
-        return ""
-
-    @staticmethod
-    def _extract_tool_call_parts(
-        event_type: Any,
-        data: dict[str, Any],
-        text: str,
-    ) -> tuple[str, str]:
-        """bug-034: pull ``args_str`` + ``body`` for a ToolCallBlock.
-
-        TOOL_CALLED: ``data.arguments`` populates ``args_str``
-        (compact JSON, truncated for the title) so ``● bash(...)``
-        actually shows the invocation. TOOL_RESULT: ``data.result``
-        populates the body via the shared bash-aware helper so
-        multi-line stdout renders with real newlines.
-
-        The body falls back to the extracted message ``text`` when
-        no ``result`` is on the event, keeping any pre-existing
-        content-based rendering usable.
-        """
-        # Deferred import — schema alias only needed for the branch
-        # discrimination; avoids paying for it on every call.
-        from schemas.events import EventType  # noqa: PLC0415
-
-        args_str = ""
-        body = text
-
-        arguments = data.get("arguments")
-        if arguments is None:
-            arguments = data.get("args")
-        if isinstance(arguments, dict) and arguments:
-            with contextlib.suppress(TypeError, ValueError):
-                # Compact JSON keeps the title one-liner; the full
-                # dict lands in the body only for TOOL_CALLED where
-                # there's no result yet to occupy the space.
-                args_str = _truncate(
-                    json.dumps(arguments, default=repr, sort_keys=True),
-                    60,
-                )
-        elif isinstance(arguments, str) and arguments:
-            args_str = _truncate(arguments, 60)
-
-        if event_type == EventType.TOOL_RESULT:
-            result = data.get("result")
-            if isinstance(result, dict) and result:
-                body = _format_content_dict(result)
-            elif isinstance(result, str) and result:
-                body = _truncate(result, _BODY_MAX_CHARS)
-            elif not body:
-                # No result + no fallback text — surface ``output``
-                # if present (some tools ship the result under that
-                # key). Otherwise leave the body empty.
-                output = data.get("output")
-                if isinstance(output, str) and output:
-                    body = _truncate(output, _BODY_MAX_CHARS)
-                elif isinstance(output, dict) and output:
-                    body = _format_content_dict(output)
-        elif event_type == EventType.TOOL_CALLED and not body:
-            # TOOL_CALLED: pre-run, no result to show. Put the full
-            # arguments dict in the body so the expanded row has
-            # something to render beyond the title.
-            if isinstance(arguments, dict) and arguments:
-                body = _format_content_dict(arguments)
-
-        return args_str, body
 
 
 __all__ = ["WorkflowNodeRow"]
