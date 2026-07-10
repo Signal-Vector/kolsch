@@ -92,7 +92,7 @@ async def test_events_while_collapsed_land_in_buffer(
         assert list(row._event_buffer) == events
         assert row._sub_agent_turn_count == 3
         assert mount_calls == []
-        assert "3 sub-agent turns" in row.title
+        assert "3 sub-agent events" in row.title
 
 
 @pytest.mark.asyncio

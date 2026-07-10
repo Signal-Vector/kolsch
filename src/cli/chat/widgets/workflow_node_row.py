@@ -297,8 +297,16 @@ class WorkflowNodeRow(Collapsible):
         # (e.g. ``"kolsch/nodes/agent"``). Used by ``set_output`` to
         # skip the JSON preview when the row already rendered the
         # agent's response via ``agent.message`` → ``AssistantProse``.
-        # bug-036b will reuse this same slot for the title suffix.
+        # bug-036b reuses this same slot for the title suffix.
         self._node_type = node_type
+        # bug-036b: last path segment of ``node_type`` (e.g.
+        # ``"kolsch/nodes/agent"`` -> ``"agent"``) rendered as a title
+        # suffix pre-completion so a user can tell agent from bash rows
+        # at a glance. Dropped once ``_details`` is set — see
+        # ``_update_title``.
+        self._short_type: str | None = (
+            node_type.rsplit("/", 1)[-1] if node_type else None
+        )
         self._sub_agent_turn_count = 0
         self._error_preview: str | None = None
         self._details: str | None = None
@@ -335,7 +343,12 @@ class WorkflowNodeRow(Collapsible):
         # skip the JSON-preview fallback for agent nodes whose
         # response already rendered via ``AssistantProse``.
         self._saw_agent_message: bool = False
+        # bug-036b: pre-completion — no ``_details`` yet — so append
+        # the ``(short_type)`` suffix when we have one. Matches the
+        # rule in ``_update_title``.
         title = f"{self.STATE_GLYPHS['starting']} {node_name}"
+        if self._short_type:
+            title += f" ({self._short_type})"
         super().__init__(title=title, collapsed=True)
 
     # ------------------------------------------------------------------
@@ -470,6 +483,11 @@ class WorkflowNodeRow(Collapsible):
         # whole run still gates ``set_output`` correctly.
         if self._extract_inner_event_type(event) == "agent.message":
             self._saw_agent_message = True
+        # bug-036b: counter deliberately increments on EVERY sub-agent
+        # event — including ``config.set``, ``thread.exchange_*``, and
+        # ``agent.template_warning`` — none of which mount widgets.
+        # The title label reads "sub-agent events" (not "turns") to
+        # match this every-event semantic.
         self._sub_agent_turn_count += 1
         self._update_title()
         if not self.collapsed:
@@ -584,7 +602,7 @@ class WorkflowNodeRow(Collapsible):
         """Refresh the collapsed title from state + details + count.
 
         Format: `{glyph} {node_name}   {details_or_error}` +
-        ` · N sub-agent turns` when count > 0. Failed rows prefer the
+        ` · N sub-agent events` when count > 0. Failed rows prefer the
         truncated `_error_preview`; completed / running rows use
         `_details`.
 
@@ -592,6 +610,17 @@ class WorkflowNodeRow(Collapsible):
         ``running``) the glyph is the current braille spinner frame
         so the row visibly ticks even during long-running nodes.
         Terminal states retain their static ``STATE_GLYPHS`` entry.
+
+        bug-036b: append a ``(short_type)`` suffix to the node name
+        ONLY when neither ``_details`` nor an error preview is set
+        (typically pre-completion). Once details/error land, the
+        three-region layout ``▸ name (type)   details   · N events``
+        has no visual anchor and the type is inferrable from the
+        details, so the suffix is dropped.
+
+        bug-036b: the trailing counter reads ``sub-agent events``
+        (not ``turns``) — the increment fires on every event
+        including non-widget-mounting ones.
         """
         if self.state in _ANIMATED_STATES:
             glyph = _SPINNER_FRAMES[self._frame_idx]
@@ -602,8 +631,10 @@ class WorkflowNodeRow(Collapsible):
             base += f"   {self._truncate_preview(self._error_preview)}"
         elif self._details:
             base += f"   {self._details}"
+        elif self._short_type:
+            base += f" ({self._short_type})"
         if self._sub_agent_turn_count > 0:
-            base += f" · {self._sub_agent_turn_count} sub-agent turns"
+            base += f" · {self._sub_agent_turn_count} sub-agent events"
         self.title = base
 
     def _truncate_preview(

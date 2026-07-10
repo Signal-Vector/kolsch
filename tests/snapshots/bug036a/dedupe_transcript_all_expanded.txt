@@ -2,7 +2,7 @@
 │ ▸ Workflow · andre/workflows/job_description_review                                                                                                                                                  │
 │ [1/1]  ▓▓▓▓▓▓▓▓  <ELAPSED>s                                                                                                                                                                              │
 │ ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ │
-│   ▼ ✓ headhunter_review · 1 sub-agent turns                                                                                                                                                          │
+│   ▼ ✓ headhunter_review (agent) · 1 sub-agent events                                                                                                                                                 │
 │                                                                                                                                                                                                      │
 │     ╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮  │
 │     │ [ {"requirement": "Deep blockchain expertise including L1/L2 protocol design, security, and shipped production systems", "score": 10, "rationale": "This is the scarcest skill set in the   │  │

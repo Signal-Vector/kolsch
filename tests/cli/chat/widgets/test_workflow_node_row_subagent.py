@@ -3,7 +3,7 @@
 Three passes:
 
 1. Three `apply_sub_agent_event` calls → `_sub_agent_turn_count == 3`
-   and title contains "3 sub-agent turns".
+   and title contains "3 sub-agent events".
 2. Row collapsed — sub-agent events only increment the counter (no
    body mount).
 3. Row expanded — new sub-agent event triggers a
@@ -46,7 +46,7 @@ async def test_three_sub_agent_events_increment_count(fake_app_factory) -> None:
             row.apply_sub_agent_event(_mk_agent_event())
         await pilot.pause()
         assert row._sub_agent_turn_count == 3
-        assert "3 sub-agent turns" in row.title
+        assert "3 sub-agent events" in row.title
 
 
 @pytest.mark.asyncio
