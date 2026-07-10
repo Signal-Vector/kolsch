@@ -33,7 +33,7 @@
 │                                                                                                                                                                                                      │
 │  stdout:                                                                                                                                                                                             │
 │  JD contents here                                                                                                                                                                                    │
-│   ▼ ✓ fetch_jd                                                                                                                                                                                       │
+│   ▼ ✓ fetch_jd (bash)                                                                                                                                                                                │
 │                                                                                                                                                                                                      │
 │     ↳ command: curl -sSL https://example.com/jd                                                                                                                                                      │
 │                                                                                                                                                                                                      │
