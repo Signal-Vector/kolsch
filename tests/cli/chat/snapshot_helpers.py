@@ -35,6 +35,13 @@ _SNAPSHOTS_ROOT = Path(__file__).resolve().parents[2] / "snapshots"
 # ``<ELAPSED>s`` token so goldens compare cleanly.
 _ELAPSED_RE = re.compile(r"(\]  \S+\s+)\d+s")
 
+# bug-036c: mask the 8-frame braille spinner used by
+# ``WorkflowNodeRow`` collapsed-title glyphs. Frame index depends on
+# how many 0.08s ticks fired before the compositor rendered — flaky
+# under Pilot. Replace the whole frame with a stable ``⠋`` (frame 0)
+# so goldens stay comparable.
+_SPINNER_RE = re.compile(r"[⣾⣽⣻⢿⡿⣟⣯⣷]")
+
 
 def _render_app_text(app: App[object]) -> str:
     """Return the current screen as plain text (styling stripped).
@@ -50,7 +57,8 @@ def _render_app_text(app: App[object]) -> str:
     strips = list(compositor.render_strips())
     rendered = [strip.text.rstrip() for strip in strips]
     text = "\n".join(rendered).rstrip() + "\n"
-    return _ELAPSED_RE.sub(r"\1<ELAPSED>s", text)
+    text = _ELAPSED_RE.sub(r"\1<ELAPSED>s", text)
+    return _SPINNER_RE.sub("⠋", text)
 
 
 def assert_snapshot_matches(app: App[object], name: str) -> None:

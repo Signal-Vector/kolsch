@@ -169,6 +169,12 @@ def _extract(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
             keep(evt)
             break
 
+    # bug-036c: also try to include a bash-type node so the
+    # ``test_bug036c_fixture_replay.py`` assertion has a subject.
+    # Fall through silently if no bash node exists in the source
+    # session — bug-036c fixture-replay is optional at that point.
+    _include_first_bash_slice(events, out, target_invocation_id, thread_id=None, session_id=None)
+
     # tool.result for the workflow call (must carry card_id).
     for evt in events:
         if evt.get("type") != "tool.result":
@@ -180,6 +186,53 @@ def _extract(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
         break
 
     return out
+
+
+def _include_first_bash_slice(
+    events: list[dict[str, Any]],
+    out: list[dict[str, Any]],
+    _target_invocation_id: str | None,
+    *,
+    thread_id: str | None,
+    session_id: str | None,
+) -> None:
+    """bug-036c: include the first bash-node started + completed pair.
+
+    Optional slice — the bug-036c fixture-replay test only fires
+    if a bash node is present. Missing (older sessions or a JD flow
+    that skipped the fetch step) is fine; the test will fall back
+    to a source-code-injected synthetic slice.
+    """
+    _ = thread_id, session_id
+    bash_invocation: str | None = None
+    for evt in events:
+        if evt.get("type") != "ui.event":
+            continue
+        data = evt.get("data", {})
+        if data.get("kind") != "kolsch.workflow.progress":
+            continue
+        payload = data.get("payload", {})
+        if payload.get("kind") != "workflow.node.started":
+            continue
+        inner = payload.get("payload") or {}
+        if inner.get("type") == "kolsch/nodes/bash":
+            bash_invocation = payload.get("invocation_id")
+            out.append(evt)
+            break
+    if bash_invocation is None:
+        return
+    for evt in events:
+        if evt.get("type") != "ui.event":
+            continue
+        data = evt.get("data", {})
+        if data.get("kind") != "kolsch.workflow.progress":
+            continue
+        payload = data.get("payload", {})
+        if payload.get("kind") != "workflow.node.completed":
+            continue
+        if payload.get("invocation_id") == bash_invocation:
+            out.append(evt)
+            break
 
 
 def main() -> int:

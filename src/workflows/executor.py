@@ -1352,6 +1352,11 @@ class IterativeExecutor:
                     "invocation_id": str(inv_id),
                     "type": _node_type_ref(node_def),
                     "inputs": bound_inputs,
+                    # bug-036c: per-node-type config surface for the
+                    # chat UI (bash's shell command today; other types
+                    # emit `{}`). Additive optional field — old
+                    # renderers ignore the key.
+                    "node_config_preview": _config_preview_for(node_def),
                     # `caller_chain` carrier: the workflow run's own
                     # caller chain (the frames it was invoked
                     # through). The chain is populated by sub-workflow
@@ -1862,6 +1867,9 @@ class IterativeExecutor:
             "invocation_id": str(inv_id),
             "type": _node_type_ref(node_def),
             "inputs": bound_inputs,
+            # bug-036c: mirror the sibling started-payload site so
+            # map-iterated bash nodes surface their command too.
+            "node_config_preview": _config_preview_for(node_def),
             "caller_chain": list(getattr(self._run, "caller_chain", ()) or ()),
         }
         async with self._emit_lock:
@@ -2782,3 +2790,23 @@ def _node_type_ref(node_def: Any) -> str:
     # `CopyOfNodeDef` — defer to a synthetic ref the registry will
     # report as "not implemented" until copy_of resolution lands.
     return "<copy_of>"
+
+
+def _config_preview_for(node_def: Any) -> dict[str, Any]:
+    """bug-036c: per-node-type preview for NODE_STARTED payload.
+
+    Populates the ``node_config_preview`` key so the chat UI can
+    surface the source config that motivated the node (bash's shell
+    command, etc.) without re-reading the workflow YAML.
+
+    Note: this helper is a *config* preview — declarative
+    source-of-truth from the workflow YAML. Runtime inputs bound
+    from inbound edges are already emitted on
+    ``NODE_STARTED.payload.inputs`` at the sibling top level; this
+    helper never duplicates them. Future node types extend the
+    dispatch (agent `prompt`, map `over_expr`, browse_url `url`, …).
+    """
+    t = _node_type_ref(node_def)
+    if t == "kolsch/nodes/bash":
+        return {"command": getattr(node_def, "command", "")}
+    return {}

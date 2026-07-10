@@ -137,6 +137,59 @@ def _truncate(text: str, max_chars: int) -> str:
     return text[: max_chars - 1] + "…"
 
 
+def _format_inputs_summary(
+    inputs: dict[str, Any],
+    *,
+    max_chars: int = 80,
+) -> str:
+    """bug-036c: compact single-line summary for the WorkflowCard header.
+
+    Shape:
+      0 inputs: ``""``
+      1 input:  ``"<key>=<value_preview>"``
+      N inputs: ``"N inputs: <first_key>=<value_preview>"``
+
+    value_preview rules:
+      - Strings with newlines: replace ``"\\n"`` with ``" ⏎ "`` so
+        the whole summary stays single-line.
+      - Dicts / lists: ``json.dumps(default=repr, ensure_ascii=False)``.
+      - Everything else: ``str(value)``.
+      - Truncate to ~30 chars with ``…``; append ``(<total> chars)``
+        for strings longer than 60 so the user sees honest scale
+        rather than a truncated blob with no size hint.
+
+    The whole summary is tail-truncated to ``max_chars``.
+    """
+    if not inputs:
+        return ""
+    first_key = next(iter(inputs))
+    first_value = inputs[first_key]
+    value_preview = _format_input_value(first_value)
+    if len(inputs) == 1:
+        summary = f"{first_key}={value_preview}"
+    else:
+        summary = f"{len(inputs)} inputs: {first_key}={value_preview}"
+    return _truncate(summary, max_chars)
+
+
+def _format_input_value(value: Any) -> str:
+    """bug-036c: preview a single input value for the header summary."""
+    if isinstance(value, str):
+        collapsed = value.replace("\n", " ⏎ ")
+        total = len(value)
+        if total > 60:
+            preview = _truncate(collapsed, 30)
+            return f"{preview} ({total} chars)"
+        return _truncate(collapsed, 30)
+    if isinstance(value, (dict, list)):
+        try:
+            rendered = json.dumps(value, default=repr, ensure_ascii=False)
+        except (TypeError, ValueError):
+            rendered = repr(value)
+        return _truncate(rendered, 30)
+    return _truncate(str(value), 30)
+
+
 def _format_content_dict(
     content: dict[str, Any],
     *,
@@ -322,6 +375,16 @@ class WorkflowNodeRow(Collapsible):
         # widget so ``set_output`` can remove the previous mount
         # before mounting a fresh one (idempotent).
         self._output_widget: Widget | None = None
+        # bug-036c: bash command preview slot + pending-mount buffer.
+        # ``set_command_preview`` may fire from ``_on_node_started``
+        # before the row is fully mounted (NODE_STARTED and the first
+        # sub-agent event can arrive in the same event-loop drain),
+        # so we stash the raw template in ``_pending_command`` and
+        # flush from ``on_mount``. Without this the fallback branch of
+        # ``_mount_in_contents`` (``self.mount(widget)``) would land
+        # the Static as a sibling of ``Contents`` and violate bug-035.
+        self._command_widget: Widget | None = None
+        self._pending_command: str | None = None
         # spec-021: bounded ring buffer for sub-agent events. Grows
         # while the row is collapsed (or after live mounts, so future
         # collapse -> expand cycles can replay). Overflow drops the
@@ -365,8 +428,14 @@ class WorkflowNodeRow(Collapsible):
         surfaces the spinner while ``self.state`` is in
         ``_ANIMATED_STATES``. On the terminal state transition,
         ``watch_state`` stops the handle.
+
+        bug-036c: flush any pending command preview that
+        ``set_command_preview`` may have stashed while the row was
+        still composing — see ``_flush_pending_previews`` for the
+        mount-race rationale.
         """
         self._spinner_handle = self.set_interval(0.08, self._advance_spinner)
+        self._flush_pending_previews()
 
     def _advance_spinner(self) -> None:
         """bug-031: bump the frame index and repaint the title.
@@ -461,6 +530,43 @@ class WorkflowNodeRow(Collapsible):
         # ``.-collapsed`` CSS rule.
         with contextlib.suppress(Exception):
             self._mount_in_contents(widget)
+
+    def set_command_preview(self, command: str) -> None:
+        """bug-036c: mount a ``↳ command: <template>`` line in the body.
+
+        Fired by
+        :meth:`~cli.chat.widgets.card_body.workflow.WorkflowRenderer._on_node_started`
+        when the payload carries a non-empty
+        ``node_config_preview.command``. Idempotent — a subsequent
+        call is a no-op once ``_command_widget`` is populated so
+        replay of ``NODE_STARTED`` can't double-mount.
+
+        Mount-race handling: NODE_STARTED and the first sub-agent
+        event can arrive in the same event-loop drain, and the row
+        may not yet be fully composed. Rather than fall through to
+        ``_mount_in_contents`` (whose fallback lands the widget as a
+        sibling of ``Collapsible.Contents`` when the slot isn't
+        resolvable), we stash the raw template and let ``on_mount``
+        flush it via ``_flush_pending_previews``.
+        """
+        if self._command_widget is not None:
+            return
+        self._pending_command = command
+        if self.is_mounted:
+            self._flush_pending_previews()
+
+    def _flush_pending_previews(self) -> None:
+        """bug-036c: mount any deferred previews once the row is composed."""
+        if self._pending_command is None or self._command_widget is not None:
+            return
+        widget = Static(
+            f"↳ command: {_truncate(self._pending_command, 200)}",
+            classes="node-command-preview",
+        )
+        with contextlib.suppress(Exception):
+            self._mount_in_contents(widget)
+        self._command_widget = widget
+        self._pending_command = None
 
     def apply_sub_agent_event(self, event: Any) -> None:
         """Route a sub-agent `Event` to this row.

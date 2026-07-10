@@ -50,7 +50,10 @@ from textual.containers import Vertical
 from textual.reactive import reactive
 from textual.widgets import Static
 
-from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
+from cli.chat.widgets.workflow_node_row import (
+    WorkflowNodeRow,
+    _format_inputs_summary,
+)
 from schemas.wire_kinds import WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT
 from workflows.events import WorkflowEventKind
 
@@ -148,6 +151,14 @@ class WorkflowProgressHeader(Static):
         # the progress bar. `None` (the top-level case) restores
         # the single-line render.
         self._parent_ref: str | None = parent_ref
+        # bug-036c: workflow ref + inputs summary. Both land via
+        # `_on_run_started` after the RUN_STARTED envelope arrives.
+        # Kept as stored state (no `reactive`) to match the existing
+        # `set_parent_ref` / `set_run_id` pattern so timing stays
+        # predictable — the header updates synchronously off the
+        # explicit setters, not via Textual's watcher scheduler.
+        self._ref: str | None = None
+        self._inputs_summary: str | None = None
         super().__init__(self._compute_text(), id=id)
 
     def set_run_id(self, run_id: str | None) -> None:
@@ -166,6 +177,16 @@ class WorkflowProgressHeader(Static):
         self._parent_ref = parent_ref
         self._refresh_progress()
 
+    def set_ref(self, ref: str) -> None:
+        """bug-036c: cache the workflow ref for the header first line."""
+        self._ref = ref
+        self.update(self._compute_text())
+
+    def set_inputs_summary(self, summary: str) -> None:
+        """bug-036c: cache the compact inputs summary line."""
+        self._inputs_summary = summary
+        self.update(self._compute_text())
+
     def update_progress(
         self,
         completed: int,
@@ -179,12 +200,18 @@ class WorkflowProgressHeader(Static):
         self._refresh_progress()
 
     def _compute_text(self) -> str:
-        """Compose the current progress-line text; no widget mutation.
+        """Compose the current header text; no widget mutation.
 
-        spec-017: when ``parent_ref`` is set, prepend
-        ``↳ from <parent-ref>`` on its own line above the progress
-        bar. A ``None`` parent_ref (top-level or peer from an outer
-        POV) restores the single-line render.
+        Composition (bug-036c):
+          - **Nested** (`parent_ref` set): three lines total —
+            ``↳ from <parent_ref> · <ref>`` (flattened first line so
+            the nested card stays 3 lines of chrome), inputs summary,
+            progress line.
+          - **Top-level** (no parent_ref): three lines — ``<ref>``,
+            inputs summary, progress line.
+          - **Ref-less** (RUN_STARTED hasn't landed): fall back to the
+            single-line spec-017 shape so pre-036c goldens for the
+            empty header don't churn.
         """
         total = max(self._total, 0)
         completed = max(0, min(self._completed, total)) if total else 0
@@ -196,9 +223,19 @@ class WorkflowProgressHeader(Static):
         progress_line = (
             f"[{completed}/{total}]  {bar}  {int(self._elapsed_seconds)}s"
         )
+        if self._ref is None:
+            # Pre-RUN_STARTED render — ref hasn't landed yet. Preserve
+            # the spec-017 single-line breadcrumb behaviour so the
+            # first paint before the fan-out doesn't show a blank ref.
+            if self._parent_ref:
+                return f"↳ from {self._parent_ref}\n{progress_line}"
+            return progress_line
         if self._parent_ref:
-            return f"↳ from {self._parent_ref}\n{progress_line}"
-        return progress_line
+            first_line = f"↳ from {self._parent_ref} · {self._ref}"
+        else:
+            first_line = self._ref
+        inputs_line = f"inputs: {self._inputs_summary or ''}"
+        return f"{first_line}\n{inputs_line}\n{progress_line}"
 
     def _refresh_progress(self) -> None:
         """Redraw the progress line from the current counters."""
@@ -476,6 +513,32 @@ class WorkflowRenderer(Vertical):
         workflow_ref = payload.get("workflow_ref")
         if isinstance(workflow_ref, str):
             self._workflow_ref = workflow_ref
+            # bug-036c: surface the ref on the header's first line.
+            self._header.set_ref(workflow_ref)
+        # bug-036c: compact inputs summary on the second header line.
+        # RUN_STARTED nests the caller-bound inputs under
+        # ``payload.payload.inputs`` (the executor emits the top-level
+        # ``workflow_ref`` + ``run_id`` on the envelope, then the
+        # domain-event body carries a nested ``payload`` with
+        # ``inputs`` / ``trace_id`` — see the fixture at
+        # ``ses_bug036a_jd_review_excerpt.jsonl``). Fall back to a
+        # sibling ``inputs`` for older payload shapes. Missing /
+        # non-dict renders as ``inputs:`` (label stays so the header
+        # keeps a stable 3-line height).
+        inputs: Any = None
+        inner = payload.get("payload")
+        if isinstance(inner, dict):
+            candidate = inner.get("inputs")
+            if isinstance(candidate, dict):
+                inputs = candidate
+        if inputs is None:
+            candidate = payload.get("inputs")
+            if isinstance(candidate, dict):
+                inputs = candidate
+        if isinstance(inputs, dict):
+            self._header.set_inputs_summary(_format_inputs_summary(inputs))
+        else:
+            self._header.set_inputs_summary("")
         ts = self._parse_ts(payload.get("ts"))
         if ts is not None:
             self._start_time = ts
@@ -528,6 +591,24 @@ class WorkflowRenderer(Vertical):
         )
         self._node_rows[node_name] = row
         self._node_list.add_node(row)
+        # bug-036c: forward the per-node-type config preview. Today
+        # only bash carries a `command` — other types emit `{}` and
+        # the empty branch below is a no-op. The mount-race pattern
+        # inside `set_command_preview` handles the "row not yet
+        # composed" case (see `_flush_pending_previews`).
+        config_preview: dict[str, Any] | None = None
+        if isinstance(inner, dict):
+            candidate = inner.get("node_config_preview")
+            if isinstance(candidate, dict):
+                config_preview = candidate
+        if config_preview is None:
+            candidate = payload.get("node_config_preview")
+            if isinstance(candidate, dict):
+                config_preview = candidate
+        if config_preview is not None:
+            command = config_preview.get("command")
+            if isinstance(command, str) and command:
+                row.set_command_preview(command)
         self._register_node_with_adapter(
             row, trace_id_val, invocation_id_val,
         )
