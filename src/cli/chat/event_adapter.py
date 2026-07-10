@@ -1368,8 +1368,15 @@ class EventAdapter:
             )
 
     async def _handle_config_set(self, event: Event) -> None:
-        """Silent — config is diagnostic-only in the JSONL."""
-        _ = event
+        """Silent — config is diagnostic-only in the JSONL.
+
+        bug-036d AC #8: still bumps the row's lifecycle counter when
+        the event is scoped to a workflow node (main-chat sink is a
+        no-op).
+        """
+        sink = self._route_to_workflow_node(event) or self._app
+        if sink is not self._app:
+            _count_row_lifecycle(sink)
 
     async def _handle_memory_written(self, event: Event) -> None:
         """Silent — memory is diagnostic-only."""

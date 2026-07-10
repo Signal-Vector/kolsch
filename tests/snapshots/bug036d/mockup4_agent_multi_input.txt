@@ -2,7 +2,7 @@
 │ ▸ Workflow · andre/workflows/job_description_review                                                                                                                                                  │
 │ andre/workflows/job_description_review                                                                                                                                                               │
 │ inputs: url=https://www.linkedin.com/jobs… (89 chars)                                                                                                                                                │
-│ [2/2]  ▓▓▓▓▓▓▓▓  <ELAPSED>s                                                                                                                                                                              │
+│ [3/3]  ▓▓▓▓▓▓▓▓  <ELAPSED>s                                                                                                                                                                              │
 │ ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ │
 │   ▼ ✓ headhunter_review (agent) · 2 sub-agent events                                                                                                                                                 │
 │                                                                                                                                                                                                      │
@@ -39,6 +39,29 @@
 │  stdout:                                                                                                                                                                                             │
 │  JD contents here                                                                                                                                                                                    │
 │   ▶ ✓ fetch_jd (bash)                                                                                                                                                                                │
+│ ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ │
+│   ▼ ✓ deduper (agent) · 2 sub-agent events                                                                                                                                                           │
+│                                                                                                                                                                                                      │
+│     ╭─ You · <TS> ────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮  │
+│     │ {                                                                                                                                                                                           │  │
+│     │   "headhunter_review": "[\n  {\"requirement\": \"Deep blockchain expertise including L1/L2 protocol design\", \"score\": 10, \"rationale\": \"Scarcest skill; core technical                │  │
+│     │ differentiator.\"},\n  {\"requirement\": \"12+ years engineering experience with architecture ownership\", \"score\": 9, \"rationale\": \"Executive credibility for equity-partner          │  │
+│     │ CTO.\"},\n  {\"requirement\": \"Hands-on Rust systems programming\", \"score\": 9, \"rationale\": \"Explicitly mandatory; eliminates most candidates.\"}\n]",                               │  │
+│     │   "hiring_manager_review": "[\n  {\"requirement\": \"Distributed team leadership in remote/async environments\", \"score\": 9, \"rationale\": \"20 hrs/week distributed model demands       │  │
+│     │ strong async leaders.\"},\n  {\"requirement\": \"Proven track record shipping to production\", \"score\": 8, \"rationale\": \"Founders need tangible outcomes, not designs.\"},\n           │  │
+│     │ {\"requirement\": \"Product-focused mindset aligned to user impact\", \"score\": 7, \"rationale\": \"Prevents blockchain theater; ties tech to revenue.\"}\n]",                             │  │
+│     │   "cto_review": "[\n  {\"requirement\": \"Production security leadership: threat modeling, secure SDLC\", \"score\": 10, \"rationale\": \"Blockchain platform is a high-value attack        │  │
+│     │ target.\"},\n  {\"requirement\": \"GCP mastery for infrastructure and observability\", \"score\": 8, \"rationale\": \"Cloud foundation is inflexibly anchored to GCP.\"},\n                 │  │
+│     │ {\"requirement\": \"Executive technical communication and investor readiness\", \"score\": 7, \"rationale\": \"Founding CTO is the primary technical credibility lever.\"}\n]"              │  │
+│     │ }                                                                                                                                                                                           │  │
+│     ╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯  │
+│     ╭─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮  │
+│     │ [ {"rank": 1, "requirement": "Deep L1/L2 blockchain protocol design", "recommended_by": ["cto","headhunter","hiring_manager"], "avg": 9.7}, {"rank": 2, "requirement": "Hands-on Rust       │  │
+│     │ systems programming", "recommended_by": ["headhunter","hiring_manager"], "avg": 8.5}, {"rank": 3, "requirement": "Production security leadership", "recommended_by": ["cto"], "avg": 10.0}  │  │
+│     │ ]                                                                                                                                                                                           │  │
+│     │                                                                                                                                                                                             │  │
+│     ╰─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯  │
+│                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 │                                                                                                                                                                                                      │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

@@ -35,6 +35,41 @@ The extracted excerpt keeps:
 Everything else (secondary nodes, extra sub-agent chatter, model
 request/response chatter that isn't inside the workflow scope) is
 dropped so the fixture stays small.
+
+bug-036d fixture extension — hand-edited additions
+====================================================
+
+The shipped fixture is **not** just this extractor's output. After
+extraction, four synthetic events for a ``deduper`` agent-type
+node (bug-036d Mockup 4 — multi-input fan-in) are spliced in
+between the bash ``fetch_jd`` completion and the workflow's
+``tool.result``:
+
+1. ``kolsch.workflow.progress`` — ``workflow.node.started`` for
+   ``deduper`` (``type: kolsch/nodes/agent``).
+2. ``kolsch.workflow.node.sub_agent_event`` — inner
+   ``user.message`` whose ``content`` is a **dict** with three
+   labeled input keys (``headhunter_review`` /
+   ``hiring_manager_review`` / ``cto_review``) — the shape a
+   fan-in node's bound inputs take.
+3. ``kolsch.workflow.node.sub_agent_event`` — inner
+   ``agent.message`` with the synthesized reply.
+4. ``kolsch.workflow.progress`` — ``workflow.node.completed`` for
+   the same invocation.
+
+If you refresh the fixture from a new source session, either:
+
+* pick a source session that already contains a fan-in
+  agent-type node whose bound-inputs dict has ≥ 2 keys (rare
+  today — the ``deduper`` node in ``job_description_review``
+  fits, but only if the sub-agent USER_MESSAGE happens to land
+  in the JSONL), OR
+* re-splice the four hand-edited events after running the
+  extractor by running
+  ``extend_bug036d_deduper_slice.py`` in this same directory.
+  The ``deduper`` node is what makes Mockup 4's golden
+  non-degenerate — without it the golden collapses to Mockup
+  3's shape.
 """
 
 from __future__ import annotations
