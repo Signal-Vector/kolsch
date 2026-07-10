@@ -43,7 +43,7 @@ _AppFactory = Callable[[Widget], App[None]]
 async def test_set_output_bash_shape_renders_real_newlines(
     fake_app_factory: _AppFactory,
 ) -> None:
-    """AC #1 — bash-shape output renders with actual newlines."""
+    """AC #1 + bug-037 — bash-shape output section contains real newlines."""
     row = WorkflowNodeRow(node_name="n")
     app = fake_app_factory(row)
     async with app.run_test() as pilot:
@@ -52,12 +52,19 @@ async def test_set_output_bash_shape_renders_real_newlines(
         row.set_output({"stdout": "a\nb\nc", "exit_code": 0})
         await pilot.pause()
 
+        # bug-037: output/exit sections created. Search the row for
+        # Statics carrying the stdout + exit lines.
+        from textual.widgets import Static  # noqa: PLC0415
         assert row._output_widget is not None
-        content = str(row._output_widget.content)
-        assert "a\nb\nc" in content
-        assert "\\n" not in content
-        assert "stdout:" in content
-        assert "exit_code: 0" in content
+        assert row._bash_exit_section is not None
+        all_text = "\n".join(
+            str(getattr(s, "content", ""))
+            for s in row.walk_children()
+            if isinstance(s, Static)
+        )
+        assert "a\nb\nc" in all_text
+        assert "\\n" not in all_text
+        assert "exit code: 0" in all_text
 
 
 def test_extract_content_text_returns_readable_string_for_dict() -> None:
@@ -92,7 +99,9 @@ async def test_assistant_prose_mount_lands_inside_contents(
 
         contents = row.query_one(Collapsible.Contents)
         prose = list(contents.query(AssistantProse))
-        assert prose
+        # bug-037: explicit widget count — one AssistantProse per
+        # mount, wrapped in a NodeSection.
+        assert len(prose) == 1
 
 
 @pytest.mark.asyncio
@@ -127,7 +136,9 @@ async def test_tool_call_block_mounts_via_sink(
 
         contents = row.query_one(Collapsible.Contents)
         blocks = list(contents.query(ToolCallBlock))
-        assert blocks
+        # bug-037: explicit widget count — one ToolCallBlock per
+        # mount, wrapped in a NodeSection.
+        assert len(blocks) == 1
 
 
 def test_helpers_are_module_private() -> None:

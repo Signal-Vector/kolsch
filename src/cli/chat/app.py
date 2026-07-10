@@ -959,8 +959,9 @@ class ChatApp(App):
         timestamp: datetime | None = None,
         *,
         event_id: str | None = None,
+        content: dict[str, Any] | None = None,
     ) -> None:
-        _ = event_id  # bug-036d: sink-protocol dedupe key — App ignores.
+        _ = event_id, content  # bug-036d/037 sink kwargs — App ignores.
         ts = timestamp if timestamp is not None else datetime.now()
         transcript = self.query_one("#transcript", VerticalScroll)
         await transcript.mount(UserChatbox(text, ts))

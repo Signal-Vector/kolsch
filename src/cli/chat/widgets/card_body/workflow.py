@@ -611,6 +611,20 @@ class WorkflowRenderer(Vertical):
         )
         self._node_rows[node_name] = row
         self._node_list.add_node(row)
+        # bug-037: stash bound inputs BEFORE set_command_preview so
+        # bash rows can render `bound inputs:` inside their `input`
+        # section. Reversing the order leaves the section without
+        # the bound-inputs block.
+        bound_inputs: dict[str, Any] = {}
+        if isinstance(inner, dict):
+            candidate = inner.get("inputs")
+            if isinstance(candidate, dict):
+                bound_inputs = candidate
+        row.set_bound_inputs(bound_inputs)
+        # bug-037: stash NODE_STARTED ts for duration derivation.
+        started_at = self._parse_ts(payload.get("ts"))
+        if started_at is not None:
+            row.set_started_at(started_at)
         # bug-036c: forward the per-node-type config preview. Today
         # only bash carries a `command` — other types emit `{}` and
         # the empty branch below is a no-op. The mount-race pattern
@@ -667,6 +681,15 @@ class WorkflowRenderer(Vertical):
             if isinstance(candidate, str):
                 details = candidate
         row.set_state("completed", details=details)
+        # bug-037: stash completion ts + duration_ms so bash `exit`
+        # section title can carry `(Xs)`.
+        completed_at = self._parse_ts(payload.get("ts"))
+        duration_ms: float | None = None
+        if isinstance(inner, dict):
+            candidate = inner.get("duration_ms")
+            if isinstance(candidate, (int, float)):
+                duration_ms = float(candidate)
+        row.set_completed_at(completed_at, duration_ms=duration_ms)
         # bug-032: forward the preview AFTER `set_state` so the row
         # is already in its terminal palette when the body mounts.
         # `set_output` is a no-op for `None` / empty containers so we

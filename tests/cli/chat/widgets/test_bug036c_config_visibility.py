@@ -107,7 +107,7 @@ async def test_command_widget_mounts_inside_contents() -> None:
 
 @pytest.mark.asyncio
 async def test_command_widget_has_css_class() -> None:
-    """AC #4: mounted command Static carries the styling anchor class."""
+    """AC #4 + bug-037: command Static (inside the input NodeSection) has class."""
     app = _Host()
     async with app.run_test() as pilot:
         row = WorkflowNodeRow(
@@ -122,7 +122,14 @@ async def test_command_widget_has_css_class() -> None:
         await pilot.pause()
 
         assert row._command_widget is not None
-        assert row._command_widget.has_class("node-command-preview")
+        # bug-037: the command Static now lives inside the `input`
+        # NodeSection; walk into Contents to find it.
+        contents = row.query_one(Collapsible.Contents)
+        previews = [
+            c for c in contents.walk_children()
+            if isinstance(c, Static) and c.has_class("node-command-preview")
+        ]
+        assert len(previews) == 1
 
 
 @pytest.mark.asyncio

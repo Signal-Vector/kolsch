@@ -1152,8 +1152,13 @@ class EventAdapter:
                 text = _content_dict_text(content)
         if not text:
             return
+        # bug-037: pass the raw dict through so row sinks can split
+        # per-key (one ``input: <key>`` section per bound input). App
+        # sinks ignore this kwarg.
+        raw_content = content if isinstance(content, dict) and content else None
         await sink.mount_user_message(
             text, _now_ts(event), event_id=_event_id_str(event),
+            content=raw_content,
         )
 
     async def _handle_agent_message(self, event: Event) -> None:

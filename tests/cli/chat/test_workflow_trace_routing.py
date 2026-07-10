@@ -36,9 +36,9 @@ class _FakeChatApp:
 
     async def mount_user_message(
         self, text: str, timestamp: Any = None,
-        *, event_id: Any = None,
+        *, event_id: Any = None, content: Any = None,
     ) -> None:
-        _ = timestamp, event_id
+        _ = timestamp, event_id, content
         self.mounts.append(f"user:{text}")
 
     async def mount_assistant_message(

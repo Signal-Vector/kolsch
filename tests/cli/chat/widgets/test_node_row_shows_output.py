@@ -34,7 +34,7 @@ _AppFactory = Callable[[Widget], App[None]]
 async def test_set_output_mounts_static_with_formatted_json(
     fake_app_factory: _AppFactory,
 ) -> None:
-    """AC #4 — non-empty output dict lands as a Static preview."""
+    """AC #4 + bug-037 — bash-shape output creates output/exit sections."""
     row = WorkflowNodeRow(node_name="n")
     app = fake_app_factory(row)
     async with app.run_test() as pilot:
@@ -43,47 +43,56 @@ async def test_set_output_mounts_static_with_formatted_json(
         row.set_output({"stdout": "hello", "exit_code": 0})
         await pilot.pause()
 
-        statics = [c for c in row.walk_children() if isinstance(c, Static)]
-        # The row-body Static tracked by ``_output_widget`` is the
-        # one we care about; other Statics (title chrome) may exist
-        # but the tracked handle is the load-bearing assertion.
+        # bug-037: bash-shape → dedicated sections. _output_widget
+        # points at the output NodeSection.
+        from cli.chat.widgets.node_section import NodeSection  # noqa: PLC0415
         assert row._output_widget is not None
-        assert row._output_widget in statics
-        content = str(row._output_widget.content)
-        assert "stdout" in content
-        assert "hello" in content
+        assert isinstance(row._output_widget, NodeSection)
+        # The body Static inside the output section carries the stdout.
+        statics = [
+            c for c in row._output_widget.walk_children()
+            if isinstance(c, Static)
+        ]
+        body_texts = [str(getattr(s, "content", "")) for s in statics]
+        assert any("hello" in t for t in body_texts)
 
 
 @pytest.mark.asyncio
 async def test_set_output_idempotent_replaces_previous(
     fake_app_factory: _AppFactory,
 ) -> None:
-    """AC #3 — second call removes the first mount."""
+    """AC #3 + bug-037 — second bash output call is a no-op (sections stick)."""
     row = WorkflowNodeRow(node_name="n")
     app = fake_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
-        row.set_output({"a": 1})
+        # bug-037: bash-shape outputs create dedicated sections that
+        # are NOT replaced on a second call (the sections are keyed
+        # on section identity — a re-fire is a no-op).
+        row.set_output({"stdout": "a", "exit_code": 0})
         await pilot.pause()
-        first_widget = row._output_widget
-        assert first_widget is not None
+        first_section = row._output_widget
+        assert first_section is not None
 
-        row.set_output({"b": 2})
+        row.set_output({"stdout": "b", "exit_code": 0})
         await pilot.pause()
 
-        # ``_output_widget`` now points at the fresh mount.
-        assert row._output_widget is not None
-        assert row._output_widget is not first_widget
-        # First widget was removed from the tree.
-        current_statics = [
-            c for c in row.walk_children() if isinstance(c, Static)
-        ]
-        assert first_widget not in current_statics
-        # Content reflects the newer payload, not the older one.
-        content = str(row._output_widget.content)
-        assert '"b": 2' in content
-        assert '"a": 1' not in content
+        # Sections don't replay; the first section remains.
+        assert row._output_widget is first_section
+        # For non-bash-shape outputs the idempotent-replace semantic
+        # still holds.
+        row2 = WorkflowNodeRow(node_name="n2")
+        app2 = fake_app_factory(row2)
+        async with app2.run_test() as pilot2:
+            await pilot2.pause()
+            row2.set_output({"a": 1})
+            await pilot2.pause()
+            first_widget = row2._output_widget
+            assert first_widget is not None
+            row2.set_output({"b": 2})
+            await pilot2.pause()
+            assert row2._output_widget is not first_widget
 
 
 @pytest.mark.asyncio
@@ -108,18 +117,20 @@ async def test_set_output_noop_for_empty_or_none(
 async def test_set_output_truncates_long_content(
     fake_app_factory: _AppFactory,
 ) -> None:
-    """AC #2 truncation — > 500-char preview ends in ``…``."""
+    """AC #2 truncation + bug-037 — 500-char stdout ends in ``…`` inside output section."""
     row = WorkflowNodeRow(node_name="n")
     app = fake_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
-        # A ~600-char stdout blob pretty-prints well past the 500
-        # char cap so the truncation branch is guaranteed to fire.
+        # A ~600-char stdout blob past the per-block 500 char cap.
         row.set_output({"stdout": "x" * 600, "exit_code": 0})
         await pilot.pause()
 
         assert row._output_widget is not None
-        content = str(row._output_widget.content)
-        assert content.endswith("…")
-        assert len(content) <= WorkflowNodeRow._OUTPUT_PREVIEW_MAX_LEN
+        statics = [
+            c for c in row._output_widget.walk_children()
+            if isinstance(c, Static)
+        ]
+        body_texts = [str(getattr(s, "content", "")) for s in statics]
+        assert any(t.endswith("…") for t in body_texts)

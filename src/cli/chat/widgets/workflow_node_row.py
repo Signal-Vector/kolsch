@@ -176,6 +176,32 @@ def _render_bash_blocks(content: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _render_bash_input_body(
+    bound_inputs: dict[str, Any],
+    command: str,
+) -> str:
+    """bug-037: render the bash `input` section body — inputs + command."""
+    lines: list[str] = []
+    if bound_inputs:
+        lines.append("bound inputs:")
+        for key, value in bound_inputs.items():
+            lines.append(f"· {key}: {_format_input_value(value)}")
+        lines.append("")
+    lines.append("command:")
+    lines.append(_truncate(command, 500))
+    return "\n".join(lines)
+
+
+def _is_failed_exit(exit_code: Any) -> bool:
+    """Return True when exit_code represents a failure."""
+    if exit_code is None:
+        return False
+    try:
+        return int(exit_code) != 0
+    except (TypeError, ValueError):
+        return False
+
+
 def _extract_content_text(content: Any) -> str:
     """bug-034: pull a display string out of a sub-agent ``content`` value."""
     if content is None or content == "":
@@ -254,6 +280,21 @@ class WorkflowNodeRow(Collapsible):
         self._output_widget: Widget | None = None
         self._command_widget: Widget | None = None
         self._pending_command: str | None = None
+        # bug-037: per-type sections. Bash rows own an `input`
+        # section (bound_inputs + command), an `output` section
+        # (stdout), and an `exit: <code>` section. Agent rows own
+        # `input: <key>` sections plus `response`/`response (N)` +
+        # per-tool_call_id `tool: <name>` sections.
+        self._response_count: int = 0
+        self._bound_inputs: dict[str, Any] = {}
+        self._bash_input_section: Widget | None = None
+        self._bash_output_section: Widget | None = None
+        self._bash_exit_section: Widget | None = None
+        self._tool_sections: dict[str, Widget] = {}
+        self._tool_blocks: dict[str, Widget] = {}
+        self._node_started_at: datetime | None = None
+        self._node_completed_at: datetime | None = None
+        self._node_duration_ms: float | None = None
         # bug-036d: pending mount closures (replaces spec-021's raw
         # event buffer). Each closure captures the extracted text +
         # widget kwargs so the drain doesn't re-run content
@@ -331,22 +372,29 @@ class WorkflowNodeRow(Collapsible):
         self._update_title()
 
     def set_output(self, output: Any) -> None:
-        """bug-032 + bug-034: mount a pretty-printed preview of `output`.
+        """bug-032 + bug-034 + bug-037: mount output section(s).
+
+        bug-037: bash-shape outputs create two dedicated sections
+        (``output``, ``exit: <code>``). Other shapes fall through
+        to the flat ``Static`` preview.
 
         bug-036d: the agent-node gate reads
         ``self._last_assistant_text`` (empty → gate off; non-empty →
-        gate on). This is the same semantic as the pre-036d
-        ``_saw_agent_message`` bool: a non-empty last-assistant-text
-        means at least one ``mount_assistant_message`` fired on this
-        row for either ``agent.message`` or ``model.response``.
+        gate on).
         """
         if output is None:
             return
         if isinstance(output, (dict, list, str)) and not output:
             return
+        # bug-037: bash-shape outputs bypass the agent gate and land
+        # in dedicated sections. This is deliberate — the agent gate
+        # is `node_type == "kolsch/nodes/agent"` scoped by spec.
+        if isinstance(output, dict) and _is_bash_shape(output):
+            self._mount_bash_output_sections(output)
+            return
         # bug-036d: agent-node gate reads _last_assistant_text.
         # Empty string is falsy → gate does not fire → set_output
-        # renders normally (matches Pilot test sub-test 11).
+        # renders normally.
         if self._node_type == "kolsch/nodes/agent" and self._last_assistant_text:
             return
         if isinstance(output, dict):
@@ -368,8 +416,23 @@ class WorkflowNodeRow(Collapsible):
         with contextlib.suppress(Exception):
             self._mount_in_contents(widget)
 
+    def set_bound_inputs(self, inputs: dict[str, Any]) -> None:
+        """bug-037: stash bound inputs for later section rendering.
+
+        Called BEFORE ``set_command_preview`` by the renderer so bash
+        rows can include the bound-inputs block inside their ``input``
+        section. If ``set_command_preview`` fires first (race), the
+        section is created without the block; a subsequent
+        ``set_bound_inputs`` is a no-op — the section is NOT rebuilt.
+        """
+        if self._bash_input_section is not None:
+            # Section already mounted (race): don't rebuild.
+            self._bound_inputs = dict(inputs)
+            return
+        self._bound_inputs = dict(inputs)
+
     def set_command_preview(self, command: str) -> None:
-        """bug-036c: mount a ``↳ command: <template>`` line in the body."""
+        """bug-036c + bug-037: mount an ``input`` section w/ command."""
         if self._command_widget is not None:
             return
         self._pending_command = command
@@ -377,17 +440,92 @@ class WorkflowNodeRow(Collapsible):
             self._flush_pending_previews()
 
     def _flush_pending_previews(self) -> None:
-        """bug-036c: mount any deferred previews once the row is composed."""
+        """bug-036c + bug-037: mount deferred command preview once composed."""
         if self._pending_command is None or self._command_widget is not None:
             return
-        widget = Static(
-            f"↳ command: {_truncate(self._pending_command, 200)}",
-            classes="node-command-preview",
-        )
-        with contextlib.suppress(Exception):
-            self._mount_in_contents(widget)
-        self._command_widget = widget
+        body = _render_bash_input_body(self._bound_inputs, self._pending_command)
+        section = self._new_bash_input_section(body)
+        self._bash_input_section = section
+        self._command_widget = section
         self._pending_command = None
+
+    def _new_bash_input_section(self, body_text: str) -> Widget:
+        """Build + mount the bash ``input`` NodeSection."""
+        from cli.chat.widgets.node_section import NodeSection  # noqa: PLC0415
+        section = NodeSection("input")
+        inner = Static(body_text, classes="node-command-preview")
+        section._contents_list.append(inner)
+        with contextlib.suppress(Exception):
+            self._mount_in_contents(section)
+        return section
+
+    def _mount_bash_output_sections(self, output: dict[str, Any]) -> None:
+        """bug-037: mount ``output`` + ``exit: <code>`` sections."""
+        from cli.chat.widgets.node_section import NodeSection  # noqa: PLC0415
+        stdout = output.get("stdout") if isinstance(output, dict) else None
+        stderr = output.get("stderr") if isinstance(output, dict) else None
+        exit_code = output.get("exit_code") if isinstance(output, dict) else None
+        # `output` section — stdout only.
+        if self._bash_output_section is None:
+            stdout_text = str(stdout) if isinstance(stdout, str) else ""
+            stdout_text = _truncate(stdout_text, _BASH_BLOCK_MAX_CHARS)
+            out_section = NodeSection("output")
+            out_section._contents_list.append(Static(stdout_text))
+            with contextlib.suppress(Exception):
+                self._mount_in_contents(out_section)
+            self._bash_output_section = out_section
+            self._output_widget = out_section
+        # `exit: <code> (<duration>)` section.
+        if self._bash_exit_section is None:
+            title = self._bash_exit_title(exit_code)
+            lines: list[str] = []
+            if exit_code is not None:
+                lines.append(f"exit code: {exit_code}")
+            if self._formatted_duration() is not None:
+                lines.append(f"duration: {self._formatted_duration()}")
+            if isinstance(stderr, str) and stderr:
+                lines.append("")
+                lines.append("stderr:")
+                lines.append(_truncate(stderr, _BASH_BLOCK_MAX_CHARS))
+            state = "failed" if _is_failed_exit(exit_code) else "completed"
+            exit_section = NodeSection(title, state=state)
+            exit_section._contents_list.append(Static("\n".join(lines) or "(empty)"))
+            with contextlib.suppress(Exception):
+                self._mount_in_contents(exit_section)
+            self._bash_exit_section = exit_section
+
+    def _bash_exit_title(self, exit_code: Any) -> str:
+        code_part = f"exit: {exit_code}" if exit_code is not None else "exit"
+        dur = self._formatted_duration()
+        if dur is not None:
+            return f"{code_part} ({dur})"
+        return code_part
+
+    def _formatted_duration(self) -> str | None:
+        if self._node_duration_ms is not None:
+            secs = self._node_duration_ms / 1000.0
+            return f"{secs:.1f}s"
+        if self._node_started_at and self._node_completed_at:
+            delta = (self._node_completed_at - self._node_started_at).total_seconds()
+            if delta >= 0:
+                return f"{delta:.1f}s"
+        return None
+
+    def set_started_at(self, ts: datetime | None) -> None:
+        """bug-037: stash NODE_STARTED ts for duration derivation."""
+        self._node_started_at = ts
+
+    def set_completed_at(
+        self,
+        ts: datetime | None = None,
+        *,
+        duration_ms: float | None = None,
+    ) -> None:
+        """bug-037: stash NODE_COMPLETED ts + duration for exit title."""
+        if ts is not None:
+            self._node_completed_at = ts
+        if duration_ms is not None:
+            self._node_duration_ms = duration_ms
 
     # ------------------------------------------------------------------
     # bug-036d: ChatMountSink implementation
@@ -399,14 +537,18 @@ class WorkflowNodeRow(Collapsible):
         timestamp: object | None = None,
         *,
         event_id: str | None = None,
+        content: dict[str, Any] | None = None,
     ) -> None:
-        """Sink method — mount a ``UserChatbox`` inside the row.
+        """Sink method — mount ``input`` section(s) with ``UserChatbox``.
 
-        bug-036d reverses bug-035's suppression — inside a workflow
-        row, USER_MESSAGE now renders a real ``UserChatbox`` so a
-        reader can see the agent's invocation payload (e.g., the
-        bound ``job_description`` string for an agent node).
+        bug-037: when ``content`` is a non-empty dict, mount ONE
+        ``input: <key>`` section per key. Otherwise, mount one
+        ``input`` section with the flat text. Map rows drop the
+        event entirely.
         """
+        # bug-037 AC #8: map rows never receive routed events; guard.
+        if self._node_type == "kolsch/nodes/map":
+            return
         if not text or self._unmounted or self._buffer_frozen:
             return
         if self._is_duplicate(event_id):
@@ -415,34 +557,53 @@ class WorkflowNodeRow(Collapsible):
         self._count_bump()
 
         async def _mount() -> None:
+            from cli.chat.widgets.node_section import NodeSection  # noqa: PLC0415
             from cli.chat.widgets.user_chatbox import UserChatbox  # noqa: PLC0415
-            widget = UserChatbox(text, ts)
-            self._mount_in_contents(widget)
+            if isinstance(content, dict) and content:
+                for key, value in content.items():
+                    section = NodeSection(f"input: {key}")
+                    section._contents_list.append(UserChatbox(str(value), ts))
+                    self._mount_in_contents(section)
+            else:
+                section = NodeSection("input")
+                section._contents_list.append(UserChatbox(text, ts))
+                self._mount_in_contents(section)
 
         await self._dispatch_mount(_mount, event_id)
 
     async def mount_assistant_message(
         self, text: str, *, event_id: str | None = None,
     ) -> None:
-        """Sink method — mount an ``AssistantProse`` inside the row.
+        """Sink method — mount ``response`` (or ``response (N)``) section.
 
-        bug-036d: bumps ``_last_assistant_text`` so the ``set_output``
-        gate suppresses the redundant JSON preview for agent nodes.
+        bug-037: dedupe fires BEFORE section construction so a
+        skipped mount leaves NO empty section widget.
         """
+        # bug-037 AC #8: map rows drop routed events.
+        if self._node_type == "kolsch/nodes/map":
+            return
         if not text or self._unmounted or self._buffer_frozen:
             return
         if self._is_duplicate(event_id):
             return
-        # bug-036d: latch the last-assistant-text BEFORE the mount
-        # (even when collapsed — the ``set_output`` gate reads this
-        # regardless of the mount succeeding).
+        # bug-037: dedupe against last-assistant-text FIRST so no
+        # empty NodeSection is created.
+        if self._last_assistant_text == text:
+            return
+        # Latch AFTER the dedupe check; sub-test 4 depends on this
+        # order.
         self._last_assistant_text = text
+        self._response_count += 1
+        response_idx = self._response_count
         self._count_bump()
 
         async def _mount() -> None:
             from cli.chat.widgets.assistant_prose import AssistantProse  # noqa: PLC0415
-            widget = AssistantProse(text)
-            self._mount_in_contents(widget)
+            from cli.chat.widgets.node_section import NodeSection  # noqa: PLC0415
+            title = "response" if response_idx == 1 else f"response ({response_idx})"
+            section = NodeSection(title)
+            section._contents_list.append(AssistantProse(text))
+            self._mount_in_contents(section)
 
         await self._dispatch_mount(_mount, event_id)
 
@@ -456,25 +617,97 @@ class WorkflowNodeRow(Collapsible):
         recovery_hint: str | None = None,
         event_id: str | None = None,
     ) -> None:
-        """Sink method — mount a ``ToolCallBlock`` inside the row."""
+        """Sink method — mount / transition a ``tool: <name>`` section.
+
+        bug-037: first call (empty body) creates the section in
+        ``running`` state; second call (with same ``event_id``,
+        used as ``tool_call_id``) transitions the SAME section to
+        ``completed`` (or ``failed``) and populates the block body.
+        """
+        if self._node_type == "kolsch/nodes/map":
+            return
         if self._unmounted or self._buffer_frozen:
             return
-        if self._is_duplicate(event_id):
-            return
-        self._count_bump()
+        # bug-037: two-phase — do NOT reject on `_is_duplicate`
+        # because the TOOL_RESULT reuses the tool_call_id as
+        # event_id. Instead, look up the section for a state
+        # transition when the id is already known.
+        tool_call_id = event_id or ""
+        is_transition = (
+            tool_call_id in self._tool_sections
+            and event_id in self._mounted_event_ids
+        )
+        if tool_call_id and not is_transition:
+            self._count_bump()
 
         async def _mount() -> None:
+            from cli.chat.widgets.node_section import NodeSection  # noqa: PLC0415
             from cli.chat.widgets.tool_call_block import ToolCallBlock  # noqa: PLC0415
-            widget = ToolCallBlock(
+            existing = self._tool_sections.get(tool_call_id) if tool_call_id else None
+            if existing is not None:
+                # Transition — update section state + block body.
+                new_state = "failed" if failed else "completed"
+                if hasattr(existing, "set_state"):
+                    existing.set_state(new_state)
+                block = self._tool_blocks.get(tool_call_id)
+                if block is not None:
+                    self._populate_tool_call_result(block, body, failed=failed)
+                return
+            state = "running" if not body and not failed else (
+                "failed" if failed else "completed"
+            )
+            section = NodeSection(f"tool: {tool_name or '?'}", state=state)
+            block = ToolCallBlock(
                 tool_name or "?",
                 args_str,
                 body,
                 failed=failed,
                 recovery_hint=recovery_hint,
             )
-            self._mount_in_contents(widget)
+            section._contents_list.append(block)
+            self._mount_in_contents(section)
+            if tool_call_id:
+                self._tool_sections[tool_call_id] = section
+                self._tool_blocks[tool_call_id] = block
+
+        # For transitions we must NOT go through the dedupe path,
+        # so bypass _dispatch_mount's event_id add and route the
+        # closure directly.
+        if is_transition:
+            if not self.collapsed:
+                try:
+                    await _mount()
+                except Exception:
+                    _LOGGER.warning(
+                        "workflow_node_row: tool transition raised on %s",
+                        self._node_name,
+                        exc_info=True,
+                    )
+                return
+            self._pending_mounts.append(_mount)
+            while len(self._pending_mounts) > _EVENT_BUFFER_MAX:
+                self._pending_mounts.pop(0)
+            return
 
         await self._dispatch_mount(_mount, event_id)
+
+    def _populate_tool_call_result(
+        self,
+        block: Widget,
+        body: str,
+        *,
+        failed: bool,
+    ) -> None:
+        """bug-037: rewrite a ToolCallBlock's body after a state transition."""
+        # ToolCallBlock is a Collapsible whose body is a Static
+        # inside Contents. Replace the Static's content.
+        with contextlib.suppress(Exception):
+            for static in block.query(Static):
+                static.update(body)
+                break
+        if failed:
+            with contextlib.suppress(Exception):
+                block.add_class("-failed")
 
     async def mount_notice(
         self,
@@ -484,14 +717,15 @@ class WorkflowNodeRow(Collapsible):
         level: str = "info",
         event_id: str | None = None,
     ) -> None:
-        """Sink method — mount a ``NoticeWidget`` inside the row.
+        """Sink method — mount a ``NoticeWidget`` pinned at TOP of Contents.
 
-        bug-036d: sub-agent notices (model fallback, template
-        warning) belong inside the row where the event originated,
-        not at the transcript root — otherwise a workflow's warning
-        gets orphaned from its node.
+        bug-037 AC #7: notices bypass sections + pin at the top so
+        template warnings / model fallbacks stay visible above the
+        section index.
         """
         _ = notice_id
+        if self._node_type == "kolsch/nodes/map":
+            return
         if not text or self._unmounted or self._buffer_frozen:
             return
         if self._is_duplicate(event_id):
@@ -501,9 +735,25 @@ class WorkflowNodeRow(Collapsible):
         async def _mount() -> None:
             from cli.chat.widgets.notice import NoticeWidget  # noqa: PLC0415
             widget = NoticeWidget(text=text, kind=level)
-            self._mount_in_contents(widget)
+            self._mount_notice_at_top(widget)
 
         await self._dispatch_mount(_mount, event_id)
+
+    def _mount_notice_at_top(self, widget: Widget) -> None:
+        """bug-037: mount ``widget`` at index 0 of Contents."""
+        try:
+            contents = self.query_one(Collapsible.Contents)
+        except Exception:  # noqa: BLE001
+            contents = None
+        if contents is None:
+            self.mount(widget)
+            return
+        existing = list(contents.children)
+        if existing:
+            with contextlib.suppress(Exception):
+                contents.mount(widget, before=existing[0])
+                return
+        contents.mount(widget)
 
     def last_assistant_text(self) -> str:
         """Sink accessor — same shape as ``ChatApp.last_assistant_text``."""

@@ -92,9 +92,9 @@ class _StubTranscriptApp(App[None]):
 
     async def mount_user_message(
         self, text: str, timestamp: Any = None,
-        *, event_id: Any = None,
+        *, event_id: Any = None, content: Any = None,
     ) -> None:
-        _ = text, timestamp, event_id
+        _ = text, timestamp, event_id, content
 
     async def mount_assistant_message(
         self, text: str, *, event_id: Any = None,

@@ -23,7 +23,7 @@ it (the transcript never dedupes by event_id).
 
 from __future__ import annotations
 
-from typing import Protocol, runtime_checkable
+from typing import Any, Protocol, runtime_checkable
 
 
 @runtime_checkable
@@ -33,6 +33,11 @@ class ChatMountSink(Protocol):
     Every mount method is ``async`` because the main App awaits
     Textual mount operations; the row's implementation is
     trivially awaitable even when queued.
+
+    Row implementations MAY wrap mounted widgets in a ``NodeSection``
+    for per-type section navigation. App implementations mount flat.
+    Semantic contract: mount ONE unit of content in the container's
+    natural presentation.
     """
 
     async def mount_user_message(
@@ -41,8 +46,14 @@ class ChatMountSink(Protocol):
         timestamp: object | None = None,
         *,
         event_id: str | None = None,
+        content: dict[str, Any] | None = None,
     ) -> None:
-        """Mount a ``UserChatbox`` for a user turn."""
+        """Mount a ``UserChatbox`` for a user turn.
+
+        ``content`` carries the raw dict payload when the source
+        event's ``data.content`` is a dict — sinks that wrap
+        per-key (workflow rows) split by key; App sinks ignore it.
+        """
         ...
 
     async def mount_assistant_message(

@@ -58,7 +58,8 @@ async def test_row_mounts_user_message(fake_app_factory: _AppFactory) -> None:
         await pilot.pause()
 
         boxes = list(_contents_of(row).query(UserChatbox))
-        assert boxes, "UserChatbox should mount inside Contents"
+        # bug-037: explicit widget count.
+        assert len(boxes) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -80,7 +81,8 @@ async def test_row_mounts_assistant_message(
         await pilot.pause()
 
         prose = list(_contents_of(row).query(AssistantProse))
-        assert prose
+        # bug-037: explicit widget count.
+        assert len(prose) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -102,7 +104,8 @@ async def test_row_mounts_tool_call(fake_app_factory: _AppFactory) -> None:
         await pilot.pause()
 
         blocks = list(_contents_of(row).query(ToolCallBlock))
-        assert blocks
+        # bug-037: explicit widget count.
+        assert len(blocks) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -122,7 +125,8 @@ async def test_row_mounts_notice(fake_app_factory: _AppFactory) -> None:
         await pilot.pause()
 
         notices = list(_contents_of(row).query(NoticeWidget))
-        assert notices
+        # bug-037: explicit widget count.
+        assert len(notices) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -168,8 +172,9 @@ async def test_collapsed_row_queues_mounts(
         await pilot.pause()
         await pilot.pause()
 
-        assert list(contents.query(UserChatbox))
-        assert list(contents.query(AssistantProse))
+        # bug-037: explicit widget counts — one per queued mount.
+        assert len(list(contents.query(UserChatbox))) == 1
+        assert len(list(contents.query(AssistantProse))) == 1
 
 
 # ---------------------------------------------------------------------------
@@ -394,9 +399,9 @@ class _FakeChatApp:
 
     async def mount_user_message(
         self, text: str, timestamp: Any = None,
-        *, event_id: Any = None,
+        *, event_id: Any = None, content: Any = None,
     ) -> None:
-        _ = timestamp, event_id
+        _ = timestamp, event_id, content
         self.calls.append(f"user:{text}")
 
     async def mount_assistant_message(

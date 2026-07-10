@@ -80,9 +80,9 @@ class _StubTranscriptApp(App[None]):
 
     async def mount_user_message(
         self, text: str, timestamp: Any = None,
-        *, event_id: Any = None,
+        *, event_id: Any = None, content: Any = None,
     ) -> None:
-        _ = text, timestamp, event_id
+        _ = text, timestamp, event_id, content
 
     async def mount_assistant_message(
         self, text: str, *, event_id: Any = None,
@@ -188,9 +188,12 @@ async def test_fixture_replay_header_and_bash_command() -> None:
             f"bash row should carry one command preview inside "
             f"Contents; got {len(previews)}"
         )
+        # bug-037: the preview Static now lives inside the `input`
+        # NodeSection, and its body carries `command:` as one of two
+        # labeled blocks (`bound inputs:` + `command:`).
         preview_text = str(previews[0].render())
-        assert preview_text.startswith("↳ command:"), (
-            f"preview should start with '↳ command:'; got {preview_text!r}"
+        assert "command:" in preview_text, (
+            f"preview should include 'command:'; got {preview_text!r}"
         )
 
         # Sanity: fixture actually opened a workflow card.
