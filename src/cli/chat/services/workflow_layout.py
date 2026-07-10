@@ -348,12 +348,24 @@ class WorkflowLayoutManager:
             in_progress = [
                 r for r in ordered if r.phase in _IN_PROGRESS_PHASES
             ]
+            terminal = [
+                r for r in ordered if r.phase not in _IN_PROGRESS_PHASES
+            ]
             should_compact = len(in_progress) > 2
+            # bug-039: terminal cards go compact only when there are
+            # multiple of them OR when in-progress compaction is already
+            # active. A lone terminal card is the exact case the user
+            # wants to drill into — leaving it full-render preserves
+            # row-expand interaction without churning spec-016's
+            # accumulated-terminals behaviour.
+            should_compact_terminal = should_compact or len(terminal) > 1
 
             # Compact-mode management. Applied BEFORE the DOM shuffle so
             # a mid-move refresh renders the right height each pass.
             for record in ordered:
-                self._apply_compact_mode(record, should_compact)
+                self._apply_compact_mode(
+                    record, should_compact, should_compact_terminal,
+                )
 
             # DOM move: diff and apply. Q4 lock — divider mount AFTER.
             self._apply_dom_order(ordered)
@@ -382,12 +394,21 @@ class WorkflowLayoutManager:
         self,
         record: "WorkflowRunRecord",
         should_compact_in_progress: bool,
+        should_compact_terminal: bool,
     ) -> None:
         """Toggle ``renderer.compact_mode`` for one card per policy.
 
-        Terminal cards → always compact.
-        In-progress + ``should_compact`` → compact except focused.
-        In-progress + not should_compact → full render.
+        Terminal cards → compact when there are multiple of them or
+        when in-progress compaction is already firing (spec-016's
+        space-pressure signal). bug-039: prior to this fix terminal
+        cards were unconditionally compact — the ``WorkflowNodeList``
+        container got ``display=False`` and the user could not click
+        into any node row to inspect what happened. A lone terminal
+        card now stays full-render; multiple terminals compact so
+        accumulated history stays legible.
+
+        In-progress + ``should_compact_in_progress`` → compact except
+        focused. In-progress + not should_compact → full render.
 
         Also wires the ``_on_error_ack`` callback on the CardWidget so
         pressing ``Enter`` on a failed card flips ``record.acked`` and
@@ -414,7 +435,13 @@ class WorkflowLayoutManager:
         if not hasattr(renderer, "compact_mode"):
             return
         if record.phase not in _IN_PROGRESS_PHASES:
-            renderer.compact_mode = True
+            # bug-039: lone terminal card stays full-render; multiple
+            # terminals or coexisting compact in-progress → compact
+            # (with the same focused-card carve-out).
+            focused = getattr(widget, "has_focus", False)
+            renderer.compact_mode = should_compact_terminal and not bool(
+                focused
+            )
             return
         if should_compact_in_progress:
             focused = getattr(widget, "has_focus", False)

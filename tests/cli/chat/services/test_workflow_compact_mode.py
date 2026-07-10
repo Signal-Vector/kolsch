@@ -167,8 +167,17 @@ async def test_three_workflows_all_compact() -> None:
 
 
 @pytest.mark.asyncio
-async def test_terminal_card_always_compact() -> None:
-    """Terminal transition → moved card ALWAYS compact regardless of count."""
+async def test_lone_terminal_and_one_in_progress_both_full() -> None:
+    """bug-039: lone terminal card stays full-render so its rows expand.
+
+    Pre-bug-039 policy: terminal cards were ALWAYS compact — the
+    ``WorkflowNodeList`` container went ``display=False`` and the
+    user could not click into node rows to inspect what completed.
+    Post-fix policy: a lone terminal card (single terminal, no
+    in-progress space pressure) stays full-render. Multiple terminals
+    still compact so accumulated history stays legible — see
+    ``test_multiple_terminal_cards_go_compact``.
+    """
     app = _TranscriptApp()
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -193,10 +202,44 @@ async def test_terminal_card_always_compact() -> None:
         await mgr._flush_reorder()
         await pilot.pause()
 
-        # Only 1 in-progress; running card is NOT compact.
-        # Terminal card IS compact.
-        assert widgets[0]._body.compact_mode is True
+        # No space pressure (1 in-progress, 1 terminal) → both full.
+        assert widgets[0]._body.compact_mode is False
         assert widgets[1]._body.compact_mode is False
+
+
+@pytest.mark.asyncio
+async def test_multiple_terminal_cards_go_compact() -> None:
+    """bug-039: 2+ terminal cards compact so accumulated history stays terse."""
+    app = _TranscriptApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        transcript, widgets, cards = await _setup_cards(pilot, 2)
+
+        records = [
+            _mk_record(
+                suffix="01", phase="success",
+                card=cards[0], terminal_offset=5,
+            ),
+            _mk_record(
+                suffix="02", phase="success",
+                card=cards[1], terminal_offset=6,
+            ),
+        ]
+        widget_map: dict[Any, Any] = {
+            cards[0].id: widgets[0], cards[1].id: widgets[1],
+        }
+        mgr = WorkflowLayoutManager(
+            transcript=transcript,
+            get_records=lambda: records,
+            get_card_widget=lambda cid: widget_map.get(cid),
+            reorder_tick=0.01,
+        )
+        await mgr._flush_reorder()
+        await pilot.pause()
+
+        # 2 terminals → both compact.
+        assert widgets[0]._body.compact_mode is True
+        assert widgets[1]._body.compact_mode is True
 
 
 @pytest.mark.asyncio
@@ -242,8 +285,11 @@ async def test_drop_from_three_to_two_returns_full() -> None:
         # In-progress count now 2; those two should be FULL render again.
         assert widgets[0]._body.compact_mode is False
         assert widgets[1]._body.compact_mode is False
-        # Terminal card is compact.
-        assert widgets[2]._body.compact_mode is True
-        # CSS class removed on the two in-progress renderers.
+        # bug-039: with only 1 terminal card and no in-progress space
+        # pressure, the terminal card also stays full-render so the
+        # user can drill into its rows.
+        assert widgets[2]._body.compact_mode is False
+        # CSS class removed on all three renderers.
         assert not widgets[0]._body.has_class("-compact")
         assert not widgets[1]._body.has_class("-compact")
+        assert not widgets[2]._body.has_class("-compact")
