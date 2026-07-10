@@ -31,7 +31,7 @@ class Composer(TextArea):
 
     DEFAULT_PLACEHOLDER = (
         "Message… (Enter=send · Alt+Enter=newline · "
-        "Ctrl+Shift+C=copy · /help · Ctrl+D or 'exit' to quit)"
+        "Ctrl+C=copy · /help · Ctrl+D or 'exit' to quit)"
     )
     AWAITING_PLACEHOLDER = "Approval required — respond in the block above"
 

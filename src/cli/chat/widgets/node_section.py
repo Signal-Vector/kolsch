@@ -12,6 +12,8 @@ State-aware title decoration:
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.widgets import Collapsible
 
 _RUNNING_SUFFIX = "…"
@@ -20,6 +22,12 @@ _FAILED_PREFIX = "✗ "
 
 class NodeSection(Collapsible):
     """One titled collapsible slot inside a workflow-row body."""
+
+    # bug-038: Collapsible defaults ALLOW_SELECT=False; override so
+    # users can drag-select text inside the section's contents
+    # (input / response / tool / output blocks). See
+    # `Widget.allow_select` at site-packages/textual/widget.py:2786.
+    ALLOW_SELECT: ClassVar[bool] = True
 
     DEFAULT_CSS = """
     NodeSection {

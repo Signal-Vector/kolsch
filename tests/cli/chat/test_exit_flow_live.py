@@ -12,9 +12,9 @@ Four scenarios, one Pilot session each:
 1. **``ctrl+d`` on an empty composer → app exits.** The seam that
    was silently broken before bug-023: Textual's ``TextArea``
    claims ``ctrl+d`` for ``delete_right``, so on the focused
-   composer the app-level ``ctrl+d`` binding at
-   ``keybindings.py:32`` never fired. The composer's ``_on_key``
-   now intercepts, posts ``QuitRequested``, and
+   composer the app-level ``ctrl+d`` binding in ``keybindings.py``
+   (line moved to :43 in bug-038) never fired. The composer's
+   ``_on_key`` now intercepts, posts ``QuitRequested``, and
    ``on_composer_quit_requested`` routes to
    ``action_quit_if_idle``.
 

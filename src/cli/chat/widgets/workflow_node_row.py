@@ -48,7 +48,7 @@ import contextlib
 import json
 import logging
 from datetime import UTC, datetime
-from typing import Any, Awaitable, Callable
+from typing import Any, Awaitable, Callable, ClassVar
 
 from textual.reactive import reactive
 from textual.widget import Widget
@@ -226,6 +226,13 @@ class WorkflowNodeRow(Collapsible):
     a session event's ``(trace_id, invocation_id)`` matches — same
     widget constructions as the main App, buffered while collapsed.
     """
+
+    # bug-038: Collapsible defaults ALLOW_SELECT=False, which blocks
+    # drag-selection inside the row's body — the exact content users
+    # want to copy. Override so Textual's selection walker (see
+    # `Widget.allow_select` at site-packages/textual/widget.py:2786)
+    # descends into this widget's children.
+    ALLOW_SELECT: ClassVar[bool] = True
 
     DEFAULT_CSS = """
     WorkflowNodeRow { padding: 0 1; margin: 0; }

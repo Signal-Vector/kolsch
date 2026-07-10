@@ -36,9 +36,13 @@ async def test_default_placeholder_matches_spec(fake_app_factory) -> None:
         # portable fallbacks the composer also accepts. `/help`
         # is the entry point to slash-command discovery until the
         # follow-up spec wires the completer.
+        # bug-038: Ctrl+C is the copy binding again (Textual Screen
+        # default at site-packages/textual/screen.py:271). The legacy
+        # Ctrl+Shift+C workaround was removed with the app-level
+        # Ctrl+C cancel override that had shadowed it.
         assert composer.placeholder == (
             "Message… (Enter=send · Alt+Enter=newline · "
-            "Ctrl+Shift+C=copy · /help · Ctrl+D or 'exit' to quit)"
+            "Ctrl+C=copy · /help · Ctrl+D or 'exit' to quit)"
         )
         assert composer.disabled is False
 

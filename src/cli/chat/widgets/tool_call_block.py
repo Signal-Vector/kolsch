@@ -22,6 +22,8 @@ Spec: process/spec-textual-chat-ui.md → Technical Context →
 
 from __future__ import annotations
 
+from typing import ClassVar
+
 from textual.binding import Binding
 from textual.widgets import Collapsible, Static
 
@@ -41,6 +43,11 @@ class ToolCallBlock(Collapsible):
     Textual's default `Collapsible` behaviour; press `Enter` on
     the focused title (Textual's built-in binding) to expand.
     """
+
+    # bug-038: Collapsible defaults ALLOW_SELECT=False; override so
+    # users can drag-select tool args + body text to copy. See
+    # `Widget.allow_select` at site-packages/textual/widget.py:2786.
+    ALLOW_SELECT: ClassVar[bool] = True
 
     # Fallback variable defaults keep the widget self-sufficient
     # (Design Principles rule 2: modular — a widget must render
