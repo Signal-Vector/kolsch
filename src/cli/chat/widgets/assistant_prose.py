@@ -27,6 +27,7 @@ markdown parser, no custom stream loop, no per-character styling.
 
 from __future__ import annotations
 
+import json
 import logging
 import os
 import re
@@ -39,6 +40,38 @@ from textual.widgets import Markdown, Static
 from textual.widgets._markdown import MarkdownFence, MarkdownStream
 
 _LOGGER = logging.getLogger(__name__)
+
+
+def _wrap_json_if_detected(text: str) -> str:
+    """Wrap ``text`` in ```json fences when it parses as JSON.
+
+    Textual's ``Markdown`` widget reflows paragraphs — single newlines
+    become spaces. A raw JSON array or object with embedded newlines
+    flattens into a single-line paragraph, hiding structure. Wrapping
+    in ``\\`\\`\\`json`` fences renders it as a code block, honouring
+    newlines + indentation.
+
+    Detection is strict — full-string parse via ``json.loads``. Mixed
+    prose + JSON is not handled here; if the model wraps output in
+    fences itself or emits prose alongside JSON, this helper returns
+    the text unchanged.
+
+    Applies to non-streaming mounts only. Streaming tokens arrive
+    piecewise and can't be pre-parsed; a JSON response received via
+    the streaming path continues to render mashed.
+    """
+    stripped = text.strip()
+    if not stripped or stripped[0] not in "{[":
+        return text
+    try:
+        parsed = json.loads(stripped)
+    except (json.JSONDecodeError, ValueError):
+        return text
+    try:
+        pretty = json.dumps(parsed, indent=2, ensure_ascii=False, default=str)
+    except (TypeError, ValueError):
+        pretty = stripped
+    return f"```json\n{pretty}\n```"
 
 
 ANCHOR_PATTERN = re.compile(
@@ -129,7 +162,7 @@ class _PlainFence(MarkdownFence):
     """
 
     @classmethod
-    def highlight(cls, code: str, language: str) -> Content:  # type: ignore[override]
+    def highlight(cls, code: str, language: str) -> Content:
         # No spans → no colour. Normalise line endings the way the
         # parent does (see `_markdown.highlight`) so line wrapping /
         # width calculations match the coloured variant.
@@ -141,7 +174,15 @@ class AssistantProse(Markdown):
 
     Reactive attributes: none of our own. Reactive state is fully
     owned by the underlying `Markdown` widget's internal document.
+
+    Auto-wraps raw JSON in ```json fences (non-streaming path only)
+    so agent responses that return structured output don't collapse
+    into a single-line paragraph under Markdown reflow. See
+    :func:`_wrap_json_if_detected`.
     """
+
+    def __init__(self, markdown: str = "", **kwargs: object) -> None:
+        super().__init__(_wrap_json_if_detected(markdown), **kwargs)  # type: ignore[arg-type]
 
     # Fallback variable defaults so the widget mounts under Pilot
     # without theme.tcss loaded (per the Design Principles' modularity
@@ -167,7 +208,7 @@ class AssistantProse(Markdown):
     }
     """
 
-    def get_block_class(self, block_name: str) -> type:  # type: ignore[override]
+    def get_block_class(self, block_name: str) -> type:
         """Return the widget class that renders a given markdown block.
 
         Under `NO_COLOR`, substitute `_PlainFence` for the Pygments-
@@ -218,7 +259,14 @@ class AssistantProse(Markdown):
         :class:`WorkflowAnchorButton` widgets inline with the prose
         blocks. The surrounding text is appended to the markdown
         stream as normal.
+
+        Auto-wraps raw JSON in ```json fences before the anchor scan
+        so structured agent responses render as code blocks. Anchor
+        markdown is a URL-syntax link, incompatible with a top-level
+        JSON parse — the JSON detection returns unchanged for anchor-
+        carrying prose.
         """
+        text = _wrap_json_if_detected(text)
         if ANCHOR_PATTERN.search(text) is None:
             await Markdown.append(self, text)
             return

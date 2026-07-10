@@ -20,7 +20,11 @@ from __future__ import annotations
 
 import pytest
 
-from cli.chat.widgets.assistant_prose import AssistantProse, _PlainFence
+from cli.chat.widgets.assistant_prose import (
+    AssistantProse,
+    _PlainFence,
+    _wrap_json_if_detected,
+)
 
 
 @pytest.mark.asyncio
@@ -152,3 +156,105 @@ async def test_fenced_code_block_plain_under_no_color(
             "Under NO_COLOR the fence must have zero style spans "
             "(Pygments suppressed); got spans=%r" % (highlighted.spans,)
         )
+
+
+# ---------------------------------------------------------------------------
+# JSON auto-wrapping (post-036d follow-up)
+# ---------------------------------------------------------------------------
+
+
+def test_wrap_json_helper_wraps_valid_json_array() -> None:
+    """Raw JSON array wraps in ```json fences with indent."""
+    text = '[{"a": 1}, {"b": 2}]'
+    wrapped = _wrap_json_if_detected(text)
+    assert wrapped.startswith("```json\n")
+    assert wrapped.endswith("\n```")
+    # Indented content preserves newlines Markdown would otherwise collapse.
+    assert '"a": 1' in wrapped
+    assert '"b": 2' in wrapped
+    assert "\n" in wrapped[7:-4]
+
+
+def test_wrap_json_helper_wraps_valid_json_object() -> None:
+    """Raw JSON object also wraps."""
+    text = '{"score": 10, "rationale": "good"}'
+    wrapped = _wrap_json_if_detected(text)
+    assert wrapped.startswith("```json\n")
+
+
+def test_wrap_json_helper_passes_prose_through_unchanged() -> None:
+    """Plain prose returns unchanged — no false-positive wrap."""
+    text = "Hello world."
+    assert _wrap_json_if_detected(text) == text
+
+
+def test_wrap_json_helper_passes_malformed_json_through_unchanged() -> None:
+    """A prefix that looks JSON-ish but doesn't parse returns unchanged."""
+    text = "[not really json"
+    assert _wrap_json_if_detected(text) == text
+
+
+def test_wrap_json_helper_handles_empty_string() -> None:
+    """Empty / whitespace returns unchanged."""
+    assert _wrap_json_if_detected("") == ""
+    assert _wrap_json_if_detected("   \n\n") == "   \n\n"
+
+
+def test_wrap_json_helper_skips_bracket_but_non_json() -> None:
+    """Text starting with `[` but not JSON returns unchanged.
+
+    Prevents false positives for e.g. Markdown-style prose beginning
+    with a bracketed reference.
+    """
+    text = "[note] see attached appendix for details"
+    assert _wrap_json_if_detected(text) == text
+
+
+@pytest.mark.asyncio
+async def test_constructor_wraps_json_input(fake_app_factory) -> None:
+    """`AssistantProse(json_text)` wraps the initial text as fenced code."""
+    text = '[{"a": 1}, {"b": 2}]'
+    widget = AssistantProse(text)
+    app = fake_app_factory(widget)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert "```json" in widget.source
+        # Real newlines survive — the fence protects them from
+        # Markdown paragraph reflow.
+        assert '"a": 1' in widget.source
+        assert '"b": 2' in widget.source
+
+
+@pytest.mark.asyncio
+async def test_constructor_leaves_prose_unchanged(fake_app_factory) -> None:
+    """Non-JSON initial text renders as regular Markdown."""
+    widget = AssistantProse("Just some prose.")
+    app = fake_app_factory(widget)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert "```json" not in widget.source
+        assert "Just some prose." in widget.source
+
+
+@pytest.mark.asyncio
+async def test_append_wraps_json_input(fake_app_factory) -> None:
+    """`append(json_text)` wraps before appending to the document."""
+    widget = AssistantProse()
+    app = fake_app_factory(widget)
+    async with app.run_test() as pilot:
+        await widget.append('[{"score": 10}]')
+        await pilot.pause()
+        assert "```json" in widget.source
+        assert '"score": 10' in widget.source
+
+
+@pytest.mark.asyncio
+async def test_append_leaves_prose_unchanged(fake_app_factory) -> None:
+    """`append(prose)` passes through — no false wrap."""
+    widget = AssistantProse()
+    app = fake_app_factory(widget)
+    async with app.run_test() as pilot:
+        await widget.append("Hello world.")
+        await pilot.pause()
+        assert "```json" not in widget.source
+        assert "Hello world." in widget.source
