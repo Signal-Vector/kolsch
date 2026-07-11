@@ -179,13 +179,16 @@ packages = [
 [tool.hatch.build.targets.wheel.force-include]
 "docs" = "src/kolsch/docs"
 "AGENTS.md" = "src/kolsch/AGENTS.md"
-# Phase 3.0 Step 0 — the ruamel.yaml chokepoint lives as a single
-# module at the src root; force-include keeps it discoverable in
-# installed wheels (the editable install already finds it via the
-# src/ .pth entry). Named ``_yamlio`` (not ``_yaml``) to avoid
-# colliding with PyYAML's site-packages compatibility stub package
-# ``_yaml/`` — PyYAML stays as a transitive dep of crewai et al.
-"src/_yamlio.py" = "_yamlio.py"
+# bug-049 — the ruamel.yaml chokepoint now lives inside the `kolsch`
+# package (`src/kolsch/_yamlio.py`) and ships automatically via the
+# `src/kolsch` entry in `packages` above. NO force-include needed.
+# History: it briefly lived at `src/_yamlio.py` with a force-include
+# copying it to the wheel root, but that created a `site-packages/
+# _yamlio.py` shadow that Python's finder preferred over the
+# editable-install `.pth`-added `src/`. Any drift between the two
+# copies (e.g. after adding an export to the src tree without
+# reinstalling the wheel) surfaced as `ImportError` at CLI startup
+# — see bug-045 (regression guard test) and bug-049 (root fix).
 
 # ---------------------------------------------------------------------------
 # Dependency groups — installed via `uv sync --group <name>` (or all groups

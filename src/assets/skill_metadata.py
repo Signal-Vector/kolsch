@@ -13,7 +13,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
-from _yamlio import YAMLError, load
+from kolsch._yamlio import YAMLError, load
 
 if TYPE_CHECKING:
     from pathlib import Path

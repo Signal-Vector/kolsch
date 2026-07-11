@@ -195,7 +195,7 @@ def _extract_description(yaml_source: str) -> str:
     explicit ``kolsch workflows validate`` path; this tool is a
     probe, not a validator.
     """
-    from _yamlio import load  # noqa: PLC0415
+    from kolsch._yamlio import load  # noqa: PLC0415
 
     try:
         payload = load(yaml_source)

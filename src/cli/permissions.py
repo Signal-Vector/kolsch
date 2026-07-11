@@ -21,7 +21,7 @@ import sys
 from pathlib import Path
 from typing import Any, TextIO
 
-from _yamlio import dump, load
+from kolsch._yamlio import dump, load
 from errors import (
     AuthzProtectedRule,
     AuthzRuleInvalid,

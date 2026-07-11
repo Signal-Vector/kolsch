@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from _yamlio import YAMLError, load, load_with_positions
+from kolsch._yamlio import YAMLError, load, load_with_positions
 from schemas import PermissionRule
 
 if TYPE_CHECKING:

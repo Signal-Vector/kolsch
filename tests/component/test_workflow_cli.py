@@ -75,7 +75,7 @@ def _write_workflow_bundle(
     wf_dir = bundle / "workflows"
     wf_dir.mkdir(exist_ok=True)
     if workflow_yaml is not None:
-        from _yamlio import dump
+        from kolsch._yamlio import dump
 
         (wf_dir / "hello.yaml").write_text(dump(workflow_yaml), encoding="utf-8")
     return bundle

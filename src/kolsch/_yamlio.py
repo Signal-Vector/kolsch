@@ -7,17 +7,21 @@ need for line-info-aware loading (Step 2).
 
 This module is the ONLY site in ``src/`` that imports ``ruamel.yaml``;
 every other module imports :func:`load` / :func:`dump` (and, when it
-needs to catch parse errors, :class:`YAMLError`) from here.
+needs to catch parse errors, :class:`YAMLError`) from here via
+``from kolsch._yamlio import ...``.
 
-The module name is ``_yamlio`` rather than ``_yaml`` because PyYAML
-itself ships a compatibility stub package literally named ``_yaml``
-(``site-packages/_yaml/__init__.py`` — a back-compat shim for the
-old standalone libyaml C extension). PyYAML remains a transitive
-dependency of crewai / chromadb / kubernetes / huggingface-hub /
-pre-commit, so the stub package can't be removed, and Python's
-package finder hits site-packages before this file. ``_yamlio``
-sidesteps that collision while keeping the spec's intent (one small
-underscore-prefixed helper at the src root).
+The module lives INSIDE the ``kolsch`` package (rather than at the
+``src/`` root) because top-level src-root modules require a
+``pyproject.toml`` force-include to land in a built wheel — and that
+force-include creates a physical copy at ``site-packages/_yamlio.py``
+alongside the editable ``.pth``-added ``src/`` entry. Python's finder
+resolves top-level modules from ``site-packages`` before ``.pth``-added
+paths, so the shadow copy wins and any drift between the two (e.g. a
+new export added to the src tree without a wheel reinstall) surfaces
+as ``ImportError`` at CLI startup. See bug-045 (regression guard) and
+bug-049 (root fix — the move into ``kolsch``) for the failure-mode
+history. Living inside a package that's already in ``[tool.hatch.
+build.targets.wheel] packages`` sidesteps the force-include entirely.
 """
 
 from __future__ import annotations

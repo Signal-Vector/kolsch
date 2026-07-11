@@ -445,7 +445,7 @@ def _describe_virtual(ref: str, yaml_source: str) -> str:
 
 def _extract_yaml_description(yaml_source: str) -> str:
     """Best-effort ``description:`` field extraction (dupes workflow_inspect)."""
-    from _yamlio import load  # noqa: PLC0415
+    from kolsch._yamlio import load  # noqa: PLC0415
 
     try:
         payload = load(yaml_source)

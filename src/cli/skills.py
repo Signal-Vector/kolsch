@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
-from _yamlio import dump, load
+from kolsch._yamlio import dump, load
 from assets.refs import build_ref
 from assets.skill_metadata import parse_skill_frontmatter
 from errors import AssetsNotFound, WorkspaceNotInitialized
@@ -1546,7 +1546,7 @@ def _read_enabled_skill_refs_from_agent_yaml(path: Path) -> list[str]:
     YAML (``kolsch run`` against this agent fails loudly via the
     validator).
     """
-    from _yamlio import YAMLError  # noqa: PLC0415
+    from kolsch._yamlio import YAMLError  # noqa: PLC0415
 
     try:
         payload = load(path.read_text(encoding="utf-8")) or {}

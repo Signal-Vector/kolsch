@@ -360,7 +360,7 @@ def _check_extends_policy(
 
     from pathlib import Path  # noqa: PLC0415
 
-    from _yamlio import load  # noqa: PLC0415
+    from kolsch._yamlio import load  # noqa: PLC0415
 
     for ref in workflow.extends:
         entry = catalog.lookup(ref, expected_type="workflow")
