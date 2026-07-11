@@ -57,7 +57,12 @@ class NoticeWidget(Static):
         kind: str = "info",
         id: str | None = None,
     ) -> None:
-        super().__init__(text, id=id)
+        # bug-040: notice text is executor-sourced (e.g.,
+        # ``event_adapter._handle_card_notice`` mounts with
+        # ``f"exchange failed — {message}"`` where ``message`` is
+        # from an executor error payload). Disable Textual markup so
+        # bracket content in the message can't trip ``MarkupError``.
+        super().__init__(text, id=id, markup=False)
         self._text = text
         self._kind = kind
         if kind == "warning":

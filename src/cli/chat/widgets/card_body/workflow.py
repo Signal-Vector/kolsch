@@ -179,7 +179,14 @@ class WorkflowProgressHeader(Static):
         # explicit setters, not via Textual's watcher scheduler.
         self._ref: str | None = None
         self._inputs_summary: str | None = None
-        super().__init__(self._compute_text(), id=id)
+        # bug-040: ``_compute_text`` embeds ``self._ref`` and
+        # ``self._inputs_summary``, both landed via bug-036c from
+        # executor-sourced RUN_STARTED payloads. Bracket content in a
+        # workflow ref or inputs summary would otherwise trip
+        # ``MarkupError``. Subsequent ``self.update(...)`` calls at
+        # lines 203 / 208 / 262 inherit the widget's ``markup``
+        # attribute so this constructor covers the whole surface.
+        super().__init__(self._compute_text(), id=id, markup=False)
 
     def set_run_id(self, run_id: str | None) -> None:
         """Store the run id anchor; re-render."""

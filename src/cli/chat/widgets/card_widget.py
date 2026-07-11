@@ -65,7 +65,12 @@ class CardHeader(Static):
     """
 
     def __init__(self, *, id: str | None = None) -> None:
-        super().__init__("", id=id)
+        # bug-040: ``set_title`` receives executor-supplied
+        # ``payload["title"]`` from ``kolsch.card.opened`` wire events,
+        # and ``_rerender`` pipes it through ``self.update(...)``.
+        # Disable Textual markup so bracket content in a card title
+        # can't trip ``MarkupError``.
+        super().__init__("", id=id, markup=False)
         self._glyph = "⠋"
         self._title = ""
         self._warning_indicator = False
@@ -102,7 +107,11 @@ class CardFooter(Static):
     """Empty by default; renders `✗ error: <msg>` on error close."""
 
     def __init__(self, *, id: str | None = None) -> None:
-        super().__init__("", id=id)
+        # bug-040: ``CardWidget._apply_close_error`` writes
+        # ``f"✗ error: {error_message}"`` here where ``error_message``
+        # is executor-sourced. Disable Textual markup so bracket
+        # content in the error message can't trip ``MarkupError``.
+        super().__init__("", id=id, markup=False)
 
 
 class _BoundedLRUSet:

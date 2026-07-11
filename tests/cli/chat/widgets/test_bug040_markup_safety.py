@@ -23,6 +23,8 @@ import pytest
 from textual.app import App
 from textual.widget import Widget
 
+from cli.chat.widgets.card_prompt_pane import CardPromptPane
+from cli.chat.widgets.notice import NoticeWidget
 from cli.chat.widgets.tool_call_block import ToolCallBlock
 from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 
@@ -124,3 +126,52 @@ async def test_bash_command_preview_with_jinja_brackets(
         await pilot.pause()
 
         assert row._command_widget is not None
+
+
+@pytest.mark.asyncio
+async def test_notice_widget_with_bracket_content(
+    fake_app_factory: _AppFactory,
+) -> None:
+    """Reviewer sweep — ``NoticeWidget`` mounts with bracket-heavy text.
+
+    Executor error content lands via
+    ``event_adapter._handle_card_notice`` as ``f"exchange failed — {message}"``
+    — the message can contain arbitrary user/tool/executor content
+    including the URL-encoded ``"}]}`` tail that tripped the
+    live-app crash.
+    """
+    notice = NoticeWidget(
+        text=f"exchange failed — {_URL_ENCODED_BRACKET_TAIL}",
+        kind="error",
+    )
+    app = fake_app_factory(notice)
+    async with app.run_test() as pilot:
+        # Pre-fix, mounting a NoticeWidget whose text contains
+        # ``[`` followed by non-markup content raised MarkupError
+        # during the underlying ``Static`` render.
+        await pilot.pause()
+
+        assert notice.is_mounted
+        assert "[brackets]" not in notice.text  # trivial sanity
+
+
+@pytest.mark.asyncio
+async def test_card_prompt_pane_with_bracket_question(
+    fake_app_factory: _AppFactory,
+) -> None:
+    """Reviewer sweep — ``CardPromptPane`` question row mounts with brackets.
+
+    The prompt question is wired from ``PromptsImpl`` (spec-014)
+    and can carry user- or tool-authored content. Bracket content
+    in the question would otherwise trip ``MarkupError`` on the
+    question-row Static.
+    """
+    pane = CardPromptPane(
+        question="Continue with url [https://x.y/z?tok=[foo]]?",
+        options=["y", "n"],
+    )
+    app = fake_app_factory(pane)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        assert pane.is_mounted

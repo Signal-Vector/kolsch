@@ -52,7 +52,15 @@ class CardPromptPane(Vertical):
         self._options = list(options)
 
     def compose(self) -> ComposeResult:
-        yield Static(self._question, classes="prompt-question")
+        # bug-040: `_question` is a constructor arg wired from
+        # `PromptsImpl` (spec-014). Bracket content in the prompt
+        # question would otherwise trip `MarkupError` — disable
+        # markup for parity with the options row below.
+        yield Static(
+            self._question,
+            classes="prompt-question",
+            markup=False,
+        )
         # `markup=False` — brackets like `[y]` would otherwise parse
         # as Textual markup tags (`[y]`, `[/n]`, etc.) and get
         # stripped from the render. Plain-text rendering keeps the
