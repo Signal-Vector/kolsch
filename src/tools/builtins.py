@@ -24,8 +24,10 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import functools
 import os
 import time
+from dataclasses import replace as _dc_replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -40,13 +42,45 @@ from errors import (
     ToolTimeout,
 )
 from files import assert_writable_destination, check_path_allowed
-from tools.decorator import tool
+from tools.decorator import get_tool_definition, tool
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from files import PathPolicy
     from tools.decorator import ToolContext
+
+
+def _detach_tool_definition(
+    fn: Callable[..., Awaitable[Any]],
+) -> Callable[..., Awaitable[Any]]:
+    """Return a per-call wrapper of ``fn`` with a fresh ``_tool_definition``.
+
+    ``make_browse_url`` / ``make_fetch_url`` load the ``@tool``-decorated
+    coroutine from a module cached in ``sys.modules`` (the starter-bundle
+    file-IS-the-tool pattern). The cached coroutine's ``_tool_definition``
+    is a SINGLE shared ``ToolDefinition`` sentinel — mutating it in one
+    caller (e.g. ``_workflow_runtime.py``'s ``_stamp_kolsch``) poisons
+    every subsequent caller in the same process (a class-of-bug we hit
+    in bug-050: a full-suite ``pytest`` run stamps the sentinel via one
+    test that invokes ``build_workflow_executor``, then the guard test
+    that runs later sees a pre-stamped defn where it expected ``None``).
+
+    This helper wraps ``fn`` in a functools-``wraps``ed thin coroutine
+    with its own ``_tool_definition`` attached — a ``dataclass.replace``
+    copy of the sentinel's fields. Callers can freely stamp their copy
+    without cross-talk. The underlying coroutine body is preserved
+    (``functools.wraps`` keeps identity metadata; ``await fn(*args)``
+    delegates the actual work), so behavior is byte-identical.
+    """
+    original_defn = get_tool_definition(fn)
+
+    @functools.wraps(fn)
+    async def _wrapper(*args: Any, **kwargs: Any) -> Any:
+        return await fn(*args, **kwargs)
+
+    _wrapper._tool_definition = _dc_replace(original_defn)  # type: ignore[attr-defined]
+    return _wrapper
 
 
 # Tunables for the canonical builtins.
@@ -281,7 +315,10 @@ def make_fetch_url(
     else:
         module = cached
     fetch_url: Callable[..., Awaitable[Any]] = module.fetch_url
-    return fetch_url
+    # bug-050: detach a fresh `_tool_definition` per call so callers
+    # that stamp `home_bundle` don't poison the module-cached sentinel
+    # for every subsequent caller in the process.
+    return _detach_tool_definition(fetch_url)
 
 
 def make_browse_url(
@@ -330,7 +367,10 @@ def make_browse_url(
     else:
         module = cached
     browse_url: Callable[..., Awaitable[Any]] = module.browse_url
-    return browse_url
+    # bug-050: detach a fresh `_tool_definition` per call so callers
+    # that stamp `home_bundle` don't poison the module-cached sentinel
+    # for every subsequent caller in the process.
+    return _detach_tool_definition(browse_url)
 
 
 def make_bash(*, policy: PathPolicy, root: Path) -> Callable[..., Awaitable[Any]]:  # noqa: ARG001
