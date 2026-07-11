@@ -820,7 +820,7 @@ def _load_model_aliases(root: Path) -> dict[str, str]:
     fresh workspaces. The `/model` slash command and the `--model`
     startup flag both rely on this for alias resolution.
     """
-    from _yamlio import YAMLError, load  # noqa: PLC0415
+    from kolsch._yamlio import YAMLError, load  # noqa: PLC0415
 
     yaml_path = root / "platform.yaml"
     if not yaml_path.is_file():

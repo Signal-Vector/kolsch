@@ -155,7 +155,7 @@ async def workflow_inspect(
 
 def _extract_description(yaml_source: str) -> str:
     """Return the workflow's top-level ``description:`` field, or ``""``."""
-    from _yamlio import load  # noqa: PLC0415
+    from kolsch._yamlio import load  # noqa: PLC0415
 
     try:
         payload = load(yaml_source)

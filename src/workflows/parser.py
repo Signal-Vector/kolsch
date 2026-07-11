@@ -44,7 +44,7 @@ from pydantic import (
     model_validator,
 )
 
-from _yamlio import YAMLError, load
+from kolsch._yamlio import YAMLError, load
 from assets.refs import is_three_segment
 from providers.authz import Rule
 from schemas.config import IOSpec

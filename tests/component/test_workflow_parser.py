@@ -448,7 +448,7 @@ def test_loader_uses_yamlio_helper() -> None:
     text = (src / "workflows" / "parser.py").read_text(encoding="utf-8")
     assert "yaml.safe_load" not in text
     assert "import yaml" not in text
-    assert "from _yamlio import" in text
+    assert "from kolsch._yamlio import" in text
 
 
 # ---------------------------------------------------------------------------
@@ -1012,6 +1012,6 @@ def _to_yaml(payload: dict[str, Any]) -> str:
     Use ``_yamlio.dump`` so the round-trip exercises the same loader
     the parser uses.
     """
-    from _yamlio import dump
+    from kolsch._yamlio import dump
 
     return dump(payload)

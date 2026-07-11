@@ -24,7 +24,7 @@ from getpass import getpass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TextIO
 
-from _yamlio import dump, load
+from kolsch._yamlio import dump, load
 from errors import (
     LlmConnectorUnknown,
     LlmDiscoveryFailed,

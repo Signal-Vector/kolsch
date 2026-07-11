@@ -30,7 +30,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TextIO
 
-from _yamlio import dump, load
+from kolsch._yamlio import dump, load
 from assets.platform_config import default_platform_payload as _stock_defaults
 
 if TYPE_CHECKING:

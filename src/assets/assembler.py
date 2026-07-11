@@ -13,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from _yamlio import YAMLError, load
+from kolsch._yamlio import YAMLError, load
 from assets.refs import is_three_segment, parse_three_segment
 from errors import (
     AssetsPromptLoadFailed,

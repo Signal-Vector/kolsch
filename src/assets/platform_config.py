@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from _yamlio import YAMLError, dump, load, load_with_positions
+from kolsch._yamlio import YAMLError, dump, load, load_with_positions
 from errors import ConfigInvalid
 
 if TYPE_CHECKING:

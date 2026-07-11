@@ -13,7 +13,7 @@ from typing import Any
 
 import pytest
 
-from _yamlio import load_with_positions
+from kolsch._yamlio import load_with_positions
 from cli.chat.services.authz_introspection import (
     DenialCardData,
     ReloadResult,

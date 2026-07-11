@@ -91,7 +91,7 @@ def scan_inputs(yaml_source: str) -> InputsScanResult:
         Name,
     )
 
-    from _yamlio import load  # noqa: PLC0415
+    from kolsch._yamlio import load  # noqa: PLC0415
 
     try:
         payload = load(yaml_source)
