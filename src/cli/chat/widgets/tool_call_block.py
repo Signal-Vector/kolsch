@@ -100,9 +100,11 @@ class ToolCallBlock(Collapsible):
         self._body_text = body
         self._recovery_hint = recovery_hint
         title = f"● {tool_name}({args})"
-        children: list[Static] = [Static(body, classes="body")]
+        children: list[Static] = [Static(body, classes="body", markup=False)]
         if recovery_hint is not None:
-            children.append(Static(f"↳ hint: {recovery_hint}", classes="hint"))
+            children.append(
+                Static(f"↳ hint: {recovery_hint}", classes="hint", markup=False),
+            )
         super().__init__(*children, title=title, collapsed=True)
         if failed:
             self.add_class("-failed")

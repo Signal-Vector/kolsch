@@ -164,6 +164,7 @@ class SlashPopup(Vertical):
                 Static(
                     f"no slash command matches {prefix!r}",
                     classes="empty",
+                    markup=False,
                 )
             )
             return
@@ -174,9 +175,10 @@ class SlashPopup(Vertical):
                 Static(
                     f"{cmd.name:<{self.ROW_NAME_WIDTH}} {cmd.description}",
                     classes="row",
+                    markup=False,
                 )
             )
         # The usage footer targets whichever match is closest —
         # the alphabetically-first hit is a fine proxy while the
         # popup is non-interactive.
-        self.mount(Static(matches[0].usage, classes="usage"))
+        self.mount(Static(matches[0].usage, classes="usage", markup=False))

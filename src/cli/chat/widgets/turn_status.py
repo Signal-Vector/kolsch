@@ -122,10 +122,10 @@ class TurnStatus(Horizontal):
 
     def compose(self):  # type: ignore[override]
         # IDs match the DEFAULT_CSS selectors; keep them in sync.
-        yield Static("", id="spinner-verb")
-        yield Static("", id="target")
-        yield Static("", id="elapsed")
-        yield Static("⚠ approval required", id="warning")
+        yield Static("", id="spinner-verb", markup=False)
+        yield Static("", id="target", markup=False)
+        yield Static("", id="elapsed", markup=False)
+        yield Static("⚠ approval required", id="warning", markup=False)
 
     # ------------------------------------------------------------------
     # Reactive watchers

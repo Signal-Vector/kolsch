@@ -106,7 +106,7 @@ class StatusBar(Horizontal):
     _TEXT_ID = "status-bar-text"
 
     def compose(self) -> ComposeResult:
-        yield Static("", id=self._TEXT_ID, classes="status-bar-text")
+        yield Static("", id=self._TEXT_ID, classes="status-bar-text", markup=False)
 
     # ------------------------------------------------------------------
     # Public API

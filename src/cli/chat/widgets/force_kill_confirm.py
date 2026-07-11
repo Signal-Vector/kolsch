@@ -135,8 +135,12 @@ class ForceKillConfirm(Vertical):
             question = (
                 f"Cancel this workflow AND {n} related {suffix}?"
             )
-        yield Static(question, id="force-kill-question")
-        yield Static("Press [y] to confirm, [n] or Esc to cancel.", id="force-kill-hint")
+        yield Static(question, id="force-kill-question", markup=False)
+        yield Static(
+            "Press [y] to confirm, [n] or Esc to cancel.",
+            id="force-kill-hint",
+            markup=False,
+        )
 
     def on_mount(self) -> None:
         """Focus the widget so the ``y`` / ``n`` bindings fire."""

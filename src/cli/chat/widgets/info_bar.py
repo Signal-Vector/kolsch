@@ -87,21 +87,25 @@ class InfoBar(Horizontal):
             self._identity_text(),
             id=self._IDENTITY_ID,
             classes="segment identity",
+            markup=False,
         )
         yield Static(
             self.session,
             id=self._SESSION_ID,
             classes="segment session",
+            markup=False,
         )
         yield Static(
             self.branch,
             id=self._BRANCH_ID,
             classes="segment branch",
+            markup=False,
         )
         yield Static(
             self.cwd,
             id=self._CWD_ID,
             classes="segment cwd",
+            markup=False,
         )
 
     def _identity_text(self) -> str:

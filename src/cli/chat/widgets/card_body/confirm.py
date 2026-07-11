@@ -36,7 +36,7 @@ class ConfirmRenderer(Vertical):
 
     def __init__(self, *, id: str | None = None) -> None:
         super().__init__(id=id)
-        self._text = Static("", classes="confirm-text")
+        self._text = Static("", classes="confirm-text", markup=False)
 
     def compose(self) -> ComposeResult:
         yield self._text

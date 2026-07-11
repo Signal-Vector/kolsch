@@ -1067,7 +1067,7 @@ class ChatApp(App):
 
     async def mount_exchange_failed(self, message: str) -> None:
         transcript = self.query_one("#transcript", VerticalScroll)
-        notice = Static(f"[exchange failed — {message}]", classes="error")
+        notice = Static(f"[exchange failed — {message}]", classes="error", markup=False)
         notice.styles.color = "red"
         await transcript.mount(notice)
         transcript.scroll_end(animate=False)

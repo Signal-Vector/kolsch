@@ -373,7 +373,7 @@ class WorkflowRenderer(Vertical):
         # Uses a distinct id so tests can query it. The line is empty
         # until the watcher populates it on a compact flip.
         self._compact_line = Static(
-            "", id=(f"{id}-compact" if id else None),
+            "", id=(f"{id}-compact" if id else None), markup=False,
         )
         self._compact_line.display = False
 

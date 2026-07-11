@@ -418,7 +418,7 @@ class WorkflowNodeRow(Collapsible):
             with contextlib.suppress(Exception):
                 self._output_widget.remove()
             self._output_widget = None
-        widget = Static(pretty)
+        widget = Static(pretty, markup=False)
         self._output_widget = widget
         with contextlib.suppress(Exception):
             self._mount_in_contents(widget)
@@ -460,7 +460,7 @@ class WorkflowNodeRow(Collapsible):
         """Build + mount the bash ``input`` NodeSection."""
         from cli.chat.widgets.node_section import NodeSection  # noqa: PLC0415
         section = NodeSection("input")
-        inner = Static(body_text, classes="node-command-preview")
+        inner = Static(body_text, classes="node-command-preview", markup=False)
         section._contents_list.append(inner)
         with contextlib.suppress(Exception):
             self._mount_in_contents(section)
@@ -477,7 +477,7 @@ class WorkflowNodeRow(Collapsible):
             stdout_text = str(stdout) if isinstance(stdout, str) else ""
             stdout_text = _truncate(stdout_text, _BASH_BLOCK_MAX_CHARS)
             out_section = NodeSection("output")
-            out_section._contents_list.append(Static(stdout_text))
+            out_section._contents_list.append(Static(stdout_text, markup=False))
             with contextlib.suppress(Exception):
                 self._mount_in_contents(out_section)
             self._bash_output_section = out_section
@@ -496,7 +496,9 @@ class WorkflowNodeRow(Collapsible):
                 lines.append(_truncate(stderr, _BASH_BLOCK_MAX_CHARS))
             state = "failed" if _is_failed_exit(exit_code) else "completed"
             exit_section = NodeSection(title, state=state)
-            exit_section._contents_list.append(Static("\n".join(lines) or "(empty)"))
+            exit_section._contents_list.append(
+                Static("\n".join(lines) or "(empty)", markup=False),
+            )
             with contextlib.suppress(Exception):
                 self._mount_in_contents(exit_section)
             self._bash_exit_section = exit_section
