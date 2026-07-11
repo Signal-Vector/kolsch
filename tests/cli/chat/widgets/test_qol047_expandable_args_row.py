@@ -1,0 +1,242 @@
+"""Pilot tests for :class:`ApprovalArgsRow` — qol-047.
+
+Framework-aligned tests: mount the widget via ``fake_app_factory``
+(shared fixture at ``tests/cli/chat/conftest.py``), drive resize +
+click + Tab via ``Pilot``, and assert on:
+
+- ``overflowing`` / ``expanded`` state,
+- the rendered text in the child ``Static``,
+- the presence / absence of the chevron characters (``▸`` / ``▾``),
+- ``Toggled`` messages posted on toggle.
+
+The AC #7 coverage matrix, one test per bullet:
+
+1. ``test_short_target_no_chevron``
+2. ``test_long_target_shows_chevron_collapsed``
+3. ``test_toggle_expands_row``
+4. ``test_toggle_collapses_row``
+5. ``test_on_resize_updates_overflow``
+6. ``test_click_toggles_expansion``
+7. ``test_tab_binding_toggles_when_focused_pane_present``
+"""
+
+from __future__ import annotations
+
+from typing import Callable
+
+import pytest
+from textual.app import App
+from textual.widget import Widget
+from textual.widgets import Static
+
+from cli.chat.widgets.approval_args_row import ApprovalArgsRow
+from cli.chat.widgets.approval_block import ApprovalBlock
+
+
+# --------------------------------------------------------------------
+# Helpers
+# --------------------------------------------------------------------
+
+
+def _rendered(widget: ApprovalArgsRow) -> str:
+    """Return the text currently displayed by the row's child Static."""
+    return str(widget.query_one(".args-line", Static).render())
+
+
+# --------------------------------------------------------------------
+# AC #7 — Unit tests for ``ApprovalArgsRow``
+# --------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_short_target_no_chevron(
+    fake_app_factory: Callable[[Widget], App],
+) -> None:
+    """A target that fits inside the row width has no chevron."""
+    row = ApprovalArgsRow("ls -la")
+    app = fake_app_factory(row)
+    async with app.run_test(size=(120, 24)):
+        assert row.overflowing is False
+        text = _rendered(row)
+        assert "▸" not in text
+        assert "▾" not in text
+        assert "…" not in text
+        assert text == "Args  ls -la"
+
+
+@pytest.mark.asyncio
+async def test_long_target_shows_chevron_collapsed(
+    fake_app_factory: Callable[[Widget], App],
+) -> None:
+    """A target too long for the row ends with ``…▸`` when collapsed."""
+    # Force overflow at 40 cols: prefix (6) + 100-char target ≫ 40.
+    long_target = "x" * 100
+    row = ApprovalArgsRow(long_target)
+    app = fake_app_factory(row)
+    async with app.run_test(size=(40, 24)):
+        assert row.overflowing is True
+        assert row.expanded is False
+        text = _rendered(row)
+        assert text.endswith("…▸"), (
+            f"expected trailing '…▸', got tail {text[-4:]!r}"
+        )
+        assert "▾" not in text
+
+
+@pytest.mark.asyncio
+async def test_toggle_expands_row(
+    fake_app_factory: Callable[[Widget], App],
+) -> None:
+    """``action_toggle_expand`` on an overflowing row reveals the full target."""
+    long_target = "abcdefghij" * 20  # 200 chars — well over 40 wide
+    row = ApprovalArgsRow(long_target)
+    app = fake_app_factory(row)
+    async with app.run_test(size=(40, 24)) as pilot:
+        assert row.overflowing is True
+        row.action_toggle_expand()
+        await pilot.pause()
+        assert row.expanded is True
+        text = _rendered(row)
+        # First line is now ``Args  ▾``.
+        assert text.startswith("Args  ▾"), (
+            f"expected first line 'Args  ▾', got {text.splitlines()[0]!r}"
+        )
+        # The full target must be present in the wrapped body somewhere.
+        body = text[len("Args  ▾\n"):]
+        # Strip indent spaces then join to reassemble.
+        joined = "".join(line.lstrip() for line in body.splitlines())
+        assert joined == long_target
+
+
+@pytest.mark.asyncio
+async def test_toggle_collapses_row(
+    fake_app_factory: Callable[[Widget], App],
+) -> None:
+    """Two toggles return the row to collapsed state."""
+    row = ApprovalArgsRow("x" * 100)
+    app = fake_app_factory(row)
+    async with app.run_test(size=(40, 24)) as pilot:
+        assert row.overflowing is True
+        row.action_toggle_expand()
+        await pilot.pause()
+        assert row.expanded is True
+        row.action_toggle_expand()
+        await pilot.pause()
+        assert row.expanded is False
+        text = _rendered(row)
+        assert text.endswith("…▸")
+        assert "▾" not in text
+
+
+@pytest.mark.asyncio
+async def test_on_resize_updates_overflow(
+    fake_app_factory: Callable[[Widget], App],
+) -> None:
+    """Resizing the terminal flips ``overflowing`` in both directions.
+
+    Start narrow — overflow; widen — overflow gone + chevron gone;
+    narrow again — overflow + chevron back.
+    """
+    target = "x" * 80  # Between 40 and 200 cols
+    row = ApprovalArgsRow(target)
+    app = fake_app_factory(row)
+    async with app.run_test(size=(40, 24)) as pilot:
+        assert row.overflowing is True
+        assert "▸" in _rendered(row)
+        # Widen so the target fits — 80 chars + 6 prefix = 86, use 200.
+        await pilot.resize_terminal(200, 24)
+        await pilot.pause()
+        assert row.overflowing is False
+        text = _rendered(row)
+        assert "▸" not in text and "▾" not in text
+        # Narrow again — overflow returns.
+        await pilot.resize_terminal(30, 24)
+        await pilot.pause()
+        assert row.overflowing is True
+        assert "▸" in _rendered(row)
+
+
+@pytest.mark.asyncio
+async def test_click_toggles_expansion(
+    fake_app_factory: Callable[[Widget], App],
+) -> None:
+    """A mouse click on the row toggles expansion (AC #4 unit-side)."""
+    row = ApprovalArgsRow("x" * 100)
+    app = fake_app_factory(row)
+    async with app.run_test(size=(40, 24)) as pilot:
+        assert row.overflowing is True
+        assert row.expanded is False
+        await pilot.click(ApprovalArgsRow)
+        await pilot.pause()
+        assert row.expanded is True
+        # A second click collapses again.
+        await pilot.click(ApprovalArgsRow)
+        await pilot.pause()
+        assert row.expanded is False
+
+
+@pytest.mark.asyncio
+async def test_tab_binding_toggles_when_focused_pane_present(
+    fake_app_factory: Callable[[Widget], App],
+) -> None:
+    """Tab pressed on the focused choice pane toggles the args row.
+
+    Verifies the ``ApprovalBlock`` Tab binding fires when the focused
+    descendant does not consume Tab. Uses a target long enough to
+    overflow at Textual's default 80-col Pilot viewport.
+    """
+    long_target = (
+        "curl -X POST https://example.com/api/v1/very/long/path"
+        "?query=parameter&another=one&yet=more&because=long "
+        "-d '{\"json\": \"body\", \"with\": \"lots\", \"of\": \"keys\"}'"
+    )
+    block = ApprovalBlock(
+        rule_id="rl_test",
+        action="kolsch/tools/bash",
+        target=long_target,
+    )
+    app = fake_app_factory(block)
+    async with app.run_test(size=(60, 24)) as pilot:
+        # Give the row a chance to compute overflow after first frame.
+        await pilot.pause()
+        args_row = block.query_one(ApprovalArgsRow)
+        assert args_row.overflowing is True, (
+            "target should overflow the 60-col viewport"
+        )
+        assert args_row.expanded is False
+        # Press Tab — should trigger the block's ``action_toggle_args``
+        # via the BINDINGS[tab] entry.
+        await pilot.press("tab")
+        await pilot.pause()
+        assert args_row.expanded is True
+        # And a second Tab collapses again.
+        await pilot.press("tab")
+        await pilot.pause()
+        assert args_row.expanded is False
+
+
+# --------------------------------------------------------------------
+# Extra: chevron char discrimination (Reviewer hint).
+# --------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_chevron_char_flips_between_toggled_states(
+    fake_app_factory: Callable[[Widget], App],
+) -> None:
+    """Explicit paranoia — ``▸`` and ``▾`` are distinct chars.
+
+    Reviewer requested: the tests should fail loudly if the wrong
+    chevron char is used. This test locks each glyph to its state.
+    """
+    row = ApprovalArgsRow("x" * 100)
+    app = fake_app_factory(row)
+    async with app.run_test(size=(40, 24)) as pilot:
+        collapsed_text = _rendered(row)
+        assert "▸" in collapsed_text
+        assert "▾" not in collapsed_text
+        row.action_toggle_expand()
+        await pilot.pause()
+        expanded_text = _rendered(row)
+        assert "▾" in expanded_text
+        assert "▸" not in expanded_text

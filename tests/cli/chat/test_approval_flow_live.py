@@ -275,15 +275,23 @@ async def test_approval_mount_and_answer_via_live_bus_bridge(
         )
 
         # (2 cont.) Context lines contain the metadata values. Read
-        # each `.context` Static; assert action / target / rule_id are
-        # present verbatim (no "(no matching rule)" fallback).
+        # each ``.context`` Static plus the qol-047 ``ApprovalArgsRow``
+        # (which replaces the previous ``Args`` Static); assert action /
+        # target / rule_id are present verbatim (no "(no matching rule)"
+        # fallback).
         from textual.widgets import Static
+        from cli.chat.widgets.approval_args_row import ApprovalArgsRow
         context_lines = [
             str(w.content)
             for w in block.query(".context").results(Static)
         ]
-        # Three lines: Tool / Args / Rule.
-        assert len(context_lines) == 3
+        # Two ``.context`` Statics remain (Tool / Rule); the Args row is
+        # now a custom widget.
+        assert len(context_lines) == 2
+        args_rows = list(block.query(ApprovalArgsRow))
+        assert len(args_rows) == 1
+        for args_static in args_rows[0].query(Static):
+            context_lines.append(str(args_static.content))
         joined = "\n".join(context_lines)
         assert action in joined, f"action {action!r} not in context: {joined!r}"
         assert target in joined, f"target {target!r} not in context: {joined!r}"
