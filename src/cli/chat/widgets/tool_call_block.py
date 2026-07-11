@@ -100,7 +100,12 @@ class ToolCallBlock(Collapsible):
         self._body_text = body
         self._recovery_hint = recovery_hint
         title = f"● {tool_name}({args})"
-        children: list[Static] = [Static(body, classes="body", markup=False)]
+        # bug-042: stash body Static so post-hoc updates target the
+        # right widget. `block.query(Static)` returns CollapsibleTitle
+        # first (markup=True by Textual default), which crashes when
+        # rendering tool output with `[...]` sequences.
+        self._body_static = Static(body, classes="body", markup=False)
+        children: list[Static] = [self._body_static]
         if recovery_hint is not None:
             children.append(
                 Static(f"↳ hint: {recovery_hint}", classes="hint", markup=False),
@@ -108,6 +113,10 @@ class ToolCallBlock(Collapsible):
         super().__init__(*children, title=title, collapsed=True)
         if failed:
             self.add_class("-failed")
+
+    def update_body(self, text: str) -> None:
+        """bug-042: update the body Static directly (markup=False safe)."""
+        self._body_static.update(text)
 
     def action_collapse(self) -> None:
         """Collapse this block. Bound to `c` (see `BINDINGS`)."""

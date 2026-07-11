@@ -708,12 +708,14 @@ class WorkflowNodeRow(Collapsible):
         failed: bool,
     ) -> None:
         """bug-037: rewrite a ToolCallBlock's body after a state transition."""
-        # ToolCallBlock is a Collapsible whose body is a Static
-        # inside Contents. Replace the Static's content.
+        # bug-042: route through ToolCallBlock.update_body — the prior
+        # `block.query(Static)` walked DOM order and hit CollapsibleTitle
+        # (markup=True) first, causing MarkupError crashes when the tool
+        # body contained `[...]` sequences.
         with contextlib.suppress(Exception):
-            for static in block.query(Static):
-                static.update(body)
-                break
+            update_body = getattr(block, "update_body", None)
+            if callable(update_body):
+                update_body(body)
         if failed:
             with contextlib.suppress(Exception):
                 block.add_class("-failed")
