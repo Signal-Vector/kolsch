@@ -240,3 +240,171 @@ async def test_chevron_char_flips_between_toggled_states(
         expanded_text = _rendered(row)
         assert "▾" in expanded_text
         assert "▸" not in expanded_text
+
+
+# --------------------------------------------------------------------
+# Round 2 — Reviewer follow-ups
+# --------------------------------------------------------------------
+
+
+def _footer_text(block: ApprovalBlock) -> str:
+    """Return the current text of the block's footer-help Static."""
+    return str(block.query_one(".footer-help", Static).render())
+
+
+@pytest.mark.asyncio
+async def test_resize_updates_footer_hint(
+    fake_app_factory: Callable[[Widget], App],
+) -> None:
+    """Round-2 Fix 1: a resize that flips overflow flips the footer too.
+
+    Reviewer Finding #1 — without a ``Toggled`` post on overflow-flag
+    flip, the footer got stuck showing ``Tab → expand args`` after the
+    terminal widened enough for the target to fit (and vice-versa).
+    """
+    long_target = "x" * 120  # Fits at 200 cols; overflows at 40.
+    block = ApprovalBlock(
+        rule_id="rl_bash",
+        action="kolsch/tools/bash",
+        target=long_target,
+    )
+    app = fake_app_factory(block)
+    async with app.run_test(size=(40, 24)) as pilot:
+        await pilot.pause()
+        # Narrow: overflow → footer includes ``Tab → expand args``.
+        assert "Tab → expand args" in _footer_text(block)
+        # Widen so the target fits — the row's chevron disappears AND
+        # the parent's footer suffix drops.
+        await pilot.resize_terminal(200, 24)
+        await pilot.pause()
+        row = block.query_one(ApprovalArgsRow)
+        assert row.overflowing is False
+        assert "Tab → expand" not in _footer_text(block), (
+            f"footer should have shed the args-expand hint, got: "
+            f"{_footer_text(block)!r}"
+        )
+        # Narrow again — overflow returns, footer suffix returns.
+        await pilot.resize_terminal(40, 24)
+        await pilot.pause()
+        assert row.overflowing is True
+        assert "Tab → expand args" in _footer_text(block)
+
+
+@pytest.mark.asyncio
+async def test_resize_from_expanded_wide_snaps_back_to_collapsed(
+    fake_app_factory: Callable[[Widget], App],
+) -> None:
+    """Round-2 Fix 1 corner: expanded row + widen = collapsed + no hint.
+
+    An expanded body with no chevron would be dead UI — nothing left
+    to toggle. The widget snaps ``_expanded`` back to False when
+    ``_notify_overflow_change`` sees an expanded+non-overflowing row.
+    """
+    block = ApprovalBlock(
+        rule_id="rl_bash",
+        action="kolsch/tools/bash",
+        target="x" * 120,
+    )
+    app = fake_app_factory(block)
+    async with app.run_test(size=(40, 24)) as pilot:
+        await pilot.pause()
+        await pilot.press("tab")  # expand
+        await pilot.pause()
+        row = block.query_one(ApprovalArgsRow)
+        assert row.expanded is True
+        await pilot.resize_terminal(200, 24)
+        await pilot.pause()
+        assert row.overflowing is False
+        assert row.expanded is False, (
+            "expanded state must snap back when overflow disappears"
+        )
+        assert "Tab" not in _footer_text(block)
+
+
+# --------------------------------------------------------------------
+# Round 2 — Fix 3 — AC #3 cross-pane Tab coverage
+# --------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_tab_toggles_args_when_pattern_edit_pane_focused(
+    fake_app_factory: Callable[[Widget], App],
+) -> None:
+    """AC #3: Tab still toggles the args row when the pattern pane owns focus.
+
+    Round-2 Fix 3 — advance past the choice pane to
+    ``ApprovalPatternEdit`` (which mounts an ``Input``), then press
+    Tab. ``Input`` does not bind Tab, so the block's Tab binding
+    fires via the bubble-up-to-ancestors mechanism.
+    """
+    from cli.chat.widgets.approval_pattern_edit import ApprovalPatternEdit
+
+    long_target = "x" * 120
+    block = ApprovalBlock(
+        rule_id="rl_bash",
+        action="kolsch/tools/bash",
+        target=long_target,
+    )
+    app = fake_app_factory(block)
+    async with app.run_test(size=(60, 24)) as pilot:
+        await pilot.pause()
+        args_row = block.query_one(ApprovalArgsRow)
+        assert args_row.overflowing is True
+        assert args_row.expanded is False
+        # Advance to step 2 — ``a`` swaps in ``ApprovalPatternEdit``.
+        await pilot.press("a")
+        await pilot.pause()
+        # Wait for the pattern pane to be the current focused descendant.
+        pane = block.query_one(ApprovalPatternEdit)
+        assert pane is not None
+        # Press Tab — Input doesn't consume it, so the block's binding fires.
+        await pilot.press("tab")
+        await pilot.pause()
+        assert args_row.expanded is True
+        # A second Tab collapses again.
+        await pilot.press("tab")
+        await pilot.pause()
+        assert args_row.expanded is False
+
+
+@pytest.mark.asyncio
+async def test_tab_toggles_args_when_save_confirm_pane_focused(
+    fake_app_factory: Callable[[Widget], App],
+) -> None:
+    """AC #3: Tab still toggles the args row when save-confirm owns focus.
+
+    Round-2 Fix 3 — advance through choice → pattern → save-confirm
+    (which binds y/n/enter/escape) and press Tab; the block's binding
+    fires because save-confirm doesn't bind Tab.
+    """
+    from cli.chat.widgets.approval_save_confirm import ApprovalSaveConfirm
+
+    long_target = "x" * 120
+    block = ApprovalBlock(
+        rule_id="rl_bash",
+        action="kolsch/tools/bash",
+        target=long_target,
+    )
+    app = fake_app_factory(block)
+    async with app.run_test(size=(60, 24)) as pilot:
+        await pilot.pause()
+        args_row = block.query_one(ApprovalArgsRow)
+        assert args_row.overflowing is True
+        assert args_row.expanded is False
+        # Advance: ``a`` → pattern; ``enter`` → save-confirm.
+        await pilot.press("a")
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+        pane = block.query_one(ApprovalSaveConfirm)
+        assert pane is not None
+        # Focus the save-confirm pane so its binding table is the
+        # keystroke's starting point; then Tab bubbles up.
+        pane.focus()
+        await pilot.pause()
+        await pilot.press("tab")
+        await pilot.pause()
+        assert args_row.expanded is True
+        await pilot.press("tab")
+        await pilot.pause()
+        assert args_row.expanded is False

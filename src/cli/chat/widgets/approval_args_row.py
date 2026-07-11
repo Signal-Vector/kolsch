@@ -261,17 +261,56 @@ class ApprovalArgsRow(Widget):
         """
         if self._recompute_overflow():
             self._refresh_static()
+            self._notify_overflow_change()
 
     def on_resize(self, event: events.Resize) -> None:
         """Re-check overflow when the container width changes."""
         del event  # unused — we read self.size directly
         if self._recompute_overflow():
             self._refresh_static()
+            self._notify_overflow_change()
+
+    def _notify_overflow_change(self) -> None:
+        """Round-2 fix — tell the parent the overflow flag flipped.
+
+        Without this the parent's footer hint gets stuck: on a terminal
+        resize from narrow → wide the row's own chevron disappears
+        (this widget re-renders), but ``ApprovalBlock`` still shows
+        ``Tab → expand args`` because the block only listens for
+        ``Toggled`` messages. Reuses the existing ``Toggled`` payload
+        + the existing ``on_approval_args_row_toggled`` handler.
+
+        No loop risk: ``_recompute_overflow`` is only called from
+        layout callbacks (``on_show`` / ``on_resize``), never from
+        the parent's handler. The parent's handler calls back into
+        ``_args_footer_suffix`` which only reads state — no re-entry.
+        """
+        # If the row is currently expanded but no longer overflowing,
+        # snap it back to collapsed — an expanded body with no chevron
+        # would be dead UI (Tab has nothing to toggle back to). Then
+        # the parent's footer suffix goes empty on next paint anyway.
+        if not self._overflow and self._expanded:
+            self._expanded = False
+            self._refresh_static()
+        self.post_message(
+            self.Toggled(
+                expanded=self._expanded,
+                overflowing=self._overflow,
+            ),
+        )
 
     # ------------------------------------------------------------------
     # Interaction
     # ------------------------------------------------------------------
 
+    # Named ``action_toggle_expand`` rather than ``action_toggle`` —
+    # ``DOMNode`` already ships ``action_toggle(attribute_name: str)``
+    # for reactive toggles, and overriding it with a zero-arg signature
+    # fails mypy strict (Signature-of-supertype error). The public API
+    # in the qol-047 spec used ``action_toggle``; we route the block's
+    # ``Binding("tab", "toggle_args", ...)`` through
+    # ``ApprovalBlock.action_toggle_args`` which forwards to this method,
+    # so the naming difference is invisible to callers outside the widget.
     def action_toggle_expand(self) -> None:
         """Flip expansion state, re-render, and notify the parent.
 
