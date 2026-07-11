@@ -624,6 +624,7 @@ class WorkflowNodeRow(Collapsible):
         *,
         failed: bool = False,
         recovery_hint: str | None = None,
+        matched_rule: dict[str, object] | None = None,
         event_id: str | None = None,
     ) -> None:
         """Sink method — mount / transition a ``tool: <name>`` section.
@@ -672,6 +673,7 @@ class WorkflowNodeRow(Collapsible):
                 body,
                 failed=failed,
                 recovery_hint=recovery_hint,
+                matched_rule=matched_rule,
             )
             section._contents_list.append(block)
             self._mount_in_contents(section)

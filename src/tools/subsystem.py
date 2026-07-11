@@ -487,6 +487,7 @@ class ToolsSubsystem:
             context.principal,
             action,
             layers=layers,
+            tool_call_id=context.tool_call_id,
         )
         if not auth.allowed:
             from errors import ToolUnauthorized  # noqa: PLC0415

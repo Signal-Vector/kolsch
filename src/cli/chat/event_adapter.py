@@ -1267,6 +1267,17 @@ class EventAdapter:
         body = f"{code}: {message}" if code else message
         recovery_hint = event.data.get("recovery_hint")
         recovery_hint = recovery_hint if isinstance(recovery_hint, str) else None
+        # feat-041 — pluck the authz matched_rule (when present) so the
+        # ToolCallBlock body composition can append the 2-line denial
+        # hint (spec §Mockup 1). Non-authz failures leave
+        # `matched_rule` None and the body renders as before.
+        detail = error.get("detail") or {}
+        matched_rule_raw = (
+            detail.get("matched_rule") if isinstance(detail, dict) else None
+        )
+        matched_rule = (
+            matched_rule_raw if isinstance(matched_rule_raw, dict) else None
+        )
         sink = self._route_to_workflow_node(event) or self._app
         await sink.mount_tool_call(
             tool_name,
@@ -1274,6 +1285,7 @@ class EventAdapter:
             body,
             failed=True,
             recovery_hint=recovery_hint,
+            matched_rule=matched_rule,
             event_id=_event_id_str(event),
         )
 

@@ -62,7 +62,7 @@ if TYPE_CHECKING:
 # the tool body in ``_invoke_tool`` and closes every non-transferred
 # card on the exit path. Outside a tool call the var is ``None`` and
 # ``CardsImpl.open`` skips the append (workflow-invoked cards, tests).
-_current_tool_open_cards: contextvars.ContextVar[list["Card"] | None] = (
+_current_tool_open_cards: contextvars.ContextVar[list[Card] | None] = (
     contextvars.ContextVar("_current_tool_open_cards", default=None)
 )
 
@@ -276,6 +276,7 @@ async def dispatch_tool(
         defn.action_name,
         target=target,
         layers=layers,
+        tool_call_id=context.tool_call_id,
     )
     if not auth.allowed:
         raise ToolUnauthorized(

@@ -980,8 +980,18 @@ class _Exchange:
         # field the provider matches on — dropping `pattern` or
         # `from_` here would silently degrade the caller-chain scope
         # or target glob of any layer-supplied rule.
+        from pathlib import Path as _Path  # noqa: PLC0415
+
+        from assets.manifest import permissions_source_map  # noqa: PLC0415
         from providers.authz import Rule  # noqa: PLC0415
 
+        # feat-041 — source-line metadata is threaded via a sidecar
+        # because `PermissionRule` (schemas.config) is `extra="forbid"`
+        # and can't carry the fields directly. The map keys are the
+        # PermissionRule's list index in its source YAML; the compiled
+        # `Rule` on the provider side stamps them onto `source_file` +
+        # `source_line`. Absent YAML → empty map → `None` fallback.
+        agent_source_map = self._agent_permissions_source_map()
         agent_rules: list[Rule] = [
             Rule(
                 id=r.id,
@@ -990,14 +1000,22 @@ class _Exchange:
                 pattern=r.pattern,
                 from_=r.from_,
                 effect=r.effect,
+                source_file=agent_source_map.get(i, (None, None))[0],
+                source_line=agent_source_map.get(i, (None, None))[1],
             )
-            for r in self.config.permissions
+            for i, r in enumerate(self.config.permissions)
         ]
         bundle_rules: list[Rule] = []
         home_bundle = self.engine._assets.get_bundle_for_agent_id(self.agent_id)
         if home_bundle is not None:
             manifest = self.engine._assets.get_bundle(home_bundle)
             if manifest is not None:
+                bundle_source_map: dict[int, tuple[str, int]] = {}
+                try:
+                    bundle_yaml = _Path(manifest.path) / "bundle.yaml"
+                    bundle_source_map = permissions_source_map(bundle_yaml)
+                except (OSError, ValueError):
+                    bundle_source_map = {}
                 bundle_rules = [
                     Rule(
                         id=r.id,
@@ -1006,8 +1024,10 @@ class _Exchange:
                         pattern=r.pattern,
                         from_=r.from_,
                         effect=r.effect,
+                        source_file=bundle_source_map.get(i, (None, None))[0],
+                        source_line=bundle_source_map.get(i, (None, None))[1],
                     )
-                    for r in manifest.permissions
+                    for i, r in enumerate(manifest.permissions)
                 ]
 
         await self.engine._tools.register_for_agent(
@@ -1036,6 +1056,43 @@ class _Exchange:
             home_bundle=home_bundle,
         )
         # MCP server registration lands when the MCP wiring patch ships.
+
+    def _agent_permissions_source_map(self) -> dict[int, tuple[str, int]]:
+        """Return `{permission_index: (source_file, source_line)}` for this agent.
+
+        feat-041 — resolves the agent's on-disk YAML path via the
+        asset catalog (`<bundle>/agents/<name>` lookup) and calls
+        `permissions_source_map`. Empty when the catalog doesn't know
+        this agent (synthetic test configs) or the YAML lacks position
+        info (custom `!tag` type — see spec §Design refinements).
+        """
+        from pathlib import Path as _Path  # noqa: PLC0415
+
+        from assets.manifest import permissions_source_map  # noqa: PLC0415
+
+        try:
+            catalog = self.engine._assets.catalog()
+        except Exception:  # noqa: BLE001 — never raise out of source-tag path
+            return {}
+        for entry in catalog.assets.values():
+            if entry.asset_type != "agent":
+                continue
+            # Match by resolved agent_id via the same derivation the
+            # catalog scanner uses. Explicit `agent_id:` YAMLs won't
+            # match this derivation — the cache in AssetManagement
+            # handles those but doesn't expose the source path here.
+            # Falling through to the empty map is acceptable: the
+            # `/why` card degrades to `(unknown source)` for agents
+            # that carry an explicit id.
+            agent_name = entry.ref.rsplit("/", 1)[-1]
+            if entry.bundle == self.engine._assets.get_bundle_for_agent_id(
+                self.agent_id,
+            ) and agent_name in str(self.agent_id):
+                try:
+                    return permissions_source_map(_Path(entry.path))
+                except (OSError, ValueError):
+                    return {}
+        return {}
 
     async def _resolve_declared_tool_paths(
         self,

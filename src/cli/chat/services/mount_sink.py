@@ -73,9 +73,16 @@ class ChatMountSink(Protocol):
         *,
         failed: bool = False,
         recovery_hint: str | None = None,
+        matched_rule: dict[str, object] | None = None,
         event_id: str | None = None,
     ) -> None:
-        """Mount a ``ToolCallBlock`` for a tool result / failure."""
+        """Mount a ``ToolCallBlock`` for a tool result / failure.
+
+        ``matched_rule`` (feat-041): the authz rule that fired, as a
+        dict shaped like ``Rule.model_dump()``. Non-None on authz
+        denials; the widget renders the 2-line hint (Mockup 1)
+        inline in the body when present.
+        """
         ...
 
     async def mount_notice(

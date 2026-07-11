@@ -1507,6 +1507,23 @@ COMMAND_REGISTRY: dict[str, SlashCommand] = {
         handler=_handler_fork,
         free_form_arg_hint="<event_id> [with key=value ...]",
     ),
+    # feat-041 — authz introspection. Both have `handler=None`;
+    # `ChatApp._handle_slash` intercepts by name because they need
+    # transcript access to mount the deny card / notice line.
+    "/why": SlashCommand(
+        name="/why",
+        description="show why the last (or a specific) tool call was denied",
+        usage="/why [<tool_call_id>]   show the deny card for the last denial",
+        handler=None,
+        state_changing=False,
+        free_form_arg_hint="<tool_call_id>",
+    ),
+    "/reload": SlashCommand(
+        name="/reload",
+        description="reload authz rules from platform.yaml (atomic)",
+        usage="/reload   rebuild the authz provider from disk",
+        handler=None,
+    ),
 }
 """The visible slash commands; `/exit` carries `/quit` as an alias."""
 

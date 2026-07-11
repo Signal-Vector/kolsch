@@ -28,7 +28,7 @@ from typing import Any
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-__all__ = ["YAMLError", "dump", "load"]
+__all__ = ["YAMLError", "dump", "load", "load_with_positions"]
 
 # Module-level singleton — cheap to share and sufficient for our
 # single-threaded CLI / setup use cases. ``typ='safe'`` mirrors
@@ -45,9 +45,45 @@ _yaml.default_flow_style = False
 _yaml.sort_base_mapping_type_on_output = False  # type: ignore[assignment]
 
 
+# feat-041 — a second singleton in round-trip mode. `typ='rt'`
+# builds `CommentedMap` / `CommentedSeq` nodes that carry a `.lc`
+# line-column tracker; the authz introspection features
+# (`/why`, inline denial hint) need the source line of each rule to
+# emit `<source_file>:<line>` breadcrumbs. Kept SEPARATE from `_yaml`
+# so existing `load()` callers don't accidentally start receiving
+# `CommentedMap` instances (which mostly quack like dicts but
+# `isinstance(x, dict)` in downstream code varies).
+_yaml_rt = YAML(typ="rt")
+_yaml_rt.default_flow_style = False
+_yaml_rt.sort_base_mapping_type_on_output = False  # type: ignore[assignment]
+
+
 def load(text: str) -> Any:  # noqa: ANN401
     """Parse YAML ``text`` and return the corresponding Python object."""
     return _yaml.load(text)
+
+
+def load_with_positions(text: str) -> Any:  # noqa: ANN401
+    """Parse YAML ``text`` in round-trip mode and preserve source lines.
+
+    Returns a ``CommentedMap``/``CommentedSeq`` tree; each mapping /
+    sequence node carries a ``.lc`` (line-column) tracker. For a
+    mapping ``m``, ``m.lc.line`` is the 0-indexed line where the
+    node's first key begins. For a sequence element ``s[i]``,
+    ``s.lc.data[i][0]`` is the 0-indexed line where that element
+    starts.
+
+    feat-041 uses this to record ``(source_file, source_line)`` on
+    each authz rule so the ``/why`` card and inline denial hint can
+    display a ``file:line`` breadcrumb.
+
+    Anchors + merge keys are supported (``.lc.line`` points to the
+    use site, which is what the feature wants). Custom ``!tag`` types
+    raise :class:`ruamel.yaml.constructor.ConstructorError`; callers
+    that anticipate them (config loaders) should catch and fall back
+    to positional metadata of ``None``.
+    """
+    return _yaml_rt.load(text)
 
 
 def dump(data: Any) -> str:  # noqa: ANN401

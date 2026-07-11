@@ -1005,6 +1005,7 @@ class ChatApp(App):
         *,
         failed: bool = False,
         recovery_hint: str | None = None,
+        matched_rule: dict[str, object] | None = None,
         event_id: str | None = None,
     ) -> None:
         _ = event_id  # bug-036d: sink-protocol dedupe key — App ignores.
@@ -1015,6 +1016,7 @@ class ChatApp(App):
             body,
             failed=failed,
             recovery_hint=recovery_hint,
+            matched_rule=matched_rule,
         )
         await transcript.mount(block)
         transcript.scroll_end(animate=False)
@@ -1246,6 +1248,12 @@ class ChatApp(App):
         if command.name == "/export":
             await self._handle_export(arg_text)
             return
+        if command.name == "/why":
+            await self._handle_why(arg_text)
+            return
+        if command.name == "/reload":
+            await self._handle_reload()
+            return
 
         if command.handler is None:
             await self._mount_transcript_notice(
@@ -1357,6 +1365,66 @@ class ChatApp(App):
             )
             return
         await self._mount_transcript_notice(f"transcript exported → {target}")
+
+    async def _handle_why(self, arg_text: str) -> None:
+        """Mount the deny card for the last (or specified) tool denial.
+
+        feat-041 — walks the current thread's events via
+        ``runtime.store.read_path_to_leaf`` (same pattern as
+        ``/export``), correlates the last ``tool.failed`` to its
+        ``policy.decision.made``, and mounts a ``Static`` carrying
+        the card text.
+
+        ``markup=False`` on the Static so rule patterns containing
+        ``[...]`` render literally (bug-040 lesson).
+        """
+        from cli.chat.services.authz_introspection import (  # noqa: PLC0415
+            find_last_denial_via_store,
+            render_denial_card,
+        )
+
+        tool_call_id = arg_text.strip() or None
+        try:
+            data = await find_last_denial_via_store(
+                self.session.runtime,
+                self.session.thread_id,
+                tool_call_id=tool_call_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            await self._mount_transcript_notice(
+                f"/why failed: {type(exc).__name__}: {exc}"
+            )
+            return
+        if data is None:
+            hint = (
+                "No recent denial in this thread. If you meant a "
+                "specific tool call, use /why <tool_call_id>."
+            )
+            await self._mount_transcript_notice(hint)
+            return
+        text = render_denial_card(data)
+        transcript = self.query_one("#transcript", VerticalScroll)
+        card = Static(text, markup=False)
+        await transcript.mount(card)
+        transcript.scroll_end(animate=False)
+
+    async def _handle_reload(self) -> None:
+        """Reload the runtime's authz provider from disk.
+
+        feat-041 — atomic swap on success; leaves the OLD provider
+        active on any parse / construct error. See
+        ``authz_introspection.handle_reload`` for the contract.
+        """
+        from cli.chat.services.authz_introspection import (  # noqa: PLC0415
+            handle_reload,
+        )
+
+        result = await handle_reload(self.session.runtime)
+        if result.error is not None:
+            await self._mount_transcript_notice(f"/reload failed: {result.error}")
+            return
+        summary = result.summary or "reload complete."
+        await self._mount_transcript_notice(f"↳ {summary}")
 
     async def _clear_transcript(self) -> None:
         """Remove every mounted widget from the transcript.

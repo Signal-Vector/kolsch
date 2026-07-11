@@ -94,17 +94,32 @@ class ToolCallBlock(Collapsible):
         body: str,
         failed: bool = False,
         recovery_hint: str | None = None,
+        matched_rule: dict[str, object] | None = None,
     ) -> None:
         self._tool_name = tool_name
         self._args = args
         self._body_text = body
         self._recovery_hint = recovery_hint
+        self._matched_rule = matched_rule
         title = f"● {tool_name}({args})"
+        # feat-041 — when the failure was an authz deny (matched_rule
+        # non-null), append the 2-line hint to the body Static (spec
+        # Mockup 1) so the user sees `denied by rl_.../<file>:<line>`
+        # without typing `/why`. Non-deny failures leave the body
+        # untouched.
+        body_text = body
+        if failed and matched_rule:
+            from cli.chat.services.authz_introspection import (  # noqa: PLC0415
+                format_denial_hint,
+            )
+
+            hint = format_denial_hint(matched_rule)
+            body_text = f"{body}\n{hint}" if body else hint
         # bug-042: stash body Static so post-hoc updates target the
         # right widget. `block.query(Static)` returns CollapsibleTitle
         # first (markup=True by Textual default), which crashes when
         # rendering tool output with `[...]` sequences.
-        self._body_static = Static(body, classes="body", markup=False)
+        self._body_static = Static(body_text, classes="body", markup=False)
         children: list[Static] = [self._body_static]
         if recovery_hint is not None:
             children.append(

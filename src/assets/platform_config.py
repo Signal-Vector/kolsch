@@ -19,7 +19,7 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from _yamlio import YAMLError, dump, load
+from _yamlio import YAMLError, dump, load, load_with_positions
 from errors import ConfigInvalid
 
 if TYPE_CHECKING:
@@ -216,3 +216,71 @@ def _write_yaml(path: Path, payload: dict[str, Any]) -> None:
 def is_known_section(name: str) -> bool:
     """Return `True` when `name` is one of the documented sections."""
     return name in _KNOWN_SECTIONS
+
+
+def authorization_rule_source_map(root: Path) -> dict[int, tuple[str, int]]:  # noqa: PLR0911 — one early-return per graceful-fallback path (§Design)
+    """Return `{rule_index: (source_file, source_line)}` for the platform's rules.
+
+    Re-reads `platform.yaml` via
+    [`load_with_positions`][_yamlio.load_with_positions] and walks the
+    `authorization.config.rules` list, recording each rule's YAML line
+    (1-indexed) alongside the absolute source path.
+
+    feat-041 uses this to tag every rule the
+    `RuleBasedAuthorizationProvider` compiles so `/why` +
+    `ToolCallBlock` inline hint can display a `platform.yaml:47`
+    breadcrumb pointing at the deny rule's authoring site.
+
+    Returns an empty map when:
+
+    - `platform.yaml` is absent (first-run defaults are used).
+    - The `authorization` section is missing or malformed.
+    - `load_with_positions` raises a `ConstructorError` because a
+      custom `!tag` type is present (fallback path — spec §Design).
+
+    Never raises: the caller uses the empty-map fallback (rules
+    compile with `source_file=None`, hint degrades to
+    `(unknown source)`).
+    """
+    from ruamel.yaml.constructor import ConstructorError  # noqa: PLC0415
+
+    path = root / "platform.yaml"
+    if not path.exists():
+        return {}
+    try:
+        payload = load_with_positions(path.read_text(encoding="utf-8"))
+    except (YAMLError, ConstructorError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    authorization = payload.get("authorization")
+    if not isinstance(authorization, dict):
+        return {}
+    config = authorization.get("config")
+    if not isinstance(config, dict):
+        return {}
+    rules = config.get("rules")
+    if rules is None:
+        return {}
+    # `rules` is a `CommentedSeq` from ruamel; its `.lc.data` maps
+    # `rule_index → (line, col)` (0-indexed). Add 1 for the
+    # human-readable form. When `lc` / `lc.data` is missing (a plain
+    # list slipped in, or a synthetic fixture), degrade gracefully.
+    lc = getattr(rules, "lc", None)
+    data = getattr(lc, "data", None) if lc is not None else None
+    if not isinstance(data, dict):
+        return {}
+    source_map: dict[int, tuple[str, int]] = {}
+    source_str = str(path.resolve())
+    for rule_index, position in data.items():
+        if not isinstance(rule_index, int):
+            continue
+        # ruamel's `.lc.data[i]` shape is `(line, col)` for sequences
+        # or `(key_line, key_col, val_line, val_col)` for maps. Rules
+        # are mappings inside a sequence, but the sequence itself
+        # tracks the item's start; take element 0 regardless.
+        line_0 = position[0] if position else None
+        if not isinstance(line_0, int):
+            continue
+        source_map[rule_index] = (source_str, line_0 + 1)
+    return source_map

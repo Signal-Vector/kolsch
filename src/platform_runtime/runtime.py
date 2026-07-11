@@ -179,12 +179,23 @@ async def bootstrap_runtime(
 
     secrets = DotenvSecretsProvider(root=root, config=secrets_cfg.get("config", {}))
     sandbox = NativeSandboxProvider(config=sandbox_cfg.get("config", {}))
+    # feat-041 — sidecar source-line metadata for the platform-layer
+    # rules. Loader routes through `_yamlio.load_with_positions`, so
+    # every rule the provider compiles carries `(source_file,
+    # source_line)` and `/why` + the inline denial hint can display
+    # `~/.kolsch/platform.yaml:<line>` breadcrumbs.
+    from assets.platform_config import (  # noqa: PLC0415
+        authorization_rule_source_map,
+    )
+
+    authz_source_map = authorization_rule_source_map(root)
     # Pass the catalog so the provider can validate qualified tool refs
     # in rule `what:` fields AND build the action→tool_ref map so
     # `what: kolsch/bash` matches the `tool.bash` action namespace.
     authz = RuleBasedAuthorizationProvider(
         config=authz_cfg.get("config", {}),
         catalog=am.catalog(),
+        source_map=authz_source_map,
     )
     path_policy = load_policy(file_access_cfg)
 

@@ -791,7 +791,7 @@ def load_workflow(path: Path) -> Workflow:
         raise WorkflowValidationError(msg)
 
     try:
-        return Workflow.model_validate(payload)
+        workflow = Workflow.model_validate(payload)
     except ValidationError as exc:
         # Re-wrap Pydantic shape errors as a single WorkflowValidationError
         # so callers see one exception class for parse-time failures.
@@ -802,6 +802,43 @@ def load_workflow(path: Path) -> Workflow:
             "(see docs/workflows#workflow-files)."
         )
         raise WorkflowValidationError(msg) from exc
+    return _stamp_policy_source_lines(workflow, path)
+
+
+def _stamp_policy_source_lines(workflow: Workflow, path: Path) -> Workflow:
+    """Return `workflow` with each `policy` rule's source_file/source_line set.
+
+    feat-041 — the parser above uses `_yamlio.load` (safe mode, no
+    position info). Rather than re-plumb the whole parse pipeline
+    through `load_with_positions`, re-open the file with position
+    tracking and copy the resulting `(source_file, source_line)` onto
+    each `Rule` via `model_copy`. Cheap on the hot-not-hot path (only
+    workflows with a `policy:` list pay the second read).
+
+    Falls back silently: any parse / position-tracking failure leaves
+    the workflow's rules unchanged (source_file remains `None`, hint
+    degrades to `(unknown source)`).
+    """
+    if not workflow.policy:
+        return workflow
+    from assets.manifest import permissions_source_map  # noqa: PLC0415
+
+    try:
+        source_map = permissions_source_map(path)
+    except Exception:  # noqa: BLE001 — never raise out of source-tag path
+        return workflow
+    if not source_map:
+        return workflow
+    updated_policy = [
+        rule.model_copy(
+            update={
+                "source_file": source_map.get(i, (None, None))[0],
+                "source_line": source_map.get(i, (None, None))[1],
+            }
+        )
+        for i, rule in enumerate(workflow.policy)
+    ]
+    return workflow.model_copy(update={"policy": updated_policy})
 
 
 def _extract_yaml_line(exc: YAMLError) -> int:

@@ -74,6 +74,16 @@ refuses to remove this id. The shape that earns this id is
 `who=".*"` AND `what=".*"` AND `effect="deny"`."""
 
 
+# feat-041 — sidecar shape passed by config loaders that use
+# `_yamlio.load_with_positions` to record where each rule was
+# authored. Keyed by the rule's index in the source YAML list; value
+# is `(absolute_source_file_path, 1-indexed_line_number)`. Consumed
+# by `RuleBasedAuthorizationProvider.__init__` and by the
+# `PermissionRule → Rule` conversion in `engine.py` where the
+# `extra="forbid"` PermissionRule schema forbids inline fields.
+RuleSourceMap = dict[int, tuple[str, int]]
+
+
 KOLSCH_TEST_BUILD_ENV_VAR = "KOLSCH_TEST_BUILD"
 """Env var that, set to `"1"`, enables the `allow_all_test` variant.
 
@@ -193,6 +203,14 @@ class Rule(BaseModel):
     # Legacy fields — presence of `who` flags the rule as legacy.
     id: str = ""
     who: str | None = None
+
+    # feat-041 — source-location metadata for authz introspection.
+    # Populated by config-loaders that route through
+    # `_yamlio.load_with_positions`; `None` when unknown (programmatic
+    # construction, legacy loaders, `/perm` inserts). Consumers must
+    # tolerate `None` and render a `(unknown source)` fallback.
+    source_file: str | None = None
+    source_line: int | None = None
 
     @property
     def is_legacy(self) -> bool:
@@ -387,8 +405,15 @@ class AuthorizationProvider(Protocol):
         callback: PromptCallback | None = None,
         layers: tuple[PermissionLayer, ...] = (),
         caller_chain: tuple[str, ...] = (),
+        tool_call_id: str | None = None,
     ) -> AuthorizationResult:
-        """Resolve the authz decision for `(principal, action, target)`."""
+        """Resolve the authz decision for `(principal, action, target)`.
+
+        `tool_call_id` (feat-041) is threaded through to the
+        `policy.decision.made` event payload so `/why <tool_call_id>`
+        can correlate deterministically. `None` at call sites that
+        aren't per-tool (e.g. `agent.execute.*` pre-flight).
+        """
 
     async def list_rules(self) -> list[Rule]:
         """Return the provider's full rule list in walk order."""
@@ -477,6 +502,7 @@ class RuleBasedAuthorizationProvider:
         *,
         config: dict[str, Any],
         catalog: AssetCatalog | None = None,
+        source_map: RuleSourceMap | None = None,
     ) -> None:
         raw_rules = config.get("rules", []) or []
         if not isinstance(raw_rules, list):
@@ -499,6 +525,11 @@ class RuleBasedAuthorizationProvider:
         # `audit_level` for the `policy.decision.made` event
         # emission. Defaults to `"rule_matched"`.
         self.audit_level: str = str(config.get("audit_level", "rule_matched"))
+        # feat-041 — sidecar map keyed by YAML list index carrying
+        # (source_file, source_line) tuples for each rule. Empty when
+        # the caller loaded rules without position tracking; the
+        # compile step degrades gracefully to `source_file=None`.
+        self._source_map: RuleSourceMap = source_map or {}
         self._rules: list[_CompiledRule] = [
             self._compile(index, entry) for index, entry in enumerate(raw_rules)
         ]
@@ -526,15 +557,24 @@ class RuleBasedAuthorizationProvider:
                 rule_index=index,
                 error=f"rule must be a mapping; got {type(entry).__name__}",
             )
+        # feat-041 — pull source metadata from the sidecar (populated
+        # by loaders that route through `_yamlio.load_with_positions`)
+        # so the compiled Rule carries `(source_file, source_line)`.
+        source = self._source_map.get(index)
         # The discriminator: legacy YAML always carries `who`; new
         # YAML never does. Same heuristic `Rule.is_legacy` uses for
         # in-memory rules.
         if "who" in entry:
-            return self._compile_legacy(index, entry)
-        return self._compile_new_shape(index, entry)
+            return self._compile_legacy(index, entry, source=source)
+        return self._compile_new_shape(index, entry, source=source)
 
     @staticmethod
-    def _compile_legacy(index: int, entry: dict[str, Any]) -> _CompiledRule:
+    def _compile_legacy(
+        index: int,
+        entry: dict[str, Any],
+        *,
+        source: tuple[str, int] | None = None,
+    ) -> _CompiledRule:
         for required in ("who", "what", "effect"):
             if required not in entry:
                 raise AuthzMalformedRule(
@@ -576,15 +616,29 @@ class RuleBasedAuthorizationProvider:
             if isinstance(supplied_id, str) and supplied_id
             else derive_rule_id(who, what, effect)
         )
+        source_file, source_line = (source[0], source[1]) if source else (None, None)
         return _CompiledRule(
             effect=effect,
-            raw=Rule(id=rule_id, who=who, what=what, effect=effect),
+            raw=Rule(
+                id=rule_id,
+                who=who,
+                what=what,
+                effect=effect,
+                source_file=source_file,
+                source_line=source_line,
+            ),
             is_legacy=True,
             who_re=who_re,
             what_re=what_re,
         )
 
-    def _compile_new_shape(self, index: int, entry: dict[str, Any]) -> _CompiledRule:
+    def _compile_new_shape(
+        self,
+        index: int,
+        entry: dict[str, Any],
+        *,
+        source: tuple[str, int] | None = None,
+    ) -> _CompiledRule:
         for required in ("what", "effect"):
             if required not in entry:
                 raise AuthzMalformedRule(
@@ -636,6 +690,7 @@ class RuleBasedAuthorizationProvider:
         # `derive_rule_id` so legacy and new-shape catch-alls coalesce
         # to the same id.
         rule_id = derive_rule_id(".*", f"{what}|{pattern}", effect)
+        source_file, source_line = (source[0], source[1]) if source else (None, None)
         return _CompiledRule(
             effect=effect,
             raw=Rule(
@@ -644,6 +699,8 @@ class RuleBasedAuthorizationProvider:
                 pattern=pattern,
                 effect=effect,
                 from_=from_value,
+                source_file=source_file,
+                source_line=source_line,
             ),
             is_legacy=False,
             what=what,
@@ -810,6 +867,7 @@ class RuleBasedAuthorizationProvider:
         callback: PromptCallback | None = None,
         layers: tuple[PermissionLayer, ...] = (),
         caller_chain: tuple[str, ...] = (),
+        tool_call_id: str | None = None,
     ) -> AuthorizationResult:
         """Evaluate the action and target against the layered rule walk.
 
@@ -862,6 +920,7 @@ class RuleBasedAuthorizationProvider:
             action=action,
             target=target,
             caller_chain=caller_chain,
+            tool_call_id=tool_call_id,
         )
         return result
 
@@ -1510,22 +1569,29 @@ class RuleBasedAuthorizationProvider:
 # ---------------------------------------------------------------------------
 
 
-def _maybe_emit_policy_decision(
+def _maybe_emit_policy_decision(  # noqa: PLR0913 — single-payload emit gate; six kwargs mirror the payload dict
     *,
     audit_level: str,
     result: AuthorizationResult,
     action: str,
     target: str | None,
     caller_chain: tuple[str, ...],
+    tool_call_id: str | None = None,
 ) -> None:
     """Append a `policy.decision.made` event to the active workflow run.
 
     Subject to `audit_level`. The payload carries
-    `{action, target, effect, rule_id, caller_chain}`. A typed
-    `layer` field is intentionally omitted today: the layer name is
-    folded into `AuthorizationResult.reason`; hoisting a typed
-    `layer` to the result requires a wider schema change tracked
-    separately.
+    `{action, target, effect, rule_id, caller_chain, tool_call_id,
+    source_file, source_line}`. A typed `layer` field is intentionally
+    omitted today: the layer name is folded into
+    `AuthorizationResult.reason`; hoisting a typed `layer` to the
+    result requires a wider schema change tracked separately.
+
+    `tool_call_id` (feat-041) is threaded from
+    `ToolContext.tool_call_id` at each caller; `None` for surfaces
+    that aren't per-tool (e.g. `agent.execute.*` at
+    `engine.py:448`). `source_file` / `source_line` come from the
+    matched rule when available.
 
     No-op when no workflow run is active on this async task — chat,
     CLI run, and tests that don't construct a run see zero overhead.
@@ -1546,6 +1612,7 @@ def _maybe_emit_policy_decision(
     )
     if normalised == "rule_matched" and result.matched_rule is None:
         return
+    matched = result.matched_rule
     emit_event(
         ctx.store,
         PolicyDecisionMadeEvent(
@@ -1558,6 +1625,9 @@ def _maybe_emit_policy_decision(
                 "effect": result.effect.value,
                 "rule_id": result.rule_id,
                 "caller_chain": list(caller_chain),
+                "tool_call_id": tool_call_id,
+                "source_file": matched.source_file if matched else None,
+                "source_line": matched.source_line if matched else None,
             },
         ),
     )
@@ -1614,6 +1684,7 @@ class AllowAllTestAuthorizationProvider:
         callback: PromptCallback | None = None,
         layers: tuple[PermissionLayer, ...] = (),
         caller_chain: tuple[str, ...] = (),
+        tool_call_id: str | None = None,
     ) -> AuthorizationResult:
         """Return `ALLOW` for every call; all kwargs are ignored."""
         _ = (
@@ -1623,6 +1694,7 @@ class AllowAllTestAuthorizationProvider:
             callback,
             layers,
             caller_chain,
+            tool_call_id,
         )
         return AuthorizationResult(
             allowed=True,

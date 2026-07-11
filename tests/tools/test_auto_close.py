@@ -51,6 +51,7 @@ class _RecordingAuthz:
         target: str | None = None,
         layers: tuple[Any, ...] = (),
         caller_chain: tuple[str, ...] = (),
+        tool_call_id: str | None = None,
     ) -> Any:  # noqa: ANN401
         class _AllowResult:
             allowed = True

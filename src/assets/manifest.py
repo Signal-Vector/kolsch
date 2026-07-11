@@ -12,7 +12,7 @@ from typing import TYPE_CHECKING
 
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from _yamlio import YAMLError, load
+from _yamlio import YAMLError, load, load_with_positions
 from schemas import PermissionRule
 
 if TYPE_CHECKING:
@@ -82,6 +82,56 @@ def load_manifest(bundle_dir: Path) -> BundleManifest | None:
         return BundleManifest.model_validate(payload)
     except ValidationError:
         return None
+
+
+def permissions_source_map(yaml_path: Path) -> dict[int, tuple[str, int]]:
+    """Return `{permission_index: (source_file, source_line)}` for a YAML.
+
+    Re-reads a bundle / agent / workflow YAML via
+    [`load_with_positions`][_yamlio.load_with_positions] and walks the
+    top-level `permissions` list (or, for workflow YAMLs, the `policy`
+    list) to record each rule's source line. 1-indexed for
+    human-readable use.
+
+    feat-041 uses this so the engine's `PermissionRule → Rule`
+    conversion (engine.py:985 and dispatch.py:262) can pass sidecar
+    metadata into `RuleBasedAuthorizationProvider` without touching
+    the `extra="forbid"` `PermissionRule` schema.
+
+    Never raises: an absent / malformed / `!tag`-carrying YAML returns
+    an empty map and the compile step falls through to
+    `source_file=None` per the spec's fallback contract.
+    """
+    from ruamel.yaml.constructor import ConstructorError  # noqa: PLC0415
+
+    if not yaml_path.exists():
+        return {}
+    try:
+        payload = load_with_positions(yaml_path.read_text(encoding="utf-8"))
+    except (YAMLError, ConstructorError):
+        return {}
+    if not isinstance(payload, dict):
+        return {}
+    # `permissions` for agent/bundle YAML; `policy` for workflow YAML.
+    seq = payload.get("permissions")
+    if seq is None:
+        seq = payload.get("policy")
+    if seq is None:
+        return {}
+    lc = getattr(seq, "lc", None)
+    data = getattr(lc, "data", None) if lc is not None else None
+    if not isinstance(data, dict):
+        return {}
+    source_str = str(yaml_path.resolve())
+    source_map: dict[int, tuple[str, int]] = {}
+    for rule_index, position in data.items():
+        if not isinstance(rule_index, int):
+            continue
+        line_0 = position[0] if position else None
+        if not isinstance(line_0, int):
+            continue
+        source_map[rule_index] = (source_str, line_0 + 1)
+    return source_map
 
 
 def is_valid_bundle_name(name: str) -> bool:
