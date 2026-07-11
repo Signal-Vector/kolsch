@@ -1,26 +1,26 @@
 ╭──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╮
-│ ▸ Workflow · andre/workflows/job_description_review                                                                                                                                                  │
-│ andre/workflows/job_description_review                                                                                                                                                               │
-│ inputs: url=https://www.linkedin.com/jobs… (89 chars)                                                                                                                                                │
-│ [3/3]  ▓▓▓▓▓▓▓▓  <ELAPSED>s                                                                                                                                                                              │
+│ ▸ Workflow · andre/workflows/job_description_review │
+│ andre/workflows/job_description_review │
+│ inputs: url=https://www.linkedin.com/jobs… (89 chars) │
+│ [3/3]  ▓▓▓▓▓▓▓▓  <ELAPSED>s │
 │ ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ │
-│   ▼ ✓ headhunter_review (agent) · 2 sub-agent events                                                                                                                                                 │
-│                                                                                                                                                                                                      │
-│      ▶ input: text                                                                                                                                                                                   │
-│      ▶ response                                                                                                                                                                                      │
+│   ▼ ✓ headhunter_review (agent) · 2 sub-agent events │
+│ │
+│      ▶ input: text │
+│      ▶ response │
 │ ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ │
-│   ▶ output                                                                                                                                                                                           │
-│   ▶ exit: 0 (1.0s)                                                                                                                                                                                   │
-│   ▼ ✓ fetch_jd (bash)                                                                                                                                                                                │
-│                                                                                                                                                                                                      │
-│      ▶ input                                                                                                                                                                                         │
+│   ▶ output │
+│   ▶ exit: 0 (1.0s) │
+│   ▼ ✓ fetch_jd (bash) │
+│ │
+│      ▶ input │
 │ ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔ │
-│   ▼ ✓ deduper (agent) · 2 sub-agent events                                                                                                                                                           │
-│                                                                                                                                                                                                      │
-│      ▶ input: headhunter_review                                                                                                                                                                      │
-│      ▶ input: hiring_manager_review                                                                                                                                                                  │
-│      ▶ input: cto_review                                                                                                                                                                             │
-│      ▶ response                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
-│                                                                                                                                                                                                      │
+│   ▼ ✓ deduper (agent) · 2 sub-agent events │
+│ │
+│      ▶ input: headhunter_review │
+│      ▶ input: hiring_manager_review │
+│      ▶ input: cto_review │
+│      ▶ response │
+│ │
+│ │
 ╰──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────╯

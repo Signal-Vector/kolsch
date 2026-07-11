@@ -48,6 +48,12 @@ _SPINNER_RE = re.compile(r"[⣾⣽⣻⢿⡿⣟⣯⣷]")
 # stable ``<TS>`` token so goldens compare cleanly.
 _USER_TS_RE = re.compile(r"You · \d{2}:\d{2}:\d{2}")
 
+# bug-043: match 2+ spaces followed by a closing box-drawing char.
+# Elapsed-seconds width drift changes container widths, which drifts
+# the padding before ``│``/``╯``/``╮`` closers. Collapsing to one
+# space stabilizes goldens across runs.
+_BOX_TRAILING_WS_RE = re.compile(r"  +([│╯╮])")
+
 
 def _render_app_text(app: App[object]) -> str:
     """Return the current screen as plain text (styling stripped).
@@ -65,7 +71,13 @@ def _render_app_text(app: App[object]) -> str:
     text = "\n".join(rendered).rstrip() + "\n"
     text = _ELAPSED_RE.sub(r"\1<ELAPSED>s", text)
     text = _SPINNER_RE.sub("⠋", text)
-    return _USER_TS_RE.sub("You · <TS>", text)
+    text = _USER_TS_RE.sub("You · <TS>", text)
+    # bug-043: collapse runs of >=2 spaces before a closing box-drawing
+    # char (│, ╯, ╮) to a single space. The container's width depends on
+    # max child content width, which drifts run-to-run when elapsed-seconds
+    # go from `1s` → `12s` (pre-substitution). Normalization stabilizes
+    # goldens without touching internal alignment inside box rows.
+    return _BOX_TRAILING_WS_RE.sub(r" \1", text)
 
 
 def assert_snapshot_matches(app: App[object], name: str) -> None:
