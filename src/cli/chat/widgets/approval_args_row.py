@@ -229,7 +229,15 @@ class ApprovalArgsRow(Widget):
     # ------------------------------------------------------------------
 
     def _recompute_overflow(self) -> bool:
-        """Recompute ``self._overflow`` from current width + target length.
+        """Recompute ``self._overflow`` from current width + target shape.
+
+        A target counts as overflowing when EITHER (a) its raw length
+        exceeds the available row width OR (b) it contains an embedded
+        newline. The newline case (qol-048) is chrome consistency —
+        Textual renders `\\n`-carrying targets as multi-line blocks
+        regardless of terminal width, so a "not overflowing" verdict
+        would strip the chevron + `Tab → expand args` footer hint even
+        though the row visibly wraps.
 
         Returns True when the flag changed (so callers can refresh).
         """
@@ -246,7 +254,14 @@ class ApprovalArgsRow(Widget):
         # short strings as overflowing (chevron appears for text that
         # DOES fit on its own).
         available = max(0, width - len(_PREFIX))
-        new_flag = len(self._target) > available
+        # qol-048 — treat any embedded newline as overflow so the
+        # chevron + Tab hint remain visible on multi-line targets
+        # (heredoc bash, formatted JSON). Without this, a short but
+        # multi-line target renders across multiple rows with no
+        # discoverability affordance — the chrome loses parity with
+        # the actual render shape. ``"\n" in`` also catches ``\r\n``
+        # because ``\n`` is a substring of ``\r\n``.
+        new_flag = len(self._target) > available or "\n" in self._target
         if new_flag != self._overflow:
             self._overflow = new_flag
             return True
