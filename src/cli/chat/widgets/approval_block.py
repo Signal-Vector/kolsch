@@ -51,10 +51,12 @@ from __future__ import annotations
 import asyncio
 
 from textual.app import ComposeResult
+from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widget import Widget
 from textual.widgets import Static
 
+from cli.chat.widgets.approval_args_row import ApprovalArgsRow
 from cli.chat.widgets.approval_choice_pane import ApprovalChoicePane
 from cli.chat.widgets.approval_pattern_edit import ApprovalPatternEdit
 from cli.chat.widgets.approval_save_confirm import ApprovalSaveConfirm
@@ -165,6 +167,15 @@ class ApprovalBlock(Vertical):
     }
     """
 
+    # qol-047: block-level Tab binding toggles the expandable Args row.
+    # Fires from any focused descendant (choice/pattern/save panes) —
+    # none of those panes bind Tab, and Input doesn't either, so this
+    # binding is reached via Textual's bubble-up-to-ancestors mechanism
+    # before Screen's default ``app.focus_next`` binding wins.
+    BINDINGS = [
+        Binding("tab", "toggle_args", "expand/collapse Args", show=False),
+    ]
+
     # Step ids used in the breadcrumb builder.
     _STEP_CHOOSE = 0
     _STEP_PATTERN = 1
@@ -223,14 +234,17 @@ class ApprovalBlock(Vertical):
         self.border_title = "⚠  Tool approval"
         yield Static(self._breadcrumb_text(), classes="breadcrumb", markup=True)
         yield Static(f"Tool  {self._action}", classes="context", markup=False)
-        yield Static(f"Args  {self._target}", classes="context", markup=False)
+        # qol-047: swap the previously-truncating Static for a small
+        # custom widget that detects overflow and offers a chevron +
+        # Tab-to-expand affordance. See ``approval_args_row.py``.
+        yield ApprovalArgsRow(self._target)
         yield Static(f"Rule  {self._rule_id}", classes="context", markup=False)
         yield Static("", classes="spacer")
         initial = ApprovalChoicePane()
         self._current_pane = initial
         yield initial
         yield Static(
-            "Esc → deny once",
+            self._choice_footer_hint(),
             classes="footer-help",
             markup=False,
         )
@@ -249,6 +263,11 @@ class ApprovalBlock(Vertical):
         """Move focus to the first pane so keybindings capture keys."""
         if self._current_pane is not None:
             self._current_pane.focus()
+        # qol-047: the args row's overflow flag is only meaningful once
+        # layout has assigned it a width. Schedule a footer refresh on
+        # the next render frame so the initial "Tab → expand args"
+        # suffix appears when the target is already too long to fit.
+        self.call_after_refresh(self._refresh_footer_help)
 
     # ------------------------------------------------------------------
     # Message handlers
@@ -372,6 +391,81 @@ class ApprovalBlock(Vertical):
             )
 
     # ------------------------------------------------------------------
+    # qol-047 — Args-row expansion
+    # ------------------------------------------------------------------
+
+    def action_toggle_args(self) -> None:
+        """Tab binding — forward to the args-row widget's own toggle.
+
+        Wrapping the call this way keeps the pane-owned bindings
+        (y/a/n/d/esc, Enter/Esc) untouched — Tab lives on the block,
+        not on any pane.
+        """
+        try:
+            args_row = self.query_one(ApprovalArgsRow)
+        except Exception:  # noqa: BLE001 — during resolve the row may already be gone
+            return
+        args_row.action_toggle_expand()
+
+    def on_approval_args_row_toggled(
+        self,
+        event: ApprovalArgsRow.Toggled,
+    ) -> None:
+        """Update the footer hint when the args-row expansion flips.
+
+        Stops the message here — no ancestor cares about it.
+        """
+        event.stop()
+        self._refresh_footer_help()
+
+    def _refresh_footer_help(self) -> None:
+        """Recompute + push the footer help line for the current pane.
+
+        Uses the widget class of the current pane to pick the base
+        wording, then appends the qol-047 args-row suffix when the row
+        is overflowing.
+        """
+        try:
+            footer = self.query_one(".footer-help", Static)
+        except Exception:  # noqa: BLE001 — footer removed post-resolve
+            return
+        pane = self._current_pane
+        if isinstance(pane, ApprovalPatternEdit):
+            base = "Enter → next  ·  Esc → back to choice"
+        elif isinstance(pane, ApprovalSaveConfirm):
+            base = "Enter → save  ·  Esc → cancel (fall back)"
+        else:
+            base = "Esc → deny once"
+        footer.update(base + self._args_footer_suffix())
+
+    def _choice_footer_hint(self) -> str:
+        """Initial footer hint for the choice pane, including args suffix.
+
+        Called from ``compose`` before the args row has been laid out,
+        so the suffix is always empty at this point — the real hint
+        arrives via ``call_after_refresh(_refresh_footer_help)`` in
+        ``on_mount``. Kept as a helper for symmetry with the other
+        footer-string sites.
+        """
+        return "Esc → deny once" + self._args_footer_suffix()
+
+    def _args_footer_suffix(self) -> str:
+        """`` · Tab → expand args`` / ``· collapse args`` / empty.
+
+        AC #5. Only appears when the args row is actually overflowing;
+        wording follows current expansion state.
+        """
+        try:
+            args_row = self.query_one(ApprovalArgsRow)
+        except Exception:  # noqa: BLE001
+            return ""
+        if not args_row.overflowing:
+            return ""
+        if args_row.expanded:
+            return "  ·  Tab → collapse args"
+        return "  ·  Tab → expand args"
+
+    # ------------------------------------------------------------------
     # Internals
     # ------------------------------------------------------------------
 
@@ -421,7 +515,10 @@ class ApprovalBlock(Vertical):
             await self.mount(new_pane)
         try:
             footer = self.query_one(".footer-help", Static)
-            footer.update(footer_help)
+            # qol-047: append the args-expand hint suffix when the row
+            # overflows. ``footer_help`` remains the source of truth for
+            # the pane-specific wording; the suffix rides along.
+            footer.update(footer_help + self._args_footer_suffix())
         except Exception:  # noqa: BLE001
             pass
         # Focus the new pane so its bindings + Input see keystrokes.

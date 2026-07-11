@@ -280,9 +280,15 @@ async def test_persist_rule_prevents_reprompt(chat_app: Any) -> None:
         block = await _wait_for_approval_block(pilot, timeout=3.0)
 
         from textual.widgets import Static  # noqa: PLC0415
+        from cli.chat.widgets.approval_args_row import ApprovalArgsRow  # noqa: PLC0415
         context_lines = [
             str(w.content) for w in block.query(".context").results(Static)
         ]
+        # qol-047: the Args row is an ``ApprovalArgsRow`` now, not a
+        # ``.context`` Static. Pick its rendered text out separately.
+        for args_row in block.query(ApprovalArgsRow):
+            for sub in args_row.query(Static):
+                context_lines.append(str(sub.content))
         joined = "\n".join(context_lines)
         assert target_ref in joined, (
             f"Args line missing workflow ref. Context: {joined!r}"
@@ -390,15 +396,21 @@ async def test_args_line_shows_workflow_ref(chat_app: Any) -> None:
         block = await _wait_for_approval_block(pilot, timeout=3.0)
 
         from textual.widgets import Static  # noqa: PLC0415
+        from cli.chat.widgets.approval_args_row import ApprovalArgsRow  # noqa: PLC0415
         context_lines = [
             str(w.content) for w in block.query(".context").results(Static)
         ]
-        # 3 lines: Tool / Args / Rule.
-        assert len(context_lines) == 3
-        args_line = next(
-            (line for line in context_lines if line.startswith("Args")),
-            None,
-        )
+        # qol-047: after the swap, the block yields 2 ``.context``
+        # Statics (Tool / Rule) plus 1 ``ApprovalArgsRow``.
+        assert len(context_lines) == 2
+        args_rows = list(block.query(ApprovalArgsRow))
+        assert len(args_rows) == 1
+        args_line: str | None = None
+        for sub in args_rows[0].query(Static):
+            text = str(sub.content)
+            context_lines.append(text)
+            if text.startswith("Args"):
+                args_line = text
         assert args_line is not None
         assert target_ref in args_line, (
             f"Args line missing workflow ref: {args_line!r}"

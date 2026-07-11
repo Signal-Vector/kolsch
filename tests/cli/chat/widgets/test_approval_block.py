@@ -86,12 +86,22 @@ async def test_initial_state_shows_choice_pane(
     async with app.run_test():
         current = await _current_pane(block)
         assert isinstance(current, ApprovalChoicePane)
-        # Context Statics must include the identity strings somewhere.
-        context_texts = "\n".join(
-            str(child.render())
-            for child in block.children
-            if child.has_class("context")
-        )
+        # Context rows must include the identity strings somewhere. Two
+        # kinds of context children after qol-047: the ``.context``
+        # Statics (Tool / Rule) and the ``ApprovalArgsRow`` widget
+        # (Args) — check both.
+        from cli.chat.widgets.approval_args_row import ApprovalArgsRow
+
+        parts: list[str] = []
+        for child in block.children:
+            if child.has_class("context"):
+                parts.append(str(child.render()))
+            elif isinstance(child, ApprovalArgsRow):
+                # Widget renders through a child Static; walk its own
+                # subtree for the visible text.
+                for sub in child.query("Static"):
+                    parts.append(str(sub.render()))
+        context_texts = "\n".join(parts)
         assert "rl_test" in context_texts
         assert "kolsch/tools/bash" in context_texts
         assert "ls -la" in context_texts
