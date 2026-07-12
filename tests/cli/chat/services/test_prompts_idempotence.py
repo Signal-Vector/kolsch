@@ -32,7 +32,7 @@ from schemas.wire_kinds import (
 )
 
 
-class _FakeApp:
+class _MockApp:
     def __init__(self) -> None:
         self.mount_calls: list[tuple[Any, Any, Any]] = []
 
@@ -46,7 +46,7 @@ class _FakeApp:
         return object()
 
 
-class _FakePromptsImpl:
+class _MockPromptsImpl:
     def __init__(self) -> None:
         self.resolves: list[tuple[str, str]] = []
         self.cancels: list[str] = []
@@ -59,7 +59,7 @@ class _FakePromptsImpl:
         rule: dict[str, Any] | None = None,
     ) -> None:
         # bug-025: accept the optional `rule=` kwarg for wire-payload
-        # forwarding; this fake ignores it (idempotence tests don't
+        # forwarding; this mock ignores it (idempotence tests don't
         # exercise the rule-persist path).
         _ = rule
         self.resolves.append((prompt_id, response))
@@ -88,7 +88,7 @@ def _mk_ui_event(kind: str, prompt_id: str, **payload: Any) -> Event:
 
 
 async def test_requested_dispatched_twice_mounts_once() -> None:
-    app = _FakeApp()
+    app = _MockApp()
     adapter = EventAdapter(app)  # type: ignore[arg-type]
 
     ev = _mk_ui_event(
@@ -106,8 +106,8 @@ async def test_requested_dispatched_twice_mounts_once() -> None:
 
 
 async def test_answered_dispatched_twice_resolves_once() -> None:
-    app = _FakeApp()
-    prompts = _FakePromptsImpl()
+    app = _MockApp()
+    prompts = _MockPromptsImpl()
     adapter = EventAdapter(app)  # type: ignore[arg-type]
     adapter.register_prompts_impl(prompts)  # type: ignore[arg-type]
 
@@ -119,8 +119,8 @@ async def test_answered_dispatched_twice_resolves_once() -> None:
 
 
 async def test_cancelled_dispatched_twice_cancels_once() -> None:
-    app = _FakeApp()
-    prompts = _FakePromptsImpl()
+    app = _MockApp()
+    prompts = _MockPromptsImpl()
     adapter = EventAdapter(app)  # type: ignore[arg-type]
     adapter.register_prompts_impl(prompts)  # type: ignore[arg-type]
 
@@ -137,7 +137,7 @@ async def test_bounded_lru_evicts_first_at_maxsize() -> None:
     Documented as best-effort in the spec. Re-dispatching the evicted
     id triggers a fresh mount.
     """
-    app = _FakeApp()
+    app = _MockApp()
     adapter = EventAdapter(app)  # type: ignore[arg-type]
 
     # Dispatch 1000 unique ids; each mounts once.

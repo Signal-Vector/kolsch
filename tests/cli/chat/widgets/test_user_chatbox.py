@@ -1,7 +1,7 @@
 """Pilot tests for `UserChatbox`.
 
 Modularity rule (spec Design Principles #2): the widget is tested
-in isolation via `fake_app_factory` from the package conftest —
+in isolation via `mock_app_factory` from the package conftest —
 no other widget, no theme.tcss, no app-level wiring is required
 for the assertions below to hold.
 
@@ -29,10 +29,10 @@ from cli.chat.widgets.user_chatbox import UserChatbox
 
 
 @pytest.mark.asyncio
-async def test_user_chatbox_mounts_with_border_title(fake_app_factory) -> None:
+async def test_user_chatbox_mounts_with_border_title(mock_app_factory) -> None:
     ts = datetime(2026, 7, 4, 14, 30, 45, tzinfo=UTC)
     widget = UserChatbox("hello world", ts)
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -42,7 +42,7 @@ async def test_user_chatbox_mounts_with_border_title(fake_app_factory) -> None:
 
 @pytest.mark.asyncio
 async def test_user_chatbox_renders_literal_text_with_backticks(
-    fake_app_factory,
+    mock_app_factory,
 ) -> None:
     """Backticks (markdown code) and brackets (Rich markup) must
     survive as literal characters — the user chatbox is NOT a
@@ -51,7 +51,7 @@ async def test_user_chatbox_renders_literal_text_with_backticks(
     ts = datetime(2026, 7, 4, 9, 0, 0, tzinfo=UTC)
     raw = "check `foo.py` and [bold]not bold[/bold]"
     widget = UserChatbox(raw, ts)
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -73,7 +73,7 @@ async def test_user_chatbox_renders_literal_text_with_backticks(
 
 @pytest.mark.asyncio
 async def test_user_chatbox_default_css_uses_user_border_variable(
-    fake_app_factory,
+    mock_app_factory,
 ) -> None:
     """The widget's DEFAULT_CSS must reference the ``$user-border``
     theme variable (not a hardcoded hex) and declare a rounded
@@ -82,7 +82,7 @@ async def test_user_chatbox_default_css_uses_user_border_variable(
 
     ts = datetime(2026, 7, 4, 0, 0, 0, tzinfo=UTC)
     widget = UserChatbox("x", ts)
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -93,14 +93,14 @@ async def test_user_chatbox_default_css_uses_user_border_variable(
 
 @pytest.mark.asyncio
 async def test_user_chatbox_title_pads_single_digit_time(
-    fake_app_factory,
+    mock_app_factory,
 ) -> None:
     """Border title uses HH:MM:SS with zero-padding — never
     ``9:5:1``."""
 
     ts = datetime(2026, 1, 1, 9, 5, 1, tzinfo=UTC)
     widget = UserChatbox("morning", ts)
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
 
     async with app.run_test() as pilot:
         await pilot.pause()

@@ -20,7 +20,7 @@ from cli.chat.app import ChatApp
 from cli.chat.services.cards_impl import CardsImpl
 
 
-class _FakeAuthz:
+class _MockAuthz:
     def register_prompt_callback(
         self, callback: Any, *, on_rule_added: Any = None,
     ) -> None:  # noqa: ARG002
@@ -30,7 +30,7 @@ class _FakeAuthz:
         return None
 
 
-class _FakeEngine:
+class _MockEngine:
     async def execute_stream(self, config: Any, ctx: Any):  # noqa: ARG002
         if False:
             yield  # pragma: no cover
@@ -38,14 +38,14 @@ class _FakeEngine:
 
 
 @dataclass
-class _FakeConfig:
+class _MockConfig:
     name: str = "TestAgent"
-    agent_id: str = "ag_fake"
+    agent_id: str = "ag_mock"
     model: Any = None
 
 
 @dataclass
-class _FakeBundle:
+class _MockBundle:
     runtime: Any
     config: Any
     session_id: Any
@@ -56,21 +56,21 @@ class _FakeBundle:
     is_resume: bool
 
 
-def _mk_bundle(tmp_path: Path, store: Any) -> _FakeBundle:
+def _mk_bundle(tmp_path: Path, store: Any) -> _MockBundle:
     class _R:
         def __init__(self) -> None:
             self.store = store
-            self.authz = _FakeAuthz()
-            self.engine = _FakeEngine()
+            self.authz = _MockAuthz()
+            self.engine = _MockEngine()
 
-    return _FakeBundle(
+    return _MockBundle(
         runtime=_R(),
-        config=_FakeConfig(),
+        config=_MockConfig(),
         session_id="ses_test",
         thread_id="th_test",
-        agent_ref="kolsch/agents/fake",
+        agent_ref="kolsch/agents/mock",
         root=tmp_path,
-        model_label="fake/test",
+        model_label="mock/test",
         is_resume=False,
     )
 
@@ -84,21 +84,21 @@ async def test_on_mount_registers_cards_impl(tmp_path: Path) -> None:
     backend = SqliteBackend(platform_dir / "entities.db")
     await backend.initialize()
     store = SessionStore(root=tmp_path, backend=backend)
-    session = await store.create_session("ag_fake", name="c")
+    session = await store.create_session("ag_mock", name="c")
     threads = await store.list_threads(session.session_id)
 
-    bundle = _FakeBundle(
+    bundle = _MockBundle(
         runtime=type(
             "R",
             (),
-            {"store": store, "authz": _FakeAuthz(), "engine": _FakeEngine()},
+            {"store": store, "authz": _MockAuthz(), "engine": _MockEngine()},
         )(),
-        config=_FakeConfig(),
+        config=_MockConfig(),
         session_id=session.session_id,
         thread_id=threads[0].thread_id,
-        agent_ref="kolsch/agents/fake",
+        agent_ref="kolsch/agents/mock",
         root=tmp_path,
-        model_label="fake/test",
+        model_label="mock/test",
         is_resume=False,
     )
 
@@ -124,21 +124,21 @@ async def test_on_unmount_calls_cards_aclose(tmp_path: Path) -> None:
     backend = SqliteBackend(platform_dir / "entities.db")
     await backend.initialize()
     store = SessionStore(root=tmp_path, backend=backend)
-    session = await store.create_session("ag_fake", name="c")
+    session = await store.create_session("ag_mock", name="c")
     threads = await store.list_threads(session.session_id)
 
-    bundle = _FakeBundle(
+    bundle = _MockBundle(
         runtime=type(
             "R",
             (),
-            {"store": store, "authz": _FakeAuthz(), "engine": _FakeEngine()},
+            {"store": store, "authz": _MockAuthz(), "engine": _MockEngine()},
         )(),
-        config=_FakeConfig(),
+        config=_MockConfig(),
         session_id=session.session_id,
         thread_id=threads[0].thread_id,
-        agent_ref="kolsch/agents/fake",
+        agent_ref="kolsch/agents/mock",
         root=tmp_path,
-        model_label="fake/test",
+        model_label="mock/test",
         is_resume=False,
     )
 

@@ -12,11 +12,11 @@ from __future__ import annotations
 from typing import Any
 
 from engine._crewai_adapter import _tool_to_openai_spec
-from engine.fake_framework import MinimalFramework
+from engine.mock_framework import MinimalFramework
 from engine.framework import LLMRequest, LLMResponse
 
 
-class _FakeToolHandle:
+class _MockToolHandle:
     """Minimal ToolHandle stand-in with the Protocol's three attrs."""
 
     def __init__(self, *, name: str, description: str, schema: dict[str, Any]) -> None:
@@ -41,9 +41,9 @@ class _CapturingLLM:
 
 async def test_run_exchange_emits_description_key() -> None:
     """`run_exchange` includes each tool's description in `LLMRequest.tools`."""
-    framework = MinimalFramework(model_name="fake-test")
+    framework = MinimalFramework(model_name="mock-test")
     llm = _CapturingLLM()
-    handle = _FakeToolHandle(
+    handle = _MockToolHandle(
         name="do_x",
         description="Do X. Prefer this over bash.",
         schema={"type": "object", "properties": {}},

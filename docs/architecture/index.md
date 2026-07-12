@@ -71,7 +71,7 @@ runtime; in-process by default, Redis for cross-process delivery.
 Memory, secrets, sandbox, and authorization sit behind protocols you
 can swap per workspace. [Providers](providers.md) covers all four.
 [LLM Connectors](llm.md) wires up Anthropic, OpenRouter, OpenCode,
-and a fake provider for tests. [Files](files.md) enforces the path
+and a mock provider for tests. [Files](files.md) enforces the path
 policy that file-touching tools have to honor.
 
 [Schemas](schemas.md) defines the shared types — identifiers,

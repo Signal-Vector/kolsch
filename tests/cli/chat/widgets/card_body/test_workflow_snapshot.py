@@ -14,9 +14,9 @@ from cli.chat.widgets.card_body.workflow import WorkflowRenderer
 
 
 @pytest.mark.asyncio
-async def test_apply_snapshot_is_noop(fake_app_factory) -> None:
+async def test_apply_snapshot_is_noop(mock_app_factory) -> None:
     renderer = WorkflowRenderer()
-    app = fake_app_factory(renderer)
+    app = mock_app_factory(renderer)
     async with app.run_test() as pilot:
         await pilot.pause()
         # Snapshot with arbitrary content — must not raise.

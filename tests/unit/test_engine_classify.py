@@ -6,7 +6,7 @@ Pure-function tests for the cause-chain helper. Integration coverage
 
 The helper matches on ``f"{module}.{name}"`` strings so the engine
 does not hard-import any provider SDK at module load. These tests
-build fake exception classes with the right ``__module__`` /
+build mock exception classes with the right ``__module__`` /
 ``__qualname__`` so the matcher fires without needing ``openai``
 installed in the unit-test path.
 """

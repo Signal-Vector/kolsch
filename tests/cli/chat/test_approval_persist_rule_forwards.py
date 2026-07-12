@@ -35,7 +35,7 @@ from schemas.wire_kinds import WIRE_PROMPT_ANSWERED, WIRE_PROMPT_REQUESTED
 from store import SessionStore, SqliteBackend
 
 
-class _FakeBlock:
+class _MockBlock:
     def __init__(self) -> None:
         self._event = asyncio.Event()
         self._result: Any = None
@@ -49,8 +49,8 @@ class _FakeBlock:
         return self._result
 
 
-class _FakeApp:
-    def __init__(self, *, block: _FakeBlock) -> None:
+class _MockApp:
+    def __init__(self, *, block: _MockBlock) -> None:
         self._block = block
 
     async def mount_approval_block(
@@ -130,8 +130,8 @@ async def test_bridge_serializes_rule_dict(store: SessionStore) -> None:
     """Widget resolves with (ALLOW, Rule) → payload carries `rule`."""
     session = await store.create_session("ag_test", name="rule_fwd")
     thread_id = (await store.list_threads(session.session_id))[0].thread_id
-    block = _FakeBlock()
-    app = _FakeApp(block=block)
+    block = _MockBlock()
+    app = _MockApp(block=block)
     adapter = EventAdapter(
         app,
         session_store=store,
@@ -166,8 +166,8 @@ async def test_bridge_fast_path_omits_rule_field(store: SessionStore) -> None:
     """
     session = await store.create_session("ag_test", name="rule_bare")
     thread_id = (await store.list_threads(session.session_id))[0].thread_id
-    block = _FakeBlock()
-    app = _FakeApp(block=block)
+    block = _MockBlock()
+    app = _MockApp(block=block)
     adapter = EventAdapter(
         app,
         session_store=store,

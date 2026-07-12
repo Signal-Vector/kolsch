@@ -24,9 +24,9 @@ from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 
 
 @pytest.mark.asyncio
-async def test_three_sub_agent_events_increment_count(fake_app_factory) -> None:
+async def test_three_sub_agent_events_increment_count(mock_app_factory) -> None:
     row = WorkflowNodeRow(node_name="n")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         for i in range(3):
@@ -38,11 +38,11 @@ async def test_three_sub_agent_events_increment_count(fake_app_factory) -> None:
 
 @pytest.mark.asyncio
 async def test_collapsed_row_does_not_mount_sub_agent(
-    fake_app_factory,
+    mock_app_factory,
 ) -> None:
     """Collapsed row: closures queued in ``_pending_mounts``; counter still bumps."""
     row = WorkflowNodeRow(node_name="n")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         # Row starts collapsed (Collapsible default in __init__).
@@ -60,9 +60,9 @@ async def test_collapsed_row_does_not_mount_sub_agent(
 
 
 @pytest.mark.asyncio
-async def test_expanded_row_mounts_sub_agent(fake_app_factory) -> None:
+async def test_expanded_row_mounts_sub_agent(mock_app_factory) -> None:
     row = WorkflowNodeRow(node_name="n")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         row.collapsed = False

@@ -263,7 +263,7 @@ class TestModuleIsolation:
     def test_bundle_imports_removed_third_party_survives(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Lay down a fake bundle Python file the test can import.
+        # Lay down a mock bundle Python file the test can import.
         bundle_dir = tmp_path / "bundles" / "demo" / "nodes"
         bundle_dir.mkdir(parents=True)
         (bundle_dir / "echo.py").write_text("MARKER = 42\n", encoding="utf-8")

@@ -12,7 +12,7 @@ the provider because the runtime hardcoded `llm=EchoLLMDriver` per
 
 Post-fix behaviour: when `llm_providers` is populated AND the caller
 didn't pass `llm=`, the runtime wires `llm_for_model=` to a
-build_llm-backed per-spec factory. `provider: fake` short-circuits to
+build_llm-backed per-spec factory. `provider: mock` short-circuits to
 EchoLLM inside the factory (AC #3 — preserves the no-creds tutorial
 path).
 
@@ -95,7 +95,7 @@ def _write_workspace(root: Path) -> None:
         ),
         encoding="utf-8",
     )
-    (root / ".env").write_text("OPENROUTER_API_KEY=sk-fake-test\n", encoding="utf-8")
+    (root / ".env").write_text("OPENROUTER_API_KEY=sk-mock-test\n", encoding="utf-8")
     bundle = root / "bundles" / "demo"
     (bundle / "agents").mkdir(parents=True, exist_ok=True)
     (bundle / "bundle.yaml").write_text(
@@ -199,26 +199,26 @@ async def test_tc_bug_echo_01_real_provider_does_not_echo(tmp_path: Path) -> Non
     assert agent_msg.data["content"]["text"] == _DISTINCTIVE
 
 
-async def test_fake_provider_agent_still_echoes_post_fix(tmp_path: Path) -> None:
-    """AC #3 — fake-LLM behaviour preserved for `provider: fake` agents
+async def test_mock_provider_agent_still_echoes_post_fix(tmp_path: Path) -> None:
+    """AC #3 — mock-LLM behaviour preserved for `provider: mock` agents
     even when real providers are configured. The factory inspects the
     spec and short-circuits to EchoLLMDriver before calling
     build_llm."""
     _write_workspace(tmp_path)
-    # Replace the agent's model with `provider: fake`.
+    # Replace the agent's model with `provider: mock`.
     agent_path = tmp_path / "bundles" / "demo" / "agents" / "realagent.yaml"
     cfg = yaml.safe_load(agent_path.read_text())
-    cfg["model"] = {"provider": "fake", "model": "fake-model"}
+    cfg["model"] = {"provider": "mock", "model": "mock-model"}
     agent_path.write_text(yaml.safe_dump(cfg), encoding="utf-8")
 
     runtime = await bootstrap_runtime(root=tmp_path)
-    # Factory IS wired (providers are configured), but `provider: fake`
+    # Factory IS wired (providers are configured), but `provider: mock`
     # should still produce echo output.
     assert runtime.engine._llm_for_model is not None
 
     config = await runtime.build_resolved_config("demo/agents/realagent")
     session = await runtime.store.create_session(
-        str(config.agent_id), name="ac3-fake-preserved"
+        str(config.agent_id), name="ac3-mock-preserved"
     )
     threads = await runtime.store.list_threads(session.session_id)
     ctx = ExecutionContext(
@@ -227,5 +227,5 @@ async def test_fake_provider_agent_still_echoes_post_fix(tmp_path: Path) -> None
     )
     agent_msg = await runtime.engine.execute(config, ctx)
     # EchoLLMDriver prefixes with "Echo:" — confirming the factory
-    # routed `provider: fake` through the dev driver.
+    # routed `provider: mock` through the dev driver.
     assert agent_msg.data["content"]["text"] == "Echo: preserved"

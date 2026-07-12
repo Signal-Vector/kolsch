@@ -36,7 +36,7 @@ from schemas.identifiers import EventId
 from store import SessionStore, SqliteBackend
 
 
-class _FakeChatApp:
+class _MockChatApp:
     """Minimal ChatApp double — record every dispatched event by id."""
 
     def __init__(self) -> None:
@@ -50,11 +50,11 @@ class _FakeChatApp:
         return None
 
     async def mount_assistant_streaming_widget(self) -> Any:
-        class _FakeProse:
+        class _MockProse:
             async def append(self, text: str) -> None:
                 return None
 
-        return _FakeProse()
+        return _MockProse()
 
     async def mount_tool_call(self, *args: Any, **kwargs: Any) -> None:
         return None
@@ -136,7 +136,7 @@ async def test_no_bookmark_replays_all_events(store: SessionStore) -> None:
     # 5 events (the session.opened already exists → total 6).
     seeded = await _seed_events(store, session.session_id, thread_id, 5)
 
-    app = _FakeChatApp()
+    app = _MockChatApp()
     adapter = _RecordingAdapter(
         app,  # type: ignore[arg-type]
         session_store=store,
@@ -163,7 +163,7 @@ async def test_bookmark_replays_only_after_marker(store: SessionStore) -> None:
     # means we replay [s3, s4] only.
     meta = SessionMeta(event_adapter_bookmark=seeded[2].event_id)
 
-    app = _FakeChatApp()
+    app = _MockChatApp()
     adapter = _RecordingAdapter(
         app,  # type: ignore[arg-type]
         session_store=store,
@@ -193,7 +193,7 @@ async def test_unknown_bookmark_falls_back_to_full_replay(
     bogus = EventId(f"ev_{uuid4()}")
     meta = SessionMeta(event_adapter_bookmark=bogus)
 
-    app = _FakeChatApp()
+    app = _MockChatApp()
     adapter = _RecordingAdapter(
         app,  # type: ignore[arg-type]
         session_store=store,
@@ -227,7 +227,7 @@ async def test_bookmark_persists_every_100_dispatches(
     # plus one on aclose() = 3 total.
     await _seed_events(store, session.session_id, thread_id, 205)
 
-    app = _FakeChatApp()
+    app = _MockChatApp()
     adapter = _RecordingAdapter(
         app,  # type: ignore[arg-type]
         session_store=store,
@@ -274,7 +274,7 @@ async def test_start_is_idempotent(store: SessionStore) -> None:
     thread_id = threads[0].thread_id
     await _seed_events(store, session.session_id, thread_id, 3)
 
-    app = _FakeChatApp()
+    app = _MockChatApp()
     adapter = _RecordingAdapter(
         app,  # type: ignore[arg-type]
         session_store=store,

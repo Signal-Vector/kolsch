@@ -1,6 +1,6 @@
 """Pilot tests for :class:`ApprovalSaveConfirm`.
 
-Framework-native: mount the widget in isolation via ``fake_app_factory``,
+Framework-native: mount the widget in isolation via ``mock_app_factory``,
 press each bound key via ``Pilot.press``, and assert the ``Chosen``
 message was posted with the matching key.
 
@@ -21,13 +21,13 @@ from cli.chat.widgets.approval_save_confirm import ApprovalSaveConfirm
 
 
 @pytest.mark.asyncio
-async def test_preview_and_fallback_label_visible(fake_app_factory):
+async def test_preview_and_fallback_label_visible(mock_app_factory):
     widget = ApprovalSaveConfirm(
         preview="authz.allow  bash(\"ls -la\")",
         deny=False,
         fallback_label="allow once",
     )
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
         preview = str(widget.query_one(".preview").render())
@@ -38,13 +38,13 @@ async def test_preview_and_fallback_label_visible(fake_app_factory):
 
 
 @pytest.mark.asyncio
-async def test_deny_flag_marks_preview_class(fake_app_factory):
+async def test_deny_flag_marks_preview_class(mock_app_factory):
     widget = ApprovalSaveConfirm(
         preview="authz.deny  bash(\"rm -rf /\")",
         deny=True,
         fallback_label="deny once",
     )
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
         preview_static = widget.query_one(".preview")
@@ -61,14 +61,14 @@ async def test_deny_flag_marks_preview_class(fake_app_factory):
     ],
 )
 async def test_posts_chosen_for_each_key(
-    fake_app_factory, key_press: str, expected: str,
+    mock_app_factory, key_press: str, expected: str,
 ) -> None:
     widget = ApprovalSaveConfirm(
         preview="authz.allow  bash(\"ls\")",
         deny=False,
         fallback_label="allow once",
     )
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
 
     seen: list[str] = []
 

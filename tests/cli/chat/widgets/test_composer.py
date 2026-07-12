@@ -11,7 +11,7 @@ Covers the widget's public behavioural contract in isolation:
   placeholder; flipping it back restores the default.
 
 Each test wraps the composer in a minimal host `App` via the
-`fake_app_factory` fixture from `tests/cli/chat/conftest.py`, so
+`mock_app_factory` fixture from `tests/cli/chat/conftest.py`, so
 nothing here depends on `theme.tcss`, other widgets, or the event
 adapter.
 """
@@ -24,10 +24,10 @@ from cli.chat.widgets.composer import Composer
 
 
 @pytest.mark.asyncio
-async def test_default_placeholder_matches_spec(fake_app_factory) -> None:
+async def test_default_placeholder_matches_spec(mock_app_factory) -> None:
     """Fresh composer shows the spec-mandated placeholder text."""
     composer = Composer()
-    app = fake_app_factory(composer)
+    app = mock_app_factory(composer)
     async with app.run_test() as pilot:
         await pilot.pause()
         # Placeholder hints at newline keys since Shift+Enter is
@@ -49,7 +49,7 @@ async def test_default_placeholder_matches_spec(fake_app_factory) -> None:
 
 @pytest.mark.asyncio
 async def test_max_height_enforced_after_typing_eight_lines(
-    fake_app_factory,
+    mock_app_factory,
 ) -> None:
     """CSS `max-height: 6` bounds the widget region at six rows.
 
@@ -59,7 +59,7 @@ async def test_max_height_enforced_after_typing_eight_lines(
     document; Textual scrolls it internally.
     """
     composer = Composer()
-    app = fake_app_factory(composer)
+    app = mock_app_factory(composer)
     async with app.run_test(size=(80, 20)) as pilot:
         composer.focus()
         await pilot.pause()
@@ -76,12 +76,12 @@ async def test_max_height_enforced_after_typing_eight_lines(
 
 @pytest.mark.asyncio
 async def test_enter_posts_submitted_message_with_content(
-    fake_app_factory,
+    mock_app_factory,
 ) -> None:
     """Pressing Enter posts `Composer.Submitted` with the current text."""
     captured: list[str] = []
 
-    class _Host(type(fake_app_factory(Composer()))):
+    class _Host(type(mock_app_factory(Composer()))):
         def on_composer_submitted(self, event: Composer.Submitted) -> None:
             captured.append(event.content)
 
@@ -104,11 +104,11 @@ async def test_enter_posts_submitted_message_with_content(
 
 @pytest.mark.asyncio
 async def test_awaiting_approval_disables_and_swaps_placeholder(
-    fake_app_factory,
+    mock_app_factory,
 ) -> None:
     """Toggling `awaiting_approval` disables + swaps; toggling back restores."""
     composer = Composer()
-    app = fake_app_factory(composer)
+    app = mock_app_factory(composer)
     async with app.run_test() as pilot:
         await pilot.pause()
         assert composer.disabled is False
@@ -129,7 +129,7 @@ async def test_awaiting_approval_disables_and_swaps_placeholder(
 
 @pytest.mark.asyncio
 async def test_enter_while_awaiting_approval_does_not_submit(
-    fake_app_factory,
+    mock_app_factory,
 ) -> None:
     """Disabled composer swallows key input and does not post `Submitted`.
 
@@ -139,7 +139,7 @@ async def test_enter_while_awaiting_approval_does_not_submit(
     """
     captured: list[str] = []
 
-    class _Host(type(fake_app_factory(Composer()))):
+    class _Host(type(mock_app_factory(Composer()))):
         def on_composer_submitted(self, event: Composer.Submitted) -> None:
             captured.append(event.content)
 

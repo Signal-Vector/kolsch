@@ -4,7 +4,7 @@ Boots a real `ChatApp` via Pilot against a workspace scaffolded with
 `kolsch setup --non-interactive`, using the shipped helper agent
 (the same one `kolsch chat` binds by default). A scripted
 `LLMHandle` emits a `run_workflow(ref="kolsch/workflows/hello")`
-tool call in response to prose "run the greet workflow". A fake
+tool call in response to prose "run the greet workflow". A mock
 workflow executor is installed on the runtime's `WorkflowsImpl` so
 the tool completes deterministically.
 
@@ -45,9 +45,9 @@ from cli.chat.widgets.card_widget import CardWidget
 from engine.framework import LLMRequest, LLMResponse
 from platform_runtime import bootstrap_runtime
 from schemas.events import EventType
-from tests.cli.chat.services.fakes import (
-    FakeExecutorSpec,
-    install_fake_executor_factory,
+from tests.cli.chat.services.mocks import (
+    MockExecutorSpec,
+    install_mock_executor_factory,
 )
 from workflows.events import (
     WorkflowNodeStartedEvent,
@@ -224,9 +224,9 @@ async def test_prose_run_workflow_triggers_run_workflow_tool_call(
             "ChatApp.on_mount failed to build WorkflowsImpl for the shipped "
             "helper agent — bug-020 plumbing regression."
         )
-        install_fake_executor_factory(
+        install_mock_executor_factory(
             workflows_impl,
-            {workflow_ref: FakeExecutorSpec(
+            {workflow_ref: MockExecutorSpec(
                 events=_mk_workflow_events(),
                 per_event_delay=0.02,
             )},
@@ -327,7 +327,7 @@ async def test_prose_run_workflow_triggers_run_workflow_tool_call(
         )
 
         # Assertion 4 (AC #10.3): the renderer received RUN_STARTED
-        # (populated at least one node row after the fake executor
+        # (populated at least one node row after the mock executor
         # fired NODE_STARTED).
         for _ in range(100):
             await pilot.pause()

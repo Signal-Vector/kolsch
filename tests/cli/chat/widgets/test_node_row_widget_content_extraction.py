@@ -41,11 +41,11 @@ _AppFactory = Callable[[Widget], App[None]]
 
 @pytest.mark.asyncio
 async def test_set_output_bash_shape_renders_real_newlines(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """AC #1 + bug-037 — bash-shape output section contains real newlines."""
     row = WorkflowNodeRow(node_name="n")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -85,12 +85,12 @@ def test_extract_content_text_returns_readable_string_for_dict() -> None:
 
 @pytest.mark.asyncio
 async def test_assistant_prose_mount_lands_inside_contents(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """bug-036d — ``mount_assistant_message`` mounts inside Contents."""
     row = WorkflowNodeRow(node_name="n")
     row.collapsed = False
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -106,7 +106,7 @@ async def test_assistant_prose_mount_lands_inside_contents(
 
 @pytest.mark.asyncio
 async def test_tool_call_body_renders_bash_shape_with_real_newlines(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """bug-034 — the shared helper renders tool.result bash-shape bodies."""
     body = _format_content_dict({"stdout": "hello\nworld", "exit_code": 0})
@@ -118,12 +118,12 @@ async def test_tool_call_body_renders_bash_shape_with_real_newlines(
 
 @pytest.mark.asyncio
 async def test_tool_call_block_mounts_via_sink(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """bug-036d — ``mount_tool_call`` mounts a ``ToolCallBlock`` in Contents."""
     row = WorkflowNodeRow(node_name="n")
     row.collapsed = False
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 

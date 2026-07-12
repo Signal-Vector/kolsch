@@ -21,7 +21,7 @@ from cli._slash import _handler_workflow
 from cli.chat.service_registry import ChatServiceRegistry
 
 
-class _FakeCard:
+class _MockCard:
     """Minimal Card impl — records `close` invocations."""
 
     def __init__(self) -> None:
@@ -46,11 +46,11 @@ class _FakeCard:
 @dataclass
 class _CardsSpy:
     open_calls: list[dict[str, Any]] = field(default_factory=list)
-    cards: list[_FakeCard] = field(default_factory=list)
+    cards: list[_MockCard] = field(default_factory=list)
 
-    async def open(self, title: str, kind: str = "markdown") -> _FakeCard:
+    async def open(self, title: str, kind: str = "markdown") -> _MockCard:
         self.open_calls.append({"title": title, "kind": kind})
-        card = _FakeCard()
+        card = _MockCard()
         self.cards.append(card)
         return card
 
@@ -76,35 +76,35 @@ class _WorkflowsSpy:
 
 
 @dataclass
-class _FakeCatalogEntry:
+class _MockCatalogEntry:
     ref: str
     path: str = "/tmp/does_not_matter.yaml"
 
 
-class _FakeCatalog:
+class _MockCatalog:
     def __init__(self, refs: list[str]) -> None:
         self._refs = set(refs)
 
     def lookup(
         self, ref: str, *, expected_type: str = "",
-    ) -> _FakeCatalogEntry | None:
+    ) -> _MockCatalogEntry | None:
         _ = expected_type
         if ref in self._refs:
-            return _FakeCatalogEntry(ref=ref)
+            return _MockCatalogEntry(ref=ref)
         return None
 
 
-class _FakeAM:
-    def __init__(self, catalog: _FakeCatalog) -> None:
+class _MockAM:
+    def __init__(self, catalog: _MockCatalog) -> None:
         self._catalog = catalog
 
-    def catalog(self) -> _FakeCatalog:
+    def catalog(self) -> _MockCatalog:
         return self._catalog
 
 
-class _FakeRuntime:
-    def __init__(self, catalog: _FakeCatalog) -> None:
-        self.asset_management = _FakeAM(catalog)
+class _MockRuntime:
+    def __init__(self, catalog: _MockCatalog) -> None:
+        self.asset_management = _MockAM(catalog)
         self.root = "/tmp"
 
 
@@ -114,7 +114,7 @@ def _make_state(
     cards: Any,
     workflows: Any,
 ) -> ChatSessionState:
-    runtime = _FakeRuntime(_FakeCatalog(catalog_refs))
+    runtime = _MockRuntime(_MockCatalog(catalog_refs))
     registry = ChatServiceRegistry(cards=cards, workflows=workflows)
     state = ChatSessionState(
         runtime=runtime,  # type: ignore[arg-type]
@@ -217,7 +217,7 @@ async def test_handler_workflow_does_not_call_execute_workflow_with_renderer(
 @pytest.mark.asyncio
 async def test_handler_workflow_missing_registry_prints_notice() -> None:
     """No service registry -> friendly one-line notice, no raise."""
-    runtime = _FakeRuntime(_FakeCatalog(["kolsch/workflows/demo"]))
+    runtime = _MockRuntime(_MockCatalog(["kolsch/workflows/demo"]))
     state = ChatSessionState(
         runtime=runtime,  # type: ignore[arg-type]
         config=None,  # type: ignore[arg-type]

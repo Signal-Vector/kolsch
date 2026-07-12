@@ -28,7 +28,7 @@ from tools.services.prompts import PromptSource
 from workflows.ids import WorkflowRunId
 
 
-class _FakeApp:
+class _MockApp:
     def __init__(self) -> None:
         self.cleared_calls = 0
 
@@ -48,7 +48,7 @@ def _mk_ctx(**overrides: Any) -> ExecutionContext:
 
 
 async def test_callback_calls_prompts_choice_with_tool_source() -> None:
-    app = _FakeApp()
+    app = _MockApp()
     mock_prompts = AsyncMock()
     mock_prompts.choice = AsyncMock(return_value="y")
 
@@ -73,7 +73,7 @@ async def test_callback_calls_prompts_choice_with_tool_source() -> None:
 
 
 async def test_callback_translates_y_to_allow() -> None:
-    app = _FakeApp()
+    app = _MockApp()
     mock_prompts = AsyncMock()
     mock_prompts.choice = AsyncMock(return_value="y")
     cb = InlineApprovalCallback(app, mock_prompts)  # type: ignore[arg-type]
@@ -83,7 +83,7 @@ async def test_callback_translates_y_to_allow() -> None:
 
 
 async def test_callback_translates_n_to_deny() -> None:
-    app = _FakeApp()
+    app = _MockApp()
     mock_prompts = AsyncMock()
     mock_prompts.choice = AsyncMock(return_value="n")
     cb = InlineApprovalCallback(app, mock_prompts)  # type: ignore[arg-type]
@@ -138,7 +138,7 @@ async def test_callback_does_not_import_approval_block() -> None:
 
 
 async def test_derive_source_workflow_scoped() -> None:
-    app = _FakeApp()
+    app = _MockApp()
     mock_prompts = AsyncMock()
     mock_prompts.choice = AsyncMock(return_value="n")
     cb = InlineApprovalCallback(app, mock_prompts)  # type: ignore[arg-type]
@@ -162,7 +162,7 @@ async def test_derive_source_workflow_scoped() -> None:
 
 
 async def test_clear_awaiting_approval_called_on_exit() -> None:
-    app = _FakeApp()
+    app = _MockApp()
     mock_prompts = AsyncMock()
     mock_prompts.choice = AsyncMock(return_value="y")
     cb = InlineApprovalCallback(app, mock_prompts)  # type: ignore[arg-type]

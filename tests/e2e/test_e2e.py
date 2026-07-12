@@ -104,7 +104,7 @@ async def test_tc_e2e_01_feasibility_crewai_with_real_llm(
 
     GATING: this is the Phase 1 Feasibility gate. Failing here means
     real CrewAI's runtime behavior diverges from the contract the
-    engine assumes (TC-CRW-02 verifies the same with FakeLLM; this
+    engine assumes (TC-CRW-02 verifies the same with MockLLM; this
     is the real-provider confirmation).
     """
     from pydantic import BaseModel
@@ -126,7 +126,7 @@ async def test_tc_e2e_01_feasibility_crewai_with_real_llm(
         build_engine,
         new_session_context,
     )
-    from tests.fixtures.fake_llm import FakeLLM
+    from tests.fixtures.mock_llm import MockLLM
     from tools import ToolContext, tool
 
     provider_string = os.environ[_LLM_PROVIDER_ENV]
@@ -184,13 +184,13 @@ async def test_tc_e2e_01_feasibility_crewai_with_real_llm(
             )
         return LLMResponse(content=str(text))
 
-    # build_engine takes a FakeLLM for its adapter shim; we bypass
+    # build_engine takes a MockLLM for its adapter shim; we bypass
     # that shim by passing our real callable in via the engine
     # constructor below.
-    fake_unused = FakeLLM(script=[])
+    mock_unused = MockLLM(script=[])
     engine, store, _am = await build_engine(
         tmp_path,
-        fake_unused,
+        mock_unused,
         framework=CrewAIFramework(),
     )
     # Swap in the real LLM callable.
@@ -499,7 +499,7 @@ def test_tc_e2e_04_default_install_no_external_services(
                 "agent_id": "ag_demo",
                 "name": "demo",
                 "description": "First-run demo.",
-                "model": {"provider": "fake", "model": "fake-model"},
+                "model": {"provider": "mock", "model": "mock-model"},
                 "prompt": "You are a demo agent.",
                 "io": {"mode": "conversational"},
             },

@@ -20,9 +20,9 @@ import pytest
 
 from cli.chat.services.workflows_impl import WorkflowsImpl
 from store import SessionStore, SqliteBackend
-from tests.cli.chat.services.fakes import (
-    FakeExecutorSpec,
-    install_fake_executor_factory,
+from tests.cli.chat.services.mocks import (
+    MockExecutorSpec,
+    install_mock_executor_factory,
 )
 from workflows.events import (
     WorkflowNodeCompletedEvent,
@@ -99,10 +99,10 @@ async def test_status_mid_run_shows_running_and_counters(
 ) -> None:
     impl = await _mk_impl(tmp_path, store)
     try:
-        install_fake_executor_factory(
+        install_mock_executor_factory(
             impl,
             {
-                "kolsch/workflows/x": FakeExecutorSpec(
+                "kolsch/workflows/x": MockExecutorSpec(
                     events=_mk_events_with_node(),
                     per_event_delay=0.15,
                 ),
@@ -138,10 +138,10 @@ async def test_status_after_eviction_returns_unknown(
 
     impl = await _mk_impl(tmp_path, store)
     try:
-        install_fake_executor_factory(
+        install_mock_executor_factory(
             impl,
             {
-                "kolsch/workflows/y": FakeExecutorSpec(
+                "kolsch/workflows/y": MockExecutorSpec(
                     events=_mk_events_with_node(),
                 ),
             },
@@ -156,7 +156,7 @@ async def test_status_after_eviction_returns_unknown(
         assert impl.status(rid).phase == "success"
         # Wait past the eviction window.
         await asyncio.sleep(0.35)
-        # Registry-first miss; the on-disk run doesn't exist (fake
+        # Registry-first miss; the on-disk run doesn't exist (mock
         # factory mints an empty run_dir but no meta.json), so cold-
         # read also returns unknown.
         assert impl.status(rid).phase == "unknown"

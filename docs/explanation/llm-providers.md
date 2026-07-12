@@ -19,7 +19,7 @@
 1. **No new LLM client abstraction.** The standard is
    `crewai.LLM`. The platform ships a small `build_llm` *helper*,
    not a parallel client hierarchy. The Agent Engine works with
-   `crewai.LLM` objects directly; tests inject the Fake LLM by
+   `crewai.LLM` objects directly; tests inject the Mock LLM by
    subclassing `crewai.LLM` (or its base).
 2. **No shipped model registry.** Platforms shipping registries go
    stale. Discovery at connect time from each provider's own API,

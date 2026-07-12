@@ -18,7 +18,7 @@ Six tests spanning ACs #2, #4, and #5 in the bug-044 spec:
   verify all three edits take effect on the next authz decision.
 
 All tests build a scratch platform root with `platform.yaml` + a
-`bundles/` tree and drive `handle_reload` against a `_FakeRuntime`
+`bundles/` tree and drive `handle_reload` against a `_MockRuntime`
 whose tools subsystem carries a real `ToolRegistry` — the bundle /
 agent layer pushes require access to `_agents` on the registry.
 """
@@ -37,11 +37,11 @@ if TYPE_CHECKING:
     from pathlib import Path
 
 # ---------------------------------------------------------------------------
-# Helpers — scratch workspace + fake runtime.
+# Helpers — scratch workspace + mock runtime.
 # ---------------------------------------------------------------------------
 
 
-class _FakeStore:
+class _MockStore:
     async def read_path_to_leaf(self, thread_id: object) -> Any:
         _ = thread_id
         if False:
@@ -49,7 +49,7 @@ class _FakeStore:
 
 
 @dataclass
-class _FakeRuntime:
+class _MockRuntime:
     """Duck-typed stand-in for ``PlatformRuntime``.
 
     Mirrors the same fields ``handle_reload`` touches: ``root`` for
@@ -62,11 +62,11 @@ class _FakeRuntime:
     authz: Any
     asset_management: Any
     tools_subsystem: Any
-    store: _FakeStore = None  # type: ignore[assignment]
+    store: _MockStore = None  # type: ignore[assignment]
 
     def __post_init__(self) -> None:
         if self.store is None:
-            self.store = _FakeStore()
+            self.store = _MockStore()
 
 
 def _write_platform_yaml_raw(root: Path, yaml_text: str) -> None:
@@ -145,7 +145,7 @@ def _dump_yaml(path: Path, payload: dict[str, Any]) -> None:
     path.write_text(dump(payload), encoding="utf-8")
 
 
-class _FakeAssetManagement:
+class _MockAssetManagement:
     """Wraps a real ``AssetCatalog`` scanned off the scratch workspace.
 
     ``catalog()`` returns the same catalog on every call — the reload
@@ -162,7 +162,7 @@ class _FakeAssetManagement:
         return self._catalog
 
 
-class _FakeToolsSubsystem:
+class _MockToolsSubsystem:
     """Wraps a real ``ToolRegistry`` so bundle / agent pushes land.
 
     The reload walks ``_registry._agents`` and overwrites each
@@ -178,8 +178,8 @@ class _FakeToolsSubsystem:
         self._registry = ToolRegistry()
 
 
-def _build_runtime(root: Path) -> _FakeRuntime:
-    """Assemble the fake runtime + scan the scratch workspace's catalog."""
+def _build_runtime(root: Path) -> _MockRuntime:
+    """Assemble the mock runtime + scan the scratch workspace's catalog."""
     from assets.platform_config import load_or_create
 
     # Ensure platform.yaml exists so `handle_reload`'s first step
@@ -195,13 +195,13 @@ def _build_runtime(root: Path) -> _FakeRuntime:
             "      - {what: '*', pattern: '*', effect: allow}\n",
         )
     _ = load_or_create(root)  # warm up
-    asset_management = _FakeAssetManagement(root)
-    tools_subsystem = _FakeToolsSubsystem()
+    asset_management = _MockAssetManagement(root)
+    tools_subsystem = _MockToolsSubsystem()
     original = RuleBasedAuthorizationProvider(
         config={"rules": [{"what": "*", "pattern": "*", "effect": "allow"}]},
         catalog=asset_management.catalog(),
     )
-    return _FakeRuntime(
+    return _MockRuntime(
         root=root,
         authz=original,
         asset_management=asset_management,

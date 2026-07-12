@@ -1,6 +1,6 @@
 """Pilot tests for :class:`ApprovalBlock` — the three-step state machine.
 
-Framework-aligned tests: mount the block via ``fake_app_factory``
+Framework-aligned tests: mount the block via ``mock_app_factory``
 (shared fixture in ``tests/cli/chat/conftest.py``), drive keys via
 ``Pilot.press``, and assert on:
 
@@ -74,7 +74,7 @@ async def _current_pane(block: ApprovalBlock) -> Widget | None:
 
 @pytest.mark.asyncio
 async def test_initial_state_shows_choice_pane(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """On mount the current pane is an ``ApprovalChoicePane``.
 
@@ -82,7 +82,7 @@ async def test_initial_state_shows_choice_pane(
     that carry the identity strings the callback was fired with.
     """
     block = _make_block()
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test():
         current = await _current_pane(block)
         assert isinstance(current, ApprovalChoicePane)
@@ -109,11 +109,11 @@ async def test_initial_state_shows_choice_pane(
 
 @pytest.mark.asyncio
 async def test_press_y_resolves_allow_once(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """``y`` → immediate ``AuthzEffect.ALLOW``; frozen footer mounted."""
     block = _make_block()
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test() as pilot:
         pane = await _current_pane(block)
         assert pane is not None
@@ -129,11 +129,11 @@ async def test_press_y_resolves_allow_once(
 
 @pytest.mark.asyncio
 async def test_press_n_resolves_deny_once(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """``n`` → immediate ``AuthzEffect.DENY``; footer has ``.-denied``."""
     block = _make_block()
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test() as pilot:
         pane = await _current_pane(block)
         assert pane is not None
@@ -149,11 +149,11 @@ async def test_press_n_resolves_deny_once(
 
 @pytest.mark.asyncio
 async def test_press_escape_on_choice_pane_resolves_deny_once(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """Escape on the choice pane is deny-once per Coordinator decision #4."""
     block = _make_block()
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test() as pilot:
         pane = await _current_pane(block)
         assert pane is not None
@@ -168,11 +168,11 @@ async def test_press_escape_on_choice_pane_resolves_deny_once(
 
 @pytest.mark.asyncio
 async def test_a_swaps_to_pattern_edit(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """``a`` swaps the pane to ``ApprovalPatternEdit`` (no resolution)."""
     block = _make_block()
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test() as pilot:
         pane = await _current_pane(block)
         assert pane is not None
@@ -187,11 +187,11 @@ async def test_a_swaps_to_pattern_edit(
 
 @pytest.mark.asyncio
 async def test_a_confirm_pattern_swaps_to_save_confirm(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """``a`` → confirm pattern → ``ApprovalSaveConfirm`` is now the pane."""
     block = _make_block()
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test() as pilot:
         pane = await _current_pane(block)
         assert pane is not None
@@ -210,11 +210,11 @@ async def test_a_confirm_pattern_swaps_to_save_confirm(
 
 @pytest.mark.asyncio
 async def test_a_full_path_resolves_allow_with_rule(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """``a`` → pattern confirm → save-confirm ``y`` → ``(ALLOW, Rule)``."""
     block = _make_block()
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test() as pilot:
         pane = await _current_pane(block)
         assert pane is not None
@@ -245,11 +245,11 @@ async def test_a_full_path_resolves_allow_with_rule(
 
 @pytest.mark.asyncio
 async def test_d_full_path_resolves_deny_with_rule(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """``d`` → pattern confirm → save-confirm ``y`` → ``(DENY, Rule)``."""
     block = _make_block()
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test() as pilot:
         pane = await _current_pane(block)
         assert pane is not None
@@ -277,11 +277,11 @@ async def test_d_full_path_resolves_deny_with_rule(
 
 @pytest.mark.asyncio
 async def test_escape_in_pattern_edit_returns_to_choice_pane(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """Escape inside ``ApprovalPatternEdit`` swaps back to the choice pane."""
     block = _make_block()
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test() as pilot:
         pane = await _current_pane(block)
         assert pane is not None
@@ -298,7 +298,7 @@ async def test_escape_in_pattern_edit_returns_to_choice_pane(
 
 @pytest.mark.asyncio
 async def test_save_confirm_n_falls_back_to_allow_once(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """``a`` path, then ``n`` on save-confirm → allow-once fallback.
 
@@ -306,7 +306,7 @@ async def test_save_confirm_n_falls_back_to_allow_once(
     their mind about writing the rule.
     """
     block = _make_block()
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test() as pilot:
         pane = await _current_pane(block)
         assert pane is not None

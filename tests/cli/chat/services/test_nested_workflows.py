@@ -29,9 +29,9 @@ from cli.chat.services.workflows_impl import (
     _current_workflow_run_id,
 )
 from store import SessionStore, SqliteBackend
-from tests.cli.chat.services.fakes import (
-    FakeExecutorSpec,
-    install_fake_executor_factory,
+from tests.cli.chat.services.mocks import (
+    MockExecutorSpec,
+    install_mock_executor_factory,
 )
 from workflows.events import (
     WorkflowRunCompletedEvent,
@@ -82,7 +82,7 @@ async def test_parent_populated(
 ) -> None:
     """Top-level → parent=None; nested-start → parent=outer id.
 
-    The nested branch is exercised by having the fake executor's
+    The nested branch is exercised by having the mock executor's
     `on_construct` callback call `impl.start()` for the child ref,
     which lands INSIDE the outer run's `_run_one_workflow` frame
     where the contextvar is set. This mirrors how
@@ -109,15 +109,15 @@ async def test_parent_populated(
             loop = asyncio.get_running_loop()
             loop.create_task(_spawn_child_from_outer())
 
-        install_fake_executor_factory(
+        install_mock_executor_factory(
             impl,
             {
-                "kolsch/workflows/outer": FakeExecutorSpec(
+                "kolsch/workflows/outer": MockExecutorSpec(
                     events=_mk_events(),
                     per_event_delay=0.15,
                     on_construct=_on_outer_construct,
                 ),
-                "kolsch/workflows/child": FakeExecutorSpec(
+                "kolsch/workflows/child": MockExecutorSpec(
                     events=_mk_events(),
                 ),
             },
@@ -175,10 +175,10 @@ async def test_peer_no_parent(
     """
     impl = await _mk_impl(tmp_path, store)
     try:
-        install_fake_executor_factory(
+        install_mock_executor_factory(
             impl,
             {
-                "kolsch/workflows/top": FakeExecutorSpec(
+                "kolsch/workflows/top": MockExecutorSpec(
                     events=_mk_events(),
                 ),
             },
@@ -213,13 +213,13 @@ async def test_peer_no_parent(
 
         # Post-reset, a fresh top-level start goes back to
         # parent_run_id=None.
-        install_fake_executor_factory(
+        install_mock_executor_factory(
             impl,
             {
-                "kolsch/workflows/top": FakeExecutorSpec(
+                "kolsch/workflows/top": MockExecutorSpec(
                     events=_mk_events(),
                 ),
-                "kolsch/workflows/other": FakeExecutorSpec(
+                "kolsch/workflows/other": MockExecutorSpec(
                     events=_mk_events(),
                 ),
             },

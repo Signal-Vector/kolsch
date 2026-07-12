@@ -34,7 +34,7 @@ from workflows.events import WorkflowEventKind
 _WIRE = "kolsch.workflow.progress"
 
 
-class _FakeEvent:
+class _MockEvent:
     __slots__ = ("kind", "payload")
 
     def __init__(self, kind: str, payload: dict[str, Any]) -> None:
@@ -57,7 +57,7 @@ def _mk_run_started_payload(ts: datetime) -> dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_renderer_elapsed_advances_without_events(
-    fake_app_factory,
+    mock_app_factory,
 ) -> None:
     """The header's elapsed counter advances between executor events.
 
@@ -67,7 +67,7 @@ async def test_renderer_elapsed_advances_without_events(
     the rendered elapsed integer advanced by ≥ 1.
     """
     renderer = WorkflowRenderer()
-    app = fake_app_factory(renderer)
+    app = mock_app_factory(renderer)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -75,7 +75,7 @@ async def test_renderer_elapsed_advances_without_events(
         # render doesn't read 0s (avoids a flaky "elapsed == 0"
         # baseline).
         started_at = datetime.now(tz=UTC)
-        renderer.apply_event(_FakeEvent(
+        renderer.apply_event(_MockEvent(
             _WIRE,
             _mk_run_started_payload(started_at),
         ))
@@ -130,7 +130,7 @@ async def test_renderer_elapsed_advances_without_events(
 
 @pytest.mark.asyncio
 async def test_renderer_stops_ticking_after_terminal(
-    fake_app_factory,
+    mock_app_factory,
 ) -> None:
     """Terminal events flip ``_is_terminal`` and the tick timer stops.
 
@@ -139,19 +139,19 @@ async def test_renderer_stops_ticking_after_terminal(
     summary footer stays quiescent.
     """
     renderer = WorkflowRenderer()
-    app = fake_app_factory(renderer)
+    app = mock_app_factory(renderer)
     async with app.run_test() as pilot:
         await pilot.pause()
 
         started_at = datetime.now(tz=UTC)
-        renderer.apply_event(_FakeEvent(
+        renderer.apply_event(_MockEvent(
             _WIRE,
             _mk_run_started_payload(started_at),
         ))
         await pilot.pause()
 
         # Feed a RUN_COMPLETED terminal event.
-        renderer.apply_event(_FakeEvent(
+        renderer.apply_event(_MockEvent(
             _WIRE,
             {
                 "run_id": "wrk_ticks",

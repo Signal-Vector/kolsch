@@ -68,7 +68,7 @@ def _write_workspace(root: Path, *, extends_value: str) -> None:
                 "agent_id": "ag_helper",
                 "name": "helper",
                 "description": "parent",
-                "model": {"provider": "fake", "model": "fake"},
+                "model": {"provider": "mock", "model": "mock"},
                 "prompt": "I am helper.",
                 "io": {"mode": "conversational"},
             }
@@ -110,8 +110,8 @@ async def test_extends_new_catalog_ref_form(tmp_path: Path) -> None:
     assert isinstance(cfg, ResolvedAgentConfig)
     # `model` inherited from parent (child YAML omits it); proves
     # the chain composed.
-    assert cfg.model.provider == "fake"
-    assert cfg.model.model == "fake"
+    assert cfg.model.provider == "mock"
+    assert cfg.model.model == "mock"
     # Child's own fields preserved.
     assert cfg.name == "child"
 
@@ -132,7 +132,7 @@ async def test_extends_legacy_workspace_prefix_still_works(
         cfg = await am.build_resolved_config("child_bundle/agents/child")
 
     # Same resolution semantics as the new-form path.
-    assert cfg.model.provider == "fake"
+    assert cfg.model.provider == "mock"
     assert cfg.name == "child"
     # Deprecation log surface.
     deprecation_messages = [

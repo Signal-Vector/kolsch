@@ -19,9 +19,9 @@ import pytest
 
 from cli.chat.services.workflows_impl import WorkflowsImpl
 from store import SessionStore, SqliteBackend
-from tests.cli.chat.services.fakes import (
-    FakeExecutorSpec,
-    install_fake_executor_factory,
+from tests.cli.chat.services.mocks import (
+    MockExecutorSpec,
+    install_mock_executor_factory,
 )
 from workflows.events import (
     WorkflowRunCompletedEvent,
@@ -72,10 +72,10 @@ async def test_run_dir_populated_after_construction(
 ) -> None:
     impl = await _mk_impl(tmp_path, store)
     try:
-        install_fake_executor_factory(
+        install_mock_executor_factory(
             impl,
             {
-                "kolsch/workflows/x": FakeExecutorSpec(
+                "kolsch/workflows/x": MockExecutorSpec(
                     events=_slow_events(), per_event_delay=0.5,
                 ),
             },
@@ -99,10 +99,10 @@ async def test_cancel_writes_to_populated_run_dir(
 ) -> None:
     impl = await _mk_impl(tmp_path, store)
     try:
-        install_fake_executor_factory(
+        install_mock_executor_factory(
             impl,
             {
-                "kolsch/workflows/x": FakeExecutorSpec(
+                "kolsch/workflows/x": MockExecutorSpec(
                     events=_slow_events(), per_event_delay=0.5,
                 ),
             },

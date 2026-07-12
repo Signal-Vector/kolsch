@@ -44,9 +44,9 @@ from schemas.wire_kinds import (
     WIRE_WORKFLOW_PROGRESS,
 )
 from store import SessionStore, SqliteBackend
-from tests.cli.chat.services.fakes import (
-    FakeExecutorSpec,
-    install_fake_executor_factory,
+from tests.cli.chat.services.mocks import (
+    MockExecutorSpec,
+    install_mock_executor_factory,
 )
 from workflows.events import (
     WorkflowEvent,
@@ -140,7 +140,7 @@ async def _wait_terminal(impl: WorkflowsImpl, rid: WorkflowRunId) -> None:
             return
 
 
-def _install_sub_agent_fake(
+def _install_sub_agent_mock(
     impl: WorkflowsImpl,
     *,
     ref: str,
@@ -149,16 +149,16 @@ def _install_sub_agent_fake(
     sub_agent_events: list[tuple[str, str, Event]],
     per_event_delay: float = 0.0,
 ) -> None:
-    """Fake executor factory that also fires the sub-agent observer.
+    """Mock executor factory that also fires the sub-agent observer.
 
     Emits the given `WorkflowEvent`s in order, then dispatches the
     scripted `(node_name, invocation_id, event)` triples to the
     executor's `sub_agent_event_observer` before RUN_COMPLETED.
     """
-    from tests.cli.chat.services.fakes.workflow_executor import FakeExecutor
+    from tests.cli.chat.services.mocks.workflow_executor import MockExecutor
     from workflows.run import RunDirectory
 
-    class _FakeWithSubAgent:
+    class _MockWithSubAgent:
         def __init__(
             self,
             *,
@@ -218,7 +218,7 @@ def _install_sub_agent_fake(
         )
         run_dir.root.mkdir(parents=True, exist_ok=True)
         return (
-            _FakeWithSubAgent(
+            _MockWithSubAgent(
                 events=events,
                 observer=observer,
                 cancel_token=cancel_token,
@@ -277,7 +277,7 @@ async def test_bridge_emits_sub_agent_events_with_envelope(
                 ),
             ),
         ]
-        _install_sub_agent_fake(
+        _install_sub_agent_mock(
             impl,
             ref="kolsch/workflows/x",
             tmp_path=tmp_path,
@@ -349,7 +349,7 @@ async def test_bridge_drops_model_request_events(
                 ),
             ),
         ]
-        _install_sub_agent_fake(
+        _install_sub_agent_mock(
             impl,
             ref="kolsch/workflows/x",
             tmp_path=tmp_path,
@@ -405,7 +405,7 @@ async def test_bridge_terminates_after_workflow_terminal(
                 ),
             ),
         ]
-        _install_sub_agent_fake(
+        _install_sub_agent_mock(
             impl,
             ref="kolsch/workflows/x",
             tmp_path=tmp_path,

@@ -43,7 +43,7 @@ from schemas.wire_kinds import (
 from store import SessionStore, SqliteBackend
 
 
-class _FakeChatApp:
+class _MockChatApp:
     def __init__(self) -> None:
         self._last_assistant: str = ""
 
@@ -54,11 +54,11 @@ class _FakeChatApp:
         return None
 
     async def mount_assistant_streaming_widget(self) -> Any:
-        class _FakeProse:
+        class _MockProse:
             async def append(self, text: str) -> None:
                 return None
 
-        return _FakeProse()
+        return _MockProse()
 
     async def mount_tool_call(self, *args: Any, **kwargs: Any) -> None:
         return None
@@ -203,7 +203,7 @@ def _make_adapter(
     session_id: Any,
     thread_id: Any,
 ) -> EventAdapter:
-    app = _FakeChatApp()
+    app = _MockChatApp()
     return EventAdapter(
         app,  # type: ignore[arg-type]
         session_store=store,

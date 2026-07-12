@@ -37,7 +37,7 @@ _LONG_TARGET = (
 
 @pytest.mark.asyncio
 async def test_snapshot_collapsed_overflow_shows_chevron(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """Golden — collapsed row ends with `…▸`, footer hints Tab expand."""
     block = ApprovalBlock(
@@ -45,7 +45,7 @@ async def test_snapshot_collapsed_overflow_shows_chevron(
         action="kolsch/tools/bash",
         target=_LONG_TARGET,
     )
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test(size=(70, 24)) as pilot:
         await pilot.pause()
         # Sanity-check the overflow flag landed before snapshotting.
@@ -57,7 +57,7 @@ async def test_snapshot_collapsed_overflow_shows_chevron(
 
 @pytest.mark.asyncio
 async def test_snapshot_expanded_overflow_wraps_target(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """Golden — expanded row shows `Args  ▾` + wrapped body indented."""
     block = ApprovalBlock(
@@ -65,7 +65,7 @@ async def test_snapshot_expanded_overflow_wraps_target(
         action="kolsch/tools/bash",
         target=_LONG_TARGET,
     )
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test(size=(70, 24)) as pilot:
         await pilot.pause()
         await pilot.press("tab")

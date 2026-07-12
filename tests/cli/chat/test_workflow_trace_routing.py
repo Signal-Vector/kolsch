@@ -29,7 +29,7 @@ from schemas.identifiers import EventId, SessionId, ThreadId
 from workflows.events import WorkflowEventKind
 
 
-class _FakeChatApp:
+class _MockChatApp:
     def __init__(self) -> None:
         self.mounts: list[str] = []
         self._last_assistant: str = ""
@@ -83,7 +83,7 @@ async def test_matching_trace_id_routes_to_node() -> None:
     falls back to a trace-only scan and still routes to the sole
     entry sharing that trace. Exercises that fallback here.
     """
-    app = _FakeChatApp()
+    app = _MockChatApp()
     adapter = EventAdapter(app)
     row = WorkflowNodeRow(node_name="n", trace_id="t1")
     adapter._live_nodes_by_trace_and_invocation[("t1", "inv_a")] = row
@@ -99,7 +99,7 @@ async def test_matching_trace_id_routes_to_node() -> None:
 @pytest.mark.asyncio
 async def test_unrelated_trace_id_falls_through_to_transcript() -> None:
     """Unmatched trace: adapter defaults to transcript-root mount."""
-    app = _FakeChatApp()
+    app = _MockChatApp()
     adapter = EventAdapter(app)
     row = WorkflowNodeRow(node_name="n", trace_id="t1")
     adapter._live_nodes_by_trace_and_invocation[("t1", "inv_a")] = row
@@ -116,7 +116,7 @@ async def test_unrelated_trace_id_falls_through_to_transcript() -> None:
 @pytest.mark.asyncio
 async def test_terminal_node_unregisters_from_live_map() -> None:
     """After NODE_COMPLETED the row leaves the trace map."""
-    app = _FakeChatApp()
+    app = _MockChatApp()
     adapter = EventAdapter(app)
 
     renderer = WorkflowRenderer()
@@ -144,20 +144,20 @@ async def test_terminal_node_unregisters_from_live_map() -> None:
         "payload": {},
     }
 
-    class _FakeEventData:
+    class _MockEventData:
         def __init__(self, kind: str, payload: dict[str, Any]) -> None:
             self.kind = kind
             self.payload = payload
 
-    renderer.apply_event(_FakeEventData("kolsch.workflow.progress", start_payload))
-    renderer.apply_event(_FakeEventData("kolsch.workflow.progress", node_start_payload))
+    renderer.apply_event(_MockEventData("kolsch.workflow.progress", start_payload))
+    renderer.apply_event(_MockEventData("kolsch.workflow.progress", node_start_payload))
 
     assert ("tr_run", "inv_1") in adapter._live_nodes_by_trace_and_invocation
 
     node_complete_payload = dict(node_start_payload)
     node_complete_payload["kind"] = WorkflowEventKind.NODE_COMPLETED.value
     node_complete_payload["event_id"] = "ev_3"
-    renderer.apply_event(_FakeEventData("kolsch.workflow.progress", node_complete_payload))
+    renderer.apply_event(_MockEventData("kolsch.workflow.progress", node_complete_payload))
 
     # Cleanup: composite key evicted from the map.
     assert (

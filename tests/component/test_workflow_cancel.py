@@ -284,7 +284,7 @@ class TestAbortPathRunsCleanup:
         workspace's ``bundles/`` prefix DURING the run; after the
         aborted exit, the entry must be gone."""
         # The cleanup walks ``sys.modules`` filtering by ``__file__``
-        # under ``<workspace>/bundles/``. Synthesise a fake module
+        # under ``<workspace>/bundles/``. Synthesise a mock module
         # entry whose ``__file__`` matches that shape so the cleanup
         # path is exercised under abort.
         import sys

@@ -47,7 +47,7 @@ def _load_workflow_inspect() -> Any:
     return module.workflow_inspect
 
 
-class _FakeWorkflows:
+class _MockWorkflows:
     """Duck-typed workflows exposing the two seams the tool reads."""
 
     def __init__(self, *, yaml_by_ref: dict[str, str]) -> None:
@@ -94,7 +94,7 @@ async def test_example_call_prefers_virtual_name_when_available(
     """AC #8 — with virtuals enabled, ``example_call`` uses the virtual name."""
     monkeypatch.setenv("KOLSCH_VIRTUAL_WORKFLOW_TOOLS", "1")
     workflow_inspect = _load_workflow_inspect()
-    workflows = _FakeWorkflows(
+    workflows = _MockWorkflows(
         yaml_by_ref={"andre/workflows/job_description_review": _JD_YAML},
     )
     ctx = _mk_ctx(workflows)
@@ -125,7 +125,7 @@ async def test_example_call_falls_back_to_generic_when_virtuals_disabled(
     """AC #8 — ``KOLSCH_VIRTUAL_WORKFLOW_TOOLS=0`` → generic shape only."""
     monkeypatch.setenv("KOLSCH_VIRTUAL_WORKFLOW_TOOLS", "0")
     workflow_inspect = _load_workflow_inspect()
-    workflows = _FakeWorkflows(
+    workflows = _MockWorkflows(
         yaml_by_ref={"andre/workflows/job_description_review": _JD_YAML},
     )
     ctx = _mk_ctx(workflows)

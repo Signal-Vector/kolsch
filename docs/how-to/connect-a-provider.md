@@ -149,7 +149,7 @@ model_aliases:
 in order: an alias called `opus`, `smart`, or `cheap`; then the
 first alphabetical alias; then the first model from `openrouter`;
 then from `opencode`; then falls back to
-`{provider: fake, model: fake-model}` if nothing is connected.
+`{provider: mock, model: mock-model}` if nothing is connected.
 
 ## Disconnecting
 

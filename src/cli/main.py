@@ -261,7 +261,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Skip all prompts. Uses KOLSCH_PROVIDER / KOLSCH_PROVIDER_KEY "
             "env vars when present to wire a provider; otherwise the "
-            "starter agent ships with `provider: fake`."
+            "starter agent ships with `provider: mock`."
         ),
     )
 
@@ -416,7 +416,7 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     # call in the event log (model.request carries the real spec)
     # while actually producing the echo. That's the bug class the
     # ticket fixed; the warning is the defensive surface so a
-    # regression is loud, not silent. `provider: fake` exits the
+    # regression is loud, not silent. `provider: mock` exits the
     # check — that's the deliberate tutorial path.
     _maybe_warn_silent_echo(config, runtime)
 
@@ -860,7 +860,7 @@ def _maybe_warn_silent_echo(
 
     Fires when:
 
-    - `config.model.provider != "fake"` (the agent intends a real
+    - `config.model.provider != "mock"` (the agent intends a real
       call), AND
     - The runtime did not wire `llm_for_model` (i.e. engine has only
       the `EchoLLMDriver` fallback). Normally this only happens when
@@ -868,17 +868,17 @@ def _maybe_warn_silent_echo(
       regression that silently routes a real-provider agent through
       the echo path.
 
-    Agents that explicitly use `provider: fake` are silent — that's
+    Agents that explicitly use `provider: mock` are silent — that's
     the tutorial path; the user knows what they signed up for.
     """
-    if config.model.provider == "fake":
+    if config.model.provider == "mock":
         return
     if runtime.engine._llm_for_model is not None:
         return
     sys.stderr.write(
         f"⚠ this agent specifies provider {config.model.provider!r}, but "
         f"no real-LLM wiring is active — the exchange will silently echo "
-        f"via the built-in fake LLM. Run `kolsch connect "
+        f"via the built-in mock LLM. Run `kolsch connect "
         f"{config.model.provider}` to wire a real provider.\n"
     )
 

@@ -1,7 +1,7 @@
 """spec-020 Test 5 (AC #5) — flagship live sub-agent event stream.
 
 D-010 gate. Boots a real :class:`~cli.chat.app.ChatApp` under Pilot,
-runs a workflow whose fake executor emits sub-agent events for its
+runs a workflow whose mock executor emits sub-agent events for its
 one agent node, expands the resulting :class:`WorkflowNodeRow`, and
 asserts the sub-agent widgets (`UserChatbox`, `AssistantProse`,
 `ToolCallBlock`) mount inside the row's body as events stream by.
@@ -13,7 +13,7 @@ or any helper that side-steps the runtime bus subscription in
 spec-020 implementation is incomplete (D-010 gate) — the grep-guard
 at the bottom of this file self-tests it.
 
-The fake executor mirrors what a real ``AgentNodeRunner`` produces:
+The mock executor mirrors what a real ``AgentNodeRunner`` produces:
 after emitting ``NODE_STARTED`` it fires three session-scoped
 ``Event``s through the ``sub_agent_event_observer``:
 
@@ -94,7 +94,7 @@ def run_workflow_tool() -> Callable[..., Awaitable[Any]]:
 # ---------------------------------------------------------------------------
 
 
-class _FakeAuthz:
+class _MockAuthz:
     def register_prompt_callback(
         self, callback: Any, *, on_rule_added: Any = None,
     ) -> None:
@@ -105,20 +105,20 @@ class _FakeAuthz:
         return None
 
 
-class _FakeEngine:
+class _MockEngine:
     async def execute_stream(self, config: Any, ctx: Any) -> Any:
         _ = config, ctx
         if False:  # pragma: no cover
             yield
 
 
-class _FakeConfig:
+class _MockConfig:
     name = "TestAgent"
-    agent_id = "ag_fake"
+    agent_id = "ag_mock"
     model = None
 
 
-class _FakeBundle:
+class _MockBundle:
     def __init__(
         self,
         *,
@@ -152,25 +152,25 @@ async def chat_app(tmp_path: Path) -> Any:
     backend = SqliteBackend(platform_dir / "entities.db")
     await backend.initialize()
     store = SessionStore(root=tmp_path, backend=backend)
-    session = await store.create_session("ag_fake", name="c")
+    session = await store.create_session("ag_mock", name="c")
     threads = await store.list_threads(session.session_id)
 
     class _R:
         def __init__(self) -> None:
             self.store = store
-            self.authz = _FakeAuthz()
-            self.engine = _FakeEngine()
+            self.authz = _MockAuthz()
+            self.engine = _MockEngine()
             self.root = tmp_path
             self.bus = InProcessEventBus()
 
-    bundle = _FakeBundle(
+    bundle = _MockBundle(
         runtime=_R(),
-        config=_FakeConfig(),
+        config=_MockConfig(),
         session_id=session.session_id,
         thread_id=threads[0].thread_id,
-        agent_ref="kolsch/agents/fake",
+        agent_ref="kolsch/agents/mock",
         root=tmp_path,
-        model_label="fake/test",
+        model_label="mock/test",
         is_resume=False,
     )
     app = ChatApp(
@@ -210,7 +210,7 @@ async def _invoke_tool_via_pilot(
 
 
 # ---------------------------------------------------------------------------
-# Fake executor that fires sub-agent events between node.started and
+# Mock executor that fires sub-agent events between node.started and
 # node.completed. Mirrors what a real ``AgentNodeRunner`` produces
 # via ``AgentEngine.execute_stream``.
 # ---------------------------------------------------------------------------
@@ -229,14 +229,14 @@ def _make_session_event(
         session_id=SessionId(f"ses_{uuid.uuid4()}"),
         type=event_type,
         data=dict(data or {}),
-        actor=Actor(kind="agent", id="ag_fake"),
+        actor=Actor(kind="agent", id="ag_mock"),
         created_at=datetime.now(UTC),
         trace_id=trace_id,
     )
 
 
-class _FakeExecutorWithSubAgent:
-    """Fake executor that fires sub-agent events for its one agent node.
+class _MockExecutorWithSubAgent:
+    """Mock executor that fires sub-agent events for its one agent node.
 
     Fires (in order):
 
@@ -343,17 +343,17 @@ class _FakeExecutorWithSubAgent:
 def _install_sub_agent_factory(
     impl: WorkflowsImpl, *, ref: str, tmp_path: Path,
     pre_sub_agent_delay: float = 2.0,
-) -> dict[str, _FakeExecutorWithSubAgent]:
-    """Rebind the executor factory to the sub-agent-firing fake.
+) -> dict[str, _MockExecutorWithSubAgent]:
+    """Rebind the executor factory to the sub-agent-firing mock.
 
     Returns a dict-holder — after `impl.start()` fires,
-    `holder["fake"]` is the executor instance for introspection.
+    `holder["mock"]` is the executor instance for introspection.
     The `pre_sub_agent_delay` is a long pause between NODE_STARTED
     and the first sub-agent event so the test can observe the row's
     mount + flip `collapsed = False` before events fan (Coordinator
     #3 lock).
     """
-    holder: dict[str, _FakeExecutorWithSubAgent] = {}
+    holder: dict[str, _MockExecutorWithSubAgent] = {}
 
     def _factory(
         ref_in: str,
@@ -361,20 +361,20 @@ def _install_sub_agent_factory(
         observer: Callable[[Any], None],
         cancel_token: Any,
         sub_agent_observer: Any = None,
-    ) -> tuple[_FakeExecutorWithSubAgent, RunDirectory]:
+    ) -> tuple[_MockExecutorWithSubAgent, RunDirectory]:
         _ = (ref_in, inputs)
         run_dir = RunDirectory(
             root=tmp_path / "runs" / f"wrk_{uuid.uuid4()}",
         )
         run_dir.root.mkdir(parents=True, exist_ok=True)
-        fake = _FakeExecutorWithSubAgent(
+        mock = _MockExecutorWithSubAgent(
             observer=observer,
             sub_agent_observer=sub_agent_observer,
             cancel_token=cancel_token,
             pre_sub_agent_delay=pre_sub_agent_delay,
         )
-        holder["fake"] = fake
-        return fake, run_dir
+        holder["mock"] = mock
+        return mock, run_dir
 
     impl._executor_factory = _factory
     return holder
@@ -397,7 +397,7 @@ async def test_sub_agent_widgets_mount_in_expanded_node_row(
 
         workflows_impl = pilot.app._service_registry.workflows
         assert isinstance(workflows_impl, WorkflowsImpl)
-        # Install the sub-agent-firing fake. The fake pauses 500ms
+        # Install the sub-agent-firing mock. The mock pauses 500ms
         # between NODE_STARTED and the first sub-agent event so the
         # test can flip `collapsed = False` on the row before events
         # arrive (Coordinator #3 lock).
@@ -413,7 +413,7 @@ async def test_sub_agent_widgets_mount_in_expanded_node_row(
         # the intermediate widget-mount + expand + streaming-events
         # while the workflow is still running. Spawn as a background
         # task so the test's polling loops run concurrently with the
-        # fake executor's fan.
+        # mock executor's fan.
         tool_task = asyncio.create_task(
             _invoke_tool_via_pilot(
                 pilot,
@@ -450,7 +450,7 @@ async def test_sub_agent_widgets_mount_in_expanded_node_row(
 
         # Coordinator #3: events are only mounted while EXPANDED.
         # Expand the row so incoming sub-agent widgets land visibly.
-        # The fake's 500ms pre-sub-agent delay gives us this window.
+        # The mock's 500ms pre-sub-agent delay gives us this window.
         node_row.collapsed = False
         await pilot.pause()
 
@@ -458,7 +458,7 @@ async def test_sub_agent_widgets_mount_in_expanded_node_row(
         # a UserChatbox (reverses bug-035's suppression — the row
         # IS a chat container). TOOL_CALLED alone doesn't mount a
         # ToolCallBlock (main-chat parity — mount happens on
-        # TOOL_RESULT); the fake fires only TOOL_CALLED.
+        # TOOL_RESULT); the mock fires only TOOL_CALLED.
         want = {UserChatbox, AssistantProse}
         seen: set[type] = set()
         for _ in range(160):  # 160 * 50ms = 8s worst case
@@ -495,9 +495,9 @@ async def test_sub_agent_widgets_mount_in_expanded_node_row(
         assert node_row._sub_agent_turn_count >= 3, (
             f"sub_agent_turn_count = {node_row._sub_agent_turn_count}"
         )
-        # Fake's ids reached the widget.
-        fake = holder["fake"]
-        assert str(fake.trace_id) == node_row._trace_id
+        # Mock's ids reached the widget.
+        mock = holder["mock"]
+        assert str(mock.trace_id) == node_row._trace_id
 
         # Drain the tool task so its long-poll (500ms poll interval)
         # settles before Pilot tears the app down. A stray unfinished

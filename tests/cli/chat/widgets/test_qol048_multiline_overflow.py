@@ -52,7 +52,7 @@ HEREDOC_TARGET = "cat <<EOF\nfoo\nbar\nEOF"
 @pytest.mark.asyncio
 @pytest.mark.parametrize("width", [200, 40, 20])
 async def test_multiline_target_shows_chevron_at_any_width(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
     width: int,
 ) -> None:
     """Multi-line targets flag as overflowing regardless of terminal width.
@@ -62,7 +62,7 @@ async def test_multiline_target_shows_chevron_at_any_width(
     appears on the collapsed row.
     """
     row = ApprovalArgsRow(HEREDOC_TARGET)
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test(size=(width, 24)) as pilot:
         # Force a resize event at the parametrized width so ``on_show``
         # / ``on_resize`` land after the row is composed.
@@ -82,7 +82,7 @@ async def test_multiline_target_shows_chevron_at_any_width(
 
 @pytest.mark.asyncio
 async def test_multiline_target_expanded_renders_all_lines(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """Expanding a multi-line target reveals every ``\\n``-separated line.
 
@@ -95,7 +95,7 @@ async def test_multiline_target_expanded_renders_all_lines(
         action="kolsch/tools/bash",
         target=HEREDOC_TARGET,
     )
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test(size=(60, 24)) as pilot:
         await pilot.pause()
         args_row = block.query_one(ApprovalArgsRow)
@@ -121,7 +121,7 @@ async def test_multiline_target_expanded_renders_all_lines(
 
 @pytest.mark.asyncio
 async def test_multiline_target_footer_hint_present(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """Mounting an ``ApprovalBlock`` with a multi-line target shows the hint.
 
@@ -134,7 +134,7 @@ async def test_multiline_target_footer_hint_present(
         action="kolsch/tools/bash",
         target=HEREDOC_TARGET,
     )
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test(size=(200, 24)) as pilot:
         await pilot.pause()
         # Even at 200 cols the multi-line target flags as overflowing,
@@ -154,7 +154,7 @@ async def test_multiline_target_footer_hint_present(
 
 @pytest.mark.asyncio
 async def test_crlf_target_treated_as_multiline(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """``\\r\\n`` line endings also trigger overflow (``\\n`` is a substring).
 
@@ -164,7 +164,7 @@ async def test_crlf_target_treated_as_multiline(
     refactor to e.g. ``.splitlines()`` doesn't silently regress it.
     """
     row = ApprovalArgsRow("line1\r\nline2\r\nline3")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test(size=(200, 24)) as pilot:
         await pilot.pause()
         assert row.overflowing is True
@@ -173,7 +173,7 @@ async def test_crlf_target_treated_as_multiline(
 
 @pytest.mark.asyncio
 async def test_single_line_target_at_wide_width_still_no_chevron(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """Regression: a short single-line target still has no chevron.
 
@@ -182,7 +182,7 @@ async def test_single_line_target_at_wide_width_still_no_chevron(
     since the new OR-branch is easy to over-eagerly trigger.
     """
     row = ApprovalArgsRow("ls -la")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test(size=(200, 24)) as pilot:
         await pilot.pause()
         assert row.overflowing is False

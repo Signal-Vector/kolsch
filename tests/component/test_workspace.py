@@ -85,14 +85,14 @@ def test_tc_ux_03_default_uses_platformdirs(
     """Monkeypatch `platformdirs.user_documents_dir` so the default
     branch is deterministic across machines."""
     monkeypatch.delenv(KOLSCH_ENV_VAR, raising=False)
-    fake_docs = tmp_path / "Documents"
-    fake_docs.mkdir()
+    mock_docs = tmp_path / "Documents"
+    mock_docs.mkdir()
     monkeypatch.setattr(
         "platform_runtime.workspace.platformdirs.user_documents_dir",
-        lambda: str(fake_docs),
+        lambda: str(mock_docs),
     )
     out = resolve_workspace()
-    assert out == (fake_docs / DEFAULT_DIR_NAME).resolve()
+    assert out == (mock_docs / DEFAULT_DIR_NAME).resolve()
 
 
 def test_tc_ux_03_empty_env_var_falls_through(
@@ -101,14 +101,14 @@ def test_tc_ux_03_empty_env_var_falls_through(
     """An empty `KOLSCH_WORKSPACE` is treated as unset (`os.environ.get`
     returns the empty string but our guard checks truthiness)."""
     monkeypatch.setenv(KOLSCH_ENV_VAR, "")
-    fake_docs = tmp_path / "Documents"
-    fake_docs.mkdir()
+    mock_docs = tmp_path / "Documents"
+    mock_docs.mkdir()
     monkeypatch.setattr(
         "platform_runtime.workspace.platformdirs.user_documents_dir",
-        lambda: str(fake_docs),
+        lambda: str(mock_docs),
     )
     out = resolve_workspace()
-    assert out == (fake_docs / DEFAULT_DIR_NAME).resolve()
+    assert out == (mock_docs / DEFAULT_DIR_NAME).resolve()
 
 
 # ---------------------------------------------------------------------------

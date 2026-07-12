@@ -1,6 +1,6 @@
 """Pilot tests for `ApprovalChoicePane`.
 
-Framework-native: mount the widget in isolation via `fake_app_factory`,
+Framework-native: mount the widget in isolation via `mock_app_factory`,
 press each bound key via `Pilot.press`, and assert the `Chosen`
 message was posted with the matching key.
 
@@ -16,7 +16,7 @@ from cli.chat.widgets.approval_choice_pane import ApprovalChoicePane
 
 
 @pytest.mark.asyncio
-async def test_pane_shows_all_four_choices_and_prompt(fake_app_factory):
+async def test_pane_shows_all_four_choices_and_prompt(mock_app_factory):
     """The pane renders a single choices line + a prompt cursor line.
 
     The choices row is one ``Static`` (rendered ``markup=False`` so
@@ -26,7 +26,7 @@ async def test_pane_shows_all_four_choices_and_prompt(fake_app_factory):
     ``[y]`` on narrow terminals; this test guards the fix.
     """
     pane = ApprovalChoicePane()
-    app = fake_app_factory(pane)
+    app = mock_app_factory(pane)
     async with app.run_test() as pilot:
         await pilot.pause()
         choices_text = str(pane.query_one(".choices").render())
@@ -49,7 +49,7 @@ async def test_pane_shows_all_four_choices_and_prompt(fake_app_factory):
     ],
 )
 async def test_pane_posts_chosen_message_for_each_key(
-    fake_app_factory, key_press: str, expected: str
+    mock_app_factory, key_press: str, expected: str
 ) -> None:
     """Each bound key posts a `Chosen(key=...)` message with the mapped key.
 
@@ -57,7 +57,7 @@ async def test_pane_posts_chosen_message_for_each_key(
     can distinguish an explicit deny from an abandoned rule write.
     """
     pane = ApprovalChoicePane()
-    app = fake_app_factory(pane)
+    app = mock_app_factory(pane)
 
     seen: list[str] = []
 

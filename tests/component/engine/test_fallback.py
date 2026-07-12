@@ -9,13 +9,13 @@ The tests exercise three layers:
 - :func:`engine._fallback.build_fallback_chain` — agent-load-time
   validation; TC-FB-05 and the duplicate-warning surface land here.
 - :class:`engine._fallback.FallbackLLMHandle` — the runtime loop;
-  TC-FB-01, 02, 03, 06, 08, 09 drive it end-to-end via a fake
+  TC-FB-01, 02, 03, 06, 08, 09 drive it end-to-end via a mock
   ``LLMHandle`` callable per spec. TC-FB-07 hits the streaming
   short-circuit at the engine level. TC-FB-10 walks a recorded
   JSONL through `reconstruct`.
 
 Per the Step 20 instructions, no real LLM is touched. The
-:class:`tests.fixtures.fake_llm.FakeLLM` extension adds an
+:class:`tests.fixtures.mock_llm.MockLLM` extension adds an
 ``inject_error`` API for deterministic failure scripting.
 """
 
@@ -964,15 +964,15 @@ def test_classification_guard_raises_on_unclassified_model_code() -> None:
     # Tweak the registered code sets temporarily so an unclassified
     # `model.*` code shows up, then call the guard's body to trigger
     # the failure path.
-    fake_codes = {"model.rate_limited", "model.new_unclassified"}
+    mock_codes = {"model.rate_limited", "model.new_unclassified"}
     original = fb._RECOVERABLE_MODEL_CODES
     try:
         # The internal guard reads from `errors.list_catalog_codes` —
-        # mock that to return our fake set.
+        # mock that to return our mock set.
         import errors as errors_mod
 
         original_list = errors_mod.list_catalog_codes
-        errors_mod.list_catalog_codes = lambda: fake_codes
+        errors_mod.list_catalog_codes = lambda: mock_codes
         try:
             with pytest.raises(ImportError, match=r"model\.new_unclassified"):
                 fb._assert_classification_exhaustive()

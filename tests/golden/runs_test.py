@@ -210,7 +210,7 @@ def _build_authored_python_basemodel(
 ) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
     """One authored-Python ``@node`` returning a Pydantic ``BaseModel``.
 
-    Uses a fake runner that mimics the catalog-runner output shape —
+    Uses a mock runner that mimics the catalog-runner output shape —
     keeping the golden independent of the on-disk module path the
     real catalog runner would import. The shape under test is the
     EVENT stream, not the importlib pipeline (which has its own
@@ -234,7 +234,7 @@ def _build_authored_python_basemodel(
     _ = tmp_path
     # The validator's ``catalog-node-defs`` pass requires the ref to
     # resolve in the catalog. Marking the entry ``builtin: True``
-    # short-circuits the importlib introspection so the fake runner
+    # short-circuits the importlib introspection so the mock runner
     # injected above carries the whole load.
     from assets.catalog import AssetCatalog, AssetEntry
 

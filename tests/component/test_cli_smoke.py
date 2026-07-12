@@ -117,7 +117,7 @@ def initialized_workspace(tmp_path_factory: pytest.TempPathFactory) -> Path:
     part of the suite per acceptance criterion 5).
 
     Setup runs with no ``KOLSCH_PROVIDER`` / ``KOLSCH_PROVIDER_KEY``
-    env vars, so the starter agent ships with the built-in fake LLM
+    env vars, so the starter agent ships with the built-in mock LLM
     and no network is touched anywhere in the smoke suite (criterion 4).
     """
     root = tmp_path_factory.mktemp("smoke_workspace")

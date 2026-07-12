@@ -1,6 +1,6 @@
 """Pilot tests for :class:`ApprovalArgsRow` — qol-047.
 
-Framework-aligned tests: mount the widget via ``fake_app_factory``
+Framework-aligned tests: mount the widget via ``mock_app_factory``
 (shared fixture at ``tests/cli/chat/conftest.py``), drive resize +
 click + Tab via ``Pilot``, and assert on:
 
@@ -50,11 +50,11 @@ def _rendered(widget: ApprovalArgsRow) -> str:
 
 @pytest.mark.asyncio
 async def test_short_target_no_chevron(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """A target that fits inside the row width has no chevron."""
     row = ApprovalArgsRow("ls -la")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test(size=(120, 24)):
         assert row.overflowing is False
         text = _rendered(row)
@@ -66,13 +66,13 @@ async def test_short_target_no_chevron(
 
 @pytest.mark.asyncio
 async def test_long_target_shows_chevron_collapsed(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """A target too long for the row ends with ``…▸`` when collapsed."""
     # Force overflow at 40 cols: prefix (6) + 100-char target ≫ 40.
     long_target = "x" * 100
     row = ApprovalArgsRow(long_target)
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test(size=(40, 24)):
         assert row.overflowing is True
         assert row.expanded is False
@@ -85,12 +85,12 @@ async def test_long_target_shows_chevron_collapsed(
 
 @pytest.mark.asyncio
 async def test_toggle_expands_row(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """``action_toggle_expand`` on an overflowing row reveals the full target."""
     long_target = "abcdefghij" * 20  # 200 chars — well over 40 wide
     row = ApprovalArgsRow(long_target)
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test(size=(40, 24)) as pilot:
         assert row.overflowing is True
         row.action_toggle_expand()
@@ -110,11 +110,11 @@ async def test_toggle_expands_row(
 
 @pytest.mark.asyncio
 async def test_toggle_collapses_row(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """Two toggles return the row to collapsed state."""
     row = ApprovalArgsRow("x" * 100)
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test(size=(40, 24)) as pilot:
         assert row.overflowing is True
         row.action_toggle_expand()
@@ -130,7 +130,7 @@ async def test_toggle_collapses_row(
 
 @pytest.mark.asyncio
 async def test_on_resize_updates_overflow(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """Resizing the terminal flips ``overflowing`` in both directions.
 
@@ -139,7 +139,7 @@ async def test_on_resize_updates_overflow(
     """
     target = "x" * 80  # Between 40 and 200 cols
     row = ApprovalArgsRow(target)
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test(size=(40, 24)) as pilot:
         assert row.overflowing is True
         assert "▸" in _rendered(row)
@@ -158,11 +158,11 @@ async def test_on_resize_updates_overflow(
 
 @pytest.mark.asyncio
 async def test_click_toggles_expansion(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """A mouse click on the row toggles expansion (AC #4 unit-side)."""
     row = ApprovalArgsRow("x" * 100)
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test(size=(40, 24)) as pilot:
         assert row.overflowing is True
         assert row.expanded is False
@@ -177,7 +177,7 @@ async def test_click_toggles_expansion(
 
 @pytest.mark.asyncio
 async def test_tab_binding_toggles_when_focused_pane_present(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """Tab pressed on the focused choice pane toggles the args row.
 
@@ -195,7 +195,7 @@ async def test_tab_binding_toggles_when_focused_pane_present(
         action="kolsch/tools/bash",
         target=long_target,
     )
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test(size=(60, 24)) as pilot:
         # Give the row a chance to compute overflow after first frame.
         await pilot.pause()
@@ -222,7 +222,7 @@ async def test_tab_binding_toggles_when_focused_pane_present(
 
 @pytest.mark.asyncio
 async def test_chevron_char_flips_between_toggled_states(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """Explicit paranoia — ``▸`` and ``▾`` are distinct chars.
 
@@ -230,7 +230,7 @@ async def test_chevron_char_flips_between_toggled_states(
     chevron char is used. This test locks each glyph to its state.
     """
     row = ApprovalArgsRow("x" * 100)
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test(size=(40, 24)) as pilot:
         collapsed_text = _rendered(row)
         assert "▸" in collapsed_text
@@ -254,7 +254,7 @@ def _footer_text(block: ApprovalBlock) -> str:
 
 @pytest.mark.asyncio
 async def test_resize_updates_footer_hint(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """Round-2 Fix 1: a resize that flips overflow flips the footer too.
 
@@ -268,7 +268,7 @@ async def test_resize_updates_footer_hint(
         action="kolsch/tools/bash",
         target=long_target,
     )
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test(size=(40, 24)) as pilot:
         await pilot.pause()
         # Narrow: overflow → footer includes ``Tab → expand args``.
@@ -292,7 +292,7 @@ async def test_resize_updates_footer_hint(
 
 @pytest.mark.asyncio
 async def test_resize_from_expanded_wide_snaps_back_to_collapsed(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """Round-2 Fix 1 corner: expanded row + widen = collapsed + no hint.
 
@@ -305,7 +305,7 @@ async def test_resize_from_expanded_wide_snaps_back_to_collapsed(
         action="kolsch/tools/bash",
         target="x" * 120,
     )
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test(size=(40, 24)) as pilot:
         await pilot.pause()
         await pilot.press("tab")  # expand
@@ -328,7 +328,7 @@ async def test_resize_from_expanded_wide_snaps_back_to_collapsed(
 
 @pytest.mark.asyncio
 async def test_tab_toggles_args_when_pattern_edit_pane_focused(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """AC #3: Tab still toggles the args row when the pattern pane owns focus.
 
@@ -345,7 +345,7 @@ async def test_tab_toggles_args_when_pattern_edit_pane_focused(
         action="kolsch/tools/bash",
         target=long_target,
     )
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test(size=(60, 24)) as pilot:
         await pilot.pause()
         args_row = block.query_one(ApprovalArgsRow)
@@ -369,7 +369,7 @@ async def test_tab_toggles_args_when_pattern_edit_pane_focused(
 
 @pytest.mark.asyncio
 async def test_tab_toggles_args_when_save_confirm_pane_focused(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """AC #3: Tab still toggles the args row when save-confirm owns focus.
 
@@ -385,7 +385,7 @@ async def test_tab_toggles_args_when_save_confirm_pane_focused(
         action="kolsch/tools/bash",
         target=long_target,
     )
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test(size=(60, 24)) as pilot:
         await pilot.pause()
         args_row = block.query_one(ApprovalArgsRow)

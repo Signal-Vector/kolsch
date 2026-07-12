@@ -32,11 +32,11 @@ _AppFactory = Callable[[Widget], App[None]]
 
 @pytest.mark.asyncio
 async def test_set_output_mounts_static_with_formatted_json(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """AC #4 + bug-037 — bash-shape output creates output/exit sections."""
     row = WorkflowNodeRow(node_name="n")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -59,11 +59,11 @@ async def test_set_output_mounts_static_with_formatted_json(
 
 @pytest.mark.asyncio
 async def test_set_output_idempotent_replaces_previous(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """AC #3 + bug-037 — second bash output call is a no-op (sections stick)."""
     row = WorkflowNodeRow(node_name="n")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -83,7 +83,7 @@ async def test_set_output_idempotent_replaces_previous(
         # For non-bash-shape outputs the idempotent-replace semantic
         # still holds.
         row2 = WorkflowNodeRow(node_name="n2")
-        app2 = fake_app_factory(row2)
+        app2 = mock_app_factory(row2)
         async with app2.run_test() as pilot2:
             await pilot2.pause()
             row2.set_output({"a": 1})
@@ -97,11 +97,11 @@ async def test_set_output_idempotent_replaces_previous(
 
 @pytest.mark.asyncio
 async def test_set_output_noop_for_empty_or_none(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """AC #2 guard — empty / None output mounts nothing."""
     row = WorkflowNodeRow(node_name="n")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -115,11 +115,11 @@ async def test_set_output_noop_for_empty_or_none(
 
 @pytest.mark.asyncio
 async def test_set_output_truncates_long_content(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """AC #2 truncation + bug-037 — 500-char stdout ends in ``…`` inside output section."""
     row = WorkflowNodeRow(node_name="n")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 

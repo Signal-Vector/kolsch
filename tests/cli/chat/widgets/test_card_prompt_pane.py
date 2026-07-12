@@ -16,9 +16,9 @@ from cli.chat.widgets.card_prompt_pane import CardPromptPane
 
 
 @pytest.mark.asyncio
-async def test_pane_mounts_three_statics(fake_app_factory) -> None:
+async def test_pane_mounts_three_statics(mock_app_factory) -> None:
     pane = CardPromptPane(question="OK?", options=["y", "n"])
-    app = fake_app_factory(pane)
+    app = mock_app_factory(pane)
     async with app.run_test() as pilot:
         await pilot.pause()
         statics = list(pane.query(Static))
@@ -29,9 +29,9 @@ async def test_pane_mounts_three_statics(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_options_row_renders_bracketed(fake_app_factory) -> None:
+async def test_options_row_renders_bracketed(mock_app_factory) -> None:
     pane = CardPromptPane(question="OK?", options=["y", "n"])
-    app = fake_app_factory(pane)
+    app = mock_app_factory(pane)
     async with app.run_test() as pilot:
         await pilot.pause()
         statics = list(pane.query(Static))

@@ -1,4 +1,4 @@
-"""Fake LLM — scripted model client for deterministic, zero-token tests.
+"""Mock LLM — scripted model client for deterministic, zero-token tests.
 
 Per handbook §8.3:
 - implements the model-client interface;
@@ -13,7 +13,7 @@ sync entry point would let engine code drift away from the real
 async client contract.
 
 The model-client Protocol itself lives in the engine package (not yet
-shipped). When it lands, this Fake conforms to it without changing
+shipped). When it lands, this Mock conforms to it without changing
 test call sites.
 """
 
@@ -58,22 +58,22 @@ class ErrorResponse(BaseModel):
 # A tagged union — Pydantic uses the `kind` Literal to discriminate. The
 # discriminator makes validation explicit and gives mypy the right
 # narrowing inside `isinstance` checks below.
-FakeLLMResponse = Annotated[
+MockLLMResponse = Annotated[
     TextResponse | ToolCallResponse | ErrorResponse,
     Field(discriminator="kind"),
 ]
 
 
-class FakeLLMScriptExhaustedError(RuntimeError):
-    """Raised when a test asks the Fake LLM for more responses than scripted.
+class MockLLMScriptExhaustedError(RuntimeError):
+    """Raised when a test asks the Mock LLM for more responses than scripted.
 
     Surfaces as a test failure rather than silent fallback; an exhausted
     script almost always means the test setup is missing a response.
     """
 
 
-class FakeLLMScriptedError(RuntimeError):
-    """Raised by the Fake LLM when the script directs an error response.
+class MockLLMScriptedError(RuntimeError):
+    """Raised by the Mock LLM when the script directs an error response.
 
     The `error_type` attribute carries the catalog-style code so a test
     can assert the failure path resolves to the right registered code
@@ -86,7 +86,7 @@ class FakeLLMScriptedError(RuntimeError):
 
 
 class RecordedCall(BaseModel):
-    """One recorded interaction with the Fake LLM.
+    """One recorded interaction with the Mock LLM.
 
     Captures whatever the engine passed as the context for the call so
     tests can assert on the Materialization Rule: what the model was
@@ -97,20 +97,20 @@ class RecordedCall(BaseModel):
     model_config = ConfigDict(frozen=True)
 
     context: dict[str, Any]
-    response: FakeLLMResponse
+    response: MockLLMResponse
 
 
-class FakeLLM(BaseModel):
+class MockLLM(BaseModel):
     """Deterministic, zero-token model stub.
 
     Usage::
 
-        fake = FakeLLM(script=[
+        mock = MockLLM(script=[
             ToolCallResponse(tool="read", args={"path": "data/x.md"}),
             TextResponse(text="Based on the file, the answer is 42."),
         ])
         ...
-        assert fake.calls[0].context["system_prompt"] == ...
+        assert mock.calls[0].context["system_prompt"] == ...
 
     `script` is consumed left-to-right; `calls` accumulates one
     `RecordedCall` per `agenerate` invocation regardless of whether the
@@ -119,10 +119,10 @@ class FakeLLM(BaseModel):
 
     model_config = ConfigDict(arbitrary_types_allowed=False)
 
-    script: list[FakeLLMResponse] = Field(default_factory=list)
+    script: list[MockLLMResponse] = Field(default_factory=list)
     calls: list[RecordedCall] = Field(default_factory=list)
 
-    async def agenerate(self, context: dict[str, Any]) -> FakeLLMResponse:
+    async def agenerate(self, context: dict[str, Any]) -> MockLLMResponse:
         """Return the next scripted response and record the call.
 
         `context` is whatever the engine assembled and would have sent
@@ -131,21 +131,21 @@ class FakeLLM(BaseModel):
         typed model-client Protocol.
 
         Raises:
-            FakeLLMScriptExhaustedError: the script has no more responses.
-            FakeLLMScriptedError: the next scripted response is an
+            MockLLMScriptExhaustedError: the script has no more responses.
+            MockLLMScriptedError: the next scripted response is an
                 `ErrorResponse`; the recorded call is still appended so
                 tests can introspect what the model was asked.
         """
         if not self.script:
             msg = (
-                "FakeLLM script exhausted: the engine requested another "
+                "MockLLM script exhausted: the engine requested another "
                 "response but the test did not script one."
             )
-            raise FakeLLMScriptExhaustedError(msg)
+            raise MockLLMScriptExhaustedError(msg)
         response = self.script.pop(0)
         self.calls.append(RecordedCall(context=context, response=response))
         if isinstance(response, ErrorResponse):
-            raise FakeLLMScriptedError(response.error_type, response.message)
+            raise MockLLMScriptedError(response.error_type, response.message)
         return response
 
     def reset_calls(self) -> None:
@@ -160,15 +160,15 @@ class FakeLLM(BaseModel):
         gives tests a more readable call site for
         deterministic error injection:
 
-            fake.inject_error("model.rate_limited")
+            mock.inject_error("model.rate_limited")
 
         forces the next ``agenerate`` call to raise. The fallback
         loop's classification layer (per-connector mapping) is
         responsible for turning the raised
-        :class:`FakeLLMScriptedError` into the typed PlatformError
+        :class:`MockLLMScriptedError` into the typed PlatformError
         the engine ultimately catches; for tests that exercise the
         engine directly, the engine's test adapter does this mapping
-        explicitly (see :mod:`tests.fixtures.fake_llm.platform_error_for_scripted`).
+        explicitly (see :mod:`tests.fixtures.mock_llm.platform_error_for_scripted`).
         """
         self.script.insert(
             0,
@@ -180,11 +180,11 @@ class FakeLLM(BaseModel):
 
 
 def platform_error_for_scripted(
-    exc: FakeLLMScriptedError, *, provider: str = "fake", model: str = "fake-model"
+    exc: MockLLMScriptedError, *, provider: str = "mock", model: str = "mock-model"
 ) -> "PlatformError":
-    """Map a ``FakeLLMScriptedError`` into the catalogued PlatformError.
+    """Map a ``MockLLMScriptedError`` into the catalogued PlatformError.
 
-    Centralises the Fake → catalog mapping so test adapters share
+    Centralises the Mock → catalog mapping so test adapters share
     the table. New ``model.*`` codes added later flow through this
     function; if a test scripts an error_type that has no mapping,
     the function raises ``ValueError`` (test setup bug).
@@ -226,7 +226,7 @@ def platform_error_for_scripted(
         # Phase 1.1 generic — kept for back-compat with existing tests.
         return ModelUpstreamError(provider=provider, http_status=500, response=msg)
     msg_err = (
-        f"FakeLLMScriptedError {code!r} has no mapping in "
+        f"MockLLMScriptedError {code!r} has no mapping in "
         f"platform_error_for_scripted; add it before testing"
     )
     raise ValueError(msg_err)

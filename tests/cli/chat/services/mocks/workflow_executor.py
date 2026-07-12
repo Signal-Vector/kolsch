@@ -1,4 +1,4 @@
-"""Fake executor factory for spec-012 tests.
+"""Mock executor factory for spec-012 tests.
 
 Backs the `WorkflowsImpl` `executor_factory` seam. Given a mapping of
 `ref → list[WorkflowEvent]`, produces a stub executor whose `run()`
@@ -20,7 +20,7 @@ from workflows.run import RunDirectory, WorkflowRunStatus
 
 
 @dataclass
-class FakeExecutor:
+class MockExecutor:
     """Stub executor — emits pre-scripted `WorkflowEvent`s then returns.
 
     Honours the injected `CancelToken`: when cancel fires mid-run, the
@@ -68,13 +68,13 @@ class FakeExecutor:
 
 
 @dataclass
-class FakeExecutorSpec:
+class MockExecutorSpec:
     """Per-ref executor programming.
 
-    `events` is the ordered list of `WorkflowEvent`s the fake emits;
+    `events` is the ordered list of `WorkflowEvent`s the mock emits;
     `per_event_delay` (seconds) sleeps between emits so tests can
     exercise the queued-vs-running FIFO transition. `on_construct` is
-    an optional callback invoked with the mint `run_id` when the fake
+    an optional callback invoked with the mint `run_id` when the mock
     executor is built.
     """
 
@@ -83,20 +83,20 @@ class FakeExecutorSpec:
     on_construct: Callable[[str], None] | None = None
 
 
-def install_fake_executor_factory(
+def install_mock_executor_factory(
     impl: Any,
-    programming: dict[str, FakeExecutorSpec],
+    programming: dict[str, MockExecutorSpec],
     *,
     runs_root: Any,
 ) -> None:
-    """Rebind `impl._executor_factory` to a scripted fake.
+    """Rebind `impl._executor_factory` to a scripted mock.
 
     Args:
         impl: The `WorkflowsImpl` under test.
-        programming: `ref → FakeExecutorSpec`. A `ref` not present in
+        programming: `ref → MockExecutorSpec`. A `ref` not present in
             the mapping raises `KeyError` at factory time — tests must
             be explicit about what refs their queue will drive.
-        runs_root: The `runs/` root directory the fake mints
+        runs_root: The `runs/` root directory the mock mints
             `RunDirectory` roots under. Typically the tmp workspace's
             `runs/` path.
     """
@@ -108,16 +108,16 @@ def install_fake_executor_factory(
         observer: Callable[[WorkflowEvent], None],
         cancel_token: Any,
         sub_agent_event_observer: Any = None,
-    ) -> tuple[FakeExecutor, RunDirectory]:
+    ) -> tuple[MockExecutor, RunDirectory]:
         _ = inputs
-        _ = sub_agent_event_observer  # spec-020 — fake doesn't fire
+        _ = sub_agent_event_observer  # spec-020 — mock doesn't fire
         spec = programming[ref]
         run_dir = RunDirectory(root=runs_root / f"wrk_{_uuid.uuid4()}")
         run_dir.root.mkdir(parents=True, exist_ok=True)
         if spec.on_construct is not None:
             spec.on_construct(str(run_dir.root.name))
         return (
-            FakeExecutor(
+            MockExecutor(
                 events=list(spec.events),
                 observer=observer,
                 cancel_token=cancel_token,

@@ -12,7 +12,7 @@ Per spec (`process/spec-textual-chat-ui.md` → widget subsection):
 - NO_COLOR: fenced code blocks render with no style spans
   (Pygments suppressed; plain dim monospace).
 
-Uses the `fake_app_factory` fixture from `tests/cli/chat/conftest.py`
+Uses the `mock_app_factory` fixture from `tests/cli/chat/conftest.py`
 so the widget is exercised in isolation without the full ChatApp.
 """
 
@@ -28,10 +28,10 @@ from cli.chat.widgets.assistant_prose import (
 
 
 @pytest.mark.asyncio
-async def test_mount_yields_empty_markdown(fake_app_factory) -> None:
+async def test_mount_yields_empty_markdown(mock_app_factory) -> None:
     """The widget mounts cleanly and starts empty (no source text)."""
     widget = AssistantProse()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
         # Freshly mounted `Markdown` has no source content yet.
@@ -39,10 +39,10 @@ async def test_mount_yields_empty_markdown(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_append_grows_content(fake_app_factory) -> None:
+async def test_append_grows_content(mock_app_factory) -> None:
     """`append(text)` writes into the underlying markdown document."""
     widget = AssistantProse()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await widget.append("Hello ")
         await widget.append("world.")
@@ -52,10 +52,10 @@ async def test_append_grows_content(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_context_manager_grows_content(fake_app_factory) -> None:
+async def test_stream_context_manager_grows_content(mock_app_factory) -> None:
     """`stream()` yields a `MarkdownStream`; writes accumulate in source."""
     widget = AssistantProse()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         async with widget.stream() as stream:
             await stream.write("Token1 ")
@@ -71,10 +71,10 @@ async def test_stream_context_manager_grows_content(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_stops_on_context_exit(fake_app_factory) -> None:
+async def test_stream_stops_on_context_exit(mock_app_factory) -> None:
     """After `stream()` exits, writing to the stream must raise."""
     widget = AssistantProse()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test():
         async with widget.stream() as stream:
             await stream.write("chunk")
@@ -83,7 +83,7 @@ async def test_stream_stops_on_context_exit(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_default_css_declares_bordered_box(fake_app_factory) -> None:
+async def test_default_css_declares_bordered_box(mock_app_factory) -> None:
     """DEFAULT_CSS boxes the assistant response in ``$assistant-fg``.
 
     Original spec had the widget borderless; the user asked during
@@ -95,7 +95,7 @@ async def test_default_css_declares_bordered_box(fake_app_factory) -> None:
     assert "$assistant-fg" in AssistantProse.DEFAULT_CSS
     # Ensure the widget still mounts with its own CSS.
     widget = AssistantProse()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
         # Textual computes styles at mount; if the CSS were malformed
@@ -105,7 +105,7 @@ async def test_default_css_declares_bordered_box(fake_app_factory) -> None:
 
 @pytest.mark.asyncio
 async def test_fenced_code_block_uses_pygments_under_color(
-    fake_app_factory, monkeypatch
+    mock_app_factory, monkeypatch
 ) -> None:
     """Under the color theme, fenced code blocks get Pygments spans.
 
@@ -116,7 +116,7 @@ async def test_fenced_code_block_uses_pygments_under_color(
     """
     monkeypatch.delenv("NO_COLOR", raising=False)
     widget = AssistantProse()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await widget.append("Here is code:\n\n```python\ndef f():\n    return 1\n```\n")
         await pilot.pause()
@@ -135,12 +135,12 @@ async def test_fenced_code_block_uses_pygments_under_color(
 
 @pytest.mark.asyncio
 async def test_fenced_code_block_plain_under_no_color(
-    fake_app_factory, monkeypatch
+    mock_app_factory, monkeypatch
 ) -> None:
     """Under NO_COLOR, fenced code blocks are plain (no Pygments spans)."""
     monkeypatch.setenv("NO_COLOR", "1")
     widget = AssistantProse()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await widget.append("```python\ndef f():\n    return 1\n```\n")
         await pilot.pause()
@@ -211,11 +211,11 @@ def test_wrap_json_helper_skips_bracket_but_non_json() -> None:
 
 
 @pytest.mark.asyncio
-async def test_constructor_wraps_json_input(fake_app_factory) -> None:
+async def test_constructor_wraps_json_input(mock_app_factory) -> None:
     """`AssistantProse(json_text)` wraps the initial text as fenced code."""
     text = '[{"a": 1}, {"b": 2}]'
     widget = AssistantProse(text)
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
         assert "```json" in widget.source
@@ -226,10 +226,10 @@ async def test_constructor_wraps_json_input(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_constructor_leaves_prose_unchanged(fake_app_factory) -> None:
+async def test_constructor_leaves_prose_unchanged(mock_app_factory) -> None:
     """Non-JSON initial text renders as regular Markdown."""
     widget = AssistantProse("Just some prose.")
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
         assert "```json" not in widget.source
@@ -237,10 +237,10 @@ async def test_constructor_leaves_prose_unchanged(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_append_wraps_json_input(fake_app_factory) -> None:
+async def test_append_wraps_json_input(mock_app_factory) -> None:
     """`append(json_text)` wraps before appending to the document."""
     widget = AssistantProse()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await widget.append('[{"score": 10}]')
         await pilot.pause()
@@ -249,10 +249,10 @@ async def test_append_wraps_json_input(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_append_leaves_prose_unchanged(fake_app_factory) -> None:
+async def test_append_leaves_prose_unchanged(mock_app_factory) -> None:
     """`append(prose)` passes through — no false wrap."""
     widget = AssistantProse()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await widget.append("Hello world.")
         await pilot.pause()

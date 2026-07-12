@@ -103,7 +103,7 @@ def confirm_dangerous_action_tool() -> Callable[..., Awaitable[Any]]:
 # --------------------------------------------------------------------
 
 
-class _FakeAuthz:
+class _MockAuthz:
     """Minimal ``AuthorizationProvider`` stub — the smoke tests
     invoke tool bodies directly and do not exercise the authz layer.
     """
@@ -118,7 +118,7 @@ class _FakeAuthz:
         return None
 
 
-class _FakeEngine:
+class _MockEngine:
     """Non-yielding engine stub — the smoke suite never runs a turn."""
 
     async def execute_stream(self, config: Any, ctx: Any):
@@ -128,14 +128,14 @@ class _FakeEngine:
 
 
 @dataclass
-class _FakeConfig:
+class _MockConfig:
     name: str = "TestAgent"
-    agent_id: str = "ag_fake"
+    agent_id: str = "ag_mock"
     model: Any = None
 
 
 @dataclass
-class _FakeBundle:
+class _MockBundle:
     runtime: Any
     config: Any
     session_id: Any
@@ -165,7 +165,7 @@ async def chat_app(tmp_path: Path) -> AsyncIterator[ChatApp]:
     backend = SqliteBackend(platform_dir / "entities.db")
     await backend.initialize()
     store = SessionStore(root=tmp_path, backend=backend)
-    session = await store.create_session("ag_fake", name="c")
+    session = await store.create_session("ag_mock", name="c")
     threads = await store.list_threads(session.session_id)
 
     from bus.in_process import InProcessEventBus
@@ -173,8 +173,8 @@ async def chat_app(tmp_path: Path) -> AsyncIterator[ChatApp]:
     class _R:
         def __init__(self) -> None:
             self.store = store
-            self.authz = _FakeAuthz()
-            self.engine = _FakeEngine()
+            self.authz = _MockAuthz()
+            self.engine = _MockEngine()
             # feat-018: butler workflow tools need
             # ``WorkflowsImpl`` at ``on_mount``; the impl's constructor
             # builds a ``WorkflowRunStore(self.session.runtime.root)``
@@ -187,14 +187,14 @@ async def chat_app(tmp_path: Path) -> AsyncIterator[ChatApp]:
             # (`PlatformRuntime.bus` is `InProcessEventBus`).
             self.bus = InProcessEventBus()
 
-    bundle = _FakeBundle(
+    bundle = _MockBundle(
         runtime=_R(),
-        config=_FakeConfig(),
+        config=_MockConfig(),
         session_id=session.session_id,
         thread_id=threads[0].thread_id,
-        agent_ref="kolsch/agents/fake",
+        agent_ref="kolsch/agents/mock",
         root=tmp_path,
-        model_label="fake/test",
+        model_label="mock/test",
         is_resume=False,
     )
     app = ChatApp(
@@ -269,7 +269,7 @@ def _headless_ctx() -> ToolContext:
     and one-shot CLI take.
     """
     return ToolContext(
-        agent_id=AgentId("ag_fake"),
+        agent_id=AgentId("ag_mock"),
         session_id=SessionId(f"ses_{uuid4()}"),
         thread_id=ThreadId(f"th_{uuid4()}"),
         principal="user",

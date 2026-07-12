@@ -20,7 +20,7 @@
 # reply as ``{text: "..."}`` regardless of the agent's IOSpec.outputs
 # field name (engine convention — see ``src/engine/observers.py``).
 # The branch reads ``inputs.label`` populated by the edge bind, which
-# pulls from ``nodes.classify.text``. With the fake-LLM default in
+# pulls from ``nodes.classify.text``. With the mock-LLM default in
 # ``platform.yaml``, the engine echoes the input back, so the
 # classify step's output mirrors ``ticket_text`` — fine for the smoke
 # test, but real classification requires a real provider.

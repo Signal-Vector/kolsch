@@ -52,9 +52,9 @@ from cli.chat.widgets.card_widget import CardWidget
 from engine.framework import LLMRequest, LLMResponse
 from platform_runtime import bootstrap_runtime
 from schemas.events import EventType
-from tests.cli.chat.services.fakes import (
-    FakeExecutorSpec,
-    install_fake_executor_factory,
+from tests.cli.chat.services.mocks import (
+    MockExecutorSpec,
+    install_mock_executor_factory,
 )
 from workflows.events import (
     WorkflowNodeStartedEvent,
@@ -163,7 +163,7 @@ class _ScriptedLLM:
 
 
 # ---------------------------------------------------------------------------
-# Fake workflow events for the one-shot invocation.
+# Mock workflow events for the one-shot invocation.
 # ---------------------------------------------------------------------------
 
 
@@ -247,9 +247,9 @@ async def test_model_calls_virtual_tool_directly(
         # executor.
         workflows_impl = pilot.app._service_registry.workflows
         assert workflows_impl is not None
-        install_fake_executor_factory(
+        install_mock_executor_factory(
             workflows_impl,
-            {workflow_ref: FakeExecutorSpec(
+            {workflow_ref: MockExecutorSpec(
                 events=_mk_workflow_events(),
                 per_event_delay=0.02,
             )},

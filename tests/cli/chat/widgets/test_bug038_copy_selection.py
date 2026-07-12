@@ -52,7 +52,7 @@ _AppFactory = Callable[[Widget], App[None]]
 
 
 @pytest.mark.asyncio
-async def test_workflow_node_row_allows_select(fake_app_factory: _AppFactory) -> None:
+async def test_workflow_node_row_allows_select(mock_app_factory: _AppFactory) -> None:
     """``WorkflowNodeRow`` sets ``ALLOW_SELECT = True`` at the class level.
 
     ``Collapsible`` itself defaults to
@@ -67,7 +67,7 @@ async def test_workflow_node_row_allows_select(fake_app_factory: _AppFactory) ->
     assert WorkflowNodeRow.ALLOW_SELECT is True
     row = WorkflowNodeRow(node_name="x")
     assert row.ALLOW_SELECT is True
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         # Body Static leaves inside the row must inherit selectability
@@ -82,12 +82,12 @@ async def test_workflow_node_row_allows_select(fake_app_factory: _AppFactory) ->
 
 
 @pytest.mark.asyncio
-async def test_node_section_allows_select(fake_app_factory: _AppFactory) -> None:
+async def test_node_section_allows_select(mock_app_factory: _AppFactory) -> None:
     """``NodeSection`` sets ``ALLOW_SELECT = True`` at the class level."""
     assert NodeSection.ALLOW_SELECT is True
     section = NodeSection("input")
     assert section.ALLOW_SELECT is True
-    app = fake_app_factory(section)
+    app = mock_app_factory(section)
     async with app.run_test() as pilot:
         await pilot.pause()
         # NodeSection has no body Statics by default; verify the
@@ -96,7 +96,7 @@ async def test_node_section_allows_select(fake_app_factory: _AppFactory) -> None
 
 
 @pytest.mark.asyncio
-async def test_tool_call_block_allows_select(fake_app_factory: _AppFactory) -> None:
+async def test_tool_call_block_allows_select(mock_app_factory: _AppFactory) -> None:
     """``ToolCallBlock`` sets ``ALLOW_SELECT = True`` at the class level.
 
     Also verifies the body Static leaves inherit selectability
@@ -105,7 +105,7 @@ async def test_tool_call_block_allows_select(fake_app_factory: _AppFactory) -> N
     assert ToolCallBlock.ALLOW_SELECT is True
     block = ToolCallBlock("read_file", "path=/tmp/x", "canonical body")
     assert block.ALLOW_SELECT is True
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test() as pilot:
         await pilot.pause()
         statics = list(block.query(Static))

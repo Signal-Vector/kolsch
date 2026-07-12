@@ -27,11 +27,11 @@ from cli.chat.widgets.card_body.workflow import (
 
 @pytest.mark.asyncio
 async def test_parent_ref_renders_arrow_line(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """`parent_ref='release-candidate'` → `↳ from release-candidate` above bar."""
     renderer = WorkflowRenderer(parent_ref="release-candidate")
-    app = fake_app_factory(renderer)
+    app = mock_app_factory(renderer)
     async with app.run_test() as pilot:
         await pilot.pause()
         text = str(renderer._header.render())
@@ -46,11 +46,11 @@ async def test_parent_ref_renders_arrow_line(
 
 @pytest.mark.asyncio
 async def test_no_parent_ref_no_arrow_line(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """Default (`parent_ref=None`) → single-line progress bar only."""
     renderer = WorkflowRenderer()
-    app = fake_app_factory(renderer)
+    app = mock_app_factory(renderer)
     async with app.run_test() as pilot:
         await pilot.pause()
         text = str(renderer._header.render())
@@ -65,7 +65,7 @@ async def test_no_parent_ref_no_arrow_line(
 
 @pytest.mark.asyncio
 async def test_set_parent_ref_after_mount_refreshes_header(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """`set_parent_ref` after mount replaces the hint text.
 
@@ -75,7 +75,7 @@ async def test_set_parent_ref_after_mount_refreshes_header(
     must idempotently update the header.
     """
     renderer = WorkflowRenderer()
-    app = fake_app_factory(renderer)
+    app = mock_app_factory(renderer)
     async with app.run_test() as pilot:
         await pilot.pause()
         pre = str(renderer._header.render())
@@ -146,7 +146,7 @@ async def test_nested_workflow_progress_fanout_sets_parent_ref() -> None:
                 ),
             }
 
-    class _FakeApp:
+    class _MockApp:
         def query_one(self, *_a: object, **_kw: object) -> object:
             raise LookupError("no #transcript")
 
@@ -156,7 +156,7 @@ async def test_nested_workflow_progress_fanout_sets_parent_ref() -> None:
     renderer._run_id = child_run_id
 
     adapter = EventAdapter(
-        _FakeApp(),  # type: ignore[arg-type]
+        _MockApp(),  # type: ignore[arg-type]
         workflows_impl=_StubWorkflowsImpl(),  # type: ignore[arg-type]
     )
 

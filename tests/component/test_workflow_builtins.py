@@ -592,7 +592,7 @@ class TestExecutorAppliesModifiers:
         assert failed[0]["payload"]["error_class"] == "NodeTimeoutExceeded"
 
     async def test_per_node_retry_emits_only_final_event(self, tmp_path: Path) -> None:
-        # Use a fake runner so we can fail-then-succeed deterministically
+        # Use a mock runner so we can fail-then-succeed deterministically
         # without invoking the bash tool. The retry wrapper is applied
         # by the executor based on node_def.retry.
         attempts: list[int] = []

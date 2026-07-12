@@ -33,8 +33,8 @@ import yaml
 from engine import ExecutionContext, LLMRequest, LLMResponse
 from platform_runtime import bootstrap_runtime
 from schemas import EventType
-from tests.fixtures.fake_llm import (
-    FakeLLM,
+from tests.fixtures.mock_llm import (
+    MockLLM,
     TextResponse,
     ToolCallResponse,
 )
@@ -98,8 +98,8 @@ def _set_bundle_permissions(root: Path, rules: list[dict[str, str]]) -> None:
     bundle_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
 
-def _make_fake_llm_callable(
-    fake: FakeLLM,
+def _make_mock_llm_callable(
+    mock: MockLLM,
 ) -> Callable[[LLMRequest], Awaitable[LLMResponse]]:
     """Adapter matching the one in tests/integration/test_tool_wiring.py."""
 
@@ -113,7 +113,7 @@ def _make_fake_llm_callable(
                 "",
             ),
         }
-        response = await fake.agenerate(context)
+        response = await mock.agenerate(context)
         if isinstance(response, TextResponse):
             return LLMResponse(content=response.text)
         if isinstance(response, ToolCallResponse):
@@ -127,7 +127,7 @@ def _make_fake_llm_callable(
                     },
                 ],
             )
-        msg = f"unexpected FakeLLM response shape: {response!r}"
+        msg = f"unexpected MockLLM response shape: {response!r}"
         raise RuntimeError(msg)
 
     return _llm
@@ -142,7 +142,7 @@ async def test_bundle_allow_rule_passes_through_in_non_chat_context(
     tmp_path: Path,
 ) -> None:
     """A bundle ``allow`` rule for ``tool.bash`` should let a
-    FakeLLM-driven invocation succeed even though the workspace's
+    MockLLM-driven invocation succeed even though the workspace's
     starter ``platform.yaml`` carries ``tool.bash → prompt`` (which
     would collapse to deny in a non-chat / no-callback context)."""
     root = tmp_path / "ws"
@@ -154,7 +154,7 @@ async def test_bundle_allow_rule_passes_through_in_non_chat_context(
         [{"what": "kolsch/tools/bash", "pattern": "*", "effect": "allow"}],
     )
 
-    fake = FakeLLM(
+    mock = MockLLM(
         script=[
             ToolCallResponse(
                 tool="bash",
@@ -164,7 +164,7 @@ async def test_bundle_allow_rule_passes_through_in_non_chat_context(
             TextResponse(text="Done — bundle-allow-rule-01"),
         ],
     )
-    runtime = await bootstrap_runtime(root=root, llm=_make_fake_llm_callable(fake))
+    runtime = await bootstrap_runtime(root=root, llm=_make_mock_llm_callable(mock))
     config = await runtime.build_resolved_config("kolsch/agents/helper")
     session = await runtime.store.create_session(
         str(config.agent_id), name="permdisc-int-01"
@@ -221,7 +221,7 @@ async def test_bundle_deny_rule_wins_over_platform_allow(
         [{"what": "kolsch/tools/bash", "pattern": "*", "effect": "deny"}],
     )
 
-    fake = FakeLLM(
+    mock = MockLLM(
         script=[
             ToolCallResponse(
                 tool="bash",
@@ -231,7 +231,7 @@ async def test_bundle_deny_rule_wins_over_platform_allow(
             TextResponse(text="should not be reached"),
         ],
     )
-    runtime = await bootstrap_runtime(root=root, llm=_make_fake_llm_callable(fake))
+    runtime = await bootstrap_runtime(root=root, llm=_make_mock_llm_callable(mock))
     config = await runtime.build_resolved_config("kolsch/agents/helper")
     session = await runtime.store.create_session(
         str(config.agent_id), name="permdisc-int-02"

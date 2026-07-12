@@ -29,11 +29,11 @@ from cli.chat.widgets.workflow_node_row import (
 
 @pytest.mark.asyncio
 async def test_node_row_spinner_rotates_while_running(
-    fake_app_factory,
+    mock_app_factory,
 ) -> None:
     """The row's collapsed-title glyph rotates during the running state."""
     row = WorkflowNodeRow(node_name="deduper")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         row.set_state("running")
@@ -66,7 +66,7 @@ async def test_node_row_spinner_rotates_while_running(
 
 @pytest.mark.asyncio
 async def test_node_row_spinner_stops_at_terminal_state(
-    fake_app_factory,
+    mock_app_factory,
 ) -> None:
     """Terminal-state transition stops the spinner interval.
 
@@ -75,7 +75,7 @@ async def test_node_row_spinner_stops_at_terminal_state(
     on a non-animated transition.
     """
     row = WorkflowNodeRow(node_name="deduper")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         row.set_state("running")

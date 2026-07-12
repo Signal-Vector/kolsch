@@ -5,7 +5,7 @@ Two passes:
 1. Wire `InlineApprovalCallback` → `PromptsImpl` → `EventAdapter`
    → mock `mount_approval_block`. Invoke the callback; assert the
    adapter's dispatch of the emitted `WIRE_PROMPT_REQUESTED` from
-   the store mounts an `ApprovalBlock` (via the mock's fake mount).
+   the store mounts an `ApprovalBlock` (via the mock's mock mount).
    Simulate the user pressing `y` by dispatching a matching
    `WIRE_PROMPT_ANSWERED`; assert the callback returns
    `AuthzEffect.ALLOW`.
@@ -45,7 +45,7 @@ from schemas.wire_kinds import (
 from store import SessionStore, SqliteBackend
 
 
-class _FakeApp:
+class _MockApp:
     def __init__(self) -> None:
         self.mount_calls: list[tuple[Any, Any, Any]] = []
         self.cleared_calls = 0
@@ -82,7 +82,7 @@ async def test_end_to_end_approval_via_event_bus(
     session = await store.create_session("ag_test", name="e2e")
     thread_id = (await store.list_threads(session.session_id))[0].thread_id
 
-    app = _FakeApp()
+    app = _MockApp()
     impl = PromptsImpl(
         session_store=store,
         session_id=session.session_id,

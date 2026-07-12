@@ -27,7 +27,7 @@ import pytest
 from cli.chat.widgets.card_widget import CardFooter, CardHeader, CardWidget
 
 
-class _FakeEvent:
+class _MockEvent:
     """Duck-typed event data for `CardWidget.apply_event`."""
 
     __slots__ = ("kind", "payload", "event_id")
@@ -50,9 +50,9 @@ def _footer_text(widget: CardWidget) -> str:
 
 
 @pytest.mark.asyncio
-async def test_mount_initializing_state(fake_app_factory) -> None:
+async def test_mount_initializing_state(mock_app_factory) -> None:
     widget = CardWidget(card_id="crd_test1", kind="markdown", title="t")
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
         assert widget.state == "initializing"
@@ -66,12 +66,12 @@ async def test_mount_initializing_state(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_appended_transitions_to_running(fake_app_factory) -> None:
+async def test_appended_transitions_to_running(mock_app_factory) -> None:
     widget = CardWidget(card_id="crd_test2", kind="markdown", title="hello")
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        widget.apply_event(_FakeEvent(
+        widget.apply_event(_MockEvent(
             "kolsch.card.appended",
             {"chunk": "hi"},
             event_id="ev-append-1",
@@ -85,13 +85,13 @@ async def test_appended_transitions_to_running(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_closed_success_auto_collapses(fake_app_factory) -> None:
+async def test_closed_success_auto_collapses(mock_app_factory) -> None:
     widget = CardWidget(card_id="crd_test3", kind="markdown", title="done")
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
         assert widget.collapsed is False
-        widget.apply_event(_FakeEvent(
+        widget.apply_event(_MockEvent(
             "kolsch.card.closed",
             {"final_status": "success", "error_message": None},
             event_id="ev-close-1",
@@ -105,12 +105,12 @@ async def test_closed_success_auto_collapses(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_closed_error_stays_expanded_with_footer(fake_app_factory) -> None:
+async def test_closed_error_stays_expanded_with_footer(mock_app_factory) -> None:
     widget = CardWidget(card_id="crd_test4", kind="markdown", title="fail")
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        widget.apply_event(_FakeEvent(
+        widget.apply_event(_MockEvent(
             "kolsch.card.closed",
             {"final_status": "error", "error_message": "oops"},
             event_id="ev-close-err",
@@ -125,12 +125,12 @@ async def test_closed_error_stays_expanded_with_footer(fake_app_factory) -> None
 
 
 @pytest.mark.asyncio
-async def test_closed_cancelled_applies_class_and_glyph(fake_app_factory) -> None:
+async def test_closed_cancelled_applies_class_and_glyph(mock_app_factory) -> None:
     widget = CardWidget(card_id="crd_test5", kind="markdown", title="c")
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        widget.apply_event(_FakeEvent(
+        widget.apply_event(_MockEvent(
             "kolsch.card.closed",
             {"final_status": "cancelled", "error_message": None},
             event_id="ev-close-cancel",
@@ -142,12 +142,12 @@ async def test_closed_cancelled_applies_class_and_glyph(fake_app_factory) -> Non
 
 
 @pytest.mark.asyncio
-async def test_status_paused_applies_class_and_glyph(fake_app_factory) -> None:
+async def test_status_paused_applies_class_and_glyph(mock_app_factory) -> None:
     widget = CardWidget(card_id="crd_test6", kind="markdown", title="p")
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        widget.apply_event(_FakeEvent(
+        widget.apply_event(_MockEvent(
             "kolsch.card.status",
             {"status": "paused"},
             event_id="ev-status-p",

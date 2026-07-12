@@ -14,7 +14,7 @@ carries alone:
 5. Each field description references the YAML line where the input
    first appears (AC #3).
 
-The builder is exercised directly against fake YAML strings — no
+The builder is exercised directly against mock YAML strings — no
 catalog, no service registry, no ChatApp.
 """
 
@@ -77,7 +77,7 @@ graph:
 """
 
 
-class _FakeWorkflows:
+class _MockWorkflows:
     """Duck-typed workflows impl exposing the two discovery seams."""
 
     def __init__(self, *, yaml_by_ref: dict[str, str]) -> None:
@@ -97,7 +97,7 @@ class _FakeWorkflows:
 
 def test_build_virtual_defs_returns_one_per_workflow() -> None:
     """Two workflows in catalog → two virtual defs."""
-    workflows = _FakeWorkflows(
+    workflows = _MockWorkflows(
         yaml_by_ref={
             "andre/workflows/job_description_review": _JD_YAML,
             "kolsch/workflows/hello": _HELLO_YAML,

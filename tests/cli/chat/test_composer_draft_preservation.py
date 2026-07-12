@@ -23,11 +23,11 @@ from cli.chat.widgets.composer import Composer
 
 @pytest.mark.asyncio
 async def test_composer_draft_preserved_through_awaiting_approval(
-    fake_app_factory,
+    mock_app_factory,
 ) -> None:
     """`awaiting_approval=True` disables the composer WITHOUT clearing text."""
     composer = Composer()
-    app = fake_app_factory(composer)
+    app = mock_app_factory(composer)
     async with app.run_test() as pilot:
         composer.focus()
         await pilot.pause()
@@ -45,11 +45,11 @@ async def test_composer_draft_preserved_through_awaiting_approval(
 
 @pytest.mark.asyncio
 async def test_composer_draft_survives_full_approval_cycle(
-    fake_app_factory,
+    mock_app_factory,
 ) -> None:
     """Type → pause → resolve → text still `"draft"`; composer re-enabled."""
     composer = Composer()
-    app = fake_app_factory(composer)
+    app = mock_app_factory(composer)
     async with app.run_test() as pilot:
         composer.focus()
         await pilot.pause()

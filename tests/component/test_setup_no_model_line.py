@@ -10,7 +10,7 @@ Verifies the post-fix shape:
 
 Two scenarios per acceptance §3 + §6:
 
-- Default selection: no provider connected → fake LLM fallback lands in
+- Default selection: no provider connected → mock LLM fallback lands in
   ``defaults.model`` and the resolved agent picks it up.
 - Non-default selection: a connected provider's first model lands in
   ``defaults.model`` and the resolved agent picks it up.
@@ -98,16 +98,16 @@ async def test_setup_writes_no_model_line_into_workspace(
 
 
 # ===========================================================================
-# Default selection — fake LLM lands in defaults.model and propagates
+# Default selection — mock LLM lands in defaults.model and propagates
 # ===========================================================================
 
 
-async def test_default_selection_writes_fake_to_defaults_model(
+async def test_default_selection_writes_mock_to_defaults_model(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """No provider connected → ``_pick_starter_model`` falls back to
-    fake/fake-model; setup writes it to ``defaults.model``; the
+    mock/mock-model; setup writes it to ``defaults.model``; the
     resolved agent config picks it up via defaults composition."""
     monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
     monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
@@ -118,8 +118,8 @@ async def test_default_selection_writes_fake_to_defaults_model(
 
     platform_payload = yaml.safe_load((tmp_path / "platform.yaml").read_text())
     assert platform_payload["defaults"]["model"] == {
-        "provider": "fake",
-        "model": "fake-model",
+        "provider": "mock",
+        "model": "mock-model",
     }
 
     am = AssetManagement(root=tmp_path)
@@ -128,8 +128,8 @@ async def test_default_selection_writes_fake_to_defaults_model(
         "kolsch/agents/helper",
         subsystem_validators={"tools": {"standard": _accept_anything}},
     )
-    assert cfg.model.provider == "fake"
-    assert cfg.model.model == "fake-model"
+    assert cfg.model.provider == "mock"
+    assert cfg.model.model == "mock-model"
 
 
 # ===========================================================================

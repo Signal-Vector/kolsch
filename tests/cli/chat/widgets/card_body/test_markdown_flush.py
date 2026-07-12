@@ -21,7 +21,7 @@ import pytest
 from cli.chat.widgets.card_body.markdown import MarkdownRenderer
 
 
-class _FakeEvent:
+class _MockEvent:
     __slots__ = ("kind", "payload")
 
     def __init__(self, kind: str, payload: dict[str, Any]) -> None:
@@ -36,7 +36,7 @@ async def _feed_40hz(widget: MarkdownRenderer, chunks: list[str]) -> None:
     interval timer can fire on its own cadence in parallel.
     """
     for chunk in chunks:
-        widget.apply_event(_FakeEvent(
+        widget.apply_event(_MockEvent(
             "kolsch.card.appended",
             {"chunk": chunk},
         ))
@@ -44,7 +44,7 @@ async def _feed_40hz(widget: MarkdownRenderer, chunks: list[str]) -> None:
 
 
 @pytest.mark.asyncio
-async def test_40hz_flush_ratio_bounded(fake_app_factory, monkeypatch) -> None:
+async def test_40hz_flush_ratio_bounded(mock_app_factory, monkeypatch) -> None:
     """40Hz input → ≤10 underlying `Markdown.append` calls per second.
 
     The `MarkdownRenderer._flush_count` counter increments on every
@@ -52,7 +52,7 @@ async def test_40hz_flush_ratio_bounded(fake_app_factory, monkeypatch) -> None:
     """
     monkeypatch.setenv("KOLSCH_CARD_MARKDOWN_FLUSH_MS", "100")
     widget = MarkdownRenderer()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
         chunks = [f"c{i} " for i in range(40)]
@@ -71,7 +71,7 @@ async def test_40hz_flush_ratio_bounded(fake_app_factory, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_flush_ms_env_override(fake_app_factory, monkeypatch) -> None:
+async def test_flush_ms_env_override(mock_app_factory, monkeypatch) -> None:
     """`KOLSCH_CARD_MARKDOWN_FLUSH_MS=30` → higher flush cadence.
 
     Under a 30ms interval the same 40Hz input drains more often —
@@ -79,7 +79,7 @@ async def test_flush_ms_env_override(fake_app_factory, monkeypatch) -> None:
     """
     monkeypatch.setenv("KOLSCH_CARD_MARKDOWN_FLUSH_MS", "30")
     widget = MarkdownRenderer()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
         assert widget._FLUSH_MS == 30
@@ -93,19 +93,19 @@ async def test_flush_ms_env_override(fake_app_factory, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_no_data_loss_under_streaming(fake_app_factory, monkeypatch) -> None:
+async def test_no_data_loss_under_streaming(mock_app_factory, monkeypatch) -> None:
     """After flush drain, the underlying `Markdown.source` contains
     the concatenation of all chunks — no chunk swallowed by
     coalescing.
     """
     monkeypatch.setenv("KOLSCH_CARD_MARKDOWN_FLUSH_MS", "100")
     widget = MarkdownRenderer()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
         chunks = [f"chunk{i}\n" for i in range(20)]
         for chunk in chunks:
-            widget.apply_event(_FakeEvent(
+            widget.apply_event(_MockEvent(
                 "kolsch.card.appended",
                 {"chunk": chunk},
             ))

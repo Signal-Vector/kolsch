@@ -33,7 +33,7 @@ _BASE_TS = datetime(2026, 7, 5, 12, 0, 0, tzinfo=UTC)
 
 
 @dataclass
-class _FakeCard:
+class _MockCard:
     id: CardId
     is_closed: bool = False
 
@@ -47,7 +47,7 @@ def _mk_record(
     *,
     suffix: str,
     phase: str,
-    card: _FakeCard,
+    card: _MockCard,
     started_offset: int = 0,
     terminal_offset: int | None = None,
 ) -> WorkflowRunRecord:
@@ -75,7 +75,7 @@ async def test_three_simultaneous_notifies_fire_one_flush() -> None:
         transcript = app.query_one("#transcript", VerticalScroll)
 
         cards = [
-            _FakeCard(id=CardId(f"crd_00000000-0000-0000-0000-000000000{i:03x}"))
+            _MockCard(id=CardId(f"crd_00000000-0000-0000-0000-000000000{i:03x}"))
             for i in range(3)
         ]
         widgets = [
@@ -128,7 +128,7 @@ async def test_final_dom_order_matches_sort() -> None:
         transcript = app.query_one("#transcript", VerticalScroll)
 
         cards = [
-            _FakeCard(id=CardId(f"crd_00000000-0000-0000-0000-000000001{i:03x}"))
+            _MockCard(id=CardId(f"crd_00000000-0000-0000-0000-000000001{i:03x}"))
             for i in range(3)
         ]
         widgets = [

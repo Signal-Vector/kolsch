@@ -9,7 +9,7 @@ description: |
   the branch's ``label`` input.
 
 # model: intentionally omitted — resolves from `platform.yaml`'s
-# `defaults.model` (the fake provider in starter scaffolds echoes the
+# `defaults.model` (the mock provider in starter scaffolds echoes the
 # input back, which is enough for the branch wiring to fire).
 
 io:

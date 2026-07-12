@@ -41,13 +41,13 @@ def _mk_agent_event() -> Event:
 
 
 @pytest.mark.asyncio
-async def test_row_title_shows_type_pre_completion(fake_app_factory: Any) -> None:
+async def test_row_title_shows_type_pre_completion(mock_app_factory: Any) -> None:
     """`(agent)` suffix is present in a running row with no details."""
     row = WorkflowNodeRow(
         node_name="hiring_manager_review",
         node_type="kolsch/nodes/agent",
     )
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         row.set_state("running")
@@ -58,14 +58,14 @@ async def test_row_title_shows_type_pre_completion(fake_app_factory: Any) -> Non
 
 @pytest.mark.asyncio
 async def test_row_title_drops_type_when_details_set(
-    fake_app_factory: Any,
+    mock_app_factory: Any,
 ) -> None:
     """Post-completion — ``_details`` populated — the suffix is dropped."""
     row = WorkflowNodeRow(
         node_name="hiring_manager_review",
         node_type="kolsch/nodes/agent",
     )
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         row.set_state("running")
@@ -78,11 +78,11 @@ async def test_row_title_drops_type_when_details_set(
 
 @pytest.mark.asyncio
 async def test_row_title_bare_when_node_type_none(
-    fake_app_factory: Any,
+    mock_app_factory: Any,
 ) -> None:
     """Row without ``node_type`` renders no ``(...)`` suffix."""
     row = WorkflowNodeRow(node_name="untyped_node")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         row.set_state("running")
@@ -93,14 +93,14 @@ async def test_row_title_bare_when_node_type_none(
 
 @pytest.mark.asyncio
 async def test_counter_label_reads_events_not_turns(
-    fake_app_factory: Any,
+    mock_app_factory: Any,
 ) -> None:
     """Trailing counter reads ``· 3 sub-agent events`` — not ``turns``."""
     row = WorkflowNodeRow(
         node_name="n",
         node_type="kolsch/nodes/agent",
     )
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         # bug-036d: any three sink calls bump the counter to 3.

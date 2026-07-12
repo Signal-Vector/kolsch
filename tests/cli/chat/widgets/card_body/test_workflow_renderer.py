@@ -26,7 +26,7 @@ from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 from workflows.events import WorkflowEventKind
 
 
-class _FakeEvent:
+class _MockEvent:
     __slots__ = ("kind", "payload")
 
     def __init__(self, kind: str, payload: dict[str, Any]) -> None:
@@ -69,21 +69,21 @@ def _mk_payload(
 
 
 @pytest.mark.asyncio
-async def test_run_start_node_complete_run_complete_flow(fake_app_factory) -> None:
+async def test_run_start_node_complete_run_complete_flow(mock_app_factory) -> None:
     """Happy-path: RUN_STARTED → NODE_STARTED(a) → NODE_COMPLETED(a) → RUN_COMPLETED."""
     renderer = WorkflowRenderer()
-    app = fake_app_factory(renderer)
+    app = mock_app_factory(renderer)
     async with app.run_test() as pilot:
         await pilot.pause()
 
         start_ts = datetime(2026, 7, 5, 12, 0, 0, tzinfo=UTC)
-        renderer.apply_event(_FakeEvent(
+        renderer.apply_event(_MockEvent(
             _WIRE,
             _mk_payload(WorkflowEventKind.RUN_STARTED, ts=start_ts),
         ))
         await pilot.pause()
 
-        renderer.apply_event(_FakeEvent(
+        renderer.apply_event(_MockEvent(
             _WIRE,
             _mk_payload(
                 WorkflowEventKind.NODE_STARTED,
@@ -98,7 +98,7 @@ async def test_run_start_node_complete_run_complete_flow(fake_app_factory) -> No
         assert rows[0]._node_name == "a"
         assert rows[0].state == "starting"
 
-        renderer.apply_event(_FakeEvent(
+        renderer.apply_event(_MockEvent(
             _WIRE,
             _mk_payload(
                 WorkflowEventKind.NODE_COMPLETED,
@@ -116,7 +116,7 @@ async def test_run_start_node_complete_run_complete_flow(fake_app_factory) -> No
         assert "[1/1]" in header_render
 
         end_ts = datetime(2026, 7, 5, 12, 0, 3, tzinfo=UTC)
-        renderer.apply_event(_FakeEvent(
+        renderer.apply_event(_MockEvent(
             _WIRE,
             _mk_payload(WorkflowEventKind.RUN_COMPLETED, ts=end_ts),
         ))
@@ -128,22 +128,22 @@ async def test_run_start_node_complete_run_complete_flow(fake_app_factory) -> No
 
 
 @pytest.mark.asyncio
-async def test_node_failed_shows_truncated_error(fake_app_factory) -> None:
+async def test_node_failed_shows_truncated_error(mock_app_factory) -> None:
     renderer = WorkflowRenderer()
-    app = fake_app_factory(renderer)
+    app = mock_app_factory(renderer)
     async with app.run_test() as pilot:
         await pilot.pause()
-        renderer.apply_event(_FakeEvent(
+        renderer.apply_event(_MockEvent(
             _WIRE, _mk_payload(WorkflowEventKind.RUN_STARTED),
         ))
-        renderer.apply_event(_FakeEvent(
+        renderer.apply_event(_MockEvent(
             _WIRE,
             _mk_payload(WorkflowEventKind.NODE_STARTED, node_name="b"),
         ))
         await pilot.pause()
 
         long_err = "oops-" + "x" * 200
-        renderer.apply_event(_FakeEvent(
+        renderer.apply_event(_MockEvent(
             _WIRE,
             _mk_payload(
                 WorkflowEventKind.NODE_FAILED,
@@ -162,19 +162,19 @@ async def test_node_failed_shows_truncated_error(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_node_pruned_transitions_to_pruned(fake_app_factory) -> None:
+async def test_node_pruned_transitions_to_pruned(mock_app_factory) -> None:
     renderer = WorkflowRenderer()
-    app = fake_app_factory(renderer)
+    app = mock_app_factory(renderer)
     async with app.run_test() as pilot:
         await pilot.pause()
-        renderer.apply_event(_FakeEvent(
+        renderer.apply_event(_MockEvent(
             _WIRE, _mk_payload(WorkflowEventKind.RUN_STARTED),
         ))
-        renderer.apply_event(_FakeEvent(
+        renderer.apply_event(_MockEvent(
             _WIRE,
             _mk_payload(WorkflowEventKind.NODE_STARTED, node_name="c"),
         ))
-        renderer.apply_event(_FakeEvent(
+        renderer.apply_event(_MockEvent(
             _WIRE,
             _mk_payload(WorkflowEventKind.NODE_PRUNED, node_name="c"),
         ))
@@ -185,15 +185,15 @@ async def test_node_pruned_transitions_to_pruned(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_failed_footer(fake_app_factory) -> None:
+async def test_run_failed_footer(mock_app_factory) -> None:
     renderer = WorkflowRenderer()
-    app = fake_app_factory(renderer)
+    app = mock_app_factory(renderer)
     async with app.run_test() as pilot:
         await pilot.pause()
-        renderer.apply_event(_FakeEvent(
+        renderer.apply_event(_MockEvent(
             _WIRE, _mk_payload(WorkflowEventKind.RUN_STARTED),
         ))
-        renderer.apply_event(_FakeEvent(
+        renderer.apply_event(_MockEvent(
             _WIRE, _mk_payload(WorkflowEventKind.RUN_FAILED),
         ))
         await pilot.pause()
@@ -202,15 +202,15 @@ async def test_run_failed_footer(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_aborted_footer(fake_app_factory) -> None:
+async def test_run_aborted_footer(mock_app_factory) -> None:
     renderer = WorkflowRenderer()
-    app = fake_app_factory(renderer)
+    app = mock_app_factory(renderer)
     async with app.run_test() as pilot:
         await pilot.pause()
-        renderer.apply_event(_FakeEvent(
+        renderer.apply_event(_MockEvent(
             _WIRE, _mk_payload(WorkflowEventKind.RUN_STARTED),
         ))
-        renderer.apply_event(_FakeEvent(
+        renderer.apply_event(_MockEvent(
             _WIRE, _mk_payload(WorkflowEventKind.RUN_ABORTED),
         ))
         await pilot.pause()

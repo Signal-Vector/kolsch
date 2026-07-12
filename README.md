@@ -69,7 +69,7 @@ credentials.
 - **If you connect a provider during setup**, the starter agent uses
   its first model — real answers from the first run.
 - **If you skip the provider step**, the starter agent ships with the
-  built-in **fake LLM** (echoes your input back). `kolsch run` prints
+  built-in **mock LLM** (echoes your input back). `kolsch run` prints
   a clearly-labelled warning to stderr so you don't mistake echoes
   for real replies. Connect a provider any time via `kolsch connect`
   and update the agent's `model:` field.

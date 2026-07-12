@@ -596,20 +596,20 @@ def test_no_core_principals_refs_in_src() -> None:
 # ---------------------------------------------------------------------------
 
 
-class _FakeNodeDef:
+class _MockNodeDef:
     description: str | None = None
-    __name__ = "FakeNodeDef"
+    __name__ = "MockNodeDef"
 
 
 def test_display_label_per_instance_description_wins() -> None:
-    fake = _FakeNodeDef()
-    fake.description = "Custom per-instance label"
-    assert display_label(fake, type_label="Type label") == "Custom per-instance label"
+    mock = _MockNodeDef()
+    mock.description = "Custom per-instance label"
+    assert display_label(mock, type_label="Type label") == "Custom per-instance label"
 
 
 def test_display_label_type_label_wins_when_no_description() -> None:
-    fake = _FakeNodeDef()
-    assert display_label(fake, type_label="Shell") == "Shell"
+    mock = _MockNodeDef()
+    assert display_label(mock, type_label="Shell") == "Shell"
 
 
 def test_display_label_cleans_class_name_when_no_other_source() -> None:

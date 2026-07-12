@@ -2,5 +2,5 @@ extends: x/agents/e2_c
 name: e2_middle
 description: E2 middle (B) — declares model (will be inherited by A).
 model:
-  provider: fake
+  provider: mock
   model: middle-model

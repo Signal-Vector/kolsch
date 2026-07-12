@@ -37,7 +37,7 @@ _BASE_TS = datetime(2026, 7, 5, 12, 0, 0, tzinfo=UTC)
 
 
 @dataclass
-class _FakeCard:
+class _MockCard:
     id: CardId
     is_closed: bool = False
 
@@ -53,7 +53,7 @@ def _mk_record(
     *,
     run_id_suffix: str,
     phase: str,
-    card: _FakeCard,
+    card: _MockCard,
     started_offset: int = 0,
     terminal_offset: int | None = None,
 ) -> WorkflowRunRecord:
@@ -80,9 +80,9 @@ async def test_three_in_progress_no_divider() -> None:
         await pilot.pause()
         transcript = app.query_one("#transcript", VerticalScroll)
 
-        card_a = _FakeCard(id=CardId("crd_00000000-0000-0000-0000-00000000000a"))
-        card_b = _FakeCard(id=CardId("crd_00000000-0000-0000-0000-00000000000b"))
-        card_c = _FakeCard(id=CardId("crd_00000000-0000-0000-0000-00000000000c"))
+        card_a = _MockCard(id=CardId("crd_00000000-0000-0000-0000-00000000000a"))
+        card_b = _MockCard(id=CardId("crd_00000000-0000-0000-0000-00000000000b"))
+        card_c = _MockCard(id=CardId("crd_00000000-0000-0000-0000-00000000000c"))
 
         widget_a = CardWidget(card_id=card_a.id, kind="workflow", title="A")
         widget_b = CardWidget(card_id=card_b.id, kind="workflow", title="B")
@@ -132,9 +132,9 @@ async def test_terminal_success_moves_to_top_and_divider_mounts() -> None:
         await pilot.pause()
         transcript = app.query_one("#transcript", VerticalScroll)
 
-        card_a = _FakeCard(id=CardId("crd_00000000-0000-0000-0000-00000000001a"))
-        card_b = _FakeCard(id=CardId("crd_00000000-0000-0000-0000-00000000001b"))
-        card_c = _FakeCard(id=CardId("crd_00000000-0000-0000-0000-00000000001c"))
+        card_a = _MockCard(id=CardId("crd_00000000-0000-0000-0000-00000000001a"))
+        card_b = _MockCard(id=CardId("crd_00000000-0000-0000-0000-00000000001b"))
+        card_c = _MockCard(id=CardId("crd_00000000-0000-0000-0000-00000000001c"))
 
         widget_a = CardWidget(card_id=card_a.id, kind="workflow", title="A")
         widget_b = CardWidget(card_id=card_b.id, kind="workflow", title="B")
@@ -187,9 +187,9 @@ async def test_terminal_error_pins_at_boundary() -> None:
         await pilot.pause()
         transcript = app.query_one("#transcript", VerticalScroll)
 
-        card_a = _FakeCard(id=CardId("crd_00000000-0000-0000-0000-00000000002a"))
-        card_b = _FakeCard(id=CardId("crd_00000000-0000-0000-0000-00000000002b"))
-        card_c = _FakeCard(id=CardId("crd_00000000-0000-0000-0000-00000000002c"))
+        card_a = _MockCard(id=CardId("crd_00000000-0000-0000-0000-00000000002a"))
+        card_b = _MockCard(id=CardId("crd_00000000-0000-0000-0000-00000000002b"))
+        card_c = _MockCard(id=CardId("crd_00000000-0000-0000-0000-00000000002c"))
 
         widget_a = CardWidget(card_id=card_a.id, kind="workflow", title="A")
         widget_b = CardWidget(card_id=card_b.id, kind="workflow", title="B")
@@ -247,9 +247,9 @@ async def test_ack_error_moves_into_terminal_band() -> None:
         await pilot.pause()
         transcript = app.query_one("#transcript", VerticalScroll)
 
-        card_a = _FakeCard(id=CardId("crd_00000000-0000-0000-0000-00000000003a"))
-        card_b = _FakeCard(id=CardId("crd_00000000-0000-0000-0000-00000000003b"))
-        card_c = _FakeCard(id=CardId("crd_00000000-0000-0000-0000-00000000003c"))
+        card_a = _MockCard(id=CardId("crd_00000000-0000-0000-0000-00000000003a"))
+        card_b = _MockCard(id=CardId("crd_00000000-0000-0000-0000-00000000003b"))
+        card_c = _MockCard(id=CardId("crd_00000000-0000-0000-0000-00000000003c"))
 
         widget_a = CardWidget(card_id=card_a.id, kind="workflow", title="A")
         widget_b = CardWidget(card_id=card_b.id, kind="workflow", title="B")

@@ -106,7 +106,7 @@ class AgentEngine:
     plus the chosen
     [`Framework`][engine.framework.Framework] and an LLM callable.
     The LLM callable is what the engine wraps inside the observed
-    LLM handle and hands to the framework — for tests, a Fake-LLM
+    LLM handle and hands to the framework — for tests, a Mock-LLM
     adapter; for production, a litellm-backed callable.
     """
 
@@ -146,7 +146,7 @@ class AgentEngine:
         self._llm = llm
         # Async factory `llm_for_model` lets the fallback orchestrator
         # lazily build per-attempt LLM clients. Tests can wire a
-        # `spec → FakeLLM` map; production wires `build_llm` via the
+        # `spec → MockLLM` map; production wires `build_llm` via the
         # bootstrap. When the factory is None, fall back to wrapping
         # `self._llm` so every spec returns the same callable —
         # backward-compatible with tests that pass `llm=` directly.
@@ -549,7 +549,7 @@ class _Exchange:
         with a callable `llm` — the test path keeps working
         unchanged. Also skipped when `llm_for_model` is wired: the
         per-spec factory handles construction lazily at call time
-        (including `provider: "fake"` → EchoLLMDriver). Otherwise
+        (including `provider: "mock"` → EchoLLMDriver). Otherwise
         the configured provider is looked up in
         `AgentEngine._llm_providers_config` (read from
         `platform.yaml` at runtime bootstrap), `build_llm` is called
@@ -560,9 +560,9 @@ class _Exchange:
         if self.engine._llm is not None:
             return None
         if self.engine._llm_for_model is not None:
-            # Factory handles construction (including provider: fake)
+            # Factory handles construction (including provider: mock)
             # at call time; pre-flight acquire would only duplicate
-            # work AND fail for `provider: fake` because no `fake`
+            # work AND fail for `provider: mock` because no `mock`
             # connector is registered.
             return None
         from llm import build_llm  # noqa: PLC0415 — defer crewai import to runtime

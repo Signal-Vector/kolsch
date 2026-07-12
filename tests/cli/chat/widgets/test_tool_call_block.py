@@ -1,7 +1,7 @@
 """Pilot tests for `ToolCallBlock`.
 
 Modularity rule (spec Design Principles #2): the widget is tested
-in isolation via `fake_app_factory` from the package conftest —
+in isolation via `mock_app_factory` from the package conftest —
 no other widget, no theme.tcss, no app-level wiring is required
 for the assertions below to hold. The widget's `DEFAULT_CSS`
 declares fallback variable values so it renders cleanly against
@@ -49,9 +49,9 @@ def _body_statics(widget: ToolCallBlock) -> list[Static]:
 
 
 @pytest.mark.asyncio
-async def test_tool_call_block_mounts_collapsed_by_default(fake_app_factory) -> None:
+async def test_tool_call_block_mounts_collapsed_by_default(mock_app_factory) -> None:
     widget = ToolCallBlock("read_file", "path=/tmp/x", "canonical body")
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -65,14 +65,14 @@ async def test_tool_call_block_mounts_collapsed_by_default(fake_app_factory) -> 
 
 
 @pytest.mark.asyncio
-async def test_tool_call_block_failed_adds_css_class(fake_app_factory) -> None:
+async def test_tool_call_block_failed_adds_css_class(mock_app_factory) -> None:
     """`failed=True` adds the ``-failed`` class. Colours change via
     CSS only — no runtime colour attribute is set."""
 
     widget = ToolCallBlock(
         "write_file", "path=/tmp/x", "denied by authz", failed=True
     )
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -82,9 +82,9 @@ async def test_tool_call_block_failed_adds_css_class(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_call_block_body_static_rendered(fake_app_factory) -> None:
+async def test_tool_call_block_body_static_rendered(mock_app_factory) -> None:
     widget = ToolCallBlock("read_file", "path=/tmp/x", "the body text")
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -99,7 +99,7 @@ async def test_tool_call_block_body_static_rendered(fake_app_factory) -> None:
 
 @pytest.mark.asyncio
 async def test_tool_call_block_recovery_hint_renders_arrow_line(
-    fake_app_factory,
+    mock_app_factory,
 ) -> None:
     """When ``recovery_hint`` is supplied, an extra ``↳ hint: …``
     Static is mounted inside the body with the ``hint`` CSS class."""
@@ -111,7 +111,7 @@ async def test_tool_call_block_recovery_hint_renders_arrow_line(
         failed=True,
         recovery_hint="try with sudo",
     )
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -131,10 +131,10 @@ async def test_tool_call_block_recovery_hint_renders_arrow_line(
 
 @pytest.mark.asyncio
 async def test_tool_call_block_no_hint_when_recovery_omitted(
-    fake_app_factory,
+    mock_app_factory,
 ) -> None:
     widget = ToolCallBlock("read_file", "path=/tmp/x", "output")
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -144,7 +144,7 @@ async def test_tool_call_block_no_hint_when_recovery_omitted(
 
 
 @pytest.mark.asyncio
-async def test_tool_call_block_c_binding_collapses(fake_app_factory) -> None:
+async def test_tool_call_block_c_binding_collapses(mock_app_factory) -> None:
     """Pressing ``c`` while the block is focused collapses it. The
     binding is declared on `ToolCallBlock`, not inherited from
     `Collapsible`.
@@ -154,7 +154,7 @@ async def test_tool_call_block_c_binding_collapses(fake_app_factory) -> None:
     """
 
     widget = ToolCallBlock("read_file", "path=/tmp/x", "body")
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
 
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -169,14 +169,14 @@ async def test_tool_call_block_c_binding_collapses(fake_app_factory) -> None:
 
 @pytest.mark.asyncio
 async def test_tool_call_block_default_css_uses_theme_variables(
-    fake_app_factory,
+    mock_app_factory,
 ) -> None:
     """The widget's ``DEFAULT_CSS`` references the theme variables
     for the palette. This is the modularity contract: theme.tcss
     swaps colours without widget changes."""
 
     widget = ToolCallBlock("read_file", "path=/tmp/x", "body")
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
 
     async with app.run_test() as pilot:
         await pilot.pause()

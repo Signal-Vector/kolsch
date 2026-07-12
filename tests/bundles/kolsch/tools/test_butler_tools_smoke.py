@@ -1,7 +1,7 @@
 """Smoke tests for the three butler workflow tools (feat-018).
 
 Each test boots the Pilot-driven ``chat_app`` from the shared
-``conftest.py`` fixture, swaps a scripted fake into the live
+``conftest.py`` fixture, swaps a scripted mock into the live
 ``WorkflowsImpl._executor_factory`` so ``start()`` completes without
 the real executor's dep graph, then invokes the tool via
 ``_invoke_tool_via_pilot`` — the same helper the spec-009 example
@@ -39,9 +39,9 @@ from tests.bundles.kolsch.tools.conftest import (
     _headless_ctx,
     _invoke_tool_via_pilot,
 )
-from tests.cli.chat.services.fakes import (
-    FakeExecutorSpec,
-    install_fake_executor_factory,
+from tests.cli.chat.services.mocks import (
+    MockExecutorSpec,
+    install_mock_executor_factory,
 )
 from tools.decorator import get_tool_definition
 from tools.discovery import discover_tools_in_file
@@ -104,7 +104,7 @@ def _install_scripted_workflows(
     refs: list[str],
     per_event_delay: float = 0.2,
 ) -> WorkflowsImpl:
-    """Rebind ``WorkflowsImpl._executor_factory`` to a scripted fake.
+    """Rebind ``WorkflowsImpl._executor_factory`` to a scripted mock.
 
     Returns the live impl so tests can peek at ``_workflow_registry``
     entries directly.
@@ -113,12 +113,12 @@ def _install_scripted_workflows(
     workflows_impl = app._service_registry.workflows
     assert isinstance(workflows_impl, WorkflowsImpl)
     programming = {
-        ref: FakeExecutorSpec(
+        ref: MockExecutorSpec(
             events=_mk_events(), per_event_delay=per_event_delay,
         )
         for ref in refs
     }
-    install_fake_executor_factory(
+    install_mock_executor_factory(
         workflows_impl,
         programming,
         runs_root=app.session.root / "runs",
@@ -139,7 +139,7 @@ async def test_run_workflow_smoke(
     """run_workflow blocks until terminal + returns phase/outputs.
 
     bug-031: the tool now blocks until the workflow reaches a terminal
-    phase (or ``timeout_seconds`` elapses). The scripted fake fires
+    phase (or ``timeout_seconds`` elapses). The scripted mock fires
     RUN_STARTED + RUN_COMPLETED with a small per-event delay so the
     tool returns ``phase="success"`` when the poll observes the
     terminal registry record. Assertions moved to reflect the
@@ -171,7 +171,7 @@ async def test_run_workflow_smoke(
         assert result["run_id"].startswith("wrk_")
         assert isinstance(result["card_id"], str)
         assert result["phase"] in ("success", "error", "cancelled")
-        # ``outputs`` may be None (fake events carry no outputs
+        # ``outputs`` may be None (mock events carry no outputs
         # payload) — assert the key is present.
         assert "outputs" in result
         assert "error_message" in result
@@ -299,7 +299,7 @@ async def test_cancel_workflow_smoke(
     """cancel_workflow(run_id) flips phase to cancelling.
 
     bug-031: pass ``timeout_seconds=1`` so ``run_workflow`` returns
-    with ``phase="running"`` while the fake executor is still cycling
+    with ``phase="running"`` while the mock executor is still cycling
     events (per_event_delay=5.0). That gives the follow-up
     ``cancel_workflow`` call a live registry record to hit.
     """

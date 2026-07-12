@@ -20,7 +20,7 @@ from textual.widgets import ProgressBar, Static
 from cli.chat.widgets.card_body.progress import ProgressRenderer
 
 
-class _FakeEvent:
+class _MockEvent:
     __slots__ = ("kind", "payload")
 
     def __init__(self, kind: str, payload: dict[str, Any]) -> None:
@@ -29,12 +29,12 @@ class _FakeEvent:
 
 
 @pytest.mark.asyncio
-async def test_set_progress_updates_message_and_bar(fake_app_factory) -> None:
+async def test_set_progress_updates_message_and_bar(mock_app_factory) -> None:
     widget = ProgressRenderer()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        widget.apply_event(_FakeEvent(
+        widget.apply_event(_MockEvent(
             "kolsch.card.set_progress",
             {"current": 5, "total": 10, "message": "halfway"},
         ))
@@ -48,13 +48,13 @@ async def test_set_progress_updates_message_and_bar(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_indeterminate_when_total_zero(fake_app_factory) -> None:
+async def test_indeterminate_when_total_zero(mock_app_factory) -> None:
     """`total=0` → indeterminate: bar's total is `None` (spinner mode)."""
     widget = ProgressRenderer()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        widget.apply_event(_FakeEvent(
+        widget.apply_event(_MockEvent(
             "kolsch.card.set_progress",
             {"current": 3, "total": 0, "message": "indeterminate"},
         ))

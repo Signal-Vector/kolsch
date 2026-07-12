@@ -36,9 +36,9 @@ def _visible_rows(widget: SlashPopup) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_empty_prefix_hides_popup(fake_app_factory) -> None:
+async def test_empty_prefix_hides_popup(mock_app_factory) -> None:
     popup = SlashPopup()
-    app = fake_app_factory(popup)
+    app = mock_app_factory(popup)
     async with app.run_test() as pilot:
         await pilot.pause()
         assert not popup.has_class("-visible")
@@ -46,9 +46,9 @@ async def test_empty_prefix_hides_popup(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_non_slash_prefix_hides_popup(fake_app_factory) -> None:
+async def test_non_slash_prefix_hides_popup(mock_app_factory) -> None:
     popup = SlashPopup()
-    app = fake_app_factory(popup)
+    app = mock_app_factory(popup)
     async with app.run_test() as pilot:
         await pilot.pause()
         popup.prefix = "hello"
@@ -57,9 +57,9 @@ async def test_non_slash_prefix_hides_popup(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_slash_prefix_shows_every_command(fake_app_factory) -> None:
+async def test_slash_prefix_shows_every_command(mock_app_factory) -> None:
     popup = SlashPopup()
-    app = fake_app_factory(popup)
+    app = mock_app_factory(popup)
     async with app.run_test() as pilot:
         await pilot.pause()
         popup.prefix = "/"
@@ -75,9 +75,9 @@ async def test_slash_prefix_shows_every_command(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_prefix_filters_to_matching_command(fake_app_factory) -> None:
+async def test_prefix_filters_to_matching_command(mock_app_factory) -> None:
     popup = SlashPopup()
-    app = fake_app_factory(popup)
+    app = mock_app_factory(popup)
     async with app.run_test() as pilot:
         await pilot.pause()
         popup.prefix = "/hel"
@@ -94,9 +94,9 @@ async def test_prefix_filters_to_matching_command(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_no_match_shows_empty_row(fake_app_factory) -> None:
+async def test_no_match_shows_empty_row(mock_app_factory) -> None:
     popup = SlashPopup()
-    app = fake_app_factory(popup)
+    app = mock_app_factory(popup)
     async with app.run_test() as pilot:
         await pilot.pause()
         popup.prefix = "/xyzzy"
@@ -108,9 +108,9 @@ async def test_no_match_shows_empty_row(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_alias_shows_own_row(fake_app_factory) -> None:
+async def test_alias_shows_own_row(mock_app_factory) -> None:
     popup = SlashPopup()
-    app = fake_app_factory(popup)
+    app = mock_app_factory(popup)
     async with app.run_test() as pilot:
         await pilot.pause()
         popup.prefix = "/quit"

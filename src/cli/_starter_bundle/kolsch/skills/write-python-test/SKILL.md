@@ -228,4 +228,4 @@ not what was being tested).
   tests, follow their lead.
 - **Integration tests that need a real LLM.** Those live behind a
   marker the user has to opt into; this skill is for unit/component
-  tests against fakes.
+  tests against mocks.

@@ -59,9 +59,9 @@ from cli.chat.widgets.card_widget import CardWidget
 from engine.framework import LLMRequest, LLMResponse
 from platform_runtime import bootstrap_runtime
 from schemas.events import EventType
-from tests.cli.chat.services.fakes import (
-    FakeExecutorSpec,
-    install_fake_executor_factory,
+from tests.cli.chat.services.mocks import (
+    MockExecutorSpec,
+    install_mock_executor_factory,
 )
 from workflows.events import (
     WorkflowNodeCompletedEvent,
@@ -125,7 +125,7 @@ def initialized_workspace(tmp_path_factory: pytest.TempPathFactory) -> Path:
 
 
 _EXPECTED_GREETING_STDOUT = "hi, world"
-"""The bash node's expected stdout — the fake RUN_COMPLETED payload
+"""The bash node's expected stdout — the mock RUN_COMPLETED payload
 carries this under ``outputs.prep.stdout`` so the model's turn 2
 prose can mention it and the assertion has something concrete to
 match.
@@ -220,7 +220,7 @@ def _stringify_message(msg: object) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Fake workflow events — RUN_STARTED + NODE_STARTED/COMPLETED + RUN_COMPLETED
+# Mock workflow events — RUN_STARTED + NODE_STARTED/COMPLETED + RUN_COMPLETED
 # with a populated ``outputs`` payload so the tool's poll observes it.
 # ---------------------------------------------------------------------------
 
@@ -277,7 +277,7 @@ async def test_run_workflow_blocks_and_model_narrates_outputs(
 
     Boots ChatApp with a scripted 2-turn LLM. Turn 1 emits the
     per-workflow virtual tool ``run_workflow_kolsch_workflows_hello_agent``
-    with ``greeting="hi"``. The tool blocks until the fake executor
+    with ``greeting="hi"``. The tool blocks until the mock executor
     fires RUN_COMPLETED (with a populated ``outputs`` dict). Turn 2
     emits a prose summary that mentions the output content.
 
@@ -329,9 +329,9 @@ async def test_run_workflow_blocks_and_model_narrates_outputs(
         # ``outputs`` dict the tool needs to surface.
         workflows_impl = pilot.app._service_registry.workflows
         assert workflows_impl is not None
-        install_fake_executor_factory(
+        install_mock_executor_factory(
             workflows_impl,
-            {workflow_ref: FakeExecutorSpec(
+            {workflow_ref: MockExecutorSpec(
                 events=_mk_workflow_events(),
                 # Small per-event delay — enough to visit the poll
                 # loop's ``asyncio.sleep(0.5)`` at least once.

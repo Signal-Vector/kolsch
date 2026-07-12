@@ -329,7 +329,7 @@ class CardWidget(Collapsible):
             return
         self.applied_appends.add(event_id)
         self.content += chunk
-        self._body.apply_event(_FakeEventData(
+        self._body.apply_event(_MockEventData(
             kind="kolsch.card.appended",
             payload={"chunk": chunk},
         ))
@@ -645,7 +645,7 @@ _GENERIC_GLYPH_BY_STATE: dict[str, str] = {
 }
 
 
-class _FakeEventData:
+class _MockEventData:
     """Lightweight duck-typed payload wrapper for renderer dispatch.
 
     The body renderers accept anything with `.kind` + `.payload`;

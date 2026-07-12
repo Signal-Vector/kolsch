@@ -293,14 +293,14 @@ class WorkflowRunRecord:
 
 # Type alias for the pluggable executor factory. Production wires
 # the concrete `_build_in_process_executor` (see
-# `_default_executor_factory` below); tests inject a fake so the
+# `_default_executor_factory` below); tests inject a mock so the
 # executor's full dependency graph (Workflow, RunnerRegistry,
 # catalog) isn't required to exercise the queue/bridge/aclose paths.
 #
 # spec-020: the factory now accepts an optional
 # `sub_agent_event_observer` — the executor calls it per session-
 # scoped `Event` yielded by `AgentEngine.execute_stream(...)` inside
-# an `AgentRunner`. Existing fake factories (test doubles) that only
+# an `AgentRunner`. Existing mock factories (test doubles) that only
 # accept the 4-arg shape are supported via a compatibility shim in
 # `_run_one_workflow` (introspect the callable's arity and call the
 # appropriate signature) so pre-spec-020 test fixtures don't need to
@@ -355,7 +355,7 @@ class WorkflowsImpl(AbstractWorkflows):
         self._bus: "EventBus | None" = bus
         # Test hook: default factory builds a real `IterativeExecutor`
         # via `_workflow_runtime.build_workflow_executor`. Test bundles
-        # pass a fake that returns a stub executor + minted RunDirectory
+        # pass a mock that returns a stub executor + minted RunDirectory
         # so the queue/bridge/aclose surfaces exercise without the
         # executor's whole dependency graph.
         self._executor_factory: ExecutorFactory = (
@@ -810,7 +810,7 @@ class WorkflowsImpl(AbstractWorkflows):
         `kolsch/nodes/workflow` runner or a tool via
         ``ctx.workflows.start``) stamps this run's id as the child's
         ``parent_run_id``. The set happens BEFORE executor
-        construction because factory callbacks (e.g., the fake
+        construction because factory callbacks (e.g., the mock
         executor's ``on_construct``) may already schedule nested
         starts. Reset happens in ``finally`` — even on a construction-
         time raise — so the outer ambient context is always restored.
@@ -891,12 +891,12 @@ class WorkflowsImpl(AbstractWorkflows):
         try:
             try:
                 # spec-020: pass the sub-agent observer as a fifth
-                # positional argument. Pre-spec-020 test fakes with
+                # positional argument. Pre-spec-020 test mocks with
                 # the 4-arg signature raise `TypeError`; catch that
                 # and fall back to the 4-arg shape so those tests
                 # keep passing (they don't exercise sub-agent
                 # forwarding). `_default_executor_factory` accepts
-                # the 5-arg form; `tests/.../fakes/workflow_executor.py`
+                # the 5-arg form; `tests/.../mocks/workflow_executor.py`
                 # is being extended in the same commit to accept it
                 # too via a keyword-with-default.
                 try:

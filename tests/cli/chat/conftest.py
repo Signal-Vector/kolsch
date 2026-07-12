@@ -2,7 +2,7 @@
 
 Widget agents assume:
 
-- `fake_app_factory` — returns a callable that wraps ONE widget in a
+- `mock_app_factory` — returns a callable that wraps ONE widget in a
   minimal `App` for `App.run_test()`. Used for widget-in-isolation tests.
 - `canonical_event` — builds a well-formed `Event` for a given
   `EventType`. Used by `test_event_adapter_coverage.py` to drive every
@@ -31,14 +31,14 @@ from schemas.identifiers import EventId, SessionId, ThreadId
 
 
 @pytest.fixture
-def fake_app_factory() -> Callable[[Widget], App]:
+def mock_app_factory() -> Callable[[Widget], App]:
     """Return a factory that wraps a single widget in a minimal `App`.
 
     Usage in a widget test:
 
-        async def test_something(fake_app_factory):
+        async def test_something(mock_app_factory):
             widget = MyWidget(...)
-            app = fake_app_factory(widget)
+            app = mock_app_factory(widget)
             async with app.run_test() as pilot:
                 await pilot.press("y")
                 # assert widget state / posted messages / rendered output

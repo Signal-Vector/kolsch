@@ -81,7 +81,7 @@ _PERMISSIVE_PLATFORM_YAML = textwrap.dedent(
       allowed_paths: ["data/", "bundles/"]
       denied_paths: [".env"]
     defaults:
-      model: {provider: fake, model: fake-model}
+      model: {provider: mock, model: mock-model}
     """
 )
 
@@ -492,7 +492,7 @@ async def test_phase2_outputs_override_travels_through_runner(
 async def test_phase3_agent_failure_maps_to_workflow_node_failed(
     tmp_path: Path,
 ) -> None:
-    """Configure the FakeLLM to raise an upstream error; the engine
+    """Configure the MockLLM to raise an upstream error; the engine
     surfaces this as `AgentExecutionError`; the runner remaps to
     `WorkflowNodeFailed`; the executor's failure path emits
     `workflow.node.failed` then `workflow.run.failed`. The spawned
@@ -502,7 +502,7 @@ async def test_phase3_agent_failure_maps_to_workflow_node_failed(
 
     llm = _ScriptedLLM(
         always_raise=ModelUpstreamError(
-            provider="fake", http_status=500, response="forced-failure"
+            provider="mock", http_status=500, response="forced-failure"
         )
     )
     status, events_path, session_jsonl, _store = await _drive_workflow(

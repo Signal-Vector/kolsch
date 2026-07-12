@@ -107,7 +107,7 @@ def _write_agent(
                 "agent_id": f"ag_{name}",
                 "name": name,
                 "description": f"{name} agent",
-                "model": {"provider": "fake", "model": "fake-model"},
+                "model": {"provider": "mock", "model": "mock-model"},
                 "prompt": "hi",
                 "io": {"mode": "conversational"},
                 "subsystems": {
