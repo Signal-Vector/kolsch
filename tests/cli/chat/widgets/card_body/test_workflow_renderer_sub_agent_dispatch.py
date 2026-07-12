@@ -36,7 +36,7 @@ from schemas.events import EventType
 from schemas.wire_kinds import WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT
 
 
-class _FakeEvent:
+class _MockEvent:
     __slots__ = ("kind", "payload")
 
     def __init__(self, kind: str, payload: dict[str, Any]) -> None:
@@ -84,12 +84,12 @@ def _mk_sub_agent_payload(
 
 @pytest.mark.asyncio
 async def test_sub_agent_event_dispatched_via_adapter(
-    fake_app_factory: Any,
+    mock_app_factory: Any,
 ) -> None:
     """Adapter path: renderer forwards the reconstructed event to
     ``EventAdapter.dispatch_sub_agent_event``."""
     renderer = WorkflowRenderer()
-    app = fake_app_factory(renderer)
+    app = mock_app_factory(renderer)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -107,7 +107,7 @@ async def test_sub_agent_event_dispatched_via_adapter(
             payload={"content": {"text": "hello"}},
         )
         renderer.apply_event(
-            _FakeEvent(WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT, payload),
+            _MockEvent(WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT, payload),
         )
         # The dispatch is scheduled as a task from the sync handler;
         # a pause lets the loop run it.
@@ -125,11 +125,11 @@ async def test_sub_agent_event_dispatched_via_adapter(
 
 @pytest.mark.asyncio
 async def test_sub_agent_event_falls_back_to_row_sink(
-    fake_app_factory: Any,
+    mock_app_factory: Any,
 ) -> None:
     """No adapter wired: renderer calls the row's sink method directly."""
     renderer = WorkflowRenderer()
-    app = fake_app_factory(renderer)
+    app = mock_app_factory(renderer)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -153,7 +153,7 @@ async def test_sub_agent_event_falls_back_to_row_sink(
             payload={"content": {"text": "hello"}},
         )
         renderer.apply_event(
-            _FakeEvent(WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT, payload),
+            _MockEvent(WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT, payload),
         )
         # Fallback dispatch schedules the sink call as a task.
         await pilot.pause()
@@ -185,12 +185,12 @@ async def test_sub_agent_event_falls_back_to_row_sink(
 )
 @pytest.mark.asyncio
 async def test_sub_agent_malformed_payloads_dropped(
-    fake_app_factory: Any,
+    mock_app_factory: Any,
     mutate: Any,
 ) -> None:
     """Any envelope shape that can't route MUST NOT raise."""
     renderer = WorkflowRenderer()
-    app = fake_app_factory(renderer)
+    app = mock_app_factory(renderer)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -206,7 +206,7 @@ async def test_sub_agent_malformed_payloads_dropped(
         )
         mutate(payload)
         renderer.apply_event(
-            _FakeEvent(WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT, payload),
+            _MockEvent(WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT, payload),
         )
         await pilot.pause()
 

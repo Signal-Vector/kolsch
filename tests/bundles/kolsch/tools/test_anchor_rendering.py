@@ -103,18 +103,18 @@ async def test_anchor_button_activation_scrolls_to_card(
         assert isinstance(workflows_impl, WorkflowsImpl)
 
         run_id = WorkflowRunId(f"wrk_{uuid4()}")
-        fake_card = MagicMock()
-        fake_card.id = f"crd_{uuid4()}"
+        mock_card = MagicMock()
+        mock_card.id = f"crd_{uuid4()}"
         workflows_impl._workflow_registry[run_id] = WorkflowRunRecord(
             run_id=run_id,
             ref="kolsch/workflows/anchor",
             phase="running",
-            card=fake_card,
+            card=mock_card,
             created_at=datetime.now(tz=UTC),
         )
         # Register a widget-like entry in the adapter's card map.
-        fake_widget = MagicMock()
-        adapter._card_widgets[fake_card.id] = fake_widget
+        mock_widget = MagicMock()
+        adapter._card_widgets[mock_card.id] = mock_widget
 
         # Ensure the adapter can see the workflows impl for the lookup.
         adapter.register_workflows_impl(workflows_impl)
@@ -143,7 +143,7 @@ async def test_anchor_button_activation_scrolls_to_card(
         await pilot.press("enter")
         await pilot.pause()
 
-        assert scrolled == [fake_widget]
+        assert scrolled == [mock_widget]
 
 
 @pytest.mark.asyncio

@@ -31,7 +31,7 @@ from tests.component.test_engine import (
     _config_with_tool,
     _new_session_context,
 )
-from tests.fixtures.fake_llm import FakeLLM, TextResponse
+from tests.fixtures.mock_llm import MockLLM, TextResponse
 from tools import ToolContext, tool
 
 if TYPE_CHECKING:
@@ -60,7 +60,7 @@ async def test_model_request_carries_tool_schemas_when_agent_declares_tools(
     Setup: engine wired with a declared `beep` tool (registered
     via the test fixture's `extra_tools` path, which is the
     programmatic equivalent of the helper agent's
-    `declared` ref list). Fake LLM emits one text response —
+    `declared` ref list). Mock LLM emits one text response —
     no tool_use, so this test pins the request-side schema
     transmission, not the response-side dispatch.
 
@@ -69,31 +69,31 @@ async def test_model_request_carries_tool_schemas_when_agent_declares_tools(
     and `schema.type=object` are present (CrewAI / litellm
     needs these for the model's tool_use protocol).
     """
-    fake = FakeLLM(script=[TextResponse(text="acknowledged.")])
+    mock = MockLLM(script=[TextResponse(text="acknowledged.")])
     engine, store, _am = await _build_engine(
         tmp_path,
-        fake,
+        mock,
         extra_tools=[_beep_tool],
     )
     ctx = await _new_session_context(store)
     await engine.execute(_config_with_tool(), ctx)
 
-    # The fake LLM also captures `request.tools` in its context —
+    # The mock LLM also captures `request.tools` in its context —
     # cross-check that what the LLM saw matches what landed on
     # the event.
-    fake_saw = fake.calls[0].context.get("tools")
-    assert isinstance(fake_saw, list)
-    assert len(fake_saw) == 1
-    fake_first = fake_saw[0]
-    assert isinstance(fake_first, dict)
-    assert fake_first.get("name") == "beep"
+    mock_saw = mock.calls[0].context.get("tools")
+    assert isinstance(mock_saw, list)
+    assert len(mock_saw) == 1
+    mock_first = mock_saw[0]
+    assert isinstance(mock_first, dict)
+    assert mock_first.get("name") == "beep"
 
     # The model.request event on the JSONL. The observer normalises
     # tools to the OpenAI spec envelope before emitting so the recorded
     # event matches what actually crosses an LLM wire (see
     # process/bug-observer-records-pre-normalisation-tool-shape.md).
     # The direct-to-LLM handoff still uses the engine's internal shape
-    # (`fake_saw` above); the divergence is intentional and documented
+    # (`mock_saw` above); the divergence is intentional and documented
     # in the observer + fallback docstrings.
     events = [e async for e in store.read_path_to_leaf(ctx.thread_id)]
     requests = [e for e in events if e.type == EventType.MODEL_REQUEST]
@@ -125,8 +125,8 @@ async def test_model_request_carries_empty_tools_when_agent_has_no_tools(
     Pins that the field is always present (default `[]`)
     rather than absent — replay code can rely on the key.
     """
-    fake = FakeLLM(script=[TextResponse(text="ack.")])
-    engine, store, _am = await _build_engine(tmp_path, fake)
+    mock = MockLLM(script=[TextResponse(text="ack.")])
+    engine, store, _am = await _build_engine(tmp_path, mock)
     ctx = await _new_session_context(store)
     # Use the no-tool config (the bare _config(), not
     # _config_with_tool which carries the standard variant).

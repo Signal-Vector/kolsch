@@ -45,7 +45,7 @@ _PYDANTIC_ERROR_TAIL = (
 
 @pytest.mark.asyncio
 async def test_update_body_writes_to_body_static_not_title(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """AC #3.1 — ``update_body`` writes to the body Static; title unchanged."""
     block = ToolCallBlock(
@@ -53,7 +53,7 @@ async def test_update_body_writes_to_body_static_not_title(
         args="url=example.com",
         body="original body",
     )
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -83,7 +83,7 @@ async def test_update_body_writes_to_body_static_not_title(
 
 @pytest.mark.asyncio
 async def test_update_body_with_bracket_content_does_not_crash(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """AC #3.2 — URL-encoded ``[...]}\\n`` payload survives render."""
     block = ToolCallBlock(
@@ -91,7 +91,7 @@ async def test_update_body_with_bracket_content_does_not_crash(
         args="url=example.com",
         body="initial",
     )
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -114,7 +114,7 @@ async def test_update_body_with_bracket_content_does_not_crash(
 
 @pytest.mark.asyncio
 async def test_update_body_with_pydantic_error_string_does_not_crash(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """AC #3.3 — Pydantic error ``[type=X, input_value=...]`` survives render."""
     block = ToolCallBlock(
@@ -122,7 +122,7 @@ async def test_update_body_with_pydantic_error_string_does_not_crash(
         args="url=example.com",
         body="initial",
     )
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -140,7 +140,7 @@ async def test_update_body_with_pydantic_error_string_does_not_crash(
 
 @pytest.mark.asyncio
 async def test_populate_tool_call_result_routes_through_update_body(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """AC #3.4 — the row's ``_populate_tool_call_result`` hits the body Static.
 
@@ -183,7 +183,7 @@ async def test_populate_tool_call_result_routes_through_update_body(
 
 @pytest.mark.asyncio
 async def test_populate_tool_call_result_failed_adds_class(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """Regression — the ``failed=True`` branch still adds the CSS class."""
     row = WorkflowNodeRow(node_name="n")

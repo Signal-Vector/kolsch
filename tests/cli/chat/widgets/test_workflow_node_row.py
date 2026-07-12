@@ -19,9 +19,9 @@ from cli.chat.widgets.workflow_node_row import (
 
 
 @pytest.mark.asyncio
-async def test_initial_starting_state(fake_app_factory) -> None:
+async def test_initial_starting_state(mock_app_factory) -> None:
     row = WorkflowNodeRow(node_name="x")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         # bug-031: wait past the 0.08s spinner interval so the tick
         # replaces the ``__init__`` placeholder glyph.
@@ -38,9 +38,9 @@ async def test_initial_starting_state(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_running_state_no_css(fake_app_factory) -> None:
+async def test_running_state_no_css(mock_app_factory) -> None:
     row = WorkflowNodeRow(node_name="x")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         row.set_state("running")
@@ -57,9 +57,9 @@ async def test_running_state_no_css(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_completed_state_with_details(fake_app_factory) -> None:
+async def test_completed_state_with_details(mock_app_factory) -> None:
     row = WorkflowNodeRow(node_name="x")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         row.set_state("completed", details="42 files")
@@ -71,9 +71,9 @@ async def test_completed_state_with_details(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_failed_state_with_truncated_error(fake_app_factory) -> None:
+async def test_failed_state_with_truncated_error(mock_app_factory) -> None:
     row = WorkflowNodeRow(node_name="x")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         row.set_state("failed", error_preview="RegistryError: bad")
@@ -85,9 +85,9 @@ async def test_failed_state_with_truncated_error(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_paused_state(fake_app_factory) -> None:
+async def test_paused_state(mock_app_factory) -> None:
     row = WorkflowNodeRow(node_name="x")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         row.set_state("paused")
@@ -98,9 +98,9 @@ async def test_paused_state(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancelling_state(fake_app_factory) -> None:
+async def test_cancelling_state(mock_app_factory) -> None:
     row = WorkflowNodeRow(node_name="x")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         row.set_state("cancelling")
@@ -111,9 +111,9 @@ async def test_cancelling_state(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_pruned_state(fake_app_factory) -> None:
+async def test_pruned_state(mock_app_factory) -> None:
     row = WorkflowNodeRow(node_name="x")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         row.set_state("pruned")

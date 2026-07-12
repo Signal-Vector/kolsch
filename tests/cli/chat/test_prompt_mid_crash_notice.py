@@ -28,7 +28,7 @@ from schemas.wire_kinds import (
 from store import SessionStore, SqliteBackend
 
 
-class _FakeChatApp:
+class _MockChatApp:
     """Minimal stand-in — the adapter's card/notice mount paths are
     stubbed by ``_locate_transcript`` returning None in headless
     mode; the notice fires through the ``Cards`` seam we track here.
@@ -44,11 +44,11 @@ class _FakeChatApp:
         return None
 
     async def mount_assistant_streaming_widget(self) -> Any:
-        class _FakeProse:
+        class _MockProse:
             async def append(self, text: str) -> None:
                 return None
 
-        return _FakeProse()
+        return _MockProse()
 
     async def mount_tool_call(self, *args: Any, **kwargs: Any) -> None:
         return None
@@ -200,7 +200,7 @@ def _make_adapter(
     cards: _RecordingCards | None,
 ) -> EventAdapter:
     return EventAdapter(
-        _FakeChatApp(),  # type: ignore[arg-type]
+        _MockChatApp(),  # type: ignore[arg-type]
         session_store=store,
         session_id=session_id,
         thread_id=thread_id,

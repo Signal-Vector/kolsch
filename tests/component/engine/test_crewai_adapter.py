@@ -486,14 +486,14 @@ async def test_run_exchange_suppresses_crewai_stdout_leakage() -> None:
 
     Unlike the other tests in this file (which stub
     ``crewai.LLM``), this one drives the real
-    ``CrewAIFramework.run_exchange`` end-to-end with a fake
+    ``CrewAIFramework.run_exchange`` end-to-end with a mock
     ``LLMHandle`` — the leak is a property of the real
     Agent/Crew/EventListener stack, not the lightweight stub.
     """
     framework = CrewAIFramework()
 
-    async def fake_llm(_request: LLMRequest) -> LLMResponse:
-        return LLMResponse(content="Hi from the fake LLM.")
+    async def mock_llm(_request: LLMRequest) -> LLMResponse:
+        return LLMResponse(content="Hi from the mock LLM.")
 
     outer_stdout = io.StringIO()
     outer_stderr = io.StringIO()
@@ -504,11 +504,11 @@ async def test_run_exchange_suppresses_crewai_stdout_leakage() -> None:
         result = await framework.run_exchange(
             system_prompt="be brief",
             user_message="say hi",
-            llm=fake_llm,
+            llm=mock_llm,
             tools=[],
         )
 
-    assert "Hi from the fake LLM." in result
+    assert "Hi from the mock LLM." in result
 
     captured_stdout = outer_stdout.getvalue()
     captured_stderr = outer_stderr.getvalue()
@@ -559,9 +559,9 @@ def test_run_exchange_suppresses_crewai_logger_leak_on_failing_llm(
     process. The Step H investigation Probe 4 verified the actual
     behaviour in standalone Python:
 
-    - Pre-fix (no wrap) + raising fake_llm → 72 bytes to stderr:
+    - Pre-fix (no wrap) + raising mock_llm → 72 bytes to stderr:
       ``Error executing listener call_llm_and_parse: <reason>``.
-    - Post-fix (wrap) + raising fake_llm → 0 bytes.
+    - Post-fix (wrap) + raising mock_llm → 0 bytes.
 
     Forking a clean Python subprocess restores the standalone
     logging behaviour; the subprocess writes its findings to its

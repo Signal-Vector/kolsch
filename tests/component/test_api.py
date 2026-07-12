@@ -73,7 +73,7 @@ def _make_platform_root(tmp_path: Path) -> Path:
                 "agent_id": "ag_demo",
                 "name": "demo",
                 "description": "Demo agent.",
-                "model": {"provider": "fake", "model": "fake-model"},
+                "model": {"provider": "mock", "model": "mock-model"},
                 "prompt": "You are a demo agent.",
                 "io": {"mode": "conversational"},
             }
@@ -339,7 +339,7 @@ def test_tc_api_10_layer3_validator_fires(tmp_path: Path) -> None:
                 "agent_id": "ag_broken",
                 "name": "broken",
                 "description": "broken memory config.",
-                "model": {"provider": "fake", "model": "fake-model"},
+                "model": {"provider": "mock", "model": "mock-model"},
                 "prompt": "You are broken.",
                 "io": {"mode": "conversational"},
                 "subsystems": {

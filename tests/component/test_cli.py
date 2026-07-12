@@ -74,7 +74,7 @@ def _make_platform_root(tmp_path: Path) -> Path:
                 "agent_id": "ag_demo",
                 "name": "demo",
                 "description": "Demo agent.",
-                "model": {"provider": "fake", "model": "fake-model"},
+                "model": {"provider": "mock", "model": "mock-model"},
                 "prompt": "You are a demo agent.",
                 "io": {"mode": "conversational"},
             }
@@ -162,11 +162,11 @@ def test_tc_cli_02_run_stream_yields_events(
 # ===========================================================================
 
 
-def test_fake_provider_agent_runs_without_warning(
+def test_mock_provider_agent_runs_without_warning(
     platform_root: Path,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """An agent whose `model.provider` is the explicit `fake` does NOT
+    """An agent whose `model.provider` is the explicit `mock` does NOT
     produce a warning — the tutorial / no-creds path is silent. Only
     real-provider agents on an un-wired runtime trip the silent-echo
     warning (see the next test)."""
@@ -183,7 +183,7 @@ def test_fake_provider_agent_runs_without_warning(
     assert exit_code == 0
     captured = capsys.readouterr()
     # Stdout carries the echoed reply (this fixture's agent uses
-    # provider: fake). No warning anywhere — fake is deliberate.
+    # provider: mock). No warning anywhere — mock is deliberate.
     assert "Echo: hello world" in captured.out
     assert "silently echo" not in captured.err
     assert "no real-LLM wiring" not in captured.err
@@ -197,7 +197,7 @@ def test_real_provider_agent_warns_about_silent_echo(
     has no `llm_for_model` wired (e.g., the workspace has no
     `llm_providers` configured), `kolsch run` warns about the silent
     echo on stderr. This is the post-bug-echo-on-real-provider
-    re-target: instead of warning on `provider: fake` (the deliberate
+    re-target: instead of warning on `provider: mock` (the deliberate
     path), warn when a real-provider agent will silently fall through
     to the EchoLLMDriver."""
     import yaml

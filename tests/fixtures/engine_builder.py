@@ -32,9 +32,9 @@ from providers.secrets import DotenvSecretsProvider
 from schemas import AgentId
 from skills import SkillsSubsystem
 from store import SessionStore, SqliteBackend
-from tests.fixtures.fake_llm import (
-    FakeLLM,
-    FakeLLMScriptedError,
+from tests.fixtures.mock_llm import (
+    MockLLM,
+    MockLLMScriptedError,
     TextResponse,
     ToolCallResponse,
 )
@@ -78,14 +78,14 @@ def write_platform_yaml(root: Path) -> None:
     (root / ".env").write_text("", encoding="utf-8")
 
 
-def make_fake_llm_callable(
-    fake_llm: FakeLLM,
+def make_mock_llm_callable(
+    mock_llm: MockLLM,
 ) -> Callable[[LLMRequest], Awaitable[LLMResponse]]:
-    """Adapter — engine LLMHandle → tests/fixtures/fake_llm.FakeLLM.
+    """Adapter — engine LLMHandle → tests/fixtures/mock_llm.MockLLM.
 
-    Translates :class:`LLMRequest` into the dict context the Fake
-    records, and the Fake's response variants back to
-    :class:`LLMResponse`. Maps ``FakeLLMScriptedError`` with
+    Translates :class:`LLMRequest` into the dict context the Mock
+    records, and the Mock's response variants back to
+    :class:`LLMResponse`. Maps ``MockLLMScriptedError`` with
     ``error_type="model.upstream_error"`` to :class:`ModelUpstreamError`
     so engine retry logic sees the right Level.
     """
@@ -101,29 +101,29 @@ def make_fake_llm_callable(
             ),
         }
         try:
-            fake_response = await fake_llm.agenerate(context)
-        except FakeLLMScriptedError as exc:
+            mock_response = await mock_llm.agenerate(context)
+        except MockLLMScriptedError as exc:
             if exc.error_type == "model.upstream_error":
                 raise ModelUpstreamError(
-                    provider="fake",
+                    provider="mock",
                     http_status=500,
                     response=str(exc),
                 ) from exc
             raise
-        if isinstance(fake_response, TextResponse):
-            return LLMResponse(content=fake_response.text)
-        if isinstance(fake_response, ToolCallResponse):
+        if isinstance(mock_response, TextResponse):
+            return LLMResponse(content=mock_response.text)
+        if isinstance(mock_response, ToolCallResponse):
             return LLMResponse(
                 content=None,
                 tool_calls=[
                     {
-                        "id": fake_response.tool_call_id or f"tc_{uuid4()}",
-                        "name": fake_response.tool,
-                        "arguments": dict(fake_response.args),
+                        "id": mock_response.tool_call_id or f"tc_{uuid4()}",
+                        "name": mock_response.tool,
+                        "arguments": dict(mock_response.args),
                     },
                 ],
             )
-        msg = f"unsupported fake response: {fake_response!r}"
+        msg = f"unsupported mock response: {mock_response!r}"
         raise RuntimeError(msg)
 
     return llm_callable
@@ -131,7 +131,7 @@ def make_fake_llm_callable(
 
 async def build_engine(
     tmp_path: Path,
-    fake_llm: FakeLLM,
+    mock_llm: MockLLM,
     framework: Framework,
     *,
     authz_rules: list[dict[str, str]] | None = None,
@@ -173,7 +173,7 @@ async def build_engine(
 
     skills_sub = SkillsSubsystem(asset_management=am)
     bus = InProcessEventBus()
-    llm_callable = make_fake_llm_callable(fake_llm)
+    llm_callable = make_mock_llm_callable(mock_llm)
 
     engine = AgentEngine(
         store=store,

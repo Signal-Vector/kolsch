@@ -20,7 +20,7 @@ if TYPE_CHECKING:
     pass
 
 
-class _FakeChatApp:
+class _MockChatApp:
     """Minimal ChatApp double for the adapter's public surface.
 
     Every method the adapter calls resolves to a no-op / trivial
@@ -47,11 +47,11 @@ class _FakeChatApp:
         self.notices.append(f"assistant:{text}")
 
     async def mount_assistant_streaming_widget(self) -> Any:
-        class _FakeProse:
+        class _MockProse:
             async def append(self, text: str) -> None:
                 return None
 
-        return _FakeProse()
+        return _MockProse()
 
     async def mount_tool_call(self, *args: Any, **kwargs: Any) -> None:
         _ = kwargs
@@ -97,6 +97,6 @@ async def test_adapter_handles_every_event_type(
         f"event_adapter.py has no branch for {event_type}"
     )
     event = canonical_event(event_type)
-    app = _FakeChatApp()
+    app = _MockChatApp()
     adapter = EventAdapter(app)
     await adapter.handle(event)

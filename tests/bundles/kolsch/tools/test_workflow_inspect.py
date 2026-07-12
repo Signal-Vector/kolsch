@@ -14,7 +14,7 @@ Covers:
   the model can copy — smoke check that the string parses as
   ``run_workflow(ref="...", inputs={...})``.
 
-Exercises the tool function directly against a fake ``Workflows``
+Exercises the tool function directly against a mock ``Workflows``
 service that exposes ``resolve_workflow_yaml`` + optional
 ``list_workflow_refs`` — no ChatApp / Pilot needed.
 """
@@ -60,7 +60,7 @@ def _load_workflow_inspect() -> Any:
 # ----------------------------------------------------------------------
 
 
-class _FakeWorkflows:
+class _MockWorkflows:
     """Duck-typed impl of ``Workflows`` for the introspection tool.
 
     Only exposes what the tool actually reads: ``resolve_workflow_yaml``
@@ -128,7 +128,7 @@ graph:
 async def test_valid_ref_returns_expected_shape() -> None:
     """Returns the full 5-key dict and correctly classifies inputs."""
     workflow_inspect = _load_workflow_inspect()
-    workflows = _FakeWorkflows(
+    workflows = _MockWorkflows(
         yaml_by_ref={"andre/workflows/job_description_review": _JD_YAML},
     )
     ctx = _mk_ctx(workflows)
@@ -184,7 +184,7 @@ graph:
 async def test_required_and_optional_correctly_partitioned() -> None:
     """`{{ inputs.a }}` → required; `{{ inputs.b | default(...) }}` → optional."""
     workflow_inspect = _load_workflow_inspect()
-    workflows = _FakeWorkflows(yaml_by_ref={"andre/workflows/mixed": _MIXED_YAML})
+    workflows = _MockWorkflows(yaml_by_ref={"andre/workflows/mixed": _MIXED_YAML})
     ctx = _mk_ctx(workflows)
 
     args_schema = workflow_inspect._tool_definition.args_schema
@@ -216,7 +216,7 @@ async def test_example_call_is_valid_run_workflow_template(
     """
     monkeypatch.setenv("KOLSCH_VIRTUAL_WORKFLOW_TOOLS", "0")
     workflow_inspect = _load_workflow_inspect()
-    workflows = _FakeWorkflows(
+    workflows = _MockWorkflows(
         yaml_by_ref={"andre/workflows/job_description_review": _JD_YAML},
     )
     ctx = _mk_ctx(workflows)
@@ -261,7 +261,7 @@ graph:
         message: "{{ inputs.message | default('hi') }}"
 """
     workflow_inspect = _load_workflow_inspect()
-    workflows = _FakeWorkflows(yaml_by_ref={"kolsch/workflows/hello": yaml_src})
+    workflows = _MockWorkflows(yaml_by_ref={"kolsch/workflows/hello": yaml_src})
     ctx = _mk_ctx(workflows)
 
     args_schema = workflow_inspect._tool_definition.args_schema
@@ -284,7 +284,7 @@ graph:
 async def test_unknown_ref_raises_with_available_refs() -> None:
     """Unknown ref → ``WrappedError`` naming the available refs."""
     workflow_inspect = _load_workflow_inspect()
-    workflows = _FakeWorkflows(
+    workflows = _MockWorkflows(
         yaml_by_ref={"kolsch/workflows/hello": "nodes: {}\n"},
         list_refs=["kolsch/workflows/hello", "andre/workflows/foo"],
     )
@@ -330,7 +330,7 @@ graph:
   edges: []
 """
     workflow_inspect = _load_workflow_inspect()
-    workflows = _FakeWorkflows(yaml_by_ref={"kolsch/workflows/nodesc": yaml_src})
+    workflows = _MockWorkflows(yaml_by_ref={"kolsch/workflows/nodesc": yaml_src})
     ctx = _mk_ctx(workflows)
 
     args_schema = workflow_inspect._tool_definition.args_schema

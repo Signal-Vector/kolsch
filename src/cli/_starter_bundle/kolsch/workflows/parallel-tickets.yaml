@@ -11,7 +11,7 @@
 #   kolsch workflows run kolsch/workflows/parallel-tickets \
 #       --input 'tickets=["server down urgent","add a button","fix login urgent"]'
 #
-# The classifier echoes the input as its ``text`` field (the fake LLM
+# The classifier echoes the input as its ``text`` field (the mock LLM
 # provider's behavior). Operators wanting real classification swap
 # the model in ``platform.yaml``'s ``defaults.model``.
 description: "Map over tickets, classify each via an agent, count urgent."

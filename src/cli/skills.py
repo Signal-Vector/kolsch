@@ -842,7 +842,7 @@ class _ParsedInstallUrl:
     derived_name: str
 
 
-# Type alias for the fetcher seam — tests inject a fake that copies
+# Type alias for the fetcher seam — tests inject a mock that copies
 # from a fixture dir, production uses _real_fetcher.
 _Fetcher = Callable[[_ParsedInstallUrl, Path], Path]
 
@@ -1164,7 +1164,7 @@ def _cmd_install(
 ) -> int:
     """``kolsch skills install <url>`` — install a skill from a URL.
 
-    ``fetcher`` is the test-injection seam: tests pass a fake that
+    ``fetcher`` is the test-injection seam: tests pass a mock that
     copies from a local fixture dir; production passes ``None`` and
     gets :func:`_real_fetcher` (git clone or archive download). The
     rest of the flow is identical either way — strict-root SKILL.md

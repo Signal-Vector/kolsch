@@ -14,7 +14,7 @@ Splits responsibilities:
 - TC-UX-07 — `KOLSCH_PROVIDER` / `KOLSCH_PROVIDER_KEY` env-driven
   auto-connect. Uses `httpx.MockTransport` for both the OpenRouter
   `/auth/key` and `/api/v1/models` endpoints.
-- TC-UX-08 — Starter agent file shape; fake fallback when no
+- TC-UX-08 — Starter agent file shape; mock fallback when no
   provider is connected.
 - TC-UX-09 — Resumability after Ctrl-C during a prompt; second
   run picks up at step D.
@@ -221,7 +221,7 @@ async def test_tc_ux_05_non_interactive_setup_initializes_workspace(
     # Skeleton present.
     for name in ("bundles", "sessions", "content", "logs", "data", ".platform"):
         assert (tmp_path / name).is_dir()
-    # Starter agent ships with the fake LLM since no provider connected.
+    # Starter agent ships with the mock LLM since no provider connected.
     # Post-E-BUG-MODELLINE-001 option (a-prime): helper.yaml no longer
     # declares a `model:` field; the picked model lands in platform.yaml's
     # defaults.model and flows in through the kernel's defaults composition.
@@ -231,8 +231,8 @@ async def test_tc_ux_05_non_interactive_setup_initializes_workspace(
     assert "model" not in helper_payload
     platform_payload = yaml.safe_load((tmp_path / "platform.yaml").read_text())
     assert platform_payload["defaults"]["model"] == {
-        "provider": "fake",
-        "model": "fake-model",
+        "provider": "mock",
+        "model": "mock-model",
     }
 
 
@@ -528,11 +528,11 @@ async def test_tc_ux_07_env_driven_auto_connect(
 # ===========================================================================
 
 
-async def test_tc_ux_08_starter_falls_back_to_fake_without_provider(
+async def test_tc_ux_08_starter_falls_back_to_mock_without_provider(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """Scenario (a): no provider → starter model is the fake LLM.
+    """Scenario (a): no provider → starter model is the mock LLM.
 
     Post-E-BUG-MODELLINE-001 (a-prime): the picked model lands in
     ``platform.yaml``'s ``defaults.model`` rather than the helper
@@ -544,8 +544,8 @@ async def test_tc_ux_08_starter_falls_back_to_fake_without_provider(
     await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
     platform_payload = yaml.safe_load((tmp_path / "platform.yaml").read_text())
     assert platform_payload["defaults"]["model"] == {
-        "provider": "fake",
-        "model": "fake-model",
+        "provider": "mock",
+        "model": "mock-model",
     }
 
 
@@ -646,7 +646,7 @@ async def test_starter_uses_openrouter_when_sole_provider(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """If only an OpenRouter (metadata-source) provider is connected,
-    the starter still uses it rather than falling back to the fake
+    the starter still uses it rather than falling back to the mock
     LLM — better real-LLM-than-echo."""
     monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
     monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
@@ -1140,7 +1140,7 @@ async def test_tc_ux_11_failed_test_run_emits_partial_banner_and_exit_4(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """TC-UX-11: setup --non-interactive with a fake run handler that
+    """TC-UX-11: setup --non-interactive with a mock run handler that
     simulates a 5xx model failure. Assert:
 
     - the partial-completion banner appears in stdout

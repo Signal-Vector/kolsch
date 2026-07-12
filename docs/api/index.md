@@ -97,7 +97,7 @@ resolved agent config) render in the
     options:
       heading_level: 3
 
-::: engine.fake_framework
+::: engine.mock_framework
     options:
       heading_level: 3
 

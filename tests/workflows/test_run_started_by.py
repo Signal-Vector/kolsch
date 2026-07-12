@@ -22,9 +22,9 @@ import pytest
 
 from cli.chat.services.workflows_impl import WorkflowsImpl
 from store import SessionStore, SqliteBackend
-from tests.cli.chat.services.fakes import (
-    FakeExecutorSpec,
-    install_fake_executor_factory,
+from tests.cli.chat.services.mocks import (
+    MockExecutorSpec,
+    install_mock_executor_factory,
 )
 from workflows.events import (
     WorkflowRunCompletedEvent,
@@ -105,9 +105,9 @@ async def test_workflows_impl_start_sets_in_process(
 ) -> None:
     """AC #3: `WorkflowsImpl.start()` sets `"in-process"` end-to-end.
 
-    Uses the fake-executor factory to bypass the runtime plumbing;
+    Uses the mock-executor factory to bypass the runtime plumbing;
     exercises the path where the impl calls `run_store.create(
-    started_by="in-process")` inside the executor factory. The fake
+    started_by="in-process")` inside the executor factory. The mock
     factory doesn't itself call `run_store.create`, so this test
     switches to the default factory + tests the `create` call by
     tracing the store contents.
@@ -125,14 +125,14 @@ async def test_workflows_impl_start_sets_in_process(
         thread_id=threads[0].thread_id,
         run_store=run_store,
     )
-    # Install a fake factory that calls run_store.create with the
+    # Install a mock factory that calls run_store.create with the
     # correct kwarg — mirrors what the default factory does.
     def _factory(ref, inputs, observer, cancel_token):  # type: ignore[no-untyped-def]
         from workflows.events import (
             WorkflowRunCompletedEvent,
             WorkflowRunStartedEvent,
         )
-        from tests.cli.chat.services.fakes.workflow_executor import FakeExecutor
+        from tests.cli.chat.services.mocks.workflow_executor import MockExecutor
 
         # The factory MUST call `run_store.create(started_by="in-process")`
         # so the sweep can find the run later.
@@ -149,7 +149,7 @@ async def test_workflows_impl_start_sets_in_process(
             WorkflowRunCompletedEvent(workflow_run_id=rid, trace_id=tr),
         ]
         return (
-            FakeExecutor(
+            MockExecutor(
                 events=events,
                 observer=observer,
                 cancel_token=cancel_token,

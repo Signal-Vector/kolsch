@@ -100,7 +100,7 @@ def _write_workspace(
         "agent_id": "ag_demo",
         "name": "demo",
         "description": "Phase 2.2 envelope demo agent.",
-        "model": {"provider": "fake", "model": "fake-model"},
+        "model": {"provider": "mock", "model": "mock-model"},
         "prompt": prompt,
         "io": {"mode": "conversational"},
     }

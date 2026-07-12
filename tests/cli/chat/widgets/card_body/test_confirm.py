@@ -18,7 +18,7 @@ from cli.chat.widgets.card_body.confirm import ConfirmRenderer
 from cli.chat.widgets.card_prompt_pane import CardPromptPane
 
 
-class _FakeEvent:
+class _MockEvent:
     __slots__ = ("kind", "payload")
 
     def __init__(self, kind: str, payload: dict[str, Any]) -> None:
@@ -27,12 +27,12 @@ class _FakeEvent:
 
 
 @pytest.mark.asyncio
-async def test_set_updates_confirm_text(fake_app_factory) -> None:
+async def test_set_updates_confirm_text(mock_app_factory) -> None:
     widget = ConfirmRenderer()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        widget.apply_event(_FakeEvent(
+        widget.apply_event(_MockEvent(
             "kolsch.card.set",
             {"content": "Are you sure?"},
         ))

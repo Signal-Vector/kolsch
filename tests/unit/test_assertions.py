@@ -12,7 +12,7 @@ from tests.fixtures.assertions import (
     assert_materialization,
 )
 from tests.fixtures.factories import make_event
-from tests.fixtures.fake_llm import FakeLLM, TextResponse
+from tests.fixtures.mock_llm import MockLLM, TextResponse
 
 # --- assert_event_sequence -------------------------------------------------
 
@@ -97,9 +97,9 @@ def test_event_content_value_mismatch_raises() -> None:
 
 
 async def test_materialization_matches_count() -> None:
-    fake = FakeLLM(script=[TextResponse(text="hi"), TextResponse(text="bye")])
-    await fake.agenerate({"turn": 1})
-    await fake.agenerate({"turn": 2})
+    mock = MockLLM(script=[TextResponse(text="hi"), TextResponse(text="bye")])
+    await mock.agenerate({"turn": 1})
+    await mock.agenerate({"turn": 2})
 
     events = [
         make_event("model.request"),
@@ -107,21 +107,21 @@ async def test_materialization_matches_count() -> None:
         make_event("model.request"),
     ]
 
-    assert_materialization(events, fake)
+    assert_materialization(events, mock)
 
 
 async def test_materialization_count_mismatch_raises() -> None:
-    fake = FakeLLM(script=[TextResponse(text="hi")])
-    await fake.agenerate({})
+    mock = MockLLM(script=[TextResponse(text="hi")])
+    await mock.agenerate({})
 
     events = [make_event("model.request"), make_event("model.request")]
 
     with pytest.raises(AssertionError) as exc_info:
-        assert_materialization(events, fake)
+        assert_materialization(events, mock)
 
     assert "materialization mismatch" in str(exc_info.value)
 
 
 def test_materialization_zero_calls_zero_requests_ok() -> None:
     # Edge case: no requests, no calls. Trivially consistent.
-    assert_materialization([make_event("session.opened")], FakeLLM())
+    assert_materialization([make_event("session.opened")], MockLLM())

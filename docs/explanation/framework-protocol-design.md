@@ -130,7 +130,7 @@ ever runs.
 This is the seam that closes the Materialization gap. By subclassing
 `BaseLLM`, the engine controls the messages at the *exact* moment they
 would have gone to the LLM. The engine captures verbatim, then routes
-to the actual LLM (real or fake) through its own controlled path.
+to the actual LLM (real or mock) through its own controlled path.
 
 Introduced in PR #2277 (2025-03), stable since the 0.105.x line.
 
@@ -208,11 +208,11 @@ class LLMResponse(BaseModel):
     LLM's reply the engine cannot derive from `content` + `tool_calls`
     alone (provider message-id, finish_reason, system_fingerprint,
     cached-prompt markers, reasoning trace blocks, etc.). The
-    MinimalFramework satisfies it with `raw={}` (the Fake LLM has no
+    MinimalFramework satisfies it with `raw={}` (the Mock LLM has no
     provider details to thread); the CrewAI adapter populates it from
     whatever the configured provider returned. This asymmetry is
     deliberate — `raw` is a passthrough channel, not a contract the
-    Fake must implement faithfully."""
+    Mock must implement faithfully."""
     content: str | None
     tool_calls: list[dict[str, Any]] | None
     usage: dict[str, int] | None

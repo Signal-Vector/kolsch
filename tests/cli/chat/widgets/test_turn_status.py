@@ -13,7 +13,7 @@ See ``process/spec-textual-chat-ui.md`` → Technical Context →
 - Clearing ``verb`` deactivates the widget and stops the timers so idle
   sessions don't tick a clock forever.
 
-Tests use the ``fake_app_factory`` fixture from ``tests/cli/chat/conftest.py``
+Tests use the ``mock_app_factory`` fixture from ``tests/cli/chat/conftest.py``
 so each widget is mounted in a bare host app — the widget must render
 correctly from its own DEFAULT_CSS with no external theme loaded.
 """
@@ -51,10 +51,10 @@ def test_spinner_frame_set_is_the_documented_braille_cycle() -> None:
 
 
 @pytest.mark.asyncio
-async def test_setting_verb_activates_widget(fake_app_factory) -> None:
+async def test_setting_verb_activates_widget(mock_app_factory) -> None:
     """A non-empty ``verb`` adds ``.-active`` and reveals the row."""
     widget = TurnStatus()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -72,10 +72,10 @@ async def test_setting_verb_activates_widget(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_target_reactive_updates_target_static(fake_app_factory) -> None:
+async def test_target_reactive_updates_target_static(mock_app_factory) -> None:
     """Setting ``target`` writes into ``#target`` (rendered dim italic via CSS)."""
     widget = TurnStatus()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -88,10 +88,10 @@ async def test_target_reactive_updates_target_static(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_elapsed_hidden_before_two_seconds(fake_app_factory) -> None:
+async def test_elapsed_hidden_before_two_seconds(mock_app_factory) -> None:
     """The 2-second gate keeps ``#elapsed`` invisible for the first tick."""
     widget = TurnStatus()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -104,14 +104,14 @@ async def test_elapsed_hidden_before_two_seconds(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_elapsed_revealed_after_two_seconds(fake_app_factory) -> None:
+async def test_elapsed_revealed_after_two_seconds(mock_app_factory) -> None:
     """After ``pilot.pause(2.5)`` the ``.-show-elapsed`` class flips on.
 
     This is the spec's canonical test: ``set verb → pilot.pause(2.5) →
     #elapsed visible``.
     """
     widget = TurnStatus()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -128,10 +128,10 @@ async def test_elapsed_revealed_after_two_seconds(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_awaiting_approval_reveals_warning_slot(fake_app_factory) -> None:
+async def test_awaiting_approval_reveals_warning_slot(mock_app_factory) -> None:
     """Flipping ``awaiting_approval`` toggles the ``.-awaiting-approval`` class."""
     widget = TurnStatus()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -151,10 +151,10 @@ async def test_awaiting_approval_reveals_warning_slot(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_clearing_verb_deactivates_widget(fake_app_factory) -> None:
+async def test_clearing_verb_deactivates_widget(mock_app_factory) -> None:
     """Emptying ``verb`` removes ``.-active`` and resets elapsed state."""
     widget = TurnStatus()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
 

@@ -104,7 +104,7 @@ def _write_workspace(
                 "agent_id": "ag_skl",
                 "name": "skl",
                 "description": "skills + authz agent",
-                "model": {"provider": "fake", "model": "fake-model"},
+                "model": {"provider": "mock", "model": "mock-model"},
                 "prompt": "hi",
                 "io": {"mode": "conversational"},
                 "subsystems": {

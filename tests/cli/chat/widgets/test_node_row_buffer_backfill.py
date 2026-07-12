@@ -37,11 +37,11 @@ _AppFactory = Callable[[Widget], App[None]]
 
 @pytest.mark.asyncio
 async def test_events_while_collapsed_queue_closures(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """AC #2 + AC #3 — collapsed row buffers without live-mounting."""
     row = WorkflowNodeRow(node_name="n")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         assert row.collapsed is True
@@ -60,11 +60,11 @@ async def test_events_while_collapsed_queue_closures(
 
 @pytest.mark.asyncio
 async def test_expand_drains_queue_in_order(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """AC #4 — collapsed -> expanded drains the queue in insertion order."""
     row = WorkflowNodeRow(node_name="n")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -88,7 +88,7 @@ async def test_expand_drains_queue_in_order(
 
 @pytest.mark.asyncio
 async def test_live_mounted_events_do_not_replay_on_recollapse(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """AC #5 — dedupe by event_id across live-mount + replay.
 
@@ -96,7 +96,7 @@ async def test_live_mounted_events_do_not_replay_on_recollapse(
     the drain finds the dedupe keys stamped and skips.
     """
     row = WorkflowNodeRow(node_name="n")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -121,10 +121,10 @@ async def test_live_mounted_events_do_not_replay_on_recollapse(
 
 
 @pytest.mark.asyncio
-async def test_overflow_drops_oldest(fake_app_factory: _AppFactory) -> None:
+async def test_overflow_drops_oldest(mock_app_factory: _AppFactory) -> None:
     """AC #6 — 51st queued closure drops the oldest."""
     row = WorkflowNodeRow(node_name="n")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -139,11 +139,11 @@ async def test_overflow_drops_oldest(fake_app_factory: _AppFactory) -> None:
 
 @pytest.mark.asyncio
 async def test_terminal_state_freezes_queue(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """AC #7 — terminal transition freezes further mounts."""
     row = WorkflowNodeRow(node_name="n")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 

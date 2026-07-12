@@ -50,7 +50,7 @@ def _contents_of(row: WorkflowNodeRow) -> Collapsible.Contents:
 
 @pytest.mark.asyncio
 async def test_node_section_mounts_with_title(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """Bare construction — title comes through as-is (completed state)."""
     section = NodeSection("input")
@@ -65,7 +65,7 @@ async def test_node_section_mounts_with_title(
 
 @pytest.mark.asyncio
 async def test_node_section_state_transitions(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """`running` suffixes `…`; `completed` removes it."""
     section = NodeSection("tool: browse_url", state="running")
@@ -83,7 +83,7 @@ async def test_node_section_state_transitions(
 
 @pytest.mark.asyncio
 async def test_node_section_failed_state_adds_class(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """`failed` prefixes ✗ and adds `-failed` class."""
     section = NodeSection("tool: read_file", state="failed")

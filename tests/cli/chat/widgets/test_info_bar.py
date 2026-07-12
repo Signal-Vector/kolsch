@@ -8,7 +8,7 @@ priority order under narrow terminals — cwd drops first, then branch,
 then session; the ``.identity`` (agent + model) slot never drops.
 
 We drive the widget through ``App.run_test()`` at four terminal widths
-(100, 80, 60, 40) using the ``fake_app_factory`` fixture from
+(100, 80, 60, 40) using the ``mock_app_factory`` fixture from
 ``tests/cli/chat/conftest.py``. The factory does NOT load
 ``theme.tcss``; a widget that only works with the theme loaded is a
 widget with hidden coupling.
@@ -26,10 +26,10 @@ from cli.chat.widgets.info_bar import InfoBar
 
 
 @pytest.mark.asyncio
-async def test_info_bar_mounts_with_default_reactives(fake_app_factory) -> None:
+async def test_info_bar_mounts_with_default_reactives(mock_app_factory) -> None:
     """Widget mounts cleanly with all reactives at their empty defaults."""
     bar = InfoBar()
-    app = fake_app_factory(bar)
+    app = mock_app_factory(bar)
     async with app.run_test(size=(100, 24)) as pilot:
         await pilot.pause()
         # Four segments compose regardless of content.
@@ -42,10 +42,10 @@ async def test_info_bar_mounts_with_default_reactives(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_info_bar_is_docked_bottom(fake_app_factory) -> None:
+async def test_info_bar_is_docked_bottom(mock_app_factory) -> None:
     """DEFAULT_CSS docks the InfoBar to the bottom of its parent."""
     bar = InfoBar()
-    app = fake_app_factory(bar)
+    app = mock_app_factory(bar)
     async with app.run_test(size=(100, 24)) as pilot:
         await pilot.pause()
         # y=23 is the bottom row in a 24-row viewport.
@@ -58,10 +58,10 @@ async def test_info_bar_is_docked_bottom(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_info_bar_reactives_populate_segments(fake_app_factory) -> None:
+async def test_info_bar_reactives_populate_segments(mock_app_factory) -> None:
     """Setting the reactives updates the corresponding Static text."""
     bar = InfoBar()
-    app = fake_app_factory(bar)
+    app = mock_app_factory(bar)
     async with app.run_test(size=(120, 24)) as pilot:
         await pilot.pause()
         bar.agent = "butler"
@@ -78,10 +78,10 @@ async def test_info_bar_reactives_populate_segments(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_info_bar_identity_handles_missing_pieces(fake_app_factory) -> None:
+async def test_info_bar_identity_handles_missing_pieces(mock_app_factory) -> None:
     """Identity slot drops empty pieces so we never render a bare ' · '."""
     bar = InfoBar()
-    app = fake_app_factory(bar)
+    app = mock_app_factory(bar)
     async with app.run_test(size=(100, 24)) as pilot:
         await pilot.pause()
 
@@ -97,10 +97,10 @@ async def test_info_bar_identity_handles_missing_pieces(fake_app_factory) -> Non
 
 
 @pytest.mark.asyncio
-async def test_info_bar_empty_reactives_render_empty(fake_app_factory) -> None:
+async def test_info_bar_empty_reactives_render_empty(mock_app_factory) -> None:
     """An unset reactive keeps its segment empty (no placeholder text)."""
     bar = InfoBar()
-    app = fake_app_factory(bar)
+    app = mock_app_factory(bar)
     async with app.run_test(size=(100, 24)) as pilot:
         await pilot.pause()
         # Populate only identity.
@@ -129,7 +129,7 @@ async def test_info_bar_empty_reactives_render_empty(fake_app_factory) -> None:
     ],
 )
 async def test_info_bar_segments_collapse_by_width(
-    fake_app_factory, width: int, expected_visible: set[str]
+    mock_app_factory, width: int, expected_visible: set[str]
 ) -> None:
     """At narrower widths the droppable segments hide in priority order.
 
@@ -138,7 +138,7 @@ async def test_info_bar_segments_collapse_by_width(
     invariant.
     """
     bar = InfoBar()
-    app = fake_app_factory(bar)
+    app = mock_app_factory(bar)
     async with app.run_test(size=(width, 24)) as pilot:
         await pilot.pause()
         bar.agent = "butler"
@@ -157,10 +157,10 @@ async def test_info_bar_segments_collapse_by_width(
 
 
 @pytest.mark.asyncio
-async def test_info_bar_identity_always_present(fake_app_factory) -> None:
+async def test_info_bar_identity_always_present(mock_app_factory) -> None:
     """Even at the narrowest tested width, identity keeps displaying."""
     bar = InfoBar()
-    app = fake_app_factory(bar)
+    app = mock_app_factory(bar)
     async with app.run_test(size=(40, 24)) as pilot:
         await pilot.pause()
         bar.agent = "butler"

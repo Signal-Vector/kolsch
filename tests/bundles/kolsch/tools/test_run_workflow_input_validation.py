@@ -8,7 +8,7 @@ Covers AC #8, #9. Two behavior-level tests:
 2. Fully-supplied inputs proceed to ``services.workflows.start``
    normally.
 
-Exercises the tool function directly against a fake ``Workflows``
+Exercises the tool function directly against a mock ``Workflows``
 service that exposes ``resolve_workflow_yaml`` (the duck-typed
 seam). No ChatApp / Pilot needed — the validation lives at the
 tool boundary, not the wire boundary.
@@ -55,23 +55,23 @@ def _load_run_workflow() -> Any:
 # ----------------------------------------------------------------------
 
 
-class _FakeCard:
+class _MockCard:
     def __init__(self) -> None:
         self.id = "card_probe"
         self._owner_transferred = False
         self.is_closed = False
 
 
-class _FakeCards:
+class _MockCards:
     def __init__(self) -> None:
         self.opened: list[tuple[str, str]] = []
 
     async def open(self, label: str, *, kind: str) -> Any:
         self.opened.append((label, kind))
-        return _FakeCard()
+        return _MockCard()
 
 
-class _FakeWorkflows:
+class _MockWorkflows:
     def __init__(self, *, yaml_source: str) -> None:
         self._yaml_source = yaml_source
         self.starts: list[tuple[str, dict[str, Any]]] = []
@@ -125,8 +125,8 @@ async def test_missing_required_input_returns_is_error_true() -> None:
     message in the payload — the LLM sees ``is_error=true``.
     """
     run_workflow = _load_run_workflow()
-    cards = _FakeCards()
-    workflows = _FakeWorkflows(yaml_source=_JD_YAML)
+    cards = _MockCards()
+    workflows = _MockWorkflows(yaml_source=_JD_YAML)
     ctx = _mk_ctx(cards, workflows)
 
     # `@tool`-decorated function has an args_schema; call the wrapped
@@ -156,8 +156,8 @@ async def test_missing_required_input_returns_is_error_true() -> None:
 async def test_valid_inputs_proceed_normally() -> None:
     """Supplied ``inputs.url`` → the run enqueues normally."""
     run_workflow = _load_run_workflow()
-    cards = _FakeCards()
-    workflows = _FakeWorkflows(yaml_source=_JD_YAML)
+    cards = _MockCards()
+    workflows = _MockWorkflows(yaml_source=_JD_YAML)
     ctx = _mk_ctx(cards, workflows)
 
     args_schema = run_workflow._tool_definition.args_schema
@@ -188,8 +188,8 @@ graph:
         message: "{{ inputs.message | default('hi') }}"
 """
     run_workflow = _load_run_workflow()
-    cards = _FakeCards()
-    workflows = _FakeWorkflows(yaml_source=yaml_src)
+    cards = _MockCards()
+    workflows = _MockWorkflows(yaml_source=yaml_src)
     ctx = _mk_ctx(cards, workflows)
 
     args_schema = run_workflow._tool_definition.args_schema
@@ -205,9 +205,9 @@ graph:
 
 @pytest.mark.asyncio
 async def test_resolver_absent_falls_back_to_pre_bug025_shape() -> None:
-    """Fake workflows without ``resolve_workflow_yaml`` skip validation.
+    """Mock workflows without ``resolve_workflow_yaml`` skip validation.
 
-    Backward-compat: headless test fakes that predate bug-025 keep
+    Backward-compat: headless test mocks that predate bug-025 keep
     working — the validator's duck-typed probe returns ``None`` and
     the tool proceeds to enqueue as before.
     """
@@ -223,7 +223,7 @@ async def test_resolver_absent_falls_back_to_pre_bug025_shape() -> None:
             return "wrk_headless"
 
     run_workflow = _load_run_workflow()
-    cards = _FakeCards()
+    cards = _MockCards()
     workflows = _MinimalWorkflows()
     ctx = _mk_ctx(cards, workflows)
 

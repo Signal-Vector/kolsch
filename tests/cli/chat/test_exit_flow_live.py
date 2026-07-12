@@ -53,7 +53,7 @@ from schemas.events import EventType
 from store import SessionStore, SqliteBackend
 
 
-class _FakeAuthz:
+class _MockAuthz:
     def register_prompt_callback(
         self, callback: Any, *, on_rule_added: Any = None,
     ) -> None:
@@ -66,7 +66,7 @@ class _FakeAuthz:
 async def _empty_stream(
     *_args: Any, **_kwargs: Any,
 ) -> AsyncGenerator[Any, None]:
-    """Yield nothing — the fake engine never runs a real turn.
+    """Yield nothing — the mock engine never runs a real turn.
 
     Mirrors the pattern in
     ``tests/cli/chat/test_approval_flow_live.py``: the ``yield``
@@ -77,17 +77,17 @@ async def _empty_stream(
     yield  # type: ignore[unreachable]  # pragma: no cover
 
 
-class _FakeEngine:
+class _MockEngine:
     execute_stream = staticmethod(_empty_stream)
 
 
-class _FakeConfig:
+class _MockConfig:
     name = "TestAgent"
-    agent_id = "ag_fake"
+    agent_id = "ag_mock"
     model = None
 
 
-class _FakeBundle:
+class _MockBundle:
     def __init__(
         self,
         *,
@@ -123,25 +123,25 @@ async def chat_app(tmp_path: Path) -> AsyncIterator[Any]:
     backend = SqliteBackend(platform_dir / "entities.db")
     await backend.initialize()
     store = SessionStore(root=tmp_path, backend=backend)
-    session = await store.create_session("ag_fake", name="exit-flow")
+    session = await store.create_session("ag_mock", name="exit-flow")
     threads = await store.list_threads(session.session_id)
 
     class _R:
         def __init__(self) -> None:
             self.store = store
-            self.authz = _FakeAuthz()
-            self.engine = _FakeEngine()
+            self.authz = _MockAuthz()
+            self.engine = _MockEngine()
             self.root = tmp_path
             self.bus = InProcessEventBus()
 
-    bundle = _FakeBundle(
+    bundle = _MockBundle(
         runtime=_R(),
-        config=_FakeConfig(),
+        config=_MockConfig(),
         session_id=session.session_id,
         thread_id=threads[0].thread_id,
-        agent_ref="kolsch/agents/fake",
+        agent_ref="kolsch/agents/mock",
         root=tmp_path,
-        model_label="fake/test",
+        model_label="mock/test",
         is_resume=False,
     )
     app = ChatApp(

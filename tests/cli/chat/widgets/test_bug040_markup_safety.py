@@ -42,11 +42,11 @@ _URL_ENCODED_BRACKET_TAIL = (
 
 @pytest.mark.asyncio
 async def test_workflow_node_set_output_with_bracket_content(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """AC #3 sub-test 1 — non-bash dict payload with ``[brackets]`` mounts."""
     row = WorkflowNodeRow(node_name="n")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -61,11 +61,11 @@ async def test_workflow_node_set_output_with_bracket_content(
 
 @pytest.mark.asyncio
 async def test_bash_stdout_with_url_encoded_content(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """AC #3 sub-test 2 — the exact live-crash payload mounts cleanly."""
     row = WorkflowNodeRow(node_name="n", node_type="kolsch/nodes/bash")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -88,7 +88,7 @@ async def test_bash_stdout_with_url_encoded_content(
 
 @pytest.mark.asyncio
 async def test_tool_call_block_with_bracket_body(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """AC #3 sub-test 3 — ToolCallBlock body + recovery_hint with brackets."""
     block = ToolCallBlock(
@@ -97,7 +97,7 @@ async def test_tool_call_block_with_bracket_body(
         body='{"result": "value with [brackets] and %5Bencoded%5D"}',
         recovery_hint="retry with different [params]",
     )
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test() as pilot:
         # Pre-fix, mounting the body Static (tool_call_block.py:103)
         # or the hint Static (tool_call_block.py:105) with bracket
@@ -109,11 +109,11 @@ async def test_tool_call_block_with_bracket_body(
 
 @pytest.mark.asyncio
 async def test_bash_command_preview_with_jinja_brackets(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """AC #3 sub-test 4 — set_command_preview with bracket content mounts."""
     row = WorkflowNodeRow(node_name="n", node_type="kolsch/nodes/bash")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -130,7 +130,7 @@ async def test_bash_command_preview_with_jinja_brackets(
 
 @pytest.mark.asyncio
 async def test_notice_widget_with_bracket_content(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """Reviewer sweep — ``NoticeWidget`` mounts with bracket-heavy text.
 
@@ -144,7 +144,7 @@ async def test_notice_widget_with_bracket_content(
         text=f"exchange failed — {_URL_ENCODED_BRACKET_TAIL}",
         kind="error",
     )
-    app = fake_app_factory(notice)
+    app = mock_app_factory(notice)
     async with app.run_test() as pilot:
         # Pre-fix, mounting a NoticeWidget whose text contains
         # ``[`` followed by non-markup content raised MarkupError
@@ -157,7 +157,7 @@ async def test_notice_widget_with_bracket_content(
 
 @pytest.mark.asyncio
 async def test_card_prompt_pane_with_bracket_question(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """Reviewer sweep — ``CardPromptPane`` question row mounts with brackets.
 
@@ -170,7 +170,7 @@ async def test_card_prompt_pane_with_bracket_question(
         question="Continue with url [https://x.y/z?tok=[foo]]?",
         options=["y", "n"],
     )
-    app = fake_app_factory(pane)
+    app = mock_app_factory(pane)
     async with app.run_test() as pilot:
         await pilot.pause()
 

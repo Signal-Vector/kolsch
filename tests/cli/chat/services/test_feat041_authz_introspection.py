@@ -31,12 +31,12 @@ from providers.authz import (
 )
 
 # ---------------------------------------------------------------------------
-# Helpers — a minimal Event double and a fake runtime for /why + /reload.
+# Helpers — a minimal Event double and a mock runtime for /why + /reload.
 # ---------------------------------------------------------------------------
 
 
 @dataclass
-class _FakeEvent:
+class _MockEvent:
     """Duck-typed stand-in for `schemas.Event` with just the fields the
     introspection helpers read (``type`` + ``data``)."""
 
@@ -49,10 +49,10 @@ class _FakeEvent:
         assert isinstance(self.data, dict)
 
 
-class _FakeStoreDirect:
+class _MockStoreDirect:
     """Store whose `read_path_to_leaf` IS an async-generator function."""
 
-    def __init__(self, events: list[_FakeEvent]) -> None:
+    def __init__(self, events: list[_MockEvent]) -> None:
         self._events = events
 
     async def read_path_to_leaf(self, thread_id: object) -> Any:
@@ -62,8 +62,8 @@ class _FakeStoreDirect:
 
 
 @dataclass
-class _FakeRuntime:
-    store: _FakeStoreDirect
+class _MockRuntime:
+    store: _MockStoreDirect
     root: Path
     authz: Any = None
     asset_management: Any = None
@@ -162,7 +162,7 @@ async def test_policy_decision_event_carries_tool_call_id(
     )
     from workflows.run_store import WorkflowRunStore
 
-    source_file = "/tmp/fake-platform.yaml"
+    source_file = "/tmp/mock-platform.yaml"
     provider = RuleBasedAuthorizationProvider(
         config={
             "audit_level": "all",
@@ -261,25 +261,25 @@ async def test_reload_swaps_provider_atomically(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    class _FakeAssetManagement:
+    class _MockAssetManagement:
         def catalog(self) -> Any:
             from assets.catalog import AssetCatalog
 
             return AssetCatalog(bundles={}, assets={})
 
-    class _FakeToolsSubsystem:
+    class _MockToolsSubsystem:
         def __init__(self) -> None:
             self._authz: Any = None
 
     original = RuleBasedAuthorizationProvider(
         config={"rules": [{"what": "*", "pattern": "*", "effect": "allow"}]},
     )
-    runtime = _FakeRuntime(
-        store=_FakeStoreDirect([]),
+    runtime = _MockRuntime(
+        store=_MockStoreDirect([]),
         root=tmp_path,
         authz=original,
-        asset_management=_FakeAssetManagement(),
-        tools_subsystem=_FakeToolsSubsystem(),
+        asset_management=_MockAssetManagement(),
+        tools_subsystem=_MockToolsSubsystem(),
     )
 
     result = await handle_reload(runtime)
@@ -302,7 +302,7 @@ async def test_reload_malformed_config_preserves_old_provider(
         encoding="utf-8",
     )
 
-    class _FakeAssetManagement:
+    class _MockAssetManagement:
         def catalog(self) -> Any:
             from assets.catalog import AssetCatalog
 
@@ -311,11 +311,11 @@ async def test_reload_malformed_config_preserves_old_provider(
     original = RuleBasedAuthorizationProvider(
         config={"rules": [{"what": "*", "pattern": "*", "effect": "allow"}]},
     )
-    runtime = _FakeRuntime(
-        store=_FakeStoreDirect([]),
+    runtime = _MockRuntime(
+        store=_MockStoreDirect([]),
         root=tmp_path,
         authz=original,
-        asset_management=_FakeAssetManagement(),
+        asset_management=_MockAssetManagement(),
     )
 
     result = await handle_reload(runtime)
@@ -337,11 +337,11 @@ def _make_tool_failed_event(
     tool_name: str,
     matched_rule: dict[str, Any] | None,
     action: str = "",
-) -> _FakeEvent:
+) -> _MockEvent:
     error_detail: dict[str, Any] = {"action": action}
     if matched_rule is not None:
         error_detail["matched_rule"] = matched_rule
-    return _FakeEvent(
+    return _MockEvent(
         type="tool.failed",
         data={
             "tool_call_id": tool_call_id,
@@ -363,8 +363,8 @@ def _make_policy_event(
     effect: str = "deny",
     source_file: str | None = None,
     source_line: int | None = None,
-) -> _FakeEvent:
-    return _FakeEvent(
+) -> _MockEvent:
+    return _MockEvent(
         type="policy.decision.made",
         data={
             "tool_call_id": tool_call_id,
@@ -390,7 +390,7 @@ async def test_why_finds_last_denial_via_store(tmp_path: Path) -> None:
         "source_file": "/tmp/platform.yaml",
         "source_line": 5,
     }
-    events: list[_FakeEvent] = [
+    events: list[_MockEvent] = [
         _make_policy_event(
             tool_call_id="tc_1",
             action="kolsch/tools/bash",
@@ -404,7 +404,7 @@ async def test_why_finds_last_denial_via_store(tmp_path: Path) -> None:
             action="kolsch/tools/bash",
         ),
     ]
-    runtime = _FakeRuntime(store=_FakeStoreDirect(events), root=tmp_path)
+    runtime = _MockRuntime(store=_MockStoreDirect(events), root=tmp_path)
     data = await find_last_denial_via_store(runtime, thread_id="th_x")
     assert data is not None
     assert data.rule_id == "rl_bash"
@@ -417,7 +417,7 @@ async def test_why_finds_last_denial_via_store(tmp_path: Path) -> None:
 async def test_why_specific_tool_call_id(tmp_path: Path) -> None:
     """`find_last_denial_via_store(tool_call_id=...)` targets that
     exact call, skipping newer denials."""
-    events: list[_FakeEvent] = [
+    events: list[_MockEvent] = [
         _make_tool_failed_event(
             tool_call_id="tc_old",
             tool_name="write_file",
@@ -439,7 +439,7 @@ async def test_why_specific_tool_call_id(tmp_path: Path) -> None:
             },
         ),
     ]
-    runtime = _FakeRuntime(store=_FakeStoreDirect(events), root=tmp_path)
+    runtime = _MockRuntime(store=_MockStoreDirect(events), root=tmp_path)
     data = await find_last_denial_via_store(
         runtime, thread_id="th_x", tool_call_id="tc_old",
     )
@@ -452,7 +452,7 @@ async def test_why_no_denial_prints_hint(tmp_path: Path) -> None:
     """When no `tool.failed` event exists (or none carry a matched_rule),
     the finder returns `None` so the caller can print the "no recent
     denial" hint."""
-    runtime = _FakeRuntime(store=_FakeStoreDirect([]), root=tmp_path)
+    runtime = _MockRuntime(store=_MockStoreDirect([]), root=tmp_path)
     data = await find_last_denial_via_store(runtime, thread_id="th_x")
     assert data is None
 
@@ -475,7 +475,7 @@ async def test_why_orphan_tool_failed_prints_diagnostic(tmp_path: Path) -> None:
             matched_rule=matched_rule,
         ),
     ]
-    runtime = _FakeRuntime(store=_FakeStoreDirect(events), root=tmp_path)
+    runtime = _MockRuntime(store=_MockStoreDirect(events), root=tmp_path)
     data = await find_last_denial_via_store(runtime, thread_id="th_x")
     assert data is not None
     assert data.rule_id == "rl_x"
@@ -501,7 +501,7 @@ async def test_why_missing_source_shows_unknown(tmp_path: Path) -> None:
             matched_rule=matched_rule,
         ),
     ]
-    runtime = _FakeRuntime(store=_FakeStoreDirect(events), root=tmp_path)
+    runtime = _MockRuntime(store=_MockStoreDirect(events), root=tmp_path)
     data = await find_last_denial_via_store(runtime, thread_id="th_x")
     assert data is not None
     card_text = render_denial_card(data)
@@ -675,7 +675,7 @@ def test_find_target_tool_failed_skips_non_authz() -> None:
         matched_rule={"id": "rl_x", "effect": "deny", "pattern": "*"},
     )
     result = _find_target_tool_failed(
-        [non_authz, authz],  # type: ignore[list-item]  # _FakeEvent duck-types Event
+        [non_authz, authz],  # type: ignore[list-item]  # _MockEvent duck-types Event
         tool_call_id=None,
     )
     assert result is authz  # type: ignore[comparison-overlap]

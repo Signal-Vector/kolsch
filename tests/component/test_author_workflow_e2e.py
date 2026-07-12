@@ -16,7 +16,7 @@ Pattern mirrored from
 ``tests/component/test_workflow_agent_runner_e2e.py`` (real
 SessionStore + AssetManagement + ToolsSubsystem; mocked LLM via the
 engine's ``llm`` callable seam) and
-``tests/component/test_engine.py`` (the FakeLLM → LLMResponse
+``tests/component/test_engine.py`` (the MockLLM → LLMResponse
 adapter).
 """
 
@@ -49,9 +49,9 @@ from providers.secrets import DotenvSecretsProvider
 from schemas import EventType
 from skills import SkillsSubsystem, make_standard_validator
 from store import SessionStore, SqliteBackend
-from tests.fixtures.fake_llm import (
-    FakeLLM,
-    FakeLLMResponse,
+from tests.fixtures.mock_llm import (
+    MockLLM,
+    MockLLMResponse,
     TextResponse,
     ToolCallResponse,
 )
@@ -93,7 +93,7 @@ file_access:
   allowed_paths: ["bundles/", "data/", "out/"]
   denied_paths: [".env"]
 defaults:
-  model: { provider: fake, model: fake-model }
+  model: { provider: mock, model: mock-model }
 """
 
 
@@ -128,9 +128,9 @@ def _make_workspace(tmp_path: Path) -> Path:
 
 
 def _scripted_llm_callable(
-    fake: FakeLLM,
+    mock: MockLLM,
 ) -> Callable[[LLMRequest], Awaitable[LLMResponse]]:
-    """Adapt a :class:`FakeLLM` script into the engine's ``LLMRequest``
+    """Adapt a :class:`MockLLM` script into the engine's ``LLMRequest``
     → ``LLMResponse`` callable seam.
 
     Mirrors the adapter in ``tests/component/test_engine.py`` —
@@ -143,7 +143,7 @@ def _scripted_llm_callable(
             "tools": list(request.tools),
             "model": request.model,
         }
-        response = await fake.agenerate(context)
+        response = await mock.agenerate(context)
         if isinstance(response, TextResponse):
             return LLMResponse(content=response.text)
         if isinstance(response, ToolCallResponse):
@@ -224,18 +224,18 @@ async def _run_author_workflow_session(
     workspace: Path,
     *,
     brief: str,
-    scripted_responses: list[FakeLLMResponse],
-) -> tuple[FakeLLM, list[Event], AssetManagement]:
+    scripted_responses: list[MockLLMResponse],
+) -> tuple[MockLLM, list[Event], AssetManagement]:
     """Drive the ``author_workflow`` meta-agent through one exchange.
 
-    Returns ``(fake_llm, all_events, asset_management)`` so the caller
+    Returns ``(mock_llm, all_events, asset_management)`` so the caller
     can inspect: which tools were invoked + with what args (via
-    ``fake.calls`` and the ``TOOL_CALLED`` / ``TOOL_RESULT`` events);
+    ``mock.calls`` and the ``TOOL_CALLED`` / ``TOOL_RESULT`` events);
     which files were written (via the workspace itself); the final
     ``AGENT_MESSAGE`` text (via the events).
     """
-    fake = FakeLLM(script=list(scripted_responses))
-    llm = _scripted_llm_callable(fake)
+    mock = MockLLM(script=list(scripted_responses))
+    llm = _scripted_llm_callable(mock)
     engine, store, am = await _build_engine(workspace, llm=llm)
 
     # Mirror bootstrap_runtime's dispatch shape so the tools subsystem
@@ -266,7 +266,7 @@ async def _run_author_workflow_session(
     async for event in engine.execute_stream(config, ctx):
         events.append(event)
 
-    return fake, events, am
+    return mock, events, am
 
 
 # ---------------------------------------------------------------------------
@@ -289,7 +289,7 @@ async def _run_workflow(
     scenarios). Returns ``(terminal_status_value, run_events_path)``.
     """
     llm_callable = llm or _scripted_llm_callable(
-        FakeLLM(script=[TextResponse(text="urgent")] * 16)
+        MockLLM(script=[TextResponse(text="urgent")] * 16)
     )
     engine, store, am = await _build_engine(workspace, llm=llm_callable)
     catalog = am.catalog()
@@ -441,7 +441,7 @@ async def test_from_scratch_authoring(tmp_path: Path) -> None:
         ),
     ]
 
-    fake, events, _am = await _run_author_workflow_session(
+    mock, events, _am = await _run_author_workflow_session(
         workspace,
         brief="Build a workflow that classifies a ticket.",
         scripted_responses=scripted,
@@ -487,8 +487,8 @@ async def test_from_scratch_authoring(tmp_path: Path) -> None:
     log = events_path.read_text(encoding="utf-8")
     assert "urgent_marker" in log and "normal_marker" in log
 
-    # FakeLLM script should be fully consumed.
-    assert not fake.script, f"unused scripted responses: {fake.script}"
+    # MockLLM script should be fully consumed.
+    assert not mock.script, f"unused scripted responses: {mock.script}"
 
 
 # ===========================================================================
@@ -564,7 +564,7 @@ async def test_amendment_loop(tmp_path: Path) -> None:
         ),
     ]
 
-    fake, events, _am = await _run_author_workflow_session(
+    mock, events, _am = await _run_author_workflow_session(
         workspace,
         brief="Also write the classification to a file at out/result.txt.",
         scripted_responses=scripted,
@@ -598,7 +598,7 @@ async def test_amendment_loop(tmp_path: Path) -> None:
     assert result_file.exists(), "amended workflow should write out/result.txt"
     assert result_file.read_text(encoding="utf-8") == "URGENT\n"
 
-    assert not fake.script
+    assert not mock.script
 
 
 # ===========================================================================
@@ -700,7 +700,7 @@ async def test_node_module_generation(tmp_path: Path) -> None:
         ),
     ]
 
-    fake, events, _am = await _run_author_workflow_session(
+    mock, events, _am = await _run_author_workflow_session(
         workspace,
         brief="Build a workflow that takes a CSV path, counts rows, prints the count.",
         scripted_responses=scripted,
@@ -751,7 +751,7 @@ async def test_node_module_generation(tmp_path: Path) -> None:
         "row_count=4 not in events log"
     )
 
-    assert not fake.script
+    assert not mock.script
 
 
 # ===========================================================================
@@ -842,7 +842,7 @@ async def test_validation_driven_revision(tmp_path: Path) -> None:
         ),
     ]
 
-    fake, events, _am = await _run_author_workflow_session(
+    mock, events, _am = await _run_author_workflow_session(
         workspace,
         brief="Build a workflow that fans two noops into one echo.",
         scripted_responses=scripted,
@@ -879,10 +879,10 @@ async def test_validation_driven_revision(tmp_path: Path) -> None:
     assert second_result["is_valid"] is True
 
     # The two write_file payloads differ at the colliding bind key only.
-    # (Use the structured args off the FakeLLM call record.)
+    # (Use the structured args off the MockLLM call record.)
     write_calls = [
         r
-        for r in fake.calls
+        for r in mock.calls
         if r.response.kind == "tool_call" and r.response.tool == "write_file"
     ]
     assert len(write_calls) == 2
@@ -900,7 +900,7 @@ async def test_validation_driven_revision(tmp_path: Path) -> None:
     )
     assert status == "succeeded", f"workflow run status: {status}"
 
-    assert not fake.script
+    assert not mock.script
 
 
 # ===========================================================================
@@ -936,7 +936,7 @@ async def test_max_attempts_cap(tmp_path: Path) -> None:
     workspace = _make_workspace(tmp_path)
     target_yaml = workspace / "bundles" / _TARGET_BUNDLE / "workflows" / "doomed.yaml"
 
-    scripted: list[FakeLLMResponse] = []
+    scripted: list[MockLLMResponse] = []
     for attempt in range(1, 6):
         scripted.append(
             ToolCallResponse(
@@ -966,7 +966,7 @@ async def test_max_attempts_cap(tmp_path: Path) -> None:
         )
     )
 
-    fake, events, _am = await _run_author_workflow_session(
+    mock, events, _am = await _run_author_workflow_session(
         workspace,
         brief="Use a node type called kolsch/nodes/quantum_compute.",
         scripted_responses=scripted,
@@ -1000,7 +1000,7 @@ async def test_max_attempts_cap(tmp_path: Path) -> None:
     assert "Direction needed" in final or "different" in final
 
     # Script fully consumed — confirms no 6th attempt slipped in.
-    assert not fake.script
+    assert not mock.script
 
 
 # ===========================================================================
@@ -1071,7 +1071,7 @@ async def test_writes_to_target_bundle_only(tmp_path: Path) -> None:
         ),
     ]
 
-    fake, events, _am = await _run_author_workflow_session(
+    mock, events, _am = await _run_author_workflow_session(
         workspace,
         brief="Build a workflow that classifies a ticket.",
         scripted_responses=scripted,
@@ -1112,7 +1112,7 @@ async def test_writes_to_target_bundle_only(tmp_path: Path) -> None:
 
     # Sanity — the target file IS where we expect it.
     assert target_yaml.is_file()
-    assert not fake.script
+    assert not mock.script
 
 
 # ===========================================================================
@@ -1192,7 +1192,7 @@ async def test_kolsch_only_workspace_surfaces_escalation(
         ),
     ]
 
-    fake, events, _am = await _run_author_workflow_session(
+    mock, events, _am = await _run_author_workflow_session(
         workspace,
         brief="Build a workflow that classifies a ticket.",
         scripted_responses=scripted,
@@ -1226,4 +1226,4 @@ async def test_kolsch_only_workspace_surfaces_escalation(
         )
 
     # Sanity — the single scripted response was consumed exactly once.
-    assert not fake.script
+    assert not mock.script

@@ -22,7 +22,7 @@ sub-agent events, and asserts the three user-reported invariants:
    Post-bug-035, workflow cards skip the auto-collapse timer.
 
 The harness mirrors ``test_sub_agent_events_stream_to_node_row.py``
-(spec-020 flagship) — same fake executor + ``chat_app`` fixture.
+(spec-020 flagship) — same mock executor + ``chat_app`` fixture.
 """
 
 from __future__ import annotations
@@ -80,7 +80,7 @@ def run_workflow_tool() -> Callable[..., Awaitable[Any]]:
     return _load_tool("run_workflow.py", "run_workflow")
 
 
-class _FakeAuthz:
+class _MockAuthz:
     def register_prompt_callback(
         self, callback: Any, *, on_rule_added: Any = None,
     ) -> None:
@@ -90,20 +90,20 @@ class _FakeAuthz:
         return None
 
 
-class _FakeEngine:
+class _MockEngine:
     async def execute_stream(self, config: Any, ctx: Any) -> Any:
         _ = config, ctx
         if False:  # pragma: no cover
             yield
 
 
-class _FakeConfig:
+class _MockConfig:
     name = "TestAgent"
-    agent_id = "ag_fake"
+    agent_id = "ag_mock"
     model = None
 
 
-class _FakeBundle:
+class _MockBundle:
     def __init__(self, **kw: Any) -> None:
         for k, v in kw.items():
             setattr(self, k, v)
@@ -120,25 +120,25 @@ async def chat_app(tmp_path: Path) -> Any:
     backend = SqliteBackend(platform_dir / "entities.db")
     await backend.initialize()
     store = SessionStore(root=tmp_path, backend=backend)
-    session = await store.create_session("ag_fake", name="c")
+    session = await store.create_session("ag_mock", name="c")
     threads = await store.list_threads(session.session_id)
 
     class _R:
         def __init__(self) -> None:
             self.store = store
-            self.authz = _FakeAuthz()
-            self.engine = _FakeEngine()
+            self.authz = _MockAuthz()
+            self.engine = _MockEngine()
             self.root = tmp_path
             self.bus = InProcessEventBus()
 
-    bundle = _FakeBundle(
+    bundle = _MockBundle(
         runtime=_R(),
-        config=_FakeConfig(),
+        config=_MockConfig(),
         session_id=session.session_id,
         thread_id=threads[0].thread_id,
-        agent_ref="kolsch/agents/fake",
+        agent_ref="kolsch/agents/mock",
         root=tmp_path,
-        model_label="fake/test",
+        model_label="mock/test",
         is_resume=False,
     )
     app = ChatApp(
@@ -188,13 +188,13 @@ def _mk_session_event(
         session_id=SessionId(f"ses_{uuid.uuid4()}"),
         type=event_type,
         data=dict(data or {}),
-        actor=Actor(kind="agent", id="ag_fake"),
+        actor=Actor(kind="agent", id="ag_mock"),
         created_at=datetime.now(UTC),
         trace_id=trace_id,
     )
 
 
-class _FakeExecutor:
+class _MockExecutor:
     """Fires RUN_STARTED → NODE_STARTED → sub-agent events → NODE_COMPLETED → RUN_COMPLETED."""
 
     def __init__(
@@ -267,8 +267,8 @@ class _FakeExecutor:
         return WorkflowRunStatus.SUCCEEDED
 
 
-def _install_fake(impl: WorkflowsImpl, tmp_path: Path) -> dict[str, _FakeExecutor]:
-    holder: dict[str, _FakeExecutor] = {}
+def _install_mock(impl: WorkflowsImpl, tmp_path: Path) -> dict[str, _MockExecutor]:
+    holder: dict[str, _MockExecutor] = {}
 
     def _factory(
         ref_in: str,
@@ -276,17 +276,17 @@ def _install_fake(impl: WorkflowsImpl, tmp_path: Path) -> dict[str, _FakeExecuto
         observer: Callable[[Any], None],
         cancel_token: Any,
         sub_agent_observer: Any = None,
-    ) -> tuple[_FakeExecutor, RunDirectory]:
+    ) -> tuple[_MockExecutor, RunDirectory]:
         _ = (ref_in, inputs)
         run_dir = RunDirectory(root=tmp_path / "runs" / f"wrk_{uuid.uuid4()}")
         run_dir.root.mkdir(parents=True, exist_ok=True)
-        fake = _FakeExecutor(
+        mock = _MockExecutor(
             observer=observer,
             sub_agent_observer=sub_agent_observer,
             cancel_token=cancel_token,
         )
-        holder["fake"] = fake
-        return fake, run_dir
+        holder["mock"] = mock
+        return mock, run_dir
 
     impl._executor_factory = _factory
     return holder
@@ -303,7 +303,7 @@ async def _drive_workflow(
     """
     workflows_impl = pilot.app._service_registry.workflows
     assert isinstance(workflows_impl, WorkflowsImpl)
-    _install_fake(workflows_impl, pilot.app.session.root)
+    _install_mock(workflows_impl, pilot.app.session.root)
 
     tool_task = asyncio.create_task(_invoke_tool_via_pilot(
         pilot,
@@ -365,7 +365,7 @@ async def test_collapse_hides_sub_agent_widgets_in_live_app(
 
         # bug-036d: parity with main-chat handlers — TOOL_CALLED
         # captures args only; a ToolCallBlock lands on TOOL_RESULT.
-        # The fake executor fires USER_MESSAGE + TOOL_CALLED +
+        # The mock executor fires USER_MESSAGE + TOOL_CALLED +
         # AGENT_MESSAGE (no TOOL_RESULT), so we expect UserChatbox
         # + AssistantProse only.
         for _ in range(200):

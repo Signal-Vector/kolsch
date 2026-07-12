@@ -1,6 +1,6 @@
 """Test 12 — streaming event delivery.
 
-Drives the observer's LLM streaming hook with a fake provider that
+Drives the observer's LLM streaming hook with a mock provider that
 yields two deltas, then asserts the emitted event log carries two
 ``MODEL_STREAMING_TOKEN`` events followed by a final
 ``MODEL_RESPONSE`` with the concatenated text.
@@ -17,8 +17,8 @@ from engine.observers import _ObservedLLMHandle
 from schemas.events import EventType
 
 
-class _FakeStreamingLLM:
-    """Fake LLM that emits two deltas then returns their concatenation."""
+class _MockStreamingLLM:
+    """Mock LLM that emits two deltas then returns their concatenation."""
 
     def __init__(self, deltas: list[str]) -> None:
         self._deltas = list(deltas)
@@ -37,7 +37,7 @@ class _FakeStreamingLLM:
         return LLMResponse(content="".join(self._deltas))
 
 
-class _FakeNonStreamingLLM:
+class _MockNonStreamingLLM:
     """Baseline: no `stream` method — observer stays on the non-streaming path."""
 
     async def __call__(self, request: LLMRequest) -> LLMResponse:
@@ -55,12 +55,12 @@ async def test_streaming_llm_emits_delta_events() -> None:
     handle = _ObservedLLMHandle(
         emit=_emit,
         agent_id="ag_test",
-        model_spec={"provider": "fake", "model": "test"},
+        model_spec={"provider": "mock", "model": "test"},
         config_event_id="ev_00000000-0000-0000-0000-000000000000",
-        llm=_FakeStreamingLLM(["Hello ", "there"]),
+        llm=_MockStreamingLLM(["Hello ", "there"]),
     )
     request = LLMRequest(
-        model="fake/test",
+        model="mock/test",
         messages=[Message(role="user", content="hi")],
         tools=[],
     )
@@ -95,12 +95,12 @@ async def test_non_streaming_llm_emits_zero_deltas() -> None:
     handle = _ObservedLLMHandle(
         emit=_emit,
         agent_id="ag_test",
-        model_spec={"provider": "fake", "model": "test"},
+        model_spec={"provider": "mock", "model": "test"},
         config_event_id="ev_00000000-0000-0000-0000-000000000000",
-        llm=_FakeNonStreamingLLM(),
+        llm=_MockNonStreamingLLM(),
     )
     request = LLMRequest(
-        model="fake/test",
+        model="mock/test",
         messages=[Message(role="user", content="hi")],
         tools=[],
     )

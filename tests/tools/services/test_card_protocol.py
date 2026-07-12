@@ -60,7 +60,7 @@ async def test_abstract_card_methods_raise_not_implemented() -> None:
     """Every default async method raises `NotImplementedError`.
 
     Concrete impls (spec-006) override each one; the ABC's job is to
-    fail loudly for incomplete impls / test fakes that forgot a
+    fail loudly for incomplete impls / test mocks that forgot a
     method.
     """
     stub = _CardStub()

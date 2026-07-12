@@ -43,7 +43,7 @@ class _SpyPrompts:
         return "y"
 
 
-class _FakeApp:
+class _MockApp:
     def __init__(self) -> None:
         self.cleared_calls = 0
 
@@ -60,7 +60,7 @@ class _FakeApp:
 async def test_inline_callback_forwards_metadata() -> None:
     """`__call__` builds `metadata={rule_id, action, target}` and passes it."""
     prompts = _SpyPrompts()
-    app = _FakeApp()
+    app = _MockApp()
     cb = InlineApprovalCallback(app, prompts)
 
     result = await cb(rule_id="rl_x", action="bash", target="ls -la")
@@ -83,7 +83,7 @@ async def test_inline_callback_forwards_metadata() -> None:
 async def test_callback_metadata_survives_null_rule_id() -> None:
     """`rule_id=None` still lands in metadata (as `None`); others populate."""
     prompts = _SpyPrompts()
-    app = _FakeApp()
+    app = _MockApp()
     cb = InlineApprovalCallback(app, prompts)
 
     await cb(rule_id=None, action="read_file", target="/etc/passwd")
@@ -101,7 +101,7 @@ async def test_callback_metadata_survives_null_target() -> None:
     """`target=None` still lands (as `None`) so the adapter's reader keeps
     its `isinstance(target, str)` narrowing intact."""
     prompts = _SpyPrompts()
-    app = _FakeApp()
+    app = _MockApp()
     cb = InlineApprovalCallback(app, prompts)
 
     await cb(rule_id="rl_x", action="net.request", target=None)

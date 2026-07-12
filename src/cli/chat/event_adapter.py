@@ -1610,7 +1610,7 @@ class EventAdapter:
                 parent_hint=parent_hint,
             )
         except TypeError:
-            # Back-compat with fake apps that don't accept the
+            # Back-compat with mock apps that don't accept the
             # spec-014 `parent_hint` kwarg (older test doubles from
             # spec-004). Fall back to the positional-only call so
             # existing tests keep passing.
@@ -1643,7 +1643,7 @@ class EventAdapter:
         # for the append; the app helper stays purely UI-mount
         # (Coordinator open Q resolution).
         #
-        # `mount_approval_block` returns `None` in some fake-app
+        # `mount_approval_block` returns `None` in some mock-app
         # fixtures (spec-014 doubles swallow the mount) — skip the
         # bridge in that case.
         if block is not None and hasattr(block, "resolved"):

@@ -37,7 +37,7 @@ class InfoBar(Horizontal):
 
     # NOTE: DEFAULT_CSS uses literal hex values (mirroring theme.tcss'
     # concrete palette) so the widget mounts standalone under
-    # `fake_app_factory`. When the real app loads theme.tcss the
+    # `mock_app_factory`. When the real app loads theme.tcss the
     # variables of the same names are declared there; the widget
     # itself is self-sufficient and testable in isolation.
     #

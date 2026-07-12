@@ -44,7 +44,7 @@ from workflows.events import WorkflowEventKind
 _WIRE = "kolsch.workflow.progress"
 
 
-class _FakeChatApp:
+class _MockChatApp:
     """Minimal `ChatApp`-shaped stub for the adapter constructor.
 
     Records mount calls so tests can assert transcript-root
@@ -82,7 +82,7 @@ class _FakeChatApp:
         self._last_assistant = text
 
 
-class _FakeEventData:
+class _MockEventData:
     """`kolsch.workflow.progress` envelope shape the renderer reads."""
 
     def __init__(self, kind: str, payload: dict[str, Any]) -> None:
@@ -157,12 +157,12 @@ def test_two_nodes_same_trace_distinct_invocation_register_separately() -> None:
     registration — `assert len(live_map) == 2` would have read
     `1`. The composite key makes both entries survive.
     """
-    app = _FakeChatApp()
+    app = _MockChatApp()
     adapter = EventAdapter(app)
     renderer = WorkflowRenderer()
     renderer.register_adapter(adapter)
 
-    renderer.apply_event(_FakeEventData(
+    renderer.apply_event(_MockEventData(
         _WIRE,
         _mk_node_started_payload(
             node_name="alpha",
@@ -170,7 +170,7 @@ def test_two_nodes_same_trace_distinct_invocation_register_separately() -> None:
             invocation_id="inv_A",
         ),
     ))
-    renderer.apply_event(_FakeEventData(
+    renderer.apply_event(_MockEventData(
         _WIRE,
         _mk_node_started_payload(
             node_name="beta",
@@ -194,12 +194,12 @@ def test_terminal_for_one_node_does_not_evict_sibling() -> None:
     completing node A evicted node B's registration too. With the
     composite key, only A's entry disappears.
     """
-    app = _FakeChatApp()
+    app = _MockChatApp()
     adapter = EventAdapter(app)
     renderer = WorkflowRenderer()
     renderer.register_adapter(adapter)
 
-    renderer.apply_event(_FakeEventData(
+    renderer.apply_event(_MockEventData(
         _WIRE,
         _mk_node_started_payload(
             node_name="alpha",
@@ -207,7 +207,7 @@ def test_terminal_for_one_node_does_not_evict_sibling() -> None:
             invocation_id="inv_A",
         ),
     ))
-    renderer.apply_event(_FakeEventData(
+    renderer.apply_event(_MockEventData(
         _WIRE,
         _mk_node_started_payload(
             node_name="beta",
@@ -215,7 +215,7 @@ def test_terminal_for_one_node_does_not_evict_sibling() -> None:
             invocation_id="inv_B",
         ),
     ))
-    renderer.apply_event(_FakeEventData(
+    renderer.apply_event(_MockEventData(
         _WIRE,
         _mk_node_completed_payload(
             node_name="alpha",
@@ -239,12 +239,12 @@ async def test_route_finds_correct_row_by_invocation_id() -> None:
     event and beta's row didn't — via `apply_sub_agent_event`'s
     turn counter on each row.
     """
-    app = _FakeChatApp()
+    app = _MockChatApp()
     adapter = EventAdapter(app)
     renderer = WorkflowRenderer()
     renderer.register_adapter(adapter)
 
-    renderer.apply_event(_FakeEventData(
+    renderer.apply_event(_MockEventData(
         _WIRE,
         _mk_node_started_payload(
             node_name="alpha",
@@ -252,7 +252,7 @@ async def test_route_finds_correct_row_by_invocation_id() -> None:
             invocation_id="inv_A",
         ),
     ))
-    renderer.apply_event(_FakeEventData(
+    renderer.apply_event(_MockEventData(
         _WIRE,
         _mk_node_started_payload(
             node_name="beta",
@@ -296,7 +296,7 @@ def test_missing_invocation_id_falls_back_and_logs(
     The register path should not crash — it falls back to the
     sentinel `""` key and logs at WARNING.
     """
-    app = _FakeChatApp()
+    app = _MockChatApp()
     adapter = EventAdapter(app)
     renderer = WorkflowRenderer()
     renderer.register_adapter(adapter)
@@ -305,7 +305,7 @@ def test_missing_invocation_id_falls_back_and_logs(
         logging.WARNING,
         logger="cli.chat.widgets.card_body.workflow",
     ):
-        renderer.apply_event(_FakeEventData(
+        renderer.apply_event(_MockEventData(
             _WIRE,
             _mk_node_started_payload(
                 node_name="alpha",

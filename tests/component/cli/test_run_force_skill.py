@@ -82,7 +82,7 @@ def _make_workspace(tmp_path: Path) -> Path:
                 "agent_id": "ag_rs",
                 "name": "rs",
                 "description": "run-skill demo",
-                "model": {"provider": "fake", "model": "fake-model"},
+                "model": {"provider": "mock", "model": "mock-model"},
                 "prompt": "hi",
                 "io": {"mode": "conversational"},
                 "subsystems": {

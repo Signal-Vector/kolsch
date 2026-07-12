@@ -104,7 +104,7 @@ class TestRunModuleNamespace:
     def test_cleanup_removes_only_prefixed_keys(self) -> None:
         ns = RunModuleNamespace(run_id="wrk_aaaaaaaa1111")
         other_ns = RunModuleNamespace(run_id="wrk_bbbbbbbb2222")
-        # Mint two fake "modules" under each prefix plus an
+        # Mint two mock "modules" under each prefix plus an
         # unrelated key that must survive.
         my_key = ns.wrap_module_name("mod_x")
         other_key = other_ns.wrap_module_name("mod_x")

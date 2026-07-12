@@ -45,7 +45,7 @@ async def store(tmp_path: Path) -> AsyncIterator[SessionStore]:
         await backend.close()
 
 
-class _FakeApp:
+class _MockApp:
     """Bare-minimum ChatApp stand-in for EventAdapter tests.
 
     `mount_approval_block` accepts the same kwargs the real ChatApp
@@ -124,7 +124,7 @@ async def test_run_chain_populated_and_formatted_for_nested_chain(
         b = _install_run(impl, ref="B.ref", parent_run_id=a)
         c = _install_run(impl, ref="C.ref", parent_run_id=b)
 
-        app = _FakeApp()
+        app = _MockApp()
         adapter = EventAdapter(app, workflows_impl=impl)  # type: ignore[arg-type]
 
         payload: dict[str, Any] = {
@@ -172,7 +172,7 @@ async def test_single_workflow_breadcrumb_no_arrow(
     try:
         top = _install_run(impl, ref="only.ref")
 
-        app = _FakeApp()
+        app = _MockApp()
         adapter = EventAdapter(app, workflows_impl=impl)  # type: ignore[arg-type]
 
         payload: dict[str, Any] = {
@@ -222,7 +222,7 @@ async def test_run_chain_helper_shape() -> None:
             b = _install_run(impl, ref="B.ref", parent_run_id=a)
 
             adapter = EventAdapter(
-                _FakeApp(),  # type: ignore[arg-type]
+                _MockApp(),  # type: ignore[arg-type]
                 workflows_impl=impl,
             )
             chain = adapter._build_run_chain(str(b), "leaf")

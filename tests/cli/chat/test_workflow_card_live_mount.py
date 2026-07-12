@@ -33,9 +33,9 @@ from cli.chat.widgets.card_body.workflow import WorkflowRenderer
 from cli.chat.widgets.card_widget import CardWidget
 from schemas.events import EventType
 from schemas.identifiers import AgentId, SessionId, ThreadId
-from tests.cli.chat.services.fakes import (
-    FakeExecutorSpec,
-    install_fake_executor_factory,
+from tests.cli.chat.services.mocks import (
+    MockExecutorSpec,
+    install_mock_executor_factory,
 )
 from tools.decorator import ToolContext, get_tool_definition
 from tools.discovery import discover_tools_in_file
@@ -72,12 +72,12 @@ def run_workflow_tool() -> Callable[..., Awaitable[Any]]:
 # lives here so this test doesn't cross-depend on the bundle
 # conftest (`tests/bundles/kolsch/tools/conftest.py`) fixture surface.
 # The bug-020 conftest already injects a real `InProcessEventBus` on
-# the fake runtime so the live bus-subscription path fires; we
+# the mock runtime so the live bus-subscription path fires; we
 # recreate that here.
 # ---------------------------------------------------------------------------
 
 
-class _FakeAuthz:
+class _MockAuthz:
     def register_prompt_callback(
         self, callback: Any, *, on_rule_added: Any = None,
     ) -> None:
@@ -88,20 +88,20 @@ class _FakeAuthz:
         return None
 
 
-class _FakeEngine:
+class _MockEngine:
     async def execute_stream(self, config: Any, ctx: Any) -> Any:
         _ = config, ctx
         if False:  # pragma: no cover
             yield
 
 
-class _FakeConfig:
+class _MockConfig:
     name = "TestAgent"
-    agent_id = "ag_fake"
+    agent_id = "ag_mock"
     model = None
 
 
-class _FakeBundle:
+class _MockBundle:
     def __init__(
         self,
         *,
@@ -135,25 +135,25 @@ async def chat_app(tmp_path: Path) -> Any:
     backend = SqliteBackend(platform_dir / "entities.db")
     await backend.initialize()
     store = SessionStore(root=tmp_path, backend=backend)
-    session = await store.create_session("ag_fake", name="c")
+    session = await store.create_session("ag_mock", name="c")
     threads = await store.list_threads(session.session_id)
 
     class _R:
         def __init__(self) -> None:
             self.store = store
-            self.authz = _FakeAuthz()
-            self.engine = _FakeEngine()
+            self.authz = _MockAuthz()
+            self.engine = _MockEngine()
             self.root = tmp_path
             self.bus = InProcessEventBus()
 
-    bundle = _FakeBundle(
+    bundle = _MockBundle(
         runtime=_R(),
-        config=_FakeConfig(),
+        config=_MockConfig(),
         session_id=session.session_id,
         thread_id=threads[0].thread_id,
-        agent_ref="kolsch/agents/fake",
+        agent_ref="kolsch/agents/mock",
         root=tmp_path,
-        model_label="fake/test",
+        model_label="mock/test",
         is_resume=False,
     )
     app = ChatApp(
@@ -222,13 +222,13 @@ async def test_workflow_card_mounts_live_without_manual_drain(
     async with chat_app.run_test() as pilot:
         await pilot.pause()
 
-        # Install a scripted fake so `_run_one_workflow` completes.
+        # Install a scripted mock so `_run_one_workflow` completes.
         workflows_impl = pilot.app._service_registry.workflows
         assert isinstance(workflows_impl, WorkflowsImpl)
-        install_fake_executor_factory(
+        install_mock_executor_factory(
             workflows_impl,
             {
-                "kolsch/workflows/live": FakeExecutorSpec(
+                "kolsch/workflows/live": MockExecutorSpec(
                     events=_mk_events_with_node(),
                     per_event_delay=0.05,
                 ),
@@ -268,7 +268,7 @@ async def test_workflow_card_mounts_live_without_manual_drain(
         # AC #11.2: the widget's body renderer is a `WorkflowRenderer`.
         assert isinstance(widget._body, WorkflowRenderer)
 
-        # AC #11.3: after the fake fires `RUN_STARTED` + `NODE_STARTED`,
+        # AC #11.3: after the mock fires `RUN_STARTED` + `NODE_STARTED`,
         # the renderer has at least one node row.
         for _ in range(40):
             await pilot.pause()

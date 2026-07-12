@@ -54,7 +54,7 @@ class NodeContext:
     **Spoof-resistance.** `bundle` is set by the engine from the
     catalog-resolved invocation file's bundle, NOT from
     `inspect`-ing the calling `@node`'s `__module__`. Re-exporting a
-    node from another bundle cannot fake its bundle of origin — the
+    node from another bundle cannot mock its bundle of origin — the
     engine tracks the resolution path that led to this invocation,
     and the wire prefix follows the catalog.
     """

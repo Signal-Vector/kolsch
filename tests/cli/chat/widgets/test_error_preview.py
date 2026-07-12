@@ -15,9 +15,9 @@ from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 
 
 @pytest.mark.asyncio
-async def test_long_error_message_truncated_in_title(fake_app_factory) -> None:
+async def test_long_error_message_truncated_in_title(mock_app_factory) -> None:
     row = WorkflowNodeRow(node_name="n")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         long_msg = "E" * 200
@@ -36,9 +36,9 @@ async def test_long_error_message_truncated_in_title(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_short_error_message_untruncated(fake_app_factory) -> None:
+async def test_short_error_message_untruncated(mock_app_factory) -> None:
     row = WorkflowNodeRow(node_name="n")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         short_msg = "boom: filesystem read denied"  # 28 chars

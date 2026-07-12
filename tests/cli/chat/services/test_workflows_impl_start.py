@@ -4,7 +4,7 @@ Three passes:
 
 1. Two `start()` calls in rapid succession return distinct
    `WorkflowRunId`s immediately (non-blocking).
-2. Fake executor for run A takes ~500ms; run B's phase stays
+2. Mock executor for run A takes ~500ms; run B's phase stays
    `"queued"` until A completes; then B transitions to `"running"`.
 3. Registry has both records at appropriate phases through the run.
 """
@@ -19,9 +19,9 @@ import pytest
 
 from cli.chat.services.workflows_impl import WorkflowsImpl
 from store import SessionStore, SqliteBackend
-from tests.cli.chat.services.fakes import (
-    FakeExecutorSpec,
-    install_fake_executor_factory,
+from tests.cli.chat.services.mocks import (
+    MockExecutorSpec,
+    install_mock_executor_factory,
 )
 from workflows.events import (
     WorkflowRunCompletedEvent,
@@ -80,13 +80,13 @@ async def test_two_starts_return_distinct_ids_immediately(
     impl = await _mk_impl(tmp_path, store)
     try:
         events, _ = _mk_events_for(f"wrk_{'0' * 8}-0000-4000-8000-{'0' * 12}")
-        install_fake_executor_factory(
+        install_mock_executor_factory(
             impl,
             {
-                "kolsch/workflows/a": FakeExecutorSpec(
+                "kolsch/workflows/a": MockExecutorSpec(
                     events=events, per_event_delay=0.1,
                 ),
-                "kolsch/workflows/b": FakeExecutorSpec(events=events),
+                "kolsch/workflows/b": MockExecutorSpec(events=events),
             },
             runs_root=tmp_path / "runs",
         )
@@ -105,13 +105,13 @@ async def test_second_run_stays_queued_until_first_completes(
     impl = await _mk_impl(tmp_path, store)
     try:
         events, _ = _mk_events_for(f"wrk_{'0' * 8}-0000-4000-8000-{'0' * 12}")
-        install_fake_executor_factory(
+        install_mock_executor_factory(
             impl,
             {
-                "kolsch/workflows/a": FakeExecutorSpec(
+                "kolsch/workflows/a": MockExecutorSpec(
                     events=events, per_event_delay=0.25,  # ~0.5s total
                 ),
-                "kolsch/workflows/b": FakeExecutorSpec(events=events),
+                "kolsch/workflows/b": MockExecutorSpec(events=events),
             },
             runs_root=tmp_path / "runs",
         )
@@ -145,13 +145,13 @@ async def test_registry_carries_both_records_during_run(
     impl = await _mk_impl(tmp_path, store)
     try:
         events, _ = _mk_events_for(f"wrk_{'0' * 8}-0000-4000-8000-{'0' * 12}")
-        install_fake_executor_factory(
+        install_mock_executor_factory(
             impl,
             {
-                "kolsch/workflows/a": FakeExecutorSpec(
+                "kolsch/workflows/a": MockExecutorSpec(
                     events=events, per_event_delay=0.20,
                 ),
-                "kolsch/workflows/b": FakeExecutorSpec(events=events),
+                "kolsch/workflows/b": MockExecutorSpec(events=events),
             },
             runs_root=tmp_path / "runs",
         )

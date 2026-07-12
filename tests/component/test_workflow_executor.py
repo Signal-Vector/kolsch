@@ -1,6 +1,6 @@
 """Phase 3.1 Step 1 — IterativeExecutor skeleton tests.
 
-Covers ACs 1.1-1.8 via fake runners injected through a per-test
+Covers ACs 1.1-1.8 via mock runners injected through a per-test
 :class:`RunnerRegistry`:
 
 - 1.1 — executor consumes the typed :class:`Workflow` directly.
@@ -37,7 +37,7 @@ from workflows.parser import Workflow
 from workflows.run_store import WorkflowRunStore
 
 # ---------------------------------------------------------------------------
-# Fake runners + helpers
+# Mock runners + helpers
 # ---------------------------------------------------------------------------
 
 

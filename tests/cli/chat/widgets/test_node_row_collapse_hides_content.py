@@ -23,12 +23,12 @@ _AppFactory = Callable[[Widget], App[None]]
 
 
 @pytest.fixture
-def fake_app_factory() -> _AppFactory:
+def mock_app_factory() -> _AppFactory:
     def factory(child: Widget) -> App[None]:
-        class _FakeApp(App[None]):
+        class _MockApp(App[None]):
             def compose(self):
                 yield child
-        return _FakeApp()
+        return _MockApp()
     return factory
 
 
@@ -39,11 +39,11 @@ def _contents_of(row: WorkflowNodeRow) -> Collapsible.Contents:
 
 @pytest.mark.asyncio
 async def test_set_output_mounts_inside_contents(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """``set_output`` mounts inside the Contents slot."""
     row = WorkflowNodeRow(node_name="n")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -57,12 +57,12 @@ async def test_set_output_mounts_inside_contents(
 
 @pytest.mark.asyncio
 async def test_assistant_message_mounts_inside_contents(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """bug-036d sink — ``mount_assistant_message`` lands inside Contents."""
     row = WorkflowNodeRow(node_name="n")
     row.collapsed = False
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -76,12 +76,12 @@ async def test_assistant_message_mounts_inside_contents(
 
 @pytest.mark.asyncio
 async def test_tool_call_mounts_inside_contents(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """bug-036d sink — ``mount_tool_call`` lands inside Contents."""
     row = WorkflowNodeRow(node_name="n")
     row.collapsed = False
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -99,12 +99,12 @@ async def test_tool_call_mounts_inside_contents(
 
 @pytest.mark.asyncio
 async def test_collapse_hides_body_via_css_class(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """Collapsing the row applies the ``.-collapsed`` class."""
     row = WorkflowNodeRow(node_name="n")
     row.collapsed = False
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 

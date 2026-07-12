@@ -174,7 +174,7 @@ async def harness(
         run_store=run_store,
         # NB: executor_factory=None so `_default_executor_factory`
         # (the production path) is the code path under test. Removing
-        # this argument or passing a fake would defeat the whole
+        # this argument or passing a mock would defeat the whole
         # point of this regression.
     )
     try:

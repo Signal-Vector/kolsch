@@ -24,7 +24,7 @@ from schemas.events import EventType
 from schemas.identifiers import EventId
 
 
-class _FakeAuthz:
+class _MockAuthz:
     def register_prompt_callback(
         self, callback: Any, *, on_rule_added: Any = None,
     ) -> None:  # noqa: ARG002
@@ -34,7 +34,7 @@ class _FakeAuthz:
         return None
 
 
-class _FakeEngine:
+class _MockEngine:
     async def execute_stream(self, config: Any, ctx: Any):  # noqa: ARG002
         if False:
             yield  # pragma: no cover
@@ -42,14 +42,14 @@ class _FakeEngine:
 
 
 @dataclass
-class _FakeConfig:
+class _MockConfig:
     name: str = "TestAgent"
-    agent_id: str = "ag_fake"
+    agent_id: str = "ag_mock"
     model: Any = None
 
 
 @dataclass
-class _FakeBundle:
+class _MockBundle:
     runtime: Any
     config: Any
     session_id: Any
@@ -69,26 +69,26 @@ async def _bootstrap_app(tmp_path: Path) -> tuple[ChatApp, InProcessEventBus, An
     backend = SqliteBackend(platform_dir / "entities.db")
     await backend.initialize()
     store = SessionStore(root=tmp_path, backend=backend)
-    session = await store.create_session("ag_fake", name="c")
+    session = await store.create_session("ag_mock", name="c")
     threads = await store.list_threads(session.session_id)
     bus = InProcessEventBus()
 
     class _R:
         def __init__(self) -> None:
             self.store = store
-            self.authz = _FakeAuthz()
-            self.engine = _FakeEngine()
+            self.authz = _MockAuthz()
+            self.engine = _MockEngine()
             self.root = tmp_path
             self.bus = bus
 
-    bundle = _FakeBundle(
+    bundle = _MockBundle(
         runtime=_R(),
-        config=_FakeConfig(),
+        config=_MockConfig(),
         session_id=session.session_id,
         thread_id=threads[0].thread_id,
-        agent_ref="kolsch/agents/fake",
+        agent_ref="kolsch/agents/mock",
         root=tmp_path,
-        model_label="fake/test",
+        model_label="mock/test",
         is_resume=False,
     )
     app = ChatApp(

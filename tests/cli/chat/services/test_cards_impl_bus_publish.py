@@ -20,7 +20,7 @@ from schemas.events import EventType
 from schemas.identifiers import SessionId, ThreadId
 
 
-class _FakeBus:
+class _MockBus:
     """Records `publish` calls; optional `raise_on_publish` for AC #3."""
 
     def __init__(self, *, raise_on_publish: bool = False) -> None:
@@ -46,7 +46,7 @@ async def _boot_impl(
     backend = SqliteBackend(tmp_path / ".platform" / "entities.db")
     await backend.initialize()
     store = SessionStore(root=tmp_path, backend=backend)
-    session = await store.create_session("ag_fake", name="c")
+    session = await store.create_session("ag_mock", name="c")
     threads = await store.list_threads(session.session_id)
 
     impl = CardsImpl(
@@ -61,7 +61,7 @@ async def _boot_impl(
 @pytest.mark.asyncio
 async def test_publish_to_bus_publishes_ui_event(tmp_path: Path) -> None:
     """`CardsImpl.open` triggers a bus publish for the `WIRE_CARD_OPENED` event."""
-    bus = _FakeBus()
+    bus = _MockBus()
     impl, _, _ = await _boot_impl(tmp_path, bus=bus)
     try:
         card = await impl.open(title="test", kind="markdown")
@@ -88,7 +88,7 @@ def test_topic_constant_matches_subscribe_topic() -> None:
 @pytest.mark.asyncio
 async def test_publish_survives_bus_backpressure(tmp_path: Path) -> None:
     """A raising bus does not kill the drain worker or the impl (best-effort)."""
-    bus = _FakeBus(raise_on_publish=True)
+    bus = _MockBus(raise_on_publish=True)
     impl, _, _ = await _boot_impl(tmp_path, bus=bus)
     try:
         # `open` -> drain worker -> `_publish_to_bus` -> bus raises.
@@ -114,7 +114,7 @@ async def test_publish_absent_bus_is_silent_noop(tmp_path: Path) -> None:
     try:
         await impl.open(title="x", kind="markdown")
         # Drain runs but publish is a no-op — no assertions to make
-        # about a fake bus, but confirming the impl doesn't blow up
+        # about a mock bus, but confirming the impl doesn't blow up
         # on the drain loop.
         for _ in range(5):
             await asyncio.sleep(0)

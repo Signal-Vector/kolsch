@@ -60,7 +60,7 @@ def _write_bundle(
                         "agent_id": f"ag_{name}",
                         "name": name,
                         "description": "x",
-                        "model": {"provider": "fake", "model": "fake"},
+                        "model": {"provider": "mock", "model": "mock"},
                         "prompt": "x",
                         "io": {"mode": "conversational"},
                     }

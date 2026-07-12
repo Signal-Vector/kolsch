@@ -4,7 +4,7 @@ The reviewer FAIL on Step 3 noted that the manual e2e scenarios couldn't
 be captured by the agent harness (real LLM + interactive keystrokes
 required). These tests narrow that gap: they drive the FULL engine →
 framework → tool subsystem → authz provider → modal path against a
-scripted FakeLLM, so the JSONL evidence is real engine output. The
+scripted MockLLM, so the JSONL evidence is real engine output. The
 property the reviewer cares about — "no model.request follows the
 tool.failed deny event" — is an engine-level property that holds
 regardless of which LLM produced the tool_call. Real-LLM verification
@@ -36,8 +36,8 @@ from engine import CancelToken, ExecutionContext, LLMRequest, LLMResponse
 from platform_runtime import bootstrap_runtime
 from providers import Rule, RuleBasedAuthorizationProvider
 from schemas import Event, EventType
-from tests.fixtures.fake_llm import (
-    FakeLLM,
+from tests.fixtures.mock_llm import (
+    MockLLM,
     TextResponse,
     ToolCallResponse,
 )
@@ -133,10 +133,10 @@ def scenario_2_workspace(tmp_path_factory: pytest.TempPathFactory) -> Path:
 # ---------------------------------------------------------------------------
 
 
-def _make_fake_llm_callable(
-    fake: FakeLLM,
+def _make_mock_llm_callable(
+    mock: MockLLM,
 ) -> Callable[[LLMRequest], Awaitable[LLMResponse]]:
-    """Adapt ``FakeLLM`` to the engine's ``llm=`` callable shape.
+    """Adapt ``MockLLM`` to the engine's ``llm=`` callable shape.
 
     Same shape as ``tests/integration/test_tool_wiring.py``; copied
     here rather than imported because that file lives under
@@ -154,7 +154,7 @@ def _make_fake_llm_callable(
                 "",
             ),
         }
-        response = await fake.agenerate(context)
+        response = await mock.agenerate(context)
         if isinstance(response, TextResponse):
             return LLMResponse(content=response.text)
         if isinstance(response, ToolCallResponse):
@@ -168,7 +168,7 @@ def _make_fake_llm_callable(
                     },
                 ],
             )
-        msg = f"unexpected FakeLLM response shape: {response!r}"
+        msg = f"unexpected MockLLM response shape: {response!r}"
         raise RuntimeError(msg)
 
     return _llm
@@ -261,7 +261,7 @@ async def test_scenario_1_deny_once_stops_exchange_end_to_end(
     """Scenario 1 from Step 3 manual checklist, automated.
 
     Drives the FULL engine path:
-      FakeLLM → framework → ToolsSubsystem.invoke_tool →
+      MockLLM → framework → ToolsSubsystem.invoke_tool →
       RuleBasedAuthorizationProvider.allow → ApprovalModal (scripted
       ``[n]``) → DENY + cancel flip → next iteration poll observes
       cancellation → engine raises ExchangeCancelled → emits
@@ -279,7 +279,7 @@ async def test_scenario_1_deny_once_stops_exchange_end_to_end(
 
     # The workspace's default platform.yaml has `tool.bash: prompt`,
     # so the bash call below routes through the modal.
-    fake = FakeLLM(
+    mock = MockLLM(
         script=[
             ToolCallResponse(
                 tool="bash",
@@ -288,14 +288,14 @@ async def test_scenario_1_deny_once_stops_exchange_end_to_end(
             ),
             # If the loop INCORRECTLY continued after the deny, this
             # would be the next response. Post-fix, the cancellation
-            # raises before this is reached. The FakeLLMScriptExhausted
+            # raises before this is reached. The MockLLMScriptExhausted
             # error is fine; we'd catch it in the engine but we never
             # get there.
             TextResponse(text="I'll try something else."),
         ],
     )
 
-    runtime = await bootstrap_runtime(root=root, llm=_make_fake_llm_callable(fake))
+    runtime = await bootstrap_runtime(root=root, llm=_make_mock_llm_callable(mock))
     config = await runtime.build_resolved_config("kolsch/agents/helper")
 
     # Wire the modal with a scripted [n] AND a per-session state
@@ -406,7 +406,7 @@ async def test_scenario_2_deny_always_persists_rule_and_restart_auto_denies(
 
     # ===== Phase A: [d] + accept pattern → rule persists ===================
 
-    fake_a = FakeLLM(
+    mock_a = MockLLM(
         script=[
             ToolCallResponse(
                 tool="bash",
@@ -418,7 +418,7 @@ async def test_scenario_2_deny_always_persists_rule_and_restart_auto_denies(
     )
     runtime_a = await bootstrap_runtime(
         root=root,
-        llm=_make_fake_llm_callable(fake_a),
+        llm=_make_mock_llm_callable(mock_a),
     )
     config_a = await runtime_a.build_resolved_config("kolsch/agents/helper")
 
@@ -498,7 +498,7 @@ async def test_scenario_2_deny_always_persists_rule_and_restart_auto_denies(
 
     # ===== Phase B: restart against same workspace → auto-deny =============
 
-    fake_b = FakeLLM(
+    mock_b = MockLLM(
         script=[
             ToolCallResponse(
                 tool="bash",
@@ -510,7 +510,7 @@ async def test_scenario_2_deny_always_persists_rule_and_restart_auto_denies(
     )
     runtime_b = await bootstrap_runtime(
         root=root,
-        llm=_make_fake_llm_callable(fake_b),
+        llm=_make_mock_llm_callable(mock_b),
     )
     config_b = await runtime_b.build_resolved_config("kolsch/agents/helper")
 
@@ -575,7 +575,7 @@ async def test_scenario_2_deny_always_persists_rule_and_restart_auto_denies(
     # short-circuit fires" (which it does: no modal); the
     # "exchange stops" part is the framework's own loop ending
     # when the LLM runs out of tool calls to make.
-    # NOTE: depending on FakeLLM script length, post-failure
+    # NOTE: depending on MockLLM script length, post-failure
     # model.requests may or may not appear — we don't assert on
     # this; we assert the modal short-circuit instead.
     _ = requests_after_b  # documented as not asserted; see note above
@@ -628,7 +628,7 @@ async def test_scenario_3_esc_during_streaming_cancels_at_cycle_boundary(
             break
     yaml_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
-    fake = FakeLLM(
+    mock = MockLLM(
         script=[
             ToolCallResponse(
                 tool="bash",
@@ -654,7 +654,7 @@ async def test_scenario_3_esc_during_streaming_cancels_at_cycle_boundary(
     # we flip the cancel BEFORE the framework's next iteration
     # poll runs. This simulates the Esc-mid-streaming user action
     # at exactly the same boundary the watcher would hit.
-    base_llm = _make_fake_llm_callable(fake)
+    base_llm = _make_mock_llm_callable(mock)
     call_count = {"n": 0}
 
     async def _cancelling_llm(request: LLMRequest) -> LLMResponse:
@@ -753,7 +753,7 @@ async def test_scenario_4_ctrl_c_still_cancels_and_stamps_reason(
             break
     yaml_path.write_text(yaml.safe_dump(payload, sort_keys=False), encoding="utf-8")
 
-    fake = FakeLLM(
+    mock = MockLLM(
         script=[
             ToolCallResponse(
                 tool="bash",
@@ -776,7 +776,7 @@ async def test_scenario_4_ctrl_c_still_cancels_and_stamps_reason(
     # AFTER the first model.response + tool.result lands. We mirror
     # that timing by flipping cancel after the first LLM call AND
     # explicitly stamping the reason the way the Ctrl-C branch does.
-    base_llm = _make_fake_llm_callable(fake)
+    base_llm = _make_mock_llm_callable(mock)
     n_calls = {"n": 0}
 
     async def _ctrl_c_simulator(request: LLMRequest) -> LLMResponse:

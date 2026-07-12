@@ -178,7 +178,7 @@ chain ← agent` (wholesale-per-field override; see Schemas
   kolsch` works with nothing else installed or running.
 - **The default install requires no LLM provider** *(Phase 1.2,
   UX-R4)* — `kolsch setup` creates a workspace and ships a `provider:
-  fake` starter agent so the first run works without credentials.
+  mock` starter agent so the first run works without credentials.
   Real-LLM execution needs `kolsch connect <provider>` (either inside
   `setup` or any time after).
 - **Storage matures with scale** (three tiers): Tier 1 (default) SQLite +

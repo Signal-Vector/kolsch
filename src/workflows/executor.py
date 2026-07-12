@@ -269,7 +269,7 @@ class IterativeExecutor:
     same event-emission seam.
 
     The constructor takes the registry explicitly so tests can inject
-    fake runners without monkey-patching a module-level default.
+    mock runners without monkey-patching a module-level default.
     """
 
     def __init__(

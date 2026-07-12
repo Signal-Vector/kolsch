@@ -32,7 +32,7 @@ class _StubWorkflowsImpl:
 
     def __init__(self) -> None:
         self.cancel_calls: list[tuple[Any, bool]] = []
-        # Fake cascade tree: run_id plus 2 descendants.
+        # Mock cascade tree: run_id plus 2 descendants.
         self._tree_size = 3
 
     def _collect_cancel_tree(self, run_id: Any) -> list[Any]:

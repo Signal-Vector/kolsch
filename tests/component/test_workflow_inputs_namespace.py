@@ -185,12 +185,12 @@ class TestBashCommandReadsOverlay:
     ) -> None:
         """A bash node's ``command:`` referencing ``{{ inputs.greeting }}``
         and ``{{ inputs.source }}`` sees the merged scope: workflow-level
-        ``greeting`` overlay'd by edge-bound ``source``. The fake
+        ``greeting`` overlay'd by edge-bound ``source``. The mock
         bash runner records the rendered command — proves the bash
         runtime's Jinja scope includes both keys (Phase 3.3 AC 0.4)."""
         captured_commands: list[str] = []
 
-        class FakeBashRunner:
+        class MockBashRunner:
             async def run(
                 self,
                 *,
@@ -243,7 +243,7 @@ class TestBashCommandReadsOverlay:
         )
         registry = RunnerRegistry()
         registry.register("kolsch/nodes/noop", CapturingRunner({}))
-        registry.register("kolsch/nodes/bash", FakeBashRunner())
+        registry.register("kolsch/nodes/bash", MockBashRunner())
         ex, _, _ = _make_executor(
             tmp_path,
             workflow=wf,
@@ -265,7 +265,7 @@ class TestBashCommandReadsOverlay:
         input shadows it (AC 0.4 — edge wins on conflict)."""
         captured_commands: list[str] = []
 
-        class FakeBashRunner:
+        class MockBashRunner:
             async def run(
                 self,
                 *,
@@ -313,7 +313,7 @@ class TestBashCommandReadsOverlay:
         )
         registry = RunnerRegistry()
         registry.register("kolsch/nodes/noop", CapturingRunner({}))
-        registry.register("kolsch/nodes/bash", FakeBashRunner())
+        registry.register("kolsch/nodes/bash", MockBashRunner())
         ex, _, _ = _make_executor(
             tmp_path,
             workflow=wf,
@@ -331,7 +331,7 @@ class TestBashCommandReadsOverlay:
         workflow-level inputs alone (AC 0.7 backward compat)."""
         captured_commands: list[str] = []
 
-        class FakeBashRunner:
+        class MockBashRunner:
             async def run(
                 self,
                 *,
@@ -368,7 +368,7 @@ class TestBashCommandReadsOverlay:
             }
         )
         registry = RunnerRegistry()
-        registry.register("kolsch/nodes/bash", FakeBashRunner())
+        registry.register("kolsch/nodes/bash", MockBashRunner())
         ex, _, _ = _make_executor(
             tmp_path,
             workflow=wf,

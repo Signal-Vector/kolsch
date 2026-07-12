@@ -33,7 +33,7 @@ from schemas.wire_kinds import WIRE_PROMPT_ANSWERED, WIRE_PROMPT_REQUESTED
 from store import SessionStore, SqliteBackend
 
 
-class _FakeBlock:
+class _MockBlock:
     """Minimal `ApprovalBlock` stand-in that resolves on command."""
 
     def __init__(self) -> None:
@@ -58,10 +58,10 @@ class _FakeBlock:
         return self._result
 
 
-class _FakeApp:
-    """Records mount calls; returns a `_FakeBlock` the test drives."""
+class _MockApp:
+    """Records mount calls; returns a `_MockBlock` the test drives."""
 
-    def __init__(self, *, block: _FakeBlock | None) -> None:
+    def __init__(self, *, block: _MockBlock | None) -> None:
         self._block = block
         self.mount_calls: list[tuple[Any, Any, Any]] = []
 
@@ -157,8 +157,8 @@ async def test_bridge_task_appends_answered_after_widget_resolves(
     """Widget → `resolved()` → adapter appends `WIRE_PROMPT_ANSWERED`."""
     session = await store.create_session("ag_test", name="bridge_ok")
     thread_id = (await store.list_threads(session.session_id))[0].thread_id
-    block = _FakeBlock()
-    app = _FakeApp(block=block)
+    block = _MockBlock()
+    app = _MockApp(block=block)
     adapter = EventAdapter(
         app,
         session_store=store,
@@ -173,7 +173,7 @@ async def test_bridge_task_appends_answered_after_widget_resolves(
         prompt_id=prompt_id,
     )
     # Dispatch the request; the adapter mounts the block and spawns
-    # the bridge task. `mount_approval_block` returns the fake block.
+    # the bridge task. `mount_approval_block` returns the mock block.
     await adapter.handle(request)
     assert len(app.mount_calls) == 1
 
@@ -194,8 +194,8 @@ async def test_bridge_task_maps_deny_effect_to_n(
     """Widget `DENY` → adapter appends `response="n"`."""
     session = await store.create_session("ag_test", name="bridge_deny")
     thread_id = (await store.list_threads(session.session_id))[0].thread_id
-    block = _FakeBlock()
-    app = _FakeApp(block=block)
+    block = _MockBlock()
+    app = _MockApp(block=block)
     adapter = EventAdapter(
         app,
         session_store=store,
@@ -227,8 +227,8 @@ async def test_bridge_task_survives_widget_cancellation(
     """`resolved()` raising `CancelledError` does not propagate; no append."""
     session = await store.create_session("ag_test", name="bridge_cancel")
     thread_id = (await store.list_threads(session.session_id))[0].thread_id
-    block = _FakeBlock()
-    app = _FakeApp(block=block)
+    block = _MockBlock()
+    app = _MockApp(block=block)
     adapter = EventAdapter(
         app,
         session_store=store,
@@ -266,8 +266,8 @@ async def test_bridge_task_no_double_emit_on_duplicate_dispatch(
     lands."""
     session = await store.create_session("ag_test", name="bridge_dedup")
     thread_id = (await store.list_threads(session.session_id))[0].thread_id
-    block = _FakeBlock()
-    app = _FakeApp(block=block)
+    block = _MockBlock()
+    app = _MockApp(block=block)
     adapter = EventAdapter(
         app,
         session_store=store,
@@ -307,10 +307,10 @@ async def test_bridge_task_no_double_emit_on_duplicate_dispatch(
 async def test_bridge_skipped_when_mount_returns_none(
     store: SessionStore,
 ) -> None:
-    """`mount_approval_block` returning `None` (fake apps) → bridge skipped."""
+    """`mount_approval_block` returning `None` (mock apps) → bridge skipped."""
     session = await store.create_session("ag_test", name="bridge_none")
     thread_id = (await store.list_threads(session.session_id))[0].thread_id
-    app = _FakeApp(block=None)
+    app = _MockApp(block=None)
     adapter = EventAdapter(
         app,
         session_store=store,

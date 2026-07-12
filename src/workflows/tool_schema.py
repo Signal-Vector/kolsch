@@ -309,7 +309,7 @@ def build_virtual_tool_definitions(
       derive typed fields.
 
     Impls without EITHER seam short-circuit to an empty list (headless
-    fixtures, minimal fakes, pre-bug-027 test doubles) — the caller
+    fixtures, minimal mocks, pre-bug-027 test doubles) — the caller
     (``ToolsSubsystem.register_for_agent``) treats an empty return as
     "no virtuals to register, just the generic ``run_workflow``."
 
@@ -544,7 +544,7 @@ def _make_virtual_invoker(
         }
 
         # bug-031: long-poll until terminal or timeout. Duck-typed on
-        # ``status`` so test fakes without the method fall back to a
+        # ``status`` so test mocks without the method fall back to a
         # ``phase="running"`` return (matches the generic tool's
         # fallback semantics).
         status_probe = getattr(services.workflows, "status", None)

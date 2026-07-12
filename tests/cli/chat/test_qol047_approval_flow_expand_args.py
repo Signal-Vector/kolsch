@@ -34,7 +34,7 @@ def _rendered_row_text(row: ApprovalArgsRow) -> str:
 
 @pytest.mark.asyncio
 async def test_approval_flow_expand_args_visible_before_choice(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """Full flow: mount long target → chevron → Tab → visible → ``y`` → ALLOW."""
     long_target = (
@@ -46,7 +46,7 @@ async def test_approval_flow_expand_args_visible_before_choice(
         action="kolsch/tools/bash",
         target=long_target,
     )
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test(size=(70, 24)) as pilot:
         # (1) The args row detects overflow at first mount → shows ``▸``.
         await pilot.pause()
@@ -78,7 +78,7 @@ async def test_approval_flow_expand_args_visible_before_choice(
 
 @pytest.mark.asyncio
 async def test_approval_flow_tab_noop_when_target_short(
-    fake_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App],
 ) -> None:
     """A short target: pressing Tab does not change the row's rendering.
 
@@ -90,7 +90,7 @@ async def test_approval_flow_tab_noop_when_target_short(
         action="kolsch/tools/bash",
         target="ls -la",
     )
-    app = fake_app_factory(block)
+    app = mock_app_factory(block)
     async with app.run_test(size=(120, 24)) as pilot:
         await pilot.pause()
         row = block.query_one(ApprovalArgsRow)

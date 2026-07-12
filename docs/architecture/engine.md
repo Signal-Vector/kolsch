@@ -6,7 +6,7 @@ that follows it — model calls, tool calls, retries — through to the
 agent's final reply.
 
 The Agent Engine doesn't talk to the model directly. It drives a framework
-adapter (CrewAI in production, a fake one for tests) that knows how to
+adapter (CrewAI in production, a mock one for tests) that knows how to
 hold an agent loop and a tool-use protocol. The framework calls the
 LLM. The LLM replies with text or with a tool-use request. When it's
 a tool-use request, the framework hands it back to the Agent Engine; the
@@ -90,7 +90,7 @@ and formats tool-use requests. That's an implementation choice
 scoped behind the `Framework` protocol — a future adapter (the
 OpenAI Assistants API, a hand-rolled loop, another agent framework)
 means writing a new `Framework` implementation, not changing the
-Engine. A fake framework drives tests without burning tokens.
+Engine. A mock framework drives tests without burning tokens.
 
 **The LLM client is per-exchange.** The Agent Engine doesn't hold an LLM
 client across exchanges. Each call resolves the model spec, calls

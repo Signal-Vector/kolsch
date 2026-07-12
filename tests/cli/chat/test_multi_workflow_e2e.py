@@ -31,7 +31,7 @@ _NOW = datetime.now(tz=UTC)
 
 
 @dataclass
-class _FakeCard:
+class _MockCard:
     id: CardId
     is_closed: bool = False
 
@@ -47,7 +47,7 @@ def _mk_record(
     *,
     suffix: str,
     phase: str,
-    card: _FakeCard | None,
+    card: _MockCard | None,
     ref: str = "test/ref",
     started_offset: int = 0,
     completed: int = 0,
@@ -80,7 +80,7 @@ async def test_start_three_workflows_shows_compact_strip() -> None:
         status_bar = app.query_one("#status-bar", StatusBar)
 
         cards = [
-            _FakeCard(id=CardId(f"crd_00000000-0000-0000-0000-00000000000{i}"))
+            _MockCard(id=CardId(f"crd_00000000-0000-0000-0000-00000000000{i}"))
             for i in range(3)
         ]
         records = [
@@ -123,7 +123,7 @@ async def test_one_terminal_updates_strip() -> None:
         status_bar = app.query_one("#status-bar", StatusBar)
 
         cards = [
-            _FakeCard(id=CardId(f"crd_00000000-0000-0000-0000-00000000001{i}"))
+            _MockCard(id=CardId(f"crd_00000000-0000-0000-0000-00000000001{i}"))
             for i in range(3)
         ]
         records = [
@@ -177,7 +177,7 @@ async def test_all_terminal_hides_strip() -> None:
         status_bar = app.query_one("#status-bar", StatusBar)
 
         cards = [
-            _FakeCard(id=CardId(f"crd_00000000-0000-0000-0000-00000000002{i}"))
+            _MockCard(id=CardId(f"crd_00000000-0000-0000-0000-00000000002{i}"))
             for i in range(3)
         ]
         records = [

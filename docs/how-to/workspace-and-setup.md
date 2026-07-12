@@ -146,8 +146,8 @@ layer, beneath any explicit `model:` on the agent itself).
 
 What setup writes depends on what's connected:
 
-- **No provider connected** → `defaults.model: {provider: fake,
-  model: fake-model}`. The agent echoes input; useful for offline
+- **No provider connected** → `defaults.model: {provider: mock,
+  model: mock-model}`. The agent echoes input; useful for offline
   smoke tests.
 - **One or more providers connected with `model_aliases`** →
   `defaults.model: <alias>` (preferring `opus` → `smart` → `cheap`).
@@ -201,7 +201,7 @@ kolsch run kolsch/agents/helper --input content="hello" \
 
 Exit codes from setup: `0` on full success, `4` on partial
 completion (e.g., skeleton created but no provider connected — the
-fake starter agent still works). These are distinct from runtime
+mock starter agent still works). These are distinct from runtime
 exit codes.
 
 ## Where to read next

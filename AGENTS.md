@@ -84,7 +84,7 @@ podman-compose exec dev uv run ruff check --fix .
 podman-compose exec dev uv run mypy .
 podman-compose exec dev uv run pytest tests/unit          # seconds
 podman-compose exec dev uv run pytest tests/component     # ~1 min
-podman-compose exec dev uv run pytest tests/integration   # minutes (Fake LLM + real CrewAI)
+podman-compose exec dev uv run pytest tests/integration   # minutes (Mock LLM + real CrewAI)
 
 # If you changed engine behavior, check golden diffs:
 podman-compose exec dev uv run pytest tests/golden
@@ -126,7 +126,7 @@ These are non-negotiable. Violating them blocks merges.
   rebuilt from the event log.
 - **Tests assert on events.** For anything touching the event log, use
   the event-sequence assertion helpers and add/maintain golden tests.
-- **Never burn tokens in tests.** Use the Fake LLM. Real-LLM tests are
+- **Never burn tokens in tests.** Use the Mock LLM. Real-LLM tests are
   the E2E layer only, run deliberately, never on every change.
 - **Document as you go.** A user-facing change includes its docs in the
   same change. See the Diátaxis structure in `docs/`.
@@ -298,7 +298,7 @@ services; only the Postgres/Redis backend component tests do.
 ├── tests/
 │   ├── unit/                  ← pure, fast, no I/O
 │   ├── component/             ← one subsystem + real backing
-│   ├── integration/           ← multi-subsystem + Fake LLM + real CrewAI
+│   ├── integration/           ← multi-subsystem + Mock LLM + real CrewAI
 │   ├── e2e/                   ← whole platform, real LLM (deliberate)
 │   ├── golden/                ← golden event-sequence files
 │   ├── fixtures/              ← factories and builders

@@ -8,7 +8,7 @@ wire it via `AgentEngine(framework=CrewAIFramework(), ...)`.
 Design (per
 [framework protocol design](../explanation/framework-protocol-design.md)):
 
-- **Fake-LLM injection via BaseLLM subclass** (`_CrewAILLM`). The
+- **Mock-LLM injection via BaseLLM subclass** (`_CrewAILLM`). The
   prereq spike validated this as the only mechanism that lets the
   engine see messages verbatim (post-framework-wrap, pre-LLM-invoke)
   without monkey-patching litellm. CrewAI's
@@ -98,7 +98,7 @@ _UNBOUNDED_MAX_ITER = 10**9
 class CrewAIFramework:
     """Production framework implementing [`Framework`][engine.framework.Framework]."""
 
-    def __init__(self, *, model_name: str = "fake-crewai") -> None:
+    def __init__(self, *, model_name: str = "mock-crewai") -> None:
         self._model_name = model_name
 
     async def run_exchange(
@@ -234,7 +234,7 @@ class CrewAIFramework:
 
 
 # ---------------------------------------------------------------------------
-# _CrewAILLM — the BaseLLM subclass (Fake-LLM injection mechanism)
+# _CrewAILLM — the BaseLLM subclass (Mock-LLM injection mechanism)
 # ---------------------------------------------------------------------------
 
 
@@ -271,7 +271,7 @@ class _CrewAILLM(BaseLLM):
 
     # Pass-through fields the base requires. Defaults make this
     # constructible without the caller filling every BaseLLM field.
-    llm_type: str = "engine_fake"
+    llm_type: str = "engine_mock"
     provider: str = "engine"
 
     # Engine-owned handles. Stored as model fields with arbitrary

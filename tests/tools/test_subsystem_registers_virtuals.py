@@ -13,7 +13,7 @@ Covers ACs #5, #6, #7 for the tool-list-assembly path:
 4. The generic ``run_workflow`` is ALWAYS registered when it was
    declared — the virtuals never replace it.
 
-The declared-refs channel isn't exercised via a fake YAML file on
+The declared-refs channel isn't exercised via a mock YAML file on
 disk; instead we go through the ``tools=[...]`` programmatic
 channel with the shipped ``run_workflow`` function so the test
 doesn't need to model the ``discover_tools_in_file`` import step.
@@ -60,7 +60,7 @@ def _load_run_workflow() -> Any:
     return module.run_workflow
 
 
-class _FakeWorkflows:
+class _MockWorkflows:
     """Duck-typed workflows impl exposing the discovery seams."""
 
     def __init__(self, *, yaml_by_ref: dict[str, str]) -> None:
@@ -128,7 +128,7 @@ async def test_register_for_agent_emits_virtual_tools_when_workflows_declared(
 ) -> None:
     """AC #5 — virtuals emerge alongside the generic ``run_workflow``."""
     monkeypatch.setenv("KOLSCH_VIRTUAL_WORKFLOW_TOOLS", "1")
-    workflows = _FakeWorkflows(
+    workflows = _MockWorkflows(
         yaml_by_ref={
             "andre/workflows/job_description_review": _JD_YAML,
             "kolsch/workflows/hello": _HELLO_YAML,
@@ -212,7 +212,7 @@ async def test_feature_flag_disables_virtuals(
 ) -> None:
     """AC #6 — ``KOLSCH_VIRTUAL_WORKFLOW_TOOLS=0`` skips virtual registration."""
     monkeypatch.setenv("KOLSCH_VIRTUAL_WORKFLOW_TOOLS", "0")
-    workflows = _FakeWorkflows(
+    workflows = _MockWorkflows(
         yaml_by_ref={
             "andre/workflows/job_description_review": _JD_YAML,
         },
@@ -243,7 +243,7 @@ async def test_generic_run_workflow_still_registered_alongside_virtuals(
 ) -> None:
     """AC #7 — the model sees BOTH the generic and each virtual."""
     monkeypatch.setenv("KOLSCH_VIRTUAL_WORKFLOW_TOOLS", "1")
-    workflows = _FakeWorkflows(
+    workflows = _MockWorkflows(
         yaml_by_ref={
             "andre/workflows/job_description_review": _JD_YAML,
         },
@@ -290,7 +290,7 @@ async def test_register_for_agent_is_idempotent(
 ) -> None:
     """AC #5 — re-registration produces the same tool set."""
     monkeypatch.setenv("KOLSCH_VIRTUAL_WORKFLOW_TOOLS", "1")
-    workflows = _FakeWorkflows(
+    workflows = _MockWorkflows(
         yaml_by_ref={"kolsch/workflows/hello": _HELLO_YAML},
     )
     _subsystem.set_chat_services(ChatServiceRegistry(workflows=workflows))

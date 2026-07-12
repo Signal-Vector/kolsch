@@ -34,12 +34,12 @@ _AppFactory = Callable[[Widget], App[None]]
 
 
 @pytest.fixture
-def fake_app_factory() -> _AppFactory:
+def mock_app_factory() -> _AppFactory:
     def factory(child: Widget) -> App[None]:
-        class _FakeApp(App[None]):
+        class _MockApp(App[None]):
             def compose(self) -> Any:
                 yield child
-        return _FakeApp()
+        return _MockApp()
     return factory
 
 
@@ -49,12 +49,12 @@ def _contents_of(row: WorkflowNodeRow) -> Collapsible.Contents:
 
 @pytest.mark.asyncio
 async def test_agent_response_not_duplicated_on_normal_completion(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """Normal ordering. Assistant text first → ``set_output`` gate fires."""
     row = WorkflowNodeRow(node_name="review", node_type="kolsch/nodes/agent")
     row.collapsed = False
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -73,11 +73,11 @@ async def test_agent_response_not_duplicated_on_normal_completion(
 
 @pytest.mark.asyncio
 async def test_late_agent_message_after_completion_falls_back_to_set_output(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """Late assistant-message after completion: dropped, JSON preview stays."""
     row = WorkflowNodeRow(node_name="review", node_type="kolsch/nodes/agent")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -101,7 +101,7 @@ async def test_late_agent_message_after_completion_falls_back_to_set_output(
 
 @pytest.mark.asyncio
 async def test_last_assistant_text_latches_on_collapsed_row(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """The last-assistant-text latches even when the row stays collapsed.
 
@@ -116,7 +116,7 @@ async def test_last_assistant_text_latches_on_collapsed_row(
     row = WorkflowNodeRow(node_name="review", node_type="kolsch/nodes/agent")
     # Row is collapsed by default.
     assert row.collapsed is True
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 

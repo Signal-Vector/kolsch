@@ -450,7 +450,7 @@ async def test_tools_handler_with_empty_subsystems_prints_empty_note() -> None:
         agent_id=AgentId("ag_bare"),
         name="bare",
         description="agent with no tools",
-        model=ModelSpec(provider="fake", model="fake-model"),
+        model=ModelSpec(provider="mock", model="mock-model"),
         prompt="...",
         io=IOSpec(mode="conversational"),
     )

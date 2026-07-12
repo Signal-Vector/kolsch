@@ -6,7 +6,7 @@ behavior that the cross-framework parametrization can't surface
 cleanly — ordering, materialization specifics, retry composition,
 and the per-thread serialization assumption.
 
-The Fake LLM is plumbed through a recording-LLM helper so the seam
+The Mock LLM is plumbed through a recording-LLM helper so the seam
 looks exactly like an engine call would; tests construct the
 Framework directly without the engine to keep the surface small.
 """
@@ -20,9 +20,9 @@ from uuid import uuid4
 import pytest
 
 from engine import CrewAIFramework, LLMRequest, LLMResponse, ToolCall
-from tests.fixtures.fake_llm import (
-    FakeLLM,
-    FakeLLMScriptedError,
+from tests.fixtures.mock_llm import (
+    MockLLM,
+    MockLLMScriptedError,
     TextResponse,
     ToolCallResponse,
 )
@@ -36,39 +36,39 @@ class _RecordingLLM:
     """Captures every LLMRequest the framework hands us + emits
     BEFORE/AFTER markers so TC-CRW-01 can assert ordering."""
 
-    def __init__(self, fake: FakeLLM, *, events: list[str]) -> None:
-        self._fake = fake
+    def __init__(self, mock: MockLLM, *, events: list[str]) -> None:
+        self._mock = mock
         self._events = events
 
     async def __call__(self, request: LLMRequest) -> LLMResponse:
         self._events.append(f"llm.before:{len(request.messages)}")
-        # Adapt to FakeLLM's dict-context shape.
+        # Adapt to MockLLM's dict-context shape.
         context: dict[str, Any] = {
             "messages": [m.model_dump() for m in request.messages],
             "tools": list(request.tools),
             "model": request.model,
         }
         try:
-            fake_response = await self._fake.agenerate(context)
-        except FakeLLMScriptedError:
+            mock_response = await self._mock.agenerate(context)
+        except MockLLMScriptedError:
             self._events.append("llm.error")
             raise
-        if isinstance(fake_response, TextResponse):
+        if isinstance(mock_response, TextResponse):
             self._events.append("llm.after:text")
-            return LLMResponse(content=fake_response.text)
-        if isinstance(fake_response, ToolCallResponse):
+            return LLMResponse(content=mock_response.text)
+        if isinstance(mock_response, ToolCallResponse):
             self._events.append("llm.after:tool_call")
             return LLMResponse(
                 content=None,
                 tool_calls=[
                     {
-                        "id": fake_response.tool_call_id or f"tc_{uuid4()}",
-                        "name": fake_response.tool,
-                        "arguments": dict(fake_response.args),
+                        "id": mock_response.tool_call_id or f"tc_{uuid4()}",
+                        "name": mock_response.tool,
+                        "arguments": dict(mock_response.args),
                     },
                 ],
             )
-        msg = f"unsupported: {fake_response!r}"
+        msg = f"unsupported: {mock_response!r}"
         raise RuntimeError(msg)
 
 
@@ -114,7 +114,7 @@ async def test_tc_crw_01_lifecycle_ordering() -> None:
       llm.before, llm.after, tool.before, tool.after,
       llm.before, llm.after — i.e. BEFORE precedes AFTER for each
     pair, and tool dispatch sits between the two LLM calls."""
-    fake = FakeLLM(
+    mock = MockLLM(
         script=[
             ToolCallResponse(
                 tool="ping",
@@ -125,7 +125,7 @@ async def test_tc_crw_01_lifecycle_ordering() -> None:
         ],
     )
     events: list[str] = []
-    llm = _RecordingLLM(fake, events=events)
+    llm = _RecordingLLM(mock, events=events)
     tool = _RecordingTool(
         name="ping",
         result={"echoed": "ack"},
@@ -241,16 +241,16 @@ async def test_tc_crw_03_retry_composition() -> None:
 
     Test: 1 scripted error → CrewAI does NOT retry → run_exchange
     raises immediately. If CrewAI's internal retry were active, the
-    Fake would be called more than once."""
-    fake = FakeLLM(
+    Mock would be called more than once."""
+    mock = MockLLM(
         script=[
             ErrorResponse_from_str("model.upstream_error", "down"),
         ],
     )
 
     async def llm(request: LLMRequest) -> LLMResponse:
-        await fake.agenerate({"messages": [m.model_dump() for m in request.messages]})
-        # FakeLLM raises before returning — this line is unreachable.
+        await mock.agenerate({"messages": [m.model_dump() for m in request.messages]})
+        # MockLLM raises before returning — this line is unreachable.
         msg = "unreachable"
         raise RuntimeError(msg)
 
@@ -265,13 +265,13 @@ async def test_tc_crw_03_retry_composition() -> None:
         )
 
     # CrewAI saw the error EXACTLY ONCE — no internal retry.
-    assert len(fake.calls) == 1
+    assert len(mock.calls) == 1
 
 
-# Local helper — `from tests.fixtures.fake_llm import ErrorResponse`
+# Local helper — `from tests.fixtures.mock_llm import ErrorResponse`
 # is fine, but we use a tiny shim here for readability of the assert
 # above (script declares one explicit error response).
-from tests.fixtures.fake_llm import ErrorResponse  # noqa: E402
+from tests.fixtures.mock_llm import ErrorResponse  # noqa: E402
 
 
 def ErrorResponse_from_str(error_type: str, message: str) -> ErrorResponse:  # noqa: N802
@@ -295,7 +295,7 @@ async def test_tc_crw_04_concurrent_tools_serialize_via_loop_bridge() -> None:
     first call per LLM turn, so we don't see TRUE parallelism but DO
     see serial cross-thread bridging) both complete and produce
     distinct results without state corruption."""
-    fake = FakeLLM(
+    mock = MockLLM(
         script=[
             ToolCallResponse(
                 tool="ping",
@@ -312,7 +312,7 @@ async def test_tc_crw_04_concurrent_tools_serialize_via_loop_bridge() -> None:
     )
 
     events: list[str] = []
-    llm = _RecordingLLM(fake, events=events)
+    llm = _RecordingLLM(mock, events=events)
     tool = _RecordingTool(
         name="ping",
         result={"ok": True},

@@ -57,27 +57,27 @@ def _load_run_workflow() -> Any:
 
 
 # ----------------------------------------------------------------------
-# Fakes.
+# Mocks.
 # ----------------------------------------------------------------------
 
 
-class _FakeCard:
+class _MockCard:
     def __init__(self) -> None:
         self.id = "card_probe"
         self._owner_transferred = False
         self.is_closed = False
 
 
-class _FakeCards:
+class _MockCards:
     def __init__(self) -> None:
         self.opened: list[tuple[str, str]] = []
 
     async def open(self, label: str, *, kind: str) -> Any:
         self.opened.append((label, kind))
-        return _FakeCard()
+        return _MockCard()
 
 
-class _FakeWorkflows:
+class _MockWorkflows:
     def __init__(self, *, yaml_source: str) -> None:
         self._yaml_source = yaml_source
         self.starts: list[tuple[str, dict[str, Any]]] = []
@@ -132,8 +132,8 @@ async def test_error_message_contains_four_required_substrings() -> None:
     error message back to text-only.
     """
     run_workflow = _load_run_workflow()
-    cards = _FakeCards()
-    workflows = _FakeWorkflows(yaml_source=_JD_YAML)
+    cards = _MockCards()
+    workflows = _MockWorkflows(yaml_source=_JD_YAML)
     ctx = _mk_ctx(cards, workflows)
 
     args_schema = run_workflow._tool_definition.args_schema
@@ -180,8 +180,8 @@ graph:
   edges: []
 """
     run_workflow = _load_run_workflow()
-    cards = _FakeCards()
-    workflows = _FakeWorkflows(yaml_source=yaml_src)
+    cards = _MockCards()
+    workflows = _MockWorkflows(yaml_source=yaml_src)
     ctx = _mk_ctx(cards, workflows)
 
     args_schema = run_workflow._tool_definition.args_schema
@@ -213,8 +213,8 @@ graph:
   edges: []
 """
     run_workflow = _load_run_workflow()
-    cards = _FakeCards()
-    workflows = _FakeWorkflows(yaml_source=yaml_src)
+    cards = _MockCards()
+    workflows = _MockWorkflows(yaml_source=yaml_src)
     ctx = _mk_ctx(cards, workflows)
 
     args_schema = run_workflow._tool_definition.args_schema

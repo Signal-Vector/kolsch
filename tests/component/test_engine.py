@@ -52,9 +52,9 @@ from schemas import (
 )
 from skills import SkillsSubsystem
 from store import SessionStore, SqliteBackend
-from tests.fixtures.fake_llm import (
-    FakeLLM,
-    FakeLLMScriptedError,
+from tests.fixtures.mock_llm import (
+    MockLLM,
+    MockLLMScriptedError,
     TextResponse,
     ToolCallResponse,
 )
@@ -110,7 +110,7 @@ def _config(agent_id: str = "ag_test") -> ResolvedAgentConfig:
         agent_id=AgentId(agent_id),
         name="test-agent",
         description="A test agent.",
-        model=ModelSpec(provider="fake", model="fake-model"),
+        model=ModelSpec(provider="mock", model="mock-model"),
         prompt="You are a helpful test agent.",
         io=IOSpec(mode="conversational"),
     )
@@ -132,7 +132,7 @@ def _config_with_tool() -> ResolvedAgentConfig:
 
 async def _build_engine(
     tmp_path: Path,
-    fake_llm: FakeLLM,
+    mock_llm: MockLLM,
     *,
     authz_rules: list[dict[str, str]] | None = None,
     extra_tools: list[Any] | None = None,
@@ -176,8 +176,8 @@ async def _build_engine(
     framework = MinimalFramework()
 
     async def llm_callable(request: LLMRequest) -> LLMResponse:
-        # Adapt LLMRequest → FakeLLM's dict context shape; translate
-        # the Fake's response variants back to LLMResponse.
+        # Adapt LLMRequest → MockLLM's dict context shape; translate
+        # the Mock's response variants back to LLMResponse.
         context: dict[str, Any] = {
             "messages": [m.model_dump() for m in request.messages],
             "tools": list(request.tools),
@@ -188,8 +188,8 @@ async def _build_engine(
             ),
         }
         try:
-            fake_response = await fake_llm.agenerate(context)
-        except FakeLLMScriptedError as exc:
+            mock_response = await mock_llm.agenerate(context)
+        except MockLLMScriptedError as exc:
             # Real LLM adapters (Step 12b CrewAI) translate provider
             # errors into the typed catalog. Mirror that here so engine
             # retry/fatal logic sees the right Level.
@@ -197,25 +197,25 @@ async def _build_engine(
 
             if exc.error_type == "model.upstream_error":
                 raise ModelUpstreamError(
-                    provider="fake",
+                    provider="mock",
                     http_status=500,
                     response=str(exc),
                 ) from exc
             raise
-        if isinstance(fake_response, TextResponse):
-            return LLMResponse(content=fake_response.text)
-        if isinstance(fake_response, ToolCallResponse):
+        if isinstance(mock_response, TextResponse):
+            return LLMResponse(content=mock_response.text)
+        if isinstance(mock_response, ToolCallResponse):
             return LLMResponse(
                 content=None,
                 tool_calls=[
                     {
-                        "id": fake_response.tool_call_id or f"tc_{uuid4()}",
-                        "name": fake_response.tool,
-                        "arguments": dict(fake_response.args),
+                        "id": mock_response.tool_call_id or f"tc_{uuid4()}",
+                        "name": mock_response.tool,
+                        "arguments": dict(mock_response.args),
                     },
                 ],
             )
-        msg = f"unsupported fake response: {fake_response!r}"
+        msg = f"unsupported mock response: {mock_response!r}"
         raise RuntimeError(msg)
 
     engine = AgentEngine(
@@ -255,7 +255,7 @@ def _events_before_last_model_request(events: list[Event]) -> list[Event]:
 
 
 def _as_messages(raw: object) -> list[dict[str, Any]]:
-    """Help mypy: the FakeLLM stores context as dict[str, Any]; the
+    """Help mypy: the MockLLM stores context as dict[str, Any]; the
     'messages' entry is concretely a list of message dicts."""
     if not isinstance(raw, list):
         msg = f"expected messages list, got {type(raw).__name__}"
@@ -295,8 +295,8 @@ async def test_preflight_rejects_unsupported_assembly_version(
     from engine.engine import _Exchange
     from errors import CapabilityMismatch
 
-    fake = FakeLLM(script=[])
-    engine, store, _am = await _build_engine(tmp_path, fake)
+    mock = MockLLM(script=[])
+    engine, store, _am = await _build_engine(tmp_path, mock)
     ctx = await _new_session_context(store)
 
     bad_config = _config().model_copy(update={"assembly_version": "999"})
@@ -328,8 +328,8 @@ _GOLDEN_SIMPLE_TYPES = (
 
 
 async def test_tc_eng_01_simple_exchange_golden_sequence(tmp_path: Path) -> None:
-    fake = FakeLLM(script=[TextResponse(text="Hi back.")])
-    engine, store, _am = await _build_engine(tmp_path, fake)
+    mock = MockLLM(script=[TextResponse(text="Hi back.")])
+    engine, store, _am = await _build_engine(tmp_path, mock)
     ctx = await _new_session_context(store)
 
     result = await engine.execute(_config(), ctx)
@@ -366,8 +366,8 @@ async def test_execution_context_trace_id_stamped_on_every_engine_event(
 
     trace_id = TraceId(f"tr_{uuid4()}")
 
-    fake = FakeLLM(script=[TextResponse(text="Done.")])
-    engine, store, _am = await _build_engine(tmp_path, fake)
+    mock = MockLLM(script=[TextResponse(text="Done.")])
+    engine, store, _am = await _build_engine(tmp_path, mock)
     session = await store.create_session(
         "ag_test",
         name="trace-test",
@@ -399,8 +399,8 @@ async def test_execution_context_trace_id_none_preserves_legacy_shape(
     entirely (verified separately by the simple-exchange golden test).
     Here we just assert the in-memory Event field stays ``None`` so
     consumers of the API don't observe an accidental promotion."""
-    fake = FakeLLM(script=[TextResponse(text="Done.")])
-    engine, store, _am = await _build_engine(tmp_path, fake)
+    mock = MockLLM(script=[TextResponse(text="Done.")])
+    engine, store, _am = await _build_engine(tmp_path, mock)
     ctx = await _new_session_context(store)  # no trace_id
 
     await engine.execute(_config(), ctx)
@@ -446,7 +446,7 @@ _GOLDEN_TOOL_TYPES = (
 
 
 async def test_tc_eng_02_tool_call_exchange_golden_sequence(tmp_path: Path) -> None:
-    fake = FakeLLM(
+    mock = MockLLM(
         script=[
             ToolCallResponse(
                 tool="ping",
@@ -458,7 +458,7 @@ async def test_tc_eng_02_tool_call_exchange_golden_sequence(tmp_path: Path) -> N
     )
     engine, store, _am = await _build_engine(
         tmp_path,
-        fake,
+        mock,
         extra_tools=[_ping_tool],
     )
     ctx = await _new_session_context(store)
@@ -485,14 +485,14 @@ async def test_tc_eng_03_materialization_simple_text(tmp_path: Path) -> None:
     the Assembly Procedure on the truncated path produces the same
     projection (replay-by-derivation still works for non-wrapping
     frameworks like MinimalFramework)."""
-    fake = FakeLLM(script=[TextResponse(text="Done.")])
-    engine, store, _am = await _build_engine(tmp_path, fake)
+    mock = MockLLM(script=[TextResponse(text="Done.")])
+    engine, store, _am = await _build_engine(tmp_path, mock)
     ctx = await _new_session_context(store)
 
     await engine.execute(_config(), ctx)
 
-    assert len(fake.calls) == 1
-    seen_messages = _as_messages(fake.calls[0].context["messages"])
+    assert len(mock.calls) == 1
+    seen_messages = _as_messages(mock.calls[0].context["messages"])
 
     all_events = [e async for e in store.read_path_to_leaf(ctx.thread_id)]
 
@@ -529,7 +529,7 @@ async def test_tc_eng_03_materialization_tool_call(tmp_path: Path) -> None:
     turn. Replay sources from the event — Assembly Procedure on the
     truncated path also reproduces the MinimalFramework view as a
     secondary check."""
-    fake = FakeLLM(
+    mock = MockLLM(
         script=[
             ToolCallResponse(tool="ping", args={"message": "x"}),
             TextResponse(text="ok"),
@@ -537,7 +537,7 @@ async def test_tc_eng_03_materialization_tool_call(tmp_path: Path) -> None:
     )
     engine, store, _am = await _build_engine(
         tmp_path,
-        fake,
+        mock,
         extra_tools=[_ping_tool],
     )
     ctx = await _new_session_context(store)
@@ -545,14 +545,14 @@ async def test_tc_eng_03_materialization_tool_call(tmp_path: Path) -> None:
     await engine.execute(_config_with_tool(), ctx)
 
     # The final LLM call saw [system, user, assistant_with_tool_call, tool_result].
-    final_messages = _as_messages(fake.calls[-1].context["messages"])
+    final_messages = _as_messages(mock.calls[-1].context["messages"])
     roles = [m["role"] for m in final_messages]
     assert roles == ["system", "user", "assistant", "tool"]
 
     all_events = [e async for e in store.read_path_to_leaf(ctx.thread_id)]
 
     # §B.6 amendment — the captured LLM-seam messages on the LAST
-    # model.request equal what the Fake LLM saw on its FINAL call.
+    # model.request equal what the Mock LLM saw on its FINAL call.
     request_events = [e for e in all_events if e.type == EventType.MODEL_REQUEST]
     assert len(request_events) == 2
     last_captured = request_events[-1].data["messages"]
@@ -582,11 +582,11 @@ async def test_tc_eng_03_materialization_with_layered_prompt(
     Procedure. Renamed from the misleading ``..._with_memory`` since
     the body never exercised memory — TC-ENG-03 scenario 4 below is
     the real memory case."""
-    fake = FakeLLM(script=[TextResponse(text="OK.")])
+    mock = MockLLM(script=[TextResponse(text="OK.")])
     cfg = _config().model_copy(
         update={"prompt": ["Layer 1.", "Layer 2."]},
     )
-    engine, store, _am = await _build_engine(tmp_path, fake)
+    engine, store, _am = await _build_engine(tmp_path, mock)
     ctx = await _new_session_context(store)
     await engine.execute(cfg, ctx)
 
@@ -597,8 +597,8 @@ async def test_tc_eng_03_materialization_with_layered_prompt(
     # Assembly Procedure §B.5 step 3.
     assert "Layer 1." in assembled.system_prompt
     assert "Layer 2." in assembled.system_prompt
-    # That same system prompt is what the Fake saw.
-    assert assembled.system_prompt == fake.calls[0].context["system_prompt"]
+    # That same system prompt is what the Mock saw.
+    assert assembled.system_prompt == mock.calls[0].context["system_prompt"]
 
 
 async def test_tc_eng_03_materialization_with_memory(tmp_path: Path) -> None:
@@ -609,10 +609,10 @@ async def test_tc_eng_03_materialization_with_memory(tmp_path: Path) -> None:
     Procedure replays the captured content; it never re-runs the
     retrieval. This test pins the projection contract directly: emit
     a memory.retrieved event into the log before the exchange, then
-    verify the Fake LLM's recorded context contains the verbatim
+    verify the Mock LLM's recorded context contains the verbatim
     content."""
-    fake = FakeLLM(script=[TextResponse(text="Got it.")])
-    engine, store, _am = await _build_engine(tmp_path, fake)
+    mock = MockLLM(script=[TextResponse(text="Got it.")])
+    engine, store, _am = await _build_engine(tmp_path, mock)
     ctx = await _new_session_context(store)
 
     # Inject a memory.retrieved event into the log mid-thread, BEFORE
@@ -654,7 +654,7 @@ async def test_tc_eng_03_materialization_with_memory(tmp_path: Path) -> None:
 
     await engine.execute(_config(), ctx)
 
-    seen_messages = _as_messages(fake.calls[0].context["messages"])
+    seen_messages = _as_messages(mock.calls[0].context["messages"])
 
     # The memory retrieval surfaces as a system message in the
     # projection. Find it and verify the verbatim content survives.
@@ -711,7 +711,7 @@ async def _boom_tool(_args: _BoomArgs, _ctx: ToolContext) -> dict[str, Any]:
 
 
 async def test_tc_eng_04_diagnostic_error_continues_exchange(tmp_path: Path) -> None:
-    fake = FakeLLM(
+    mock = MockLLM(
         script=[
             ToolCallResponse(tool="boom", args={}),
             TextResponse(text="The tool failed; I'll skip it."),
@@ -719,7 +719,7 @@ async def test_tc_eng_04_diagnostic_error_continues_exchange(tmp_path: Path) -> 
     )
     engine, store, _am = await _build_engine(
         tmp_path,
-        fake,
+        mock,
         extra_tools=[_boom_tool],
     )
     ctx = await _new_session_context(store)
@@ -741,20 +741,20 @@ async def test_tc_eng_04_diagnostic_error_continues_exchange(tmp_path: Path) -> 
 # ===========================================================================
 
 
-from tests.fixtures.fake_llm import ErrorResponse  # noqa: E402
+from tests.fixtures.mock_llm import ErrorResponse  # noqa: E402
 
 
 async def test_tc_eng_05_fatal_error_raises_sync(tmp_path: Path) -> None:
     # Use a Recoverable error multiple times so the engine's retry
     # exhausts and Fatals out as model.retry_exhausted.
-    fake = FakeLLM(
+    mock = MockLLM(
         script=[
             ErrorResponse(error_type="model.upstream_error", message="upstream down"),
             ErrorResponse(error_type="model.upstream_error", message="still down"),
             ErrorResponse(error_type="model.upstream_error", message="and again"),
         ],
     )
-    engine, store, _am = await _build_engine(tmp_path, fake)
+    engine, store, _am = await _build_engine(tmp_path, mock)
     ctx = await _new_session_context(store)
     cfg = _config().model_copy(
         update={"runtime": RuntimeSpec(max_retries=2, timeout_seconds=None)},
@@ -770,14 +770,14 @@ async def test_tc_eng_05_fatal_error_raises_sync(tmp_path: Path) -> None:
 
 
 async def test_tc_eng_06_fatal_error_ends_stream(tmp_path: Path) -> None:
-    fake = FakeLLM(
+    mock = MockLLM(
         script=[
             ErrorResponse(error_type="model.upstream_error", message="x"),
             ErrorResponse(error_type="model.upstream_error", message="x"),
             ErrorResponse(error_type="model.upstream_error", message="x"),
         ],
     )
-    engine, store, _am = await _build_engine(tmp_path, fake)
+    engine, store, _am = await _build_engine(tmp_path, mock)
     ctx = await _new_session_context(store)
     cfg = _config().model_copy(
         update={"runtime": RuntimeSpec(max_retries=2, timeout_seconds=None)},
@@ -798,10 +798,10 @@ async def test_tc_eng_06_fatal_error_ends_stream(tmp_path: Path) -> None:
 
 
 async def test_tc_eng_07_authz_denial(tmp_path: Path) -> None:
-    fake = FakeLLM(script=[])  # never called
+    mock = MockLLM(script=[])  # never called
     engine, store, _am = await _build_engine(
         tmp_path,
-        fake,
+        mock,
         authz_rules=[
             {"who": "user.local", "what": r"agent\.execute\..*", "effect": "deny"},
         ],
@@ -833,16 +833,16 @@ async def test_tc_eng_07_authz_denial(tmp_path: Path) -> None:
 
 
 async def test_tc_eng_08_statelessness_across_restart(tmp_path: Path) -> None:
-    fake1 = FakeLLM(script=[TextResponse(text="Turn 1 reply.")])
-    engine1, store, _am = await _build_engine(tmp_path, fake1)
+    mock1 = MockLLM(script=[TextResponse(text="Turn 1 reply.")])
+    engine1, store, _am = await _build_engine(tmp_path, mock1)
     ctx = await _new_session_context(store)
 
     await engine1.execute(_config(), ctx)
 
-    # Simulate restart: build a fresh engine + a fresh fake LLM,
+    # Simulate restart: build a fresh engine + a fresh mock LLM,
     # reusing the same store + thread.
-    fake2 = FakeLLM(script=[TextResponse(text="Turn 2 reply.")])
-    engine2, _store2, _am2 = await _build_engine(tmp_path, fake2)
+    mock2 = MockLLM(script=[TextResponse(text="Turn 2 reply.")])
+    engine2, _store2, _am2 = await _build_engine(tmp_path, mock2)
 
     # New trigger on the same thread.
     ctx2 = ExecutionContext(
@@ -854,7 +854,7 @@ async def test_tc_eng_08_statelessness_across_restart(tmp_path: Path) -> None:
 
     # Turn 2's LLM call saw Turn 1's history (assistant turn from
     # the previous exchange + new user message + system prompt).
-    seen = _as_messages(fake2.calls[0].context["messages"])
+    seen = _as_messages(mock2.calls[0].context["messages"])
     roles = [m["role"] for m in seen]
     # system (always), then user(turn1), assistant(turn1), user(turn2)
     assert roles[0] == "system"
@@ -874,7 +874,7 @@ async def test_tc_eng_09_cancellation_mid_exchange(tmp_path: Path) -> None:
 
     # The LLM script will return a tool call so we have at least
     # two iterations; we cancel between them by inserting a hook.
-    fake = FakeLLM(
+    mock = MockLLM(
         script=[
             ToolCallResponse(tool="ping", args={"message": "a"}),
             TextResponse(text="should not get here"),
@@ -882,7 +882,7 @@ async def test_tc_eng_09_cancellation_mid_exchange(tmp_path: Path) -> None:
     )
     engine, store, _am = await _build_engine(
         tmp_path,
-        fake,
+        mock,
         extra_tools=[_ping_tool],
     )
     ctx = ExecutionContext(
@@ -945,8 +945,8 @@ async def test_tc_eng_10_force_invoke_emits_synthetic_read(tmp_path: Path) -> No
     _platform_yaml(tmp_path)
     md_path = _write_skill(tmp_path, "acme", "literature", "Skill body content.")
 
-    fake = FakeLLM(script=[TextResponse(text="Done.")])
-    engine, store, _am = await _build_engine(tmp_path, fake)
+    mock = MockLLM(script=[TextResponse(text="Done.")])
+    engine, store, _am = await _build_engine(tmp_path, mock)
 
     cfg = _config().model_copy(
         update={
@@ -1024,8 +1024,8 @@ async def test_tc_eng_11_skills_listing_in_system_prompt(tmp_path: Path) -> None
         encoding="utf-8",
     )
 
-    fake = FakeLLM(script=[TextResponse(text="Done.")])
-    engine, store, _am = await _build_engine(tmp_path, fake)
+    mock = MockLLM(script=[TextResponse(text="Done.")])
+    engine, store, _am = await _build_engine(tmp_path, mock)
 
     cfg = _config().model_copy(
         update={
@@ -1051,6 +1051,6 @@ async def test_tc_eng_11_skills_listing_in_system_prompt(tmp_path: Path) -> None
     ctx = await _new_session_context(store)
     await engine.execute(cfg, ctx)
 
-    system_prompt = str(fake.calls[0].context["system_prompt"])
+    system_prompt = str(mock.calls[0].context["system_prompt"])
     assert "alpha" in system_prompt
     assert "beta" not in system_prompt  # Sk-I2 — hidden skill excluded.

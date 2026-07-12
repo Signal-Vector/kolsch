@@ -56,9 +56,9 @@ from cli.chat.widgets.card_widget import CardWidget
 from engine.framework import LLMRequest, LLMResponse
 from platform_runtime import bootstrap_runtime
 from schemas.events import EventType
-from tests.cli.chat.services.fakes import (
-    FakeExecutorSpec,
-    install_fake_executor_factory,
+from tests.cli.chat.services.mocks import (
+    MockExecutorSpec,
+    install_mock_executor_factory,
 )
 from workflows.events import (
     WorkflowNodeStartedEvent,
@@ -178,7 +178,7 @@ class _ScriptedLLM:
 
 
 # ---------------------------------------------------------------------------
-# Fake workflow events for the corrective retry.
+# Mock workflow events for the corrective retry.
 # ---------------------------------------------------------------------------
 
 
@@ -215,7 +215,7 @@ async def test_model_corrects_retry_after_bug_025_error_shape(
     node's ``command:`` — perfect: bug-025 validation flags
     ``inputs={}`` as missing ``'greeting'``, and turn 2's
     ``inputs={"greeting": "hi"}`` clears the validator and reaches
-    the fake executor.
+    the mock executor.
     """
     workflow_ref = "kolsch/workflows/hello-agent"
     corrected_key = "greeting"
@@ -257,9 +257,9 @@ async def test_model_corrects_retry_after_bug_025_error_shape(
         # reaches the executor factory).
         workflows_impl = pilot.app._service_registry.workflows
         assert workflows_impl is not None
-        install_fake_executor_factory(
+        install_mock_executor_factory(
             workflows_impl,
-            {workflow_ref: FakeExecutorSpec(
+            {workflow_ref: MockExecutorSpec(
                 events=_mk_workflow_events(),
                 per_event_delay=0.02,
             )},

@@ -31,7 +31,7 @@ _BASE_TS = datetime(2026, 7, 5, 12, 0, 0, tzinfo=UTC)
 
 
 @dataclass
-class _FakeCard:
+class _MockCard:
     id: CardId
     is_closed: bool = False
 
@@ -45,7 +45,7 @@ def _mk_record(
     *,
     suffix: str,
     phase: str,
-    card: _FakeCard,
+    card: _MockCard,
     started_offset: int = 0,
     terminal_offset: int | None = None,
 ) -> WorkflowRunRecord:
@@ -71,7 +71,7 @@ async def _setup_cards(pilot, n: int) -> tuple[Any, list[Any], list[Any]]:
     cards = []
     for i in range(n):
         cid = CardId(f"crd_00000000-0000-0000-0000-0000000000{i:02x}")
-        card = _FakeCard(id=cid)
+        card = _MockCard(id=cid)
         widget = CardWidget(card_id=cid, kind="workflow", title=f"W{i}")
         await transcript.mount(widget)
         widgets.append(widget)

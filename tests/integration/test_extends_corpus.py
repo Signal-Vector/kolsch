@@ -111,7 +111,7 @@ pytestmark = pytest.mark.asyncio
 # ---------------------------------------------------------------------------
 
 
-_DEFAULT_MODEL = {"provider": "fake", "model": "default-model"}
+_DEFAULT_MODEL = {"provider": "mock", "model": "default-model"}
 
 
 def _write_platform_yaml(root: Path) -> None:

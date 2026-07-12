@@ -13,7 +13,7 @@ Context → TurnStatus):
    ``set_interval`` primitives. No hand-rolled clock loop.
 2. **Modular.** This widget owns its full DEFAULT_CSS and only touches
    built-in Textual variables (``$panel``, ``$text-muted``,
-   ``$warning``) so the fake-app Pilot host can mount it without the
+   ``$warning``) so the mock-app Pilot host can mount it without the
    project theme loaded — the conftest philosophy.
 3. **Don't reinvent.** The spinner is a plain frame index into a
    Braille cycle advanced by ``set_interval``. Elapsed formatting is a

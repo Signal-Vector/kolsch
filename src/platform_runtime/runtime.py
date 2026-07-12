@@ -144,8 +144,10 @@ async def bootstrap_runtime(
     listed above are documented so users can make an informed choice
     per workspace. See `process/feat-clarify-framework-selection.md`
     for the historical context (this class was renamed from
-    `FakeFramework`, which misled users into treating it as a test
-    fixture).
+    `FakeFramework` to `MinimalFramework`, which misled users into
+    treating it as a test fixture; the containing module was later
+    renamed from `mock_framework.py` to `mock_framework.py` — see
+    `process/qol-046-mock-to-mock-rename.md`).
 
     Default `llm` is [`EchoLLMDriver`][engine.dev_llm.EchoLLMDriver]
     when no `llm_providers` are configured, so a fresh install runs
@@ -267,7 +269,7 @@ async def bootstrap_runtime(
     #   the factory. Pre-existing tests that pin a single callable
     #   continue to work unchanged.
     # - Otherwise and `llm_providers_config` is populated → wire
-    #   `llm_for_model=` to the per-spec factory (`provider == "fake"`
+    #   `llm_for_model=` to the per-spec factory (`provider == "mock"`
     #   still gets EchoLLMDriver from inside the factory, preserving
     #   the no-credentials tutorial behaviour).
     # - Otherwise (no providers AND no explicit `llm=`) → fall back to

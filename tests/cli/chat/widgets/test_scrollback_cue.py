@@ -48,10 +48,10 @@ def test_cue_text_matches_spec() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mounts_under_pilot(fake_app_factory) -> None:
+async def test_mounts_under_pilot(mock_app_factory) -> None:
     """Widget mounts under `App.run_test()` and renders the cue text."""
     widget = ScrollbackCue()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
         rendered = str(widget.render())
@@ -60,7 +60,7 @@ async def test_mounts_under_pilot(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_widget_is_one_shot_lifecycle(fake_app_factory) -> None:
+async def test_widget_is_one_shot_lifecycle(mock_app_factory) -> None:
     """No sticky/docked behaviour — the widget participates in normal flow.
 
     The lifecycle lock in the spec is "one-shot, mounted once, never
@@ -70,7 +70,7 @@ async def test_widget_is_one_shot_lifecycle(fake_app_factory) -> None:
     does not opt into any dock position.
     """
     widget = ScrollbackCue()
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
         # `dock` should not be set — the widget flows with the transcript

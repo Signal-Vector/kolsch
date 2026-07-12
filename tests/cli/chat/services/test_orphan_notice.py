@@ -24,7 +24,7 @@ from workflows.run_store import WorkflowRunStore
 
 
 @dataclass
-class FakeCards:
+class MockCards:
     """Minimal stub carrying the `.notice(text, *, kind=...)` seam."""
 
     calls: list[tuple[str, str]] = field(default_factory=list)
@@ -84,7 +84,7 @@ async def test_fire_notice_after_two_orphans_reconciled(
         )
         run_store.update_status(run.run_id, WorkflowRunStatus.RUNNING)
 
-    cards = FakeCards()
+    cards = MockCards()
     impl = await _mk_impl(tmp_path, session_store, run_store, cards)
     try:
         n = await impl.sweep_orphans()
@@ -110,7 +110,7 @@ async def test_fire_notice_idempotent(
     )
     run_store.update_status(run.run_id, WorkflowRunStatus.RUNNING)
 
-    cards = FakeCards()
+    cards = MockCards()
     impl = await _mk_impl(tmp_path, session_store, run_store, cards)
     try:
         assert await impl.sweep_orphans() == 1
@@ -136,7 +136,7 @@ async def test_fire_notice_no_op_when_no_orphans(
     )
     run_store.update_status(done.run_id, WorkflowRunStatus.SUCCEEDED)
 
-    cards = FakeCards()
+    cards = MockCards()
     impl = await _mk_impl(tmp_path, session_store, run_store, cards)
     try:
         assert await impl.sweep_orphans() == 0

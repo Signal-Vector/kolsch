@@ -23,9 +23,9 @@ from cli.chat.services.workflows_impl import WorkflowsImpl
 from schemas.events import EventType
 from schemas.wire_kinds import WIRE_CARD_STATUS
 from store import SessionStore, SqliteBackend
-from tests.cli.chat.services.fakes import (
-    FakeExecutorSpec,
-    install_fake_executor_factory,
+from tests.cli.chat.services.mocks import (
+    MockExecutorSpec,
+    install_mock_executor_factory,
 )
 from workflows.events import (
     WorkflowRunCompletedEvent,
@@ -84,11 +84,11 @@ async def test_cancel_running_fires_token_and_writes_flag(
 ) -> None:
     impl, cards = await _mk_impl(tmp_path, store)
     try:
-        # Use a slow fake so we can catch it mid-run.
-        install_fake_executor_factory(
+        # Use a slow mock so we can catch it mid-run.
+        install_mock_executor_factory(
             impl,
             {
-                "kolsch/workflows/x": FakeExecutorSpec(
+                "kolsch/workflows/x": MockExecutorSpec(
                     events=_mk_events(), per_event_delay=0.5,
                 ),
             },
@@ -133,9 +133,9 @@ async def test_cancel_terminal_returns_false(
 ) -> None:
     impl, cards = await _mk_impl(tmp_path, store)
     try:
-        install_fake_executor_factory(
+        install_mock_executor_factory(
             impl,
-            {"kolsch/workflows/x": FakeExecutorSpec(events=_mk_events())},
+            {"kolsch/workflows/x": MockExecutorSpec(events=_mk_events())},
             runs_root=tmp_path / "runs",
         )
         rid = await impl.start("kolsch/workflows/x", {})
@@ -156,10 +156,10 @@ async def test_cancel_transitions_card_status(
 ) -> None:
     impl, cards = await _mk_impl(tmp_path, store)
     try:
-        install_fake_executor_factory(
+        install_mock_executor_factory(
             impl,
             {
-                "kolsch/workflows/x": FakeExecutorSpec(
+                "kolsch/workflows/x": MockExecutorSpec(
                     events=_mk_events(), per_event_delay=0.5,
                 ),
             },

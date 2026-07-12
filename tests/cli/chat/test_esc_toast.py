@@ -43,7 +43,7 @@ from workflows.ids import WorkflowRunId
 _NOW = datetime.now(tz=UTC)
 
 
-class _FakeAuthz:
+class _MockAuthz:
     def register_prompt_callback(
         self, callback: Any, *, on_rule_added: Any = None,
     ) -> None:  # noqa: ARG002
@@ -53,7 +53,7 @@ class _FakeAuthz:
         return None
 
 
-class _FakeEngine:
+class _MockEngine:
     async def execute_stream(self, config: Any, ctx: Any):  # noqa: ARG002
         if False:
             yield  # pragma: no cover
@@ -61,14 +61,14 @@ class _FakeEngine:
 
 
 @dataclass
-class _FakeConfig:
+class _MockConfig:
     name: str = "TestAgent"
-    agent_id: str = "ag_fake"
+    agent_id: str = "ag_mock"
     model: Any = None
 
 
 @dataclass
-class _FakeBundle:
+class _MockBundle:
     runtime: Any
     config: Any
     session_id: Any
@@ -80,7 +80,7 @@ class _FakeBundle:
 
 
 @dataclass
-class _FakeStore:
+class _MockStore:
     """Minimal store stub — read_path_to_leaf yields nothing."""
 
     async def read_path_to_leaf(self, _thread_id: Any):
@@ -142,27 +142,27 @@ class _StubWorkflowsImpl:
 
 
 @pytest.fixture
-def bundle(tmp_path: Path) -> _FakeBundle:
+def bundle(tmp_path: Path) -> _MockBundle:
     class _R:
         def __init__(self) -> None:
-            self.store = _FakeStore()
-            self.authz = _FakeAuthz()
-            self.engine = _FakeEngine()
+            self.store = _MockStore()
+            self.authz = _MockAuthz()
+            self.engine = _MockEngine()
 
-    return _FakeBundle(
+    return _MockBundle(
         runtime=_R(),
-        config=_FakeConfig(),
+        config=_MockConfig(),
         session_id=SessionId("ses_00000000-0000-0000-0000-000000000001"),
         thread_id=ThreadId("th_00000000-0000-0000-0000-000000000001"),
-        agent_ref="kolsch/agents/fake",
+        agent_ref="kolsch/agents/mock",
         root=tmp_path,
-        model_label="fake/test",
+        model_label="mock/test",
         is_resume=False,
     )
 
 
 async def _make_app(
-    bundle: _FakeBundle, workflows: _StubWorkflowsImpl,
+    bundle: _MockBundle, workflows: _StubWorkflowsImpl,
 ) -> ChatApp:
     """Construct a ChatApp with the stub workflows pre-registered."""
     app = ChatApp(
@@ -189,7 +189,7 @@ async def _press_escape(app: ChatApp) -> None:
 
 
 @pytest.mark.asyncio
-async def test_esc_with_butler_only_no_toast(bundle: _FakeBundle) -> None:
+async def test_esc_with_butler_only_no_toast(bundle: _MockBundle) -> None:
     """Butler turn + no workflows → Esc cancels turn; no toast."""
     workflows = _StubWorkflowsImpl()
     app = await _make_app(bundle, workflows)
@@ -197,11 +197,11 @@ async def test_esc_with_butler_only_no_toast(bundle: _FakeBundle) -> None:
         await pilot.pause()
 
         # Simulate an active butler turn.
-        class _FakeToken:
+        class _MockToken:
             def cancel(self) -> None:
                 pass
 
-        app.active_cancel = _FakeToken()
+        app.active_cancel = _MockToken()
 
         await _press_escape(app)
         await pilot.pause()
@@ -214,7 +214,7 @@ async def test_esc_with_butler_only_no_toast(bundle: _FakeBundle) -> None:
 
 @pytest.mark.asyncio
 async def test_esc_with_butler_and_workflow_shows_toast(
-    bundle: _FakeBundle,
+    bundle: _MockBundle,
 ) -> None:
     """Butler + workflow → Esc cancels turn AND the toast appears."""
     workflows = _StubWorkflowsImpl()
@@ -223,11 +223,11 @@ async def test_esc_with_butler_and_workflow_shows_toast(
     async with app.run_test() as pilot:
         await pilot.pause()
 
-        class _FakeToken:
+        class _MockToken:
             def cancel(self) -> None:
                 pass
 
-        app.active_cancel = _FakeToken()
+        app.active_cancel = _MockToken()
 
         await _press_escape(app)
         await pilot.pause()
@@ -242,7 +242,7 @@ async def test_esc_with_butler_and_workflow_shows_toast(
 
 @pytest.mark.asyncio
 async def test_second_esc_within_window_cancels_workflow(
-    bundle: _FakeBundle,
+    bundle: _MockBundle,
 ) -> None:
     """Second Esc inside the 3s window cancels the oldest workflow."""
     workflows = _StubWorkflowsImpl()
@@ -251,11 +251,11 @@ async def test_second_esc_within_window_cancels_workflow(
     async with app.run_test() as pilot:
         await pilot.pause()
 
-        class _FakeToken:
+        class _MockToken:
             def cancel(self) -> None:
                 pass
 
-        app.active_cancel = _FakeToken()
+        app.active_cancel = _MockToken()
 
         # First Esc — cancels butler; toast on.
         await _press_escape(app)
@@ -271,7 +271,7 @@ async def test_second_esc_within_window_cancels_workflow(
 
 @pytest.mark.asyncio
 async def test_toast_auto_dismisses_after_window(
-    bundle: _FakeBundle, monkeypatch: pytest.MonkeyPatch,
+    bundle: _MockBundle, monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """After 3s the toast auto-dismisses via the timer callback."""
     # Shorten the window for the test.
@@ -284,11 +284,11 @@ async def test_toast_auto_dismisses_after_window(
     async with app.run_test() as pilot:
         await pilot.pause()
 
-        class _FakeToken:
+        class _MockToken:
             def cancel(self) -> None:
                 pass
 
-        app.active_cancel = _FakeToken()
+        app.active_cancel = _MockToken()
 
         # First Esc — toast fires.
         await _press_escape(app)
@@ -313,7 +313,7 @@ async def test_toast_auto_dismisses_after_window(
 
 @pytest.mark.asyncio
 async def test_esc_with_workflow_only_cancels_directly(
-    bundle: _FakeBundle,
+    bundle: _MockBundle,
 ) -> None:
     """No butler turn + workflow live → Esc cancels workflow (no toast)."""
     workflows = _StubWorkflowsImpl()
@@ -334,7 +334,7 @@ async def test_esc_with_workflow_only_cancels_directly(
 
 @pytest.mark.asyncio
 async def test_multiple_workflows_second_esc_cancels_oldest(
-    bundle: _FakeBundle,
+    bundle: _MockBundle,
 ) -> None:
     """Multiple workflows: second Esc cancels the OLDEST (started_at ASC)."""
     workflows = _StubWorkflowsImpl()
@@ -350,11 +350,11 @@ async def test_multiple_workflows_second_esc_cancels_oldest(
     async with app.run_test() as pilot:
         await pilot.pause()
 
-        class _FakeToken:
+        class _MockToken:
             def cancel(self) -> None:
                 pass
 
-        app.active_cancel = _FakeToken()
+        app.active_cancel = _MockToken()
 
         # First Esc — cancels butler; toast on.
         await _press_escape(app)

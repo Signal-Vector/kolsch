@@ -1,7 +1,7 @@
 """Pilot tests for ApprovalFromEdit.
 
 Each test wraps the widget in a minimal host `App` via the
-`fake_app_factory` fixture (see `tests/cli/chat/conftest.py`) and drives
+`mock_app_factory` fixture (see `tests/cli/chat/conftest.py`) and drives
 it with `Pilot`. No CSS beyond the widget's `DEFAULT_CSS` is loaded —
 this keeps the widget honest as a modular unit.
 """
@@ -16,10 +16,10 @@ from cli.chat.widgets.approval_from_edit import ApprovalFromEdit
 
 @pytest.mark.asyncio
 async def test_mounts_with_suggested_from_and_input_has_focus(
-    fake_app_factory,
+    mock_app_factory,
 ) -> None:
     widget = ApprovalFromEdit(suggested_from="agent:*")
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
         input_widget = widget.query_one(Input)
@@ -30,10 +30,10 @@ async def test_mounts_with_suggested_from_and_input_has_focus(
 
 @pytest.mark.asyncio
 async def test_enter_posts_confirmed_with_current_value(
-    fake_app_factory,
+    mock_app_factory,
 ) -> None:
     widget = ApprovalFromEdit(suggested_from="agent:*")
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
 
     received: list[ApprovalFromEdit.Confirmed] = []
 
@@ -58,9 +58,9 @@ async def test_enter_posts_confirmed_with_current_value(
 
 
 @pytest.mark.asyncio
-async def test_enter_confirms_edited_value(fake_app_factory) -> None:
+async def test_enter_confirms_edited_value(mock_app_factory) -> None:
     widget = ApprovalFromEdit(suggested_from="")
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
 
     received: list[ApprovalFromEdit.Confirmed] = []
 
@@ -85,9 +85,9 @@ async def test_enter_confirms_edited_value(fake_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_escape_posts_cancelled(fake_app_factory) -> None:
+async def test_escape_posts_cancelled(mock_app_factory) -> None:
     widget = ApprovalFromEdit(suggested_from="agent:*")
-    app = fake_app_factory(widget)
+    app = mock_app_factory(widget)
 
     received: list[ApprovalFromEdit.Cancelled] = []
 

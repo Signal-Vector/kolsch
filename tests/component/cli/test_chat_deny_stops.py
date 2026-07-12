@@ -129,7 +129,7 @@ async def test_tc_chat_deny_01_deny_once_flips_cancel_token() -> None:
     assert result.effect is AuthzEffect.DENY
     assert result.allowed is False
     # Cancel-token side effect: framework will observe this on the
-    # next iteration poll (fake_framework.py:78-79).
+    # next iteration poll (mock_framework.py:78-79).
     assert cancel.is_cancelled() is True
     assert state.last_cancel_reason == "denied"
 

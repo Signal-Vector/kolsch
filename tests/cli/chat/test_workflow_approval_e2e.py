@@ -3,7 +3,7 @@
 Four passes wired at the adapter/impl layer (not a full ChatApp
 Pilot — see the note in `test_approval_e2e.py`):
 
-1. Fake workflow with a node that fires an approval. The adapter's
+1. Mock workflow with a node that fires an approval. The adapter's
    `_handle_prompt_requested` dispatches with `source.kind="workflow"`
    → `WorkflowsImpl.emit_awaiting_approval` fires and the mount hook
    receives `parent_hint`.
@@ -47,7 +47,7 @@ from workflows.ids import WorkflowRunId
 from workflows.run_store import WorkflowRunStore
 
 
-class _FakeApp:
+class _MockApp:
     """Minimal ChatApp double for the adapter's mount hook."""
 
     def __init__(self) -> None:
@@ -174,7 +174,7 @@ async def test_e2e_workflow_approval_paused(
 ) -> None:
     """Prompt.requested with workflow source → row paused + parent_hint."""
     impl, session_id, thread_id = await _mk_impl(tmp_path, store)
-    app = _FakeApp()
+    app = _MockApp()
     adapter = EventAdapter(app)  # type: ignore[arg-type]
     adapter.register_workflows_impl(impl)
 
@@ -261,7 +261,7 @@ async def test_e2e_workflow_approval_resolved_transitions_back(
 ) -> None:
     """User presses `y` → resolved event fires → row transitions to running."""
     impl, session_id, thread_id = await _mk_impl(tmp_path, store)
-    app = _FakeApp()
+    app = _MockApp()
     adapter = EventAdapter(app)  # type: ignore[arg-type]
     adapter.register_workflows_impl(impl)
 
@@ -362,7 +362,7 @@ async def test_e2e_workflow_approval_denied_still_transitions_running(
     when the tool's denial cascades).
     """
     impl, session_id, thread_id = await _mk_impl(tmp_path, store)
-    app = _FakeApp()
+    app = _MockApp()
     adapter = EventAdapter(app)  # type: ignore[arg-type]
     adapter.register_workflows_impl(impl)
 

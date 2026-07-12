@@ -35,7 +35,7 @@ _NOW = datetime.now(tz=UTC)
 
 
 @dataclass
-class _FakeCard:
+class _MockCard:
     id: CardId
     is_closed: bool = False
 
@@ -53,7 +53,7 @@ def _mk_record(
     *,
     suffix: str,
     phase: str,
-    card: _FakeCard | None,
+    card: _MockCard | None,
     ref: str = "test/ref",
     completed: int = 0,
     total: int = 0,
@@ -89,7 +89,7 @@ async def test_layout_manager_push_shows_strip() -> None:
         transcript = app.query_one("#transcript", VerticalScroll)
         status_bar = app.query_one("#status-bar", StatusBar)
 
-        card = _FakeCard(id=CardId("crd_00000000-0000-0000-0000-000000000001"))
+        card = _MockCard(id=CardId("crd_00000000-0000-0000-0000-000000000001"))
         record = _mk_record(
             suffix="a1",
             phase="running",
@@ -153,7 +153,7 @@ async def test_terminal_workflow_hides_strip() -> None:
         transcript = app.query_one("#transcript", VerticalScroll)
         status_bar = app.query_one("#status-bar", StatusBar)
 
-        card = _FakeCard(id=CardId("crd_00000000-0000-0000-0000-000000000010"))
+        card = _MockCard(id=CardId("crd_00000000-0000-0000-0000-000000000010"))
         record = _mk_record(
             suffix="b1", phase="running", card=card, started_offset=5,
         )

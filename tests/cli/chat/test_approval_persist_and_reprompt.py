@@ -70,22 +70,22 @@ from tools.decorator import ToolContext
 async def _empty_stream(
     *_args: Any, **_kwargs: Any,
 ) -> Any:
-    """The fake engine never runs a turn — the LLM path isn't exercised."""
+    """The mock engine never runs a turn — the LLM path isn't exercised."""
     return
     yield  # type: ignore[unreachable]  # pragma: no cover
 
 
-class _FakeEngine:
+class _MockEngine:
     execute_stream = staticmethod(_empty_stream)
 
 
-class _FakeConfig:
+class _MockConfig:
     name = "TestAgent"
-    agent_id = "ag_fake"
+    agent_id = "ag_mock"
     model = None
 
 
-class _FakeBundle:
+class _MockBundle:
     def __init__(
         self,
         *,
@@ -150,7 +150,7 @@ async def chat_app(tmp_path: Path) -> AsyncIterator[Any]:
     backend = SqliteBackend(platform_dir / "entities.db")
     await backend.initialize()
     store = SessionStore(root=tmp_path, backend=backend)
-    session = await store.create_session("ag_fake", name="bug025_persist")
+    session = await store.create_session("ag_mock", name="bug025_persist")
     threads = await store.list_threads(session.session_id)
 
     # Construct the real authz provider from the seeded platform.yaml.
@@ -170,18 +170,18 @@ async def chat_app(tmp_path: Path) -> AsyncIterator[Any]:
         def __init__(self) -> None:
             self.store = store
             self.authz = authz
-            self.engine = _FakeEngine()
+            self.engine = _MockEngine()
             self.root = tmp_path
             self.bus = InProcessEventBus()
 
-    bundle = _FakeBundle(
+    bundle = _MockBundle(
         runtime=_R(),
-        config=_FakeConfig(),
+        config=_MockConfig(),
         session_id=session.session_id,
         thread_id=threads[0].thread_id,
-        agent_ref="kolsch/agents/fake",
+        agent_ref="kolsch/agents/mock",
         root=tmp_path,
-        model_label="fake/test",
+        model_label="mock/test",
         is_resume=False,
     )
     app = ChatApp(
@@ -444,7 +444,7 @@ graph:
 async def test_run_workflow_input_validation_surfaces_error() -> None:
     """Missing input → tool raises ``WrappedError`` (is_error=true).
 
-    Calls the tool function directly against a fake ``Workflows``
+    Calls the tool function directly against a mock ``Workflows``
     service that exposes ``resolve_workflow_yaml``. The
     ``WrappedError`` is a ``PlatformError`` at ``Level.DIAGNOSTIC``;
     the engine observer at ``src/engine/observers.py:284`` emits
@@ -467,18 +467,18 @@ async def test_run_workflow_input_validation_surfaces_error() -> None:
     spec.loader.exec_module(module)
     run_workflow = module.run_workflow
 
-    class _FakeCard:
+    class _MockCard:
         def __init__(self) -> None:
             self.id = "card_x"
             self._owner_transferred = False
             self.is_closed = False
 
-    class _FakeCards:
+    class _MockCards:
         async def open(self, label: str, *, kind: str) -> Any:
             _ = label, kind
-            return _FakeCard()
+            return _MockCard()
 
-    class _FakeWorkflows:
+    class _MockWorkflows:
         def resolve_workflow_yaml(self, ref: str) -> str | None:
             _ = ref
             return _JD_YAML_STUB
@@ -495,8 +495,8 @@ async def test_run_workflow_input_validation_surfaces_error() -> None:
         thread_id=ThreadId(f"th_{uuid4()}"),
         principal="agent.test",
         secrets={},
-        cards=_FakeCards(),
-        workflows=_FakeWorkflows(),
+        cards=_MockCards(),
+        workflows=_MockWorkflows(),
     )
 
     args_schema = run_workflow._tool_definition.args_schema

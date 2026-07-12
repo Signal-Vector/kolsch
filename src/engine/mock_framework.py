@@ -1,12 +1,14 @@
 """Reference implementation of [`Framework`][engine.framework.Framework].
 
-`MinimalFramework` (formerly `FakeFramework`) is kolsch's default
-production framework — `bootstrap_runtime` wires it up regardless of
-whether a real LLM factory is present. Renamed from `FakeFramework`
-because the old name misled reviewers into treating the class as a
-test fixture; see `process/feat-clarify-framework-selection.md` for
-the rename rationale + the shipped bug that revealed the confusion
-(kimi K2 empty-args tool calls, 2026-07-02).
+`MinimalFramework` is kolsch's default production framework —
+`bootstrap_runtime` wires it up regardless of whether a real LLM
+factory is present. Previously named `FakeFramework`, the class was
+first renamed to `MinimalFramework` because the old name misled
+reviewers into treating it as a test fixture (see
+`process/feat-clarify-framework-selection.md`), and the containing
+module was later renamed from `mock_framework.py` to
+`mock_framework.py` for repo-wide `Fake` → `Mock` vocabulary
+consistency (qol-046).
 
 The loop is deliberately minimal: build `[system, user]`, call the
 LLM, dispatch any tool calls the LLM emits, append the tool result +
@@ -40,10 +42,11 @@ if TYPE_CHECKING:
 class MinimalFramework:
     """Kolsch's minimal reference framework — the `bootstrap_runtime` default.
 
-    Renamed from `FakeFramework` — see the module docstring.
+    See the module docstring for the naming history (`FakeFramework`
+    → `MinimalFramework`, and `mock_framework.py` → `mock_framework.py`).
     """
 
-    def __init__(self, *, model_name: str = "fake") -> None:
+    def __init__(self, *, model_name: str = "mock") -> None:
         self._model_name = model_name
 
     async def run_exchange(
@@ -62,7 +65,7 @@ class MinimalFramework:
 
         Implements [`Framework`][engine.framework.Framework] without an
         external LLM — every reply comes from the engine-supplied
-        `llm` seam, which test code wires to a fake driver.
+        `llm` seam, which test code wires to a mock driver.
         """
         # The engine's Assembly Procedure supplies `history` for
         # multi-turn exchanges (prior user/assistant/tool turns
@@ -184,8 +187,3 @@ def _stringify(value: object) -> str:
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
 
 
-# DEPRECATED: renamed to `MinimalFramework` (see
-# process/feat-clarify-framework-selection.md). Alias kept for one
-# release so external callers upgrading from the previous release do
-# not break immediately; remove in the next feature release.
-FakeFramework = MinimalFramework

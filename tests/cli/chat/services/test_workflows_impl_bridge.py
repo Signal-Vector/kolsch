@@ -2,7 +2,7 @@
 
 Three passes:
 
-1. Fake executor emits 5 events (RUN_STARTED, 3× NODE_*,
+1. Mock executor emits 5 events (RUN_STARTED, 3× NODE_*,
    RUN_COMPLETED). Observer enqueues each into the bridge; bridge
    drain fires 5 `kolsch.workflow.progress` UI events plus a
    `card.closed` on terminal.
@@ -25,9 +25,9 @@ from cli.chat.services.workflows_impl import WorkflowsImpl
 from schemas.events import EventType
 from schemas.wire_kinds import WIRE_CARD_CLOSED, WIRE_WORKFLOW_PROGRESS
 from store import SessionStore, SqliteBackend
-from tests.cli.chat.services.fakes import (
-    FakeExecutorSpec,
-    install_fake_executor_factory,
+from tests.cli.chat.services.mocks import (
+    MockExecutorSpec,
+    install_mock_executor_factory,
 )
 from workflows.events import (
     WorkflowNodeCompletedEvent,
@@ -126,9 +126,9 @@ async def test_bridge_emits_progress_events_and_closes_card(
 ) -> None:
     impl, cards = await _mk(tmp_path, store)
     try:
-        install_fake_executor_factory(
+        install_mock_executor_factory(
             impl,
-            {"kolsch/workflows/x": FakeExecutorSpec(events=_five_events())},
+            {"kolsch/workflows/x": MockExecutorSpec(events=_five_events())},
             runs_root=tmp_path / "runs",
         )
         card = await cards.open("wf", kind="workflow")
@@ -165,9 +165,9 @@ async def test_card_closes_with_error_on_run_failed(
             WorkflowRunStartedEvent(workflow_run_id=rid_e, trace_id=tr_e),
             WorkflowRunFailedEvent(workflow_run_id=rid_e, trace_id=tr_e),
         ]
-        install_fake_executor_factory(
+        install_mock_executor_factory(
             impl,
-            {"kolsch/workflows/f": FakeExecutorSpec(events=events)},
+            {"kolsch/workflows/f": MockExecutorSpec(events=events)},
             runs_root=tmp_path / "runs",
         )
         card = await cards.open("wf", kind="workflow")
@@ -196,9 +196,9 @@ async def test_card_closes_with_cancelled_on_run_aborted(
                 payload={"reason": "user_cancel"},
             ),
         ]
-        install_fake_executor_factory(
+        install_mock_executor_factory(
             impl,
-            {"kolsch/workflows/a": FakeExecutorSpec(events=events)},
+            {"kolsch/workflows/a": MockExecutorSpec(events=events)},
             runs_root=tmp_path / "runs",
         )
         card = await cards.open("wf", kind="workflow")

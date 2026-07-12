@@ -47,11 +47,11 @@ def _contents_of(row: WorkflowNodeRow) -> Collapsible.Contents:
 
 
 @pytest.mark.asyncio
-async def test_row_mounts_user_message(fake_app_factory: _AppFactory) -> None:
+async def test_row_mounts_user_message(mock_app_factory: _AppFactory) -> None:
     """Sink call for USER_MESSAGE mounts a ``UserChatbox`` in Contents."""
     row = WorkflowNodeRow(node_name="n")
     row.collapsed = False
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         await row.mount_user_message("hello")
@@ -69,12 +69,12 @@ async def test_row_mounts_user_message(fake_app_factory: _AppFactory) -> None:
 
 @pytest.mark.asyncio
 async def test_row_mounts_assistant_message(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """Sink call for AGENT_MESSAGE / MODEL_RESPONSE mounts an ``AssistantProse``."""
     row = WorkflowNodeRow(node_name="n")
     row.collapsed = False
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         await row.mount_assistant_message("hello world")
@@ -91,11 +91,11 @@ async def test_row_mounts_assistant_message(
 
 
 @pytest.mark.asyncio
-async def test_row_mounts_tool_call(fake_app_factory: _AppFactory) -> None:
+async def test_row_mounts_tool_call(mock_app_factory: _AppFactory) -> None:
     """Sink call for TOOL_RESULT mounts a ``ToolCallBlock``."""
     row = WorkflowNodeRow(node_name="n")
     row.collapsed = False
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         await row.mount_tool_call(
@@ -114,11 +114,11 @@ async def test_row_mounts_tool_call(fake_app_factory: _AppFactory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_row_mounts_notice(fake_app_factory: _AppFactory) -> None:
+async def test_row_mounts_notice(mock_app_factory: _AppFactory) -> None:
     """Sink call for a notice mounts a ``NoticeWidget`` inside Contents."""
     row = WorkflowNodeRow(node_name="n")
     row.collapsed = False
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         await row.mount_notice("nid", "heads up", level="warning")
@@ -150,11 +150,11 @@ async def test_row_last_assistant_text_get_set() -> None:
 
 @pytest.mark.asyncio
 async def test_collapsed_row_queues_mounts(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """Collapsed row: nothing lands in Contents until expanded."""
     row = WorkflowNodeRow(node_name="n")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         assert row.collapsed is True
@@ -184,11 +184,11 @@ async def test_collapsed_row_queues_mounts(
 
 @pytest.mark.asyncio
 async def test_pending_mount_order_preserved(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """Drain preserves insertion order — UserChatbox then AssistantProse then ToolCallBlock."""
     row = WorkflowNodeRow(node_name="n")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -227,7 +227,7 @@ async def test_pending_mount_order_preserved(
 
 @pytest.mark.asyncio
 async def test_terminal_state_drops_post_freeze_mounts(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """Post-terminal ``mount_*`` invocations are dropped by the freeze.
 
@@ -239,7 +239,7 @@ async def test_terminal_state_drops_post_freeze_mounts(
     without side effects.
     """
     row = WorkflowNodeRow(node_name="n")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -276,11 +276,11 @@ async def test_terminal_state_drops_post_freeze_mounts(
 
 @pytest.mark.asyncio
 async def test_unmount_clears_pending_mounts(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """on_unmount clears pending closures + latches ``_unmounted``."""
     row = WorkflowNodeRow(node_name="n")
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -302,14 +302,14 @@ async def test_unmount_clears_pending_mounts(
 
 @pytest.mark.asyncio
 async def test_set_output_gate_reads_last_assistant_text(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """Agent node: non-empty last-assistant-text → set_output no-ops."""
     row = WorkflowNodeRow(
         node_name="n", node_type="kolsch/nodes/agent",
     )
     row.collapsed = False
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -329,7 +329,7 @@ async def test_set_output_gate_reads_last_assistant_text(
 
 @pytest.mark.asyncio
 async def test_set_output_gate_empty_text_edge(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """Empty ``_last_assistant_text`` → gate does NOT fire.
 
@@ -340,7 +340,7 @@ async def test_set_output_gate_empty_text_edge(
     row = WorkflowNodeRow(
         node_name="n", node_type="kolsch/nodes/agent",
     )
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -360,7 +360,7 @@ async def test_set_output_gate_empty_text_edge(
 
 @pytest.mark.asyncio
 async def test_transformed_agent_message_mounts_second_prose(
-    fake_app_factory: _AppFactory,
+    mock_app_factory: _AppFactory,
 ) -> None:
     """Two distinct assistant messages → two AssistantProse widgets.
 
@@ -370,7 +370,7 @@ async def test_transformed_agent_message_mounts_second_prose(
     """
     row = WorkflowNodeRow(node_name="n")
     row.collapsed = False
-    app = fake_app_factory(row)
+    app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
 
@@ -390,7 +390,7 @@ async def test_transformed_agent_message_mounts_second_prose(
 # ---------------------------------------------------------------------------
 
 
-class _FakeChatApp:
+class _MockChatApp:
     """Bare-bones sink stub for the adapter — only reads/writes state."""
 
     def __init__(self) -> None:
@@ -452,7 +452,7 @@ def _mk_event(
 
 def test_route_to_workflow_node_returns_row_or_none() -> None:
     """``_route_to_workflow_node`` returns the row for a matching trace, else None."""
-    app = _FakeChatApp()
+    app = _MockChatApp()
     adapter = EventAdapter(app)  # type: ignore[arg-type]
     row = WorkflowNodeRow(node_name="n", trace_id="tr_x")
     adapter._live_nodes_by_trace_and_invocation[("tr_x", "inv_A")] = row
@@ -475,7 +475,7 @@ async def test_unwrap_mismatched_trace_id_drops_event(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """A trace-id mismatch on the sub-agent dispatch drops the event."""
-    app = _FakeChatApp()
+    app = _MockChatApp()
     adapter = EventAdapter(app)  # type: ignore[arg-type]
 
     inner = _mk_event(
@@ -498,7 +498,7 @@ async def test_unwrap_mismatched_trace_id_drops_event(
 # ---------------------------------------------------------------------------
 
 
-def test_fake_app_conforms_to_chatmountsink() -> None:
+def test_mock_app_conforms_to_chatmountsink() -> None:
     """The stub App satisfies ``ChatMountSink`` at runtime.
 
     The Protocol is ``runtime_checkable``; a plain isinstance check
@@ -506,7 +506,7 @@ def test_fake_app_conforms_to_chatmountsink() -> None:
     Reviewer #2: the type assertion migrates from a comment to an
     executed test.
     """
-    app = _FakeChatApp()
+    app = _MockChatApp()
     assert isinstance(app, ChatMountSink)
 
 

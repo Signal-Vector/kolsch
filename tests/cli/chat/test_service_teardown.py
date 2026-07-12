@@ -27,14 +27,14 @@ from cli.chat.app import ChatApp
 from cli.chat.service_registry import ChatServiceRegistry
 
 
-class _FakeStore:
+class _MockStore:
     async def read_path_to_leaf(self, thread_id: Any) -> Any:  # noqa: ARG002
         if False:
             yield  # pragma: no cover
         return
 
 
-class _FakeAuthz:
+class _MockAuthz:
     def register_prompt_callback(
         self, callback: Any, *, on_rule_added: Any = None
     ) -> None:  # noqa: ARG002
@@ -44,29 +44,29 @@ class _FakeAuthz:
         return None
 
 
-class _FakeEngine:
+class _MockEngine:
     async def execute_stream(self, config: Any, ctx: Any):  # noqa: ARG002
         if False:
             yield  # pragma: no cover
         return
 
 
-class _FakeRuntime:
+class _MockRuntime:
     def __init__(self) -> None:
-        self.store = _FakeStore()
-        self.authz = _FakeAuthz()
-        self.engine = _FakeEngine()
+        self.store = _MockStore()
+        self.authz = _MockAuthz()
+        self.engine = _MockEngine()
 
 
 @dataclass
-class _FakeConfig:
+class _MockConfig:
     name: str = "TestAgent"
-    agent_id: str = "ag_fake"
+    agent_id: str = "ag_mock"
     model: Any = None
 
 
 @dataclass
-class _FakeBundle:
+class _MockBundle:
     runtime: Any
     config: Any
     session_id: str
@@ -77,15 +77,15 @@ class _FakeBundle:
     is_resume: bool
 
 
-def _mk_bundle(tmp_path: Path) -> _FakeBundle:
-    return _FakeBundle(
-        runtime=_FakeRuntime(),
-        config=_FakeConfig(),
+def _mk_bundle(tmp_path: Path) -> _MockBundle:
+    return _MockBundle(
+        runtime=_MockRuntime(),
+        config=_MockConfig(),
         session_id="ses_test",
         thread_id="th_test",
-        agent_ref="kolsch/agents/fake",
+        agent_ref="kolsch/agents/mock",
         root=tmp_path,
-        model_label="fake/test",
+        model_label="mock/test",
         is_resume=False,
     )
 

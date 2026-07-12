@@ -34,7 +34,7 @@ _BASE_TS = datetime(2026, 7, 5, 12, 0, 0, tzinfo=UTC)
 
 
 @dataclass
-class _FakeCard:
+class _MockCard:
     id: CardId
     is_closed: bool = False
 
@@ -48,7 +48,7 @@ def _mk_record(
     *,
     suffix: str,
     phase: str,
-    card: _FakeCard,
+    card: _MockCard,
     created_offset: int = 0,
     started_offset: int | None = None,
     terminal_offset: int | None = None,
@@ -81,7 +81,7 @@ async def test_resume_produces_sorted_order_not_chronological() -> None:
         transcript = app.query_one("#transcript", VerticalScroll)
 
         cards = [
-            _FakeCard(id=CardId(f"crd_00000000-0000-0000-0000-000000002{i:03x}"))
+            _MockCard(id=CardId(f"crd_00000000-0000-0000-0000-000000002{i:03x}"))
             for i in range(5)
         ]
         widgets = [
@@ -155,7 +155,7 @@ async def test_two_flush_passes_produce_identical_order() -> None:
         transcript = app.query_one("#transcript", VerticalScroll)
 
         cards = [
-            _FakeCard(id=CardId(f"crd_00000000-0000-0000-0000-000000003{i:03x}"))
+            _MockCard(id=CardId(f"crd_00000000-0000-0000-0000-000000003{i:03x}"))
             for i in range(5)
         ]
         widgets = [

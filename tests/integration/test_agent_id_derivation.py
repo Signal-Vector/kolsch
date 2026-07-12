@@ -70,7 +70,7 @@ def _agent_payload(*, agent_id: str | None) -> dict[str, Any]:
         "assembly_version": "1",
         "name": "demo",
         "description": "TC-AGENTID regression fixture.",
-        "model": {"provider": "fake", "model": "fake-model"},
+        "model": {"provider": "mock", "model": "mock-model"},
         "prompt": "You are a demo agent.",
         "io": {"mode": "conversational"},
     }
@@ -123,8 +123,8 @@ async def test_tc_agentid_01_partial_without_agent_id_derives(tmp_path: Path) ->
     # didn't accidentally break the rest of the resolved shape.
     assert cfg.name == "demo"
     assert cfg.description == "TC-AGENTID regression fixture."
-    assert cfg.model.provider == "fake"
-    assert cfg.model.model == "fake-model"
+    assert cfg.model.provider == "mock"
+    assert cfg.model.model == "mock-model"
 
 
 # ---------------------------------------------------------------------------
@@ -220,7 +220,7 @@ async def test_tc_agentid_04_starter_helper_keeps_explicit_id(tmp_path: Path) ->
         (tmp_path / sub).mkdir(exist_ok=True)
     platform_payload = {
         **_PLATFORM_PAYLOAD,
-        "defaults": {"model": {"provider": "fake", "model": "fake-model"}},
+        "defaults": {"model": {"provider": "mock", "model": "mock-model"}},
     }
     (tmp_path / "platform.yaml").write_text(
         yaml.safe_dump(platform_payload), encoding="utf-8"

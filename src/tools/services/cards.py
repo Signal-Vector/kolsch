@@ -18,7 +18,7 @@ Two shapes for the service surface plus the `Card` handle:
   / `set_title` / `close`, or drive it as an async context manager
   (auto-close on exit).
 - [`AbstractCard`][tools.services.cards.AbstractCard] is the ABC
-  base for concrete `Card` impls and test fakes.
+  base for concrete `Card` impls and test mocks.
 
 The ABCs do NOT inherit from the Protocols — structural typing
 carries the shape at every use site. Test 4 (from spec-001) asserts
@@ -188,7 +188,7 @@ class Card(Protocol):
 
 
 class AbstractCard(ABC):
-    """Stub base for concrete Card impls and test fakes.
+    """Stub base for concrete Card impls and test mocks.
 
     Does NOT inherit from `Card` Protocol (structural typing carries
     the shape at every use site — same pattern as
@@ -313,7 +313,7 @@ class AbstractCards(ABC):
     async def aclose(self) -> None:
         """Called from ChatApp.on_unmount. Cancels drain tasks, snapshot timers, cancel tokens. Idempotent. Post-aclose, subsequent mutation raises RuntimeError.
 
-        The ABC default is a no-op — test fakes and the placeholder
+        The ABC default is a no-op — test mocks and the placeholder
         `ChatServiceRegistry` fields (all `None` today) don't need real
         teardown. Concrete impls in spec-006 override with real
         teardown logic.
