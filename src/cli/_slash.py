@@ -1520,8 +1520,8 @@ COMMAND_REGISTRY: dict[str, SlashCommand] = {
     ),
     "/reload": SlashCommand(
         name="/reload",
-        description="reload authz rules from platform.yaml (atomic)",
-        usage="/reload   rebuild the authz provider from disk",
+        description="reload authz rules across all 4 layers (platform + bundle + workflow + agent)",
+        usage="/reload   rescan disk + rebuild the authz provider atomically",
         handler=None,
     ),
 }

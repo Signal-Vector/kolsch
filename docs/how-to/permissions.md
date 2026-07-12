@@ -288,6 +288,69 @@ which intent wins.
 
 ---
 
+## Debugging denials in chat — `/why` and `/reload`
+
+Two companion slash commands help you iterate on rules without
+restarting the chat.
+
+### `/why` — inspect a denial
+
+When a tool call was denied and you want to see the exact rule
+that fired:
+
+```
+/why                    # deny card for the most recent denial in this thread
+/why <tool_call_id>     # deny card for a specific tool call
+```
+
+The card names the matched rule, the layer it came from
+(`platform` / `bundle` / `workflow` / `agent`), the source
+`file:line` where it's declared, and the caller / target / action
+strings the check ran against. Use this to answer "which rule?"
+without hunting through YAMLs.
+
+If no denial is found in the current thread, `/why` prints a
+notice suggesting `/why <tool_call_id>` if you meant a specific
+call.
+
+### `/reload` — pick up rule edits without restarting
+
+After hand-editing any of the 4 rule sources — `platform.yaml`,
+`bundles/*/bundle.yaml`, workflow `policy:` blocks, or agent
+`permissions:` fields — run:
+
+```
+/reload
+```
+
+The command atomically:
+
+1. Rescans the filesystem to discover new / deleted YAMLs since
+   the chat started (so `bundles/new-bundle/bundle.yaml` created
+   mid-session is picked up).
+2. Re-parses every YAML in all 4 layers.
+3. If ANY parse fails: aborts, keeps the old authz provider live,
+   prints the offending `file:line`. Enforcement never enters a
+   half-loaded state.
+4. Otherwise: swaps in the fresh provider and prints a summary
+   like `reloaded 17 rules across 4 layers [+1 bundle, -1 agent]`.
+
+Next authz decision uses the new rules. In-flight tool calls
+straddling a `/reload` are race-safe — they see the old provider
+consistently across all their decisions.
+
+Common `/why` → edit → `/reload` loop:
+
+```
+> run some tool                # denied
+> /why                         # see which rule blocked, and where
+> (edit platform.yaml)         # adjust the rule
+> /reload                      # pick up the edit
+> run the tool again           # allowed
+```
+
+---
+
 ## Editing rules from the CLI — `kolsch permissions`
 
 The CLI is the scriptable mirror of `/perm`. Use it for batch
