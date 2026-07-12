@@ -172,10 +172,22 @@ def _echo_node_body() -> str:
 
 
 def _holding_node_body(barrier_path: str, release_path: str) -> str:
-    """Worker that blocks until ``release_path`` exists so two runs
-    can park inside the runner concurrently."""
+    """Worker that yields until ``release_path`` exists so two runs
+    can park inside the runner concurrently.
+
+    Uses ``await asyncio.sleep`` (NOT ``time.sleep``) so the runner
+    releases the event loop; a blocking ``time.sleep`` here would
+    serialise the two ``asyncio.gather`` tasks and defeat the whole
+    "concurrent runs" invariant this test exists to enforce. If both
+    workers run serially, run A completes and its module is cleaned
+    up BEFORE run B starts — the Python allocator then routinely
+    hands B the same memory address A just vacated, and ``id()`` on
+    the two module objects collides even though the mechanism under
+    test (distinct ``sys.modules`` keys) is working correctly. That
+    class of flake is what the ``asyncio.sleep`` here defends against.
+    """
     return f"""
-        import time
+        import asyncio
         from pathlib import Path
         from pydantic import BaseModel
         from workflows import node, NodeContext
@@ -185,16 +197,20 @@ def _holding_node_body(barrier_path: str, release_path: str) -> str:
 
         class Outp(BaseModel):
             module_id: int
+            module_key: str
 
         @node(label="Holding")
         async def run(inputs: Inp, ctx: NodeContext) -> Outp:
             import sys as _sys
             Path({barrier_path!r}).touch()
-            for _ in range(200):
+            for _ in range(400):
                 if Path({release_path!r}).exists():
                     break
-                time.sleep(0.01)
-            return Outp(module_id=id(_sys.modules[__name__]))
+                await asyncio.sleep(0.005)
+            return Outp(
+                module_id=id(_sys.modules[__name__]),
+                module_key=__name__,
+            )
         """
 
 
@@ -210,9 +226,19 @@ class TestConcurrentRunsDistinctModules:
 
         We use two separate workspaces (distinct ``runs/`` roots,
         same node .py) so the executors operate fully independently
-        but exercise the SAME module path. Each node returns
-        ``id(sys.modules[__name__])`` — the prefix discipline makes
-        these distinct.
+        but exercise the SAME module path. Each node returns its
+        own ``sys.modules`` key AND ``id()``:
+
+        - The KEY assertion (``key_a != key_b``) tests the mechanism
+          under scrutiny — the ``RunModuleNamespace`` prefix discipline.
+          This is the primary invariant.
+        - The ``id()`` assertion (``mod_a != mod_b``) is a redundant
+          check that the two module objects coexist in memory during
+          the barrier window. It only holds when both runs are
+          concurrently mid-dispatch (see ``_holding_node_body``'s
+          ``asyncio.sleep`` comment for why serial execution would
+          silently break the id() check while the key check would
+          still pass).
         """
         ws_a = tmp_path / "ws_a"
         ws_b = tmp_path / "ws_b"
@@ -246,7 +272,7 @@ class TestConcurrentRunsDistinctModules:
             }
         )
 
-        async def _do_run(ws: Path, catalog: AssetCatalog) -> tuple[str, int]:
+        async def _do_run(ws: Path, catalog: AssetCatalog) -> tuple[str, int, str]:
             ex, store = _build_executor(ws, wf, catalog)
             status = await ex.run()
             run_id = ex._run.run_id
@@ -255,31 +281,47 @@ class TestConcurrentRunsDistinctModules:
                 e for e in events if e.get("kind") == "workflow.node.completed"
             )
             module_id = completed["payload"]["output"]["module_id"]
-            return str(status), module_id
+            module_key = completed["payload"]["output"]["module_key"]
+            return str(status), module_id, module_key
 
         # Schedule both runs concurrently; release them in unison
         # once both are parked inside the node body.
         async def _releaser() -> None:
-            for _ in range(200):
+            for _ in range(400):
                 if barrier_a.exists() and barrier_b.exists():
                     release.touch()
                     return
-                await asyncio.sleep(0.01)
+                await asyncio.sleep(0.005)
             release.touch()  # safety; runs will time out anyway
 
         task_a = asyncio.create_task(_do_run(ws_a, catalog_a))
         task_b = asyncio.create_task(_do_run(ws_b, catalog_b))
         releaser = asyncio.create_task(_releaser())
         try:
-            (status_a, mod_a), (status_b, mod_b) = await asyncio.gather(task_a, task_b)
+            (status_a, mod_a, key_a), (status_b, mod_b, key_b) = await asyncio.gather(
+                task_a, task_b
+            )
         finally:
             await releaser
 
         assert status_a.lower().endswith("succeeded")
         assert status_b.lower().endswith("succeeded")
-        # The crux: each run loaded its OWN module instance under
-        # its OWN prefixed sys.modules key.
-        assert mod_a != mod_b
+        # Primary invariant: the ``RunModuleNamespace`` prefix
+        # discipline gives each run a distinct ``sys.modules`` key
+        # for the SAME authored node module path.
+        assert key_a != key_b, (
+            f"expected distinct per-run sys.modules keys; got {key_a!r} == {key_b!r}"
+        )
+        # Secondary invariant: the two module objects lived in
+        # memory at overlapping times (the barriers enforced
+        # mid-dispatch overlap), so their ``id()`` differs. If this
+        # fails while the key check passes, the concurrency
+        # coordination broke (see the ``_holding_node_body``
+        # comment) — not the isolation mechanism.
+        assert mod_a != mod_b, (
+            f"expected distinct module objects in memory; got {mod_a} == {mod_b} "
+            f"(keys were {key_a!r} vs {key_b!r})"
+        )
 
 
 # ---------------------------------------------------------------------------
