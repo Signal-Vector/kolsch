@@ -530,6 +530,18 @@ class _CatalogDiff:
         )
 
 
+# Missing-YAML contract (qol-051 C2): both ``_reload_bundles`` and
+# ``_reload_agents`` treat a YAML that has vanished from disk between
+# rescan and reload as an ABORT — the rescan step at the top of
+# ``handle_reload`` (qol-051 C1) drops disappeared YAMLs from the fresh
+# catalog before either helper runs, so a missing-YAML failure at this
+# layer means the file disappeared MID-RELOAD (the rescan built the
+# catalog entry, then the per-layer reload tried to re-parse it and
+# found nothing). That's an unusual condition — safer to fail loud than
+# preserve stale state that no longer has a filesystem source. Both
+# ``_reload_bundles`` and ``_reload_agents`` share the same shape:
+# typed error string, "Old rules still active" clause, offending file
+# path in the message.
 async def handle_reload(runtime: PlatformRuntime) -> ReloadResult:
     """Atomically rebuild every authz layer from disk (bug-044 + qol-051 C1).
 
@@ -960,6 +972,14 @@ def _reload_bundles(catalog: Any) -> _BundleReloadOutcome:
     error string cites the offending ``file:line`` when the parser's
     exception exposes it, otherwise the file path plus the error
     message.
+
+    Missing-YAML semantics (qol-051 C2): after C1's rescan, the
+    catalog only contains bundles whose ``bundle.yaml`` existed at
+    rescan time. A missing YAML here means the file vanished BETWEEN
+    rescan and re-parse — a rare mid-reload race. Abort with a typed
+    error (symmetric with ``_reload_agents``'s OSError branch) so we
+    don't ship a partial reload silently preserving stale state that
+    no longer has a filesystem source.
     """
     from pathlib import Path  # noqa: PLC0415
 
@@ -971,13 +991,16 @@ def _reload_bundles(catalog: Any) -> _BundleReloadOutcome:
         bundle_dir = Path(existing.path)
         yaml_path = bundle_dir / "bundle.yaml"
         if not yaml_path.exists():
-            # The bundle was scanned at startup — its YAML disappearing
-            # mid-session is an operator-visible failure. Preserve the
-            # existing manifest and skip; we don't want to spuriously
-            # abort a reload because the file was renamed.
-            manifests[name] = existing
-            total += len(existing.permissions)
-            continue
+            # Mid-reload race: the rescan saw the YAML, then it
+            # disappeared before we could re-parse. Abort so we don't
+            # ship a partial reload — mirrors ``_reload_agents``.
+            return _BundleReloadOutcome(
+                error=(
+                    f"could not read bundle YAML {yaml_path}: "
+                    "file disappeared between rescan and reload. "
+                    "Old rules still active; no change to enforcement."
+                ),
+            )
         # `load_manifest` returns None on parse/shape failure — for
         # /reload we want to surface the failure with a file
         # reference instead of the silent None-fallback the catalog

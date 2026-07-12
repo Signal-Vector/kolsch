@@ -664,3 +664,112 @@ async def test_reload_notices_deleted_bundle_yaml(tmp_path: Path) -> None:
     assert "andre" in fresh_catalog.bundles
 
 
+# ---------------------------------------------------------------------------
+# qol-051 C2 — missing-YAML contract is symmetric across bundle + agent.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reload_handles_missing_bundle_yaml_consistently(
+    tmp_path: Path,
+) -> None:
+    """Bundle YAML disappearing between rescan and reload aborts loudly.
+
+    C1's rescan drops deleted bundles from the fresh catalog, so
+    ``_reload_bundles`` sees a missing YAML only in a mid-reload race
+    — this test synthesizes the race by monkey-patching
+    ``catalog_module.scan`` to return the stale catalog even after the
+    on-disk YAML is gone.
+
+    The invariant under test (qol-051 C2): the bundle layer's
+    missing-YAML branch fires the SAME abort-with-typed-error path
+    ``_reload_agents`` takes on ``OSError``. Silent preservation of
+    stale state (the pre-C2 behavior) is a regression trap this test
+    locks out.
+    """
+    _write_platform_yaml_raw(
+        tmp_path,
+        "authorization:\n"
+        "  variant: rule_based\n"
+        "  config:\n"
+        "    rules:\n"
+        "      - {what: '*', pattern: '*', effect: allow}\n",
+    )
+    _write_bundle(
+        tmp_path,
+        "andre",
+        permissions=[{"what": "kolsch/tools/bash", "effect": "deny"}],
+    )
+    runtime = _build_runtime(tmp_path)
+
+    # Synthesize the mid-reload race: monkey-patch
+    # ``catalog_module.scan`` so the rescan returns the stale (still
+    # carrying "andre") catalog even though the YAML has been deleted.
+    from assets import catalog as catalog_module
+
+    stale_catalog = runtime.asset_management.catalog()
+    (tmp_path / "bundles" / "andre" / "bundle.yaml").unlink()
+
+    original_scan = catalog_module.scan
+    try:
+        catalog_module.scan = lambda _root: stale_catalog  # type: ignore[assignment]
+        result = await handle_reload(runtime)
+    finally:
+        catalog_module.scan = original_scan  # type: ignore[assignment]
+
+    # Bundle layer surfaces a typed error when the YAML disappears
+    # mid-reload — mirroring the agent layer's OSError abort.
+    assert result.summary is None
+    assert result.error is not None
+    assert "Old rules still active" in result.error
+    # File path cited in the message so the operator can find it.
+    assert "andre" in result.error and "bundle.yaml" in result.error
+
+
+@pytest.mark.asyncio
+async def test_reload_handles_missing_agent_yaml_consistently(
+    tmp_path: Path,
+) -> None:
+    """Agent YAML disappearing between rescan and reload aborts loudly.
+
+    Mirror of the bundle case above — same race, agent layer. The
+    ``_reload_agents`` helper aborts on OSError (has since bug-044);
+    this test locks that behavior in AND documents the symmetry with
+    ``_reload_bundles``'s new missing-YAML branch (qol-051 C2).
+    """
+    _write_platform_yaml_raw(
+        tmp_path,
+        "authorization:\n"
+        "  variant: rule_based\n"
+        "  config:\n"
+        "    rules:\n"
+        "      - {what: '*', pattern: '*', effect: allow}\n",
+    )
+    _write_bundle(
+        tmp_path,
+        "andre",
+        permissions=[],
+        agent_permissions={"butler": [{"what": "*", "effect": "allow"}]},
+    )
+    runtime = _build_runtime(tmp_path)
+
+    from assets import catalog as catalog_module
+
+    stale_catalog = runtime.asset_management.catalog()
+    (tmp_path / "bundles" / "andre" / "agents" / "butler.yaml").unlink()
+
+    original_scan = catalog_module.scan
+    try:
+        catalog_module.scan = lambda _root: stale_catalog  # type: ignore[assignment]
+        result = await handle_reload(runtime)
+    finally:
+        catalog_module.scan = original_scan  # type: ignore[assignment]
+
+    # Same observable behavior as the bundle case: typed error,
+    # "Old rules still active" clause, offending file cited.
+    assert result.summary is None
+    assert result.error is not None
+    assert "Old rules still active" in result.error
+    assert "butler" in result.error or "agent YAML" in result.error
+
+
