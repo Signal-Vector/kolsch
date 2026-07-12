@@ -22,7 +22,7 @@ bug-042 lessons).
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -503,29 +503,44 @@ class ReloadResult:
 
 
 async def handle_reload(runtime: PlatformRuntime) -> ReloadResult:
-    """Atomically rebuild the runtime's authz provider from disk.
+    """Atomically rebuild every authz layer from disk (bug-044 scope).
 
-    Steps:
+    Rescans all four authz layers — platform, bundle, workflow, agent
+    — and reports the true rule count on success. This is the
+    scope-extension follow-up feat-041 deferred: the platform-only
+    reload shipped, but bundle / workflow / agent YAML edits still
+    required a restart to take effect.
 
-    1. Re-read ``platform.yaml`` (via ``platform_config.load_or_create``
-       so the same error surface applies) and its rule source map.
-    2. Construct a NEW ``RuleBasedAuthorizationProvider`` from the
-       fresh config.
-    3. On success: swap ``runtime.authz`` atomically and return the
-       summary. In-flight tool calls that already resolved through
-       the old provider are unaffected — they're past their
-       ``allow()`` call by construction.
-    4. On any failure (YAML parse, malformed rule, missing required
-       field): DO NOT touch the runtime. Return a ``ReloadResult``
-       with the error message so the caller can display it. The old
-       provider stays live.
+    Strategy (Path B — partial rescan). Rather than rebuild the whole
+    ``AssetCatalog`` (which would cascade into every catalog-derived
+    cache — agent-id→bundle map, tool registrations, engine bindings
+    — and force a re-run of ``build_resolved_config``), we surgically
+    refresh only the state each layer's rules live in:
 
-    Cross-layer note: bundle / workflow / agent YAMLs aren't loaded
-    here — they're consumed at agent-preflight / node-dispatch time
-    from the catalog (which is itself immutable after startup). A
-    future extension can rescan the catalog; today the primary
-    iteration loop is the operator editing `platform.yaml` and
-    typing `/reload`.
+    - **platform** — ``runtime.authz`` gets a fresh
+      ``RuleBasedAuthorizationProvider``, same as feat-041.
+    - **bundle** — ``BundleManifest.permissions`` on every catalog
+      entry is refreshed by re-parsing ``bundle.yaml``, and every
+      ``_AgentRegistration.bundle_permissions`` for agents in that
+      bundle is overwritten with the fresh rules.
+    - **agent** — ``_AgentRegistration.agent_permissions`` is
+      overwritten from each agent YAML's ``permissions:`` field
+      (parsed direct off disk, keyed by the agent's derived
+      ``AgentId``).
+    - **workflow** — ``load_workflow(entry.path)`` is already invoked
+      fresh on every workflow run, so ``policy:`` edits are picked up
+      automatically. We still parse each workflow YAML here to enforce
+      the "abort-on-any-failure" contract — a broken workflow YAML
+      would otherwise crash later at first invocation.
+
+    Failure model (AC #2): any single YAML that fails to parse aborts
+    the entire reload BEFORE any state mutates. The error message
+    cites the offending ``file:line`` and the old provider stays live.
+    Never leaves the system half-loaded.
+
+    Success summary (AC #1 / Mockup 3): ``reloaded N rules across 4
+    layers (platform, bundle, workflow, agent) — new decisions use
+    the updated config.`` ``N`` is the true total across every layer.
     """
     from assets.platform_config import (  # noqa: PLC0415
         authorization_rule_source_map,
@@ -535,23 +550,17 @@ async def handle_reload(runtime: PlatformRuntime) -> ReloadResult:
     from providers.authz import RuleBasedAuthorizationProvider  # noqa: PLC0415
 
     root = runtime.root
+
+    # --- Phase A: parse every layer, no mutations yet ------------------
+    #
+    # Any failure at this phase returns an error immediately — the
+    # runtime is untouched, so the old provider + old bundle/agent
+    # bindings stay active.
+
     try:
         payload = load_or_create(root)
     except ConfigInvalid as exc:
-        # `ConfigInvalid` stashes the per-error list on
-        # `detail["validation_errors"]`; grab the first one's
-        # `message` if present, else str(exc).
-        detail = getattr(exc, "detail", {}) or {}
-        errors = detail.get("validation_errors") if isinstance(detail, dict) else None
-        first_error = errors[0] if errors else {}
-        message = first_error.get("message") if isinstance(first_error, dict) else None
-        message = message or str(exc)
-        return ReloadResult(
-            error=(
-                f"yaml parse error in platform.yaml — {message}. "
-                "Old rules still active; no change to enforcement."
-            ),
-        )
+        return ReloadResult(error=_format_config_invalid(exc, "platform.yaml"))
     except OSError as exc:
         return ReloadResult(
             error=(
@@ -569,11 +578,35 @@ async def handle_reload(runtime: PlatformRuntime) -> ReloadResult:
             ),
         )
 
+    catalog = runtime.asset_management.catalog()
+
+    # Bundle rescan — one BundleManifest per catalogued bundle. Failure
+    # to reload a bundle.yaml (parse or shape error) aborts the reload.
+    bundle_reload = _reload_bundles(catalog)
+    if bundle_reload.error is not None:
+        return ReloadResult(error=bundle_reload.error)
+
+    # Agent rescan — one PermissionRule list per catalogued agent.
+    # Parse errors abort. Empty permissions list is fine.
+    agent_reload = _reload_agents(catalog)
+    if agent_reload.error is not None:
+        return ReloadResult(error=agent_reload.error)
+
+    # Workflow rescan — we don't cache policy, but we still verify each
+    # workflow YAML parses so a broken file surfaces at /reload rather
+    # than at first invocation. Rules are counted here for the summary.
+    workflow_reload = _reload_workflows(catalog)
+    if workflow_reload.error is not None:
+        return ReloadResult(error=workflow_reload.error)
+
+    # Build the fresh platform provider. Do this AFTER the bundle /
+    # agent / workflow parses succeed so a failure downstream still
+    # leaves everything untouched.
     try:
         source_map = authorization_rule_source_map(root)
         new_authz = RuleBasedAuthorizationProvider(
             config=authz_cfg.get("config", {}),
-            catalog=runtime.asset_management.catalog(),
+            catalog=catalog,
             source_map=source_map,
         )
     except Exception as exc:  # noqa: BLE001 — surface any construction error
@@ -585,25 +618,449 @@ async def handle_reload(runtime: PlatformRuntime) -> ReloadResult:
             ),
         )
 
-    # Atomic swap. `PlatformRuntime` is a frozen dataclass — bypass
-    # the freeze with `object.__setattr__` since the semantic is
-    # "same runtime, updated provider". Alternative (rebuild the
-    # dataclass) would ripple through every closure that captured
-    # the old runtime.
-    object.__setattr__(runtime, "authz", new_authz)
+    # --- Phase B: atomic swap. All parses succeeded above ----------
+    #
+    # From here on the mutations are non-recoverable — but each is a
+    # single-attribute rebind, and Python's GIL guarantees each write
+    # is atomic. In-flight tool calls that already resolved through
+    # the old state are unaffected (they're past their `allow()` call
+    # by construction).
 
-    # Also update the tools subsystem's cached authz reference — the
-    # dispatch flow reads `runtime.authz` at dispatch time, but the
-    # subsystem holds its own reference set at bootstrap.
+    # Platform layer — the feat-041 swap.
+    object.__setattr__(runtime, "authz", new_authz)
     tools_sub = getattr(runtime, "tools_subsystem", None)
     if tools_sub is not None:
         object.__setattr__(tools_sub, "_authz", new_authz)
 
+        # Bundle + agent layers — push the freshly-parsed rules into
+        # every existing agent registration. Registrations for agents
+        # that never bound to an on-disk YAML (test fixtures, synthetic
+        # configs) keep whatever they had.
+        _apply_bundle_and_agent_rules(
+            tools_sub=tools_sub,
+            catalog=catalog,
+            bundle_manifests=bundle_reload.manifests,
+            agent_rules_by_id=agent_reload.rules_by_id,
+        )
+
+    # Update the catalog's cached BundleManifest map so any future
+    # agent registration (a workflow spawning a sub-agent, e.g.) sees
+    # the fresh `permissions:` list. `AssetCatalog` is technically
+    # frozen=False so the direct assignment works; the "immutable
+    # after startup" convention is a call-site discipline the reload
+    # is by design breaking.
+    if bundle_reload.manifests:
+        for name, manifest in bundle_reload.manifests.items():
+            catalog.bundles[name] = manifest
+
     rules = await new_authz.list_rules()
-    n_rules = len(rules)
+    n_platform = len(rules)
+    total = (
+        n_platform
+        + bundle_reload.total_rules
+        + workflow_reload.total_rules
+        + agent_reload.total_rules
+    )
     return ReloadResult(
         summary=(
-            f"reloaded {n_rules} rules (platform layer) — "
+            f"reloaded {total} rules across 4 layers "
+            f"(platform, bundle, workflow, agent) — "
             "new decisions use the updated config."
         ),
     )
+
+
+# ---------------------------------------------------------------------------
+# /reload — helper: per-layer rescan pipelines
+# ---------------------------------------------------------------------------
+
+
+def _format_config_invalid(exc: object, source: str) -> str:
+    """Compose the user-visible error string for a ``ConfigInvalid``.
+
+    Extracts the first validation error's ``message`` from the
+    exception's ``detail`` dict (feat-041 shape) and appends the
+    "old rules still active" clause so the caller has a complete
+    line to render.
+    """
+    detail = getattr(exc, "detail", {}) or {}
+    errors = detail.get("validation_errors") if isinstance(detail, dict) else None
+    first_error = errors[0] if errors else {}
+    message = first_error.get("message") if isinstance(first_error, dict) else None
+    message = message or str(exc)
+    return (
+        f"yaml parse error in {source} — {message}. "
+        "Old rules still active; no change to enforcement."
+    )
+
+
+@dataclass(frozen=True)
+class _BundleReloadOutcome:
+    """Phase-A outcome for the bundle layer.
+
+    ``manifests`` is keyed by bundle name; ``total_rules`` is the sum
+    of ``len(permissions)`` across every fresh manifest. ``error``, if
+    present, aborts the reload before mutation.
+    """
+
+    manifests: dict[str, Any] = field(default_factory=dict)
+    total_rules: int = 0
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class _AgentReloadOutcome:
+    """Phase-A outcome for the agent layer.
+
+    ``rules_by_id`` maps a derived ``AgentId`` (str form) to the
+    freshly-parsed permission-rule list — the tools subsystem's
+    registration for that agent gets overwritten with the value.
+    """
+
+    rules_by_id: dict[str, Any] = field(default_factory=dict)
+    total_rules: int = 0
+    error: str | None = None
+
+
+@dataclass(frozen=True)
+class _WorkflowReloadOutcome:
+    """Phase-A outcome for the workflow layer.
+
+    Workflow policy is not cached (each ``load_workflow`` call re-reads
+    the YAML), so nothing needs to be pushed back at swap time. We
+    still parse every workflow to enforce the "abort-on-any-failure"
+    contract and to count rules for the summary.
+    """
+
+    total_rules: int = 0
+    error: str | None = None
+
+
+def _reload_bundles(catalog: Any) -> _BundleReloadOutcome:
+    """Re-parse every catalogued bundle's ``bundle.yaml``.
+
+    Failure to parse a bundle YAML aborts the whole reload — the
+    error string cites the offending ``file:line`` when the parser's
+    exception exposes it, otherwise the file path plus the error
+    message.
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from assets.manifest import load_manifest  # noqa: PLC0415
+
+    manifests: dict[str, Any] = {}
+    total = 0
+    for name, existing in catalog.bundles.items():
+        bundle_dir = Path(existing.path)
+        yaml_path = bundle_dir / "bundle.yaml"
+        if not yaml_path.exists():
+            # The bundle was scanned at startup — its YAML disappearing
+            # mid-session is an operator-visible failure. Preserve the
+            # existing manifest and skip; we don't want to spuriously
+            # abort a reload because the file was renamed.
+            manifests[name] = existing
+            total += len(existing.permissions)
+            continue
+        # `load_manifest` returns None on parse/shape failure — for
+        # /reload we want to surface the failure with a file
+        # reference instead of the silent None-fallback the catalog
+        # scanner uses at boot time. Re-parse ourselves to catch the
+        # error class.
+        try:
+            manifest = _reparse_bundle_manifest(bundle_dir)
+        except _YamlReloadError as exc:
+            return _BundleReloadOutcome(
+                error=(
+                    f"yaml parse error in {exc.source} — {exc.message}. "
+                    "Old rules still active; no change to enforcement."
+                ),
+            )
+        if manifest is None:
+            # Parse succeeded but shape validation failed silently
+            # inside `load_manifest`. Re-run through the strict path
+            # to extract the concrete error.
+            fresh = load_manifest(bundle_dir)
+            if fresh is None:
+                return _BundleReloadOutcome(
+                    error=(
+                        f"yaml parse error in {yaml_path} — "
+                        "bundle.yaml shape validation failed. "
+                        "Old rules still active; no change to enforcement."
+                    ),
+                )
+            manifest = fresh
+        manifests[name] = manifest
+        total += len(manifest.permissions)
+    return _BundleReloadOutcome(manifests=manifests, total_rules=total)
+
+
+def _reload_agents(catalog: Any) -> _AgentReloadOutcome:
+    """Re-parse every catalogued agent YAML's ``permissions:`` field.
+
+    Result is keyed by derived ``AgentId`` (str) so the tools subsystem
+    can look up the corresponding registration on the swap. Agent
+    YAMLs that don't parse cleanly abort the reload with the file's
+    path in the error message.
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from assets.assembler import load_agent_definition  # noqa: PLC0415
+    from errors import ConfigInvalid  # noqa: PLC0415
+    from schemas import PermissionRule, derive_agent_id  # noqa: PLC0415
+
+    rules_by_id: dict[str, Any] = {}
+    total = 0
+    for entry in catalog.assets.values():
+        if entry.asset_type != "agent":
+            continue
+        # `entry.path` on an agent entry is the YAML file itself.
+        yaml_path = Path(entry.path)
+        try:
+            payload = load_agent_definition(yaml_path)
+        except ConfigInvalid as exc:
+            return _AgentReloadOutcome(
+                error=_format_config_invalid(exc, str(yaml_path)),
+            )
+        except OSError as exc:
+            return _AgentReloadOutcome(
+                error=(
+                    f"could not read agent YAML {yaml_path}: {exc}. "
+                    "Old rules still active; no change to enforcement."
+                ),
+            )
+        raw_permissions = payload.get("permissions") or []
+        if not isinstance(raw_permissions, list):
+            return _AgentReloadOutcome(
+                error=(
+                    f"agent YAML {yaml_path} 'permissions:' must be a list; "
+                    f"got {type(raw_permissions).__name__}. "
+                    "Old rules still active; no change to enforcement."
+                ),
+            )
+        parsed: list[PermissionRule] = []
+        for idx, raw in enumerate(raw_permissions):
+            try:
+                parsed.append(PermissionRule.model_validate(raw))
+            except Exception as exc:  # noqa: BLE001 — surface pydantic + shape errors uniformly
+                return _AgentReloadOutcome(
+                    error=(
+                        f"invalid permission rule at {yaml_path} "
+                        f"(index {idx}): {exc}. "
+                        "Old rules still active; no change to enforcement."
+                    ),
+                )
+        agent_name = entry.ref.rsplit("/", 1)[-1]
+        agent_id = str(derive_agent_id(entry.bundle, agent_name))
+        rules_by_id[agent_id] = parsed
+        total += len(parsed)
+    return _AgentReloadOutcome(rules_by_id=rules_by_id, total_rules=total)
+
+
+def _reload_workflows(catalog: Any) -> _WorkflowReloadOutcome:
+    """Re-parse every catalogued workflow YAML.
+
+    Workflow policy rules ARE re-read on every workflow run (via
+    ``load_workflow`` at invocation time), so no state needs pushing
+    back at swap time. The rescan here just enforces the
+    "abort-on-any-failure" contract — a broken workflow YAML surfaces
+    at /reload rather than at first invocation — and totals the policy
+    rules for the summary.
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from workflows.errors import WorkflowError  # noqa: PLC0415
+    from workflows.parser import load_workflow  # noqa: PLC0415
+
+    total = 0
+    for entry in catalog.assets.values():
+        if entry.asset_type != "workflow":
+            continue
+        try:
+            workflow = load_workflow(Path(entry.path))
+        except WorkflowError as exc:
+            return _WorkflowReloadOutcome(
+                error=(
+                    f"workflow YAML {entry.path} failed to parse: {exc}. "
+                    "Old rules still active; no change to enforcement."
+                ),
+            )
+        except OSError as exc:
+            return _WorkflowReloadOutcome(
+                error=(
+                    f"could not read workflow YAML {entry.path}: {exc}. "
+                    "Old rules still active; no change to enforcement."
+                ),
+            )
+        total += len(workflow.policy)
+    return _WorkflowReloadOutcome(total_rules=total)
+
+
+class _YamlReloadError(Exception):
+    """Internal marker carrying source + message for one YAML failure."""
+
+    def __init__(self, *, source: str, message: str) -> None:
+        super().__init__(f"{source}: {message}")
+        self.source = source
+        self.message = message
+
+
+def _reparse_bundle_manifest(bundle_dir: Any) -> Any:
+    """Re-parse ``bundle.yaml`` and surface the concrete parse error.
+
+    ``assets.manifest.load_manifest`` swallows YAMLError + ValidationError
+    to keep the catalog scanner's "skip with warning" contract, which
+    would silently hide the failure at /reload. Here we run the same
+    load path but re-raise as ``_YamlReloadError`` so the caller can
+    build a user-visible message.
+    """
+    from pydantic import ValidationError  # noqa: PLC0415
+
+    from assets.manifest import BundleManifest  # noqa: PLC0415
+    from kolsch._yamlio import YAMLError, load  # noqa: PLC0415
+
+    yaml_path = bundle_dir / "bundle.yaml"
+    try:
+        text = yaml_path.read_text(encoding="utf-8")
+    except OSError as exc:
+        raise _YamlReloadError(
+            source=str(yaml_path),
+            message=str(exc),
+        ) from exc
+    try:
+        payload = load(text)
+    except YAMLError as exc:
+        line = _yaml_error_line(exc)
+        raise _YamlReloadError(
+            source=f"{yaml_path}:{line}",
+            message=str(exc),
+        ) from exc
+    if payload is None or not isinstance(payload, dict):
+        raise _YamlReloadError(
+            source=str(yaml_path),
+            message=(
+                "top-level must be a mapping; "
+                f"got {type(payload).__name__}"
+            ),
+        )
+    payload["path"] = str(bundle_dir.resolve())
+    try:
+        return BundleManifest.model_validate(payload)
+    except ValidationError as exc:
+        raise _YamlReloadError(
+            source=str(yaml_path),
+            message=str(exc),
+        ) from exc
+
+
+def _yaml_error_line(exc: Any) -> int:
+    """Best-effort ruamel-YAML line extraction (1-indexed).
+
+    Mirrors ``workflows.parser._extract_yaml_line`` — falls back to
+    ``1`` when the error class doesn't expose a ``problem_mark``.
+    """
+    mark = getattr(exc, "problem_mark", None)
+    if mark is None:
+        return 1
+    return int(getattr(mark, "line", 0)) + 1
+
+
+def _apply_bundle_and_agent_rules(
+    *,
+    tools_sub: Any,
+    catalog: Any,
+    bundle_manifests: dict[str, Any],
+    agent_rules_by_id: dict[str, Any],
+) -> None:
+    """Push freshly-parsed bundle + agent rules into every registration.
+
+    Walks the tools subsystem's ``_registry._agents`` map and, for each
+    registered agent, overwrites ``agent_permissions`` and
+    ``bundle_permissions`` in place. Uses the catalog to map an
+    ``AgentId`` back to its home bundle (via the entry's ``bundle``
+    field on the matching ``agent`` asset entry). Agents that no longer
+    have a matching catalog entry (test fixtures that never came from
+    an on-disk YAML) are left as-is — the reload is a best-effort
+    refresh, not a re-registration.
+    """
+    from providers.authz import Rule  # noqa: PLC0415
+    from schemas import derive_agent_id  # noqa: PLC0415
+
+    registry = getattr(tools_sub, "_registry", None)
+    if registry is None:
+        return
+    agents_map = getattr(registry, "_agents", None)
+    if not isinstance(agents_map, dict):
+        return
+
+    # Build reverse map AgentId (str) → (bundle, agent_yaml_path) once.
+    id_to_agent: dict[str, tuple[str, str]] = {}
+    for entry in catalog.assets.values():
+        if entry.asset_type != "agent":
+            continue
+        agent_name = entry.ref.rsplit("/", 1)[-1]
+        agent_id_str = str(derive_agent_id(entry.bundle, agent_name))
+        id_to_agent[agent_id_str] = (entry.bundle, entry.path)
+
+    for agent_id, registration in agents_map.items():
+        meta = id_to_agent.get(str(agent_id))
+        if meta is None:
+            # Synthetic registration (test fixture or programmatic
+            # tools=... caller). Nothing on disk to reload from.
+            continue
+        bundle_name, agent_yaml_path = meta
+
+        # --- agent layer ---
+        raw_agent_rules = agent_rules_by_id.get(str(agent_id), [])
+        agent_source_map = _load_source_map(agent_yaml_path)
+        new_agent_rules = [
+            Rule(
+                id=r.id,
+                who=r.who,
+                what=r.what,
+                pattern=r.pattern,
+                from_=r.from_,
+                effect=r.effect,
+                source_file=agent_source_map.get(i, (None, None))[0],
+                source_line=agent_source_map.get(i, (None, None))[1],
+            )
+            for i, r in enumerate(raw_agent_rules)
+        ]
+        registration.agent_permissions = new_agent_rules
+
+        # --- bundle layer ---
+        manifest = bundle_manifests.get(bundle_name)
+        if manifest is not None:
+            bundle_yaml_path = f"{manifest.path}/bundle.yaml"
+            bundle_source_map = _load_source_map(bundle_yaml_path)
+            new_bundle_rules = [
+                Rule(
+                    id=r.id,
+                    who=r.who,
+                    what=r.what,
+                    pattern=r.pattern,
+                    from_=r.from_,
+                    effect=r.effect,
+                    source_file=bundle_source_map.get(i, (None, None))[0],
+                    source_line=bundle_source_map.get(i, (None, None))[1],
+                )
+                for i, r in enumerate(manifest.permissions)
+            ]
+            registration.bundle_permissions = new_bundle_rules
+
+
+def _load_source_map(yaml_path: str) -> dict[int, tuple[str, int]]:
+    """Return the ``permissions_source_map`` for a YAML path, or empty.
+
+    Wraps ``assets.manifest.permissions_source_map`` in try/except to
+    match the engine-side "empty map on failure" contract feat-041
+    established — the reload path should never crash because the
+    source-tag lookup missed.
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    from assets.manifest import permissions_source_map  # noqa: PLC0415
+
+    try:
+        return permissions_source_map(Path(yaml_path))
+    except Exception:  # noqa: BLE001 — never raise out of source-tag path
+        return {}
