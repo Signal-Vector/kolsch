@@ -547,3 +547,120 @@ async def test_reload_ac5_manual_verify_three_layer_edit(tmp_path: Path) -> None
     # No push-target for workflow rules — the counter proves the reload
     # rescanned the file. If it had failed to parse, the reload would
     # have aborted with an error.
+
+
+# ---------------------------------------------------------------------------
+# qol-051 C1 — /reload discovers new + deleted bundle/agent/workflow YAMLs.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reload_discovers_new_bundle_yaml_added_since_startup(
+    tmp_path: Path,
+) -> None:
+    """A bundle authored AFTER the boot-time scan is picked up on /reload.
+
+    Boot-time scan sees one bundle; operator authors a second bundle
+    on disk; /reload rescans; the fresh catalog's ``bundles`` and
+    ``assets`` maps carry the new bundle's manifest + agent entries
+    and the summary flags the ``+1 bundle`` addition.
+    """
+    _write_platform_yaml_raw(
+        tmp_path,
+        "authorization:\n"
+        "  variant: rule_based\n"
+        "  config:\n"
+        "    rules:\n"
+        "      - {what: '*', pattern: '*', effect: allow}\n",
+    )
+    _write_bundle(
+        tmp_path,
+        "andre",
+        permissions=[],
+        agent_permissions={"butler": []},
+    )
+    runtime = _build_runtime(tmp_path)
+
+    # Sanity: the boot catalog only carries "andre".
+    boot_catalog = runtime.asset_management.catalog()
+    assert set(boot_catalog.bundles.keys()) == {"andre"}
+
+    # Operator drops a second bundle on disk mid-session — this is the
+    # workflow the boot-time-only reload could never catch.
+    _write_bundle(
+        tmp_path,
+        "second",
+        permissions=[{"what": "kolsch/tools/write_file", "effect": "deny"}],
+        agent_permissions={"scribe": [{"what": "*", "effect": "allow"}]},
+    )
+
+    result = await handle_reload(runtime)
+
+    assert result.error is None, result.error
+    summary = result.summary or ""
+    # The bundle diff clause fires with +1 bundle (the "second" one).
+    # +1 agent is also possible (the new scribe agent).
+    assert "+1 bundle" in summary
+    assert "since last reload" in summary
+
+    # Fresh catalog installed on the runtime — future asset_management
+    # reads pick up "second".
+    fresh_catalog = runtime.asset_management.catalog()
+    assert "second" in fresh_catalog.bundles
+    # And the new bundle's rules are queryable via the /reload's rule
+    # count — 1 platform allow-all + 1 bundle deny + 1 new agent
+    # allow-all = 3.
+    assert "reloaded 3 rules" in summary
+
+
+@pytest.mark.asyncio
+async def test_reload_notices_deleted_bundle_yaml(tmp_path: Path) -> None:
+    """A bundle whose YAML is deleted mid-session drops out on /reload.
+
+    Boot-time scan sees two bundles; operator deletes one's
+    ``bundle.yaml``; /reload rescans; the fresh catalog no longer
+    carries the removed bundle and the summary flags the ``-1
+    bundle`` removal.
+    """
+    _write_platform_yaml_raw(
+        tmp_path,
+        "authorization:\n"
+        "  variant: rule_based\n"
+        "  config:\n"
+        "    rules:\n"
+        "      - {what: '*', pattern: '*', effect: allow}\n",
+    )
+    _write_bundle(
+        tmp_path,
+        "andre",
+        permissions=[{"what": "kolsch/tools/bash", "effect": "deny"}],
+    )
+    _write_bundle(
+        tmp_path,
+        "removed",
+        permissions=[{"what": "kolsch/tools/read_file", "effect": "allow"}],
+    )
+    runtime = _build_runtime(tmp_path)
+
+    # Sanity: boot catalog carries both bundles.
+    boot_catalog = runtime.asset_management.catalog()
+    assert set(boot_catalog.bundles.keys()) == {"andre", "removed"}
+
+    # Delete the "removed" bundle's YAML mid-session — the directory
+    # stays but the manifest is gone.
+    (tmp_path / "bundles" / "removed" / "bundle.yaml").unlink()
+
+    result = await handle_reload(runtime)
+
+    assert result.error is None, result.error
+    summary = result.summary or ""
+    assert "-1 bundle" in summary
+    assert "since last reload" in summary
+
+    # Fresh catalog no longer carries "removed" — subsequent
+    # asset_management reads see the deletion.
+    fresh_catalog = runtime.asset_management.catalog()
+    assert "removed" not in fresh_catalog.bundles
+    assert "andre" in fresh_catalog.bundles
+
+

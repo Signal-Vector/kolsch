@@ -502,51 +502,92 @@ class ReloadResult:
     error: str | None = None
 
 
+@dataclass(frozen=True)
+class _CatalogDiff:
+    """Rescan diff — added / removed bundles + agents + workflows.
+
+    Populated by ``_diff_catalogs`` when the fresh filesystem scan
+    reveals new or deleted YAMLs since the last reload. Formatted into
+    the reload success summary via ``_format_catalog_diff``.
+    """
+
+    bundles_added: tuple[str, ...] = ()
+    bundles_removed: tuple[str, ...] = ()
+    agents_added: tuple[str, ...] = ()
+    agents_removed: tuple[str, ...] = ()
+    workflows_added: tuple[str, ...] = ()
+    workflows_removed: tuple[str, ...] = ()
+
+    def is_empty(self) -> bool:
+        """True when the fresh scan matches the previous catalog exactly."""
+        return not (
+            self.bundles_added
+            or self.bundles_removed
+            or self.agents_added
+            or self.agents_removed
+            or self.workflows_added
+            or self.workflows_removed
+        )
+
+
 async def handle_reload(runtime: PlatformRuntime) -> ReloadResult:
-    """Atomically rebuild every authz layer from disk (bug-044 scope).
+    """Atomically rebuild every authz layer from disk (bug-044 + qol-051 C1).
 
-    Rescans all four authz layers — platform, bundle, workflow, agent
-    — and reports the true rule count on success. This is the
-    scope-extension follow-up feat-041 deferred: the platform-only
-    reload shipped, but bundle / workflow / agent YAML edits still
-    required a restart to take effect.
+    Rescans the filesystem for NEW / DELETED bundle / agent / workflow
+    YAMLs (qol-051 C1) and refreshes rules across all four authz layers
+    — platform, bundle, workflow, agent — reporting the true rule count
+    + a diff summary on success. Before C1 the reload iterated only the
+    boot-time catalog, so YAMLs added or removed since startup stayed
+    invisible until the next restart.
 
-    Strategy (Path B — partial rescan). Rather than rebuild the whole
-    ``AssetCatalog`` (which would cascade into every catalog-derived
-    cache — agent-id→bundle map, tool registrations, engine bindings
-    — and force a re-run of ``build_resolved_config``), we surgically
-    refresh only the state each layer's rules live in:
+    Strategy (Path B — partial rescan). Rather than rebuild every
+    catalog-derived cache (agent-id→bundle map, tool registrations,
+    engine bindings — which would force a re-run of
+    ``build_resolved_config``), we:
 
-    - **platform** — ``runtime.authz`` gets a fresh
-      ``RuleBasedAuthorizationProvider``, same as feat-041.
-    - **bundle** — ``BundleManifest.permissions`` on every catalog
-      entry is refreshed by re-parsing ``bundle.yaml``, and every
-      ``_AgentRegistration.bundle_permissions`` for agents in that
-      bundle is overwritten with the fresh rules.
-    - **agent** — ``_AgentRegistration.agent_permissions`` is
-      overwritten from each agent YAML's ``permissions:`` field
-      (parsed direct off disk, keyed by the agent's derived
-      ``AgentId``).
-    - **workflow** — ``load_workflow(entry.path)`` is already invoked
-      fresh on every workflow run, so ``policy:`` edits are picked up
-      automatically. We still parse each workflow YAML here to enforce
-      the "abort-on-any-failure" contract — a broken workflow YAML
-      would otherwise crash later at first invocation.
+    1. Re-scan the platform root via ``assets.catalog.scan`` to pick
+       up new bundle/agent/workflow YAMLs and drop deleted ones.
+    2. Refresh the rule state each layer's authz decisions read from:
+
+       - **platform** — ``runtime.authz`` gets a fresh
+         ``RuleBasedAuthorizationProvider``, same as feat-041.
+       - **bundle** — ``BundleManifest.permissions`` on every fresh
+         catalog entry is re-parsed off ``bundle.yaml``, and every
+         ``_AgentRegistration.bundle_permissions`` for an agent in
+         that bundle is overwritten.
+       - **agent** — ``_AgentRegistration.agent_permissions`` is
+         overwritten from each agent YAML's ``permissions:`` field
+         (parsed off disk, keyed by the derived ``AgentId``).
+       - **workflow** — ``load_workflow(entry.path)`` is already
+         invoked fresh on every workflow run, so ``policy:`` edits are
+         picked up automatically. We still parse each workflow YAML
+         here to enforce the "abort-on-any-failure" contract.
+    3. Swap the fresh ``AssetCatalog`` into ``runtime.asset_management``
+       so future agent registrations (a workflow spawning a sub-agent,
+       e.g.) see the new/deleted assets.
 
     Failure model (AC #2): any single YAML that fails to parse aborts
     the entire reload BEFORE any state mutates. The error message
-    cites the offending ``file:line`` and the old provider stays live.
-    Never leaves the system half-loaded.
+    cites the offending ``file:line`` and the old provider + old
+    catalog stay live. Never leaves the system half-loaded.
 
-    Success summary (AC #1 / Mockup 3): ``reloaded N rules across 4
-    layers (platform, bundle, workflow, agent) — new decisions use
-    the updated config.`` ``N`` is the true total across every layer.
+    Success summary (AC #1 / Mockup 3 + C1): ``reloaded N rules across
+    4 layers (platform, bundle, workflow, agent) [+X bundles, -Y agents
+    since last reload] — new decisions use the updated config.`` ``N``
+    is the true total across every layer. The diff clause only appears
+    when the rescan surfaced additions or deletions.
     """
+    from assets import catalog as catalog_module  # noqa: PLC0415
     from assets.platform_config import (  # noqa: PLC0415
         authorization_rule_source_map,
         load_or_create,
     )
-    from errors import ConfigInvalid  # noqa: PLC0415
+    from errors import (  # noqa: PLC0415
+        AssetsBundleNameMismatch,
+        AssetsDuplicateBundleName,
+        AssetsDuplicateName,
+        ConfigInvalid,
+    )
     from providers.authz import RuleBasedAuthorizationProvider  # noqa: PLC0415
 
     root = runtime.root
@@ -578,24 +619,63 @@ async def handle_reload(runtime: PlatformRuntime) -> ReloadResult:
             ),
         )
 
-    catalog = runtime.asset_management.catalog()
+    # --- qol-051 C1: filesystem rescan ---------------------------------
+    #
+    # The boot-time ``scan`` walks ``bundles/`` and every asset subdir;
+    # running it again picks up bundle YAMLs added since startup and
+    # drops bundles whose YAML was deleted. Catalog-integrity failures
+    # (duplicate bundle names, name/directory mismatches, duplicate
+    # asset refs) raise the matching ``AssetsError`` — surface these
+    # as reload errors so the old catalog stays live.
+    #
+    # ``scan`` skips bundles whose ``bundle.yaml`` is malformed with a
+    # WARNING (catalog's "keep booting on broken input" contract).
+    # /reload's AC #2 demands the opposite — surface the parse error
+    # loudly and preserve the old provider — so after the scan we
+    # cross-check every ``bundles/<name>/bundle.yaml`` against the
+    # fresh catalog and re-parse strictly for any that got dropped.
+    old_catalog = runtime.asset_management.catalog()
+    try:
+        fresh_catalog = catalog_module.scan(root)
+    except (
+        AssetsDuplicateBundleName,
+        AssetsBundleNameMismatch,
+        AssetsDuplicateName,
+    ) as exc:
+        return ReloadResult(
+            error=(
+                f"catalog rescan failed: {type(exc).__name__}: {exc}. "
+                "Old rules still active; no change to enforcement."
+            ),
+        )
+    except OSError as exc:
+        return ReloadResult(
+            error=(
+                f"could not rescan bundles/: {exc}. "
+                "Old rules still active; no change to enforcement."
+            ),
+        )
+    strict_error = _check_scan_dropped_bundles(root, fresh_catalog)
+    if strict_error is not None:
+        return ReloadResult(error=strict_error)
+    catalog_diff = _diff_catalogs(old_catalog, fresh_catalog)
 
     # Bundle rescan — one BundleManifest per catalogued bundle. Failure
     # to reload a bundle.yaml (parse or shape error) aborts the reload.
-    bundle_reload = _reload_bundles(catalog)
+    bundle_reload = _reload_bundles(fresh_catalog)
     if bundle_reload.error is not None:
         return ReloadResult(error=bundle_reload.error)
 
     # Agent rescan — one PermissionRule list per catalogued agent.
     # Parse errors abort. Empty permissions list is fine.
-    agent_reload = _reload_agents(catalog)
+    agent_reload = _reload_agents(fresh_catalog)
     if agent_reload.error is not None:
         return ReloadResult(error=agent_reload.error)
 
     # Workflow rescan — we don't cache policy, but we still verify each
     # workflow YAML parses so a broken file surfaces at /reload rather
     # than at first invocation. Rules are counted here for the summary.
-    workflow_reload = _reload_workflows(catalog)
+    workflow_reload = _reload_workflows(fresh_catalog)
     if workflow_reload.error is not None:
         return ReloadResult(error=workflow_reload.error)
 
@@ -606,7 +686,7 @@ async def handle_reload(runtime: PlatformRuntime) -> ReloadResult:
         source_map = authorization_rule_source_map(root)
         new_authz = RuleBasedAuthorizationProvider(
             config=authz_cfg.get("config", {}),
-            catalog=catalog,
+            catalog=fresh_catalog,
             source_map=source_map,
         )
     except Exception as exc:  # noqa: BLE001 — surface any construction error
@@ -638,20 +718,25 @@ async def handle_reload(runtime: PlatformRuntime) -> ReloadResult:
         # configs) keep whatever they had.
         _apply_bundle_and_agent_rules(
             tools_sub=tools_sub,
-            catalog=catalog,
+            catalog=fresh_catalog,
             bundle_manifests=bundle_reload.manifests,
             agent_rules_by_id=agent_reload.rules_by_id,
         )
 
-    # Update the catalog's cached BundleManifest map so any future
-    # agent registration (a workflow spawning a sub-agent, e.g.) sees
-    # the fresh `permissions:` list. `AssetCatalog` is technically
-    # frozen=False so the direct assignment works; the "immutable
-    # after startup" convention is a call-site discipline the reload
-    # is by design breaking.
+    # Push the fresh manifests back into the catalog's `bundles` map
+    # so future agent registrations (a workflow spawning a sub-agent,
+    # e.g.) see the freshly-parsed ``permissions:`` list — the
+    # strict-parse ``bundle_reload.manifests`` is authoritative over
+    # the scan's silent-fallback manifests when both succeeded.
     if bundle_reload.manifests:
         for name, manifest in bundle_reload.manifests.items():
-            catalog.bundles[name] = manifest
+            fresh_catalog.bundles[name] = manifest
+
+    # Install the fresh catalog into ``asset_management`` so subsequent
+    # reads (``.catalog()``, ``.get_bundle(name)``, ``.list_bundles()``)
+    # see added and deleted YAMLs — the boot-time invariant "catalog
+    # is immutable" is by design broken by /reload.
+    _install_fresh_catalog(runtime.asset_management, fresh_catalog)
 
     rules = await new_authz.list_rules()
     n_platform = len(rules)
@@ -661,11 +746,12 @@ async def handle_reload(runtime: PlatformRuntime) -> ReloadResult:
         + workflow_reload.total_rules
         + agent_reload.total_rules
     )
+    diff_clause = _format_catalog_diff(catalog_diff)
     return ReloadResult(
         summary=(
             f"reloaded {total} rules across 4 layers "
-            f"(platform, bundle, workflow, agent) — "
-            "new decisions use the updated config."
+            f"(platform, bundle, workflow, agent)"
+            f"{diff_clause} — new decisions use the updated config."
         ),
     )
 
@@ -673,6 +759,137 @@ async def handle_reload(runtime: PlatformRuntime) -> ReloadResult:
 # ---------------------------------------------------------------------------
 # /reload — helper: per-layer rescan pipelines
 # ---------------------------------------------------------------------------
+
+
+def _check_scan_dropped_bundles(root: Any, fresh_catalog: Any) -> str | None:
+    """Return an error string if the rescan silently dropped a bundle.
+
+    ``AssetCatalog.scan`` skips a bundle whose ``bundle.yaml`` is
+    malformed with a WARNING log and no reflected error — the boot
+    contract preserves other bundles when one is broken. /reload's
+    AC #2 wants the exact opposite: a single broken YAML must abort
+    the whole reload with the offending file cited. Cross-reference
+    the filesystem with the fresh catalog; any bundle directory whose
+    ``bundle.yaml`` exists but got dropped runs through the strict
+    re-parse to surface the concrete error.
+    """
+    from pathlib import Path  # noqa: PLC0415
+
+    bundles_dir = Path(root) / "bundles"
+    if not bundles_dir.exists():
+        return None
+    catalogued = set(getattr(fresh_catalog, "bundles", {}).keys())
+    for bundle_dir in sorted(bundles_dir.iterdir()):
+        if not bundle_dir.is_dir():
+            continue
+        yaml_path = bundle_dir / "bundle.yaml"
+        if not yaml_path.exists():
+            # No YAML at all — the scan skipped this directory silently.
+            # /reload doesn't need to invent a rule here; the operator
+            # never authored a bundle here.
+            continue
+        if bundle_dir.name in catalogued:
+            continue
+        # YAML present, but scan dropped it — surface the concrete
+        # error via the strict parser.
+        try:
+            _reparse_bundle_manifest(bundle_dir)
+        except _YamlReloadError as exc:
+            return (
+                f"yaml parse error in {exc.source} — {exc.message}. "
+                "Old rules still active; no change to enforcement."
+            )
+        # Reparse succeeded — the scan dropped this bundle for a
+        # different reason (invalid directory name, name/directory
+        # mismatch caught in a later pass, etc.). Report a generic
+        # error so the operator knows the reload can't proceed.
+        return (
+            f"bundle directory {bundle_dir.name} exists on disk but "
+            f"was dropped from the catalog rescan. "
+            "Old rules still active; no change to enforcement."
+        )
+    return None
+
+
+def _diff_catalogs(old: Any, fresh: Any) -> _CatalogDiff:
+    """Compute added / removed bundles + agents + workflows across two scans.
+
+    Sorted tuples give the summary formatter a deterministic listing —
+    tests can assert the exact clause without depending on dict-hash
+    ordering.
+    """
+
+    def _refs_by_type(catalog: Any, asset_type: str) -> set[str]:
+        out: set[str] = set()
+        assets = getattr(catalog, "assets", None) or {}
+        for ref, entry in assets.items():
+            if entry.asset_type == asset_type:
+                out.add(ref)
+        return out
+
+    old_bundles = set(getattr(old, "bundles", {}).keys())
+    fresh_bundles = set(getattr(fresh, "bundles", {}).keys())
+    old_agents = _refs_by_type(old, "agent")
+    fresh_agents = _refs_by_type(fresh, "agent")
+    old_workflows = _refs_by_type(old, "workflow")
+    fresh_workflows = _refs_by_type(fresh, "workflow")
+
+    return _CatalogDiff(
+        bundles_added=tuple(sorted(fresh_bundles - old_bundles)),
+        bundles_removed=tuple(sorted(old_bundles - fresh_bundles)),
+        agents_added=tuple(sorted(fresh_agents - old_agents)),
+        agents_removed=tuple(sorted(old_agents - fresh_agents)),
+        workflows_added=tuple(sorted(fresh_workflows - old_workflows)),
+        workflows_removed=tuple(sorted(old_workflows - fresh_workflows)),
+    )
+
+
+def _format_catalog_diff(diff: _CatalogDiff) -> str:
+    """Return the ``[+X bundles, -Y agents, ...]`` clause, or ``''`` if empty.
+
+    Renders the additions/removals detected by the rescan into a
+    space-prefixed bracketed clause so the reload summary shows what
+    the filesystem changed since the last reload. Empty diffs return
+    the empty string so the summary reads cleanly on no-op reloads.
+    """
+    if diff.is_empty():
+        return ""
+    parts: list[str] = []
+    if diff.bundles_added:
+        parts.append(f"+{len(diff.bundles_added)} bundle"
+                     + ("s" if len(diff.bundles_added) != 1 else ""))
+    if diff.bundles_removed:
+        parts.append(f"-{len(diff.bundles_removed)} bundle"
+                     + ("s" if len(diff.bundles_removed) != 1 else ""))
+    if diff.agents_added:
+        parts.append(f"+{len(diff.agents_added)} agent"
+                     + ("s" if len(diff.agents_added) != 1 else ""))
+    if diff.agents_removed:
+        parts.append(f"-{len(diff.agents_removed)} agent"
+                     + ("s" if len(diff.agents_removed) != 1 else ""))
+    if diff.workflows_added:
+        parts.append(f"+{len(diff.workflows_added)} workflow"
+                     + ("s" if len(diff.workflows_added) != 1 else ""))
+    if diff.workflows_removed:
+        parts.append(f"-{len(diff.workflows_removed)} workflow"
+                     + ("s" if len(diff.workflows_removed) != 1 else ""))
+    return " [" + ", ".join(parts) + " since last reload]"
+
+
+def _install_fresh_catalog(asset_management: Any, fresh_catalog: Any) -> None:
+    """Swap the rescan's fresh ``AssetCatalog`` into ``asset_management``.
+
+    The catalog is a private attribute (``_catalog``) on both the real
+    ``AssetManagement`` and the test mocks — direct assignment is
+    fine. Failures here (e.g. the field renamed underneath us)
+    silently no-op so the reload's Phase B rebinds still land; the
+    only observable effect of the miss is that the next
+    ``asset_management.catalog()`` returns the old catalog.
+    """
+    try:
+        asset_management._catalog = fresh_catalog  # noqa: SLF001 — reload is by design breaking the "immutable" invariant
+    except Exception:  # noqa: BLE001 — never raise out of the catalog install
+        return
 
 
 def _format_config_invalid(exc: object, source: str) -> str:
