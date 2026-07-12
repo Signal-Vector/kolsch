@@ -79,7 +79,17 @@ def _detach_tool_definition(
     async def _wrapper(*args: Any, **kwargs: Any) -> Any:
         return await fn(*args, **kwargs)
 
-    _wrapper._tool_definition = _dc_replace(original_defn)  # type: ignore[attr-defined]
+    # bug-050 Reviewer finding: bare `_dc_replace(original_defn)` shares
+    # the mutable list fields (`secrets_needed`, `requires`) with the
+    # module-cached sentinel — an `.append(...)` on the "detached" copy
+    # would still poison every subsequent caller. Materialize fresh
+    # lists so the shallow-copy risk is neutralised at the seam that
+    # exists exactly to prevent cross-caller pollution.
+    _wrapper._tool_definition = _dc_replace(  # type: ignore[attr-defined]
+        original_defn,
+        secrets_needed=list(original_defn.secrets_needed),
+        requires=list(original_defn.requires),
+    )
     return _wrapper
 
 
