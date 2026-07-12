@@ -12,7 +12,7 @@ Ships two frameworks:
   adds cancellation, retry translation, and stdout capture.
 
 See `process/feat-clarify-framework-selection.md` for the rename
-rationale, and `process/qol-046-mock-to-mock-rename.md` for the
+rationale, and `process/qol-046-fake-to-mock-rename.md` for the
 subsequent module-level `fake_*` → `mock_*` sweep.
 """
 

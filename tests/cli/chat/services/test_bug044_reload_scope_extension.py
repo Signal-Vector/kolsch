@@ -547,3 +547,229 @@ async def test_reload_ac5_manual_verify_three_layer_edit(tmp_path: Path) -> None
     # No push-target for workflow rules — the counter proves the reload
     # rescanned the file. If it had failed to parse, the reload would
     # have aborted with an error.
+
+
+# ---------------------------------------------------------------------------
+# qol-051 C1 — /reload discovers new + deleted bundle/agent/workflow YAMLs.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reload_discovers_new_bundle_yaml_added_since_startup(
+    tmp_path: Path,
+) -> None:
+    """A bundle authored AFTER the boot-time scan is picked up on /reload.
+
+    Boot-time scan sees one bundle; operator authors a second bundle
+    on disk; /reload rescans; the fresh catalog's ``bundles`` and
+    ``assets`` maps carry the new bundle's manifest + agent entries
+    and the summary flags the ``+1 bundle`` addition.
+    """
+    _write_platform_yaml_raw(
+        tmp_path,
+        "authorization:\n"
+        "  variant: rule_based\n"
+        "  config:\n"
+        "    rules:\n"
+        "      - {what: '*', pattern: '*', effect: allow}\n",
+    )
+    _write_bundle(
+        tmp_path,
+        "andre",
+        permissions=[],
+        agent_permissions={"butler": []},
+    )
+    runtime = _build_runtime(tmp_path)
+
+    # Sanity: the boot catalog only carries "andre".
+    boot_catalog = runtime.asset_management.catalog()
+    assert set(boot_catalog.bundles.keys()) == {"andre"}
+
+    # Operator drops a second bundle on disk mid-session — this is the
+    # workflow the boot-time-only reload could never catch.
+    _write_bundle(
+        tmp_path,
+        "second",
+        permissions=[{"what": "kolsch/tools/write_file", "effect": "deny"}],
+        agent_permissions={"scribe": [{"what": "*", "effect": "allow"}]},
+    )
+
+    result = await handle_reload(runtime)
+
+    assert result.error is None, result.error
+    summary = result.summary or ""
+    # The bundle diff clause fires with +1 bundle (the "second" one).
+    # +1 agent is also possible (the new scribe agent).
+    assert "+1 bundle" in summary
+    assert "since last reload" in summary
+
+    # Fresh catalog installed on the runtime — future asset_management
+    # reads pick up "second".
+    fresh_catalog = runtime.asset_management.catalog()
+    assert "second" in fresh_catalog.bundles
+    # And the new bundle's rules are queryable via the /reload's rule
+    # count — 1 platform allow-all + 1 bundle deny + 1 new agent
+    # allow-all = 3.
+    assert "reloaded 3 rules" in summary
+
+
+@pytest.mark.asyncio
+async def test_reload_notices_deleted_bundle_yaml(tmp_path: Path) -> None:
+    """A bundle whose YAML is deleted mid-session drops out on /reload.
+
+    Boot-time scan sees two bundles; operator deletes one's
+    ``bundle.yaml``; /reload rescans; the fresh catalog no longer
+    carries the removed bundle and the summary flags the ``-1
+    bundle`` removal.
+    """
+    _write_platform_yaml_raw(
+        tmp_path,
+        "authorization:\n"
+        "  variant: rule_based\n"
+        "  config:\n"
+        "    rules:\n"
+        "      - {what: '*', pattern: '*', effect: allow}\n",
+    )
+    _write_bundle(
+        tmp_path,
+        "andre",
+        permissions=[{"what": "kolsch/tools/bash", "effect": "deny"}],
+    )
+    _write_bundle(
+        tmp_path,
+        "removed",
+        permissions=[{"what": "kolsch/tools/read_file", "effect": "allow"}],
+    )
+    runtime = _build_runtime(tmp_path)
+
+    # Sanity: boot catalog carries both bundles.
+    boot_catalog = runtime.asset_management.catalog()
+    assert set(boot_catalog.bundles.keys()) == {"andre", "removed"}
+
+    # Delete the "removed" bundle's YAML mid-session — the directory
+    # stays but the manifest is gone.
+    (tmp_path / "bundles" / "removed" / "bundle.yaml").unlink()
+
+    result = await handle_reload(runtime)
+
+    assert result.error is None, result.error
+    summary = result.summary or ""
+    assert "-1 bundle" in summary
+    assert "since last reload" in summary
+
+    # Fresh catalog no longer carries "removed" — subsequent
+    # asset_management reads see the deletion.
+    fresh_catalog = runtime.asset_management.catalog()
+    assert "removed" not in fresh_catalog.bundles
+    assert "andre" in fresh_catalog.bundles
+
+
+# ---------------------------------------------------------------------------
+# qol-051 C2 — missing-YAML contract is symmetric across bundle + agent.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_reload_handles_missing_bundle_yaml_consistently(
+    tmp_path: Path,
+) -> None:
+    """Bundle YAML disappearing between rescan and reload aborts loudly.
+
+    C1's rescan drops deleted bundles from the fresh catalog, so
+    ``_reload_bundles`` sees a missing YAML only in a mid-reload race
+    — this test synthesizes the race by monkey-patching
+    ``catalog_module.scan`` to return the stale catalog even after the
+    on-disk YAML is gone.
+
+    The invariant under test (qol-051 C2): the bundle layer's
+    missing-YAML branch fires the SAME abort-with-typed-error path
+    ``_reload_agents`` takes on ``OSError``. Silent preservation of
+    stale state (the pre-C2 behavior) is a regression trap this test
+    locks out.
+    """
+    _write_platform_yaml_raw(
+        tmp_path,
+        "authorization:\n"
+        "  variant: rule_based\n"
+        "  config:\n"
+        "    rules:\n"
+        "      - {what: '*', pattern: '*', effect: allow}\n",
+    )
+    _write_bundle(
+        tmp_path,
+        "andre",
+        permissions=[{"what": "kolsch/tools/bash", "effect": "deny"}],
+    )
+    runtime = _build_runtime(tmp_path)
+
+    # Synthesize the mid-reload race: monkey-patch
+    # ``catalog_module.scan`` so the rescan returns the stale (still
+    # carrying "andre") catalog even though the YAML has been deleted.
+    from assets import catalog as catalog_module
+
+    stale_catalog = runtime.asset_management.catalog()
+    (tmp_path / "bundles" / "andre" / "bundle.yaml").unlink()
+
+    original_scan = catalog_module.scan
+    try:
+        catalog_module.scan = lambda _root: stale_catalog  # type: ignore[assignment]
+        result = await handle_reload(runtime)
+    finally:
+        catalog_module.scan = original_scan  # type: ignore[assignment]
+
+    # Bundle layer surfaces a typed error when the YAML disappears
+    # mid-reload — mirroring the agent layer's OSError abort.
+    assert result.summary is None
+    assert result.error is not None
+    assert "Old rules still active" in result.error
+    # File path cited in the message so the operator can find it.
+    assert "andre" in result.error and "bundle.yaml" in result.error
+
+
+@pytest.mark.asyncio
+async def test_reload_handles_missing_agent_yaml_consistently(
+    tmp_path: Path,
+) -> None:
+    """Agent YAML disappearing between rescan and reload aborts loudly.
+
+    Mirror of the bundle case above — same race, agent layer. The
+    ``_reload_agents`` helper aborts on OSError (has since bug-044);
+    this test locks that behavior in AND documents the symmetry with
+    ``_reload_bundles``'s new missing-YAML branch (qol-051 C2).
+    """
+    _write_platform_yaml_raw(
+        tmp_path,
+        "authorization:\n"
+        "  variant: rule_based\n"
+        "  config:\n"
+        "    rules:\n"
+        "      - {what: '*', pattern: '*', effect: allow}\n",
+    )
+    _write_bundle(
+        tmp_path,
+        "andre",
+        permissions=[],
+        agent_permissions={"butler": [{"what": "*", "effect": "allow"}]},
+    )
+    runtime = _build_runtime(tmp_path)
+
+    from assets import catalog as catalog_module
+
+    stale_catalog = runtime.asset_management.catalog()
+    (tmp_path / "bundles" / "andre" / "agents" / "butler.yaml").unlink()
+
+    original_scan = catalog_module.scan
+    try:
+        catalog_module.scan = lambda _root: stale_catalog  # type: ignore[assignment]
+        result = await handle_reload(runtime)
+    finally:
+        catalog_module.scan = original_scan  # type: ignore[assignment]
+
+    # Same observable behavior as the bundle case: typed error,
+    # "Old rules still active" clause, offending file cited.
+    assert result.summary is None
+    assert result.error is not None
+    assert "Old rules still active" in result.error
+    assert "butler" in result.error or "agent YAML" in result.error
+
+

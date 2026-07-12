@@ -204,7 +204,7 @@ async def run_workflow(
     # bug-025: fetch the workflow YAML via the service seam and
     # validate `inputs` against the declared `{{ inputs.X }}`
     # references. Duck-typed to keep the `Workflows` Protocol byte-
-    # identical — headless test fakes without this method fall
+    # identical — headless test mocks without this method fall
     # through to the no-validation path (matches pre-bug-025).
     resolver = getattr(services.workflows, "resolve_workflow_yaml", None)
     if resolver is not None:
@@ -267,7 +267,7 @@ async def run_workflow(
     }
 
     # bug-031: long-poll until terminal or timeout. ``status`` is
-    # duck-typed on the ``Workflows`` Protocol — headless test fakes
+    # duck-typed on the ``Workflows`` Protocol — headless test mocks
     # that predate bug-031 don't implement it, so guard the probe
     # and fall back to the pre-bug-031 fire-and-forget return (with
     # ``phase="running"`` and a note) so those tests still pass. The
