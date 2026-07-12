@@ -146,8 +146,8 @@ async def bootstrap_runtime(
     for the historical context (this class was renamed from
     `FakeFramework` to `MinimalFramework`, which misled users into
     treating it as a test fixture; the containing module was later
-    renamed from `mock_framework.py` to `mock_framework.py` — see
-    `process/qol-046-mock-to-mock-rename.md`).
+    renamed from `fake_framework.py` to `mock_framework.py` — see
+    `process/qol-046-fake-to-mock-rename.md`).
 
     Default `llm` is [`EchoLLMDriver`][engine.dev_llm.EchoLLMDriver]
     when no `llm_providers` are configured, so a fresh install runs

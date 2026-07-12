@@ -21,7 +21,7 @@ Covers ACs 0.1-0.8 of ``process/phase3.7-composition-build.md``:
   kwargs continue to construct cleanly.
 
 NO ``WorkflowSubRunner`` / ``MapRunner`` work here — those land in
-Steps 1 + 2. The tests construct the executor with FAKE runners so
+Steps 1 + 2. The tests construct the executor with MOCK runners so
 the payload-builder behaviour can be exercised without the Step 1
 runtime.
 """
