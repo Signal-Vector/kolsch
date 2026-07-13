@@ -1192,11 +1192,18 @@ class ChatApp(App):
         *,
         event_id: str | None = None,
         content: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> Any | None:
         _ = event_id, content  # bug-036d/037 sink kwargs — App ignores.
         ts = timestamp if timestamp is not None else datetime.now()
         transcript = self.query_one("#transcript", VerticalScroll)
-        await transcript.mount(UserChatbox(text, ts))
+        widget = UserChatbox(text, ts)
+        await transcript.mount(widget)
+        # bug-060 Part 1: return the widget so `EventAdapter` can
+        # register it under the source event's id. Row sinks stay
+        # ``None``-returning (their mounts are queued closures) —
+        # covered widgets inside a row aren't reached by the outer
+        # compaction unmount pass.
+        return widget
 
     def _assistant_border_title(self) -> str:
         """Build the `AssistantProse` border title: `<agent> · HH:MM:SS`.
@@ -1209,7 +1216,7 @@ class ChatApp(App):
 
     async def mount_assistant_message(
         self, text: str, *, event_id: str | None = None,
-    ) -> None:
+    ) -> Any | None:
         _ = event_id  # bug-036d: sink-protocol dedupe key — App ignores.
         transcript = self.query_one("#transcript", VerticalScroll)
         prose = AssistantProse()
@@ -1217,6 +1224,8 @@ class ChatApp(App):
         await transcript.mount(prose)
         await prose.append(text)
         self._last_assistant_widget = prose
+        # bug-060 Part 1: return the widget for event-id registration.
+        return prose
 
     async def mount_assistant_streaming_widget(self) -> AssistantProse:
         transcript = self.query_one("#transcript", VerticalScroll)
@@ -1236,7 +1245,7 @@ class ChatApp(App):
         recovery_hint: str | None = None,
         matched_rule: dict[str, object] | None = None,
         event_id: str | None = None,
-    ) -> None:
+    ) -> Any | None:
         _ = event_id  # bug-036d: sink-protocol dedupe key — App ignores.
         transcript = self.query_one("#transcript", VerticalScroll)
         block = ToolCallBlock(
@@ -1248,6 +1257,8 @@ class ChatApp(App):
             matched_rule=matched_rule,
         )
         await transcript.mount(block)
+        # bug-060 Part 1: return the widget for event-id registration.
+        return block
 
     async def mount_notice(
         self,
@@ -1256,7 +1267,7 @@ class ChatApp(App):
         *,
         level: str = "info",
         event_id: str | None = None,
-    ) -> None:
+    ) -> Any | None:
         """bug-036d: sink-protocol notice mount at transcript root.
 
         Mirrors ``_mount_transcript_notice`` but takes the sink
@@ -1265,11 +1276,15 @@ class ChatApp(App):
         knowing whether the sink is the App or a workflow row.
         Idempotent per ``notice_id`` is NOT enforced here — the
         adapter's ``_applied_notice_ids`` LRU handles that upstream.
+
+        bug-060 Part 1: returns the mounted widget so the adapter can
+        register it under the source event's id.
         """
         _ = notice_id, event_id  # tracked by the adapter's LRU
         transcript = self.query_one("#transcript", VerticalScroll)
         notice = NoticeWidget(text=text, kind=level)
         await transcript.mount(notice)
+        return notice
 
     async def _mount_transcript_notice(
         self,
@@ -1293,11 +1308,13 @@ class ChatApp(App):
         notice = NoticeWidget(text=text, kind=kind)
         await transcript.mount(notice)
 
-    async def mount_exchange_failed(self, message: str) -> None:
+    async def mount_exchange_failed(self, message: str) -> Any | None:
         transcript = self.query_one("#transcript", VerticalScroll)
         notice = Static(f"[exchange failed — {message}]", classes="error", markup=False)
         notice.styles.color = "red"
         await transcript.mount(notice)
+        # bug-060 Part 1: return the widget for event-id registration.
+        return notice
 
     async def mount_approval_block(
         self,

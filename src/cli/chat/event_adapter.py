@@ -724,6 +724,13 @@ class EventAdapter:
         # replay has no entry and takes the interactive path.
         self._replay_prompt_outcomes: dict[str, tuple[str, str]] = {}
 
+        # bug-060 Part 1: source-event → mounted widgets. Populated by
+        # every mount seam via `_register_widget_for_event`. Consumed
+        # by Part 2's `_unmount_covered_widgets` on CONTEXT_COMPACTED.
+        # Widget type is `Any` to avoid a Textual import that would
+        # create a cycle with `cli.chat.widgets.*`.
+        self._event_widgets: dict[EventId, list[Any]] = {}
+
     # ------------------------------------------------------------------
     # Public surface
     # ------------------------------------------------------------------
@@ -1247,7 +1254,11 @@ class EventAdapter:
         sink = self._route_to_workflow_node(event) or self._app
         if sink is self._app:
             await self._app.set_turn_verb("", target="")
-            await self._app.mount_exchange_failed(message)
+            widget = await self._app.mount_exchange_failed(message)
+            # bug-060 Part 1: register the transcript-root widget under
+            # the source event's id. Row sinks are skipped — widgets
+            # inside a row aren't reached by the outer unmount pass.
+            self._register_widget_for_event(event, widget)
         else:
             await sink.mount_notice(
                 f"exchange-failed-{event.event_id}",
@@ -1319,10 +1330,16 @@ class EventAdapter:
         # per-key (one ``input: <key>`` section per bound input). App
         # sinks ignore this kwarg.
         raw_content = content if isinstance(content, dict) and content else None
-        await sink.mount_user_message(
+        widget = await sink.mount_user_message(
             text, _now_ts(event), event_id=_event_id_str(event),
             content=raw_content,
         )
+        # bug-060 Part 1: register the mounted widget under the source
+        # event's id. Row sinks return ``None`` (deferred closures) and
+        # `_register_widget_for_event` no-ops in that case — widgets
+        # inside a workflow row aren't reached by the outer compaction
+        # unmount pass.
+        self._register_widget_for_event(event, widget)
 
     async def _handle_agent_message(self, event: Event) -> None:
         """Mount assistant prose only if the sink didn't already.
@@ -1341,8 +1358,14 @@ class EventAdapter:
             return
         if sink.last_assistant_text() == text:
             return
-        await sink.mount_assistant_message(text, event_id=_event_id_str(event))
+        widget = await sink.mount_assistant_message(
+            text, event_id=_event_id_str(event),
+        )
         sink.set_last_assistant_text(text)
+        # bug-060 Part 1: register the mounted widget (App sinks only —
+        # row sinks return ``None`` and `_register_widget_for_event`
+        # no-ops).
+        self._register_widget_for_event(event, widget)
 
     async def _handle_tool_called(self, event: Event) -> None:
         """Capture args + fire the turn verb on the main-chat surface.
@@ -1405,11 +1428,14 @@ class EventAdapter:
                 await self._app.set_turn_verb("Thinking…", target="")
             return
         body = _format_tool_result(result)
-        await sink.mount_tool_call(
+        widget = await sink.mount_tool_call(
             tool_name, args_str, body,
             failed=False,
             event_id=_event_id_str(event),
         )
+        # bug-060 Part 1: register the mounted widget under the source
+        # event's id (App sinks only — row sinks return ``None``).
+        self._register_widget_for_event(event, widget)
         if sink is self._app:
             await self._app.set_turn_verb("Thinking…", target="")
 
@@ -1442,7 +1468,7 @@ class EventAdapter:
             matched_rule_raw if isinstance(matched_rule_raw, dict) else None
         )
         sink = self._route_to_workflow_node(event) or self._app
-        await sink.mount_tool_call(
+        widget = await sink.mount_tool_call(
             tool_name,
             args_str,
             body,
@@ -1451,6 +1477,9 @@ class EventAdapter:
             matched_rule=matched_rule,
             event_id=_event_id_str(event),
         )
+        # bug-060 Part 1: register the mounted widget under the source
+        # event's id (App sinks only — row sinks return ``None``).
+        self._register_widget_for_event(event, widget)
 
     async def _handle_model_request(self, event: Event) -> None:
         """MODEL_REQUEST fires the "Thinking…" verb on the main chat.
@@ -1498,10 +1527,14 @@ class EventAdapter:
             # mount when both MODEL_RESPONSE and AGENT_MESSAGE fire
             # with identical content.
             if sink.last_assistant_text() != text:
-                await sink.mount_assistant_message(
+                widget = await sink.mount_assistant_message(
                     text, event_id=_event_id_str(event),
                 )
                 sink.set_last_assistant_text(text)
+                # bug-060 Part 1: register the mounted widget under
+                # the source event's id (App sinks only — row sinks
+                # return ``None``).
+                self._register_widget_for_event(event, widget)
         if sink is self._app:
             await self._app.set_turn_verb("Thinking…", target="")
 
@@ -1516,6 +1549,12 @@ class EventAdapter:
             widget = await self._app.mount_assistant_streaming_widget()
             self._streaming_widgets[call_id] = widget
             self._streaming_buffers[call_id] = ""
+            # bug-060 Part 1: register the streaming widget under the
+            # first STREAMING_TOKEN event's id. The matching
+            # MODEL_RESPONSE finalises the same widget (no fresh mount
+            # in that branch), so registration here covers the widget
+            # for its whole lifetime.
+            self._register_widget_for_event(event, widget)
         self._streaming_buffers[call_id] += delta
         # `AssistantProse.append` awaits the underlying
         # `Markdown.append` — safe on the event-loop thread.
@@ -1540,7 +1579,10 @@ class EventAdapter:
         text = f"falling back to {to_label} because {reason}"
         sink = self._route_to_workflow_node(event) or self._app
         if sink is self._app:
-            await self._mount_root_notice(notice_id, text, "info")
+            widget = await self._mount_root_notice(notice_id, text, "info")
+            # bug-060 Part 1: register the mounted widget under the
+            # source event's id (row sinks skipped by design).
+            self._register_widget_for_event(event, widget)
         else:
             await sink.mount_notice(
                 notice_id, text, level="info",
@@ -1592,6 +1634,11 @@ class EventAdapter:
         block = await self._acquire_compaction_block(event_id=eid_str)
         if block is None:
             return
+        # bug-060 Part 1: register the CompactionBlock under the
+        # compaction event's id. CRITICAL: Part 2's `/uncompact`
+        # re-replay path looks up this widget by event_id to
+        # transition it back to the ``revoked`` state.
+        self._register_widget_for_event(event, block)
         if preview_flag:
             block.transition_to_preview(
                 compacted_count=len(compacted_ids),
@@ -1614,6 +1661,12 @@ class EventAdapter:
         block = await self._acquire_compaction_block(event_id=eid_str)
         if block is None:
             return
+        # bug-060 Part 1: register the block under the revoke event's
+        # id. The pre-existing `_compaction_widgets[event_id]` mapping
+        # is orthogonal — it stays keyed on the revoke's own id so
+        # `_acquire_compaction_block` can find it on a duplicate
+        # dispatch.
+        self._register_widget_for_event(event, block)
         block.transition_to_revoked(target_short_id=short)
 
     async def _handle_context_compaction_failed(self, event: Event) -> None:
@@ -1628,6 +1681,10 @@ class EventAdapter:
         block = await self._acquire_compaction_block(event_id=eid_str)
         if block is None:
             return
+        # bug-060 Part 1: register the block under the failure event's
+        # id — failure blocks are still transcript-mounted DOM the
+        # compaction unmount pass may need to reach.
+        self._register_widget_for_event(event, block)
         block.transition_to_failure(message=message, fallback_tier=fallback)
 
     async def _handle_context_compaction_skipped(self, event: Event) -> None:
@@ -1636,6 +1693,9 @@ class EventAdapter:
         block = await self._acquire_compaction_block(event_id=eid_str)
         if block is None:
             return
+        # bug-060 Part 1: register the block under the skipped event's
+        # id. Skipped-state blocks are still transcript DOM.
+        self._register_widget_for_event(event, block)
         block.transition_to_skipped(reason=reason)
 
     async def _acquire_compaction_block(
@@ -1688,7 +1748,10 @@ class EventAdapter:
         text = f"template warning: {message}"
         sink = self._route_to_workflow_node(event) or self._app
         if sink is self._app:
-            await self._mount_root_notice(notice_id, text, "warning")
+            widget = await self._mount_root_notice(notice_id, text, "warning")
+            # bug-060 Part 1: register the mounted widget under the
+            # source event's id (row sinks skipped by design).
+            self._register_widget_for_event(event, widget)
         else:
             await sink.mount_notice(
                 notice_id, text, level="warning",
@@ -1720,7 +1783,10 @@ class EventAdapter:
             payload = {}
 
         if kind == WIRE_PROMPT_REQUESTED:
-            await self._handle_prompt_requested(payload)
+            # bug-060 Part 1: pass the source event through so the
+            # handler can register the mounted `ApprovalBlock` under
+            # its id.
+            await self._handle_prompt_requested(payload, event=event)
             return
         if kind == WIRE_PROMPT_ANSWERED:
             self._handle_prompt_answered(payload)
@@ -1778,7 +1844,12 @@ class EventAdapter:
         # Unknown or workflow-UI kinds land here as silent no-ops
         # until their service specs wire the routing.
 
-    async def _handle_prompt_requested(self, payload: dict[str, Any]) -> None:
+    async def _handle_prompt_requested(
+        self,
+        payload: dict[str, Any],
+        *,
+        event: Event | None = None,
+    ) -> None:
         """Mount the approval widget for a fresh `kolsch.prompt.requested`.
 
         Idempotent per `prompt_id` — a duplicate dispatch (from
@@ -1902,8 +1973,9 @@ class EventAdapter:
                 # (Coordinator note); reuse `-denied` (see
                 # `ApprovalBlock._resolved_classes`).
                 terminal = (None, footer)
+            terminal_block: Any = None
             try:
-                await self._app.mount_approval_block(
+                terminal_block = await self._app.mount_approval_block(
                     rule_id_val,
                     action_val,
                     target_val,
@@ -1917,7 +1989,7 @@ class EventAdapter:
                 # such mocks can't inspect the terminal render
                 # anyway).
                 try:
-                    await self._app.mount_approval_block(
+                    terminal_block = await self._app.mount_approval_block(
                         rule_id_val,
                         action_val,
                         target_val,
@@ -1934,6 +2006,11 @@ class EventAdapter:
                     "raised for prompt_id=%r",
                     prompt_id,
                 )
+            # bug-060 Part 1: register the terminal ApprovalBlock
+            # under the source event's id so Part 2's compaction
+            # unmount pass can reach it.
+            if event is not None:
+                self._register_widget_for_event(event, terminal_block)
             # Bookkeeping: mark this prompt resolved so the
             # answered/cancelled handlers early-return + the bridge
             # write-guard triggers on any residual path.
@@ -1975,6 +2052,12 @@ class EventAdapter:
                 "event_adapter: mount_approval_block raised for prompt_id=%r",
                 prompt_id,
             )
+        # bug-060 Part 1: register the live ApprovalBlock under the
+        # source event's id so Part 2's compaction unmount pass can
+        # reach it. `_register_widget_for_event` no-ops on ``None`` so
+        # the mock-app fallback path stays safe.
+        if event is not None:
+            self._register_widget_for_event(event, block)
 
         # bug-021 Symptom 2: bridge the widget's local resolution back
         # onto the store as a `WIRE_PROMPT_ANSWERED` event.
@@ -2432,7 +2515,9 @@ class EventAdapter:
         an app; the stub's in-memory state suffices for the
         adapter's idempotence checks).
         """
-        _ = event
+        # bug-060 Part 1: ``event`` is consumed by
+        # ``_register_widget_for_event`` below; no `_ = event` suppression
+        # needed here (see the register call after the mount await).
         card_id = self._get_card_id(payload)
         if card_id is None:
             return
@@ -2455,6 +2540,11 @@ class EventAdapter:
                 entry = widget
                 self._card_widgets[card_id] = entry
                 await self._mount_card_widget(widget, transcript)
+                # bug-060 Part 1: register the CardWidget under the
+                # source UI event's id. Cards mounted in a compacted
+                # span (rare in practice) become reachable by the
+                # Part 2 unmount pass.
+                self._register_widget_for_event(event, widget)
                 # spec-017: workflow-kind cards whose bound run
                 # already has a `parent_run_id` populated (i.e.,
                 # `Workflows.start()` fired the card-open BEFORE
@@ -2769,17 +2859,28 @@ class EventAdapter:
 
         card_id_str = payload.get("card_id")
         if isinstance(card_id_str, str) and card_id_str:
-            self._mount_in_card_notice(
+            widget = self._mount_in_card_notice(
                 raw_id, card_id_str, text_str, kind_str,
             )
+            # bug-060 Part 1: in-card notices register under the
+            # source event's id when the mount returns a widget.
+            self._register_widget_for_event(event, widget)
             return
 
         # Transcript-root notice — schedule the async mount.
         # `_handle_card_notice` is sync (called from
         # ``_handle_ui_event``); schedule the mount as a task.
-        asyncio.create_task(
-            self._mount_root_notice(raw_id, text_str, kind_str),
-        )
+        # bug-060 Part 1: chain a callback so the mounted widget is
+        # registered under the source event's id once the task
+        # settles. `_register_widget_for_event` no-ops on ``None``
+        # (mount failure / headless).
+        source_event = event
+
+        async def _mount_and_register() -> None:
+            widget = await self._mount_root_notice(raw_id, text_str, kind_str)
+            self._register_widget_for_event(source_event, widget)
+
+        asyncio.create_task(_mount_and_register())
 
     def _mount_in_card_notice(
         self,
@@ -2787,24 +2888,28 @@ class EventAdapter:
         card_id_str: str,
         text: str,
         kind: str,
-    ) -> None:
+    ) -> Any | None:
         """Mount a notice inside a specific card's ``NoticeSlot``.
 
         Called by ``_handle_card_notice`` when the payload carries a
         ``card_id``. Silent no-op when the card isn't in
         ``_card_widgets`` (unmounted / unknown — the notice is
         dropped by design).
+
+        bug-060 Part 1: returns the mounted notice widget (or
+        ``None`` on any miss) so the caller can register it under
+        the source event's id.
         """
         try:
             card_id = CardId(card_id_str)
         except (ValueError, TypeError):
-            return
+            return None
         entry = self._card_widgets.get(card_id)
         if entry is None:
-            return
+            return None
         mount = getattr(entry, "mount_notice", None)
         if not callable(mount):
-            return
+            return None
         try:
             widget = mount(text, kind)
         except Exception:
@@ -2812,9 +2917,10 @@ class EventAdapter:
                 "event_adapter: mount_notice raised for card_id=%r",
                 card_id_str,
             )
-            return
+            return None
         if widget is not None:
             self._notice_widgets[notice_id] = widget
+        return widget
 
     def _handle_workflow_progress(
         self,
@@ -3145,12 +3251,71 @@ class EventAdapter:
             return entry
         return None
 
+    def _register_widget_for_event(
+        self, event: Event, widget: Any,
+    ) -> None:
+        """bug-060 Part 1: record ``widget`` as mounted for ``event``.
+
+        Called by every mount seam after the mount await returns.
+        The map is consumed by Part 2's ``_unmount_covered_widgets``
+        pass on ``CONTEXT_COMPACTED`` — Part 1 is pure plumbing, so
+        this method has no observers yet. Silent no-op when
+        ``widget`` is ``None`` (headless / stub-mount fallbacks).
+        """
+        if widget is None:
+            return
+        self._event_widgets.setdefault(event.event_id, []).append(widget)
+
+    def _sync_dict_removal(self, widget: Any) -> int:
+        """bug-060 Part 1: drop ``widget`` from every tracking dict.
+
+        Walks each dict that holds a strong reference to a widget
+        (directly, or via a ``widget`` / ``_widget`` attribute on a
+        wrapper) and removes any entry whose value IS ``widget``.
+        Returns the number of dict entries removed — a hook for
+        Part 2's debug/test observability.
+
+        Dicts that do NOT hold widget-like values
+        (``_replay_prompt_outcomes`` stores ``(kind, footer)`` tuples;
+        ``_workflow_prompt_sources`` stores ``(run_id, node_name)``
+        tuples) are left untouched. Defensive: unknown wrapper shapes
+        pass through cleanly.
+        """
+        if widget is None:
+            return 0
+        removed = 0
+        dicts: tuple[dict[Any, Any], ...] = (
+            self._notice_widgets,
+            self._card_widgets,
+            self._compaction_widgets,
+        )
+        for target in dicts:
+            stale: list[Any] = []
+            for key, value in target.items():
+                if value is widget:
+                    stale.append(key)
+                    continue
+                # `_card_widgets` values are `CardMountState` — the
+                # widget-backed impl (`CardWidget`) IS the widget
+                # itself, so the `is` check above catches it. The
+                # spec-006 `_CardMountStub` isn't a widget, so a
+                # sync pass never hits it. Defensive fallback for any
+                # future wrapper that exposes the widget under a
+                # `widget` attribute:
+                inner = getattr(value, "widget", None)
+                if inner is widget:
+                    stale.append(key)
+            for key in stale:
+                target.pop(key, None)
+                removed += 1
+        return removed
+
     async def _mount_root_notice(
         self,
         notice_id: str,
         text: str,
         kind: str,
-    ) -> None:
+    ) -> Any | None:
         """Mount a
         [`NoticeWidget`][cli.chat.widgets.notice.NoticeWidget] at the
         transcript root.
@@ -3159,15 +3324,20 @@ class EventAdapter:
         (headless service tests). The widget handle is tracked under
         ``notice_id`` so a repeat dispatch's update-in-place path
         can replace the text.
+
+        bug-060 Part 1: returns the mounted widget so callers can
+        register it under a source event's id via
+        ``_register_widget_for_event``. Returns ``None`` on any
+        mount failure or missing transcript.
         """
         transcript = self._locate_transcript()
         if transcript is None:
-            return
+            return None
         try:
             from cli.chat.widgets.notice import NoticeWidget  # noqa: PLC0415
         except Exception:
             _LOGGER.exception("event_adapter: NoticeWidget import failed")
-            return
+            return None
         try:
             widget = NoticeWidget(text=text, kind=kind)
             await transcript.mount(widget)
@@ -3176,8 +3346,9 @@ class EventAdapter:
                 "event_adapter: root notice mount failed for notice_id=%r",
                 notice_id,
             )
-            return
+            return None
         self._notice_widgets[notice_id] = widget
+        return widget
 
 
 __all__ = ["CardMountState", "CardTrackingEntry", "EventAdapter"]

@@ -47,12 +47,18 @@ class ChatMountSink(Protocol):
         *,
         event_id: str | None = None,
         content: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> Any | None:
         """Mount a ``UserChatbox`` for a user turn.
 
         ``content`` carries the raw dict payload when the source
         event's ``data.content`` is a dict — sinks that wrap
         per-key (workflow rows) split by key; App sinks ignore it.
+
+        bug-060 Part 1: App sinks return the mounted widget so the
+        adapter can register it under the source event's id. Row
+        sinks return ``None`` (their mounts are deferred closures);
+        widgets inside a row aren't reached by the outer compaction
+        unmount pass.
         """
         ...
 
@@ -61,8 +67,11 @@ class ChatMountSink(Protocol):
         text: str,
         *,
         event_id: str | None = None,
-    ) -> None:
-        """Mount an ``AssistantProse`` for a model response / agent message."""
+    ) -> Any | None:
+        """Mount an ``AssistantProse`` for a model response / agent message.
+
+        bug-060 Part 1: see ``mount_user_message`` note on returns.
+        """
         ...
 
     async def mount_tool_call(
@@ -75,13 +84,15 @@ class ChatMountSink(Protocol):
         recovery_hint: str | None = None,
         matched_rule: dict[str, object] | None = None,
         event_id: str | None = None,
-    ) -> None:
+    ) -> Any | None:
         """Mount a ``ToolCallBlock`` for a tool result / failure.
 
         ``matched_rule`` (feat-041): the authz rule that fired, as a
         dict shaped like ``Rule.model_dump()``. Non-None on authz
         denials; the widget renders the 2-line hint (Mockup 1)
         inline in the body when present.
+
+        bug-060 Part 1: see ``mount_user_message`` note on returns.
         """
         ...
 
@@ -92,8 +103,11 @@ class ChatMountSink(Protocol):
         *,
         level: str = "info",
         event_id: str | None = None,
-    ) -> None:
-        """Mount a ``NoticeWidget`` (info / warning / error banner)."""
+    ) -> Any | None:
+        """Mount a ``NoticeWidget`` (info / warning / error banner).
+
+        bug-060 Part 1: see ``mount_user_message`` note on returns.
+        """
         ...
 
     def last_assistant_text(self) -> str:
