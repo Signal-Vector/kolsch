@@ -31,7 +31,7 @@ import contextlib
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 from engine.assembly import ASSEMBLY_VERSION, assemble_context
@@ -464,6 +464,261 @@ class AgentEngine:
             await self._bus.publish(stored)
         except Exception:  # noqa: BLE001
             _log.exception("manual_compact: bus publish failed")
+        return stored
+
+    async def maybe_compact_thread_eagerly(
+        self,
+        *,
+        thread_id: ThreadId,
+        spec: ModelSpec,
+        tool_schemas: list[dict[str, Any]] | None = None,
+        trigger: Literal["auto_resume"] = "auto_resume",
+    ) -> Any:
+        """Check ``thread_id`` for over-threshold context and compact if so.
+
+        feat-054 Phase 5 — session-open eager compaction. Safe to call
+        BEFORE any exchange begins (e.g. from ``ChatApp.on_mount``).
+        Shifts the summariser delay out of the user's first post-resume
+        message and into the resume UX itself.
+
+        Runs the same 3-tier failure ladder as
+        :meth:`_Exchange._maybe_compact_events`:
+
+        1. Tier 1 — retry summariser once.
+        2. Tier 2 — mechanical truncation fallback (emits
+           ``CONTEXT_COMPACTION_FAILED`` + ``CONTEXT_COMPACTED`` with
+           ``summary.trigger="auto_truncation"``).
+        3. Tier 3 — raise ``ContextOverflowUncompactable`` when even
+           mechanical truncation cannot bring the projection below
+           the model's budget.
+
+        ``trigger`` marks the emitted event's ``trigger`` field so
+        downstream telemetry can distinguish resume-time compaction
+        from per-exchange compaction.
+
+        Returns the emitted ``ContextCompactedData`` outcome (as a
+        :class:`Event`) on success, ``None`` when compaction was NOT
+        needed (thread under threshold, provider not wired, model has
+        no declared ``context_length``, or the middle span is empty
+        because the session is short).
+        """
+        # Serialise against a concurrent in-flight exchange OR a
+        # concurrent /compact call on the same thread — same lock
+        # both other paths acquire.
+        async with self._lock_for_thread(str(thread_id)):
+            return await self._eager_compact_locked(
+                thread_id=thread_id,
+                spec=spec,
+                tool_schemas=tool_schemas or [],
+                trigger=trigger,
+            )
+
+    async def _eager_compact_locked(
+        self,
+        *,
+        thread_id: ThreadId,
+        spec: ModelSpec,
+        tool_schemas: list[dict[str, Any]],
+        trigger: str,
+    ) -> Event | None:
+        """Body of :meth:`maybe_compact_thread_eagerly`, invoked inside the thread lock."""
+        provider = self._compaction_provider
+        if provider is None:
+            return None
+        context_length = _context_length_for_spec(
+            self._llm_providers_config,
+            spec,
+        )
+        if context_length is None:
+            return None
+        # Load current path.
+        events = [
+            e async for e in self._store.read_path_to_leaf(thread_id)
+        ]
+        if not events:
+            # Fresh session — nothing to compact. Fast no-op path so a
+            # brand-new chat doesn't spuriously call the summariser.
+            return None
+
+        compaction_cfg = (self._assets._platform_config or {}).get(
+            "compaction",
+            {},
+        ) or {}
+        # Estimate current projection tokens using the same tiktoken
+        # helper the per-exchange trigger uses.
+        preview = assemble_context(
+            events,
+            tool_schemas=tool_schemas,
+            respect_compaction=True,
+        )
+        from providers.compaction import (  # noqa: PLC0415
+            build_mechanical_truncation_payload,
+            estimate_tokens_for_messages,
+        )
+
+        preview_msgs = [m.model_dump() for m in preview.messages]
+        estimate = estimate_tokens_for_messages(preview_msgs, preview.tools)
+
+        max_output = int(
+            compaction_cfg.get("config", {}).get("max_output_tokens", 4096)
+        )
+        budget = max(context_length - max_output, 1)
+        trigger_at = float(compaction_cfg.get("trigger_at", 0.80))
+        if estimate < budget * trigger_at:
+            # Under threshold — no compaction needed.
+            return None
+
+        base_keep_recent_fraction = float(
+            compaction_cfg.get("config", {}).get("keep_recent_fraction", 0.20)
+        )
+        keep_fractions: list[float] = [
+            base_keep_recent_fraction,
+            base_keep_recent_fraction * 0.5,
+            base_keep_recent_fraction * 0.25,
+        ]
+        last_error: Exception | None = None
+        for attempt_index, kf in enumerate(keep_fractions):
+            keep_tail_tokens = max(int(budget * kf), 1)
+            inner_config: dict[str, Any] = dict(
+                compaction_cfg.get("config", {}) or {}
+            )
+            inner_config["keep_recent_fraction"] = kf
+            # Propagate the requested trigger through the provider so
+            # the emitted ContextCompactedData.trigger reflects reality.
+            inner_config["trigger"] = trigger
+            outcome: Any = None
+            attempt_error: Exception | None = None
+            for retry in range(2):
+                try:
+                    outcome = await provider.compact(
+                        events=events,
+                        keep_head=0,
+                        keep_tail=keep_tail_tokens,
+                        model_context_length=context_length,
+                        thread_id=thread_id,
+                        config=inner_config,
+                    )
+                except Exception as exc:  # noqa: BLE001 — ladder catches any raise
+                    attempt_error = exc
+                    _log.warning(
+                        "compaction (eager): summariser attempt %d/2 "
+                        "failed (%s)",
+                        retry + 1,
+                        exc,
+                    )
+                    outcome = None
+                    continue
+                break
+            if outcome is None:
+                last_error = attempt_error
+                break
+            if not outcome.compacted_event_ids:
+                # No middle to summarise (short session) — nothing to do.
+                return None
+            if outcome.tokens_before > 0 and (
+                outcome.tokens_after > outcome.tokens_before * 0.90
+            ):
+                await self._emit_thread_event(
+                    thread_id=thread_id,
+                    event_type=EventType.CONTEXT_COMPACTION_SKIPPED,
+                    data={
+                        "reason": "no_net_savings",
+                        "tokens_before": outcome.tokens_before,
+                        "tokens_after": outcome.tokens_after,
+                        "keep_recent_fraction": kf,
+                        "attempt": attempt_index + 1,
+                    },
+                )
+                if attempt_index + 1 < len(keep_fractions):
+                    continue
+                last_error = RuntimeError(
+                    "compaction produced no net token savings on any retry"
+                )
+                break
+            # Success — emit the compacted event.
+            return await self._emit_thread_event(
+                thread_id=thread_id,
+                event_type=EventType.CONTEXT_COMPACTED,
+                data=outcome.model_dump(mode="json"),
+            )
+
+        # Tier 1 exhausted — emit CONTEXT_COMPACTION_FAILED then attempt
+        # tier 2 mechanical truncation.
+        await self._emit_thread_event(
+            thread_id=thread_id,
+            event_type=EventType.CONTEXT_COMPACTION_FAILED,
+            data={
+                "error": {
+                    "type": (
+                        type(last_error).__name__
+                        if last_error is not None
+                        else "unknown"
+                    ),
+                    "message": (
+                        str(last_error)
+                        if last_error is not None
+                        else "summariser exhausted retries"
+                    ),
+                    "where": "engine.compaction.maybe_compact_thread_eagerly",
+                    "detail": {},
+                },
+                "span_first_event_id": None,
+                "span_last_event_id": None,
+            },
+        )
+
+        keep_tail_tokens = max(int(budget * base_keep_recent_fraction), 1)
+        mechanical = build_mechanical_truncation_payload(
+            events=events,
+            keep_tail_tokens=keep_tail_tokens,
+        )
+        if mechanical is None:
+            from errors import ContextOverflowUncompactable  # noqa: PLC0415
+
+            raise ContextOverflowUncompactable(
+                thread_id=str(thread_id),
+                keep_tail_tokens=keep_tail_tokens,
+                budget_tokens=budget,
+            )
+
+        return await self._emit_thread_event(
+            thread_id=thread_id,
+            event_type=EventType.CONTEXT_COMPACTED,
+            data=mechanical.model_dump(mode="json"),
+        )
+
+    async def _emit_thread_event(
+        self,
+        *,
+        thread_id: ThreadId,
+        event_type: EventType,
+        data: dict[str, Any],
+    ) -> Event:
+        """Append + publish a system-actor event on ``thread_id``.
+
+        Shared by :meth:`maybe_compact_thread_eagerly` — mirrors the
+        emit shape used by :meth:`_manual_compact_locked` (system actor,
+        no ``parent_event_id`` override; the store computes the parent
+        from the current leaf).
+        """
+        thread = await self._store.get_thread(thread_id)
+        emitted = Event(
+            event_id=EventId(f"ev_{uuid4().hex}"),
+            session_id=thread.session_id,
+            thread_id=thread_id,
+            parent_event_id=None,
+            created_at=datetime.now(UTC),
+            type=event_type,
+            data=data,
+            actor=Actor(kind="system"),
+        )
+        stored = await self._store.append_event(thread_id, emitted)
+        try:
+            await self._bus.publish(stored)
+        except Exception:  # noqa: BLE001 — bus publish best-effort
+            _log.exception(
+                "eager compaction: bus publish failed for %s", event_type
+            )
         return stored
 
     async def manual_uncompact(

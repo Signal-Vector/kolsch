@@ -447,7 +447,13 @@ class ReferenceSummaryCompactionProvider:
         ):
             extra_instructions = str(extra_instructions)
         trigger_override = config.get("trigger")
-        if trigger_override not in ("auto", "manual", "manual_preview"):
+        if trigger_override not in (
+            "auto",
+            "auto_resume",
+            "auto_resume_preview",
+            "manual",
+            "manual_preview",
+        ):
             trigger_override = "auto"
         preview_flag = bool(config.get("preview", False))
 

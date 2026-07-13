@@ -374,7 +374,12 @@ class ContextCompactedData(_DataModel):
     both when projecting. `preview` is `True` when this compaction was
     emitted as a diagnostic without swapping the live context.
     `trigger` records what fired the compaction: `"auto"` for
-    threshold-triggered, `"manual"` for a user-invoked `/compact`,
+    threshold-triggered during an in-flight exchange, `"auto_resume"`
+    for the feat-054 Phase 5 session-open eager check (fires BEFORE
+    the user's first post-resume message so the summariser delay is
+    absorbed into the resume UX instead of the first exchange),
+    `"auto_resume_preview"` for the read-only variant of the eager
+    check, `"manual"` for a user-invoked `/compact`, and
     `"manual_preview"` for `/compact --preview`.
     """
 
@@ -385,7 +390,13 @@ class ContextCompactedData(_DataModel):
     tokens_after: int
     revoked_by: EventId | None = None
     preview: bool = False
-    trigger: Literal["auto", "manual", "manual_preview"] = "auto"
+    trigger: Literal[
+        "auto",
+        "auto_resume",
+        "auto_resume_preview",
+        "manual",
+        "manual_preview",
+    ] = "auto"
 
 
 class ContextCompactionRevokedData(_DataModel):
