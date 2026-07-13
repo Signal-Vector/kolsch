@@ -271,6 +271,46 @@ class ContextFileNotFound(PlatformError):
         )
 
 
+class ContextOverflowUncompactable(PlatformError):
+    """Raised when the recent-tail alone exceeds the model's context window.
+
+    feat-054 Phase 4 — the last rung of the compaction failure ladder.
+    When the recent 20 % (or whatever ``keep_recent_fraction`` is) is
+    already larger than the model can hold, even mechanical truncation
+    can't reduce the projected messages below the budget. The engine
+    emits ``thread.exchange_failed`` with this error type so the
+    ``/why`` and chat surfaces render an actionable message ("your
+    latest message alone is larger than the model's window; drop the
+    paste or move it to a `context_files:` reference").
+    """
+
+    code = "context.overflow_uncompactable"
+    level = Level.FATAL
+
+    def __init__(
+        self,
+        *,
+        thread_id: str,
+        keep_tail_tokens: int,
+        budget_tokens: int,
+        where: str = "engine.compaction.overflow",
+    ) -> None:
+        super().__init__(
+            message=(
+                f"cannot compact thread {thread_id!r}: recent tail alone "
+                f"({keep_tail_tokens} tokens) exceeds the model's usable "
+                f"budget ({budget_tokens} tokens). Shorten the most recent "
+                f"user message or move large pastes to context_files."
+            ),
+            where=where,
+            detail={
+                "thread_id": thread_id,
+                "keep_tail_tokens": keep_tail_tokens,
+                "budget_tokens": budget_tokens,
+            },
+        )
+
+
 class ContextFileTooLarge(PlatformError):
     """Raised when a `context_files[]` file exceeds the 64 KiB cap.
 

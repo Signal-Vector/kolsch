@@ -158,6 +158,20 @@ async def build_why_compact_card(
     events = await _collect_events(runtime, thread_id)
     target: Event | None = None
     query = event_id.strip()
+    # Index revocations by the compaction they invalidate so the
+    # dump's ``revoked_by`` field cross-references separate
+    # ``CONTEXT_COMPACTION_REVOKED`` events — matching what the
+    # ``/compaction-history`` table shows. Without this, a compaction
+    # invalidated via ``/uncompact`` reads as ``revoked_by: null``
+    # because the pointer lives on the revocation event, not the
+    # compaction payload.
+    revocations: dict[str, str] = {}
+    for e in events:
+        if e.type != EventType.CONTEXT_COMPACTION_REVOKED:
+            continue
+        rev_target = e.data.get("compaction_event_id")
+        if isinstance(rev_target, str) and rev_target:
+            revocations[rev_target] = str(e.event_id)
     for e in events:
         if e.type != EventType.CONTEXT_COMPACTED:
             continue
@@ -167,6 +181,15 @@ async def build_why_compact_card(
             break
     if target is None:
         return None
+    # Payload-level `revoked_by` (belt) wins over the cross-referenced
+    # pointer (braces) so a variant that stamps the pointer inline
+    # still shows the same value here.
+    payload_revoked = target.data.get("revoked_by")
+    revoked_by_event_id: str | None
+    if isinstance(payload_revoked, str) and payload_revoked:
+        revoked_by_event_id = payload_revoked
+    else:
+        revoked_by_event_id = revocations.get(str(target.event_id))
     payload = {
         "event_id": str(target.event_id),
         "created_at": (
@@ -176,7 +199,8 @@ async def build_why_compact_card(
         ),
         "trigger": target.data.get("trigger"),
         "preview": target.data.get("preview", False),
-        "revoked_by": target.data.get("revoked_by"),
+        "revoked_by": revoked_by_event_id,
+        "revoked_by_event_id": revoked_by_event_id,
         "tokens_before": target.data.get("tokens_before"),
         "tokens_after": target.data.get("tokens_after"),
         "compacted_event_ids": target.data.get("compacted_event_ids") or [],

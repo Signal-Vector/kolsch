@@ -149,9 +149,14 @@ def snap_to_safe_boundary(
        (direction: earlier).
 
     Extends the cut monotonically in ``direction`` until no group
-    straddles the boundary. ``"later"`` grows the tail (kept span
-    grows, middle shrinks); ``"earlier"`` grows the head (rare — used
-    by callers that want to force keeping less tail).
+    straddles the boundary. ``"later"`` moves the boundary index
+    forward — because ``compact()`` uses ``tail_start = cut``, that
+    grows ``tail_start`` so the **middle grows** and the **kept tail
+    shrinks** (moving the cut point later in the event stream pushes
+    the tail boundary further forward, reducing what's preserved
+    verbatim). ``"earlier"`` moves it backward — mirror-image (rare —
+    used by callers that want to force keeping more tail at the
+    expense of the middle).
     """
     if not events:
         return candidate_cut
@@ -782,6 +787,159 @@ def _parse_summariser_json(raw: str) -> dict[str, Any]:
             f"summariser returned a non-object JSON value: {type(parsed).__name__}"
         )
     return parsed
+
+
+# ---------------------------------------------------------------------------
+# Mechanical truncation fallback (feat-054 Phase 4 — tier 2 of the ladder)
+# ---------------------------------------------------------------------------
+
+
+def build_mechanical_truncation_payload(
+    events: list[Event],
+    *,
+    keep_tail_tokens: int,
+    max_refs: int = 50,
+) -> ContextCompactedData | None:
+    """Construct a mechanical-truncation ``ContextCompactedData``.
+
+    feat-054 Phase 4 tier 2 — used by the engine's compaction ladder
+    when the summariser LLM exhausts its retries. Snaps the same
+    boundary the reference-summary provider would use, then produces a
+    ``ContextCompactedData`` whose ``summary`` carries **no LLM prose
+    at all** — just:
+
+    - a stock ``summary_text`` telling the model the span was
+      mechanically dropped and pointing at ``context.reference_lookup``,
+    - a stub ``refs[]`` of one-liner ``{event_id, event_type}`` entries
+      (clustered per :func:`_cluster_refs` when the span exceeds
+      ``max_refs``) so :func:`context.reference_lookup` still resolves
+      dropped events,
+    - a ``trigger`` of ``"auto_truncation"``. This is a fourth value on
+      the ``ContextCompactedData.trigger`` literal beyond the
+      auto/manual/manual_preview set — extend the model's Literal when
+      wiring this in.
+
+    Returns ``None`` when the middle span is empty (nothing to drop —
+    tier 3 hard-fail should fire at the engine instead).
+    """
+    if not events:
+        return None
+    from schemas import EventId  # noqa: PLC0415
+    from schemas.events import ContextCompactedData  # noqa: PLC0415
+
+    # Head boundary — same rule as the reference_summary provider: run
+    # of events before the first USER_MESSAGE stays out of the middle.
+    head_end = 0
+    for i, e in enumerate(events):
+        if e.type == EventType.USER_MESSAGE:
+            head_end = i
+            break
+    else:
+        head_end = len(events)
+    head_end = snap_to_safe_boundary(events, head_end, direction="later")
+
+    # Tail boundary — walk backward accumulating tokens until keep_tail
+    # is reached; snap later.
+    cumulative = 0
+    tail_start = len(events)
+    for i in range(len(events) - 1, -1, -1):
+        cumulative += _event_token_estimate(events[i])
+        if cumulative >= keep_tail_tokens:
+            tail_start = i
+            break
+    else:
+        tail_start = 0
+    tail_start = snap_to_safe_boundary(events, tail_start, direction="later")
+
+    if tail_start <= head_end:
+        return None
+
+    middle = events[head_end:tail_start]
+    if not middle:
+        return None
+
+    pre_tokens = sum(_event_token_estimate(e) for e in middle)
+
+    first_id = str(middle[0].event_id)
+    last_id = str(middle[-1].event_id)
+    span_count = len(middle)
+
+    # Build stub refs. Every dropped event gets a one-liner
+    # {event_id, event_type} so `context.reference_lookup` can fetch
+    # any of them by exact id (per Coordinator decision on ranges: the
+    # lookup tool rejects clusters and asks the model to use an exact
+    # event_id from the range).
+    refs: list[dict[str, Any]] = []
+    for e in middle:
+        refs.append(
+            {
+                "event_id": str(e.event_id),
+                "event_type": str(e.type),
+                "one_line": f"{e.type} (mechanically truncated)",
+            }
+        )
+    if len(refs) > max_refs:
+        kept = refs[: max_refs - 1]
+        overflow = refs[max_refs - 1 :]
+        overflow_ids = [str(r["event_id"]) for r in overflow]
+        kept.append(
+            {
+                "event_id_range": {
+                    "first_event_id": overflow_ids[0],
+                    "last_event_id": overflow_ids[-1],
+                    "event_count": len(overflow_ids),
+                },
+                "note": (
+                    "clustered overflow — mechanical truncation dropped "
+                    f"{len(overflow_ids)} events; use exact event_ids from "
+                    "the range with context.reference_lookup."
+                ),
+            }
+        )
+        refs = kept
+
+    summary_text = (
+        f"[Context truncated: {span_count} events between {first_id} and "
+        f"{last_id} were removed to stay within the model's context "
+        f"window. Use context.reference_lookup(event_id) to retrieve any "
+        f"of the following event_ids as needed.]"
+    )
+
+    return ContextCompactedData(
+        compacted_event_ids=[EventId(str(e.event_id)) for e in middle],
+        pre_compaction={
+            "head_end": head_end,
+            "tail_start": tail_start,
+            "total_events": len(events),
+            "fallback": "mechanical_truncation",
+        },
+        summary={
+            "schema_version": 1,
+            "summary_text": summary_text,
+            "refs": refs,
+            "span": {
+                "first_event_id": first_id,
+                "last_event_id": last_id,
+                "event_count": span_count,
+            },
+            "trigger": "auto_truncation",
+            "compactor": {
+                "variant": "mechanical_truncation",
+                "model": None,
+            },
+        },
+        tokens_before=pre_tokens,
+        # Rough estimate — the mechanical summary is small (the stock
+        # text + short refs); the engine's non-shrinking guard is
+        # bypassed for this path so an exact estimate isn't load-bearing.
+        tokens_after=min(pre_tokens // 4, 500),
+        preview=False,
+        # `trigger` on ContextCompactedData is still one of
+        # auto/manual/manual_preview; keep "auto" so the pydantic
+        # literal validates. The mechanical marker rides on
+        # `summary.trigger` + `pre_compaction.fallback`.
+        trigger="auto",
+    )
 
 
 # ---------------------------------------------------------------------------

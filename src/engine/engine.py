@@ -371,6 +371,33 @@ class AgentEngine:
         (``ChatApp._handle_compact``) mounts a notice with the error;
         the failure ladder in Phase 4 will retry.
         """
+        # feat-054 Phase 4 — thread-safety: serialise the read-then-emit
+        # of a manual compaction against any concurrent in-flight
+        # exchange on the same thread. Without the lock, an exchange's
+        # emit slotting between our `read_path_to_leaf` and
+        # `append_event` would produce a compaction whose
+        # `compacted_event_ids` reference a stale leaf — Assembly would
+        # still project them (they're valid ids on the path) but the
+        # user-visible span would exclude events emitted during the
+        # window, leaving a jagged "compaction covers past me, not
+        # around me" state. Same lock the exchange uses.
+        async with self._lock_for_thread(str(thread_id)):
+            return await self._manual_compact_locked(
+                config=config,
+                thread_id=thread_id,
+                preview=preview,
+                extra_instructions=extra_instructions,
+            )
+
+    async def _manual_compact_locked(
+        self,
+        *,
+        config: ResolvedAgentConfig,
+        thread_id: ThreadId,
+        preview: bool,
+        extra_instructions: str | None,
+    ) -> Event | None:
+        """Body of :meth:`manual_compact`, invoked inside the thread lock."""
         provider = self._compaction_provider
         if provider is None:
             return None
@@ -458,6 +485,16 @@ class AgentEngine:
         projecting, so the next exchange sees the restored context.
         Does NOT restart the current exchange.
         """
+        # feat-054 Phase 4 — thread-safety, mirrors :meth:`manual_compact`.
+        async with self._lock_for_thread(str(thread_id)):
+            return await self._manual_uncompact_locked(thread_id=thread_id)
+
+    async def _manual_uncompact_locked(
+        self,
+        *,
+        thread_id: ThreadId,
+    ) -> Event | None:
+        """Body of :meth:`manual_uncompact`, invoked inside the thread lock."""
         events = [
             e async for e in self._store.read_path_to_leaf(thread_id)
         ]
@@ -1679,7 +1716,7 @@ class _Exchange:
             actor=Actor(kind="system"),
         )
 
-    # ---- Compaction trigger (feat-054 Phase 2) ------------------------
+    # ---- Compaction trigger (feat-054 Phase 2 + Phase 4 failure ladder) -
 
     async def _maybe_compact_events(
         self,
@@ -1690,11 +1727,34 @@ class _Exchange:
 
         Returns the same ``events`` unchanged when compaction is
         disabled, when the model has no declared ``context_length``,
-        when the projected estimate is below the trigger, or when the
-        summariser call fails. Otherwise emits a
-        [`CONTEXT_COMPACTED`][schemas.EventType.CONTEXT_COMPACTED] event
-        and re-reads the path so the new event is included in
-        downstream assembly.
+        or when the projected estimate is below the trigger. Otherwise
+        runs the summariser through the Phase 4 failure ladder:
+
+        1. **Tier 1 — retry once.** If the first summariser call raises
+           OR the returned payload fails JSON parse, retry once with
+           the same model.
+        2. **Tier 2 — mechanical truncation fallback.** If tier 1 also
+           fails, emit ``CONTEXT_COMPACTION_FAILED``, then construct a
+           mechanical-truncation ``ContextCompactedData`` (no
+           summariser prose; just ``refs[]`` one-liners the model can
+           feed to :func:`context.reference_lookup`) and emit
+           ``CONTEXT_COMPACTED`` with ``trigger="auto_truncation"``.
+        3. **Tier 3 — hard-fail.** If mechanical truncation can't get
+           below the budget either (recent-tail alone exceeds the
+           model's window), raise
+           :class:`ContextOverflowUncompactable`. The engine's outer
+           ``execute`` translates the raise into
+           ``thread.exchange_failed`` so the user's turn ends with an
+           actionable error rather than a mid-stream provider bailout.
+
+        Non-shrinking guard (Phase 4 §B): if the successful summary
+        does not reduce projected tokens below ``0.90 ×
+        tokens_before``, the compaction is discarded, a
+        ``CONTEXT_COMPACTION_SKIPPED`` event is emitted with
+        ``reason="no_net_savings"``, and the trigger retries with a
+        tighter ``keep_recent_fraction`` (halved, then quartered — max
+        two retries). If all retries fail to shrink, the tier-2
+        fallback fires.
         """
         provider = self.engine._compaction_provider
         if provider is None:
@@ -1742,48 +1802,182 @@ class _Exchange:
             return events
 
         # Trigger. Compute keep_tail from the fraction and delegate.
-        keep_recent_fraction = float(
+        base_keep_recent_fraction = float(
             compaction_cfg.get("config", {}).get("keep_recent_fraction", 0.20)
         )
-        keep_tail_tokens = max(int(budget * keep_recent_fraction), 1)
-        inner_config: dict[str, Any] = dict(
-            compaction_cfg.get("config", {}) or {}
-        )
 
-        try:
-            outcome = await provider.compact(
+        # Phase 4 §B — non-shrinking guard with two retries at tighter
+        # keep_recent_fraction. Each attempt runs the tier 1 (retry-once)
+        # summariser ladder; the outer loop steps down the tail fraction
+        # if the produced summary didn't shrink enough.
+        keep_fractions: list[float] = [
+            base_keep_recent_fraction,
+            base_keep_recent_fraction * 0.5,
+            base_keep_recent_fraction * 0.25,
+        ]
+
+        last_error: Exception | None = None
+        for attempt_index, kf in enumerate(keep_fractions):
+            keep_tail_tokens = max(int(budget * kf), 1)
+            inner_config: dict[str, Any] = dict(
+                compaction_cfg.get("config", {}) or {}
+            )
+            inner_config["keep_recent_fraction"] = kf
+            outcome, error = await self._run_summariser_with_retry(
+                provider=provider,
                 events=events,
-                keep_head=0,
-                keep_tail=keep_tail_tokens,
-                model_context_length=context_length,
-                thread_id=self.context.thread_id,
-                config=inner_config,
+                keep_tail_tokens=keep_tail_tokens,
+                context_length=context_length,
+                inner_config=inner_config,
             )
-        except Exception as exc:  # noqa: BLE001 — Phase 2 skips on any failure
-            _log.warning(
-                "compaction: summariser failed (%s); skipping this exchange",
-                exc,
+            if outcome is None:
+                last_error = error
+                # Tier 1 exhausted on this attempt — jump straight to
+                # tier 2 rather than continuing the shrink-retry loop
+                # (a summariser that raised won't succeed with a
+                # narrower tail).
+                break
+            if not outcome.compacted_event_ids:
+                # No-op payload (short session). Nothing to do.
+                return events
+            # Non-shrinking guard.
+            if outcome.tokens_before > 0 and (
+                outcome.tokens_after > outcome.tokens_before * 0.90
+            ):
+                await self._emit(
+                    type_=EventType.CONTEXT_COMPACTION_SKIPPED,
+                    data={
+                        "reason": "no_net_savings",
+                        "tokens_before": outcome.tokens_before,
+                        "tokens_after": outcome.tokens_after,
+                        "keep_recent_fraction": kf,
+                        "attempt": attempt_index + 1,
+                    },
+                    actor=Actor(kind="system"),
+                )
+                if attempt_index + 1 < len(keep_fractions):
+                    continue
+                # Exhausted retries — fall through to tier 2.
+                last_error = RuntimeError(
+                    "compaction produced no net token savings on any retry"
+                )
+                break
+            # Success — emit and re-read the path.
+            await self._emit(
+                type_=EventType.CONTEXT_COMPACTED,
+                data=outcome.model_dump(mode="json"),
+                actor=Actor(kind="system"),
             )
-            return events
+            return [
+                e
+                async for e in self.engine._store.read_path_to_leaf(
+                    self.context.thread_id,
+                )
+            ]
 
-        # No-op payloads (short session) — don't emit.
-        if not outcome.compacted_event_ids:
-            return events
-
+        # Tier 1 + shrink-retries exhausted. Move to tier 2: emit a
+        # failure event, then attempt mechanical truncation.
         await self._emit(
-            type_=EventType.CONTEXT_COMPACTED,
-            data=outcome.model_dump(mode="json"),
+            type_=EventType.CONTEXT_COMPACTION_FAILED,
+            data={
+                "error": {
+                    "type": (
+                        type(last_error).__name__
+                        if last_error is not None
+                        else "unknown"
+                    ),
+                    "message": (
+                        str(last_error)
+                        if last_error is not None
+                        else "summariser exhausted retries"
+                    ),
+                    "where": "engine.compaction._maybe_compact_events",
+                    "detail": {},
+                },
+                "span_first_event_id": None,
+                "span_last_event_id": None,
+            },
             actor=Actor(kind="system"),
         )
 
-        # Re-read the path so the freshly-emitted compaction event is
-        # included in the downstream assembly.
+        # Tier 2 — mechanical truncation. Snap a boundary at the
+        # base keep_recent_fraction (widest tail we're comfortable with)
+        # and emit a mechanical CONTEXT_COMPACTED whose summary is
+        # the stock "context truncated" stub. reference_lookup still
+        # works because `refs[]` and `compacted_event_ids` cover the
+        # dropped span.
+        from providers.compaction import (  # noqa: PLC0415
+            build_mechanical_truncation_payload,
+        )
+
+        keep_tail_tokens = max(int(budget * base_keep_recent_fraction), 1)
+        mechanical = build_mechanical_truncation_payload(
+            events=events,
+            keep_tail_tokens=keep_tail_tokens,
+        )
+        if mechanical is None:
+            # Tier 3 — even mechanical truncation cannot reduce below
+            # budget. Raise; the engine's outer `execute` translates
+            # into thread.exchange_failed with our distinct error type.
+            from errors import ContextOverflowUncompactable  # noqa: PLC0415
+
+            raise ContextOverflowUncompactable(
+                thread_id=str(self.context.thread_id),
+                keep_tail_tokens=keep_tail_tokens,
+                budget_tokens=budget,
+            )
+
+        await self._emit(
+            type_=EventType.CONTEXT_COMPACTED,
+            data=mechanical.model_dump(mode="json"),
+            actor=Actor(kind="system"),
+        )
         return [
             e
             async for e in self.engine._store.read_path_to_leaf(
                 self.context.thread_id,
             )
         ]
+
+    async def _run_summariser_with_retry(
+        self,
+        *,
+        provider: ContextCompactionProvider,
+        events: list[Event],
+        keep_tail_tokens: int,
+        context_length: int,
+        inner_config: dict[str, Any],
+    ) -> tuple[Any, Exception | None]:
+        """Invoke ``provider.compact`` up to twice; return ``(outcome, error)``.
+
+        Tier 1 of the failure ladder — one retry with the same model +
+        prompt to absorb transient rate-limits / network flakes.
+        Success returns ``(payload, None)``; two failures return
+        ``(None, last_error)``.
+        """
+        attempts = 2
+        last_error: Exception | None = None
+        for i in range(attempts):
+            try:
+                outcome = await provider.compact(
+                    events=events,
+                    keep_head=0,
+                    keep_tail=keep_tail_tokens,
+                    model_context_length=context_length,
+                    thread_id=self.context.thread_id,
+                    config=inner_config,
+                )
+            except Exception as exc:  # noqa: BLE001 — ladder catches any raise
+                last_error = exc
+                _log.warning(
+                    "compaction: summariser attempt %d/%d failed (%s)",
+                    i + 1,
+                    attempts,
+                    exc,
+                )
+                continue
+            return outcome, None
+        return None, last_error
 
     # ---- Emit helpers --------------------------------------------------
 
