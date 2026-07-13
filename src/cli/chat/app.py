@@ -1078,13 +1078,21 @@ class ChatApp(App):
         # loop finishes have no entry and take the interactive path
         # (AC #13).
         self.event_adapter.stage_replay_prompt_outcomes(selected)
-        for event in selected:
-            try:
-                await self.event_adapter.handle(event)
-            except Exception:
-                # Replay is best-effort; a bad event shouldn't crash
-                # the chat. Continue.
-                continue
+        # bug-058 Part A: batch the per-event dispatch so N per-widget
+        # layout passes collapse into one layout + one paint on exit.
+        # `VerticalScroll.batch()` is `Widget.batch()` (widget.py:4364);
+        # it composes the widget's mount lock with `App.batch_update()`,
+        # which is safe with sub-container mounts (WorkflowCard →
+        # WorkflowNodeRow inside `#transcript`) — Textual doesn't require
+        # the batch to be hoisted to a common ancestor.
+        async with transcript.batch():
+            for event in selected:
+                try:
+                    await self.event_adapter.handle(event)
+                except Exception:
+                    # Replay is best-effort; a bad event shouldn't crash
+                    # the chat. Continue.
+                    continue
         # bug-056: safety recompute — after replay every terminal block
         # is mounted `is_resolved=True`, so this un-freezes the composer
         # unconditionally when no live prompt is in flight (AC #2).
