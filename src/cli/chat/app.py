@@ -826,11 +826,141 @@ class ChatApp(App):
         if self.session.is_resume:
             await self._replay_history()
 
+        # feat-054 Phase 5 — session-open eager compaction. Fire BEFORE
+        # the user's first post-resume message so the summariser delay
+        # is absorbed into the resume UX. Fresh sessions no-op via the
+        # empty-events guard in the engine method. The composer is
+        # frozen for the duration so the user can't type ahead of an
+        # unstable context state.
+        await self._maybe_eager_compact_on_open()
+
         # Focus the composer so the user can start typing.
         try:
             self.query_one(Composer).focus()
         except Exception:
             pass
+
+    async def _maybe_eager_compact_on_open(self) -> None:
+        """Run the feat-054 Phase 5 session-open eager compaction check.
+
+        Wraps :meth:`AgentEngine.maybe_compact_thread_eagerly` with the
+        chat-side UX:
+
+        - Freezes the composer while the check runs.
+        - Mounts a progress notice at the top of the transcript if the
+          check triggers a summariser call.
+        - Mounts a warning notice if the ladder hard-fails (tier 3).
+
+        No notice, no LLM call when the thread is below threshold —
+        the engine method's fast-path returns ``None`` before touching
+        the summariser.
+        """
+        engine = getattr(self, "engine", None)
+        maybe = getattr(engine, "maybe_compact_thread_eagerly", None)
+        if maybe is None:
+            return
+        # Freeze the composer. Direct `.disabled` toggle keeps the
+        # semantic distinct from `awaiting_approval` (which routes
+        # approvals, not "engine-busy").
+        composer: Composer | None = None
+        try:
+            composer = self.query_one(Composer)
+            composer.disabled = True
+        except Exception:  # noqa: BLE001 — headless fixtures may lack a mounted composer
+            composer = None
+
+        # Read the runtime-declared context length to decide whether
+        # to bother mounting the "compacting…" notice. We only mount
+        # after the engine tells us it needs to compact (via a fired
+        # CONTEXT_COMPACTED event on the bus — the adapter mounts its
+        # own notice). Between the check and the emit we don't yet
+        # know if compaction will fire, so we emit a lightweight
+        # in-progress notice up front and let the event adapter's
+        # standard handler mount its notice afterwards.
+        notice_widget: Any | None = None
+        try:
+            transcript = self.query_one("#transcript", VerticalScroll)
+        except Exception:  # noqa: BLE001
+            transcript = None
+        # Determine whether we should mount the "compacting…" progress
+        # notice. Cheap early estimate: only mount if the thread has
+        # ANY events (fresh session has none — no delay to advertise).
+        should_mount_progress = False
+        try:
+            has_events = False
+            async for _ in self.session.runtime.store.read_path_to_leaf(
+                self.session.thread_id,
+            ):
+                has_events = True
+                break
+            should_mount_progress = has_events and self.session.is_resume
+        except Exception:  # noqa: BLE001
+            should_mount_progress = False
+
+        if should_mount_progress and transcript is not None:
+            try:
+                from cli.chat.widgets.notice import (  # noqa: PLC0415
+                    NoticeWidget,
+                )
+
+                notice_widget = NoticeWidget(
+                    text=(
+                        "↳ resumed session exceeds context budget; "
+                        "compacting…"
+                    ),
+                    kind="info",
+                )
+                await transcript.mount(notice_widget)
+            except Exception:  # noqa: BLE001 — best-effort
+                notice_widget = None
+
+        try:
+            await maybe(
+                thread_id=self.session.thread_id,
+                spec=self.session.config.model,
+            )
+        except Exception as exc:  # noqa: BLE001 — hard-fail path
+            # Tier 3 uncompactable or other unexpected error. Mount a
+            # warning notice; do NOT hard-fail the chat boot.
+            _LOGGER.warning(
+                "ChatApp._maybe_eager_compact_on_open: eager compaction "
+                "raised %s",
+                type(exc).__name__,
+                exc_info=True,
+            )
+            if transcript is not None:
+                try:
+                    from cli.chat.widgets.notice import (  # noqa: PLC0415
+                        NoticeWidget,
+                    )
+
+                    await transcript.mount(
+                        NoticeWidget(
+                            text=(
+                                "↳ eager compaction failed — the first "
+                                "message may take longer while the "
+                                "engine falls back."
+                            ),
+                            kind="warning",
+                        )
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+        finally:
+            # Remove the transient "compacting…" progress notice —
+            # the event adapter's standard handler mounted the real
+            # CONTEXT_COMPACTED notice via bus publish.
+            if notice_widget is not None:
+                try:
+                    await notice_widget.remove()
+                except Exception:  # noqa: BLE001
+                    pass
+            # Re-enable the composer regardless of outcome.
+            if composer is not None:
+                try:
+                    composer.disabled = False
+                except Exception:  # noqa: BLE001
+                    pass
 
     async def on_unmount(self) -> None:
         """Clear the modal registration on exit + tear down services.
