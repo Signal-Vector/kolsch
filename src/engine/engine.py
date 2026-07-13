@@ -85,7 +85,7 @@ if TYPE_CHECKING:
         SandboxProvider,
         SecretsProvider,
     )
-    from schemas import ModelSpec
+    from schemas import ModelSpec, ThreadId
     from skills import SkillsSubsystem
     from store import SessionStore
     from tools import ToolsSubsystem
@@ -340,6 +340,173 @@ class AgentEngine:
             lock = asyncio.Lock()
             self._thread_locks[thread_id] = lock
         return lock
+
+    async def manual_compact(
+        self,
+        *,
+        config: ResolvedAgentConfig,
+        thread_id: ThreadId,
+        preview: bool = False,
+        extra_instructions: str | None = None,
+    ) -> Event | None:
+        """Force a compaction on ``thread_id`` regardless of the trigger threshold.
+
+        feat-054 Phase 3 — powers the ``/compact`` slash command. Runs
+        the same summariser path as
+        :meth:`_Exchange._maybe_compact_events` but bypasses the
+        pre-flight token estimate check so the user can compact NOW.
+        Emits a
+        [`CONTEXT_COMPACTED`][schemas.EventType.CONTEXT_COMPACTED] event
+        with ``trigger="manual"`` (or ``"manual_preview"`` when
+        ``preview=True``) so downstream telemetry can tell a user-
+        initiated compaction apart from an auto-fired one.
+
+        Returns the emitted event, or ``None`` when the middle span
+        was empty (nothing to compact — a short session), when the
+        provider is not wired, or when the model has no declared
+        context_length (matches the auto path's silent-skip
+        behaviour).
+
+        Raises the summariser exception on failure. The caller
+        (``ChatApp._handle_compact``) mounts a notice with the error;
+        the failure ladder in Phase 4 will retry.
+        """
+        provider = self._compaction_provider
+        if provider is None:
+            return None
+        context_length = _context_length_for_spec(
+            self._llm_providers_config,
+            config.model,
+        )
+        if context_length is None:
+            return None
+        events = [
+            e async for e in self._store.read_path_to_leaf(thread_id)
+        ]
+        compaction_cfg = (self._assets._platform_config or {}).get(
+            "compaction",
+            {},
+        ) or {}
+        max_output = int(
+            compaction_cfg.get("config", {}).get("max_output_tokens", 4096)
+        )
+        budget = max(context_length - max_output, 1)
+        keep_recent_fraction = float(
+            compaction_cfg.get("config", {}).get("keep_recent_fraction", 0.20)
+        )
+        keep_tail_tokens = max(int(budget * keep_recent_fraction), 1)
+        inner_config: dict[str, Any] = dict(
+            compaction_cfg.get("config", {}) or {}
+        )
+        # Route the manual-invocation markers through the provider's
+        # config dict so the summariser prompt + emitted event both
+        # reflect user intent.
+        inner_config["trigger"] = "manual_preview" if preview else "manual"
+        if preview:
+            inner_config["preview"] = True
+        if extra_instructions:
+            inner_config["extra_instructions"] = extra_instructions
+
+        outcome = await provider.compact(
+            events=events,
+            keep_head=0,
+            keep_tail=keep_tail_tokens,
+            model_context_length=context_length,
+            thread_id=thread_id,
+            config=inner_config,
+        )
+        if not outcome.compacted_event_ids:
+            return None
+
+        # Manual compaction is not exchange-scoped. Emit through the
+        # store directly with a system Actor and a per-thread event.
+        thread = await self._store.get_thread(thread_id)
+        emitted = Event(
+            event_id=EventId(f"ev_{uuid4().hex}"),
+            session_id=thread.session_id,
+            thread_id=thread_id,
+            parent_event_id=None,
+            created_at=datetime.now(UTC),
+            type=EventType.CONTEXT_COMPACTED,
+            data=outcome.model_dump(mode="json"),
+            actor=Actor(kind="system"),
+        )
+        stored = await self._store.append_event(thread_id, emitted)
+        # Publish so live subscribers (chat event adapter) see it.
+        try:
+            await self._bus.publish(stored)
+        except Exception:  # noqa: BLE001
+            _log.exception("manual_compact: bus publish failed")
+        return stored
+
+    async def manual_uncompact(
+        self,
+        *,
+        thread_id: ThreadId,
+    ) -> Event | None:
+        """Append a ``CONTEXT_COMPACTION_REVOKED`` event for the most-recent active compaction.
+
+        feat-054 Phase 3 — powers the ``/uncompact`` slash command.
+        Walks the thread from newest to oldest, finds the first
+        ``CONTEXT_COMPACTED`` event that has no ``revoked_by`` field
+        set (i.e. is still active), and emits a revocation pointing at
+        it. Coordinator decision #2: LIFO first-only. Returns the
+        emitted revocation event, or ``None`` when no active
+        compaction exists on the thread.
+
+        Assembly (Phase 2) already skips revoked compactions when
+        projecting, so the next exchange sees the restored context.
+        Does NOT restart the current exchange.
+        """
+        events = [
+            e async for e in self._store.read_path_to_leaf(thread_id)
+        ]
+        # Index every CONTEXT_COMPACTION_REVOKED so a prior /uncompact
+        # is honoured — the revocation is emitted as a separate event
+        # (immutable log), NOT by mutating the compaction's payload,
+        # so an in-payload `revoked_by` check alone would miss it.
+        revoked_ids: set[str] = set()
+        for e in events:
+            if e.type != EventType.CONTEXT_COMPACTION_REVOKED:
+                continue
+            revoked_target = e.data.get("compaction_event_id")
+            if isinstance(revoked_target, str) and revoked_target:
+                revoked_ids.add(revoked_target)
+        target: Event | None = None
+        for e in reversed(events):
+            if e.type != EventType.CONTEXT_COMPACTED:
+                continue
+            if str(e.event_id) in revoked_ids:
+                continue
+            # `revoked_by` on the payload (belt + braces for future
+            # variants that DO stamp the pointer inline).
+            revoked_by = e.data.get("revoked_by")
+            if revoked_by:
+                continue
+            target = e
+            break
+        if target is None:
+            return None
+        thread = await self._store.get_thread(thread_id)
+        emitted = Event(
+            event_id=EventId(f"ev_{uuid4().hex}"),
+            session_id=thread.session_id,
+            thread_id=thread_id,
+            parent_event_id=None,
+            created_at=datetime.now(UTC),
+            type=EventType.CONTEXT_COMPACTION_REVOKED,
+            data={
+                "compaction_event_id": str(target.event_id),
+                "reason": "user_requested",
+            },
+            actor=Actor(kind="system"),
+        )
+        stored = await self._store.append_event(thread_id, emitted)
+        try:
+            await self._bus.publish(stored)
+        except Exception:  # noqa: BLE001
+            _log.exception("manual_uncompact: bus publish failed")
+        return stored
 
 
 # ---------------------------------------------------------------------------

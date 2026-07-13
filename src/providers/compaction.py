@@ -430,6 +430,21 @@ class ReferenceSummaryCompactionProvider:
         if max_refs < 1:
             max_refs = 1
         summarizer_model_cfg = config.get("summarizer_model")
+        # feat-054 Phase 3 — `/compact --instructions "..."` and
+        # `/compact --preview` reach the provider through these config
+        # keys. `trigger` records what fired the compaction so the
+        # emitted event's `trigger` field ("manual" / "manual_preview"
+        # / "auto") reflects reality. `extra_instructions` bias the
+        # summariser prompt without changing its JSON contract.
+        extra_instructions = config.get("extra_instructions")
+        if extra_instructions is not None and not isinstance(
+            extra_instructions, str
+        ):
+            extra_instructions = str(extra_instructions)
+        trigger_override = config.get("trigger")
+        if trigger_override not in ("auto", "manual", "manual_preview"):
+            trigger_override = "auto"
+        preview_flag = bool(config.get("preview", False))
 
         # Step 1 — head boundary. Everything before the first user
         # message is considered head (SESSION_OPENED + early CONFIG_SET
@@ -488,7 +503,8 @@ class ReferenceSummaryCompactionProvider:
                 },
                 tokens_before=0,
                 tokens_after=0,
-                trigger="auto",
+                preview=preview_flag,
+                trigger=trigger_override,  # type: ignore[arg-type]
             )
 
         middle = events[head_end:tail_start]
@@ -507,7 +523,11 @@ class ReferenceSummaryCompactionProvider:
         model_spec = _resolve_summarizer_spec(summarizer_model_cfg)
         llm = await self._llm_for_model(model_spec)
 
-        summariser_input = _build_summariser_prompt(middle, max_refs=max_refs)
+        summariser_input = _build_summariser_prompt(
+            middle,
+            max_refs=max_refs,
+            extra_instructions=extra_instructions,
+        )
         from engine import LLMRequest  # noqa: PLC0415 — deferred import
         from engine.framework import Message  # noqa: PLC0415
 
@@ -598,7 +618,8 @@ class ReferenceSummaryCompactionProvider:
             summary=summary_body,
             tokens_before=pre_tokens,
             tokens_after=tokens_after,
-            trigger="auto",
+            preview=preview_flag,
+            trigger=trigger_override,  # type: ignore[arg-type]
         )
 
 
@@ -696,8 +717,17 @@ def _build_summariser_prompt(
     middle: list[Event],
     *,
     max_refs: int,
+    extra_instructions: str | None = None,
 ) -> _SummariserInput:
-    """Build the JSON-only summariser prompt."""
+    """Build the JSON-only summariser prompt.
+
+    ``extra_instructions`` — feat-054 Phase 3 — is user-supplied
+    guidance from `/compact --instructions "<text>"`. When present it
+    is appended verbatim after the standard header so the summariser
+    LLM can bias the ``summary_text`` accordingly (e.g. "focus on file
+    edits", "preserve error messages verbatim"). The instructions
+    never change the JSON schema contract — only the summary content.
+    """
     lines: list[str] = []
     for e in middle:
         try:
@@ -712,6 +742,12 @@ def _build_summariser_prompt(
         f"\n\nCap refs at {max_refs} entries; if you would list more, "
         "keep the most useful ones."
     )
+    if extra_instructions:
+        body += (
+            "\n\nAdditional operator guidance for this compaction "
+            f"(honour it while still returning the JSON schema above): "
+            f"{extra_instructions}"
+        )
     return _SummariserInput(
         messages=[{"role": "user", "content": body}],
     )

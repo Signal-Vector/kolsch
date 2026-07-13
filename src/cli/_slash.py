@@ -1524,6 +1524,38 @@ COMMAND_REGISTRY: dict[str, SlashCommand] = {
         usage="/reload   rescan disk + rebuild the authz provider atomically",
         handler=None,
     ),
+    # feat-054 Phase 3 — context compaction DX surface. All four have
+    # ``handler=None``; ``ChatApp._handle_slash`` intercepts by name
+    # because they need transcript access + runtime handles the free-
+    # standing dispatcher can't reach.
+    "/compact": SlashCommand(
+        name="/compact",
+        description="force-compact the conversation now (or preview what would compact)",
+        usage="/compact [--preview] [--instructions '<text>']",
+        handler=None,
+        free_form_arg_hint="[--preview] [--instructions '<text>']",
+    ),
+    "/uncompact": SlashCommand(
+        name="/uncompact",
+        description="revoke the most recent active compaction on this thread",
+        usage="/uncompact   restore the last compacted range for the next exchange",
+        handler=None,
+    ),
+    "/compaction-history": SlashCommand(
+        name="/compaction-history",
+        description="list every compaction event on this thread",
+        usage="/compaction-history",
+        handler=None,
+        state_changing=False,
+    ),
+    "/why-compact": SlashCommand(
+        name="/why-compact",
+        description="dump the summary + pre_compaction payload for one compaction event",
+        usage="/why-compact <event_id>",
+        handler=None,
+        state_changing=False,
+        free_form_arg_hint="<event_id>",
+    ),
 }
 """The visible slash commands; `/exit` carries `/quit` as an alias."""
 

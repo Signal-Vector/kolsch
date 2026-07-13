@@ -49,9 +49,10 @@ def test_registry_has_twelve_visible_commands_per_patch_5() -> None:
     """Patch §5 + skills-build + qol-permission-system-human-readable.md
     Step 3 add ``/skill`` then ``/perm``; Phase 3.9 Step 1 adds
     ``/workflow`` and Step 3 adds ``/fork``; feat-041 adds ``/why``
-    and ``/reload``. ``/exit`` and ``/quit`` still share one entry
-    via ``aliases``."""
-    assert len(COMMAND_REGISTRY) == 14
+    and ``/reload``; feat-054 Phase 3 adds ``/compact``,
+    ``/uncompact``, ``/compaction-history``, ``/why-compact``.
+    ``/exit`` and ``/quit`` still share one entry via ``aliases``."""
+    assert len(COMMAND_REGISTRY) == 18
     expected = {
         "/help",
         "/exit",
@@ -67,6 +68,10 @@ def test_registry_has_twelve_visible_commands_per_patch_5() -> None:
         "/fork",
         "/why",
         "/reload",
+        "/compact",
+        "/uncompact",
+        "/compaction-history",
+        "/why-compact",
     }
     assert set(COMMAND_REGISTRY.keys()) == expected
 
@@ -104,11 +109,20 @@ def test_registry_real_handlers_match_phase_2_1_step_24e_set() -> None:
     # feat-041 intentionally leaves `/why` and `/reload` with
     # `handler=None` — the ChatApp intercepts by name because both
     # need transcript / runtime access the SlashContext doesn't
-    # expose.
+    # expose. feat-054 Phase 3 uses the same pattern for the four
+    # compaction commands (they need `ChatApp.engine` + transcript
+    # access the free-standing SlashContext doesn't carry).
     placeholders = {
         name for name, cmd in COMMAND_REGISTRY.items() if cmd.handler is None
     }
-    assert placeholders == {"/why", "/reload"}
+    assert placeholders == {
+        "/why",
+        "/reload",
+        "/compact",
+        "/uncompact",
+        "/compaction-history",
+        "/why-compact",
+    }
 
 
 def test_is_slash_command() -> None:
@@ -254,6 +268,10 @@ def test_tc_chat_15_completer_lists_all_twelve_commands_after_slash() -> None:
         "/fork",
         "/why",
         "/reload",
+        "/compact",
+        "/uncompact",
+        "/compaction-history",
+        "/why-compact",
     }
 
 
