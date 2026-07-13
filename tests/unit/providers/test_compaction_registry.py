@@ -95,22 +95,25 @@ def test_register_compaction_variant_adds_to_registry() -> None:
 
 
 @pytest.mark.asyncio
-async def test_reference_summary_compact_stub_raises_not_implemented() -> None:
-    # Phase 1 stub — real algorithm lands in Phase 2. Guard against
-    # accidental invocation.
+async def test_reference_summary_compact_no_op_on_empty_events() -> None:
+    # Phase 2: `compact()` is implemented. Short/empty session → no-op
+    # payload with empty `compacted_event_ids`; the engine trigger
+    # site treats that as "skip emit".
     provider = ReferenceSummaryCompactionProvider(
         llm_for_model=None,
         config={},
     )
-    with pytest.raises(NotImplementedError):
-        await provider.compact(
-            events=[],
-            keep_head=0,
-            keep_tail=0,
-            model_context_length=100_000,
-            thread_id="thread_test",  # type: ignore[arg-type]
-            config={},
-        )
+    outcome = await provider.compact(
+        events=[],
+        keep_head=0,
+        keep_tail=100,
+        model_context_length=100_000,
+        thread_id="thread_test",  # type: ignore[arg-type]
+        config={},
+    )
+    assert outcome.compacted_event_ids == []
+    assert outcome.tokens_before == 0
+    assert outcome.tokens_after == 0
 
 
 def test_provider_satisfies_protocol() -> None:

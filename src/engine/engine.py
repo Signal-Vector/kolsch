@@ -180,10 +180,19 @@ class AgentEngine:
     # ---- Public API ----------------------------------------------------
 
     def capabilities(self) -> EngineCapabilities:
-        """Declare what this engine can do."""
+        """Declare what this engine can do.
+
+        feat-054 Phase 2 bumped ``ASSEMBLY_VERSION`` from ``"1"`` to
+        ``"2"``. Both are advertised: agent YAMLs shipped in bundles
+        still declare ``assembly_version: "1"`` (they don't rely on
+        compaction) and the projection is byte-identical when no
+        ``CONTEXT_COMPACTED`` events are on the path. Agents that
+        explicitly bump to ``"2"`` opt into the compaction projection
+        rule.
+        """
         return EngineCapabilities(
             engine_version=ENGINE_VERSION,
-            assembly_versions=[ASSEMBLY_VERSION],
+            assembly_versions=["1", ASSEMBLY_VERSION],
             supported_modes=["single_shot", "conversational"],
             supported_features=["tool_use", "force_invoke"],
             supported_providers=["*"],
@@ -1040,8 +1049,25 @@ class _Exchange:
                     for i, r in enumerate(manifest.permissions)
                 ]
 
+        # feat-054 Phase 2: auto-register `reference_lookup` when
+        # compaction is active for this exchange. The engine's
+        # provider being non-None is the enable flag — an agent whose
+        # exchanges get compacted needs to be able to fetch cited
+        # events. Skipped when compaction is disabled (no engine
+        # provider) so agents without compaction see no extra tool.
+        programmatic_tools: list[Callable[..., Awaitable[Any]]] = []
+        if self.engine._compaction_provider is not None:
+            from tools.context_reference import (  # noqa: PLC0415
+                make_reference_lookup,
+            )
+
+            programmatic_tools.append(
+                make_reference_lookup(session_store=self.engine._store),
+            )
+
         await self.engine._tools.register_for_agent(
             agent_id=self.agent_id,  # type: ignore[arg-type]
+            tools=programmatic_tools or None,
             builtin_names=list(body.get("builtin", []) or []),
             declared_paths=declared_paths,
             # Per-declared-path owner bundle derived from the ref's
@@ -1280,6 +1306,13 @@ class _Exchange:
             for t in registered
         ]
 
+        # feat-054 Phase 2: compaction trigger check. Only fires when a
+        # provider is wired on the engine AND the model declares a
+        # context_length. Skips on missing context_length (opencode
+        # models frequently omit it), on provider-None, and on any
+        # summariser failure — Phase 4 introduces the retry ladder.
+        events = await self._maybe_compact_events(events, tool_schemas)
+
         assembled = assemble_context(
             events,
             tool_schemas=tool_schemas,
@@ -1479,6 +1512,112 @@ class _Exchange:
             actor=Actor(kind="system"),
         )
 
+    # ---- Compaction trigger (feat-054 Phase 2) ------------------------
+
+    async def _maybe_compact_events(
+        self,
+        events: list[Event],
+        tool_schemas: list[dict[str, Any]],
+    ) -> list[Event]:
+        """Run the compaction pre-flight and return the (possibly-updated) event list.
+
+        Returns the same ``events`` unchanged when compaction is
+        disabled, when the model has no declared ``context_length``,
+        when the projected estimate is below the trigger, or when the
+        summariser call fails. Otherwise emits a
+        [`CONTEXT_COMPACTED`][schemas.EventType.CONTEXT_COMPACTED] event
+        and re-reads the path so the new event is included in
+        downstream assembly.
+        """
+        provider = self.engine._compaction_provider
+        if provider is None:
+            return events
+
+        # Look up the model's declared context_length via the runtime
+        # cache the engine already carries. `context_length_for`
+        # returns None when the model doesn't declare one, so
+        # compaction is silently skipped for opencode-style models.
+        context_length = _context_length_for_spec(
+            self.engine._llm_providers_config,
+            self.config.model,
+        )
+        if context_length is None:
+            _log.debug(
+                "compaction: model %s/%s has no declared context_length; "
+                "skipping",
+                self.config.model.provider,
+                self.config.model.model,
+            )
+            return events
+
+        compaction_cfg = (self.engine._assets._platform_config or {}).get(
+            "compaction",
+            {},
+        ) or {}
+        # Preview projection: what would the model see today?
+        preview = assemble_context(
+            events,
+            tool_schemas=tool_schemas,
+            respect_compaction=True,
+        )
+        from providers.compaction import estimate_tokens_for_messages  # noqa: PLC0415
+
+        preview_msgs = [m.model_dump() for m in preview.messages]
+        estimate = estimate_tokens_for_messages(preview_msgs, preview.tools)
+
+        # Reserve for max output tokens; default 4096 when unset.
+        max_output = int(
+            compaction_cfg.get("config", {}).get("max_output_tokens", 4096)
+        )
+        budget = max(context_length - max_output, 1)
+        trigger_at = float(compaction_cfg.get("trigger_at", 0.80))
+        if estimate < budget * trigger_at:
+            return events
+
+        # Trigger. Compute keep_tail from the fraction and delegate.
+        keep_recent_fraction = float(
+            compaction_cfg.get("config", {}).get("keep_recent_fraction", 0.20)
+        )
+        keep_tail_tokens = max(int(budget * keep_recent_fraction), 1)
+        inner_config: dict[str, Any] = dict(
+            compaction_cfg.get("config", {}) or {}
+        )
+
+        try:
+            outcome = await provider.compact(
+                events=events,
+                keep_head=0,
+                keep_tail=keep_tail_tokens,
+                model_context_length=context_length,
+                thread_id=self.context.thread_id,
+                config=inner_config,
+            )
+        except Exception as exc:  # noqa: BLE001 — Phase 2 skips on any failure
+            _log.warning(
+                "compaction: summariser failed (%s); skipping this exchange",
+                exc,
+            )
+            return events
+
+        # No-op payloads (short session) — don't emit.
+        if not outcome.compacted_event_ids:
+            return events
+
+        await self._emit(
+            type_=EventType.CONTEXT_COMPACTED,
+            data=outcome.model_dump(mode="json"),
+            actor=Actor(kind="system"),
+        )
+
+        # Re-read the path so the freshly-emitted compaction event is
+        # included in the downstream assembly.
+        return [
+            e
+            async for e in self.engine._store.read_path_to_leaf(
+                self.context.thread_id,
+            )
+        ]
+
     # ---- Emit helpers --------------------------------------------------
 
     async def _emit(
@@ -1547,6 +1686,34 @@ class _Exchange:
 # ---------------------------------------------------------------------------
 # Module-private helpers
 # ---------------------------------------------------------------------------
+
+
+def _context_length_for_spec(
+    providers: dict[str, Any],
+    spec: Any,
+) -> int | None:
+    """Look up the declared ``context_length`` for ``spec`` in ``providers``.
+
+    Duplicates the tiny helper on ``PlatformRuntime`` so the engine
+    can answer without holding a reference back to the runtime object.
+    ``None`` when the provider isn't declared, the model isn't listed,
+    or the ``context_length`` field is absent / null / non-int.
+    """
+    provider = providers.get(spec.provider)
+    if provider is None:
+        return None
+    for entry in getattr(provider, "models", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("id") != spec.model:
+            continue
+        value = entry.get("context_length")
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        return None
+    return None
 
 
 def _extract_trigger_content(trigger: dict[str, Any]) -> dict[str, Any]:

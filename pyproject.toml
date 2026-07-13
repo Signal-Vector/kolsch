@@ -86,6 +86,7 @@ dependencies = [
     # `src/cli/_slash.py` still uses its `Completer`; the
     # Textual chat + prompt_toolkit slash completer coexist in v1.
     "textual>=7.5.0,<8",
+    "tiktoken>=0.13.0",
 ]
 
 [project.optional-dependencies]
