@@ -19,7 +19,7 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator
 
@@ -83,6 +83,9 @@ class EventType(StrEnum):
 
     # Compaction
     CONTEXT_COMPACTED = "context.compacted"
+    CONTEXT_COMPACTION_REVOKED = "context.compaction_revoked"
+    CONTEXT_COMPACTION_FAILED = "context.compaction_failed"
+    CONTEXT_COMPACTION_SKIPPED = "context.compaction_skipped"
 
     # Engine pre-flight emits one of these when a template references
     # variable data the resolved config doesn't carry (e.g.
@@ -365,6 +368,14 @@ class ContextCompactedData(_DataModel):
     later model calls project as context. `pre_compaction` captures
     the FULL content being summarised, so a replay can decide whether
     to apply the compaction or skip it.
+
+    `revoked_by` points at a `context.compaction_revoked` event that
+    invalidated this compaction (from `/uncompact`); Assembly filters
+    both when projecting. `preview` is `True` when this compaction was
+    emitted as a diagnostic without swapping the live context.
+    `trigger` records what fired the compaction: `"auto"` for
+    threshold-triggered, `"manual"` for a user-invoked `/compact`,
+    `"manual_preview"` for `/compact --preview`.
     """
 
     compacted_event_ids: list[EventId]
@@ -372,6 +383,49 @@ class ContextCompactedData(_DataModel):
     summary: dict[str, Any]
     tokens_before: int
     tokens_after: int
+    revoked_by: EventId | None = None
+    preview: bool = False
+    trigger: Literal["auto", "manual", "manual_preview"] = "auto"
+
+
+class ContextCompactionRevokedData(_DataModel):
+    """`context.compaction_revoked.data` — one `/uncompact` invocation.
+
+    Points at the `context.compacted` event this revocation
+    invalidates. Assembly filters both events from projection so the
+    live model's next turn sees the restored (verbatim) context.
+    """
+
+    compaction_event_id: EventId
+    reason: str = "user_requested"
+
+
+class ContextCompactionFailedData(_DataModel):
+    """`context.compaction_failed.data` — a summariser LLM/JSON failure.
+
+    Emitted when the summariser LLM call raises twice or the returned
+    payload fails JSON validation. The engine follows the failure
+    ladder (mechanical truncation) and continues the exchange; this
+    event records the diagnostic so `/why-compact` can surface it.
+    """
+
+    error: Error
+    span_first_event_id: EventId | None = None
+    span_last_event_id: EventId | None = None
+
+
+class ContextCompactionSkippedData(_DataModel):
+    """`context.compaction_skipped.data` — a compaction attempt was discarded.
+
+    Emitted when the produced summary did not shrink the projected
+    context enough to be worth swapping (`tokens_after > tokens_before
+    * 0.90`) or when the engine could not compute a compaction (missing
+    `context_length`, etc.).
+    """
+
+    reason: str
+    tokens_before: int = 0
+    tokens_after: int = 0
 
 
 class AgentTemplateWarningData(_DataModel):

@@ -26,6 +26,13 @@ from providers.authz import (
     make_authorization_provider,
     register_authorization_variant,
 )
+from providers.compaction import (
+    ContextCompactionProvider,
+    ReferenceSummaryCompactionProvider,
+    make_compaction_provider,
+    register_compaction_variant,
+    validate_reference_summary_config,
+)
 from providers.memory import (
     CompactionResult,
     FilterExpression,
@@ -61,6 +68,7 @@ __all__ = [
     "AuthorizationResult",
     "AuthzEffect",
     "CompactionResult",
+    "ContextCompactionProvider",
     "DotenvSecretsProvider",
     "FilterExpression",
     "MemoryContext",
@@ -69,6 +77,7 @@ __all__ = [
     "PermissionLayer",
     "RecentBufferMemoryContext",
     "RecentBufferMemoryProvider",
+    "ReferenceSummaryCompactionProvider",
     "RetrievalQuery",
     "RetrievalResult",
     "RetrievedItem",
@@ -79,12 +88,15 @@ __all__ = [
     "SecretsProvider",
     "derive_rule_id",
     "make_authorization_provider",
+    "make_compaction_provider",
     "make_memory_provider",
     "make_sandbox_provider",
     "make_secrets_provider",
     "register_authorization_variant",
+    "register_compaction_variant",
     "register_memory_variant",
     "register_sandbox_variant",
     "register_secrets_variant",
     "validate_recent_buffer_config",
+    "validate_reference_summary_config",
 ]

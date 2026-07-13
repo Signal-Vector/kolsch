@@ -80,6 +80,7 @@ if TYPE_CHECKING:
     from llm import ProviderConfig
     from providers import (
         AuthorizationProvider,
+        ContextCompactionProvider,
         RecentBufferMemoryProvider,
         SandboxProvider,
         SecretsProvider,
@@ -132,6 +133,7 @@ class AgentEngine:
             ]
             | None
         ) = None,
+        compaction_provider: ContextCompactionProvider | None = None,
     ) -> None:
         self._store = store
         self._bus = bus
@@ -157,6 +159,14 @@ class AgentEngine:
         # so build_llm has something to look up.
         self._llm_providers_config: dict[str, ProviderConfig] = (
             llm_providers_config or {}
+        )
+        # feat-054 Phase 1: constructor-only wiring. The trigger check
+        # at pre-flight lands in Phase 2. `None` = compaction disabled
+        # (platform.yaml has no ``compaction:`` section or the provider
+        # factory declined to build one) and the engine will skip the
+        # threshold check entirely.
+        self._compaction_provider: ContextCompactionProvider | None = (
+            compaction_provider
         )
         # The acquired crewai.LLM lives on the exchange instance, NOT
         # the engine — each exchange may target a different model.

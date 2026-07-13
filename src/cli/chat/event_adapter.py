@@ -499,6 +499,14 @@ class EventAdapter:
         EventType.MEMORY_RETRIEVED: "_handle_memory_retrieved",
         EventType.MEMORY_DELETED: "_handle_memory_deleted",
         EventType.CONTEXT_COMPACTED: "_handle_context_compacted",
+        # feat-054 Phase 1: stub branches keep the coverage smoke green.
+        # Notice widgets + rich rendering land in Phase 3 alongside the
+        # slash-command surface (/compact, /uncompact, /compaction-history,
+        # /why-compact); the stubs mean a Phase-2 emitter won't crash the
+        # adapter dispatch table.
+        EventType.CONTEXT_COMPACTION_REVOKED: "_handle_context_compaction_revoked",
+        EventType.CONTEXT_COMPACTION_FAILED: "_handle_context_compaction_failed",
+        EventType.CONTEXT_COMPACTION_SKIPPED: "_handle_context_compaction_skipped",
         EventType.AGENT_TEMPLATE_WARNING: "_handle_agent_template_warning",
         # spec-002 registers the UI event envelope. Emission +
         # per-kind dispatch land in spec-003 / spec-006 / spec-012+;
@@ -1409,6 +1417,18 @@ class EventAdapter:
 
     async def _handle_context_compacted(self, event: Event) -> None:
         """Silent — compaction is diagnostic-only."""
+        _ = event
+
+    async def _handle_context_compaction_revoked(self, event: Event) -> None:
+        """Silent stub — feat-054 Phase 1. Notice widget lands in Phase 3."""
+        _ = event
+
+    async def _handle_context_compaction_failed(self, event: Event) -> None:
+        """Silent stub — feat-054 Phase 1. Notice widget lands in Phase 3."""
+        _ = event
+
+    async def _handle_context_compaction_skipped(self, event: Event) -> None:
+        """Silent stub — feat-054 Phase 1. Notice widget lands in Phase 3."""
         _ = event
 
     async def _handle_agent_template_warning(self, event: Event) -> None:
