@@ -731,6 +731,17 @@ class EventAdapter:
         # create a cycle with `cli.chat.widgets.*`.
         self._event_widgets: dict[EventId, list[Any]] = {}
 
+        # bug-060 Part 2: event ids whose handlers are currently being
+        # re-run via `/uncompact`'s re-replay pass. Populated by
+        # `_handle_context_compaction_revoked` for the covered slice
+        # before it re-dispatches each event through `handle()`, cleared
+        # at loop end. Handlers with a mount-dedupe LRU consult this to
+        # split "durable side-effect applied" (guard stays) from "widget
+        # is mounted" (must proceed on remount). Two consumers today:
+        # `_handle_prompt_requested` (`_applied_prompt_ids`) and
+        # `_handle_card_notice` (`_applied_notice_ids`).
+        self._remounted_events: set[EventId] = set()
+
     # ------------------------------------------------------------------
     # Public surface
     # ------------------------------------------------------------------
@@ -1653,6 +1664,14 @@ class EventAdapter:
                 trigger=trigger,
                 refs_count=refs_count,
             )
+            # bug-060 Part 2: after the block lands in its terminal
+            # state, unmount every widget the compaction covered. The
+            # CompactionBlock itself was registered under the compaction
+            # event's id (see the `_register_widget_for_event` call
+            # above), which is NOT in `compacted_event_ids`, so it
+            # survives the pass. Preview compactions skip unmount by
+            # spec AC #4 — the branch above returns before this line.
+            await self._unmount_covered_widgets(compacted_ids)
 
     async def _handle_context_compaction_revoked(self, event: Event) -> None:
         target = str(event.data.get("compaction_event_id") or "")
@@ -1668,6 +1687,110 @@ class EventAdapter:
         # dispatch.
         self._register_widget_for_event(event, block)
         block.transition_to_revoked(target_short_id=short)
+        # bug-060 Part 2: re-mount the covered slice. Look up the
+        # compaction event by id, re-drive each covered event through
+        # `handle()` so mount seams re-fire. `_replay_prompt_outcomes`
+        # is re-staged first so a `.requested` inside the restored
+        # slice renders terminal (bug-056 AC #1 on re-replay). The
+        # covered event ids are held in `_remounted_events` for the
+        # duration of the loop so mount-dedupe LRUs
+        # (`_applied_notice_ids`, `_applied_prompt_ids`) yield to the
+        # remount. Durable-write guards (`_resolved_prompt_ids`,
+        # bridge write-guard) are left intact — no new events are
+        # appended (bug-060 AC #6, mirrors bug-056 AC #4).
+        await self._remount_compacted_slice(target)
+
+    async def _remount_compacted_slice(
+        self, compaction_event_id: str,
+    ) -> None:
+        """Re-run every event covered by the named CONTEXT_COMPACTED.
+
+        Looks up ``compaction_event_id`` in the session store, extracts
+        its ``compacted_event_ids`` payload, loads those events (in log
+        order), re-stages the replay prompt outcomes for the slice, and
+        dispatches each event through :meth:`handle`. Silent no-op when
+        the store isn't wired (headless / stub-mount tests) or the
+        compaction event / covered ids can't be found.
+        """
+        if (
+            self._session_store is None
+            or self._thread_id is None
+            or not compaction_event_id
+        ):
+            return
+        compaction_event: Event | None = None
+        try:
+            async for ev in self._session_store.read_events(self._thread_id):
+                if str(ev.event_id) == compaction_event_id:
+                    compaction_event = ev
+                    break
+        except Exception:
+            _LOGGER.exception(
+                "event_adapter: /uncompact — read_events raised for "
+                "compaction_event_id=%r",
+                compaction_event_id,
+            )
+            return
+        if compaction_event is None:
+            _LOGGER.warning(
+                "event_adapter: /uncompact — compaction event %r not "
+                "found in store; nothing to remount",
+                compaction_event_id,
+            )
+            return
+        raw_ids = compaction_event.data.get("compacted_event_ids") or []
+        if not isinstance(raw_ids, list) or not raw_ids:
+            return
+        covered_ids: set[str] = {str(x) for x in raw_ids}
+        # Second pass: load covered events in log order.
+        restored: list[Event] = []
+        try:
+            async for ev in self._session_store.read_events(self._thread_id):
+                if str(ev.event_id) in covered_ids:
+                    restored.append(ev)
+        except Exception:
+            _LOGGER.exception(
+                "event_adapter: /uncompact — covered-events read raised "
+                "for compaction_event_id=%r",
+                compaction_event_id,
+            )
+            return
+        if not restored:
+            _LOGGER.debug(
+                "event_adapter: /uncompact — no covered events found "
+                "for compaction %r",
+                compaction_event_id,
+            )
+            return
+        # bug-056: stage outcomes so `.requested` inside the slice
+        # renders terminal on re-replay (AC #8).
+        self.stage_replay_prompt_outcomes(restored)
+        # Populate the remount marker set so mount-dedupe LRUs
+        # yield to the re-mount branch. Durable-write guards
+        # (`_resolved_prompt_ids`) stay engaged — the re-replayed
+        # `.requested` hits the terminal branch (via the outcomes map)
+        # and returns before spawning the bridge, so no write path is
+        # reached anyway. Guarding via the set is the belt to the
+        # write-guard's braces.
+        marker: set[EventId] = {ev.event_id for ev in restored}
+        self._remounted_events |= marker
+        try:
+            for ev in restored:
+                try:
+                    await self.handle(ev)
+                except Exception:
+                    _LOGGER.exception(
+                        "event_adapter: /uncompact re-replay raised "
+                        "for event_id=%r",
+                        ev.event_id,
+                    )
+        finally:
+            self._remounted_events -= marker
+        _LOGGER.debug(
+            "event_adapter: /uncompact re-mounted %d event(s) covered "
+            "by compaction %r",
+            len(restored), compaction_event_id,
+        )
 
     async def _handle_context_compaction_failed(self, event: Event) -> None:
         error = event.data.get("error") or {}
@@ -1873,7 +1996,18 @@ class EventAdapter:
         prompt_id = payload.get("prompt_id")
         if not isinstance(prompt_id, str) or not prompt_id:
             return
-        if prompt_id in self._applied_prompt_ids:
+        # bug-060 Part 2: split mount-dedupe from durable-write dedupe.
+        # `_applied_prompt_ids` is a PURE mount guard (no side effects
+        # beyond mounting the widget); a `/uncompact` re-replay of a
+        # covered `.requested` must proceed to the mount branch even
+        # when the id was seen earlier at first-mount time. The
+        # `_resolved_prompt_ids` LRU (durable-write guard) stays
+        # engaged — a terminal re-mount hits the outcomes-map branch,
+        # returns before spawning the bridge, and no write path fires.
+        is_remount = (
+            event is not None and event.event_id in self._remounted_events
+        )
+        if prompt_id in self._applied_prompt_ids and not is_remount:
             return
         self._applied_prompt_ids.add(prompt_id)
         rule_id = payload.get("rule_id")
@@ -2846,7 +2980,13 @@ class EventAdapter:
         raw_kind = payload.get("kind")
         kind_str = raw_kind if isinstance(raw_kind, str) else "info"
 
-        if raw_id in self._applied_notice_ids:
+        # bug-060 Part 2: split mount-dedupe from durable-write dedupe.
+        # `_applied_notice_ids` is a pure mount guard; on `/uncompact`
+        # re-replay of a covered `.notice`, force the mount branch
+        # (the widget was intentionally unmounted; the id in the LRU is
+        # stale for DOM purposes).
+        is_remount = event.event_id in self._remounted_events
+        if raw_id in self._applied_notice_ids and not is_remount:
             # Update-in-place: same notice_id, new text.
             existing = self._notice_widgets.get(raw_id)
             if existing is not None:
@@ -3308,6 +3448,62 @@ class EventAdapter:
             for key in stale:
                 target.pop(key, None)
                 removed += 1
+        return removed
+
+    async def _unmount_covered_widgets(
+        self, compacted_ids: list[str],
+    ) -> int:
+        """bug-060 Part 2: unmount every widget tracked under a covered id.
+
+        For each id in ``compacted_ids`` pops the widget list from
+        :attr:`_event_widgets` and awaits :meth:`Widget.remove` on each
+        still-mounted widget. Every unmounted widget is passed through
+        :meth:`_sync_dict_removal` so per-kind tracking dicts
+        (``_notice_widgets`` / ``_card_widgets`` /
+        ``_compaction_widgets``) don't hold a dangling reference.
+
+        The ``CompactionBlock`` for the CONTEXT_COMPACTED event itself
+        is NOT covered — that event's own ``event_id`` is not included
+        in the ``compacted_event_ids`` payload (verified in the schema
+        contract), so it survives naturally via the dict-lookup miss.
+
+        Returns the number of widgets removed for debug/test
+        observability. Idempotent: firing again with the same ids finds
+        empty lists and returns ``0``. Already-detached widgets whose
+        ``remove`` raises are still cleared from the tracking dicts and
+        counted as removed (the widget is effectively gone from the
+        DOM by the time we're aware of it).
+        """
+        removed = 0
+        for eid in compacted_ids:
+            try:
+                key = EventId(str(eid))
+            except (ValueError, TypeError):
+                # Not a valid EventId shape — nothing tracked; nothing
+                # to unmount. Robustness for older payloads.
+                continue
+            widgets = self._event_widgets.pop(key, [])
+            for widget in widgets:
+                if widget is None:
+                    continue
+                is_mounted = getattr(widget, "is_mounted", True)
+                if is_mounted:
+                    try:
+                        await widget.remove()
+                    except Exception:
+                        _LOGGER.exception(
+                            "event_adapter: compaction unmount failed "
+                            "for event_id=%s widget=%r",
+                            key, widget,
+                        )
+                        # Still sync the dicts — the widget's mount
+                        # state is unusable regardless of the exception.
+                self._sync_dict_removal(widget)
+                removed += 1
+        _LOGGER.debug(
+            "event_adapter: compaction unmount removed %d widget(s)",
+            removed,
+        )
         return removed
 
     async def _mount_root_notice(
