@@ -115,6 +115,19 @@ def _canonical_data(event_type: EventType) -> dict[str, Any]:
             return {"key": "k"}
         case EventType.CONTEXT_COMPACTED:
             return {"before_tokens": 100, "after_tokens": 50}
+        case EventType.CONTEXT_COMPACTION_REVOKED:
+            return {"compaction_event_id": f"ev_{uuid4()}", "reason": "canonical"}
+        case EventType.CONTEXT_COMPACTION_FAILED:
+            return {
+                "error": {
+                    "type": "context.summarizer_failed",
+                    "message": "canonical",
+                    "where": "providers.compaction",
+                    "detail": {},
+                }
+            }
+        case EventType.CONTEXT_COMPACTION_SKIPPED:
+            return {"reason": "canonical", "tokens_before": 100, "tokens_after": 100}
         case EventType.AGENT_TEMPLATE_WARNING:
             return {"message": "canonical warning"}
         case EventType.UI_EVENT:

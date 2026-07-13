@@ -499,6 +499,14 @@ class EventAdapter:
         EventType.MEMORY_RETRIEVED: "_handle_memory_retrieved",
         EventType.MEMORY_DELETED: "_handle_memory_deleted",
         EventType.CONTEXT_COMPACTED: "_handle_context_compacted",
+        # feat-054 Phase 1: stub branches keep the coverage smoke green.
+        # Notice widgets + rich rendering land in Phase 3 alongside the
+        # slash-command surface (/compact, /uncompact, /compaction-history,
+        # /why-compact); the stubs mean a Phase-2 emitter won't crash the
+        # adapter dispatch table.
+        EventType.CONTEXT_COMPACTION_REVOKED: "_handle_context_compaction_revoked",
+        EventType.CONTEXT_COMPACTION_FAILED: "_handle_context_compaction_failed",
+        EventType.CONTEXT_COMPACTION_SKIPPED: "_handle_context_compaction_skipped",
         EventType.AGENT_TEMPLATE_WARNING: "_handle_agent_template_warning",
         # spec-002 registers the UI event envelope. Emission +
         # per-kind dispatch land in spec-003 / spec-006 / spec-012+;
@@ -1408,8 +1416,94 @@ class EventAdapter:
         _ = event
 
     async def _handle_context_compacted(self, event: Event) -> None:
-        """Silent — compaction is diagnostic-only."""
-        _ = event
+        """feat-054 Phase 3 — mount a notice for the compaction event.
+
+        Text template:
+
+        - Successful auto/manual: ``↳ compacted <N> events (<before> →
+          <after> tokens · /uncompact to restore · /why-compact for
+          details)``.
+        - Preview: ``↳ compaction preview: would compact <N> events
+          (<before> → <after> tokens). Not applied. /why-compact
+          <event_id> for details.``
+
+        The event id is included in the notice's mount key so a
+        subsequent ``/why-compact`` can be pre-populated when the UI
+        offers copy-to-clipboard.
+        """
+        compacted_ids = event.data.get("compacted_event_ids") or []
+        # Empty compaction (no middle to summarise) — don't mount noise.
+        if not compacted_ids:
+            return
+        tokens_before = int(event.data.get("tokens_before") or 0)
+        tokens_after = int(event.data.get("tokens_after") or 0)
+        preview_flag = bool(event.data.get("preview"))
+        eid_str = _event_id_str(event) or ""
+        eid_short = eid_str[:12] if eid_str else "(unknown)"
+        if preview_flag:
+            text = (
+                f"↳ compaction preview: would compact {len(compacted_ids)} "
+                f"events ({tokens_before:,} → {tokens_after:,} tokens). "
+                f"Not applied. /why-compact {eid_short} for details"
+            )
+        else:
+            text = (
+                f"↳ compacted {len(compacted_ids)} events "
+                f"({tokens_before:,} → {tokens_after:,} tokens · "
+                f"/uncompact to restore · /why-compact for details)"
+            )
+        notice_id = f"context-compacted-{eid_str or 'anon'}"
+        await self._mount_root_notice(notice_id, text, "info")
+
+    async def _handle_context_compaction_revoked(self, event: Event) -> None:
+        """feat-054 Phase 3 — mount a notice recording the revocation.
+
+        The pointed-at ``compaction_event_id`` is trimmed to its short
+        prefix (same rule as ``/compaction-history``) so the notice
+        stays scan-friendly.
+        """
+        target = str(event.data.get("compaction_event_id") or "")
+        short = target[:12] if target else "(unknown)"
+        eid = _event_id_str(event) or "anon"
+        text = f"↳ compaction {short} restored"
+        await self._mount_root_notice(
+            f"context-compaction-revoked-{eid}", text, "info"
+        )
+
+    async def _handle_context_compaction_failed(self, event: Event) -> None:
+        """feat-054 Phase 3 — surface a compaction failure as a warning notice.
+
+        Reads ``error.message`` from the payload; falls back to the
+        error type or a bare ``"unknown"`` when neither is set. The
+        exchange itself is unaffected (compaction is prevention, the
+        engine's fallback chain handles overflows reactively).
+        """
+        error = event.data.get("error") or {}
+        message = ""
+        if isinstance(error, dict):
+            message = str(error.get("message") or error.get("type") or "")
+        if not message:
+            message = "unknown"
+        eid = _event_id_str(event) or "anon"
+        text = f"↳ compaction failed: {message}"
+        await self._mount_root_notice(
+            f"context-compaction-failed-{eid}", text, "warning"
+        )
+
+    async def _handle_context_compaction_skipped(self, event: Event) -> None:
+        """feat-054 Phase 3 — mount a notice recording why compaction was skipped.
+
+        ``reason == "no_net_savings"`` is expected/benign so it renders
+        as an ``info`` notice. Any other reason is a warning — a config
+        or model-declaration issue the operator likely wants to fix.
+        """
+        reason = str(event.data.get("reason") or "unknown")
+        kind = "info" if reason == "no_net_savings" else "warning"
+        eid = _event_id_str(event) or "anon"
+        text = f"↳ compaction skipped: {reason}"
+        await self._mount_root_notice(
+            f"context-compaction-skipped-{eid}", text, kind
+        )
 
     async def _handle_agent_template_warning(self, event: Event) -> None:
         """Surface template warnings as a dim inline notice.

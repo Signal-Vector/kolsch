@@ -98,6 +98,54 @@ def register_chat_slash_commands() -> None:
         )
 
 
+def _parse_compact_args(
+    arg_text: str,
+) -> tuple[bool, str | None, str | None]:
+    """Parse the ``/compact`` argument shape.
+
+    feat-054 Phase 3. Accepts:
+
+    - ``""`` — force compaction with no extra instructions.
+    - ``"--preview"`` — preview mode (no side-effect on live context).
+    - ``"--instructions '<text>'"`` — extra summariser guidance.
+    - Both flags in either order.
+
+    Returns ``(preview, instructions, error)``. ``error`` is ``None``
+    on success; on parse failure it is a one-line message the caller
+    surfaces as a notice. Uses ``shlex`` so the operator can quote
+    multi-word instructions with either single or double quotes.
+    """
+    import shlex  # noqa: PLC0415
+
+    text = arg_text.strip()
+    if not text:
+        return False, None, None
+    try:
+        tokens = shlex.split(text)
+    except ValueError as exc:
+        return False, None, f"could not parse arguments: {exc}"
+    preview = False
+    instructions: str | None = None
+    i = 0
+    while i < len(tokens):
+        tok = tokens[i]
+        if tok == "--preview":
+            preview = True
+            i += 1
+        elif tok == "--instructions":
+            if i + 1 >= len(tokens):
+                return False, None, "--instructions requires a value"
+            instructions = tokens[i + 1]
+            i += 2
+        else:
+            return (
+                False,
+                None,
+                f"unknown token {tok!r} (expected --preview or --instructions)",
+            )
+    return preview, instructions, None
+
+
 _THEMES_DIR = Path(__file__).parent / "themes"
 
 
@@ -1254,6 +1302,18 @@ class ChatApp(App):
         if command.name == "/reload":
             await self._handle_reload()
             return
+        if command.name == "/compact":
+            await self._handle_compact(arg_text)
+            return
+        if command.name == "/uncompact":
+            await self._handle_uncompact()
+            return
+        if command.name == "/compaction-history":
+            await self._handle_compaction_history()
+            return
+        if command.name == "/why-compact":
+            await self._handle_why_compact(arg_text)
+            return
 
         if command.handler is None:
             await self._mount_transcript_notice(
@@ -1425,6 +1485,152 @@ class ChatApp(App):
             return
         summary = result.summary or "reload complete."
         await self._mount_transcript_notice(f"↳ {summary}")
+
+    async def _handle_compact(self, arg_text: str) -> None:
+        """Force-compact the current thread now (or emit a preview).
+
+        feat-054 Phase 3 — parses the ``[--preview] [--instructions
+        '<text>']`` argument shape, delegates to
+        :meth:`AgentEngine.manual_compact`, and mounts a chat notice
+        with the outcome. The notice mounted by the event adapter
+        (from the emitted ``context.compacted`` event) is the primary
+        surface; this handler only mounts an inline error notice when
+        compaction cannot be attempted (provider disabled / no
+        context_length / summariser failure).
+        """
+        preview, instructions, parse_err = _parse_compact_args(arg_text)
+        if parse_err is not None:
+            await self._mount_transcript_notice(f"/compact: {parse_err}")
+            return
+        engine = getattr(self, "engine", None)
+        manual_compact = getattr(engine, "manual_compact", None)
+        if manual_compact is None:
+            await self._mount_transcript_notice(
+                "/compact: engine has no compaction provider wired."
+            )
+            return
+        try:
+            emitted = await manual_compact(
+                config=self.session.config,
+                thread_id=self.session.thread_id,
+                preview=preview,
+                extra_instructions=instructions,
+            )
+        except Exception as exc:  # noqa: BLE001
+            await self._mount_transcript_notice(
+                f"/compact failed: {type(exc).__name__}: {exc}"
+            )
+            return
+        if emitted is None:
+            await self._mount_transcript_notice(
+                "↳ /compact: nothing to compact (short session, "
+                "compaction disabled, or model has no declared "
+                "context_length)."
+            )
+            return
+        # The notice for the compaction event is mounted by
+        # EventAdapter._handle_context_compacted (fed by the bus
+        # publish inside manual_compact). Nothing more to do here on
+        # the happy path.
+
+    async def _handle_uncompact(self) -> None:
+        """Revoke the most-recent active compaction on this thread.
+
+        feat-054 Phase 3 — appends a
+        ``CONTEXT_COMPACTION_REVOKED`` event pointing at the newest
+        still-active ``CONTEXT_COMPACTED``. Assembly (Phase 2) filters
+        both from projection, so the NEXT exchange sees the restored
+        context. The live model has already forgotten, so this does
+        NOT restart the current exchange.
+        """
+        engine = getattr(self, "engine", None)
+        manual_uncompact = getattr(engine, "manual_uncompact", None)
+        if manual_uncompact is None:
+            await self._mount_transcript_notice(
+                "/uncompact: engine has no compaction provider wired."
+            )
+            return
+        try:
+            emitted = await manual_uncompact(
+                thread_id=self.session.thread_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            await self._mount_transcript_notice(
+                f"/uncompact failed: {type(exc).__name__}: {exc}"
+            )
+            return
+        if emitted is None:
+            await self._mount_transcript_notice(
+                "↳ no active compaction to revoke"
+            )
+            return
+        # Notice is mounted by EventAdapter._handle_context_compaction_revoked.
+
+    async def _handle_compaction_history(self) -> None:
+        """Walk the thread; mount a compact table of every compaction event.
+
+        feat-054 Phase 3 — read-only. Columns: event_id (short), local
+        HH:MM:SS, tokens_before → tokens_after, first..last event span,
+        preview flag, revoked_by id (or ``-``).
+        """
+        from cli.chat.services.compaction_introspection import (  # noqa: PLC0415
+            build_compaction_history_table,
+        )
+
+        try:
+            text = await build_compaction_history_table(
+                self.session.runtime,
+                self.session.thread_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            await self._mount_transcript_notice(
+                f"/compaction-history failed: {type(exc).__name__}: {exc}"
+            )
+            return
+        transcript = self.query_one("#transcript", VerticalScroll)
+        card = Static(text, markup=False)
+        await transcript.mount(card)
+        transcript.scroll_end(animate=False)
+
+    async def _handle_why_compact(self, arg_text: str) -> None:
+        """Dump ``pre_compaction`` + ``summary`` for one compaction event.
+
+        feat-054 Phase 3 — reads the specific ``CONTEXT_COMPACTED``
+        event by id and mounts a plain-text card carrying both JSON
+        blobs. When no event with that id exists, mount the "no
+        compaction event with id" hint.
+        """
+        event_id = arg_text.strip()
+        if not event_id:
+            await self._mount_transcript_notice(
+                "/why-compact: pass the compaction event_id "
+                "(see /compaction-history)."
+            )
+            return
+        from cli.chat.services.compaction_introspection import (  # noqa: PLC0415
+            build_why_compact_card,
+        )
+
+        try:
+            text = await build_why_compact_card(
+                self.session.runtime,
+                self.session.thread_id,
+                event_id=event_id,
+            )
+        except Exception as exc:  # noqa: BLE001
+            await self._mount_transcript_notice(
+                f"/why-compact failed: {type(exc).__name__}: {exc}"
+            )
+            return
+        if text is None:
+            await self._mount_transcript_notice(
+                f"↳ no compaction event with id {event_id}"
+            )
+            return
+        transcript = self.query_one("#transcript", VerticalScroll)
+        card = Static(text, markup=False)
+        await transcript.mount(card)
+        transcript.scroll_end(animate=False)
 
     async def _clear_transcript(self) -> None:
         """Remove every mounted widget from the transcript.

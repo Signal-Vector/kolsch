@@ -128,6 +128,15 @@ class DenialCardData:
     who: str | None
     pattern: str | None
     reason: str | None
+    compaction_badge: str | None = None
+    """feat-054 Phase 3 — set when the referenced tool call sits inside
+    an active ``CONTEXT_COMPACTED.compacted_event_ids`` range. The
+    renderer appends the badge on a trailing line so the operator
+    knows the live model may not remember the call.
+
+    ``None`` when the call is not in any active compacted range OR
+    when compaction is not in use on this thread.
+    """
 
 
 _CARD_INNER_WIDTH = 60
@@ -244,6 +253,8 @@ def render_denial_card(data: DenialCardData) -> str:
             "  ↳ grep your platform.yaml / bundle.yaml / workflow YAML "
             f"for `id: {data.rule_id or '<rule-id>'}`.",
         )
+    if data.compaction_badge:
+        lines.append(f"  {data.compaction_badge}")
     return "\n".join(lines)
 
 
@@ -286,7 +297,105 @@ async def find_last_denial_via_store(
     tool_failed = _find_target_tool_failed(events, tool_call_id=tool_call_id)
     if tool_failed is None:
         return None
-    return _assemble_card_data(events, tool_failed)
+    data = _assemble_card_data(events, tool_failed)
+    # feat-054 Phase 3 — badge the card when the failed tool call sits
+    # inside an active compacted range. The correlated tool.called (or
+    # the failure itself, when the call preceded it) is the anchor we
+    # look up in each active CONTEXT_COMPACTED.compacted_event_ids.
+    badge = _compaction_badge_for_call(
+        events,
+        tool_failed=tool_failed,
+    )
+    if badge is not None:
+        data = _replace_card(data, compaction_badge=badge)
+    return data
+
+
+def _replace_card(
+    card: DenialCardData,
+    **updates: Any,
+) -> DenialCardData:
+    """Return a new ``DenialCardData`` with ``updates`` merged in.
+
+    Kept as a small helper so the badge injection stays one line at
+    the call site (the dataclass is frozen — ``dataclasses.replace``
+    is the idiomatic path but takes an import; a plain constructor
+    call is clearer and avoids reaching for the stdlib helper).
+    """
+    from dataclasses import replace  # noqa: PLC0415
+
+    return replace(card, **updates)
+
+
+def _compaction_badge_for_call(
+    events: list[Event],
+    *,
+    tool_failed: Event,
+) -> str | None:
+    """Return the compaction-range badge text, or ``None`` when not applicable.
+
+    Walks every ``CONTEXT_COMPACTED`` event on the thread (skipping
+    revoked ones — a revocation is recorded as a following
+    ``CONTEXT_COMPACTION_REVOKED`` pointing back at the compaction's
+    ``event_id``). For each active compaction, checks whether the
+    ``tool.failed`` event or its correlated ``tool.called`` event id
+    appears in ``compacted_event_ids``. On hit, returns the badge
+    string carrying the compaction event id so the operator can jump
+    to ``/why-compact <event_id>``.
+    """
+    # Index revocations so we skip inactive compactions.
+    revoked_ids: set[str] = set()
+    for e in events:
+        if str(e.type) != "context.compaction_revoked":
+            continue
+        target = _event_data(e).get("compaction_event_id")
+        if isinstance(target, str) and target:
+            revoked_ids.add(target)
+
+    # Anchor id: the tool.failed event itself, plus the correlated
+    # tool.called (looked up by tool_call_id) — either being inside a
+    # compacted range means the model has forgotten the call.
+    anchor_ids: set[str] = set()
+    failed_id = getattr(tool_failed, "event_id", None)
+    if failed_id is not None:
+        anchor_ids.add(str(failed_id))
+    tool_call_id = _event_data(tool_failed).get("tool_call_id")
+    if tool_call_id:
+        for e in events:
+            if str(e.type) != "tool.called":
+                continue
+            payload = _event_data(e)
+            if payload.get("tool_call_id") == tool_call_id:
+                called_id = getattr(e, "event_id", None)
+                if called_id is not None:
+                    anchor_ids.add(str(called_id))
+                break
+
+    if not anchor_ids:
+        return None
+
+    for e in events:
+        if str(e.type) != "context.compacted":
+            continue
+        compaction_id = getattr(e, "event_id", None)
+        if compaction_id is not None and str(compaction_id) in revoked_ids:
+            continue
+        payload = _event_data(e)
+        # `revoked_by` set on the payload → also inactive (belt +
+        # braces with the revocation-event scan above).
+        if payload.get("revoked_by"):
+            continue
+        compacted_ids = payload.get("compacted_event_ids") or []
+        if not isinstance(compacted_ids, list):
+            continue
+        compacted_set = {str(cid) for cid in compacted_ids}
+        if anchor_ids & compacted_set:
+            display_id = compaction_id if compaction_id is not None else "?"
+            return (
+                f"↳ (this call is inside compacted range {display_id}; "
+                "the LIVE model may not remember it)"
+            )
+    return None
 
 
 def _find_target_tool_failed(

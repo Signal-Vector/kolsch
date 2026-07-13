@@ -89,6 +89,7 @@ from errors.kernel import (
     ConfigVersionMismatch,
     ContextFileNotFound,
     ContextFileTooLarge,
+    ContextOverflowUncompactable,
 )
 from errors.level import Level
 from errors.llm import (
@@ -190,6 +191,7 @@ __all__ = [
     "ConfigVersionMismatch",
     "ContextFileNotFound",
     "ContextFileTooLarge",
+    "ContextOverflowUncompactable",
     "ExchangeCancelled",
     "ExchangeTimeout",
     "FileAccessDenied",

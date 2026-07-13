@@ -35,12 +35,15 @@ from engine.framework import Framework
 from files import PathPolicy, load_policy
 from providers import (
     AuthorizationProvider,
+    ContextCompactionProvider,
     NativeSandboxProvider,
     RecentBufferMemoryProvider,
     RuleBasedAuthorizationProvider,
     SandboxProvider,
     SecretsProvider,
+    make_compaction_provider,
     validate_recent_buffer_config,
+    validate_reference_summary_config,
 )
 from providers.secrets import DotenvSecretsProvider
 from schemas import ResolvedAgentConfig
@@ -54,6 +57,7 @@ if TYPE_CHECKING:
     from typing import Any
 
     from kernel import ConfigValidator
+    from llm import ProviderConfig
     from schemas import ModelSpec
 
 
@@ -88,6 +92,15 @@ class PlatformRuntime:
     subsystem_validators: dict[str, dict[str, ConfigValidator]] = field(
         default_factory=dict,
     )
+    # feat-054: kept on the runtime so the context-compaction pre-flight
+    # can look up the model's declared context window via
+    # `context_length_for(spec)`. `None` when compaction is disabled.
+    compaction_provider: ContextCompactionProvider | None = None
+    # Cached ``llm_providers`` slice from ``platform.yaml``. The engine
+    # already carries a copy for fallback dispatch; the runtime keeps
+    # its own reference so :meth:`context_length_for` can answer
+    # without reaching into the engine's private state.
+    llm_providers_config: dict[str, ProviderConfig] = field(default_factory=dict)
 
     async def build_resolved_config(
         self,
@@ -118,6 +131,47 @@ class PlatformRuntime:
             call_overrides=call_overrides,
             subsystem_validators=self.subsystem_validators,
         )
+
+    def context_length_for(self, spec: ModelSpec) -> int | None:
+        """Return the declared ``context_length`` (tokens) for ``spec``, or ``None``.
+
+        Walks :attr:`llm_providers_config` for a provider matching
+        ``spec.provider`` and looks up an entry in that provider's
+        ``models`` list whose ``id`` matches ``spec.model``. Returns
+        the entry's ``context_length`` when the model declares one.
+
+        Returns ``None`` when:
+
+        - The provider is not present in ``llm_providers_config``
+          (e.g. ``spec.provider == "mock"`` on the default tier).
+        - No model entry matches ``spec.model``.
+        - The matching entry has ``context_length: null`` (many
+          ``opencode`` models legitimately don't declare one).
+
+        The compaction pre-flight (feat-054, lands in Phase 2) uses
+        this to compute the trigger budget. ``None`` is a signal to
+        skip compaction for the current exchange and emit a diagnostic
+        rather than hard-failing.
+        """
+        provider = self.llm_providers_config.get(spec.provider)
+        if provider is None:
+            return None
+        for entry in provider.models:
+            # `ProviderConfig.models` is typed as `list[dict[str, Any]]`.
+            # A malformed non-dict slipped in at load time would raise
+            # `AttributeError` here — that's the correct signal (bug in
+            # config parsing) rather than silently masking the miss.
+            if entry.get("id") != spec.model:
+                continue
+            value = entry.get("context_length")
+            # `bool` is a subclass of `int`; reject it before the int
+            # check so `context_length: true` does not become `1`.
+            if isinstance(value, bool):
+                return None
+            if isinstance(value, int):
+                return value
+            return None
+        return None
 
 
 async def bootstrap_runtime(
@@ -209,6 +263,13 @@ async def bootstrap_runtime(
     store = SessionStore(root=root, backend=backend)
 
     memory = RecentBufferMemoryProvider(store=store)
+    # feat-054: build the compaction provider from platform.yaml. The
+    # section is optional; when missing (the default), the factory
+    # returns `None` and the engine skips the trigger check entirely.
+    try:
+        compaction_cfg = am.get_platform_config("compaction")
+    except KeyError:
+        compaction_cfg = {}
     bus = InProcessEventBus()
 
     tools_sub = ToolsSubsystem(
@@ -290,6 +351,19 @@ async def bootstrap_runtime(
     elif chosen_llm is None:
         chosen_llm = EchoLLMDriver().__call__
 
+    # feat-054 Phase 1: construct the compaction provider (if any) so
+    # the engine holds a reference. The invocation site lands in
+    # Phase 2. `llm_for_model` is passed through so the v1 variant can
+    # dispatch to a summariser model of its choice.
+    compaction_provider: ContextCompactionProvider | None = (
+        make_compaction_provider(
+            config=compaction_cfg,
+            llm_for_model=chosen_llm_for_model,
+        )
+        if compaction_cfg
+        else None
+    )
+
     engine = AgentEngine(
         store=store,
         bus=bus,
@@ -304,6 +378,7 @@ async def bootstrap_runtime(
         llm=chosen_llm,
         llm_for_model=chosen_llm_for_model,
         llm_providers_config=llm_providers_config,
+        compaction_provider=compaction_provider,
     )
 
     # Per-subsystem Layer 3 validators — dispatch shape: subsystem
@@ -314,6 +389,7 @@ async def bootstrap_runtime(
         "memory": {"recent_buffer": validate_recent_buffer_config},
         "tools": {"standard": validate_standard_config},
         "skills": {"standard": make_standard_validator(am)},
+        "compaction": {"reference_summary": validate_reference_summary_config},
     }
 
     return PlatformRuntime(
@@ -330,4 +406,6 @@ async def bootstrap_runtime(
         path_policy=path_policy,
         engine=engine,
         subsystem_validators=subsystem_validators,
+        compaction_provider=compaction_provider,
+        llm_providers_config=llm_providers_config,
     )

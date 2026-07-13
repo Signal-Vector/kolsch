@@ -55,6 +55,12 @@ _KNOWN_SECTIONS: frozenset[str] = frozenset(
         # the author. No default is written at setup time — leaving
         # the section absent IS the documented "auto-resolve" mode.
         "author_workflow",
+        # Context-compaction subsystem (feat-054). Shape:
+        # ``{variant, trigger_at, config}``. No default is written at
+        # setup time — leaving the section absent IS the documented
+        # "off" mode; the provider factory returns ``None`` and the
+        # engine skips the trigger check entirely.
+        "compaction",
     }
 )
 
