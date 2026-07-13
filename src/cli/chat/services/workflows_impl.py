@@ -336,6 +336,7 @@ class WorkflowsImpl(AbstractWorkflows):
         run_store: "WorkflowRunStore",
         executor_factory: ExecutorFactory | None = None,
         bus: "EventBus | None" = None,
+        default_timeout_seconds: int | None = None,
     ) -> None:
         self._runtime = runtime
         self._cards = cards
@@ -344,6 +345,16 @@ class WorkflowsImpl(AbstractWorkflows):
         self._session_id = session_id
         self._thread_id = thread_id
         self._run_store = run_store
+        # Prefer the explicit ctor arg; otherwise read from the runtime
+        # (populated at bootstrap from
+        # `platform.yaml:workflows.default_timeout_seconds`); otherwise
+        # fall back to the AbstractWorkflows 300s default.
+        if default_timeout_seconds is not None:
+            self._default_timeout_seconds = int(default_timeout_seconds)
+        else:
+            self._default_timeout_seconds = int(
+                getattr(runtime, "workflow_default_timeout_seconds", 300),
+            )
         # bug-020: in-process runtime bus. When present,
         # `_emit_ui_event` publishes each UI event on `UI_EVENT_TOPIC`
         # AFTER the store append so the live `EventAdapter.handle`
@@ -638,6 +649,10 @@ class WorkflowsImpl(AbstractWorkflows):
                     stack.append(child_id)
 
         return list(seen)
+
+    @property
+    def default_timeout_seconds(self) -> int:
+        return self._default_timeout_seconds
 
     async def aclose(self) -> None:
         """Cancel drain worker + per-run drains + all live tokens.

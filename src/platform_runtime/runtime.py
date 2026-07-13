@@ -101,6 +101,12 @@ class PlatformRuntime:
     # its own reference so :meth:`context_length_for` can answer
     # without reaching into the engine's private state.
     llm_providers_config: dict[str, ProviderConfig] = field(default_factory=dict)
+    # Default `run_workflow` blocking timeout (seconds). Populated at
+    # bootstrap from `platform.yaml:workflows.default_timeout_seconds`;
+    # 300 preserves the pre-existing bug-031 default when the section
+    # is absent. WorkflowsImpl reads this at construction time and
+    # exposes it to tools via `Workflows.default_timeout_seconds`.
+    workflow_default_timeout_seconds: int = 300
 
     async def build_resolved_config(
         self,
@@ -392,6 +398,16 @@ async def bootstrap_runtime(
         "compaction": {"reference_summary": validate_reference_summary_config},
     }
 
+    # Workflows section (optional). Currently one knob:
+    # `default_timeout_seconds` — how long `run_workflow` blocks.
+    try:
+        workflows_cfg = am.get_platform_config("workflows")
+    except KeyError:
+        workflows_cfg = {}
+    workflow_default_timeout_seconds = int(
+        (workflows_cfg or {}).get("default_timeout_seconds", 300)
+    )
+
     return PlatformRuntime(
         root=root,
         asset_management=am,
@@ -408,4 +424,5 @@ async def bootstrap_runtime(
         subsystem_validators=subsystem_validators,
         compaction_provider=compaction_provider,
         llm_providers_config=llm_providers_config,
+        workflow_default_timeout_seconds=workflow_default_timeout_seconds,
     )

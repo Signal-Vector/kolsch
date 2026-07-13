@@ -61,6 +61,12 @@ _KNOWN_SECTIONS: frozenset[str] = frozenset(
         # "off" mode; the provider factory returns ``None`` and the
         # engine skips the trigger check entirely.
         "compaction",
+        # Workflow subsystem defaults. Currently one knob:
+        # ``default_timeout_seconds`` — how long the blocking
+        # ``run_workflow`` (and per-workflow virtual variants) waits
+        # for a terminal phase before returning ``phase="running"``.
+        # Section absent → hardcoded 300s default preserved.
+        "workflows",
     }
 )
 

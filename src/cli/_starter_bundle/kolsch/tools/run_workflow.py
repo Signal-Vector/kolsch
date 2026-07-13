@@ -114,11 +114,13 @@ class RunWorkflowArgs(BaseModel):
             'Example: ``{"url": "https://example.com/job"}``.'
         ),
     )
-    timeout_seconds: int = Field(
-        default=_DEFAULT_TIMEOUT_SECONDS,
+    timeout_seconds: int | None = Field(
+        default=None,
         description=(
-            "bug-031: upper bound on how long the tool blocks waiting "
-            "for terminal. Default 300s. On timeout the tool returns "
+            "Upper bound (seconds) on how long the tool blocks waiting "
+            "for terminal. Omit to use the platform default from "
+            "``platform.yaml:workflows.default_timeout_seconds`` (300 "
+            "when unset). On timeout the tool returns "
             "``phase=\"running\"`` with a note telling the model to "
             "check ``workflow_status`` later."
         ),
@@ -286,7 +288,21 @@ async def run_workflow(
             ),
         }
 
-    deadline_polls = max(1, int(args.timeout_seconds / _POLL_INTERVAL_SECONDS))
+    # Resolve the effective timeout: caller-supplied wins; otherwise
+    # ask the service (driven by `platform.yaml:workflows`); fall back
+    # to the pre-existing 300s default when the service handle is
+    # older / doesn't expose the property.
+    if args.timeout_seconds is not None:
+        effective_timeout = int(args.timeout_seconds)
+    else:
+        effective_timeout = int(
+            getattr(
+                services.workflows,
+                "default_timeout_seconds",
+                _DEFAULT_TIMEOUT_SECONDS,
+            )
+        )
+    deadline_polls = max(1, int(effective_timeout / _POLL_INTERVAL_SECONDS))
     for _ in range(deadline_polls):
         await asyncio.sleep(_POLL_INTERVAL_SECONDS)
         status_view = status_probe(run_id)
@@ -315,7 +331,7 @@ async def run_workflow(
         "phase": "running",
         "_chat_anchor": anchor,
         "note": (
-            f"Workflow still running after {args.timeout_seconds} "
+            f"Workflow still running after {effective_timeout} "
             f"seconds; call workflow_status(run_id={str(run_id)!r}) "
             f"to check later."
         ),

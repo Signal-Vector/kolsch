@@ -272,9 +272,24 @@ class Workflows(Protocol):
         """Cancel drain worker, per-run drains, and all live tokens."""
         ...
 
+    @property
+    def default_timeout_seconds(self) -> int:
+        """Default blocking timeout for `run_workflow` (and virtual variants).
+
+        Sourced from `platform.yaml:workflows.default_timeout_seconds`
+        at runtime bootstrap. Tools read this to size their long-poll
+        deadline when the caller doesn't pass an explicit timeout.
+        """
+        ...
+
 
 class AbstractWorkflows(ABC):
     """Platform + test base for `Workflows` impls. Methods raise by default."""
+
+    @property
+    def default_timeout_seconds(self) -> int:
+        """Default stub — subclasses override. 300s preserves bug-031 default."""
+        return 300
 
     async def start(
         self,

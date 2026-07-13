@@ -467,12 +467,13 @@ tools in one place.
 """
 
 _VIRTUAL_DEFAULT_TIMEOUT_SECONDS = 300
-"""bug-031: same 300s default timeout as the generic ``run_workflow``.
+"""Fallback timeout when the workflows service doesn't expose one.
 
-Session ``ses_af5980ab`` recorded the JD-review workflow at 3 min
-23s wall-clock — comfortably inside the 5 min bound. Longer runs
-return ``phase="running"`` so the model narrates the pending state
-and can re-check via ``workflow_status``.
+Preferred source is
+``services.workflows.default_timeout_seconds`` (driven by
+``platform.yaml:workflows.default_timeout_seconds``); this constant
+is only used when the service handle lacks the attribute (older
+mocks / headless test paths).
 """
 
 _VIRTUAL_TERMINAL_PHASES = frozenset({"success", "error", "cancelled"})
@@ -560,7 +561,13 @@ def _make_virtual_invoker(
                 ),
             }
 
-        timeout_seconds = _VIRTUAL_DEFAULT_TIMEOUT_SECONDS
+        timeout_seconds = int(
+            getattr(
+                services.workflows,
+                "default_timeout_seconds",
+                _VIRTUAL_DEFAULT_TIMEOUT_SECONDS,
+            )
+        )
         deadline_polls = max(
             1,
             int(timeout_seconds / _VIRTUAL_POLL_INTERVAL_SECONDS),
