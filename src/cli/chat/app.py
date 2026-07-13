@@ -568,6 +568,14 @@ class ChatApp(App):
                     # adapter subscription (workflow progress card
                     # updates in the SAME session).
                     bus=getattr(self.session.runtime, "bus", None),
+                    # `platform.yaml:workflows.default_timeout_seconds`,
+                    # populated on the runtime at bootstrap. Tools read
+                    # this via `services.workflows.default_timeout_seconds`.
+                    default_timeout_seconds=getattr(
+                        self.session.runtime,
+                        "workflow_default_timeout_seconds",
+                        300,
+                    ),
                 )
             except Exception:  # noqa: BLE001 — headless fixtures may lack a real runtime
                 _LOGGER.debug(
@@ -899,18 +907,22 @@ class ChatApp(App):
 
         if should_mount_progress and transcript is not None:
             try:
-                from cli.chat.widgets.notice import (  # noqa: PLC0415
-                    NoticeWidget,
+                from cli.chat.widgets.compaction_block import (  # noqa: PLC0415
+                    CompactionBlock,
                 )
 
-                notice_widget = NoticeWidget(
-                    text=(
-                        "↳ resumed session exceeds context budget; "
-                        "compacting…"
-                    ),
-                    kind="info",
+                notice_widget = CompactionBlock(
+                    state="running",
+                    title_text="● Compacting resumed session…",
+                    body_text="Resumed session exceeds context budget; summarising…",
                 )
                 await transcript.mount(notice_widget)
+                # Hand off to the event adapter so the CONTEXT_COMPACTED
+                # / _FAILED handler transitions this widget in place.
+                self.event_adapter._compaction_widgets["pending"] = notice_widget
+                # The 'finally' clean-up below removes the widget; we
+                # skip that because the transition handler owns it now.
+                notice_widget = None
             except Exception:  # noqa: BLE001 — best-effort
                 notice_widget = None
 
@@ -1058,6 +1070,14 @@ class ChatApp(App):
         transcript = self.query_one("#transcript", VerticalScroll)
         if truncated:
             await transcript.mount(ScrollbackCue())
+        # bug-056: stage a point-in-time snapshot of the slice's
+        # `.requested → outcome` map BEFORE dispatch. `_handle_prompt_requested`
+        # consults it so historical prompts render terminal (no active
+        # widget, no bridge, composer stays usable) while genuinely
+        # live post-resume prompts arriving on the live bus AFTER this
+        # loop finishes have no entry and take the interactive path
+        # (AC #13).
+        self.event_adapter.stage_replay_prompt_outcomes(selected)
         for event in selected:
             try:
                 await self.event_adapter.handle(event)
@@ -1065,6 +1085,10 @@ class ChatApp(App):
                 # Replay is best-effort; a bad event shouldn't crash
                 # the chat. Continue.
                 continue
+        # bug-056: safety recompute — after replay every terminal block
+        # is mounted `is_resolved=True`, so this un-freezes the composer
+        # unconditionally when no live prompt is in flight (AC #2).
+        self.recompute_awaiting_approval()
 
         # spec-016 AC #10: at end of chronological replay, flush the
         # layout manager once so multi-workflow cards land in canonical
@@ -1079,6 +1103,14 @@ class ChatApp(App):
                 _LOGGER.exception(
                     "ChatApp._replay_history: layout flush raised",
                 )
+
+        # Land the viewport at the tail after replay. Deferred to
+        # after_refresh so widget layouts have settled (Collapsibles
+        # + nested widgets change height post-mount).
+        def _scroll_tail() -> None:
+            transcript.scroll_end(animate=False)
+
+        self.call_after_refresh(_scroll_tail)
 
     # ------------------------------------------------------------------
     # Exchange worker
@@ -1259,37 +1291,61 @@ class ChatApp(App):
         target: str | None,
         *,
         parent_hint: str | None = None,
+        terminal: tuple[bool | None, str] | None = None,
     ) -> ApprovalBlock:
         transcript = self.query_one("#transcript", VerticalScroll)
         block = ApprovalBlock(
-            rule_id, action, target, parent_hint=parent_hint,
+            rule_id,
+            action,
+            target,
+            parent_hint=parent_hint,
+            terminal_state=terminal,
         )
         await transcript.mount(block)
-        # Freeze composer.
-        try:
-            composer = self.query_one(Composer)
-            composer.awaiting_approval = True
-        except Exception:
-            pass
-        try:
-            turn = self.query_one(TurnStatus)
-            turn.awaiting_approval = True
-        except Exception:
-            pass
+        # bug-056: a terminal (replay) block does not gate the composer
+        # and does not carry an in-flight PromptsImpl future, so skip
+        # the freeze entirely and just recompute the gate over currently
+        # mounted blocks. The recompute is the single source of truth
+        # for the gate, replacing the pre-bug-056 single-boolean toggle.
+        self.recompute_awaiting_approval()
         transcript.scroll_end(animate=False)
         return block
 
-    def clear_awaiting_approval(self) -> None:
+    def recompute_awaiting_approval(self) -> None:
+        """Recompute the composer gate from currently mounted approvals.
+
+        bug-056: the composer is frozen iff **any** mounted
+        `ApprovalBlock` is unresolved. Replaces the pre-bug-056
+        single-boolean toggle that clobbered the gate on the first
+        resolution when two live approvals were stacked (a pre-existing
+        latent bug the bug-056 review lifted into scope). Also called
+        on session resume so historical (terminal) blocks — which
+        report `is_resolved=True` from birth — never gate the composer
+        (AC #2).
+        """
+        try:
+            blocks = list(self.query(ApprovalBlock))
+        except Exception:
+            blocks = []
+        awaiting = any(not block.is_resolved for block in blocks)
         try:
             composer = self.query_one(Composer)
-            composer.awaiting_approval = False
+            composer.awaiting_approval = awaiting
         except Exception:
             pass
         try:
             turn = self.query_one(TurnStatus)
-            turn.awaiting_approval = False
+            turn.awaiting_approval = awaiting
         except Exception:
             pass
+
+    def clear_awaiting_approval(self) -> None:
+        # bug-056: the sole clear site (InlineApprovalCallback.finally)
+        # used to hard-set the gate to False, which raced with a second
+        # still-open live approval. Recompute instead so a stacked live
+        # approval keeps the composer frozen until every mounted block
+        # resolves (AC #10).
+        self.recompute_awaiting_approval()
 
     async def set_turn_verb(self, verb: str, *, target: str = "") -> None:
         try:
@@ -1639,6 +1695,29 @@ class ChatApp(App):
                 "/compact: engine has no compaction provider wired."
             )
             return
+        # Mount a running CompactionBlock so the user has a live signal
+        # while the summariser call is in flight. The event adapter's
+        # terminal handler consumes it and transitions in place.
+        running_block = None
+        try:
+            transcript = self.query_one("#transcript", VerticalScroll)
+            from cli.chat.widgets.compaction_block import (  # noqa: PLC0415
+                CompactionBlock,
+            )
+
+            title = "◎ Compaction preview…" if preview else "● Compacting…"
+            body = (
+                "Running summariser (preview — will NOT alter live context)"
+                if preview
+                else "Running summariser…"
+            )
+            running_block = CompactionBlock(
+                state="running", title_text=title, body_text=body,
+            )
+            await transcript.mount(running_block)
+            self.event_adapter._compaction_widgets["pending"] = running_block
+        except Exception:  # noqa: BLE001
+            running_block = None
         try:
             emitted = await manual_compact(
                 config=self.session.config,
@@ -1647,21 +1726,45 @@ class ChatApp(App):
                 extra_instructions=instructions,
             )
         except Exception as exc:  # noqa: BLE001
-            await self._mount_transcript_notice(
-                f"/compact failed: {type(exc).__name__}: {exc}"
+            # Transition the running block to failure if it was mounted;
+            # otherwise fall back to the plain notice.
+            pending = self.event_adapter._compaction_widgets.pop(
+                "pending", None,
             )
+            if pending is not None:
+                try:
+                    pending.transition_to_failure(
+                        message=f"{type(exc).__name__}: {exc}",
+                    )
+                except Exception:  # noqa: BLE001
+                    await self._mount_transcript_notice(
+                        f"/compact failed: {type(exc).__name__}: {exc}"
+                    )
+            else:
+                await self._mount_transcript_notice(
+                    f"/compact failed: {type(exc).__name__}: {exc}"
+                )
             return
         if emitted is None:
+            # No summariser call happened — remove the placeholder and
+            # surface the standard nothing-to-do notice.
+            pending = self.event_adapter._compaction_widgets.pop(
+                "pending", None,
+            )
+            if pending is not None:
+                try:
+                    await pending.remove()
+                except Exception:  # noqa: BLE001
+                    pass
             await self._mount_transcript_notice(
                 "↳ /compact: nothing to compact (short session, "
                 "compaction disabled, or model has no declared "
                 "context_length)."
             )
             return
-        # The notice for the compaction event is mounted by
-        # EventAdapter._handle_context_compacted (fed by the bus
-        # publish inside manual_compact). Nothing more to do here on
-        # the happy path.
+        # Happy path: EventAdapter._handle_context_compacted transitions
+        # the pending block to success/preview via the bus publish
+        # inside manual_compact. Nothing more to do here.
 
     async def _handle_uncompact(self) -> None:
         """Revoke the most-recent active compaction on this thread.

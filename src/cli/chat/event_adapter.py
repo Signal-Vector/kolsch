@@ -121,6 +121,41 @@ def _response_to_resolution(response: str) -> str:
     return "denied"
 
 
+def _replay_outcome_from_response(
+    response: str,
+    *,
+    has_rule: bool,
+) -> tuple[str, str]:
+    """Map a historical `.answered` response key to a terminal outcome.
+
+    bug-056. Mirrors the interactive path's `_resolve` footer choice
+    at `approval_block.py:283-390` — the resumed row must read exactly
+    the same footer/class the user saw when they originally answered.
+
+    - ``y`` → ``("allowed", "✓ Allowed once")``
+    - ``a`` + rule dict → ``("allowed", "✓ Rule saved (allow)")``
+    - ``a`` without rule dict → ``("allowed", "✓ Allowed once")`` (a
+      pre-bug-025 answered payload that dropped the rule; the fallback
+      matches `_translate_response`'s allow-once collapse).
+    - ``n`` → ``("denied", "✗ Denied once")``
+    - ``d`` + rule dict → ``("denied", "✗ Rule saved (deny)")``
+    - ``d`` without rule dict → ``("denied", "✗ Denied once")``
+    - Anything else (unknown response) → denied — matches
+      `_translate_response`'s catch-all deny.
+    """
+    if response == "y":
+        return ("allowed", "✓ Allowed once")
+    if response == "a":
+        if has_rule:
+            return ("allowed", "✓ Rule saved (allow)")
+        return ("allowed", "✓ Allowed once")
+    if response == "d":
+        if has_rule:
+            return ("denied", "✗ Rule saved (deny)")
+        return ("denied", "✗ Denied once")
+    return ("denied", "✗ Denied once")
+
+
 def _log_task_exception(task: asyncio.Task[Any]) -> None:
     """Done-callback that surfaces a failed fire-and-forget task.
 
@@ -633,6 +668,16 @@ class EventAdapter:
         # test purposes we don't age the widget dict independently).
         self._notice_widgets: dict[str, Any] = {}
 
+        # feat-054 CompactionBlock tracking. Keys:
+        # - "pending" — the widget mounted in `running` state by a
+        #   ChatApp call site (manual /compact, eager-on-open) before
+        #   the terminal event arrives. Consumed and transitioned by
+        #   the terminal handler; deleted after use.
+        # - "<event_id>" — the widget for a completed compaction,
+        #   kept so `/uncompact` / `/why-compact` UX (future) can
+        #   correlate.
+        self._compaction_widgets: dict[str, Any] = {}
+
         # spec-008: reference to the ``Cards`` service so the
         # boot-time interruption notice (fired from
         # ``_scan_dangling_prompts``) can go through the same seam
@@ -659,6 +704,25 @@ class EventAdapter:
         self._started = False
         # Coordinator decision Q3: bounded scan window.
         self._scan_tail = 1000
+        # bug-056: point-in-time snapshot of the replayed slice's
+        # `.requested` → outcome map. `stage_replay_prompt_outcomes` is
+        # called BEFORE the replay dispatch loop (both `_replay_history`
+        # and the dormant `_replay_from_bookmark`) with the exact slice
+        # about to be handed to `handle()`; the map indexes every
+        # `.requested` in the slice to one of ``("allowed", footer)``,
+        # ``("denied", footer)``, ``("interrupted", footer)`` derived
+        # from the matching `.answered` / `.cancelled` (or absent one —
+        # dangling). `_handle_prompt_requested` consults this map: an
+        # entry means "render as terminal, don't spawn the bridge, don't
+        # freeze the composer"; the entry is popped on consumption so a
+        # duplicate dispatch of the same `.requested` hits the standard
+        # `_applied_prompt_ids` idempotence guard. Populated `None` (no
+        # pre-pass staged) is the live path — any `.requested` there is
+        # a real in-flight prompt and takes the interactive branch.
+        # AC #12 / AC #13: because the map is a point-in-time snapshot,
+        # a post-resume live `.requested` arriving on the live bus after
+        # replay has no entry and takes the interactive path.
+        self._replay_prompt_outcomes: dict[str, tuple[str, str]] = {}
 
     # ------------------------------------------------------------------
     # Public surface
@@ -764,6 +828,88 @@ class EventAdapter:
         handler = getattr(self, method_name)
         await handler(event)
 
+    def stage_replay_prompt_outcomes(self, events: list[Event]) -> None:
+        """Index a replay slice's `.requested` → historical outcome.
+
+        bug-056: called BEFORE the replay dispatch loop with the exact
+        slice about to be handed to `handle()`. Walks the slice once,
+        building a `{prompt_id → (kind, footer)}` map where
+        ``kind ∈ {"allowed", "denied", "interrupted"}``; footer follows
+        the interactive path's `_resolve` mapping (see
+        `approval_block.py:283-390`):
+
+        - `y` → ``("allowed", "✓ Allowed once")``
+        - `a` + rule dict → ``("allowed", "✓ Rule saved (allow)")``
+        - `n` / dropped `.cancelled` payload → ``("denied", "✗ Denied once")``
+        - `d` + rule dict → ``("denied", "✗ Rule saved (deny)")``
+        - `.requested` with no `.answered`/`.cancelled` in-slice →
+          ``("interrupted", "⊘ Interrupted")``
+
+        `_handle_prompt_requested` consults this map: an entry means
+        "render as terminal, no bridge, no freeze". The map is a
+        point-in-time snapshot — a post-resume live prompt arriving on
+        the live bus has no entry and takes the interactive path
+        (AC #13).
+
+        Overwrites any previous staging so a second resume boot (or a
+        `_replay_from_bookmark` call after `_replay_history`) starts
+        clean; the caller owns which slice is staged.
+
+        Note: `_scan_dangling_prompts` (test-only path) does NOT run on
+        the production resume path, so this method is where dangling
+        historical prompts get their `interrupted` synthesis for the
+        UI (AC #6). The scan path stays untouched — it targets the
+        durable log, not the render.
+        """
+        outcomes: dict[str, tuple[str, str]] = {}
+        # First pass: index every terminal event for a prompt.
+        for event in events:
+            if event.type != EventType.UI_EVENT:
+                continue
+            data = event.data if isinstance(event.data, dict) else {}
+            kind = data.get("kind")
+            payload = data.get("payload") or {}
+            if not isinstance(payload, dict):
+                payload = {}
+            prompt_id = payload.get("prompt_id")
+            if not isinstance(prompt_id, str) or not prompt_id:
+                continue
+            if kind == WIRE_PROMPT_ANSWERED:
+                # `.answered` payload key fallback matches
+                # `_handle_prompt_answered` (`response` OR `answer`).
+                response = payload.get("response", payload.get("answer", ""))
+                if not isinstance(response, str):
+                    response = str(response)
+                rule = payload.get("rule")
+                rule_present = isinstance(rule, dict)
+                outcomes[prompt_id] = _replay_outcome_from_response(
+                    response, has_rule=rule_present,
+                )
+            elif kind == WIRE_PROMPT_CANCELLED:
+                # `.cancelled` payload has no `response`/`answer` key —
+                # synthesise denied so the row reads the same footer as
+                # an Esc / `n` interactive resolution.
+                outcomes[prompt_id] = ("denied", "✗ Denied once")
+        # Second pass: dangling `.requested` (in-slice, no resolution)
+        # → interrupted. Must come after the terminal pass so an in-
+        # slice `.answered` for a prompt wins over the interrupted
+        # fallback.
+        for event in events:
+            if event.type != EventType.UI_EVENT:
+                continue
+            data = event.data if isinstance(event.data, dict) else {}
+            if data.get("kind") != WIRE_PROMPT_REQUESTED:
+                continue
+            payload = data.get("payload") or {}
+            if not isinstance(payload, dict):
+                payload = {}
+            prompt_id = payload.get("prompt_id")
+            if not isinstance(prompt_id, str) or not prompt_id:
+                continue
+            if prompt_id not in outcomes:
+                outcomes[prompt_id] = ("interrupted", "⊘ Interrupted")
+        self._replay_prompt_outcomes = outcomes
+
     # ------------------------------------------------------------------
     # spec-003: replay-on-boot bookmark + prompt-mid-crash synthesis
     # ------------------------------------------------------------------
@@ -824,10 +970,19 @@ class EventAdapter:
                 )
                 replay_from = None
 
-        async for event in self._session_store.read_events(
+        # bug-056 AC #12: the dormant bookmark-replay path is a replay
+        # too — stage the pre-pass here as well so a `.requested` in
+        # this slice renders terminal instead of active. Buffer the
+        # slice so we can index it before dispatching.
+        replay_slice: list[Event] = []
+        async for ev in self._session_store.read_events(
             self._thread_id,
             from_event_id=str(replay_from) if replay_from is not None else None,
         ):
+            replay_slice.append(ev)
+        self.stage_replay_prompt_outcomes(replay_slice)
+
+        for event in replay_slice:
             try:
                 await self.handle(event)
             except Exception:
@@ -1416,94 +1571,109 @@ class EventAdapter:
         _ = event
 
     async def _handle_context_compacted(self, event: Event) -> None:
-        """feat-054 Phase 3 — mount a notice for the compaction event.
+        """feat-054 — mount / transition a CompactionBlock for the event.
 
-        Text template:
-
-        - Successful auto/manual: ``↳ compacted <N> events (<before> →
-          <after> tokens · /uncompact to restore · /why-compact for
-          details)``.
-        - Preview: ``↳ compaction preview: would compact <N> events
-          (<before> → <after> tokens). Not applied. /why-compact
-          <event_id> for details.``
-
-        The event id is included in the notice's mount key so a
-        subsequent ``/why-compact`` can be pre-populated when the UI
-        offers copy-to-clipboard.
+        When a ``pending`` running block already exists (mounted by the
+        ChatApp call site before the summariser call), transition it
+        in place. Otherwise mount a fresh terminal block.
         """
         compacted_ids = event.data.get("compacted_event_ids") or []
-        # Empty compaction (no middle to summarise) — don't mount noise.
         if not compacted_ids:
             return
         tokens_before = int(event.data.get("tokens_before") or 0)
         tokens_after = int(event.data.get("tokens_after") or 0)
         preview_flag = bool(event.data.get("preview"))
+        trigger = str(event.data.get("trigger") or "auto")
+        summary = event.data.get("summary") or {}
+        refs_count = (
+            len(summary.get("refs") or []) if isinstance(summary, dict) else None
+        )
         eid_str = _event_id_str(event) or ""
-        eid_short = eid_str[:12] if eid_str else "(unknown)"
+        block = await self._acquire_compaction_block(event_id=eid_str)
+        if block is None:
+            return
         if preview_flag:
-            text = (
-                f"↳ compaction preview: would compact {len(compacted_ids)} "
-                f"events ({tokens_before:,} → {tokens_after:,} tokens). "
-                f"Not applied. /why-compact {eid_short} for details"
+            block.transition_to_preview(
+                compacted_count=len(compacted_ids),
+                tokens_before=tokens_before,
+                tokens_after=tokens_after,
             )
         else:
-            text = (
-                f"↳ compacted {len(compacted_ids)} events "
-                f"({tokens_before:,} → {tokens_after:,} tokens · "
-                f"/uncompact to restore · /why-compact for details)"
+            block.transition_to_success(
+                compacted_count=len(compacted_ids),
+                tokens_before=tokens_before,
+                tokens_after=tokens_after,
+                trigger=trigger,
+                refs_count=refs_count,
             )
-        notice_id = f"context-compacted-{eid_str or 'anon'}"
-        await self._mount_root_notice(notice_id, text, "info")
 
     async def _handle_context_compaction_revoked(self, event: Event) -> None:
-        """feat-054 Phase 3 — mount a notice recording the revocation.
-
-        The pointed-at ``compaction_event_id`` is trimmed to its short
-        prefix (same rule as ``/compaction-history``) so the notice
-        stays scan-friendly.
-        """
         target = str(event.data.get("compaction_event_id") or "")
         short = target[:12] if target else "(unknown)"
-        eid = _event_id_str(event) or "anon"
-        text = f"↳ compaction {short} restored"
-        await self._mount_root_notice(
-            f"context-compaction-revoked-{eid}", text, "info"
-        )
+        eid_str = _event_id_str(event) or ""
+        block = await self._acquire_compaction_block(event_id=eid_str)
+        if block is None:
+            return
+        block.transition_to_revoked(target_short_id=short)
 
     async def _handle_context_compaction_failed(self, event: Event) -> None:
-        """feat-054 Phase 3 — surface a compaction failure as a warning notice.
-
-        Reads ``error.message`` from the payload; falls back to the
-        error type or a bare ``"unknown"`` when neither is set. The
-        exchange itself is unaffected (compaction is prevention, the
-        engine's fallback chain handles overflows reactively).
-        """
         error = event.data.get("error") or {}
         message = ""
         if isinstance(error, dict):
             message = str(error.get("message") or error.get("type") or "")
         if not message:
             message = "unknown"
-        eid = _event_id_str(event) or "anon"
-        text = f"↳ compaction failed: {message}"
-        await self._mount_root_notice(
-            f"context-compaction-failed-{eid}", text, "warning"
-        )
+        fallback = str(event.data.get("fallback") or "") or None
+        eid_str = _event_id_str(event) or ""
+        block = await self._acquire_compaction_block(event_id=eid_str)
+        if block is None:
+            return
+        block.transition_to_failure(message=message, fallback_tier=fallback)
 
     async def _handle_context_compaction_skipped(self, event: Event) -> None:
-        """feat-054 Phase 3 — mount a notice recording why compaction was skipped.
-
-        ``reason == "no_net_savings"`` is expected/benign so it renders
-        as an ``info`` notice. Any other reason is a warning — a config
-        or model-declaration issue the operator likely wants to fix.
-        """
         reason = str(event.data.get("reason") or "unknown")
-        kind = "info" if reason == "no_net_savings" else "warning"
-        eid = _event_id_str(event) or "anon"
-        text = f"↳ compaction skipped: {reason}"
-        await self._mount_root_notice(
-            f"context-compaction-skipped-{eid}", text, kind
-        )
+        eid_str = _event_id_str(event) or ""
+        block = await self._acquire_compaction_block(event_id=eid_str)
+        if block is None:
+            return
+        block.transition_to_skipped(reason=reason)
+
+    async def _acquire_compaction_block(
+        self, *, event_id: str
+    ) -> Any:
+        """Return the CompactionBlock to write into.
+
+        Consumes a pre-mounted ``pending`` running block if present.
+        Otherwise mounts a fresh block at the transcript root. Returns
+        ``None`` on hard mount failure (headless test paths).
+        """
+        pending = self._compaction_widgets.pop("pending", None)
+        if pending is not None:
+            if event_id:
+                self._compaction_widgets[event_id] = pending
+            return pending
+        transcript = self._locate_transcript()
+        if transcript is None:
+            return None
+        try:
+            from cli.chat.widgets.compaction_block import (  # noqa: PLC0415
+                CompactionBlock,
+            )
+        except Exception:
+            _LOGGER.exception("event_adapter: CompactionBlock import failed")
+            return None
+        try:
+            block = CompactionBlock(state="running", event_id=event_id or None)
+            await transcript.mount(block)
+        except Exception:
+            _LOGGER.exception(
+                "event_adapter: CompactionBlock mount failed for event_id=%r",
+                event_id,
+            )
+            return None
+        if event_id:
+            self._compaction_widgets[event_id] = block
+        return block
 
     async def _handle_agent_template_warning(self, event: Event) -> None:
         """Surface template warnings as a dim inline notice.
@@ -1642,9 +1812,26 @@ class EventAdapter:
         action_val = action if isinstance(action, str) else ""
         target_val = target if isinstance(target, str) else None
 
-        # spec-014: detect workflow-source prompts and route through
-        # WorkflowsImpl for the durable awaiting_approval emit + the
-        # parent_hint construction on the ApprovalBlock.
+        # bug-056: consult the replay pre-pass snapshot BEFORE the
+        # spec-014 workflow-source branch so a historical workflow-
+        # scoped prompt does NOT trigger a fresh `emit_awaiting_approval`
+        # (which would append a new durable UI event on resume and
+        # violate AC #4). Presence of an entry means the slice already
+        # carries the historical outcome — render terminal (non-blocking,
+        # no bridge, composer stays usable, no durable emit). Absence
+        # means this is a genuinely live prompt (post-resume live bus,
+        # or a fresh session tool call) — fall through to the workflow
+        # branch + interactive mount + bridge. `.pop` so a duplicate
+        # `.requested` dispatch (belt + braces alongside
+        # `_applied_prompt_ids`) still no-ops.
+        terminal_entry = self._replay_prompt_outcomes.pop(prompt_id, None)
+
+        # spec-014: detect workflow-source prompts and derive the
+        # parent_hint for the ApprovalBlock. The durable
+        # `emit_awaiting_approval` fires only on the LIVE path — a
+        # historical (terminal) prompt already has its matching
+        # `.awaiting_approval` in the log slice and would produce a
+        # duplicate emit on resume otherwise.
         source = payload.get("source")
         parent_hint: str | None = None
         if isinstance(source, dict) and source.get("kind") == "workflow":
@@ -1657,7 +1844,10 @@ class EventAdapter:
             # Track the (run_id, node_name) tuple so the follow-up
             # `.answered` / `.cancelled` dispatch can fire
             # `emit_approval_resolved` without re-parsing `source`.
-            if run_id:
+            # Only for the LIVE path — a historical prompt's follow-up
+            # `.answered`/`.cancelled` hits the `_resolved_prompt_ids`
+            # early-return before consulting this map.
+            if run_id and terminal_entry is None:
                 self._workflow_prompt_sources[prompt_id] = (
                     run_id, node_name,
                 )
@@ -1680,8 +1870,14 @@ class EventAdapter:
                 )
             # Fire the durable `awaiting_approval` UI event — the
             # matching WorkflowRenderer transitions the node row to
-            # `paused` on the resulting dispatch.
-            if self._workflows_impl is not None and run_id:
+            # `paused` on the resulting dispatch. bug-056: skipped for
+            # historical prompts (terminal branch) to keep the resume
+            # append count at zero (AC #4).
+            if (
+                self._workflows_impl is not None
+                and run_id
+                and terminal_entry is None
+            ):
                 try:
                     await self._workflows_impl.emit_awaiting_approval(
                         run_id=run_id,
@@ -1694,6 +1890,60 @@ class EventAdapter:
                         prompt_id,
                         run_id,
                     )
+
+        if terminal_entry is not None:
+            kind, footer = terminal_entry
+            if kind == "allowed":
+                terminal: tuple[bool | None, str] | None = (True, footer)
+            elif kind == "denied":
+                terminal = (False, footer)
+            else:
+                # interrupted: match the widget's resolved-row styling
+                # (Coordinator note); reuse `-denied` (see
+                # `ApprovalBlock._resolved_classes`).
+                terminal = (None, footer)
+            try:
+                await self._app.mount_approval_block(
+                    rule_id_val,
+                    action_val,
+                    target_val,
+                    parent_hint=parent_hint,
+                    terminal=terminal,
+                )
+            except TypeError:
+                # Older mock apps that don't accept the bug-056
+                # `terminal=` kwarg — fall back to no-arg mount. The
+                # block will render interactive there (tests using
+                # such mocks can't inspect the terminal render
+                # anyway).
+                try:
+                    await self._app.mount_approval_block(
+                        rule_id_val,
+                        action_val,
+                        target_val,
+                    )
+                except Exception:
+                    _LOGGER.exception(
+                        "event_adapter: mount_approval_block "
+                        "(terminal fallback) raised for prompt_id=%r",
+                        prompt_id,
+                    )
+            except Exception:
+                _LOGGER.exception(
+                    "event_adapter: mount_approval_block (terminal) "
+                    "raised for prompt_id=%r",
+                    prompt_id,
+                )
+            # Bookkeeping: mark this prompt resolved so the
+            # answered/cancelled handlers early-return + the bridge
+            # write-guard triggers on any residual path.
+            self._resolved_prompt_ids.add(prompt_id)
+            # Do NOT spawn the bridge — the terminal block never sets
+            # `_resolved_event`, so anything parked on `resolved()` would
+            # hang forever. bug-056 keeps the durable log untouched by
+            # simply not starting the bridge for historical prompts
+            # (AC #4 primary defence).
+            return
 
         block: Any = None
         try:
@@ -1795,6 +2045,22 @@ class EventAdapter:
         except Exception:
             _LOGGER.exception(
                 "event_adapter: block.resolved() raised for prompt_id=%r",
+                prompt_id,
+            )
+            return
+        # bug-056 defence-in-depth: if the widget's `_resolved_event`
+        # somehow fired for a prompt whose historical resolution is
+        # already durable (e.g. a residual code path outside the
+        # bug-056 replay-terminal branch), don't append a duplicate
+        # `WIRE_PROMPT_ANSWERED` to the store. The pre-bug-056 code
+        # only checked `_resolved_prompt_ids` inside `_handle_prompt_answered`,
+        # which fires AFTER the append — too late. Guarding here means
+        # any future refactor that reintroduces `_resolve` on the replay
+        # path still cannot corrupt the ground-truth log (AC #4).
+        if prompt_id in self._resolved_prompt_ids:
+            _LOGGER.debug(
+                "event_adapter: approval bridge skipped (already resolved) "
+                "for prompt_id=%r",
                 prompt_id,
             )
             return
@@ -2045,6 +2311,13 @@ class EventAdapter:
         # handler stays sync; the awaiting `choice()` unblocks via
         # the resolve above.
         self._maybe_emit_approval_resolved(prompt_id, response)
+        # bug-056: recompute the composer gate. Belt + braces with the
+        # live-path `InlineApprovalCallback.finally → clear_awaiting_approval`
+        # so headless / synthetic-event tests without a callback still
+        # un-freeze once every mounted block reports `is_resolved` (AC #10).
+        recompute = getattr(self._app, "recompute_awaiting_approval", None)
+        if callable(recompute):
+            recompute()
 
     def _handle_prompt_cancelled(self, payload: dict[str, Any]) -> None:
         """Cancel the in-flight `PromptsImpl` future on `.cancelled`.
@@ -2067,6 +2340,10 @@ class EventAdapter:
         if self._prompts_impl is not None:
             self._prompts_impl.cancel_pending(prompt_id)
         self._maybe_emit_approval_resolved(prompt_id, "cancelled")
+        # bug-056: same recompute nudge as the answered path.
+        recompute = getattr(self._app, "recompute_awaiting_approval", None)
+        if callable(recompute):
+            recompute()
 
     def _maybe_emit_approval_resolved(
         self,

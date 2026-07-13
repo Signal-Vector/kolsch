@@ -1,19 +1,17 @@
-"""feat-054 Phase 3 — chat notice widget for compaction events.
+"""feat-054 — chat widget for compaction events (CompactionBlock).
 
-Drives four canonical payloads through
-:class:`cli.chat.event_adapter.EventAdapter` and asserts the exact
-notice text + kind mounted at the transcript root:
+Drives the canonical payloads through
+:class:`cli.chat.event_adapter.EventAdapter` and asserts the widget
+state + title mounted at the transcript root:
 
-- ``CONTEXT_COMPACTED`` (success) → info notice with the ``compacted
-  N events`` line.
-- ``CONTEXT_COMPACTED`` with ``preview=True`` → info notice with the
-  ``compaction preview`` line.
-- ``CONTEXT_COMPACTION_REVOKED`` → info notice naming the restored
-  compaction.
-- ``CONTEXT_COMPACTION_FAILED`` → warning notice carrying the error
-  message.
-- ``CONTEXT_COMPACTION_SKIPPED`` (no_net_savings) → info notice.
-- ``CONTEXT_COMPACTION_SKIPPED`` (other reason) → warning notice.
+- ``CONTEXT_COMPACTED`` (success) → ``state="success"`` with token
+  savings in the title.
+- ``CONTEXT_COMPACTED`` with ``preview=True`` → ``state="preview"``.
+- ``CONTEXT_COMPACTION_REVOKED`` → ``state="revoked"`` naming the
+  restored compaction.
+- ``CONTEXT_COMPACTION_FAILED`` → ``state="failure"`` carrying the
+  error message.
+- ``CONTEXT_COMPACTION_SKIPPED`` → ``state="skipped"`` with the reason.
 """
 
 from __future__ import annotations
@@ -68,11 +66,11 @@ class _CapturingApp:
         )
 
 
-def _first_mount_text_kind(app: _CapturingApp) -> tuple[str, str]:
-    """Return ``(text, kind)`` from the first mounted ``NoticeWidget``."""
+def _first_mount(app: _CapturingApp) -> tuple[str, str, str]:
+    """Return ``(state, title, body)`` from the first mounted CompactionBlock."""
     assert app.transcript.mounted, "no widget was mounted"
     widget = app.transcript.mounted[0]
-    return widget.text, widget.kind
+    return widget.state, str(widget.title), widget.body_text
 
 
 def _fresh_id(prefix: str) -> str:
@@ -114,12 +112,12 @@ async def test_context_compacted_success_mounts_info_notice() -> None:
         },
     )
     await adapter.handle(event)
-    text, kind = _first_mount_text_kind(app)
-    assert "compacted 47 events" in text
-    assert "12,043" in text and "1,180" in text
-    assert "/uncompact to restore" in text
-    assert "/why-compact for details" in text
-    assert kind == "info"
+    state, title, body = _first_mount(app)
+    assert state == "success"
+    assert "Compacted 47 events" in title
+    assert "12,043" in title and "1,180" in title
+    assert "/uncompact to restore" in body
+    assert "/why-compact" in body
 
 
 @pytest.mark.asyncio
@@ -139,11 +137,11 @@ async def test_context_compacted_preview_mounts_preview_notice() -> None:
         },
     )
     await adapter.handle(event)
-    text, kind = _first_mount_text_kind(app)
-    assert "compaction preview" in text
-    assert "would compact 47 events" in text
-    assert "Not applied" in text
-    assert kind == "info"
+    state, title, body = _first_mount(app)
+    assert state == "preview"
+    assert "Compaction preview" in title
+    assert "would compact 47 events" in title
+    assert "not applied" in title.lower() or "not applied" in body.lower()
 
 
 @pytest.mark.asyncio
@@ -159,11 +157,11 @@ async def test_context_compaction_revoked_mounts_info_notice() -> None:
         },
     )
     await adapter.handle(event)
-    text, kind = _first_mount_text_kind(app)
-    assert "restored" in text
-    # Notice shows the short-id form of the pointed-at compaction id.
-    assert target_id[:12] in text
-    assert kind == "info"
+    state, title, _body = _first_mount(app)
+    assert state == "revoked"
+    assert "restored" in title
+    # Widget shows the short-id form of the pointed-at compaction id.
+    assert target_id[:12] in title
 
 
 @pytest.mark.asyncio
@@ -177,10 +175,10 @@ async def test_context_compaction_failed_mounts_warning_notice() -> None:
         },
     )
     await adapter.handle(event)
-    text, kind = _first_mount_text_kind(app)
-    assert "compaction failed" in text
-    assert "LLM timed out" in text
-    assert kind == "warning"
+    state, title, body = _first_mount(app)
+    assert state == "failure"
+    assert "Compaction failed" in title
+    assert "LLM timed out" in body or "LLM timed out" in title
 
 
 @pytest.mark.asyncio
@@ -192,9 +190,9 @@ async def test_context_compaction_skipped_info_when_no_net_savings() -> None:
         {"reason": "no_net_savings", "tokens_before": 100, "tokens_after": 95},
     )
     await adapter.handle(event)
-    text, kind = _first_mount_text_kind(app)
-    assert "no_net_savings" in text
-    assert kind == "info"
+    state, title, body = _first_mount(app)
+    assert state == "skipped"
+    assert "no_net_savings" in title or "no_net_savings" in body
 
 
 @pytest.mark.asyncio
@@ -206,6 +204,6 @@ async def test_context_compaction_skipped_warning_on_other_reason() -> None:
         {"reason": "context_length_unknown"},
     )
     await adapter.handle(event)
-    text, kind = _first_mount_text_kind(app)
-    assert "context_length_unknown" in text
-    assert kind == "warning"
+    state, title, body = _first_mount(app)
+    assert state == "skipped"
+    assert "context_length_unknown" in title or "context_length_unknown" in body

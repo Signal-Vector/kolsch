@@ -49,6 +49,7 @@ The block **remains mounted** in the transcript after resolution
 from __future__ import annotations
 
 import asyncio
+import contextlib
 
 from textual.app import ComposeResult
 from textual.binding import Binding
@@ -188,6 +189,7 @@ class ApprovalBlock(Vertical):
         target: str | None,
         *,
         parent_hint: str | None = None,
+        terminal_state: tuple[bool | None, str] | None = None,
     ) -> None:
         super().__init__()
         # Preserve the exact strings the callback was fired with so the
@@ -219,6 +221,16 @@ class ApprovalBlock(Vertical):
         # ``asyncio.Event`` the PromptCallback implementation awaits via
         # ``resolved()``. One-shot — set once, never cleared.
         self._resolved_event: asyncio.Event = asyncio.Event()
+        # bug-056: when non-None, this block was constructed to render a
+        # historical (resolved / interrupted) outcome on session resume.
+        # `compose` skips the interactive choice pane; `on_mount` skips
+        # the pane `.focus()`; `_resolved_event` is NEVER set so the
+        # adapter's `_bridge_widget_resolution` (if it were ever spawned
+        # for such a block, which it isn't) would park forever and not
+        # append a duplicate `WIRE_PROMPT_ANSWERED`. The tuple is
+        # ``(allowed, footer)`` — matching the interactive path's
+        # `_resolve` footer/class choice.
+        self._terminal_state: tuple[bool | None, str] | None = terminal_state
 
     # ------------------------------------------------------------------
     # Compose
@@ -240,6 +252,15 @@ class ApprovalBlock(Vertical):
         yield ApprovalArgsRow(self._target)
         yield Static(f"Rule  {self._rule_id}", classes="context", markup=False)
         yield Static("", classes="spacer")
+        # bug-056: a terminal-state block was constructed for a historical
+        # prompt on session resume. Skip the interactive choice pane +
+        # footer-help and yield the frozen resolved row directly, so the
+        # widget never surfaces an active keyboard capture and never
+        # sets `_resolved_event`.
+        if self._terminal_state is not None:
+            allowed, footer = self._terminal_state
+            yield Static(footer, classes=self._resolved_classes(allowed), markup=False)
+            return
         initial = ApprovalChoicePane()
         self._current_pane = initial
         yield initial
@@ -248,6 +269,21 @@ class ApprovalBlock(Vertical):
             classes="footer-help",
             markup=False,
         )
+
+    @staticmethod
+    def _resolved_classes(allowed: bool | None) -> str:
+        """Pick the CSS classes for a resolved-row Static.
+
+        Matches the interactive path's `_resolve` mapping — ``True``
+        renders as ``resolved -allowed`` (tool-cyan), ``False`` as
+        ``resolved -denied`` (error-red). bug-056: ``None`` (dangling /
+        interrupted) reuses the ``-denied`` styling so the row reads
+        the same visual weight as a denied resolution — consistent with
+        the widget's resolved-row styling (Coordinator note).
+        """
+        if allowed is True:
+            return "resolved -allowed"
+        return "resolved -denied"
 
     # ------------------------------------------------------------------
     # Public API
@@ -259,8 +295,30 @@ class ApprovalBlock(Vertical):
         assert self._result is not None  # noqa: S101
         return self._result
 
+    @property
+    def is_resolved(self) -> bool:
+        """True if this block is no longer awaiting user input.
+
+        bug-056 composer-gate recompute: the interactive path marks
+        resolution by setting `_resolved_event` (via `_resolve`); the
+        replay-terminal path marks it by being constructed with a
+        terminal state (`compose` yields the frozen row directly, no
+        interactive pane is ever mounted). `ChatApp.recompute_awaiting_approval`
+        walks mounted blocks and freezes the composer only when at least
+        one is still awaiting input.
+        """
+        if self._terminal_state is not None:
+            return True
+        return self._resolved_event.is_set()
+
     def on_mount(self) -> None:
         """Move focus to the first pane so keybindings capture keys."""
+        # bug-056: a terminal-state block has no interactive pane to
+        # focus (compose skipped it) — skip the focus + footer refresh
+        # entirely so the resumed transcript doesn't steal focus from
+        # the composer (AC #9).
+        if self._terminal_state is not None:
+            return
         if self._current_pane is not None:
             self._current_pane.focus()
         # qol-047: the args row's overflow flag is only meaningful once
@@ -268,6 +326,44 @@ class ApprovalBlock(Vertical):
         # the next render frame so the initial "Tab → expand args"
         # suffix appears when the target is already too long to fit.
         self.call_after_refresh(self._refresh_footer_help)
+
+    async def render_terminal(
+        self,
+        *,
+        allowed: bool | None,
+        footer: str,
+    ) -> None:
+        """Reconfigure this block as a frozen historical row.
+
+        bug-056: called on session resume for prompts whose replayed
+        slice contains a matching `.answered` / `.cancelled`, or that
+        are dangling (no resolution in-slice). Removes the interactive
+        choice pane + footer-help hint if they were mounted, and mounts
+        the same frozen resolved-row Static the interactive path fires
+        from `_resolve` — but **does not** set `_resolved_event`.
+        Anything parked on `resolved()` (the adapter bridge) therefore
+        never wakes, so no duplicate `WIRE_PROMPT_ANSWERED` can be
+        appended to the durable log (AC #4).
+
+        Primary construction path is via the `terminal_state=` kwarg on
+        `__init__`; this instance method exists as a symmetric transform
+        for callers that already hold a live block reference.
+        """
+        if self._current_pane is not None:
+            with contextlib.suppress(Exception):
+                await self._current_pane.remove()
+            self._current_pane = None
+        with contextlib.suppress(Exception):
+            await self.query_one(".footer-help", Static).remove()
+        with contextlib.suppress(Exception):
+            await self.mount(
+                Static(
+                    footer,
+                    classes=self._resolved_classes(allowed),
+                    markup=False,
+                ),
+            )
+        self._terminal_state = (allowed, footer)
 
     # ------------------------------------------------------------------
     # Message handlers
