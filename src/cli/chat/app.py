@@ -842,6 +842,20 @@ class ChatApp(App):
         # unstable context state.
         await self._maybe_eager_compact_on_open()
 
+        # bug-058 Part B: adopt Textual's ``Widget.anchor()`` primitive
+        # so the transcript stays pinned to the bottom until the user
+        # scrolls away (and auto-releases on user scroll). Replaces the
+        # ~13 per-mount ``scroll_end(animate=False)`` calls that used to
+        # hand-roll the same behaviour — see ``widget.py:769``. Called
+        # ONCE after replay + eager compaction settle so the deferred
+        # `_scroll_tail` (call_after_refresh) fires against an already
+        # anchored transcript.
+        try:
+            transcript = self.query_one("#transcript", VerticalScroll)
+            transcript.anchor()
+        except Exception:  # noqa: BLE001 — headless fixtures may lack #transcript
+            pass
+
         # Focus the composer so the user can start typing.
         try:
             self.query_one(Composer).focus()
@@ -1183,7 +1197,6 @@ class ChatApp(App):
         ts = timestamp if timestamp is not None else datetime.now()
         transcript = self.query_one("#transcript", VerticalScroll)
         await transcript.mount(UserChatbox(text, ts))
-        transcript.scroll_end(animate=False)
 
     def _assistant_border_title(self) -> str:
         """Build the `AssistantProse` border title: `<agent> · HH:MM:SS`.
@@ -1204,7 +1217,6 @@ class ChatApp(App):
         await transcript.mount(prose)
         await prose.append(text)
         self._last_assistant_widget = prose
-        transcript.scroll_end(animate=False)
 
     async def mount_assistant_streaming_widget(self) -> AssistantProse:
         transcript = self.query_one("#transcript", VerticalScroll)
@@ -1212,7 +1224,6 @@ class ChatApp(App):
         prose.border_title = self._assistant_border_title()
         await transcript.mount(prose)
         self._last_assistant_widget = prose
-        transcript.scroll_end(animate=False)
         return prose
 
     async def mount_tool_call(
@@ -1237,7 +1248,6 @@ class ChatApp(App):
             matched_rule=matched_rule,
         )
         await transcript.mount(block)
-        transcript.scroll_end(animate=False)
 
     async def mount_notice(
         self,
@@ -1260,7 +1270,6 @@ class ChatApp(App):
         transcript = self.query_one("#transcript", VerticalScroll)
         notice = NoticeWidget(text=text, kind=level)
         await transcript.mount(notice)
-        transcript.scroll_end(animate=False)
 
     async def _mount_transcript_notice(
         self,
@@ -1283,14 +1292,12 @@ class ChatApp(App):
         transcript = self.query_one("#transcript", VerticalScroll)
         notice = NoticeWidget(text=text, kind=kind)
         await transcript.mount(notice)
-        transcript.scroll_end(animate=False)
 
     async def mount_exchange_failed(self, message: str) -> None:
         transcript = self.query_one("#transcript", VerticalScroll)
         notice = Static(f"[exchange failed — {message}]", classes="error", markup=False)
         notice.styles.color = "red"
         await transcript.mount(notice)
-        transcript.scroll_end(animate=False)
 
     async def mount_approval_block(
         self,
@@ -1316,7 +1323,6 @@ class ChatApp(App):
         # mounted blocks. The recompute is the single source of truth
         # for the gate, replacing the pre-bug-056 single-boolean toggle.
         self.recompute_awaiting_approval()
-        transcript.scroll_end(animate=False)
         return block
 
     def recompute_awaiting_approval(self) -> None:
@@ -1660,7 +1666,6 @@ class ChatApp(App):
         transcript = self.query_one("#transcript", VerticalScroll)
         card = Static(text, markup=False)
         await transcript.mount(card)
-        transcript.scroll_end(animate=False)
 
     async def _handle_reload(self) -> None:
         """Reload the runtime's authz provider from disk.
@@ -1831,7 +1836,6 @@ class ChatApp(App):
         transcript = self.query_one("#transcript", VerticalScroll)
         card = Static(text, markup=False)
         await transcript.mount(card)
-        transcript.scroll_end(animate=False)
 
     async def _handle_why_compact(self, arg_text: str) -> None:
         """Dump ``pre_compaction`` + ``summary`` for one compaction event.
@@ -1871,7 +1875,6 @@ class ChatApp(App):
         transcript = self.query_one("#transcript", VerticalScroll)
         card = Static(text, markup=False)
         await transcript.mount(card)
-        transcript.scroll_end(animate=False)
 
     async def _clear_transcript(self) -> None:
         """Remove every mounted widget from the transcript.

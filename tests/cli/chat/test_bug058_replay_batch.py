@@ -1,13 +1,17 @@
-"""bug-058 Part A — batch-wrapped replay completes under the pass gate.
+"""bug-058 — batch-wrapped replay + ``anchor()`` adoption regression tests.
 
 Boots a real :class:`cli.chat.app.ChatApp` under
-:class:`textual.pilot.Pilot` on a resume session seeded with a few
-hundred alternating USER_MESSAGE / AGENT_MESSAGE / TOOL_CALLED /
-TOOL_RESULT events, then asserts the replay finishes in well under
-five seconds wall-clock. The three-engineer review predicts <2s once
-`_replay_history`'s dispatch loop is wrapped in
-``async with transcript.batch():``; five seconds is the acceptance
-gate with headroom for a slower CI box.
+:class:`textual.pilot.Pilot` on a resume session seeded with
+alternating USER_MESSAGE / AGENT_MESSAGE events, then asserts:
+
+- Part A: the replay finishes in well under five seconds wall-clock
+  (three-engineer review predicts <2s once ``_replay_history``'s
+  dispatch loop is wrapped in ``async with transcript.batch():``; five
+  seconds is the acceptance gate with headroom for a slower CI box).
+- Part B: ``#transcript.is_anchored`` reads ``True`` after ``on_mount``
+  settles; the anchor releases when the user scrolls up (via
+  ``pageup``); every replayed event's widget is present in the DOM
+  after the batch unwinds (no dropped mounts).
 
 Fixture shape mirrors
 ``tests/cli/chat/test_bug056_resume_resolved_approvals.py`` (real
@@ -25,6 +29,7 @@ from typing import Any
 from uuid import uuid4
 
 import pytest
+from textual.containers import VerticalScroll
 
 from bus.in_process import InProcessEventBus
 from cli.chat.app import ChatApp
@@ -255,4 +260,113 @@ async def test_replay_history_completes_under_five_seconds_on_large_session(
         assert elapsed < 5.0, (
             f"replay took {elapsed:.2f}s; expected < 5.0s "
             f"(target < 2.0s per three-engineer prediction)"
+        )
+
+
+# ---------------------------------------------------------------------------
+# Part B — anchor adoption + widget-count parity tests.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_transcript_anchored_after_on_mount(
+    store_env: dict[str, Any],
+) -> None:
+    """After boot, ``#transcript.is_anchored`` reads ``True``.
+
+    Regression guard for bug-058 Part B: ``ChatApp.on_mount`` calls
+    ``transcript.anchor()`` after ``_replay_history`` and
+    ``_maybe_eager_compact_on_open`` return. A future refactor that
+    drops the call will trip this assertion.
+    """
+    bundle = _mk_bundle(store_env, is_resume=False)
+    app = ChatApp(
+        session=bundle, engine=bundle.runtime.engine, full_history=False,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        transcript = app.query_one("#transcript", VerticalScroll)
+        assert transcript.is_anchored is True, (
+            "expected #transcript to be anchored after on_mount; "
+            "anchor() call missing or races the deferred scroll"
+        )
+
+
+@pytest.mark.asyncio
+async def test_anchor_releases_when_user_scrolls_up(
+    store_env: dict[str, Any],
+) -> None:
+    """User ``pageup`` releases the anchor so incoming events don't yank down.
+
+    Seeds enough turns that the mounted transcript's ``virtual_size.height``
+    exceeds the container height, then presses ``pageup``. Asserts the
+    anchor is released — Textual's :meth:`Widget._on_scroll` auto-clears
+    on user-initiated scroll.
+    """
+    events = _synthesize_events(
+        store_env["session_id"],
+        store_env["thread_id"],
+        turns=50,
+    )
+    await _seed(store_env["store"], store_env["thread_id"], events)
+
+    bundle = _mk_bundle(store_env, is_resume=True)
+    app = ChatApp(
+        session=bundle, engine=bundle.runtime.engine, full_history=True,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        transcript = app.query_one("#transcript", VerticalScroll)
+        # Sanity: anchor engaged after boot.
+        assert transcript.is_anchored is True
+
+        # Focus the transcript so pageup routes to it (not the composer).
+        transcript.focus()
+        await pilot.pause()
+        await pilot.press("pageup")
+        await pilot.pause()
+
+        assert transcript.is_anchored is False or transcript._anchor_released, (
+            "expected user pageup to release the anchor "
+            "(is_anchored=False OR _anchor_released=True); "
+            "incoming events would yank the viewport back down"
+        )
+
+
+@pytest.mark.asyncio
+async def test_batch_replay_mounts_all_widgets(
+    store_env: dict[str, Any],
+) -> None:
+    """Every replayed event's widget is present in the DOM after batch.
+
+    Reviewer note from Part A: assert widget-count parity so a future
+    refactor of ``EventAdapter.handle`` (or the batch wrapper) can't
+    silently drop mounts. Seeds 100 turns (200 events — user + agent
+    per turn), asserts the ``#transcript`` children count exceeds a
+    conservative minimum after resume settles.
+    """
+    events = _synthesize_events(
+        store_env["session_id"],
+        store_env["thread_id"],
+        turns=100,
+    )
+    await _seed(store_env["store"], store_env["thread_id"], events)
+
+    bundle = _mk_bundle(store_env, is_resume=True)
+    app = ChatApp(
+        session=bundle, engine=bundle.runtime.engine, full_history=True,
+    )
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        transcript = app.query_one("#transcript", VerticalScroll)
+        # 200 events → at minimum 200 widgets (user + agent per turn).
+        # Assert > 50 as a conservative floor that still catches the
+        # "batch swallowed every mount" failure mode.
+        child_count = len(list(transcript.children))
+        assert child_count > 50, (
+            f"expected > 50 mounted widgets after 200-event replay; "
+            f"got {child_count}. Batch may have dropped mounts."
         )

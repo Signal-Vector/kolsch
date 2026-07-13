@@ -2582,12 +2582,10 @@ class EventAdapter:
                 getattr(widget, "card_id", "<unknown>"),
             )
             return
-        # Scroll to the newly-mounted card. Best-effort — a missing
-        # `scroll_end` (non-VerticalScroll transcript) is fine.
-        try:
-            transcript.scroll_end(animate=False)
-        except Exception:  # noqa: BLE001 — some containers don't scroll
-            pass
+        # bug-058 Part B: tail-stickiness is now handled by the
+        # ``VerticalScroll.anchor()`` primitive engaged in
+        # ``ChatApp.on_mount`` (see ``widget.py:769``). No per-mount
+        # scroll_end call needed.
 
     def _handle_card_appended(
         self,
