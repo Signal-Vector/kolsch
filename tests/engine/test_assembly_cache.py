@@ -1,8 +1,7 @@
-"""feat-059 Part 1 — `AssemblyCache` unit tests.
+"""feat-059 — `AssemblyCache` and engine-wiring tests.
 
-Covers the caller-side memoisation seam in isolation: the cache
-class + tool-schemas hasher. Engine wiring lands in Part 2 and its
-integration tests (7, 8, 10 in the spec) live alongside that work.
+Covers the caller-side memoisation seam in isolation (Part 1) plus
+the engine wiring and Fermi smoke (Part 2).
 
 Tests below correspond to the numbered acceptance tests in
 `process/feat-059-assembly-projection-cache.md`:
@@ -13,15 +12,23 @@ Tests below correspond to the numbered acceptance tests in
 - Test 4 → `test_tool_schemas_hash_stable_across_dict_order`
 - Test 5 → `test_per_thread_cache_evicts_oldest_over_max`
 - Test 6 → `test_version_bump_invalidates_cache`
+- Test 7 → `test_engine_helper_reuses_projection_on_second_call`
+- Test 8 → `test_no_direct_assemble_context_calls_in_engine`
 - Test 9 → `test_two_engines_do_not_share_cache`
+- Test 10 → `test_cache_warm_is_orders_of_magnitude_faster`
 """
 
 from __future__ import annotations
 
+import time
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 from uuid import uuid4
 
+import pytest
+
+from engine import MinimalFramework
 from engine.assembly import ASSEMBLY_VERSION, assemble_context
 from engine.assembly_cache import (
     AssemblyCache,
@@ -30,6 +37,8 @@ from engine.assembly_cache import (
     hash_tool_schemas,
 )
 from schemas import Actor, Event, EventId, EventType, ThreadId
+from tests.fixtures.engine_builder import build_engine
+from tests.fixtures.mock_llm import MockLLM, TextResponse
 
 
 _TID = ThreadId(f"th_{uuid4()}")
@@ -249,3 +258,183 @@ def test_two_engines_do_not_share_cache() -> None:
     assert cache_b.get(key) is None
     assert cache_b.misses == 1
     assert cache_b.hits == 0
+
+
+# ---------------------------------------------------------------------------
+# Test 7 — engine helper reuses the projection on a second same-turn call
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_engine_helper_reuses_projection_on_second_call(
+    tmp_path: Path,
+) -> None:
+    """Two calls to ``_assemble_context_cached`` on the same events hit.
+
+    Narrower shape (documented in the Part-2 handoff): rather than
+    driving ``AgentEngine.manual_compact`` end-to-end — which needs a
+    live compaction provider, a ResolvedAgentConfig, and a session
+    with real leaf state — build an engine via the standard test
+    fixture and call the cached helper directly. Same seam, same
+    guarantee: the second call must be a hit and produce byte-
+    identical output.
+    """
+    mock = MockLLM(script=[TextResponse(text="ok")])
+    engine, _store, _am = await build_engine(
+        tmp_path,
+        mock,
+        MinimalFramework(),
+    )
+
+    events = [
+        _mk(EventType.USER_MESSAGE, {"content": {"text": "hi"}}),
+        _mk(EventType.AGENT_MESSAGE, {"content": {"text": "hello"}}),
+    ]
+    tool_schemas: list[dict[str, Any]] = []
+
+    hits_before = engine._assembly_cache.hits
+    misses_before = engine._assembly_cache.misses
+
+    first = engine._assemble_context_cached(
+        events,
+        tool_schemas=tool_schemas,
+        respect_compaction=True,
+    )
+    second = engine._assemble_context_cached(
+        events,
+        tool_schemas=tool_schemas,
+        respect_compaction=True,
+    )
+
+    # Byte-identical output (frozen model — identity check is stronger
+    # than equality, but the spec asks for byte-identical
+    # ``model_dump`` too).
+    assert first is second
+    assert first.model_dump() == second.model_dump()
+
+    # First was a miss, second was a hit.
+    assert engine._assembly_cache.misses == misses_before + 1
+    assert engine._assembly_cache.hits == hits_before + 1
+
+
+# ---------------------------------------------------------------------------
+# Test 8 — grep-based lint: no direct assemble_context calls in engine.py
+# ---------------------------------------------------------------------------
+
+
+def test_no_direct_assemble_context_calls_in_engine() -> None:
+    """``src/engine/engine.py`` may call ``assemble_context`` at most once.
+
+    Part 2 routes every projection call through
+    ``AgentEngine._assemble_context_cached``, which is the sole
+    remaining direct caller of the pure function. A regression here
+    means a new call site slipped in without going through the cache
+    and would silently reintroduce the O(n²) behaviour on that path.
+    """
+    engine_path = (
+        Path(__file__).resolve().parents[2]
+        / "src"
+        / "engine"
+        / "engine.py"
+    )
+    source = engine_path.read_text(encoding="utf-8")
+    count = source.count("assemble_context(")
+    assert count == 1, (
+        f"expected exactly one `assemble_context(` call in engine.py "
+        f"(the helper's own delegation to the pure function); "
+        f"found {count}"
+    )
+
+
+# ---------------------------------------------------------------------------
+# Test 10 — Fermi smoke: warm cache is orders of magnitude faster
+# ---------------------------------------------------------------------------
+
+
+def _synthetic_path(length: int) -> list[Event]:
+    """Build a synthetic ``length``-event path with a realistic mix.
+
+    Cycles through USER_MESSAGE, AGENT_MESSAGE, TOOL_CALLED,
+    TOOL_RESULT so the projection walks every branch of its type
+    switch. The exact payloads are minimally viable — the goal is
+    walk cost, not projection correctness.
+    """
+    events: list[Event] = []
+    for i in range(length):
+        cycle = i % 4
+        if cycle == 0:
+            events.append(_mk(
+                EventType.USER_MESSAGE,
+                {"content": {"text": f"user msg {i}"}},
+            ))
+        elif cycle == 1:
+            events.append(_mk(
+                EventType.AGENT_MESSAGE,
+                {"content": {"text": f"agent msg {i}"}},
+            ))
+        elif cycle == 2:
+            events.append(_mk(
+                EventType.TOOL_CALLED,
+                {
+                    "tool_call_id": f"tc_{i}",
+                    "tool_name": "noop",
+                    "arguments": {"n": i},
+                },
+            ))
+        else:
+            events.append(_mk(
+                EventType.TOOL_RESULT,
+                {
+                    "tool_call_id": f"tc_{i - 1}",
+                    "tool_name": "noop",
+                    "result": {"ok": True, "n": i},
+                },
+            ))
+    return events
+
+
+def test_cache_warm_is_orders_of_magnitude_faster() -> None:
+    """Warm cache lookups are >=8x faster than a cold projection walk.
+
+    Times one cold call to the pure ``assemble_context`` on a
+    500-event path, then nine warm calls that go through
+    ``AssemblyCache.get`` on the same key. The cache-warm path is a
+    dict lookup + LRU refresh; the cold path is an O(n) event walk +
+    Pydantic model construction. On a 500-event path the ratio should
+    be at least three orders of magnitude in practice; 8x is a
+    generous smoke gate that still catches "cache didn't fire" bugs.
+    """
+    events = _synthetic_path(500)
+    cache = AssemblyCache()
+    key = _Key(
+        thread_id=events[-1].thread_id,
+        leaf_event_id=events[-1].event_id,
+        tool_schemas_hash=hash_tool_schemas(None),
+        respect_compaction=True,
+        assembly_version=ASSEMBLY_VERSION,
+    )
+
+    # Cold call: walk the full 500-event path once.
+    cold_start = time.perf_counter()
+    cold_ctx = assemble_context(events, respect_compaction=True)
+    cold_elapsed = time.perf_counter() - cold_start
+    cache.put(key, cold_ctx)
+
+    # Nine warm calls — pure cache lookups.
+    warm_samples: list[float] = []
+    for _ in range(9):
+        warm_start = time.perf_counter()
+        hit = cache.get(key)
+        warm_samples.append(time.perf_counter() - warm_start)
+        assert hit is cold_ctx
+
+    warm_avg = sum(warm_samples) / len(warm_samples)
+    # Guard against clock granularity making warm_avg == 0 on very
+    # fast systems: floor at 1 ns so the ratio is well-defined.
+    warm_avg_floor = max(warm_avg, 1e-9)
+    ratio = cold_elapsed / warm_avg_floor
+    assert ratio >= 8.0, (
+        f"expected warm avg to be >=8x faster than cold; "
+        f"cold={cold_elapsed:.6f}s, warm_avg={warm_avg:.9f}s, "
+        f"ratio={ratio:.2f}x"
+    )

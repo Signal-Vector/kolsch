@@ -35,6 +35,7 @@ from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 from engine.assembly import ASSEMBLY_VERSION, assemble_context
+from engine.assembly_cache import AssemblyCache, _Key, hash_tool_schemas
 from engine.context import (
     AgentExecutionError,
     CancelToken,
@@ -75,6 +76,7 @@ if TYPE_CHECKING:
 
     from assets import AssetManagement
     from bus import EventBus
+    from engine.assembly import AssembledContext
     from engine.context import ExecutionContext
     from engine.framework import Framework, LLMRequest, LLMResponse
     from llm import ProviderConfig
@@ -176,6 +178,14 @@ class AgentEngine:
         # are long-lived (statelessness is about exchange state, not
         # in-process structural state like locks).
         self._thread_locks: dict[str, asyncio.Lock] = {}
+        # feat-059: per-engine assembly-projection cache. Keyed by
+        # ``(thread_id, leaf_event_id, tool_schemas_hash, respect_compaction,
+        # assembly_version)`` so a new event appended to the log naturally
+        # invalidates the entry via the ``leaf_event_id`` change. Reads and
+        # writes for a given thread are already serialised by
+        # ``_lock_for_thread(str(thread_id))``, which every
+        # ``assemble_context`` call site holds.
+        self._assembly_cache: AssemblyCache = AssemblyCache()
 
     # ---- Public API ----------------------------------------------------
 
@@ -340,6 +350,68 @@ class AgentEngine:
             lock = asyncio.Lock()
             self._thread_locks[thread_id] = lock
         return lock
+
+    def _assemble_context_cached(
+        self,
+        events: list[Event],
+        *,
+        tool_schemas: list[dict[str, Any]] | None = None,
+        respect_compaction: bool = True,
+    ) -> "AssembledContext":
+        """Cached wrapper over :func:`engine.assembly.assemble_context`.
+
+        feat-059: memoises the pure projection on
+        ``(thread_id, leaf_event_id, tool_schemas_hash, respect_compaction,
+        assembly_version)``. A new event appended to the thread changes the
+        leaf id, so the next call misses and re-projects with the fresh
+        path — invalidation is automatic. Empty ``events`` bypasses the
+        cache: no leaf means no stable key, and this is the trivial
+        no-history path a fresh session takes exactly once.
+
+        Callers hold ``_lock_for_thread(str(thread_id))``, so cache
+        reads/writes for a given thread are already serialised. The
+        cache's own outer lock only guards the first insert for a
+        previously-unseen thread.
+        """
+        key: _Key | None
+        if events:
+            thread_id = events[-1].thread_id
+            leaf_event_id = events[-1].event_id
+            key = _Key(
+                thread_id=thread_id,
+                leaf_event_id=leaf_event_id,
+                tool_schemas_hash=hash_tool_schemas(tool_schemas),
+                respect_compaction=respect_compaction,
+                assembly_version=ASSEMBLY_VERSION,
+            )
+            cached = self._assembly_cache.get(key)
+            if cached is not None:
+                _log.debug(
+                    "assembly_cache: %s thread=%s leaf=%s",
+                    "hit",
+                    thread_id,
+                    leaf_event_id,
+                )
+                return cached
+            _log.debug(
+                "assembly_cache: %s thread=%s leaf=%s",
+                "miss",
+                thread_id,
+                leaf_event_id,
+            )
+        else:
+            # Trivial no-history case: no leaf, no stable cache key.
+            # Delegate to the pure function below and skip caching.
+            key = None
+
+        value = assemble_context(
+            events,
+            tool_schemas=tool_schemas,
+            respect_compaction=respect_compaction,
+        )
+        if key is not None:
+            self._assembly_cache.put(key, value)
+        return value
 
     async def manual_compact(
         self,
@@ -546,7 +618,7 @@ class AgentEngine:
         ) or {}
         # Estimate current projection tokens using the same tiktoken
         # helper the per-exchange trigger uses.
-        preview = assemble_context(
+        preview = self._assemble_context_cached(
             events,
             tool_schemas=tool_schemas,
             respect_compaction=True,
@@ -1772,7 +1844,7 @@ class _Exchange:
         # summariser failure — Phase 4 introduces the retry ladder.
         events = await self._maybe_compact_events(events, tool_schemas)
 
-        assembled = assemble_context(
+        assembled = self.engine._assemble_context_cached(
             events,
             tool_schemas=tool_schemas,
         )
@@ -2037,7 +2109,7 @@ class _Exchange:
             {},
         ) or {}
         # Preview projection: what would the model see today?
-        preview = assemble_context(
+        preview = self.engine._assemble_context_cached(
             events,
             tool_schemas=tool_schemas,
             respect_compaction=True,
