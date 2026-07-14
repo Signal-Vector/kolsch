@@ -128,7 +128,20 @@ async def test_run_start_node_complete_run_complete_flow(mock_app_factory) -> No
 
 
 @pytest.mark.asyncio
-async def test_node_failed_shows_truncated_error(mock_app_factory) -> None:
+async def test_node_failed_error_lands_in_error_section(mock_app_factory) -> None:
+    """bug-063 — full error lives in the Error NodeSection body.
+
+    REWRITTEN from ``test_node_failed_shows_truncated_error`` which
+    asserted the error tail-appended (truncated) to ``row.title``.
+    The new contract: title carries only a short marker; the FULL
+    error (un-re-truncated) lives in the Error NodeSection body. A
+    future regression that re-adds truncated error-in-title would
+    fail this test.
+    """
+    from textual.widgets import Collapsible, Static
+
+    from cli.chat.widgets.node_section import NodeSection
+
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
     async with app.run_test() as pilot:
@@ -155,10 +168,26 @@ async def test_node_failed_shows_truncated_error(mock_app_factory) -> None:
 
         row = renderer._node_rows["b"]
         assert row.state == "failed"
-        # "oops" prefix survives truncation.
-        assert "oops" in row.title
-        # Truncated: no full 200-char string in the title.
+        # Short marker only in the title — the pre-bug-063 truncated
+        # preview is gone. Full error is nowhere in the title.
+        assert "✗" in row.title
+        assert "b" in row.title
         assert long_err not in row.title
+        # Even the "oops" prefix should not be in the title anymore —
+        # only the node name + glyph.
+        assert "oops" not in row.title
+        # Full error lands in the Error NodeSection body,
+        # un-re-truncated.
+        contents = row.query_one(Collapsible.Contents)
+        sections = list(contents.query(NodeSection))
+        error_sections = [s for s in sections if "error" in str(s.title)]
+        assert len(error_sections) == 1
+        body = "\n".join(
+            str(getattr(child, "content", "") or child.render())
+            for child in error_sections[0].walk_children()
+            if isinstance(child, Static)
+        )
+        assert long_err in body
 
 
 @pytest.mark.asyncio

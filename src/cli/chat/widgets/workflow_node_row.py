@@ -90,6 +90,24 @@ _BASH_BLOCK_MAX_CHARS = 500
 """bug-034: per-block soft cap for stdout / stderr."""
 
 
+_FAILED_OUTPUT_EMPTY_NOTE = "(no output — node failed before producing a result)"
+"""bug-063: exact body text for the Output section on a failed node.
+
+The Coordinator pinned this string so tests can assert on it via the
+module-level constant. ``node.failed`` payloads carry no output, so the
+Output section is always mounted with this note on a failure.
+"""
+
+
+_FAILED_INPUT_EMPTY_NOTE = "(no bound inputs recorded for this node)"
+"""bug-063: body text when a failed node's ``_bound_inputs`` is empty.
+
+Rare — a node that failed before ``NODE_STARTED`` delivered inputs. The
+Input section is still mounted (for parity with Output) so the failure's
+three-section shape stays consistent.
+"""
+
+
 def _truncate(text: str, max_chars: int) -> str:
     """Tail-truncate ``text`` at ``max_chars`` with an ellipsis marker."""
     if len(text) <= max_chars:
@@ -189,6 +207,23 @@ def _render_bash_input_body(
         lines.append("")
     lines.append("command:")
     lines.append(_truncate(command, 500))
+    return "\n".join(lines)
+
+
+def _render_bound_inputs_body(bound_inputs: dict[str, Any]) -> str:
+    """bug-063: render a generic Input section body from bound inputs.
+
+    Used on the failure path for node types (e.g. agent) that lack a
+    reusable bound-inputs section. Mirrors the ``bound inputs:`` block
+    from :func:`_render_bash_input_body` but without the trailing
+    ``command:`` block. Empty inputs render as the empty-note constant
+    so a failed row always shows a populated Input section.
+    """
+    if not bound_inputs:
+        return _FAILED_INPUT_EMPTY_NOTE
+    lines: list[str] = ["bound inputs:"]
+    for key, value in bound_inputs.items():
+        lines.append(f"· {key}: {_format_input_value(value)}")
     return "\n".join(lines)
 
 
@@ -299,6 +334,14 @@ class WorkflowNodeRow(Collapsible):
         self._bash_exit_section: Widget | None = None
         self._tool_sections: dict[str, Widget] = {}
         self._tool_blocks: dict[str, Widget] = {}
+        # bug-063: failure-path Input/Output/Error sections. Mounted
+        # once when the row transitions to ``failed``; the references
+        # let tests introspect them and guard against double-mount if
+        # ``set_state("failed", ...)`` is called more than once.
+        self._failure_input_section: Widget | None = None
+        self._failure_output_section: Widget | None = None
+        self._failure_error_section: Widget | None = None
+        self._failure_sections_mounted: bool = False
         self._node_started_at: datetime | None = None
         self._node_completed_at: datetime | None = None
         self._node_duration_ms: float | None = None
@@ -370,13 +413,22 @@ class WorkflowNodeRow(Collapsible):
         details: str | None = None,
         error_preview: str | None = None,
     ) -> None:
-        """Transition the row to `state`; refresh title + CSS."""
+        """Transition the row to `state`; refresh title + CSS.
+
+        bug-063: on a transition to ``failed``, mount three peer
+        chevron sections (Input / Output / Error) so the failure is
+        inspectable with the same affordances a successful node
+        gives. The mount is idempotent — repeat ``set_state("failed")``
+        calls do NOT re-mount.
+        """
         if details is not None:
             self._details = details
         if error_preview is not None:
             self._error_preview = error_preview
         self.state = state
         self._update_title()
+        if state == "failed":
+            self._mount_failure_sections()
 
     def set_output(self, output: Any) -> None:
         """bug-032 + bug-034 + bug-037: mount output section(s).
@@ -502,6 +554,72 @@ class WorkflowNodeRow(Collapsible):
             with contextlib.suppress(Exception):
                 self._mount_in_contents(exit_section)
             self._bash_exit_section = exit_section
+
+    def _mount_failure_sections(self) -> None:
+        """bug-063: mount Input / Output / Error sections on a failed row.
+
+        Called from :meth:`set_state` when the row transitions to
+        ``failed``. Mounts three peer chevron sections in order
+        (Input → Output → Error) matching the "After" mockup in
+        the bug-063 spec. All three use :class:`NodeSection` so they
+        share the identical chevron style used by input / output /
+        response / tool sections on a successful node.
+
+        Idempotent — the ``_failure_sections_mounted`` latch prevents
+        a repeat ``set_state("failed")`` from duplicating sections.
+        The Input section is skipped only for map rows (which have
+        their own iteration-row layout, no bound-inputs semantics).
+        """
+        if self._failure_sections_mounted:
+            return
+        # Map rows own an iteration-row layout, not a per-row
+        # input/output/error surface. Skip the failure sections there
+        # so we don't disrupt the map contents shape.
+        if self._node_type == "kolsch/nodes/map":
+            self._failure_sections_mounted = True
+            return
+        from cli.chat.widgets.node_section import NodeSection  # noqa: PLC0415
+        # --- Input section ---------------------------------------------------
+        # bug-037 already builds a bash `input` section on
+        # `set_command_preview`. If it exists, keep it — no need to
+        # mount a second one. Otherwise, mount a generic Input from
+        # `_bound_inputs` (this is the NEW render for agent nodes,
+        # which have no reusable bound-inputs section).
+        if self._bash_input_section is None:
+            input_body = _render_bound_inputs_body(self._bound_inputs)
+            input_section = NodeSection("input")
+            input_section._contents_list.append(
+                Static(input_body, markup=False),
+            )
+            with contextlib.suppress(Exception):
+                self._mount_in_contents(input_section)
+            self._failure_input_section = input_section
+        else:
+            # Reuse the bash-side input section as the failure Input.
+            self._failure_input_section = self._bash_input_section
+        # --- Output section --------------------------------------------------
+        # `set_output` is not reached on the failure path — `node.failed`
+        # payloads carry no output. Mount an Output section with the
+        # empty-note constant so the failed row always shows the three
+        # peer sections.
+        output_section = NodeSection("output")
+        output_section._contents_list.append(
+            Static(_FAILED_OUTPUT_EMPTY_NOTE, markup=False),
+        )
+        with contextlib.suppress(Exception):
+            self._mount_in_contents(output_section)
+        self._failure_output_section = output_section
+        # --- Error section ---------------------------------------------------
+        # `_error_preview` holds the FULL error string (only
+        # `_update_title` truncated it pre-bug-063). Use it directly —
+        # do NOT re-truncate.
+        error_body = self._error_preview or "(no error message)"
+        error_section = NodeSection("error", state="failed")
+        error_section._contents_list.append(Static(error_body, markup=False))
+        with contextlib.suppress(Exception):
+            self._mount_in_contents(error_section)
+        self._failure_error_section = error_section
+        self._failure_sections_mounted = True
 
     def _bash_exit_title(self, exit_code: Any) -> str:
         code_part = f"exit: {exit_code}" if exit_code is not None else "exit"
@@ -909,14 +1027,24 @@ class WorkflowNodeRow(Collapsible):
                 loop.create_task(self._drain_pending_mounts())
 
     def _update_title(self) -> None:
-        """Refresh the collapsed title from state + details + count."""
+        """Refresh the collapsed title from state + details + count.
+
+        bug-063: on ``failed`` the title carries ONLY the state glyph
+        and node name (``✗ <node>``) — the full error moved into the
+        Error ``NodeSection`` body (see
+        :meth:`_mount_failure_sections`). Pre-bug-063 the title
+        tail-appended a 60-char muted preview which read as a detail
+        rather than a first-class failure surface.
+        """
         if self.state in _ANIMATED_STATES:
             glyph = _SPINNER_FRAMES[self._frame_idx]
         else:
             glyph = self.STATE_GLYPHS.get(self.state, "?")
         base = f"{glyph} {self._node_name}"
-        if self.state == "failed" and self._error_preview:
-            base += f"   {self._truncate_preview(self._error_preview)}"
+        if self.state == "failed":
+            # bug-063: full error moved to Error section body; keep
+            # only the state glyph + node name as a short marker.
+            pass
         elif self._details:
             base += f"   {self._details}"
         elif self._short_type:

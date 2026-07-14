@@ -93,3 +93,34 @@ async def test_node_row_spinner_stops_at_terminal_state(
         )
         # Handle cleared.
         assert row._spinner_handle is None
+
+
+@pytest.mark.asyncio
+async def test_spinner_stops_on_node_failed(mock_app_factory) -> None:
+    """bug-063 VERIFY — ``node.failed`` transitions stop the spinner.
+
+    ``failed`` is a terminal state; ``watch_state`` clears the
+    spinner interval when the new state leaves ``_ANIMATED_STATES``.
+    Guards the "spinner keeps waking on a failed row" regression.
+    NO new production code — this test verifies existing behavior.
+    """
+    row = WorkflowNodeRow(node_name="identify_missing")
+    app = mock_app_factory(row)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        row.set_state("running")
+        await pilot.pause(0.1)
+
+        # Transition to failed — the terminal failure kind.
+        row.set_state("failed", error_preview="boom")
+        await pilot.pause()
+
+        assert row.state == "failed"
+        # Static ``✗`` glyph — no spinner frame.
+        assert "✗" in row.title
+        assert not any(f in row.title for f in _SPINNER_FRAMES), (
+            f"failed-state row {row.title!r} still carries a "
+            f"spinner frame — ``watch_state`` didn't stop the timer."
+        )
+        # Handle cleared.
+        assert row._spinner_handle is None

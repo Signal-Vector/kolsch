@@ -168,3 +168,106 @@ async def test_renderer_stops_ticking_after_terminal(
         # ``_is_terminal`` flag set; tick handle stopped.
         assert renderer._is_terminal is True
         assert renderer._tick_handle is None
+
+
+@pytest.mark.asyncio
+async def test_renderer_stops_ticking_after_run_failed(
+    mock_app_factory,
+) -> None:
+    """bug-063 VERIFY — ``run.failed`` also flips ``_is_terminal``.
+
+    RUN_FAILED is in ``_TERMINAL_RUN_KINDS`` alongside RUN_COMPLETED
+    (see ``card_body/workflow.py``). This test guards that the
+    failure-side terminal path uses the same tick-stop machinery as
+    the completion path. NO new production code.
+    """
+    renderer = WorkflowRenderer()
+    app = mock_app_factory(renderer)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        started_at = datetime.now(tz=UTC)
+        renderer.apply_event(_MockEvent(
+            _WIRE,
+            _mk_run_started_payload(started_at),
+        ))
+        await pilot.pause()
+
+        # Feed a RUN_FAILED terminal event.
+        renderer.apply_event(_MockEvent(
+            _WIRE,
+            {
+                "run_id": "wrk_ticks",
+                "workflow_ref": "kolsch/workflows/ticks",
+                "kind": WorkflowEventKind.RUN_FAILED.value,
+                "event_id": "ev_ticks_failed",
+                "ts": datetime.now(tz=UTC).isoformat(),
+                "trace_id": "tr_ticks",
+                "payload": {},
+            },
+        ))
+        await pilot.pause()
+
+        assert renderer._is_terminal is True
+        assert renderer._tick_handle is None
+
+
+@pytest.mark.asyncio
+async def test_node_failed_alone_does_not_freeze_card(
+    mock_app_factory,
+) -> None:
+    """bug-063 GUARDRAIL — ``node.failed`` alone must NOT freeze the card.
+
+    The card timer is RUN-level; freezing on a single node's failure
+    would misreport a multi-node run (e.g. under future continue-on-
+    failure semantics). This test prevents anyone from adding a
+    tempting "freeze on node.failed" widget-side hack. If the
+    renderer starts setting ``_is_terminal`` on ``NODE_FAILED``, this
+    test fails loudly.
+
+    Runs a NODE_STARTED → NODE_FAILED sequence WITHOUT a subsequent
+    RUN_FAILED and asserts the card tick is still live.
+    """
+    renderer = WorkflowRenderer()
+    app = mock_app_factory(renderer)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        started_at = datetime.now(tz=UTC)
+        renderer.apply_event(_MockEvent(
+            _WIRE,
+            _mk_run_started_payload(started_at),
+        ))
+        renderer.apply_event(_MockEvent(
+            _WIRE,
+            {
+                "run_id": "wrk_ticks",
+                "workflow_ref": "kolsch/workflows/ticks",
+                "kind": WorkflowEventKind.NODE_STARTED.value,
+                "event_id": "ev_node_started",
+                "ts": datetime.now(tz=UTC).isoformat(),
+                "trace_id": "tr_ticks",
+                "invocation_id": "inv_a",
+                "node_name": "a",
+                "payload": {},
+            },
+        ))
+        renderer.apply_event(_MockEvent(
+            _WIRE,
+            {
+                "run_id": "wrk_ticks",
+                "workflow_ref": "kolsch/workflows/ticks",
+                "kind": WorkflowEventKind.NODE_FAILED.value,
+                "event_id": "ev_node_failed",
+                "ts": datetime.now(tz=UTC).isoformat(),
+                "trace_id": "tr_ticks",
+                "invocation_id": "inv_a",
+                "node_name": "a",
+                "payload": {"error_message": "boom"},
+            },
+        ))
+        await pilot.pause()
+
+        # Card tick is STILL live — node.failed alone must not freeze.
+        assert renderer._is_terminal is False
+        assert renderer._tick_handle is not None

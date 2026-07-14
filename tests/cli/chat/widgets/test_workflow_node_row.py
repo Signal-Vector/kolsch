@@ -71,17 +71,45 @@ async def test_completed_state_with_details(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_failed_state_with_truncated_error(mock_app_factory) -> None:
+async def test_failed_state_error_in_section_not_title(mock_app_factory) -> None:
+    """bug-063 — full error moved from row title to Error NodeSection body.
+
+    REWRITTEN from ``test_failed_state_with_truncated_error`` which
+    asserted the error tail-appended to ``row.title``. The new
+    contract: title carries ONLY the ``✗ <node>`` short marker; the
+    full (un-re-truncated) error lives in a peer Error NodeSection.
+    A future regression that re-adds a title-truncated preview would
+    fail this test.
+    """
+    from textual.widgets import Collapsible, Static
+
+    from cli.chat.widgets.node_section import NodeSection
+
     row = WorkflowNodeRow(node_name="x")
     app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
         row.set_state("failed", error_preview="RegistryError: bad")
         await pilot.pause()
+
+        # Row-level state + glyph unchanged from pre-bug-063.
         assert row.state == "failed"
         assert "✗" in row.title
         assert "-failed" in row.classes
-        assert "RegistryError" in row.title
+        # Title carries a SHORT marker only — no full error text.
+        assert "RegistryError" not in row.title
+        assert "bad" not in row.title
+        # Full error lives in the Error NodeSection body.
+        contents = row.query_one(Collapsible.Contents)
+        sections = list(contents.query(NodeSection))
+        error_sections = [s for s in sections if "error" in str(s.title)]
+        assert len(error_sections) == 1
+        body = "\n".join(
+            str(getattr(child, "content", "") or child.render())
+            for child in error_sections[0].walk_children()
+            if isinstance(child, Static)
+        )
+        assert "RegistryError: bad" in body
 
 
 @pytest.mark.asyncio
