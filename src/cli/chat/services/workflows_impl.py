@@ -523,6 +523,22 @@ class WorkflowsImpl(AbstractWorkflows):
         if record is not None:
             anchor = record.started_at or record.created_at
             elapsed = (datetime.now(tz=UTC) - anchor).total_seconds()
+            # bug-066: derive the canonical on-disk id from
+            # ``record.run_dir.root.name`` — the ``wrk_<uuid>`` that
+            # keys ``runs/<...>/`` on disk (owns ``meta.json`` /
+            # ``events.jsonl`` / ``pid`` / ``cancel.flag``). Distinct
+            # from the registry ``run_id`` because the executor's
+            # ``WorkflowRunStore.create`` mints its own id inside the
+            # factory, after ``start()`` has already returned the
+            # queue-time registry id to the caller. ``run_dir`` is
+            # populated at ``_run_one_workflow`` after executor
+            # construction — so this stays ``None`` while the run is
+            # still ``queued`` (no on-disk dir yet), which is
+            # accurate: there is nothing under ``runs/`` to correlate
+            # against yet.
+            on_disk_run_id: WorkflowRunId | None = None
+            if record.run_dir is not None:
+                on_disk_run_id = WorkflowRunId(record.run_dir.root.name)
             return WorkflowRunStatusView(
                 run_id=run_id,
                 phase=record.phase,
@@ -537,6 +553,8 @@ class WorkflowsImpl(AbstractWorkflows):
                 # ``run_workflow`` tool sees the terminal payload as
                 # soon as ``_drain_workflow_bridge`` caches it.
                 outputs=record.outputs,
+                # bug-066: canonical on-disk identifier — see above.
+                on_disk_run_id=on_disk_run_id,
             )
         # Cold-read: neither the registry nor the store may know the run.
         return self._status_from_meta_and_tail(
@@ -1460,6 +1478,12 @@ class WorkflowsImpl(AbstractWorkflows):
             # bug-031: cold-read outputs — populated when the JSONL
             # tail carries a ``workflow.run.completed`` row.
             outputs=terminal_outputs,
+            # bug-066: on cold-read the ``run_id`` the caller passed
+            # IS the on-disk id (that's the only way ``meta.json``
+            # was found). Echo it back so callers reading
+            # ``on_disk_run_id`` uniformly get the canonical id
+            # regardless of which lookup path served the view.
+            on_disk_run_id=run_id,
         )
 
     # ------------------------------------------------------------------

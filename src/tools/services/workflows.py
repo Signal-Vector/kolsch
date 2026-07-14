@@ -152,6 +152,24 @@ class WorkflowRunStatusView:
             blocking ``run_workflow`` tool can return the outputs in
             the same turn — closing the "workflow completes, model
             silent 12 min" symptom from session ses_af5980ab.
+        on_disk_run_id: The **canonical on-disk identifier** — the
+            ``wrk_<uuid>`` that keys ``runs/<on_disk_run_id>/`` (owns
+            ``meta.json`` / ``events.jsonl`` / ``pid`` /
+            ``cancel.flag``). Distinct from ``run_id`` because the
+            chat's ``WorkflowsImpl`` registry mints its own
+            queue-time id at ``start()`` (before the executor's
+            ``WorkflowRunStore.create`` mints the on-disk id). Both
+            share the ``wrk_<uuid>`` shape so a prefix grep cannot
+            disambiguate them — operators must use this field to
+            correlate a status view with its on-disk artefacts.
+            ``None`` when the run is still queued (executor not
+            constructed yet, no on-disk dir) or on cold-read /
+            registry-unknown paths where the lookup key was already
+            the on-disk id (in which case ``run_id`` and
+            ``on_disk_run_id`` coincide — populated to the same
+            value for uniformity). Added by bug-066 to close the
+            "workflow_status echoes an id that isn't in ``runs/``"
+            correlation defect.
     """
 
     run_id: WorkflowRunId
@@ -165,6 +183,8 @@ class WorkflowRunStatusView:
     failed_node: str | None = None
     # bug-031: terminal-outputs dict — see dataclass docstring.
     outputs: dict[str, Any] | None = None
+    # bug-066: canonical on-disk identifier — see dataclass docstring.
+    on_disk_run_id: WorkflowRunId | None = None
 
 
 # ---------------------------------------------------------------------------

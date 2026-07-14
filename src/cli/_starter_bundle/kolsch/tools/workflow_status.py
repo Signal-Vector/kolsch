@@ -89,6 +89,21 @@ async def workflow_status(
         # returns the outputs dict. On a live/in-flight run this is
         # ``None`` — call this tool again once the phase flips.
         "outputs": status.outputs,
+        # bug-066: the canonical on-disk identifier. The registry
+        # ``run_id`` (above) is the in-memory queue-time id — it may
+        # not correlate with anything under ``runs/`` because the
+        # executor's ``WorkflowRunStore.create`` mints its own id.
+        # ``on_disk_run_id`` is the ``wrk_<uuid>`` that keys
+        # ``runs/<on_disk_run_id>/`` (``meta.json`` /
+        # ``events.jsonl`` / ``pid`` / ``cancel.flag``) — this is
+        # the id operators should ``ls runs/`` or ``kolsch workflows
+        # tail`` with. ``None`` while the run is still ``queued`` —
+        # poll again after the executor starts.
+        "on_disk_run_id": (
+            str(status.on_disk_run_id)
+            if status.on_disk_run_id is not None
+            else None
+        ),
         "_chat_anchor": {
             "kind": "workflow_card",
             "run_id": str(status.run_id),
