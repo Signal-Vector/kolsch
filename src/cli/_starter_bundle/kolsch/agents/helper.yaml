@@ -11,8 +11,8 @@ description: A friendly general-purpose helper agent.
 
 io: { mode: conversational }
 
-# Context files inlined into the system prompt at agent-load. Both
-# entries use the `kolsch:` prefix and resolve via
+# Context files inlined into the system prompt at agent-load. The
+# entry uses the `kolsch:` prefix and resolves via
 # `importlib.resources.files("kolsch")` against the installed kolsch
 # package — no per-workspace setup required. Add
 # `workspace:`-prefixed entries to surface your own docs to the
@@ -20,9 +20,6 @@ io: { mode: conversational }
 context_files:
   - path: kolsch:docs/index.md
     summary: Master index of all Kolsch documentation.
-    primary: true
-  - path: kolsch:AGENTS.md
-    summary: Operating rules for AI agents working in this codebase.
     primary: true
 
 # Per-agent permission rules. These OVERRIDE the workspace's

@@ -127,6 +127,31 @@ prompt: |
   {% endfor %}
 ```
 
+### Primary-tier hygiene
+
+When declaring `context_files:` entries, the `primary: true` flag means
+the file's full content is inlined into every system prompt on every LLM
+call. Follow these rules:
+
+- **Small, always-relevant docs only** — keep `primary: true` for files
+  under ~8 KB that are genuinely useful on every exchange (an index,
+  hard rules, a quick-reference).
+- **Larger/reference docs go secondary** — omit `primary:` (defaults to
+  `false`) so the doc appears as a path + summary in the "Also
+  available" list. The agent reads it on demand via `read_file` when
+  needed.
+- **Sandbox reachability caveat** — secondary/on-demand only works when
+  the doc is reachable by `read_file` from the agent's workspace
+  sandbox. A `kolsch:` package doc (e.g. `kolsch:AGENTS.md`) resolves
+  to the installed package path, which is **outside** the agent's
+  workspace sandbox — `read_file` cannot open it. Such docs must be
+  either primary (if small and relevant) or omitted entirely; never
+  secondary.
+- **The contributor guide (AGENTS.md) is not operator knowledge** — it
+  describes how to develop kolsch (dev containers, commit gates, mypy
+  rules), not how kolsch works. It should not appear in any runtime
+  agent's context.
+
 ### `skills`
 
 The agent's enabled skill set (per `subsystems.skills.config.enabled`

@@ -14,23 +14,11 @@ description: |
 
 io: { mode: conversational }
 
-# Context files inlined into the system prompt at agent-load. The
-# two `kolsch:` paths resolve via
-# `importlib.resources.files("kolsch")` against the installed kolsch
-# package — no per-workspace setup required.
-context_files:
-  - path: kolsch:docs/explanation/workflow-foundation.md
-    summary: Locked cross-phase foundation decisions for workflow design.
-    primary: true
-  - path: kolsch:docs/reference/workflow-yaml.md
-    summary: |
-      Field-by-field reference for the workflow YAML — top-level
-      shape, every built-in node type, edges / binds / branches,
-      modifiers. This replaced ``docs/workflows.md`` after the
-      docs-reorg (repo commit ``abc4142``); mkdocs strict-mode
-      surfaced the legacy file's duplicate anchors and it was
-      deleted in favour of this canonical reference.
-    primary: true
+# Context files: the kolsch: workflow reference docs are too large
+# for primary inlining (~27 KB each) and are not read_file-reachable
+# from the agent's workspace sandbox, so they are not listed here.
+# The author-workflow skill carries the primary authoring knowledge.
+context_files: []
 
 # Per-agent permission rules. The default kolsch `bash` policy is
 # `prompt`; reaffirm it here so an operator who has widened the
