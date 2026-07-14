@@ -18,6 +18,7 @@ import logging
 import os
 import threading
 import weakref
+from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from concurrent.futures.thread import _threads_queues, _worker
 from datetime import datetime
@@ -161,6 +162,77 @@ def _resolve_css_path() -> str:
     """
     theme = "mono.tcss" if os.environ.get("NO_COLOR") is not None else "theme.tcss"
     return str(_THEMES_DIR / theme)
+
+
+# bug-067 — shutdown-watchdog backstop. spec-069 (owned daemon executor +
+# bounded LLM/network reads + node timeouts) is the primary fix for the
+# `Py_Finalize → ThreadHandle_join` hang; the watchdog exists so a
+# hung teardown from an unforeseen wedge (third-party thread we cannot
+# daemonize, unbounded native call, wedged asyncio task) can never again
+# strand a `kolsch chat` process for hours.
+#
+# Design:
+#   * Armed at the top of `ChatApp.on_unmount`; disarmed at the end
+#     after every `aclose()` + the owned-executor shutdown succeeded.
+#   * Uses a `threading.Timer` (daemon thread) — reliable across any
+#     teardown-path wedge, including a hung event loop or a hung main
+#     thread. Neither a signal-based `SIGALRM` (Windows-hostile,
+#     conflicts with other handlers) nor an asyncio-scheduled callback
+#     (dies if the loop itself wedges) has that property.
+#   * On expiry the callback calls the module-level `_EXIT_HOOK`
+#     (`os._exit` in production, a spy in tests). It deliberately
+#     does NOT attempt a graceful sqlite `conn.close()` / WAL
+#     checkpoint (that is the exact step spec-069's Technical Context
+#     identifies as hangable) and does NOT `join()` non-daemon workers.
+#     Store contract makes `os._exit` safe: JSONL append is
+#     `O_APPEND + flock + fsync` (recoverable via
+#     `recover_partial_final_line` on next read); sqlite is WAL
+#     autocommit so every statement is durable on disk and WAL
+#     recovery handles an abrupt exit.
+#   * Window default is 5s (matches spec-069 AC5's ≤5s teardown
+#     target); overridable via `KOLSCH_SHUTDOWN_WATCHDOG_SECONDS`
+#     (float; blank / `0` / negative disables the watchdog entirely,
+#     restoring the pre-bug-067 behaviour).
+_DEFAULT_SHUTDOWN_WATCHDOG_SECONDS: float = 5.0
+
+
+def _read_shutdown_watchdog_seconds() -> float | None:
+    """Return the watchdog window in seconds, or `None` if disabled.
+
+    `None` means "do not arm the watchdog" — mirrors the shape of
+    `_read_llm_call_timeout_seconds` in `engine/_crewai_adapter.py`.
+    """
+    raw = os.environ.get("KOLSCH_SHUTDOWN_WATCHDOG_SECONDS")
+    if raw is None:
+        return _DEFAULT_SHUTDOWN_WATCHDOG_SECONDS
+    stripped = raw.strip()
+    if not stripped:
+        return None
+    try:
+        value = float(stripped)
+    except ValueError:
+        return _DEFAULT_SHUTDOWN_WATCHDOG_SECONDS
+    if value <= 0:
+        return None
+    return value
+
+
+# Module-level exit hook, injectable for tests. Production: `os._exit`
+# (fast exit — no atexit hooks, no interpreter finalization = no
+# thread-join hang). Tests install a spy via `_set_exit_hook` to assert
+# firing without actually killing the pytest process.
+_EXIT_HOOK: Callable[[int], None] = os._exit
+
+
+def _set_exit_hook(hook: Callable[[int], None]) -> None:
+    """Install a replacement exit hook (test seam).
+
+    Prod code MUST NOT call this — the default `os._exit` is what
+    makes the fast-exit path safe (no atexit → no thread-join hang).
+    Tests use this to swap in a spy.
+    """
+    global _EXIT_HOOK  # noqa: PLW0603 — module-level test seam
+    _EXIT_HOOK = hook
 
 
 _ESC_TOAST_SECONDS = 3.0
@@ -581,6 +653,21 @@ class ChatApp(App):
         # if the loop already had a non-default executor set from
         # outside the app, or the install raised).
         self._owned_executor: ThreadPoolExecutor | None = None
+        # bug-067 — shutdown watchdog. Armed at the top of
+        # `on_unmount`; disarmed at the bottom after every service
+        # `aclose()` + owned-executor shutdown returned. If teardown
+        # overruns the window (default 5s, tunable via
+        # `KOLSCH_SHUTDOWN_WATCHDOG_SECONDS`) the timer's daemon
+        # thread fires `_EXIT_HOOK` (`os._exit` in prod) so the
+        # process exits promptly even when spec-069's defenses miss
+        # a wedge (unforeseen third-party thread, hung asyncio task).
+        # `_shutdown_watchdog_fired` is the disarm race guard: if
+        # the timer fires the SAME tick we call `.cancel()` on it,
+        # `_shutdown_watchdog_fired` remains False and the callback
+        # skips the exit — a cleanly torn-down app must never be
+        # force-exited.
+        self._shutdown_watchdog_timer: threading.Timer | None = None
+        self._shutdown_watchdog_disarmed: bool = False
 
     # ------------------------------------------------------------------
     # Compose
@@ -1206,6 +1293,114 @@ class ChatApp(App):
             return
         self._owned_executor = pool
 
+    def _arm_shutdown_watchdog(self) -> None:
+        """Arm the bug-067 shutdown watchdog.
+
+        Called at the top of `on_unmount`. If graceful teardown does
+        not disarm this timer within the configured window, the
+        timer's daemon thread invokes `_EXIT_HOOK` (production:
+        `os._exit(1)`) to force-exit the process.
+
+        Idempotent: a second arm before disarm is a no-op (the first
+        timer keeps running).
+
+        No-op when the environment disables the watchdog
+        (`KOLSCH_SHUTDOWN_WATCHDOG_SECONDS` set to blank / `0` /
+        negative) — restores pre-bug-067 behaviour, where a wedged
+        teardown can hang forever. Also no-op when the timer library
+        raises (unlikely — `threading.Timer` is pure Python).
+        """
+        if self._shutdown_watchdog_timer is not None:
+            # Already armed. Second arm is a no-op — the first timer
+            # is still running against the same disarm signal.
+            return
+        window = _read_shutdown_watchdog_seconds()
+        if window is None:
+            _LOGGER.debug(
+                "ChatApp._arm_shutdown_watchdog: disabled via env; skipping",
+            )
+            return
+        self._shutdown_watchdog_disarmed = False
+        try:
+            timer = threading.Timer(window, self._on_shutdown_watchdog_fire)
+            timer.daemon = True
+            timer.name = "kolsch-shutdown-watchdog"
+            timer.start()
+        except Exception:  # noqa: BLE001 — best-effort backstop
+            _LOGGER.debug(
+                "ChatApp._arm_shutdown_watchdog: timer install skipped",
+                exc_info=True,
+            )
+            return
+        self._shutdown_watchdog_timer = timer
+
+    def _disarm_shutdown_watchdog(self) -> None:
+        """Disarm the bug-067 shutdown watchdog.
+
+        Called at the end of `on_unmount` after every `aclose()` and
+        the owned-executor shutdown returned. Sets the "disarmed"
+        flag BEFORE cancelling the timer so a race — the timer fires
+        the same tick we call `.cancel()` — is caught by the
+        callback and short-circuits the exit.
+
+        Idempotent and safe when the watchdog was never armed
+        (headless CLI, tests that don't invoke `on_unmount`).
+        """
+        self._shutdown_watchdog_disarmed = True
+        timer = self._shutdown_watchdog_timer
+        if timer is None:
+            return
+        try:
+            timer.cancel()
+        except Exception:  # noqa: BLE001 — best-effort disarm
+            _LOGGER.debug(
+                "ChatApp._disarm_shutdown_watchdog: cancel skipped",
+                exc_info=True,
+            )
+        finally:
+            self._shutdown_watchdog_timer = None
+
+    def _on_shutdown_watchdog_fire(self) -> None:
+        """Watchdog expiry callback (runs on the Timer's daemon thread).
+
+        DELIBERATELY minimal work:
+
+        * Checks the "disarmed" flag first — a cleanly torn-down app
+          must never be force-exited (AC2). If teardown finished
+          between the timer's alarm and this callback's entry, the
+          flag is True and we return without calling the exit hook.
+        * If we do proceed, calls `_EXIT_HOOK(1)` (production
+          `os._exit(1)` — non-zero to signal abnormal exit; tests
+          install a spy).
+
+        The exit hook must NOT attempt a graceful sqlite
+        `conn.close()` / WAL checkpoint (AC3) — the spec's
+        Technical Context flags that as the exact step that could
+        hang. It must NOT `join()` non-daemon workers for the same
+        reason. Store contract makes `os._exit` safe: JSONL append
+        is `O_APPEND + flock + fsync` (recoverable on next read via
+        `recover_partial_final_line`); sqlite is WAL autocommit so
+        every statement is already durable — WAL recovery handles
+        an abrupt exit cleanly (AC4).
+        """
+        if self._shutdown_watchdog_disarmed:
+            return
+        _LOGGER.warning(
+            "ChatApp shutdown watchdog fired — teardown exceeded "
+            "the bounded window; force-exiting via os._exit(1) to "
+            "avoid a Py_Finalize hang.",
+        )
+        try:
+            _EXIT_HOOK(1)
+        except Exception:  # noqa: BLE001 — last-resort backstop
+            # The exit hook raised. Nothing else we can meaningfully
+            # do from a daemon thread — swallow so the logging above
+            # is preserved.
+            _LOGGER.debug(
+                "ChatApp shutdown watchdog: exit hook raised",
+                exc_info=True,
+            )
+
     async def on_unmount(self) -> None:
         """Clear the modal registration on exit + tear down services.
 
@@ -1227,6 +1422,30 @@ class ChatApp(App):
         guarantees no non-daemon worker can block `Py_Finalize`.
         Skipped when no executor was installed (`_owned_executor is
         None`, e.g. headless fixtures that never called `on_mount`).
+
+        bug-067: arm the shutdown watchdog at the TOP of this method,
+        disarm at the BOTTOM (in `finally:` so an exception in
+        teardown still disarms — otherwise a raised teardown would
+        both surface the error AND get force-exited). The watchdog
+        is the last-resort backstop for any wedge spec-069 misses
+        (unforeseen third-party thread, hung asyncio task); when
+        spec-069's defenses hold — as they do in every existing
+        test in `test_shutdown_owned_executor.py` — teardown
+        completes in milliseconds and disarms the watchdog well
+        before it fires.
+        """
+        self._arm_shutdown_watchdog()
+        try:
+            await self._on_unmount_body()
+        finally:
+            self._disarm_shutdown_watchdog()
+
+    async def _on_unmount_body(self) -> None:
+        """The pre-bug-067 body of `on_unmount`, wrapped by arm/disarm.
+
+        Split so the arm/disarm bracket around it is a single trivial
+        `try/finally` — easier to reason about than sprinkling
+        disarm calls through every early-return / except branch.
         """
         authz = self.session.runtime.authz
         if isinstance(authz, RuleBasedAuthorizationProvider):
