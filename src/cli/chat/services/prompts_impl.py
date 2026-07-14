@@ -39,7 +39,7 @@ from typing import TYPE_CHECKING, Any
 from schemas.entities import Actor
 from schemas.events import Event, EventType
 from schemas.identifiers import EventId, PromptId, new_prompt_id
-from schemas.wire_kinds import WIRE_PROMPT_REQUESTED
+from schemas.wire_kinds import WIRE_PROMPT_CANCELLED, WIRE_PROMPT_REQUESTED
 from tools.services.exceptions import PromptBusy
 from tools.services.prompts import AbstractPrompts, PromptSource
 
@@ -97,7 +97,10 @@ class PromptResponse(str):
         """
         return str.__str__(self)
 
+
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from bus.event_bus import EventBus
     from schemas.identifiers import SessionId, ThreadId
     from store.session_store import SessionStore
@@ -149,6 +152,15 @@ class PromptsImpl(AbstractPrompts):
         self._bus: EventBus | None = bus
         self._pending_future: asyncio.Future[str] | None = None
         self._pending_prompt_id: PromptId | None = None
+        # spec-068 Part B — bound `close_span` for the current
+        # exchange's registry, snapshotted at `choice`/`text` call
+        # time (contextvars propagate via task-locals but we hold
+        # the callable directly so `resolve_pending` /
+        # `cancel_pending` — which run from the adapter's task, not
+        # ours — can still find the right registry). `None` when
+        # the prompt fired outside an engine exchange (rare: tool
+        # call chain always originates from an exchange today).
+        self._pending_close_span: Callable[[str], None] | None = None
         self._closed = False
 
     # ------------------------------------------------------------------
@@ -159,14 +171,16 @@ class PromptsImpl(AbstractPrompts):
     # a caller-supplied `metadata` dict. Keeping this at the class
     # level so `choice` and `text` share a single source of truth
     # and the test that asserts precedence can import it.
-    _RESERVED_PAYLOAD_KEYS: frozenset[str] = frozenset({
-        "prompt_id",
-        "kind",
-        "prompt",
-        "options",
-        "placeholder",
-        "source",
-    })
+    _RESERVED_PAYLOAD_KEYS: frozenset[str] = frozenset(
+        {
+            "prompt_id",
+            "kind",
+            "prompt",
+            "options",
+            "placeholder",
+            "source",
+        }
+    )
 
     async def choice(
         self,
@@ -228,6 +242,16 @@ class PromptsImpl(AbstractPrompts):
         finally:
             self._pending_future = None
             self._pending_prompt_id = None
+            # spec-068 Part B — clear the exchange-registry hook so
+            # a follow-on prompt in the SAME exchange starts clean.
+            # If the exchange died mid-await (CancelledError bubbling
+            # through this finally), the span is DELIBERATELY not
+            # closed: the engine's `close_all_open_spans` in the
+            # exchange finally will emit the terminal. If the future
+            # resolved / was cancelled via a durable widget append,
+            # `resolve_pending` / `cancel_pending` already ran
+            # `close_span` before this finally fires.
+            self._pending_close_span = None
 
     async def text(
         self,
@@ -268,6 +292,16 @@ class PromptsImpl(AbstractPrompts):
         finally:
             self._pending_future = None
             self._pending_prompt_id = None
+            # spec-068 Part B — clear the exchange-registry hook so
+            # a follow-on prompt in the SAME exchange starts clean.
+            # If the exchange died mid-await (CancelledError bubbling
+            # through this finally), the span is DELIBERATELY not
+            # closed: the engine's `close_all_open_spans` in the
+            # exchange finally will emit the terminal. If the future
+            # resolved / was cancelled via a durable widget append,
+            # `resolve_pending` / `cancel_pending` already ran
+            # `close_span` before this finally fires.
+            self._pending_close_span = None
 
     async def wait_for_slot(
         self,
@@ -351,6 +385,15 @@ class PromptsImpl(AbstractPrompts):
         if pending is None or pending.done():
             return
         pending.set_result(PromptResponse(response, rule=rule))
+        # spec-068 Part B — the durable terminal (widget-appended
+        # `WIRE_PROMPT_ANSWERED`) has already landed on the log, so
+        # the exchange's finally-safety-net MUST NOT emit a synthetic
+        # `WIRE_PROMPT_CANCELLED(session_interrupted)` on top. Close
+        # the span.
+        close_span = self._pending_close_span
+        if close_span is not None:
+            close_span(prompt_id)
+        self._pending_close_span = None
 
     def cancel_pending(self, prompt_id: str) -> None:
         """Cancel the in-flight future for `prompt_id`.
@@ -371,6 +414,15 @@ class PromptsImpl(AbstractPrompts):
         if pending is None or pending.done():
             return
         pending.cancel()
+        # spec-068 Part B — dispatch arrives from
+        # `_handle_ui_event` on a `WIRE_PROMPT_CANCELLED` durable
+        # append (widget-driven Esc / deny-once). The terminal is
+        # already on the log, so close the span to prevent the
+        # exchange finally-safety-net from double-emitting.
+        close_span = self._pending_close_span
+        if close_span is not None:
+            close_span(prompt_id)
+        self._pending_close_span = None
 
     # ------------------------------------------------------------------
     # Internals
@@ -386,10 +438,7 @@ class PromptsImpl(AbstractPrompts):
             msg = "PromptsImpl is closed"
             raise RuntimeError(msg)
         if self._pending_future is not None:
-            msg = (
-                f"Another prompt is unresolved: "
-                f"prompt_id={self._pending_prompt_id}"
-            )
+            msg = f"Another prompt is unresolved: prompt_id={self._pending_prompt_id}"
             raise PromptBusy(msg)
 
     async def _append_ui_event(self, kind: str, payload: dict[str, Any]) -> None:
@@ -405,6 +454,19 @@ class PromptsImpl(AbstractPrompts):
         `EventAdapter.handle` subscription reaches the ApprovalBlock
         mount site in the SAME session. Bus failures are swallowed —
         the store append is the durability contract.
+
+        spec-068 Part B: on a `WIRE_PROMPT_REQUESTED` write, plug
+        the prompt into the active exchange's span registry (if
+        any). The registered terminal-factory produces the exact
+        `WIRE_PROMPT_CANCELLED(reason="session_interrupted")`
+        UI_EVENT the (now-deleted) renderer synth wrote and the
+        engine's resume reconciliation writes — one source of
+        truth. The engine's exchange-finally invokes the factory
+        via its `_emit` on cancel/quit; `resolve_pending` /
+        `cancel_pending` call `close_span` when the widget-appended
+        terminal has already landed, so the finally-safety-net
+        skips it (no double terminal). See
+        `engine.engine.current_span_registry`.
         """
         import contextlib as _cl  # noqa: PLC0415
 
@@ -426,6 +488,38 @@ class PromptsImpl(AbstractPrompts):
         if self._bus is not None:
             with _cl.suppress(Exception):
                 await self._bus.publish(event)
+
+        # spec-068 Part B — register the span AFTER the store
+        # append so no factory can fire a terminal for a
+        # `.requested` the log never mentions.
+        if kind == WIRE_PROMPT_REQUESTED:
+            from engine.engine import current_span_registry  # noqa: PLC0415
+
+            registry = current_span_registry()
+            if registry is not None:
+                register_span, close_span = registry
+                prompt_id = payload.get("prompt_id")
+                if isinstance(prompt_id, str) and prompt_id:
+                    span_id = prompt_id
+
+                    def _terminal_factory(
+                        _pid: str = span_id,
+                    ) -> tuple[EventType, dict[str, Any], Actor]:
+                        return (
+                            EventType.UI_EVENT,
+                            {
+                                "schema_version": 1,
+                                "kind": WIRE_PROMPT_CANCELLED,
+                                "payload": {
+                                    "prompt_id": _pid,
+                                    "reason": "session_interrupted",
+                                },
+                            },
+                            Actor(kind="system"),
+                        )
+
+                    register_span(span_id, _terminal_factory)
+                    self._pending_close_span = close_span
 
 
 __all__ = ["PromptResponse", "PromptsImpl"]

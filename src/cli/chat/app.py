@@ -186,7 +186,7 @@ chars so it fits comfortably on standard terminals.
 _WORKFLOW_TOOLS_MISSING_WARNING = (
     "WorkflowsImpl is running but the agent's declared tool set has "
     "no workflow-service tools (no tool declares "
-    "`requires=[\"workflows\"]`). Users prompting for workflow "
+    '`requires=["workflows"]`). Users prompting for workflow '
     "invocation will see the model fall back to `bash kolsch "
     "workflows run` instead of mounting a live WorkflowCard. Add "
     "`kolsch/tools/run_workflow` (and optionally "
@@ -398,7 +398,9 @@ class ChatApp(App):
         # without a runtime still work — the adapter's constructor
         # already accepts `None` for every kwarg.
         _session_store = getattr(
-            getattr(session, "runtime", None), "store", None,
+            getattr(session, "runtime", None),
+            "store",
+            None,
         )
         _session_id = getattr(session, "session_id", None)
         _thread_id = getattr(session, "thread_id", None)
@@ -597,13 +599,9 @@ class ChatApp(App):
             # Merge: keep the pre-set fields; fill in what was empty.
             self._service_registry = ChatServiceRegistry(
                 cards=cards_impl if pre_set_cards is None else existing.cards,
-                prompts=(
-                    prompts_impl if pre_set_prompts is None else existing.prompts
-                ),
+                prompts=(prompts_impl if pre_set_prompts is None else existing.prompts),
                 workflows=(
-                    workflows_impl
-                    if pre_set_workflows is None
-                    else existing.workflows
+                    workflows_impl if pre_set_workflows is None else existing.workflows
                 ),
                 session=existing.session,
             )
@@ -617,18 +615,21 @@ class ChatApp(App):
             else None
         )
         if active_prompts is not None and hasattr(
-            active_prompts, "resolve_pending",
+            active_prompts,
+            "resolve_pending",
         ):
             self.event_adapter.register_prompts_impl(active_prompts)
 
-        # spec-008: wire the ``Cards`` handle into the adapter so the
-        # boot-time interruption notice from
-        # ``_scan_dangling_prompts`` fires through the same
-        # ``Cards.notice`` seam every other notice uses.
+        # spec-008 / spec-068 Part B: wire the ``Cards`` handle into
+        # the adapter so the boot-time interruption notice from
+        # ``stage_replay_prompt_outcomes`` (the render-only detector
+        # for interrupted prompt rows on replay) fires through the
+        # same ``Cards.notice`` seam every other notice uses. The
+        # durable side of the pre-spec-068 ``_scan_dangling_prompts``
+        # helper moved into the engine's resume reconciliation; only
+        # the UI-facing notice remains renderer-side.
         active_cards = (
-            self._service_registry.cards
-            if self._service_registry is not None
-            else None
+            self._service_registry.cards if self._service_registry is not None else None
         )
         if active_cards is not None and hasattr(active_cards, "notice"):
             self.event_adapter.register_cards_impl(active_cards)
@@ -643,7 +644,8 @@ class ChatApp(App):
             else None
         )
         if active_workflows is not None and hasattr(
-            active_workflows, "emit_awaiting_approval",
+            active_workflows,
+            "emit_awaiting_approval",
         ):
             self.event_adapter.register_workflows_impl(active_workflows)
 
@@ -665,10 +667,13 @@ class ChatApp(App):
         # falls back to raw `bash`/`read_file`/`write_file`.
         try:
             tools_sub = getattr(
-                self.session.runtime, "tools_subsystem", None,
+                self.session.runtime,
+                "tools_subsystem",
+                None,
             )
             if tools_sub is not None and hasattr(
-                tools_sub, "set_chat_services",
+                tools_sub,
+                "set_chat_services",
             ):
                 tools_sub.set_chat_services(self._service_registry)
         except Exception:  # noqa: BLE001 — headless fixtures may lack the subsystem
@@ -691,7 +696,9 @@ class ChatApp(App):
         _warn_if_workflow_tools_missing(
             logger=_LOGGER,
             tools_subsystem=getattr(
-                self.session.runtime, "tools_subsystem", None,
+                self.session.runtime,
+                "tools_subsystem",
+                None,
             ),
             agent_id=getattr(self.session.config, "agent_id", None),
             workflows_impl=active_workflows,
@@ -724,7 +731,8 @@ class ChatApp(App):
         # when either is unavailable (headless fixtures) — the notify
         # hook on WorkflowsImpl silently no-ops without a manager.
         if active_workflows is not None and hasattr(
-            active_workflows, "register_layout_manager",
+            active_workflows,
+            "register_layout_manager",
         ):
             try:
                 from cli.chat.services.workflow_layout import (  # noqa: PLC0415
@@ -733,18 +741,20 @@ class ChatApp(App):
 
                 transcript = self.query_one("#transcript", VerticalScroll)
                 registry = getattr(
-                    active_workflows, "_workflow_registry", None,
+                    active_workflows,
+                    "_workflow_registry",
+                    None,
                 )
                 card_widgets = getattr(
-                    self.event_adapter, "_card_widgets", None,
+                    self.event_adapter,
+                    "_card_widgets",
+                    None,
                 )
                 if registry is not None and card_widgets is not None:
                     layout_manager = WorkflowLayoutManager(
                         transcript=transcript,
                         get_records=lambda reg=registry: list(reg.values()),
-                        get_card_widget=(
-                            lambda cid, cw=card_widgets: cw.get(cid)
-                        ),
+                        get_card_widget=(lambda cid, cw=card_widgets: cw.get(cid)),
                     )
                     active_workflows.register_layout_manager(layout_manager)
                     self._workflow_layout_manager = layout_manager
@@ -770,7 +780,8 @@ class ChatApp(App):
         # teardown fixtures don't exercise the approval flow).
         if active_prompts is not None:
             self.approval_callback = InlineApprovalCallback(
-                self, active_prompts,
+                self,
+                active_prompts,
             )
             # Register the approval callback with the runtime's authz
             # provider so tool checks with `prompt` effects surface as
@@ -792,6 +803,7 @@ class ChatApp(App):
                 from cli.permissions import (  # noqa: PLC0415
                     _write_back as _persist_authz_rules,
                 )
+
                 yaml_path = self.session.root / "platform.yaml"
 
                 def _on_rule_added(rules: list[Any]) -> None:
@@ -819,7 +831,8 @@ class ChatApp(App):
         # Best-effort: a failing sweep (headless fixtures without a
         # real run store, permission errors) is logged and swallowed.
         if active_workflows is not None and hasattr(
-            active_workflows, "sweep_orphans",
+            active_workflows,
+            "sweep_orphans",
         ):
             try:
                 await active_workflows.sweep_orphans()
@@ -952,8 +965,7 @@ class ChatApp(App):
             # Tier 3 uncompactable or other unexpected error. Mount a
             # warning notice; do NOT hard-fail the chat boot.
             _LOGGER.warning(
-                "ChatApp._maybe_eager_compact_on_open: eager compaction "
-                "raised %s",
+                "ChatApp._maybe_eager_compact_on_open: eager compaction raised %s",
                 type(exc).__name__,
                 exc_info=True,
             )
@@ -1032,10 +1044,13 @@ class ChatApp(App):
                 self._ui_event_bus_sub = None
         try:
             tools_sub = getattr(
-                self.session.runtime, "tools_subsystem", None,
+                self.session.runtime,
+                "tools_subsystem",
+                None,
             )
             if tools_sub is not None and hasattr(
-                tools_sub, "set_chat_services",
+                tools_sub,
+                "set_chat_services",
             ):
                 tools_sub.set_chat_services(None)
         except Exception:  # noqa: BLE001 — teardown best-effort
@@ -1218,7 +1233,10 @@ class ChatApp(App):
         return f"{agent} · {datetime.now().strftime('%H:%M:%S')}"
 
     async def mount_assistant_message(
-        self, text: str, *, event_id: str | None = None,
+        self,
+        text: str,
+        *,
+        event_id: str | None = None,
     ) -> Any | None:
         _ = event_id  # bug-036d: sink-protocol dedupe key — App ignores.
         transcript = self.query_one("#transcript", VerticalScroll)
@@ -1474,7 +1492,8 @@ class ChatApp(App):
         self._run_exchange(text)
 
     def on_composer_quit_requested(
-        self, message: Composer.QuitRequested,
+        self,
+        message: Composer.QuitRequested,
     ) -> None:
         """bug-023 — Ctrl+D on an empty composer → quit if idle.
 
@@ -1745,7 +1764,9 @@ class ChatApp(App):
                 else "Running summariser…"
             )
             running_block = CompactionBlock(
-                state="running", title_text=title, body_text=body,
+                state="running",
+                title_text=title,
+                body_text=body,
             )
             await transcript.mount(running_block)
             self.event_adapter._compaction_widgets["pending"] = running_block
@@ -1762,7 +1783,8 @@ class ChatApp(App):
             # Transition the running block to failure if it was mounted;
             # otherwise fall back to the plain notice.
             pending = self.event_adapter._compaction_widgets.pop(
-                "pending", None,
+                "pending",
+                None,
             )
             if pending is not None:
                 try:
@@ -1782,7 +1804,8 @@ class ChatApp(App):
             # No summariser call happened — remove the placeholder and
             # surface the standard nothing-to-do notice.
             pending = self.event_adapter._compaction_widgets.pop(
-                "pending", None,
+                "pending",
+                None,
             )
             if pending is not None:
                 try:
@@ -1826,9 +1849,7 @@ class ChatApp(App):
             )
             return
         if emitted is None:
-            await self._mount_transcript_notice(
-                "↳ no active compaction to revoke"
-            )
+            await self._mount_transcript_notice("↳ no active compaction to revoke")
             return
         # Notice is mounted by EventAdapter._handle_context_compaction_revoked.
 
@@ -1868,8 +1889,7 @@ class ChatApp(App):
         event_id = arg_text.strip()
         if not event_id:
             await self._mount_transcript_notice(
-                "/why-compact: pass the compaction event_id "
-                "(see /compaction-history)."
+                "/why-compact: pass the compaction event_id (see /compaction-history)."
             )
             return
         from cli.chat.services.compaction_introspection import (  # noqa: PLC0415
@@ -1972,9 +1992,8 @@ class ChatApp(App):
             phase = getattr(record, "phase", None)
             if phase not in ("running", "cancelling"):
                 continue
-            anchor = (
-                getattr(record, "started_at", None)
-                or getattr(record, "created_at", None)
+            anchor = getattr(record, "started_at", None) or getattr(
+                record, "created_at", None
             )
             if anchor is None:
                 continue
@@ -2148,7 +2167,6 @@ class ChatApp(App):
             self.exit(0)
 
 
-
 # ---------------------------------------------------------------------------
 # Turn slicing for tail-20 replay
 # ---------------------------------------------------------------------------
@@ -2181,7 +2199,11 @@ def _format_event_for_export(event: Event) -> str:
     if et == "tool.called":
         name = data_dict.get("tool_name", "?")
         args = data_dict.get("arguments") or {}
-        args_str = ", ".join(f"{k}={v!r}" for k, v in args.items()) if isinstance(args, dict) else str(args)
+        args_str = (
+            ", ".join(f"{k}={v!r}" for k, v in args.items())
+            if isinstance(args, dict)
+            else str(args)
+        )
         return f"# tool called · {when} · {name}({args_str})"
     if et == "tool.result":
         name = data_dict.get("tool_name", "?")
@@ -2213,9 +2235,7 @@ def _tail_turns(
     Coordinator decision 5: default N=20.
     """
     # Find USER_MESSAGE indexes.
-    user_indexes = [
-        i for i, e in enumerate(events) if e.type == EventType.USER_MESSAGE
-    ]
+    user_indexes = [i for i, e in enumerate(events) if e.type == EventType.USER_MESSAGE]
     if len(user_indexes) <= n:
         return events, False
     cutoff = user_indexes[-n]

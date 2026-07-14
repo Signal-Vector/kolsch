@@ -38,9 +38,12 @@ class PromptSource(TypedDict):
     `kind` + `id` form the baseline identity every source carries.
     The remaining keys are optional and shape-per-kind:
 
-    - `tool_call_id` — set on `kind="tool"` so the crash-scan can
-      correlate the request back to the parent `tool.called` event
-      (see `EventAdapter._scan_dangling_prompts`).
+    - `tool_call_id` — set on `kind="tool"` so the engine's
+      resume-time reconciliation can correlate the request back to
+      the parent `tool.called` event when replaying a partially-
+      written session (see
+      `engine.engine._Exchange._reconcile_open_spans_on_resume`,
+      spec-068 Part B).
     - `run_id` / `node_name` — set on `kind="workflow"` so the
       approval renderer can group prompts by workflow run and node.
     - `run_chain` — spec-004 stub for spec-017's nested-workflow

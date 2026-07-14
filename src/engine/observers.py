@@ -17,11 +17,13 @@ These classes are engine-internal — not part of the public surface.
 
 from __future__ import annotations
 
+import asyncio
+import logging
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from engine._crewai_adapter import _tool_to_openai_spec
-from errors import PlatformError, ToolUnauthorized
+from errors import ExchangeCancelled, PlatformError, ToolUnauthorized
 from schemas import (
     Actor,
     AgentCallId,
@@ -42,6 +44,20 @@ if TYPE_CHECKING:
 
     from engine.framework import LLMRequest, LLMResponse, ToolCall
     from tools.decorator import ToolDefinition
+
+
+_log = logging.getLogger("engine.observers")
+
+
+# spec-068 Part A — the same terminal-payload shape the renderer's
+# `EventAdapter._append_synthetic_tool_failed` uses today. Part B
+# will strip the renderer's durable write and the resume-time
+# reconciliation will emit the SAME string, so keep the constants
+# here so both call sites reference one source of truth.
+_SESSION_INTERRUPTED_ERROR_TYPE = "session.interrupted"
+_SESSION_INTERRUPTED_MESSAGE = (
+    "The chat session ended while this tool was awaiting user input. Retry to continue."
+)
 
 
 class _ObservedLLMHandle:
@@ -116,6 +132,7 @@ class _ObservedLLMHandle:
         stream_method = getattr(self._llm, "stream", None)
         try:
             if callable(stream_method):
+
                 async def _on_delta(text_delta: str) -> None:
                     await self._emit(
                         type_=EventType.MODEL_STREAMING_TOKEN,
@@ -208,6 +225,8 @@ class _ObservedToolHandle:
         tools_subsystem: Any,
         defn: ToolDefinition,
         cancel: Any = None,
+        register_span: Callable[[str, Any], None] | None = None,
+        close_span: Callable[[str], None] | None = None,
     ) -> None:
         self._emit = emit
         self._agent_id = agent_id
@@ -221,6 +240,17 @@ class _ObservedToolHandle:
         # engine constructed the observer without cancellation
         # (tests, programmatic paths).
         self._cancel = cancel
+        # spec-068 Part A — span-registry seams. The engine's
+        # `_Exchange` passes bound `register_span` / `close_span`
+        # methods; test / programmatic constructions leave them
+        # `None` and the observer degrades gracefully (no registry
+        # bookkeeping, but every emit arm still fires as before).
+        # The engine keeps a per-exchange OrderedDict keyed by
+        # `tool_call_id`; the observer's own `try/finally` is the
+        # primary guarantee for a paired terminal on cancel — the
+        # registry is the exchange-level backstop.
+        self._register_span = register_span
+        self._close_span = close_span
         # Public attributes required by the ToolHandle Protocol.
         self.name = defn.name
         # bug-024: expose the tool's rich `@tool(description=...)`
@@ -245,67 +275,177 @@ class _ObservedToolHandle:
             actor=Actor(kind="agent", id=self._agent_id),
         )
 
-        try:
-            result = await self._tools_subsystem.invoke_tool(
-                tool_name=call.name,
-                args=dict(call.arguments),
-                context=ToolContext(
-                    agent_id=self._agent_id,  # type: ignore[arg-type]
-                    session_id=self._session_id,  # type: ignore[arg-type]
-                    thread_id=self._thread_id,  # type: ignore[arg-type]
-                    principal=f"agent.{self._agent_id}",
-                    secrets={},
-                    tool_call_id=tool_call_id,
-                    cancellation=self._cancel,
-                ),
-            )
-        except ToolUnauthorized as exc:
-            err = Error.from_platform_error(exc)
-            # Derive the exact `/perm allow` chat command from the
-            # matched rule's `what` + the in-flight args. The model
-            # and the chat renderer both see this hint; the user
-            # types it to un-block.
-            recovery_hint = _derive_authz_recovery_hint(exc, arguments=call.arguments)
-            await self._emit(
-                type_=EventType.TOOL_FAILED,
-                data=ToolFailedData(
-                    tool_call_id=tool_call_id,
-                    tool_name=call.name,
-                    error=err,
-                    recovery_hint=recovery_hint,
-                ).model_dump(mode="json"),
-                actor=Actor(kind="agent", id=self._agent_id),
-            )
-            # Diagnostic — return error payload so framework continues.
-            payload = err.model_dump(mode="json")
-            if recovery_hint is not None:
-                payload["recovery_hint"] = recovery_hint
-            return {"error": payload}
-        except PlatformError as exc:
-            err = Error.from_platform_error(exc)
-            await self._emit(
-                type_=EventType.TOOL_FAILED,
-                data=ToolFailedData(
-                    tool_call_id=tool_call_id,
-                    tool_name=call.name,
-                    error=err,
-                ).model_dump(mode="json"),
-                actor=Actor(kind="agent", id=self._agent_id),
-            )
-            return {"error": err.model_dump(mode="json")}
+        # spec-068 Part A — register the span AFTER `tool.called` has
+        # been appended so the registry can never fire a `tool.failed`
+        # for a call the log never mentions. The factory closes over
+        # `tool_call_id` + `call.name` so the exchange finally can
+        # build a symmetric terminal payload without needing to
+        # re-walk the log.
+        if self._register_span is not None:
+            span_id = tool_call_id
+            tool_name = call.name
 
-        # AFTER — tool.result.
-        result_payload = _normalize_result(result.result)
-        await self._emit(
-            type_=EventType.TOOL_RESULT,
-            data=ToolResultData(
-                tool_call_id=tool_call_id,
-                tool_name=call.name,
-                result=result_payload,
-            ).model_dump(mode="json"),
-            actor=Actor(kind="agent", id=self._agent_id),
-        )
-        return result.result
+            def _terminal_factory() -> tuple[EventType, dict[str, Any], Actor]:
+                return _build_session_interrupted_tool_failed(
+                    tool_call_id=span_id,
+                    tool_name=tool_name,
+                )
+
+            self._register_span(span_id, _terminal_factory)
+
+        # spec-068 Part A — the outer `try/finally` guarantees that a
+        # cancel firing between `tool.called` and any downstream
+        # terminal still emits a `tool.failed(session.interrupted)`
+        # BEFORE the exception propagates. The `ExchangeCancelled` /
+        # `CancelledError` arm below is the observer's own belt; the
+        # exchange finally is the outer suspenders (registry-based).
+        # On every normal arm below we also `close_span` so the
+        # exchange finally doesn't double-emit.
+        try:
+            try:
+                result = await self._tools_subsystem.invoke_tool(
+                    tool_name=call.name,
+                    args=dict(call.arguments),
+                    context=ToolContext(
+                        agent_id=self._agent_id,  # type: ignore[arg-type]
+                        session_id=self._session_id,  # type: ignore[arg-type]
+                        thread_id=self._thread_id,  # type: ignore[arg-type]
+                        principal=f"agent.{self._agent_id}",
+                        secrets={},
+                        tool_call_id=tool_call_id,
+                        cancellation=self._cancel,
+                    ),
+                )
+            except ToolUnauthorized as exc:
+                err = Error.from_platform_error(exc)
+                # Derive the exact `/perm allow` chat command from the
+                # matched rule's `what` + the in-flight args. The model
+                # and the chat renderer both see this hint; the user
+                # types it to un-block.
+                recovery_hint = _derive_authz_recovery_hint(
+                    exc, arguments=call.arguments
+                )
+                await self._emit(
+                    type_=EventType.TOOL_FAILED,
+                    data=ToolFailedData(
+                        tool_call_id=tool_call_id,
+                        tool_name=call.name,
+                        error=err,
+                        recovery_hint=recovery_hint,
+                    ).model_dump(mode="json"),
+                    actor=Actor(kind="agent", id=self._agent_id),
+                )
+                # Diagnostic — return error payload so framework continues.
+                payload = err.model_dump(mode="json")
+                if recovery_hint is not None:
+                    payload["recovery_hint"] = recovery_hint
+                return {"error": payload}
+            except PlatformError as exc:
+                err = Error.from_platform_error(exc)
+                await self._emit(
+                    type_=EventType.TOOL_FAILED,
+                    data=ToolFailedData(
+                        tool_call_id=tool_call_id,
+                        tool_name=call.name,
+                        error=err,
+                    ).model_dump(mode="json"),
+                    actor=Actor(kind="agent", id=self._agent_id),
+                )
+                return {"error": err.model_dump(mode="json")}
+            except (ExchangeCancelled, asyncio.CancelledError):
+                # spec-068 Part A — cancel between `tool.called` and
+                # `tool.result`/`tool.failed` used to leave the span
+                # dangling; downstream assembly then permanently
+                # 400'd the session ("tool_call_ids did not have
+                # response messages"). Emit the same synthetic
+                # terminal shape `EventAdapter._append_synthetic_
+                # tool_failed` writes today (Part B rips out the
+                # renderer's durable write in favour of engine
+                # emission), then re-raise so the exchange failure
+                # path still runs.
+                type_, data, actor = _build_session_interrupted_tool_failed(
+                    tool_call_id=tool_call_id,
+                    tool_name=call.name,
+                )
+                try:
+                    await self._emit(type_=type_, data=data, actor=actor)
+                except Exception:  # noqa: BLE001 — emit best-effort on cancel
+                    # Swallow after logging and re-raise the original
+                    # cancel — priority is a clean cancel bubble, not
+                    # a second exception on top. Note: the outer
+                    # `finally` below always calls `close_span`, so
+                    # the exchange finally's registry backstop cannot
+                    # retry this emit either — the span is gone from
+                    # the registry by the time the exchange finally
+                    # runs. An emit failure here means the store
+                    # append_event itself failed, so the log is
+                    # unreachable in this process regardless; the
+                    # true safety net for that failure mode is Part
+                    # B's resume reconciliation, which reads the log
+                    # on the next successful boot and appends any
+                    # still-missing terminal via `_emit`.
+                    _log.exception(
+                        "observer: session-interrupted terminal emit "
+                        "failed for tool_call_id=%s",
+                        tool_call_id,
+                    )
+                raise
+
+            # AFTER — tool.result.
+            result_payload = _normalize_result(result.result)
+            await self._emit(
+                type_=EventType.TOOL_RESULT,
+                data=ToolResultData(
+                    tool_call_id=tool_call_id,
+                    tool_name=call.name,
+                    result=result_payload,
+                ).model_dump(mode="json"),
+                actor=Actor(kind="agent", id=self._agent_id),
+            )
+            return result.result
+        finally:
+            # Every arm above (result, failed, cancel-with-emit) has
+            # already appended a terminal for this span — mark it
+            # closed so the exchange finally does not double-emit. If
+            # the emit itself raised before appending (rare — the
+            # store is durable-first), the span stays open and the
+            # exchange finally picks it up.
+            if self._close_span is not None:
+                self._close_span(tool_call_id)
+
+
+def _build_session_interrupted_tool_failed(
+    *,
+    tool_call_id: str,
+    tool_name: str,
+) -> tuple[EventType, dict[str, Any], Actor]:
+    """Build a `tool.failed(session.interrupted)` terminal payload.
+
+    Central factory so the observer's cancel arm and the exchange
+    finally's registry-close both emit byte-identical events. The
+    shape mirrors the renderer's existing
+    `EventAdapter._append_synthetic_tool_failed` write (same
+    `error.type` string, same `error.message`) so Part B — which
+    rips out the renderer's durable write in favour of engine-side
+    reconciliation on resume — can adopt this factory without any
+    consumer-visible diff.
+
+    Actor is `system` (not `agent`): the terminal is engine-authored
+    on behalf of the cancelled exchange, not a model-attributable
+    event. Consumers filter on this to distinguish forced closure
+    from a model-emitted failure.
+    """
+    error = Error(
+        type=_SESSION_INTERRUPTED_ERROR_TYPE,
+        message=_SESSION_INTERRUPTED_MESSAGE,
+        where="engine.observers._ObservedToolHandle",
+    )
+    data = ToolFailedData(
+        tool_call_id=tool_call_id,
+        tool_name=tool_name,
+        error=error,
+    ).model_dump(mode="json")
+    return EventType.TOOL_FAILED, data, Actor(kind="system")
 
 
 def _normalize_result(value: object) -> dict[str, Any]:

@@ -28,7 +28,9 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import contextvars
 import logging
+from collections import OrderedDict
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Literal
@@ -97,6 +99,63 @@ _log = logging.getLogger("engine")
 
 # Sentinel pushed to the stream queue when the runner finishes.
 _QUEUE_END: Any = object()
+
+
+# spec-068 Part A — span registry type. A "span" is any begin/end
+# pair the engine writes to the log (`tool.called` → `tool.result` /
+# `tool.failed`; `node.started` → `node.completed` / `node.failed`;
+# `prompt.requested` → `prompt.answered` / `prompt.cancelled` in a
+# later part). Each begin registers a terminal factory keyed by the
+# span id; the exchange's `try/finally` invokes any still-open
+# factory and routes the terminal through `_emit`, preserving I1.
+# Aliased via typing.TypeAlias-shape at TYPE_CHECKING to avoid a
+# runtime import of `Callable` here; the alias is only consulted by
+# type-checkers, not by the interpreter.
+if TYPE_CHECKING:
+    SpanTerminalFactory = Callable[[], tuple[EventType, dict[str, Any], Actor]]
+
+
+# spec-068 Part B — cross-subsystem span-registry seam. `PromptsImpl`
+# lives in the renderer package and never touches engine internals
+# directly, but its `WIRE_PROMPT_REQUESTED` write is a span begin that
+# must close via the engine's `_emit` on cancel/quit. The exchange
+# publishes bound `(register_span, close_span)` callables into this
+# ContextVar on `run()` entry; downstream subsystems invoked inside
+# the exchange's task (tools → `Prompts.choice`/`text` → PromptsImpl)
+# read them from the same contextvars-propagated task context. The
+# renderer imports the tiny reader helper below rather than
+# `AgentEngine` internals — no import cycle, no coupling to `_Exchange`
+# beyond the two callable shapes. `None` when no engine exchange is
+# on the stack (headless tests, force-invoke synthetic reads on the
+# preflight boundary), and the reader is a no-op.
+_ExchangeSpanRegistry = tuple[
+    "Callable[[str, SpanTerminalFactory], None]",
+    "Callable[[str], None]",
+]
+
+_current_exchange_span_registry: contextvars.ContextVar[
+    _ExchangeSpanRegistry | None
+] = contextvars.ContextVar(
+    "_current_exchange_span_registry",
+    default=None,
+)
+
+
+def current_span_registry() -> _ExchangeSpanRegistry | None:
+    """Return the active exchange's `(register_span, close_span)` pair.
+
+    Subsystems whose begin-event site fires inside an engine exchange
+    (today: `PromptsImpl`) read this to plug their span into the
+    exchange's registry so the finally-safety-net + resume
+    reconciliation cover them symmetrically with observer-driven tool
+    spans. Returns `None` outside of an engine exchange (headless
+    unit tests of the subsystem in isolation), in which case the
+    caller is responsible for its own closure (or the resume path
+    picks it up next boot — the whole point of the reconciliation
+    invariant).
+    """
+    return _current_exchange_span_registry.get()
+
 
 #: Engine version — bump when the public contract changes.
 ENGINE_VERSION = "0.1"
@@ -340,6 +399,17 @@ class AgentEngine:
             except Exception:  # noqa: BLE001 — secondary failure
                 _log.exception("failed to emit exchange_failed safety event")
         finally:
+            # spec-068 Part A — close any still-open spans BEFORE
+            # `_QUEUE_END` so their terminals stream to consumers as
+            # part of this exchange, and go through `_emit` (I1 sole
+            # emitter). Best-effort: `close_all_open_spans` catches
+            # its own emit failures. The primary owner of each span
+            # is its emit site (e.g. `_ObservedToolHandle`'s
+            # `try/finally`); this is the belt to those suspenders.
+            try:
+                await ex.close_all_open_spans()
+            except Exception:  # noqa: BLE001 — finally safety net
+                _log.exception("close_all_open_spans safety net raised")
             queue.put_nowait(_QUEUE_END)
 
     # ---- Internal helpers used by _Exchange ---------------------------
@@ -357,7 +427,7 @@ class AgentEngine:
         *,
         tool_schemas: list[dict[str, Any]] | None = None,
         respect_compaction: bool = True,
-    ) -> "AssembledContext":
+    ) -> AssembledContext:
         """Cached wrapper over :func:`engine.assembly.assemble_context`.
 
         feat-059: memoises the pure projection on
@@ -479,9 +549,7 @@ class AgentEngine:
         )
         if context_length is None:
             return None
-        events = [
-            e async for e in self._store.read_path_to_leaf(thread_id)
-        ]
+        events = [e async for e in self._store.read_path_to_leaf(thread_id)]
         compaction_cfg = (self._assets._platform_config or {}).get(
             "compaction",
             {},
@@ -494,9 +562,7 @@ class AgentEngine:
             compaction_cfg.get("config", {}).get("keep_recent_fraction", 0.20)
         )
         keep_tail_tokens = max(int(budget * keep_recent_fraction), 1)
-        inner_config: dict[str, Any] = dict(
-            compaction_cfg.get("config", {}) or {}
-        )
+        inner_config: dict[str, Any] = dict(compaction_cfg.get("config", {}) or {})
         # Route the manual-invocation markers through the provider's
         # config dict so the summariser prompt + emitted event both
         # reflect user intent.
@@ -604,9 +670,7 @@ class AgentEngine:
         if context_length is None:
             return None
         # Load current path.
-        events = [
-            e async for e in self._store.read_path_to_leaf(thread_id)
-        ]
+        events = [e async for e in self._store.read_path_to_leaf(thread_id)]
         if not events:
             # Fresh session — nothing to compact. Fast no-op path so a
             # brand-new chat doesn't spuriously call the summariser.
@@ -651,9 +715,7 @@ class AgentEngine:
         last_error: Exception | None = None
         for attempt_index, kf in enumerate(keep_fractions):
             keep_tail_tokens = max(int(budget * kf), 1)
-            inner_config: dict[str, Any] = dict(
-                compaction_cfg.get("config", {}) or {}
-            )
+            inner_config: dict[str, Any] = dict(compaction_cfg.get("config", {}) or {})
             inner_config["keep_recent_fraction"] = kf
             # Propagate the requested trigger through the provider so
             # the emitted ContextCompactedData.trigger reflects reality.
@@ -673,8 +735,7 @@ class AgentEngine:
                 except Exception as exc:  # noqa: BLE001 — ladder catches any raise
                     attempt_error = exc
                     _log.warning(
-                        "compaction (eager): summariser attempt %d/2 "
-                        "failed (%s)",
+                        "compaction (eager): summariser attempt %d/2 failed (%s)",
                         retry + 1,
                         exc,
                     )
@@ -788,9 +849,7 @@ class AgentEngine:
         try:
             await self._bus.publish(stored)
         except Exception:  # noqa: BLE001 — bus publish best-effort
-            _log.exception(
-                "eager compaction: bus publish failed for %s", event_type
-            )
+            _log.exception("eager compaction: bus publish failed for %s", event_type)
         return stored
 
     async def manual_uncompact(
@@ -822,9 +881,7 @@ class AgentEngine:
         thread_id: ThreadId,
     ) -> Event | None:
         """Body of :meth:`manual_uncompact`, invoked inside the thread lock."""
-        events = [
-            e async for e in self._store.read_path_to_leaf(thread_id)
-        ]
+        events = [e async for e in self._store.read_path_to_leaf(thread_id)]
         # Index every CONTEXT_COMPACTION_REVOKED so a prior /uncompact
         # is honoured — the revocation is emitted as a separate event
         # (immutable log), NOT by mutating the compaction's payload,
@@ -918,10 +975,235 @@ class _Exchange:
         self.cancel = context.cancellation or CancelToken()
         # Per-thread lock — shared across emits in this exchange.
         self._lock = engine._lock_for_thread(self.thread_id)
+        # spec-068 Part A — span registry. Ordered by insertion so the
+        # exchange finally closes newest-first (mirroring stack-unwind
+        # order). Values are zero-arg factories that produce the
+        # terminal event's `(EventType, data, actor)` tuple; the
+        # exchange finally invokes them and routes each through
+        # `_emit`, preserving I1 sole-emitter. Primary owner of the
+        # closure is the emit site itself (observer's try/finally);
+        # this registry is the belt to that suspenders — if any span
+        # begin ever slips past its own finally, the exchange finally
+        # still guarantees a terminal.
+        self._open_spans: OrderedDict[str, SpanTerminalFactory] = OrderedDict()
+
+    # ---- Span registry (spec-068 Part A) ------------------------------
+
+    def register_span(
+        self,
+        span_id: str,
+        terminal_factory: SpanTerminalFactory,
+    ) -> None:
+        """Record an open span that must be closed by a paired terminal.
+
+        Called by the emit site immediately AFTER its begin event
+        (`tool.called`, `node.started`, etc.) has been appended to the
+        log. The factory produces the terminal event's
+        ``(EventType, data, actor)`` tuple; the exchange finally
+        invokes any still-registered factory and routes each terminal
+        through ``_emit`` so I1 sole-emitter holds even on the
+        cancellation / crash path. Re-registering an id overwrites —
+        the last registration wins (used by pathological retries; the
+        common case is one register + one close per id).
+        """
+        self._open_spans[span_id] = terminal_factory
+
+    def close_span(self, span_id: str) -> None:
+        """Mark a span closed. No-op when the id was never registered.
+
+        Called by the emit site immediately AFTER its terminal event
+        has been appended (successfully or on any error arm). Idempotent
+        — the exchange finally's ``close_all_open_spans`` skips ids
+        that are no longer in the registry.
+        """
+        self._open_spans.pop(span_id, None)
+
+    async def close_all_open_spans(self) -> None:
+        """Close every still-open span by emitting its terminal.
+
+        Runs from the exchange's outer ``try/finally`` on normal
+        completion, error, or cancel-bubble. Each terminal is routed
+        through ``_emit`` so the sole-emitter invariant (I1) holds and
+        the event is appended, published on the bus, and pushed to the
+        stream queue in the same shape as any other engine emit.
+
+        Emission is best-effort per span: an individual emit failure
+        is logged but does not prevent subsequent spans from closing.
+        The registry is drained regardless — a second call to this
+        method is a no-op.
+        """
+        # Snapshot + clear so a concurrent close_span (e.g. from a
+        # racing observer arm still in flight) can't double-close.
+        factories = list(self._open_spans.items())
+        self._open_spans.clear()
+        for span_id, factory in factories:
+            try:
+                type_, data, actor = factory()
+            except Exception:  # noqa: BLE001 — factory is untrusted
+                _log.exception(
+                    "close_all_open_spans: terminal factory for span %s raised",
+                    span_id,
+                )
+                continue
+            try:
+                await self._emit(type_=type_, data=data, actor=actor)
+            except Exception:  # noqa: BLE001 — emit is best-effort in finally
+                _log.exception(
+                    "close_all_open_spans: emit terminal for span %s failed",
+                    span_id,
+                )
+
+    # ---- Resume reconciliation (spec-068 Part B) ----------------------
+
+    async def _reconcile_open_spans_on_resume(self) -> None:
+        """Close any span begin on the leaf path whose terminal never landed.
+
+        The append-only log is authoritative; the projector does not
+        repair it at read time (Store §5.4). If a prior process wrote
+        `tool.called` or `prompt.requested` and died / was cancelled
+        before appending the paired terminal, every subsequent
+        assembly re-projects the orphan and the provider 400s the
+        session ("tool_call_ids did not have response messages").
+
+        This method walks the current leaf path once, indexes span
+        begins → terminals by span id (`tool_call_id`, `prompt_id`),
+        and appends a synthetic terminal via `_emit` for each
+        unpaired begin — the SAME sole-emitter seam every engine-
+        authored event goes through, preserving I1. Span-keyed (not
+        tail-windowed): a begin 5000 events deep is still closed.
+        Idempotent: after this method appends the terminal, the next
+        boot's scan sees the pair and does nothing.
+
+        Terminal shapes are byte-identical to what the observer's
+        cancel arm emits for tools (`_build_session_interrupted_tool_
+        failed` in engine.observers) and what the (now-deleted)
+        renderer synth wrote for prompts (`reason="session_
+        interrupted"`). Actor is `system` — engine-authored on behalf
+        of the dead exchange, not model-attributable.
+
+        Runs from `_run_framework` BEFORE the first assembly read and
+        BEFORE the live-bus subscription in `ChatApp` has replayed
+        anything through widgets. A prompt injected on the live bus
+        AFTER replay lands as a fresh begin on future paths and is
+        picked up by the observer/PromptsImpl span registration
+        during its own exchange — reconciliation never touches it.
+        """
+        from schemas.wire_kinds import (  # noqa: PLC0415
+            WIRE_PROMPT_ANSWERED,
+            WIRE_PROMPT_CANCELLED,
+            WIRE_PROMPT_REQUESTED,
+        )
+
+        events = [
+            e
+            async for e in self.engine._store.read_path_to_leaf(
+                self.context.thread_id,
+            )
+        ]
+
+        # Index begins and terminals in one pass. `tool_call_id` and
+        # `prompt_id` are disjoint namespaces (different generators,
+        # different prefixes), so a single dict per class is safe.
+        tool_calls: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        tool_terminals: set[str] = set()
+        prompt_requests: OrderedDict[str, dict[str, Any]] = OrderedDict()
+        prompt_terminals: set[str] = set()
+        for evt in events:
+            data = evt.data if isinstance(evt.data, dict) else {}
+            if evt.type == EventType.TOOL_CALLED:
+                call_id = data.get("tool_call_id")
+                if isinstance(call_id, str):
+                    tool_calls[call_id] = data
+            elif evt.type in (EventType.TOOL_RESULT, EventType.TOOL_FAILED):
+                call_id = data.get("tool_call_id")
+                if isinstance(call_id, str):
+                    tool_terminals.add(call_id)
+            elif evt.type == EventType.UI_EVENT:
+                kind = data.get("kind")
+                payload = data.get("payload") or {}
+                if not isinstance(payload, dict):
+                    payload = {}
+                prompt_id = payload.get("prompt_id")
+                if not isinstance(prompt_id, str) or not prompt_id:
+                    continue
+                if kind == WIRE_PROMPT_REQUESTED:
+                    prompt_requests[prompt_id] = payload
+                elif kind in (WIRE_PROMPT_ANSWERED, WIRE_PROMPT_CANCELLED):
+                    prompt_terminals.add(prompt_id)
+
+        # Emit synthetic terminals for every unpaired begin. Order
+        # begins-of-appearance so downstream consumers see a stable
+        # sequence across boots. Tool terminals use the observer's
+        # central factory — one source of truth for the payload
+        # shape. Prompt terminals mirror the exact `WIRE_PROMPT_
+        # CANCELLED` payload the (now-deleted) renderer synth wrote.
+        from engine.observers import (  # noqa: PLC0415
+            _build_session_interrupted_tool_failed,
+        )
+
+        for call_id, called_data in tool_calls.items():
+            if call_id in tool_terminals:
+                continue
+            tool_name = called_data.get("tool_name")
+            if not isinstance(tool_name, str):
+                tool_name = "<unknown>"
+            type_, terminal_data, actor = _build_session_interrupted_tool_failed(
+                tool_call_id=call_id,
+                tool_name=tool_name,
+            )
+            try:
+                await self._emit(type_=type_, data=terminal_data, actor=actor)
+            except Exception:  # noqa: BLE001 — best-effort per span
+                _log.exception(
+                    "resume reconciliation: emit tool.failed for %s failed",
+                    call_id,
+                )
+
+        for prompt_id in prompt_requests:
+            if prompt_id in prompt_terminals:
+                continue
+            terminal_data = {
+                "schema_version": 1,
+                "kind": WIRE_PROMPT_CANCELLED,
+                "payload": {
+                    "prompt_id": prompt_id,
+                    "reason": "session_interrupted",
+                },
+            }
+            try:
+                await self._emit(
+                    type_=EventType.UI_EVENT,
+                    data=terminal_data,
+                    actor=Actor(kind="system"),
+                )
+            except Exception:  # noqa: BLE001 — best-effort per span
+                _log.exception(
+                    "resume reconciliation: emit prompt.cancelled for %s failed",
+                    prompt_id,
+                )
 
     # ---- The orchestrator ---------------------------------------------
 
     async def run(self) -> None:
+        # spec-068 Part B — publish this exchange's span registry into
+        # the task-local ContextVar so subsystems whose begin-event
+        # site fires deep inside the tool call chain (today:
+        # PromptsImpl, which writes WIRE_PROMPT_REQUESTED durably from
+        # the renderer package with no direct engine handle) can
+        # register their span with our finally-safety-net + resume
+        # reconciliation. The token is reset in the outer finally so
+        # a follow-on exchange on the same task never sees stale
+        # callables. contextvars.Token semantics guarantee reset
+        # happens even on cancellation.
+        span_registry_token = _current_exchange_span_registry.set(
+            (self.register_span, self.close_span),
+        )
+        try:
+            await self._run_body()
+        finally:
+            _current_exchange_span_registry.reset(span_registry_token)
+
+    async def _run_body(self) -> None:
         try:
             await self._preflight()
         except PlatformError as exc:
@@ -1081,6 +1363,31 @@ class _Exchange:
             actor=Actor(kind="system"),
         )
         self.exchange_started_id = str(started.event_id)
+
+        # Step 10.5 — spec-068 Part B resume reconciliation. Any begin
+        # event (`tool.called`, `prompt.requested`) on the leaf path
+        # whose paired terminal never landed (prior process died
+        # between emits) permanently 400s every future exchange because
+        # the provider rejects a `tool_calls` message with no matching
+        # `tool` reply. Close every such span with an engine-authored
+        # terminal HERE — BEFORE the trigger `user.message` in Step 11
+        # — so the terminal precedes the trigger in file order. That
+        # ordering is load-bearing: the projector produces
+        # `[..., assistant(tool_calls=[t1]), tool(t1), user]`, and
+        # `_history_before_last_user` (which splits on the last user)
+        # correctly hands the `tool(t1)` message to the framework as
+        # history. If reconciliation ran AFTER Step 11 (as it did in
+        # the original Part B landing), file order became
+        # `..., tool.called(t1), user.message, tool.failed(t1)`,
+        # projecting to `[assistant(tool_calls=[t1]), user, tool(t1)]`
+        # — and the tool message got sliced off, wedging the exchange
+        # on any real OpenAI-compatible provider. Span-keyed (not
+        # tail-windowed), idempotent, and routes through `_emit` so I1
+        # sole-emitter holds. Runs BEFORE the live-bus subscription in
+        # `ChatApp` starts replaying / dispatching to widgets — a live
+        # prompt injected after replay has no orphan begin on the
+        # persisted path so reconciliation ignores it.
+        await self._reconcile_open_spans_on_resume()
 
         # Step 11 — materialize the trigger as user.message.
         await self._emit(
@@ -1768,6 +2075,28 @@ class _Exchange:
                 ).model_dump(mode="json"),
                 actor=Actor(kind="system"),
             )
+            # spec-068 Part A — register the span. The observer's
+            # symmetric wiring covers model-driven tool calls; this
+            # force-invoke path is a separate emit site with the
+            # same shape. Register so the exchange finally's
+            # backstop can still close a span that slips past a
+            # `CancelledError` propagating up from `invoke_tool`
+            # (the `except PlatformError` below does not catch that).
+            from engine.observers import (  # noqa: PLC0415
+                _build_session_interrupted_tool_failed,
+            )
+
+            _force_span_id = tool_call_id
+
+            def _force_terminal_factory(
+                _span_id: str = _force_span_id,
+            ) -> tuple[EventType, dict[str, Any], Actor]:
+                return _build_session_interrupted_tool_failed(
+                    tool_call_id=_span_id,
+                    tool_name="read",
+                )
+
+            self.register_span(tool_call_id, _force_terminal_factory)
             # Drive the read tool via the Tools subsystem with
             # principal=system.
             try:
@@ -1797,6 +2126,9 @@ class _Exchange:
                     ).model_dump(mode="json"),
                     actor=Actor(kind="system"),
                 )
+                # Terminal already emitted — mark the span closed so
+                # the exchange finally's backstop doesn't double-emit.
+                self.close_span(tool_call_id)
                 # A force-invoke read failure is fatal — the spec
                 # treats force-invoke as a pre-flight prerequisite.
                 raise
@@ -1814,10 +2146,20 @@ class _Exchange:
                 ).model_dump(mode="json"),
                 actor=Actor(kind="system"),
             )
+            # Happy-path terminal emitted — close the span so the
+            # exchange finally's backstop skips it.
+            self.close_span(tool_call_id)
 
     # ---- Framework setup + driver loop --------------------------------
 
     async def _run_framework(self) -> str:
+        # spec-068 Part B resume reconciliation runs earlier — from
+        # `_preflight` between the `thread.exchange_started` emit and
+        # the trigger `user.message` emit — so terminals for dangling
+        # spans land in the log BEFORE `user.message`. See the block
+        # docstring at the reconciliation call site in `_preflight` for
+        # why the ordering is load-bearing.
+
         # Build assembled context.
         events = [
             e
@@ -1900,6 +2242,12 @@ class _Exchange:
                 # Thread the exchange's CancelToken so tool bodies
                 # receive it via `ctx.cancellation`.
                 cancel=self.cancel,
+                # spec-068 Part A — wire the exchange's span registry
+                # so the observer can register on `tool.called` and
+                # close on any terminal arm. The exchange finally
+                # emits terminals for any span still open at unwind.
+                register_span=self.register_span,
+                close_span=self.close_span,
             )
             for t in registered
         ]
@@ -2097,8 +2445,7 @@ class _Exchange:
         )
         if context_length is None:
             _log.debug(
-                "compaction: model %s/%s has no declared context_length; "
-                "skipping",
+                "compaction: model %s/%s has no declared context_length; skipping",
                 self.config.model.provider,
                 self.config.model.model,
             )
@@ -2146,9 +2493,7 @@ class _Exchange:
         last_error: Exception | None = None
         for attempt_index, kf in enumerate(keep_fractions):
             keep_tail_tokens = max(int(budget * kf), 1)
-            inner_config: dict[str, Any] = dict(
-                compaction_cfg.get("config", {}) or {}
-            )
+            inner_config: dict[str, Any] = dict(compaction_cfg.get("config", {}) or {})
             inner_config["keep_recent_fraction"] = kf
             outcome, error = await self._run_summariser_with_retry(
                 provider=provider,

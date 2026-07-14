@@ -678,12 +678,16 @@ class EventAdapter:
         #   correlate.
         self._compaction_widgets: dict[str, Any] = {}
 
-        # spec-008: reference to the ``Cards`` service so the
-        # boot-time interruption notice (fired from
-        # ``_scan_dangling_prompts``) can go through the same seam
-        # ``Cards.notice(kind="warning")`` uses everywhere else.
-        # Populated by ``ChatApp.on_mount`` after the service registry
-        # comes up; ``None`` in headless / replay-only tests.
+        # spec-008 / spec-068 Part B: reference to the ``Cards``
+        # service, kept wired for future render-adjacent notice
+        # paths. Spec-068 Part B removed the single consumer (the
+        # boot-time interruption notice from the deleted
+        # ``_scan_dangling_prompts``) — ``Cards.notice`` writes
+        # durably and belongs to the engine's sole-emitter side; the
+        # `⊘ Interrupted` per-row footer applied by
+        # ``stage_replay_prompt_outcomes`` is the render-only
+        # replacement UX signal. ``None`` in headless / replay-only
+        # tests.
         self._cards: Any | None = cards
 
         # spec-003 bookmark state. Optional deps — when not wired,
@@ -702,8 +706,6 @@ class EventAdapter:
         # Coordinator decision Q4: idempotency guard. A second
         # `start()` returns early without re-dispatching.
         self._started = False
-        # Coordinator decision Q3: bounded scan window.
-        self._scan_tail = 1000
         # bug-056: point-in-time snapshot of the replayed slice's
         # `.requested` → outcome map. `stage_replay_prompt_outcomes` is
         # called BEFORE the replay dispatch loop (both `_replay_history`
@@ -804,10 +806,12 @@ class EventAdapter:
         Mirrors ``register_prompts_impl``: the adapter is built before
         ``ChatApp.on_mount`` constructs the concrete services (Textual
         lifecycle constraint), so the ``cards=`` kwarg is optional at
-        ``__init__`` time and this setter closes the loop. Used by
-        the boot-time interruption notice from
-        ``_scan_dangling_prompts`` when the session's replay
-        synthesises at least one ``tool.failed``.
+        ``__init__`` time and this setter closes the loop. Kept
+        wired for future render-adjacent notice paths; spec-068 Part
+        B removed the single consumer (the boot-time interruption
+        notice that used to fire from the deleted
+        ``_scan_dangling_prompts``) because ``Cards.notice`` writes
+        durably and belongs to the engine's sole-emitter side.
         """
         self._cards = cards
 
@@ -873,11 +877,21 @@ class EventAdapter:
         `_replay_from_bookmark` call after `_replay_history`) starts
         clean; the caller owns which slice is staged.
 
-        Note: `_scan_dangling_prompts` (test-only path) does NOT run on
-        the production resume path, so this method is where dangling
-        historical prompts get their `interrupted` synthesis for the
-        UI (AC #6). The scan path stays untouched — it targets the
-        durable log, not the render.
+        Note: `_scan_dangling_prompts` was deleted in spec-068 Part
+        B (it was an I1 violation — the renderer writing durable
+        repair events — and tail-windowed so long sessions could
+        silently miss orphans). Durable dangling-prompt terminals now
+        come from the engine's resume-time reconciliation
+        (`engine.engine._Exchange._reconcile_open_spans_on_resume`),
+        which runs BEFORE assembly on every fresh exchange. This
+        method remains the RENDER-only path: it decorates the
+        replayed prompt row with the `⊘ Interrupted` footer (matches
+        the interactive `_resolve` mapping) and unfreezes the
+        composer via `recompute_awaiting_approval`. Writes NOTHING
+        durable — the boot-time `Cards.notice` from the removed
+        scan is intentionally not migrated here (a `Cards.notice`
+        write goes durably through the sole-emitter path and would
+        re-open the I1 violation this spec closes).
         """
         outcomes: dict[str, tuple[str, str]] = {}
         # First pass: index every terminal event for a prompt.
@@ -901,7 +915,8 @@ class EventAdapter:
                 rule = payload.get("rule")
                 rule_present = isinstance(rule, dict)
                 outcomes[prompt_id] = _replay_outcome_from_response(
-                    response, has_rule=rule_present,
+                    response,
+                    has_rule=rule_present,
                 )
             elif kind == WIRE_PROMPT_CANCELLED:
                 # `.cancelled` payload has no `response`/`answer` key —
@@ -928,12 +943,26 @@ class EventAdapter:
                 outcomes[prompt_id] = ("interrupted", "⊘ Interrupted")
         self._replay_prompt_outcomes = outcomes
 
+        # spec-068 Part B — the boot-time "session was interrupted"
+        # notice used to fire from the (now-deleted)
+        # `_scan_dangling_prompts` when it synthesised a `tool.failed`
+        # durably. `Cards.notice` writes durably (a WIRE_CARD_NOTICE
+        # UI_EVENT); wiring it here would violate `stage_replay_
+        # prompt_outcomes`'s contract that it writes NOTHING durable.
+        # The `⊘ Interrupted` per-row footer above is the render-only
+        # replacement UX signal — the user sees interrupted rows in
+        # the transcript instead of a separate notice card. If a
+        # session-wide banner turns out to be UX-required, it belongs
+        # on a render-only surface (e.g. an InfoBar variant), NOT on
+        # a durable `Cards.notice` — that would re-open the I1
+        # violation this spec closes.
+
     # ------------------------------------------------------------------
     # spec-003: replay-on-boot bookmark + prompt-mid-crash synthesis
     # ------------------------------------------------------------------
 
     async def start(self) -> None:
-        """Idempotent startup — replay from bookmark, then scan for dangling prompts.
+        """Idempotent startup — replay from bookmark.
 
         Must be called before the live bus subscription so no events
         between the last-dispatched bookmark and the log tail are
@@ -943,6 +972,18 @@ class EventAdapter:
         No-op when the store/session/thread deps aren't wired — the
         chat runtime today constructs the adapter without them; the
         wiring lands together with the concrete service impls in M2+.
+
+        spec-068 Part B: durable dangling-prompt / dangling-tool_call
+        repair used to happen here via `_scan_dangling_prompts`. It
+        was an I1 violation (renderer writing durable events) AND
+        tail-windowed (silently missed deep orphans in long
+        sessions). The engine now owns this responsibility via
+        `_Exchange._reconcile_open_spans_on_resume`, which runs on
+        every fresh-exchange resume before assembly, is span-keyed
+        (not tail-bound), and routes each terminal through the
+        engine's sole-emitter `_emit`. The render-side "⊘
+        Interrupted" footer and composer-unfreeze survive via
+        `stage_replay_prompt_outcomes` (UI-only; writes nothing).
         """
         if self._started:
             return
@@ -954,7 +995,6 @@ class EventAdapter:
         ):
             return
         await self._replay_from_bookmark()
-        await self._scan_dangling_prompts()
 
     async def _replay_from_bookmark(self) -> None:
         """Read events from bookmark to log tail; dispatch each; persist every 100.
@@ -1012,196 +1052,6 @@ class EventAdapter:
             self._bookmark_dispatch_count += 1
             if self._bookmark_dispatch_count >= self._bookmark_persist_every:
                 await self._persist_bookmark()
-
-    async def _scan_dangling_prompts(self) -> None:
-        """Synthesise `.cancelled` + `tool.failed` for unresolved prompt requests.
-
-        Bounded scan (Coordinator decision Q3): only the last
-        `self._scan_tail` events (default 1000) are considered. A
-        dangling prompt is a `kolsch.prompt.requested` UI event with
-        no matching `.answered` or `.cancelled` in the same window.
-        For each dangling prompt:
-
-        - Append synthetic `kolsch.prompt.cancelled` with
-          `reason="session_interrupted"`.
-        - If the parent `tool.called` (looked up via
-          `source.tool_call_id` in the request's payload) has no
-          `tool.result` or `tool.failed`, append synthetic
-          `tool.failed` with `error.type="session.interrupted"`.
-
-        Idempotent: on the second boot after synthesis, the newly-
-        appended `.cancelled` closes the request, so the scan finds
-        no dangling entries and does nothing. Pre-spec-004 (no
-        `kolsch.prompt.requested` events exist anywhere), this is a
-        silent no-op.
-        """
-        assert self._session_store is not None
-        assert self._session_id is not None
-        assert self._thread_id is not None
-
-        events: list[Event] = []
-        async for ev in self._session_store.read_events(
-            self._thread_id,
-            tail=self._scan_tail,
-        ):
-            events.append(ev)
-
-        # First pass: index requested/resolved prompts + tool.called
-        # + tool terminals within the scan window.
-        requested: dict[str, Event] = {}
-        resolved: set[str] = set()
-        tool_calls: dict[str, Event] = {}
-        tool_terminals: set[str] = set()
-
-        for ev in events:
-            if ev.type == EventType.UI_EVENT:
-                data = ev.data if isinstance(ev.data, dict) else {}
-                kind = data.get("kind")
-                payload = data.get("payload") or {}
-                if not isinstance(payload, dict):
-                    payload = {}
-                prompt_id = payload.get("prompt_id")
-                if not isinstance(prompt_id, str):
-                    continue
-                if kind == WIRE_PROMPT_REQUESTED:
-                    requested[prompt_id] = ev
-                elif kind in (WIRE_PROMPT_ANSWERED, WIRE_PROMPT_CANCELLED):
-                    resolved.add(prompt_id)
-            elif ev.type == EventType.TOOL_CALLED:
-                data = ev.data if isinstance(ev.data, dict) else {}
-                call_id = data.get("tool_call_id")
-                if isinstance(call_id, str):
-                    tool_calls[call_id] = ev
-            elif ev.type in (EventType.TOOL_RESULT, EventType.TOOL_FAILED):
-                data = ev.data if isinstance(ev.data, dict) else {}
-                call_id = data.get("tool_call_id")
-                if isinstance(call_id, str):
-                    tool_terminals.add(call_id)
-
-        # Second pass: synthesize for dangling requests.
-        tool_failed_synthesised = 0
-        for prompt_id, req_ev in requested.items():
-            if prompt_id in resolved:
-                continue
-            await self._append_synthetic_prompt_cancelled(prompt_id, req_ev)
-            data = req_ev.data if isinstance(req_ev.data, dict) else {}
-            source = data.get("payload", {}).get("source") if isinstance(
-                data.get("payload"), dict
-            ) else None
-            tool_call_id = (
-                source.get("tool_call_id")
-                if isinstance(source, dict)
-                else None
-            )
-            if (
-                isinstance(tool_call_id, str)
-                and tool_call_id in tool_calls
-                and tool_call_id not in tool_terminals
-            ):
-                await self._append_synthetic_tool_failed(
-                    tool_call_id,
-                    tool_calls[tool_call_id],
-                )
-                tool_failed_synthesised += 1
-
-        # spec-008: fire a boot-time interruption notice ONLY when we
-        # synthesised at least one ``tool.failed``. Uses the same
-        # ``Cards.notice`` seam every other in-transcript notice goes
-        # through; the adapter's ``_handle_card_notice`` mounts a
-        # ``NoticeWidget`` at the transcript root (no ``card_id`` in
-        # the payload). Headless tests without a live ``Cards`` skip
-        # silently.
-        if tool_failed_synthesised > 0 and self._cards is not None:
-            with contextlib.suppress(Exception):
-                self._cards.notice(
-                    "↻ Previous session was interrupted; ask the "
-                    "assistant to retry.",
-                    kind="warning",
-                )
-
-    async def _append_synthetic_prompt_cancelled(
-        self,
-        prompt_id: str,
-        req_event: Event,
-    ) -> None:
-        """Append a synthetic `kolsch.prompt.cancelled` UI event.
-
-        Reason is `session_interrupted`; payload also carries the
-        `prompt_id` so downstream consumers can correlate with the
-        original request.
-        """
-        assert self._session_store is not None
-        assert self._thread_id is not None
-        assert self._session_id is not None
-
-        cancelled = Event(
-            event_id=EventId(f"ev_{uuid4()}"),
-            parent_event_id=None,
-            thread_id=req_event.thread_id,
-            session_id=req_event.session_id,
-            type=EventType.UI_EVENT,
-            data={
-                "schema_version": 1,
-                "kind": WIRE_PROMPT_CANCELLED,
-                "payload": {
-                    "prompt_id": prompt_id,
-                    "reason": "session_interrupted",
-                },
-            },
-            actor=Actor(kind="system"),
-            created_at=datetime.now(UTC),
-        )
-        try:
-            await self._session_store.append_event(self._thread_id, cancelled)
-        except Exception:
-            _LOGGER.exception(
-                "failed to append synthetic prompt.cancelled for %r",
-                prompt_id,
-            )
-
-    async def _append_synthetic_tool_failed(
-        self,
-        tool_call_id: str,
-        tool_called: Event,
-    ) -> None:
-        """Append a synthetic `tool.failed` for an interrupted tool call.
-
-        `error.type` is `session.interrupted`; the message explains
-        the retry path so the model can pick up cleanly on its next
-        turn.
-        """
-        assert self._session_store is not None
-        assert self._thread_id is not None
-
-        called_data = tool_called.data if isinstance(tool_called.data, dict) else {}
-        tool_name = called_data.get("tool_name", "<unknown>")
-        failed = Event(
-            event_id=EventId(f"ev_{uuid4()}"),
-            parent_event_id=None,
-            thread_id=tool_called.thread_id,
-            session_id=tool_called.session_id,
-            type=EventType.TOOL_FAILED,
-            data={
-                "tool_call_id": tool_call_id,
-                "tool_name": tool_name,
-                "error": {
-                    "type": "session.interrupted",
-                    "message": (
-                        "The chat session ended while this tool was awaiting "
-                        "user input. Retry to continue."
-                    ),
-                },
-            },
-            actor=Actor(kind="system"),
-            created_at=datetime.now(UTC),
-        )
-        try:
-            await self._session_store.append_event(self._thread_id, failed)
-        except Exception:
-            _LOGGER.exception(
-                "failed to append synthetic tool.failed for %r",
-                tool_call_id,
-            )
 
     async def _persist_bookmark(self) -> None:
         """Persist the current bookmark to the session's `meta.json`.
@@ -1312,9 +1162,10 @@ class EventAdapter:
                 (trace_id, ""),
             )
         if node_row is None:
-            for (mapped_trace, _mapped_inv), row in (
-                self._live_nodes_by_trace_and_invocation.items()
-            ):
+            for (
+                mapped_trace,
+                _mapped_inv,
+            ), row in self._live_nodes_by_trace_and_invocation.items():
                 if mapped_trace == trace_id:
                     node_row = row
                     break
@@ -1342,7 +1193,9 @@ class EventAdapter:
         # sinks ignore this kwarg.
         raw_content = content if isinstance(content, dict) and content else None
         widget = await sink.mount_user_message(
-            text, _now_ts(event), event_id=_event_id_str(event),
+            text,
+            _now_ts(event),
+            event_id=_event_id_str(event),
             content=raw_content,
         )
         # bug-060 Part 1: register the mounted widget under the source
@@ -1370,7 +1223,8 @@ class EventAdapter:
         if sink.last_assistant_text() == text:
             return
         widget = await sink.mount_assistant_message(
-            text, event_id=_event_id_str(event),
+            text,
+            event_id=_event_id_str(event),
         )
         sink.set_last_assistant_text(text)
         # bug-060 Part 1: register the mounted widget (App sinks only —
@@ -1440,7 +1294,9 @@ class EventAdapter:
             return
         body = _format_tool_result(result)
         widget = await sink.mount_tool_call(
-            tool_name, args_str, body,
+            tool_name,
+            args_str,
+            body,
             failed=False,
             event_id=_event_id_str(event),
         )
@@ -1475,9 +1331,7 @@ class EventAdapter:
         matched_rule_raw = (
             detail.get("matched_rule") if isinstance(detail, dict) else None
         )
-        matched_rule = (
-            matched_rule_raw if isinstance(matched_rule_raw, dict) else None
-        )
+        matched_rule = matched_rule_raw if isinstance(matched_rule_raw, dict) else None
         sink = self._route_to_workflow_node(event) or self._app
         widget = await sink.mount_tool_call(
             tool_name,
@@ -1539,7 +1393,8 @@ class EventAdapter:
             # with identical content.
             if sink.last_assistant_text() != text:
                 widget = await sink.mount_assistant_message(
-                    text, event_id=_event_id_str(event),
+                    text,
+                    event_id=_event_id_str(event),
                 )
                 sink.set_last_assistant_text(text)
                 # bug-060 Part 1: register the mounted widget under
@@ -1596,7 +1451,9 @@ class EventAdapter:
             self._register_widget_for_event(event, widget)
         else:
             await sink.mount_notice(
-                notice_id, text, level="info",
+                notice_id,
+                text,
+                level="info",
                 event_id=_event_id_str(event),
             )
 
@@ -1701,7 +1558,8 @@ class EventAdapter:
         await self._remount_compacted_slice(target)
 
     async def _remount_compacted_slice(
-        self, compaction_event_id: str,
+        self,
+        compaction_event_id: str,
     ) -> None:
         """Re-run every event covered by the named CONTEXT_COMPACTED.
 
@@ -1757,8 +1615,7 @@ class EventAdapter:
             return
         if not restored:
             _LOGGER.debug(
-                "event_adapter: /uncompact — no covered events found "
-                "for compaction %r",
+                "event_adapter: /uncompact — no covered events found for compaction %r",
                 compaction_event_id,
             )
             return
@@ -1780,16 +1637,15 @@ class EventAdapter:
                     await self.handle(ev)
                 except Exception:
                     _LOGGER.exception(
-                        "event_adapter: /uncompact re-replay raised "
-                        "for event_id=%r",
+                        "event_adapter: /uncompact re-replay raised for event_id=%r",
                         ev.event_id,
                     )
         finally:
             self._remounted_events -= marker
         _LOGGER.debug(
-            "event_adapter: /uncompact re-mounted %d event(s) covered "
-            "by compaction %r",
-            len(restored), compaction_event_id,
+            "event_adapter: /uncompact re-mounted %d event(s) covered by compaction %r",
+            len(restored),
+            compaction_event_id,
         )
 
     async def _handle_context_compaction_failed(self, event: Event) -> None:
@@ -1821,9 +1677,7 @@ class EventAdapter:
         self._register_widget_for_event(event, block)
         block.transition_to_skipped(reason=reason)
 
-    async def _acquire_compaction_block(
-        self, *, event_id: str
-    ) -> Any:
+    async def _acquire_compaction_block(self, *, event_id: str) -> Any:
         """Return the CompactionBlock to write into.
 
         Consumes a pre-mounted ``pending`` running block if present.
@@ -1877,7 +1731,9 @@ class EventAdapter:
             self._register_widget_for_event(event, widget)
         else:
             await sink.mount_notice(
-                notice_id, text, level="warning",
+                notice_id,
+                text,
+                level="warning",
                 event_id=_event_id_str(event),
             )
 
@@ -2004,9 +1860,7 @@ class EventAdapter:
         # `_resolved_prompt_ids` LRU (durable-write guard) stays
         # engaged — a terminal re-mount hits the outcomes-map branch,
         # returns before spawning the bridge, and no write path fires.
-        is_remount = (
-            event is not None and event.event_id in self._remounted_events
-        )
+        is_remount = event is not None and event.event_id in self._remounted_events
         if prompt_id in self._applied_prompt_ids and not is_remount:
             return
         self._applied_prompt_ids.add(prompt_id)
@@ -2043,9 +1897,7 @@ class EventAdapter:
             run_id_raw = source.get("run_id")
             node_name_raw = source.get("node_name")
             run_id = run_id_raw if isinstance(run_id_raw, str) else ""
-            node_name = (
-                node_name_raw if isinstance(node_name_raw, str) else ""
-            )
+            node_name = node_name_raw if isinstance(node_name_raw, str) else ""
             # Track the (run_id, node_name) tuple so the follow-up
             # `.answered` / `.cancelled` dispatch can fire
             # `emit_approval_resolved` without re-parsing `source`.
@@ -2054,7 +1906,8 @@ class EventAdapter:
             # early-return before consulting this map.
             if run_id and terminal_entry is None:
                 self._workflow_prompt_sources[prompt_id] = (
-                    run_id, node_name,
+                    run_id,
+                    node_name,
                 )
             # spec-017: build the run_chain and populate it on the
             # source dict so downstream consumers (renderers, replay
@@ -2071,18 +1924,15 @@ class EventAdapter:
                 parent_hint = self._format_run_chain(run_chain)
             else:
                 parent_hint = self._derive_workflow_parent_hint(
-                    run_id, node_name=node_name,
+                    run_id,
+                    node_name=node_name,
                 )
             # Fire the durable `awaiting_approval` UI event — the
             # matching WorkflowRenderer transitions the node row to
             # `paused` on the resulting dispatch. bug-056: skipped for
             # historical prompts (terminal branch) to keep the resume
             # append count at zero (AC #4).
-            if (
-                self._workflows_impl is not None
-                and run_id
-                and terminal_entry is None
-            ):
+            if self._workflows_impl is not None and run_id and terminal_entry is None:
                 try:
                     await self._workflows_impl.emit_awaiting_approval(
                         run_id=run_id,
@@ -2177,8 +2027,7 @@ class EventAdapter:
                 )
             except Exception:
                 _LOGGER.exception(
-                    "event_adapter: mount_approval_block raised "
-                    "for prompt_id=%r",
+                    "event_adapter: mount_approval_block raised for prompt_id=%r",
                     prompt_id,
                 )
         except Exception:
@@ -2288,6 +2137,7 @@ class EventAdapter:
             from cli.chat.widgets.approval_block import (
                 response_key_from,
             )
+
             response = response_key_from(result)
         except Exception:
             _LOGGER.exception(
@@ -2331,8 +2181,7 @@ class EventAdapter:
             # widget's `_resolved_event` still fires so any direct
             # awaiter (widget-level tests) unblocks.
             _LOGGER.debug(
-                "event_adapter: approval bridge skipped (no store) "
-                "for prompt_id=%r",
+                "event_adapter: approval bridge skipped (no store) for prompt_id=%r",
                 prompt_id,
             )
             return
@@ -2381,7 +2230,9 @@ class EventAdapter:
         # bus failures are swallowed (durability is the store append,
         # delivery is best-effort).
         bus = getattr(
-            getattr(self._app, "session", None), "runtime", None,
+            getattr(self._app, "session", None),
+            "runtime",
+            None,
         )
         bus = getattr(bus, "bus", None) if bus is not None else None
         if bus is not None and hasattr(bus, "publish"):
@@ -2440,9 +2291,7 @@ class EventAdapter:
         # `_workflow_registry` keys are `WorkflowRunId` (a `str`
         # subclass). Build a plain-str lookup once so the walk stays
         # O(chain_depth) rather than O(chain_depth * registry_size).
-        by_str: dict[str, Any] = {
-            str(key): record for key, record in registry.items()
-        }
+        by_str: dict[str, Any] = {str(key): record for key, record in registry.items()}
 
         chain: list[dict[str, str]] = []
         cur: str | None = innermost_run_id
@@ -2454,13 +2303,15 @@ class EventAdapter:
                 break
             ref = getattr(rec, "ref", None)
             ref_str = ref if isinstance(ref, str) else ""
-            chain.append({
-                "run_id": cur,
-                "ref": ref_str,
-                "node_name": (
-                    innermost_node_name if cur == innermost_run_id else ""
-                ),
-            })
+            chain.append(
+                {
+                    "run_id": cur,
+                    "ref": ref_str,
+                    "node_name": (
+                        innermost_node_name if cur == innermost_run_id else ""
+                    ),
+                }
+            )
             parent = getattr(rec, "parent_run_id", None)
             cur = str(parent) if parent is not None else None
 
@@ -2478,8 +2329,7 @@ class EventAdapter:
         if not run_chain:
             return ""
         refs = " → ".join(
-            entry.get("ref") or entry.get("run_id", "")
-            for entry in run_chain
+            entry.get("ref") or entry.get("run_id", "") for entry in run_chain
         )
         innermost = run_chain[-1]
         node_name = innermost.get("node_name") or ""
@@ -2521,7 +2371,9 @@ class EventAdapter:
         )
         if self._prompts_impl is not None:
             self._prompts_impl.resolve_pending(
-                prompt_id, response, rule=rule_dict,
+                prompt_id,
+                response,
+                rule=rule_dict,
             )
         # spec-014: workflow branch — schedule the durable
         # `approval_resolved` emit. Fire-and-forget so the sync
@@ -2689,7 +2541,8 @@ class EventAdapter:
                 # handles that path via `_refresh_workflow_parent_ref`.
                 if kind == "workflow":
                     self._apply_workflow_parent_ref_from_card(
-                        card_id, widget,
+                        card_id,
+                        widget,
                     )
                 return
         # Fallback: no transcript container available (headless
@@ -3000,7 +2853,10 @@ class EventAdapter:
         card_id_str = payload.get("card_id")
         if isinstance(card_id_str, str) and card_id_str:
             widget = self._mount_in_card_notice(
-                raw_id, card_id_str, text_str, kind_str,
+                raw_id,
+                card_id_str,
+                text_str,
+                kind_str,
             )
             # bug-060 Part 1: in-card notices register under the
             # source event's id when the mount returns a widget.
@@ -3170,15 +3026,14 @@ class EventAdapter:
         from cli.chat.widgets.card_body.workflow import (  # noqa: PLC0415
             _ReconstructedSubAgentEvent,
         )
+
         outer_ts = _now_ts(event)
         inner = _ReconstructedSubAgentEvent(
             type=event_type,
             data=data,
             created_at=outer_ts,
             trace_id=trace_id,
-            event_id=(
-                wire_event_id if isinstance(wire_event_id, str) else None
-            ),
+            event_id=(wire_event_id if isinstance(wire_event_id, str) else None),
         )
         # Register adapter with any tracked renderers so the map
         # stays populated. This mirrors the pre-036d fan-out
@@ -3194,7 +3049,8 @@ class EventAdapter:
         # ``dispatch_sub_agent_event`` is a no-op here (outer +
         # inner trace_id are identical by construction).
         await self.dispatch_sub_agent_event(
-            inner, outer_trace_id=trace_id,
+            inner,
+            outer_trace_id=trace_id,
         )
 
     def _refresh_workflow_parent_ref(
@@ -3339,8 +3195,7 @@ class EventAdapter:
         transcript = self._locate_transcript()
         if transcript is None:
             _LOGGER.warning(
-                "event_adapter: transcript absent; anchor scroll no-op "
-                "for run_id=%r",
+                "event_adapter: transcript absent; anchor scroll no-op for run_id=%r",
                 run_id,
             )
             return False
@@ -3392,7 +3247,9 @@ class EventAdapter:
         return None
 
     def _register_widget_for_event(
-        self, event: Event, widget: Any,
+        self,
+        event: Event,
+        widget: Any,
     ) -> None:
         """bug-060 Part 1: record ``widget`` as mounted for ``event``.
 
@@ -3451,7 +3308,8 @@ class EventAdapter:
         return removed
 
     async def _unmount_covered_widgets(
-        self, compacted_ids: list[str],
+        self,
+        compacted_ids: list[str],
     ) -> int:
         """bug-060 Part 2: unmount every widget tracked under a covered id.
 
@@ -3494,7 +3352,8 @@ class EventAdapter:
                         _LOGGER.exception(
                             "event_adapter: compaction unmount failed "
                             "for event_id=%s widget=%r",
-                            key, widget,
+                            key,
+                            widget,
                         )
                         # Still sync the dicts — the widget's mount
                         # state is unusable regardless of the exception.
