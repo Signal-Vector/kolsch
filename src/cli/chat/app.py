@@ -834,6 +834,23 @@ class ChatApp(App):
         if self.session.is_resume:
             await self._replay_history()
 
+        # bug-058 Part B + qol-061: adopt Textual's ``Widget.anchor()``
+        # primitive so the transcript stays pinned to the bottom until
+        # the user scrolls away (and auto-releases on user scroll).
+        # Replaces the ~13 per-mount ``scroll_end(animate=False)`` calls
+        # that used to hand-roll the same behaviour — see
+        # ``widget.py:769``. qol-061: hoisted BEFORE the eager compact
+        # await so mounts during the summariser hang (up to 30-90s on
+        # the whale session) land inside an anchored transcript and
+        # follow the tail. Textual's built-in ``_check_anchor``
+        # (``widget.py:792-799``) handles scroll-back-to-tail re-engage
+        # natively — no subclass required.
+        try:
+            transcript = self.query_one("#transcript", VerticalScroll)
+            transcript.anchor()
+        except Exception:  # noqa: BLE001 — headless fixtures may lack #transcript
+            pass
+
         # feat-054 Phase 5 — session-open eager compaction. Fire BEFORE
         # the user's first post-resume message so the summariser delay
         # is absorbed into the resume UX. Fresh sessions no-op via the
@@ -841,20 +858,6 @@ class ChatApp(App):
         # frozen for the duration so the user can't type ahead of an
         # unstable context state.
         await self._maybe_eager_compact_on_open()
-
-        # bug-058 Part B: adopt Textual's ``Widget.anchor()`` primitive
-        # so the transcript stays pinned to the bottom until the user
-        # scrolls away (and auto-releases on user scroll). Replaces the
-        # ~13 per-mount ``scroll_end(animate=False)`` calls that used to
-        # hand-roll the same behaviour — see ``widget.py:769``. Called
-        # ONCE after replay + eager compaction settle so the deferred
-        # `_scroll_tail` (call_after_refresh) fires against an already
-        # anchored transcript.
-        try:
-            transcript = self.query_one("#transcript", VerticalScroll)
-            transcript.anchor()
-        except Exception:  # noqa: BLE001 — headless fixtures may lack #transcript
-            pass
 
         # Focus the composer so the user can start typing.
         try:
