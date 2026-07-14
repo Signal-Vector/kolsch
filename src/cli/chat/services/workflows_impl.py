@@ -1040,6 +1040,20 @@ class WorkflowsImpl(AbstractWorkflows):
                     record.phase = "cancelled"
                 else:
                     record.phase = "error"
+            # spec-069 Part A — belt-and-braces reconciliation of the
+            # in-flight node count. `_update_node_counts` already
+            # decrements `running` on `NODE_COMPLETED` / `NODE_FAILED` /
+            # `NODE_TIMED_OUT`, but a construction-failure path (record
+            # created, `workflow.node.started` never emitted, or a
+            # bridge that dropped an event) can still leave `running > 0`
+            # when the terminal phase lands. Zero it here so
+            # `workflow_status` / `node_counts.running` never reports a
+            # phantom in-flight node on a terminal record — the fix
+            # spec-069 Background (defect 1) points at (the wedged
+            # 2-node workflow stuck at running=1 forever). Cheap,
+            # obviously correct, no behaviour change on the happy path.
+            if record.node_counts.running != 0:
+                record.node_counts.running = 0
 
         # Close the bound card if the bridge didn't already.
         if spec.card is not None and not spec.card.is_closed:

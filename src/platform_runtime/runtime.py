@@ -107,6 +107,19 @@ class PlatformRuntime:
     # is absent. WorkflowsImpl reads this at construction time and
     # exposes it to tools via `Workflows.default_timeout_seconds`.
     workflow_default_timeout_seconds: int = 300
+    # spec-069 Part A — default PER-NODE execution timeout (seconds)
+    # threaded into `IterativeExecutor` so a stalled node
+    # (agent stream never yields, LLM stall the token can't cooperatively
+    # unwind, etc.) is hard-cancelled via `asyncio.wait_for`. Populated
+    # at bootstrap from `platform.yaml:workflows.default_node_timeout_seconds`;
+    # 240s default leaves comfortable headroom under the 300s
+    # `run_workflow` long-poll (see
+    # `_starter_bundle/kolsch/tools/run_workflow.py:_DEFAULT_TIMEOUT_SECONDS`)
+    # so the node's own timeout fires BEFORE the poll returns
+    # "still running" — otherwise the wedge shape from spec-069's
+    # Background (defect 1) recurs. `None` disables the default
+    # (raw runner runs unwrapped, matching pre-spec-069 behaviour).
+    workflow_default_node_timeout_seconds: float | None = 240.0
 
     async def build_resolved_config(
         self,
@@ -412,6 +425,21 @@ async def bootstrap_runtime(
     workflow_default_timeout_seconds = int(
         (workflows_cfg or {}).get("default_timeout_seconds", 300)
     )
+    # spec-069 Part A — read the per-node execution-timeout default
+    # from the same `workflows:` section. Optional. Resolution:
+    #   * key absent          → 240s default (below)
+    #   * key present, `null` → None (explicit opt-out; unbounded await)
+    #   * key present, number → float(value)
+    raw_node_timeout: Any
+    if workflows_cfg is not None and "default_node_timeout_seconds" in workflows_cfg:
+        raw_node_timeout = workflows_cfg["default_node_timeout_seconds"]
+    else:
+        raw_node_timeout = 240.0
+    workflow_default_node_timeout_seconds: float | None
+    if raw_node_timeout is None:
+        workflow_default_node_timeout_seconds = None
+    else:
+        workflow_default_node_timeout_seconds = float(raw_node_timeout)
 
     return PlatformRuntime(
         root=root,
@@ -430,4 +458,5 @@ async def bootstrap_runtime(
         compaction_provider=compaction_provider,
         llm_providers_config=llm_providers_config,
         workflow_default_timeout_seconds=workflow_default_timeout_seconds,
+        workflow_default_node_timeout_seconds=workflow_default_node_timeout_seconds,
     )

@@ -21,10 +21,12 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from engine.framework import LLMResponse
+from errors import ModelTimeout
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -35,6 +37,42 @@ if TYPE_CHECKING:
     from llm import ProviderConfig
     from providers import SecretsProvider
     from schemas import ModelSpec
+
+
+# spec-069 Part A — bound the blocking LLM read so a wedged provider
+# call fails fast instead of pinning a worker thread indefinitely.
+# `asyncio.wait_for` hard-cancels the awaiting task on expiry; the
+# underlying `to_thread` worker keeps running until it returns from
+# the blocking call (Python cannot cancel arbitrary threads). That's
+# acceptable — spec-069 Part B (owned executor) makes the worker
+# daemonic so it can't block interpreter shutdown; until Part B
+# lands, the process's non-daemon pool worker keeps the runtime
+# alive briefly on shutdown but no longer blocks the CALLER (chat
+# session, workflow node) that raised the timeout.
+#
+# Default 120s is long enough for real-provider latency on cold
+# tools + rate-limited retries but short enough that a stuck
+# request surfaces within ~2 minutes rather than hanging a chat
+# turn forever. Override at process start via
+# `KOLSCH_LLM_CALL_TIMEOUT_SECONDS` (float; blank/`0`/negative
+# disables the wrap, restoring the pre-spec-069 unbounded shape).
+def _read_llm_call_timeout_seconds() -> float | None:
+    raw = os.environ.get("KOLSCH_LLM_CALL_TIMEOUT_SECONDS")
+    if raw is None:
+        return _DEFAULT_LLM_CALL_TIMEOUT_SECONDS
+    stripped = raw.strip()
+    if not stripped:
+        return None
+    try:
+        value = float(stripped)
+    except ValueError:
+        return _DEFAULT_LLM_CALL_TIMEOUT_SECONDS
+    if value <= 0:
+        return None
+    return value
+
+
+_DEFAULT_LLM_CALL_TIMEOUT_SECONDS: float = 120.0
 
 
 def make_llm_callable(
@@ -89,11 +127,47 @@ def make_llm_callable(
         # crewai's LLMMessage is a TypedDict variant we don't import
         # to avoid the heavy crewai imports at module load; our dict
         # has the same shape. Cast is safe.
-        result = await asyncio.to_thread(
-            crewai_llm.call,
-            messages,  # type: ignore[arg-type]
-            tools=tools_arg,
-        )
+        #
+        # spec-069 Part A — bound the `to_thread` await with
+        # `asyncio.wait_for` so a wedged provider read fails fast
+        # instead of pinning the worker forever. See the module-level
+        # `_read_llm_call_timeout_seconds` docstring for the caveat
+        # about the underlying thread outliving the timeout (fixed by
+        # Part B / owned executor). `None` (env opt-out) disables the
+        # wrap, restoring the pre-spec-069 unbounded shape for tests
+        # that need it.
+        timeout = _read_llm_call_timeout_seconds()
+        if timeout is None:
+            result = await asyncio.to_thread(
+                crewai_llm.call,
+                messages,  # type: ignore[arg-type]
+                tools=tools_arg,
+            )
+        else:
+            try:
+                result = await asyncio.wait_for(
+                    asyncio.to_thread(
+                        crewai_llm.call,
+                        messages,  # type: ignore[arg-type]
+                        tools=tools_arg,
+                    ),
+                    timeout=timeout,
+                )
+            except TimeoutError as exc:
+                # Semantic domain error rather than a bare `TimeoutError`
+                # so the engine's fallback ladder + observer render
+                # the same shape as a provider-side `model.timeout`.
+                # Provider + model are best-effort — this call site
+                # is inside `make_llm_callable` which was constructed
+                # for a specific `crewai_llm` with `crewai_llm.model`
+                # set.
+                model_name = getattr(crewai_llm, "model", None) or "unknown"
+                raise ModelTimeout(
+                    provider="crewai",
+                    model=str(model_name),
+                    timeout_seconds=float(timeout),
+                    where="engine._crewai_adapter.make_llm_callable",
+                ) from exc
         return _engine_response_from_crewai(result)
 
     return call

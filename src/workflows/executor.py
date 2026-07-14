@@ -287,6 +287,7 @@ class IterativeExecutor:
         sub_agent_event_observer: (
             Callable[[str, str, "Event"], None] | None
         ) = None,
+        default_node_timeout_seconds: float | None = None,
     ) -> None:
         # Nested-executor depth cap (shared with `extends:`; same
         # error class, same limit). The check at CONSTRUCTION (not at
@@ -450,6 +451,21 @@ class IterativeExecutor:
         # (same discipline as `_event_observer`; a bad UI-side
         # translator can't kill the workflow).
         self._sub_agent_event_observer = sub_agent_event_observer
+        # spec-069 Part A — default per-node execution timeout applied
+        # by `_apply_node_modifiers` when the node YAML does NOT set
+        # `timeout_seconds:`. `None` disables the default (raw runner
+        # runs unwrapped, matching pre-spec-069 behaviour) so
+        # constructors that don't opt in continue to work — chat wires
+        # a value from `platform.yaml:workflows.default_node_timeout_seconds`
+        # via `build_workflow_executor`, headless CLI paths keep the
+        # legacy unbounded behaviour unless they opt in.
+        #
+        # The value MUST be shorter than
+        # `run_workflow._DEFAULT_TIMEOUT_SECONDS` (300s) so the poll
+        # doesn't return "still running" AFTER the node's own
+        # deadline should have fired — see spec-069 Background
+        # (defect 1) for the wedge shape that motivates this.
+        self._default_node_timeout_seconds = default_node_timeout_seconds
 
     # ------------------------------------------------------------------
     # spec-011: emit + observer seam.
@@ -1432,7 +1448,11 @@ class IterativeExecutor:
                 # Per-node modifiers — apply retry FIRST so the
                 # timeout deadline bounds the WHOLE retry budget
                 # (not just the final attempt).
-                runner = _apply_node_modifiers(runner, node_def=node_def)
+                runner = _apply_node_modifiers(
+                    runner,
+                    node_def=node_def,
+                    default_timeout_seconds=self._default_node_timeout_seconds,
+                )
                 try:
                     output = await runner.run(
                         node_name=node_name,
@@ -1939,7 +1959,11 @@ class IterativeExecutor:
             _node_type_ref(pending.node_def),
             node_name=pending.node_name,
         )
-        runner = _apply_node_modifiers(runner, node_def=pending.node_def)
+        runner = _apply_node_modifiers(
+            runner,
+            node_def=pending.node_def,
+            default_timeout_seconds=self._default_node_timeout_seconds,
+        )
 
         touches_state = _node_type_ref(pending.node_def) in (
             "kolsch/nodes/set_state",
@@ -2776,6 +2800,7 @@ def _apply_node_modifiers(
     runner: NodeRunner,
     *,
     node_def: Any,
+    default_timeout_seconds: float | None = None,
 ) -> NodeRunner:
     """Apply per-node `retry` and `timeout_seconds` modifiers.
 
@@ -2783,6 +2808,15 @@ def _apply_node_modifiers(
     retry'd runner. The result is that `timeout_seconds` bounds the
     WHOLE retry budget (initial + all retries + backoffs), not just
     the final attempt.
+
+    spec-069 Part A: when the node's YAML does NOT set an explicit
+    `timeout_seconds:` and the caller supplied a positive
+    `default_timeout_seconds`, wrap the runner with the default so
+    the executor's `await runner.run(...)` is always bounded. Explicit
+    per-node `timeout_seconds:` still wins (the override path). A
+    `default_timeout_seconds=None` (or `<= 0`) preserves the
+    pre-spec-069 unwrapped behaviour — callers that don't opt in
+    (headless CLI, tests) keep the legacy shape.
     """
     retries = int(getattr(node_def, "retry", 0) or 0)
     if retries > 0:
@@ -2790,10 +2824,17 @@ def _apply_node_modifiers(
 
         runner = with_retry(runner, retries=retries)
     timeout_seconds = getattr(node_def, "timeout_seconds", None)
+    effective_timeout: float | None
     if timeout_seconds is not None and float(timeout_seconds) > 0:
+        effective_timeout = float(timeout_seconds)
+    elif default_timeout_seconds is not None and default_timeout_seconds > 0:
+        effective_timeout = float(default_timeout_seconds)
+    else:
+        effective_timeout = None
+    if effective_timeout is not None:
         from workflows.builtins.timeout import with_timeout  # noqa: PLC0415
 
-        runner = with_timeout(runner, timeout_seconds=float(timeout_seconds))
+        runner = with_timeout(runner, timeout_seconds=effective_timeout)
     return runner
 
 

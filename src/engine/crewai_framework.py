@@ -198,12 +198,56 @@ class CrewAIFramework:
         # path warnings being noise, not signal). Do NOT remove
         # without first checking that the upstream singleton has
         # been fixed.
+        # spec-069 Part A — bound the whole kickoff so a wedged
+        # provider read (LLM or tool network I/O) fails fast rather
+        # than pinning the caller forever. `kickoff_async` internally
+        # runs the sync `kickoff` in `asyncio.to_thread`; `wait_for`
+        # hard-cancels the awaiting task on expiry. The underlying
+        # worker thread keeps running until it returns from the
+        # blocking call — Python can't cancel arbitrary threads —
+        # which is why spec-069 Part B makes that pool's threads
+        # daemonic so they can't block interpreter shutdown. The
+        # default (see `_crewai_adapter._DEFAULT_LLM_CALL_TIMEOUT_SECONDS`
+        # / `KOLSCH_LLM_CALL_TIMEOUT_SECONDS` env override) is
+        # deliberately generous — real-provider latency on cold
+        # tools + rate-limited retries can add up.
+        from engine._crewai_adapter import (  # noqa: PLC0415
+            _read_llm_call_timeout_seconds,
+        )
+
+        kickoff_timeout = _read_llm_call_timeout_seconds()
         with (
             contextlib.redirect_stdout(io.StringIO()),
             contextlib.redirect_stderr(io.StringIO()),
         ):
             try:
-                result = await crew.kickoff_async()
+                if kickoff_timeout is None:
+                    result = await crew.kickoff_async()
+                else:
+                    kickoff_bound = kickoff_timeout
+                    try:
+                        result = await asyncio.wait_for(
+                            crew.kickoff_async(),
+                            timeout=kickoff_bound,
+                        )
+                    except TimeoutError as exc:
+                        # Same shape as
+                        # `_crewai_adapter.make_llm_callable` surfaces
+                        # on the direct `to_thread` seam — the engine's
+                        # fallback / observer machinery treats
+                        # `model.timeout` uniformly regardless of which
+                        # framework surface fired.
+                        from errors import ModelTimeout  # noqa: PLC0415
+
+                        raise ModelTimeout(
+                            provider="crewai",
+                            model=self._model_name,
+                            timeout_seconds=float(kickoff_bound),
+                            where=(
+                                "engine.crewai_framework."
+                                "run_exchange.kickoff"
+                            ),
+                        ) from exc
             except PlatformError:
                 # Engine-typed errors (e.g., ExchangeCancelled raised
                 # from inside _CrewAILLM.call) pass through unchanged

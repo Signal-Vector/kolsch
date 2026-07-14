@@ -161,6 +161,15 @@ def build_workflow_executor(
         workflow_store=store,
         executor_factory=_executor_factory,
     )
+    # spec-069 Part A — thread the per-node default timeout from the
+    # runtime (populated by `bootstrap_runtime` from
+    # `platform.yaml:workflows.default_node_timeout_seconds`) into
+    # every executor built through this helper. `None` on the runtime
+    # opts out (raw runner runs unwrapped, matching pre-spec-069
+    # behaviour); the runtime's dataclass default is 240s.
+    default_node_timeout_seconds = getattr(
+        runtime, "workflow_default_node_timeout_seconds", None
+    )
     return IterativeExecutor(
         workflow=workflow,
         run=run,
@@ -170,4 +179,5 @@ def build_workflow_executor(
         event_observer=event_observer,
         cancel_token=cancel_token,
         sub_agent_event_observer=sub_agent_event_observer,
+        default_node_timeout_seconds=default_node_timeout_seconds,
     )
