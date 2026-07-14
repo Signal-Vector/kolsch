@@ -16,6 +16,10 @@ import asyncio
 import io
 import logging
 import os
+import threading
+import weakref
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures.thread import _threads_queues, _worker
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -312,6 +316,118 @@ def _warn_if_workflow_tools_missing(
     logger.warning(_WORKFLOW_TOOLS_MISSING_WARNING)
 
 
+class _DaemonThreadPoolExecutor(ThreadPoolExecutor):
+    """Daemon-worker pool detached from `_threads_queues` at shutdown.
+
+    spec-069 Part B. The stdlib default `ThreadPoolExecutor` spawns
+    NON-daemon workers; if any is blocked in a synchronous call (a
+    stalled LLM/provider read is the canonical case) at interpreter
+    shutdown, CPython's `_python_exit` atexit hook joins every
+    registered worker — hanging `Py_Finalize →
+    wait_for_thread_shutdown → ThreadHandle_join` forever.
+
+    **Why daemon alone is insufficient** (empirical Reviewer finding):
+    `concurrent.futures.thread._python_exit` is registered via
+    `threading._register_atexit` and runs BEFORE Py_Finalize's
+    daemon-thread skip. Its body iterates every executor's threads:
+
+        items = list(_threads_queues.items())
+        for t, q in items: q.put(None)
+        for t, q in items: t.join()   # unconditional; daemon flag irrelevant
+
+    `t.join()` blocks on a wedged worker whether or not it's a
+    daemon. Repro: with the executor's workers registered into
+    `_threads_queues`, the interpreter took 15s+ to exit (killed by
+    timeout) with a wedged worker; with those entries removed at
+    `shutdown()`, exit is sub-second.
+
+    **Two defenses, both required:**
+
+    1. `daemon=True` on the worker `Thread` — so if any code path
+       reaches Py_Finalize with a wedged worker still alive (bypassing
+       our `shutdown()` — e.g. an unhandled exception before
+       `on_unmount`), Py_Finalize's daemon skip still kicks in.
+    2. `_threads_queues.pop(t, None)` at `shutdown()` — so
+       `_python_exit`'s join loop does not iterate our workers at all
+       for the normal teardown path (where `on_unmount` runs).
+
+    Belt AND suspenders. Defense 1 alone leaves the `_python_exit`
+    hang (this bug). Defense 2 alone would leave the fallback window
+    where `on_unmount` never ran.
+
+    Implementation mirrors the stdlib
+    `ThreadPoolExecutor._adjust_thread_count` verbatim except for
+    `daemon=True` on the `Thread` constructor. This reaches into
+    private stdlib helpers (`_worker`, `_threads_queues`) — pinned
+    to Python 3.13's shape; regression-tested via the stdlib import
+    at module load. We deliberately KEEP `_threads_queues[t] = ...`
+    during normal operation so the stdlib's weakref-cb sentinel
+    delivery still works if a worker dies unexpectedly; the pop
+    happens only at `shutdown()`.
+    """
+
+    def _adjust_thread_count(self) -> None:
+        if self._idle_semaphore.acquire(timeout=0):
+            return
+
+        def _weakref_cb(_: Any, q: Any = self._work_queue) -> None:
+            q.put(None)
+
+        num_threads = len(self._threads)
+        if num_threads < self._max_workers:
+            thread_name = f"{self._thread_name_prefix or self}_{num_threads}"
+            t = threading.Thread(
+                name=thread_name,
+                target=_worker,
+                args=(
+                    weakref.ref(self, _weakref_cb),
+                    self._work_queue,
+                    self._initializer,
+                    self._initargs,
+                ),
+                daemon=True,
+            )
+            t.start()
+            # `_threads` is typed as `AbstractSet[Thread]` in stdlib
+            # stubs but the runtime shape is a plain `set` — mutating
+            # matches the stdlib's own `_adjust_thread_count`. Same
+            # for `_threads_queues` (`Mapping` in stubs, mutable dict
+            # at runtime).
+            self._threads.add(t)  # type: ignore[attr-defined]
+            _threads_queues[t] = self._work_queue  # type: ignore[index]
+
+    def shutdown(
+        self,
+        wait: bool = True,  # noqa: FBT001, FBT002 — matches stdlib signature
+        *,
+        cancel_futures: bool = False,
+    ) -> None:
+        """Detach workers from `_threads_queues` before delegating.
+
+        Load-bearing for spec-069 AC5. `_python_exit` (the
+        `concurrent.futures.thread` atexit hook, registered via
+        `threading._register_atexit`) iterates
+        `_threads_queues.items()` at interpreter shutdown and joins
+        every listed worker UNCONDITIONALLY — the daemon flag is
+        checked only later by Py_Finalize, which never runs while
+        `_python_exit` is blocked in `t.join()`.
+
+        Removing our workers from `_threads_queues` here means
+        `_python_exit`'s join loop does not iterate them at all,
+        so a wedged worker cannot hang interpreter exit.
+
+        Kept in sync with the stdlib name (`_threads_queues`) —
+        pinned to Python 3.13's shape; regression-tested via the
+        top-of-module import.
+        """
+        # Reach into the same private stdlib map that
+        # `_adjust_thread_count` writes to. `_threads_queues` is
+        # already imported at the top of this module.
+        for t in list(self._threads):
+            _threads_queues.pop(t, None)  # type: ignore[attr-defined]
+        super().shutdown(wait=wait, cancel_futures=cancel_futures)
+
+
 class ChatApp(App):
     """Textual chat surface.
 
@@ -452,6 +568,19 @@ class ChatApp(App):
         # this handle so a re-mount does not stack duplicate handlers
         # (D-008 aclose idempotence).
         self._ui_event_bus_sub: Any = None
+        # spec-069 Part B — app-owned default `ThreadPoolExecutor` for
+        # the running loop. Installed in `on_mount` and torn down in
+        # `on_unmount` via `shutdown(wait=False)` so no non-daemon
+        # worker (an `asyncio.to_thread` / `run_in_executor` task
+        # blocked on a synchronous LLM/provider read) can wedge
+        # `Py_Finalize → wait_for_thread_shutdown → ThreadHandle_join`
+        # at interpreter shutdown. The wait-free shutdown does NOT
+        # join the workers; combined with Part A's bounded LLM read
+        # this ensures the interpreter can always exit promptly.
+        # `None` if installation was skipped (rare — currently only
+        # if the loop already had a non-default executor set from
+        # outside the app, or the install raised).
+        self._owned_executor: ThreadPoolExecutor | None = None
 
     # ------------------------------------------------------------------
     # Compose
@@ -477,6 +606,23 @@ class ChatApp(App):
 
     async def on_mount(self) -> None:
         """Register the approval callback and replay history if resuming."""
+        # spec-069 Part B — install an app-owned default executor on
+        # the running loop BEFORE any wiring that could schedule an
+        # `asyncio.to_thread` / `loop.run_in_executor` task. All
+        # subsequent `to_thread` callers land on this pool; at
+        # `on_unmount` we call `shutdown(wait=False)` so a worker
+        # blocked on a synchronous LLM/provider read cannot wedge
+        # `Py_Finalize → wait_for_thread_shutdown → ThreadHandle_join`.
+        # Part A bounds the LLM/network seam so the worker itself
+        # unblocks quickly in practice; Part B closes the hole for any
+        # third-party thread we cannot bound.
+        #
+        # Best-effort: if the install raises for any reason (loop
+        # policy quirks, tests that pre-set an executor) we log and
+        # continue — the interpreter would only re-hit the pre-Part-B
+        # behaviour, not regress further.
+        self._install_owned_default_executor()
+
         # Wire the InfoBar with the session-visible identity.
         info = self.query_one(InfoBar)
         info.agent = self.session.config.name
@@ -1003,6 +1149,63 @@ class ChatApp(App):
                 except Exception:  # noqa: BLE001
                     pass
 
+    def _install_owned_default_executor(self) -> None:
+        """Install an app-owned daemon-thread executor on the loop.
+
+        spec-069 Part B. Called at the top of `on_mount` (before any
+        wiring that could schedule `asyncio.to_thread` /
+        `loop.run_in_executor`) so every subsequent worker lands on
+        our owned pool — one whose shutdown detaches its workers
+        from `concurrent.futures.thread._threads_queues`, so
+        `_python_exit`'s atexit join loop cannot hang on a wedged
+        worker at interpreter shutdown.
+
+        Sizing follows the stdlib default (`min(32, cpu_count + 4)`)
+        so we don't shrink the pool from what upstream picks. The
+        `thread_name_prefix` makes workers easy to spot in a
+        `sample`/`py-spy` dump.
+
+        The safety property has two defenses (see
+        :class:`_DaemonThreadPoolExecutor` docstring): (1) daemon
+        workers so Py_Finalize skips them if `on_unmount` never ran;
+        (2) `_threads_queues` cleanup at `shutdown()` so
+        `_python_exit`'s unconditional `t.join()` loop does not
+        iterate them at all on the normal teardown path. Empirical
+        Reviewer finding (2026-07-14): (1) alone leaves an 8+ second
+        interpreter-exit hang because `_python_exit` runs BEFORE
+        Py_Finalize's daemon skip.
+
+        Best-effort: any failure is logged and left as a no-op —
+        `_owned_executor` stays `None`, the loop keeps its stdlib
+        default (pre-Part-B non-daemon behaviour, i.e. no regression
+        vs. pre-spec-069 — Part A's bounded LLM read already helps).
+        """
+        try:
+            loop = asyncio.get_running_loop()
+        except RuntimeError:
+            # `on_mount` runs on the loop that drives the App; a
+            # missing loop here would mean the App is being mounted
+            # outside `run_async` / `run_test`, which we don't
+            # support. Log defensively rather than raise.
+            _LOGGER.debug(
+                "ChatApp.on_mount: no running loop; owned executor skipped",
+            )
+            return
+        try:
+            max_workers = min(32, (os.cpu_count() or 1) + 4)
+            pool = _DaemonThreadPoolExecutor(
+                max_workers=max_workers,
+                thread_name_prefix="kolsch-exec-",
+            )
+            loop.set_default_executor(pool)
+        except Exception:  # noqa: BLE001 — best-effort install
+            _LOGGER.debug(
+                "ChatApp.on_mount: owned default executor install skipped",
+                exc_info=True,
+            )
+            return
+        self._owned_executor = pool
+
     async def on_unmount(self) -> None:
         """Clear the modal registration on exit + tear down services.
 
@@ -1015,6 +1218,15 @@ class ChatApp(App):
         dead code, but the plumbing is in place for M2+ specs.
         Per-service exceptions are caught and logged so one bad
         `aclose` doesn't stop teardown of the others.
+
+        spec-069 Part B: AFTER the `aclose()` chain (services may
+        schedule `to_thread` work during their own shutdown), tear
+        down the app-owned default executor with
+        `shutdown(wait=False)`. The wait-free shutdown does NOT join
+        workers — combined with Part A's bounded LLM read this
+        guarantees no non-daemon worker can block `Py_Finalize`.
+        Skipped when no executor was installed (`_owned_executor is
+        None`, e.g. headless fixtures that never called `on_mount`).
         """
         authz = self.session.runtime.authz
         if isinstance(authz, RuleBasedAuthorizationProvider):
@@ -1074,6 +1286,57 @@ class ChatApp(App):
                         "ChatApp.on_unmount: service %r aclose raised",
                         field_name,
                     )
+
+        # spec-069 Part B — retire the app-owned daemon-thread pool
+        # LAST, after every service `aclose()` above (some of which
+        # may schedule their own `to_thread` work during teardown).
+        #
+        # We do TWO things here, in this order:
+        #
+        # 1. Install a fresh stdlib default executor on the loop so
+        #    any post-teardown `asyncio.to_thread` call still works
+        #    (existing tests routinely close SQLite backends and
+        #    other resources in a `finally:` block AFTER `run_test`
+        #    exits — those closes use `to_thread`, and would raise
+        #    `RuntimeError: cannot schedule new futures after
+        #    shutdown` if we simply shut ours down). This swap is
+        #    also load-bearing for AC5 in production: asyncio's own
+        #    `shutdown_default_executor` (called at loop close) does
+        #    `default_executor.shutdown(wait=True)`, which would join
+        #    any wedged worker. Swapping in a fresh empty pool means
+        #    asyncio joins THAT (idle → returns immediately), never
+        #    ours.
+        # 2. Shutdown OUR pool with `wait=False, cancel_futures=True`.
+        #    Our overridden `shutdown` also detaches workers from
+        #    `_threads_queues` so `_python_exit`'s atexit join loop
+        #    does not iterate them. `wait=False` is load-bearing: even
+        #    with the `_threads_queues` cleanup, `wait=True` here
+        #    would still join our own `self._threads` inside
+        #    `super().shutdown` — recreating the hang on a wedged
+        #    worker. See `_DaemonThreadPoolExecutor` docstring for
+        #    the full two-defenses rationale.
+        if self._owned_executor is not None:
+            try:
+                loop = asyncio.get_running_loop()
+                loop.set_default_executor(
+                    ThreadPoolExecutor(thread_name_prefix="kolsch-exec-post-"),
+                )
+            except Exception:  # noqa: BLE001 — best-effort loop swap
+                _LOGGER.debug(
+                    "ChatApp.on_unmount: default-executor swap skipped",
+                    exc_info=True,
+                )
+            try:
+                self._owned_executor.shutdown(
+                    wait=False,
+                    cancel_futures=True,
+                )
+            except Exception:
+                _LOGGER.exception(
+                    "ChatApp.on_unmount: owned executor shutdown raised",
+                )
+            finally:
+                self._owned_executor = None
 
     async def _replay_history(self) -> None:
         """Replay the thread's JSONL through the event adapter.
