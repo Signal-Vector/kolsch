@@ -391,6 +391,16 @@ def _add_chat_subparser(sub: argparse._SubParsersAction[Any]) -> None:
             "instead of the default tail-20 turns."
         ),
     )
+    chat.add_argument(
+        "--resume",
+        dest="resume",
+        action="store_true",
+        default=False,
+        help=(
+            "Show an interactive arrow-key picker of recent sessions "
+            "and resume the chosen one. Conflicts with --session."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -507,6 +517,36 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     return 0
 
 
+async def _recent_sessions_decorated(
+    runtime: PlatformRuntime,
+    *,
+    starred: bool | None = None,
+    archived: bool | None = None,
+    limit: int | None = None,
+) -> list[tuple[Any, datetime | None]]:
+    """Return recency-sorted ``(Session, last_activity_at)`` tuples.
+
+    Shared by :func:`_cmd_sessions_list` (the ``sessions list`` command)
+    and :func:`_cmd_chat`'s ``--resume`` picker so the two never
+    diverge on ordering. Sessions with no events sort to the bottom
+    (their ``last_activity_at`` is ``None`` and the sort key falls
+    back to ``datetime.min``).
+    """
+    sessions = await runtime.store.list_sessions(
+        starred=starred,
+        archived=archived,
+        limit=limit,
+    )
+    decorated = [
+        (s, await _compute_last_event_at(runtime, s.session_id)) for s in sessions
+    ]
+    decorated.sort(
+        key=lambda item: item[1] or datetime.min.replace(tzinfo=UTC),
+        reverse=True,
+    )
+    return decorated
+
+
 async def _cmd_sessions_list(args: argparse.Namespace) -> int:
     """Print a compact, sorted-by-recency table of sessions.
 
@@ -515,24 +555,17 @@ async def _cmd_sessions_list(args: argparse.Namespace) -> int:
     query; they have no columns in the default output.
     """
     runtime = await bootstrap_runtime(root=args.root)
-    sessions = await runtime.store.list_sessions(
+    decorated = await _recent_sessions_decorated(
+        runtime,
         starred=(args.starred or None),
         archived=(args.archived or None),
         limit=args.limit,
     )
-    if not sessions:
+    if not decorated:
         return 0
 
     now = datetime.now(UTC)
-    decorated = [
-        (s, await _compute_last_event_at(runtime, s.session_id)) for s in sessions
-    ]
-    # Sort by last-event descending. Sessions with no events sort to
-    # the bottom (None replaced by datetime.min for the key).
-    decorated.sort(
-        key=lambda item: item[1] or datetime.min.replace(tzinfo=UTC),
-        reverse=True,
-    )
+    sessions = [s for s, _ in decorated]
 
     # SESSION_ID width = max(header, longest id). Session ids are
     # prefixed UUIDs (40 chars) — wider than the ticket's example
@@ -777,6 +810,18 @@ async def _cmd_skills(args: argparse.Namespace) -> int:
     return await cmd_skills(args)
 
 
+_RESUME_PICKER_LIMIT = 20
+"""Cap on the resume-picker session list. Matches the default that
+``kolsch sessions list`` shows (its ``--limit`` default) so the
+picker and the sessions table stay in step.
+
+Deliberately hard-coded — the picker's job is to disambiguate the
+most-recent handful of sessions, not to browse the archive. Users
+who need older sessions still have ``kolsch sessions list --limit N``
+plus ``kolsch chat --session <id>``.
+"""
+
+
 async def _cmd_chat(args: argparse.Namespace) -> int:
     from cli.chat.app import ChatApp, register_chat_slash_commands  # noqa: PLC0415
     from cli.chat.session import build_session  # noqa: PLC0415
@@ -788,8 +833,18 @@ async def _cmd_chat(args: argparse.Namespace) -> int:
     # assertions (`test_chat_slash`).
     register_chat_slash_commands()
 
+    # --resume flow — resolve a session id via the interactive picker
+    # BEFORE build_session runs, then fall through to the unchanged
+    # resume path by stamping args.session.
+    resume_runtime = await _resolve_resume_session(args)
+    if isinstance(resume_runtime, int):
+        # Sentinel exit code (conflict, cancel, or empty list) — the
+        # helper printed a message and we short-circuit without
+        # launching the chat app.
+        return resume_runtime
+
     try:
-        session = await build_session(args)
+        session = await build_session(args, runtime=resume_runtime)
     except ValueError as exc:
         sys.stderr.write(f"{exc}\n")
         return 1
@@ -804,6 +859,51 @@ async def _cmd_chat(args: argparse.Namespace) -> int:
     # the user quit the app instead of vanishing.
     await app.run_async(inline=True, inline_no_clear=True)
     return int(app.return_code or 0)
+
+
+async def _resolve_resume_session(
+    args: argparse.Namespace,
+) -> PlatformRuntime | int | None:
+    """Handle the ``--resume`` flag; return early-exit code or a runtime.
+
+    Return values:
+
+    - ``int`` — a sentinel exit code the caller must return without
+      launching the chat app. Covers three cases: ``1`` for the
+      ``--resume + --session`` conflict, ``0`` for an empty session
+      list (nothing to resume), ``0`` for user cancel from the picker.
+    - :class:`PlatformRuntime` — the picker bootstrapped a runtime and
+      stamped ``args.session``; the caller should pass the runtime
+      into :func:`build_session` to avoid a second bootstrap.
+    - ``None`` — ``--resume`` was not requested; the caller proceeds
+      with its normal (non-resume) startup.
+    """
+    from cli.session_picker import pick_session  # noqa: PLC0415
+
+    if not getattr(args, "resume", False):
+        return None
+
+    if getattr(args, "session", None):
+        sys.stderr.write(
+            "chat: --resume and --session are mutually exclusive; "
+            "pick one.\n",
+        )
+        return 1
+
+    runtime = await bootstrap_runtime(root=args.root)
+    rows = await _recent_sessions_decorated(runtime, limit=_RESUME_PICKER_LIMIT)
+    if not rows:
+        sys.stdout.write("No sessions to resume.\n")
+        return 0
+
+    picked = await pick_session(rows)
+    if picked is None:
+        # Esc / Ctrl-C from the picker — exit cleanly without
+        # launching. Matches the "cancel exits 0" acceptance criteria.
+        return 0
+
+    args.session = str(picked)
+    return runtime
 
 
 async def _cmd_setup(args: argparse.Namespace) -> int:

@@ -71,12 +71,21 @@ class ChatSessionBundle:
 
 async def build_session(
     args: argparse.Namespace,
+    *,
+    runtime: PlatformRuntime | None = None,
 ) -> ChatSessionBundle:
     """Bootstrap the runtime, resolve the agent, mint / load a session.
 
     Mirrors the setup half of ``_legacy.cmd_chat`` (up through the
     session load / create block) but returns a bundle instead of
     entering an input loop.
+
+    When ``runtime`` is supplied the caller has already bootstrapped
+    one (e.g. the ``--resume`` picker in ``_cmd_chat`` needs it to
+    list sessions) and we reuse it instead of paying the second
+    bootstrap cost. Non-picker paths (plain ``kolsch chat``, direct
+    ``--session <id>``) pass ``None`` and this function bootstraps
+    fresh, matching the pre-``--resume`` behavior.
 
     Raises ``ValueError`` on user-visible startup failures
     (invalid ``--model`` override; ``--session`` id not loadable).
@@ -85,7 +94,8 @@ async def build_session(
     from platform_runtime import bootstrap_runtime  # noqa: PLC0415
 
     agent_ref = args.agent_ref or _DEFAULT_AGENT_REF
-    runtime = await bootstrap_runtime(root=args.root)
+    if runtime is None:
+        runtime = await bootstrap_runtime(root=args.root)
     config = await runtime.build_resolved_config(agent_ref)
 
     model_label = _format_model_label(config.model)
