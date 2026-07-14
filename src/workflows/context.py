@@ -24,7 +24,9 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from engine.context import CancelToken
     from schemas import EventId, SessionId
+    from schemas.events import Event
     from workflows.events import WorkflowEvent
     from workflows.ids import InvocationId, TraceId, WorkflowRunId
 
@@ -52,7 +54,7 @@ class NodeContext:
     **Spoof-resistance.** `bundle` is set by the engine from the
     catalog-resolved invocation file's bundle, NOT from
     `inspect`-ing the calling `@node`'s `__module__`. Re-exporting a
-    node from another bundle cannot fake its bundle of origin — the
+    node from another bundle cannot mock its bundle of origin — the
     engine tracks the resolution path that led to this invocation,
     and the wire prefix follows the catalog.
     """
@@ -166,6 +168,29 @@ class NodeContext:
     # dispatch.
     is_resume_mode: bool = False
     recorded_child_run_id: WorkflowRunId | None = None
+    # spec-011: the executor's in-process cancel handle. When set, the
+    # `AgentRunner` (and any other sub-agent invocation runner)
+    # composes it into the sub-agent's `ExecutionContext.cancellation`
+    # via `CombinedCancelToken(cancel_token, existing_or_new)` so the
+    # cancel reaches the sub-agent's LLM stream mid-node. `None` when
+    # the executor was constructed without a cancel token (chat, CLI,
+    # tests). Frozen dataclass — the executor plumbs this through
+    # `_build_ctx` at NodeContext construction; no runtime mutation.
+    cancel_token: CancelToken | None = None
+    # spec-020: the sub-agent event forwarder seam. When set, the
+    # `AgentRunner` (or any other runner that spawns a sub-agent) calls
+    # this per-event as it iterates
+    # `AgentEngine.execute_stream(...)` so each session-scoped
+    # `tool.called` / `agent.message` / etc. reaches the executor's
+    # observer channel and, eventually, the `WorkflowNodeRow` that
+    # owns this invocation. `None` outside the executor's worklist
+    # (e.g., `for_test`); production contexts (built by the executor's
+    # `_build_ctx`) always set it. The runner MUST NOT raise on a
+    # bound callback that itself raises — best-effort like the other
+    # NodeContext seams.
+    on_sub_agent_event_callback: Callable[[Event], None] | None = field(
+        default=None, repr=False,
+    )
 
     def derive_for_iteration(
         self,

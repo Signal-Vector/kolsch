@@ -18,6 +18,7 @@ plumbing cannot silently drop the stamp again.
 
 from __future__ import annotations
 
+from dataclasses import replace
 from typing import TYPE_CHECKING
 
 import pytest
@@ -74,12 +75,79 @@ def test_workflow_runtime_stamps_home_bundle_on_all_builtin_defns(
         "Sanity: pre-stamp defn must return the legacy 1-seg form so "
         "the stamp below is the load-bearing change."
     )
-    # The workflow-runtime fix stamps `kolsch` here. Simulate it and
-    # assert the action_name flips to canonical.
-    defn.home_bundle = "kolsch"
-    assert defn.action_name == f"kolsch/tools/{tool_name}", (
+    # The workflow-runtime fix stamps `kolsch` on the sentinel. Simulate
+    # it on a *copy* rather than mutating the returned sentinel — bug-050:
+    # `make_browse_url` returns a module-cached function whose sentinel
+    # `ToolDefinition` is shared across factory calls, so an in-place
+    # `defn.home_bundle = "kolsch"` here would poison later parametrizations
+    # and any downstream test running in the same pytest process. Prod
+    # code owns the sentinel and stamps it once at `build_workflow_executor`;
+    # this test only reads the invariant.
+    stamped = replace(defn, home_bundle="kolsch")
+    assert stamped.action_name == f"kolsch/tools/{tool_name}", (
         f"Workflow-runtime tool defn for {tool_name!r} must expose the "
         f"canonical 3-seg action string 'kolsch/tools/{tool_name}' so "
         f"users' `what: kolsch/tools/{tool_name}` rules match at "
         "dispatch. See bug-workflow-runtime-tool-home-bundle-not-stamped."
+    )
+    # And, of course, the original sentinel must be untouched by our probe.
+    assert defn.home_bundle is None, (
+        "This test must not mutate the shared ToolDefinition sentinel — "
+        "see bug-050."
+    )
+
+
+def test_workflow_runtime_stamps_home_bundle_survives_double_bootstrap(
+    tmp_path: Path,
+    _policy: PathPolicy,
+) -> None:
+    """bug-050: pin the pollution class the parametrized guard tripped over.
+
+    Before bug-050, ``make_browse_url`` returned a module-cached
+    coroutine (loaded once into ``sys.modules``) whose attached
+    ``ToolDefinition`` was a single shared sentinel across every
+    factory call. Any caller that mutated ``defn.home_bundle`` in
+    place — production code (``_stamp_kolsch`` in ``_workflow_runtime``)
+    OR a test's own probe — poisoned the sentinel for every downstream
+    reader in the same pytest process, so the guard test
+    ``test_workflow_runtime_stamps_home_bundle_on_all_builtin_defns``
+    flaked under full-suite order (any earlier test that exercised
+    ``build_workflow_executor`` re-stamped the sentinel).
+
+    The bug-050 fix detaches a fresh ``_tool_definition`` per factory
+    call via ``_detach_tool_definition`` in ``src/tools/builtins.py``.
+    This test pins the invariant: two calls in a row to
+    ``make_browse_url`` yield independent defns — mutating one does
+    not observably poison the other. Without the fix, the second
+    ``assert defn_second.home_bundle is None`` blows up because the
+    first stamp bled through.
+    """
+    fn_first = make_browse_url(policy=_policy, root=tmp_path)
+    defn_first = get_tool_definition(fn_first)
+    assert defn_first.home_bundle is None, (
+        "First get_tool_definition(make_browse_url(...)) must return "
+        "an unstamped defn — the factory is expected to detach a fresh "
+        "ToolDefinition per call so callers can stamp `home_bundle` "
+        "without poisoning the module-cached sentinel. See bug-050."
+    )
+    # Mutate the first defn as prod code (``_stamp_kolsch``) would.
+    defn_first.home_bundle = "kolsch"
+
+    # Second call must see a fresh defn — the mutation on defn_first
+    # must not have bled through the module cache.
+    fn_second = make_browse_url(policy=_policy, root=tmp_path)
+    defn_second = get_tool_definition(fn_second)
+    assert defn_second.home_bundle is None, (
+        "Second get_tool_definition(make_browse_url(...)) must ALSO "
+        "return an unstamped defn — the first caller's stamp must not "
+        "have bled through the module cache. If this fails, "
+        "`make_browse_url` is back to returning a shared sentinel — see "
+        "bug-050's `_detach_tool_definition` helper in "
+        "src/tools/builtins.py."
+    )
+    # And the two defns are distinct objects — pollution isolation.
+    assert defn_first is not defn_second, (
+        "Sanity: after bug-050, make_browse_url detaches a per-call "
+        "ToolDefinition copy. If this identity breaks (both defns the "
+        "same object), the class of pollution is back."
     )

@@ -1,0 +1,18 @@
+▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
+  ▼ ✓ fetch_jd (bash)
+
+     ▼ input
+
+       bound inputs:
+       · url: https://example.com/jd
+
+       command:
+       curl {{ inputs.url }}
+     ▼ output
+
+       Senior CTO - Blockchain Startup
+
+       We are building...
+     ▼ exit: 0
+
+       exit code: 0

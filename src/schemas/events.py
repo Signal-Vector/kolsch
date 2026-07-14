@@ -19,9 +19,9 @@ from __future__ import annotations
 
 from datetime import datetime
 from enum import StrEnum
-from typing import Any
+from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, field_validator
 
 from schemas.entities import Actor, ContentRef
 from schemas.error import Error
@@ -33,6 +33,7 @@ from schemas.identifiers import (
     SessionId,
     ThreadId,
 )
+from schemas.wire_kinds import is_valid_kind
 
 
 class EventType(StrEnum):
@@ -61,6 +62,12 @@ class EventType(StrEnum):
     # Model interaction
     MODEL_REQUEST = "model.request"
     MODEL_RESPONSE = "model.response"
+    # Per-chunk delta emitted by streaming-capable framework paths
+    # between `MODEL_REQUEST` and `MODEL_RESPONSE`. Non-streaming
+    # framework paths emit zero of these; the whole response still
+    # arrives on `MODEL_RESPONSE`. See
+    # `process/spec-textual-chat-ui.md` for the wire contract.
+    MODEL_STREAMING_TOKEN = "model.streaming_token"
     # Emitted once per fallback transition.
     MODEL_FALLBACK = "model.fallback"
 
@@ -76,11 +83,21 @@ class EventType(StrEnum):
 
     # Compaction
     CONTEXT_COMPACTED = "context.compacted"
+    CONTEXT_COMPACTION_REVOKED = "context.compaction_revoked"
+    CONTEXT_COMPACTION_FAILED = "context.compaction_failed"
+    CONTEXT_COMPACTION_SKIPPED = "context.compaction_skipped"
 
     # Engine pre-flight emits one of these when a template references
     # variable data the resolved config doesn't carry (e.g.
     # `{{ tools }}` referenced but no tools declared).
     AGENT_TEMPLATE_WARNING = "agent.template_warning"
+
+    # UI mutation envelope emitted by the tool-services layer
+    # (CardsImpl, PromptsImpl, WorkflowsImpl). Discriminated by
+    # `UIEventData.kind` (a dotted `kolsch.<domain>.<verb>` string)
+    # rather than by adding one `EventType` member per UI verb. See
+    # `src/schemas/wire_kinds.py` for the canonical platform set.
+    UI_EVENT = "ui.event"
 
 
 # ---------------------------------------------------------------------------
@@ -91,12 +108,24 @@ class EventType(StrEnum):
 class _DataModel(BaseModel):
     """Common base for event-data payloads.
 
-    `extra="forbid"` enforces the per-type shape: a typo in a field
-    name fails validation rather than silently passing through into
-    the JSONL.
+    `extra="ignore"` (relaxed from the pre-spec-002 `extra="forbid"`)
+    keeps forward-compat replay tolerant: newer JSONL entries with
+    added payload fields don't fail validation on older readers. See
+    the roadmap's cross-cutting invariants and
+    `process/spec-002-ui-event-schema.md` for the rationale.
+
+    Every payload subclass inherits `logical_seq: int = 0`, the
+    cross-log ordering key populated by :class:`SessionStore` inside
+    its flock critical section (allocation logic lands in spec-003).
+    Default `0` means legacy events without the field validate
+    cleanly on replay.
     """
 
-    model_config = ConfigDict(frozen=True, extra="forbid")
+    model_config = ConfigDict(frozen=True, extra="ignore")
+
+    # spec-002: field-in-place; spec-003 populates on write. Default
+    # zero keeps legacy log entries validating without a migration.
+    logical_seq: int = 0
 
 
 class SessionOpenedData(_DataModel):
@@ -186,6 +215,29 @@ class ModelResponseData(_DataModel):
     # When `stop_reason == "error"`, `error` carries the canonical
     # Error envelope. Optional otherwise.
     error: Error | None = None
+
+
+class ModelStreamingTokenData(_DataModel):
+    """`model.streaming_token.data` — one chunk of a streamed model response.
+
+    Emitted by streaming-capable framework paths between the
+    `MODEL_REQUEST` and `MODEL_RESPONSE` for the same `call_id`. The
+    concatenation of every delta for a given `call_id` (in event
+    order) must equal the `content` text on the final
+    `MODEL_RESPONSE`; consumers verify this defensively.
+    Non-streaming framework paths emit zero deltas — behaviour is
+    unchanged and the whole response arrives on `MODEL_RESPONSE`.
+
+    Fields are minimal by design. If a future spec needs to
+    distinguish extended-thinking tokens from assistant tokens it
+    can either add a `channel` field via migration or introduce a
+    separate `MODEL_THINKING_TOKEN` event; both paths are cheap and
+    premature reservation isn't warranted (see
+    `process/spec-textual-chat-ui.md` Coordinator decision 1).
+    """
+
+    call_id: AgentCallId
+    text_delta: str
 
 
 class ModelFallbackData(_DataModel):
@@ -316,6 +368,19 @@ class ContextCompactedData(_DataModel):
     later model calls project as context. `pre_compaction` captures
     the FULL content being summarised, so a replay can decide whether
     to apply the compaction or skip it.
+
+    `revoked_by` points at a `context.compaction_revoked` event that
+    invalidated this compaction (from `/uncompact`); Assembly filters
+    both when projecting. `preview` is `True` when this compaction was
+    emitted as a diagnostic without swapping the live context.
+    `trigger` records what fired the compaction: `"auto"` for
+    threshold-triggered during an in-flight exchange, `"auto_resume"`
+    for the feat-054 Phase 5 session-open eager check (fires BEFORE
+    the user's first post-resume message so the summariser delay is
+    absorbed into the resume UX instead of the first exchange),
+    `"auto_resume_preview"` for the read-only variant of the eager
+    check, `"manual"` for a user-invoked `/compact`, and
+    `"manual_preview"` for `/compact --preview`.
     """
 
     compacted_event_ids: list[EventId]
@@ -323,6 +388,55 @@ class ContextCompactedData(_DataModel):
     summary: dict[str, Any]
     tokens_before: int
     tokens_after: int
+    revoked_by: EventId | None = None
+    preview: bool = False
+    trigger: Literal[
+        "auto",
+        "auto_resume",
+        "auto_resume_preview",
+        "manual",
+        "manual_preview",
+    ] = "auto"
+
+
+class ContextCompactionRevokedData(_DataModel):
+    """`context.compaction_revoked.data` — one `/uncompact` invocation.
+
+    Points at the `context.compacted` event this revocation
+    invalidates. Assembly filters both events from projection so the
+    live model's next turn sees the restored (verbatim) context.
+    """
+
+    compaction_event_id: EventId
+    reason: str = "user_requested"
+
+
+class ContextCompactionFailedData(_DataModel):
+    """`context.compaction_failed.data` — a summariser LLM/JSON failure.
+
+    Emitted when the summariser LLM call raises twice or the returned
+    payload fails JSON validation. The engine follows the failure
+    ladder (mechanical truncation) and continues the exchange; this
+    event records the diagnostic so `/why-compact` can surface it.
+    """
+
+    error: Error
+    span_first_event_id: EventId | None = None
+    span_last_event_id: EventId | None = None
+
+
+class ContextCompactionSkippedData(_DataModel):
+    """`context.compaction_skipped.data` — a compaction attempt was discarded.
+
+    Emitted when the produced summary did not shrink the projected
+    context enough to be worth swapping (`tokens_after > tokens_before
+    * 0.90`) or when the engine could not compute a compaction (missing
+    `context_length`, etc.).
+    """
+
+    reason: str
+    tokens_before: int = 0
+    tokens_after: int = 0
 
 
 class AgentTemplateWarningData(_DataModel):
@@ -336,6 +450,46 @@ class AgentTemplateWarningData(_DataModel):
     reference: str
     reason: str
     hint: str
+
+
+class UIEventData(_DataModel):
+    """`ui.event.data` — one UI mutation.
+
+    `kind` is the discriminator: a dotted `<owner>.<domain>.<verb>`
+    string (see :mod:`schemas.wire_kinds` for the platform set). Every
+    subsequent UI reader switches on `kind` to reach the
+    kind-specific `payload` shape.
+
+    `schema_version` enables forward-compatible payload evolution:
+    older readers ignore unknown extra fields (see
+    :attr:`_DataModel.model_config`); a semantic break bumps the int
+    and adds a migration handler (deferred until the first migration
+    is needed — see spec-002 §Coordinator decisions).
+
+    Kinds MUST be dotted `<owner>.<domain>.<verb>`:
+
+    - `<owner>` is `kolsch` (platform-emitted) or a bundle name
+      (v1.1). The platform reserves `kolsch.*`.
+    - Non-dotted kinds fail construction via :func:`is_valid_kind`.
+    - Deeper hierarchies are allowed
+      (e.g. `kolsch.workflow.node.awaiting_approval`).
+    """
+
+    schema_version: int = 1
+    kind: str
+    payload: dict[str, Any]
+
+    @field_validator("kind")
+    @classmethod
+    def _validate_dotted(cls, v: str) -> str:
+        if not is_valid_kind(v):
+            raise ValueError(
+                f"kind must be dotted <owner>.<domain>.<verb>; got {v!r}. "
+                "See src/schemas/wire_kinds.py for the platform set "
+                "(all `kolsch.*`). Bundle authors: prefix with your "
+                "bundle name."
+            )
+        return v
 
 
 # ---------------------------------------------------------------------------

@@ -82,6 +82,15 @@ def _serialise(event: Event) -> bytes:
     # key surfaces in their lines verbatim.
     if payload.get("trace_id") is None:
         payload.pop("trace_id", None)
+    # spec-002 — `logical_seq` is additive on `_DataModel`. It defaults
+    # to 0; populated values arrive from SessionStore in spec-003.
+    # Strip the key from `data` when the default is in force so JSONL
+    # rows produced by pre-spec-003 emitters remain byte-identical to
+    # the pre-spec-002 shape. Non-zero values (once spec-003 lands)
+    # continue to surface verbatim.
+    data = payload.get("data")
+    if isinstance(data, dict) and data.get("logical_seq") == 0:
+        data.pop("logical_seq", None)
     return (
         json.dumps(payload, sort_keys=True, separators=(",", ":")).encode("utf-8")
         + b"\n"
@@ -133,6 +142,87 @@ def _parses_as_json(payload: bytes) -> bool:
     except (UnicodeDecodeError, json.JSONDecodeError):
         return False
     return True
+
+
+def _read_last_logical_seq(path: Path) -> int:
+    """Return the `logical_seq` on the JSONL's last non-empty line, or 0.
+
+    Called by [`append_event_sync`][store.jsonl.append_event_sync] under
+    the per-session `flock` immediately before a new event is stamped
+    with `tail + 1`. Reads the last non-empty line's `data.logical_seq`
+    field (defaulting to `0` if the key is absent — legacy events
+    written before spec-002 didn't carry it), returns 0 on any parse
+    failure.
+
+    Coordinator decision #1 for spec-003: the JSONL tail is
+    authoritative under `flock`. The `SessionMeta.logical_seq_bookmark`
+    field is reserved for a v1.1 perf optimisation but currently
+    unused; this helper re-reads the tail on every append.
+
+    Coordinator decision #2 for spec-003: kept inline in `jsonl.py`
+    rather than extracted to a separate module. It's a small helper
+    with exactly one call site.
+
+    Args:
+        path: JSONL file path. Missing / empty files return 0 (the
+            next append will stamp `logical_seq=1`).
+
+    Returns:
+        The tail's `logical_seq` value, or 0 for empty / missing /
+        parse-failing files.
+    """
+    if not path.exists():
+        return 0
+    size = path.stat().st_size
+    if size == 0:
+        return 0
+    # Find the byte offset of the last line by locating the newline
+    # right before EOF (or the last newline if the file doesn't end in
+    # `\n`). `_find_last_newline` returns the offset of the trailing
+    # `\n`; the last complete line lives before it.
+    with path.open("rb") as f:
+        f.seek(0, os.SEEK_END)
+        end = f.tell()
+        # Walk back to find the newline that terminates the last
+        # complete line. If the file ends with `\n`, that's `end - 1`;
+        # if it doesn't, the last line is a partial (which
+        # `recover_partial_final_line` will have truncated before we
+        # get here) so we scan for the previous `\n`.
+        pos = end - 1
+        # Skip trailing newline if present.
+        while pos >= 0:
+            f.seek(pos)
+            byte = f.read(1)
+            if byte != b"\n":
+                break
+            pos -= 1
+        # Now scan back to the previous newline (start of the last
+        # line's content). If we hit BOF first, the whole file is one
+        # line.
+        line_end = pos + 1  # exclusive end of the last line's bytes
+        while pos >= 0:
+            f.seek(pos)
+            byte = f.read(1)
+            if byte == b"\n":
+                pos += 1
+                break
+            pos -= 1
+        line_start = max(0, pos)
+        f.seek(line_start)
+        raw = f.read(line_end - line_start)
+    if not raw:
+        return 0
+    try:
+        payload = json.loads(raw.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError):
+        return 0
+    data = payload.get("data")
+    if not isinstance(data, dict):
+        return 0
+    seq = data.get("logical_seq", 0)
+    if not isinstance(seq, int):
+        return 0
+    return seq
 
 
 def recover_partial_final_line(path: Path) -> None:
@@ -213,8 +303,26 @@ def append_event_sync(
 
         # Compute leaf under the lock.
         leaf = read_last_event_for_thread(jsonl, thread_id)
+
+        # spec-003: allocate `logical_seq` inside the flock critical
+        # section. Read the current JSONL tail (any thread — the seq
+        # is per-session, not per-thread) and stamp `tail + 1` on the
+        # event's data payload. This is what makes the counter strictly
+        # monotonic per session across concurrent appends.
+        last_seq = _read_last_logical_seq(jsonl)
+        new_seq = last_seq + 1
+        # `Event.data` is a plain `dict[str, Any]` on the envelope, so
+        # merge the new seq via a fresh dict rather than the pydantic
+        # `_DataModel` copy pattern (the sketch in the spec assumed a
+        # typed data model; the codebase carries dicts).
+        data_dict = dict(event.data) if isinstance(event.data, dict) else {}
+        data_dict["logical_seq"] = new_seq
+
         appended = event.model_copy(
-            update={"parent_event_id": leaf.event_id if leaf else None},
+            update={
+                "parent_event_id": leaf.event_id if leaf else None,
+                "data": data_dict,
+            },
         )
 
         line = _serialise(appended)

@@ -10,7 +10,7 @@ user reported.
 The test drives the bootstrap_runtime path (the same path
 ``kolsch run`` and ``kolsch chat`` hit in production) so the
 regression catches a re-introduction of the wiring gap at the
-same call site the user's bug exercised. A simulated FakeLLM
+same call site the user's bug exercised. A simulated MockLLM
 emits the ``tool_use`` call; the rest of the chain (tool dispatch,
 sandbox, real ``bash`` execution, the model's second turn with the
 tool result, the final ``agent.message``) is the production code
@@ -42,8 +42,8 @@ from engine import (
 from errors import ConfigUnknownTool
 from platform_runtime import bootstrap_runtime
 from schemas import EventType
-from tests.fixtures.fake_llm import (
-    FakeLLM,
+from tests.fixtures.mock_llm import (
+    MockLLM,
     TextResponse,
     ToolCallResponse,
 )
@@ -99,7 +99,7 @@ def _allow_bash_in_workspace(root: Path) -> None:
 
     The default rule set has ``tool.bash`` as ``prompt`` (the
     workspace assumes the Phase 2.1 chat modal will resolve it).
-    For an end-to-end regression test driven by FakeLLM there's
+    For an end-to-end regression test driven by MockLLM there's
     no modal — the default ``prompt`` collapses to ``deny`` (no
     callback), the bash call fails, and we can't observe the
     real-stdout property the bug fixes.
@@ -149,10 +149,10 @@ def _allow_bash_in_workspace(root: Path) -> None:
         )
 
 
-def _make_fake_llm_callable(
-    fake: FakeLLM,
+def _make_mock_llm_callable(
+    mock: MockLLM,
 ) -> Callable[[LLMRequest], Awaitable[LLMResponse]]:
-    """Adapt :class:`FakeLLM` to the engine's ``llm=`` callable shape.
+    """Adapt :class:`MockLLM` to the engine's ``llm=`` callable shape.
 
     Mirrors the adapter in ``tests/component/test_engine.py`` so
     tool-call responses go through the framework's standard
@@ -169,7 +169,7 @@ def _make_fake_llm_callable(
                 "",
             ),
         }
-        response = await fake.agenerate(context)
+        response = await mock.agenerate(context)
         if isinstance(response, TextResponse):
             return LLMResponse(content=response.text)
         if isinstance(response, ToolCallResponse):
@@ -183,7 +183,7 @@ def _make_fake_llm_callable(
                     },
                 ],
             )
-        msg = f"unexpected FakeLLM response shape: {response!r}"
+        msg = f"unexpected MockLLM response shape: {response!r}"
         raise RuntimeError(msg)
 
     return _llm
@@ -206,7 +206,7 @@ async def test_tc_tool_wire_01_helper_agent_routes_bash_through_engine_to_real_s
     tweaked so ``tool.bash`` is ``allow`` rather than ``prompt``
     (the production modal path is exercised by TC-CHAT-03/04).
 
-    Action: FakeLLM scripted to invoke
+    Action: MockLLM scripted to invoke
     ``bash(command="echo hello-from-tool-wire-01")`` then return a
     final text response.
 
@@ -229,7 +229,7 @@ async def test_tc_tool_wire_01_helper_agent_routes_bash_through_engine_to_real_s
     root = initialized_workspace_for_tool_wiring
     _allow_bash_in_workspace(root)
 
-    fake = FakeLLM(
+    mock = MockLLM(
         script=[
             ToolCallResponse(
                 tool="bash",
@@ -240,7 +240,7 @@ async def test_tc_tool_wire_01_helper_agent_routes_bash_through_engine_to_real_s
         ],
     )
 
-    runtime = await bootstrap_runtime(root=root, llm=_make_fake_llm_callable(fake))
+    runtime = await bootstrap_runtime(root=root, llm=_make_mock_llm_callable(mock))
     config = await runtime.build_resolved_config("kolsch/agents/helper")
     session = await runtime.store.create_session(
         str(config.agent_id),
@@ -327,7 +327,7 @@ async def test_tc_tool_wire_02_unknown_declared_ref_raises_config_unknown_tool(
         agent_id=AgentId("ag_bad_tools"),
         name="bad-tools",
         description="declares a tool that doesn't exist",
-        model=ModelSpec(provider="fake", model="fake-model"),
+        model=ModelSpec(provider="mock", model="mock-model"),
         prompt="...",
         io=IOSpec(mode="conversational"),
         subsystems={
@@ -414,12 +414,12 @@ async def test_engine_preflight_registers_declared_tools_with_subsystem(
     from schemas import AgentId
 
     root = initialized_workspace_for_tool_wiring
-    # Text-only FakeLLM response — no tool_use, so the engine
+    # Text-only MockLLM response — no tool_use, so the engine
     # runs pre-flight + a single model turn + finalize. The
     # pre-flight registration is what we're pinning.
-    fake = FakeLLM(script=[TextResponse(text="acknowledged.")])
+    mock = MockLLM(script=[TextResponse(text="acknowledged.")])
 
-    runtime = await bootstrap_runtime(root=root, llm=_make_fake_llm_callable(fake))
+    runtime = await bootstrap_runtime(root=root, llm=_make_mock_llm_callable(mock))
     config = await runtime.build_resolved_config("kolsch/agents/helper")
     session = await runtime.store.create_session(
         str(config.agent_id),

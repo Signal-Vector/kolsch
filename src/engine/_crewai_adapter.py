@@ -10,7 +10,7 @@ a single `crewai.LLM` into an `LLMHandle`-shaped async callable, and
 returns a per-spec factory that constructs the `crewai.LLM` lazily.
 The factory threads
 [`EchoLLMDriver`][engine.dev_llm.EchoLLMDriver] for `provider:
-"fake"` so the no-creds tutorial path keeps working.
+"mock"` so the no-creds tutorial path keeps working.
 
 Neither function performs I/O at module-import time; `crewai.LLM`
 construction happens inside the factory — per exchange when the
@@ -312,7 +312,7 @@ def make_build_llm_factory(
 
     Behaviour:
 
-    - `spec.provider == "fake"` → return the
+    - `spec.provider == "mock"` → return the
       [`EchoLLMDriver`][engine.dev_llm.EchoLLMDriver] callable.
       Preserves the no-creds tutorial path even when real providers
       ARE configured.
@@ -333,7 +333,7 @@ def make_build_llm_factory(
     async def factory(
         spec: ModelSpec,
     ) -> Callable[[LLMRequest], Awaitable[LLMResponse]]:
-        if spec.provider == "fake":
+        if spec.provider == "mock":
             from engine.dev_llm import EchoLLMDriver  # noqa: PLC0415
 
             return EchoLLMDriver().__call__

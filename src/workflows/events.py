@@ -56,9 +56,11 @@ __all__ = [
     "WorkflowNodeStartedEvent",
     "WorkflowNodeTimedOutEvent",
     "WorkflowRunAbortedEvent",
+    "WorkflowRunAbortedPayload",
     "WorkflowRunCompletedEvent",
     "WorkflowRunCompletedPayload",
     "WorkflowRunFailedEvent",
+    "WorkflowRunFailedPayload",
     "WorkflowRunForkedFromEvent",
     "WorkflowRunForkedFromPayload",
     "WorkflowRunResumedEvent",
@@ -211,17 +213,42 @@ class WorkflowRunCompletedPayload(BaseModel):
     so existing payload keys (`outputs`) round-trip cleanly when
     loaded from older JSONL rows; `peak_in_flight` defaults to `None`
     for the same reason.
+
+    Also anchors `terminal_at`: the UTC datetime at payload
+    construction. spec-016's multi-workflow layout sorts terminal
+    cards by this field; putting it in place from M1 onward guarantees
+    every completed run on disk carries it. Default-factory runs at
+    model_validate, so older logs pick up a sensible value on read.
+    Emitters that need precise emit-time semantics should override
+    explicitly.
     """
 
     model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
 
     peak_in_flight: int | None = None
+    terminal_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 class WorkflowRunCompletedEvent(WorkflowEvent):
     """The `workflow.run.completed` envelope."""
 
     kind: Literal[WorkflowEventKind.RUN_COMPLETED] = WorkflowEventKind.RUN_COMPLETED
+
+
+class WorkflowRunFailedPayload(BaseModel):
+    """Typed payload for the `workflow.run.failed` envelope.
+
+    Anchors `terminal_at`: the UTC datetime at payload construction.
+    See :class:`WorkflowRunCompletedPayload` for the rationale
+    (spec-016 sorts terminal cards by this field). Payload otherwise
+    stays `extra="allow"` so existing failure keys (`error`,
+    `failure_reason`, etc.) round-trip cleanly through older JSONL
+    rows.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+
+    terminal_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 class WorkflowRunFailedEvent(WorkflowEvent):
@@ -234,6 +261,21 @@ class WorkflowRunTimedOutEvent(WorkflowEvent):
     """The `workflow.run.timed_out` envelope."""
 
     kind: Literal[WorkflowEventKind.RUN_TIMED_OUT] = WorkflowEventKind.RUN_TIMED_OUT
+
+
+class WorkflowRunAbortedPayload(BaseModel):
+    """Typed payload for the `workflow.run.aborted` envelope.
+
+    Anchors `terminal_at`: the UTC datetime at payload construction.
+    See :class:`WorkflowRunCompletedPayload` for the rationale
+    (spec-016 sorts terminal cards by this field). Payload otherwise
+    stays `extra="allow"` so existing abort keys (`reason`, etc.)
+    round-trip cleanly through older JSONL rows.
+    """
+
+    model_config: ClassVar[ConfigDict] = ConfigDict(extra="allow")
+
+    terminal_at: datetime = Field(default_factory=lambda: datetime.now(tz=UTC))
 
 
 class WorkflowRunAbortedEvent(WorkflowEvent):

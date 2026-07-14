@@ -515,16 +515,16 @@ class TestPauseRunsModuleCleanup:
     async def test_module_loaded_pre_pause_is_swept_on_pause_exit(
         self, tmp_path: Path
     ) -> None:
-        # Seed a fake module that lives under the workspace's
+        # Seed a mock module that lives under the workspace's
         # ``bundles/`` tree so the cleanup filter targets it; the
         # filter only sweeps modules NOT in the pre-run snapshot
         # whose ``__file__`` resolves under the workspace.
-        bundles_dir = tmp_path / "bundles" / "fakebundle"
+        bundles_dir = tmp_path / "bundles" / "mockbundle"
         bundles_dir.mkdir(parents=True)
-        module_path = bundles_dir / "fake_module.py"
+        module_path = bundles_dir / "mock_module.py"
         module_path.write_text("VALUE = 1\n", encoding="utf-8")
 
-        loaded_module_name = "fakebundle.fake_module"
+        loaded_module_name = "mockbundle.mock_module"
 
         class LoaderRunner:
             """Imports the seeded module mid-run, then returns."""

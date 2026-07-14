@@ -29,6 +29,7 @@ Updating goldens: run a fixture, copy the printed-on-failure
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -56,6 +57,40 @@ def canonicalize_jsonl(text: str) -> str:
     monkeypatch on the workflow-specific name doesn't reach across
     into Phase 1 goldens."""
     return canonicalize_text(text)
+
+
+# ---------------------------------------------------------------------------
+# Golden update helper
+# ---------------------------------------------------------------------------
+
+
+def _assert_or_update_golden(
+    golden_path: Path, actual: str, fixture_name: str,
+) -> None:
+    """Compare ``actual`` to ``golden_path`` content; write if
+    ``UPDATE_GOLDEN=1`` is set. Consolidates the four assertion
+    sites so future schema-additive changes (like bug-036c adding
+    ``node_config_preview`` to ``NODE_STARTED.payload``) can
+    regenerate all goldens with one env var instead of hand-editing
+    each file.
+    """
+    if os.getenv("UPDATE_GOLDEN"):
+        golden_path.parent.mkdir(parents=True, exist_ok=True)
+        golden_path.write_text(actual, encoding="utf-8")
+        return
+    if not golden_path.exists():
+        msg = (
+            f"Missing golden for fixture {fixture_name!r}.\n"
+            f"To create it, run with UPDATE_GOLDEN=1 or write to "
+            f"{golden_path}:\n\n{actual}"
+        )
+        raise AssertionError(msg)
+    expected = golden_path.read_text(encoding="utf-8")
+    assert actual == expected, (
+        f"Golden mismatch for {fixture_name!r}.\n"
+        f"--- expected ({golden_path}) ---\n{expected}"
+        f"--- actual ---\n{actual}"
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -175,7 +210,7 @@ def _build_authored_python_basemodel(
 ) -> tuple[Workflow, RunnerRegistry, dict[str, Any]]:
     """One authored-Python ``@node`` returning a Pydantic ``BaseModel``.
 
-    Uses a fake runner that mimics the catalog-runner output shape —
+    Uses a mock runner that mimics the catalog-runner output shape —
     keeping the golden independent of the on-disk module path the
     real catalog runner would import. The shape under test is the
     EVENT stream, not the importlib pipeline (which has its own
@@ -199,7 +234,7 @@ def _build_authored_python_basemodel(
     _ = tmp_path
     # The validator's ``catalog-node-defs`` pass requires the ref to
     # resolve in the catalog. Marking the entry ``builtin: True``
-    # short-circuits the importlib introspection so the fake runner
+    # short-circuits the importlib introspection so the mock runner
     # injected above carries the whole load.
     from assets.catalog import AssetCatalog, AssetEntry
 
@@ -1497,19 +1532,7 @@ async def test_workflow_run_matches_golden(
     actual = canonicalize_jsonl(actual_raw)
 
     golden_path = _GOLDEN_DIR / f"{fixture_name}.jsonl"
-    if not golden_path.exists():
-        msg = (
-            f"Missing golden for fixture {fixture_name!r}.\n"
-            f"To create it, write the following text to {golden_path}:\n\n"
-            f"{actual}"
-        )
-        raise AssertionError(msg)
-    expected = golden_path.read_text(encoding="utf-8")
-    assert actual == expected, (
-        f"Golden mismatch for {fixture_name!r}.\n"
-        f"--- expected ({golden_path}) ---\n{expected}"
-        f"--- actual ---\n{actual}"
-    )
+    _assert_or_update_golden(golden_path, actual, fixture_name)
 
 
 # ---------------------------------------------------------------------------
@@ -1632,19 +1655,7 @@ async def test_workflow_pause_resume_matches_golden(
     actual = canonicalize_jsonl(actual_raw)
 
     golden_path = _GOLDEN_DIR / f"{fixture_name}.jsonl"
-    if not golden_path.exists():
-        msg = (
-            f"Missing pause/resume golden for fixture "
-            f"{fixture_name!r}.\nTo create it, write the following "
-            f"text to {golden_path}:\n\n{actual}"
-        )
-        raise AssertionError(msg)
-    expected = golden_path.read_text(encoding="utf-8")
-    assert actual == expected, (
-        f"Golden mismatch for {fixture_name!r}.\n"
-        f"--- expected ({golden_path}) ---\n{expected}"
-        f"--- actual ---\n{actual}"
-    )
+    _assert_or_update_golden(golden_path, actual, fixture_name)
 
 
 async def _read_status(store: WorkflowRunStore, run_id: Any) -> Any:
@@ -1869,10 +1880,12 @@ def _find_fork_event_id(
         if event.get("kind") != kind:
             continue
         if node_name is None:
-            return event["event_id"]
+            event_id: str = event["event_id"]
+            return event_id
         en = event.get("node_name") or event.get("payload", {}).get("node_name")
         if en == node_name:
-            return event["event_id"]
+            matched_event_id: str = event["event_id"]
+            return matched_event_id
     msg = (
         f"no event matching kind={kind!r} node_name={node_name!r}; "
         f"available kinds: {sorted({e['kind'] for e in events})}"
@@ -1965,23 +1978,9 @@ async def test_workflow_fork_matches_paired_goldens(
         (f"{fixture_name}.parent", parent_actual),
         (f"{fixture_name}.fork", fork_actual),
     )
-    missing: list[str] = []
     for name, actual in pairs:
         golden_path = _GOLDEN_DIR / f"{name}.jsonl"
-        if not golden_path.exists():
-            missing.append(f"# write to {golden_path}\n{actual}")
-    if missing:
-        msg = "Missing paired fork goldens.\n" + "\n---\n".join(missing)
-        raise AssertionError(msg)
-
-    for name, actual in pairs:
-        golden_path = _GOLDEN_DIR / f"{name}.jsonl"
-        expected = golden_path.read_text(encoding="utf-8")
-        assert actual == expected, (
-            f"Golden mismatch for {name!r}.\n"
-            f"--- expected ({golden_path}) ---\n{expected}"
-            f"--- actual ---\n{actual}"
-        )
+        _assert_or_update_golden(golden_path, actual, name)
 
     # The fork golden's first event MUST be workflow.run.forked_from
     # with parent_event_id=None — same first-event invariant that
@@ -2056,23 +2055,9 @@ async def test_workflow_agent_roundtrip_matches_paired_goldens(
         ("workflow-agent-roundtrip.workflow", workflow_actual),
         ("workflow-agent-roundtrip.session", session_actual),
     )
-    missing: list[str] = []
     for name, actual in pairs:
         golden_path = _GOLDEN_DIR / f"{name}.jsonl"
-        if not golden_path.exists():
-            missing.append(f"# write to {golden_path}\n{actual}")
-    if missing:
-        msg = "Missing paired goldens.\n" + "\n---\n".join(missing)
-        raise AssertionError(msg)
-
-    for name, actual in pairs:
-        golden_path = _GOLDEN_DIR / f"{name}.jsonl"
-        expected = golden_path.read_text(encoding="utf-8")
-        assert actual == expected, (
-            f"Golden mismatch for {name!r}.\n"
-            f"--- expected ({golden_path}) ---\n{expected}"
-            f"--- actual ---\n{actual}"
-        )
+        _assert_or_update_golden(golden_path, actual, name)
 
     # AC 4.4 — trace_id identity across both files. The shared
     # canonicaliser guarantees the same raw trace_id resolves to

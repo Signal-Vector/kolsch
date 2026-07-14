@@ -30,7 +30,7 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TextIO
 
-from _yamlio import dump, load
+from kolsch._yamlio import dump, load
 from assets.platform_config import default_platform_payload as _stock_defaults
 
 if TYPE_CHECKING:
@@ -455,7 +455,7 @@ async def _step_c_interactive(io: _SetupIO) -> str:
     )
     provider = {"r": "openrouter", "c": "opencode"}.get(choice)
     if provider is None:
-        io.out.write("  → skipping; the starter agent will use the fake LLM.\n")
+        io.out.write("  → skipping; the starter agent will use the mock LLM.\n")
         return _SKIPPED
     connect_io = io.connect_io_factory(io.root, provider, None)
     from cli.llm_commands import cmd_connect  # noqa: PLC0415
@@ -475,7 +475,7 @@ async def _step_c_non_interactive(io: _SetupIO) -> str:
     if not provider or not key:
         io.out.write(
             "  (no KOLSCH_PROVIDER / KOLSCH_PROVIDER_KEY env vars; "
-            "starter agent will use the fake LLM)\n"
+            "starter agent will use the mock LLM)\n"
         )
         return _SKIPPED
     connect_io = io.connect_io_factory(io.root, provider, key)
@@ -590,15 +590,15 @@ def _announce_picked_model(io: _SetupIO, model: str | dict[str, str]) -> None:
 
     Three cases:
 
-    - Fake fallback: announce loudly that no usable provider was
+    - Mock fallback: announce loudly that no usable provider was
       available; the user needs to connect one to get real answers.
     - Picked from a connected provider: name the provider + model.
     - Picked alias: name the alias + what it resolves to.
     """
-    if isinstance(model, dict) and model.get("provider") == "fake":
+    if isinstance(model, dict) and model.get("provider") == "mock":
         io.out.write(
             "  ⚠ no usable provider was connected — the starter agent "
-            "uses the built-in fake LLM (echoes input back). Run "
+            "uses the built-in mock LLM (echoes input back). Run "
             "`kolsch connect <provider>` to swap in real answers.\n"
         )
         return
@@ -646,7 +646,7 @@ def _pick_starter_model(io: _SetupIO) -> str | dict[str, str]:
        c. Other providers alphabetically.
        Within each provider, the first model id from its `models`
        list.
-    3. `{"provider": "fake", "model": "fake-model"}` if no provider
+    3. `{"provider": "mock", "model": "mock-model"}` if no provider
        yielded a model.
     """
     payload = _read_yaml(io.root / "platform.yaml")
@@ -685,9 +685,9 @@ def _pick_starter_model(io: _SetupIO) -> str | dict[str, str]:
             continue
         return {"provider": name, "model": model_id}
 
-    # 3) Nothing connected — fall back to the fake LLM so the starter
+    # 3) Nothing connected — fall back to the mock LLM so the starter
     # agent is still runnable.
-    return {"provider": "fake", "model": "fake-model"}
+    return {"provider": "mock", "model": "mock-model"}
 
 
 def _first_model_id(entry: dict[str, Any]) -> str | None:
@@ -875,6 +875,20 @@ def _workspace_only_default_rules() -> list[dict[str, str]]:
         # extra). Same conservative prompt default as fetch_url so the
         # chat surface asks before the agent drives headless Chromium.
         {"what": "kolsch/tools/browse_url", "pattern": "*", "effect": "prompt"},
+        # bug-024: workflow-service tools. `run_workflow` opens a
+        # WorkflowCard AND queues a run; conservative `prompt` so the
+        # user confirms the run before any nodes fire. `workflow_status`
+        # is read-only; safe to `allow`. `cancel_workflow` is user-
+        # initiated safety; `allow` so the model can react to an Esc
+        # or an explicit "cancel that" instruction without a modal.
+        {"what": "kolsch/tools/run_workflow", "pattern": "*", "effect": "prompt"},
+        {"what": "kolsch/tools/workflow_status", "pattern": "*", "effect": "allow"},
+        {"what": "kolsch/tools/cancel_workflow", "pattern": "*", "effect": "allow"},
+        # bug-027: `workflow_inspect` is read-only introspection —
+        # the model calls it to discover a workflow's required
+        # inputs before `run_workflow`. Safe to `allow`; no side
+        # effects, no run started.
+        {"what": "kolsch/tools/workflow_inspect", "pattern": "*", "effect": "allow"},
         # Default-deny tail (protected).
         {"what": "*", "pattern": "*", "effect": "deny"},
     ]

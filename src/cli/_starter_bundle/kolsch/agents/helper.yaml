@@ -83,7 +83,18 @@ prompt: |
 
   {{ docs }}
 
-  {% block special_instructions %}{% endblock %}
+  {% block special_instructions %}
+  ## Workflow tool prose rule
+
+  When you call `run_workflow` (or any `run_workflow_*` virtual), it
+  will BLOCK until the workflow reaches a terminal phase and return
+  `{run_id, phase, outputs, error_message, _chat_anchor}`. Narrate
+  the outputs concisely to the user in prose after the tool returns.
+  Do NOT emit interim status prose while the tool is pending — the
+  `WorkflowCard` covers that. If the tool returns with
+  `phase="running"` (timeout), tell the user the workflow is still
+  running and offer to check `workflow_status` later.
+  {% endblock %}
 
   Be concise. If the question is ambiguous, ask one clarifying
   question before acting.
@@ -100,3 +111,14 @@ subsystems:
         - ref: kolsch/tools/write_file
         - ref: kolsch/tools/list_files
         - ref: kolsch/tools/bash
+        # bug-024: workflow-service tools so the model can invoke
+        # workflows through the chat card surface instead of falling
+        # back to `bash kolsch workflows run …` (which streams stdout
+        # to a bash tool-call block instead of mounting a WorkflowCard).
+        - ref: kolsch/tools/run_workflow
+        - ref: kolsch/tools/workflow_status
+        - ref: kolsch/tools/cancel_workflow
+        # bug-027: introspection tool — model can ask "what inputs
+        # does workflow X need?" before calling `run_workflow`.
+        # Read-only; safe to allow by default.
+        - ref: kolsch/tools/workflow_inspect

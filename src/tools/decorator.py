@@ -19,12 +19,19 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, get_args
 
-from pydantic import BaseModel, ConfigDict
+from pydantic import BaseModel, ConfigDict, SkipValidation
 
 from files import PathPolicy
 from schemas import AgentId, SessionId, ThreadId
+from tools.services import (
+    Cards,
+    Prompts,
+    ServiceName,
+    SessionView,
+    Workflows,
+)
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -81,6 +88,25 @@ class ToolContext(BaseModel):
     # tools ↔ engine import cycle at runtime. Tool authors should
     # annotate access sites as `CancelToken | None` and import lazily.
     cancellation: Any = None
+
+    # spec-001 additions: four capability-scoped service handles the
+    # dispatcher populates per-tool-call from the `ChatServiceRegistry`
+    # when the tool declares them via `@tool(requires=[...])`. All
+    # four default to `None`; in headless mode (no registry passed to
+    # `dispatch_tool`) they stay `None`. Author narrowing goes through
+    # `tools.services.require_services()`, never `isinstance`.
+    #
+    # Wrapped in `SkipValidation[...]` because the service Protocols
+    # carry `@runtime_checkable=False` (deliberate — see
+    # `tools/services/cards.py`) and Pydantic v2 would otherwise
+    # build an `isinstance`-based validator that rejects the Protocol
+    # class outright. `SkipValidation` preserves the author-facing
+    # type shape (mypy sees `Cards | None`) while telling Pydantic to
+    # accept the value as-is at construction time.
+    cards: SkipValidation[Cards | None] = None
+    prompts: SkipValidation[Prompts | None] = None
+    workflows: SkipValidation[Workflows | None] = None
+    session: SkipValidation[SessionView | None] = None
 
 
 class ToolResult(BaseModel):
@@ -142,6 +168,10 @@ class ToolDefinition:
     timeout_seconds: float | None = None
     summary: str = ""
     home_bundle: str | None = None
+    requires: list[ServiceName] = field(default_factory=list)
+    """spec-001: names of tool services the dispatcher must inject on
+    `ToolContext` before this tool runs. Empty by default; the
+    dispatcher only populates fields listed here."""
 
     @property
     def action_name(self) -> str:
@@ -193,6 +223,7 @@ def tool(
     action: str | None = None,
     timeout_seconds: float | None = None,
     summary: str | None = None,
+    requires: list[ServiceName] | None = None,
 ) -> Callable[[Callable[..., Awaitable[Any]]], Callable[..., Awaitable[Any]]]:
     """The `@tool` decorator.
 
@@ -220,17 +251,35 @@ def tool(
             tool listing. When omitted, derived from the first
             sentence of `description`. The model still receives the
             full `description` via the LLM API regardless.
+        requires: Names of tool services (`"cards"`, `"prompts"`,
+            `"workflows"`, `"session"`) the dispatcher must inject on
+            `ToolContext` before this tool runs. Members must be in
+            [`ServiceName`][tools.services.ServiceName]; unknown
+            names raise `ValueError` at decoration time. Default
+            `None` — tools that don't opt in see all four service
+            fields as `None`.
 
     Returns:
         The decorator that stamps a `ToolDefinition` and returns the
         function unchanged.
 
     Raises:
-        ValueError: `name` doesn't match the required pattern.
+        ValueError: `name` doesn't match the required pattern, or
+            `requires` contains an entry not in `ServiceName`.
     """
     if not _NAME_PATTERN.fullmatch(name):
         msg = f"tool name {name!r} must match ^[a-z][a-z0-9_]*$"
         raise ValueError(msg)
+
+    if requires is not None:
+        valid_services = set(get_args(ServiceName))
+        unknown = [s for s in requires if s not in valid_services]
+        if unknown:
+            msg = (
+                f"tool {name!r} declared unknown requires={unknown}; "
+                f"valid: {sorted(valid_services)}"
+            )
+            raise ValueError(msg)
 
     resolved_summary = summary if summary is not None else _derive_summary(description)
 
@@ -246,6 +295,7 @@ def tool(
             action=action,
             timeout_seconds=timeout_seconds,
             summary=resolved_summary,
+            requires=list(requires or []),
         )
         fn._tool_definition = defn  # type: ignore[attr-defined]
         return fn

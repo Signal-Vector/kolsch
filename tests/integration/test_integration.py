@@ -1,7 +1,7 @@
 """TC-INT-01..07 — cross-subsystem integration tests.
 
 Wire the full Phase 1 stack and run end-to-end flows. Most cases use
-CrewAIFramework (the v1 production framework) driven by the Fake LLM
+CrewAIFramework (the v1 production framework) driven by the Mock LLM
 so the Materialization seam is exercised against the real adapter.
 TC-INT-04 uses CrewAI's native tool dispatch to verify authz gating
 mid-exchange. TC-INT-07 (backend swap) is scaffolded but skips when
@@ -31,8 +31,8 @@ from tests.fixtures.engine_builder import (
     build_engine,
     new_session_context,
 )
-from tests.fixtures.fake_llm import (
-    FakeLLM,
+from tests.fixtures.mock_llm import (
+    MockLLM,
     TextResponse,
     ToolCallResponse,
 )
@@ -102,7 +102,7 @@ def _config_with_tool(*, agent_id: str = "ag_test") -> ResolvedAgentConfig:
         agent_id=AgentId(agent_id),
         name="test-agent",
         description="Integration test agent.",
-        model=ModelSpec(provider="fake", model="fake-model"),
+        model=ModelSpec(provider="mock", model="mock-model"),
         prompt="You are an assistant.",
         io=IOSpec(mode="conversational"),
         subsystems={
@@ -112,13 +112,13 @@ def _config_with_tool(*, agent_id: str = "ag_test") -> ResolvedAgentConfig:
 
 
 # ===========================================================================
-# TC-INT-01 — Full single-agent exchange end to end (real CrewAI + Fake LLM)
+# TC-INT-01 — Full single-agent exchange end to end (real CrewAI + Mock LLM)
 # ===========================================================================
 
 
 async def test_tc_int_01_full_single_agent_exchange(tmp_path: Path) -> None:
     """think → tool call → think → answer against real CrewAI."""
-    fake = FakeLLM(
+    mock = MockLLM(
         script=[
             ToolCallResponse(
                 tool="ping",
@@ -130,7 +130,7 @@ async def test_tc_int_01_full_single_agent_exchange(tmp_path: Path) -> None:
     )
     engine, store, _am = await build_engine(
         tmp_path,
-        fake,
+        mock,
         framework=CrewAIFramework(),
         extra_tools=[_ping_tool],
     )
@@ -174,10 +174,10 @@ async def test_tc_int_02_events_durable_after_return(tmp_path: Path) -> None:
 
     from store.jsonl import jsonl_path
 
-    fake = FakeLLM(script=[TextResponse(text="Persisted.")])
+    mock = MockLLM(script=[TextResponse(text="Persisted.")])
     engine, store, _am = await build_engine(
         tmp_path,
-        fake,
+        mock,
         framework=CrewAIFramework(),
     )
     ctx = await new_session_context(store)
@@ -222,7 +222,7 @@ async def test_tc_int_03_memory_write_retrieve_across_turn(
         MemoryRetrievedData,
     )
 
-    fake = FakeLLM(
+    mock = MockLLM(
         script=[
             TextResponse(text="Turn 1 noted."),
             TextResponse(text="Turn 2 reply."),
@@ -230,7 +230,7 @@ async def test_tc_int_03_memory_write_retrieve_across_turn(
     )
     engine, store, _am = await build_engine(
         tmp_path,
-        fake,
+        mock,
         framework=CrewAIFramework(),
     )
     ctx = await new_session_context(store)
@@ -275,7 +275,7 @@ async def test_tc_int_03_memory_write_retrieve_across_turn(
     # text on Task.description per CrewAIFramework's design). Either
     # placement satisfies §B.6 — the verbatim content is in the LLM's
     # context.
-    last_call = fake.calls[-1]
+    last_call = mock.calls[-1]
     messages = last_call.context["messages"]
     assert isinstance(messages, list)
     full_text = " ".join(
@@ -293,10 +293,10 @@ async def test_tc_int_03_memory_write_retrieve_across_turn(
 
 
 async def test_tc_int_04_authz_gates_tool_mid_exchange(tmp_path: Path) -> None:
-    """`forbidden_tool` is denied by authz; `ping` is allowed. The Fake
+    """`forbidden_tool` is denied by authz; `ping` is allowed. The Mock
     LLM tries the forbidden one first, gets the failure as a tool
     message, recovers with `ping`, then answers."""
-    fake = FakeLLM(
+    mock = MockLLM(
         script=[
             ToolCallResponse(
                 tool="forbidden_tool",
@@ -313,7 +313,7 @@ async def test_tc_int_04_authz_gates_tool_mid_exchange(tmp_path: Path) -> None:
     )
     engine, store, _am = await build_engine(
         tmp_path,
-        fake,
+        mock,
         framework=CrewAIFramework(),
         # Allow `tool.ping` and `agent.execute.*`; deny `tool.forbidden_tool`.
         authz_rules=[
@@ -380,10 +380,10 @@ async def test_tc_int_05_secret_missing_propagates_as_setup_failed(
     The engine surfaces the failure as a Fatal exchange failure (and
     `execute` raises AgentExecutionError).
     """
-    fake = FakeLLM(script=[])  # never called — registration fails first.
+    mock = MockLLM(script=[])  # never called — registration fails first.
     engine, store, _am = await build_engine(
         tmp_path,
-        fake,
+        mock,
         framework=CrewAIFramework(),
     )
     # session is created so the test platform root is fully wired,
@@ -441,20 +441,20 @@ async def test_tc_int_06_resume_after_restart(tmp_path: Path) -> None:
     """Run turn 1; build a FRESH engine + store handle; run turn 2 on
     the same thread. Turn 2's path/leaf/config are reconstructed from
     the JSONL log alone."""
-    fake1 = FakeLLM(script=[TextResponse(text="Turn 1 answer.")])
+    mock1 = MockLLM(script=[TextResponse(text="Turn 1 answer.")])
     engine1, store1, _am1 = await build_engine(
         tmp_path,
-        fake1,
+        mock1,
         framework=CrewAIFramework(),
     )
     ctx = await new_session_context(store1)
     await engine1.execute(_config_with_tool(), ctx)
 
     # Simulate a restart: build fresh subsystems on the same root.
-    fake2 = FakeLLM(script=[TextResponse(text="Turn 2 answer.")])
+    mock2 = MockLLM(script=[TextResponse(text="Turn 2 answer.")])
     engine2, store2, _am2 = await build_engine(
         tmp_path,
-        fake2,
+        mock2,
         framework=CrewAIFramework(),
     )
     ctx2 = ExecutionContext(
@@ -473,7 +473,7 @@ async def test_tc_int_06_resume_after_restart(tmp_path: Path) -> None:
     #
     # Step 14 review #5 — consolidated from the previous if/else
     # branch (which masked what was actually being verified).
-    seen = fake2.calls[0].context["messages"]
+    seen = mock2.calls[0].context["messages"]
     assert isinstance(seen, list)
     seen_text = " ".join(str(m.get("content", "")) for m in seen if isinstance(m, dict))
     assert "Turn 1 answer" in seen_text
@@ -504,8 +504,8 @@ async def test_tc_int_06b_default_tier_end_to_end(tmp_path: Path) -> None:
     from engine import MinimalFramework
     from engine.dev_llm import EchoLLMDriver
 
-    fake = FakeLLM(script=[])  # never used — EchoLLM drives instead.
-    _ = fake  # silence unused warning; kept for symmetry with builders.
+    mock = MockLLM(script=[])  # never used — EchoLLM drives instead.
+    _ = mock  # silence unused warning; kept for symmetry with builders.
 
     # Use bootstrap_runtime-style defaults: MinimalFramework + EchoLLM.
     # build_engine takes the framework explicitly; pass MinimalFramework

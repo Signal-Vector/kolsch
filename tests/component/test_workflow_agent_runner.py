@@ -6,7 +6,7 @@ real :class:`engine.AgentEngine` injection, the
 :class:`engine.ExecutionContext` construction (carrying ``trace_id``
 + extended caller chain), and the
 :class:`engine.AgentExecutionError` → :class:`WorkflowNodeFailed`
-remap. These tests inject a tiny fake engine that captures the call
+remap. These tests inject a tiny mock engine that captures the call
 shape so the runner-side construction is verifiable without standing
 up the full :class:`AgentEngine` fixture (that lives at the Step 4
 end-to-end layer).
@@ -58,13 +58,22 @@ if TYPE_CHECKING:
 _AGENT_REF = "demo/agents/classifier"
 
 
-class _FakeEngine:
+class _MockEngine:
     """Minimal :class:`AgentEngine` stand-in.
 
-    The runner consumes only ``execute(config, context, *, inputs)``;
-    fakes can record the call shape without standing up the full
-    engine wiring. Tests that need to exercise real engine integration
-    end-to-end live in Step 4's ``tests/component/test_workflow_agent_runner_e2e.py``.
+    The runner consumes ``execute_stream(config, context, *, inputs)``
+    (spec-020); mocks can record the call shape without standing up
+    the full engine wiring. Tests that need to exercise real engine
+    integration end-to-end live in Step 4's
+    ``tests/component/test_workflow_agent_runner_e2e.py``.
+
+    spec-020: the runner switched from ``execute`` to
+    ``execute_stream``. This mock now yields the single
+    ``agent.message`` event (matching the pre-spec-020 return shape)
+    so existing tests continue to observe the same runner-return
+    behaviour. On a Fatal-path test (``raise_on_next``), we still
+    raise (mirroring ``AgentEngine.execute``'s legacy-Fatal path); the
+    runner catches ``AgentExecutionError`` in a dedicated ``except``.
     """
 
     def __init__(self, *, response_content: dict[str, Any] | None = None) -> None:
@@ -92,12 +101,37 @@ class _FakeEngine:
             content=self.response_content,
         )
 
+    async def execute_stream(
+        self,
+        config: ResolvedAgentConfig,
+        context: ExecutionContext,
+        *,
+        inputs: dict[str, Any] | None = None,
+    ) -> Any:
+        """Yield the single ``agent.message`` — mirrors ``execute``.
 
-def _as_engine(fake: _FakeEngine) -> AgentEngine:
-    """Cast the fake to satisfy the runner's annotation. The runner
+        A real engine yields intermediate ``tool.called`` /
+        ``model.response`` events too; this mock stays minimal so
+        pre-spec-020 assertion shapes (single ``agent.message``
+        returned) don't need to change.
+        """
+        self.calls.append((config, context, dict(inputs or {})))
+        if self.raise_on_next is not None:
+            exc = self.raise_on_next
+            self.raise_on_next = None
+            raise exc
+        yield _make_agent_message_event(
+            session_id=SessionId(f"ses_{uuid4()}"),
+            thread_id=context.thread_id,
+            content=self.response_content,
+        )
+
+
+def _as_engine(mock: _MockEngine) -> AgentEngine:
+    """Cast the mock to satisfy the runner's annotation. The runner
     only invokes ``execute(...)`` — full structural conformance
     isn't needed for these unit tests."""
-    return cast("AgentEngine", fake)
+    return cast("AgentEngine", mock)
 
 
 def _make_resolved_config(
@@ -109,8 +143,8 @@ def _make_resolved_config(
         name="classifier",
         description="A test classifier agent.",
         model=ModelSpec(
-            provider="fake",
-            model="fake-model",
+            provider="mock",
+            model="mock-model",
             parameters={"temperature": 0.42},
         ),
         prompt="You are a classifier.",
@@ -162,7 +196,7 @@ def _make_failed_event(*, session_id: SessionId, thread_id: ThreadId) -> Event:
         thread_id=thread_id,
         session_id=session_id,
         type=EventType.THREAD_EXCHANGE_FAILED,
-        data={"reason": "fake-failure"},
+        data={"reason": "mock-failure"},
         actor=Actor(kind="system"),
         created_at=datetime.now(UTC),
     )
@@ -174,6 +208,7 @@ def _make_ctx(
     parent_event_id: EventId | None = None,
     trace_id: TraceId | None = None,
     caller_chain: tuple[str, ...] = (),
+        tool_call_id: str | None = None,
 ) -> NodeContext:
     ctx = NodeContext.for_test(
         workflow_run_id=str(WorkflowRunId(f"wrk_{uuid4()}")),
@@ -214,14 +249,14 @@ def _make_runner(
     catalog: AssetCatalog,
     session_store: SessionStore,
     config: ResolvedAgentConfig | None = None,
-    engine: _FakeEngine | None = None,
-) -> tuple[AgentRunner, _FakeEngine]:
+    engine: _MockEngine | None = None,
+) -> tuple[AgentRunner, _MockEngine]:
     cfg = config or _make_resolved_config()
 
     async def _builder(_ref: str) -> ResolvedAgentConfig:
         return cfg
 
-    eng = engine or _FakeEngine()
+    eng = engine or _MockEngine()
     runner = AgentRunner(
         catalog=catalog,
         session_store=session_store,
@@ -246,7 +281,7 @@ async def test_assembly_happy_path(
     runner, engine = _make_runner(
         catalog=_make_catalog(),
         session_store=session_store,
-        engine=_FakeEngine(response_content={"label": "positive"}),
+        engine=_MockEngine(response_content={"label": "positive"}),
     )
     ctx = _make_ctx(workspace=tmp_path, parent_event_id=parent_event_id)
 
@@ -290,7 +325,7 @@ async def test_outputs_override_replaces_only_outputs(
         catalog=_make_catalog(),
         session_store=session_store,
         config=base,
-        engine=_FakeEngine(response_content={"classification": "spam"}),
+        engine=_MockEngine(response_content={"classification": "spam"}),
     )
     override = IOSpec(
         mode="single_shot",
@@ -449,7 +484,7 @@ async def test_agent_execution_error_remaps_to_workflow_node_failed(
     """AC 2.4 — :class:`AgentExecutionError` becomes
     :class:`WorkflowNodeFailed(cause=)`; ``__cause__`` preserved so the
     executor's failure path can read the chained exception."""
-    engine = _FakeEngine()
+    engine = _MockEngine()
     failed_event = _make_failed_event(
         session_id=SessionId(f"ses_{uuid4()}"),
         thread_id=ThreadId(f"th_{uuid4()}"),

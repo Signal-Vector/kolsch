@@ -5,7 +5,7 @@ its events, resume the session, stream events live, rebuild the
 entity database from the log, serve the same agent over HTTP,
 connect a real LLM provider, and add a fallback model.
 
-Steps 1–7 run with the fake LLM — a scripted echo, no credentials
+Steps 1–7 run with the mock LLM — a scripted echo, no credentials
 needed. Steps 8 onward connect a real provider. Do them when you're
 ready.
 
@@ -40,7 +40,7 @@ The starter agent's model depends on the provider step:
 - **Provider connected** — the starter uses that provider's first
   available model. Real replies from step 2.
 - **Provider skipped** — the workspace's `platform.yaml` gets
-  `defaults.model: {provider: fake, model: fake-model}`. Every
+  `defaults.model: {provider: mock, model: mock-model}`. Every
   `kolsch run` prints a stderr warning so you don't mistake the
   echo for a model reply. Swap in a real model any time via
   `kolsch connect <provider>` plus an edit to
@@ -77,7 +77,7 @@ file_access:
   allowed_paths: [ data/, bundles/ ]
   denied_paths:  [ .env ]
 defaults:
-  model: { provider: fake, model: fake-model }
+  model: { provider: mock, model: mock-model }
 ```
 
 `bundles/kolsch/agents/helper.yaml` — your first agent:
@@ -110,8 +110,8 @@ uv run kolsch run kolsch/agents/helper --input content="hello, kolsch"
 
 You'll see one line of JSON: the agent's reply.
 
-- With the fake LLM, the reply is literally `Echo: hello, kolsch`
-  and there's a stderr warning naming the fake LLM.
+- With the mock LLM, the reply is literally `Echo: hello, kolsch`
+  and there's a stderr warning naming the mock LLM.
 - With a real provider, you get a real reply and no warning.
 
 ## 3. See what happened on disk
@@ -243,8 +243,8 @@ its own model picks up the new value:
 ```yaml
 # in platform.yaml:
 defaults:
-  # from (if setup left you on the fake LLM):
-  # model: { provider: fake, model: fake-model }
+  # from (if setup left you on the mock LLM):
+  # model: { provider: mock, model: mock-model }
   model: { provider: openrouter, model: anthropic/claude-opus-4-7 }
   # or via an alias:
   # model: opus

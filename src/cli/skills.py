@@ -29,7 +29,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
-from _yamlio import dump, load
+from kolsch._yamlio import dump, load
 from assets.refs import build_ref
 from assets.skill_metadata import parse_skill_frontmatter
 from errors import AssetsNotFound, WorkspaceNotInitialized
@@ -842,7 +842,7 @@ class _ParsedInstallUrl:
     derived_name: str
 
 
-# Type alias for the fetcher seam — tests inject a fake that copies
+# Type alias for the fetcher seam — tests inject a mock that copies
 # from a fixture dir, production uses _real_fetcher.
 _Fetcher = Callable[[_ParsedInstallUrl, Path], Path]
 
@@ -1164,7 +1164,7 @@ def _cmd_install(
 ) -> int:
     """``kolsch skills install <url>`` — install a skill from a URL.
 
-    ``fetcher`` is the test-injection seam: tests pass a fake that
+    ``fetcher`` is the test-injection seam: tests pass a mock that
     copies from a local fixture dir; production passes ``None`` and
     gets :func:`_real_fetcher` (git clone or archive download). The
     rest of the flow is identical either way — strict-root SKILL.md
@@ -1546,7 +1546,7 @@ def _read_enabled_skill_refs_from_agent_yaml(path: Path) -> list[str]:
     YAML (``kolsch run`` against this agent fails loudly via the
     validator).
     """
-    from _yamlio import YAMLError  # noqa: PLC0415
+    from kolsch._yamlio import YAMLError  # noqa: PLC0415
 
     try:
         payload = load(path.read_text(encoding="utf-8")) or {}

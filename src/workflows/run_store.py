@@ -31,7 +31,7 @@ import uuid
 from collections.abc import Iterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from schemas.entities import ForkedFrom, ParentRunPointer
 from workflows.ids import TraceId, WorkflowRunId
@@ -79,6 +79,7 @@ class WorkflowRunStore:
         trace_id: TraceId | None = None,
         parent: ParentRunPointer | None = None,
         forked_from: ForkedFrom | None = None,
+        started_by: Literal["subprocess", "in-process"] = "subprocess",
     ) -> WorkflowRun:
         """Mint a fresh run and write its meta sidecar.
 
@@ -109,6 +110,11 @@ class WorkflowRunStore:
                 a freshly-minted one.
             parent: Optional sub-workflow parent pointer.
             forked_from: Optional fork parent pointer.
+            started_by: feat-015 — `"in-process"` for runs started by
+                the chat's `WorkflowsImpl`; `"subprocess"` (default)
+                for runs launched via `kolsch workflows run` and
+                similar CLI entry points. The chat's boot-time orphan
+                sweep only reconciles `"in-process"` runs.
 
         Returns:
             The materialised
@@ -127,6 +133,7 @@ class WorkflowRunStore:
             created_at=datetime.now(UTC),
             parent=parent,
             forked_from=forked_from,
+            run_started_by=started_by,
         )
         run_dir = self._directory(run_id)
         run_dir.root.mkdir(parents=True, exist_ok=True)
@@ -319,6 +326,37 @@ class WorkflowRunStore:
             rows.append(run)
         rows.sort(key=lambda r: (r.created_at, r.run_id), reverse=True)
         return rows
+
+    def list_all_meta(self) -> Iterator[WorkflowRun]:
+        """Yield one `WorkflowRun` per meta sidecar under `runs/`.
+
+        Cheap enumeration — reads `meta.json` only (no JSONL walk).
+        Used by feat-015's in-process orphan sweep to identify runs
+        whose `run_started_by="in-process"` and whose meta status is
+        still non-terminal after a chat quit. Skips directories that
+        lack a `meta.json` or whose meta fails to parse; skipping is
+        deliberate — a partial run without a meta is not a candidate
+        for orphan reconciliation.
+
+        Yields:
+            One `WorkflowRun` per readable meta sidecar. Order is
+            filesystem-iteration order (unsorted).
+        """
+        if not self._runs_root.exists():
+            return
+        for child in self._runs_root.iterdir():
+            if not child.is_dir():
+                continue
+            meta_path = child / "meta.json"
+            if not meta_path.exists():
+                continue
+            try:
+                meta = json.loads(meta_path.read_text(encoding="utf-8"))
+                yield WorkflowRun.model_validate(meta)
+            except (OSError, json.JSONDecodeError, ValueError):
+                # Corrupt or unreadable meta — skip. The sweep must
+                # not derail on one bad run.
+                continue
 
     # ------------------------------------------------------------------
     # directory accessor

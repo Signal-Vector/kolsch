@@ -33,6 +33,7 @@ from schemas.entities import (
     FromWorkflowRun,
     ParentRunPointer,
     Session,
+    SessionMeta,
     Thread,
 )
 from schemas.error import Error
@@ -49,6 +50,7 @@ from schemas.events import (
     ModelFallbackData,
     ModelRequestData,
     ModelResponseData,
+    ModelStreamingTokenData,
     SessionOpenedData,
     ThreadExchangeCompletedData,
     ThreadExchangeFailedData,
@@ -56,11 +58,13 @@ from schemas.events import (
     ToolCalledData,
     ToolFailedData,
     ToolResultData,
+    UIEventData,
     UserMessageData,
 )
 from schemas.identifiers import (
     AgentCallId,
     AgentId,
+    CardId,
     EventId,
     MemoryItemId,
     PrefixedId,
@@ -68,6 +72,7 @@ from schemas.identifiers import (
     SubscriptionId,
     ThreadId,
     derive_agent_id,
+    new_card_id,
 )
 
 __all__ = [
@@ -76,6 +81,7 @@ __all__ = [
     "AgentId",
     "AgentMessageData",
     "AgentTemplateWarningData",
+    "CardId",
     "ConfigSetData",
     "ContentRef",
     "ContextCompactedData",
@@ -93,6 +99,7 @@ __all__ = [
     "ModelFallbackData",
     "ModelRequestData",
     "ModelResponseData",
+    "ModelStreamingTokenData",
     "ModelSpec",
     "ParentRunPointer",
     "PermissionRule",
@@ -102,6 +109,7 @@ __all__ = [
     "RuntimeSpec",
     "Session",
     "SessionId",
+    "SessionMeta",
     "SessionOpenedData",
     "SubscriptionId",
     "SubsystemConfig",
@@ -113,6 +121,8 @@ __all__ = [
     "ToolCalledData",
     "ToolFailedData",
     "ToolResultData",
+    "UIEventData",
     "UserMessageData",
     "derive_agent_id",
+    "new_card_id",
 ]

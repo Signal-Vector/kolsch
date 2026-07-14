@@ -30,6 +30,7 @@ CATALOG: dict[str, Level] = {
     # Context file resolution errors.
     "context.file_not_found": Level.FATAL,
     "context.file_too_large": Level.FATAL,
+    "context.overflow_uncompactable": Level.FATAL,
     # Agent inheritance errors.
     "config.agent_inheritance_cycle": Level.FATAL,
     "config.parent_agent_not_found": Level.FATAL,

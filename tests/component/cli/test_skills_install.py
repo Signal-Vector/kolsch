@@ -1,6 +1,6 @@
 """``kolsch skills install <url>`` — Step 7 URL → bundle install.
 
-Uses a fake fetcher (the production code's documented test seam) so
+Uses a mock fetcher (the production code's documented test seam) so
 the suite has no network dependency. The real ``_real_fetcher``
 exercises ``git clone`` and ``urllib.request.urlretrieve``; those
 are covered by the manual e2e in the PR description.
@@ -10,7 +10,7 @@ Cases covered:
 - Auto-create flow: bundle.yaml is well-formed, skill lands at the
   derived ref, post-install validate fires.
 - ``--bundle <existing>`` installs into that bundle.
-- ``--bundle <missing>`` fails BEFORE fetch (the fake fetcher's
+- ``--bundle <missing>`` fails BEFORE fetch (the mock fetcher's
   call counter proves it wasn't invoked).
 - Strict-root SKILL.md absent → friendly error + zero workspace
   writes (atomicity contract).
@@ -90,11 +90,11 @@ def _build_skill_source(
 ) -> Path:
     """Create a directory shaped like a fetched skill checkout.
 
-    The fake fetcher copies this verbatim into the install pipeline's
+    The mock fetcher copies this verbatim into the install pipeline's
     scratch dir, so this is the exact view the trust prompt + the
     strict-root check + the atomic move all operate on.
     """
-    source = tmp_path / "fake_remote"
+    source = tmp_path / "mock_remote"
     source.mkdir(parents=True, exist_ok=True)
     if include_skill_md:
         (source / "SKILL.md").write_text(
@@ -114,10 +114,10 @@ def _build_skill_source(
     return source
 
 
-def _fake_fetcher(
+def _mock_fetcher(
     source: Path, *, calls: list[int] | None = None
 ) -> Callable[[_ParsedInstallUrl, Path], Path]:
-    """Build a fake fetcher that copies ``source`` into the install
+    """Build a mock fetcher that copies ``source`` into the install
     pipeline's scratch dir. ``calls`` (optional) is a counter list
     the test can inspect to assert the fetcher was (or wasn't)
     invoked — used by the fast-fail tests."""
@@ -160,7 +160,7 @@ def test_install_auto_creates_bundle_with_well_formed_manifest(
         yes=True,
         out=out,
         err=err,
-        fetcher=_fake_fetcher(source),
+        fetcher=_mock_fetcher(source),
     )
     assert exit_code == 0, f"stdout: {out.getvalue()}; stderr: {err.getvalue()}"
 
@@ -195,7 +195,7 @@ def test_install_with_bundle_name_uses_explicit_name(tmp_path: Path) -> None:
         yes=True,
         out=_io.StringIO(),
         err=_io.StringIO(),
-        fetcher=_fake_fetcher(source),
+        fetcher=_mock_fetcher(source),
     )
     assert exit_code == 0
     assert (tmp_path / "bundles" / "my-skills" / "bundle.yaml").is_file()
@@ -225,7 +225,7 @@ def test_install_into_existing_bundle(tmp_path: Path) -> None:
         yes=True,
         out=_io.StringIO(),
         err=_io.StringIO(),
-        fetcher=_fake_fetcher(source),
+        fetcher=_mock_fetcher(source),
     )
     assert exit_code == 0
 
@@ -261,7 +261,7 @@ def test_install_unknown_bundle_fails_before_fetch(tmp_path: Path) -> None:
         yes=True,
         out=_io.StringIO(),
         err=err,
-        fetcher=_fake_fetcher(source, calls=calls),
+        fetcher=_mock_fetcher(source, calls=calls),
     )
     assert exit_code == 1
     assert calls == [], "fetcher must NOT have been invoked"
@@ -285,7 +285,7 @@ def test_install_strict_root_failure_no_partial_write(tmp_path: Path) -> None:
         yes=True,
         out=out,
         err=err,
-        fetcher=_fake_fetcher(source),
+        fetcher=_mock_fetcher(source),
     )
     assert exit_code == 1
     assert "does not point at a SKILL.md root" in err.getvalue()
@@ -321,7 +321,7 @@ def test_install_refuses_overwrite_existing_skill(tmp_path: Path) -> None:
         yes=True,
         out=_io.StringIO(),
         err=err,
-        fetcher=_fake_fetcher(source),
+        fetcher=_mock_fetcher(source),
     )
     assert exit_code == 1
     assert "already exists" in err.getvalue()
@@ -348,7 +348,7 @@ def test_install_non_tty_without_yes_refuses(tmp_path: Path) -> None:
         yes=False,
         out=_io.StringIO(),
         err=err,
-        fetcher=_fake_fetcher(source),
+        fetcher=_mock_fetcher(source),
     )
     assert exit_code == 1
     rendered_err = err.getvalue()
@@ -374,7 +374,7 @@ def test_install_yes_prints_trust_audit_lines(tmp_path: Path) -> None:
         yes=True,
         out=out,
         err=_io.StringIO(),
-        fetcher=_fake_fetcher(source),
+        fetcher=_mock_fetcher(source),
     )
     assert exit_code == 0
 
@@ -408,7 +408,7 @@ def test_install_auto_create_appends_discriminator_on_collision(
             yes=True,
             out=_io.StringIO(),
             err=_io.StringIO(),
-            fetcher=_fake_fetcher(source),
+            fetcher=_mock_fetcher(source),
         )
         assert exit_code == 0
 

@@ -26,6 +26,9 @@ dist/
 # Platform runtime artifacts (handbook §5.3) ------------------------------
 .platform/
 sessions/
+# bug-036a: keep the checked-in JSONL fixture for the flagship
+# replay test — real-session excerpt, not a runtime artifact.
+!tests/fixtures/sessions/
 content/
 logs/
 .tool-outputs/

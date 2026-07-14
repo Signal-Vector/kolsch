@@ -78,7 +78,7 @@ prompt small even when an agent has many skills enabled, and it
 means a skill the model never invokes never costs context tokens.
 
 **Force-invoke is a synthetic read, not a separate code path.** When
-the user pins a skill, the engine fakes a tool call to `read` on the
+the user pins a skill, the engine synthesises a tool call to `read` on the
 SKILL.md path. The result event has the same shape as any other
 tool result. Authz runs the regular `tool.read` check; there's no
 "is this user allowed to force-invoke" predicate the engine has to

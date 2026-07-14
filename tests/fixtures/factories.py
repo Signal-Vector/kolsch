@@ -31,8 +31,8 @@ def make_agent_config(**overrides: Any) -> dict[str, Any]:
         "name": "test-agent",
         "description": "A scaffolding-time placeholder agent.",
         "model": {
-            "provider": "fake",
-            "model": "fake-1",
+            "provider": "mock",
+            "model": "mock-1",
             "parameters": {},
             "fallback": [],
         },

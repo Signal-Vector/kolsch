@@ -36,7 +36,7 @@ from workflows.parser import BashNodeDef, Workflow
 
 
 def _render(
-    events: list[dict],
+    events: list[dict[str, Any]],
     *,
     workflow: Workflow | None = None,
     indent_depth: int = 0,

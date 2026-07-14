@@ -197,6 +197,36 @@ class Thread(BaseModel):
     created_at: datetime
 
 
+class SessionMeta(BaseModel):
+    """Per-session mutable sidecar — the `meta.json` file for a session.
+
+    Sits alongside the JSONL log at
+    `<root>/sessions/<session_id>.meta.json`. Carries the bookmarks
+    consumers need to resume without re-scanning the full log.
+
+    Fields:
+
+    - `logical_seq_bookmark`: reserved for a v1.1 optimisation that
+      lets `append_event_sync` skip the tail re-read. Currently unused
+      per Coordinator decision — the JSONL tail is always authoritative
+      under `flock`. Defaults to `0` so legacy meta.json files (or a
+      missing file) validate cleanly.
+    - `event_adapter_bookmark`: the last `event_id` the `EventAdapter`
+      finished dispatching. `None` means "no bookmark; replay the
+      entire log on next boot". Persisted by
+      `EventAdapter._replay_from_bookmark` every 100 dispatches and on
+      unmount.
+
+    Both fields default so a session that has no meta.json on disk (or
+    a legacy one written before spec-003) validates cleanly.
+    """
+
+    model_config = ConfigDict(frozen=False, extra="ignore")
+
+    logical_seq_bookmark: int = 0
+    event_adapter_bookmark: EventId | None = None
+
+
 class Actor(BaseModel):
     """The actor stamped on every event — who or what produced it.
 

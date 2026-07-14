@@ -1,0 +1,5 @@
+name: workflow_inspect
+description: Inspect a workflow — returns required/optional inputs + example call.
+entry: workflow_inspect.py
+requires:
+  - workflows

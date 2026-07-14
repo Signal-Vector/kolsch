@@ -1,0 +1,12 @@
+╭─ ⚠  Tool approval ─────────────────────────────────────────────────╮
+│ ○ choose ─ ○ pattern ─ ○ save │
+│ Tool  kolsch/tools/bash │
+│ Args  curl -X POST https://example.com/api/v1/endpoint -d '{"jso…▸ │
+│ Rule  rl_bash │
+│ │
+│ [y] allow once   [a] allow + rule   [n] deny once   [d] deny + │
+│ │
+│ › ▊ │
+│ │
+│ Esc → deny once  ·  Tab → expand args │
+╰────────────────────────────────────────────────────────────────────╯

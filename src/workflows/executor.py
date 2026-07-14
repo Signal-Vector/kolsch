@@ -25,13 +25,14 @@ import logging
 import os
 import uuid
 from collections import deque
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any, Protocol
 
 from pydantic import ValidationError
 
 from assets.refs import is_three_segment, parse_three_segment
+from engine.context import CancelToken
 from workflows._inputs_models import inputs_model_for
 from workflows._replay import find_event_by_id, replay_into
 from workflows.branching import compute_branch_value
@@ -68,11 +69,14 @@ from workflows.run import WorkflowRunStatus
 
 if TYPE_CHECKING:
     from assets.catalog import AssetCatalog
+    from schemas.events import Event
     from schemas.identifiers import EventId
     from workflows.events import WorkflowEvent
     from workflows.parser import EdgeDef, Workflow
     from workflows.run import RunDirectory, WorkflowRun
     from workflows.run_store import WorkflowRunStore
+
+logger = logging.getLogger(__name__)
 
 __all__ = [
     "BUILTIN_PHASE_MAP",
@@ -265,7 +269,7 @@ class IterativeExecutor:
     same event-emission seam.
 
     The constructor takes the registry explicitly so tests can inject
-    fake runners without monkey-patching a module-level default.
+    mock runners without monkey-patching a module-level default.
     """
 
     def __init__(
@@ -278,6 +282,11 @@ class IterativeExecutor:
         catalog: AssetCatalog,
         _call_depth: int = 0,
         _call_chain: tuple[str, ...] = (),
+        event_observer: Callable[[WorkflowEvent], None] | None = None,
+        cancel_token: CancelToken | None = None,
+        sub_agent_event_observer: (
+            Callable[[str, str, "Event"], None] | None
+        ) = None,
     ) -> None:
         # Nested-executor depth cap (shared with `extends:`; same
         # error class, same limit). The check at CONSTRUCTION (not at
@@ -406,6 +415,107 @@ class IterativeExecutor:
         # `workflow.run.completed.payload.peak_in_flight` and in the
         # CLI envelope. Sequential runs always report `1`.
         self._peak_in_flight: int = 1
+        # spec-011 plumbing.
+        #
+        # `_event_observer` is a synchronous callable invoked once per
+        # emitted `WorkflowEvent` AFTER the store append succeeds
+        # (durable-first). Observer exceptions are caught and logged
+        # via `logger.exception` so a bad observer never kills the run.
+        # `None` means "no observer" — the emit path skips the
+        # callback entirely.
+        #
+        # `_cancel_token` is an in-process cooperative cancel handle.
+        # When set, every sub-agent invocation composes its
+        # `ExecutionContext.cancellation` as
+        # `CombinedCancelToken(cancel_token, existing_or_new)` so the
+        # cancel reaches the sub-agent's LLM stream via the same
+        # cooperative poll the engine already uses. The between-node
+        # file-based poll (`run_dir.cancel_flag_path.exists()`) is
+        # complementary — this token targets mid-node LLM streams.
+        self._event_observer = event_observer
+        self._cancel_token = cancel_token
+        # spec-020 plumbing.
+        #
+        # `_sub_agent_event_observer` is a synchronous callable the
+        # executor invokes once per session-scoped `Event` yielded from
+        # `AgentEngine.execute_stream(...)` inside an `AgentRunner`
+        # (or any other runner that spawns a sub-agent stream). The
+        # callable receives the owning `(node_name, invocation_id,
+        # event)` tuple so the bridge on the other end can translate
+        # each into a `kolsch.workflow.node.sub_agent_event` UI event
+        # keyed on bug-033's `(trace_id, invocation_id)` map.
+        #
+        # Observer exceptions are caught and logged — a raising
+        # observer must NOT propagate up into the executor run loop
+        # (same discipline as `_event_observer`; a bad UI-side
+        # translator can't kill the workflow).
+        self._sub_agent_event_observer = sub_agent_event_observer
+
+    # ------------------------------------------------------------------
+    # spec-011: emit + observer seam.
+    # ------------------------------------------------------------------
+
+    def _emit_event(self, event: WorkflowEvent) -> EventId:
+        """Append `event` to the store and fan out to the observer.
+
+        Durable-first: the store append runs BEFORE the observer
+        callback so a subscriber that raises never leaves a run in a
+        "notified but unpersisted" state. Observer exceptions are
+        caught and logged via `logger.exception` per spec-011 AC #3 —
+        a raising observer must NOT propagate up into the executor
+        run loop.
+
+        This helper wraps the module-level
+        [`emit_event`][workflows.events.emit_event] so every executor
+        emit site funnels through the same observer fan-out; grep
+        `_emit_event` to enumerate them.
+        """
+        event_id = emit_event(self._store, event)
+        if self._event_observer is not None:
+            try:
+                self._event_observer(event)
+            except Exception:  # noqa: BLE001 — observer is untrusted
+                logger.exception(
+                    "event_observer raised on event %s", event.kind,
+                )
+        return event_id
+
+    def _emit_sub_agent_event(
+        self,
+        node_name: str,
+        invocation_id: str,
+        event: "Event",
+    ) -> None:
+        """Fan a session-scoped sub-agent `Event` to the observer.
+
+        spec-020 sibling to
+        [`_emit_event`][workflows.executor.IterativeExecutor._emit_event].
+        Unlike its sibling, this method DOES NOT touch the workflow-
+        run JSONL — session-scoped events already land on their own
+        child-session JSONL from the engine's normal emit path. This
+        seam exists purely to fan the same event to a UI-side
+        translator (`WorkflowsImpl._drain_workflow_bridge` → the
+        `kolsch.workflow.node.sub_agent_event` wire kind) keyed on
+        the owning `(node_name, invocation_id)` so the receiver can
+        route into the matching `WorkflowNodeRow` via bug-033's
+        composite map.
+
+        No-ops when `sub_agent_event_observer` is unset (the CLI
+        headless path never wires one). Observer exceptions are
+        caught + logged, matching the `_event_observer` discipline.
+        """
+        if self._sub_agent_event_observer is None:
+            return
+        try:
+            self._sub_agent_event_observer(node_name, invocation_id, event)
+        except Exception:  # noqa: BLE001 — observer is untrusted
+            logger.exception(
+                "sub_agent_event_observer raised on event %s "
+                "(node=%s, invocation_id=%s)",
+                getattr(event, "type", "<unknown>"),
+                node_name,
+                invocation_id,
+            )
 
     # ------------------------------------------------------------------
     # Public entry point.
@@ -497,8 +607,7 @@ class IterativeExecutor:
         }
         if self._workflow.concurrency == "auto":
             started_payload["concurrency_mode"] = "auto"
-        self._last_event_id = emit_event(
-            self._store,
+        self._last_event_id = self._emit_event(
             WorkflowRunStartedEvent(
                 workflow_run_id=run_id,
                 trace_id=self._run.trace_id,
@@ -743,8 +852,7 @@ class IterativeExecutor:
             # Emit `workflow.run.resumed` — chained to the JSONL tail
             # event (typically the paused `user_input`'s
             # `workflow.node.started`).
-            resumed_id = emit_event(
-                self._store,
+            resumed_id = self._emit_event(
                 WorkflowRunResumedEvent(
                     workflow_run_id=run_id,
                     trace_id=self._run.trace_id,
@@ -809,8 +917,7 @@ class IterativeExecutor:
                     "invocation_id": waiting_invocation_id,
                     "output": dict(response),
                 }
-                completion_id = emit_event(
-                    self._store,
+                completion_id = self._emit_event(
                     WorkflowNodeCompletedEvent(
                         workflow_run_id=run_id,
                         trace_id=self._run.trace_id,
@@ -1085,8 +1192,7 @@ class IterativeExecutor:
             # to the parent run lives in the payload
             # (`forked_from_run_id` + `fork_event_id`) plus the
             # inherited `trace_id`.
-            forked_id = emit_event(
-                self._store,
+            forked_id = self._emit_event(
                 WorkflowRunForkedFromEvent(
                     workflow_run_id=run_id,
                     trace_id=self._run.trace_id,
@@ -1246,6 +1352,11 @@ class IterativeExecutor:
                     "invocation_id": str(inv_id),
                     "type": _node_type_ref(node_def),
                     "inputs": bound_inputs,
+                    # bug-036c: per-node-type config surface for the
+                    # chat UI (bash's shell command today; other types
+                    # emit `{}`). Additive optional field — old
+                    # renderers ignore the key.
+                    "node_config_preview": _config_preview_for(node_def),
                     # `caller_chain` carrier: the workflow run's own
                     # caller chain (the frames it was invoked
                     # through). The chain is populated by sub-workflow
@@ -1268,8 +1379,7 @@ class IterativeExecutor:
                     started_payload["concurrency"] = getattr(
                         node_def, "concurrency", None
                     )
-                started_id = emit_event(
-                    self._store,
+                started_id = self._emit_event(
                     WorkflowNodeStartedEvent(
                         workflow_run_id=run_id,
                         trace_id=self._run.trace_id,
@@ -1299,6 +1409,7 @@ class IterativeExecutor:
                 parent_event_id=self._invocation_last_event_id.get(inv_id, started_id),
                 is_resume_mode=is_resume_mode,
                 recorded_child_run_id=recorded_child,
+                node_name=node_name,
             )
             try:
                 # Strict-mode bind validation against the receiver's
@@ -1380,8 +1491,7 @@ class IterativeExecutor:
                 self._store.update_status(run_id, WorkflowRunStatus.WAITING_FOR_INPUT)
                 return WorkflowRunStatus.WAITING_FOR_INPUT
             except Exception as exc:  # noqa: BLE001 — record + abort
-                failed_id = emit_event(
-                    self._store,
+                failed_id = self._emit_event(
                     WorkflowNodeFailedEvent(
                         workflow_run_id=run_id,
                         trace_id=self._run.trace_id,
@@ -1396,8 +1506,7 @@ class IterativeExecutor:
                         },
                     ),
                 )
-                self._last_event_id = emit_event(
-                    self._store,
+                self._last_event_id = self._emit_event(
                     WorkflowRunFailedEvent(
                         workflow_run_id=run_id,
                         trace_id=self._run.trace_id,
@@ -1475,8 +1584,7 @@ class IterativeExecutor:
             # `_invocation_last_event_id` is seeded with `started_id`
             # at fire time and only advanced by
             # `ctx.emit_workflow_event`).
-            completion_id = emit_event(
-                self._store,
+            completion_id = self._emit_event(
                 WorkflowNodeCompletedEvent(
                     workflow_run_id=run_id,
                     trace_id=self._run.trace_id,
@@ -1524,8 +1632,7 @@ class IterativeExecutor:
         # The CLI envelope defaults to `1` when the field is absent.
         outputs = self._assemble_terminal_outputs(topo)
         run_completed_payload: dict[str, Any] = {"outputs": outputs}
-        self._last_event_id = emit_event(
-            self._store,
+        self._last_event_id = self._emit_event(
             WorkflowRunCompletedEvent(
                 workflow_run_id=run_id,
                 trace_id=self._run.trace_id,
@@ -1696,8 +1803,7 @@ class IterativeExecutor:
                 "peak_in_flight": self._peak_in_flight,
             }
             async with self._emit_lock:
-                self._last_event_id = emit_event(
-                    self._store,
+                self._last_event_id = self._emit_event(
                     WorkflowRunCompletedEvent(
                         workflow_run_id=run_id,
                         trace_id=self._run.trace_id,
@@ -1761,11 +1867,13 @@ class IterativeExecutor:
             "invocation_id": str(inv_id),
             "type": _node_type_ref(node_def),
             "inputs": bound_inputs,
+            # bug-036c: mirror the sibling started-payload site so
+            # map-iterated bash nodes surface their command too.
+            "node_config_preview": _config_preview_for(node_def),
             "caller_chain": list(getattr(self._run, "caller_chain", ()) or ()),
         }
         async with self._emit_lock:
-            started_id = emit_event(
-                self._store,
+            started_id = self._emit_event(
                 WorkflowNodeStartedEvent(
                     workflow_run_id=run_id,
                     trace_id=self._run.trace_id,
@@ -1785,6 +1893,7 @@ class IterativeExecutor:
             parent_event_id=started_id,
             is_resume_mode=False,
             recorded_child_run_id=None,
+            node_name=node_name,
         )
         return _PendingNode(
             node_name=node_name,
@@ -1893,8 +2002,7 @@ class IterativeExecutor:
             completed_payload["child_run_id"] = str(pending.ctx.spawned_run_id)
 
         async with self._emit_lock:
-            completion_id = emit_event(
-                self._store,
+            completion_id = self._emit_event(
                 WorkflowNodeCompletedEvent(
                     workflow_run_id=run_id,
                     trace_id=self._run.trace_id,
@@ -1929,8 +2037,7 @@ class IterativeExecutor:
         `parent_event_id` chains to the node's started event.
         """
         async with self._emit_lock:
-            failed_id = emit_event(
-                self._store,
+            failed_id = self._emit_event(
                 WorkflowNodeFailedEvent(
                     workflow_run_id=run_id,
                     trace_id=self._run.trace_id,
@@ -1972,8 +2079,7 @@ class IterativeExecutor:
             except (asyncio.CancelledError, Exception):  # noqa: BLE001, S110 — drain only
                 pass
             async with self._emit_lock:
-                cancelled_id = emit_event(
-                    self._store,
+                cancelled_id = self._emit_event(
                     WorkflowNodeFailedEvent(
                         workflow_run_id=run_id,
                         trace_id=self._run.trace_id,
@@ -2007,8 +2113,7 @@ class IterativeExecutor:
             "peak_in_flight": self._peak_in_flight,
         }
         async with self._emit_lock:
-            self._last_event_id = emit_event(
-                self._store,
+            self._last_event_id = self._emit_event(
                 WorkflowRunFailedEvent(
                     workflow_run_id=run_id,
                     trace_id=self._run.trace_id,
@@ -2389,8 +2494,7 @@ class IterativeExecutor:
         from workflows.events import WorkflowNodePrunedEvent  # noqa: PLC0415
 
         pruned_inv = InvocationId(f"inv_{uuid.uuid4()}")
-        self._last_event_id = emit_event(
-            self._store,
+        self._last_event_id = self._emit_event(
             WorkflowNodePrunedEvent(
                 workflow_run_id=self._run.run_id,
                 trace_id=self._run.trace_id,
@@ -2447,6 +2551,7 @@ class IterativeExecutor:
         parent_event_id: Any = None,
         is_resume_mode: bool = False,
         recorded_child_run_id: WorkflowRunId | None = None,
+        node_name: str | None = None,
     ) -> NodeContext:
         """Mint a per-invocation [`NodeContext`][workflows.context.NodeContext].
 
@@ -2458,6 +2563,17 @@ class IterativeExecutor:
         threads through so the agent runner can stamp the spawned
         session's `spawned_by` payload with the originating
         `workflow.node.started` id.
+
+        spec-020: when `node_name` is provided AND the executor was
+        wired with a `sub_agent_event_observer`, the context's
+        `on_sub_agent_event_callback` fans each session-scoped
+        `Event` yielded by `AgentEngine.execute_stream(...)` to the
+        observer with the owning `(node_name, invocation_id)` so the
+        bridge on the other end can route the payload into the
+        matching `WorkflowNodeRow`. When `node_name` is unset (older
+        call sites that haven't been threaded through) the callback
+        is a no-op — every sub-agent event still lands on the child
+        session's JSONL via the engine's normal emit path.
         """
         type_ref = _node_type_ref(node_def)
         bundle = (
@@ -2514,10 +2630,29 @@ class IterativeExecutor:
             # is uncontended in sequential mode so JSONL byte output
             # is byte-identical to the sequential baseline.
             async with self._emit_lock:
-                new_id = emit_event(self._store, event)
+                new_id = self._emit_event(event)
             self._last_event_id = new_id
             self._invocation_last_event_id[inv_id] = new_id
             return new_id
+
+        # spec-020: the sub-agent event forwarder seam. `AgentRunner`
+        # calls this per-event as it iterates
+        # `AgentEngine.execute_stream(...)`. We bind `node_name` +
+        # `inv_id` into the closure so the observer always sees the
+        # owning `(node_name, invocation_id)` tuple. When `node_name`
+        # is unset (older call site) OR no observer is wired, the
+        # callback still runs but `_emit_sub_agent_event` short-
+        # circuits — a wired runner can call it unconditionally.
+        _node_name_for_sub_agent = node_name
+
+        def _on_sub_agent_event(event: "Event") -> None:
+            if _node_name_for_sub_agent is None:
+                return
+            self._emit_sub_agent_event(
+                _node_name_for_sub_agent,
+                str(inv_id),
+                event,
+            )
 
         return NodeContext(
             workflow_run_id=str(run_id),
@@ -2549,6 +2684,18 @@ class IterativeExecutor:
             # status instead.
             is_resume_mode=is_resume_mode,
             recorded_child_run_id=recorded_child_run_id,
+            # spec-011: the executor's in-process cancel handle. The
+            # `AgentRunner` reads this from the NodeContext at
+            # sub-agent invocation time and composes it into the
+            # `ExecutionContext.cancellation` alongside any existing
+            # exchange-scoped token. `None` when the executor was
+            # constructed without a cancel token.
+            cancel_token=self._cancel_token,
+            # spec-020: the sub-agent event forwarder seam. Every
+            # session-scoped event `AgentEngine.execute_stream(...)`
+            # yields lands here; the closure fans to the executor's
+            # `_sub_agent_event_observer` (see `_emit_sub_agent_event`).
+            on_sub_agent_event_callback=_on_sub_agent_event,
         )
 
     # ------------------------------------------------------------------
@@ -2566,8 +2713,7 @@ class IterativeExecutor:
         boundary). `reason: user_cancel` is the standard vocabulary
         for an operator-initiated abort.
         """
-        self._last_event_id = emit_event(
-            self._store,
+        self._last_event_id = self._emit_event(
             WorkflowRunAbortedEvent(
                 workflow_run_id=run_id,
                 trace_id=self._run.trace_id,
@@ -2644,3 +2790,23 @@ def _node_type_ref(node_def: Any) -> str:
     # `CopyOfNodeDef` — defer to a synthetic ref the registry will
     # report as "not implemented" until copy_of resolution lands.
     return "<copy_of>"
+
+
+def _config_preview_for(node_def: Any) -> dict[str, Any]:
+    """bug-036c: per-node-type preview for NODE_STARTED payload.
+
+    Populates the ``node_config_preview`` key so the chat UI can
+    surface the source config that motivated the node (bash's shell
+    command, etc.) without re-reading the workflow YAML.
+
+    Note: this helper is a *config* preview — declarative
+    source-of-truth from the workflow YAML. Runtime inputs bound
+    from inbound edges are already emitted on
+    ``NODE_STARTED.payload.inputs`` at the sibling top level; this
+    helper never duplicates them. Future node types extend the
+    dispatch (agent `prompt`, map `over_expr`, browse_url `url`, …).
+    """
+    t = _node_type_ref(node_def)
+    if t == "kolsch/nodes/bash":
+        return {"command": getattr(node_def, "command", "")}
+    return {}

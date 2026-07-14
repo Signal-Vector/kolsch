@@ -39,9 +39,9 @@ from tests.fixtures.engine_builder import (
     build_engine,
     new_session_context,
 )
-from tests.fixtures.fake_llm import (
+from tests.fixtures.mock_llm import (
     ErrorResponse,
-    FakeLLM,
+    MockLLM,
     TextResponse,
     ToolCallResponse,
 )
@@ -64,7 +64,7 @@ def _config() -> ResolvedAgentConfig:
         agent_id=AgentId("ag_test"),
         name="test-agent",
         description="A test agent.",
-        model=ModelSpec(provider="fake", model="fake-model"),
+        model=ModelSpec(provider="mock", model="mock-model"),
         prompt="You are a helpful test agent.",
         io=IOSpec(mode="conversational"),
     )
@@ -101,10 +101,10 @@ async def _ping_tool(
 
 
 async def test_tc_eng_01_simple_against_crewai(tmp_path: Path) -> None:
-    fake = FakeLLM(script=[TextResponse(text="Hi from CrewAI.")])
+    mock = MockLLM(script=[TextResponse(text="Hi from CrewAI.")])
     engine, store, _am = await build_engine(
         tmp_path,
-        fake,
+        mock,
         framework=CrewAIFramework(),
     )
     ctx = await new_session_context(store)
@@ -141,7 +141,7 @@ async def test_tc_eng_01_simple_against_crewai(tmp_path: Path) -> None:
 
 
 async def test_tc_eng_02_tool_call_against_crewai(tmp_path: Path) -> None:
-    fake = FakeLLM(
+    mock = MockLLM(
         script=[
             ToolCallResponse(
                 tool="ping",
@@ -153,7 +153,7 @@ async def test_tc_eng_02_tool_call_against_crewai(tmp_path: Path) -> None:
     )
     engine, store, _am = await build_engine(
         tmp_path,
-        fake,
+        mock,
         framework=CrewAIFramework(),
         extra_tools=[_ping_tool],
     )
@@ -205,7 +205,7 @@ async def _boom_tool(_args: _BoomArgs, _ctx: ToolContext) -> dict[str, Any]:
 async def test_tc_eng_04_diagnostic_continues_against_crewai(
     tmp_path: Path,
 ) -> None:
-    fake = FakeLLM(
+    mock = MockLLM(
         script=[
             ToolCallResponse(tool="boom", args={}, tool_call_id="call_boom"),
             TextResponse(text="The tool failed; I'll skip it."),
@@ -213,7 +213,7 @@ async def test_tc_eng_04_diagnostic_continues_against_crewai(
     )
     engine, store, _am = await build_engine(
         tmp_path,
-        fake,
+        mock,
         framework=CrewAIFramework(),
         extra_tools=[_boom_tool],
     )
@@ -235,7 +235,7 @@ async def test_tc_eng_04_diagnostic_continues_against_crewai(
 
 
 async def test_tc_eng_05_fatal_raises_against_crewai(tmp_path: Path) -> None:
-    fake = FakeLLM(
+    mock = MockLLM(
         script=[
             ErrorResponse(
                 error_type="model.upstream_error",
@@ -253,7 +253,7 @@ async def test_tc_eng_05_fatal_raises_against_crewai(tmp_path: Path) -> None:
     )
     engine, store, _am = await build_engine(
         tmp_path,
-        fake,
+        mock,
         framework=CrewAIFramework(),
     )
     ctx = await new_session_context(store)
@@ -275,10 +275,10 @@ async def test_tc_eng_05_fatal_raises_against_crewai(tmp_path: Path) -> None:
 
 
 async def test_tc_eng_07_authz_denial_against_crewai(tmp_path: Path) -> None:
-    fake = FakeLLM(script=[])  # never called
+    mock = MockLLM(script=[])  # never called
     engine, store, _am = await build_engine(
         tmp_path,
-        fake,
+        mock,
         framework=CrewAIFramework(),
         authz_rules=[
             {"who": "user.local", "what": r"agent\.execute\..*", "effect": "deny"},
@@ -305,20 +305,20 @@ async def test_tc_eng_07_authz_denial_against_crewai(tmp_path: Path) -> None:
 
 
 async def test_tc_eng_08_statelessness_against_crewai(tmp_path: Path) -> None:
-    fake1 = FakeLLM(script=[TextResponse(text="Turn 1 reply.")])
+    mock1 = MockLLM(script=[TextResponse(text="Turn 1 reply.")])
     engine1, store, _am = await build_engine(
         tmp_path,
-        fake1,
+        mock1,
         framework=CrewAIFramework(),
     )
     ctx = await new_session_context(store)
     await engine1.execute(_config(), ctx)
 
-    # Restart: fresh engine + fresh fake; same store + same thread.
-    fake2 = FakeLLM(script=[TextResponse(text="Turn 2 reply.")])
+    # Restart: fresh engine + fresh mock; same store + same thread.
+    mock2 = MockLLM(script=[TextResponse(text="Turn 2 reply.")])
     engine2, _store2, _am2 = await build_engine(
         tmp_path,
-        fake2,
+        mock2,
         framework=CrewAIFramework(),
     )
     ctx2 = ExecutionContext(
@@ -370,10 +370,10 @@ async def test_tc_eng_11_skills_listing_against_crewai(tmp_path: Path) -> None:
         encoding="utf-8",
     )
 
-    fake = FakeLLM(script=[TextResponse(text="Done.")])
+    mock = MockLLM(script=[TextResponse(text="Done.")])
     engine, store, _am = await build_engine(
         tmp_path,
-        fake,
+        mock,
         framework=CrewAIFramework(),
     )
 
@@ -403,7 +403,7 @@ async def test_tc_eng_11_skills_listing_against_crewai(tmp_path: Path) -> None:
 
     # CrewAI builds a wrapped system prompt; the skills listing lives
     # inside our backstory which becomes part of the wrap.
-    seen = fake.calls[0].context["messages"]
+    seen = mock.calls[0].context["messages"]
     assert isinstance(seen, list)
     system_text = next(
         (
@@ -430,7 +430,7 @@ async def test_tc_eng_06_fatal_ends_stream_against_crewai(tmp_path: Path) -> Non
     yielded item and the iterator ends."""
     from schemas import Event
 
-    fake = FakeLLM(
+    mock = MockLLM(
         script=[
             ErrorResponse(error_type="model.upstream_error", message="x"),
             ErrorResponse(error_type="model.upstream_error", message="x"),
@@ -439,7 +439,7 @@ async def test_tc_eng_06_fatal_ends_stream_against_crewai(tmp_path: Path) -> Non
     )
     engine, store, _am = await build_engine(
         tmp_path,
-        fake,
+        mock,
         framework=CrewAIFramework(),
     )
     ctx = await new_session_context(store)
@@ -482,10 +482,10 @@ async def test_tc_eng_09_cancellation_against_crewai(tmp_path: Path) -> None:
     cancel = CancelToken()
     cancel.cancel()  # pre-cancel; framework's first cancellation poll fires.
 
-    fake = FakeLLM(script=[TextResponse(text="should not be reached")])
+    mock = MockLLM(script=[TextResponse(text="should not be reached")])
     engine, store, _am = await build_engine(
         tmp_path,
-        fake,
+        mock,
         framework=CrewAIFramework(),
     )
     base_ctx = await new_session_context(store)
@@ -505,8 +505,8 @@ async def test_tc_eng_09_cancellation_against_crewai(tmp_path: Path) -> None:
     # platform.internal_error).
     assert events[-1].type == EventType.THREAD_EXCHANGE_FAILED
     assert events[-1].data["error"]["type"] == "exchange.cancelled"
-    # FakeLLM was never reached (we pre-cancelled).
-    assert len(fake.calls) == 0
+    # MockLLM was never reached (we pre-cancelled).
+    assert len(mock.calls) == 0
     # asyncio import preserved across PLR — runtime use here is to make
     # the helper-import block clear; the engine's CancelToken sets the
     # underlying asyncio.Event itself.
@@ -538,10 +538,10 @@ async def test_tc_eng_10_force_invoke_against_crewai(tmp_path: Path) -> None:
     write_platform_yaml(tmp_path)
     md_path = _write_skill_for_force_invoke(tmp_path)
 
-    fake = FakeLLM(script=[TextResponse(text="Done.")])
+    mock = MockLLM(script=[TextResponse(text="Done.")])
     engine, store, _am = await build_engine(
         tmp_path,
-        fake,
+        mock,
         framework=CrewAIFramework(),
     )
 

@@ -26,7 +26,7 @@ from dataclasses import dataclass
 from datetime import datetime
 from enum import StrEnum
 from pathlib import Path
-from typing import Any, ClassVar
+from typing import Any, ClassVar, Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
@@ -98,6 +98,14 @@ class WorkflowRun(BaseModel):
     # Independent of `parent`: a run can have either, both, or neither
     # (a forked sub-workflow run carries both).
     forked_from: ForkedFrom | None = None
+    # feat-015: distinguishes runs launched by the chat's in-process
+    # `WorkflowsImpl` from subprocess-hosted runs (`kolsch workflows
+    # run`). The chat's boot-time orphan sweep only reconciles
+    # `"in-process"` runs; `"subprocess"` runs use the existing
+    # PID-based sweep at `src/workflows/orphan_sweep.py`. Default
+    # `"subprocess"` preserves backward compat — legacy `meta.json`
+    # files that predate this field validate cleanly with the default.
+    run_started_by: Literal["subprocess", "in-process"] = "subprocess"
 
 
 @dataclass(frozen=True, slots=True)

@@ -4,7 +4,7 @@ Implements the framework boundary per the
 [framework protocol design](../explanation/framework-protocol-design.md).
 The engine depends on this Protocol, never on a concrete framework.
 Reference implementations:
-[`MinimalFramework`][engine.fake_framework.MinimalFramework] (the v1 default
+[`MinimalFramework`][engine.mock_framework.MinimalFramework] (the v1 default
 for engine tests and zero-LLM-cost dev workflows) and
 [`CrewAIFramework`][engine.crewai_framework.CrewAIFramework] (the real
 CrewAI adapter).
@@ -72,7 +72,7 @@ class LLMResponse(BaseModel):
     tool-invocation list when the model wants to call one or more
     tools (mutually exclusive in v1 — a model either answers in text
     OR requests tools, not both, per the
-    [`MinimalFramework`][engine.fake_framework.MinimalFramework] loop's
+    [`MinimalFramework`][engine.mock_framework.MinimalFramework] loop's
     invariant). `raw` carries the provider-shaped response dict for
     downstream materialization on `model.response.data` — the parts
     of the LLM's reply the engine cannot derive from `content` +
@@ -81,7 +81,7 @@ class LLMResponse(BaseModel):
     blocks). `MinimalFramework` satisfies it with `raw={}`; the CrewAI
     adapter populates it from whatever the configured provider
     returned. The asymmetry is deliberate — `raw` is a passthrough
-    channel, not a Fake-contract gap.
+    channel, not a Mock-contract gap.
     """
 
     model_config = ConfigDict(frozen=True, extra="forbid")
@@ -142,9 +142,16 @@ class ToolHandle(Protocol):
     tool-result message instead of raising — the engine contract
     forbids in-exchange failures from raising into the framework
     loop.
+
+    `description` was added by bug-024. The framework needs the tool's
+    prose description (from `@tool(description=...)`) to build the
+    outgoing OpenAI-spec `tools=` payload — without it every advertised
+    tool ships as `"Tool: <name>"` and models (Kimi K2.6 especially)
+    fall back to `bash` for anything they can spawn as a subprocess.
     """
 
     name: str
+    description: str
     schema: dict[str, Any]
 
     async def __call__(self, call: ToolCall) -> Any:
@@ -209,6 +216,6 @@ class Framework(Protocol):
 #: whatever the underlying model produced. The engine translates the
 #: driver's reply into [`LLMResponse`][engine.framework.LLMResponse]
 #: inside the [`LLMHandle`][engine.framework.LLMHandle] body. In tests
-#: this is bound to `FakeLLM.agenerate`; the CrewAI adapter binds it
+#: this is bound to `MockLLM.agenerate`; the CrewAI adapter binds it
 #: to a litellm-backed function.
 LLMDriver = Callable[[dict[str, Any]], Awaitable[Any]]

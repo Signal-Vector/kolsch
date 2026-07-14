@@ -53,7 +53,7 @@ def _agent_payload(
         "agent_id": "ag_demo",
         "name": "demo",
         "description": "version-defaults regression fixture.",
-        "model": {"provider": "fake", "model": "fake-model"},
+        "model": {"provider": "mock", "model": "mock-model"},
         "prompt": "You are a demo agent.",
         "io": {"mode": "conversational"},
     }

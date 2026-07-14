@@ -78,6 +78,15 @@ dependencies = [
     # docs/explanation/framework-protocol-design.md §2.
     # Release notes: https://github.com/crewAIInc/crewAI/releases
     "crewai==1.14.6",
+    # spec-textual-chat-ui — inline Textual UI for `kolsch chat`.
+    # Pinned to match crewai==1.14.6's transitive constraint
+    # (crewai-cli depends on textual>=7.5.0). We take the ceiling
+    # at <8 to avoid future major-version surprises.
+    # `prompt_toolkit` above stays as a runtime dep because
+    # `src/cli/_slash.py` still uses its `Completer`; the
+    # Textual chat + prompt_toolkit slash completer coexist in v1.
+    "textual>=7.5.0,<8",
+    "tiktoken>=0.13.0",
 ]
 
 [project.optional-dependencies]
@@ -171,13 +180,16 @@ packages = [
 [tool.hatch.build.targets.wheel.force-include]
 "docs" = "src/kolsch/docs"
 "AGENTS.md" = "src/kolsch/AGENTS.md"
-# Phase 3.0 Step 0 — the ruamel.yaml chokepoint lives as a single
-# module at the src root; force-include keeps it discoverable in
-# installed wheels (the editable install already finds it via the
-# src/ .pth entry). Named ``_yamlio`` (not ``_yaml``) to avoid
-# colliding with PyYAML's site-packages compatibility stub package
-# ``_yaml/`` — PyYAML stays as a transitive dep of crewai et al.
-"src/_yamlio.py" = "_yamlio.py"
+# bug-049 — the ruamel.yaml chokepoint now lives inside the `kolsch`
+# package (`src/kolsch/_yamlio.py`) and ships automatically via the
+# `src/kolsch` entry in `packages` above. NO force-include needed.
+# History: it briefly lived at `src/_yamlio.py` with a force-include
+# copying it to the wheel root, but that created a `site-packages/
+# _yamlio.py` shadow that Python's finder preferred over the
+# editable-install `.pth`-added `src/`. Any drift between the two
+# copies (e.g. after adding an export to the src tree without
+# reinstalling the wheel) surfaced as `ImportError` at CLI startup
+# — see bug-045 (regression guard test) and bug-049 (root fix).
 
 # ---------------------------------------------------------------------------
 # Dependency groups — installed via `uv sync --group <name>` (or all groups
@@ -430,6 +442,22 @@ convention = "google"
 # signature matches spec §2.2 directly (5 kwargs + the function it
 # decorates), and validator branching mirrors spec §3.4's checklist.
 "src/tools/**" = ["TC001", "TC003", "PLR0913", "PLR0912"]
+# `src/tools/services/` — the `AbstractCards` / `AbstractPrompts` /
+# `AbstractWorkflows` ABCs are the structural-typing partner of their
+# sibling `Protocol` classes (spec-001 §Service Contracts). Methods
+# raise `NotImplementedError` by default rather than being
+# `@abstractmethod`, so subclasses can override incrementally without
+# being forced to implement the full surface up front. B024 flags the
+# missing `@abstractmethod` decorators; the pattern is intentional.
+"src/tools/services/cards.py" = ["B024"]
+"src/tools/services/prompts.py" = ["B024"]
+"src/tools/services/workflows.py" = ["B024"]
+# `src/tools/services/exceptions.py` — service-layer errors follow the
+# same "no Error suffix" naming convention as `src/errors/` and
+# `src/workflows/errors.py`. Names like `ToolNotAvailable`, `PromptBusy`,
+# and `CardClosed` read as states/conditions in raise sites, per
+# spec-001 §Errors.
+"src/tools/services/exceptions.py" = ["N818"]
 # Same for skills — EnabledSkill and SkillInvocation are Pydantic
 # models per Module API Reference §10.2.
 "src/skills/**" = ["TC001", "TC003"]
@@ -583,17 +611,16 @@ ignore_missing_imports = true
 # no-redef, unreachable, valid-type, syntax) stay enforced.
 module = ["tests.*"]
 # Per-code rationale (Q8 audit: process/qol-audit-tests-mypy-override.md).
-# Every code here has been sampled and confirmed to fire dominantly
-# on false-positive test-scaffolding shapes; sites that surfaced
+# Every code here has been triaged site-by-site — the full 141-row
+# per-site table lives at process/qol-audit-tests-mypy-override-triage.md
+# (gitignored working doc). Every remaining code was confirmed to
+# have ZERO real-bug sites after the triage; sites that surfaced
 # genuine typing bugs during the audit were fixed in PRs #8, #9,
-# and #10 (see the qol-audit spec's Notes section for the trail).
+# #10, #11, #12, and #13 (the last two under the tests-mypy-per-code
+# branch — see the qol-audit spec's Notes section for the trail).
 # Add a new code here only after auditing that it too has zero
 # real bugs in the current corpus.
 disable_error_code = [
-    # dict-walking parsed JSONL — event["kind"] where the reader
-    # trusts the runtime shape more than the declared dict[str, Any]
-    # value narrowing.
-    "index",
     # pytest.raises(BaseError) as exc: assert exc.subclass_field —
     # the base class exposes union, tests inspect the concrete arm.
     "union-attr",
@@ -605,25 +632,31 @@ disable_error_code = [
     # where Foo expects Literal[...] or a NewType) — the mismatch
     # is the whole point of the test.
     "arg-type",
-    # bare `dict` / `list` in helper signatures — the tests-are-
-    # loose convention (also carried by the ruff tests/** ignore).
-    "type-arg",
-    # test helpers returning Any-typed values pulled from parsed
-    # JSONL / dict walks — declaring the narrow return type + adding
-    # cast() at every site is pure ceremony for scaffolding code.
-    "no-any-return",
-    # calls to test helpers that are themselves untyped by design
-    # (test helpers deliberately return Any for flexibility).
-    "no-untyped-call",
-    # test functions returning None implicitly and kwargs helpers
-    # without full signatures — pytest test bodies live under the
-    # "tests are loose" convention.
-    "no-untyped-def",
-    # test stubs that return None / partial shapes for paths the
-    # test never exercises (e.g., ``connect_io_factory`` in the
-    # no-network setup tests).
-    "return-value",
 ]
+# Removed 2026-07-04 (Q8 fifth pass):
+#   no-untyped-def, no-untyped-call — every remaining site was
+#     annotated or covered by a helper return type; the codes now
+#     fail loud on new sloppy signatures instead of silently.
+#   return-value — the three remaining sites (setup_io fake
+#     factories that the no-network paths don't reach) are marked
+#     with per-line `# type: ignore[return-value, arg-type]`.
+#   call-arg — never fired on its own (only as `note:` follow-ups
+#     from arg-type findings); dropping it is a no-op.
+#   type-arg — the 16 bare-`dict` / bare-`list` sites were tightened
+#     to `dict[str, Any]` / `list[dict[str, Any]]` in-file. Cost was
+#     one-line-per-site plus a `from typing import Any` in a few
+#     helper modules; the payoff is that new bare-generic drift
+#     fails loud rather than silently landing.
+#   no-any-return — the 13 sites were helper functions pulling
+#     values out of `json.loads(...)`, `dict[str, Any]`, or `getattr`
+#     of unknown-typed modules. The fix at each site was an explicit
+#     narrow-typed local (`x: str = payload["event_id"]; return x`)
+#     rather than `return payload["event_id"]`. Same pattern as
+#     type-arg above: cheap ceremony to unblock new-drift detection.
+#   index — after the type-arg + no-any-return passes tightened
+#     helper signatures, mypy no longer flags any dict-index sites
+#     in tests/. Dropping it is a no-op today AND surfaces future
+#     regressions the moment they're written.
 
 [tool.pydantic-mypy]
 init_forbid_extra = true

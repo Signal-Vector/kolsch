@@ -54,6 +54,7 @@ from errors import (
     ConfigVersionMismatch,
     ContextFileNotFound,
     ContextFileTooLarge,
+    ContextOverflowUncompactable,
     ExchangeCancelled,
     ExchangeTimeout,
     FileAccessDenied,
@@ -163,6 +164,11 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
         "path": "workspace:x.md",
         "size_bytes": 100_000,
         "max_bytes": 65_536,
+    },
+    ContextOverflowUncompactable: {
+        "thread_id": "th_x",
+        "keep_tail_tokens": 200_000,
+        "budget_tokens": 100,
     },
     # 4.2 Store
     SessionNotFound: {"session_id": "ses_x"},

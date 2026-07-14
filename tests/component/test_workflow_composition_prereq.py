@@ -21,7 +21,7 @@ Covers ACs 0.1-0.8 of ``process/phase3.7-composition-build.md``:
   kwargs continue to construct cleanly.
 
 NO ``WorkflowSubRunner`` / ``MapRunner`` work here — those land in
-Steps 1 + 2. The tests construct the executor with FAKE runners so
+Steps 1 + 2. The tests construct the executor with MOCK runners so
 the payload-builder behaviour can be exercised without the Step 1
 runtime.
 """
@@ -325,7 +325,7 @@ class TestNewEventKinds:
 
 
 class _SpawnedRunStampingRunner:
-    """A fake runner that stamps ``ctx.spawned_run_id`` then returns.
+    """A mock runner that stamps ``ctx.spawned_run_id`` then returns.
 
     Mimics what :class:`workflows.builtins.workflow_sub.WorkflowSubRunner`
     will do in Step 1: mutate the frozen :class:`NodeContext` via
@@ -363,7 +363,7 @@ class _StaticRunner:
 class TestWorkflowNodeCompletedPayload:
     async def test_child_run_id_appears_for_workflow_node(self, tmp_path: Path) -> None:
         # A single-node workflow whose node is ``kolsch/nodes/workflow``;
-        # the fake runner stamps ``spawned_run_id`` so the executor's
+        # the mock runner stamps ``spawned_run_id`` so the executor's
         # payload builder appends ``child_run_id``.
         wf = Workflow.model_validate(
             {

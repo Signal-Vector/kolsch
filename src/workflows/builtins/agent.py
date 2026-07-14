@@ -18,8 +18,9 @@ from __future__ import annotations
 from typing import TYPE_CHECKING, Any
 
 from engine import ExecutionContext
-from engine.context import AgentExecutionError
+from engine.context import AgentExecutionError, CancelToken, CombinedCancelToken
 from schemas import FromWorkflowRun, IOSpec
+from schemas.events import EventType
 from workflows.errors import AgentRefUnresolved, WorkflowNodeFailed
 from workflows.ids import InvocationId, WorkflowRunId
 
@@ -97,15 +98,21 @@ class AgentRunner:
            [`ExecutionContext`][engine.ExecutionContext] carrying
            the workflow's `trace_id` and the extended caller chain
            (agent ref prepended). Invoke
-           [`AgentEngine.execute`][engine.engine.AgentEngine.execute]
-           synchronously.
+           [`AgentEngine.execute_stream`][engine.engine.AgentEngine.execute_stream]
+           and iterate — spec-020 tees each yielded session-scoped
+           `Event` to `ctx.on_sub_agent_event_callback` so the chat
+           UI's `WorkflowNodeRow` can render live sub-agent activity
+           inside the expanded body. Terminal events
+           (`AGENT_MESSAGE`, `THREAD_EXCHANGE_FAILED`) are captured
+           for the runner's return value.
         7. Catch
-           [`AgentExecutionError`][engine.context.AgentExecutionError];
-           remap to
+           [`AgentExecutionError`][engine.context.AgentExecutionError]
+           OR translate a trailing `thread.exchange_failed` event
+           into the same exception; remap to
            [`WorkflowNodeFailed`][workflows.errors.WorkflowNodeFailed]
            so the executor's existing failure path emits
            `workflow.node.failed`.
-        8. Extract the structured output from the returned
+        8. Extract the structured output from the captured
            `agent.message` event's `data["content"]`.
 
         Args:
@@ -214,28 +221,113 @@ class AgentRunner:
             trigger=trigger,
             trace_id=ctx.trace_id,
             caller_chain=(node_def.agent, *ctx.caller_chain),
+            # spec-011 r-review r1: stamp the workflow context onto
+            # the sub-agent's ExecutionContext so downstream consumers
+            # (spec-014's `InlineApprovalCallback._derive_source`) can
+            # tag emitted `kolsch.prompt.requested` events as
+            # workflow-scoped. `ctx.workflow_run_id` is a plain str on
+            # NodeContext; wrap in the typed `WorkflowRunId` for the
+            # engine surface.
+            workflow_run_id=WorkflowRunId(ctx.workflow_run_id),
+            workflow_node_name=node_name,
         )
 
-        # Step 7: invoke + error remap. The engine's only documented
-        # surface failure is `AgentExecutionError`; we remap to
-        # `WorkflowNodeFailed` so the executor's existing failure
-        # path emits the canonical `workflow.node.failed` +
-        # `workflow.run.failed` pair. The `raise ... from exc` form
-        # preserves `__cause__` for the error envelope.
+        # spec-011: compose the workflow-level cancel token into the
+        # sub-agent's cancellation handle. When the executor was
+        # constructed with a `cancel_token`, `NodeContext.cancel_token`
+        # carries it here; compose with any exchange-scoped token
+        # (typically `None` at this point — the engine mints a no-op
+        # if unset) via `CombinedCancelToken` so cancel-on-any
+        # semantics reach the sub-agent's LLM stream.
+        # `ExecutionContext` is a pydantic model with `extra="forbid"`
+        # but NOT frozen, so assignment to existing fields works.
+        if ctx.cancel_token is not None:
+            exec_ctx.cancellation = CombinedCancelToken(
+                ctx.cancel_token,
+                exec_ctx.cancellation or CancelToken(),
+            )
+
+        # Step 7: invoke via `execute_stream` and tee every event
+        # through `ctx.on_sub_agent_event_callback` (spec-020) BEFORE
+        # collecting the terminal `agent.message`. Unlike `execute()`,
+        # `execute_stream()` yields the failed event as the final
+        # item rather than raising; we mirror the `execute()` semantics
+        # (raise `AgentExecutionError`) by catching the trailing
+        # `thread.exchange_failed` event and constructing the same
+        # exception the engine's `execute()` would. `AgentExecutionError`
+        # is then remapped to `WorkflowNodeFailed` so the executor's
+        # existing failure path emits the canonical
+        # `workflow.node.failed` + `workflow.run.failed` pair.
+        #
+        # spec-020: the forwarder call is best-effort — the callback
+        # is bound by the executor's `_build_ctx` and swallows raises
+        # via `_emit_sub_agent_event`, but we double-guard here with
+        # a suppressor so a bad wire on a callback that DIDN'T come
+        # from `_build_ctx` (e.g. a monkey-patched test context)
+        # can't take down the agent invocation. Nested agents:
+        # per spec §Open questions, we forward everything for v1;
+        # the inner agent's events flow through the same callback
+        # (they share the outer node's `(node_name, invocation_id)`
+        # because they inherit the same `NodeContext`).
+        forward = ctx.on_sub_agent_event_callback
+        agent_message: Any = None
+        failed_event: Any = None
         try:
-            event = await self._engine.execute(
+            stream = self._engine.execute_stream(
                 resolved,
                 exec_ctx,
                 inputs=bound_inputs,
             )
+            async for event in stream:
+                if forward is not None:
+                    try:
+                        forward(event)
+                    except Exception:  # noqa: BLE001 — best-effort tee
+                        # The executor-bound callback already swallows
+                        # via `_emit_sub_agent_event`. Belt-and-braces
+                        # for test-injected callbacks.
+                        pass
+                if event.type == EventType.AGENT_MESSAGE:
+                    agent_message = event
+                elif event.type == EventType.THREAD_EXCHANGE_FAILED:
+                    failed_event = event
         except AgentExecutionError as exc:
+            # An engine that raised (rare — `execute_stream` normally
+            # yields the failed event as the last item) still lands
+            # here so we can remap. Preserve the original semantic:
+            # `AgentExecutionError` → `WorkflowNodeFailed`.
             raise WorkflowNodeFailed(
                 node=node_name,
                 invocation_id=str(ctx.invocation_id),
                 cause=exc,
             ) from exc
 
+        if failed_event is not None:
+            # Mirror `AgentEngine.execute()`'s translation.
+            translated = AgentExecutionError(failed_event)
+            raise WorkflowNodeFailed(
+                node=node_name,
+                invocation_id=str(ctx.invocation_id),
+                cause=translated,
+            ) from translated
+
         # Step 8: extract structured output. `agent.message.data`
-        # carries `content: dict[str, Any]`.
-        content = event.data.get("content") if event.data else None
+        # carries `content: dict[str, Any]`. Missing `agent_message`
+        # here indicates an engine invariant violation — the success
+        # path always emits it. Mirror `AgentEngine.execute()`'s
+        # unreachable-branch handling by raising the same shape.
+        if agent_message is None:
+            from errors import PlatformInternalError  # noqa: PLC0415
+
+            msg = (
+                "AgentRunner: execute_stream completed without an "
+                "agent.message or failed event"
+            )
+            raise PlatformInternalError(
+                original_type="workflow.agent_runner.invariant_violation",
+                args=[msg],
+            )
+        content = (
+            agent_message.data.get("content") if agent_message.data else None
+        )
         return dict(content) if isinstance(content, dict) else {}

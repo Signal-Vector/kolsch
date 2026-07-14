@@ -31,10 +31,11 @@ import contextlib
 import logging
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Literal
 from uuid import uuid4
 
 from engine.assembly import ASSEMBLY_VERSION, assemble_context
+from engine.assembly_cache import AssemblyCache, _Key, hash_tool_schemas
 from engine.context import (
     AgentExecutionError,
     CancelToken,
@@ -75,16 +76,18 @@ if TYPE_CHECKING:
 
     from assets import AssetManagement
     from bus import EventBus
+    from engine.assembly import AssembledContext
     from engine.context import ExecutionContext
     from engine.framework import Framework, LLMRequest, LLMResponse
     from llm import ProviderConfig
     from providers import (
         AuthorizationProvider,
+        ContextCompactionProvider,
         RecentBufferMemoryProvider,
         SandboxProvider,
         SecretsProvider,
     )
-    from schemas import ModelSpec
+    from schemas import ModelSpec, ThreadId
     from skills import SkillsSubsystem
     from store import SessionStore
     from tools import ToolsSubsystem
@@ -106,7 +109,7 @@ class AgentEngine:
     plus the chosen
     [`Framework`][engine.framework.Framework] and an LLM callable.
     The LLM callable is what the engine wraps inside the observed
-    LLM handle and hands to the framework — for tests, a Fake-LLM
+    LLM handle and hands to the framework — for tests, a Mock-LLM
     adapter; for production, a litellm-backed callable.
     """
 
@@ -132,6 +135,7 @@ class AgentEngine:
             ]
             | None
         ) = None,
+        compaction_provider: ContextCompactionProvider | None = None,
     ) -> None:
         self._store = store
         self._bus = bus
@@ -146,7 +150,7 @@ class AgentEngine:
         self._llm = llm
         # Async factory `llm_for_model` lets the fallback orchestrator
         # lazily build per-attempt LLM clients. Tests can wire a
-        # `spec → FakeLLM` map; production wires `build_llm` via the
+        # `spec → MockLLM` map; production wires `build_llm` via the
         # bootstrap. When the factory is None, fall back to wrapping
         # `self._llm` so every spec returns the same callable —
         # backward-compatible with tests that pass `llm=` directly.
@@ -158,6 +162,14 @@ class AgentEngine:
         self._llm_providers_config: dict[str, ProviderConfig] = (
             llm_providers_config or {}
         )
+        # feat-054 Phase 1: constructor-only wiring. The trigger check
+        # at pre-flight lands in Phase 2. `None` = compaction disabled
+        # (platform.yaml has no ``compaction:`` section or the provider
+        # factory declined to build one) and the engine will skip the
+        # threshold check entirely.
+        self._compaction_provider: ContextCompactionProvider | None = (
+            compaction_provider
+        )
         # The acquired crewai.LLM lives on the exchange instance, NOT
         # the engine — each exchange may target a different model.
         # Per-thread lock map. Each execute call shares the lock so
@@ -166,14 +178,31 @@ class AgentEngine:
         # are long-lived (statelessness is about exchange state, not
         # in-process structural state like locks).
         self._thread_locks: dict[str, asyncio.Lock] = {}
+        # feat-059: per-engine assembly-projection cache. Keyed by
+        # ``(thread_id, leaf_event_id, tool_schemas_hash, respect_compaction,
+        # assembly_version)`` so a new event appended to the log naturally
+        # invalidates the entry via the ``leaf_event_id`` change. Reads and
+        # writes for a given thread are already serialised by
+        # ``_lock_for_thread(str(thread_id))``, which every
+        # ``assemble_context`` call site holds.
+        self._assembly_cache: AssemblyCache = AssemblyCache()
 
     # ---- Public API ----------------------------------------------------
 
     def capabilities(self) -> EngineCapabilities:
-        """Declare what this engine can do."""
+        """Declare what this engine can do.
+
+        feat-054 Phase 2 bumped ``ASSEMBLY_VERSION`` from ``"1"`` to
+        ``"2"``. Both are advertised: agent YAMLs shipped in bundles
+        still declare ``assembly_version: "1"`` (they don't rely on
+        compaction) and the projection is byte-identical when no
+        ``CONTEXT_COMPACTED`` events are on the path. Agents that
+        explicitly bump to ``"2"`` opt into the compaction projection
+        rule.
+        """
         return EngineCapabilities(
             engine_version=ENGINE_VERSION,
-            assembly_versions=[ASSEMBLY_VERSION],
+            assembly_versions=["1", ASSEMBLY_VERSION],
             supported_modes=["single_shot", "conversational"],
             supported_features=["tool_use", "force_invoke"],
             supported_providers=["*"],
@@ -321,6 +350,527 @@ class AgentEngine:
             lock = asyncio.Lock()
             self._thread_locks[thread_id] = lock
         return lock
+
+    def _assemble_context_cached(
+        self,
+        events: list[Event],
+        *,
+        tool_schemas: list[dict[str, Any]] | None = None,
+        respect_compaction: bool = True,
+    ) -> "AssembledContext":
+        """Cached wrapper over :func:`engine.assembly.assemble_context`.
+
+        feat-059: memoises the pure projection on
+        ``(thread_id, leaf_event_id, tool_schemas_hash, respect_compaction,
+        assembly_version)``. A new event appended to the thread changes the
+        leaf id, so the next call misses and re-projects with the fresh
+        path — invalidation is automatic. Empty ``events`` bypasses the
+        cache: no leaf means no stable key, and this is the trivial
+        no-history path a fresh session takes exactly once.
+
+        Callers hold ``_lock_for_thread(str(thread_id))``, so cache
+        reads/writes for a given thread are already serialised. The
+        cache's own outer lock only guards the first insert for a
+        previously-unseen thread.
+        """
+        key: _Key | None
+        if events:
+            thread_id = events[-1].thread_id
+            leaf_event_id = events[-1].event_id
+            key = _Key(
+                thread_id=thread_id,
+                leaf_event_id=leaf_event_id,
+                tool_schemas_hash=hash_tool_schemas(tool_schemas),
+                respect_compaction=respect_compaction,
+                assembly_version=ASSEMBLY_VERSION,
+            )
+            cached = self._assembly_cache.get(key)
+            if cached is not None:
+                _log.debug(
+                    "assembly_cache: %s thread=%s leaf=%s",
+                    "hit",
+                    thread_id,
+                    leaf_event_id,
+                )
+                return cached
+            _log.debug(
+                "assembly_cache: %s thread=%s leaf=%s",
+                "miss",
+                thread_id,
+                leaf_event_id,
+            )
+        else:
+            # Trivial no-history case: no leaf, no stable cache key.
+            # Delegate to the pure function below and skip caching.
+            key = None
+
+        value = assemble_context(
+            events,
+            tool_schemas=tool_schemas,
+            respect_compaction=respect_compaction,
+        )
+        if key is not None:
+            self._assembly_cache.put(key, value)
+        return value
+
+    async def manual_compact(
+        self,
+        *,
+        config: ResolvedAgentConfig,
+        thread_id: ThreadId,
+        preview: bool = False,
+        extra_instructions: str | None = None,
+    ) -> Event | None:
+        """Force a compaction on ``thread_id`` regardless of the trigger threshold.
+
+        feat-054 Phase 3 — powers the ``/compact`` slash command. Runs
+        the same summariser path as
+        :meth:`_Exchange._maybe_compact_events` but bypasses the
+        pre-flight token estimate check so the user can compact NOW.
+        Emits a
+        [`CONTEXT_COMPACTED`][schemas.EventType.CONTEXT_COMPACTED] event
+        with ``trigger="manual"`` (or ``"manual_preview"`` when
+        ``preview=True``) so downstream telemetry can tell a user-
+        initiated compaction apart from an auto-fired one.
+
+        Returns the emitted event, or ``None`` when the middle span
+        was empty (nothing to compact — a short session), when the
+        provider is not wired, or when the model has no declared
+        context_length (matches the auto path's silent-skip
+        behaviour).
+
+        Raises the summariser exception on failure. The caller
+        (``ChatApp._handle_compact``) mounts a notice with the error;
+        the failure ladder in Phase 4 will retry.
+        """
+        # feat-054 Phase 4 — thread-safety: serialise the read-then-emit
+        # of a manual compaction against any concurrent in-flight
+        # exchange on the same thread. Without the lock, an exchange's
+        # emit slotting between our `read_path_to_leaf` and
+        # `append_event` would produce a compaction whose
+        # `compacted_event_ids` reference a stale leaf — Assembly would
+        # still project them (they're valid ids on the path) but the
+        # user-visible span would exclude events emitted during the
+        # window, leaving a jagged "compaction covers past me, not
+        # around me" state. Same lock the exchange uses.
+        async with self._lock_for_thread(str(thread_id)):
+            return await self._manual_compact_locked(
+                config=config,
+                thread_id=thread_id,
+                preview=preview,
+                extra_instructions=extra_instructions,
+            )
+
+    async def _manual_compact_locked(
+        self,
+        *,
+        config: ResolvedAgentConfig,
+        thread_id: ThreadId,
+        preview: bool,
+        extra_instructions: str | None,
+    ) -> Event | None:
+        """Body of :meth:`manual_compact`, invoked inside the thread lock."""
+        provider = self._compaction_provider
+        if provider is None:
+            return None
+        context_length = _context_length_for_spec(
+            self._llm_providers_config,
+            config.model,
+        )
+        if context_length is None:
+            return None
+        events = [
+            e async for e in self._store.read_path_to_leaf(thread_id)
+        ]
+        compaction_cfg = (self._assets._platform_config or {}).get(
+            "compaction",
+            {},
+        ) or {}
+        max_output = int(
+            compaction_cfg.get("config", {}).get("max_output_tokens", 4096)
+        )
+        budget = max(context_length - max_output, 1)
+        keep_recent_fraction = float(
+            compaction_cfg.get("config", {}).get("keep_recent_fraction", 0.20)
+        )
+        keep_tail_tokens = max(int(budget * keep_recent_fraction), 1)
+        inner_config: dict[str, Any] = dict(
+            compaction_cfg.get("config", {}) or {}
+        )
+        # Route the manual-invocation markers through the provider's
+        # config dict so the summariser prompt + emitted event both
+        # reflect user intent.
+        inner_config["trigger"] = "manual_preview" if preview else "manual"
+        if preview:
+            inner_config["preview"] = True
+        if extra_instructions:
+            inner_config["extra_instructions"] = extra_instructions
+
+        outcome = await provider.compact(
+            events=events,
+            keep_head=0,
+            keep_tail=keep_tail_tokens,
+            model_context_length=context_length,
+            thread_id=thread_id,
+            config=inner_config,
+        )
+        if not outcome.compacted_event_ids:
+            return None
+
+        # Manual compaction is not exchange-scoped. Emit through the
+        # store directly with a system Actor and a per-thread event.
+        thread = await self._store.get_thread(thread_id)
+        emitted = Event(
+            event_id=EventId(f"ev_{uuid4().hex}"),
+            session_id=thread.session_id,
+            thread_id=thread_id,
+            parent_event_id=None,
+            created_at=datetime.now(UTC),
+            type=EventType.CONTEXT_COMPACTED,
+            data=outcome.model_dump(mode="json"),
+            actor=Actor(kind="system"),
+        )
+        stored = await self._store.append_event(thread_id, emitted)
+        # Publish so live subscribers (chat event adapter) see it.
+        try:
+            await self._bus.publish(stored)
+        except Exception:  # noqa: BLE001
+            _log.exception("manual_compact: bus publish failed")
+        return stored
+
+    async def maybe_compact_thread_eagerly(
+        self,
+        *,
+        thread_id: ThreadId,
+        spec: ModelSpec,
+        tool_schemas: list[dict[str, Any]] | None = None,
+        trigger: Literal["auto_resume"] = "auto_resume",
+    ) -> Any:
+        """Check ``thread_id`` for over-threshold context and compact if so.
+
+        feat-054 Phase 5 — session-open eager compaction. Safe to call
+        BEFORE any exchange begins (e.g. from ``ChatApp.on_mount``).
+        Shifts the summariser delay out of the user's first post-resume
+        message and into the resume UX itself.
+
+        Runs the same 3-tier failure ladder as
+        :meth:`_Exchange._maybe_compact_events`:
+
+        1. Tier 1 — retry summariser once.
+        2. Tier 2 — mechanical truncation fallback (emits
+           ``CONTEXT_COMPACTION_FAILED`` + ``CONTEXT_COMPACTED`` with
+           ``summary.trigger="auto_truncation"``).
+        3. Tier 3 — raise ``ContextOverflowUncompactable`` when even
+           mechanical truncation cannot bring the projection below
+           the model's budget.
+
+        ``trigger`` marks the emitted event's ``trigger`` field so
+        downstream telemetry can distinguish resume-time compaction
+        from per-exchange compaction.
+
+        Returns the emitted ``ContextCompactedData`` outcome (as a
+        :class:`Event`) on success, ``None`` when compaction was NOT
+        needed (thread under threshold, provider not wired, model has
+        no declared ``context_length``, or the middle span is empty
+        because the session is short).
+        """
+        # Serialise against a concurrent in-flight exchange OR a
+        # concurrent /compact call on the same thread — same lock
+        # both other paths acquire.
+        async with self._lock_for_thread(str(thread_id)):
+            return await self._eager_compact_locked(
+                thread_id=thread_id,
+                spec=spec,
+                tool_schemas=tool_schemas or [],
+                trigger=trigger,
+            )
+
+    async def _eager_compact_locked(
+        self,
+        *,
+        thread_id: ThreadId,
+        spec: ModelSpec,
+        tool_schemas: list[dict[str, Any]],
+        trigger: str,
+    ) -> Event | None:
+        """Body of :meth:`maybe_compact_thread_eagerly`, invoked inside the thread lock."""
+        provider = self._compaction_provider
+        if provider is None:
+            return None
+        context_length = _context_length_for_spec(
+            self._llm_providers_config,
+            spec,
+        )
+        if context_length is None:
+            return None
+        # Load current path.
+        events = [
+            e async for e in self._store.read_path_to_leaf(thread_id)
+        ]
+        if not events:
+            # Fresh session — nothing to compact. Fast no-op path so a
+            # brand-new chat doesn't spuriously call the summariser.
+            return None
+
+        compaction_cfg = (self._assets._platform_config or {}).get(
+            "compaction",
+            {},
+        ) or {}
+        # Estimate current projection tokens using the same tiktoken
+        # helper the per-exchange trigger uses.
+        preview = self._assemble_context_cached(
+            events,
+            tool_schemas=tool_schemas,
+            respect_compaction=True,
+        )
+        from providers.compaction import (  # noqa: PLC0415
+            build_mechanical_truncation_payload,
+            estimate_tokens_for_messages,
+        )
+
+        preview_msgs = [m.model_dump() for m in preview.messages]
+        estimate = estimate_tokens_for_messages(preview_msgs, preview.tools)
+
+        max_output = int(
+            compaction_cfg.get("config", {}).get("max_output_tokens", 4096)
+        )
+        budget = max(context_length - max_output, 1)
+        trigger_at = float(compaction_cfg.get("trigger_at", 0.80))
+        if estimate < budget * trigger_at:
+            # Under threshold — no compaction needed.
+            return None
+
+        base_keep_recent_fraction = float(
+            compaction_cfg.get("config", {}).get("keep_recent_fraction", 0.20)
+        )
+        keep_fractions: list[float] = [
+            base_keep_recent_fraction,
+            base_keep_recent_fraction * 0.5,
+            base_keep_recent_fraction * 0.25,
+        ]
+        last_error: Exception | None = None
+        for attempt_index, kf in enumerate(keep_fractions):
+            keep_tail_tokens = max(int(budget * kf), 1)
+            inner_config: dict[str, Any] = dict(
+                compaction_cfg.get("config", {}) or {}
+            )
+            inner_config["keep_recent_fraction"] = kf
+            # Propagate the requested trigger through the provider so
+            # the emitted ContextCompactedData.trigger reflects reality.
+            inner_config["trigger"] = trigger
+            outcome: Any = None
+            attempt_error: Exception | None = None
+            for retry in range(2):
+                try:
+                    outcome = await provider.compact(
+                        events=events,
+                        keep_head=0,
+                        keep_tail=keep_tail_tokens,
+                        model_context_length=context_length,
+                        thread_id=thread_id,
+                        config=inner_config,
+                    )
+                except Exception as exc:  # noqa: BLE001 — ladder catches any raise
+                    attempt_error = exc
+                    _log.warning(
+                        "compaction (eager): summariser attempt %d/2 "
+                        "failed (%s)",
+                        retry + 1,
+                        exc,
+                    )
+                    outcome = None
+                    continue
+                break
+            if outcome is None:
+                last_error = attempt_error
+                break
+            if not outcome.compacted_event_ids:
+                # No middle to summarise (short session) — nothing to do.
+                return None
+            if outcome.tokens_before > 0 and (
+                outcome.tokens_after > outcome.tokens_before * 0.90
+            ):
+                await self._emit_thread_event(
+                    thread_id=thread_id,
+                    event_type=EventType.CONTEXT_COMPACTION_SKIPPED,
+                    data={
+                        "reason": "no_net_savings",
+                        "tokens_before": outcome.tokens_before,
+                        "tokens_after": outcome.tokens_after,
+                        "keep_recent_fraction": kf,
+                        "attempt": attempt_index + 1,
+                    },
+                )
+                if attempt_index + 1 < len(keep_fractions):
+                    continue
+                last_error = RuntimeError(
+                    "compaction produced no net token savings on any retry"
+                )
+                break
+            # Success — emit the compacted event.
+            return await self._emit_thread_event(
+                thread_id=thread_id,
+                event_type=EventType.CONTEXT_COMPACTED,
+                data=outcome.model_dump(mode="json"),
+            )
+
+        # Tier 1 exhausted — emit CONTEXT_COMPACTION_FAILED then attempt
+        # tier 2 mechanical truncation.
+        await self._emit_thread_event(
+            thread_id=thread_id,
+            event_type=EventType.CONTEXT_COMPACTION_FAILED,
+            data={
+                "error": {
+                    "type": (
+                        type(last_error).__name__
+                        if last_error is not None
+                        else "unknown"
+                    ),
+                    "message": (
+                        str(last_error)
+                        if last_error is not None
+                        else "summariser exhausted retries"
+                    ),
+                    "where": "engine.compaction.maybe_compact_thread_eagerly",
+                    "detail": {},
+                },
+                "span_first_event_id": None,
+                "span_last_event_id": None,
+            },
+        )
+
+        keep_tail_tokens = max(int(budget * base_keep_recent_fraction), 1)
+        mechanical = build_mechanical_truncation_payload(
+            events=events,
+            keep_tail_tokens=keep_tail_tokens,
+        )
+        if mechanical is None:
+            from errors import ContextOverflowUncompactable  # noqa: PLC0415
+
+            raise ContextOverflowUncompactable(
+                thread_id=str(thread_id),
+                keep_tail_tokens=keep_tail_tokens,
+                budget_tokens=budget,
+            )
+
+        return await self._emit_thread_event(
+            thread_id=thread_id,
+            event_type=EventType.CONTEXT_COMPACTED,
+            data=mechanical.model_dump(mode="json"),
+        )
+
+    async def _emit_thread_event(
+        self,
+        *,
+        thread_id: ThreadId,
+        event_type: EventType,
+        data: dict[str, Any],
+    ) -> Event:
+        """Append + publish a system-actor event on ``thread_id``.
+
+        Shared by :meth:`maybe_compact_thread_eagerly` — mirrors the
+        emit shape used by :meth:`_manual_compact_locked` (system actor,
+        no ``parent_event_id`` override; the store computes the parent
+        from the current leaf).
+        """
+        thread = await self._store.get_thread(thread_id)
+        emitted = Event(
+            event_id=EventId(f"ev_{uuid4().hex}"),
+            session_id=thread.session_id,
+            thread_id=thread_id,
+            parent_event_id=None,
+            created_at=datetime.now(UTC),
+            type=event_type,
+            data=data,
+            actor=Actor(kind="system"),
+        )
+        stored = await self._store.append_event(thread_id, emitted)
+        try:
+            await self._bus.publish(stored)
+        except Exception:  # noqa: BLE001 — bus publish best-effort
+            _log.exception(
+                "eager compaction: bus publish failed for %s", event_type
+            )
+        return stored
+
+    async def manual_uncompact(
+        self,
+        *,
+        thread_id: ThreadId,
+    ) -> Event | None:
+        """Append a ``CONTEXT_COMPACTION_REVOKED`` event for the most-recent active compaction.
+
+        feat-054 Phase 3 — powers the ``/uncompact`` slash command.
+        Walks the thread from newest to oldest, finds the first
+        ``CONTEXT_COMPACTED`` event that has no ``revoked_by`` field
+        set (i.e. is still active), and emits a revocation pointing at
+        it. Coordinator decision #2: LIFO first-only. Returns the
+        emitted revocation event, or ``None`` when no active
+        compaction exists on the thread.
+
+        Assembly (Phase 2) already skips revoked compactions when
+        projecting, so the next exchange sees the restored context.
+        Does NOT restart the current exchange.
+        """
+        # feat-054 Phase 4 — thread-safety, mirrors :meth:`manual_compact`.
+        async with self._lock_for_thread(str(thread_id)):
+            return await self._manual_uncompact_locked(thread_id=thread_id)
+
+    async def _manual_uncompact_locked(
+        self,
+        *,
+        thread_id: ThreadId,
+    ) -> Event | None:
+        """Body of :meth:`manual_uncompact`, invoked inside the thread lock."""
+        events = [
+            e async for e in self._store.read_path_to_leaf(thread_id)
+        ]
+        # Index every CONTEXT_COMPACTION_REVOKED so a prior /uncompact
+        # is honoured — the revocation is emitted as a separate event
+        # (immutable log), NOT by mutating the compaction's payload,
+        # so an in-payload `revoked_by` check alone would miss it.
+        revoked_ids: set[str] = set()
+        for e in events:
+            if e.type != EventType.CONTEXT_COMPACTION_REVOKED:
+                continue
+            revoked_target = e.data.get("compaction_event_id")
+            if isinstance(revoked_target, str) and revoked_target:
+                revoked_ids.add(revoked_target)
+        target: Event | None = None
+        for e in reversed(events):
+            if e.type != EventType.CONTEXT_COMPACTED:
+                continue
+            if str(e.event_id) in revoked_ids:
+                continue
+            # `revoked_by` on the payload (belt + braces for future
+            # variants that DO stamp the pointer inline).
+            revoked_by = e.data.get("revoked_by")
+            if revoked_by:
+                continue
+            target = e
+            break
+        if target is None:
+            return None
+        thread = await self._store.get_thread(thread_id)
+        emitted = Event(
+            event_id=EventId(f"ev_{uuid4().hex}"),
+            session_id=thread.session_id,
+            thread_id=thread_id,
+            parent_event_id=None,
+            created_at=datetime.now(UTC),
+            type=EventType.CONTEXT_COMPACTION_REVOKED,
+            data={
+                "compaction_event_id": str(target.event_id),
+                "reason": "user_requested",
+            },
+            actor=Actor(kind="system"),
+        )
+        stored = await self._store.append_event(thread_id, emitted)
+        try:
+            await self._bus.publish(stored)
+        except Exception:  # noqa: BLE001
+            _log.exception("manual_uncompact: bus publish failed")
+        return stored
 
 
 # ---------------------------------------------------------------------------
@@ -549,7 +1099,7 @@ class _Exchange:
         with a callable `llm` — the test path keeps working
         unchanged. Also skipped when `llm_for_model` is wired: the
         per-spec factory handles construction lazily at call time
-        (including `provider: "fake"` → EchoLLMDriver). Otherwise
+        (including `provider: "mock"` → EchoLLMDriver). Otherwise
         the configured provider is looked up in
         `AgentEngine._llm_providers_config` (read from
         `platform.yaml` at runtime bootstrap), `build_llm` is called
@@ -560,9 +1110,9 @@ class _Exchange:
         if self.engine._llm is not None:
             return None
         if self.engine._llm_for_model is not None:
-            # Factory handles construction (including provider: fake)
+            # Factory handles construction (including provider: mock)
             # at call time; pre-flight acquire would only duplicate
-            # work AND fail for `provider: fake` because no `fake`
+            # work AND fail for `provider: mock` because no `mock`
             # connector is registered.
             return None
         from llm import build_llm  # noqa: PLC0415 — defer crewai import to runtime
@@ -980,8 +1530,18 @@ class _Exchange:
         # field the provider matches on — dropping `pattern` or
         # `from_` here would silently degrade the caller-chain scope
         # or target glob of any layer-supplied rule.
+        from pathlib import Path as _Path  # noqa: PLC0415
+
+        from assets.manifest import permissions_source_map  # noqa: PLC0415
         from providers.authz import Rule  # noqa: PLC0415
 
+        # feat-041 — source-line metadata is threaded via a sidecar
+        # because `PermissionRule` (schemas.config) is `extra="forbid"`
+        # and can't carry the fields directly. The map keys are the
+        # PermissionRule's list index in its source YAML; the compiled
+        # `Rule` on the provider side stamps them onto `source_file` +
+        # `source_line`. Absent YAML → empty map → `None` fallback.
+        agent_source_map = self._agent_permissions_source_map()
         agent_rules: list[Rule] = [
             Rule(
                 id=r.id,
@@ -990,14 +1550,22 @@ class _Exchange:
                 pattern=r.pattern,
                 from_=r.from_,
                 effect=r.effect,
+                source_file=agent_source_map.get(i, (None, None))[0],
+                source_line=agent_source_map.get(i, (None, None))[1],
             )
-            for r in self.config.permissions
+            for i, r in enumerate(self.config.permissions)
         ]
         bundle_rules: list[Rule] = []
         home_bundle = self.engine._assets.get_bundle_for_agent_id(self.agent_id)
         if home_bundle is not None:
             manifest = self.engine._assets.get_bundle(home_bundle)
             if manifest is not None:
+                bundle_source_map: dict[int, tuple[str, int]] = {}
+                try:
+                    bundle_yaml = _Path(manifest.path) / "bundle.yaml"
+                    bundle_source_map = permissions_source_map(bundle_yaml)
+                except (OSError, ValueError):
+                    bundle_source_map = {}
                 bundle_rules = [
                     Rule(
                         id=r.id,
@@ -1006,12 +1574,31 @@ class _Exchange:
                         pattern=r.pattern,
                         from_=r.from_,
                         effect=r.effect,
+                        source_file=bundle_source_map.get(i, (None, None))[0],
+                        source_line=bundle_source_map.get(i, (None, None))[1],
                     )
-                    for r in manifest.permissions
+                    for i, r in enumerate(manifest.permissions)
                 ]
+
+        # feat-054 Phase 2: auto-register `reference_lookup` when
+        # compaction is active for this exchange. The engine's
+        # provider being non-None is the enable flag — an agent whose
+        # exchanges get compacted needs to be able to fetch cited
+        # events. Skipped when compaction is disabled (no engine
+        # provider) so agents without compaction see no extra tool.
+        programmatic_tools: list[Callable[..., Awaitable[Any]]] = []
+        if self.engine._compaction_provider is not None:
+            from tools.context_reference import (  # noqa: PLC0415
+                make_reference_lookup,
+            )
+
+            programmatic_tools.append(
+                make_reference_lookup(session_store=self.engine._store),
+            )
 
         await self.engine._tools.register_for_agent(
             agent_id=self.agent_id,  # type: ignore[arg-type]
+            tools=programmatic_tools or None,
             builtin_names=list(body.get("builtin", []) or []),
             declared_paths=declared_paths,
             # Per-declared-path owner bundle derived from the ref's
@@ -1036,6 +1623,43 @@ class _Exchange:
             home_bundle=home_bundle,
         )
         # MCP server registration lands when the MCP wiring patch ships.
+
+    def _agent_permissions_source_map(self) -> dict[int, tuple[str, int]]:
+        """Return `{permission_index: (source_file, source_line)}` for this agent.
+
+        feat-041 — resolves the agent's on-disk YAML path via the
+        asset catalog (`<bundle>/agents/<name>` lookup) and calls
+        `permissions_source_map`. Empty when the catalog doesn't know
+        this agent (synthetic test configs) or the YAML lacks position
+        info (custom `!tag` type — see spec §Design refinements).
+        """
+        from pathlib import Path as _Path  # noqa: PLC0415
+
+        from assets.manifest import permissions_source_map  # noqa: PLC0415
+
+        try:
+            catalog = self.engine._assets.catalog()
+        except Exception:  # noqa: BLE001 — never raise out of source-tag path
+            return {}
+        for entry in catalog.assets.values():
+            if entry.asset_type != "agent":
+                continue
+            # Match by resolved agent_id via the same derivation the
+            # catalog scanner uses. Explicit `agent_id:` YAMLs won't
+            # match this derivation — the cache in AssetManagement
+            # handles those but doesn't expose the source path here.
+            # Falling through to the empty map is acceptable: the
+            # `/why` card degrades to `(unknown source)` for agents
+            # that carry an explicit id.
+            agent_name = entry.ref.rsplit("/", 1)[-1]
+            if entry.bundle == self.engine._assets.get_bundle_for_agent_id(
+                self.agent_id,
+            ) and agent_name in str(self.agent_id):
+                try:
+                    return permissions_source_map(_Path(entry.path))
+                except (OSError, ValueError):
+                    return {}
+        return {}
 
     async def _resolve_declared_tool_paths(
         self,
@@ -1213,7 +1837,14 @@ class _Exchange:
             for t in registered
         ]
 
-        assembled = assemble_context(
+        # feat-054 Phase 2: compaction trigger check. Only fires when a
+        # provider is wired on the engine AND the model declares a
+        # context_length. Skips on missing context_length (opencode
+        # models frequently omit it), on provider-None, and on any
+        # summariser failure — Phase 4 introduces the retry ladder.
+        events = await self._maybe_compact_events(events, tool_schemas)
+
+        assembled = self.engine._assemble_context_cached(
             events,
             tool_schemas=tool_schemas,
         )
@@ -1412,6 +2043,269 @@ class _Exchange:
             actor=Actor(kind="system"),
         )
 
+    # ---- Compaction trigger (feat-054 Phase 2 + Phase 4 failure ladder) -
+
+    async def _maybe_compact_events(
+        self,
+        events: list[Event],
+        tool_schemas: list[dict[str, Any]],
+    ) -> list[Event]:
+        """Run the compaction pre-flight and return the (possibly-updated) event list.
+
+        Returns the same ``events`` unchanged when compaction is
+        disabled, when the model has no declared ``context_length``,
+        or when the projected estimate is below the trigger. Otherwise
+        runs the summariser through the Phase 4 failure ladder:
+
+        1. **Tier 1 — retry once.** If the first summariser call raises
+           OR the returned payload fails JSON parse, retry once with
+           the same model.
+        2. **Tier 2 — mechanical truncation fallback.** If tier 1 also
+           fails, emit ``CONTEXT_COMPACTION_FAILED``, then construct a
+           mechanical-truncation ``ContextCompactedData`` (no
+           summariser prose; just ``refs[]`` one-liners the model can
+           feed to :func:`context.reference_lookup`) and emit
+           ``CONTEXT_COMPACTED`` with ``trigger="auto_truncation"``.
+        3. **Tier 3 — hard-fail.** If mechanical truncation can't get
+           below the budget either (recent-tail alone exceeds the
+           model's window), raise
+           :class:`ContextOverflowUncompactable`. The engine's outer
+           ``execute`` translates the raise into
+           ``thread.exchange_failed`` so the user's turn ends with an
+           actionable error rather than a mid-stream provider bailout.
+
+        Non-shrinking guard (Phase 4 §B): if the successful summary
+        does not reduce projected tokens below ``0.90 ×
+        tokens_before``, the compaction is discarded, a
+        ``CONTEXT_COMPACTION_SKIPPED`` event is emitted with
+        ``reason="no_net_savings"``, and the trigger retries with a
+        tighter ``keep_recent_fraction`` (halved, then quartered — max
+        two retries). If all retries fail to shrink, the tier-2
+        fallback fires.
+        """
+        provider = self.engine._compaction_provider
+        if provider is None:
+            return events
+
+        # Look up the model's declared context_length via the runtime
+        # cache the engine already carries. `context_length_for`
+        # returns None when the model doesn't declare one, so
+        # compaction is silently skipped for opencode-style models.
+        context_length = _context_length_for_spec(
+            self.engine._llm_providers_config,
+            self.config.model,
+        )
+        if context_length is None:
+            _log.debug(
+                "compaction: model %s/%s has no declared context_length; "
+                "skipping",
+                self.config.model.provider,
+                self.config.model.model,
+            )
+            return events
+
+        compaction_cfg = (self.engine._assets._platform_config or {}).get(
+            "compaction",
+            {},
+        ) or {}
+        # Preview projection: what would the model see today?
+        preview = self.engine._assemble_context_cached(
+            events,
+            tool_schemas=tool_schemas,
+            respect_compaction=True,
+        )
+        from providers.compaction import estimate_tokens_for_messages  # noqa: PLC0415
+
+        preview_msgs = [m.model_dump() for m in preview.messages]
+        estimate = estimate_tokens_for_messages(preview_msgs, preview.tools)
+
+        # Reserve for max output tokens; default 4096 when unset.
+        max_output = int(
+            compaction_cfg.get("config", {}).get("max_output_tokens", 4096)
+        )
+        budget = max(context_length - max_output, 1)
+        trigger_at = float(compaction_cfg.get("trigger_at", 0.80))
+        if estimate < budget * trigger_at:
+            return events
+
+        # Trigger. Compute keep_tail from the fraction and delegate.
+        base_keep_recent_fraction = float(
+            compaction_cfg.get("config", {}).get("keep_recent_fraction", 0.20)
+        )
+
+        # Phase 4 §B — non-shrinking guard with two retries at tighter
+        # keep_recent_fraction. Each attempt runs the tier 1 (retry-once)
+        # summariser ladder; the outer loop steps down the tail fraction
+        # if the produced summary didn't shrink enough.
+        keep_fractions: list[float] = [
+            base_keep_recent_fraction,
+            base_keep_recent_fraction * 0.5,
+            base_keep_recent_fraction * 0.25,
+        ]
+
+        last_error: Exception | None = None
+        for attempt_index, kf in enumerate(keep_fractions):
+            keep_tail_tokens = max(int(budget * kf), 1)
+            inner_config: dict[str, Any] = dict(
+                compaction_cfg.get("config", {}) or {}
+            )
+            inner_config["keep_recent_fraction"] = kf
+            outcome, error = await self._run_summariser_with_retry(
+                provider=provider,
+                events=events,
+                keep_tail_tokens=keep_tail_tokens,
+                context_length=context_length,
+                inner_config=inner_config,
+            )
+            if outcome is None:
+                last_error = error
+                # Tier 1 exhausted on this attempt — jump straight to
+                # tier 2 rather than continuing the shrink-retry loop
+                # (a summariser that raised won't succeed with a
+                # narrower tail).
+                break
+            if not outcome.compacted_event_ids:
+                # No-op payload (short session). Nothing to do.
+                return events
+            # Non-shrinking guard.
+            if outcome.tokens_before > 0 and (
+                outcome.tokens_after > outcome.tokens_before * 0.90
+            ):
+                await self._emit(
+                    type_=EventType.CONTEXT_COMPACTION_SKIPPED,
+                    data={
+                        "reason": "no_net_savings",
+                        "tokens_before": outcome.tokens_before,
+                        "tokens_after": outcome.tokens_after,
+                        "keep_recent_fraction": kf,
+                        "attempt": attempt_index + 1,
+                    },
+                    actor=Actor(kind="system"),
+                )
+                if attempt_index + 1 < len(keep_fractions):
+                    continue
+                # Exhausted retries — fall through to tier 2.
+                last_error = RuntimeError(
+                    "compaction produced no net token savings on any retry"
+                )
+                break
+            # Success — emit and re-read the path.
+            await self._emit(
+                type_=EventType.CONTEXT_COMPACTED,
+                data=outcome.model_dump(mode="json"),
+                actor=Actor(kind="system"),
+            )
+            return [
+                e
+                async for e in self.engine._store.read_path_to_leaf(
+                    self.context.thread_id,
+                )
+            ]
+
+        # Tier 1 + shrink-retries exhausted. Move to tier 2: emit a
+        # failure event, then attempt mechanical truncation.
+        await self._emit(
+            type_=EventType.CONTEXT_COMPACTION_FAILED,
+            data={
+                "error": {
+                    "type": (
+                        type(last_error).__name__
+                        if last_error is not None
+                        else "unknown"
+                    ),
+                    "message": (
+                        str(last_error)
+                        if last_error is not None
+                        else "summariser exhausted retries"
+                    ),
+                    "where": "engine.compaction._maybe_compact_events",
+                    "detail": {},
+                },
+                "span_first_event_id": None,
+                "span_last_event_id": None,
+            },
+            actor=Actor(kind="system"),
+        )
+
+        # Tier 2 — mechanical truncation. Snap a boundary at the
+        # base keep_recent_fraction (widest tail we're comfortable with)
+        # and emit a mechanical CONTEXT_COMPACTED whose summary is
+        # the stock "context truncated" stub. reference_lookup still
+        # works because `refs[]` and `compacted_event_ids` cover the
+        # dropped span.
+        from providers.compaction import (  # noqa: PLC0415
+            build_mechanical_truncation_payload,
+        )
+
+        keep_tail_tokens = max(int(budget * base_keep_recent_fraction), 1)
+        mechanical = build_mechanical_truncation_payload(
+            events=events,
+            keep_tail_tokens=keep_tail_tokens,
+        )
+        if mechanical is None:
+            # Tier 3 — even mechanical truncation cannot reduce below
+            # budget. Raise; the engine's outer `execute` translates
+            # into thread.exchange_failed with our distinct error type.
+            from errors import ContextOverflowUncompactable  # noqa: PLC0415
+
+            raise ContextOverflowUncompactable(
+                thread_id=str(self.context.thread_id),
+                keep_tail_tokens=keep_tail_tokens,
+                budget_tokens=budget,
+            )
+
+        await self._emit(
+            type_=EventType.CONTEXT_COMPACTED,
+            data=mechanical.model_dump(mode="json"),
+            actor=Actor(kind="system"),
+        )
+        return [
+            e
+            async for e in self.engine._store.read_path_to_leaf(
+                self.context.thread_id,
+            )
+        ]
+
+    async def _run_summariser_with_retry(
+        self,
+        *,
+        provider: ContextCompactionProvider,
+        events: list[Event],
+        keep_tail_tokens: int,
+        context_length: int,
+        inner_config: dict[str, Any],
+    ) -> tuple[Any, Exception | None]:
+        """Invoke ``provider.compact`` up to twice; return ``(outcome, error)``.
+
+        Tier 1 of the failure ladder — one retry with the same model +
+        prompt to absorb transient rate-limits / network flakes.
+        Success returns ``(payload, None)``; two failures return
+        ``(None, last_error)``.
+        """
+        attempts = 2
+        last_error: Exception | None = None
+        for i in range(attempts):
+            try:
+                outcome = await provider.compact(
+                    events=events,
+                    keep_head=0,
+                    keep_tail=keep_tail_tokens,
+                    model_context_length=context_length,
+                    thread_id=self.context.thread_id,
+                    config=inner_config,
+                )
+            except Exception as exc:  # noqa: BLE001 — ladder catches any raise
+                last_error = exc
+                _log.warning(
+                    "compaction: summariser attempt %d/%d failed (%s)",
+                    i + 1,
+                    attempts,
+                    exc,
+                )
+                continue
+            return outcome, None
+        return None, last_error
+
     # ---- Emit helpers --------------------------------------------------
 
     async def _emit(
@@ -1480,6 +2374,34 @@ class _Exchange:
 # ---------------------------------------------------------------------------
 # Module-private helpers
 # ---------------------------------------------------------------------------
+
+
+def _context_length_for_spec(
+    providers: dict[str, Any],
+    spec: Any,
+) -> int | None:
+    """Look up the declared ``context_length`` for ``spec`` in ``providers``.
+
+    Duplicates the tiny helper on ``PlatformRuntime`` so the engine
+    can answer without holding a reference back to the runtime object.
+    ``None`` when the provider isn't declared, the model isn't listed,
+    or the ``context_length`` field is absent / null / non-int.
+    """
+    provider = providers.get(spec.provider)
+    if provider is None:
+        return None
+    for entry in getattr(provider, "models", []) or []:
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("id") != spec.model:
+            continue
+        value = entry.get("context_length")
+        if isinstance(value, bool):
+            return None
+        if isinstance(value, int):
+            return value
+        return None
+    return None
 
 
 def _extract_trigger_content(trigger: dict[str, Any]) -> dict[str, Any]:

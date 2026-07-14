@@ -59,6 +59,49 @@ ISO_DT_RE = re.compile(
 )
 
 
+def _strip_logical_seq_from_jsonl(text: str) -> str:
+    """Remove `logical_seq` from `data` on every parseable JSONL line.
+
+    spec-003 stamps `logical_seq: int` on every appended event's data
+    payload inside the store's flock. The workflow golden fixtures
+    were captured before this field existed; golden diffs shouldn't
+    care about the sequence numbers (they're exercised directly by
+    `tests/store/test_logical_seq_monotonic.py`).
+
+    Non-JSONL input passes through unchanged; unparseable lines pass
+    through unchanged (this shim is best-effort — it must not corrupt
+    input that doesn't fit the JSONL shape, since `canonicalize_text`
+    is also used on non-JSONL strings like directory listings).
+    """
+    # Cheap early-out: no JSON braces, no work to do.
+    if "{" not in text:
+        return text
+    out_lines: list[str] = []
+    for line in text.split("\n"):
+        stripped = line.strip()
+        # Only touch lines that look like a complete JSON object.
+        if not stripped.startswith("{") or not stripped.endswith("}"):
+            out_lines.append(line)
+            continue
+        try:
+            payload = json.loads(stripped)
+        except json.JSONDecodeError:
+            out_lines.append(line)
+            continue
+        if not isinstance(payload, dict):
+            out_lines.append(line)
+            continue
+        data = payload.get("data")
+        if isinstance(data, dict) and "logical_seq" in data:
+            data.pop("logical_seq", None)
+            out_lines.append(
+                json.dumps(payload, sort_keys=True, separators=(",", ":"))
+            )
+        else:
+            out_lines.append(line)
+    return "\n".join(out_lines)
+
+
 def canonicalize_text(text: str) -> str:
     """Run the volatile-field substitutions over an arbitrary string.
 
@@ -82,6 +125,14 @@ class Canonicaliser:
         self.counters: dict[str, int] = {}
 
     def sub(self, text: str) -> str:
+        # spec-003 — `logical_seq` is populated on every store append
+        # (allocated under `flock`). Golden runs snapshot raw JSONL
+        # bytes; strip the key so goldens committed before the
+        # allocator landed stay byte-stable. Monotonicity is exercised
+        # by the dedicated spec-003 store tests. We do the strip
+        # BEFORE the id/timestamp substitution so a `logical_seq: 1`
+        # in the file doesn't get renumbered as an id.
+        text = _strip_logical_seq_from_jsonl(text)
         text = PREFIX_UUID_RE.sub(self._replace_prefixed, text)
         return ISO_DT_RE.sub("<TS>", text)
 
@@ -144,6 +195,18 @@ def normalize_events(events: list[Event]) -> list[dict[str, Any]]:
         # trace_id is actually set.
         if raw.get("trace_id") is None:
             raw.pop("trace_id", None)
+        # spec-002 — ``logical_seq`` is additive on ``_DataModel``.
+        # spec-003 — populated values arrive from SessionStore's
+        # `append_event_sync` under the flock. Golden diffs should not
+        # care about the sequence numbers themselves (they're
+        # deterministic per-run but the goldens were captured before
+        # the field existed). Strip the key from ``data`` regardless of
+        # value so goldens committed before this field landed stay
+        # byte-stable across the seq-allocation change. Monotonicity
+        # is exercised by `tests/store/test_logical_seq_monotonic.py`.
+        data = raw.get("data")
+        if isinstance(data, dict):
+            data.pop("logical_seq", None)
         normalized = _normalize_value(raw, id_map, counters)
         assert isinstance(normalized, dict)
         out.append(normalized)

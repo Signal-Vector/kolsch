@@ -2,7 +2,7 @@
 
 Regression pins for bug-framework-iteration-cap-removal.md. Pre-fix,
 ``MinimalFramework.run_exchange`` hard-capped the loop at 10 iterations
-and raised :class:`FakeFrameworkLoopExceededError` on exhaustion —
+and raised :class:`MockFrameworkLoopExceededError` on exhaustion —
 which the engine boundary then mis-classified as
 ``platform.internal_error``. After Step 2, the cap is gone and the
 loop terminates only when the LLM stops emitting tool calls OR
@@ -88,10 +88,10 @@ class _NoopTool:
 # ===========================================================================
 
 
-async def test_tc_frm_nocap_01_fake_framework_runs_past_ten_iterations() -> None:
-    """Drive a FakeLLM that scripts 15 tool calls then a content-only
+async def test_tc_frm_nocap_01_mock_framework_runs_past_ten_iterations() -> None:
+    """Drive a MockLLM that scripts 15 tool calls then a content-only
     response. Pre-fix, MinimalFramework raised
-    ``FakeFrameworkLoopExceededError`` at iteration 10 (which the engine
+    ``MockFrameworkLoopExceededError`` at iteration 10 (which the engine
     boundary wrapped as ``platform.internal_error``). Post-fix, the
     loop completes and returns the final text.
 
@@ -119,7 +119,7 @@ async def test_tc_frm_nocap_01_fake_framework_runs_past_ten_iterations() -> None
 # ===========================================================================
 
 
-async def test_tc_frm_nocap_02_fake_framework_observes_cancellation_mid_loop() -> None:
+async def test_tc_frm_nocap_02_mock_framework_observes_cancellation_mid_loop() -> None:
     """Cancellation polling at the top of each iteration is the
     user's only mechanism for stopping a runaway loop (no
     iteration cap, no timeout in v1).
@@ -204,7 +204,7 @@ class _HangingTool:
         return {"never": "reached"}
 
 
-async def test_fake_framework_observes_cancel_during_llm_await() -> None:
+async def test_mock_framework_observes_cancel_during_llm_await() -> None:
     """bug-framework-cancellation-mid-call-latency.md AC — a 5s hung
     LLM aborts within ~one grace window of the cancel flip instead
     of waiting for the call to return."""
@@ -263,7 +263,7 @@ class _ScriptedSingleHangCall:
         return LLMResponse(content="never reached")
 
 
-async def test_fake_framework_observes_cancel_during_tool_await() -> None:
+async def test_mock_framework_observes_cancel_during_tool_await() -> None:
     """bug-mid-tool-cancellation-latency.md AC — a hanging tool
     aborts within ~one grace window of the cancel flip. The
     framework's tool-dispatch loop no longer waits for the tool

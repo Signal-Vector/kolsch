@@ -13,7 +13,7 @@ graph LR
     BuildLLM --> Registry[Provider Registry]
     Registry --> Connector[Connector]
     Connector --> External[External provider API]
-    Fake[FakeConnector] --> Engine
+    Mock[MockConnector] --> Engine
 
     click Engine "../engine/"
 ```

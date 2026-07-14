@@ -20,8 +20,8 @@ signatures" comes from the investigation doc's Probe 1 + Probe 2:
   load-bearing pin for "no Rich panel from CrewAI specifically"
   (it can distinguish via outer-redirect-buffer scoping).
 
-Run-mode: fake LLM via ``--model fake/fake-model`` (no real
-network). Per the investigation doc's Step E captures, the fake
+Run-mode: mock LLM via ``--model mock/mock-model`` (no real
+network). Per the investigation doc's Step E captures, the mock
 LLM produces zero signatures on both pre-fix and post-fix code
 in the healthy path — so this test's literal value is
 "PR-author-asserts no signatures appear during normal chat
@@ -32,12 +32,12 @@ test of the wrap mechanism itself); the test catalog entry below
 records both.
 
 The escalation in Step H's investigation report explains why
-fake-LLM-via-subprocess can't reproduce CrewAI's failure-path
+mock-LLM-via-subprocess can't reproduce CrewAI's failure-path
 EventsBus warnings: the EchoLLMDriver returns cleanly, no
 event-pair mismatch fires, no ``print()`` calls happen at all in
 the healthy path. To get pre-fix bite in subprocess form we'd
 need either a real LLM that errors (rejected — no network in
-component tier) or a deliberately-failing fake LLM driver added
+component tier) or a deliberately-failing mock LLM driver added
 to the dev-LLM module (deferred — coordinator follow-up).
 """
 
@@ -47,6 +47,8 @@ import os
 import subprocess
 import sys
 from typing import TYPE_CHECKING
+
+import pytest
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -67,8 +69,17 @@ _CREWAI_SIGNATURES: tuple[str, ...] = (
 )
 
 
+@pytest.mark.skip(
+    reason=(
+        "Retired by spec-textual-chat-ui: the Textual App(inline=True) "
+        "surface can't be driven via piped stdin. The 'no CrewAI stdout "
+        "leak' invariant is still covered by the in-process test at "
+        "tests/component/engine/test_crewai_adapter.py which uses the "
+        "adapter directly. See process/spec-textual-chat-ui.md."
+    ),
+)
 def test_chat_does_not_leak_crewai_output(chat_workspace: Path) -> None:
-    """TC-CREWAI-NOLEAK-01 — drive a fake-LLM chat session via
+    """TC-CREWAI-NOLEAK-01 — drive a mock-LLM chat session via
     subprocess; assert no CrewAI signatures appear in the captured
     stdout or stderr.
 
@@ -89,7 +100,7 @@ def test_chat_does_not_leak_crewai_output(chat_workspace: Path) -> None:
             "cli",
             "chat",
             "--model",
-            "fake/fake-model",
+            "mock/mock-model",
         ],
         env=env,
         input="say hi\n/exit\n",

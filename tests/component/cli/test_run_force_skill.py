@@ -15,7 +15,7 @@ the one-shot CLI. Three cases per the build prompt:
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import yaml
 
@@ -82,7 +82,7 @@ def _make_workspace(tmp_path: Path) -> Path:
                 "agent_id": "ag_rs",
                 "name": "rs",
                 "description": "run-skill demo",
-                "model": {"provider": "fake", "model": "fake-model"},
+                "model": {"provider": "mock", "model": "mock-model"},
                 "prompt": "hi",
                 "io": {"mode": "conversational"},
                 "subsystems": {
@@ -107,13 +107,13 @@ def _make_workspace(tmp_path: Path) -> Path:
     return tmp_path
 
 
-def _synthetic_read_calls(stream_lines: list[str]) -> list[dict]:
+def _synthetic_read_calls(stream_lines: list[str]) -> list[dict[str, Any]]:
     """Pick out the engine's synthetic tool.called events from a --stream run.
 
     System-actor tool.called events with tool_name=='read' are exactly
     the pre-flight force-invoke synthesis (engine.py:937-945).
     """
-    out: list[dict] = []
+    out: list[dict[str, Any]] = []
     for line in stream_lines:
         if not line.strip():
             continue

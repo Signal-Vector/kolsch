@@ -73,7 +73,7 @@ that fits the sentence.*
 
 **"turn" vs "exchange":** they mean the same thing. `turn` reads more
 naturally in narrative code that talks about the model (assembly,
-framework adapters, fake framework, chat UI); `exchange` reads more
+framework adapters, mock framework, chat UI); `exchange` reads more
 naturally in event-log / store code that treats it as a discrete
 recorded unit. Pick by the sentence, not by the module.
 

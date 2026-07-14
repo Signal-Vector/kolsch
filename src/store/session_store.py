@@ -15,11 +15,13 @@ for the full set of invariants this layer upholds.
 from __future__ import annotations
 
 import asyncio
+import json
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
-from pydantic import BaseModel, ConfigDict, Field
+from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
 from errors import SessionNotFound, ThreadNotFound
 from schemas import (
@@ -32,6 +34,7 @@ from schemas import (
     FromWorkflowRun,
     Session,
     SessionId,
+    SessionMeta,
     Thread,
     ThreadId,
 )
@@ -49,7 +52,6 @@ from store.jsonl import (
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
-    from pathlib import Path
 
     from store.backend import EntityBackend
 
@@ -57,6 +59,18 @@ if TYPE_CHECKING:
 # ---------------------------------------------------------------------------
 # Reconstruction result type
 # ---------------------------------------------------------------------------
+
+
+class _Sentinel:
+    """Sentinel type for `update_meta` — distinguishes "unchanged" from `None`.
+
+    `None` is a valid value for `event_adapter_bookmark` (clears the
+    bookmark). `_SENTINEL` means "leave the field unchanged". Standard
+    Python idiom — a private class + a private singleton.
+    """
+
+
+_SENTINEL = _Sentinel()
 
 
 class ReconstructionResult(BaseModel):
@@ -411,6 +425,7 @@ class SessionStore:
         *,
         from_event_id: str | None = None,
         limit: int | None = None,
+        tail: int | None = None,
     ) -> AsyncIterator[Event]:
         """Yield events for `thread_id` in file order.
 
@@ -423,8 +438,16 @@ class SessionStore:
         Args:
             thread_id: The thread to read.
             from_event_id: When set, yield only events strictly after
-                the event with this id. Unknown ids yield nothing.
+                the event with this id. Unknown ids yield nothing (per
+                the pre-spec-003 shape). spec-003's `EventAdapter`
+                treats an unknown-id bookmark as "replay everything";
+                it detects the unknown case by checking the bookmark
+                against the events it read separately.
             limit: Cap the yield count. `None` yields every match.
+            tail: When set, only consider the LAST `tail` events of
+                the log for this thread (applied BEFORE the
+                `from_event_id` filter). `None` = full log. Added in
+                spec-003 for the prompt-mid-crash scan window bound.
 
         Yields:
             Each [`Event`][schemas.events.Event] in file order.
@@ -442,6 +465,13 @@ class SessionStore:
         all_events: list[Event] = await asyncio.to_thread(
             lambda: list(read_lines(path))
         )
+
+        # spec-003: `tail` applies first (before `from_event_id`) so
+        # callers combining both (bookmark + bounded window) get the
+        # intersection: "last N events, but only those after
+        # bookmark".
+        if tail is not None:
+            all_events = all_events[-tail:] if tail > 0 else []
 
         if from_event_id is not None:
             # Yield only events strictly after the sentinel.
@@ -481,6 +511,78 @@ class SessionStore:
         # site.
         async for event in self.read_events(thread_id):
             yield event
+
+    async def get_last_logical_seq(self, session_id: SessionId) -> int:
+        """Return the `logical_seq` on the session's JSONL tail, or 0.
+
+        Test-facing helper. Delegates to
+        [`_read_last_logical_seq`][store.jsonl._read_last_logical_seq]
+        under a worker thread so the event loop stays unblocked.
+
+        spec-003 uses this in `test_logical_seq_monotonic.py` to
+        verify the next append will get `tail + 1`.
+        """
+        from store.jsonl import _read_last_logical_seq  # noqa: PLC0415
+
+        path = jsonl_path(self._root, session_id)
+        return await asyncio.to_thread(_read_last_logical_seq, path)
+
+    # --- Session meta.json ---------------------------------------------
+
+    async def read_meta(self, session_id: SessionId) -> SessionMeta:
+        """Read the session's `meta.json` sidecar.
+
+        Missing / empty / corrupt files return a default
+        [`SessionMeta`][schemas.entities.SessionMeta] rather than
+        raising — this is the "legacy meta.json validates cleanly"
+        contract from spec-003 AC #9. Extra keys are ignored
+        (`model_config extra="ignore"`).
+
+        The file lives at
+        `<root>/sessions/<session_id>.meta.json`.
+        """
+        path = self._meta_path(session_id)
+        return await asyncio.to_thread(_read_meta_sync, path)
+
+    async def update_meta(
+        self,
+        session_id: SessionId,
+        *,
+        event_adapter_bookmark: EventId | None | _Sentinel = _SENTINEL,
+        logical_seq_bookmark: int | _Sentinel = _SENTINEL,
+    ) -> SessionMeta:
+        """Patch the session's `meta.json` sidecar.
+
+        Reads the existing meta (or a default if none exists), applies
+        the non-sentinel kwargs, writes the result back atomically via
+        `os.replace`. The write is best-effort — a failed write does
+        not raise (the JSONL log is still authoritative for the
+        `logical_seq` counter; the bookmark is an optimisation).
+
+        Args:
+            session_id: The session to patch.
+            event_adapter_bookmark: New bookmark, or `None` to clear.
+                Pass `_SENTINEL` (default) to leave unchanged.
+            logical_seq_bookmark: Reserved for v1.1. Pass `_SENTINEL`
+                (default) to leave unchanged.
+
+        Returns:
+            The post-update `SessionMeta`.
+        """
+        existing = await self.read_meta(session_id)
+        updates: dict[str, object] = {}
+        if not isinstance(event_adapter_bookmark, _Sentinel):
+            updates["event_adapter_bookmark"] = event_adapter_bookmark
+        if not isinstance(logical_seq_bookmark, _Sentinel):
+            updates["logical_seq_bookmark"] = logical_seq_bookmark
+        updated = existing.model_copy(update=updates)
+        path = self._meta_path(session_id)
+        await asyncio.to_thread(_write_meta_sync, path, updated)
+        return updated
+
+    def _meta_path(self, session_id: SessionId) -> Path:
+        """Return the meta.json path for `session_id`."""
+        return self._root / "sessions" / f"{session_id}.meta.json"
 
     # --- Content store -------------------------------------------------
 
@@ -604,6 +706,56 @@ class SessionStore:
             threads_reconstructed=threads_reconstructed,
             warnings=warnings,
         )
+
+
+def _read_meta_sync(path: Path) -> SessionMeta:
+    """Read `path` as a `SessionMeta`, returning defaults on any error.
+
+    Called from `SessionStore.read_meta` under `asyncio.to_thread`.
+    Legacy files (missing fields, extra unknown fields) validate
+    cleanly because both fields default and `model_config extra="ignore"`.
+    Missing / corrupt files return a default meta.
+    """
+    if not path.exists():
+        return SessionMeta()
+    try:
+        raw = path.read_text(encoding="utf-8")
+    except OSError:
+        return SessionMeta()
+    if not raw.strip():
+        return SessionMeta()
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        return SessionMeta()
+    if not isinstance(payload, dict):
+        return SessionMeta()
+    try:
+        return SessionMeta.model_validate(payload)
+    except ValidationError:
+        return SessionMeta()
+
+
+def _write_meta_sync(path: Path, meta: SessionMeta) -> None:
+    """Atomically write `meta` to `path` via a temp file + `os.replace`.
+
+    Best-effort — silently swallows OSError so the caller (typically
+    `EventAdapter._persist_bookmark`) doesn't have to guard against
+    disk full / permission errors mid-replay. The JSONL log remains
+    authoritative for the events themselves; the meta.json is an
+    optimisation.
+    """
+    import os as _os  # noqa: PLC0415 — local to avoid extra module-scope import
+
+    try:
+        path.parent.mkdir(parents=True, exist_ok=True)
+        tmp = path.with_suffix(path.suffix + ".tmp")
+        tmp.write_text(meta.model_dump_json(), encoding="utf-8")
+        _os.replace(tmp, path)
+    except OSError:
+        # Best-effort — bookmark drift is tolerated. See spec-003
+        # coordinator decision #1: JSONL tail is authoritative.
+        return
 
 
 def _parse_dt(value: object) -> datetime | None:

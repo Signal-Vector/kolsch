@@ -145,7 +145,7 @@ for the operator-facing guide.
 
 **Protocols, not base classes.** Each provider is a Python
 `Protocol`. Anyone can implement one without subclassing or
-importing from `providers/`. Test fakes and production
+importing from `providers/`. Test mocks and production
 implementations sit at the same level.
 
 **Defaults work without configuration.** A fresh workspace runs

@@ -26,6 +26,7 @@ import threading
 import time
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -206,7 +207,7 @@ class TestTail:
         store = WorkflowRunStore(tmp_path)
         run = store.create(workflow_ref="demo/workflows/hello", inputs={})
 
-        produced: list[dict] = []
+        produced: list[dict[str, Any]] = []
 
         def producer() -> None:
             # Stagger the writes so the consumer observes them via polling.
@@ -262,7 +263,7 @@ class TestModuleIsolation:
     def test_bundle_imports_removed_third_party_survives(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # Lay down a fake bundle Python file the test can import.
+        # Lay down a mock bundle Python file the test can import.
         bundle_dir = tmp_path / "bundles" / "demo" / "nodes"
         bundle_dir.mkdir(parents=True)
         (bundle_dir / "echo.py").write_text("MARKER = 42\n", encoding="utf-8")

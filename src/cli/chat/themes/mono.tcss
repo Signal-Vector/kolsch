@@ -1,0 +1,27 @@
+/*
+ * mono.tcss — NO_COLOR variant of theme.tcss.
+ *
+ * Every colour maps to `auto` / `default` (the terminal's own fg).
+ * Text-style attributes (bold, italic, dim, reverse) replace hue
+ * so widgets can still communicate role and state without colour.
+ *
+ * Widgets that convey identity or warning under NO_COLOR should
+ * add `text-style: bold` in their `DEFAULT_CSS`; widgets that
+ * convey hint / dim state should add `text-style: dim`. This
+ * file supplies only the variable substitutions; widgets do the
+ * per-role work in their own CSS.
+ *
+ * The `⚠` glyph is retained under NO_COLOR (information carrier,
+ * not decoration).
+ */
+
+/* $background and $panel are Textual built-ins; leaving them alone
+ * so Textual's default-palette CSS keeps working. */
+
+$user-border:   auto;
+$assistant-fg:  auto;
+$tool-fg:       auto;
+
+$error:         auto;
+$warning:       auto;
+$hint:          auto;

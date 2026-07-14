@@ -5,7 +5,7 @@ both rely on the echo driver as the default-tier LLM. A fresh install
 runs `kolsch run <agent>` end-to-end with zero LLM keys and zero
 external services.
 
-Distinct from `tests/fixtures/fake_llm.FakeLLM` (the scripted
+Distinct from `tests/fixtures/mock_llm.MockLLM` (the scripted
 Pydantic-modelled test stub). The dev driver is deterministic, has no
 per-test script, and no Pydantic schema for users to satisfy.
 """

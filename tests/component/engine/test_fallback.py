@@ -9,13 +9,13 @@ The tests exercise three layers:
 - :func:`engine._fallback.build_fallback_chain` — agent-load-time
   validation; TC-FB-05 and the duplicate-warning surface land here.
 - :class:`engine._fallback.FallbackLLMHandle` — the runtime loop;
-  TC-FB-01, 02, 03, 06, 08, 09 drive it end-to-end via a fake
+  TC-FB-01, 02, 03, 06, 08, 09 drive it end-to-end via a mock
   ``LLMHandle`` callable per spec. TC-FB-07 hits the streaming
   short-circuit at the engine level. TC-FB-10 walks a recorded
   JSONL through `reconstruct`.
 
 Per the Step 20 instructions, no real LLM is touched. The
-:class:`tests.fixtures.fake_llm.FakeLLM` extension adds an
+:class:`tests.fixtures.mock_llm.MockLLM` extension adds an
 ``inject_error`` API for deterministic failure scripting.
 """
 
@@ -435,12 +435,19 @@ def test_tc_fb_06_event_shape_matches_patch_3_1() -> None:
         attempt=1,
     )
     serialised = data.model_dump(mode="json", by_alias=True)
+    # spec-002 adds ``logical_seq: int = 0`` on ``_DataModel``;
+    # populated in spec-003 by ``SessionStore`` inside its flock
+    # critical section. Present as a defaulted key on every payload
+    # dump from here on. Store's JSONL writer strips the default 0 at
+    # write time (``src/store/jsonl.py``) so on-disk byte shapes stay
+    # compat; in-memory ``model_dump`` still carries it.
     assert set(serialised.keys()) == {
         "from",
         "to",
         "reason",
         "reason_detail",
         "attempt",
+        "logical_seq",
     }
     assert serialised["from"] == {
         "provider": "openrouter",
@@ -957,15 +964,15 @@ def test_classification_guard_raises_on_unclassified_model_code() -> None:
     # Tweak the registered code sets temporarily so an unclassified
     # `model.*` code shows up, then call the guard's body to trigger
     # the failure path.
-    fake_codes = {"model.rate_limited", "model.new_unclassified"}
+    mock_codes = {"model.rate_limited", "model.new_unclassified"}
     original = fb._RECOVERABLE_MODEL_CODES
     try:
         # The internal guard reads from `errors.list_catalog_codes` —
-        # mock that to return our fake set.
+        # mock that to return our mock set.
         import errors as errors_mod
 
         original_list = errors_mod.list_catalog_codes
-        errors_mod.list_catalog_codes = lambda: fake_codes
+        errors_mod.list_catalog_codes = lambda: mock_codes
         try:
             with pytest.raises(ImportError, match=r"model\.new_unclassified"):
                 fb._assert_classification_exhaustive()

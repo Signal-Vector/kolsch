@@ -1,0 +1,30 @@
+/*
+ * theme.tcss — CSS variables ONLY.
+ *
+ * Widget-specific rules live in each widget's `DEFAULT_CSS`
+ * class attribute (Textual canonical pattern). This file
+ * declares the semantic palette so widgets reference variables,
+ * not hex codes. Adding a new theme (later follow-up) means
+ * shipping another `.tcss` file that maps the same names.
+ *
+ * NO_COLOR variant is `mono.tcss` alongside this file.
+ * See process/spec-textual-chat-ui.md → Technical Context →
+ * Concrete CSS values.
+ */
+
+/* $background and $panel are Textual built-ins with type "color";
+ * overriding them at the app CSS level breaks other Textual CSS
+ * (Screen.-maximized-view uses `hatch: right $panel`, which needs
+ * a semantic name Textual recognises). The chat surface's
+ * background comes from Textual's default palette; widget-local
+ * `background:` declarations use literal values. */
+
+/* Role-role palette (Aider-adjacent) */
+$user-border:   #2ea043;   /* GitHub green */
+$assistant-fg:  #b0c0d5;   /* soft blue-grey */
+$tool-fg:       #4dd0e1;   /* cyan-400 */
+
+/* Semantic */
+$error:         #ff5555;
+$warning:       #ffb454;
+$hint:          #6e7681;

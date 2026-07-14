@@ -35,12 +35,15 @@ from engine.framework import Framework
 from files import PathPolicy, load_policy
 from providers import (
     AuthorizationProvider,
+    ContextCompactionProvider,
     NativeSandboxProvider,
     RecentBufferMemoryProvider,
     RuleBasedAuthorizationProvider,
     SandboxProvider,
     SecretsProvider,
+    make_compaction_provider,
     validate_recent_buffer_config,
+    validate_reference_summary_config,
 )
 from providers.secrets import DotenvSecretsProvider
 from schemas import ResolvedAgentConfig
@@ -54,6 +57,7 @@ if TYPE_CHECKING:
     from typing import Any
 
     from kernel import ConfigValidator
+    from llm import ProviderConfig
     from schemas import ModelSpec
 
 
@@ -88,6 +92,21 @@ class PlatformRuntime:
     subsystem_validators: dict[str, dict[str, ConfigValidator]] = field(
         default_factory=dict,
     )
+    # feat-054: kept on the runtime so the context-compaction pre-flight
+    # can look up the model's declared context window via
+    # `context_length_for(spec)`. `None` when compaction is disabled.
+    compaction_provider: ContextCompactionProvider | None = None
+    # Cached ``llm_providers`` slice from ``platform.yaml``. The engine
+    # already carries a copy for fallback dispatch; the runtime keeps
+    # its own reference so :meth:`context_length_for` can answer
+    # without reaching into the engine's private state.
+    llm_providers_config: dict[str, ProviderConfig] = field(default_factory=dict)
+    # Default `run_workflow` blocking timeout (seconds). Populated at
+    # bootstrap from `platform.yaml:workflows.default_timeout_seconds`;
+    # 300 preserves the pre-existing bug-031 default when the section
+    # is absent. WorkflowsImpl reads this at construction time and
+    # exposes it to tools via `Workflows.default_timeout_seconds`.
+    workflow_default_timeout_seconds: int = 300
 
     async def build_resolved_config(
         self,
@@ -119,6 +138,47 @@ class PlatformRuntime:
             subsystem_validators=self.subsystem_validators,
         )
 
+    def context_length_for(self, spec: ModelSpec) -> int | None:
+        """Return the declared ``context_length`` (tokens) for ``spec``, or ``None``.
+
+        Walks :attr:`llm_providers_config` for a provider matching
+        ``spec.provider`` and looks up an entry in that provider's
+        ``models`` list whose ``id`` matches ``spec.model``. Returns
+        the entry's ``context_length`` when the model declares one.
+
+        Returns ``None`` when:
+
+        - The provider is not present in ``llm_providers_config``
+          (e.g. ``spec.provider == "mock"`` on the default tier).
+        - No model entry matches ``spec.model``.
+        - The matching entry has ``context_length: null`` (many
+          ``opencode`` models legitimately don't declare one).
+
+        The compaction pre-flight (feat-054, lands in Phase 2) uses
+        this to compute the trigger budget. ``None`` is a signal to
+        skip compaction for the current exchange and emit a diagnostic
+        rather than hard-failing.
+        """
+        provider = self.llm_providers_config.get(spec.provider)
+        if provider is None:
+            return None
+        for entry in provider.models:
+            # `ProviderConfig.models` is typed as `list[dict[str, Any]]`.
+            # A malformed non-dict slipped in at load time would raise
+            # `AttributeError` here — that's the correct signal (bug in
+            # config parsing) rather than silently masking the miss.
+            if entry.get("id") != spec.model:
+                continue
+            value = entry.get("context_length")
+            # `bool` is a subclass of `int`; reject it before the int
+            # check so `context_length: true` does not become `1`.
+            if isinstance(value, bool):
+                return None
+            if isinstance(value, int):
+                return value
+            return None
+        return None
+
 
 async def bootstrap_runtime(
     *,
@@ -144,8 +204,10 @@ async def bootstrap_runtime(
     listed above are documented so users can make an informed choice
     per workspace. See `process/feat-clarify-framework-selection.md`
     for the historical context (this class was renamed from
-    `FakeFramework`, which misled users into treating it as a test
-    fixture).
+    `FakeFramework` to `MinimalFramework`, which misled users into
+    treating it as a test fixture; the containing module was later
+    renamed from `fake_framework.py` to `mock_framework.py` — see
+    `process/qol-046-fake-to-mock-rename.md`).
 
     Default `llm` is [`EchoLLMDriver`][engine.dev_llm.EchoLLMDriver]
     when no `llm_providers` are configured, so a fresh install runs
@@ -179,12 +241,23 @@ async def bootstrap_runtime(
 
     secrets = DotenvSecretsProvider(root=root, config=secrets_cfg.get("config", {}))
     sandbox = NativeSandboxProvider(config=sandbox_cfg.get("config", {}))
+    # feat-041 — sidecar source-line metadata for the platform-layer
+    # rules. Loader routes through `_yamlio.load_with_positions`, so
+    # every rule the provider compiles carries `(source_file,
+    # source_line)` and `/why` + the inline denial hint can display
+    # `~/.kolsch/platform.yaml:<line>` breadcrumbs.
+    from assets.platform_config import (  # noqa: PLC0415
+        authorization_rule_source_map,
+    )
+
+    authz_source_map = authorization_rule_source_map(root)
     # Pass the catalog so the provider can validate qualified tool refs
     # in rule `what:` fields AND build the action→tool_ref map so
     # `what: kolsch/bash` matches the `tool.bash` action namespace.
     authz = RuleBasedAuthorizationProvider(
         config=authz_cfg.get("config", {}),
         catalog=am.catalog(),
+        source_map=authz_source_map,
     )
     path_policy = load_policy(file_access_cfg)
 
@@ -196,6 +269,13 @@ async def bootstrap_runtime(
     store = SessionStore(root=root, backend=backend)
 
     memory = RecentBufferMemoryProvider(store=store)
+    # feat-054: build the compaction provider from platform.yaml. The
+    # section is optional; when missing (the default), the factory
+    # returns `None` and the engine skips the trigger check entirely.
+    try:
+        compaction_cfg = am.get_platform_config("compaction")
+    except KeyError:
+        compaction_cfg = {}
     bus = InProcessEventBus()
 
     tools_sub = ToolsSubsystem(
@@ -256,7 +336,7 @@ async def bootstrap_runtime(
     #   the factory. Pre-existing tests that pin a single callable
     #   continue to work unchanged.
     # - Otherwise and `llm_providers_config` is populated → wire
-    #   `llm_for_model=` to the per-spec factory (`provider == "fake"`
+    #   `llm_for_model=` to the per-spec factory (`provider == "mock"`
     #   still gets EchoLLMDriver from inside the factory, preserving
     #   the no-credentials tutorial behaviour).
     # - Otherwise (no providers AND no explicit `llm=`) → fall back to
@@ -277,6 +357,19 @@ async def bootstrap_runtime(
     elif chosen_llm is None:
         chosen_llm = EchoLLMDriver().__call__
 
+    # feat-054 Phase 1: construct the compaction provider (if any) so
+    # the engine holds a reference. The invocation site lands in
+    # Phase 2. `llm_for_model` is passed through so the v1 variant can
+    # dispatch to a summariser model of its choice.
+    compaction_provider: ContextCompactionProvider | None = (
+        make_compaction_provider(
+            config=compaction_cfg,
+            llm_for_model=chosen_llm_for_model,
+        )
+        if compaction_cfg
+        else None
+    )
+
     engine = AgentEngine(
         store=store,
         bus=bus,
@@ -291,6 +384,7 @@ async def bootstrap_runtime(
         llm=chosen_llm,
         llm_for_model=chosen_llm_for_model,
         llm_providers_config=llm_providers_config,
+        compaction_provider=compaction_provider,
     )
 
     # Per-subsystem Layer 3 validators — dispatch shape: subsystem
@@ -301,7 +395,18 @@ async def bootstrap_runtime(
         "memory": {"recent_buffer": validate_recent_buffer_config},
         "tools": {"standard": validate_standard_config},
         "skills": {"standard": make_standard_validator(am)},
+        "compaction": {"reference_summary": validate_reference_summary_config},
     }
+
+    # Workflows section (optional). Currently one knob:
+    # `default_timeout_seconds` — how long `run_workflow` blocks.
+    try:
+        workflows_cfg = am.get_platform_config("workflows")
+    except KeyError:
+        workflows_cfg = {}
+    workflow_default_timeout_seconds = int(
+        (workflows_cfg or {}).get("default_timeout_seconds", 300)
+    )
 
     return PlatformRuntime(
         root=root,
@@ -317,4 +422,7 @@ async def bootstrap_runtime(
         path_policy=path_policy,
         engine=engine,
         subsystem_validators=subsystem_validators,
+        compaction_provider=compaction_provider,
+        llm_providers_config=llm_providers_config,
+        workflow_default_timeout_seconds=workflow_default_timeout_seconds,
     )

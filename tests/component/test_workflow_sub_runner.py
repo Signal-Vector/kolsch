@@ -584,7 +584,7 @@ class TestPauseCascade:
             ref: demo/workflows/child
         """
         # Child has a single ``user_input`` node — we register a
-        # pausing fake against the slot.
+        # pausing mock against the slot.
         child_yaml = """
         nodes:
           wait:

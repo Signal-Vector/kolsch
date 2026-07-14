@@ -1,0 +1,5 @@
+name: hello_card
+description: Demonstrate a streaming markdown card.
+entry: hello_card.py
+requires:
+  - cards

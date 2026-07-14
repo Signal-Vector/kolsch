@@ -72,7 +72,7 @@ def _write_workspace(root: Path, *, prompt: str) -> None:
                 "agent_id": "ag_probe",
                 "name": "probe",
                 "description": "bug-agent-inputs-template-scope repro agent.",
-                "model": {"provider": "fake", "model": "fake-model"},
+                "model": {"provider": "mock", "model": "mock-model"},
                 "prompt": prompt,
                 "io": {"mode": "single_shot"},
             }

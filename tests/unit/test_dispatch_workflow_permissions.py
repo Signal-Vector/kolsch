@@ -63,6 +63,7 @@ class _RecordingAuthz:
         target: str | None = None,
         layers: tuple[Any, ...] = (),
         caller_chain: tuple[str, ...] = (),
+        tool_call_id: str | None = None,
     ) -> Any:
         self.layers_seen = layers
 

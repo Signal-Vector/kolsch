@@ -261,7 +261,7 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Skip all prompts. Uses KOLSCH_PROVIDER / KOLSCH_PROVIDER_KEY "
             "env vars when present to wire a provider; otherwise the "
-            "starter agent ships with `provider: fake`."
+            "starter agent ships with `provider: mock`."
         ),
     )
 
@@ -381,6 +381,16 @@ def _add_chat_subparser(sub: argparse._SubParsersAction[Any]) -> None:
         default=None,
         help="Session-scoped model override (ModelSpec input shape).",
     )
+    chat.add_argument(
+        "--full-history",
+        dest="full_history",
+        action="store_true",
+        default=False,
+        help=(
+            "Replay the whole session history on --session resume "
+            "instead of the default tail-20 turns."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -406,7 +416,7 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     # call in the event log (model.request carries the real spec)
     # while actually producing the echo. That's the bug class the
     # ticket fixed; the warning is the defensive surface so a
-    # regression is loud, not silent. `provider: fake` exits the
+    # regression is loud, not silent. `provider: mock` exits the
     # check — that's the deliberate tutorial path.
     _maybe_warn_silent_echo(config, runtime)
 
@@ -768,9 +778,32 @@ async def _cmd_skills(args: argparse.Namespace) -> int:
 
 
 async def _cmd_chat(args: argparse.Namespace) -> int:
-    from cli.chat import cmd_chat  # noqa: PLC0415
+    from cli.chat.app import ChatApp, register_chat_slash_commands  # noqa: PLC0415
+    from cli.chat.session import build_session  # noqa: PLC0415
 
-    return await cmd_chat(args)
+    # Register ChatApp-owned slash commands (`/export`) on the shared
+    # registry only when the chat entry point actually runs. Doing this
+    # at module import time would mutate `COMMAND_REGISTRY` for every
+    # test that imports `cli.chat`, breaking base-registry-shape
+    # assertions (`test_chat_slash`).
+    register_chat_slash_commands()
+
+    try:
+        session = await build_session(args)
+    except ValueError as exc:
+        sys.stderr.write(f"{exc}\n")
+        return 1
+
+    app = ChatApp(
+        session=session,
+        engine=session.runtime.engine,
+        full_history=getattr(args, "full_history", False),
+    )
+    # `inline_no_clear=True` bakes the transcript into terminal
+    # scrollback on exit — so the conversation stays visible where
+    # the user quit the app instead of vanishing.
+    await app.run_async(inline=True, inline_no_clear=True)
+    return int(app.return_code or 0)
 
 
 async def _cmd_setup(args: argparse.Namespace) -> int:
@@ -827,7 +860,7 @@ def _maybe_warn_silent_echo(
 
     Fires when:
 
-    - `config.model.provider != "fake"` (the agent intends a real
+    - `config.model.provider != "mock"` (the agent intends a real
       call), AND
     - The runtime did not wire `llm_for_model` (i.e. engine has only
       the `EchoLLMDriver` fallback). Normally this only happens when
@@ -835,17 +868,17 @@ def _maybe_warn_silent_echo(
       regression that silently routes a real-provider agent through
       the echo path.
 
-    Agents that explicitly use `provider: fake` are silent — that's
+    Agents that explicitly use `provider: mock` are silent — that's
     the tutorial path; the user knows what they signed up for.
     """
-    if config.model.provider == "fake":
+    if config.model.provider == "mock":
         return
     if runtime.engine._llm_for_model is not None:
         return
     sys.stderr.write(
         f"⚠ this agent specifies provider {config.model.provider!r}, but "
         f"no real-LLM wiring is active — the exchange will silently echo "
-        f"via the built-in fake LLM. Run `kolsch connect "
+        f"via the built-in mock LLM. Run `kolsch connect "
         f"{config.model.provider}` to wire a real provider.\n"
     )
 

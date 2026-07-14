@@ -266,7 +266,7 @@ class TestPhaseTest4ReplayReconstructsState:
         # (see ``validator._check_value_for_refs``).
         workspace = _make_workspace_with_starter(tmp_path)
         wf_dir = workspace / "bundles" / "kolsch" / "workflows"
-        from _yamlio import dump
+        from kolsch._yamlio import dump
 
         (wf_dir / "prep-pause-echo.yaml").write_text(
             dump(

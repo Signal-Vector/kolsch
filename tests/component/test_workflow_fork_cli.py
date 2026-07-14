@@ -83,7 +83,7 @@ def _write_workflow_bundle(
     )
     wf_dir = bundle / "workflows"
     wf_dir.mkdir(exist_ok=True)
-    from _yamlio import dump
+    from kolsch._yamlio import dump
 
     (wf_dir / f"{workflow_name}.yaml").write_text(dump(workflow_yaml), encoding="utf-8")
     return bundle
@@ -168,7 +168,8 @@ def _events_via_cli(
         capsys=capsys,
     )
     assert rc == 0
-    return json.loads(out)["data"]["events"]
+    events: list[dict[str, Any]] = json.loads(out)["data"]["events"]
+    return events
 
 
 def _find_event_id(
@@ -184,7 +185,8 @@ def _find_event_id(
             "payload_preview", ""
         ):
             continue
-        return event["event_id"]
+        event_id: str = event["event_id"]
+        return event_id
     msg = f"no event matching kind={kind!r} preview_contains={preview_contains!r}"
     raise AssertionError(msg)
 

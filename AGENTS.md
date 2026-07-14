@@ -84,7 +84,7 @@ podman-compose exec dev uv run ruff check --fix .
 podman-compose exec dev uv run mypy .
 podman-compose exec dev uv run pytest tests/unit          # seconds
 podman-compose exec dev uv run pytest tests/component     # ~1 min
-podman-compose exec dev uv run pytest tests/integration   # minutes (Fake LLM + real CrewAI)
+podman-compose exec dev uv run pytest tests/integration   # minutes (Mock LLM + real CrewAI)
 
 # If you changed engine behavior, check golden diffs:
 podman-compose exec dev uv run pytest tests/golden
@@ -126,7 +126,7 @@ These are non-negotiable. Violating them blocks merges.
   rebuilt from the event log.
 - **Tests assert on events.** For anything touching the event log, use
   the event-sequence assertion helpers and add/maintain golden tests.
-- **Never burn tokens in tests.** Use the Fake LLM. Real-LLM tests are
+- **Never burn tokens in tests.** Use the Mock LLM. Real-LLM tests are
   the E2E layer only, run deliberately, never on every change.
 - **Document as you go.** A user-facing change includes its docs in the
   same change. See the Diátaxis structure in `docs/`.
@@ -193,11 +193,18 @@ These are non-negotiable. Violating them blocks merges.
   it returns its decision through the callback's tuple shape so
   Phase 2.0's authz provider — not the chat — appends the new
   rule and rewrites `platform.yaml`. The chat also MUST NOT
-  enter full-screen / alternate-screen mode (it stays in
-  prompt_toolkit's bottom-toolbar idiom) so terminal-native
-  scrolling and selection keep working; TC-CHAT-18 enforces
-  this architecturally by introspecting `src/cli/chat.py` for
-  `Application.run(full_screen=True)` and equivalents.
+  enter full-screen / alternate-screen mode. It renders
+  **inline** (via Textual's `App(inline=True)` today) so
+  terminal-native scrolling and selection keep working.
+  TC-CHAT-18 enforces this by AST-parsing every `.py` file
+  under `src/cli/chat/` and rejecting any `App(...).run(...)`
+  or `App(...).run_async(...)` call whose kwargs do not include
+  `inline=True`, and by continuing to reject the legacy
+  `Application.run(full_screen=True)` idiom. Approvals are the
+  one carve-out to the "pure consumer" rule: the four-choice
+  callback registered via `authz.register_prompt_callback`
+  fires from a worker and mounts an inline widget; this is a
+  pre-existing carve-out documented at `src/cli/_modal.py:168`.
 - **Agent prompts are Jinja2 templates.** Variable names are
   resolved via the standardized API (`tools`, `docs`,
   `workspace`, `agent`, `platform`) defined in
@@ -218,6 +225,31 @@ These are non-negotiable. Violating them blocks merges.
   live in `.env` per Phase 1.1's `dotenv` provider; agent code
   reaches them via `ctx.secrets` after the Secrets provider
   resolves names listed in `@tool(secrets_needed=[...])`.
+- **Multi-spec refactors require a composition invariant and a
+  live-runtime gate at each milestone.** Component-scoped specs
+  cannot ship a working feature on their own — the seams between
+  them (bus subscription, service-registry injection, adapter
+  handler registration) are load-bearing and easy to leave
+  unwired. Every refactor spanning ≥ 2 specs owes:
+    (a) an invariant in `process/design-decisions-ledger.md` of
+        the form _"no spec in this refactor ships until a real
+        Pilot ChatApp (or equivalent live-runtime harness) proves
+        the composed pipeline surfaces the feature end-to-end"_;
+    (b) a **milestone smoke check** — actually boot the shipped
+        surface and use the feature — before flipping the
+        milestone gate. Green component tests are necessary, not
+        sufficient. If your tests use a `_replay_*` /
+        `_drain_events_manually` / `handle_directly(...)`
+        scaffold to simulate the live path, that scaffold is a
+        documented gap, not a shortcut — promote it to a blocker
+        and wire the live path instead of shipping around it.
+    Exhibit A: the 19-spec Textual chat refactor (specs
+    001-019, 2026-07). Shipped green with 2713 passing tests, but
+    invoking a workflow in the running chat produced no
+    `WorkflowCard` because two seams (tool-dispatch
+    `chat_services=` forwarding, runtime bus subscription) were
+    never wired. Bug-020 documents the fix; this rule prevents
+    the recurrence.
 
 
 ---
@@ -266,7 +298,7 @@ services; only the Postgres/Redis backend component tests do.
 ├── tests/
 │   ├── unit/                  ← pure, fast, no I/O
 │   ├── component/             ← one subsystem + real backing
-│   ├── integration/           ← multi-subsystem + Fake LLM + real CrewAI
+│   ├── integration/           ← multi-subsystem + Mock LLM + real CrewAI
 │   ├── e2e/                   ← whole platform, real LLM (deliberate)
 │   ├── golden/                ← golden event-sequence files
 │   ├── fixtures/              ← factories and builders

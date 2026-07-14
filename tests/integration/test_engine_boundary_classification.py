@@ -66,7 +66,7 @@ from engine import MinimalFramework
 from errors import ModelUpstreamError
 from schemas import EventType
 from tests.fixtures.engine_builder import build_engine, new_session_context
-from tests.fixtures.fake_llm import FakeLLM, TextResponse
+from tests.fixtures.mock_llm import MockLLM, TextResponse
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -87,7 +87,8 @@ def _synth_openai_typed_exc(name: str, msg: str) -> Exception:
     test free of any ``openai`` SDK import."""
     cls = type(name, (Exception,), {})
     cls.__module__ = "openai"
-    return cls(msg)
+    instance: Exception = cls(msg)
+    return instance
 
 
 class _CauseChainRecoverableFramework:
@@ -193,10 +194,10 @@ async def _drive_one_exchange(
     max_retries: int = 2,
 ) -> list[Any]:
     """Build an engine on tmp_path, drive one exchange, return events."""
-    fake_llm = FakeLLM(script=[TextResponse(text="unused")])
+    mock_llm = MockLLM(script=[TextResponse(text="unused")])
     engine, store, _am = await build_engine(
         tmp_path,
-        fake_llm,
+        mock_llm,
         framework=framework,  # protocol duck-types
     )
     ctx = await new_session_context(store)
@@ -363,10 +364,10 @@ async def test_tc_eng_classify_03_real_engine_bug_still_internal_error(
     boundary falls back to PlatformInternalError — the right
     classification for real engine bugs.
     """
-    fake_llm = FakeLLM(script=[TextResponse(text="unused")])
+    mock_llm = MockLLM(script=[TextResponse(text="unused")])
     engine, store, _am = await build_engine(
         tmp_path,
-        fake_llm,
+        mock_llm,
         framework=MinimalFramework(),
     )
     ctx = await new_session_context(store)

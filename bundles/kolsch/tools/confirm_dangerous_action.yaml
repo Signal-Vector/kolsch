@@ -1,0 +1,5 @@
+name: confirm_dangerous_action
+description: Prompt the user to confirm a dangerous action.
+entry: confirm_dangerous_action.py
+requires:
+  - prompts

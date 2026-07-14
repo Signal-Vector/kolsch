@@ -19,7 +19,7 @@ import asyncio
 import json
 import textwrap
 import time
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 from cli.main import main
 
@@ -223,9 +223,9 @@ def test_cancel_mid_run_aborts_at_node_boundary(
 # ---------------------------------------------------------------------------
 
 
-def _read_jsonl(path: Path) -> list[dict]:
+def _read_jsonl(path: Path) -> list[dict[str, Any]]:
     """Parse ``events.jsonl`` into a list of event dicts."""
-    rows: list[dict] = []
+    rows: list[dict[str, Any]] = []
     with path.open(encoding="utf-8") as fh:
         for line in fh:
             stripped = line.strip()
