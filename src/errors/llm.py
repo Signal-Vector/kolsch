@@ -119,7 +119,16 @@ class ConfigUnknownAlias(PlatformError):
 
 
 class LlmConnectorUnknown(PlatformError):
-    """Raised when a provider config's `type` matches no registered connector."""
+    """Raised when a provider config's `type` matches no registered connector.
+
+    When `provider_name` is supplied (the common case — `build_llm` and
+    the registry-side `get(..., provider_name=...)` both pass it), the
+    message names the offending `llm_providers.<provider_name>` entry
+    and points the operator at `platform.yaml`. When `type_name` is
+    empty the message says "missing" instead of "unknown value" so an
+    operator can tell "I forgot to write `type:`" apart from "I typed
+    the wrong `type:`".
+    """
 
     code = "llm.connector_unknown"
     level = Level.FATAL
@@ -129,18 +138,49 @@ class LlmConnectorUnknown(PlatformError):
         type_name: str,
         registered_types: list[str],
         *,
+        provider_name: str | None = None,
         where: str = "llm.registry.get",
     ) -> None:
-        super().__init__(
-            message=(
+        registered_sorted = sorted(registered_types)
+        if provider_name is not None:
+            if not type_name:
+                cause_phrase = (
+                    f"provider {provider_name!r} in platform.yaml is "
+                    f"missing its `type:` field"
+                )
+            else:
+                cause_phrase = (
+                    f"provider {provider_name!r} in platform.yaml has "
+                    f"an unknown value for `type:` ({type_name!r})"
+                )
+            message = (
+                f"{cause_phrase}. Registered types: {registered_sorted}. "
+                f"Set `llm_providers.{provider_name}.type` in platform.yaml "
+                f"to one of the registered types (usually {provider_name!r} — "
+                f"the `type:` field defaults to the provider key when omitted)."
+            )
+        elif not type_name:
+            message = (
+                f"Missing connector `type` (empty). Registered types: "
+                f"{registered_sorted}. Set `llm_providers.<name>.type` "
+                f"in platform.yaml."
+            )
+        else:
+            message = (
                 f"Unknown connector type {type_name!r}. Registered types: "
-                f"{sorted(registered_types)}"
-            ),
+                f"{registered_sorted}. Set `llm_providers.<name>.type` "
+                f"in platform.yaml to one of the registered types."
+            )
+        detail: dict[str, object] = {
+            "type": type_name,
+            "registered_types": registered_sorted,
+        }
+        if provider_name is not None:
+            detail["provider"] = provider_name
+        super().__init__(
+            message=message,
             where=where,
-            detail={
-                "type": type_name,
-                "registered_types": sorted(registered_types),
-            },
+            detail=detail,
         )
 
 

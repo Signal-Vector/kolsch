@@ -78,7 +78,12 @@ async def build_llm(
         )
 
     # registry.get raises LlmConnectorUnknown if the type is missing.
-    connector = registry.get(provider_config.type)
+    # Thread `provider_name` so the error names the offending
+    # `llm_providers.<name>` entry and points at `platform.yaml`.
+    connector = registry.get(
+        provider_config.type,
+        provider_name=provider_name,
+    )
 
     # Resolve the API key when the provider wants one. Null-key
     # providers (Llama-local) skip this entire branch.

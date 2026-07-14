@@ -54,15 +54,26 @@ def register(
     _REGISTRY[type_name] = connector_cls
 
 
-def get(type_name: str) -> ProviderConnector:
+def get(
+    type_name: str,
+    *,
+    provider_name: str | None = None,
+) -> ProviderConnector:
     """Return a provider instance for `type_name`.
 
     Raised when `platform.yaml`'s `llm_providers.<X>.type` doesn't
-    match any registered provider — this is what surfaces a typo'd
-    provider type to the user.
+    match any registered provider — this is what surfaces a typo'd or
+    missing provider type to the user.
 
     Args:
         type_name: The registered provider type string.
+        provider_name: The `llm_providers.<key>` dictionary key this
+            lookup is on behalf of. When supplied, the raised
+            `LlmConnectorUnknown`'s message names the offending
+            provider and points at `platform.yaml` — the caller (e.g.
+            `build_llm`) is the only site that knows this, so it is
+            threaded through here so the registry-side raise still
+            carries it.
 
     Returns:
         A freshly-constructed provider instance.
@@ -75,6 +86,7 @@ def get(type_name: str) -> ProviderConnector:
         raise LlmConnectorUnknown(
             type_name=type_name,
             registered_types=list(_REGISTRY),
+            provider_name=provider_name,
         )
     return cls()
 

@@ -741,9 +741,14 @@ def _provider_configs_from_payload(
     for name, raw in (payload.get("llm_providers") or {}).items():
         if not isinstance(raw, dict):
             continue
+        # `type:` defaults to the provider dictionary key (e.g. an
+        # entry keyed `opencode` with no explicit `type:` resolves to
+        # the `opencode` connector). Explicit `type:` still wins —
+        # only set it when the connector type differs from the key
+        # you chose. See bug-055.
         out[name] = ProviderConfig(
             name=name,
-            type=raw.get("type", ""),
+            type=raw.get("type") or name,
             api_key_secret=raw.get("api_key_secret"),
             base_url=raw.get("base_url"),
             timeout_seconds=raw.get("timeout_seconds"),

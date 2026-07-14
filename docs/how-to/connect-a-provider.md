@@ -23,6 +23,33 @@ Three things happen atomically when `kolsch connect` succeeds:
 A failed connect leaves both files untouched — writes only happen
 after validation and discovery both succeed.
 
+### The `type:` field convention
+
+`llm_providers.<name>.type` names the connector to use for the
+entry. When omitted, it **defaults to the dictionary key**, so an
+entry keyed `opencode` with no explicit `type:` resolves to the
+`opencode` connector automatically. Set `type:` explicitly only
+when the connector type differs from the key you chose — for
+example, if you want two separate OpenCode-shaped providers
+against different endpoints:
+
+```yaml
+llm_providers:
+  opencode_local:
+    type: opencode              # explicit — the key is `opencode_local`
+    base_url: http://127.0.0.1:8000/v1
+    api_key_secret: OPENCODE_LOCAL_API_KEY
+  opencode_prod:
+    type: opencode              # explicit — the key is `opencode_prod`
+    base_url: https://opencode.example.com/v1
+    api_key_secret: OPENCODE_PROD_API_KEY
+```
+
+If the `type:` value doesn't match a registered connector, the
+runtime raises `llm.connector_unknown` naming the offending
+provider entry and pointing back at `platform.yaml`. Run
+`kolsch providers` to see the registered types.
+
 ## The two shipping connectors
 
 **`openrouter`** — one API key routes to Anthropic, OpenAI, Meta,
@@ -180,6 +207,7 @@ provider, or the next agent load will fail with
 | `unknown provider: 'anthropic'` | Planned but not shipping | Use `openrouter` for Claude |
 | Agent fails with `model.authentication_failed` at runtime | Secret rotated after connect | Re-run `kolsch connect <provider>` |
 | Agent fails with `llm.provider_not_configured` at runtime | Agent references a `provider:` not in `llm_providers` | `kolsch providers` to see what's connected; fix the agent's `model:` |
+| Agent fails with `llm.connector_unknown` naming a provider | `llm_providers.<name>.type` is set to something unregistered (typo) | Fix the `type:` value in `platform.yaml` to a registered type, or delete the line to fall back to the dictionary key (see the `type:` convention above) |
 
 ## A worked example — OpenRouter + Claude, from empty
 

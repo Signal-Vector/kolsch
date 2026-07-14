@@ -38,6 +38,36 @@ if TYPE_CHECKING:
 __all__ = ["AgentRunner"]
 
 
+def _extract_nested_error(failed_event: Any) -> dict[str, Any] | None:
+    """Extract `{type, message, event_id}` from a `thread.exchange_failed` event.
+
+    The engine records the terminal typed error as a
+    :class:`schemas.error.Error` envelope on the event's
+    ``data["error"]``. Bug-055: the workflow executor's
+    `workflow.node.failed` payload includes this on `nested_error`
+    so the real cause (e.g. `llm.connector_unknown`) surfaces
+    without operators grepping the spawned agent's sub-session
+    JSONL for the `ev_...` id. Returns `None` when the shape doesn't
+    match — the caller falls back to the exception message alone.
+    """
+    if failed_event is None:
+        return None
+    data = getattr(failed_event, "data", None) or {}
+    error = data.get("error") if isinstance(data, dict) else None
+    if not isinstance(error, dict):
+        return None
+    err_type = error.get("type")
+    err_message = error.get("message")
+    if not isinstance(err_type, str) or not isinstance(err_message, str):
+        return None
+    event_id = getattr(failed_event, "event_id", None)
+    return {
+        "type": err_type,
+        "message": err_message,
+        "event_id": str(event_id) if event_id is not None else None,
+    }
+
+
 class AgentRunner:
     """Runner for `kolsch/nodes/agent` — spawns a child agent session.
 
@@ -295,11 +325,16 @@ class AgentRunner:
             # An engine that raised (rare — `execute_stream` normally
             # yields the failed event as the last item) still lands
             # here so we can remap. Preserve the original semantic:
-            # `AgentExecutionError` → `WorkflowNodeFailed`.
+            # `AgentExecutionError` → `WorkflowNodeFailed`. Bug-055:
+            # thread the child's typed error onto the wrapper so the
+            # executor's `workflow.node.failed` emit carries the real
+            # cause without operators having to grep the spawned
+            # session's JSONL for the `ev_...` id.
             raise WorkflowNodeFailed(
                 node=node_name,
                 invocation_id=str(ctx.invocation_id),
                 cause=exc,
+                nested_error=_extract_nested_error(exc.failed_event),
             ) from exc
 
         if failed_event is not None:
@@ -309,6 +344,7 @@ class AgentRunner:
                 node=node_name,
                 invocation_id=str(ctx.invocation_id),
                 cause=translated,
+                nested_error=_extract_nested_error(failed_event),
             ) from translated
 
         # Step 8: extract structured output. `agent.message.data`

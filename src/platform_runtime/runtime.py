@@ -307,9 +307,14 @@ async def bootstrap_runtime(
     for provider_name, raw in (raw_llm or {}).items():
         if not isinstance(raw, dict):
             continue
+        # `type:` defaults to the provider dictionary key (e.g. an
+        # entry keyed `opencode` with no explicit `type:` resolves to
+        # the `opencode` connector). Explicit `type:` still wins —
+        # only set it when the connector type differs from the key
+        # you chose. See bug-055.
         llm_providers_config[provider_name] = ProviderConfig(
             name=provider_name,
-            type=raw.get("type", ""),
+            type=raw.get("type") or provider_name,
             api_key_secret=raw.get("api_key_secret"),
             base_url=raw.get("base_url"),
             timeout_seconds=raw.get("timeout_seconds"),

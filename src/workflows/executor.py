@@ -1491,6 +1491,25 @@ class IterativeExecutor:
                 self._store.update_status(run_id, WorkflowRunStatus.WAITING_FOR_INPUT)
                 return WorkflowRunStatus.WAITING_FOR_INPUT
             except Exception as exc:  # noqa: BLE001 — record + abort
+                failure_payload: dict[str, Any] = {
+                    "node_name": node_name,
+                    "invocation_id": str(inv_id),
+                    "error_class": type(exc).__name__,
+                    "message": str(exc),
+                }
+                # Bug-055: `WorkflowNodeFailed.nested_error` (populated
+                # by the agent runner from the spawned agent's
+                # `thread.exchange_failed` event) carries the terminal
+                # typed error's `type` + `message` + `event_id`. Surface
+                # it alongside the wrapper so the real cause (e.g.
+                # `llm.connector_unknown`) is visible on
+                # `workflow.node.failed` without operators grepping
+                # sub-session JSONLs. The existing `ev_...` linkage
+                # (`parent_event_id`, `event_id` on the nested_error)
+                # is preserved.
+                nested = getattr(exc, "nested_error", None)
+                if isinstance(nested, dict):
+                    failure_payload["nested_error"] = dict(nested)
                 failed_id = self._emit_event(
                     WorkflowNodeFailedEvent(
                         workflow_run_id=run_id,
@@ -1498,12 +1517,7 @@ class IterativeExecutor:
                         parent_event_id=self._node_started_event_id.get(inv_id),
                         invocation_id=inv_id,
                         node_name=node_name,
-                        payload={
-                            "node_name": node_name,
-                            "invocation_id": str(inv_id),
-                            "error_class": type(exc).__name__,
-                            "message": str(exc),
-                        },
+                        payload=failure_payload,
                     ),
                 )
                 self._last_event_id = self._emit_event(
@@ -2036,6 +2050,18 @@ class IterativeExecutor:
         Mirrors the sequential body's failure-path emit;
         `parent_event_id` chains to the node's started event.
         """
+        failure_payload: dict[str, Any] = {
+            "node_name": pending.node_name,
+            "invocation_id": str(pending.inv_id),
+            "error_class": type(exc).__name__,
+            "message": str(exc),
+        }
+        # Bug-055: surface the nested typed error from a spawned
+        # agent's `thread.exchange_failed` event alongside the
+        # wrapper. See the sequential emit for the full rationale.
+        nested = getattr(exc, "nested_error", None)
+        if isinstance(nested, dict):
+            failure_payload["nested_error"] = dict(nested)
         async with self._emit_lock:
             failed_id = self._emit_event(
                 WorkflowNodeFailedEvent(
@@ -2044,12 +2070,7 @@ class IterativeExecutor:
                     parent_event_id=self._node_started_event_id.get(pending.inv_id),
                     invocation_id=pending.inv_id,
                     node_name=pending.node_name,
-                    payload={
-                        "node_name": pending.node_name,
-                        "invocation_id": str(pending.inv_id),
-                        "error_class": type(exc).__name__,
-                        "message": str(exc),
-                    },
+                    payload=failure_payload,
                 ),
             )
         self._last_event_id = failed_id

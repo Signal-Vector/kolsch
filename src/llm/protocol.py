@@ -170,6 +170,15 @@ class ProviderConfig:
     and provider-specific keys under `extras` — for example,
     OpenRouter's `serves_as_metadata_source`. Providers receive this
     in `build_llm` and may read from `extras` directly.
+
+    `type` defaults to the dictionary key at both construction sites
+    (`platform_runtime.runtime` and `cli.llm_commands`) so an entry
+    keyed `opencode` with no explicit `type:` resolves to the
+    `opencode` connector. Set `type:` explicitly only when the
+    connector type differs from the key you chose (e.g. two OpenCode
+    endpoints keyed `opencode_local` / `opencode_prod`, both with
+    `type: opencode`). See bug-055 and
+    `docs/how-to/connect-a-provider.md#the-type-field-convention`.
     """
 
     name: str

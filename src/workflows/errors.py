@@ -1330,7 +1330,17 @@ class BashNonZeroExit(WorkflowRuntimeError):
 
 
 class WorkflowNodeFailed(WorkflowRuntimeError):
-    """Raised when a node's runner raises during dispatch."""
+    """Raised when a node's runner raises during dispatch.
+
+    `nested_error` (optional) carries the terminal typed error from a
+    spawned sub-context (e.g. an agent node's `thread.exchange_failed`
+    event `data.error` envelope) so the executor can surface the real
+    cause on `workflow.node.failed` without operators having to grep
+    the spawned session's JSONL for the `ev_...` id. Shape:
+    `{"type": str, "message": str, "event_id": str | None}`. When
+    absent, the executor falls back to the exception message alone.
+    See bug-055.
+    """
 
     caller_message: ClassVar[str] = (
         "A workflow step failed. Share the run ID with your engineer."
@@ -1343,10 +1353,12 @@ class WorkflowNodeFailed(WorkflowRuntimeError):
         node: str,
         invocation_id: str,
         cause: BaseException | None = None,
+        nested_error: dict[str, Any] | None = None,
     ) -> None:
         self.node = node
         self.invocation_id = invocation_id
         self.cause = cause
+        self.nested_error = nested_error
         problem = f"node {node!r} (invocation {invocation_id!r}) failed"
         if cause is not None:
             problem = f"{problem}: {cause!s}"
