@@ -19,7 +19,7 @@ from __future__ import annotations
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, get_args
+from typing import TYPE_CHECKING, Any, Literal, get_args
 
 from pydantic import BaseModel, ConfigDict, SkipValidation
 
@@ -172,6 +172,28 @@ class ToolDefinition:
     """spec-001: names of tool services the dispatcher must inject on
     `ToolContext` before this tool runs. Empty by default; the
     dispatcher only populates fields listed here."""
+
+    target_shape: Literal["auto", "json"] = "auto"
+    """bug-029: hint for `_extract_target_from_args` on how to
+    render the approval widget's `Args` line for this tool.
+
+    - ``"auto"`` (default) — bug-025's priority walk:
+      first stringy attr in
+      :data:`tools.dispatch._TARGET_ARG_PRIORITY`
+      (``path`` / ``command`` / ``url`` / ``ref`` / ``run_id``)
+      wins, with a truncated ``model_dump_json`` fallback when
+      none matches. Correct for tools whose args are conventionally
+      one load-bearing field (``bash``, ``read_file``,
+      ``fetch_website``).
+    - ``"json"`` — skip the priority walk; always return the
+      full ``model_dump_json(exclude_defaults=True)`` truncated to
+      200 chars with a ``…`` suffix if longer. Used by the
+      per-workflow virtual tools built in
+      :func:`workflows.tool_schema.build_virtual_tool_definitions`
+      whose args model is arbitrary and multi-field — showing
+      just the ``url`` (or first priority attr) misleads the user
+      about what the tool is actually being called with.
+    """
 
     @property
     def action_name(self) -> str:

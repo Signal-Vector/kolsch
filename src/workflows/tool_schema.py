@@ -400,6 +400,14 @@ def build_virtual_tool_definitions(
                 # every virtual is gated on the SAME permission the
                 # generic tool is (see ``authz_action`` docstring).
                 action=authz_action,
+                # bug-029: virtual workflow tools have arbitrary
+                # multi-field args models — the bug-025 priority
+                # walk would short-circuit on ``url`` (or another
+                # priority attr) and hide the rest of the call
+                # shape from the user. Opt into the JSON dump path
+                # so the approval widget's ``Args`` line shows the
+                # full call shape (``{"url": "…", "limit": 5}``).
+                target_shape="json",
             ),
         )
     return defs

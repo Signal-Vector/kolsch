@@ -245,7 +245,9 @@ async def dispatch_tool(
     # falls back to `action`, so existing rules with action-namespace
     # `what` patterns still fire as before — see
     # RuleBasedAuthorizationProvider.allow.
-    target = _extract_target_from_args(validated_args)
+    target = _extract_target_from_args(
+        validated_args, target_shape=defn.target_shape,
+    )
     # Assemble the layers tuple in proximate-caller order:
     # workflow → agent → bundle. The provider's docstring
     # (src/providers/authz.py:813-822) specifies workflow FIRST when
@@ -390,11 +392,21 @@ single-line ``Args`` row stays legible.
 _TARGET_ARG_FALLBACK_CHAR_LIMIT = 80
 """Truncation cap for the ``model_dump_json`` fallback (bug-025 AC #11)."""
 
+_TARGET_ARG_JSON_CHAR_LIMIT = 200
+"""bug-029 AC #3: truncation cap for the opt-in ``target_shape="json"``
+path. Chosen so a typical virtual-workflow call
+(``{"url": "https://…", "limit": 25}``) renders legibly on one line
+in the approval widget while capping pathological long-args cases."""
 
-def _extract_target_from_args(validated_args: object) -> str | None:
+
+def _extract_target_from_args(
+    validated_args: object,
+    *,
+    target_shape: str = "auto",
+) -> str | None:
     """Return the conventional target string from a tool's args, if any.
 
-    bug-025 AC #10 + #11:
+    bug-025 AC #10 + #11 (``"auto"`` — the default):
 
     1. Priority walk — return the first stringy attr found on
        ``validated_args`` from :data:`_TARGET_ARG_PRIORITY`. Preserves
@@ -407,7 +419,29 @@ def _extract_target_from_args(validated_args: object) -> str | None:
        instead of an empty tail. Returns ``None`` only when the args
        model has literally no non-default content (rare — most tools
        declare at least one required field).
+
+    bug-029 AC #2 (``"json"``):
+
+    - Skip the priority walk entirely. Return
+      ``model_dump_json(exclude_defaults=True)`` truncated to 200
+      chars with a ``…`` suffix if longer. Used by per-workflow
+      virtual tools (whose args models are arbitrary multi-field
+      shapes) so the approval widget's ``Args`` row shows the full
+      call shape (``{"url": "…", "limit": 5}``) rather than just the
+      first priority-attr value.
+
+    Args:
+        validated_args: The Pydantic-validated args model instance.
+        target_shape: The `ToolDefinition.target_shape` hint —
+            ``"auto"`` (default, bug-025 behaviour) or ``"json"``
+            (bug-029, force the JSON dump path).
     """
+    if target_shape == "json":
+        return _dump_args_to_json(
+            validated_args,
+            char_limit=_TARGET_ARG_JSON_CHAR_LIMIT,
+        )
+
     for attr in _TARGET_ARG_PRIORITY:
         value = getattr(validated_args, attr, None)
         if isinstance(value, str):
@@ -417,22 +451,41 @@ def _extract_target_from_args(validated_args: object) -> str | None:
     # `exclude_defaults=True` so a tool with all-default args doesn't
     # render `"{}"` — that path returns `None` and the authz
     # matcher's action-namespace fallback kicks in as before.
+    return _dump_args_to_json(
+        validated_args,
+        char_limit=_TARGET_ARG_FALLBACK_CHAR_LIMIT,
+    )
+
+
+def _dump_args_to_json(
+    validated_args: object,
+    *,
+    char_limit: int,
+) -> str | None:
+    """Return ``model_dump_json(exclude_defaults=True)`` truncated to ``char_limit``.
+
+    Shared by both the bug-025 ``"auto"`` fallback and the bug-029
+    ``"json"`` opt-in. Truncation trims to ``char_limit - 1`` chars
+    then appends ``…`` for a total of ``char_limit`` chars. Returns
+    ``None`` when the args model exposes no ``model_dump_json``, when
+    the dump raises, or when the rendered payload is empty / ``"{}"``
+    (all-default args). Callers layer the priority-attr walk on top
+    for the ``"auto"`` path.
+    """
     dump = getattr(validated_args, "model_dump_json", None)
-    if callable(dump):
-        try:
-            rendered = dump(exclude_defaults=True)
-        except Exception:  # noqa: BLE001 — best-effort
-            return None
-        if isinstance(rendered, str) and rendered and rendered != "{}":
-            if len(rendered) > _TARGET_ARG_FALLBACK_CHAR_LIMIT:
-                # Trim to N-1 then append the ellipsis for a total of
-                # N chars — the widget's single-line row prefers a
-                # bounded length.
-                return (
-                    rendered[: _TARGET_ARG_FALLBACK_CHAR_LIMIT - 1] + "…"
-                )
-            return rendered
-    return None
+    if not callable(dump):
+        return None
+    try:
+        rendered = dump(exclude_defaults=True)
+    except Exception:  # noqa: BLE001 — best-effort
+        return None
+    if not isinstance(rendered, str) or not rendered or rendered == "{}":
+        return None
+    if len(rendered) > char_limit:
+        # Trim to N-1 then append the ellipsis for a total of N chars —
+        # the widget's single-line row prefers a bounded length.
+        return rendered[: char_limit - 1] + "…"
+    return rendered
 
 
 def authz_call(
