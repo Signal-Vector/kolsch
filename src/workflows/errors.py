@@ -42,6 +42,7 @@ __all__ = [
     "WorkflowAmbiguousStart",
     "WorkflowBindCollision",
     "WorkflowBindTypeMismatch",
+    "WorkflowBindUndefined",
     "WorkflowBranchMissingArm",
     "WorkflowBranchOnNonBranchable",
     "WorkflowBuiltinShadowed",
@@ -1408,6 +1409,69 @@ class WorkflowFileAccessDenied(WorkflowRuntimeError):
                 ),
             )
         )
+
+
+class WorkflowBindUndefined(WorkflowRuntimeError):
+    """Raised at run start when a fired-edge bind renders to a Jinja `Undefined`.
+
+    Bug-062 runtime guard. The workflows Jinja env uses Jinja's
+    default (silent) `Undefined` — a bare single-expression bind
+    `{{ nodes.X.missing }}` returns the raw `Undefined` object, which
+    then gets stored as the receiver's bound input and only explodes
+    much later during JSON serialization (`Unable to serialize
+    unknown type: <class 'jinja2.runtime.Undefined'>`), far from the
+    offending bind.
+
+    The B1 validator (`_check_jinja_refs`) catches most of these at
+    validate time for agent + builtin nodes; this runtime guard is
+    the safety net for genuinely-open node types (sub-workflows,
+    authored Python `@node`s) whose output schema can't be
+    introspected statically.
+
+    Scope: fired-edge bind rendering ONLY. Pruned-edge Undefined
+    (referenced from downstream node-config Jinja) is intentional
+    and MUST remain silent — that's why the guard lives inside
+    `_render_bound_inputs` (which already skips pruned edges).
+    """
+
+    caller_message: ClassVar[str] = (
+        "A workflow step's input references a value that doesn't exist "
+        "on the upstream step. Contact your engineer."
+    )
+    identifying_names_keys: ClassVar[tuple[str, ...]] = (
+        "from_node",
+        "to_node",
+        "bind_key",
+    )
+
+    def __init__(
+        self,
+        *,
+        from_node: str,
+        to_node: str,
+        bind_key: str,
+        expression: str,
+        source_fields: tuple[str, ...] | None = None,
+    ) -> None:
+        self.from_node = from_node
+        self.to_node = to_node
+        self.bind_key = bind_key
+        self.expression = expression
+        self.source_fields = source_fields
+        edge = f"{from_node}->{to_node}"
+        problem = (
+            f"edge {edge!r} bind {bind_key!r} expression {expression!r} "
+            f"rendered to Undefined (the source node {from_node!r} does "
+            f"not expose the referenced field)"
+        )
+        if source_fields is not None:
+            fields_repr = (
+                ", ".join(repr(f) for f in sorted(source_fields))
+                if source_fields
+                else "(none)"
+            )
+            problem = f"{problem}; known output fields: {fields_repr}"
+        super().__init__(_runtime_str(self, problem=problem))
 
 
 class WorkflowJinjaSecurityError(WorkflowRuntimeError):

@@ -133,10 +133,19 @@ registration.
 
 
 _OPEN_OUTPUT_CLASSES: tuple[type, ...] = (
-    AgentNodeDef,
     WorkflowNodeDef,
     CatalogNodeDef,
 )
+"""Node classes whose output schema is genuinely unknown at validate time.
+
+`AgentNodeDef` is deliberately absent — an agent node's outputs are
+declared in the agent YAML's `io.outputs` (or overridden inline via
+`AgentNodeDef.outputs`) and therefore resolvable via the catalog. See
+[`_output_field_set`][workflows.validator._output_field_set] for the
+agent-node resolution path. `WorkflowNodeDef` (sub-workflow) and
+`CatalogNodeDef` (authored Python) remain open — bug-062 B2's runtime
+guard backstops field typos on those.
+"""
 
 
 # ---------------------------------------------------------------------------
@@ -719,17 +728,84 @@ def _extract_nodes_refs(expression: str) -> list[tuple[str, str | None]]:
     return [(x, y) for (x, y) in pairs if not (y is None and x in nodes_x_y_sources)]
 
 
-def _output_field_set(node: Any) -> frozenset[str] | None:
+def _output_field_set(
+    node: Any,
+    *,
+    catalog: AssetCatalog | None = None,
+) -> frozenset[str] | None:
     """Return the known output-field set for a node.
 
-    Returns `None` when the schema is unconstrained (agent /
-    sub-workflow / authored Python) and the field-existence check
-    should pass-through.
+    Returns `None` when the schema is unconstrained (sub-workflow /
+    authored Python, or a catalog miss on an agent ref) and the
+    field-existence check should pass-through.
+
+    Bug-062 B1: `AgentNodeDef` is resolved via the catalog — an
+    agent node's outputs are declared in the agent YAML's
+    `io.outputs` (or overridden inline via `AgentNodeDef.outputs`).
+    Any failure to resolve (catalog miss, missing/malformed YAML,
+    absent `io.outputs`) degrades gracefully to `None` so the field
+    check falls back to open/`not_declared` for that node — the
+    validator never crashes on unresolvable refs (AC #4).
     """
+    if isinstance(node, AgentNodeDef):
+        return _agent_output_field_set(node, catalog=catalog)
     if isinstance(node, _OPEN_OUTPUT_CLASSES):
         return None
     cls = type(node)
     return _BUILTIN_OUTPUT_FIELDS.get(cls)
+
+
+def _agent_output_field_set(
+    node: AgentNodeDef,
+    *,
+    catalog: AssetCatalog | None,
+) -> frozenset[str] | None:
+    """Resolve an agent node's declared output field names.
+
+    Resolution order:
+
+    1. If `node.outputs` (per-invocation `AgentNodeDef.outputs`
+       override) is set, its keys ARE the output schema (the runner
+       replaces `config.io.outputs` wholesale with this dict — see
+       `workflows/builtins/agent.py` step 3).
+    2. Otherwise, look up the agent ref in the catalog and read the
+       agent YAML's `io.outputs` keys directly. This uses the
+       DECLARED outputs (not the assembled config) — cheap, no
+       resolver / prompt / model plumbing needed. Limitation: an
+       agent that inherits `io.outputs` from a parent via `extends`
+       is not covered here; that case falls back to open
+       (`None`) and B2's runtime guard remains the safety net.
+
+    Returns `None` (falls back to open) on any of: no catalog,
+    catalog miss, unreadable YAML, non-mapping top level, no `io.`
+    block, no `outputs` under `io`, or non-mapping `outputs`. The
+    validator never crashes on an unresolvable / malformed agent
+    reference — that's AC #4.
+    """
+    if node.outputs is not None:
+        return frozenset(node.outputs.outputs.keys())
+    if catalog is None:
+        return None
+    entry = catalog.lookup(node.agent, expected_type="agent")
+    if entry is None:
+        return None
+    from pathlib import Path  # noqa: PLC0415
+
+    from kolsch._yamlio import load  # noqa: PLC0415
+
+    try:
+        raw = load(Path(entry.path).read_text(encoding="utf-8"))
+    except Exception:  # noqa: BLE001 — defensive; graceful degradation per AC #4
+        return None
+    if not isinstance(raw, dict):
+        return None
+    io_block = raw.get("io")
+    if not isinstance(io_block, dict):
+        return None
+    outputs = io_block.get("outputs")
+    if not isinstance(outputs, dict):
+        return None
+    return frozenset(outputs.keys())
 
 
 def _check_jinja_refs(
@@ -743,8 +819,12 @@ def _check_jinja_refs(
     Walks the Jinja AST via the singleton sandbox env; the
     predecessor relationship is computed from graph-reachability (NOT
     edge-level `ref:`, which no longer exists).
+
+    Bug-062 B1: the catalog is now passed through to
+    `_check_value_for_refs` so agent-node references
+    (`nodes.<agent>.<field>`) can be field-checked against the
+    resolved agent's declared `io.outputs`.
     """
-    _ = catalog
     errors: list[WorkflowValidationError] = []
     warnings: list[WorkflowValidationWarning] = []
 
@@ -792,6 +872,7 @@ def _check_jinja_refs(
                     node_names=node_names,
                     workflow=workflow,
                     map_apply_targets=map_apply_targets,
+                    catalog=catalog,
                 )
             )
         if edge.when is not None:
@@ -804,6 +885,7 @@ def _check_jinja_refs(
                     node_names=node_names,
                     workflow=workflow,
                     map_apply_targets=map_apply_targets,
+                    catalog=catalog,
                 )
             )
         _ = target  # reserved for future field-typed-check work
@@ -823,6 +905,7 @@ def _check_jinja_refs(
                     node_names=node_names,
                     workflow=workflow,
                     map_apply_targets=map_apply_targets,
+                    catalog=catalog,
                 )
             )
         # Per-type Jinja-evaluable fields.
@@ -837,6 +920,7 @@ def _check_jinja_refs(
                     node_names=node_names,
                     workflow=workflow,
                     map_apply_targets=map_apply_targets,
+                    catalog=catalog,
                 )
             )
 
@@ -877,6 +961,7 @@ def _check_value_for_refs(
     node_names: set[str],
     workflow: Workflow,
     map_apply_targets: set[str],
+    catalog: AssetCatalog | None = None,
 ) -> list[WorkflowValidationError]:
     """Inspect `value` for `nodes.<X>.<Y>` refs and return any findings.
 
@@ -938,7 +1023,7 @@ def _check_value_for_refs(
         if y_field is None:
             continue  # bare `nodes.X` access — pass.
         source_node = workflow.nodes[x_name]
-        output_fields = _output_field_set(source_node)
+        output_fields = _output_field_set(source_node, catalog=catalog)
         if output_fields is None:
             # Open schema (agent / sub-workflow / CatalogNodeDef). For
             # CatalogNodeDef we can't introspect the .py at v1 — flag

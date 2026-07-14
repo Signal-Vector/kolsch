@@ -42,6 +42,7 @@ from workflows.errors import (
     BashNonZeroExit,
     NodeTypeNotImplemented,
     WorkflowBindTypeMismatch,
+    WorkflowBindUndefined,
     WorkflowExtendsDepthExceeded,
     WorkflowInputInvalid,
     WorkflowNodeFailed,
@@ -1335,7 +1336,71 @@ class IterativeExecutor:
                 continue
 
             # Render this node's bound inputs from inbound edges.
-            bound_inputs = self._render_bound_inputs(node_name)
+            # Bug-062 B2: `_render_bound_inputs` may raise
+            # `WorkflowBindUndefined` (a fired-edge bind renders to
+            # a Jinja `Undefined`) or `WorkflowJinjaSecurityError`
+            # (sandbox-blocked expression). Both are handled below
+            # by minting an invocation id + emitting `started`
+            # (empty inputs marker) then routing through the same
+            # `workflow.node.failed` + `workflow.run.failed` path
+            # the runner-invoke failure arm uses. This keeps the
+            # terminal serializable — an unserializable `Undefined`
+            # never enters a payload (see bug-062 AC #9).
+            try:
+                bound_inputs = self._render_bound_inputs(node_name)
+            except Exception as render_exc:  # noqa: BLE001 — record + abort
+                inv_id = InvocationId(f"inv_{uuid.uuid4()}")
+                started_id = self._emit_event(
+                    WorkflowNodeStartedEvent(
+                        workflow_run_id=run_id,
+                        trace_id=self._run.trace_id,
+                        parent_event_id=self._last_event_id,
+                        invocation_id=inv_id,
+                        node_name=node_name,
+                        payload={
+                            "node_name": node_name,
+                            "invocation_id": str(inv_id),
+                            "type": _node_type_ref(node_def),
+                            "inputs": {},
+                            "node_config_preview": _config_preview_for(node_def),
+                            "caller_chain": list(
+                                getattr(self._run, "caller_chain", ()) or ()
+                            ),
+                        },
+                    ),
+                )
+                self._last_event_id = started_id
+                self._node_started_event_id[inv_id] = started_id
+                failed_id = self._emit_event(
+                    WorkflowNodeFailedEvent(
+                        workflow_run_id=run_id,
+                        trace_id=self._run.trace_id,
+                        parent_event_id=started_id,
+                        invocation_id=inv_id,
+                        node_name=node_name,
+                        payload={
+                            "node_name": node_name,
+                            "invocation_id": str(inv_id),
+                            "error_class": type(render_exc).__name__,
+                            "message": str(render_exc),
+                        },
+                    ),
+                )
+                self._last_event_id = self._emit_event(
+                    WorkflowRunFailedEvent(
+                        workflow_run_id=run_id,
+                        trace_id=self._run.trace_id,
+                        parent_event_id=failed_id,
+                        payload={
+                            "reason": (
+                                f"node {node_name!r} raised "
+                                f"{type(render_exc).__name__}"
+                            ),
+                        },
+                    ),
+                )
+                self._cleanup_waiting_at(run_dir)
+                return WorkflowRunStatus.FAILED
 
             # Sub-workflow resume cascade. When the resume entry
             # recorded this node as an OPEN workflow-node invocation
@@ -1754,10 +1819,56 @@ class IterativeExecutor:
                     ready_now.append(node_name)
 
                 # Dispatch every ready node as a task.
+                render_failure: (
+                    tuple[str, InvocationId, Any, BaseException] | None
+                ) = None
                 for node_name in ready_now:
-                    pending = await self._prepare_concurrent_dispatch(
-                        node_name=node_name, run_id=run_id
-                    )
+                    try:
+                        pending = await self._prepare_concurrent_dispatch(
+                            node_name=node_name, run_id=run_id
+                        )
+                    except Exception as render_exc:  # noqa: BLE001
+                        # Bug-062 B2: `_render_bound_inputs` inside
+                        # dispatch prep raised (e.g. a fired-edge
+                        # bind rendered to Undefined and tripped
+                        # `WorkflowBindUndefined`). Emit a synthetic
+                        # `started`/`failed`/`run.failed` triple so
+                        # the terminal is serializable and mirrors
+                        # the sequential-path shape.
+                        inv_id_synth = InvocationId(f"inv_{uuid.uuid4()}")
+                        node_def_synth = self._workflow.nodes[node_name]
+                        async with self._emit_lock:
+                            started_id_synth = self._emit_event(
+                                WorkflowNodeStartedEvent(
+                                    workflow_run_id=run_id,
+                                    trace_id=self._run.trace_id,
+                                    parent_event_id=self._last_event_id,
+                                    invocation_id=inv_id_synth,
+                                    node_name=node_name,
+                                    payload={
+                                        "node_name": node_name,
+                                        "invocation_id": str(inv_id_synth),
+                                        "type": _node_type_ref(node_def_synth),
+                                        "inputs": {},
+                                        "node_config_preview": _config_preview_for(
+                                            node_def_synth
+                                        ),
+                                        "caller_chain": list(
+                                            getattr(self._run, "caller_chain", ())
+                                            or ()
+                                        ),
+                                    },
+                                ),
+                            )
+                        self._last_event_id = started_id_synth
+                        self._node_started_event_id[inv_id_synth] = started_id_synth
+                        render_failure = (
+                            node_name,
+                            inv_id_synth,
+                            started_id_synth,
+                            render_exc,
+                        )
+                        break
                     if pending is None:
                         # when-gate skipped or pruned — already updated
                         # the bookkeeping; no task to spawn.
@@ -1767,6 +1878,43 @@ class IterativeExecutor:
                     )
                     in_flight[task] = pending
                     self._peak_in_flight = max(self._peak_in_flight, len(in_flight))
+
+                if render_failure is not None:
+                    (
+                        rf_node_name,
+                        rf_inv_id,
+                        rf_started_id,
+                        rf_exc,
+                    ) = render_failure
+                    async with self._emit_lock:
+                        rf_failed_id = self._emit_event(
+                            WorkflowNodeFailedEvent(
+                                workflow_run_id=run_id,
+                                trace_id=self._run.trace_id,
+                                parent_event_id=rf_started_id,
+                                invocation_id=rf_inv_id,
+                                node_name=rf_node_name,
+                                payload={
+                                    "node_name": rf_node_name,
+                                    "invocation_id": str(rf_inv_id),
+                                    "error_class": type(rf_exc).__name__,
+                                    "message": str(rf_exc),
+                                },
+                            ),
+                        )
+                    self._last_event_id = rf_failed_id
+                    await self._cancel_in_flight_and_emit_failed(
+                        in_flight=in_flight,
+                        run_id=run_id,
+                        reason="sibling_failure",
+                    )
+                    await self._emit_run_failed_concurrent(
+                        node_name=rf_node_name,
+                        exc=rf_exc,
+                        run_id=run_id,
+                    )
+                    self._cleanup_waiting_at(run_dir)
+                    return WorkflowRunStatus.FAILED
 
                 # Nothing left to do? Terminal success.
                 if not in_flight:
@@ -2350,7 +2498,30 @@ class IterativeExecutor:
         therefore sees only the fired inbound edges' binds;
         downstream Jinja that references a pruned edge's bind key
         resolves to `Undefined`.
+
+        Bug-062 B2: after rendering each fired-edge bind, if the
+        rendered value is a Jinja `Undefined` (the env uses Jinja's
+        silent Undefined so a missing field renders to a raw
+        `Undefined` object that would otherwise be stored and later
+        crash JSON serialization), raise a descriptive
+        [`WorkflowBindUndefined`][workflows.errors.WorkflowBindUndefined]
+        naming the edge, key, and expression. The guard is scoped
+        to fired-edge bind rendering here ONLY — pruned edges are
+        already skipped above, and node-config Jinja rendering
+        (which intentionally allows Undefined for pruned-edge bind
+        keys) is untouched. Only the top-level rendered value is
+        inspected; Undefined nested inside a rendered list/dict is
+        not caught here (the reported crash is the bare-expression
+        shape, and recursive walking would risk touching legitimate
+        Undefined patterns downstream).
         """
+        # Local import: `jinja2.Undefined` is the env's silent
+        # missing-value sentinel; the sandbox subclass in
+        # `workflows.jinja_env` doesn't customise the class, so
+        # `isinstance(rendered, jinja2.Undefined)` is the correct
+        # probe for the bug-062 guard.
+        from jinja2 import Undefined as _JinjaUndefined  # noqa: PLC0415
+
         bound: dict[str, Any] = {}
         if self._workflow.graph is None:
             return bound
@@ -2360,10 +2531,46 @@ class IterativeExecutor:
             if (edge.from_, edge.to) in self._pruned_edges:
                 continue
             for key, value in edge.binds.items():
-                bound[key] = (
+                rendered = (
                     self._render_jinja(value) if _is_jinja_marked(value) else value
                 )
+                if isinstance(rendered, _JinjaUndefined):
+                    raise WorkflowBindUndefined(
+                        from_node=edge.from_,
+                        to_node=edge.to,
+                        bind_key=key,
+                        expression=str(value),
+                        source_fields=self._known_output_fields(edge.from_),
+                    )
+                bound[key] = rendered
         return bound
+
+    def _known_output_fields(self, source_node_name: str) -> tuple[str, ...] | None:
+        """Best-effort output-field discovery for a source node at runtime.
+
+        Used to enrich `WorkflowBindUndefined` messages. Returns
+        `None` when the source node's schema is genuinely open
+        (sub-workflow, authored Python) OR when the source ran and
+        we can just read its captured keys. Prefers the LIVE
+        `_captured` view when the source has already run (source of
+        truth — reflects the actual output shape); otherwise falls
+        back to the static validator's `_output_field_set` for a
+        best-effort declared-fields hint.
+        """
+        captured = self._captured.get(source_node_name)
+        if captured is not None:
+            return tuple(sorted(captured.keys()))
+        source_def = self._workflow.nodes.get(source_node_name)
+        if source_def is None:
+            return None
+        # Local import to avoid a validator ↔ executor cycle at module
+        # import time.
+        from workflows.validator import _output_field_set  # noqa: PLC0415
+
+        fields = _output_field_set(source_def, catalog=self._catalog)
+        if fields is None:
+            return None
+        return tuple(sorted(fields))
 
     # ------------------------------------------------------------------
     # Branch dispatch and pruning bookkeeping.
