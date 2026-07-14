@@ -14,6 +14,8 @@ the output and hands it to the framework via
 from __future__ import annotations
 
 import json
+import logging
+import os
 from typing import TYPE_CHECKING, Any
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -23,6 +25,32 @@ from schemas import EventType
 
 if TYPE_CHECKING:
     from schemas import Event
+
+
+_log = logging.getLogger("engine.assembly")
+
+# bug-064: dedup key for "log once per (thread_id, span_id)". Bounded
+# to keep long-lived processes from growing without limit — the cap is
+# generous (a healthy process should hit this path effectively never),
+# and once the cap is reached we forget the oldest entry FIFO-style.
+_PAIRING_WARN_DEDUP: set[tuple[str, str]] = set()
+_PAIRING_WARN_DEDUP_MAX = 1024
+
+
+def _in_test_mode() -> bool:
+    """True when the current process is running under pytest.
+
+    Uses the standard ``PYTEST_CURRENT_TEST`` environment variable
+    pytest injects for every test invocation — no new project-level
+    flag introduced. Falls back to inspecting ``sys.modules`` so a
+    caller that imports assembly outside a running test (e.g. a
+    conftest fixture setup step) still sees the honest answer.
+    """
+    if os.environ.get("PYTEST_CURRENT_TEST"):
+        return True
+    import sys  # noqa: PLC0415
+
+    return "pytest" in sys.modules
 
 
 # feat-054 Phase 2: bump from "1" → "2" because the projection table
@@ -225,9 +253,11 @@ def _project_events(
             if str(event.event_id) in revoked:
                 continue
             summary = event.data.get("summary") or {}
-            if not summary.get("compacted_event_ids") and not summary.get(
-                "summary_text"
-            ) and not (event.data.get("compacted_event_ids") or []):
+            if (
+                not summary.get("compacted_event_ids")
+                and not summary.get("summary_text")
+                and not (event.data.get("compacted_event_ids") or [])
+            ):
                 # No-op payload (short session).
                 continue
             messages.append(
@@ -294,7 +324,262 @@ def _project_events(
                 ),
             )
         # All other event types: not projected.
-    return messages
+
+    # bug-064 — post-projection bidirectional pairing backstop.
+    # spec-068 is the primary defense (the engine reconciles orphans
+    # on resume); this check catches anything that still slipped
+    # through. On well-formed input it is a byte-identical no-op.
+    return _enforce_pairing_invariant(messages, events)
+
+
+# ---------------------------------------------------------------------------
+# bug-064 — Post-projection pairing backstop
+# ---------------------------------------------------------------------------
+
+
+def _enforce_pairing_invariant(
+    messages: list[Message],
+    events: list[Event],
+) -> list[Message]:
+    """Verify assistant ``tool_calls`` ids pair adjacently with tool msgs.
+
+    The provider invariant this check enforces (strict adjacency, per
+    the OpenAI chat-completions contract):
+
+    * When an assistant message carries ``tool_calls=[id1..idN]``, the
+      immediately-following contiguous run of ``role="tool"`` messages
+      must carry every ``tool_call_id`` in that set (order within the
+      run may vary). Any id from ``tool_calls`` that is missing from
+      that adjacent run is an orphan-call — even if some later,
+      non-adjacent tool message happens to carry the id, the provider
+      400s because a non-tool message (user / assistant) broke the run.
+    * A ``role="tool"`` message must sit inside the run immediately
+      following an assistant whose ``tool_calls[]`` contains its
+      ``tool_call_id``. A tool message with no preceding assistant
+      tool_calls run — or one whose id isn't in that run's owning
+      assistant — is an orphan-result.
+
+    Existence-based checks (was: "matches SOMEWHERE later") let the
+    wedge shape ``[assistant(tool_calls=[t1]), user, tool(t1)]`` slip
+    through; the real provider still 400s that shape because a user
+    message broke the adjacency requirement. The primary defense is
+    spec-068's engine-side reconciliation running BEFORE the trigger
+    user.message emit — this check is the belt-and-braces backstop
+    that would surface any future regression loudly.
+
+    Violations of either direction cause the provider to 400 the
+    entire request.
+
+    Behaviour on violation:
+
+    * **Test mode** (``PYTEST_CURRENT_TEST`` set OR ``pytest`` in
+      ``sys.modules``): raise ``AssertionError`` so an engine bug
+      surfaces loudly in CI and local dev.
+    * **Production**: log ONCE per (thread_id, leaf_event_id) at
+      WARNING with enough detail to diagnose, and drop the
+      offending unpaired message(s) from the returned list. The
+      durable event log is never mutated; events are never
+      reordered; no events are synthesized.
+
+    "Drop" choice:
+
+    * Orphan assistant ``tool_calls`` id → remove that id from the
+      ``tool_calls[]`` array (siblings survive). If the list ends up
+      empty, drop the whole assistant message.
+    * Orphan ``role="tool"`` message → drop just that tool message.
+
+    Well-formed input is returned unchanged (byte-identical) — this
+    is Acceptance Criterion 2 (determinism).
+    """
+    # Single linear walk over the projected message list. For each
+    # assistant with tool_calls, consume the contiguous run of tool
+    # messages that immediately follows; any id in the assistant's
+    # tool_calls[] that isn't covered by that adjacent run is an
+    # orphan-call. Any tool message that lands outside such a run
+    # (either standalone or under an assistant whose tool_calls[]
+    # doesn't include its id) is an orphan-result.
+    orphan_call_ids_by_msg: dict[int, set[str]] = {}
+    orphan_tool_msg_indexes: set[int] = set()
+
+    i = 0
+    n = len(messages)
+    while i < n:
+        msg = messages[i]
+        if msg.role == "assistant" and msg.tool_calls:
+            declared_ids = {str(tc.get("id", "")) for tc in msg.tool_calls}
+            # Consume the immediately-following contiguous run of tool
+            # messages. Their order relative to declared_ids doesn't
+            # matter; the provider only requires that every declared id
+            # appears in the run.
+            j = i + 1
+            covered_ids: set[str] = set()
+            while j < n and messages[j].role == "tool":
+                tid = messages[j].tool_call_id or ""
+                if tid and tid in declared_ids:
+                    covered_ids.add(tid)
+                else:
+                    # A tool message inside the run whose id isn't part
+                    # of THIS assistant's tool_calls[] is an
+                    # orphan-result — the provider would 400 on the
+                    # stray id even though it sits adjacent to some
+                    # assistant with tool_calls[].
+                    orphan_tool_msg_indexes.add(j)
+                j += 1
+            # Any declared id not covered by the adjacent run is an
+            # orphan-call. Empty-string ids can never match.
+            missing = {tid for tid in declared_ids if not tid or tid not in covered_ids}
+            if missing:
+                orphan_call_ids_by_msg[i] = missing
+            # Advance past the run we just consumed.
+            i = j
+            continue
+        if msg.role == "tool":
+            # A tool message that isn't inside a run following an
+            # assistant with tool_calls[] is an orphan-result. (If it
+            # were, the branch above would have consumed it.)
+            orphan_tool_msg_indexes.add(i)
+            i += 1
+            continue
+        # Any other role — advance.
+        i += 1
+
+    # Fast path — well-formed input is byte-identical. No copy, no
+    # log, no mutation.
+    if not orphan_call_ids_by_msg and not orphan_tool_msg_indexes:
+        return messages
+
+    # Malformed path. In test mode we fail fast so engine bugs
+    # surface loudly.
+    diagnostic = _pairing_diagnostic(
+        events,
+        orphan_call_ids_by_msg,
+        orphan_tool_msg_indexes,
+    )
+    if _in_test_mode():
+        error_msg = (
+            f"bug-064: assembly pairing invariant violated — {diagnostic}"
+        )
+        raise AssertionError(error_msg)
+
+    # Production degrade: log once per (thread_id, span_id), then
+    # rebuild the in-memory list with offending messages dropped.
+    _warn_once_pairing(events, diagnostic)
+    return _drop_unpaired(messages, orphan_call_ids_by_msg, orphan_tool_msg_indexes)
+
+
+def _drop_unpaired(
+    messages: list[Message],
+    orphan_call_ids_by_msg: dict[int, set[str]],
+    orphan_tool_msg_indexes: set[int],
+) -> list[Message]:
+    """Return a new list with orphan tool_calls ids / tool msgs removed.
+
+    Blast radius is kept minimal: sibling call ids in a multi-call
+    turn survive; only the offending id is stripped. If stripping
+    leaves an assistant with an empty ``tool_calls[]``, the whole
+    assistant message is dropped (an empty ``tool_calls`` array is
+    itself an invalid provider input).
+    """
+    out: list[Message] = []
+    for i, msg in enumerate(messages):
+        if i in orphan_tool_msg_indexes:
+            continue
+        if i in orphan_call_ids_by_msg and msg.tool_calls:
+            drop_ids = orphan_call_ids_by_msg[i]
+            kept = [
+                tc for tc in msg.tool_calls if str(tc.get("id", "")) not in drop_ids
+            ]
+            if not kept:
+                # Nothing left — drop the whole assistant turn. If
+                # the message also had prose content it's still
+                # dropped: the fold at :261-265 only creates
+                # tool_call-carrying assistants either from an
+                # AGENT_MESSAGE + tool.called sequence (prose kept,
+                # calls appended) or from a bare tool.called
+                # (empty content). In the first case dropping the
+                # assistant loses prose the model produced; that's
+                # the price of a genuinely malformed path. The prod
+                # log carries the detail needed to reconstruct.
+                continue
+            out.append(msg.model_copy(update={"tool_calls": kept}))
+        else:
+            out.append(msg)
+    return out
+
+
+def _pairing_diagnostic(
+    events: list[Event],
+    orphan_call_ids_by_msg: dict[int, set[str]],
+    orphan_tool_msg_indexes: set[int],
+) -> str:
+    """Human-readable summary for logs / assertions."""
+    all_orphan_call_ids: set[str] = set()
+    for ids in orphan_call_ids_by_msg.values():
+        all_orphan_call_ids.update(ids)
+    parts: list[str] = []
+    if all_orphan_call_ids:
+        parts.append(
+            "orphan_call_ids=" + ",".join(sorted(all_orphan_call_ids)),
+        )
+    if orphan_tool_msg_indexes:
+        parts.append(
+            "orphan_tool_msg_indexes="
+            + ",".join(str(i) for i in sorted(orphan_tool_msg_indexes)),
+        )
+    tid, sid, eid = _pairing_context(events)
+    if tid:
+        parts.append(f"thread_id={tid}")
+    if sid:
+        parts.append(f"session_id={sid}")
+    if eid:
+        parts.append(f"leaf_event_id={eid}")
+    return " ".join(parts)
+
+
+def _pairing_context(
+    events: list[Event],
+) -> tuple[str, str, str]:
+    """Extract (thread_id, session_id, leaf_event_id) for diagnostics.
+
+    All three fall back to the empty string when the event list is
+    empty — the projector accepts an empty list (see the trivial
+    no-history branch in the engine wrapper), and even then the
+    check must run correctly (it just has nothing to diagnose).
+    """
+    if not events:
+        return "", "", ""
+    leaf = events[-1]
+    return (
+        str(leaf.thread_id),
+        str(leaf.session_id),
+        str(leaf.event_id),
+    )
+
+
+def _warn_once_pairing(events: list[Event], diagnostic: str) -> None:
+    """Emit a WARNING log at most once per (thread_id, leaf_event_id).
+
+    The dedup key uses (thread_id, leaf_event_id) — a retrying
+    exchange sees the same leaf until it succeeds or advances, so
+    this suppresses spam on retry loops while still surfacing a new
+    warning if the same thread malforms a different span later.
+    """
+    tid, _sid, eid = _pairing_context(events)
+    key = (tid, eid)
+    if key in _PAIRING_WARN_DEDUP:
+        return
+    # Bounded — evict an arbitrary entry (set.pop) once we hit the
+    # cap. Simplest bound that keeps memory bounded without wiring
+    # a full LRU for a path that should almost never fire.
+    if len(_PAIRING_WARN_DEDUP) >= _PAIRING_WARN_DEDUP_MAX:
+        _PAIRING_WARN_DEDUP.pop()
+    _PAIRING_WARN_DEDUP.add(key)
+    _log.warning(
+        "bug-064: assembly pairing invariant violated — dropping "
+        "unpaired message(s) from in-memory request (durable log "
+        "NOT mutated). %s",
+        diagnostic,
+    )
 
 
 def _extract_content_text(content: dict[str, Any] | str | None) -> str:
