@@ -1,0 +1,11 @@
+#!/bin/sh
+# Refresh codanna index after `git pull` / `git merge`. Same rationale
+# as post-commit — the incoming diff can be large so -f is important;
+# background so the merge command returns immediately.
+
+command -v codanna >/dev/null 2>&1 || exit 0
+
+REPO="$(git rev-parse --show-toplevel)"
+LOG="/tmp/codanna-reindex-$(basename "$REPO").log"
+
+nohup codanna index -f "$REPO" >"$LOG" 2>&1 &
