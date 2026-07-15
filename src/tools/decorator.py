@@ -276,7 +276,7 @@ def tool(
         requires: Names of tool services (`"cards"`, `"prompts"`,
             `"workflows"`, `"session"`) the dispatcher must inject on
             `ToolContext` before this tool runs. Members must be in
-            [`ServiceName`][tools.services.ServiceName]; unknown
+            `ServiceName`; unknown
             names raise `ValueError` at decoration time. Default
             `None` — tools that don't opt in see all four service
             fields as `None`.

@@ -498,7 +498,7 @@ class AgentEngine:
         :meth:`_Exchange._maybe_compact_events` but bypasses the
         pre-flight token estimate check so the user can compact NOW.
         Emits a
-        [`CONTEXT_COMPACTED`][schemas.EventType.CONTEXT_COMPACTED] event
+        `CONTEXT_COMPACTED` event
         with ``trigger="manual"`` (or ``"manual_preview"`` when
         ``preview=True``) so downstream telemetry can tell a user-
         initiated compaction apart from an auto-fired one.

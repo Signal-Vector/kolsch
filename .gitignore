@@ -63,3 +63,6 @@ logs/
 
 # MkDocs build output
 site/
+
+# pi-subagents run artifacts
+.pi-subagents/

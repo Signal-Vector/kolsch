@@ -21,10 +21,8 @@ from __future__ import annotations
 
 import pytest
 
-from cli.chat.widgets.workflow_node_row import (
-    _SPINNER_FRAMES,
-    WorkflowNodeRow,
-)
+from cli.chat.spinner import SPINNER_FRAMES as _SPINNER_FRAMES
+from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 
 
 @pytest.mark.asyncio
@@ -38,8 +36,10 @@ async def test_node_row_spinner_rotates_while_running(
         await pilot.pause()
         row.set_state("running")
         # Wait past the first spinner tick so the title picks up the
-        # spinner frame (initial title in ``__init__`` was set from
-        # ``STATE_GLYPHS['starting']`` before the tick fires).
+        # spinner frame (initial title in ``__init__`` is a static
+        # placeholder set before the tick fires; qol-075 dropped the
+        # per-widget ``STATE_GLYPHS`` map — the placeholder is now
+        # hard-coded to ``⠋`` at the __init__ site).
         await pilot.pause(0.1)
 
         title_before = row.title

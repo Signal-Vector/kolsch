@@ -50,15 +50,17 @@ import logging
 from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable, ClassVar
 
+import warnings
+
 from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Collapsible, Static
 
+from cli.chat.metrics import format_duration
+from cli.chat.spinner import SPINNER_FRAMES, spinner_frame
+from cli.chat.state_tokens import resolve_state
+
 _LOGGER = logging.getLogger(__name__)
-
-
-_SPINNER_FRAMES = ("⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷")
-"""bug-031: 8-cell braille spinner frames rotated at ~12.5 Hz."""
 
 
 _ANIMATED_STATES = frozenset({"starting", "running"})
@@ -270,24 +272,28 @@ class WorkflowNodeRow(Collapsible):
     ALLOW_SELECT: ClassVar[bool] = True
 
     DEFAULT_CSS = """
+    $tool-fg: #4dd0e1;
+    $error: #ff5555;
+    $warning: #ffb454;
+    $hint: #6e7681;
+
     WorkflowNodeRow { padding: 0 1; margin: 0; }
-    WorkflowNodeRow.-completed  { color: #4dd0e1; }
-    WorkflowNodeRow.-failed     { color: #ff5555; }
-    WorkflowNodeRow.-paused     { color: #ffb454; }
-    WorkflowNodeRow.-cancelling { color: #4dd0e1; opacity: 0.6; }
-    WorkflowNodeRow.-pruned     { color: #6e7681; }
+    WorkflowNodeRow.-completed  { color: $tool-fg; }
+    WorkflowNodeRow.-failed     { color: $error; }
+    WorkflowNodeRow.-paused     { color: $warning; }
+    WorkflowNodeRow.-cancelling { color: $tool-fg; opacity: 0.6; }
+    WorkflowNodeRow.-pruned     { color: $hint; }
     """
 
-    STATE_GLYPHS = {
-        "starting":   "⠋",
-        "running":    "▸",
-        "completed":  "✓",
-        "failed":     "✗",
-        "paused":     "⚠",
-        "cancelling": "⧗",
-        "pruned":     "─",
-    }
-    """7-state glyph map."""
+    # State glyphs live in `src/cli/chat/state_tokens.py` — the
+    # single canonical `STATE_TOKENS` table shared with `CardWidget`
+    # (qol-075). This row's reactive `state` still uses the historical
+    # vocabulary (``starting``/``completed``/``pruned``) because the
+    # widget's CSS classes, tests, and upstream `set_state` callers
+    # key off those names; :func:`resolve_state` bridges them to
+    # canonical via `_LEGACY_ALIASES`. Migrating the reactive
+    # vocabulary itself is a follow-up — see qol-084 (the aliases
+    # are the short-lived bridge until then).
 
     _TERMINAL_CSS_STATES = ("completed", "failed", "paused", "cancelling", "pruned")
     """States that map to a `.-<state>` CSS class."""
@@ -367,7 +373,15 @@ class WorkflowNodeRow(Collapsible):
         # should gate the JSON preview for agent nodes.
         self._last_assistant_text: str = ""
         # bug-036b: pre-completion title includes ``(short_type)``.
-        title = f"{self.STATE_GLYPHS['starting']} {node_name}"
+        # The initial ``⠋`` is a static placeholder for the ~80 ms
+        # gap between compose and the first spinner tick (installed
+        # in :meth:`on_mount`). It intentionally does NOT go through
+        # ``state_tokens.resolve_state`` — the canonical
+        # ``running`` glyph (``▸``) would flash briefly before the
+        # spinner overwrites it, changing a rendering that the
+        # bug-036b snapshot golden pins on ``⠋``. See qol-084 for
+        # the follow-up that unifies this with the spinner table.
+        title = f"⠋ {node_name}"
         if self._short_type:
             title += f" ({self._short_type})"
         super().__init__(title=title, collapsed=True)
@@ -398,7 +412,7 @@ class WorkflowNodeRow(Collapsible):
 
     def _advance_spinner(self) -> None:
         """bug-031: bump the frame index and repaint the title."""
-        self._frame_idx = (self._frame_idx + 1) % len(_SPINNER_FRAMES)
+        self._frame_idx = (self._frame_idx + 1) % len(SPINNER_FRAMES)
         if self.state in _ANIMATED_STATES:
             self._update_title()
 
@@ -629,13 +643,17 @@ class WorkflowNodeRow(Collapsible):
         return code_part
 
     def _formatted_duration(self) -> str | None:
+        # qol-085: route through the shared helper so a 2-minute bash
+        # renders `2m 00s` here just like the workflow-card header
+        # (was `120.0s` pre-migration). `sub_second_precision=1`
+        # preserves the fast-bash `0.4s` signal below 1s.
         if self._node_duration_ms is not None:
             secs = self._node_duration_ms / 1000.0
-            return f"{secs:.1f}s"
+            return format_duration(secs, sub_second_precision=1)
         if self._node_started_at and self._node_completed_at:
             delta = (self._node_completed_at - self._node_started_at).total_seconds()
             if delta >= 0:
-                return f"{delta:.1f}s"
+                return format_duration(delta, sub_second_precision=1)
         return None
 
     def set_started_at(self, ts: datetime | None) -> None:
@@ -1037,9 +1055,22 @@ class WorkflowNodeRow(Collapsible):
         rather than a first-class failure surface.
         """
         if self.state in _ANIMATED_STATES:
-            glyph = _SPINNER_FRAMES[self._frame_idx]
+            glyph = spinner_frame(self._frame_idx)
         else:
-            glyph = self.STATE_GLYPHS.get(self.state, "?")
+            # State-tokens (qol-075): legacy state names alias to
+            # canonical inside `resolve_state`; unknown names raise
+            # ``KeyError`` — mirror the pre-qol-075 ``.get(..., "?")``
+            # fallback so a stray state can't crash the title paint.
+            # `catch_warnings` silences the alias DeprecationWarning
+            # per repaint — this row's reactive still holds the legacy
+            # vocabulary; the warning is for external callers. The
+            # bridge dissolves when qol-084 migrates the reactive.
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                try:
+                    glyph = resolve_state(self.state).glyph
+                except KeyError:
+                    glyph = "?"
         base = f"{glyph} {self._node_name}"
         if self.state == "failed":
             # bug-063: full error moved to Error section body; keep

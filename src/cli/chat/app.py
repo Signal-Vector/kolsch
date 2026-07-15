@@ -1705,15 +1705,6 @@ class ChatApp(App):
         # compaction unmount pass.
         return widget
 
-    def _assistant_border_title(self) -> str:
-        """Build the `AssistantProse` border title: `<agent> · HH:MM:SS`.
-
-        Mirrors ``UserChatbox``'s ``You · HH:MM:SS`` format so the two
-        boxes read as a matched pair.
-        """
-        agent = self.session.config.name
-        return f"{agent} · {datetime.now().strftime('%H:%M:%S')}"
-
     async def mount_assistant_message(
         self,
         text: str,
@@ -1722,8 +1713,10 @@ class ChatApp(App):
     ) -> Any | None:
         _ = event_id  # bug-036d: sink-protocol dedupe key — App ignores.
         transcript = self.query_one("#transcript", VerticalScroll)
-        prose = AssistantProse()
-        prose.border_title = self._assistant_border_title()
+        prose = AssistantProse(
+            agent_name=self.session.config.name,
+            timestamp=datetime.now(),
+        )
         await transcript.mount(prose)
         await prose.append(text)
         self._last_assistant_widget = prose
@@ -1732,8 +1725,10 @@ class ChatApp(App):
 
     async def mount_assistant_streaming_widget(self) -> AssistantProse:
         transcript = self.query_one("#transcript", VerticalScroll)
-        prose = AssistantProse()
-        prose.border_title = self._assistant_border_title()
+        prose = AssistantProse(
+            agent_name=self.session.config.name,
+            timestamp=datetime.now(),
+        )
         await transcript.mount(prose)
         self._last_assistant_widget = prose
         return prose

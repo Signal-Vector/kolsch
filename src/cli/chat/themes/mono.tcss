@@ -1,7 +1,14 @@
 /*
  * mono.tcss — NO_COLOR variant of theme.tcss.
  *
- * Every colour maps to `auto` / `default` (the terminal's own fg).
+ * Every colour maps to `ansi_default` (the terminal's own fg).
+ * `ansi_default` — not `auto` — is required because these vars are
+ * used in `border:` properties as well as text `color:`, and `auto`
+ * is only legal for text (it computes contrast against the rendered
+ * background). `border: <type> auto` fails stylesheet parse, which
+ * prevented every border-using widget from mounting under NO_COLOR.
+ * `ansi_default` is legal for both and defers to the terminal's own
+ * foreground — the correct NO_COLOR behaviour.
  * Text-style attributes (bold, italic, dim, reverse) replace hue
  * so widgets can still communicate role and state without colour.
  *
@@ -18,10 +25,12 @@
 /* $background and $panel are Textual built-ins; leaving them alone
  * so Textual's default-palette CSS keeps working. */
 
-$user-border:   auto;
-$assistant-fg:  auto;
-$tool-fg:       auto;
+$user-border:   ansi_default;
+$assistant-fg:  ansi_default;
+$tool-fg:       ansi_default;
 
-$error:         auto;
-$warning:       auto;
-$hint:          auto;
+$error:         ansi_default;
+$warning:       ansi_default;
+$hint:          ansi_default;
+
+$chat-surface:  ansi_default;

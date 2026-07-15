@@ -9,7 +9,7 @@ tool.
 
 - Your bundle lives under `bundles/<your-name>/tools/` with a
   `bundle.yaml` at the bundle root (see
-  [`bundles/kolsch/bundle.yaml`](../../bundles/kolsch/bundle.yaml)
+  [`bundles/kolsch/bundle.yaml`](https://github.com/Signal-Vector/kolsch/blob/main/bundles/kolsch/bundle.yaml)
   for the shape).
 - You've read [Write a tool](../how-to/write-a-tool.md) — the
   `@tool` decorator basics.
@@ -142,18 +142,18 @@ correlate the request back to the parent `tool.called` event.
 
 Runnable examples in this repo:
 
-- [`bundles/kolsch/tools/hello_card.py`](../../bundles/kolsch/tools/hello_card.py)
+- [`bundles/kolsch/tools/hello_card.py`](https://github.com/Signal-Vector/kolsch/blob/main/bundles/kolsch/tools/hello_card.py)
   — simplest example, streaming markdown.
-- [`bundles/kolsch/tools/download_with_progress.py`](../../bundles/kolsch/tools/download_with_progress.py)
+- [`bundles/kolsch/tools/download_with_progress.py`](https://github.com/Signal-Vector/kolsch/blob/main/bundles/kolsch/tools/download_with_progress.py)
   — progress bar in a loop.
-- [`bundles/kolsch/tools/confirm_dangerous_action.py`](../../bundles/kolsch/tools/confirm_dangerous_action.py)
+- [`bundles/kolsch/tools/confirm_dangerous_action.py`](https://github.com/Signal-Vector/kolsch/blob/main/bundles/kolsch/tools/confirm_dangerous_action.py)
   — direct `Prompts.choice` with `PromptBusy` catch-and-retry.
 
 Reference:
 
 - [How-to: Write a tool](../how-to/write-a-tool.md) — decorator +
   args-schema basics, secrets, sandboxing.
-- [Textual chat UI roadmap](../../process/roadmap-textual-chat-refactor.md)
+- Textual chat UI roadmap (`process/roadmap-textual-chat-refactor.md`, local planning notes — not published)
   — the wider vision for cards, prompts, workflows.
 
 Need a card kind that isn't in the v1 palette? File an issue with

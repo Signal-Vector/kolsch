@@ -208,7 +208,7 @@ async def dispatch_tool(
         agent_permissions: The agent's resolved permission rules.
         bundle_permissions: The bundle's resolved permission rules.
         chat_services: Optional
-            [`ChatServiceRegistry`][cli.chat.service_registry.ChatServiceRegistry]
+            `ChatServiceRegistry`
             sidecar the chat runtime passes so tools declaring
             ``requires=[...]`` see the corresponding service handles
             on `ToolContext`. Headless callers (tests, workflow

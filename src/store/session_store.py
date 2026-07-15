@@ -516,7 +516,7 @@ class SessionStore:
         """Return the `logical_seq` on the session's JSONL tail, or 0.
 
         Test-facing helper. Delegates to
-        [`_read_last_logical_seq`][store.jsonl._read_last_logical_seq]
+        `_read_last_logical_seq`
         under a worker thread so the event loop stays unblocked.
 
         spec-003 uses this in `test_logical_seq_monotonic.py` to

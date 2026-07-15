@@ -96,11 +96,12 @@ class SlashPopup(Vertical):
     $hint: #6e7681;
     $assistant-fg: #b0c0d5;
     $warning: #ffb454;
+    $chat-surface: #1a1d24;
 
     SlashPopup {
         height: auto;
         max-height: 10;
-        background: #1a1d24;
+        background: $chat-surface;
         padding: 0 1;
         display: none;
     }

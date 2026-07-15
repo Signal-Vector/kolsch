@@ -34,7 +34,12 @@ services:
     #   1. ruff check
     #   2. ruff format --check
     #   3. mypy
-    #   4. unit + component + integration tests (golden inclusive)
+    #   4. chat-widget palette-bypass lint (qol-082) — cheap grep guard
+    #      that blocks raw hex in `color:` / `background:` / `border*:`
+    #      property values under `src/cli/chat/widgets/`. Widget-local
+    #      `$var: #hex;` fallbacks (isolation-invariant per qol-082) are
+    #      exempted by the regex's left-side guard.
+    #   5. unit + component + integration tests (golden inclusive)
     #
     # E2E tests are NOT in the gate; they cost tokens and run on a
     # separate schedule.
@@ -45,6 +50,7 @@ services:
         uv run ruff check .
         uv run ruff format --check .
         uv run mypy .
+        uv run python scripts/lint_chat_hex.py
         uv run pytest \
             --cov \
             --cov-report=xml \

@@ -52,7 +52,8 @@ async def test_header_shows_ref_and_inputs_top_level() -> None:
         assert len(lines) == 3, f"expected 3 lines, got {lines!r}"
         assert lines[0] == "andre/workflows/jd_review"
         assert lines[1] == "inputs: url=https://example.com/jd"
-        assert lines[2].startswith("[0/0]")
+        # qol-077: header counts are bare N/M (no brackets).
+        assert lines[2].startswith("0/0")
 
 
 @pytest.mark.asyncio

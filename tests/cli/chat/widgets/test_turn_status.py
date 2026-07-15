@@ -23,31 +23,34 @@ from __future__ import annotations
 import pytest
 from textual.widgets import Static
 
-from cli.chat.widgets.turn_status import (
-    _SPINNER_FRAMES,
-    TurnStatus,
-    _format_elapsed,
-)
+from cli.chat.metrics import format_duration
+from cli.chat.spinner import SPINNER_FRAMES
+from cli.chat.widgets.turn_status import TurnStatus
 
 
-def test_format_elapsed_under_a_minute() -> None:
-    """Sub-minute values render as ``(NNs)``."""
-    assert _format_elapsed(0) == "(0s)"
-    assert _format_elapsed(7) == "(7s)"
-    assert _format_elapsed(59) == "(59s)"
+def test_elapsed_render_under_a_minute() -> None:
+    """Sub-minute values render as ``(NNs)`` — helper + widget chrome.
+
+    qol-077: the number format lives in ``cli.chat.metrics``; the
+    surrounding parens are TurnStatus's own chrome. Assert against
+    the composed string so this test still covers the visible line.
+    """
+    assert f"({format_duration(0)})" == "(0s)"
+    assert f"({format_duration(7)})" == "(7s)"
+    assert f"({format_duration(59)})" == "(59s)"
 
 
-def test_format_elapsed_over_a_minute() -> None:
+def test_elapsed_render_over_a_minute() -> None:
     """Multi-minute values render as ``(Mm SSs)`` with zero-padded seconds."""
-    assert _format_elapsed(60) == "(1m 00s)"
-    assert _format_elapsed(75) == "(1m 15s)"
-    assert _format_elapsed(3 * 60 + 4) == "(3m 04s)"
+    assert f"({format_duration(60)})" == "(1m 00s)"
+    assert f"({format_duration(75)})" == "(1m 15s)"
+    assert f"({format_duration(3 * 60 + 4)})" == "(3m 04s)"
 
 
 def test_spinner_frame_set_is_the_documented_braille_cycle() -> None:
     """Spec locks the 10-frame Braille cycle; guard against typo drift."""
-    assert _SPINNER_FRAMES == "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
-    assert len(_SPINNER_FRAMES) == 10
+    assert SPINNER_FRAMES == tuple("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+    assert len(SPINNER_FRAMES) == 10
 
 
 @pytest.mark.asyncio
@@ -68,7 +71,7 @@ async def test_setting_verb_activates_widget(mock_app_factory) -> None:
         rendered = str(widget.query_one("#spinner-verb", Static).render())
         # Frame + verb; frame is one of the documented Braille chars.
         assert "Thinking…" in rendered
-        assert any(frame in rendered for frame in _SPINNER_FRAMES)
+        assert any(frame in rendered for frame in SPINNER_FRAMES)
 
 
 @pytest.mark.asyncio

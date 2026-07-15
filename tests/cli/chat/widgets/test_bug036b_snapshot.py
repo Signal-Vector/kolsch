@@ -53,18 +53,20 @@ def _freeze_starting(row: WorkflowNodeRow) -> None:
     scheduler dispatched, which is non-deterministic across CI runs.
     For a golden text snapshot we need a stable glyph, so we stop
     the timer and reset the frame to 0. We also re-apply the static
-    ``STATE_GLYPHS['starting']`` glyph to overwrite any frame the
-    timer may have already committed via ``_advance_spinner``.
+    ``⠋`` placeholder glyph (matches the pre-spinner
+    ``__init__`` title in ``workflow_node_row.py``) to overwrite any
+    frame the timer may have already committed via
+    ``_advance_spinner``.
     """
     if row._spinner_handle is not None:
         row._spinner_handle.stop()
         row._spinner_handle = None
     row._frame_idx = 0
-    # Rebuild the base title using the static ``starting`` glyph +
-    # the same ``(short_type)`` / details rules ``_update_title``
-    # applies. Keeps the golden readable and matches how the row
-    # would render if the interval never fired.
-    glyph = WorkflowNodeRow.STATE_GLYPHS["starting"]
+    # Rebuild the base title using the static ``starting`` placeholder
+    # glyph + the same ``(short_type)`` / details rules
+    # ``_update_title`` applies. Keeps the golden readable and matches
+    # how the row would render if the interval never fired.
+    glyph = "⠋"
     base = f"{glyph} {row._node_name}"
     if row._details:
         base += f"   {row._details}"

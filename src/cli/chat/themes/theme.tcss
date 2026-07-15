@@ -28,3 +28,12 @@ $tool-fg:       #4dd0e1;   /* cyan-400 */
 $error:         #ff5555;
 $warning:       #ffb454;
 $hint:          #6e7681;
+
+/* Inset surface — background shared by info_bar / slash_popup.
+ *
+ * Named `$chat-surface`, not `$surface`, because `$surface` is a Textual
+ * design-system builtin (see `.venv/.../textual/design.py:174`) that
+ * cascades into `Input` widgets' background. Overriding it at the app CSS
+ * level shifted the Input renders — the same class of hazard the header
+ * comment above calls out for `$background` / `$panel`. */
+$chat-surface:  #1a1d24;
