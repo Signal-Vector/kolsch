@@ -43,6 +43,8 @@ from typing import TYPE_CHECKING, Any, Callable
 
 from textual.widgets import Static
 
+from cli.chat.metrics import format_counts, format_duration
+
 if TYPE_CHECKING:
     from textual.containers import VerticalScroll
 
@@ -157,7 +159,10 @@ def format_live_workflow_strip(
         elapsed = 0
     elapsed = max(0, elapsed)
 
-    parts = [f"▸ {head.ref} {completed}/{total}"]
+    # qol-077: route counts + elapsed through cli.chat.metrics so
+    # the live-workflow strip matches the workflow card header /
+    # compact summary formats (bare N/M, minute-rollover duration).
+    parts = [f"▸ {head.ref} {format_counts(completed, total)}"]
 
     # Compact suffixes — queued count present iff any queued records
     # exist (independent of live cardinality); paused present iff any
@@ -165,7 +170,7 @@ def format_live_workflow_strip(
     # after the discrete counts.
     if queued:
         parts.append(f"⋯ {len(queued)} queued")
-    parts.append(f"{elapsed}s")
+    parts.append(format_duration(elapsed))
     if paused:
         parts.append(f"⚠ {len(paused)} paused")
     return " · ".join(parts)

@@ -10,7 +10,8 @@ per-node state machines.
 Composition (yielded from `compose`):
 
 - [`WorkflowProgressHeader`][cli.chat.widgets.card_body.workflow.WorkflowProgressHeader]
-  — `[N/M]  ▓▓░░░░░  Ns` progress bar + elapsed.
+  — `N/M  ▓▓░░░░░  Ns` progress bar + elapsed (metric format via
+  [`cli.chat.metrics`][cli.chat.metrics]).
 - [`WorkflowNodeList`][cli.chat.widgets.card_body.workflow.WorkflowNodeList]
   — container of
   [`WorkflowNodeRow`][cli.chat.widgets.workflow_node_row.WorkflowNodeRow]
@@ -52,6 +53,11 @@ from textual.containers import Vertical
 from textual.reactive import reactive
 from textual.widgets import Static
 
+from cli.chat.metrics import (
+    format_counts,
+    format_duration,
+    format_progress,
+)
 from cli.chat.widgets.workflow_node_row import (
     WorkflowNodeRow,
     _format_inputs_summary,
@@ -138,12 +144,14 @@ class _ReconstructedSubAgentEvent:
 
 
 class WorkflowProgressHeader(Static):
-    """Progress line: `[completed/total]  ▓▓░░░░░  Ns`.
+    """Progress line: `completed/total  ▓▓░░░░░  Ns`.
 
     Updated by `WorkflowRenderer._update_header` on every event; the
     glyph bar is an 8-cell fill ratio (not pixel-precise; a coarse
     visual cue is enough for the terminal). Empty totals render as
-    `[0/0]  ░░░░░░░░  0s`.
+    `0/0  ░░░░░░░░  0s`. qol-077 routed the count / bar / duration
+    formats through [`cli.chat.metrics`][cli.chat.metrics] so the
+    header, compact summary, and terminal footer share one format.
 
     spec-017 adds an optional ``parent_ref``: when set, the header
     prepends a ``↳ from <parent-ref>`` hint line above the progress
@@ -242,14 +250,12 @@ class WorkflowProgressHeader(Static):
         """
         total = max(self._total, 0)
         completed = max(0, min(self._completed, total)) if total else 0
-        if total > 0:
-            filled = int(round(self._BAR_WIDTH * completed / total))
-        else:
-            filled = 0
-        bar = "▓" * filled + "░" * (self._BAR_WIDTH - filled)
-        progress_line = (
-            f"[{completed}/{total}]  {bar}  {int(self._elapsed_seconds)}s"
-        )
+        # qol-077: metric helpers own the number format — bare N/M
+        # (no brackets), fixed-width bar, minute-rollover duration.
+        counts = format_counts(completed, total)
+        bar = format_progress(completed, total, width=self._BAR_WIDTH)
+        elapsed = format_duration(self._elapsed_seconds)
+        progress_line = f"{counts}  {bar}  {elapsed}"
         if self._ref is None:
             # Pre-RUN_STARTED render — ref hasn't landed yet. Preserve
             # the spec-017 single-line breadcrumb behaviour so the
@@ -302,7 +308,9 @@ class WorkflowRenderer(Vertical):
 
     spec-016 adds ``compact_mode`` — a reactive flag that hides the
     node list + footer and swaps in a one-line summary
-    (``▸ workflow · <ref>  N/M · Ns``). The
+    (``▸ workflow · <ref>  N/M · Ns`` — same metric formats as the
+    header, both routed through
+    [`cli.chat.metrics`][cli.chat.metrics] as of qol-077). The
     [`WorkflowLayoutManager`][cli.chat.services.workflow_layout.WorkflowLayoutManager]
     flips this when more than two workflows are in-flight so the
     transcript stays legible under load. Focused cards remain full-
@@ -975,7 +983,9 @@ class WorkflowRenderer(Vertical):
         success = kind == WorkflowEventKind.RUN_COMPLETED.value
         elapsed = self._elapsed_seconds(payload)
         prefix = "✓" if success else "✗"
-        self._footer.update(f"{prefix} done in {int(elapsed)}s")
+        # qol-077: helper owns Ns / Mm SSs; footer supplies its own
+        # "done in" chrome around the number.
+        self._footer.update(f"{prefix} done in {format_duration(elapsed)}")
         self._is_terminal = True
         if self._tick_handle is not None:
             with contextlib.suppress(Exception):
@@ -1073,9 +1083,12 @@ class WorkflowRenderer(Vertical):
         """
         completed = self._header._completed
         total = self._header._total
-        elapsed = int(self._header._elapsed_seconds)
+        # qol-077: same three helpers as the header — bare N/M and
+        # minute-rollover duration so header and summary agree.
         ref = self._workflow_ref or self._run_id or "?"
-        return f"▸ workflow · {ref}  {completed}/{total} · {elapsed}s"
+        counts = format_counts(completed, total)
+        elapsed = format_duration(self._header._elapsed_seconds)
+        return f"▸ workflow · {ref}  {counts} · {elapsed}"
 
     def _elapsed_now(self) -> float:
         """Return seconds since `_start_time`.

@@ -111,9 +111,10 @@ async def test_run_start_node_complete_run_complete_flow(mock_app_factory) -> No
 
         assert rows[0].state == "completed"
         assert "✓" in rows[0].title
-        # Header shows [1/1]
+        # Header shows 1/1 (qol-077: bare counts, no brackets).
         header_render = str(renderer._header.render())
-        assert "[1/1]" in header_render
+        assert "1/1" in header_render
+        assert "[1/1]" not in header_render
 
         end_ts = datetime(2026, 7, 5, 12, 0, 3, tzinfo=UTC)
         renderer.apply_event(_MockEvent(
