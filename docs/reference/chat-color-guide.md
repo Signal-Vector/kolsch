@@ -18,7 +18,7 @@ glyph, and border conventions see the
 
 ## Palette
 
-Six semantic variables carry every intentional hue. Widgets reference the
+Seven semantic variables carry every intentional hue. Widgets reference the
 variable, not the hex, so a future theme is one more `.tcss` file.
 
 <div class="chat-swatch" markdown>
@@ -27,16 +27,26 @@ variable, not the hex, so a future theme is one more `.tcss` file.
 |---|---|---|---|---|
 | `$user-border` | <span style="display:inline-block;width:1.1em;height:1.1em;border:1px solid #888;background:#2ea043"></span> | `#2ea043` | user turn frame (GitHub green) | `ansi_default` |
 | `$assistant-fg` | <span style="display:inline-block;width:1.1em;height:1.1em;border:1px solid #888;background:#b0c0d5"></span> | `#b0c0d5` | assistant prose / frame (soft blue-grey) | `ansi_default` |
-| `$tool-fg` | <span style="display:inline-block;width:1.1em;height:1.1em;border:1px solid #888;background:#4dd0e1"></span> | `#4dd0e1` | tool calls, done states (cyan-400) | `ansi_default` |
+| `$tool-fg` | <span style="display:inline-block;width:1.1em;height:1.1em;border:1px solid #888;background:#4dd0e1"></span> | `#4dd0e1` | tool calls, done states, compaction (cyan-400) | `ansi_default` |
 | `$error` | <span style="display:inline-block;width:1.1em;height:1.1em;border:1px solid #888;background:#ff5555"></span> | `#ff5555` | error / failed | `ansi_default` |
 | `$warning` | <span style="display:inline-block;width:1.1em;height:1.1em;border:1px solid #888;background:#ffb454"></span> | `#ffb454` | warning / paused / awaiting approval | `ansi_default` |
 | `$hint` | <span style="display:inline-block;width:1.1em;height:1.1em;border:1px solid #888;background:#6e7681"></span> | `#6e7681` | hints / disabled / low-emphasis | `ansi_default` |
+| `$chat-surface` | <span style="display:inline-block;width:1.1em;height:1.1em;border:1px solid #888;background:#1a1d24"></span> | `#1a1d24` | inset background (info bar, slash popup) | `ansi_default` |
 
 </div>
 
 Declared in `theme.tcss`: `$user-border` L23, `$assistant-fg` L24,
-`$tool-fg` L25, `$error` L28, `$warning` L29, `$hint` L30. The `mono.tcss`
-mapping (all six → `ansi_default`) is at `mono.tcss:28–34`.
+`$tool-fg` L25, `$error` L28, `$warning` L29, `$hint` L30, `$chat-surface`
+L38. The `mono.tcss` mapping (all seven → `ansi_default`) is at
+`mono.tcss:28–36`.
+
+!!! note "Why `$chat-surface`, not `$surface`?"
+    `$surface` is a Textual design-system builtin (see
+    `.venv/.../textual/design.py`) that cascades into `Input` widgets'
+    background — the same class of hazard the `theme.tcss` header comment
+    calls out for `$background` / `$panel`. Prefixing the chat's inset
+    surface with `chat-` keeps our palette additive rather than
+    overriding a framework primitive.
 
 ## Palette fallback pattern
 
@@ -98,23 +108,12 @@ Both halves are enforced automatically:
 See `process/qol-082-chat-palette-fallback-convention.md` for the full
 convention.
 
-### Off-palette colors (⚑ backlog)
+### Off-palette colors
 
-These are widget-local variables carrying hue that is **not** part of
-the six-variable palette. They are the two remaining not-in-theme names;
-`qol-074` drops both and routes their references through `$tool-fg`.
-Because they are `$var: #hex;` declarations (not property-value hex),
-they are neither a fallback nor a lint-caught bypass — they're a
-distinct concern (duplicate/orphan widget-local vars).
-
-<div class="chat-swatch" markdown>
-
-| Value | Swatch | Where | Issue |
-|---|---|---|---|
-| `$compact-fg` `#b39ddb` | <span style="display:inline-block;width:1.1em;height:1.1em;border:1px solid #888;background:#b39ddb"></span> | `compaction_block.py:49` | widget-local var; a compaction accent that isn't in the global palette |
-| `$card-fg` `#4dd0e1` | <span style="display:inline-block;width:1.1em;height:1.1em;border:1px solid #888;background:#4dd0e1"></span> | `card_widget.py:174` | widget-local var; duplicates `$tool-fg`'s hex under a second name |
-
-</div>
+Closed by `qol-074`: the two widget-local variables `$compact-fg`
+(`compaction_block.py`) and `$card-fg` (`card_widget.py`) were dropped;
+both widgets now reference `$tool-fg` directly. Nothing off-palette
+remains.
 
 ## Border-color conventions
 
@@ -131,17 +130,17 @@ instead (e.g. `tool_call_block.py:65,68`).
 | `AssistantProse` | `border: round $assistant-fg` | assistant blue-grey | `assistant_prose.py:202` |
 | `ApprovalBlock` | `border: round $warning` | amber | `approval_block.py:117` |
 | `ForceKillConfirm` | `border: round $warning` | amber | `force_kill_confirm.py:80` |
-| `CardWidget` (default) | `border: round $card-fg` | cyan (local var) | `card_widget.py:180` |
-| `CardWidget.-queued` | `border: round $hint` | dim | `card_widget.py:186` |
-| `CardWidget.-paused` | `border: round $warning` | amber | `card_widget.py:187` |
-| `CardWidget.-cancelling` | `border: round $card-fg; opacity: 0.7` | dimmed cyan | `card_widget.py:188` |
-| `CardWidget.-error` | `border: round $error` | red | `card_widget.py:189` |
-| `CardWidget.-cancelled` | `border: round $hint` | dim | `card_widget.py:190` |
+| `CardWidget` (default) | `border: round $tool-fg` | cyan | `card_widget.py:181` |
+| `CardWidget.-queued` | `border: round $hint` | dim | `card_widget.py:187` |
+| `CardWidget.-paused` | `border: round $warning` | amber | `card_widget.py:188` |
+| `CardWidget.-cancelling` | `border: round $tool-fg; opacity: 0.7` | dimmed cyan | `card_widget.py:189` |
+| `CardWidget.-error` | `border: round $error` | red | `card_widget.py:190` |
+| `CardWidget.-cancelled` | `border: round $hint` | dim | `card_widget.py:191` |
 | `Composer` | `border-top/bottom: heavy $user-border` | user green dividers | `composer.py:50,51,56,57` |
 | `ToolCallBlock` (ok) | `:focus-within { border-left: thick $tool-fg }` | cyan bar — **focus only** | `tool_call_block.py:70` (decl. L71) |
 | `ToolCallBlock` (failed) | `.-failed:focus-within { border-left: thick $error }` | red bar — **focus only** | `tool_call_block.py:73` (decl. L74) |
-| `CompactionBlock` | `:focus-within { border-left: thick $compact-fg }` | purple bar (local var) — **focus only** | `compaction_block.py:75` (decl. L76) |
-| `CompactionBlock.-failed` | `.-failed:focus-within { border-left: thick $error }` | red bar — **focus only** | `compaction_block.py:78` (decl. L79) |
+| `CompactionBlock` | `:focus-within { border-left: thick $tool-fg }` | cyan bar — **focus only** | `compaction_block.py:76` |
+| `CompactionBlock.-failed` | `.-failed:focus-within { border-left: thick $error }` | red bar — **focus only** | `compaction_block.py:79` |
 
 <figure markdown>
 ![UserChatbox — green round frame](chat-widgets/svg/user-chatbox-color.svg)
@@ -175,10 +174,11 @@ state; do not pick a color for its own sake.
 |---|---|---|
 | user turn / user identity | green | `$user-border` |
 | assistant prose / assistant frame | blue-grey | `$assistant-fg` |
-| tool calls, completed / "done" states | cyan | `$tool-fg` |
+| tool calls, completed / "done" states, compaction | cyan | `$tool-fg` |
 | error, failed | red | `$error` |
 | warning, paused, awaiting approval | amber | `$warning` |
 | hint, disabled, cancelled, low-emphasis | grey | `$hint` |
+| inset background (info bar, slash popup) | near-black | `$chat-surface` |
 
 <figure markdown>
 ![NoticeWidget info](chat-widgets/svg/notice-info-color.svg)
@@ -189,7 +189,7 @@ state; do not pick a color for its own sake.
 
 ## NO_COLOR / mono strategy
 
-Under `NO_COLOR`, `mono.tcss` replaces all six palette variables with
+Under `NO_COLOR`, `mono.tcss` replaces all seven palette variables with
 `ansi_default` — the terminal's own default foreground — and role/state is
 carried by **text style** instead of hue.
 
@@ -227,34 +227,14 @@ plain dim monospace instead of running Pygments when `NO_COLOR` is set
 <figcaption>Mono variants (<code>ansi_default</code> + text-style). The same widgets as above, rendered under <code>NO_COLOR</code>: hue is gone, structure and emphasis remain.</figcaption>
 </figure>
 
-## Palette-bypass backlog (⚑)
+## Palette-bypass backlog
 
-Widgets that hard-code hue in a **property value** (`color:` /
-`background:` / `border*:`) instead of referencing a palette variable.
-Flagged for the normalization pass (`qol-074`); **not changed here**.
-
-This is the narrow definition of "bypass": widget-local `$var: #hex;`
-declarations are the [canonical fallback pattern](#palette-fallback-pattern)
-and are not listed here. The CI lint (`scripts/lint_chat_hex.py`)
-enforces the distinction — property-value hex fails; declaration lines
-pass.
-
-| Widget | Line(s) | Bypass | Equivalent palette var |
-|---|---|---|---|
-| `info_bar.py` | 53 | `background: #1a1d24` | — (undeclared; `qol-074` promotes to `$surface`) |
-| `info_bar.py` | 56 | `color: #6e7681` | `$hint` |
-| `info_bar.py` | 62 | `color: #b0c0d5` | `$assistant-fg` |
-| `slash_popup.py` | 103 | `background: #1a1d24` | — (undeclared; duplicates `info_bar`; `qol-074` promotes to `$surface`) |
-| `notice.py` | 44 | `color: #ffb454` | `$warning` |
-| `notice.py` | 48 | `color: #ff5555` | `$error` |
-| `node_section.py` | 39 | `color: #ff5555` | `$error` |
-| `workflow_node_row.py` | 274–278 | `#4dd0e1` / `#ff5555` / `#ffb454` / `#4dd0e1` / `#6e7681` per state | `$tool-fg` / `$error` / `$warning` / `$tool-fg` / `$hint` |
-| `assistant_prose.py` | 105 | `WorkflowAnchorButton { color: #4dd0e1; }` | `$tool-fg` |
-
-Two follow-up themes for the normalization pass: (1) route every
-property-value literal through the six variables, and (2) decide whether
-the shared card background (`#1a1d24`) deserves its own palette entry
-(`qol-074` promotes it to `$surface`).
+Closed by `qol-074`: every property-value hex under
+`src/cli/chat/widgets/**` now routes through a palette variable, and the
+duplicated `#1a1d24` inset background was promoted to `$chat-surface`. The CI
+lint (`scripts/lint_chat_hex.py`) keeps the tree honest — property-value
+hex fails; the canonical `$var: #hex;` fallback declarations documented
+above pass.
 
 ## Regenerating the gallery
 

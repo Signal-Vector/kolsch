@@ -270,12 +270,17 @@ class WorkflowNodeRow(Collapsible):
     ALLOW_SELECT: ClassVar[bool] = True
 
     DEFAULT_CSS = """
+    $tool-fg: #4dd0e1;
+    $error: #ff5555;
+    $warning: #ffb454;
+    $hint: #6e7681;
+
     WorkflowNodeRow { padding: 0 1; margin: 0; }
-    WorkflowNodeRow.-completed  { color: #4dd0e1; }
-    WorkflowNodeRow.-failed     { color: #ff5555; }
-    WorkflowNodeRow.-paused     { color: #ffb454; }
-    WorkflowNodeRow.-cancelling { color: #4dd0e1; opacity: 0.6; }
-    WorkflowNodeRow.-pruned     { color: #6e7681; }
+    WorkflowNodeRow.-completed  { color: $tool-fg; }
+    WorkflowNodeRow.-failed     { color: $error; }
+    WorkflowNodeRow.-paused     { color: $warning; }
+    WorkflowNodeRow.-cancelling { color: $tool-fg; opacity: 0.6; }
+    WorkflowNodeRow.-pruned     { color: $hint; }
     """
 
     STATE_GLYPHS = {

@@ -35,17 +35,20 @@ class NoticeWidget(Static):
     """
 
     DEFAULT_CSS = """
+    $warning: #ffb454;
+    $error: #ff5555;
+
     NoticeWidget {
         height: auto;
         padding: 0 1;
         text-style: dim italic;
     }
     NoticeWidget.-warning {
-        color: #ffb454;
+        color: $warning;
         text-style: italic;
     }
     NoticeWidget.-error {
-        color: #ff5555;
+        color: $error;
         text-style: italic;
     }
     """

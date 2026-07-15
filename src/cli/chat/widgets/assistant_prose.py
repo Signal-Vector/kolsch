@@ -101,8 +101,10 @@ class WorkflowAnchorButton(Static):
     """
 
     DEFAULT_CSS = """
+    $tool-fg: #4dd0e1;
+
     WorkflowAnchorButton {
-        color: #4dd0e1;
+        color: $tool-fg;
         text-style: bold;
         height: 1;
         width: auto;

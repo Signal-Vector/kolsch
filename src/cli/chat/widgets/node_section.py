@@ -30,13 +30,15 @@ class NodeSection(Collapsible):
     ALLOW_SELECT: ClassVar[bool] = True
 
     DEFAULT_CSS = """
+    $error: #ff5555;
+
     NodeSection {
         padding: 0;
         margin: 0;
         border-top: none;
     }
     NodeSection.-failed > CollapsibleTitle {
-        color: #ff5555;
+        color: $error;
     }
     """
 

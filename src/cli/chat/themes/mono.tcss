@@ -32,3 +32,5 @@ $tool-fg:       ansi_default;
 $error:         ansi_default;
 $warning:       ansi_default;
 $hint:          ansi_default;
+
+$chat-surface:  ansi_default;

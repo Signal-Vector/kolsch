@@ -171,13 +171,13 @@ class CardWidget(Collapsible):
     """
 
     DEFAULT_CSS = """
-    $card-fg: #4dd0e1;
+    $tool-fg: #4dd0e1;
     $warning: #ffb454;
     $error: #ff5555;
     $hint: #6e7681;
 
     CardWidget {
-        border: round $card-fg;
+        border: round $tool-fg;
         padding: 0 1;
         margin: 0 0 1 0;
         height: auto;
@@ -185,12 +185,12 @@ class CardWidget(Collapsible):
     }
     CardWidget.-queued     { border: round $hint; }
     CardWidget.-paused     { border: round $warning; }
-    CardWidget.-cancelling { border: round $card-fg; opacity: 0.7; }
+    CardWidget.-cancelling { border: round $tool-fg; opacity: 0.7; }
     CardWidget.-error      { border: round $error; }
     CardWidget.-cancelled  { border: round $hint; }
 
     CardWidget CardHeader {
-        color: $card-fg;
+        color: $tool-fg;
         text-style: bold;
         height: 1;
     }

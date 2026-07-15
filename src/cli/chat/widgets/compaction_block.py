@@ -46,40 +46,41 @@ class CompactionBlock(Collapsible):
     ALLOW_SELECT: ClassVar[bool] = True
 
     DEFAULT_CSS = """
-    $compact-fg: #b39ddb;
-    $compact-ok: #4dd0e1;
-    $compact-hint: #6e7681;
+    $tool-fg: #4dd0e1;
+    $hint: #6e7681;
+    $error: #ff5555;
+
     CompactionBlock {
         border: none;
     }
     CompactionBlock > CollapsibleTitle {
-        color: $compact-fg;
+        color: $tool-fg;
     }
     CompactionBlock.-success > CollapsibleTitle {
-        color: $compact-ok;
+        color: $tool-fg;
     }
     CompactionBlock.-failed > CollapsibleTitle {
         color: $error;
     }
     CompactionBlock.-skipped > CollapsibleTitle {
-        color: $compact-hint;
+        color: $hint;
         text-style: italic;
     }
     CompactionBlock.-revoked > CollapsibleTitle {
-        color: $compact-hint;
+        color: $hint;
     }
     CompactionBlock.-preview > CollapsibleTitle {
-        color: $compact-fg;
+        color: $tool-fg;
         text-style: italic;
     }
     CompactionBlock:focus-within {
-        border-left: thick $compact-fg;
+        border-left: thick $tool-fg;
     }
     CompactionBlock.-failed:focus-within {
         border-left: thick $error;
     }
     CompactionBlock .body {
-        color: $compact-hint;
+        color: $hint;
         text-style: dim;
     }
     """

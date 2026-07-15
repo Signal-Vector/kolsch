@@ -47,19 +47,23 @@ class InfoBar(Horizontal):
     # doesn't hit the target order — that path is taken in
     # `on_resize` below.
     DEFAULT_CSS = """
+    $chat-surface: #1a1d24;
+    $hint: #6e7681;
+    $assistant-fg: #b0c0d5;
+
     InfoBar {
         dock: bottom;
         height: 1;
-        background: #1a1d24;
+        background: $chat-surface;
     }
     InfoBar > .segment {
-        color: #6e7681;
+        color: $hint;
         margin-right: 1;
         width: auto;
         min-width: 0;
     }
     InfoBar > .identity {
-        color: #b0c0d5;
+        color: $assistant-fg;
         text-style: bold;
         min-width: 1;
     }
