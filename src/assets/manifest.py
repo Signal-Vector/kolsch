@@ -88,7 +88,7 @@ def permissions_source_map(yaml_path: Path) -> dict[int, tuple[str, int]]:
     """Return `{permission_index: (source_file, source_line)}` for a YAML.
 
     Re-reads a bundle / agent / workflow YAML via
-    [`load_with_positions`][_yamlio.load_with_positions] and walks the
+    `load_with_positions` and walks the
     top-level `permissions` list (or, for workflow YAMLs, the `policy`
     list) to record each rule's source line. 1-indexed for
     human-readable use.

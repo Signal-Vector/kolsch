@@ -151,11 +151,11 @@ class MemoryItemId(PrefixedId):
 class PromptId(PrefixedId):
     """`prm_<uuid>` — identifies one prompt request.
 
-    Emitted by [`PromptsImpl`][cli.chat.services.prompts_impl.PromptsImpl]
+    Emitted by `PromptsImpl`
     when it fires a `kolsch.prompt.requested` UI event; the
     matching `.answered` / `.cancelled` events carry the same id so
     the impl's pending-future can be resolved by the
-    [`EventAdapter`][cli.chat.event_adapter.EventAdapter] dispatch
+    `EventAdapter` dispatch
     path.
     """
 
@@ -189,7 +189,7 @@ class AgentCallId(PrefixedId):
 class CardId(PrefixedId):
     """`crd_<uuid>` — identifies one card handle mounted in the chat UI.
 
-    Emitted by [`Cards.open`][tools.services.cards.Cards.open] when it
+    Emitted by `Cards.open` when it
     mounts a new card and stamped on every UI event the handle fires
     (open, mutation, close). Downstream renderers key on this id so
     subsequent mutations route to the same card widget.
@@ -203,7 +203,7 @@ def new_card_id() -> CardId:
     """Build a fresh [`CardId`][schemas.identifiers.CardId].
 
     Wraps a uuid4 in the `crd_` prefix; used at every
-    [`Cards.open`][tools.services.cards.Cards.open] call site so each
+    `Cards.open` call site so each
     card carries a unique id downstream widgets can dedupe on.
     """
     return CardId(f"crd_{uuid.uuid4()}")

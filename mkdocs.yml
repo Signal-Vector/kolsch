@@ -157,6 +157,8 @@ nav:
   - Reference:
       - Schemas: reference/schemas.md
       - Workflow YAML: reference/workflow-yaml.md
+      - Chat styleguide: reference/chat-styleguide.md
+      - Chat color guide: reference/chat-color-guide.md
       - Contributor process:
           - Documentation conventions: process/documentation-conventions.md
           - Vocabulary: process/vocabulary.md
