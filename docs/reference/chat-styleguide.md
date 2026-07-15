@@ -87,8 +87,7 @@ Legacy widget-specific state names (`completed`, `error`,
 | `▾` | expanded | collapse chevron | — | `approval_args_row.py:66` (`_CHEVRON_EXPANDED`) — pairs with `▸` |
 | `⋯` | queued | leading title glyph | `queued` (legacy `initializing` aliases) | — |
 | `…` | truncation ellipsis | trailing, in overflow | — | `approval_args_row.py:67` (`_ELLIPSIS`) |
-| `⣾…` (8) | spinner — active node | leading glyph (animated) | — | `workflow_node_row.py:60` (`_SPINNER_FRAMES`), used at `:1055` — ⚑ **8-frame** alphabet |
-| `⠋…` (10) | spinner — active turn | leading glyph (animated) | — | `turn_status.py:33` (`_SPINNER_FRAMES`), used at `:232` — ⚑ **10-frame** alphabet |
+| `⠋…` (10) | spinner — active turn / active node | leading glyph (animated) | — | `src/cli/chat/spinner.py` (`SPINNER_FRAMES`), imported by `turn_status.py` and `workflow_node_row.py` |
 | `↳` | nested / "from" connector | gutter before a hint line | — | `card_body/workflow.py:258,261` (`↳ from <ref>`), `tool_call_block.py:126` (`↳ hint:`) |
 | `●` / `○` | breadcrumb done / pending | header breadcrumb | — | `approval_block.py:578,581,584` (`● choose ─ ○ pattern ─ ○ save`) |
 | `●` | tool-call / compaction marker | leading title glyph | — | `tool_call_block.py:104` (`● {tool}`), `compaction_block.py:207` (`● Compacting…`) |
@@ -120,18 +119,16 @@ Legacy alias resolution emits a `DeprecationWarning` (see the
 `_LEGACY_ALIASES` table); the aliases are the one-release bridge for
 widgets whose reactive `state` still uses the historical vocabulary.
 
-### ⚑ Two spinner alphabets
+### Spinner alphabet
 
-- `turn_status.py:33` — **10-frame** `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` (dot-cycle braille),
-  for the active-turn status line.
-- `workflow_node_row.py:60` — **8-frame** `⣾⣽⣻⢿⡿⣟⣯⣷` (rotating-block
-  braille), for an active workflow node.
-
-Two different animations for the same "work in progress" idea.
+One 10-frame dot-cycle `⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏` (`src/cli/chat/spinner.py`)
+backs every "work in progress" animation on the chat surface — the
+active-turn status line and the active workflow-node title both
+index into it. See qol-076.
 
 ![TurnStatus active — 10-frame spinner (⠙ reading)](chat-widgets/svg/turn-status-active-color.svg)
 
-![WorkflowNodeRow running — 8-frame spinner (⣻ deduper)](chat-widgets/svg/workflow-node-running-color.svg)
+![WorkflowNodeRow running — 10-frame spinner (⠋ deduper)](chat-widgets/svg/workflow-node-running-color.svg)
 
 ### ⚑ `▸` double meaning
 
@@ -223,7 +220,7 @@ duplicated here.)
 
 | # | Inconsistency | Locations |
 |---|---------------|-----------|
-| 1 | **Two spinner alphabets** — 10-frame vs 8-frame braille | `turn_status.py:33` vs `workflow_node_row.py:60` |
+| 1 | ~~**Two spinner alphabets**~~ — resolved by qol-076: `src/cli/chat/spinner.py` now owns the single canonical 10-frame table (`SPINNER_FRAMES`); both `turn_status.py` and `workflow_node_row.py` import it. | ~~`turn_status.py:33` vs `workflow_node_row.py:60`~~ |
 | 2 | ~~**Divergent state-glyph maps**~~ — resolved by qol-075: `src/cli/chat/state_tokens.py` now owns the single canonical table (`STATE_TOKENS`); widget-specific legacy names resolve via `_LEGACY_ALIASES` with a `DeprecationWarning`. | ~~`workflow_node_row.py:281` vs `card_widget.py:637`~~ |
 | 3 | **`▸` double meaning** — running-state glyph and collapsed chevron | `state_tokens.py` (`running`) & `approval_args_row.py:65` |
 | 4 | **Two elapsed formats** — minute rollover vs whole-seconds | `turn_status.py:36` vs `card_body/workflow.py:251` |

@@ -24,6 +24,8 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from cli.chat.spinner import SPINNER_FRAMES
+
 if TYPE_CHECKING:
     from textual.app import App
 
@@ -35,12 +37,14 @@ _SNAPSHOTS_ROOT = Path(__file__).resolve().parents[2] / "snapshots"
 # ``<ELAPSED>s`` token so goldens compare cleanly.
 _ELAPSED_RE = re.compile(r"(\]  \S+\s+)\d+s")
 
-# bug-036c: mask the 8-frame braille spinner used by
-# ``WorkflowNodeRow`` collapsed-title glyphs. Frame index depends on
-# how many 0.08s ticks fired before the compositor rendered — flaky
-# under Pilot. Replace the whole frame with a stable ``⠋`` (frame 0)
-# so goldens stay comparable.
-_SPINNER_RE = re.compile(r"[⣾⣽⣻⢿⡿⣟⣯⣷]")
+# bug-036c: mask the braille spinner used by ``WorkflowNodeRow``
+# collapsed-title glyphs. Frame index depends on how many 0.08s ticks
+# fired before the compositor rendered — flaky under Pilot. Replace
+# the whole frame with a stable ``⠋`` (frame 0) so goldens stay
+# comparable. Frame set imported from :mod:`cli.chat.spinner` so the
+# alphabet stays in sync with the source of truth (qol-076 unified
+# the 10-frame dot-cycle across the chat surface).
+_SPINNER_RE = re.compile(f"[{''.join(SPINNER_FRAMES)}]")
 
 # bug-036d: mask ``You · HH:MM:SS`` timestamps in ``UserChatbox``
 # borders. The timestamp is wall-clock derived (or fixture-event

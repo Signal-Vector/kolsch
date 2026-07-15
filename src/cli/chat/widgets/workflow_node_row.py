@@ -56,13 +56,10 @@ from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Collapsible, Static
 
+from cli.chat.spinner import SPINNER_FRAMES, spinner_frame
 from cli.chat.state_tokens import resolve_state
 
 _LOGGER = logging.getLogger(__name__)
-
-
-_SPINNER_FRAMES = ("⣾", "⣽", "⣻", "⢿", "⡿", "⣟", "⣯", "⣷")
-"""bug-031: 8-cell braille spinner frames rotated at ~12.5 Hz."""
 
 
 _ANIMATED_STATES = frozenset({"starting", "running"})
@@ -414,7 +411,7 @@ class WorkflowNodeRow(Collapsible):
 
     def _advance_spinner(self) -> None:
         """bug-031: bump the frame index and repaint the title."""
-        self._frame_idx = (self._frame_idx + 1) % len(_SPINNER_FRAMES)
+        self._frame_idx = (self._frame_idx + 1) % len(SPINNER_FRAMES)
         if self.state in _ANIMATED_STATES:
             self._update_title()
 
@@ -1053,7 +1050,7 @@ class WorkflowNodeRow(Collapsible):
         rather than a first-class failure surface.
         """
         if self.state in _ANIMATED_STATES:
-            glyph = _SPINNER_FRAMES[self._frame_idx]
+            glyph = spinner_frame(self._frame_idx)
         else:
             # State-tokens (qol-075): legacy state names alias to
             # canonical inside `resolve_state`; unknown names raise

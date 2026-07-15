@@ -30,7 +30,7 @@ from textual.containers import Horizontal
 from textual.reactive import reactive
 from textual.widgets import Static
 
-_SPINNER_FRAMES = "⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏"
+from cli.chat.spinner import SPINNER_FRAMES, spinner_frame
 
 
 def _format_elapsed(seconds: int) -> str:
@@ -219,7 +219,7 @@ class TurnStatus(Horizontal):
         self.elapsed_seconds = self.elapsed_seconds + 1
 
     def _advance_spinner(self) -> None:
-        self._spinner_index = (self._spinner_index + 1) % len(_SPINNER_FRAMES)
+        self._spinner_index = (self._spinner_index + 1) % len(SPINNER_FRAMES)
         self._render_spinner_verb()
 
     def _render_spinner_verb(self) -> None:
@@ -229,7 +229,7 @@ class TurnStatus(Horizontal):
         route through the same render call — one source of truth for
         the combined string format.
         """
-        frame = _SPINNER_FRAMES[self._spinner_index] if self.verb else ""
+        frame = spinner_frame(self._spinner_index) if self.verb else ""
         text = f"{frame} {self.verb}".strip()
         try:
             self.query_one("#spinner-verb", Static).update(text)

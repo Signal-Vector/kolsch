@@ -21,10 +21,8 @@ from __future__ import annotations
 
 import pytest
 
-from cli.chat.widgets.workflow_node_row import (
-    _SPINNER_FRAMES,
-    WorkflowNodeRow,
-)
+from cli.chat.spinner import SPINNER_FRAMES as _SPINNER_FRAMES
+from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 
 
 @pytest.mark.asyncio
