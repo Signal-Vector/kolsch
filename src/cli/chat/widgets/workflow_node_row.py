@@ -50,9 +50,13 @@ import logging
 from datetime import UTC, datetime
 from typing import Any, Awaitable, Callable, ClassVar
 
+import warnings
+
 from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Collapsible, Static
+
+from cli.chat.state_tokens import resolve_state
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -283,16 +287,15 @@ class WorkflowNodeRow(Collapsible):
     WorkflowNodeRow.-pruned     { color: $hint; }
     """
 
-    STATE_GLYPHS = {
-        "starting":   "⠋",
-        "running":    "▸",
-        "completed":  "✓",
-        "failed":     "✗",
-        "paused":     "⚠",
-        "cancelling": "⧗",
-        "pruned":     "─",
-    }
-    """7-state glyph map."""
+    # State glyphs live in `src/cli/chat/state_tokens.py` — the
+    # single canonical `STATE_TOKENS` table shared with `CardWidget`
+    # (qol-075). This row's reactive `state` still uses the historical
+    # vocabulary (``starting``/``completed``/``pruned``) because the
+    # widget's CSS classes, tests, and upstream `set_state` callers
+    # key off those names; :func:`resolve_state` bridges them to
+    # canonical via `_LEGACY_ALIASES`. Migrating the reactive
+    # vocabulary itself is a follow-up — see qol-084 (the aliases
+    # are the short-lived bridge until then).
 
     _TERMINAL_CSS_STATES = ("completed", "failed", "paused", "cancelling", "pruned")
     """States that map to a `.-<state>` CSS class."""
@@ -372,7 +375,15 @@ class WorkflowNodeRow(Collapsible):
         # should gate the JSON preview for agent nodes.
         self._last_assistant_text: str = ""
         # bug-036b: pre-completion title includes ``(short_type)``.
-        title = f"{self.STATE_GLYPHS['starting']} {node_name}"
+        # The initial ``⠋`` is a static placeholder for the ~80 ms
+        # gap between compose and the first spinner tick (installed
+        # in :meth:`on_mount`). It intentionally does NOT go through
+        # ``state_tokens.resolve_state`` — the canonical
+        # ``running`` glyph (``▸``) would flash briefly before the
+        # spinner overwrites it, changing a rendering that the
+        # bug-036b snapshot golden pins on ``⠋``. See qol-084 for
+        # the follow-up that unifies this with the spinner table.
+        title = f"⠋ {node_name}"
         if self._short_type:
             title += f" ({self._short_type})"
         super().__init__(title=title, collapsed=True)
@@ -1044,7 +1055,20 @@ class WorkflowNodeRow(Collapsible):
         if self.state in _ANIMATED_STATES:
             glyph = _SPINNER_FRAMES[self._frame_idx]
         else:
-            glyph = self.STATE_GLYPHS.get(self.state, "?")
+            # State-tokens (qol-075): legacy state names alias to
+            # canonical inside `resolve_state`; unknown names raise
+            # ``KeyError`` — mirror the pre-qol-075 ``.get(..., "?")``
+            # fallback so a stray state can't crash the title paint.
+            # `catch_warnings` silences the alias DeprecationWarning
+            # per repaint — this row's reactive still holds the legacy
+            # vocabulary; the warning is for external callers. The
+            # bridge dissolves when qol-084 migrates the reactive.
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                try:
+                    glyph = resolve_state(self.state).glyph
+                except KeyError:
+                    glyph = "?"
         base = f"{glyph} {self._node_name}"
         if self.state == "failed":
             # bug-063: full error moved to Error section body; keep

@@ -21,6 +21,7 @@ from typing import Any
 
 import pytest
 
+from cli.chat.state_tokens import resolve_state
 from cli.chat.widgets.card_body.workflow import WorkflowRenderer
 from workflows.events import WorkflowEventKind
 
@@ -87,8 +88,8 @@ async def test_node_row_paused_on_awaiting_approval() -> None:
         node_name="n1",
     ))
     assert row.state == "paused"
-    # Glyph verified via STATE_GLYPHS mapping.
-    assert row.STATE_GLYPHS[row.state] == "⚠"
+    # Glyph verified via canonical STATE_TOKENS table (qol-075).
+    assert resolve_state(row.state).glyph == "⚠"
 
 
 @pytest.mark.asyncio
@@ -122,7 +123,7 @@ async def test_node_row_running_on_approval_resolved() -> None:
         resolution="approved",
     ))
     assert row.state == "running"
-    assert row.STATE_GLYPHS[row.state] == "▸"
+    assert resolve_state(row.state).glyph == "▸"
 
 
 @pytest.mark.asyncio

@@ -27,12 +27,14 @@ readable.
 from __future__ import annotations
 
 import time
+import warnings
 from typing import Any
 
 from textual.app import ComposeResult
 from textual.reactive import reactive
 from textual.widgets import Collapsible, Static
 
+from cli.chat.state_tokens import resolve_state
 from cli.chat.widgets.card_body import KIND_TO_RENDERER
 from cli.chat.widgets.notice_slot import NoticeSlot
 from tools.services.card_kinds import get_kind_spec
@@ -485,12 +487,24 @@ class CardWidget(Collapsible):
         if new in _CSS_CLASS_STATES:
             self.add_class(f"-{new}")
         # Update glyph. `running` uses the kind default when the
-        # kind-spec map has no explicit entry.
+        # kind-spec map has no explicit entry. Out-of-kind states
+        # (e.g. `paused` on a markdown card) fall through to the
+        # canonical `STATE_TOKENS` table via qol-075's
+        # `resolve_state`; unknown names paint `?` so a stray status
+        # can't crash the header. `catch_warnings` silences the alias
+        # DeprecationWarning per transition — the widget's reactive
+        # still holds the legacy vocabulary in a few positions
+        # (``initializing`` default, ``error`` from `apply_close`);
+        # the warning is aimed at external callers. The reactive
+        # migration itself is qol-084; the bridge dissolves then.
         glyph = self._kind_spec.header_glyph_by_status.get(new)
         if glyph is None:
-            # Fallbacks for states outside the kind's own map
-            # (e.g. `initializing` / `paused` on a markdown card).
-            glyph = _GENERIC_GLYPH_BY_STATE.get(new, "?")
+            with warnings.catch_warnings():
+                warnings.simplefilter("ignore", DeprecationWarning)
+                try:
+                    glyph = resolve_state(new).glyph
+                except KeyError:
+                    glyph = "?"
         self._header.set_glyph(glyph)
 
     def action_expand_or_ack(self) -> None:
@@ -630,19 +644,6 @@ class CardWidget(Collapsible):
                 self.app.mount(modal)
         except Exception:  # noqa: BLE001 — mount is best-effort
             pass
-
-
-# Generic fallbacks for state → glyph when the card's kind-spec map
-# has no entry (e.g. `paused` on a markdown card).
-_GENERIC_GLYPH_BY_STATE: dict[str, str] = {
-    "initializing": "⠋",
-    "queued": "⋯",
-    "paused": "⚠",
-    "cancelling": "⧗",
-    "success": "✓",
-    "error": "✗",
-    "cancelled": "─",
-}
 
 
 class _MockEventData:

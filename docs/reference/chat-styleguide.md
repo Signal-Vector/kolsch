@@ -69,25 +69,31 @@ Single-side spacing (used for finer intra-widget layout):
 
 ## 2. Symbols & glyphs
 
-| Glyph | Means | Placement | Used by (`file:line`) | Notes |
-|-------|-------|-----------|------------------------|-------|
-| `✓` | terminal success | leading title glyph | `workflow_node_row.py:281` (`completed`), `card_widget.py:637` (`success`), `compaction_block.py:208` (`success`) | consistent |
-| `✗` | terminal failure | leading title glyph | `workflow_node_row.py:281` (`failed`), `card_widget.py:637` (`error`), `compaction_block.py:210` (`failure`), `node_section.py:39` (error color) | consistent |
-| `⧗` | cancelling | leading title glyph | `workflow_node_row.py:281`, `card_widget.py:637` | consistent |
-| `⚠` | paused / warning | leading title glyph | `workflow_node_row.py:281` (`paused`), `card_widget.py:637` (`paused`) | consistent |
-| `─` | pruned / cancelled | leading title glyph | `workflow_node_row.py:281` (`pruned`), `card_widget.py:637` (`cancelled`) | ⚑ same glyph, two different state *names* |
-| `⠋` | starting / initializing | leading title glyph | `workflow_node_row.py:281` (`starting`), `card_widget.py:637` (`initializing`) | ⚑ same glyph, two different state names |
-| `▸` | running (static) / collapsed | leading glyph **and** collapse chevron | `workflow_node_row.py:281` (`running`), `approval_args_row.py:65` (`_CHEVRON_COLLAPSED`) | ⚑ **double meaning** — see below |
-| `▾` | expanded | collapse chevron | `approval_args_row.py:66` (`_CHEVRON_EXPANDED`) | pairs with `▸` |
-| `⋯` | queued | leading title glyph | `card_widget.py:637` (`queued`) | CardWidget only (no WorkflowNodeRow equivalent) |
-| `…` | truncation ellipsis | trailing, in overflow | `approval_args_row.py:67` (`_ELLIPSIS`) | |
-| `⣾…` (8) | spinner — active node | leading glyph (animated) | `workflow_node_row.py:60` (`_SPINNER_FRAMES`), used at `:1040` | ⚑ **8-frame** alphabet |
-| `⠋…` (10) | spinner — active turn | leading glyph (animated) | `turn_status.py:33` (`_SPINNER_FRAMES`), used at `:232` | ⚑ **10-frame** alphabet |
-| `↳` | nested / "from" connector | gutter before a hint line | `card_body/workflow.py:258,261` (`↳ from <ref>`), `tool_call_block.py:126` (`↳ hint:`) | consistent connector |
-| `●` / `○` | breadcrumb done / pending | header breadcrumb | `approval_block.py:578,581,584` (`● choose ─ ○ pattern ─ ○ save`) | |
-| `●` | tool-call / compaction marker | leading title glyph | `tool_call_block.py:104` (`● {tool}`), `compaction_block.py:207` (`● Compacting…`) | |
-| `◎` | compaction preview | leading title glyph | `compaction_block.py:209` | |
-| `↷` / `↶` | compaction skipped / restored | leading title glyph | `compaction_block.py:211,212` | |
+Every widget looks state glyphs up through
+`src/cli/chat/state_tokens.py` — the canonical `STATE_TOKENS` table
+maps a single state vocabulary to `(glyph, color, text_style)`.
+Legacy widget-specific state names (`completed`, `error`,
+`initializing`, `starting`, `pruned`) still resolve via
+`_LEGACY_ALIASES` with a `DeprecationWarning` (qol-075).
+
+| Glyph | Means | Placement | Canonical state (`state_tokens.py`) | Other users |
+|-------|-------|-----------|--------------------------------------|--------------|
+| `✓` | terminal success | leading title glyph | `success` | `compaction_block.py:208` (`success`) |
+| `✗` | terminal failure | leading title glyph | `failed` | `compaction_block.py:210` (`failure`), `node_section.py:39` (error color) |
+| `⧗` | cancelling | leading title glyph | `cancelling` | — |
+| `⚠` | paused / warning | leading title glyph | `paused`, `awaiting` | — |
+| `─` | pruned / cancelled | leading title glyph | `cancelled` (legacy `pruned` aliases) | — |
+| `▸` | running (static) / collapsed | leading glyph **and** collapse chevron | `running` (legacy `starting` aliases) | `approval_args_row.py:65` (`_CHEVRON_COLLAPSED`) — ⚑ **double meaning** |
+| `▾` | expanded | collapse chevron | — | `approval_args_row.py:66` (`_CHEVRON_EXPANDED`) — pairs with `▸` |
+| `⋯` | queued | leading title glyph | `queued` (legacy `initializing` aliases) | — |
+| `…` | truncation ellipsis | trailing, in overflow | — | `approval_args_row.py:67` (`_ELLIPSIS`) |
+| `⣾…` (8) | spinner — active node | leading glyph (animated) | — | `workflow_node_row.py:60` (`_SPINNER_FRAMES`), used at `:1055` — ⚑ **8-frame** alphabet |
+| `⠋…` (10) | spinner — active turn | leading glyph (animated) | — | `turn_status.py:33` (`_SPINNER_FRAMES`), used at `:232` — ⚑ **10-frame** alphabet |
+| `↳` | nested / "from" connector | gutter before a hint line | — | `card_body/workflow.py:258,261` (`↳ from <ref>`), `tool_call_block.py:126` (`↳ hint:`) |
+| `●` / `○` | breadcrumb done / pending | header breadcrumb | — | `approval_block.py:578,581,584` (`● choose ─ ○ pattern ─ ○ save`) |
+| `●` | tool-call / compaction marker | leading title glyph | — | `tool_call_block.py:104` (`● {tool}`), `compaction_block.py:207` (`● Compacting…`) |
+| `◎` | compaction preview | leading title glyph | — | `compaction_block.py:209` |
+| `↷` / `↶` | compaction skipped / restored | leading title glyph | — | `compaction_block.py:211,212` |
 
 ![WorkflowNodeRow failed — ✗ leading glyph](chat-widgets/svg/workflow-node-failed-color.svg)
 
@@ -95,26 +101,24 @@ Single-side spacing (used for finer intra-widget layout):
 
 ![ApprovalBlock choose — ○ pending breadcrumb steps](chat-widgets/svg/approval-choose-color.svg)
 
-### ⚑ Divergent state-glyph maps
+### State vocabulary
 
-`WorkflowNodeRow.STATE_GLYPHS` (`workflow_node_row.py:281`) and
-`CardWidget._GENERIC_GLYPH_BY_STATE` (`card_widget.py:637`) are two
-independent maps with **different keys for the same visual meaning**:
+The canonical state names (source of truth: `src/cli/chat/state_tokens.py`):
 
-| Meaning | WorkflowNodeRow key → glyph | CardWidget key → glyph |
-|---------|------------------------------|-------------------------|
-| success | `completed` → `✓` | `success` → `✓` |
-| failure | `failed` → `✗` | `error` → `✗` |
-| start | `starting` → `⠋` | `initializing` → `⠋` |
-| cancelling | `cancelling` → `⧗` | `cancelling` → `⧗` |
-| paused | `paused` → `⚠` | `paused` → `⚠` |
-| terminal-none | `pruned` → `─` | `cancelled` → `─` |
-| running | `running` → `▸` | — (uses kind-spec / no generic) |
-| queued | — | `queued` → `⋯` |
+| Canonical state | Glyph | Palette color | Text style | Legacy aliases |
+|-----------------|-------|---------------|------------|----------------|
+| `success`    | `✓` | `$tool-fg` | `bold` | `completed` |
+| `failed`     | `✗` | `$error`   | `bold` | `error` |
+| `running`    | `▸` | `$tool-fg` | `bold` | `starting` |
+| `queued`     | `⋯` | `$hint`    | `dim`  | `initializing` |
+| `paused`     | `⚠` | `$warning` | `bold italic` | — |
+| `awaiting`   | `⚠` | `$warning` | `bold italic` | — |
+| `cancelling` | `⧗` | `$warning` | `bold italic` | — |
+| `cancelled`  | `─` | `$hint`    | `dim`  | `pruned` |
 
-The glyphs agree; the **state names do not** (`completed` vs `success`,
-`failed` vs `error`, `starting` vs `initializing`, `pruned` vs
-`cancelled`). Normalizing to one vocabulary is a backlog item.
+Legacy alias resolution emits a `DeprecationWarning` (see the
+`_LEGACY_ALIASES` table); the aliases are the one-release bridge for
+widgets whose reactive `state` still uses the historical vocabulary.
 
 ### ⚑ Two spinner alphabets
 
@@ -131,12 +135,12 @@ Two different animations for the same "work in progress" idea.
 
 ### ⚑ `▸` double meaning
 
-`▸` is both the **running-state glyph** (`STATE_GLYPHS['running']`,
-`workflow_node_row.py:281`) and the **collapsed-chevron** for
+`▸` is both the **running-state glyph** (`STATE_TOKENS['running']` in
+`src/cli/chat/state_tokens.py`) and the **collapsed-chevron** for
 collapsible rows (`_CHEVRON_COLLAPSED`, `approval_args_row.py:65`). Note
 that while a node is *animating* it actually renders the braille spinner
-(`workflow_node_row.py:1040` picks `_SPINNER_FRAMES` for animated
-states), so `▸` is the static/non-animating running glyph — but it still
+(`workflow_node_row.py` picks `_SPINNER_FRAMES` for animated states),
+so `▸` is the static/non-animating running glyph — but it still
 collides with the collapse chevron's meaning.
 
 ![ApprovalArgsRow expanded — ▾ chevron + overflow …](chat-widgets/svg/approval-args-expanded-color.svg)
@@ -220,8 +224,8 @@ duplicated here.)
 | # | Inconsistency | Locations |
 |---|---------------|-----------|
 | 1 | **Two spinner alphabets** — 10-frame vs 8-frame braille | `turn_status.py:33` vs `workflow_node_row.py:60` |
-| 2 | **Divergent state-glyph maps** — same glyphs, different state names (`completed`/`success`, `failed`/`error`, `starting`/`initializing`, `pruned`/`cancelled`) | `workflow_node_row.py:281` vs `card_widget.py:637` |
-| 3 | **`▸` double meaning** — running-state glyph and collapsed chevron | `workflow_node_row.py:281` & `approval_args_row.py:65` |
+| 2 | ~~**Divergent state-glyph maps**~~ — resolved by qol-075: `src/cli/chat/state_tokens.py` now owns the single canonical table (`STATE_TOKENS`); widget-specific legacy names resolve via `_LEGACY_ALIASES` with a `DeprecationWarning`. | ~~`workflow_node_row.py:281` vs `card_widget.py:637`~~ |
+| 3 | **`▸` double meaning** — running-state glyph and collapsed chevron | `state_tokens.py` (`running`) & `approval_args_row.py:65` |
 | 4 | **Two elapsed formats** — minute rollover vs whole-seconds | `turn_status.py:36` vs `card_body/workflow.py:251` |
 | 5 | **Two count formats** — `[N/M]` vs `N/M` | `card_body/workflow.py:251` vs `:1078` |
 | 6 | **Spacing outliers** — `margin: 1 0` (top+bottom) and `margin-left: 2` indent | `force_kill_confirm.py:82`, `approval_save_confirm.py:54` |
