@@ -38,10 +38,74 @@ Declared in `theme.tcss`: `$user-border` L23, `$assistant-fg` L24,
 `$tool-fg` L25, `$error` L28, `$warning` L29, `$hint` L30. The `mono.tcss`
 mapping (all six → `ansi_default`) is at `mono.tcss:28–34`.
 
+## Palette fallback pattern
+
+Every widget that references a palette variable in its `DEFAULT_CSS`
+also declares a fallback for that variable at the top of the block:
+
+```python
+class UserChatbox(Static):
+    DEFAULT_CSS = """
+    $user-border: #2ea043;              /* ← fallback for widget-isolation tests */
+    UserChatbox {
+        border: round $user-border;     /* ← property reference (canonical) */
+        ...
+    }
+    """
+```
+
+The fallback matches the value in `src/cli/chat/themes/theme.tcss`. At
+runtime, the app-level theme override wins (later declarations in
+Textual's cascade). During widget-isolation tests, the app-level theme
+is *not* loaded — the fallback is what lets the widget render standalone.
+
+The invariant is enforced by `mock_app_factory` in
+`tests/cli/chat/conftest.py`, whose docstring states it verbatim:
+
+> The wrapper does not add CSS beyond what the widget declares in its own
+> `DEFAULT_CSS`. This keeps tests honest — a widget that only renders
+> correctly with theme.tcss loaded is a widget with hidden coupling, not
+> a modular unit.
+
+The precedent comment lives above `user_chatbox.py`'s `DEFAULT_CSS`
+(`user_chatbox.py:43–46`): *"the app-level theme.tcss overrides the
+variable at runtime."* Around a dozen widgets carry the same pattern
+today — it is the canonical shape, not a bypass.
+
+**Rule:**
+
+- Widgets **must** declare a `$var: #hex;` fallback for every palette
+  `$var` they reference in a property value — otherwise widget-isolation
+  tests (`mock_app_factory`) fail to render with `UnresolvedVariableError`.
+- Widgets **may** also declare fallbacks for vars they don't currently
+  reference (harmless). Widget-local vars not in the theme (e.g. a
+  widget-specific accent) may be declared in the widget's own
+  `DEFAULT_CSS` — but if the color is likely to recur across widgets,
+  add it to `theme.tcss` first and then declare the fallback.
+- Widgets **may not** use raw hex in `color:`, `background:`, or
+  `border*:` property values — those must reference a `$var`.
+
+Both halves are enforced automatically:
+
+- **Drift-guard** — `tests/unit/cli/chat/test_palette_fallback_drift.py`
+  parses every `$var: #hex;` under `src/cli/chat/widgets/` and asserts the
+  hex matches the theme's value for that var.
+- **CI lint** — `scripts/lint_chat_hex.py` (wired into the commit gate,
+  `compose.test.yml`) fails on any raw hex in a `color:`/`background:`/
+  `border*:` property value under `src/cli/chat/widgets/`. Fallback
+  declarations are exempted by a left-side guard in the regex.
+
+See `process/qol-082-chat-palette-fallback-convention.md` for the full
+convention.
+
 ### Off-palette colors (⚑ backlog)
 
-These carry hue but are **not** part of the six-variable palette. They are
-flagged for the normalization pass, not fixed here.
+These are widget-local variables carrying hue that is **not** part of
+the six-variable palette. They are the two remaining not-in-theme names;
+`qol-074` drops both and routes their references through `$tool-fg`.
+Because they are `$var: #hex;` declarations (not property-value hex),
+they are neither a fallback nor a lint-caught bypass — they're a
+distinct concern (duplicate/orphan widget-local vars).
 
 <div class="chat-swatch" markdown>
 
@@ -49,7 +113,6 @@ flagged for the normalization pass, not fixed here.
 |---|---|---|---|
 | `$compact-fg` `#b39ddb` | <span style="display:inline-block;width:1.1em;height:1.1em;border:1px solid #888;background:#b39ddb"></span> | `compaction_block.py:49` | widget-local var; a compaction accent that isn't in the global palette |
 | `$card-fg` `#4dd0e1` | <span style="display:inline-block;width:1.1em;height:1.1em;border:1px solid #888;background:#4dd0e1"></span> | `card_widget.py:174` | widget-local var; duplicates `$tool-fg`'s hex under a second name |
-| `#1a1d24` | <span style="display:inline-block;width:1.1em;height:1.1em;border:1px solid #888;background:#1a1d24"></span> | `info_bar.py:53`, `slash_popup.py:103` | undeclared background; duplicated literal with no variable |
 
 </div>
 
@@ -166,27 +229,32 @@ plain dim monospace instead of running Pygments when `NO_COLOR` is set
 
 ## Palette-bypass backlog (⚑)
 
-Widgets that hard-code hue instead of referencing the six palette
-variables. Flagged for the normalization pass; **not changed here**.
+Widgets that hard-code hue in a **property value** (`color:` /
+`background:` / `border*:`) instead of referencing a palette variable.
+Flagged for the normalization pass (`qol-074`); **not changed here**.
+
+This is the narrow definition of "bypass": widget-local `$var: #hex;`
+declarations are the [canonical fallback pattern](#palette-fallback-pattern)
+and are not listed here. The CI lint (`scripts/lint_chat_hex.py`)
+enforces the distinction — property-value hex fails; declaration lines
+pass.
 
 | Widget | Line(s) | Bypass | Equivalent palette var |
 |---|---|---|---|
-| `info_bar.py` | 53 | `background: #1a1d24` | — (undeclared) |
+| `info_bar.py` | 53 | `background: #1a1d24` | — (undeclared; `qol-074` promotes to `$surface`) |
 | `info_bar.py` | 56 | `color: #6e7681` | `$hint` |
 | `info_bar.py` | 62 | `color: #b0c0d5` | `$assistant-fg` |
-| `slash_popup.py` | 95–98 | redeclares `$tool-fg`/`$hint`/`$assistant-fg`/`$warning` as literal hex, shadowing the theme vars | the four named vars |
-| `slash_popup.py` | 103 | `background: #1a1d24` | — (undeclared; duplicates `info_bar`) |
+| `slash_popup.py` | 103 | `background: #1a1d24` | — (undeclared; duplicates `info_bar`; `qol-074` promotes to `$surface`) |
 | `notice.py` | 44 | `color: #ffb454` | `$warning` |
 | `notice.py` | 48 | `color: #ff5555` | `$error` |
 | `node_section.py` | 39 | `color: #ff5555` | `$error` |
-| `workflow_node_row.py` | 274–278 | `#4dd0e1` / `#ff5555` / `#ffb454` / `#6e7681` per state | `$tool-fg` / `$error` / `$warning` / `$hint` |
-| `compaction_block.py` | 49 | `$compact-fg: #b39ddb` (widget-local var) | — (no global equivalent) |
-| `card_widget.py` | 174 | `$card-fg: #4dd0e1` (widget-local var) | duplicates `$tool-fg` |
+| `workflow_node_row.py` | 274–278 | `#4dd0e1` / `#ff5555` / `#ffb454` / `#4dd0e1` / `#6e7681` per state | `$tool-fg` / `$error` / `$warning` / `$tool-fg` / `$hint` |
+| `assistant_prose.py` | 105 | `WorkflowAnchorButton { color: #4dd0e1; }` | `$tool-fg` |
 
-Two follow-up themes for the normalization pass: (1) route every literal
-hue through the six variables, and (2) decide whether the compaction accent
-and the shared card background (`#1a1d24`) deserve their own palette
-entries.
+Two follow-up themes for the normalization pass: (1) route every
+property-value literal through the six variables, and (2) decide whether
+the shared card background (`#1a1d24`) deserves its own palette entry
+(`qol-074` promotes it to `$surface`).
 
 ## Regenerating the gallery
 
