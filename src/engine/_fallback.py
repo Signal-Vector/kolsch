@@ -34,6 +34,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from engine._crewai_adapter import _tool_to_openai_spec
+from engine._think_strip import strip_leading_think
 from errors import (
     ConfigFallbackDuplicate,
     LlmAllModelsFailed,
@@ -415,7 +416,17 @@ class FallbackLLMHandle:
                 await self._emit_response_error(call_id=call_id, exc=None)
                 raise
 
-            await self._emit_response_success(call_id=call_id, response=response)
+            # bug-087 — strip a leading `<think>…</think>` block from
+            # inline-reasoning models (e.g. openrouter minimax-m3) so
+            # both the emitted `model.response` event content and the
+            # returned `LLMResponse.content` are clean. The reasoning
+            # is preserved on the event's `reasoning_trace` field.
+            clean, reasoning = strip_leading_think(response.content)
+            if reasoning is not None:
+                response = response.model_copy(update={"content": clean})
+            await self._emit_response_success(
+                call_id=call_id, response=response, reasoning=reasoning
+            )
             return response
 
         # Loop fell through — every attempt raised a Recoverable
@@ -488,6 +499,7 @@ class FallbackLLMHandle:
         *,
         call_id: AgentCallId,
         response: LLMResponse,
+        reasoning: str | None = None,
     ) -> None:
         content_dict: dict[str, Any]
         if response.tool_calls:
@@ -496,11 +508,13 @@ class FallbackLLMHandle:
         else:
             content_dict = {"text": response.content or ""}
             stop_reason = "text"
+        reasoning_trace = {"text": reasoning} if reasoning is not None else None
         await self._emit(
             type_=EventType.MODEL_RESPONSE,
             data=ModelResponseData(
                 call_id=call_id,
                 content=content_dict,
+                reasoning_trace=reasoning_trace,
                 usage=dict(response.usage),
                 cost=0.0,
                 latency_ms=0,

@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 from engine._crewai_adapter import _tool_to_openai_spec
+from engine._think_strip import strip_leading_think
 from errors import ExchangeCancelled, PlatformError, ToolUnauthorized
 from schemas import (
     Actor,
@@ -180,6 +181,16 @@ class _ObservedLLMHandle:
             )
             raise
 
+        # bug-087 — strip a leading `<think>…</think>` block from
+        # inline-reasoning models so both the emitted `model.response`
+        # event content and the returned `LLMResponse.content` are
+        # clean; the reasoning is captured on `reasoning_trace`. A
+        # future streaming connector would need delta-aware stripping
+        # (deltas bypass this seam).
+        clean, reasoning = strip_leading_think(response.content)
+        if reasoning is not None:
+            response = response.model_copy(update={"content": clean})
+
         # AFTER — model.response.
         content_dict: dict[str, Any]
         if response.tool_calls:
@@ -188,12 +199,14 @@ class _ObservedLLMHandle:
         else:
             content_dict = {"text": response.content or ""}
             stop_reason = "text"
+        reasoning_trace = {"text": reasoning} if reasoning is not None else None
 
         await self._emit(
             type_=EventType.MODEL_RESPONSE,
             data=ModelResponseData(
                 call_id=call_id,
                 content=content_dict,
+                reasoning_trace=reasoning_trace,
                 usage=dict(response.usage),
                 cost=0.0,
                 latency_ms=0,
