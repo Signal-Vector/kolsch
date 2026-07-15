@@ -228,6 +228,27 @@ def _add_notice_slot_notices(w: Any) -> None:  # noqa: ANN401
     w.add_notice("Warning: deprecated API", "warning")
 
 
+def _switch_notice_kind(kind: str) -> Callable[[Any], None]:
+    """Return a driver that switches a ``NoticeWidget`` into ``kind``.
+
+    Removes any prior severity class, adds the new one, resets ``_kind``,
+    and calls ``update_text`` so the widget re-renders with the correct
+    leading glyph.
+    """
+
+    def _driver(w: Any) -> None:  # noqa: ANN401
+        for cls in ("-warning", "-error"):
+            w.remove_class(cls)
+        if kind == "warning":
+            w.add_class("-warning")
+        elif kind == "error":
+            w.add_class("-error")
+        w._kind = kind  # noqa: SLF001
+        w.update_text(w._body)  # noqa: SLF001
+
+    return _driver
+
+
 # ---------------------------------------------------------------------------
 # The catalog
 # ---------------------------------------------------------------------------
@@ -400,9 +421,9 @@ CATALOG: list[CatalogEntry] = [
         source_file="notice.py",
         make=lambda: NoticeWidget(text="Operation completed", kind="info"),
         states={
-            "info": lambda _w: None,  # default
-            "warning": lambda w: w.add_class("-warning"),
-            "error": lambda w: w.add_class("-error"),
+            "info": _switch_notice_kind("info"),
+            "warning": _switch_notice_kind("warning"),
+            "error": _switch_notice_kind("error"),
         },
     ),
     CatalogEntry(

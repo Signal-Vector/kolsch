@@ -47,7 +47,8 @@ async def test_mount_notice_adds_widget_to_slot() -> None:
         slot = card.query_one(NoticeSlot)
         widgets = list(slot.query(NoticeWidget))
         assert len(widgets) == 1
-        assert widgets[0].text == "hi"
+        # qol-080: `.text` includes the leading severity glyph.
+        assert widgets[0].text == "ℹ hi"
         assert widgets[0].kind == "info"
 
 
@@ -88,7 +89,8 @@ async def test_multiple_notices_stack_in_order() -> None:
         slot = card.query_one(NoticeSlot)
         widgets = list(slot.query(NoticeWidget))
         assert len(widgets) == 3
-        # Mount order preserved.
-        assert widgets[0].text == "first"
-        assert widgets[1].text == "second"
-        assert widgets[2].text == "third"
+        # Mount order preserved. qol-080: `.text` carries the leading
+        # severity glyph (`ℹ` for info, `⚠` for warning).
+        assert widgets[0].text == "ℹ first"
+        assert widgets[1].text == "⚠ second"
+        assert widgets[2].text == "ℹ third"

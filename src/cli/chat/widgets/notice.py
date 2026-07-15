@@ -21,15 +21,23 @@ from __future__ import annotations
 
 from textual.widgets import Static
 
+# qol-080 — severity glyph unconditional; see the redundant-carriers
+# callout in `docs/reference/chat-color-guide.md`.
+SEVERITY_GLYPHS: dict[str, str] = {
+    "info": "ℹ",
+    "warning": "⚠",
+    "error": "✗",
+}
+
 
 class NoticeWidget(Static):
     """Dim italic notice line. Colour and glyph vary by ``kind``.
 
     ``kind`` values in v1:
 
-    - ``"info"`` — dim italic, no colour override.
-    - ``"warning"`` — amber italic.
-    - ``"error"`` — red italic.
+    - ``"info"`` — dim italic, no colour override; ``ℹ`` glyph.
+    - ``"warning"`` — amber italic; ``⚠`` glyph.
+    - ``"error"`` — red italic; ``✗`` glyph.
 
     Any unknown kind renders as ``info``.
     """
@@ -60,23 +68,32 @@ class NoticeWidget(Static):
         kind: str = "info",
         id: str | None = None,
     ) -> None:
+        rendered = self._render_body(text, kind)
         # bug-040: notice text is executor-sourced (e.g.,
         # ``event_adapter._handle_card_notice`` mounts with
         # ``f"exchange failed — {message}"`` where ``message`` is
         # from an executor error payload). Disable Textual markup so
         # bracket content in the message can't trip ``MarkupError``.
-        super().__init__(text, id=id, markup=False)
-        self._text = text
+        super().__init__(rendered, id=id, markup=False)
+        self._body = text
+        self._text = rendered
         self._kind = kind
         if kind == "warning":
             self.add_class("-warning")
         elif kind == "error":
             self.add_class("-error")
 
+    @staticmethod
+    def _render_body(text: str, kind: str) -> str:
+        glyph = SEVERITY_GLYPHS.get(kind, SEVERITY_GLYPHS["info"])
+        return f"{glyph} {text}"
+
     def update_text(self, text: str) -> None:
         """Replace the notice's text in place (used for count updates)."""
-        self._text = text
-        self.update(text)
+        rendered = self._render_body(text, self._kind)
+        self._body = text
+        self._text = rendered
+        self.update(rendered)
 
     @property
     def text(self) -> str:
@@ -89,4 +106,4 @@ class NoticeWidget(Static):
         return self._kind
 
 
-__all__ = ["NoticeWidget"]
+__all__ = ["SEVERITY_GLYPHS", "NoticeWidget"]

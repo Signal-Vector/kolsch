@@ -71,7 +71,8 @@ async def test_notice_without_card_id_mounts_at_transcript_root() -> None:
         widgets = list(transcript.query(NoticeWidget))
         # No `card_id` → mounted at transcript root.
         assert len(widgets) == 1
-        assert widgets[0].text == "hi"
+        # qol-080: widget prepends the severity glyph.
+        assert widgets[0].text == "ℹ hi"
 
 
 @pytest.mark.asyncio
@@ -108,7 +109,8 @@ async def test_notice_with_card_id_mounts_inside_card() -> None:
         slot = card_widget.query_one(NoticeSlot)
         widgets = list(slot.query(NoticeWidget))
         assert len(widgets) == 1
-        assert widgets[0].text == "in-card"
+        # qol-080: widget prepends the severity glyph.
+        assert widgets[0].text == "ℹ in-card"
 
         # No transcript-root NoticeWidget for this notice.
         transcript = app.query_one("#transcript", VerticalScroll)
@@ -165,7 +167,7 @@ async def test_repeat_notice_id_updates_existing_widget_in_place() -> None:
                 WIRE_CARD_NOTICE,
                 {
                     "notice_id": notice_id,
-                    "text": "⚠ dropped 10 events",
+                    "text": "dropped 10 events",
                     "kind": "warning",
                     "card_id": card_id,
                 },
@@ -179,7 +181,7 @@ async def test_repeat_notice_id_updates_existing_widget_in_place() -> None:
                 WIRE_CARD_NOTICE,
                 {
                     "notice_id": notice_id,
-                    "text": "⚠ dropped 20 events",
+                    "text": "dropped 20 events",
                     "kind": "warning",
                     "card_id": card_id,
                 },
@@ -190,6 +192,7 @@ async def test_repeat_notice_id_updates_existing_widget_in_place() -> None:
         card_widget = app.query_one(CardWidget)
         slot = card_widget.query_one(NoticeSlot)
         widgets = list(slot.query(NoticeWidget))
-        # Only ONE widget in the slot — updated in place.
+        # Only ONE widget in the slot — updated in place. qol-080: the
+        # widget prepends the severity glyph on both mount and update.
         assert len(widgets) == 1
         assert widgets[0].text == "⚠ dropped 20 events"

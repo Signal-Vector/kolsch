@@ -100,10 +100,15 @@ N drops per card (default 10). Prevents a saturated stream from
 firing a notice for every dropped append; the notice text updates in
 place via the shared ``notice_id`` on subsequent 10-multiples."""
 
-_DROP_NOTICE_PREFIX = "⚠ dropped"
-"""Prefix used by drop-notice text ("⚠ dropped N events"). Also the
+_DROP_NOTICE_PREFIX = "dropped"
+"""Prefix used by drop-notice text ("dropped N events"). Also the
 key that ``CardsImpl.notice`` uses to reuse the per-card
-``notice_id`` for the update-in-place path."""
+``notice_id`` for the update-in-place path.
+
+qol-080: the widget owns the leading ``⚠`` glyph now — callers pass
+body text only, and ``NoticeWidget`` prepends the severity glyph on
+mount and on ``update_text``. See
+``docs/reference/chat-color-guide.md`` §"Redundant carriers"."""
 
 
 def _new_event_id() -> EventId:
@@ -249,7 +254,7 @@ class CardsImpl(AbstractCards):
         ``EventAdapter._handle_card_notice`` mounts the notice INSIDE
         that card's
         [`NoticeSlot`][cli.chat.widgets.notice_slot.NoticeSlot]. For
-        drop-notice text (``text.startswith("⚠ dropped")``) the
+        drop-notice text (``text.startswith("dropped")``) the
         per-card ``notice_id`` is reused so repeat drops update the
         existing widget's text in place instead of stacking a second
         notice.

@@ -6,7 +6,7 @@ Three passes:
    carries no ``card_id``.
 2. ``impl.notice("hello", card=card1)`` — payload carries
    ``card_id=str(card1.id)``.
-3. Two notice calls with ``text.startswith("⚠ dropped")`` on the
+3. Two notice calls with ``text.startswith("dropped")`` on the
    same card share the same ``notice_id`` (dedup for drop-notice
    updates).
 """
@@ -112,8 +112,8 @@ async def test_drop_notice_shares_notice_id_per_card(
     impl = await _mk_impl(store)
     try:
         card = await impl.open("t", kind="markdown")
-        impl.notice("⚠ dropped 10 events", kind="warning", card=card)
-        impl.notice("⚠ dropped 20 events", kind="warning", card=card)
+        impl.notice("dropped 10 events", kind="warning", card=card)
+        impl.notice("dropped 20 events", kind="warning", card=card)
         await _drain(impl)
 
         payloads = await _collect_notice_payloads(store, impl._thread_id)

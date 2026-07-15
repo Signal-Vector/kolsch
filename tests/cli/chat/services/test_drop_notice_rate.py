@@ -7,7 +7,7 @@ Three passes:
    drop 10, 20, 30) — not 30.
 2. Each drop-notice on the same card shares the same ``notice_id``.
 3. The rendered notice text updates to the current count
-   (``"⚠ dropped 30 events"`` supersedes ``"⚠ dropped 10 events"``).
+   (``"dropped 30 events"`` supersedes ``"dropped 10 events"``).
 
 We spy on ``CardsImpl.notice`` to record every call — the notice
 itself is fire-and-forget on the critical lane, and asserting on
@@ -123,7 +123,7 @@ async def test_rate_limit_fires_every_10_drops(
         for n in notice_log:
             assert n["kind"] == "warning"
             assert n["card_id"] == str(card.id)
-            assert n["text"].startswith("⚠ dropped")
+            assert n["text"].startswith("dropped")
     finally:
         await impl.aclose()
 
@@ -157,9 +157,9 @@ async def test_drop_notices_share_notice_id(
     # relies on for update-in-place behaviour.
     try:
         card = await impl.open("t", kind="markdown")
-        impl.notice("⚠ dropped 10 events", kind="warning", card=card)
+        impl.notice("dropped 10 events", kind="warning", card=card)
         first_id = impl._notice_ids_per_card[card.id]
-        impl.notice("⚠ dropped 20 events", kind="warning", card=card)
+        impl.notice("dropped 20 events", kind="warning", card=card)
         second_id = impl._notice_ids_per_card[card.id]
         assert first_id == second_id
     finally:
@@ -188,9 +188,9 @@ async def test_drop_notice_text_updates_count(
 
         texts = [n["text"] for n in notice_log]
         assert texts == [
-            "⚠ dropped 10 events",
-            "⚠ dropped 20 events",
-            "⚠ dropped 30 events",
+            "dropped 10 events",
+            "dropped 20 events",
+            "dropped 30 events",
         ]
     finally:
         await impl.aclose()
