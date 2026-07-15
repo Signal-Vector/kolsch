@@ -36,6 +36,35 @@ def test_format_duration() -> None:
     assert format_duration(-1) == "0s"
 
 
+def test_format_duration_sub_second() -> None:
+    """qol-085: ``sub_second_precision`` opt-in applies ONLY below 1s.
+
+    Under 1s + precision>0: decimal format (Option B — matches the
+    pre-qol-077 bash-timing site's exact behavior). At/above 1s: the
+    parameter is inert so a 2-minute bash still renders ``2m 00s``,
+    not ``120.0s`` — the drift qol-085 exists to close.
+    """
+    # Sub-second with precision: decimal-formatted.
+    assert format_duration(0.4, sub_second_precision=1) == "0.4s"
+    assert format_duration(0.05, sub_second_precision=1) == "0.1s"
+    assert format_duration(0.999, sub_second_precision=1) == "1.0s"
+    assert format_duration(0.42, sub_second_precision=2) == "0.42s"
+
+    # Default (precision=0) is qol-077 behavior — whole seconds.
+    assert format_duration(0.4) == "0s"
+
+    # 1s threshold: parameter is inert; both branches use whole seconds.
+    assert format_duration(1.0, sub_second_precision=1) == "1s"
+    assert format_duration(1.9, sub_second_precision=1) == "1s"
+
+    # Minute rollover unchanged — parameter must not leak into ≥60s.
+    assert format_duration(90, sub_second_precision=1) == "1m 30s"
+    assert format_duration(120, sub_second_precision=1) == "2m 00s"
+
+    # Negative clamp still holds with the opt-in — no `-0.5s` string.
+    assert format_duration(-0.5, sub_second_precision=1) == "0s"
+
+
 # ---------------------------------------------------------------------------
 # format_counts
 # ---------------------------------------------------------------------------

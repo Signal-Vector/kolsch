@@ -5,7 +5,10 @@ One format per fact:
 - ``format_duration`` — whole seconds under 60, ``Mm SSs`` at or above.
   Used everywhere the chat renders a wall-clock elapsed (turn status
   line, workflow-card header, workflow compact summary, terminal-run
-  footer, live-workflow strip).
+  footer, live-workflow strip). qol-085 adds a keyword-only
+  ``sub_second_precision`` opt-in that applies ONLY below 1s so
+  fast-bash timings can retain a ``0.4s`` signal; the ≥1s branches
+  are unchanged.
 - ``format_counts`` — bare ``N/M``, no brackets. The workflow-card
   header was the last holdout on bracketed counts; qol-077 dropped
   the brackets so header + compact summary + strip agree.
@@ -25,13 +28,21 @@ helpers return the number ONLY.
 from __future__ import annotations
 
 
-def format_duration(seconds: float) -> str:
+def format_duration(seconds: float, *, sub_second_precision: int = 0) -> str:
     """Render ``seconds`` as ``Ns`` under 60, ``Mm SSs`` at or above.
 
     Negative inputs clamp to ``0s`` — a defensive guard for callers
     that derive elapsed from clock deltas that can briefly go
     negative on re-anchoring.
+
+    qol-085: when ``sub_second_precision > 0`` AND ``seconds < 1``,
+    render as ``{seconds:.{p}f}s`` (e.g. ``0.4s``) so bash-node
+    timings keep their fast-execution signal. The ≥1s branches are
+    unaffected — a 2-minute bash still renders ``2m 00s`` regardless
+    of ``sub_second_precision``.
     """
+    if sub_second_precision > 0 and 0 <= seconds < 1:
+        return f"{seconds:.{sub_second_precision}f}s"
     s = max(0, int(seconds))
     if s < 60:
         return f"{s}s"

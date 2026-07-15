@@ -56,6 +56,7 @@ from textual.reactive import reactive
 from textual.widget import Widget
 from textual.widgets import Collapsible, Static
 
+from cli.chat.metrics import format_duration
 from cli.chat.spinner import SPINNER_FRAMES, spinner_frame
 from cli.chat.state_tokens import resolve_state
 
@@ -642,13 +643,17 @@ class WorkflowNodeRow(Collapsible):
         return code_part
 
     def _formatted_duration(self) -> str | None:
+        # qol-085: route through the shared helper so a 2-minute bash
+        # renders `2m 00s` here just like the workflow-card header
+        # (was `120.0s` pre-migration). `sub_second_precision=1`
+        # preserves the fast-bash `0.4s` signal below 1s.
         if self._node_duration_ms is not None:
             secs = self._node_duration_ms / 1000.0
-            return f"{secs:.1f}s"
+            return format_duration(secs, sub_second_precision=1)
         if self._node_started_at and self._node_completed_at:
             delta = (self._node_completed_at - self._node_started_at).total_seconds()
             if delta >= 0:
-                return f"{delta:.1f}s"
+                return format_duration(delta, sub_second_precision=1)
         return None
 
     def set_started_at(self, ts: datetime | None) -> None:
