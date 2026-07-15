@@ -32,12 +32,21 @@ import logging
 import os
 import re
 from contextlib import asynccontextmanager
+from datetime import datetime
 from typing import AsyncIterator
 
 from textual import events
 from textual.content import Content
 from textual.widgets import Markdown, Static
 from textual.widgets._markdown import MarkdownFence, MarkdownStream
+
+_ASSISTANT_FALLBACK_NAME = "Assistant"
+"""Generic identity used when the caller doesn't supply an agent name.
+
+kolsch ships with pluggable agents; hard-coding ``Claude`` would leak
+one deployment's naming into every render path. ``Assistant`` is the
+generic that the spec (qol-081) locks in.
+"""
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -172,7 +181,7 @@ class _PlainFence(MarkdownFence):
 
 
 class AssistantProse(Markdown):
-    """Assistant response widget — streaming markdown, no border.
+    """Assistant response widget — streaming markdown, rounded frame.
 
     Reactive attributes: none of our own. Reactive state is fully
     owned by the underlying `Markdown` widget's internal document.
@@ -181,10 +190,44 @@ class AssistantProse(Markdown):
     so agent responses that return structured output don't collapse
     into a single-line paragraph under Markdown reflow. See
     :func:`_wrap_json_if_detected`.
+
+    Identity header (qol-081): when the caller passes a ``timestamp``,
+    the widget renders ``<agent-name> · HH:MM`` in the top rail so the
+    assistant carries the same identity chrome as
+    :class:`~cli.chat.widgets.user_chatbox.UserChatbox`. The agent name
+    is bold in ``$assistant-fg``; the time is dim in ``$hint``. Callers
+    that don't pass a timestamp (nested workflow-row prose, ad-hoc
+    literal markdown) keep the bare rail.
     """
 
-    def __init__(self, markdown: str = "", **kwargs: object) -> None:
+    def __init__(
+        self,
+        markdown: str = "",
+        *,
+        agent_name: str | None = None,
+        timestamp: datetime | None = None,
+        **kwargs: object,
+    ) -> None:
         super().__init__(_wrap_json_if_detected(markdown), **kwargs)  # type: ignore[arg-type]
+        if timestamp is not None:
+            self.border_title = self._build_identity_header(agent_name, timestamp)
+
+    @staticmethod
+    def _build_identity_header(
+        agent_name: str | None, timestamp: datetime
+    ) -> str:
+        """Format the ``<agent> · HH:MM`` border title.
+
+        Returns a plain string; per-segment styling isn't possible via
+        ``border_title`` because Rich's style tokens don't resolve
+        Textual theme variables (``$assistant-fg``, ``$hint``). The
+        title picks up uniform ``border-title-color`` / ``-style`` from
+        this widget's ``DEFAULT_CSS`` (bold in ``$assistant-fg``) —
+        matching :class:`UserChatbox`'s uniform-title pattern. ``HH:MM``
+        is 24-hour, no seconds.
+        """
+        name = agent_name or _ASSISTANT_FALLBACK_NAME
+        return f"{name} · {timestamp:%H:%M}"
 
     # Fallback variable defaults so the widget mounts under Pilot
     # without theme.tcss loaded (per the Design Principles' modularity
@@ -202,6 +245,8 @@ class AssistantProse(Markdown):
      * turns. */
     AssistantProse {
         border: round $assistant-fg;
+        border-title-color: $assistant-fg;
+        border-title-style: bold;
         padding: 0 1;
         margin: 0 0 1 0;
         color: $assistant-fg;

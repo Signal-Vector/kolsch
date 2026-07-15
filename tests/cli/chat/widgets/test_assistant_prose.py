@@ -18,6 +18,8 @@ so the widget is exercised in isolation without the full ChatApp.
 
 from __future__ import annotations
 
+from datetime import datetime
+
 import pytest
 
 from cli.chat.widgets.assistant_prose import (
@@ -258,3 +260,92 @@ async def test_append_leaves_prose_unchanged(mock_app_factory) -> None:
         await pilot.pause()
         assert "```json" not in widget.source
         assert "Hello world." in widget.source
+
+
+# ---------------------------------------------------------------------------
+# Identity header (qol-081)
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_identity_header_renders_agent_name_and_time(
+    mock_app_factory,
+) -> None:
+    """With ``agent_name`` + ``timestamp``, the border title shows both."""
+    widget = AssistantProse(
+        agent_name="Claude",
+        timestamp=datetime(2026, 7, 15, 10, 32, 14),
+    )
+    app = mock_app_factory(widget)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        title = str(widget.border_title)
+        assert "Claude" in title
+        assert "10:32" in title
+        # `·` is the mid-dot separator locked by spec.
+        assert "·" in title
+
+
+@pytest.mark.asyncio
+async def test_identity_header_falls_back_to_assistant(mock_app_factory) -> None:
+    """When ``agent_name`` is ``None``, the header uses ``Assistant``."""
+    widget = AssistantProse(
+        agent_name=None,
+        timestamp=datetime(2026, 7, 15, 10, 32, 0),
+    )
+    app = mock_app_factory(widget)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        title = str(widget.border_title)
+        assert "Assistant" in title
+        assert "10:32" in title
+
+
+@pytest.mark.asyncio
+async def test_identity_header_strips_seconds(mock_app_factory) -> None:
+    """Time renders ``HH:MM`` — seconds must be dropped from the title."""
+    widget = AssistantProse(
+        agent_name="Claude",
+        timestamp=datetime(2026, 7, 15, 10, 32, 59),
+    )
+    app = mock_app_factory(widget)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        title = str(widget.border_title)
+        assert "10:32" in title
+        assert "10:32:59" not in title
+        assert ":59" not in title
+
+
+@pytest.mark.asyncio
+async def test_identity_header_omitted_when_timestamp_missing(
+    mock_app_factory,
+) -> None:
+    """Callers that don't opt in (no ``timestamp``) keep the bare rail.
+
+    Nested prose (workflow-row response sections, ad-hoc gallery
+    fixtures) shouldn't invent a fake timestamp. The header is
+    strictly opt-in — matches the styleguide catalog / app-layer
+    contract.
+    """
+    widget = AssistantProse("Some markdown.")
+    app = mock_app_factory(widget)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        # ``border_title`` is unset — Textual's default is ``None`` or
+        # an empty renderable; either way, the header text is absent.
+        assert not widget.border_title
+
+
+def test_identity_header_css_declares_bold_assistant_fg() -> None:
+    """CSS must give the border title uniform bold ``$assistant-fg``.
+
+    ``border_title`` is a plain string (Rich style tokens don't
+    resolve Textual theme vars); the theme colour comes from the
+    ``border-title-color`` / ``border-title-style`` rules in
+    ``DEFAULT_CSS``. Losing either rule silently drops the title
+    into Textual's default grey, breaking the AC.
+    """
+    css = AssistantProse.DEFAULT_CSS
+    assert "border-title-color: $assistant-fg" in css
+    assert "border-title-style: bold" in css

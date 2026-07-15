@@ -349,7 +349,9 @@ CATALOG: list[CatalogEntry] = [
         family="transcript",
         source_file="assistant_prose.py",
         make=lambda: AssistantProse(
-            "**Hello**, here is some markdown with `code`.\n\n- item 1\n- item 2"
+            "**Hello**, here is some markdown with `code`.\n\n- item 1\n- item 2",
+            agent_name="Claude",
+            timestamp=datetime(2026, 7, 14, 10, 32, 0, tzinfo=UTC),
         ),
         states={},  # frozen widget, single render
     ),

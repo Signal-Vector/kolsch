@@ -10,6 +10,16 @@ The renders on this page are real widget captures produced by the
 glyph, and border conventions see the
 [chat styleguide](chat-styleguide.md).
 
+!!! tip "Redundant carriers — the accessibility rule"
+    Every semantic distinction in the chat surface is carried by **at
+    least two** of hue, glyph, and text-style. A user in `NO_COLOR`, on a
+    grey-scale terminal, or with a colour-vision difference still reads
+    every state from either the glyph or the text-style — never from hue
+    alone. See §"[NO_COLOR / mono strategy](#no_color-mono-strategy)"
+    for the per-role mapping, and `NoticeWidget` (below) as the canonical
+    example: `ℹ` / `⚠` / `✗` prefix every notice, in both colour and
+    mono modes, regardless of the amber/red hue overlay.
+
 !!! note "Source of truth"
     The palette lives in `src/cli/chat/themes/theme.tcss` (color) and
     `src/cli/chat/themes/mono.tcss` (`NO_COLOR`). Theme selection is by
@@ -145,7 +155,7 @@ instead (e.g. `tool_call_block.py:65,68`).
 <figure markdown>
 ![UserChatbox — green round frame](chat-widgets/svg/user-chatbox-color.svg)
 ![AssistantProse — blue-grey round frame](chat-widgets/svg/assistant-prose-color.svg)
-<figcaption>Role frames: user green (<code>$user-border</code>) vs assistant blue-grey (<code>$assistant-fg</code>).</figcaption>
+<figcaption>Role frames: user green (<code>$user-border</code>) vs assistant blue-grey (<code>$assistant-fg</code>). Both carry a matched identity header on the top rail — <code>You · HH:MM:SS</code> and <code>&lt;agent&gt; · HH:MM</code> respectively — so the transcript reads as a two-sided conversation, not a monologue with prompts (qol-081).</figcaption>
 </figure>
 
 <figure markdown>
@@ -184,7 +194,7 @@ state; do not pick a color for its own sake.
 ![NoticeWidget info](chat-widgets/svg/notice-info-color.svg)
 ![NoticeWidget warning](chat-widgets/svg/notice-warning-color.svg)
 ![NoticeWidget error](chat-widgets/svg/notice-error-color.svg)
-<figcaption>Severity mapping on <code>NoticeWidget</code>: info, warning (amber), error (red).</figcaption>
+<figcaption>Severity mapping on <code>NoticeWidget</code>: info (<code>ℹ</code>), warning (<code>⚠</code>, amber), error (<code>✗</code>, red). Each notice leads with its severity glyph in both colour and mono modes — the glyph is the redundant carrier so a user in <code>NO_COLOR</code> or with a colour-vision difference still reads severity from shape, not hue alone (<code>notice.py:SEVERITY_GLYPHS</code>, qol-080).</figcaption>
 </figure>
 
 ## NO_COLOR / mono strategy
@@ -211,20 +221,25 @@ widgets do the per-role work in their own `DEFAULT_CSS`):
 |---|---|---|
 | identity / action | `bold` | `card_widget.py:194`, `info_bar.py:63`, `approval_block.py:128` |
 | hint / disabled / low-emphasis | `dim` | `compaction_block.py:83`, `tool_call_block.py:78` |
-| secondary / de-emphasized | `italic` | `card_widget.py:201`, `notice.py:41` (`dim italic`) |
+| secondary / de-emphasized | `italic` | `card_widget.py:201`, `notice.py:52` (`dim italic`) |
 | focus / selection | `reverse` | `assistant_prose.py:112` (`bold reverse`) |
 
-The `⚠` glyph is retained under `NO_COLOR` as an information carrier
-(`mono.tcss` header comment). Syntax highlighting is suppressed too:
-`AssistantProse` swaps `MarkdownFence` for a `_PlainFence` that returns
-plain dim monospace instead of running Pygments when `NO_COLOR` is set
-(`assistant_prose.py:16–20`, `assistant_prose.py:154–167`).
+Severity glyphs (`ℹ` / `⚠` / `✗`) are retained under `NO_COLOR` as
+information carriers per the redundant-carriers rule — see the callout
+at the top of this page. `NoticeWidget` prepends its severity glyph
+unconditionally (`notice.py:SEVERITY_GLYPHS`, qol-080), and
+`mono.tcss`'s header comment documents the same intent. Syntax
+highlighting is suppressed too: `AssistantProse` swaps `MarkdownFence`
+for a `_PlainFence` that returns plain dim monospace instead of running
+Pygments when `NO_COLOR` is set (`assistant_prose.py:16–20`,
+`assistant_prose.py:154–167`).
 
 <figure markdown>
 ![UserChatbox mono](chat-widgets/svg/user-chatbox-mono.svg)
+![AssistantProse mono](chat-widgets/svg/assistant-prose-mono.svg)
 ![CardWidget error mono](chat-widgets/svg/card-error-mono.svg)
 ![ToolCallBlock failed mono](chat-widgets/svg/tool-call-failed-mono.svg)
-<figcaption>Mono variants (<code>ansi_default</code> + text-style). The same widgets as above, rendered under <code>NO_COLOR</code>: hue is gone, structure and emphasis remain.</figcaption>
+<figcaption>Mono variants (<code>ansi_default</code> + text-style). The same widgets as above, rendered under <code>NO_COLOR</code>: hue is gone, structure and emphasis remain — the assistant identity header still leads with <code>bold</code> weight.</figcaption>
 </figure>
 
 ## Palette-bypass backlog
