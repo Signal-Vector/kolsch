@@ -72,7 +72,10 @@ def _subsystem(tmp_path: Path) -> ToolsSubsystem:
         catalog=None,  # type: ignore[arg-type]
     )
     return ToolsSubsystem(
-        secrets=secrets, sandbox=sandbox, authz=authz, root=tmp_path,
+        secrets=secrets,
+        sandbox=sandbox,
+        authz=authz,
+        root=tmp_path,
     )
 
 

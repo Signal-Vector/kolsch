@@ -20,7 +20,6 @@ from uuid import uuid4
 from engine.assembly import ASSEMBLY_VERSION, assemble_context
 from schemas import Actor, Event, EventType
 
-
 _TID = f"th_{uuid4()}"
 _SID = f"ses_{uuid4()}"
 

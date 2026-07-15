@@ -66,9 +66,7 @@ def _platform_yaml(root: Path) -> None:
                 "authorization": {
                     "variant": "rule_based",
                     "config": {
-                        "rules": [
-                            {"who": ".*", "what": ".*", "effect": "allow"}
-                        ]
+                        "rules": [{"who": ".*", "what": ".*", "effect": "allow"}]
                     },
                 },
                 "storage": {
@@ -136,9 +134,7 @@ async def test_manual_compact_serialises_with_concurrent_exchange(
     async def factory(_spec: Any) -> Any:
         return _Summariser()
 
-    provider = ReferenceSummaryCompactionProvider(
-        llm_for_model=factory, config={}
-    )
+    provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
     llm_providers = {
         "mock": ProviderConfig(
             name="mock",
@@ -204,9 +200,7 @@ async def test_manual_compact_serialises_with_concurrent_exchange(
     # emitted by manual_compact captures a coherent prefix, and the
     # execute's own emits don't slip inside the compaction's window.
     async def run_compact() -> Any:
-        return await engine.manual_compact(
-            config=config, thread_id=thread.thread_id
-        )
+        return await engine.manual_compact(config=config, thread_id=thread.thread_id)
 
     async def run_execute() -> Any:
         return await engine.execute(
@@ -226,9 +220,7 @@ async def test_manual_compact_serialises_with_concurrent_exchange(
     # Build the (event_id → chronological index) map from the append
     # order the store returns.
     index_by_id = {str(e.event_id): i for i, e in enumerate(events)}
-    compactions = [
-        e for e in events if e.type == EventType.CONTEXT_COMPACTED
-    ]
+    compactions = [e for e in events if e.type == EventType.CONTEXT_COMPACTED]
     assert compactions, (
         "manual_compact should have emitted at least one CONTEXT_COMPACTED "
         "for the seeded thread"

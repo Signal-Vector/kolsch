@@ -59,10 +59,7 @@ def test_workflow_ui_constant_has_canonical_value() -> None:
 
 def test_workflow_node_sub_agent_event_has_canonical_value() -> None:
     """spec-020 — the workflow → sub-agent forwarder wire kind."""
-    assert (
-        WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT
-        == "kolsch.workflow.node.sub_agent_event"
-    )
+    assert WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT == "kolsch.workflow.node.sub_agent_event"
 
 
 def test_all_platform_kinds_has_exactly_fifteen_members() -> None:
@@ -71,24 +68,27 @@ def test_all_platform_kinds_has_exactly_fifteen_members() -> None:
     workflow-node approval-lifecycle kinds; spec-020 added the
     sub-agent event forwarder kind.)"""
     assert len(ALL_PLATFORM_KINDS) == 15
-    assert ALL_PLATFORM_KINDS == frozenset(
-        {
-            WIRE_CARD_OPENED,
-            WIRE_CARD_APPENDED,
-            WIRE_CARD_SET,
-            WIRE_CARD_SET_PROGRESS,
-            WIRE_CARD_STATUS,
-            WIRE_CARD_CLOSED,
-            WIRE_CARD_SNAPSHOT,
-            WIRE_CARD_NOTICE,
-            WIRE_PROMPT_REQUESTED,
-            WIRE_PROMPT_ANSWERED,
-            WIRE_PROMPT_CANCELLED,
-            WIRE_WORKFLOW_PROGRESS,
-            WIRE_WORKFLOW_NODE_AWAITING_APPROVAL,
-            WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED,
-            WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT,
-        }
+    assert (
+        frozenset(
+            {
+                WIRE_CARD_OPENED,
+                WIRE_CARD_APPENDED,
+                WIRE_CARD_SET,
+                WIRE_CARD_SET_PROGRESS,
+                WIRE_CARD_STATUS,
+                WIRE_CARD_CLOSED,
+                WIRE_CARD_SNAPSHOT,
+                WIRE_CARD_NOTICE,
+                WIRE_PROMPT_REQUESTED,
+                WIRE_PROMPT_ANSWERED,
+                WIRE_PROMPT_CANCELLED,
+                WIRE_WORKFLOW_PROGRESS,
+                WIRE_WORKFLOW_NODE_AWAITING_APPROVAL,
+                WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED,
+                WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT,
+            }
+        )
+        == ALL_PLATFORM_KINDS
     )
 
 

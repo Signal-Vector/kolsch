@@ -45,8 +45,9 @@ import asyncio
 import os
 import subprocess
 import sys
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, AsyncIterator, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 

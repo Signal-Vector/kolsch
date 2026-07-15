@@ -30,7 +30,6 @@ import pytest
 from cli.chat.widgets.card_body.workflow import WorkflowRenderer
 from workflows.events import WorkflowEventKind
 
-
 _WIRE = "kolsch.workflow.progress"
 
 
@@ -75,10 +74,12 @@ async def test_renderer_elapsed_advances_without_events(
         # render doesn't read 0s (avoids a flaky "elapsed == 0"
         # baseline).
         started_at = datetime.now(tz=UTC)
-        renderer.apply_event(_MockEvent(
-            _WIRE,
-            _mk_run_started_payload(started_at),
-        ))
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                _mk_run_started_payload(started_at),
+            )
+        )
         await pilot.pause()
 
         # Baseline: the elapsed integer from the header render.
@@ -144,25 +145,29 @@ async def test_renderer_stops_ticking_after_terminal(
         await pilot.pause()
 
         started_at = datetime.now(tz=UTC)
-        renderer.apply_event(_MockEvent(
-            _WIRE,
-            _mk_run_started_payload(started_at),
-        ))
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                _mk_run_started_payload(started_at),
+            )
+        )
         await pilot.pause()
 
         # Feed a RUN_COMPLETED terminal event.
-        renderer.apply_event(_MockEvent(
-            _WIRE,
-            {
-                "run_id": "wrk_ticks",
-                "workflow_ref": "kolsch/workflows/ticks",
-                "kind": WorkflowEventKind.RUN_COMPLETED.value,
-                "event_id": "ev_ticks_completed",
-                "ts": datetime.now(tz=UTC).isoformat(),
-                "trace_id": "tr_ticks",
-                "payload": {},
-            },
-        ))
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                {
+                    "run_id": "wrk_ticks",
+                    "workflow_ref": "kolsch/workflows/ticks",
+                    "kind": WorkflowEventKind.RUN_COMPLETED.value,
+                    "event_id": "ev_ticks_completed",
+                    "ts": datetime.now(tz=UTC).isoformat(),
+                    "trace_id": "tr_ticks",
+                    "payload": {},
+                },
+            )
+        )
         await pilot.pause()
 
         # ``_is_terminal`` flag set; tick handle stopped.
@@ -187,25 +192,29 @@ async def test_renderer_stops_ticking_after_run_failed(
         await pilot.pause()
 
         started_at = datetime.now(tz=UTC)
-        renderer.apply_event(_MockEvent(
-            _WIRE,
-            _mk_run_started_payload(started_at),
-        ))
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                _mk_run_started_payload(started_at),
+            )
+        )
         await pilot.pause()
 
         # Feed a RUN_FAILED terminal event.
-        renderer.apply_event(_MockEvent(
-            _WIRE,
-            {
-                "run_id": "wrk_ticks",
-                "workflow_ref": "kolsch/workflows/ticks",
-                "kind": WorkflowEventKind.RUN_FAILED.value,
-                "event_id": "ev_ticks_failed",
-                "ts": datetime.now(tz=UTC).isoformat(),
-                "trace_id": "tr_ticks",
-                "payload": {},
-            },
-        ))
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                {
+                    "run_id": "wrk_ticks",
+                    "workflow_ref": "kolsch/workflows/ticks",
+                    "kind": WorkflowEventKind.RUN_FAILED.value,
+                    "event_id": "ev_ticks_failed",
+                    "ts": datetime.now(tz=UTC).isoformat(),
+                    "trace_id": "tr_ticks",
+                    "payload": {},
+                },
+            )
+        )
         await pilot.pause()
 
         assert renderer._is_terminal is True
@@ -234,38 +243,44 @@ async def test_node_failed_alone_does_not_freeze_card(
         await pilot.pause()
 
         started_at = datetime.now(tz=UTC)
-        renderer.apply_event(_MockEvent(
-            _WIRE,
-            _mk_run_started_payload(started_at),
-        ))
-        renderer.apply_event(_MockEvent(
-            _WIRE,
-            {
-                "run_id": "wrk_ticks",
-                "workflow_ref": "kolsch/workflows/ticks",
-                "kind": WorkflowEventKind.NODE_STARTED.value,
-                "event_id": "ev_node_started",
-                "ts": datetime.now(tz=UTC).isoformat(),
-                "trace_id": "tr_ticks",
-                "invocation_id": "inv_a",
-                "node_name": "a",
-                "payload": {},
-            },
-        ))
-        renderer.apply_event(_MockEvent(
-            _WIRE,
-            {
-                "run_id": "wrk_ticks",
-                "workflow_ref": "kolsch/workflows/ticks",
-                "kind": WorkflowEventKind.NODE_FAILED.value,
-                "event_id": "ev_node_failed",
-                "ts": datetime.now(tz=UTC).isoformat(),
-                "trace_id": "tr_ticks",
-                "invocation_id": "inv_a",
-                "node_name": "a",
-                "payload": {"error_message": "boom"},
-            },
-        ))
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                _mk_run_started_payload(started_at),
+            )
+        )
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                {
+                    "run_id": "wrk_ticks",
+                    "workflow_ref": "kolsch/workflows/ticks",
+                    "kind": WorkflowEventKind.NODE_STARTED.value,
+                    "event_id": "ev_node_started",
+                    "ts": datetime.now(tz=UTC).isoformat(),
+                    "trace_id": "tr_ticks",
+                    "invocation_id": "inv_a",
+                    "node_name": "a",
+                    "payload": {},
+                },
+            )
+        )
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                {
+                    "run_id": "wrk_ticks",
+                    "workflow_ref": "kolsch/workflows/ticks",
+                    "kind": WorkflowEventKind.NODE_FAILED.value,
+                    "event_id": "ev_node_failed",
+                    "ts": datetime.now(tz=UTC).isoformat(),
+                    "trace_id": "tr_ticks",
+                    "invocation_id": "inv_a",
+                    "node_name": "a",
+                    "payload": {"error_message": "boom"},
+                },
+            )
+        )
         await pilot.pause()
 
         # Card tick is STILL live — node.failed alone must not freeze.

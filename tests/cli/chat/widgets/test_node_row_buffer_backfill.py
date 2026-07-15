@@ -19,7 +19,7 @@ Sub-tests:
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 from textual.app import App
@@ -81,9 +81,7 @@ async def test_expand_drains_queue_in_order(
         await pilot.pause()
 
         prose = list(contents.query(AssistantProse))
-        assert len(prose) == 2, (
-            f"expected two AssistantProse widgets; got {len(prose)}"
-        )
+        assert len(prose) == 2, f"expected two AssistantProse widgets; got {len(prose)}"
 
 
 @pytest.mark.asyncio

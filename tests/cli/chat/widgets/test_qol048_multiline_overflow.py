@@ -15,7 +15,7 @@ overflow. These tests lock in AC #2, #3, #5 from
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 from textual.app import App
@@ -24,7 +24,6 @@ from textual.widgets import Static
 
 from cli.chat.widgets.approval_args_row import ApprovalArgsRow
 from cli.chat.widgets.approval_block import ApprovalBlock
-
 
 # --------------------------------------------------------------------
 # Helpers
@@ -142,8 +141,7 @@ async def test_multiline_target_footer_hint_present(
         args_row = block.query_one(ApprovalArgsRow)
         assert args_row.overflowing is True
         assert "Tab → expand args" in _footer_text(block), (
-            f"expected 'Tab → expand args' in footer, got "
-            f"{_footer_text(block)!r}"
+            f"expected 'Tab → expand args' in footer, got {_footer_text(block)!r}"
         )
 
 

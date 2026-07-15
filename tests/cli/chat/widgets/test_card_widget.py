@@ -30,9 +30,11 @@ from cli.chat.widgets.card_widget import CardFooter, CardHeader, CardWidget
 class _MockEvent:
     """Duck-typed event data for `CardWidget.apply_event`."""
 
-    __slots__ = ("kind", "payload", "event_id")
+    __slots__ = ("event_id", "kind", "payload")
 
-    def __init__(self, kind: str, payload: dict[str, Any], event_id: str = "ev-1") -> None:
+    def __init__(
+        self, kind: str, payload: dict[str, Any], event_id: str = "ev-1"
+    ) -> None:
         self.kind = kind
         self.payload = payload
         self.event_id = event_id
@@ -71,11 +73,13 @@ async def test_appended_transitions_to_running(mock_app_factory) -> None:
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        widget.apply_event(_MockEvent(
-            "kolsch.card.appended",
-            {"chunk": "hi"},
-            event_id="ev-append-1",
-        ))
+        widget.apply_event(
+            _MockEvent(
+                "kolsch.card.appended",
+                {"chunk": "hi"},
+                event_id="ev-append-1",
+            )
+        )
         await pilot.pause()
         assert widget.state == "running"
         # `.content` tracks the applied append.
@@ -91,11 +95,13 @@ async def test_closed_success_auto_collapses(mock_app_factory) -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         assert widget.collapsed is False
-        widget.apply_event(_MockEvent(
-            "kolsch.card.closed",
-            {"final_status": "success", "error_message": None},
-            event_id="ev-close-1",
-        ))
+        widget.apply_event(
+            _MockEvent(
+                "kolsch.card.closed",
+                {"final_status": "success", "error_message": None},
+                event_id="ev-close-1",
+            )
+        )
         await pilot.pause()
         assert widget.state == "success"
         assert "✓" in _header_text(widget)
@@ -110,11 +116,13 @@ async def test_closed_error_stays_expanded_with_footer(mock_app_factory) -> None
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        widget.apply_event(_MockEvent(
-            "kolsch.card.closed",
-            {"final_status": "error", "error_message": "oops"},
-            event_id="ev-close-err",
-        ))
+        widget.apply_event(
+            _MockEvent(
+                "kolsch.card.closed",
+                {"final_status": "error", "error_message": "oops"},
+                event_id="ev-close-err",
+            )
+        )
         await pilot.pause()
         assert widget.state == "error"
         assert widget.has_class("-error")
@@ -130,11 +138,13 @@ async def test_closed_cancelled_applies_class_and_glyph(mock_app_factory) -> Non
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        widget.apply_event(_MockEvent(
-            "kolsch.card.closed",
-            {"final_status": "cancelled", "error_message": None},
-            event_id="ev-close-cancel",
-        ))
+        widget.apply_event(
+            _MockEvent(
+                "kolsch.card.closed",
+                {"final_status": "cancelled", "error_message": None},
+                event_id="ev-close-cancel",
+            )
+        )
         await pilot.pause()
         assert widget.state == "cancelled"
         assert widget.has_class("-cancelled")
@@ -147,11 +157,13 @@ async def test_status_paused_applies_class_and_glyph(mock_app_factory) -> None:
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        widget.apply_event(_MockEvent(
-            "kolsch.card.status",
-            {"status": "paused"},
-            event_id="ev-status-p",
-        ))
+        widget.apply_event(
+            _MockEvent(
+                "kolsch.card.status",
+                {"status": "paused"},
+                event_id="ev-status-p",
+            )
+        )
         await pilot.pause()
         assert widget.state == "paused"
         assert widget.has_class("-paused")

@@ -246,7 +246,8 @@ async def dispatch_tool(
     # `what` patterns still fire as before — see
     # RuleBasedAuthorizationProvider.allow.
     target = _extract_target_from_args(
-        validated_args, target_shape=defn.target_shape,
+        validated_args,
+        target_shape=defn.target_shape,
     )
     # Assemble the layers tuple in proximate-caller order:
     # workflow → agent → bundle. The provider's docstring

@@ -43,9 +43,7 @@ def _body_statics(widget: ToolCallBlock) -> list[Static]:
     title bar. Order matches mount order.
     """
 
-    return [
-        s for s in widget.query(Static) if not isinstance(s, CollapsibleTitle)
-    ]
+    return [s for s in widget.query(Static) if not isinstance(s, CollapsibleTitle)]
 
 
 @pytest.mark.asyncio
@@ -69,9 +67,7 @@ async def test_tool_call_block_failed_adds_css_class(mock_app_factory) -> None:
     """`failed=True` adds the ``-failed`` class. Colours change via
     CSS only — no runtime colour attribute is set."""
 
-    widget = ToolCallBlock(
-        "write_file", "path=/tmp/x", "denied by authz", failed=True
-    )
+    widget = ToolCallBlock("write_file", "path=/tmp/x", "denied by authz", failed=True)
     app = mock_app_factory(widget)
 
     async with app.run_test() as pilot:

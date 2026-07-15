@@ -977,23 +977,35 @@ def _format_catalog_diff(diff: _CatalogDiff) -> str:
         return ""
     parts: list[str] = []
     if diff.bundles_added:
-        parts.append(f"+{len(diff.bundles_added)} bundle"
-                     + ("s" if len(diff.bundles_added) != 1 else ""))
+        parts.append(
+            f"+{len(diff.bundles_added)} bundle"
+            + ("s" if len(diff.bundles_added) != 1 else "")
+        )
     if diff.bundles_removed:
-        parts.append(f"-{len(diff.bundles_removed)} bundle"
-                     + ("s" if len(diff.bundles_removed) != 1 else ""))
+        parts.append(
+            f"-{len(diff.bundles_removed)} bundle"
+            + ("s" if len(diff.bundles_removed) != 1 else "")
+        )
     if diff.agents_added:
-        parts.append(f"+{len(diff.agents_added)} agent"
-                     + ("s" if len(diff.agents_added) != 1 else ""))
+        parts.append(
+            f"+{len(diff.agents_added)} agent"
+            + ("s" if len(diff.agents_added) != 1 else "")
+        )
     if diff.agents_removed:
-        parts.append(f"-{len(diff.agents_removed)} agent"
-                     + ("s" if len(diff.agents_removed) != 1 else ""))
+        parts.append(
+            f"-{len(diff.agents_removed)} agent"
+            + ("s" if len(diff.agents_removed) != 1 else "")
+        )
     if diff.workflows_added:
-        parts.append(f"+{len(diff.workflows_added)} workflow"
-                     + ("s" if len(diff.workflows_added) != 1 else ""))
+        parts.append(
+            f"+{len(diff.workflows_added)} workflow"
+            + ("s" if len(diff.workflows_added) != 1 else "")
+        )
     if diff.workflows_removed:
-        parts.append(f"-{len(diff.workflows_removed)} workflow"
-                     + ("s" if len(diff.workflows_removed) != 1 else ""))
+        parts.append(
+            f"-{len(diff.workflows_removed)} workflow"
+            + ("s" if len(diff.workflows_removed) != 1 else "")
+        )
     return " [" + ", ".join(parts) + " since last reload]"
 
 
@@ -1008,7 +1020,7 @@ def _install_fresh_catalog(asset_management: Any, fresh_catalog: Any) -> None:
     ``asset_management.catalog()`` returns the old catalog.
     """
     try:
-        asset_management._catalog = fresh_catalog  # noqa: SLF001 — reload is by design breaking the "immutable" invariant
+        asset_management._catalog = fresh_catalog
     except Exception:  # noqa: BLE001 — never raise out of the catalog install
         return
 
@@ -1286,10 +1298,7 @@ def _reparse_bundle_manifest(bundle_dir: Any) -> Any:
     if payload is None or not isinstance(payload, dict):
         raise _YamlReloadError(
             source=str(yaml_path),
-            message=(
-                "top-level must be a mapping; "
-                f"got {type(payload).__name__}"
-            ),
+            message=(f"top-level must be a mapping; got {type(payload).__name__}"),
         )
     payload["path"] = str(bundle_dir.resolve())
     try:

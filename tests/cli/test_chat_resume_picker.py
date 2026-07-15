@@ -20,13 +20,12 @@ acceptance criteria:
 from __future__ import annotations
 
 import argparse
+import importlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
 import yaml
-
-import importlib
 
 from cli.main import _cmd_chat
 
@@ -37,7 +36,7 @@ from cli.main import _cmd_chat
 cli_main = importlib.import_module("cli.main")
 
 if TYPE_CHECKING:
-    from collections.abc import Awaitable, Callable
+    from collections.abc import Callable
 
     from schemas.entities import Session
 
@@ -143,7 +142,7 @@ class _NeverCalledChooser:
     def __init__(self) -> None:
         self.called = False
 
-    async def __call__(self, rows: list[Any]) -> None:  # noqa: ARG002
+    async def __call__(self, rows: list[Any]) -> None:
         self.called = True
         msg = "chooser should not be invoked in this scenario"
         raise AssertionError(msg)
@@ -168,7 +167,7 @@ class _RecordingChooser:
     async def __call__(self, rows: list[Any]) -> Any:
         self.called = True
         self.captured_rows = list(rows)
-        from schemas import SessionId  # noqa: PLC0415
+        from schemas import SessionId
 
         raw = self._result(rows) if callable(self._result) else self._result
         if raw is None:
@@ -215,7 +214,7 @@ def _install_launch_spy(monkeypatch: pytest.MonkeyPatch) -> _NeverLaunched:
         return _StubSessionBundle(session_id=str(args.session or ""))
 
     class _StubChatApp:
-        def __init__(self, *, session: Any, engine: Any, full_history: bool) -> None:  # noqa: ARG002
+        def __init__(self, *, session: Any, engine: Any, full_history: bool) -> None:
             spy.chat_app_constructed = True
             self.return_code = 0
 
@@ -251,7 +250,7 @@ async def test_selects_and_resumes(
     """Chooser returns the 2nd session's id; ``args.session`` is stamped
     and the launch path fires (AC #1 / #3).
     """
-    from platform_runtime import bootstrap_runtime  # noqa: PLC0415
+    from platform_runtime import bootstrap_runtime
 
     # Seed two sessions so the picker has real rows.
     runtime = await bootstrap_runtime(root=platform_root)
@@ -288,7 +287,7 @@ async def test_cancel_no_launch(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Chooser returns ``None``: ``_cmd_chat`` returns 0 and nothing launches (AC #4)."""
-    from platform_runtime import bootstrap_runtime  # noqa: PLC0415
+    from platform_runtime import bootstrap_runtime
 
     runtime = await bootstrap_runtime(root=platform_root)
     await runtime.store.create_session("ag_demo", name="chat:one")
@@ -376,7 +375,7 @@ async def test_ordering(
     asserts the picker's captured rows match the shared helper's output
     row-for-row.
     """
-    from platform_runtime import bootstrap_runtime  # noqa: PLC0415
+    from platform_runtime import bootstrap_runtime
 
     runtime = await bootstrap_runtime(root=platform_root)
     # Create three sessions.
@@ -396,7 +395,7 @@ async def test_ordering(
         return datetime(2026, 1, rank, 12, 0, 0, tzinfo=UTC)
 
     async def _stubbed_compute(
-        rt: Any,  # noqa: ARG001
+        rt: Any,
         session_id: Any,
     ) -> datetime:
         # Look up the name by scanning the runtime store.
@@ -432,8 +431,6 @@ async def test_ordering(
 
     assert picked_ids == helper_ids
     # And the newest-named session sorts first (most-recent first).
-    all_sessions: dict[str, Session] = {
-        str(s.session_id): s for s, _ in helper_rows
-    }
+    all_sessions: dict[str, Session] = {str(s.session_id): s for s, _ in helper_rows}
     assert all_sessions[picked_ids[0]].name == "chat:newest"
     assert all_sessions[picked_ids[-1]].name == "chat:oldest"

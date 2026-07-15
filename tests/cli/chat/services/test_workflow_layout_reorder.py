@@ -32,7 +32,6 @@ from cli.chat.widgets.card_widget import CardWidget
 from schemas.identifiers import CardId
 from workflows.ids import WorkflowRunId
 
-
 _BASE_TS = datetime(2026, 7, 5, 12, 0, 0, tzinfo=UTC)
 
 
@@ -92,9 +91,15 @@ async def test_three_in_progress_no_divider() -> None:
         await transcript.mount(widget_c)
         await pilot.pause()
 
-        rec_a = _mk_record(run_id_suffix="01", phase="running", card=card_a, started_offset=1)
-        rec_b = _mk_record(run_id_suffix="02", phase="running", card=card_b, started_offset=2)
-        rec_c = _mk_record(run_id_suffix="03", phase="running", card=card_c, started_offset=3)
+        rec_a = _mk_record(
+            run_id_suffix="01", phase="running", card=card_a, started_offset=1
+        )
+        rec_b = _mk_record(
+            run_id_suffix="02", phase="running", card=card_b, started_offset=2
+        )
+        rec_c = _mk_record(
+            run_id_suffix="03", phase="running", card=card_c, started_offset=3
+        )
         records = [rec_a, rec_b, rec_c]
         widgets: dict[Any, Any] = {
             card_a.id: widget_a,
@@ -146,11 +151,17 @@ async def test_terminal_success_moves_to_top_and_divider_mounts() -> None:
 
         # A is terminal (success); B and C still running.
         rec_a = _mk_record(
-            run_id_suffix="11", phase="success",
-            card=card_a, terminal_offset=10,
+            run_id_suffix="11",
+            phase="success",
+            card=card_a,
+            terminal_offset=10,
         )
-        rec_b = _mk_record(run_id_suffix="12", phase="running", card=card_b, started_offset=2)
-        rec_c = _mk_record(run_id_suffix="13", phase="running", card=card_c, started_offset=3)
+        rec_b = _mk_record(
+            run_id_suffix="12", phase="running", card=card_b, started_offset=2
+        )
+        rec_c = _mk_record(
+            run_id_suffix="13", phase="running", card=card_c, started_offset=3
+        )
         records = [rec_a, rec_b, rec_c]
         widgets: dict[Any, Any] = {
             card_a.id: widget_a,
@@ -200,15 +211,22 @@ async def test_terminal_error_pins_at_boundary() -> None:
         await pilot.pause()
 
         rec_a = _mk_record(
-            run_id_suffix="21", phase="success",
-            card=card_a, terminal_offset=10,
+            run_id_suffix="21",
+            phase="success",
+            card=card_a,
+            terminal_offset=10,
         )
         rec_b = _mk_record(
-            run_id_suffix="22", phase="error",
-            card=card_b, terminal_offset=20,
+            run_id_suffix="22",
+            phase="error",
+            card=card_b,
+            terminal_offset=20,
         )
         rec_c = _mk_record(
-            run_id_suffix="23", phase="running", card=card_c, started_offset=3,
+            run_id_suffix="23",
+            phase="running",
+            card=card_c,
+            started_offset=3,
         )
         records = [rec_a, rec_b, rec_c]
         widgets: dict[Any, Any] = {
@@ -260,15 +278,22 @@ async def test_ack_error_moves_into_terminal_band() -> None:
         await pilot.pause()
 
         rec_a = _mk_record(
-            run_id_suffix="31", phase="success",
-            card=card_a, terminal_offset=10,
+            run_id_suffix="31",
+            phase="success",
+            card=card_a,
+            terminal_offset=10,
         )
         rec_b = _mk_record(
-            run_id_suffix="32", phase="error",
-            card=card_b, terminal_offset=20,
+            run_id_suffix="32",
+            phase="error",
+            card=card_b,
+            terminal_offset=20,
         )
         rec_c = _mk_record(
-            run_id_suffix="33", phase="running", card=card_c, started_offset=3,
+            run_id_suffix="33",
+            phase="running",
+            card=card_c,
+            started_offset=3,
         )
         records = [rec_a, rec_b, rec_c]
         widgets: dict[Any, Any] = {
@@ -299,6 +324,7 @@ async def test_ack_error_moves_into_terminal_band() -> None:
 
         # Wait for the scheduled reorder to fire.
         import asyncio as _asyncio
+
         await _asyncio.sleep(0.05)
         await pilot.pause()
 

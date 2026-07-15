@@ -28,7 +28,6 @@ from cli.chat.widgets.card_widget import CardWidget
 from schemas.identifiers import CardId
 from workflows.ids import WorkflowRunId
 
-
 _BASE_TS = datetime(2026, 7, 5, 12, 0, 0, tzinfo=UTC)
 
 
@@ -88,14 +87,14 @@ async def test_three_simultaneous_notifies_fire_one_flush() -> None:
 
         records = [
             _mk_record(
-                suffix=f"a{i}", phase="running",
-                card=cards[i], started_offset=i,
+                suffix=f"a{i}",
+                phase="running",
+                card=cards[i],
+                started_offset=i,
             )
             for i in range(3)
         ]
-        widget_map: dict[Any, Any] = {
-            cards[i].id: widgets[i] for i in range(3)
-        }
+        widget_map: dict[Any, Any] = {cards[i].id: widgets[i] for i in range(3)}
 
         mgr = WorkflowLayoutManager(
             transcript=transcript,
@@ -114,9 +113,7 @@ async def test_three_simultaneous_notifies_fire_one_flush() -> None:
         await pilot.pause()
 
         # Only ONE flush should have run.
-        assert mgr.flush_count == 1, (
-            f"expected 1 flush, got {mgr.flush_count}"
-        )
+        assert mgr.flush_count == 1, f"expected 1 flush, got {mgr.flush_count}"
 
 
 @pytest.mark.asyncio
@@ -144,21 +141,25 @@ async def test_final_dom_order_matches_sort() -> None:
         # All three terminal successes with different `terminal_at`.
         records = [
             _mk_record(
-                suffix="b1", phase="success",
-                card=cards[0], terminal_offset=30,
+                suffix="b1",
+                phase="success",
+                card=cards[0],
+                terminal_offset=30,
             ),
             _mk_record(
-                suffix="b2", phase="success",
-                card=cards[1], terminal_offset=10,
+                suffix="b2",
+                phase="success",
+                card=cards[1],
+                terminal_offset=10,
             ),
             _mk_record(
-                suffix="b3", phase="success",
-                card=cards[2], terminal_offset=20,
+                suffix="b3",
+                phase="success",
+                card=cards[2],
+                terminal_offset=20,
             ),
         ]
-        widget_map: dict[Any, Any] = {
-            cards[i].id: widgets[i] for i in range(3)
-        }
+        widget_map: dict[Any, Any] = {cards[i].id: widgets[i] for i in range(3)}
 
         mgr = WorkflowLayoutManager(
             transcript=transcript,

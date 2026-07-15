@@ -34,6 +34,7 @@ from uuid import uuid4
 
 import pytest
 import yaml
+from textual.widgets import Static
 
 from cli.chat.app import ChatApp
 from cli.chat.session import ChatSessionBundle
@@ -45,14 +46,12 @@ from tests.cli.chat.services.mocks import (
     MockExecutorSpec,
     install_mock_executor_factory,
 )
-from textual.widgets import Static
 from workflows.events import (
     WorkflowNodeStartedEvent,
     WorkflowRunCompletedEvent,
     WorkflowRunStartedEvent,
 )
 from workflows.ids import InvocationId, TraceId, WorkflowRunId
-
 
 # ---------------------------------------------------------------------------
 # Fixture — scaffold via ``kolsch setup``; keep ``run_workflow`` at ``prompt``.
@@ -73,7 +72,7 @@ def prompt_gated_workspace(tmp_path_factory: pytest.TempPathFactory) -> Path:
     env = dict(os.environ)
     env["KOLSCH_WORKSPACE"] = str(root)
     env["PATH"] = "/usr/bin:/bin"
-    result = subprocess.run(  # noqa: S603 — deterministic module invoker
+    result = subprocess.run(
         [sys.executable, "-m", "cli", "setup", "--non-interactive"],
         env=env,
         capture_output=True,
@@ -116,7 +115,8 @@ def prompt_gated_workspace(tmp_path_factory: pytest.TempPathFactory) -> Path:
                 },
             )
         yaml_path.write_text(
-            yaml.safe_dump(payload, sort_keys=False), encoding="utf-8",
+            yaml.safe_dump(payload, sort_keys=False),
+            encoding="utf-8",
         )
 
     return root
@@ -266,10 +266,12 @@ async def test_approval_args_line_contains_json_for_virtual_workflow_tool(
         assert workflows_impl is not None
         install_mock_executor_factory(
             workflows_impl,
-            {workflow_ref: MockExecutorSpec(
-                events=_mk_workflow_events(),
-                per_event_delay=0.02,
-            )},
+            {
+                workflow_ref: MockExecutorSpec(
+                    events=_mk_workflow_events(),
+                    per_event_delay=0.02,
+                )
+            },
             runs_root=prompt_gated_workspace / "runs",
         )
 
@@ -303,9 +305,7 @@ async def test_approval_args_line_contains_json_for_virtual_workflow_tool(
         assert len(args_rows) == 1, (
             f"expected exactly one ApprovalArgsRow; got {len(args_rows)}"
         )
-        args_texts = [
-            str(sub.content) for sub in args_rows[0].query(Static)
-        ]
+        args_texts = [str(sub.content) for sub in args_rows[0].query(Static)]
         args_joined = " | ".join(args_texts)
 
         # AC #5 — Args line contains JSON delimiters.

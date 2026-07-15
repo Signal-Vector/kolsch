@@ -13,8 +13,9 @@ mis-routing.
 from __future__ import annotations
 
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any, Callable
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -32,7 +33,6 @@ from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 from schemas.entities import Actor
 from schemas.events import Event, EventType
 from schemas.identifiers import EventId, SessionId, ThreadId
-
 
 _AppFactory = Callable[[Widget], App[None]]
 
@@ -99,7 +99,9 @@ async def test_row_mounts_tool_call(mock_app_factory: _AppFactory) -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         await row.mount_tool_call(
-            "bash", args_str='{"c":"ls"}', body="exit_code: 0",
+            "bash",
+            args_str='{"c":"ls"}',
+            body="exit_code: 0",
         )
         await pilot.pause()
 
@@ -195,7 +197,9 @@ async def test_pending_mount_order_preserved(
         await row.mount_user_message("A", event_id="ev-1")
         await row.mount_assistant_message("B", event_id="ev-2")
         await row.mount_tool_call(
-            "bash", args_str="", body="",
+            "bash",
+            args_str="",
+            body="",
             event_id="ev-3",
         )
         await pilot.pause()
@@ -306,7 +310,8 @@ async def test_set_output_gate_reads_last_assistant_text(
 ) -> None:
     """Agent node: non-empty last-assistant-text → set_output no-ops."""
     row = WorkflowNodeRow(
-        node_name="n", node_type="kolsch/nodes/agent",
+        node_name="n",
+        node_type="kolsch/nodes/agent",
     )
     row.collapsed = False
     app = mock_app_factory(row)
@@ -338,7 +343,8 @@ async def test_set_output_gate_empty_text_edge(
     behave as "nothing rendered" so ``set_output`` still runs.
     """
     row = WorkflowNodeRow(
-        node_name="n", node_type="kolsch/nodes/agent",
+        node_name="n",
+        node_type="kolsch/nodes/agent",
     )
     app = mock_app_factory(row)
     async with app.run_test() as pilot:
@@ -398,14 +404,21 @@ class _MockChatApp:
         self.calls: list[str] = []
 
     async def mount_user_message(
-        self, text: str, timestamp: Any = None,
-        *, event_id: Any = None, content: Any = None,
+        self,
+        text: str,
+        timestamp: Any = None,
+        *,
+        event_id: Any = None,
+        content: Any = None,
     ) -> None:
         _ = timestamp, event_id, content
         self.calls.append(f"user:{text}")
 
     async def mount_assistant_message(
-        self, text: str, *, event_id: Any = None,
+        self,
+        text: str,
+        *,
+        event_id: Any = None,
     ) -> None:
         _ = event_id
         self.calls.append(f"assistant:{text}")
@@ -415,8 +428,12 @@ class _MockChatApp:
         self.calls.append("tool")
 
     async def mount_notice(
-        self, notice_id: str, text: str,
-        *, level: str = "info", event_id: Any = None,
+        self,
+        notice_id: str,
+        text: str,
+        *,
+        level: str = "info",
+        event_id: Any = None,
     ) -> None:
         _ = notice_id, text, level, event_id
         self.calls.append(f"notice:{text}")
@@ -435,7 +452,9 @@ class _MockChatApp:
 
 
 def _mk_event(
-    *, trace_id: str | None = None, data: dict[str, Any] | None = None,
+    *,
+    trace_id: str | None = None,
+    data: dict[str, Any] | None = None,
     event_type: EventType = EventType.AGENT_MESSAGE,
 ) -> Event:
     return Event(

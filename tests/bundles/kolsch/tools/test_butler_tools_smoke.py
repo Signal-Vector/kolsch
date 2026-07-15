@@ -23,9 +23,10 @@ Assertions cover:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -52,15 +53,12 @@ from workflows.events import (
 )
 from workflows.ids import TraceId, WorkflowRunId
 
-
 # --------------------------------------------------------------------
 # Fixtures
 # --------------------------------------------------------------------
 
 
-_TOOLS_DIR = (
-    Path(__file__).resolve().parents[4] / "bundles" / "kolsch" / "tools"
-)
+_TOOLS_DIR = Path(__file__).resolve().parents[4] / "bundles" / "kolsch" / "tools"
 
 
 def _load_tool(filename: str, tool_name: str) -> Callable[..., Awaitable[Any]]:
@@ -114,7 +112,8 @@ def _install_scripted_workflows(
     assert isinstance(workflows_impl, WorkflowsImpl)
     programming = {
         ref: MockExecutorSpec(
-            events=_mk_events(), per_event_delay=per_event_delay,
+            events=_mk_events(),
+            per_event_delay=per_event_delay,
         )
         for ref in refs
     }
@@ -148,7 +147,8 @@ async def test_run_workflow_smoke(
     async with chat_app.run_test() as pilot:
         await pilot.pause()
         _install_scripted_workflows(
-            pilot, refs=["kolsch/workflows/test"],
+            pilot,
+            refs=["kolsch/workflows/test"],
         )
 
         result = await _invoke_tool_via_pilot(
@@ -226,7 +226,8 @@ async def test_workflow_status_smoke(
     async with chat_app.run_test() as pilot:
         await pilot.pause()
         _install_scripted_workflows(
-            pilot, refs=["kolsch/workflows/probe"],
+            pilot,
+            refs=["kolsch/workflows/probe"],
             per_event_delay=5.0,  # keep the workflow running past the timeout
         )
 
@@ -255,7 +256,9 @@ async def test_workflow_status_smoke(
         # Poll until the drain worker picks the run up (queued -> running).
         for _ in range(20):
             status = await _invoke_tool_via_pilot(
-                pilot, workflow_status_tool, {"run_id": run_id},
+                pilot,
+                workflow_status_tool,
+                {"run_id": run_id},
             )
             if status["phase"] in ("running", "queued"):
                 break
@@ -279,7 +282,8 @@ async def test_workflow_status_smoke(
 
         # Unknown run_id -> phase="unknown".
         unknown = await _invoke_tool_via_pilot(
-            pilot, workflow_status_tool,
+            pilot,
+            workflow_status_tool,
             {"run_id": f"wrk_{uuid4()}"},
         )
         assert unknown["phase"] == "unknown"
@@ -306,7 +310,8 @@ async def test_cancel_workflow_smoke(
     async with chat_app.run_test() as pilot:
         await pilot.pause()
         workflows_impl = _install_scripted_workflows(
-            pilot, refs=["kolsch/workflows/long"],
+            pilot,
+            refs=["kolsch/workflows/long"],
             per_event_delay=5.0,
         )
 
@@ -399,12 +404,8 @@ async def test_cancel_workflow_cascade_smoke(
             "run_id": str(parent_id),
             "cascade": True,
         }
-        assert (
-            workflows_impl._workflow_registry[parent_id].phase == "cancelling"
-        )
-        assert (
-            workflows_impl._workflow_registry[child_id].phase == "cancelling"
-        )
+        assert workflows_impl._workflow_registry[parent_id].phase == "cancelling"
+        assert workflows_impl._workflow_registry[child_id].phase == "cancelling"
 
 
 @pytest.mark.asyncio

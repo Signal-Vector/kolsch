@@ -18,6 +18,7 @@ Run after ``extract_bug036a_fixture.py`` refreshes the base slice:
 
     uv run python tests/fixtures/sessions/extend_bug036d_deduper_slice.py
 """
+
 from __future__ import annotations
 
 import json
@@ -238,8 +239,7 @@ def _node_completed_evt() -> dict[str, Any]:
 
 def main() -> None:
     fixture_path = (
-        Path(__file__).resolve().parent
-        / "ses_bug036a_jd_review_excerpt.jsonl"
+        Path(__file__).resolve().parent / "ses_bug036a_jd_review_excerpt.jsonl"
     )
     lines = [ln for ln in fixture_path.read_text().splitlines() if ln]
     # Idempotent: strip any prior deduper events (identified by the

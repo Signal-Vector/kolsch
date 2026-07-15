@@ -21,7 +21,6 @@ from cli.chat.services.workflows_impl import WorkflowRunRecord
 from tools.services.workflows import NodeCounts, WorkflowRunPhase
 from workflows.ids import WorkflowRunId
 
-
 _NOW = datetime.now(tz=UTC)
 
 
@@ -37,9 +36,7 @@ def _record(
 ) -> WorkflowRunRecord:
     """Build a synthetic ``WorkflowRunRecord`` with node counts + timing."""
     started_at = (
-        _NOW - timedelta(seconds=started_offset)
-        if started_offset is not None
-        else None
+        _NOW - timedelta(seconds=started_offset) if started_offset is not None else None
     )
     return WorkflowRunRecord(
         run_id=WorkflowRunId(f"wrk_00000000-0000-0000-0000-0000000000{suffix}"),

@@ -12,8 +12,8 @@ from __future__ import annotations
 from typing import Any
 
 from engine._crewai_adapter import _tool_to_openai_spec
-from engine.mock_framework import MinimalFramework
 from engine.framework import LLMRequest, LLMResponse
+from engine.mock_framework import MinimalFramework
 
 
 class _MockToolHandle:

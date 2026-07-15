@@ -9,15 +9,12 @@ Fixture: ``canonical_event`` from ``tests/cli/chat/conftest.py``.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Any
+from typing import Any
 
 import pytest
 
 from cli.chat.event_adapter import EventAdapter
 from schemas.events import EventType
-
-if TYPE_CHECKING:
-    pass
 
 
 class _MockChatApp:
@@ -34,14 +31,21 @@ class _MockChatApp:
         self._last_assistant: str = ""
 
     async def mount_user_message(
-        self, text: str, timestamp: Any = None,
-        *, event_id: Any = None, content: Any = None,
+        self,
+        text: str,
+        timestamp: Any = None,
+        *,
+        event_id: Any = None,
+        content: Any = None,
     ) -> None:
         _ = timestamp, event_id, content
         self.notices.append(f"user:{text}")
 
     async def mount_assistant_message(
-        self, text: str, *, event_id: Any = None,
+        self,
+        text: str,
+        *,
+        event_id: Any = None,
     ) -> None:
         _ = event_id
         self.notices.append(f"assistant:{text}")
@@ -58,8 +62,12 @@ class _MockChatApp:
         self.notices.append(f"tool:{args}")
 
     async def mount_notice(
-        self, notice_id: str = "", text: str = "",
-        *, level: str = "info", event_id: Any = None,
+        self,
+        notice_id: str = "",
+        text: str = "",
+        *,
+        level: str = "info",
+        event_id: Any = None,
     ) -> None:
         _ = notice_id, level, event_id
         self.notices.append(f"notice:{text}")

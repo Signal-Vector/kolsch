@@ -40,7 +40,6 @@ from schemas.events import Event, EventType
 from schemas.identifiers import EventId, SessionId, ThreadId
 from workflows.events import WorkflowEventKind
 
-
 _WIRE = "kolsch.workflow.progress"
 
 
@@ -56,14 +55,21 @@ class _MockChatApp:
         self._last_assistant: str = ""
 
     async def mount_user_message(
-        self, text: str, timestamp: Any = None,
-        *, event_id: Any = None, content: Any = None,
+        self,
+        text: str,
+        timestamp: Any = None,
+        *,
+        event_id: Any = None,
+        content: Any = None,
     ) -> None:
         _ = timestamp, event_id, content
         self.mounts.append(f"user:{text}")
 
     async def mount_assistant_message(
-        self, text: str, *, event_id: Any = None,
+        self,
+        text: str,
+        *,
+        event_id: Any = None,
     ) -> None:
         _ = event_id
         self.mounts.append(f"assistant:{text}")
@@ -162,22 +168,26 @@ def test_two_nodes_same_trace_distinct_invocation_register_separately() -> None:
     renderer = WorkflowRenderer()
     renderer.register_adapter(adapter)
 
-    renderer.apply_event(_MockEventData(
-        _WIRE,
-        _mk_node_started_payload(
-            node_name="alpha",
-            trace_id="tr_1",
-            invocation_id="inv_A",
-        ),
-    ))
-    renderer.apply_event(_MockEventData(
-        _WIRE,
-        _mk_node_started_payload(
-            node_name="beta",
-            trace_id="tr_1",
-            invocation_id="inv_B",
-        ),
-    ))
+    renderer.apply_event(
+        _MockEventData(
+            _WIRE,
+            _mk_node_started_payload(
+                node_name="alpha",
+                trace_id="tr_1",
+                invocation_id="inv_A",
+            ),
+        )
+    )
+    renderer.apply_event(
+        _MockEventData(
+            _WIRE,
+            _mk_node_started_payload(
+                node_name="beta",
+                trace_id="tr_1",
+                invocation_id="inv_B",
+            ),
+        )
+    )
 
     live_map = adapter._live_nodes_by_trace_and_invocation
     assert ("tr_1", "inv_A") in live_map
@@ -199,30 +209,36 @@ def test_terminal_for_one_node_does_not_evict_sibling() -> None:
     renderer = WorkflowRenderer()
     renderer.register_adapter(adapter)
 
-    renderer.apply_event(_MockEventData(
-        _WIRE,
-        _mk_node_started_payload(
-            node_name="alpha",
-            trace_id="tr_1",
-            invocation_id="inv_A",
-        ),
-    ))
-    renderer.apply_event(_MockEventData(
-        _WIRE,
-        _mk_node_started_payload(
-            node_name="beta",
-            trace_id="tr_1",
-            invocation_id="inv_B",
-        ),
-    ))
-    renderer.apply_event(_MockEventData(
-        _WIRE,
-        _mk_node_completed_payload(
-            node_name="alpha",
-            trace_id="tr_1",
-            invocation_id="inv_A",
-        ),
-    ))
+    renderer.apply_event(
+        _MockEventData(
+            _WIRE,
+            _mk_node_started_payload(
+                node_name="alpha",
+                trace_id="tr_1",
+                invocation_id="inv_A",
+            ),
+        )
+    )
+    renderer.apply_event(
+        _MockEventData(
+            _WIRE,
+            _mk_node_started_payload(
+                node_name="beta",
+                trace_id="tr_1",
+                invocation_id="inv_B",
+            ),
+        )
+    )
+    renderer.apply_event(
+        _MockEventData(
+            _WIRE,
+            _mk_node_completed_payload(
+                node_name="alpha",
+                trace_id="tr_1",
+                invocation_id="inv_A",
+            ),
+        )
+    )
 
     live_map = adapter._live_nodes_by_trace_and_invocation
     assert ("tr_1", "inv_A") not in live_map
@@ -244,22 +260,26 @@ async def test_route_finds_correct_row_by_invocation_id() -> None:
     renderer = WorkflowRenderer()
     renderer.register_adapter(adapter)
 
-    renderer.apply_event(_MockEventData(
-        _WIRE,
-        _mk_node_started_payload(
-            node_name="alpha",
-            trace_id="tr_1",
-            invocation_id="inv_A",
-        ),
-    ))
-    renderer.apply_event(_MockEventData(
-        _WIRE,
-        _mk_node_started_payload(
-            node_name="beta",
-            trace_id="tr_1",
-            invocation_id="inv_B",
-        ),
-    ))
+    renderer.apply_event(
+        _MockEventData(
+            _WIRE,
+            _mk_node_started_payload(
+                node_name="alpha",
+                trace_id="tr_1",
+                invocation_id="inv_A",
+            ),
+        )
+    )
+    renderer.apply_event(
+        _MockEventData(
+            _WIRE,
+            _mk_node_started_payload(
+                node_name="beta",
+                trace_id="tr_1",
+                invocation_id="inv_B",
+            ),
+        )
+    )
 
     row_alpha = adapter._live_nodes_by_trace_and_invocation[("tr_1", "inv_A")]
     row_beta = adapter._live_nodes_by_trace_and_invocation[("tr_1", "inv_B")]
@@ -305,19 +325,20 @@ def test_missing_invocation_id_falls_back_and_logs(
         logging.WARNING,
         logger="cli.chat.widgets.card_body.workflow",
     ):
-        renderer.apply_event(_MockEventData(
-            _WIRE,
-            _mk_node_started_payload(
-                node_name="alpha",
-                trace_id="tr_1",
-                invocation_id=None,
-            ),
-        ))
+        renderer.apply_event(
+            _MockEventData(
+                _WIRE,
+                _mk_node_started_payload(
+                    node_name="alpha",
+                    trace_id="tr_1",
+                    invocation_id=None,
+                ),
+            )
+        )
 
     live_map = adapter._live_nodes_by_trace_and_invocation
     assert ("tr_1", "") in live_map
     assert any(
-        "missing invocation_id" in record.message
-        and record.levelno == logging.WARNING
+        "missing invocation_id" in record.message and record.levelno == logging.WARNING
         for record in caplog.records
     )

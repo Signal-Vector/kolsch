@@ -19,8 +19,6 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-import pytest
-
 from cli.chat.event_adapter import EventAdapter
 from schemas.entities import Actor
 from schemas.events import Event, EventType

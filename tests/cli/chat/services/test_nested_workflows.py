@@ -18,8 +18,8 @@ correctly returns None.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator
 from uuid import uuid4
 
 import pytest
@@ -78,7 +78,8 @@ def _mk_events() -> list:
 
 
 async def test_parent_populated(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     """Top-level → parent=None; nested-start → parent=outer id.
 
@@ -139,8 +140,7 @@ async def test_parent_populated(
         # Child's parent_run_id must be the outer's run_id.
         child_rec = impl._workflow_registry[child_id]
         assert child_rec.parent_run_id == outer_id, (
-            f"expected parent_run_id={outer_id}, got "
-            f"{child_rec.parent_run_id}"
+            f"expected parent_run_id={outer_id}, got {child_rec.parent_run_id}"
         )
 
         # Reverse map must carry the child on the outer's entry.
@@ -161,7 +161,8 @@ async def test_parent_populated(
 
 
 async def test_peer_no_parent(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     """Top-level `start()` outside any workflow → parent_run_id=None.
 

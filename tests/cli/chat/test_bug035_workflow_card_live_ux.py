@@ -29,25 +29,25 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 from uuid import uuid4
 
 import pytest
+from textual.widgets import Collapsible
 
 from cli.chat.app import ChatApp
 from cli.chat.services.workflows_impl import WorkflowsImpl
 from cli.chat.widgets.assistant_prose import AssistantProse
 from cli.chat.widgets.card_body.workflow import WorkflowRenderer
 from cli.chat.widgets.card_widget import CardWidget
-from cli.chat.widgets.tool_call_block import ToolCallBlock
 from cli.chat.widgets.user_chatbox import UserChatbox
 from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 from schemas.entities import Actor
 from schemas.events import Event, EventType
 from schemas.identifiers import AgentId, EventId, SessionId, ThreadId
-from textual.widgets import Collapsible
 from tools.decorator import ToolContext, get_tool_definition
 from tools.discovery import discover_tools_in_file
 from tools.dispatch import _invoke_tool
@@ -60,10 +60,7 @@ from workflows.events import (
 from workflows.ids import InvocationId, TraceId, WorkflowRunId
 from workflows.run import RunDirectory, WorkflowRunStatus
 
-
-_BUNDLE_TOOLS_DIR = (
-    Path(__file__).resolve().parents[3] / "bundles" / "kolsch" / "tools"
-)
+_BUNDLE_TOOLS_DIR = Path(__file__).resolve().parents[3] / "bundles" / "kolsch" / "tools"
 
 
 def _load_tool(filename: str, tool_name: str) -> Callable[..., Awaitable[Any]]:
@@ -82,7 +79,10 @@ def run_workflow_tool() -> Callable[..., Awaitable[Any]]:
 
 class _MockAuthz:
     def register_prompt_callback(
-        self, callback: Any, *, on_rule_added: Any = None,
+        self,
+        callback: Any,
+        *,
+        on_rule_added: Any = None,
     ) -> None:
         _ = callback, on_rule_added
 
@@ -217,16 +217,21 @@ class _MockExecutor:
         self.node_name = "classify"
 
     async def run(self) -> WorkflowRunStatus:
-        self._observer(WorkflowRunStartedEvent(
-            workflow_run_id=self.run_id, trace_id=self.trace_id,
-        ))
+        self._observer(
+            WorkflowRunStartedEvent(
+                workflow_run_id=self.run_id,
+                trace_id=self.trace_id,
+            )
+        )
         await asyncio.sleep(self._delay)
-        self._observer(WorkflowNodeStartedEvent(
-            workflow_run_id=self.run_id,
-            trace_id=self.trace_id,
-            invocation_id=self.invocation_id,
-            node_name=self.node_name,
-        ))
+        self._observer(
+            WorkflowNodeStartedEvent(
+                workflow_run_id=self.run_id,
+                trace_id=self.trace_id,
+                invocation_id=self.invocation_id,
+                node_name=self.node_name,
+            )
+        )
         await asyncio.sleep(self._pre_sub_agent_delay)
         if self._sub_agent_observer is not None:
             for evt in (
@@ -251,19 +256,26 @@ class _MockExecutor:
                 ),
             ):
                 self._sub_agent_observer(
-                    self.node_name, str(self.invocation_id), evt,
+                    self.node_name,
+                    str(self.invocation_id),
+                    evt,
                 )
                 await asyncio.sleep(self._delay)
-        self._observer(WorkflowNodeCompletedEvent(
-            workflow_run_id=self.run_id,
-            trace_id=self.trace_id,
-            invocation_id=self.invocation_id,
-            node_name=self.node_name,
-        ))
+        self._observer(
+            WorkflowNodeCompletedEvent(
+                workflow_run_id=self.run_id,
+                trace_id=self.trace_id,
+                invocation_id=self.invocation_id,
+                node_name=self.node_name,
+            )
+        )
         await asyncio.sleep(self._delay)
-        self._observer(WorkflowRunCompletedEvent(
-            workflow_run_id=self.run_id, trace_id=self.trace_id,
-        ))
+        self._observer(
+            WorkflowRunCompletedEvent(
+                workflow_run_id=self.run_id,
+                trace_id=self.trace_id,
+            )
+        )
         return WorkflowRunStatus.SUCCEEDED
 
 
@@ -305,16 +317,19 @@ async def _drive_workflow(
     assert isinstance(workflows_impl, WorkflowsImpl)
     _install_mock(workflows_impl, pilot.app.session.root)
 
-    tool_task = asyncio.create_task(_invoke_tool_via_pilot(
-        pilot,
-        run_workflow_tool,
-        {"ref": "kolsch/workflows/hello-agent", "inputs": {}},
-    ))
+    tool_task = asyncio.create_task(
+        _invoke_tool_via_pilot(
+            pilot,
+            run_workflow_tool,
+            {"ref": "kolsch/workflows/hello-agent", "inputs": {}},
+        )
+    )
     card: CardWidget | None = None
     for _ in range(80):
         await pilot.pause()
         cards = [
-            w for w in pilot.app.query(CardWidget)
+            w
+            for w in pilot.app.query(CardWidget)
             if getattr(w, "kind", None) == "workflow"
         ]
         if cards:
@@ -355,7 +370,8 @@ async def test_collapse_hides_sub_agent_widgets_in_live_app(
     async with chat_app.run_test() as pilot:
         await pilot.pause()
         _, node_row, tool_task, _ = await _drive_workflow(
-            pilot, run_workflow_tool,
+            pilot,
+            run_workflow_tool,
         )
 
         # Expand the row so events land visibly (Coordinator #3 lock
@@ -371,7 +387,8 @@ async def test_collapse_hides_sub_agent_widgets_in_live_app(
         for _ in range(200):
             await pilot.pause()
             seen = {
-                type(w) for w in node_row.query("*")
+                type(w)
+                for w in node_row.query("*")
                 if type(w) in {UserChatbox, AssistantProse}
             }
             if seen == {UserChatbox, AssistantProse}:
@@ -417,7 +434,7 @@ async def test_collapse_hides_sub_agent_widgets_in_live_app(
         tool_task.cancel()
         try:
             await asyncio.wait_for(tool_task, timeout=5.0)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
+        except (TimeoutError, asyncio.CancelledError):
             pass
 
 
@@ -436,7 +453,8 @@ async def test_user_message_produces_userchatbox_widget_in_live_app(
     async with chat_app.run_test() as pilot:
         await pilot.pause()
         _, node_row, tool_task, _ = await _drive_workflow(
-            pilot, run_workflow_tool,
+            pilot,
+            run_workflow_tool,
         )
         node_row.collapsed = False
         for _ in range(200):
@@ -453,7 +471,7 @@ async def test_user_message_produces_userchatbox_widget_in_live_app(
         tool_task.cancel()
         try:
             await asyncio.wait_for(tool_task, timeout=5.0)
-        except (asyncio.CancelledError, asyncio.TimeoutError):
+        except (TimeoutError, asyncio.CancelledError):
             pass
 
 
@@ -472,13 +490,14 @@ async def test_workflow_card_stays_expanded_after_success(
     async with chat_app.run_test() as pilot:
         await pilot.pause()
         _, _, tool_task, card = await _drive_workflow(
-            pilot, run_workflow_tool,
+            pilot,
+            run_workflow_tool,
         )
 
         # Let the workflow finish naturally.
         try:
             await asyncio.wait_for(tool_task, timeout=15.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             pytest.fail("workflow tool did not complete within 15s")
 
         # Wait well past the 1s auto-collapse timer that

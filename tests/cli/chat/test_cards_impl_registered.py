@@ -22,8 +22,11 @@ from cli.chat.services.cards_impl import CardsImpl
 
 class _MockAuthz:
     def register_prompt_callback(
-        self, callback: Any, *, on_rule_added: Any = None,
-    ) -> None:  # noqa: ARG002
+        self,
+        callback: Any,
+        *,
+        on_rule_added: Any = None,
+    ) -> None:
         return None
 
     def clear_prompt_callback(self) -> None:
@@ -31,10 +34,9 @@ class _MockAuthz:
 
 
 class _MockEngine:
-    async def execute_stream(self, config: Any, ctx: Any):  # noqa: ARG002
+    async def execute_stream(self, config: Any, ctx: Any):
         if False:
             yield  # pragma: no cover
-        return
 
 
 @dataclass
@@ -104,7 +106,9 @@ async def test_on_mount_registers_cards_impl(tmp_path: Path) -> None:
 
     try:
         app = ChatApp(
-            session=bundle, engine=bundle.runtime.engine, full_history=False,
+            session=bundle,
+            engine=bundle.runtime.engine,
+            full_history=False,
         )
         async with app.run_test() as pilot:
             await pilot.pause()
@@ -146,7 +150,9 @@ async def test_on_unmount_calls_cards_aclose(tmp_path: Path) -> None:
 
     try:
         app = ChatApp(
-            session=bundle, engine=bundle.runtime.engine, full_history=False,
+            session=bundle,
+            engine=bundle.runtime.engine,
+            full_history=False,
         )
         async with app.run_test() as pilot:
             await pilot.pause()

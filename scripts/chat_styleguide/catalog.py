@@ -243,8 +243,8 @@ def _switch_notice_kind(kind: str) -> Callable[[Any], None]:
             w.add_class("-warning")
         elif kind == "error":
             w.add_class("-error")
-        w._kind = kind  # noqa: SLF001
-        w.update_text(w._body)  # noqa: SLF001
+        w._kind = kind
+        w.update_text(w._body)
 
     return _driver
 

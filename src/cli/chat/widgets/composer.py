@@ -98,9 +98,7 @@ class Composer(TextArea):
     # specific key mapping; Alt+Enter and Ctrl+J are more widely
     # respected. Accept all three so users don't have to know which
     # their terminal supports.
-    _NEWLINE_KEYS = frozenset(
-        {"shift+enter", "alt+enter", "ctrl+j"}
-    )
+    _NEWLINE_KEYS = frozenset({"shift+enter", "alt+enter", "ctrl+j"})
 
     async def _on_key(self, event: events.Key) -> None:
         """Intercept Enter (submit), newline keys, and empty-composer Ctrl+D.

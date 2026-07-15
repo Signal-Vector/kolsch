@@ -65,7 +65,9 @@ def canonicalize_jsonl(text: str) -> str:
 
 
 def _assert_or_update_golden(
-    golden_path: Path, actual: str, fixture_name: str,
+    golden_path: Path,
+    actual: str,
+    fixture_name: str,
 ) -> None:
     """Compare ``actual`` to ``golden_path`` content; write if
     ``UPDATE_GOLDEN=1`` is set. Consolidates the four assertion

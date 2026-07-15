@@ -16,8 +16,7 @@ from uuid import uuid4
 
 import pytest
 
-from cli._slash import ChatSessionState, ControlSignal, SlashContext
-from cli._slash import _handler_workflow
+from cli._slash import ChatSessionState, ControlSignal, SlashContext, _handler_workflow
 from cli.chat.service_registry import ChatServiceRegistry
 
 
@@ -86,7 +85,10 @@ class _MockCatalog:
         self._refs = set(refs)
 
     def lookup(
-        self, ref: str, *, expected_type: str = "",
+        self,
+        ref: str,
+        *,
+        expected_type: str = "",
     ) -> _MockCatalogEntry | None:
         _ = expected_type
         if ref in self._refs:
@@ -197,7 +199,9 @@ async def test_handler_workflow_does_not_call_execute_workflow_with_renderer(
     import cli._workflow_chat_runner as _chat_runner
 
     monkeypatch.setattr(
-        _chat_runner, "execute_workflow_with_renderer", _boom,
+        _chat_runner,
+        "execute_workflow_with_renderer",
+        _boom,
     )
 
     cards = _CardsSpy()

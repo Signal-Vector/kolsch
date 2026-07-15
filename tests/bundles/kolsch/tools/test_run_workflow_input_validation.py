@@ -19,15 +19,13 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
-from uuid import uuid4
-
 from errors import PlatformError
-from tools.decorator import ToolContext
 from schemas.identifiers import AgentId, SessionId, ThreadId
-
+from tools.decorator import ToolContext
 
 # ----------------------------------------------------------------------
 # Load the tool function from the bundle (matches other tests).
@@ -81,7 +79,11 @@ class _MockWorkflows:
         return self._yaml_source
 
     async def start(
-        self, ref: str, inputs: dict[str, Any], *, card: Any = None,
+        self,
+        ref: str,
+        inputs: dict[str, Any],
+        *,
+        card: Any = None,
     ) -> str:
         _ = card
         self.starts.append((ref, inputs))
@@ -134,10 +136,12 @@ async def test_missing_required_input_returns_is_error_true() -> None:
     # exposed; otherwise call `run_workflow` with dict-shaped args
     # via the model_validate path.
     args_schema = run_workflow._tool_definition.args_schema
-    args = args_schema.model_validate({
-        "ref": "andre/workflows/job_description_review",
-        "inputs": {},
-    })
+    args = args_schema.model_validate(
+        {
+            "ref": "andre/workflows/job_description_review",
+            "inputs": {},
+        }
+    )
     with pytest.raises(PlatformError) as exc_info:
         # The @tool decorator wraps the coroutine; call the wrapped
         # tool function directly on args + ctx.
@@ -161,10 +165,12 @@ async def test_valid_inputs_proceed_normally() -> None:
     ctx = _mk_ctx(cards, workflows)
 
     args_schema = run_workflow._tool_definition.args_schema
-    args = args_schema.model_validate({
-        "ref": "andre/workflows/job_description_review",
-        "inputs": {"url": "https://example.com"},
-    })
+    args = args_schema.model_validate(
+        {
+            "ref": "andre/workflows/job_description_review",
+            "inputs": {"url": "https://example.com"},
+        }
+    )
     result = await run_workflow._tool_definition.func(args, ctx)
     assert result["run_id"] == "wrk_probe"
     assert workflows.starts == [
@@ -193,10 +199,12 @@ graph:
     ctx = _mk_ctx(cards, workflows)
 
     args_schema = run_workflow._tool_definition.args_schema
-    args = args_schema.model_validate({
-        "ref": "kolsch/workflows/hello",
-        "inputs": {},
-    })
+    args = args_schema.model_validate(
+        {
+            "ref": "kolsch/workflows/hello",
+            "inputs": {},
+        }
+    )
     # Should NOT raise — defaulted input is optional.
     result = await run_workflow._tool_definition.func(args, ctx)
     assert result["run_id"] == "wrk_probe"
@@ -211,12 +219,17 @@ async def test_resolver_absent_falls_back_to_pre_bug025_shape() -> None:
     working — the validator's duck-typed probe returns ``None`` and
     the tool proceeds to enqueue as before.
     """
+
     class _MinimalWorkflows:
         def __init__(self) -> None:
             self.starts: list[tuple[str, dict[str, Any]]] = []
 
         async def start(
-            self, ref: str, inputs: dict[str, Any], *, card: Any = None,
+            self,
+            ref: str,
+            inputs: dict[str, Any],
+            *,
+            card: Any = None,
         ) -> str:
             _ = card
             self.starts.append((ref, inputs))
@@ -228,10 +241,12 @@ async def test_resolver_absent_falls_back_to_pre_bug025_shape() -> None:
     ctx = _mk_ctx(cards, workflows)
 
     args_schema = run_workflow._tool_definition.args_schema
-    args = args_schema.model_validate({
-        "ref": "andre/workflows/job_description_review",
-        "inputs": {},
-    })
+    args = args_schema.model_validate(
+        {
+            "ref": "andre/workflows/job_description_review",
+            "inputs": {},
+        }
+    )
     # Should NOT raise — resolver is absent, so no validation.
     result = await run_workflow._tool_definition.func(args, ctx)
     assert result["run_id"] == "wrk_headless"

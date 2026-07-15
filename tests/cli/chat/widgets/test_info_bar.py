@@ -21,7 +21,6 @@ from textual.widgets import Static
 
 from cli.chat.widgets.info_bar import InfoBar
 
-
 # ── Basic mount / composition ────────────────────────────────────────
 
 
@@ -71,7 +70,9 @@ async def test_info_bar_reactives_populate_segments(mock_app_factory) -> None:
         bar.cwd = "kolsch"
         await pilot.pause()
 
-        assert str(bar.query_one("#info-identity", Static).render()) == "butler · sonnet-4"
+        assert (
+            str(bar.query_one("#info-identity", Static).render()) == "butler · sonnet-4"
+        )
         assert str(bar.query_one("#info-session", Static).render()) == "sess-42"
         assert str(bar.query_one("#info-branch", Static).render()) == "main"
         assert str(bar.query_one("#info-cwd", Static).render()) == "kolsch"
@@ -108,7 +109,9 @@ async def test_info_bar_empty_reactives_render_empty(mock_app_factory) -> None:
         bar.model = "sonnet-4"
         await pilot.pause()
 
-        assert str(bar.query_one("#info-identity", Static).render()) == "butler · sonnet-4"
+        assert (
+            str(bar.query_one("#info-identity", Static).render()) == "butler · sonnet-4"
+        )
         assert str(bar.query_one("#info-session", Static).render()) == ""
         assert str(bar.query_one("#info-branch", Static).render()) == ""
         assert str(bar.query_one("#info-cwd", Static).render()) == ""
@@ -149,9 +152,7 @@ async def test_info_bar_segments_collapse_by_width(
         await pilot.pause()
 
         seen_visible = {
-            st.id
-            for st in bar.query(Static)
-            if st.display and st.id is not None
+            st.id for st in bar.query(Static) if st.display and st.id is not None
         }
         assert seen_visible == expected_visible
 

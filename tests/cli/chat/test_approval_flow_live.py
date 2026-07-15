@@ -49,7 +49,10 @@ from store import SessionStore, SqliteBackend
 
 class _MockAuthz:
     def register_prompt_callback(
-        self, callback: Any, *, on_rule_added: Any = None,
+        self,
+        callback: Any,
+        *,
+        on_rule_added: Any = None,
     ) -> None:
         _ = callback, on_rule_added
 
@@ -58,7 +61,8 @@ class _MockAuthz:
 
 
 async def _empty_stream(
-    *_args: Any, **_kwargs: Any,
+    *_args: Any,
+    **_kwargs: Any,
 ) -> AsyncGenerator[Any, None]:
     """Yield nothing — the mock engine never runs a real turn.
 
@@ -280,10 +284,11 @@ async def test_approval_mount_and_answer_via_live_bus_bridge(
         # target / rule_id are present verbatim (no "(no matching rule)"
         # fallback).
         from textual.widgets import Static
+
         from cli.chat.widgets.approval_args_row import ApprovalArgsRow
+
         context_lines = [
-            str(w.content)
-            for w in block.query(".context").results(Static)
+            str(w.content) for w in block.query(".context").results(Static)
         ]
         # Two ``.context`` Statics remain (Tool / Rule); the Args row is
         # now a custom widget.
@@ -295,9 +300,7 @@ async def test_approval_mount_and_answer_via_live_bus_bridge(
         joined = "\n".join(context_lines)
         assert action in joined, f"action {action!r} not in context: {joined!r}"
         assert target in joined, f"target {target!r} not in context: {joined!r}"
-        assert rule_id in joined, (
-            f"rule_id {rule_id!r} not in context: {joined!r}"
-        )
+        assert rule_id in joined, f"rule_id {rule_id!r} not in context: {joined!r}"
         # Explicit: no empty-field fallback text is present.
         assert "(no matching rule)" not in joined
 

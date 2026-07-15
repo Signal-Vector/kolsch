@@ -54,4 +54,8 @@ def test_load_workflow_signature_takes_path() -> None:
     # `inspect.signature` returns the annotation as a type; we
     # normalise to str for a stable assertion.
     annotation = first.annotation
-    assert annotation is Path or annotation is inspect.Parameter.empty or "Path" in str(annotation)
+    assert (
+        annotation is Path
+        or annotation is inspect.Parameter.empty
+        or "Path" in str(annotation)
+    )

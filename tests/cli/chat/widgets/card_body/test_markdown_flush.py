@@ -13,7 +13,6 @@ Three passes:
 from __future__ import annotations
 
 import asyncio
-import os
 from typing import Any
 
 import pytest
@@ -36,10 +35,12 @@ async def _feed_40hz(widget: MarkdownRenderer, chunks: list[str]) -> None:
     interval timer can fire on its own cadence in parallel.
     """
     for chunk in chunks:
-        widget.apply_event(_MockEvent(
-            "kolsch.card.appended",
-            {"chunk": chunk},
-        ))
+        widget.apply_event(
+            _MockEvent(
+                "kolsch.card.appended",
+                {"chunk": chunk},
+            )
+        )
         await asyncio.sleep(0.025)
 
 
@@ -63,8 +64,7 @@ async def test_40hz_flush_ratio_bounded(mock_app_factory, monkeypatch) -> None:
         # to absorb scheduling jitter; the invariant is
         # "coalesced, not per-append".
         assert widget._flush_count <= 12, (
-            f"Expected ≤12 flushes for 40 chunks at 100ms; "
-            f"got {widget._flush_count}"
+            f"Expected ≤12 flushes for 40 chunks at 100ms; got {widget._flush_count}"
         )
         # But at least one flush fired — buffer drained.
         assert widget._flush_count >= 1
@@ -105,14 +105,14 @@ async def test_no_data_loss_under_streaming(mock_app_factory, monkeypatch) -> No
         await pilot.pause()
         chunks = [f"chunk{i}\n" for i in range(20)]
         for chunk in chunks:
-            widget.apply_event(_MockEvent(
-                "kolsch.card.appended",
-                {"chunk": chunk},
-            ))
+            widget.apply_event(
+                _MockEvent(
+                    "kolsch.card.appended",
+                    {"chunk": chunk},
+                )
+            )
         # Give the interval enough time to drain remaining chunks.
         await pilot.pause(0.3)
         source = widget.source
         for i in range(20):
-            assert f"chunk{i}" in source, (
-                f"chunk{i} missing from source={source!r}"
-            )
+            assert f"chunk{i}" in source, f"chunk{i} missing from source={source!r}"

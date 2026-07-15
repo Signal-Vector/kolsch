@@ -33,20 +33,17 @@ from schemas.events import Event, EventType
 from schemas.identifiers import EventId, SessionId, ThreadId
 from tests.cli.chat.snapshot_helpers import assert_snapshot_matches
 
-
 _FIXTURE_PATH = (
     Path(__file__).resolve().parents[3]
-    / "fixtures" / "sessions" / "ses_bug036a_jd_review_excerpt.jsonl"
+    / "fixtures"
+    / "sessions"
+    / "ses_bug036a_jd_review_excerpt.jsonl"
 )
 _APP_SIZE = (200, 100)
 
 
 def _load_fixture() -> list[dict[str, Any]]:
-    return [
-        json.loads(line)
-        for line in _FIXTURE_PATH.read_text().splitlines()
-        if line
-    ]
+    return [json.loads(line) for line in _FIXTURE_PATH.read_text().splitlines() if line]
 
 
 def _event_from_row(row: dict[str, Any]) -> Event:
@@ -78,13 +75,20 @@ class _StubTranscriptApp(App[None]):
         yield VerticalScroll(id="transcript")
 
     async def mount_user_message(
-        self, text: str, timestamp: Any = None,
-        *, event_id: Any = None, content: Any = None,
+        self,
+        text: str,
+        timestamp: Any = None,
+        *,
+        event_id: Any = None,
+        content: Any = None,
     ) -> None:
         _ = text, timestamp, event_id, content
 
     async def mount_assistant_message(
-        self, text: str, *, event_id: Any = None,
+        self,
+        text: str,
+        *,
+        event_id: Any = None,
     ) -> None:
         _ = text, event_id
 
@@ -92,6 +96,7 @@ class _StubTranscriptApp(App[None]):
         class _P:
             async def append(self, text: str) -> None:
                 _ = text
+
         return _P()
 
     async def mount_tool_call(
@@ -107,8 +112,12 @@ class _StubTranscriptApp(App[None]):
         _ = tool_name, args, body, failed, recovery_hint, event_id
 
     async def mount_notice(
-        self, notice_id: str, text: str,
-        *, level: str = "info", event_id: Any = None,
+        self,
+        notice_id: str,
+        text: str,
+        *,
+        level: str = "info",
+        event_id: Any = None,
     ) -> None:
         _ = notice_id, text, level, event_id
 
@@ -178,7 +187,8 @@ async def test_snapshot_mockup3_agent_single_turn() -> None:
         await pilot.pause()
 
         agent_rows = [
-            r for r in pilot.app.query(WorkflowNodeRow)
+            r
+            for r in pilot.app.query(WorkflowNodeRow)
             if r._node_type == "kolsch/nodes/agent"
         ]
         if agent_rows:

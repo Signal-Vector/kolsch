@@ -48,14 +48,14 @@ class StateToken:
 
 
 STATE_TOKENS: dict[str, StateToken] = {
-    "success":    StateToken("✓", "$tool-fg", "bold"),
-    "failed":     StateToken("✗", "$error",   "bold"),
-    "running":    StateToken("▸", "$tool-fg", "bold"),
-    "queued":     StateToken("⋯", "$hint",    "dim"),
-    "paused":     StateToken("⚠", "$warning", "bold italic"),
-    "awaiting":   StateToken("⚠", "$warning", "bold italic"),
+    "success": StateToken("✓", "$tool-fg", "bold"),
+    "failed": StateToken("✗", "$error", "bold"),
+    "running": StateToken("▸", "$tool-fg", "bold"),
+    "queued": StateToken("⋯", "$hint", "dim"),
+    "paused": StateToken("⚠", "$warning", "bold italic"),
+    "awaiting": StateToken("⚠", "$warning", "bold italic"),
     "cancelling": StateToken("⧗", "$warning", "bold italic"),
-    "cancelled":  StateToken("─", "$hint",    "dim"),
+    "cancelled": StateToken("─", "$hint", "dim"),
 }
 """Canonical state → token map.
 
@@ -67,12 +67,12 @@ through :func:`resolve_state` which translates via
 
 
 _LEGACY_ALIASES: dict[str, str] = {
-    "completed":    "success",
-    "error":        "failed",
+    "completed": "success",
+    "error": "failed",
     # WorkflowNodeRow's ``starting`` renders the animated spinner
     # (see ``_ANIMATED_STATES``), i.e. reads as "in motion" —
     # ``running`` is the correct canonical bucket.
-    "starting":     "running",
+    "starting": "running",
     # CardWidget's ``initializing`` renders ``⠋`` as a *resting* glyph
     # (no spinner timer on the header), i.e. reads as
     # "not-yet-started, being prepared" — ``queued`` is the calmer
@@ -83,7 +83,7 @@ _LEGACY_ALIASES: dict[str, str] = {
     # generic map for out-of-kind states (``paused`` on a markdown
     # card, etc.). The visible-behavior contract is preserved.
     "initializing": "queued",
-    "pruned":       "cancelled",
+    "pruned": "cancelled",
 }
 """Legacy state name → canonical state name.
 
@@ -118,4 +118,4 @@ def resolve_state(name: str) -> StateToken:
     raise KeyError(f"unknown state: {name!r}")
 
 
-__all__ = ["StateToken", "STATE_TOKENS", "resolve_state"]
+__all__ = ["STATE_TOKENS", "StateToken", "resolve_state"]

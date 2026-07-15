@@ -78,9 +78,7 @@ class AssemblyCache:
     """
 
     def __init__(self) -> None:
-        self._per_thread: dict[
-            ThreadId, OrderedDict[_Key, AssembledContext]
-        ] = {}
+        self._per_thread: dict[ThreadId, OrderedDict[_Key, AssembledContext]] = {}
         self.hits: int = 0
         self.misses: int = 0
         self._outer_lock = threading.Lock()

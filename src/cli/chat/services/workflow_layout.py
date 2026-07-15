@@ -38,8 +38,9 @@ from __future__ import annotations
 import asyncio
 import contextlib
 import logging
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from textual.widgets import Static
 
@@ -98,7 +99,7 @@ records with ``running`` or ``cancelling`` populate the leading
 """
 
 
-def _has_pending_approval(record: "WorkflowRunRecord") -> bool:
+def _has_pending_approval(record: WorkflowRunRecord) -> bool:
     """Return True when a running record has a pending approval.
 
     feat-019 uses this to bump the strip's ``⚠ N paused`` counter.
@@ -110,7 +111,7 @@ def _has_pending_approval(record: "WorkflowRunRecord") -> bool:
 
 
 def format_live_workflow_strip(
-    records: list["WorkflowRunRecord"],
+    records: list[WorkflowRunRecord],
 ) -> str | None:
     """Return the status-line-2 strip string, or ``None`` if idle.
 
@@ -142,8 +143,7 @@ def format_live_workflow_strip(
     live = [r for r in records if r.phase in _LIVE_PHASES]
     queued = [r for r in records if r.phase == "queued"]
     paused = [
-        r for r in records
-        if r.phase in _LIVE_PHASES and _has_pending_approval(r)
+        r for r in records if r.phase in _LIVE_PHASES and _has_pending_approval(r)
     ]
     if not live:
         return None
@@ -177,8 +177,8 @@ def format_live_workflow_strip(
 
 
 def sort_workflow_cards(
-    records: list["WorkflowRunRecord"],
-) -> list["WorkflowRunRecord"]:
+    records: list[WorkflowRunRecord],
+) -> list[WorkflowRunRecord]:
     """Canonical sort per spec-016 AC #2.
 
     Groups records into three bands and sorts each independently:
@@ -198,9 +198,9 @@ def sort_workflow_cards(
         A fresh list ordered as: terminal-successes ++ failed-pinned ++
         in-progress. Empty input yields an empty list.
     """
-    terminal_success: list["WorkflowRunRecord"] = []
-    failed_pinned: list["WorkflowRunRecord"] = []
-    in_progress: list["WorkflowRunRecord"] = []
+    terminal_success: list[WorkflowRunRecord] = []
+    failed_pinned: list[WorkflowRunRecord] = []
+    in_progress: list[WorkflowRunRecord] = []
 
     for record in records:
         phase = record.phase
@@ -247,11 +247,11 @@ class WorkflowLayoutManager:
     def __init__(
         self,
         *,
-        transcript: "VerticalScroll",
-        get_records: Callable[[], list["WorkflowRunRecord"]],
+        transcript: VerticalScroll,
+        get_records: Callable[[], list[WorkflowRunRecord]],
         get_card_widget: Callable[[Any], Any | None],
         reorder_tick: float = _REORDER_TICK_SECONDS,
-        status_bar: "StatusBar | None" = None,
+        status_bar: StatusBar | None = None,
     ) -> None:
         self._transcript = transcript
         self._get_records = get_records
@@ -260,14 +260,14 @@ class WorkflowLayoutManager:
         # feat-019: optional StatusBar reference; when wired the
         # manager pushes the live-workflow strip on every flush so the
         # line-2 rendering stays in lockstep with the card layout.
-        self._status_bar: "StatusBar | None" = status_bar
+        self._status_bar: StatusBar | None = status_bar
         self._divider: Static | None = None
         self._pending_reorder = False
         # Test-facing counter — how many `_flush_reorder` passes have
         # actually run. Test 5 reads this to verify batching.
         self.flush_count = 0
 
-    def register_status_bar(self, status_bar: "StatusBar") -> None:
+    def register_status_bar(self, status_bar: StatusBar) -> None:
         """Wire a :class:`StatusBar` handle after construction.
 
         Called from ``ChatApp.on_mount`` once the widget is composed —
@@ -297,7 +297,7 @@ class WorkflowLayoutManager:
             records = self._get_records()
             text = format_live_workflow_strip(records)
             self._status_bar.set_workflow_strip(text)
-        except Exception:  # noqa: BLE001 — status bar is best-effort
+        except Exception:
             _LOGGER.exception(
                 "WorkflowLayoutManager: status bar push failed",
             )
@@ -350,12 +350,8 @@ class WorkflowLayoutManager:
             records = self._get_records()
             ordered = sort_workflow_cards(records)
 
-            in_progress = [
-                r for r in ordered if r.phase in _IN_PROGRESS_PHASES
-            ]
-            terminal = [
-                r for r in ordered if r.phase not in _IN_PROGRESS_PHASES
-            ]
+            in_progress = [r for r in ordered if r.phase in _IN_PROGRESS_PHASES]
+            terminal = [r for r in ordered if r.phase not in _IN_PROGRESS_PHASES]
             should_compact = len(in_progress) > 2
             # bug-039: terminal cards go compact only when there are
             # multiple of them OR when in-progress compaction is already
@@ -369,7 +365,9 @@ class WorkflowLayoutManager:
             # a mid-move refresh renders the right height each pass.
             for record in ordered:
                 self._apply_compact_mode(
-                    record, should_compact, should_compact_terminal,
+                    record,
+                    should_compact,
+                    should_compact_terminal,
                 )
 
             # DOM move: diff and apply. Q4 lock — divider mount AFTER.
@@ -386,7 +384,7 @@ class WorkflowLayoutManager:
             # registered StatusBar. Done AFTER the DOM shuffle so the
             # strip lags card state by at most one 250ms tick.
             self._push_workflow_strip()
-        except Exception:  # noqa: BLE001 — reorder is best-effort
+        except Exception:
             _LOGGER.exception(
                 "WorkflowLayoutManager: _flush_reorder raised",
             )
@@ -397,7 +395,7 @@ class WorkflowLayoutManager:
 
     def _apply_compact_mode(
         self,
-        record: "WorkflowRunRecord",
+        record: WorkflowRunRecord,
         should_compact_in_progress: bool,
         should_compact_terminal: bool,
     ) -> None:
@@ -444,9 +442,7 @@ class WorkflowLayoutManager:
             # terminals or coexisting compact in-progress → compact
             # (with the same focused-card carve-out).
             focused = getattr(widget, "has_focus", False)
-            renderer.compact_mode = should_compact_terminal and not bool(
-                focused
-            )
+            renderer.compact_mode = should_compact_terminal and not bool(focused)
             return
         if should_compact_in_progress:
             focused = getattr(widget, "has_focus", False)
@@ -455,7 +451,8 @@ class WorkflowLayoutManager:
             renderer.compact_mode = False
 
     def _make_ack_callback(
-        self, record: "WorkflowRunRecord",
+        self,
+        record: WorkflowRunRecord,
     ) -> Callable[[], None]:
         """Build the closure the CardWidget fires on Enter in error state.
 
@@ -469,7 +466,7 @@ class WorkflowLayoutManager:
 
         return _ack
 
-    def _apply_dom_order(self, ordered: list["WorkflowRunRecord"]) -> None:
+    def _apply_dom_order(self, ordered: list[WorkflowRunRecord]) -> None:
         """Move each card to its computed position via ``move_child``.
 
         Skips records with no bound card, or cards not tracked in the
@@ -508,7 +505,7 @@ class WorkflowLayoutManager:
 
     async def _sync_divider(
         self,
-        ordered: list["WorkflowRunRecord"],
+        ordered: list[WorkflowRunRecord],
         has_terminal: bool,
         has_in_progress: bool,
     ) -> None:
@@ -538,15 +535,15 @@ class WorkflowLayoutManager:
                 # Divider already mounted — ensure it sits before the
                 # first in-progress card.
                 self._reposition_divider(ordered)
-        else:
-            # No dual-group; remove the divider if it exists.
-            if self._divider is not None:
-                with contextlib.suppress(Exception):
-                    self._divider.remove()
-                self._divider = None
+        # No dual-group; remove the divider if it exists.
+        elif self._divider is not None:
+            with contextlib.suppress(Exception):
+                self._divider.remove()
+            self._divider = None
 
     def _first_in_progress_widget(
-        self, ordered: list["WorkflowRunRecord"],
+        self,
+        ordered: list[WorkflowRunRecord],
     ) -> Any | None:
         """Return the widget for the first in-progress record, if any."""
         for record in ordered:
@@ -560,7 +557,8 @@ class WorkflowLayoutManager:
         return None
 
     def _reposition_divider(
-        self, ordered: list["WorkflowRunRecord"],
+        self,
+        ordered: list[WorkflowRunRecord],
     ) -> None:
         """Slot the existing divider before the first in-progress card."""
         if self._divider is None:

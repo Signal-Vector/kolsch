@@ -243,10 +243,7 @@ class CrewAIFramework:
                             provider="crewai",
                             model=self._model_name,
                             timeout_seconds=float(kickoff_bound),
-                            where=(
-                                "engine.crewai_framework."
-                                "run_exchange.kickoff"
-                            ),
+                            where=("engine.crewai_framework.run_exchange.kickoff"),
                         ) from exc
             except PlatformError:
                 # Engine-typed errors (e.g., ExchangeCancelled raised
@@ -444,9 +441,7 @@ def _make_crewai_tool(
     # for anything it could spawn.
     handle_description = getattr(handle, "description", None)
     description = str(
-        handle_description
-        or schema.get("description")
-        or f"Tool: {name}",
+        handle_description or schema.get("description") or f"Tool: {name}",
     )
 
     # Build a minimal Pydantic schema that accepts whatever the LLM

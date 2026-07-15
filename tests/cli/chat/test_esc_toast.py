@@ -23,7 +23,7 @@ exercised without booting a real workflow executor.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -31,7 +31,7 @@ from typing import Any
 import pytest
 from textual import events
 
-from cli.chat.app import ChatApp, _ESC_TOAST_TEXT
+from cli.chat.app import _ESC_TOAST_TEXT, ChatApp
 from cli.chat.service_registry import ChatServiceRegistry
 from cli.chat.services.workflows_impl import WorkflowRunRecord
 from cli.chat.widgets.status_bar import StatusBar
@@ -39,14 +39,16 @@ from schemas.identifiers import SessionId, ThreadId
 from tools.services.workflows import NodeCounts
 from workflows.ids import WorkflowRunId
 
-
 _NOW = datetime.now(tz=UTC)
 
 
 class _MockAuthz:
     def register_prompt_callback(
-        self, callback: Any, *, on_rule_added: Any = None,
-    ) -> None:  # noqa: ARG002
+        self,
+        callback: Any,
+        *,
+        on_rule_added: Any = None,
+    ) -> None:
         return None
 
     def clear_prompt_callback(self) -> None:
@@ -54,10 +56,9 @@ class _MockAuthz:
 
 
 class _MockEngine:
-    async def execute_stream(self, config: Any, ctx: Any):  # noqa: ARG002
+    async def execute_stream(self, config: Any, ctx: Any):
         if False:
             yield  # pragma: no cover
-        return
 
 
 @dataclass
@@ -86,7 +87,6 @@ class _MockStore:
     async def read_path_to_leaf(self, _thread_id: Any):
         if False:
             yield  # pragma: no cover
-        return
 
     async def append_event(self, _thread_id: Any, _event: Any) -> None:
         return None
@@ -129,7 +129,10 @@ class _StubWorkflowsImpl:
         return rec
 
     async def cancel(
-        self, run_id: WorkflowRunId, *, cascade: bool = False,
+        self,
+        run_id: WorkflowRunId,
+        *,
+        cascade: bool = False,
     ) -> bool:
         self.cancel_calls.append((run_id, cascade))
         rec = self._workflow_registry.get(run_id)
@@ -162,11 +165,14 @@ def bundle(tmp_path: Path) -> _MockBundle:
 
 
 async def _make_app(
-    bundle: _MockBundle, workflows: _StubWorkflowsImpl,
+    bundle: _MockBundle,
+    workflows: _StubWorkflowsImpl,
 ) -> ChatApp:
     """Construct a ChatApp with the stub workflows pre-registered."""
     app = ChatApp(
-        session=bundle, engine=bundle.runtime.engine, full_history=False,
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=False,
     )
     # Pre-seed the service registry so on_mount preserves our stub.
     app._service_registry = ChatServiceRegistry(
@@ -271,11 +277,13 @@ async def test_second_esc_within_window_cancels_workflow(
 
 @pytest.mark.asyncio
 async def test_toast_auto_dismisses_after_window(
-    bundle: _MockBundle, monkeypatch: pytest.MonkeyPatch,
+    bundle: _MockBundle,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """After 3s the toast auto-dismisses via the timer callback."""
     # Shorten the window for the test.
     from cli.chat import app as app_module
+
     monkeypatch.setattr(app_module, "_ESC_TOAST_SECONDS", 0.05)
 
     workflows = _StubWorkflowsImpl()
@@ -342,7 +350,9 @@ async def test_multiple_workflows_second_esc_cancels_oldest(
     workflows.add_record(suffix="e1", phase="running", started_offset=5)
     # Oldest — 30s ago.
     r_old = workflows.add_record(
-        suffix="e2", phase="running", started_offset=30,
+        suffix="e2",
+        phase="running",
+        started_offset=30,
     )
     # Middle — 15s ago.
     workflows.add_record(suffix="e3", phase="running", started_offset=15)

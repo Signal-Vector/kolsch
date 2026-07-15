@@ -29,7 +29,7 @@ Seven Pilot tests covering the two behavior changes:
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 from textual.app import App
@@ -149,8 +149,7 @@ def test_ctrl_c_not_bound_to_cancel_exchange() -> None:
     """
     for binding in CHAT_BINDINGS:
         assert "ctrl+c" not in binding.key.split(","), (
-            f"CHAT_BINDINGS shadows the Screen ctrl+c copy default: "
-            f"{binding!r}"
+            f"CHAT_BINDINGS shadows the Screen ctrl+c copy default: {binding!r}"
         )
 
 

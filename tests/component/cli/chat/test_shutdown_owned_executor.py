@@ -301,8 +301,7 @@ async def test_graceful_shutdown_runs_aclose_and_shuts_executor(
         async with app.run_test() as pilot:
             await pilot.pause()
             assert app._owned_executor is not None, (
-                "on_mount must install the owned executor even on the "
-                "graceful path"
+                "on_mount must install the owned executor even on the graceful path"
             )
         # After `run_test` exits, `on_unmount` has completed.
         assert stub.closed, (
@@ -310,8 +309,7 @@ async def test_graceful_shutdown_runs_aclose_and_shuts_executor(
             "the Part-B executor-shutdown addition"
         )
         assert app._owned_executor is None, (
-            "on_unmount must null out the executor handle on the graceful "
-            "path too"
+            "on_unmount must null out the executor handle on the graceful path too"
         )
     finally:
         await backend.close()
@@ -356,7 +354,8 @@ async def test_state_integrity_after_wedged_worker_teardown(
             # executor via `asyncio.to_thread(append_event_sync, ...)`.
             for i in range(seeded_count):
                 await store.append_event(
-                    thread_id, _make_event(session_id, thread_id, f"seed.{i}"),
+                    thread_id,
+                    _make_event(session_id, thread_id, f"seed.{i}"),
                 )
 
             # Wedge a worker on the owned pool.

@@ -22,7 +22,6 @@ from cli.chat.services.workflows_impl import WorkflowRunRecord
 from tools.services.workflows import WorkflowRunPhase
 from workflows.ids import WorkflowRunId
 
-
 _BASE_TS = datetime(2026, 7, 5, 12, 0, 0, tzinfo=UTC)
 
 
@@ -180,5 +179,10 @@ def test_mixed_layout_ordering() -> None:
     # - cancelling p3 (started 75)
     # - running p1 (started 100)
     assert [r.run_id for r in result] == [
-        s2.run_id, s1.run_id, e1.run_id, p2.run_id, p3.run_id, p1.run_id,
+        s2.run_id,
+        s1.run_id,
+        e1.run_id,
+        p2.run_id,
+        p3.run_id,
+        p1.run_id,
     ]

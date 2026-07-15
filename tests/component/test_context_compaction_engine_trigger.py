@@ -56,7 +56,9 @@ def _platform_yaml(root: Path) -> None:
                 "sandbox": {"variant": "native", "config": {}},
                 "authorization": {
                     "variant": "rule_based",
-                    "config": {"rules": [{"who": ".*", "what": ".*", "effect": "allow"}]},
+                    "config": {
+                        "rules": [{"who": ".*", "what": ".*", "effect": "allow"}]
+                    },
                 },
                 "storage": {
                     "entity_backend": "sqlite",
@@ -140,7 +142,9 @@ def _config(*, agent_id: str = "ag_test") -> ResolvedAgentConfig:
     )
 
 
-async def _fresh_thread_ctx(store: SessionStore, agent_id: str = "ag_test") -> ExecutionContext:
+async def _fresh_thread_ctx(
+    store: SessionStore, agent_id: str = "ag_test"
+) -> ExecutionContext:
     session = await store.create_session(agent_id, name="test-session")
     threads = await store.list_threads(session.session_id)
     return ExecutionContext(
@@ -243,6 +247,6 @@ async def test_compaction_fires_when_estimate_exceeds_threshold(tmp_path: Path) 
     )
     await engine.execute(_config(), ctx2)
     events = [e async for e in store.read_path_to_leaf(ctx2.thread_id)]
-    assert any(e.type == EventType.CONTEXT_COMPACTED for e in events), (
-        [e.type.value for e in events]
-    )
+    assert any(e.type == EventType.CONTEXT_COMPACTED for e in events), [
+        e.type.value for e in events
+    ]

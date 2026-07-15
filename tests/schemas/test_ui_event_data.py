@@ -63,8 +63,7 @@ def test_extra_fields_are_ignored_on_validate() -> None:
     unknown field validates without raising. Locks the forward-compat
     replay contract from spec-002."""
     payload_json = (
-        '{"kind": "kolsch.card.opened", "payload": {}, '
-        '"unknown_future_field": 42}'
+        '{"kind": "kolsch.card.opened", "payload": {}, "unknown_future_field": 42}'
     )
     ev = UIEventData.model_validate_json(payload_json)
     assert ev.kind == "kolsch.card.opened"

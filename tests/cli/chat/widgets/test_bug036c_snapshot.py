@@ -53,12 +53,14 @@ async def test_snapshot_header_shows_ref_and_inputs_top_level() -> None:
         await slot.mount(renderer)
         await pilot.pause()
 
-        renderer._on_run_started({
-            "run_id": "wrk_snapshot_top",
-            "workflow_ref": "andre/workflows/jd_review",
-            "inputs": {"url": "https://example.com/jd"},
-            "ts": "2026-07-09T00:00:00Z",
-        })
+        renderer._on_run_started(
+            {
+                "run_id": "wrk_snapshot_top",
+                "workflow_ref": "andre/workflows/jd_review",
+                "inputs": {"url": "https://example.com/jd"},
+                "ts": "2026-07-09T00:00:00Z",
+            }
+        )
         await pilot.pause()
 
         assert_snapshot_matches(pilot.app, "bug036c/header_top_level")
@@ -74,12 +76,14 @@ async def test_snapshot_header_flattens_parent_ref_when_nested() -> None:
         await slot.mount(renderer)
         await pilot.pause()
 
-        renderer._on_run_started({
-            "run_id": "wrk_snapshot_nested",
-            "workflow_ref": "child/wf/inner",
-            "inputs": {"url": "https://example.com"},
-            "ts": "2026-07-09T00:00:00Z",
-        })
+        renderer._on_run_started(
+            {
+                "run_id": "wrk_snapshot_nested",
+                "workflow_ref": "child/wf/inner",
+                "inputs": {"url": "https://example.com"},
+                "ts": "2026-07-09T00:00:00Z",
+            }
+        )
         await pilot.pause()
 
         assert_snapshot_matches(pilot.app, "bug036c/header_nested")
@@ -123,5 +127,6 @@ async def test_snapshot_bash_row_collapsed_hides_command() -> None:
         await pilot.pause()
 
         assert_snapshot_matches(
-            pilot.app, "bug036c/bash_command_hidden_when_collapsed",
+            pilot.app,
+            "bug036c/bash_command_hidden_when_collapsed",
         )

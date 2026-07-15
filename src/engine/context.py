@@ -96,9 +96,7 @@ class CombinedCancelToken(CancelToken):
 
     def is_cancelled(self) -> bool:
         """Return `True` if this token's local flag OR any inner is cancelled."""
-        return self._event.is_set() or any(
-            t.is_cancelled() for t in self._inner
-        )
+        return self._event.is_set() or any(t.is_cancelled() for t in self._inner)
 
     async def wait_cancelled(self) -> None:
         """Suspend until the first of {local flag, any inner token} fires."""
@@ -112,7 +110,8 @@ class CombinedCancelToken(CancelToken):
         waits.append(asyncio.create_task(self._event.wait()))
         try:
             await asyncio.wait(
-                waits, return_when=asyncio.FIRST_COMPLETED,
+                waits,
+                return_when=asyncio.FIRST_COMPLETED,
             )
         finally:
             for w in waits:

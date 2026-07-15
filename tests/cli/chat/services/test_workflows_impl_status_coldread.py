@@ -13,8 +13,8 @@ Three passes:
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator
 from uuid import uuid4
 
 import pytest
@@ -53,7 +53,9 @@ async def _mk_impl(tmp_path: Path, store: SessionStore) -> WorkflowsImpl:
 
 
 def _mint_meta(
-    runs_root: Path, run_id: WorkflowRunId, status: str,
+    runs_root: Path,
+    run_id: WorkflowRunId,
+    status: str,
 ) -> Path:
     """Write a minimal but validating `meta.json` under runs/<run_id>/."""
     run_dir = runs_root / str(run_id)
@@ -72,7 +74,8 @@ def _mint_meta(
 
 
 async def test_coldread_running_meta_no_registry(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     impl = await _mk_impl(tmp_path, store)
     try:
@@ -87,7 +90,8 @@ async def test_coldread_running_meta_no_registry(
 
 
 async def test_coldread_terminal_in_jsonl_beats_meta(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     impl = await _mk_impl(tmp_path, store)
     try:
@@ -116,7 +120,8 @@ async def test_coldread_terminal_in_jsonl_beats_meta(
 
 
 async def test_coldread_missing_returns_unknown(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     impl = await _mk_impl(tmp_path, store)
     try:

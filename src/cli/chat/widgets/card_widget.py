@@ -39,7 +39,6 @@ from cli.chat.widgets.card_body import KIND_TO_RENDERER
 from cli.chat.widgets.notice_slot import NoticeSlot
 from tools.services.card_kinds import get_kind_spec
 
-
 # feat-019: hardcoded threshold — the ``x`` force-kill binding only
 # fires when a card has been in ``cancelling`` state for more than this
 # many seconds. Coordinator Q3 lock: no env-var override in v1.
@@ -298,7 +297,8 @@ class CardWidget(Collapsible):
         # widget renders correctly on mount without waiting for a
         # state transition.
         initial_glyph = self._kind_spec.header_glyph_by_status.get(
-            "running", "?",
+            "running",
+            "?",
         )
         self._header.set_glyph(initial_glyph)
         self._header.set_title(title)
@@ -331,10 +331,12 @@ class CardWidget(Collapsible):
             return
         self.applied_appends.add(event_id)
         self.content += chunk
-        self._body.apply_event(_MockEventData(
-            kind="kolsch.card.appended",
-            payload={"chunk": chunk},
-        ))
+        self._body.apply_event(
+            _MockEventData(
+                kind="kolsch.card.appended",
+                payload={"chunk": chunk},
+            )
+        )
         if self.state == "initializing":
             self.state = "running"
 
@@ -415,7 +417,8 @@ class CardWidget(Collapsible):
         if payload is None:
             payload = data.get("payload") or {}
         event_id = getattr(data, "event_id", None) or payload.get(
-            "event_id", "",
+            "event_id",
+            "",
         )
         if kind == "kolsch.card.appended":
             chunk = payload.get("chunk", "")
@@ -431,9 +434,7 @@ class CardWidget(Collapsible):
                 self.apply_status(status)
         elif kind == "kolsch.card.closed":
             raw_final = payload.get("final_status")
-            final_status = (
-                raw_final if isinstance(raw_final, str) else "success"
-            )
+            final_status = raw_final if isinstance(raw_final, str) else "success"
             raw_msg = payload.get("error_message")
             error_message = raw_msg if isinstance(raw_msg, str) else None
             self.apply_close(final_status, error_message)

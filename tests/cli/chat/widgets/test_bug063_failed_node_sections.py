@@ -92,7 +92,8 @@ async def test_failed_bash_node_has_input_section() -> None:
     app = _Host()
     async with app.run_test() as pilot:
         row = WorkflowNodeRow(
-            node_name="fetch_jd", node_type="kolsch/nodes/bash",
+            node_name="fetch_jd",
+            node_type="kolsch/nodes/bash",
         )
         slot = pilot.app.query_one("#slot", VerticalScroll)
         await slot.mount(row)
@@ -128,7 +129,8 @@ async def test_failed_agent_node_has_input_section() -> None:
     app = _Host()
     async with app.run_test() as pilot:
         row = WorkflowNodeRow(
-            node_name="identify_missing", node_type="kolsch/nodes/agent",
+            node_name="identify_missing",
+            node_type="kolsch/nodes/agent",
         )
         slot = pilot.app.query_one("#slot", VerticalScroll)
         await slot.mount(row)
@@ -136,10 +138,12 @@ async def test_failed_agent_node_has_input_section() -> None:
 
         # NODE_STARTED delivered bound inputs (via set_bound_inputs)
         # before the node crashed.
-        row.set_bound_inputs({
-            "resume_files": ["resume-backend.yaml", "resume-frontend.yaml"],
-            "jd_url": "https://example.com/jd",
-        })
+        row.set_bound_inputs(
+            {
+                "resume_files": ["resume-backend.yaml", "resume-frontend.yaml"],
+                "jd_url": "https://example.com/jd",
+            }
+        )
         await pilot.pause()
 
         row.set_state("failed", error_preview="jinja2.runtime.Undefined")
@@ -167,7 +171,8 @@ async def test_failed_node_input_section_empty_note_when_no_bound_inputs() -> No
     app = _Host()
     async with app.run_test() as pilot:
         row = WorkflowNodeRow(
-            node_name="early_fail", node_type="kolsch/nodes/agent",
+            node_name="early_fail",
+            node_type="kolsch/nodes/agent",
         )
         slot = pilot.app.query_one("#slot", VerticalScroll)
         await slot.mount(row)
@@ -198,7 +203,8 @@ async def test_failed_node_has_output_section_empty_note() -> None:
     app = _Host()
     async with app.run_test() as pilot:
         row = WorkflowNodeRow(
-            node_name="identify_missing", node_type="kolsch/nodes/agent",
+            node_name="identify_missing",
+            node_type="kolsch/nodes/agent",
         )
         slot = pilot.app.query_one("#slot", VerticalScroll)
         await slot.mount(row)
@@ -230,7 +236,8 @@ async def test_failed_node_error_is_section_not_title() -> None:
     app = _Host()
     async with app.run_test() as pilot:
         row = WorkflowNodeRow(
-            node_name="identify_missing", node_type="kolsch/nodes/agent",
+            node_name="identify_missing",
+            node_type="kolsch/nodes/agent",
         )
         slot = pilot.app.query_one("#slot", VerticalScroll)
         await slot.mount(row)
@@ -252,9 +259,7 @@ async def test_failed_node_error_is_section_not_title() -> None:
         # NodeSection prefixes a `✗ ` when state is "failed" — the base
         # title is "error"; the decorated title is "✗ error".
         assert "✗ error" in titles
-        error_section = next(
-            s for s in sections if str(s.title) == "✗ error"
-        )
+        error_section = next(s for s in sections if str(s.title) == "✗ error")
         body = _section_body_text(error_section)
         assert err in body
 
@@ -270,7 +275,8 @@ async def test_error_section_carries_full_untruncated_error() -> None:
     app = _Host()
     async with app.run_test() as pilot:
         row = WorkflowNodeRow(
-            node_name="identify_missing", node_type="kolsch/nodes/agent",
+            node_name="identify_missing",
+            node_type="kolsch/nodes/agent",
         )
         slot = pilot.app.query_one("#slot", VerticalScroll)
         await slot.mount(row)
@@ -282,9 +288,7 @@ async def test_error_section_carries_full_untruncated_error() -> None:
         await pilot.pause()
 
         sections = list(_contents_of(row).query(NodeSection))
-        error_section = next(
-            s for s in sections if str(s.title) == "✗ error"
-        )
+        error_section = next(s for s in sections if str(s.title) == "✗ error")
         body = _section_body_text(error_section)
         # FULL error present — not truncated to 60 chars.
         assert long_err in body
@@ -305,7 +309,8 @@ async def test_failure_sections_are_peer_node_sections() -> None:
     app = _Host()
     async with app.run_test() as pilot:
         row = WorkflowNodeRow(
-            node_name="identify_missing", node_type="kolsch/nodes/agent",
+            node_name="identify_missing",
+            node_type="kolsch/nodes/agent",
         )
         slot = pilot.app.query_one("#slot", VerticalScroll)
         await slot.mount(row)
@@ -330,7 +335,8 @@ async def test_failure_sections_are_idempotent() -> None:
     app = _Host()
     async with app.run_test() as pilot:
         row = WorkflowNodeRow(
-            node_name="identify_missing", node_type="kolsch/nodes/agent",
+            node_name="identify_missing",
+            node_type="kolsch/nodes/agent",
         )
         slot = pilot.app.query_one("#slot", VerticalScroll)
         await slot.mount(row)

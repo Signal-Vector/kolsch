@@ -13,8 +13,8 @@ Three passes:
 from __future__ import annotations
 
 import logging
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from typing import AsyncIterator
 from unittest.mock import MagicMock
 from uuid import uuid4
 
@@ -78,8 +78,7 @@ async def test_anchor_button_mounts_inline_in_assistant_prose(
         await pilot.app.mount_assistant_streaming_widget()
         prose = pilot.app.query(AssistantProse).first()
         await prose.append(
-            "Here's the workflow: "
-            "[▸ my-flow](kolsch-anchor://workflow_card/wrk_run1)",
+            "Here's the workflow: [▸ my-flow](kolsch-anchor://workflow_card/wrk_run1)",
         )
         await pilot.pause()
         buttons = prose.query(WorkflowAnchorButton)

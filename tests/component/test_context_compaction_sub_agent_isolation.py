@@ -35,7 +35,6 @@ from schemas import (
     IOSpec,
     ModelSpec,
     ResolvedAgentConfig,
-    ThreadId,
 )
 from skills import SkillsSubsystem
 from store import SessionStore, SqliteBackend
@@ -52,9 +51,14 @@ def _write_platform_yaml(root: Any) -> None:
                 "sandbox": {"variant": "native", "config": {}},
                 "authorization": {
                     "variant": "rule_based",
-                    "config": {"rules": [{"who": ".*", "what": ".*", "effect": "allow"}]},
+                    "config": {
+                        "rules": [{"who": ".*", "what": ".*", "effect": "allow"}]
+                    },
                 },
-                "storage": {"entity_backend": "sqlite", "entity_path": ".platform/entities.db"},
+                "storage": {
+                    "entity_backend": "sqlite",
+                    "entity_path": ".platform/entities.db",
+                },
                 "event_bus": {"backend": "in_process"},
                 "file_access": {"allowed_paths": ["data/"], "denied_paths": [".env"]},
                 "compaction": {"variant": "reference_summary"},
@@ -203,12 +207,8 @@ async def test_sub_agent_compaction_isolated_to_child_thread(tmp_path: Any) -> N
     )
     await engine.execute(child_config, child_ctx2)
 
-    parent_events = [
-        e async for e in store.read_path_to_leaf(parent_thread.thread_id)
-    ]
-    child_events = [
-        e async for e in store.read_path_to_leaf(child_thread.thread_id)
-    ]
+    parent_events = [e async for e in store.read_path_to_leaf(parent_thread.thread_id)]
+    child_events = [e async for e in store.read_path_to_leaf(child_thread.thread_id)]
 
     # Parent has NO compaction event (its window is huge).
     assert not any(e.type == EventType.CONTEXT_COMPACTED for e in parent_events)

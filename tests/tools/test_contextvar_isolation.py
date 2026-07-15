@@ -14,9 +14,9 @@ Three passes:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, AsyncIterator, cast
-from uuid import uuid4
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from pydantic import BaseModel
@@ -48,7 +48,7 @@ class _RecordingAuthz:
         layers: tuple[Any, ...] = (),
         caller_chain: tuple[str, ...] = (),
         tool_call_id: str | None = None,
-    ) -> Any:  # noqa: ANN401
+    ) -> Any:
         class _AllowResult:
             allowed = True
             matched_rule = None
@@ -105,7 +105,7 @@ async def _mk_impl(store: SessionStore) -> CardsImpl:
     )
 
 
-def _make_defn(tool_func: Any, name: str = "t") -> ToolDefinition:  # noqa: ANN401
+def _make_defn(tool_func: Any, name: str = "t") -> ToolDefinition:
     return ToolDefinition(
         name=name,
         description="test",
@@ -163,13 +163,21 @@ async def test_concurrent_tools_isolate_open_cards(
         res_a, res_b = await asyncio.gather(
             dispatch_tool(
                 defn=_make_defn(_body_a, name="a"),
-                args={}, context=ctx, authz=authz,
-                secrets=secrets, sandbox=sandbox, chat_services=registry,
+                args={},
+                context=ctx,
+                authz=authz,
+                secrets=secrets,
+                sandbox=sandbox,
+                chat_services=registry,
             ),
             dispatch_tool(
                 defn=_make_defn(_body_b, name="b"),
-                args={}, context=ctx, authz=authz,
-                secrets=secrets, sandbox=sandbox, chat_services=registry,
+                args={},
+                context=ctx,
+                authz=authz,
+                secrets=secrets,
+                sandbox=sandbox,
+                chat_services=registry,
             ),
         )
         assert res_a == "a-ok"
@@ -232,6 +240,7 @@ async def test_contextvar_reset_on_exception(
     """After a raising tool call, the contextvar is None again."""
     impl = await _mk_impl(store)
     try:
+
         async def _body(args: _EmptyArgs, ctx: ToolContext) -> str:
             _ = args
             # Sanity: inside the body, contextvar IS set to a list.

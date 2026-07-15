@@ -131,10 +131,12 @@ def test_warns_when_registered_tools_have_no_workflow_requirement(
     caplog: Any,
 ) -> None:
     """Fallback signal: runtime registry check when config isn't passed."""
-    tools_sub = _StubToolsSubsystem([
-        _defn("bash"),
-        _defn("read_file"),
-    ])
+    tools_sub = _StubToolsSubsystem(
+        [
+            _defn("bash"),
+            _defn("read_file"),
+        ]
+    )
     workflows_impl = object()
 
     logger = logging.getLogger("bug024.warns_registry")
@@ -157,10 +159,12 @@ def test_no_warning_when_run_workflow_registered_at_runtime(
     caplog: Any,
 ) -> None:
     """Fallback silent path: a real `requires=["workflows"]` tool exists."""
-    tools_sub = _StubToolsSubsystem([
-        _defn("bash"),
-        _defn("run_workflow", requires=["cards", "workflows"]),
-    ])
+    tools_sub = _StubToolsSubsystem(
+        [
+            _defn("bash"),
+            _defn("run_workflow", requires=["cards", "workflows"]),
+        ]
+    )
     workflows_impl = object()
 
     logger = logging.getLogger("bug024.silent_registry")

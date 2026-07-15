@@ -33,7 +33,6 @@ from jinja2.exceptions import (
 )
 from jinja2.nodes import Extends, Getattr, Getitem, Name
 
-from kolsch._yamlio import load
 from assets.refs import is_three_segment
 from errors import (
     ConfigAgentInheritanceCycle,
@@ -41,6 +40,7 @@ from errors import (
     ConfigRequiredBlockMissing,
     ConfigTemplateRenderFailed,
 )
+from kolsch._yamlio import load
 from templating.context_files import resolve_path
 
 if TYPE_CHECKING:

@@ -33,7 +33,7 @@ spec-012 additions (r-review r1):
 from __future__ import annotations
 
 from abc import ABC
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from datetime import datetime
 from typing import TYPE_CHECKING, Any, Literal, Protocol
 
@@ -58,8 +58,12 @@ __all__ = [
 
 
 WorkflowRunPhase = Literal[
-    "queued", "running", "cancelling",
-    "success", "error", "cancelled",
+    "queued",
+    "running",
+    "cancelling",
+    "success",
+    "error",
+    "cancelled",
 ]
 """Services-owned run phase vocabulary.
 
@@ -72,8 +76,13 @@ until it unwinds to `ABORTED`.
 
 
 WorkflowRunStatusPhase = Literal[
-    "queued", "running", "cancelling",
-    "success", "error", "cancelled", "unknown",
+    "queued",
+    "running",
+    "cancelling",
+    "success",
+    "error",
+    "cancelled",
+    "unknown",
 ]
 """Return-value phase — adds `unknown` for the cold-read miss case.
 
@@ -204,15 +213,15 @@ class WorkflowRunStatusView:
 
 
 EXECUTOR_STATUS_TO_PHASE: dict[WorkflowRunStatus, WorkflowRunPhase] = {
-    WorkflowRunStatus.PENDING:            "queued",
-    WorkflowRunStatus.RUNNING:            "running",
+    WorkflowRunStatus.PENDING: "queued",
+    WorkflowRunStatus.RUNNING: "running",
     # Paused runs are still "running" from the services phase POV —
     # the UI surfaces the pause via a `paused` sub-event.
-    WorkflowRunStatus.WAITING_FOR_INPUT:  "running",
-    WorkflowRunStatus.SUCCEEDED:          "success",
-    WorkflowRunStatus.FAILED:             "error",
-    WorkflowRunStatus.TIMED_OUT:          "error",
-    WorkflowRunStatus.ABORTED:            "cancelled",
+    WorkflowRunStatus.WAITING_FOR_INPUT: "running",
+    WorkflowRunStatus.SUCCEEDED: "success",
+    WorkflowRunStatus.FAILED: "error",
+    WorkflowRunStatus.TIMED_OUT: "error",
+    WorkflowRunStatus.ABORTED: "cancelled",
 }
 
 
@@ -345,4 +354,4 @@ class AbstractWorkflows(ABC):
         teardown. Concrete impls in spec-012 override with real
         teardown logic.
         """
-        return None
+        return

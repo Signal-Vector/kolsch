@@ -19,8 +19,9 @@ rate-limit path fires without waiting for it to reach the store.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 import pytest
 
@@ -41,7 +42,9 @@ async def store(tmp_path: Path) -> AsyncIterator[SessionStore]:
         await backend.close()
 
 
-async def _mk_impl_paused(store: SessionStore) -> tuple[CardsImpl, list[dict[str, Any]]]:
+async def _mk_impl_paused(
+    store: SessionStore,
+) -> tuple[CardsImpl, list[dict[str, Any]]]:
     """Build a CardsImpl whose drain never advances + a notice log.
 
     The paused drain forces streaming appends to drop. Every drop

@@ -34,7 +34,7 @@ PERM-SYS-01/-02/-03 exercise the actual ``cli/_setup.py``,
 from __future__ import annotations
 
 import io as _io
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, cast
 
 import pytest
 import yaml

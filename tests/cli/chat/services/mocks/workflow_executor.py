@@ -12,8 +12,9 @@ so `record.run_dir.cancel_flag_path` is a real writable path.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from workflows.events import WorkflowEvent, WorkflowEventKind
 from workflows.run import RunDirectory, WorkflowRunStatus
@@ -37,8 +38,7 @@ class MockExecutor:
             if self.cancel_token is not None and self.cancel_token.is_cancelled():
                 # Synthesise an aborted terminal and stop.
                 if not any(
-                    e.kind == WorkflowEventKind.RUN_ABORTED
-                    for e in self.events
+                    e.kind == WorkflowEventKind.RUN_ABORTED for e in self.events
                 ):
                     from workflows.events import WorkflowRunAbortedEvent
 

@@ -68,9 +68,7 @@ def _platform_yaml(root: Path) -> None:
                 "authorization": {
                     "variant": "rule_based",
                     "config": {
-                        "rules": [
-                            {"who": ".*", "what": ".*", "effect": "allow"}
-                        ]
+                        "rules": [{"who": ".*", "what": ".*", "effect": "allow"}]
                     },
                 },
                 "storage": {
@@ -244,9 +242,7 @@ async def test_fresh_session_no_events_returns_none_without_llm_call(
     async def factory(_spec: Any) -> Any:
         return summariser
 
-    provider = ReferenceSummaryCompactionProvider(
-        llm_for_model=factory, config={}
-    )
+    provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
     engine, store = await _build(
         tmp_path,
         compaction_provider=provider,
@@ -280,9 +276,7 @@ async def test_under_threshold_returns_none_no_compaction_emitted(
     async def factory(_spec: Any) -> Any:
         return summariser
 
-    provider = ReferenceSummaryCompactionProvider(
-        llm_for_model=factory, config={}
-    )
+    provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
     engine, store = await _build(
         tmp_path,
         compaction_provider=provider,
@@ -328,9 +322,7 @@ async def test_over_threshold_emits_context_compacted_auto_resume(
     async def factory(_spec: Any) -> Any:
         return summariser
 
-    provider = ReferenceSummaryCompactionProvider(
-        llm_for_model=factory, config={}
-    )
+    provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
     engine, store = await _build(
         tmp_path,
         compaction_provider=provider,
@@ -350,9 +342,7 @@ async def test_over_threshold_emits_context_compacted_auto_resume(
     # The per-exchange trigger may have already compacted (tiny
     # context_length). Take the pre-eager compaction count as baseline.
     events = [e async for e in store.read_path_to_leaf(thread.thread_id)]
-    pre_count = sum(
-        1 for e in events if e.type == EventType.CONTEXT_COMPACTED
-    )
+    pre_count = sum(1 for e in events if e.type == EventType.CONTEXT_COMPACTED)
     result = await engine.maybe_compact_thread_eagerly(
         thread_id=thread.thread_id,
         spec=_config().model,
@@ -362,9 +352,7 @@ async def test_over_threshold_emits_context_compacted_auto_resume(
     # prior compaction shrank the middle). Either way: no exception,
     # composer stays enabled.
     events = [e async for e in store.read_path_to_leaf(thread.thread_id)]
-    compacted = [
-        e for e in events if e.type == EventType.CONTEXT_COMPACTED
-    ]
+    compacted = [e for e in events if e.type == EventType.CONTEXT_COMPACTED]
     if result is not None:
         # The eager path fired — the emitted event carries the
         # auto_resume trigger.
@@ -394,9 +382,7 @@ async def test_summariser_fails_twice_falls_through_to_mechanical(
     async def factory(_spec: Any) -> Any:
         return summariser
 
-    provider = ReferenceSummaryCompactionProvider(
-        llm_for_model=factory, config={}
-    )
+    provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
     engine, store = await _build(
         tmp_path,
         compaction_provider=provider,
@@ -426,12 +412,8 @@ async def test_summariser_fails_twice_falls_through_to_mechanical(
         spec=_config().model,
     )
     events = [e async for e in store.read_path_to_leaf(thread.thread_id)]
-    compacted = [
-        e for e in events if e.type == EventType.CONTEXT_COMPACTED
-    ]
-    failed = [
-        e for e in events if e.type == EventType.CONTEXT_COMPACTION_FAILED
-    ]
+    compacted = [e for e in events if e.type == EventType.CONTEXT_COMPACTED]
+    failed = [e for e in events if e.type == EventType.CONTEXT_COMPACTION_FAILED]
     # The eager path called the summariser at least twice (tier-1 retry).
     assert summariser.calls >= 2
     # A failure event landed and the mechanical fallback fired.
@@ -465,9 +447,7 @@ async def test_concurrent_with_manual_compact_serialises_cleanly(
     async def factory(_spec: Any) -> Any:
         return summariser
 
-    provider = ReferenceSummaryCompactionProvider(
-        llm_for_model=factory, config={}
-    )
+    provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
     engine, store = await _build(
         tmp_path,
         compaction_provider=provider,

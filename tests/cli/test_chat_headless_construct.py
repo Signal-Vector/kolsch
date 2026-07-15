@@ -17,7 +17,7 @@ from cli.chat.app import ChatApp
 
 
 class _MockStore:
-    async def read_path_to_leaf(self, thread_id: Any) -> Any:  # noqa: ARG002
+    async def read_path_to_leaf(self, thread_id: Any) -> Any:
         if False:
             yield  # pragma: no cover
         return
@@ -26,7 +26,7 @@ class _MockStore:
 class _MockAuthz:
     def register_prompt_callback(
         self, callback: Any, *, on_rule_added: Any = None
-    ) -> None:  # noqa: ARG002
+    ) -> None:
         return None
 
     def clear_prompt_callback(self) -> None:
@@ -41,10 +41,9 @@ class _MockRuntime:
 
 
 class _MockEngine:
-    async def execute_stream(self, config: Any, ctx: Any):  # noqa: ARG002
+    async def execute_stream(self, config: Any, ctx: Any):
         if False:
             yield  # pragma: no cover
-        return
 
 
 @dataclass

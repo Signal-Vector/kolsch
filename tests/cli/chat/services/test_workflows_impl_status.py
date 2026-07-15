@@ -13,8 +13,8 @@ Three passes:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator
 
 import pytest
 
@@ -63,29 +63,36 @@ async def _mk_impl(tmp_path: Path, store: SessionStore) -> WorkflowsImpl:
 
 def _mk_events_with_node() -> list:
     from uuid import uuid4
+
     rid = WorkflowRunId(f"wrk_{uuid4()}")
     tr = TraceId(f"tr_{uuid4()}")
     inv = InvocationId(f"inv_{uuid4()}")
     return [
         WorkflowRunStartedEvent(workflow_run_id=rid, trace_id=tr),
         WorkflowNodeStartedEvent(
-            workflow_run_id=rid, trace_id=tr,
-            invocation_id=inv, node_name="n1",
+            workflow_run_id=rid,
+            trace_id=tr,
+            invocation_id=inv,
+            node_name="n1",
         ),
         WorkflowNodeCompletedEvent(
-            workflow_run_id=rid, trace_id=tr,
-            invocation_id=inv, node_name="n1",
+            workflow_run_id=rid,
+            trace_id=tr,
+            invocation_id=inv,
+            node_name="n1",
         ),
         WorkflowRunCompletedEvent(workflow_run_id=rid, trace_id=tr),
     ]
 
 
 async def test_status_unknown_returns_unknown_phase(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     impl = await _mk_impl(tmp_path, store)
     try:
         from uuid import uuid4
+
         stray = WorkflowRunId(f"wrk_{uuid4()}")
         result = impl.status(stray)
         assert result.phase == "unknown"
@@ -95,7 +102,8 @@ async def test_status_unknown_returns_unknown_phase(
 
 
 async def test_status_mid_run_shows_running_and_counters(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     impl = await _mk_impl(tmp_path, store)
     try:
@@ -115,14 +123,14 @@ async def test_status_mid_run_shows_running_and_counters(
         for _ in range(40):
             await asyncio.sleep(0.05)
             rec = impl._workflow_registry.get(rid)
-            if rec is not None and rec.phase == "running" and (
-                rec.node_counts.total >= 1
+            if (
+                rec is not None
+                and rec.phase == "running"
+                and (rec.node_counts.total >= 1)
             ):
                 break
         result = impl.status(rid)
-        assert result.phase == "running", (
-            f"expected running, got {result.phase}"
-        )
+        assert result.phase == "running", f"expected running, got {result.phase}"
         assert result.node_counts is not None
         assert result.node_counts.total >= 1
     finally:
@@ -130,10 +138,13 @@ async def test_status_mid_run_shows_running_and_counters(
 
 
 async def test_status_after_eviction_returns_unknown(
-    tmp_path: Path, store: SessionStore, monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+    store: SessionStore,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     # Short-circuit the 60s eviction: monkeypatch the constant.
     from cli.chat.services import workflows_impl as wi_mod
+
     monkeypatch.setattr(wi_mod, "_REGISTRY_EVICTION_SECONDS", 0.15)
 
     impl = await _mk_impl(tmp_path, store)

@@ -13,13 +13,13 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-from kolsch._yamlio import YAMLError, load
 from assets.refs import is_three_segment, parse_three_segment
 from errors import (
     AssetsPromptLoadFailed,
     ConfigInvalid,
     ConfigUnknownAlias,
 )
+from kolsch._yamlio import YAMLError, load
 
 if TYPE_CHECKING:
     from assets.catalog import AssetCatalog

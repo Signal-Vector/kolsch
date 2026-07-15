@@ -208,7 +208,7 @@ def _make_ctx(
     parent_event_id: EventId | None = None,
     trace_id: TraceId | None = None,
     caller_chain: tuple[str, ...] = (),
-        tool_call_id: str | None = None,
+    tool_call_id: str | None = None,
 ) -> NodeContext:
     ctx = NodeContext.for_test(
         workflow_run_id=str(WorkflowRunId(f"wrk_{uuid4()}")),

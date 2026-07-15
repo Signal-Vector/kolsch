@@ -269,7 +269,8 @@ class CardsImpl(AbstractCards):
         # mounting a second one.
         if card is not None and text.startswith(_DROP_NOTICE_PREFIX):
             notice_id = self._notice_ids_per_card.setdefault(
-                card.id, f"ntc_{uuid4()}",
+                card.id,
+                f"ntc_{uuid4()}",
             )
         else:
             notice_id = f"ntc_{uuid4()}"
@@ -434,7 +435,7 @@ class CardsImpl(AbstractCards):
             event = await self._stream_queue.get()
             try:
                 await self._publish_to_bus(event)
-            except Exception:  # noqa: BLE001 — drain is best-effort
+            except Exception:
                 _LOGGER.exception(
                     "CardsImpl: drain publish raised for event %r",
                     event.event_id,
@@ -505,10 +506,12 @@ class CardImpl(AbstractCard):
         self._pending_event_ids: list[str] = []
         self._snapshot_timer: asyncio.TimerHandle | None = None
         self._SNAPSHOT_N = self._read_env_int(
-            "KOLSCH_CARD_SNAPSHOT_N", _DEFAULT_SNAPSHOT_N,
+            "KOLSCH_CARD_SNAPSHOT_N",
+            _DEFAULT_SNAPSHOT_N,
         )
         self._SNAPSHOT_MS = self._read_env_int(
-            "KOLSCH_CARD_SNAPSHOT_MS", _DEFAULT_SNAPSHOT_MS,
+            "KOLSCH_CARD_SNAPSHOT_MS",
+            _DEFAULT_SNAPSHOT_MS,
         )
 
     @staticmethod

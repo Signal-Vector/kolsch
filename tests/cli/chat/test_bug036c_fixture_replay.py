@@ -33,16 +33,14 @@ from schemas.identifiers import EventId, SessionId, ThreadId
 
 _FIXTURE_PATH = (
     Path(__file__).resolve().parents[2]
-    / "fixtures" / "sessions" / "ses_bug036a_jd_review_excerpt.jsonl"
+    / "fixtures"
+    / "sessions"
+    / "ses_bug036a_jd_review_excerpt.jsonl"
 )
 
 
 def _load_fixture() -> list[dict[str, Any]]:
-    return [
-        json.loads(line)
-        for line in _FIXTURE_PATH.read_text().splitlines()
-        if line
-    ]
+    return [json.loads(line) for line in _FIXTURE_PATH.read_text().splitlines() if line]
 
 
 def _event_from_row(row: dict[str, Any]) -> Event:
@@ -79,13 +77,20 @@ class _StubTranscriptApp(App[None]):
         yield VerticalScroll(id="transcript")
 
     async def mount_user_message(
-        self, text: str, timestamp: Any = None,
-        *, event_id: Any = None, content: Any = None,
+        self,
+        text: str,
+        timestamp: Any = None,
+        *,
+        event_id: Any = None,
+        content: Any = None,
     ) -> None:
         _ = text, timestamp, event_id, content
 
     async def mount_assistant_message(
-        self, text: str, *, event_id: Any = None,
+        self,
+        text: str,
+        *,
+        event_id: Any = None,
     ) -> None:
         _ = text, event_id
 
@@ -93,6 +98,7 @@ class _StubTranscriptApp(App[None]):
         class _P:
             async def append(self, text: str) -> None:
                 _ = text
+
         return _P()
 
     async def mount_tool_call(
@@ -108,8 +114,12 @@ class _StubTranscriptApp(App[None]):
         _ = tool_name, args, body, failed, recovery_hint, event_id
 
     async def mount_notice(
-        self, notice_id: str, text: str,
-        *, level: str = "info", event_id: Any = None,
+        self,
+        notice_id: str,
+        text: str,
+        *,
+        level: str = "info",
+        event_id: Any = None,
     ) -> None:
         _ = notice_id, text, level, event_id
 
@@ -152,8 +162,7 @@ async def test_fixture_replay_header_and_bash_command() -> None:
         text = header._compute_text()
         lines = text.split("\n")
         assert len(lines) == 3, (
-            f"expected 3-line header (ref, inputs, progress); "
-            f"got {lines!r}"
+            f"expected 3-line header (ref, inputs, progress); got {lines!r}"
         )
         first = lines[0]
         # Top-level fixture has no parent; first line is the raw ref.
@@ -171,9 +180,7 @@ async def test_fixture_replay_header_and_bash_command() -> None:
             r.collapsed = False
         await pilot.pause()
 
-        bash_rows = [
-            r for r in rows if r._node_type == "kolsch/nodes/bash"
-        ]
+        bash_rows = [r for r in rows if r._node_type == "kolsch/nodes/bash"]
         assert bash_rows, (
             "fixture must include a bash-type node — otherwise AC #4 "
             "surface is trivially vacuous"
@@ -181,7 +188,8 @@ async def test_fixture_replay_header_and_bash_command() -> None:
         bash_row = bash_rows[0]
         contents = bash_row.query_one(Collapsible.Contents)
         previews = [
-            c for c in contents.walk_children()
+            c
+            for c in contents.walk_children()
             if isinstance(c, Static) and c.has_class("node-command-preview")
         ]
         assert len(previews) == 1, (
@@ -198,7 +206,8 @@ async def test_fixture_replay_header_and_bash_command() -> None:
 
         # Sanity: fixture actually opened a workflow card.
         workflow_cards = [
-            w for w in pilot.app.query(CardWidget)
+            w
+            for w in pilot.app.query(CardWidget)
             if getattr(w, "kind", None) == "workflow"
         ]
         assert workflow_cards, "no WorkflowCard mounted"

@@ -35,7 +35,6 @@ from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run_store import WorkflowRunStore
 
-
 # ---------------------------------------------------------------------------
 # Test helpers.
 # ---------------------------------------------------------------------------
@@ -81,7 +80,7 @@ class SubAgentishRunner:
         exchange_token: CancelToken | None = None,
         max_wait_seconds: float = 5.0,
     ) -> None:
-        import uuid  # noqa: PLC0415
+        import uuid
 
         self._thread_id = thread_id or f"th_{uuid.uuid4()}"
         self._exchange_token = exchange_token
@@ -109,7 +108,7 @@ class SubAgentishRunner:
         # the cancel token when the NodeContext carries one.
         exec_ctx.workflow_node_name = node_name
         if ctx.workflow_run_id is not None:
-            from workflows.ids import WorkflowRunId  # noqa: PLC0415
+            from workflows.ids import WorkflowRunId
 
             exec_ctx.workflow_run_id = WorkflowRunId(ctx.workflow_run_id)
         if ctx.cancel_token is not None:
@@ -129,10 +128,12 @@ class SubAgentishRunner:
             ):
                 break
             await asyncio.sleep(0.01)
-        return {"cancelled": bool(
-            exec_ctx.cancellation is not None
-            and exec_ctx.cancellation.is_cancelled()
-        )}
+        return {
+            "cancelled": bool(
+                exec_ctx.cancellation is not None
+                and exec_ctx.cancellation.is_cancelled()
+            )
+        }
 
 
 def _make_workflow(nodes: dict[str, Any]) -> Workflow:
@@ -332,9 +333,7 @@ class TestCancelTokenReachesSubagent:
         # Introspection: the composed cancellation is a
         # CombinedCancelToken instance.
         assert sub_runner.captured_ctx is not None
-        assert isinstance(
-            sub_runner.captured_ctx.cancellation, CombinedCancelToken
-        )
+        assert isinstance(sub_runner.captured_ctx.cancellation, CombinedCancelToken)
         # And the workflow context was stamped (r-review r1).
         assert sub_runner.captured_ctx.workflow_run_id is not None
         assert sub_runner.captured_ctx.workflow_node_name == "sub"
@@ -346,9 +345,7 @@ class TestCancelTokenReachesSubagent:
 
 
 class TestCompositionPreservesExchange:
-    async def test_exchange_token_fires_triggers_cancel(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_exchange_token_fires_triggers_cancel(self, tmp_path: Path) -> None:
         wf = _make_workflow(
             {
                 "sub": {"type": "kolsch/nodes/noop"},
@@ -389,9 +386,7 @@ class TestCompositionPreservesExchange:
         # Workflow token itself never fired.
         assert not workflow_token.is_cancelled()
 
-    async def test_workflow_token_fires_triggers_cancel(
-        self, tmp_path: Path
-    ) -> None:
+    async def test_workflow_token_fires_triggers_cancel(self, tmp_path: Path) -> None:
         wf = _make_workflow(
             {
                 "sub": {"type": "kolsch/nodes/noop"},
@@ -450,16 +445,12 @@ async def test_observer_exception_caught(
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Alias to `TestObserverExceptionCaught.test_observer_exception_caught`."""
-    await TestObserverExceptionCaught().test_observer_exception_caught(
-        tmp_path, caplog
-    )
+    await TestObserverExceptionCaught().test_observer_exception_caught(tmp_path, caplog)
 
 
 async def test_cancel_token_reaches_subagent(tmp_path: Path) -> None:
     """Alias to `TestCancelTokenReachesSubagent.test_cancel_token_reaches_subagent`."""
-    await TestCancelTokenReachesSubagent().test_cancel_token_reaches_subagent(
-        tmp_path
-    )
+    await TestCancelTokenReachesSubagent().test_cancel_token_reaches_subagent(tmp_path)
 
 
 async def test_composition_preserves_exchange(tmp_path: Path) -> None:

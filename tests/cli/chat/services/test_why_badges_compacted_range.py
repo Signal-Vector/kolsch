@@ -142,7 +142,8 @@ async def test_why_badge_absent_when_no_active_compaction(
         root=tmp_path,
     )
     data = await find_last_denial_via_store(
-        runtime, "th_ignored",
+        runtime,
+        "th_ignored",
     )
     assert data is not None
     assert data.compaction_badge is None
@@ -166,7 +167,8 @@ async def test_why_badge_when_call_inside_compacted_range(
         root=tmp_path,
     )
     data = await find_last_denial_via_store(
-        runtime, "th_ignored",
+        runtime,
+        "th_ignored",
     )
     assert data is not None
     assert data.compaction_badge is not None
@@ -196,7 +198,8 @@ async def test_why_badge_skipped_when_compaction_revoked(
         root=tmp_path,
     )
     data = await find_last_denial_via_store(
-        runtime, "th_ignored",
+        runtime,
+        "th_ignored",
     )
     assert data is not None
     assert data.compaction_badge is None

@@ -21,12 +21,11 @@ from cli.chat.services.compaction_introspection import (
 )
 from engine import ExecutionContext
 from providers.compaction import ReferenceSummaryCompactionProvider
-
 from tests.component.test_context_compaction_slash_compact import (
-    _RecordingLLM,
     _build,
     _config,
     _fresh_thread,
+    _RecordingLLM,
 )
 
 
@@ -44,7 +43,9 @@ async def test_why_compact_missing_event_id_returns_none(
     thread_id = await _fresh_thread(store)
     runtime = _Runtime(store)
     result = await build_why_compact_card(
-        runtime, thread_id, event_id="ev_does_not_exist",
+        runtime,
+        thread_id,
+        event_id="ev_does_not_exist",
     )
     assert result is None
 
@@ -64,7 +65,8 @@ async def test_why_compact_dumps_summary_json(tmp_path: Path) -> None:
         return recording
 
     provider = ReferenceSummaryCompactionProvider(
-        llm_for_model=factory, config={},
+        llm_for_model=factory,
+        config={},
     )
     engine, store = await _build(tmp_path, compaction_provider=provider)
     thread_id = await _fresh_thread(store)
@@ -78,13 +80,16 @@ async def test_why_compact_dumps_summary_json(tmp_path: Path) -> None:
         )
         await engine.execute(_config(), ctx)
     emitted = await engine.manual_compact(
-        config=_config(), thread_id=thread_id,
+        config=_config(),
+        thread_id=thread_id,
     )
     assert emitted is not None
 
     runtime = _Runtime(store)
     text = await build_why_compact_card(
-        runtime, thread_id, event_id=str(emitted.event_id),
+        runtime,
+        thread_id,
+        event_id=str(emitted.event_id),
     )
     assert text is not None
     # Header carries the short event id.
@@ -121,7 +126,8 @@ async def test_why_compact_shows_revoked_by_from_separate_revocation_event(
         return recording
 
     provider = ReferenceSummaryCompactionProvider(
-        llm_for_model=factory, config={},
+        llm_for_model=factory,
+        config={},
     )
     engine, store = await _build(tmp_path, compaction_provider=provider)
     thread_id = await _fresh_thread(store)
@@ -135,7 +141,8 @@ async def test_why_compact_shows_revoked_by_from_separate_revocation_event(
         )
         await engine.execute(_config(), ctx)
     emitted = await engine.manual_compact(
-        config=_config(), thread_id=thread_id,
+        config=_config(),
+        thread_id=thread_id,
     )
     assert emitted is not None
     # Revoke — emits a separate CONTEXT_COMPACTION_REVOKED event.
@@ -144,7 +151,9 @@ async def test_why_compact_shows_revoked_by_from_separate_revocation_event(
 
     runtime = _Runtime(store)
     text = await build_why_compact_card(
-        runtime, thread_id, event_id=str(emitted.event_id),
+        runtime,
+        thread_id,
+        event_id=str(emitted.event_id),
     )
     assert text is not None
     _, _, dumped = text.partition("\n")
@@ -174,7 +183,8 @@ async def test_why_compact_prefers_payload_revoked_by_over_cross_reference(
         return recording
 
     provider = ReferenceSummaryCompactionProvider(
-        llm_for_model=factory, config={},
+        llm_for_model=factory,
+        config={},
     )
     engine, store = await _build(tmp_path, compaction_provider=provider)
     thread_id = await _fresh_thread(store)
@@ -188,16 +198,17 @@ async def test_why_compact_prefers_payload_revoked_by_over_cross_reference(
         )
         await engine.execute(_config(), ctx)
     emitted = await engine.manual_compact(
-        config=_config(), thread_id=thread_id,
+        config=_config(),
+        thread_id=thread_id,
     )
     assert emitted is not None
     # Fake an inline `revoked_by` on the compaction payload — the
     # dump should surface this value, not any cross-reference.
-    from datetime import UTC, datetime  # noqa: PLC0415
-    from uuid import uuid4  # noqa: PLC0415
+    from datetime import UTC, datetime
+    from uuid import uuid4
 
-    from schemas import Actor, EventId  # noqa: PLC0415
-    from schemas.events import Event, EventType  # noqa: PLC0415
+    from schemas import Actor, EventId
+    from schemas.events import Event, EventType
 
     # Emit an unrelated revocation event so the cross-reference
     # index has something to find (pointing at emitted.event_id).
@@ -225,7 +236,9 @@ async def test_why_compact_prefers_payload_revoked_by_over_cross_reference(
     # by the introspection helper's unit path).
     runtime = _Runtime(store)
     text = await build_why_compact_card(
-        runtime, thread_id, event_id=str(emitted.event_id),
+        runtime,
+        thread_id,
+        event_id=str(emitted.event_id),
     )
     assert text is not None
     _, _, dumped = text.partition("\n")
@@ -248,7 +261,8 @@ async def test_why_compact_short_prefix_lookup(tmp_path: Path) -> None:
         return recording
 
     provider = ReferenceSummaryCompactionProvider(
-        llm_for_model=factory, config={},
+        llm_for_model=factory,
+        config={},
     )
     engine, store = await _build(tmp_path, compaction_provider=provider)
     thread_id = await _fresh_thread(store)
@@ -262,13 +276,16 @@ async def test_why_compact_short_prefix_lookup(tmp_path: Path) -> None:
         )
         await engine.execute(_config(), ctx)
     emitted = await engine.manual_compact(
-        config=_config(), thread_id=thread_id,
+        config=_config(),
+        thread_id=thread_id,
     )
     assert emitted is not None
     runtime = _Runtime(store)
     short = str(emitted.event_id)[:12]
     text = await build_why_compact_card(
-        runtime, thread_id, event_id=short,
+        runtime,
+        thread_id,
+        event_id=short,
     )
     assert text is not None
     assert short in text

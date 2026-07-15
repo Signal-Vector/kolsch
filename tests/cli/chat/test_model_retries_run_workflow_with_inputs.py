@@ -67,7 +67,6 @@ from workflows.events import (
 )
 from workflows.ids import InvocationId, TraceId, WorkflowRunId
 
-
 # ---------------------------------------------------------------------------
 # Fixture — workspace scaffolded via ``kolsch setup --non-interactive``.
 # ---------------------------------------------------------------------------
@@ -259,10 +258,12 @@ async def test_model_corrects_retry_after_bug_025_error_shape(
         assert workflows_impl is not None
         install_mock_executor_factory(
             workflows_impl,
-            {workflow_ref: MockExecutorSpec(
-                events=_mk_workflow_events(),
-                per_event_delay=0.02,
-            )},
+            {
+                workflow_ref: MockExecutorSpec(
+                    events=_mk_workflow_events(),
+                    per_event_delay=0.02,
+                )
+            },
             runs_root=initialized_workspace / "runs",
         )
 
@@ -277,7 +278,8 @@ async def test_model_corrects_retry_after_bug_025_error_shape(
         for _ in range(200):  # 200 * 50ms = 10s cap
             await pilot.pause()
             widgets = [
-                w for w in pilot.app.query(CardWidget)
+                w
+                for w in pilot.app.query(CardWidget)
                 if getattr(w, "kind", None) == "workflow"
             ]
             if widgets:
@@ -350,9 +352,7 @@ async def test_model_corrects_retry_after_bug_025_error_shape(
         # ------------------------------------------------------------
         # Assertion 3 (AC #10.3) — no bash tool call in the store.
         # ------------------------------------------------------------
-        bash_calls = [
-            c for c in tool_called if c.get("tool_name") == "bash"
-        ]
+        bash_calls = [c for c in tool_called if c.get("tool_name") == "bash"]
         assert bash_calls == [], (
             "session 4778 shape must NOT reappear — the model must not "
             "fall back to bash. Observed bash calls: "

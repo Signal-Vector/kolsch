@@ -104,7 +104,9 @@ def _mk_requested(session_id: Any, thread_id: Any, prompt_id: str) -> Event:
 
 
 async def _await_answered(
-    store: SessionStore, thread_id: Any, prompt_id: str,
+    store: SessionStore,
+    thread_id: Any,
+    prompt_id: str,
 ) -> Event:
     for _ in range(100):
         async for ev in store.read_events(thread_id):

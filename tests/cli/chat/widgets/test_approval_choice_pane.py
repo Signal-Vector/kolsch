@@ -31,7 +31,12 @@ async def test_pane_shows_all_four_choices_and_prompt(mock_app_factory):
         await pilot.pause()
         choices_text = str(pane.query_one(".choices").render())
         prompt_text = str(pane.query_one(".prompt").render())
-        for label in ("[y] allow once", "[a] allow + rule", "[n] deny once", "[d] deny + rule"):
+        for label in (
+            "[y] allow once",
+            "[a] allow + rule",
+            "[n] deny once",
+            "[d] deny + rule",
+        ):
             assert label in choices_text, f"missing {label!r} from choices row"
         assert "›" in prompt_text
         assert "▊" in prompt_text

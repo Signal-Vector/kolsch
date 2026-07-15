@@ -69,9 +69,7 @@ async def test_slash_prefix_shows_every_command(mock_app_factory) -> None:
         # One row per canonical registry entry (aliases append
         # their own rows too when they start with `/`).
         for cmd in COMMAND_REGISTRY.values():
-            assert any(cmd.name in row for row in rows), (
-                f"missing row for {cmd.name}"
-            )
+            assert any(cmd.name in row for row in rows), f"missing row for {cmd.name}"
 
 
 @pytest.mark.asyncio
@@ -88,9 +86,9 @@ async def test_prefix_filters_to_matching_command(mock_app_factory) -> None:
         # And nothing else that starts with `/hel` in the registry.
         other_names = [c.name for c in COMMAND_REGISTRY.values() if c.name != "/help"]
         for name in other_names:
-            assert not any(
-                r.startswith(f"{name:<12}") for r in rows
-            ), f"{name} leaked into /hel matches"
+            assert not any(r.startswith(f"{name:<12}") for r in rows), (
+                f"{name} leaked into /hel matches"
+            )
 
 
 @pytest.mark.asyncio

@@ -61,11 +61,13 @@ async def test_snapshot_mockup3_bash_expanded() -> None:
         row.set_bound_inputs({"url": "https://example.com/jd"})
         row.set_command_preview("curl {{ inputs.url }}")
         await pilot.pause()
-        row.set_output({
-            "stdout": "Senior CTO - Blockchain Startup\n\nWe are building...",
-            "stderr": "",
-            "exit_code": 0,
-        })
+        row.set_output(
+            {
+                "stdout": "Senior CTO - Blockchain Startup\n\nWe are building...",
+                "stderr": "",
+                "exit_code": 0,
+            }
+        )
         row.set_state("completed")
         row.set_completed_at(duration_ms=8200.0)
         await pilot.pause()
@@ -111,7 +113,8 @@ async def test_snapshot_mockup4_agent_collapsed_sections() -> None:
         await pilot.pause()
 
         assert_snapshot_matches(
-            pilot.app, "bug037/mockup4_agent_collapsed_sections",
+            pilot.app,
+            "bug037/mockup4_agent_collapsed_sections",
         )
 
 
@@ -153,5 +156,6 @@ async def test_snapshot_mockup5_deduper_input_split() -> None:
         await pilot.pause()
 
         assert_snapshot_matches(
-            pilot.app, "bug037/mockup5_deduper_input_split",
+            pilot.app,
+            "bug037/mockup5_deduper_input_split",
         )

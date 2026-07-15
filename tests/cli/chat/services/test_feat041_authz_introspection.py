@@ -13,7 +13,6 @@ from typing import Any
 
 import pytest
 
-from kolsch._yamlio import load_with_positions
 from cli.chat.services.authz_introspection import (
     DenialCardData,
     ReloadResult,
@@ -26,6 +25,7 @@ from cli.chat.services.authz_introspection import (
     handle_reload,
     render_denial_card,
 )
+from kolsch._yamlio import load_with_positions
 from providers.authz import (
     RuleBasedAuthorizationProvider,
 )
@@ -177,7 +177,9 @@ async def test_policy_decision_event_carries_tool_call_id(
     store.append_event(run.run_id, {"kind": "workflow.run.started", "payload": {}})
     token = set_workflow_run_context(
         WorkflowRunContext(
-            run_id=run.run_id, trace_id=run.trace_id, store=store,
+            run_id=run.run_id,
+            trace_id=run.trace_id,
+            store=store,
         )
     )
     try:
@@ -441,7 +443,9 @@ async def test_why_specific_tool_call_id(tmp_path: Path) -> None:
     ]
     runtime = _MockRuntime(store=_MockStoreDirect(events), root=tmp_path)
     data = await find_last_denial_via_store(
-        runtime, thread_id="th_x", tool_call_id="tc_old",
+        runtime,
+        thread_id="th_x",
+        tool_call_id="tc_old",
     )
     assert data is not None
     assert data.rule_id == "rl_a"

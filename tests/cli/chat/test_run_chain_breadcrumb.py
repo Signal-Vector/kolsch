@@ -15,9 +15,10 @@ Three passes:
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -27,7 +28,6 @@ from cli.chat.services.workflows_impl import (
     WorkflowRunRecord,
     WorkflowsImpl,
 )
-from schemas.wire_kinds import WIRE_PROMPT_REQUESTED
 from store import SessionStore, SqliteBackend
 from workflows.ids import WorkflowRunId
 from workflows.run_store import WorkflowRunStore
@@ -65,12 +65,14 @@ class _MockApp:
         *,
         parent_hint: Any = None,
     ) -> None:
-        self._mount_calls.append({
-            "rule_id": rule_id,
-            "action": action,
-            "target": target,
-            "parent_hint": parent_hint,
-        })
+        self._mount_calls.append(
+            {
+                "rule_id": rule_id,
+                "action": action,
+                "target": target,
+                "parent_hint": parent_hint,
+            }
+        )
 
     def query_one(self, *_args: Any, **_kwargs: Any) -> Any:
         # Force _locate_transcript to fall through to the stub path.
@@ -78,7 +80,8 @@ class _MockApp:
 
 
 async def _mk_wfimpl(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> WorkflowsImpl:
     session = await store.create_session("ag_test", name="w")
     threads = await store.list_threads(session.session_id)
@@ -115,7 +118,8 @@ def _install_run(
 
 
 async def test_run_chain_populated_and_formatted_for_nested_chain(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     """A→B→C nested; prompt on C. run_chain outermost-first + formatted."""
     impl = await _mk_wfimpl(tmp_path, store)
@@ -165,7 +169,8 @@ async def test_run_chain_populated_and_formatted_for_nested_chain(
 
 
 async def test_single_workflow_breadcrumb_no_arrow(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     """Single-entry chain formats as `workflow <ref>` (spec-014 compat)."""
     impl = await _mk_wfimpl(tmp_path, store)

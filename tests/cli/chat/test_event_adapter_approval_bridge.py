@@ -250,9 +250,13 @@ async def test_bridge_task_survives_widget_cancellation(
     # No answered event lands — cancellation is a silent debug log.
     events: list[Event] = []
     async for ev in store.read_events(thread_id):
-        if ev.type == EventType.UI_EVENT and ev.data.get(
-            "kind",
-        ) == WIRE_PROMPT_ANSWERED:
+        if (
+            ev.type == EventType.UI_EVENT
+            and ev.data.get(
+                "kind",
+            )
+            == WIRE_PROMPT_ANSWERED
+        ):
             events.append(ev)
     assert events == []
 
@@ -329,8 +333,12 @@ async def test_bridge_skipped_when_mount_returns_none(
     await asyncio.sleep(0.05)
     events: list[Event] = []
     async for ev in store.read_events(thread_id):
-        if ev.type == EventType.UI_EVENT and ev.data.get(
-            "kind",
-        ) == WIRE_PROMPT_ANSWERED:
+        if (
+            ev.type == EventType.UI_EVENT
+            and ev.data.get(
+                "kind",
+            )
+            == WIRE_PROMPT_ANSWERED
+        ):
             events.append(ev)
     assert events == []

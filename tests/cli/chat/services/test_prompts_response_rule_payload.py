@@ -21,8 +21,8 @@ from pathlib import Path
 import pytest
 
 from cli.chat.services.prompts_impl import PromptResponse, PromptsImpl
-from tools.services.prompts import PromptSource
 from store import SessionStore, SqliteBackend
+from tools.services.prompts import PromptSource
 
 
 @pytest.fixture

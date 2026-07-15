@@ -29,7 +29,7 @@ from cli.chat.widgets.notice import NoticeWidget
 from cli.chat.widgets.notice_slot import NoticeSlot
 from schemas.entities import Actor
 from schemas.events import Event, EventType
-from schemas.identifiers import CardId, EventId, SessionId, ThreadId
+from schemas.identifiers import EventId, SessionId, ThreadId
 from schemas.wire_kinds import WIRE_CARD_NOTICE, WIRE_CARD_OPENED
 
 
@@ -115,8 +115,7 @@ async def test_notice_with_card_id_mounts_inside_card() -> None:
         # No transcript-root NoticeWidget for this notice.
         transcript = app.query_one("#transcript", VerticalScroll)
         root_widgets = [
-            w for w in transcript.query(NoticeWidget)
-            if w.parent is transcript
+            w for w in transcript.query(NoticeWidget) if w.parent is transcript
         ]
         assert root_widgets == []
 

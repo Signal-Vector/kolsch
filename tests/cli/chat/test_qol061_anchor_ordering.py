@@ -37,7 +37,6 @@ from schemas.events import EventType
 from schemas.identifiers import EventId
 from store import SessionStore, SqliteBackend
 
-
 # ---------------------------------------------------------------------------
 # Runtime + engine mocks (mirror bug-058's shape).
 # ---------------------------------------------------------------------------
@@ -45,7 +44,10 @@ from store import SessionStore, SqliteBackend
 
 class _MockAuthz:
     def register_prompt_callback(
-        self, callback: Any, *, on_rule_added: Any = None,
+        self,
+        callback: Any,
+        *,
+        on_rule_added: Any = None,
     ) -> None:
         _ = callback, on_rule_added
 
@@ -54,7 +56,8 @@ class _MockAuthz:
 
 
 async def _empty_stream(
-    *_args: Any, **_kwargs: Any,
+    *_args: Any,
+    **_kwargs: Any,
 ) -> AsyncGenerator[Any, None]:
     return
     yield  # type: ignore[unreachable]  # pragma: no cover
@@ -68,10 +71,10 @@ class _MockEngine:
     async def maybe_compact_thread_eagerly(
         self,
         *,
-        thread_id: Any,  # noqa: ARG002
-        spec: Any,  # noqa: ARG002
-        tool_schemas: list[dict[str, Any]] | None = None,  # noqa: ARG002
-        trigger: str = "auto_resume",  # noqa: ARG002
+        thread_id: Any,
+        spec: Any,
+        tool_schemas: list[dict[str, Any]] | None = None,
+        trigger: str = "auto_resume",
     ) -> Any:
         return None
 
@@ -154,7 +157,10 @@ def _mk_bundle(env: dict[str, Any], *, is_resume: bool) -> _MockBundle:
 
 
 def _mk_user_message(
-    *, session_id: Any, thread_id: Any, text: str,
+    *,
+    session_id: Any,
+    thread_id: Any,
+    text: str,
 ) -> Event:
     return Event(
         event_id=EventId(f"ev_{uuid4()}"),
@@ -169,7 +175,10 @@ def _mk_user_message(
 
 
 def _mk_agent_message(
-    *, session_id: Any, thread_id: Any, text: str,
+    *,
+    session_id: Any,
+    thread_id: Any,
+    text: str,
 ) -> Event:
     return Event(
         event_id=EventId(f"ev_{uuid4()}"),
@@ -184,7 +193,10 @@ def _mk_agent_message(
 
 
 def _synthesize_events(
-    session_id: Any, thread_id: Any, *, turns: int,
+    session_id: Any,
+    thread_id: Any,
+    *,
+    turns: int,
 ) -> list[Event]:
     events: list[Event] = []
     for i in range(turns):
@@ -206,7 +218,9 @@ def _synthesize_events(
 
 
 async def _seed(
-    store: SessionStore, thread_id: Any, events: list[Event],
+    store: SessionStore,
+    thread_id: Any,
+    events: list[Event],
 ) -> None:
     for ev in events:
         await store.append_event(thread_id, ev)
@@ -230,7 +244,9 @@ async def test_anchor_engages_before_eager_compact_await(
     """
     bundle = _mk_bundle(store_env, is_resume=True)
     app = ChatApp(
-        session=bundle, engine=bundle.runtime.engine, full_history=False,
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=False,
     )
 
     observed: dict[str, bool | None] = {"is_anchored_at_entry": None}
@@ -287,7 +303,9 @@ async def test_mount_during_eager_compact_follows_tail(
 
     bundle = _mk_bundle(store_env, is_resume=True)
     app = ChatApp(
-        session=bundle, engine=bundle.runtime.engine, full_history=True,
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=True,
     )
 
     observed: dict[str, Any] = {
@@ -318,9 +336,7 @@ async def test_mount_during_eager_compact_follows_tail(
         await pilot.pause()
         transcript = app.query_one("#transcript", VerticalScroll)
 
-        assert observed["mounted"] is True, (
-            "the simulated hang's mount did not run"
-        )
+        assert observed["mounted"] is True, "the simulated hang's mount did not run"
         assert observed["anchored_on_entry"] is True, (
             "expected anchor engaged BEFORE the eager-compact await; "
             f"observed {observed['anchored_on_entry']!r}"
@@ -364,7 +380,9 @@ async def test_scroll_up_preserves_position_on_new_mount(
 
     bundle = _mk_bundle(store_env, is_resume=True)
     app = ChatApp(
-        session=bundle, engine=bundle.runtime.engine, full_history=True,
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=True,
     )
 
     async with app.run_test(size=(80, 24)) as pilot:
@@ -428,7 +446,9 @@ async def test_scroll_back_to_tail_reengages_anchor_natively(
 
     bundle = _mk_bundle(store_env, is_resume=True)
     app = ChatApp(
-        session=bundle, engine=bundle.runtime.engine, full_history=True,
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=True,
     )
 
     async with app.run_test(size=(80, 24)) as pilot:

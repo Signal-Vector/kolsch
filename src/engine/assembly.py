@@ -456,9 +456,7 @@ def _enforce_pairing_invariant(
         orphan_tool_msg_indexes,
     )
     if _in_test_mode():
-        error_msg = (
-            f"bug-064: assembly pairing invariant violated — {diagnostic}"
-        )
+        error_msg = f"bug-064: assembly pairing invariant violated — {diagnostic}"
         raise AssertionError(error_msg)
 
     # Production degrade: log once per (thread_id, span_id), then

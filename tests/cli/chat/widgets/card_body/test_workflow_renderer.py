@@ -77,20 +77,24 @@ async def test_run_start_node_complete_run_complete_flow(mock_app_factory) -> No
         await pilot.pause()
 
         start_ts = datetime(2026, 7, 5, 12, 0, 0, tzinfo=UTC)
-        renderer.apply_event(_MockEvent(
-            _WIRE,
-            _mk_payload(WorkflowEventKind.RUN_STARTED, ts=start_ts),
-        ))
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                _mk_payload(WorkflowEventKind.RUN_STARTED, ts=start_ts),
+            )
+        )
         await pilot.pause()
 
-        renderer.apply_event(_MockEvent(
-            _WIRE,
-            _mk_payload(
-                WorkflowEventKind.NODE_STARTED,
-                node_name="a",
-                ts=start_ts,
-            ),
-        ))
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                _mk_payload(
+                    WorkflowEventKind.NODE_STARTED,
+                    node_name="a",
+                    ts=start_ts,
+                ),
+            )
+        )
         await pilot.pause()
 
         rows = list(renderer.query(WorkflowNodeRow))
@@ -98,15 +102,17 @@ async def test_run_start_node_complete_run_complete_flow(mock_app_factory) -> No
         assert rows[0]._node_name == "a"
         assert rows[0].state == "starting"
 
-        renderer.apply_event(_MockEvent(
-            _WIRE,
-            _mk_payload(
-                WorkflowEventKind.NODE_COMPLETED,
-                node_name="a",
-                summary="ok",
-                ts=start_ts,
-            ),
-        ))
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                _mk_payload(
+                    WorkflowEventKind.NODE_COMPLETED,
+                    node_name="a",
+                    summary="ok",
+                    ts=start_ts,
+                ),
+            )
+        )
         await pilot.pause()
 
         assert rows[0].state == "completed"
@@ -117,10 +123,12 @@ async def test_run_start_node_complete_run_complete_flow(mock_app_factory) -> No
         assert "[1/1]" not in header_render
 
         end_ts = datetime(2026, 7, 5, 12, 0, 3, tzinfo=UTC)
-        renderer.apply_event(_MockEvent(
-            _WIRE,
-            _mk_payload(WorkflowEventKind.RUN_COMPLETED, ts=end_ts),
-        ))
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                _mk_payload(WorkflowEventKind.RUN_COMPLETED, ts=end_ts),
+            )
+        )
         await pilot.pause()
 
         footer_render = str(renderer._footer.render())
@@ -147,24 +155,31 @@ async def test_node_failed_error_lands_in_error_section(mock_app_factory) -> Non
     app = mock_app_factory(renderer)
     async with app.run_test() as pilot:
         await pilot.pause()
-        renderer.apply_event(_MockEvent(
-            _WIRE, _mk_payload(WorkflowEventKind.RUN_STARTED),
-        ))
-        renderer.apply_event(_MockEvent(
-            _WIRE,
-            _mk_payload(WorkflowEventKind.NODE_STARTED, node_name="b"),
-        ))
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                _mk_payload(WorkflowEventKind.RUN_STARTED),
+            )
+        )
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                _mk_payload(WorkflowEventKind.NODE_STARTED, node_name="b"),
+            )
+        )
         await pilot.pause()
 
         long_err = "oops-" + "x" * 200
-        renderer.apply_event(_MockEvent(
-            _WIRE,
-            _mk_payload(
-                WorkflowEventKind.NODE_FAILED,
-                node_name="b",
-                error_message=long_err,
-            ),
-        ))
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                _mk_payload(
+                    WorkflowEventKind.NODE_FAILED,
+                    node_name="b",
+                    error_message=long_err,
+                ),
+            )
+        )
         await pilot.pause()
 
         row = renderer._node_rows["b"]
@@ -197,17 +212,24 @@ async def test_node_pruned_transitions_to_pruned(mock_app_factory) -> None:
     app = mock_app_factory(renderer)
     async with app.run_test() as pilot:
         await pilot.pause()
-        renderer.apply_event(_MockEvent(
-            _WIRE, _mk_payload(WorkflowEventKind.RUN_STARTED),
-        ))
-        renderer.apply_event(_MockEvent(
-            _WIRE,
-            _mk_payload(WorkflowEventKind.NODE_STARTED, node_name="c"),
-        ))
-        renderer.apply_event(_MockEvent(
-            _WIRE,
-            _mk_payload(WorkflowEventKind.NODE_PRUNED, node_name="c"),
-        ))
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                _mk_payload(WorkflowEventKind.RUN_STARTED),
+            )
+        )
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                _mk_payload(WorkflowEventKind.NODE_STARTED, node_name="c"),
+            )
+        )
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                _mk_payload(WorkflowEventKind.NODE_PRUNED, node_name="c"),
+            )
+        )
         await pilot.pause()
         row = renderer._node_rows["c"]
         assert row.state == "pruned"
@@ -220,12 +242,18 @@ async def test_run_failed_footer(mock_app_factory) -> None:
     app = mock_app_factory(renderer)
     async with app.run_test() as pilot:
         await pilot.pause()
-        renderer.apply_event(_MockEvent(
-            _WIRE, _mk_payload(WorkflowEventKind.RUN_STARTED),
-        ))
-        renderer.apply_event(_MockEvent(
-            _WIRE, _mk_payload(WorkflowEventKind.RUN_FAILED),
-        ))
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                _mk_payload(WorkflowEventKind.RUN_STARTED),
+            )
+        )
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                _mk_payload(WorkflowEventKind.RUN_FAILED),
+            )
+        )
         await pilot.pause()
         footer_render = str(renderer._footer.render())
         assert footer_render.startswith("✗ done in ")
@@ -237,12 +265,18 @@ async def test_run_aborted_footer(mock_app_factory) -> None:
     app = mock_app_factory(renderer)
     async with app.run_test() as pilot:
         await pilot.pause()
-        renderer.apply_event(_MockEvent(
-            _WIRE, _mk_payload(WorkflowEventKind.RUN_STARTED),
-        ))
-        renderer.apply_event(_MockEvent(
-            _WIRE, _mk_payload(WorkflowEventKind.RUN_ABORTED),
-        ))
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                _mk_payload(WorkflowEventKind.RUN_STARTED),
+            )
+        )
+        renderer.apply_event(
+            _MockEvent(
+                _WIRE,
+                _mk_payload(WorkflowEventKind.RUN_ABORTED),
+            )
+        )
         await pilot.pause()
         footer_render = str(renderer._footer.render())
         assert footer_render.startswith("✗ done in ")

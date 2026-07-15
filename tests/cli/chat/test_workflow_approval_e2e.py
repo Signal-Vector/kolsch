@@ -22,15 +22,16 @@ Pilot — see the note in `test_approval_e2e.py`):
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 from uuid import uuid4
 
 import pytest
 
 from cli.chat.event_adapter import EventAdapter
-from cli.chat.services.workflows_impl import WorkflowsImpl, WorkflowRunRecord
+from cli.chat.services.workflows_impl import WorkflowRunRecord, WorkflowsImpl
 from cli.chat.widgets.card_body.workflow import WorkflowRenderer
 from schemas.entities import Actor
 from schemas.events import Event, EventType
@@ -61,12 +62,14 @@ class _MockApp:
         *,
         parent_hint: str | None = None,
     ) -> Any:
-        self.mount_calls.append({
-            "rule_id": rule_id,
-            "action": action,
-            "target": target,
-            "parent_hint": parent_hint,
-        })
+        self.mount_calls.append(
+            {
+                "rule_id": rule_id,
+                "action": action,
+                "target": target,
+                "parent_hint": parent_hint,
+            }
+        )
         return object()
 
     def clear_awaiting_approval(self) -> None:
@@ -93,7 +96,8 @@ async def store(tmp_path: Path) -> AsyncIterator[SessionStore]:
 
 
 async def _mk_impl(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> tuple[WorkflowsImpl, Any, Any]:
     session = await store.create_session("ag_test", name="e2e_wf")
     threads = await store.list_threads(session.session_id)
@@ -141,36 +145,41 @@ async def _run_started_and_node_started(
     node_name: str,
 ) -> None:
     ts = datetime.now(tz=UTC).isoformat()
-    renderer.apply_event({
-        "kind": "kolsch.workflow.progress",
-        "payload": {
-            "run_id": run_id,
-            "workflow_ref": "kolsch/workflows/test",
-            "kind": WorkflowEventKind.RUN_STARTED.value,
-            "event_id": "ev_run_started",
-            "ts": ts,
-            "trace_id": "tr_root",
-            "payload": {},
-        },
-    })
-    renderer.apply_event({
-        "kind": "kolsch.workflow.progress",
-        "payload": {
-            "run_id": run_id,
-            "workflow_ref": "kolsch/workflows/test",
-            "kind": WorkflowEventKind.NODE_STARTED.value,
-            "event_id": "ev_node_started",
-            "ts": ts,
-            "trace_id": "tr_root",
-            "payload": {},
-            "node_name": node_name,
-        },
-    })
+    renderer.apply_event(
+        {
+            "kind": "kolsch.workflow.progress",
+            "payload": {
+                "run_id": run_id,
+                "workflow_ref": "kolsch/workflows/test",
+                "kind": WorkflowEventKind.RUN_STARTED.value,
+                "event_id": "ev_run_started",
+                "ts": ts,
+                "trace_id": "tr_root",
+                "payload": {},
+            },
+        }
+    )
+    renderer.apply_event(
+        {
+            "kind": "kolsch.workflow.progress",
+            "payload": {
+                "run_id": run_id,
+                "workflow_ref": "kolsch/workflows/test",
+                "kind": WorkflowEventKind.NODE_STARTED.value,
+                "event_id": "ev_node_started",
+                "ts": ts,
+                "trace_id": "tr_root",
+                "payload": {},
+                "node_name": node_name,
+            },
+        }
+    )
 
 
 @pytest.mark.asyncio
 async def test_e2e_workflow_approval_paused(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     """Prompt.requested with workflow source → row paused + parent_hint."""
     impl, session_id, thread_id = await _mk_impl(tmp_path, store)
@@ -193,7 +202,9 @@ async def test_e2e_workflow_approval_paused(
     # dispatch has somewhere to land.
     renderer = WorkflowRenderer()
     await _run_started_and_node_started(
-        renderer, run_id=str(run_id), node_name="build",
+        renderer,
+        run_id=str(run_id),
+        node_name="build",
     )
     entry = _StubCardBody(renderer)
     # Adapter fans out via `_card_widgets.values()` — inject via a
@@ -257,7 +268,8 @@ async def test_e2e_workflow_approval_paused(
 
 @pytest.mark.asyncio
 async def test_e2e_workflow_approval_resolved_transitions_back(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     """User presses `y` → resolved event fires → row transitions to running."""
     impl, session_id, thread_id = await _mk_impl(tmp_path, store)
@@ -276,7 +288,9 @@ async def test_e2e_workflow_approval_resolved_transitions_back(
 
     renderer = WorkflowRenderer()
     await _run_started_and_node_started(
-        renderer, run_id=str(run_id), node_name="build",
+        renderer,
+        run_id=str(run_id),
+        node_name="build",
     )
     adapter._card_widgets[new_card_id()] = _StubCardBody(
         renderer,
@@ -352,7 +366,8 @@ async def test_e2e_workflow_approval_resolved_transitions_back(
 
 @pytest.mark.asyncio
 async def test_e2e_workflow_approval_denied_still_transitions_running(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     """A `n` (deny) resolution also transitions the row back to running.
 
@@ -376,36 +391,42 @@ async def test_e2e_workflow_approval_denied_still_transitions_running(
     )
     renderer = WorkflowRenderer()
     await _run_started_and_node_started(
-        renderer, run_id=str(run_id), node_name="build",
+        renderer,
+        run_id=str(run_id),
+        node_name="build",
     )
     adapter._card_widgets[new_card_id()] = _StubCardBody(
         renderer,
     )  # type: ignore[assignment]
 
-    await adapter.handle(_mk_ui_event(
-        session_id=session_id,
-        thread_id=thread_id,
-        kind=WIRE_PROMPT_REQUESTED,
-        payload={
-            "prompt_id": "prm_wf3",
-            "kind": "choice",
-            "prompt": "Approve?",
-            "options": ["y", "a", "n", "d"],
-            "source": {
-                "kind": "workflow",
-                "id": str(run_id),
-                "run_id": str(run_id),
-                "node_name": "build",
-                "run_chain": [],
+    await adapter.handle(
+        _mk_ui_event(
+            session_id=session_id,
+            thread_id=thread_id,
+            kind=WIRE_PROMPT_REQUESTED,
+            payload={
+                "prompt_id": "prm_wf3",
+                "kind": "choice",
+                "prompt": "Approve?",
+                "options": ["y", "a", "n", "d"],
+                "source": {
+                    "kind": "workflow",
+                    "id": str(run_id),
+                    "run_id": str(run_id),
+                    "node_name": "build",
+                    "run_chain": [],
+                },
             },
-        },
-    ))
-    await adapter.handle(_mk_ui_event(
-        session_id=session_id,
-        thread_id=thread_id,
-        kind=WIRE_PROMPT_ANSWERED,
-        payload={"prompt_id": "prm_wf3", "response": "n"},
-    ))
+        )
+    )
+    await adapter.handle(
+        _mk_ui_event(
+            session_id=session_id,
+            thread_id=thread_id,
+            kind=WIRE_PROMPT_ANSWERED,
+            payload={"prompt_id": "prm_wf3", "response": "n"},
+        )
+    )
 
     # Poll for the resolved event.
     async def _find_resolved() -> Event | None:
@@ -446,6 +467,7 @@ def test_e2e_no_get_event_loop_in_modified_files() -> None:
         "src/cli/chat/widgets/card_body/workflow.py",
     ]
     from pathlib import Path as _Path
+
     repo_root = _Path(__file__).resolve().parents[3]
     for rel in modified:
         p = repo_root / rel

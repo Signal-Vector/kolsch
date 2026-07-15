@@ -36,9 +36,10 @@ import asyncio
 import contextlib
 import inspect
 import uuid
+from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -48,7 +49,6 @@ from cli.chat.services.workflows_impl import WorkflowsImpl
 from cli.chat.widgets.assistant_prose import AssistantProse
 from cli.chat.widgets.card_body.workflow import WorkflowRenderer
 from cli.chat.widgets.card_widget import CardWidget
-from cli.chat.widgets.tool_call_block import ToolCallBlock
 from cli.chat.widgets.user_chatbox import UserChatbox
 from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 from schemas.entities import Actor
@@ -58,7 +58,6 @@ from tools.decorator import ToolContext, get_tool_definition
 from tools.discovery import discover_tools_in_file
 from tools.dispatch import _invoke_tool
 from workflows.events import (
-    WorkflowEventKind,
     WorkflowNodeCompletedEvent,
     WorkflowNodeStartedEvent,
     WorkflowRunCompletedEvent,
@@ -67,10 +66,7 @@ from workflows.events import (
 from workflows.ids import InvocationId, TraceId, WorkflowRunId
 from workflows.run import RunDirectory, WorkflowRunStatus
 
-
-_BUNDLE_TOOLS_DIR = (
-    Path(__file__).resolve().parents[3] / "bundles" / "kolsch" / "tools"
-)
+_BUNDLE_TOOLS_DIR = Path(__file__).resolve().parents[3] / "bundles" / "kolsch" / "tools"
 
 
 def _load_tool(filename: str, tool_name: str) -> Callable[..., Awaitable[Any]]:
@@ -96,10 +92,12 @@ def run_workflow_tool() -> Callable[..., Awaitable[Any]]:
 
 class _MockAuthz:
     def register_prompt_callback(
-        self, callback: Any, *, on_rule_added: Any = None,
+        self,
+        callback: Any,
+        *,
+        on_rule_added: Any = None,
     ) -> None:
         _ = callback, on_rule_added
-        return None
 
     def clear_prompt_callback(self) -> None:
         return None
@@ -277,7 +275,8 @@ class _MockExecutorWithSubAgent:
         # RUN_STARTED
         self._observer(
             WorkflowRunStartedEvent(
-                workflow_run_id=self.run_id, trace_id=self.trace_id,
+                workflow_run_id=self.run_id,
+                trace_id=self.trace_id,
             ),
         )
         await asyncio.sleep(self._delay)
@@ -318,7 +317,9 @@ class _MockExecutorWithSubAgent:
                 ),
             ):
                 self._sub_agent_observer(
-                    self.node_name, str(self.invocation_id), evt,
+                    self.node_name,
+                    str(self.invocation_id),
+                    evt,
                 )
                 await asyncio.sleep(self._delay)
 
@@ -334,14 +335,18 @@ class _MockExecutorWithSubAgent:
         await asyncio.sleep(self._delay)
         self._observer(
             WorkflowRunCompletedEvent(
-                workflow_run_id=self.run_id, trace_id=self.trace_id,
+                workflow_run_id=self.run_id,
+                trace_id=self.trace_id,
             ),
         )
         return WorkflowRunStatus.SUCCEEDED
 
 
 def _install_sub_agent_factory(
-    impl: WorkflowsImpl, *, ref: str, tmp_path: Path,
+    impl: WorkflowsImpl,
+    *,
+    ref: str,
+    tmp_path: Path,
     pre_sub_agent_delay: float = 2.0,
 ) -> dict[str, _MockExecutorWithSubAgent]:
     """Rebind the executor factory to the sub-agent-firing mock.
@@ -427,7 +432,8 @@ async def test_sub_agent_widgets_mount_in_expanded_node_row(
         for _ in range(80):
             await pilot.pause()
             widgets = [
-                w for w in pilot.app.query(CardWidget)
+                w
+                for w in pilot.app.query(CardWidget)
                 if getattr(w, "kind", None) == "workflow"
             ]
             if widgets:
@@ -463,10 +469,7 @@ async def test_sub_agent_widgets_mount_in_expanded_node_row(
         seen: set[type] = set()
         for _ in range(160):  # 160 * 50ms = 8s worst case
             await pilot.pause()
-            seen = {
-                type(w) for w in node_row.query("*")
-                if type(w) in want
-            }
+            seen = {type(w) for w in node_row.query("*") if type(w) in want}
             if seen == want:
                 break
             await asyncio.sleep(0.05)
@@ -480,10 +483,11 @@ async def test_sub_agent_widgets_mount_in_expanded_node_row(
                     data = ev.data if isinstance(ev.data, dict) else {}
                     ui_events.append(data.get("kind"))
             print(f"DEBUG UI events: {ui_events}")
-            print(f"DEBUG row.collapsed={node_row.collapsed} "
-                  f"turn_count={node_row._sub_agent_turn_count}")
-            print(f"DEBUG row.query: "
-                  f"{[type(w).__name__ for w in node_row.query('*')]}")
+            print(
+                f"DEBUG row.collapsed={node_row.collapsed} "
+                f"turn_count={node_row._sub_agent_turn_count}"
+            )
+            print(f"DEBUG row.query: {[type(w).__name__ for w in node_row.query('*')]}")
         assert seen == want, (
             f"expected sub-agent widgets to mount inside the row; "
             f"got {sorted(t.__name__ for t in seen)}"
@@ -504,7 +508,7 @@ async def test_sub_agent_widgets_mount_in_expanded_node_row(
         # task would leak into the next test's event loop.
         try:
             result = await asyncio.wait_for(tool_task, timeout=10.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             tool_task.cancel()
             with contextlib.suppress(BaseException):
                 await tool_task

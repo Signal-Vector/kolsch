@@ -7,17 +7,16 @@ refactor.
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 from textual.app import App
 from textual.widget import Widget
-from textual.widgets import Collapsible, Static
+from textual.widgets import Collapsible
 
 from cli.chat.widgets.assistant_prose import AssistantProse
 from cli.chat.widgets.tool_call_block import ToolCallBlock
 from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
-
 
 _AppFactory = Callable[[Widget], App[None]]
 
@@ -28,7 +27,9 @@ def mock_app_factory() -> _AppFactory:
         class _MockApp(App[None]):
             def compose(self):
                 yield child
+
         return _MockApp()
+
     return factory
 
 

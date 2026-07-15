@@ -122,9 +122,7 @@ async def build_compaction_history_table(
         tokens_before = int(e.data.get("tokens_before") or 0)
         tokens_after = int(e.data.get("tokens_after") or 0)
         tokens = _format_tokens(tokens_before, tokens_after)
-        compacted_ids = [
-            str(x) for x in (e.data.get("compacted_event_ids") or [])
-        ]
+        compacted_ids = [str(x) for x in (e.data.get("compacted_event_ids") or [])]
         span = _short_span(compacted_ids)
         preview_flag = "yes" if e.data.get("preview") else "no"
         revoked_id = revocations.get(str(e.event_id))

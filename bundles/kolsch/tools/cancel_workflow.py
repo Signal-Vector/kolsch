@@ -47,7 +47,8 @@ class CancelWorkflowArgs(BaseModel):
     requires=["workflows"],
 )
 async def cancel_workflow(
-    args: CancelWorkflowArgs, ctx: ToolContext,
+    args: CancelWorkflowArgs,
+    ctx: ToolContext,
 ) -> dict[str, object]:
     """Fire the cancel; return `{cancelled, run_id, cascade}`.
 

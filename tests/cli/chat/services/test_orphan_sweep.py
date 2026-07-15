@@ -17,8 +17,8 @@ Five passes:
 from __future__ import annotations
 
 import json
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator
 
 import pytest
 
@@ -59,7 +59,8 @@ async def _mk_impl(
 
 
 async def test_sweep_reconciles_only_in_process_non_terminal(
-    tmp_path: Path, session_store: SessionStore,
+    tmp_path: Path,
+    session_store: SessionStore,
 ) -> None:
     """AC #4 / AC #7 / AC #8: sweep only touches in-process orphans."""
     run_store = WorkflowRunStore(tmp_path)
@@ -94,8 +95,8 @@ async def test_sweep_reconciles_only_in_process_non_terminal(
         orphan_dir = run_store.directory(inproc_orphan.run_id)
         assert orphan_dir.events_path.exists()
         lines = [
-            line for line in
-            orphan_dir.events_path.read_text().splitlines()
+            line
+            for line in orphan_dir.events_path.read_text().splitlines()
             if line.strip()
         ]
         assert len(lines) == 1
@@ -124,7 +125,8 @@ async def test_sweep_reconciles_only_in_process_non_terminal(
 
 
 async def test_sweep_reconciles_running_and_waiting_for_input(
-    tmp_path: Path, session_store: SessionStore,
+    tmp_path: Path,
+    session_store: SessionStore,
 ) -> None:
     """AC #4: RUNNING and WAITING_FOR_INPUT statuses both reconcile."""
     run_store = WorkflowRunStore(tmp_path)
@@ -142,7 +144,8 @@ async def test_sweep_reconciles_running_and_waiting_for_input(
         started_by="in-process",
     )
     run_store.update_status(
-        waiting_orphan.run_id, WorkflowRunStatus.WAITING_FOR_INPUT,
+        waiting_orphan.run_id,
+        WorkflowRunStatus.WAITING_FOR_INPUT,
     )
 
     impl = await _mk_impl(tmp_path, session_store, run_store)
@@ -160,7 +163,8 @@ async def test_sweep_reconciles_running_and_waiting_for_input(
 
 
 async def test_sweep_zero_when_no_orphans(
-    tmp_path: Path, session_store: SessionStore,
+    tmp_path: Path,
+    session_store: SessionStore,
 ) -> None:
     """AC #4 baseline: no orphans → returns 0, no JSONL writes."""
     run_store = WorkflowRunStore(tmp_path)
@@ -190,7 +194,8 @@ async def test_sweep_zero_when_no_orphans(
 
 
 async def test_sweep_terminal_statuses_untouched(
-    tmp_path: Path, session_store: SessionStore,
+    tmp_path: Path,
+    session_store: SessionStore,
 ) -> None:
     """AC #8: every terminal status (SUCCEEDED/FAILED/TIMED_OUT/ABORTED) skipped."""
     run_store = WorkflowRunStore(tmp_path)
@@ -225,7 +230,8 @@ async def test_sweep_terminal_statuses_untouched(
 
 
 async def test_sweep_appended_event_replayable(
-    tmp_path: Path, session_store: SessionStore,
+    tmp_path: Path,
+    session_store: SessionStore,
 ) -> None:
     """AC #4: appended aborted event round-trips through `read_events`.
 

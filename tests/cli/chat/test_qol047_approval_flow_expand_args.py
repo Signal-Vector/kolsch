@@ -16,7 +16,7 @@ Both AC #8 tests:
 from __future__ import annotations
 
 import asyncio
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 from textual.app import App
@@ -53,9 +53,7 @@ async def test_approval_flow_expand_args_visible_before_choice(
         row = block.query_one(ApprovalArgsRow)
         assert row.overflowing is True
         text = _rendered_row_text(row)
-        assert "▸" in text, (
-            "Collapsed overflow state must show ▸ chevron in Args row"
-        )
+        assert "▸" in text, "Collapsed overflow state must show ▸ chevron in Args row"
         # (2) Press Tab — Args row expands, full target becomes visible.
         await pilot.press("tab")
         await pilot.pause()
@@ -64,10 +62,7 @@ async def test_approval_flow_expand_args_visible_before_choice(
         assert long_target in expanded_text.replace("\n", "").replace(" ", "") or (
             # Char-wrap: the joined body-without-indent matches
             long_target
-            in "".join(
-                line.lstrip()
-                for line in expanded_text.splitlines()[1:]
-            )
+            in "".join(line.lstrip() for line in expanded_text.splitlines()[1:])
         )
         # (3) Press ``y`` — the choice pane's binding still fires; the
         # widget resolves with ALLOW. Tab must NOT have hijacked ``y``.

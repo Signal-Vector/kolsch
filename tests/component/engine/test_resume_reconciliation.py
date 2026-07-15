@@ -677,18 +677,12 @@ async def test_llm_request_after_reconciliation_is_provider_legal(
 
     # Exactly one LLM call for this exchange (MockLLM records every
     # agenerate). Inspect the messages that call was built from.
-    assert len(mock.calls) == 1, (
-        f"expected exactly one LLM call; got {len(mock.calls)}"
-    )
+    assert len(mock.calls) == 1, f"expected exactly one LLM call; got {len(mock.calls)}"
     raw_msgs = mock.calls[0].context["messages"]
     assert isinstance(raw_msgs, list), "context.messages must be a list"
 
     # Assertion 1 — the tool response for the dangling id IS present.
-    tool_msg_ids = [
-        m.get("tool_call_id")
-        for m in raw_msgs
-        if m.get("role") == "tool"
-    ]
+    tool_msg_ids = [m.get("tool_call_id") for m in raw_msgs if m.get("role") == "tool"]
     assert dangling_id in tool_msg_ids, (
         f"tool response for {dangling_id!r} missing from LLM request; "
         f"messages roles = {[m.get('role') for m in raw_msgs]}. "

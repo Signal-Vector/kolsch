@@ -39,7 +39,9 @@ def mock_app_factory() -> _AppFactory:
         class _MockApp(App[None]):
             def compose(self) -> Any:
                 yield child
+
         return _MockApp()
+
     return factory
 
 

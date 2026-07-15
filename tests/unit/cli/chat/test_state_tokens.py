@@ -19,21 +19,20 @@ from cli.chat.state_tokens import (
     resolve_state,
 )
 
-
 # ---------------------------------------------------------------------------
 # Canonical resolution
 # ---------------------------------------------------------------------------
 
 
 _EXPECTED_CANONICAL: dict[str, tuple[str, str, str]] = {
-    "success":    ("✓", "$tool-fg", "bold"),
-    "failed":     ("✗", "$error",   "bold"),
-    "running":    ("▸", "$tool-fg", "bold"),
-    "queued":     ("⋯", "$hint",    "dim"),
-    "paused":     ("⚠", "$warning", "bold italic"),
-    "awaiting":   ("⚠", "$warning", "bold italic"),
+    "success": ("✓", "$tool-fg", "bold"),
+    "failed": ("✗", "$error", "bold"),
+    "running": ("▸", "$tool-fg", "bold"),
+    "queued": ("⋯", "$hint", "dim"),
+    "paused": ("⚠", "$warning", "bold italic"),
+    "awaiting": ("⚠", "$warning", "bold italic"),
     "cancelling": ("⧗", "$warning", "bold italic"),
-    "cancelled":  ("─", "$hint",    "dim"),
+    "cancelled": ("─", "$hint", "dim"),
 }
 
 
@@ -65,7 +64,7 @@ def test_canonical_state_resolves_to_expected_token(
 def test_state_token_is_frozen_dataclass() -> None:
     """`StateToken` is immutable — enables safe module-level reuse."""
     token = resolve_state("success")
-    with pytest.raises(Exception):  # dataclasses.FrozenInstanceError subclass  # noqa: BLE001,PT011
+    with pytest.raises(Exception):  # dataclasses.FrozenInstanceError subclass
         token.glyph = "?"  # type: ignore[misc]
 
 
@@ -75,11 +74,11 @@ def test_state_token_is_frozen_dataclass() -> None:
 
 
 _EXPECTED_ALIASES: dict[str, str] = {
-    "completed":    "success",
-    "error":        "failed",
+    "completed": "success",
+    "error": "failed",
     "initializing": "queued",
-    "starting":     "running",
-    "pruned":       "cancelled",
+    "starting": "running",
+    "pruned": "cancelled",
 }
 
 

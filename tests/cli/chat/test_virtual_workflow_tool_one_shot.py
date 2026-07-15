@@ -63,7 +63,6 @@ from workflows.events import (
 )
 from workflows.ids import InvocationId, TraceId, WorkflowRunId
 
-
 # ---------------------------------------------------------------------------
 # Fixture — workspace scaffolded via ``kolsch setup --non-interactive``.
 # ---------------------------------------------------------------------------
@@ -249,10 +248,12 @@ async def test_model_calls_virtual_tool_directly(
         assert workflows_impl is not None
         install_mock_executor_factory(
             workflows_impl,
-            {workflow_ref: MockExecutorSpec(
-                events=_mk_workflow_events(),
-                per_event_delay=0.02,
-            )},
+            {
+                workflow_ref: MockExecutorSpec(
+                    events=_mk_workflow_events(),
+                    per_event_delay=0.02,
+                )
+            },
             runs_root=initialized_workspace / "runs",
         )
 
@@ -267,7 +268,8 @@ async def test_model_calls_virtual_tool_directly(
         for _ in range(200):  # 200 * 50ms = 10s cap
             await pilot.pause()
             widgets = [
-                w for w in pilot.app.query(CardWidget)
+                w
+                for w in pilot.app.query(CardWidget)
                 if getattr(w, "kind", None) == "workflow"
             ]
             if widgets:
@@ -306,12 +308,9 @@ async def test_model_calls_virtual_tool_directly(
         # Assertion 2 (AC #10.2) — turn 1 tool.called has the virtual
         # tool + typed arg populated.
         # ------------------------------------------------------------
-        virtual_calls = [
-            c for c in tool_called if c.get("tool_name") == virtual_name
-        ]
+        virtual_calls = [c for c in tool_called if c.get("tool_name") == virtual_name]
         assert len(virtual_calls) == 1, (
-            f"expected exactly one virtual-tool call (turn 1). "
-            f"Got: {virtual_calls!r}"
+            f"expected exactly one virtual-tool call (turn 1). Got: {virtual_calls!r}"
         )
         virtual_args = _extract_arguments(virtual_calls[0])
         assert isinstance(virtual_args, dict)
@@ -332,19 +331,14 @@ async def test_model_calls_virtual_tool_directly(
         # Assertion 4 (AC #10.4) — NO fallback to generic run_workflow
         # OR bash.
         # ------------------------------------------------------------
-        generic_calls = [
-            c for c in tool_called if c.get("tool_name") == "run_workflow"
-        ]
+        generic_calls = [c for c in tool_called if c.get("tool_name") == "run_workflow"]
         assert generic_calls == [], (
             "bug-028 gate: model must NOT fall back to generic "
             f"run_workflow. Observed: {generic_calls!r}"
         )
-        bash_calls = [
-            c for c in tool_called if c.get("tool_name") == "bash"
-        ]
+        bash_calls = [c for c in tool_called if c.get("tool_name") == "bash"]
         assert bash_calls == [], (
-            "bug-028 gate: model must NOT fall back to bash. "
-            f"Observed: {bash_calls!r}"
+            f"bug-028 gate: model must NOT fall back to bash. Observed: {bash_calls!r}"
         )
 
         # ------------------------------------------------------------

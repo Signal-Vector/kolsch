@@ -45,7 +45,7 @@ def test_tc_chat_18_chat_module_is_not_full_screen() -> None:
     ``process/spec-textual-chat-ui.md`` → Technical Context →
     TC-CHAT-18 rewrite.
     """
-    import ast  # noqa: PLC0415
+    import ast
 
     chat_dir = Path(__file__).parents[3] / "src" / "cli" / "chat"
     assert chat_dir.is_dir(), f"expected {chat_dir!s} to be a directory"
@@ -69,6 +69,4 @@ def test_tc_chat_18_chat_module_is_not_full_screen() -> None:
                             ), f"{py}:{node.lineno}: inline must be True"
         # Legacy prompt_toolkit guard, still enforced across the tree.
         for pattern in ("full_screen=True", "\x1b[?1049h", "[?1049h"):
-            assert pattern not in src, (
-                f"{py}: forbidden pattern {pattern!r}"
-            )
+            assert pattern not in src, f"{py}: forbidden pattern {pattern!r}"

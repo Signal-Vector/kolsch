@@ -73,7 +73,9 @@ async def confirm_dangerous_action(
     options = ["yes", "no"]
     try:
         response = await services.prompts.choice(
-            question, options, source=source,
+            question,
+            options,
+            source=source,
         )
     except PromptBusy:
         # Wait up to 5 s for the current prompt to clear, then retry
@@ -88,7 +90,9 @@ async def confirm_dangerous_action(
                 "error": "another prompt was pending too long",
             }
         response = await services.prompts.choice(
-            question, options, source=source,
+            question,
+            options,
+            source=source,
         )
     return {
         "user_answered": response,

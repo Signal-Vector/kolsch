@@ -108,9 +108,7 @@ def test_validate_agent_unknown_field_fails(tmp_path: Path) -> None:
                         "from": "read_index",
                         "to": "identify_missing",
                         "binds": {
-                            "indexed_files": (
-                                "{{ nodes.read_index.indexed_files }}"
-                            ),
+                            "indexed_files": ("{{ nodes.read_index.indexed_files }}"),
                         },
                     }
                 ]

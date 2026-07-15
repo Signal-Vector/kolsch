@@ -52,7 +52,9 @@ def _format_row_label(session: Session, last_at: datetime | None) -> str:
     last-activity, id) but joined on `` • `` since the picker is a
     single-column list, not a table.
     """
-    from cli.main import _format_delta  # noqa: PLC0415 — avoid import cycle at module load
+    from cli.main import (
+        _format_delta,
+    )
 
     now = datetime.now(UTC)
     name = session.name or "(unnamed)"
@@ -110,7 +112,7 @@ async def pick_session(
 
 
 __all__ = [
-    "pick_session",
     "_default_chooser",
     "_format_row_label",
+    "pick_session",
 ]

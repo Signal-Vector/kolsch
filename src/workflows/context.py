@@ -189,7 +189,8 @@ class NodeContext:
     # bound callback that itself raises — best-effort like the other
     # NodeContext seams.
     on_sub_agent_event_callback: Callable[[Event], None] | None = field(
-        default=None, repr=False,
+        default=None,
+        repr=False,
     )
 
     def derive_for_iteration(

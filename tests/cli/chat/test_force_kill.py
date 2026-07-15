@@ -49,7 +49,9 @@ class _HostApp(App):
 
 
 def _make_card_with_state(
-    *, state: str, seconds_in_state: float,
+    *,
+    state: str,
+    seconds_in_state: float,
 ) -> CardWidget:
     """Build a workflow-kind CardWidget already in ``state``.
 

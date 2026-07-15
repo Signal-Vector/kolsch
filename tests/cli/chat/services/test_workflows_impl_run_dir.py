@@ -11,8 +11,8 @@ Two passes:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator
 from uuid import uuid4
 
 import pytest
@@ -68,7 +68,8 @@ def _slow_events() -> list:
 
 
 async def test_run_dir_populated_after_construction(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     impl = await _mk_impl(tmp_path, store)
     try:
@@ -76,7 +77,8 @@ async def test_run_dir_populated_after_construction(
             impl,
             {
                 "kolsch/workflows/x": MockExecutorSpec(
-                    events=_slow_events(), per_event_delay=0.5,
+                    events=_slow_events(),
+                    per_event_delay=0.5,
                 ),
             },
             runs_root=tmp_path / "runs",
@@ -95,7 +97,8 @@ async def test_run_dir_populated_after_construction(
 
 
 async def test_cancel_writes_to_populated_run_dir(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     impl = await _mk_impl(tmp_path, store)
     try:
@@ -103,7 +106,8 @@ async def test_cancel_writes_to_populated_run_dir(
             impl,
             {
                 "kolsch/workflows/x": MockExecutorSpec(
-                    events=_slow_events(), per_event_delay=0.5,
+                    events=_slow_events(),
+                    per_event_delay=0.5,
                 ),
             },
             runs_root=tmp_path / "runs",

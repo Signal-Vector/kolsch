@@ -48,7 +48,6 @@ from schemas.wire_kinds import (
 )
 from store import SessionStore, SqliteBackend
 
-
 # ---------------------------------------------------------------------------
 # Fixture — real store + bus, ChatApp not yet booted (caller sets is_resume).
 # ---------------------------------------------------------------------------
@@ -56,7 +55,10 @@ from store import SessionStore, SqliteBackend
 
 class _MockAuthz:
     def register_prompt_callback(
-        self, callback: Any, *, on_rule_added: Any = None,
+        self,
+        callback: Any,
+        *,
+        on_rule_added: Any = None,
     ) -> None:
         _ = callback, on_rule_added
 
@@ -65,7 +67,8 @@ class _MockAuthz:
 
 
 async def _empty_stream(
-    *_args: Any, **_kwargs: Any,
+    *_args: Any,
+    **_kwargs: Any,
 ) -> AsyncGenerator[Any, None]:
     return
     yield  # type: ignore[unreachable]  # pragma: no cover
@@ -79,10 +82,10 @@ class _MockEngine:
     async def maybe_compact_thread_eagerly(
         self,
         *,
-        thread_id: Any,  # noqa: ARG002
-        spec: Any,  # noqa: ARG002
-        tool_schemas: list[dict[str, Any]] | None = None,  # noqa: ARG002
-        trigger: str = "auto_resume",  # noqa: ARG002
+        thread_id: Any,
+        spec: Any,
+        tool_schemas: list[dict[str, Any]] | None = None,
+        trigger: str = "auto_resume",
     ) -> Any:
         return None
 
@@ -148,7 +151,9 @@ async def store_env(tmp_path: Path) -> AsyncIterator[dict[str, Any]]:
 
 
 def _mk_bundle(
-    env: dict[str, Any], *, is_resume: bool,
+    env: dict[str, Any],
+    *,
+    is_resume: bool,
 ) -> _MockBundle:
     return _MockBundle(
         runtime=_Runtime(env["store"], env["root"]),
@@ -684,8 +689,7 @@ async def test_new_approval_after_resume_is_interactive(
             await asyncio.sleep(0.05)
         assert new_block is not None, "new post-resume block never mounted"
         assert new_block.is_resolved is False, (
-            "new post-resume prompt was misclassified as historical — "
-            "AC #13 regressed"
+            "new post-resume prompt was misclassified as historical — AC #13 regressed"
         )
 
         # The composer freezes on the live block.

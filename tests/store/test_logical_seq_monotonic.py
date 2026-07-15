@@ -17,16 +17,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import AsyncIterator
 from uuid import uuid4
 
 import pytest
 
 from schemas import (
     Actor,
-    AgentId,
     Event,
     EventType,
     SessionId,

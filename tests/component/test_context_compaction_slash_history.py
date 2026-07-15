@@ -23,12 +23,11 @@ from cli.chat.services.compaction_introspection import (
 )
 from engine import ExecutionContext
 from providers.compaction import ReferenceSummaryCompactionProvider
-
 from tests.component.test_context_compaction_slash_compact import (
-    _RecordingLLM,
     _build,
     _config,
     _fresh_thread,
+    _RecordingLLM,
 )
 
 
@@ -67,7 +66,8 @@ async def test_compaction_history_lists_compactions_with_revoked(
         return recording
 
     provider = ReferenceSummaryCompactionProvider(
-        llm_for_model=factory, config={},
+        llm_for_model=factory,
+        config={},
     )
     engine, store = await _build(tmp_path, compaction_provider=provider)
     thread_id = await _fresh_thread(store)
@@ -83,7 +83,8 @@ async def test_compaction_history_lists_compactions_with_revoked(
         await engine.execute(_config(), ctx)
 
     emitted = await engine.manual_compact(
-        config=_config(), thread_id=thread_id,
+        config=_config(),
+        thread_id=thread_id,
     )
     assert emitted is not None
     runtime = _Runtime(store)

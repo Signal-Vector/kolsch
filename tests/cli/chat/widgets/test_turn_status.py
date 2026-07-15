@@ -49,7 +49,7 @@ def test_elapsed_render_over_a_minute() -> None:
 
 def test_spinner_frame_set_is_the_documented_braille_cycle() -> None:
     """Spec locks the 10-frame Braille cycle; guard against typo drift."""
-    assert SPINNER_FRAMES == tuple("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏")
+    assert tuple("⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏") == SPINNER_FRAMES
     assert len(SPINNER_FRAMES) == 10
 
 

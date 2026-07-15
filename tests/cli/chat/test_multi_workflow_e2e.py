@@ -26,7 +26,6 @@ from schemas.identifiers import CardId
 from tools.services.workflows import NodeCounts
 from workflows.ids import WorkflowRunId
 
-
 _NOW = datetime.now(tz=UTC)
 
 
@@ -85,9 +84,13 @@ async def test_start_three_workflows_shows_compact_strip() -> None:
         ]
         records = [
             _mk_record(
-                suffix=f"a{i}", phase="running", card=cards[i],
+                suffix=f"a{i}",
+                phase="running",
+                card=cards[i],
                 ref=f"pipe/step-{i}",
-                started_offset=10 + i, completed=1, total=3,
+                started_offset=10 + i,
+                completed=1,
+                total=3,
             )
             for i in range(3)
         ]
@@ -128,9 +131,13 @@ async def test_one_terminal_updates_strip() -> None:
         ]
         records = [
             _mk_record(
-                suffix=f"b{i}", phase="running", card=cards[i],
+                suffix=f"b{i}",
+                phase="running",
+                card=cards[i],
                 ref=f"multi/{i}",
-                started_offset=10 + i * 2, completed=2, total=5,
+                started_offset=10 + i * 2,
+                completed=2,
+                total=5,
             )
             for i in range(3)
         ]
@@ -146,9 +153,7 @@ async def test_one_terminal_updates_strip() -> None:
 
         await mgr._flush_reorder()
         await pilot.pause()
-        first_text = str(
-            status_bar.query_one("#status-bar-text", Static).render()
-        )
+        first_text = str(status_bar.query_one("#status-bar-text", Static).render())
         assert "▸ multi/" in first_text
 
         # Terminal one — the second workflow.
@@ -160,9 +165,7 @@ async def test_one_terminal_updates_strip() -> None:
 
         # Still visible — two workflows still live.
         assert status_bar.has_class("-visible")
-        second_text = str(
-            status_bar.query_one("#status-bar-text", Static).render()
-        )
+        second_text = str(status_bar.query_one("#status-bar-text", Static).render())
         # Strip is present + still references a live workflow.
         assert "▸ multi/" in second_text
 
@@ -182,8 +185,12 @@ async def test_all_terminal_hides_strip() -> None:
         ]
         records = [
             _mk_record(
-                suffix=f"c{i}", phase="running", card=cards[i],
-                started_offset=10 + i, completed=1, total=3,
+                suffix=f"c{i}",
+                phase="running",
+                card=cards[i],
+                started_offset=10 + i,
+                completed=1,
+                total=3,
             )
             for i in range(3)
         ]

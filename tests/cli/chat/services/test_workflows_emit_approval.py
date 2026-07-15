@@ -15,8 +15,8 @@ Three passes:
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator
 
 import pytest
 
@@ -43,7 +43,8 @@ async def store(tmp_path: Path) -> AsyncIterator[SessionStore]:
 
 
 async def _mk_impl(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> tuple[WorkflowsImpl, str]:
     session = await store.create_session("ag_test", name="w")
     threads = await store.list_threads(session.session_id)
@@ -61,7 +62,9 @@ async def _mk_impl(
 
 
 async def _read_ui_events(
-    store: SessionStore, thread_id: str, kind: str,
+    store: SessionStore,
+    thread_id: str,
+    kind: str,
 ) -> list[dict]:
     """Collect every UI_EVENT of `kind` from the store's read path."""
     hits: list[dict] = []
@@ -78,15 +81,19 @@ async def _read_ui_events(
 
 @pytest.mark.asyncio
 async def test_emit_awaiting_approval_appends_ui_event(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     """`emit_awaiting_approval` appends WIRE_WORKFLOW_NODE_AWAITING_APPROVAL."""
     impl, thread_id = await _mk_impl(tmp_path, store)
     await impl.emit_awaiting_approval(
-        run_id="r1", node_name="n1",
+        run_id="r1",
+        node_name="n1",
     )
     hits = await _read_ui_events(
-        store, thread_id, WIRE_WORKFLOW_NODE_AWAITING_APPROVAL,
+        store,
+        thread_id,
+        WIRE_WORKFLOW_NODE_AWAITING_APPROVAL,
     )
     assert len(hits) == 1
     payload = hits[0]
@@ -96,15 +103,20 @@ async def test_emit_awaiting_approval_appends_ui_event(
 
 @pytest.mark.asyncio
 async def test_emit_approval_resolved_appends_ui_event(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     """`emit_approval_resolved` appends WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED."""
     impl, thread_id = await _mk_impl(tmp_path, store)
     await impl.emit_approval_resolved(
-        run_id="r1", node_name="n1", resolution="approved",
+        run_id="r1",
+        node_name="n1",
+        resolution="approved",
     )
     hits = await _read_ui_events(
-        store, thread_id, WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED,
+        store,
+        thread_id,
+        WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED,
     )
     assert len(hits) == 1
     payload = hits[0]
@@ -115,31 +127,40 @@ async def test_emit_approval_resolved_appends_ui_event(
 
 @pytest.mark.asyncio
 async def test_emit_approval_resolved_resolutions_variants(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     """`resolution` accepts approved/denied/cancelled — all persist verbatim."""
     impl, thread_id = await _mk_impl(tmp_path, store)
     for resolution in ("approved", "denied", "cancelled"):
         await impl.emit_approval_resolved(
-            run_id="r1", node_name=f"n_{resolution}", resolution=resolution,
+            run_id="r1",
+            node_name=f"n_{resolution}",
+            resolution=resolution,
         )
     hits = await _read_ui_events(
-        store, thread_id, WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED,
+        store,
+        thread_id,
+        WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED,
     )
     assert len(hits) == 3
     assert {h["resolution"] for h in hits} == {
-        "approved", "denied", "cancelled",
+        "approved",
+        "denied",
+        "cancelled",
     }
 
 
 @pytest.mark.asyncio
 async def test_emit_awaiting_approval_uses_critical_lane(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     """Critical lane = durable append; event has non-zero logical_seq."""
     impl, thread_id = await _mk_impl(tmp_path, store)
     await impl.emit_awaiting_approval(
-        run_id="r1", node_name="n1",
+        run_id="r1",
+        node_name="n1",
     )
     async for ev in store.read_events(thread_id):
         if ev.type != EventType.UI_EVENT:

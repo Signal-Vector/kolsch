@@ -39,16 +39,14 @@ from schemas.identifiers import EventId, SessionId, ThreadId
 
 _FIXTURE_PATH = (
     Path(__file__).resolve().parents[2]
-    / "fixtures" / "sessions" / "ses_bug036a_jd_review_excerpt.jsonl"
+    / "fixtures"
+    / "sessions"
+    / "ses_bug036a_jd_review_excerpt.jsonl"
 )
 
 
 def _load_fixture() -> list[dict[str, Any]]:
-    return [
-        json.loads(line)
-        for line in _FIXTURE_PATH.read_text().splitlines()
-        if line
-    ]
+    return [json.loads(line) for line in _FIXTURE_PATH.read_text().splitlines() if line]
 
 
 def _event_from_row(row: dict[str, Any]) -> Event:
@@ -91,13 +89,20 @@ class _StubTranscriptApp(App[None]):
     # ChatApp surface the adapter calls.
 
     async def mount_user_message(
-        self, text: str, timestamp: Any = None,
-        *, event_id: Any = None, content: Any = None,
+        self,
+        text: str,
+        timestamp: Any = None,
+        *,
+        event_id: Any = None,
+        content: Any = None,
     ) -> None:
         _ = text, timestamp, event_id, content
 
     async def mount_assistant_message(
-        self, text: str, *, event_id: Any = None,
+        self,
+        text: str,
+        *,
+        event_id: Any = None,
     ) -> None:
         _ = text, event_id
 
@@ -105,6 +110,7 @@ class _StubTranscriptApp(App[None]):
         class _P:
             async def append(self, text: str) -> None:
                 _ = text
+
         return _P()
 
     async def mount_tool_call(
@@ -126,8 +132,12 @@ class _StubTranscriptApp(App[None]):
         self.mounted_tool_calls.append((tool_name, args, body))
 
     async def mount_notice(
-        self, notice_id: str, text: str,
-        *, level: str = "info", event_id: Any = None,
+        self,
+        notice_id: str,
+        text: str,
+        *,
+        level: str = "info",
+        event_id: Any = None,
     ) -> None:
         _ = notice_id, text, level, event_id
 
@@ -209,7 +219,8 @@ async def test_fixture_replay_dedupe_invariants() -> None:
         # matching tool_name inside the transcript root (excluding
         # any that landed inside a WorkflowNodeRow's Contents).
         workflow_cards = [
-            w for w in pilot.app.query(CardWidget)
+            w
+            for w in pilot.app.query(CardWidget)
             if getattr(w, "kind", None) == "workflow"
         ]
         assert workflow_cards, (
@@ -226,9 +237,7 @@ async def test_fixture_replay_dedupe_invariants() -> None:
         await pilot.pause()
 
         # AC #2: agent rows render one response, no set_output.
-        agent_rows = [
-            r for r in rows if r._node_type == "kolsch/nodes/agent"
-        ]
+        agent_rows = [r for r in rows if r._node_type == "kolsch/nodes/agent"]
         assert agent_rows, (
             "the fixture must contain at least one agent-type node — "
             "otherwise the AC #2 surface is trivially vacuous"
@@ -248,6 +257,7 @@ async def test_fixture_replay_dedupe_invariants() -> None:
             # USER_MESSAGE for headhunter_review — the row should
             # mount exactly one UserChatbox.
             from cli.chat.widgets.user_chatbox import UserChatbox
+
             user_boxes = list(node_row.query(UserChatbox))
             if node_row._node_name == "headhunter_review":
                 assert len(user_boxes) == 1, (
@@ -258,7 +268,8 @@ async def test_fixture_replay_dedupe_invariants() -> None:
         # Any transcript-root ToolCallBlock is fine if it's not a
         # card-mounting tool — verify no card-mounting tool leaked.
         transcript_blocks = [
-            w for w in pilot.app.query(ToolCallBlock)
+            w
+            for w in pilot.app.query(ToolCallBlock)
             # Skip blocks that live inside a WorkflowNodeRow's body.
             if not any(isinstance(a, WorkflowNodeRow) for a in w.ancestors)
         ]

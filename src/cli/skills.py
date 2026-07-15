@@ -29,10 +29,10 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, TextIO
 
-from kolsch._yamlio import dump, load
 from assets.refs import build_ref
 from assets.skill_metadata import parse_skill_frontmatter
 from errors import AssetsNotFound, WorkspaceNotInitialized
+from kolsch._yamlio import dump, load
 from platform_runtime import bootstrap_runtime
 from platform_runtime.workspace import workspace_is_initialized
 

@@ -127,10 +127,12 @@ async def test_content_events_dispatch_to_widget_apply() -> None:
         assert isinstance(widget, CardWidget)
 
         # `card.appended` — Protocol seam writes via `apply_append`.
-        await adapter.handle(_mk_ui_event(
-            WIRE_CARD_APPENDED,
-            {"card_id": card_id, "chunk": "chunk-a"},
-        ))
+        await adapter.handle(
+            _mk_ui_event(
+                WIRE_CARD_APPENDED,
+                {"card_id": card_id, "chunk": "chunk-a"},
+            )
+        )
         await pilot.pause()
         assert widget.content == "chunk-a"
         assert widget.state == "running"
@@ -140,19 +142,25 @@ async def test_content_events_dispatch_to_widget_apply() -> None:
         # doesn't crash the widget — it flows through `apply_event`.
         # For real coverage, open a `progress`-kind card too.
         progress_id = f"crd_{uuid4()}"
-        await adapter.handle(_mk_opened(
-            progress_id, kind="progress", title="p",
-        ))
+        await adapter.handle(
+            _mk_opened(
+                progress_id,
+                kind="progress",
+                title="p",
+            )
+        )
         await pilot.pause()
-        await adapter.handle(_mk_ui_event(
-            WIRE_CARD_SET_PROGRESS,
-            {
-                "card_id": progress_id,
-                "current": 3,
-                "total": 10,
-                "message": "step 3/10",
-            },
-        ))
+        await adapter.handle(
+            _mk_ui_event(
+                WIRE_CARD_SET_PROGRESS,
+                {
+                    "card_id": progress_id,
+                    "current": 3,
+                    "total": 10,
+                    "message": "step 3/10",
+                },
+            )
+        )
         await pilot.pause()
         progress_widget = adapter._card_widgets[CardId(progress_id)]
         assert isinstance(progress_widget, CardWidget)

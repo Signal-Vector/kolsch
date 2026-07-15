@@ -29,7 +29,6 @@ from cli.chat.widgets.card_widget import CardWidget
 from schemas.identifiers import CardId
 from workflows.ids import WorkflowRunId
 
-
 _BASE_TS = datetime(2026, 7, 5, 12, 0, 0, tzinfo=UTC)
 
 
@@ -98,29 +97,42 @@ async def test_resume_produces_sorted_order_not_chronological() -> None:
         # but canonical sort must differ.
         records = [
             _mk_record(
-                suffix="c1", phase="success",
-                card=cards[0], created_offset=1, terminal_offset=30,
+                suffix="c1",
+                phase="success",
+                card=cards[0],
+                created_offset=1,
+                terminal_offset=30,
             ),
             _mk_record(
-                suffix="c2", phase="success",
-                card=cards[1], created_offset=2, terminal_offset=10,
+                suffix="c2",
+                phase="success",
+                card=cards[1],
+                created_offset=2,
+                terminal_offset=10,
             ),
             _mk_record(
-                suffix="c3", phase="running",
-                card=cards[2], created_offset=3, started_offset=100,
+                suffix="c3",
+                phase="running",
+                card=cards[2],
+                created_offset=3,
+                started_offset=100,
             ),
             _mk_record(
-                suffix="c4", phase="success",
-                card=cards[3], created_offset=4, terminal_offset=20,
+                suffix="c4",
+                phase="success",
+                card=cards[3],
+                created_offset=4,
+                terminal_offset=20,
             ),
             _mk_record(
-                suffix="c5", phase="running",
-                card=cards[4], created_offset=5, started_offset=50,
+                suffix="c5",
+                phase="running",
+                card=cards[4],
+                created_offset=5,
+                started_offset=50,
             ),
         ]
-        widget_map: dict[Any, Any] = {
-            cards[i].id: widgets[i] for i in range(5)
-        }
+        widget_map: dict[Any, Any] = {cards[i].id: widgets[i] for i in range(5)}
 
         mgr = WorkflowLayoutManager(
             transcript=transcript,
@@ -168,29 +180,37 @@ async def test_two_flush_passes_produce_identical_order() -> None:
 
         records = [
             _mk_record(
-                suffix="d1", phase="success",
-                card=cards[0], terminal_offset=30,
+                suffix="d1",
+                phase="success",
+                card=cards[0],
+                terminal_offset=30,
             ),
             _mk_record(
-                suffix="d2", phase="success",
-                card=cards[1], terminal_offset=10,
+                suffix="d2",
+                phase="success",
+                card=cards[1],
+                terminal_offset=10,
             ),
             _mk_record(
-                suffix="d3", phase="running",
-                card=cards[2], started_offset=100,
+                suffix="d3",
+                phase="running",
+                card=cards[2],
+                started_offset=100,
             ),
             _mk_record(
-                suffix="d4", phase="error",
-                card=cards[3], terminal_offset=20,
+                suffix="d4",
+                phase="error",
+                card=cards[3],
+                terminal_offset=20,
             ),
             _mk_record(
-                suffix="d5", phase="running",
-                card=cards[4], started_offset=50,
+                suffix="d5",
+                phase="running",
+                card=cards[4],
+                started_offset=50,
             ),
         ]
-        widget_map: dict[Any, Any] = {
-            cards[i].id: widgets[i] for i in range(5)
-        }
+        widget_map: dict[Any, Any] = {cards[i].id: widgets[i] for i in range(5)}
 
         mgr = WorkflowLayoutManager(
             transcript=transcript,
@@ -200,23 +220,13 @@ async def test_two_flush_passes_produce_identical_order() -> None:
         )
         await mgr._flush_reorder()
         await pilot.pause()
-        order_a = [
-            c.title for c in transcript.children
-            if c in widgets
-        ]
-        divider_a = [
-            getattr(c, "id", None) for c in transcript.children
-        ]
+        order_a = [c.title for c in transcript.children if c in widgets]
+        divider_a = [getattr(c, "id", None) for c in transcript.children]
 
         # Second flush on the same records.
         await mgr._flush_reorder()
         await pilot.pause()
-        order_b = [
-            c.title for c in transcript.children
-            if c in widgets
-        ]
-        divider_b = [
-            getattr(c, "id", None) for c in transcript.children
-        ]
+        order_b = [c.title for c in transcript.children if c in widgets]
+        divider_b = [getattr(c, "id", None) for c in transcript.children]
         assert order_a == order_b
         assert divider_a == divider_b

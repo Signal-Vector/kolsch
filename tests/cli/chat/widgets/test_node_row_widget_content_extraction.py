@@ -21,7 +21,7 @@ Sub-tests:
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 from textual.app import App
@@ -54,7 +54,8 @@ async def test_set_output_bash_shape_renders_real_newlines(
 
         # bug-037: output/exit sections created. Search the row for
         # Statics carrying the stdout + exit lines.
-        from textual.widgets import Static  # noqa: PLC0415
+        from textual.widgets import Static
+
         assert row._output_widget is not None
         assert row._bash_exit_section is not None
         all_text = "\n".join(

@@ -55,7 +55,10 @@ from store import SessionStore, SqliteBackend
 
 class _MockAuthz:
     def register_prompt_callback(
-        self, callback: Any, *, on_rule_added: Any = None,
+        self,
+        callback: Any,
+        *,
+        on_rule_added: Any = None,
     ) -> None:
         _ = callback, on_rule_added
 
@@ -64,7 +67,8 @@ class _MockAuthz:
 
 
 async def _empty_stream(
-    *_args: Any, **_kwargs: Any,
+    *_args: Any,
+    **_kwargs: Any,
 ) -> AsyncGenerator[Any, None]:
     """Yield nothing — the mock engine never runs a real turn.
 
@@ -307,12 +311,10 @@ def test_flagship_uses_no_replay_scaffold() -> None:
         f"Flagship contains a `{banned_replay}` reference — violates D-010."
     )
     assert banned_dispatch not in runnable, (
-        f"Flagship contains a `{banned_dispatch}` direct dispatch "
-        "— violates D-010."
+        f"Flagship contains a `{banned_dispatch}` direct dispatch — violates D-010."
     )
     assert banned_hand_key not in runnable, (
-        f"Flagship contains a `{banned_hand_key}` hand-crafted Key "
-        "— violates D-010."
+        f"Flagship contains a `{banned_hand_key}` hand-crafted Key — violates D-010."
     )
     # And it MUST use `pilot.press(...)` as its sole input surface.
     assert "pilot.press" in text

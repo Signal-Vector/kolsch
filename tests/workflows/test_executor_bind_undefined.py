@@ -116,9 +116,7 @@ def _bind_undefined_workflow() -> Workflow:
                         "from": "src",
                         "to": "sink",
                         "binds": {
-                            "indexed_files": (
-                                "{{ nodes.src.indexed_files }}"
-                            ),
+                            "indexed_files": ("{{ nodes.src.indexed_files }}"),
                         },
                     }
                 ]
@@ -149,8 +147,7 @@ async def test_bind_undefined_raises_workflow_bind_undefined(
 
     status = await ex.run()
     assert status == WorkflowRunStatus.FAILED, (
-        f"expected FAILED terminal (bind Undefined guard should fire); "
-        f"got {status!r}"
+        f"expected FAILED terminal (bind Undefined guard should fire); got {status!r}"
     )
 
     events = list(store.read_events(run.run_id))
@@ -305,10 +302,7 @@ async def test_bind_undefined_terminal_events_serialize(tmp_path: Path) -> None:
         try:
             raw = json.dumps(payload)
         except (TypeError, ValueError) as exc:
-            pytest.fail(
-                f"payload for event {e['kind']!r} failed to serialize: "
-                f"{exc!r}"
-            )
+            pytest.fail(f"payload for event {e['kind']!r} failed to serialize: {exc!r}")
         assert "jinja2.runtime.Undefined" not in raw, (
             f"event {e['kind']!r} payload leaked Jinja Undefined: {raw}"
         )

@@ -185,5 +185,3 @@ def _stringify(value: object) -> str:
     import json  # noqa: PLC0415
 
     return json.dumps(value, sort_keys=True, separators=(",", ":"), default=str)
-
-

@@ -58,7 +58,6 @@ from workflows.builtins.agent import AgentRunner
 from workflows.context import NodeContext
 from workflows.parser import AgentNodeDef
 
-
 _CHILD_AGENT_REF = "kolsch/agents/child"
 
 
@@ -221,9 +220,7 @@ async def test_workflow_agent_runner_compaction_stays_on_child_thread(
     # Parent kicks off — a plain engine exchange (a chat surface would
     # do the same). Its execute-stream call does not go through the
     # workflow runtime; the workflow-runtime path is the CHILD's.
-    parent_session = await store.create_session(
-        "ag_parent", name="parent-session"
-    )
+    parent_session = await store.create_session("ag_parent", name="parent-session")
     parent_thread = (await store.list_threads(parent_session.session_id))[0]
     await engine.execute(
         parent_config,
@@ -308,8 +305,7 @@ async def test_workflow_agent_runner_compaction_stays_on_child_thread(
     for cs in child_sessions:
         assert (
             cs.from_workflow_run is not None
-            and str(cs.from_workflow_run.workflow_run_id)
-            == node_ctx.workflow_run_id
+            and str(cs.from_workflow_run.workflow_run_id) == node_ctx.workflow_run_id
         )
 
     # Force a compaction on the child thread. `manual_compact` bypasses
@@ -354,14 +350,10 @@ async def test_workflow_agent_runner_compaction_stays_on_child_thread(
             async for e in store.read_path_to_leaf(t.thread_id):
                 child_events.append(e)
 
-    parent_events = [
-        e async for e in store.read_path_to_leaf(parent_thread.thread_id)
-    ]
+    parent_events = [e async for e in store.read_path_to_leaf(parent_thread.thread_id)]
 
     # Parent: no compaction event AT ALL.
-    assert not any(
-        e.type == EventType.CONTEXT_COMPACTED for e in parent_events
-    ), (
+    assert not any(e.type == EventType.CONTEXT_COMPACTED for e in parent_events), (
         "parent thread saw a CONTEXT_COMPACTED — sub-agent compaction "
         "must stay on the child thread"
     )
@@ -371,9 +363,7 @@ async def test_workflow_agent_runner_compaction_stays_on_child_thread(
     child_compactions = [
         e for e in child_events if e.type == EventType.CONTEXT_COMPACTED
     ]
-    assert child_compactions, (
-        "no CONTEXT_COMPACTED landed on any child thread"
-    )
+    assert child_compactions, "no CONTEXT_COMPACTED landed on any child thread"
     child_thread_ids = {
         str(t.thread_id)
         for cs in child_sessions

@@ -12,7 +12,6 @@ import pytest
 
 from cli.chat.spinner import SPINNER_FRAMES, spinner_frame
 
-
 # ---------------------------------------------------------------------------
 # Frame table content
 # ---------------------------------------------------------------------------
@@ -56,9 +55,7 @@ def test_spinner_frame_wraps_at_frame_count() -> None:
     [(i, _EXPECTED_FRAMES[i]) for i in range(len(_EXPECTED_FRAMES))],
     ids=[f"tick={i}" for i in range(len(_EXPECTED_FRAMES))],
 )
-def test_spinner_frame_indexes_each_frame_in_order(
-    tick: int, expected: str
-) -> None:
+def test_spinner_frame_indexes_each_frame_in_order(tick: int, expected: str) -> None:
     """Every in-range tick maps to its positional frame."""
     assert spinner_frame(tick) == expected
 

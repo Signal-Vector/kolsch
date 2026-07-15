@@ -15,8 +15,8 @@ Five passes:
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator
 
 import pytest
 
@@ -80,7 +80,9 @@ async def test_open_returns_card_and_emits_opened(store: SessionStore) -> None:
         assert str(card.id).startswith("crd_")
 
         opened = await _collect_ui_events(
-            store, impl._thread_id, WIRE_CARD_OPENED,
+            store,
+            impl._thread_id,
+            WIRE_CARD_OPENED,
         )
         assert len(opened) == 1
         assert opened[0]["card_id"] == str(card.id)
@@ -97,7 +99,9 @@ async def test_append_emits_appended(store: SessionStore) -> None:
         await card.append("hi")
 
         appended = await _collect_ui_events(
-            store, impl._thread_id, WIRE_CARD_APPENDED,
+            store,
+            impl._thread_id,
+            WIRE_CARD_APPENDED,
         )
         assert len(appended) == 1
         assert appended[0]["chunk"] == "hi"
@@ -115,7 +119,9 @@ async def test_close_emits_once_and_is_idempotent(store: SessionStore) -> None:
         await card.close()
 
         closed = await _collect_ui_events(
-            store, impl._thread_id, WIRE_CARD_CLOSED,
+            store,
+            impl._thread_id,
+            WIRE_CARD_CLOSED,
         )
         assert len(closed) == 1
         assert card.is_closed is True

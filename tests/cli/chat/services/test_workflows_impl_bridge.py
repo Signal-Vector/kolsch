@@ -14,8 +14,8 @@ Three passes:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator
 from uuid import uuid4
 
 import pytest
@@ -54,7 +54,8 @@ async def store(tmp_path: Path) -> AsyncIterator[SessionStore]:
 
 
 async def _mk(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> tuple[WorkflowsImpl, CardsImpl]:
     session = await store.create_session("ag_test", name="w")
     threads = await store.list_threads(session.session_id)
@@ -83,23 +84,31 @@ def _five_events() -> list:
     return [
         WorkflowRunStartedEvent(workflow_run_id=rid, trace_id=tr),
         WorkflowNodeStartedEvent(
-            workflow_run_id=rid, trace_id=tr,
-            invocation_id=inv, node_name="n1",
+            workflow_run_id=rid,
+            trace_id=tr,
+            invocation_id=inv,
+            node_name="n1",
         ),
         WorkflowNodeCompletedEvent(
-            workflow_run_id=rid, trace_id=tr,
-            invocation_id=inv, node_name="n1",
+            workflow_run_id=rid,
+            trace_id=tr,
+            invocation_id=inv,
+            node_name="n1",
         ),
         WorkflowNodeStartedEvent(
-            workflow_run_id=rid, trace_id=tr,
-            invocation_id=inv, node_name="n2",
+            workflow_run_id=rid,
+            trace_id=tr,
+            invocation_id=inv,
+            node_name="n2",
         ),
         WorkflowRunCompletedEvent(workflow_run_id=rid, trace_id=tr),
     ]
 
 
 async def _collect(
-    store: SessionStore, thread_id: str, kind: str,
+    store: SessionStore,
+    thread_id: str,
+    kind: str,
 ) -> list[dict]:
     out: list[dict] = []
     async for ev in store.read_events(thread_id):
@@ -122,7 +131,8 @@ async def _wait_terminal(impl: WorkflowsImpl, rid) -> None:
 
 
 async def test_bridge_emits_progress_events_and_closes_card(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     impl, cards = await _mk(tmp_path, store)
     try:
@@ -138,11 +148,11 @@ async def test_bridge_emits_progress_events_and_closes_card(
         await asyncio.sleep(0.1)
 
         progress = await _collect(
-            store, cards._thread_id, WIRE_WORKFLOW_PROGRESS,
+            store,
+            cards._thread_id,
+            WIRE_WORKFLOW_PROGRESS,
         )
-        assert len(progress) == 5, (
-            f"expected 5 progress events, got {len(progress)}"
-        )
+        assert len(progress) == 5, f"expected 5 progress events, got {len(progress)}"
         for p in progress:
             assert p["run_id"] == str(rid)
 
@@ -155,7 +165,8 @@ async def test_bridge_emits_progress_events_and_closes_card(
 
 
 async def test_card_closes_with_error_on_run_failed(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     impl, cards = await _mk(tmp_path, store)
     try:
@@ -183,7 +194,8 @@ async def test_card_closes_with_error_on_run_failed(
 
 
 async def test_card_closes_with_cancelled_on_run_aborted(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     impl, cards = await _mk(tmp_path, store)
     try:
@@ -192,7 +204,8 @@ async def test_card_closes_with_cancelled_on_run_aborted(
         events = [
             WorkflowRunStartedEvent(workflow_run_id=rid_a, trace_id=tr_a),
             WorkflowRunAbortedEvent(
-                workflow_run_id=rid_a, trace_id=tr_a,
+                workflow_run_id=rid_a,
+                trace_id=tr_a,
                 payload={"reason": "user_cancel"},
             ),
         ]

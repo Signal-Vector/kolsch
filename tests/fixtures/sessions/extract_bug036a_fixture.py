@@ -80,9 +80,7 @@ import sys
 from pathlib import Path
 from typing import Any
 
-_FIXTURE_OUT = (
-    Path(__file__).resolve().parent / "ses_bug036a_jd_review_excerpt.jsonl"
-)
+_FIXTURE_OUT = Path(__file__).resolve().parent / "ses_bug036a_jd_review_excerpt.jsonl"
 
 
 def _load(path: Path) -> list[dict[str, Any]]:
@@ -208,7 +206,9 @@ def _extract(events: list[dict[str, Any]]) -> list[dict[str, Any]]:
     # ``test_bug036c_fixture_replay.py`` assertion has a subject.
     # Fall through silently if no bash node exists in the source
     # session — bug-036c fixture-replay is optional at that point.
-    _include_first_bash_slice(events, out, target_invocation_id, thread_id=None, session_id=None)
+    _include_first_bash_slice(
+        events, out, target_invocation_id, thread_id=None, session_id=None
+    )
 
     # tool.result for the workflow call (must carry card_id).
     for evt in events:

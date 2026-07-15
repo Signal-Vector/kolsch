@@ -318,4 +318,4 @@ class AbstractCards(ABC):
         teardown. Concrete impls in spec-006 override with real
         teardown logic.
         """
-        return None
+        return

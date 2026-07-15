@@ -41,12 +41,14 @@ async def test_header_shows_ref_and_inputs_top_level() -> None:
         await slot.mount(renderer)
         await pilot.pause()
 
-        renderer._on_run_started({
-            "run_id": "run_abc",
-            "workflow_ref": "andre/workflows/jd_review",
-            "inputs": {"url": "https://example.com/jd"},
-            "ts": "2026-07-09T00:00:00Z",
-        })
+        renderer._on_run_started(
+            {
+                "run_id": "run_abc",
+                "workflow_ref": "andre/workflows/jd_review",
+                "inputs": {"url": "https://example.com/jd"},
+                "ts": "2026-07-09T00:00:00Z",
+            }
+        )
         text = renderer._header._compute_text()
         lines = text.split("\n")
         assert len(lines) == 3, f"expected 3 lines, got {lines!r}"
@@ -66,12 +68,14 @@ async def test_header_flattens_parent_ref_when_nested() -> None:
         await slot.mount(renderer)
         await pilot.pause()
 
-        renderer._on_run_started({
-            "run_id": "run_xyz",
-            "workflow_ref": "child/wf/inner",
-            "inputs": {"url": "https://x.com"},
-            "ts": "2026-07-09T00:00:00Z",
-        })
+        renderer._on_run_started(
+            {
+                "run_id": "run_xyz",
+                "workflow_ref": "child/wf/inner",
+                "inputs": {"url": "https://x.com"},
+                "ts": "2026-07-09T00:00:00Z",
+            }
+        )
         text = renderer._header._compute_text()
         lines = text.split("\n")
         assert len(lines) == 3, f"expected 3 lines, got {lines!r}"
@@ -97,12 +101,12 @@ async def test_command_widget_mounts_inside_contents() -> None:
 
         contents = row.query_one(Collapsible.Contents)
         child_previews = [
-            c for c in contents.walk_children()
+            c
+            for c in contents.walk_children()
             if isinstance(c, Static) and c.has_class("node-command-preview")
         ]
         assert len(child_previews) == 1, (
-            f"expected one command preview inside Contents, "
-            f"got {len(child_previews)}"
+            f"expected one command preview inside Contents, got {len(child_previews)}"
         )
 
 
@@ -127,7 +131,8 @@ async def test_command_widget_has_css_class() -> None:
         # NodeSection; walk into Contents to find it.
         contents = row.query_one(Collapsible.Contents)
         previews = [
-            c for c in contents.walk_children()
+            c
+            for c in contents.walk_children()
             if isinstance(c, Static) and c.has_class("node-command-preview")
         ]
         assert len(previews) == 1
@@ -170,7 +175,8 @@ async def test_pending_command_mounts_after_on_mount() -> None:
         assert post_mount_widget is not None
         contents = row.query_one(Collapsible.Contents)
         child_previews = [
-            c for c in contents.walk_children()
+            c
+            for c in contents.walk_children()
             if isinstance(c, Static) and c.has_class("node-command-preview")
         ]
         assert len(child_previews) == 1
@@ -206,7 +212,8 @@ async def test_command_survives_collapse_expand_cycle() -> None:
 
         contents = row.query_one(Collapsible.Contents)
         child_previews = [
-            c for c in contents.walk_children()
+            c
+            for c in contents.walk_children()
             if isinstance(c, Static) and c.has_class("node-command-preview")
         ]
         assert len(child_previews) == 1, (

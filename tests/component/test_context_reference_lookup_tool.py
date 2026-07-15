@@ -18,7 +18,6 @@ from errors import ToolExecutionFailed
 from schemas import Actor, Event, EventType
 from tools.context_reference import ReferenceLookupArgs, make_reference_lookup
 
-
 _TID = f"th_{uuid4()}"
 _SID = f"ses_{uuid4()}"
 _AGENT_ID = f"ag_{uuid4()}"
@@ -43,7 +42,7 @@ class _FakeStore:
 
     async def read_path_to_leaf(
         self,
-        thread_id: Any,  # noqa: ARG002
+        thread_id: Any,
     ) -> AsyncIterator[Event]:
         for e in self._events:
             yield e
@@ -104,9 +103,7 @@ async def test_reference_lookup_refuses_out_of_scope_event() -> None:
             "pre_compaction": {},
         },
     )
-    tool = make_reference_lookup(
-        session_store=_FakeStore([other, scoped, compaction])
-    )
+    tool = make_reference_lookup(session_store=_FakeStore([other, scoped, compaction]))
     with pytest.raises(ToolExecutionFailed):
         await tool(ReferenceLookupArgs(event_id=str(other.event_id)), _ctx())
 
@@ -133,8 +130,6 @@ async def test_reference_lookup_refuses_revoked_scope() -> None:
         EventType.CONTEXT_COMPACTION_REVOKED,
         {"compaction_event_id": str(compaction.event_id), "reason": "user_requested"},
     )
-    tool = make_reference_lookup(
-        session_store=_FakeStore([target, compaction, revoke])
-    )
+    tool = make_reference_lookup(session_store=_FakeStore([target, compaction, revoke]))
     with pytest.raises(ToolExecutionFailed):
         await tool(ReferenceLookupArgs(event_id=str(target.event_id)), _ctx())

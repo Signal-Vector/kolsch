@@ -127,7 +127,8 @@ async def test_snapshot_titles_show_type_pre_completion() -> None:
         await pilot.pause()
 
         assert_snapshot_matches(
-            pilot.app, "bug036b/titles_pre_completion",
+            pilot.app,
+            "bug036b/titles_pre_completion",
         )
 
 
@@ -163,7 +164,8 @@ async def test_snapshot_titles_drop_type_when_details_set() -> None:
         await pilot.pause()
 
         assert_snapshot_matches(
-            pilot.app, "bug036b/titles_post_completion",
+            pilot.app,
+            "bug036b/titles_post_completion",
         )
 
 
@@ -194,5 +196,6 @@ async def test_snapshot_counter_label_reads_events() -> None:
         await pilot.pause()
 
         assert_snapshot_matches(
-            pilot.app, "bug036b/counter_label",
+            pilot.app,
+            "bug036b/counter_label",
         )

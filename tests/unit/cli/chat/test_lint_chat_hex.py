@@ -80,16 +80,15 @@ def test_border_two_token_shorthand_hex_fires(tmp_path: Path) -> None:
 def test_outline_two_token_shorthand_hex_fires(tmp_path: Path) -> None:
     """``outline: thick dashed #ff5555;`` — outline two-token form."""
     assert (
-        _run_lint_on('DEFAULT_CSS = """outline: thick dashed #ff5555;"""', tmp_path) == 1
+        _run_lint_on('DEFAULT_CSS = """outline: thick dashed #ff5555;"""', tmp_path)
+        == 1
     )
 
 
 def test_border_top_two_token_shorthand_hex_fires(tmp_path: Path) -> None:
     """``border-top: thick solid #ff5555;`` — edge-scoped border, two tokens."""
     assert (
-        _run_lint_on(
-            'DEFAULT_CSS = """border-top: thick solid #ff5555;"""', tmp_path
-        )
+        _run_lint_on('DEFAULT_CSS = """border-top: thick solid #ff5555;"""', tmp_path)
         == 1
     )
 
@@ -137,10 +136,7 @@ def test_border_four_token_shorthand_hex_fires(tmp_path: Path) -> None:
 def test_border_multi_token_var_does_not_fire(tmp_path: Path) -> None:
     """``border: heavy dashed $error;`` — canonical ``$var``, any-token count."""
     assert (
-        _run_lint_on(
-            'DEFAULT_CSS = """border: heavy dashed $error;"""', tmp_path
-        )
-        == 0
+        _run_lint_on('DEFAULT_CSS = """border: heavy dashed $error;"""', tmp_path) == 0
     )
 
 
@@ -190,23 +186,17 @@ def test_hatch_hex_fires(tmp_path: Path) -> None:
 
 def test_scrollbar_color_hex_fires(tmp_path: Path) -> None:
     """``scrollbar-color: #6e7681;`` — one of the ``scrollbar-*`` family."""
-    assert (
-        _run_lint_on('DEFAULT_CSS = """scrollbar-color: #6e7681;"""', tmp_path) == 1
-    )
+    assert _run_lint_on('DEFAULT_CSS = """scrollbar-color: #6e7681;"""', tmp_path) == 1
 
 
 def test_link_color_hover_hex_fires(tmp_path: Path) -> None:
     """``link-color-hover: #ff5555;`` — ``link-*`` family."""
-    assert (
-        _run_lint_on('DEFAULT_CSS = """link-color-hover: #ff5555;"""', tmp_path) == 1
-    )
+    assert _run_lint_on('DEFAULT_CSS = """link-color-hover: #ff5555;"""', tmp_path) == 1
 
 
 def test_background_tint_hex_fires(tmp_path: Path) -> None:
     """``background-tint: #b0c0d5;`` — extended color prop, not just ``background``."""
-    assert (
-        _run_lint_on('DEFAULT_CSS = """background-tint: #b0c0d5;"""', tmp_path) == 1
-    )
+    assert _run_lint_on('DEFAULT_CSS = """background-tint: #b0c0d5;"""', tmp_path) == 1
 
 
 # --- Canonical fallback exemption (foundational qol-082 convention) ----
@@ -220,16 +210,12 @@ def test_background_tint_hex_fires(tmp_path: Path) -> None:
 
 def test_user_border_var_fallback_does_not_fire(tmp_path: Path) -> None:
     """``$user-border: #2ea043;`` — widget-local fallback, MUST pass."""
-    assert (
-        _run_lint_on('DEFAULT_CSS = """$user-border: #2ea043;"""', tmp_path) == 0
-    )
+    assert _run_lint_on('DEFAULT_CSS = """$user-border: #2ea043;"""', tmp_path) == 0
 
 
 def test_assistant_fg_var_fallback_does_not_fire(tmp_path: Path) -> None:
     """``$assistant-fg: #b0c0d5;`` — palette-var fallback, MUST pass."""
-    assert (
-        _run_lint_on('DEFAULT_CSS = """$assistant-fg: #b0c0d5;"""', tmp_path) == 0
-    )
+    assert _run_lint_on('DEFAULT_CSS = """$assistant-fg: #b0c0d5;"""', tmp_path) == 0
 
 
 def test_hint_var_fallback_does_not_fire(tmp_path: Path) -> None:

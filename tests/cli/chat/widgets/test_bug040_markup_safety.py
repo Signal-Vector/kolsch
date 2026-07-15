@@ -17,7 +17,7 @@ that mounting succeeds instead of blowing up.
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 from textual.app import App
@@ -36,7 +36,7 @@ _AppFactory = Callable[[Widget], App[None]]
 _URL_ENCODED_BRACKET_TAIL = (
     "%2FZRrhp7ghYJ26c1fhbGDYx%2FE4ZaNjXG4vKh3zCC%2B6DlUpDz8"
     "%2BK6SVW2a9RCOZlJ9RQ4sFOjtLnTChoH7j4xEb9aaMQVTrTq58e2vPDrKmxx"
-    "YBgAmzESJhu%2FDgArCSby0Bpcq6YZQ%3D%3D\"}]}\n"
+    'YBgAmzESJhu%2FDgArCSby0Bpcq6YZQ%3D%3D"}]}\n'
 )
 
 
@@ -120,9 +120,7 @@ async def test_bash_command_preview_with_jinja_brackets(
         # Command preview lands at workflow_node_row.py:463
         # (node-command-preview Static). Jinja template rendering
         # can leave literal ``[...]`` fragments in the command.
-        row.set_command_preview(
-            "curl 'https://example.com?token=[foo]&auth=[bar]'"
-        )
+        row.set_command_preview("curl 'https://example.com?token=[foo]&auth=[bar]'")
         await pilot.pause()
 
         assert row._command_widget is not None

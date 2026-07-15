@@ -22,7 +22,7 @@ The AC #7 coverage matrix, one test per bullet:
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 from textual.app import App
@@ -31,7 +31,6 @@ from textual.widgets import Static
 
 from cli.chat.widgets.approval_args_row import ApprovalArgsRow
 from cli.chat.widgets.approval_block import ApprovalBlock
-
 
 # --------------------------------------------------------------------
 # Helpers
@@ -77,9 +76,7 @@ async def test_long_target_shows_chevron_collapsed(
         assert row.overflowing is True
         assert row.expanded is False
         text = _rendered(row)
-        assert text.endswith("…▸"), (
-            f"expected trailing '…▸', got tail {text[-4:]!r}"
-        )
+        assert text.endswith("…▸"), f"expected trailing '…▸', got tail {text[-4:]!r}"
         assert "▾" not in text
 
 
@@ -102,7 +99,7 @@ async def test_toggle_expands_row(
             f"expected first line 'Args  ▾', got {text.splitlines()[0]!r}"
         )
         # The full target must be present in the wrapped body somewhere.
-        body = text[len("Args  ▾\n"):]
+        body = text[len("Args  ▾\n") :]
         # Strip indent spaces then join to reassemble.
         joined = "".join(line.lstrip() for line in body.splitlines())
         assert joined == long_target
@@ -188,7 +185,7 @@ async def test_tab_binding_toggles_when_focused_pane_present(
     long_target = (
         "curl -X POST https://example.com/api/v1/very/long/path"
         "?query=parameter&another=one&yet=more&because=long "
-        "-d '{\"json\": \"body\", \"with\": \"lots\", \"of\": \"keys\"}'"
+        '-d \'{"json": "body", "with": "lots", "of": "keys"}\''
     )
     block = ApprovalBlock(
         rule_id="rl_test",

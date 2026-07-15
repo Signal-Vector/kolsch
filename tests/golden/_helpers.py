@@ -94,9 +94,7 @@ def _strip_logical_seq_from_jsonl(text: str) -> str:
         data = payload.get("data")
         if isinstance(data, dict) and "logical_seq" in data:
             data.pop("logical_seq", None)
-            out_lines.append(
-                json.dumps(payload, sort_keys=True, separators=(",", ":"))
-            )
+            out_lines.append(json.dumps(payload, sort_keys=True, separators=(",", ":")))
         else:
             out_lines.append(line)
     return "\n".join(out_lines)

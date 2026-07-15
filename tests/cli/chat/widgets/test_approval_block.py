@@ -29,7 +29,7 @@ no longer user-editable, so the flow is 3 steps not 4):
 from __future__ import annotations
 
 import asyncio
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 from textual.app import App
@@ -40,7 +40,6 @@ from cli.chat.widgets.approval_choice_pane import ApprovalChoicePane
 from cli.chat.widgets.approval_pattern_edit import ApprovalPatternEdit
 from cli.chat.widgets.approval_save_confirm import ApprovalSaveConfirm
 from providers.authz import AuthzEffect, Rule
-
 
 # --------------------------------------------------------------------
 # Helpers

@@ -12,8 +12,8 @@ Three passes:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator
 
 import pytest
 
@@ -63,6 +63,7 @@ async def _mk_impl(
 
 def _mk_events_for(run_id: str) -> tuple[list, TraceId]:
     from uuid import uuid4
+
     trace = TraceId(f"tr_{uuid4()}")
     rid = WorkflowRunId(run_id)
     return (
@@ -75,7 +76,8 @@ def _mk_events_for(run_id: str) -> tuple[list, TraceId]:
 
 
 async def test_two_starts_return_distinct_ids_immediately(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     impl = await _mk_impl(tmp_path, store)
     try:
@@ -84,7 +86,8 @@ async def test_two_starts_return_distinct_ids_immediately(
             impl,
             {
                 "kolsch/workflows/a": MockExecutorSpec(
-                    events=events, per_event_delay=0.1,
+                    events=events,
+                    per_event_delay=0.1,
                 ),
                 "kolsch/workflows/b": MockExecutorSpec(events=events),
             },
@@ -100,7 +103,8 @@ async def test_two_starts_return_distinct_ids_immediately(
 
 
 async def test_second_run_stays_queued_until_first_completes(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     impl = await _mk_impl(tmp_path, store)
     try:
@@ -109,7 +113,8 @@ async def test_second_run_stays_queued_until_first_completes(
             impl,
             {
                 "kolsch/workflows/a": MockExecutorSpec(
-                    events=events, per_event_delay=0.25,  # ~0.5s total
+                    events=events,
+                    per_event_delay=0.25,  # ~0.5s total
                 ),
                 "kolsch/workflows/b": MockExecutorSpec(events=events),
             },
@@ -140,7 +145,8 @@ async def test_second_run_stays_queued_until_first_completes(
 
 
 async def test_registry_carries_both_records_during_run(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     impl = await _mk_impl(tmp_path, store)
     try:
@@ -149,7 +155,8 @@ async def test_registry_carries_both_records_during_run(
             impl,
             {
                 "kolsch/workflows/a": MockExecutorSpec(
-                    events=events, per_event_delay=0.20,
+                    events=events,
+                    per_event_delay=0.20,
                 ),
                 "kolsch/workflows/b": MockExecutorSpec(events=events),
             },

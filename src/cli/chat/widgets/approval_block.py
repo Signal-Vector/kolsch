@@ -388,9 +388,7 @@ class ApprovalBlock(Vertical):
                 allowed=False,
             )
         elif key in ("a", "d"):
-            self._pending_effect = (
-                AuthzEffect.ALLOW if key == "a" else AuthzEffect.DENY
-            )
+            self._pending_effect = AuthzEffect.ALLOW if key == "a" else AuthzEffect.DENY
             self._step = self._STEP_PATTERN
             self._refresh_breadcrumb()
             await self._swap_pane(
@@ -408,9 +406,7 @@ class ApprovalBlock(Vertical):
         self._refresh_breadcrumb()
         preview = self._preview_text()
         fallback = (
-            "allow once"
-            if self._pending_effect is AuthzEffect.ALLOW
-            else "deny once"
+            "allow once" if self._pending_effect is AuthzEffect.ALLOW else "deny once"
         )
         await self._swap_pane(
             ApprovalSaveConfirm(
@@ -572,7 +568,11 @@ class ApprovalBlock(Vertical):
         class is set on the outer Static with ``markup=True``.
         """
         parts: list[str] = []
-        labels = [(self._STEP_CHOOSE, "choose"), (self._STEP_PATTERN, "pattern"), (self._STEP_SAVE, "save")]
+        labels = [
+            (self._STEP_CHOOSE, "choose"),
+            (self._STEP_PATTERN, "pattern"),
+            (self._STEP_SAVE, "save"),
+        ]
         for i, (step_id, label) in enumerate(labels):
             if step_id < self._step:
                 dot = "[b bright_cyan]●[/]"
@@ -647,8 +647,6 @@ class ApprovalBlock(Vertical):
 
     def _preview_text(self) -> str:
         """Rule preview line: `authz.<effect>  <what>("<pattern>")`."""
-        effect_word = (
-            "allow" if self._pending_effect is AuthzEffect.ALLOW else "deny"
-        )
+        effect_word = "allow" if self._pending_effect is AuthzEffect.ALLOW else "deny"
         pattern = self._pending_pattern or ""
         return f'authz.{effect_word}  {self._action}("{pattern}")'

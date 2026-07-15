@@ -58,9 +58,7 @@ def build_workflow_executor(
     store: WorkflowRunStore,
     event_observer: Callable[[WorkflowEvent], None] | None = None,
     cancel_token: CancelToken | None = None,
-    sub_agent_event_observer: (
-        Callable[[str, str, Event], None] | None
-    ) = None,
+    sub_agent_event_observer: (Callable[[str, str, Event], None] | None) = None,
 ) -> IterativeExecutor:
     """Construct a fully-wired `IterativeExecutor`.
 

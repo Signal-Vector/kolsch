@@ -363,7 +363,5 @@ class AgentRunner:
                 original_type="workflow.agent_runner.invariant_violation",
                 args=[msg],
             )
-        content = (
-            agent_message.data.get("content") if agent_message.data else None
-        )
+        content = agent_message.data.get("content") if agent_message.data else None
         return dict(content) if isinstance(content, dict) else {}

@@ -18,7 +18,7 @@ Four passes cover the new ``set_output`` surface:
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 from textual.app import App
@@ -45,13 +45,13 @@ async def test_set_output_mounts_static_with_formatted_json(
 
         # bug-037: bash-shape → dedicated sections. _output_widget
         # points at the output NodeSection.
-        from cli.chat.widgets.node_section import NodeSection  # noqa: PLC0415
+        from cli.chat.widgets.node_section import NodeSection
+
         assert row._output_widget is not None
         assert isinstance(row._output_widget, NodeSection)
         # The body Static inside the output section carries the stdout.
         statics = [
-            c for c in row._output_widget.walk_children()
-            if isinstance(c, Static)
+            c for c in row._output_widget.walk_children() if isinstance(c, Static)
         ]
         body_texts = [str(getattr(s, "content", "")) for s in statics]
         assert any("hello" in t for t in body_texts)
@@ -129,8 +129,7 @@ async def test_set_output_truncates_long_content(
 
         assert row._output_widget is not None
         statics = [
-            c for c in row._output_widget.walk_children()
-            if isinstance(c, Static)
+            c for c in row._output_widget.walk_children() if isinstance(c, Static)
         ]
         body_texts = [str(getattr(s, "content", "")) for s in statics]
         assert any(t.endswith("…") for t in body_texts)

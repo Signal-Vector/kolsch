@@ -25,7 +25,6 @@ import pytest
 from schemas.identifiers import AgentId, SessionId, ThreadId
 from tools.decorator import ToolContext
 
-
 # ---------------------------------------------------------------------------
 # Load the tool function from the bundle (mirrors test_workflow_inspect.py).
 # ---------------------------------------------------------------------------
@@ -99,9 +98,11 @@ async def test_example_call_prefers_virtual_name_when_available(
     )
     ctx = _mk_ctx(workflows)
     args_schema = workflow_inspect._tool_definition.args_schema
-    args = args_schema.model_validate({
-        "ref": "andre/workflows/job_description_review",
-    })
+    args = args_schema.model_validate(
+        {
+            "ref": "andre/workflows/job_description_review",
+        }
+    )
     result = await workflow_inspect._tool_definition.func(args, ctx)
 
     example = result["example_call"]
@@ -130,15 +131,17 @@ async def test_example_call_falls_back_to_generic_when_virtuals_disabled(
     )
     ctx = _mk_ctx(workflows)
     args_schema = workflow_inspect._tool_definition.args_schema
-    args = args_schema.model_validate({
-        "ref": "andre/workflows/job_description_review",
-    })
+    args = args_schema.model_validate(
+        {
+            "ref": "andre/workflows/job_description_review",
+        }
+    )
     result = await workflow_inspect._tool_definition.func(args, ctx)
 
     example = result["example_call"]
     # bug-027 shape.
     assert example.startswith('run_workflow(ref="andre/workflows/')
-    assert 'inputs={' in example
+    assert "inputs={" in example
     assert '"url": "<value from user request>"' in example
     # Virtual tool name NOT used.
     assert "run_workflow_andre_workflows_" not in example

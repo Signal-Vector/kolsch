@@ -31,9 +31,9 @@ import json
 import logging
 import os
 import re
+from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
-from typing import AsyncIterator
 
 from textual import events
 from textual.content import Content
@@ -83,9 +83,7 @@ def _wrap_json_if_detected(text: str) -> str:
     return f"```json\n{pretty}\n```"
 
 
-ANCHOR_PATTERN = re.compile(
-    r"\[([^\]]+)\]\(kolsch-anchor://workflow_card/([^)]+)\)"
-)
+ANCHOR_PATTERN = re.compile(r"\[([^\]]+)\]\(kolsch-anchor://workflow_card/([^)]+)\)")
 """feat-018 anchor markup — ``[<label>](kolsch-anchor://workflow_card/<run_id>)``.
 
 Coordinator-locked convention: the assistant embeds the anchor as
@@ -213,9 +211,7 @@ class AssistantProse(Markdown):
             self.border_title = self._build_identity_header(agent_name, timestamp)
 
     @staticmethod
-    def _build_identity_header(
-        agent_name: str | None, timestamp: datetime
-    ) -> str:
+    def _build_identity_header(agent_name: str | None, timestamp: datetime) -> str:
         """Format the ``<agent> · HH:MM`` border title.
 
         Returns a plain string; per-segment styling isn't possible via
@@ -264,9 +260,10 @@ class AssistantProse(Markdown):
         so tests can toggle `NO_COLOR` between runs (Pilot tests are
         function-scoped and may monkeypatch the env).
         """
-        if block_name in ("fence", "code_block") and os.environ.get(
-            "NO_COLOR"
-        ) is not None:
+        if (
+            block_name in ("fence", "code_block")
+            and os.environ.get("NO_COLOR") is not None
+        ):
             return _PlainFence
         return Markdown.BLOCKS[block_name]
 
@@ -328,10 +325,10 @@ class AssistantProse(Markdown):
             button = WorkflowAnchorButton(label=label, run_id=run_id)
             try:
                 await self.mount(button)
-            except Exception:  # noqa: BLE001 — mount failure logged
+            except Exception:
                 _LOGGER.exception(
-                    "assistant_prose: WorkflowAnchorButton mount "
-                    "failed for run_id=%r", run_id,
+                    "assistant_prose: WorkflowAnchorButton mount failed for run_id=%r",
+                    run_id,
                 )
 
     @staticmethod

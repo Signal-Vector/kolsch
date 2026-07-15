@@ -25,15 +25,13 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
-from uuid import uuid4
-
 from errors import PlatformError
-from tools.decorator import ToolContext
 from schemas.identifiers import AgentId, SessionId, ThreadId
-
+from tools.decorator import ToolContext
 
 # ----------------------------------------------------------------------
 # Load the tool function from the bundle.
@@ -87,7 +85,11 @@ class _MockWorkflows:
         return self._yaml_source
 
     async def start(
-        self, ref: str, inputs: dict[str, Any], *, card: Any = None,
+        self,
+        ref: str,
+        inputs: dict[str, Any],
+        *,
+        card: Any = None,
     ) -> str:
         _ = card
         self.starts.append((ref, inputs))
@@ -137,10 +139,12 @@ async def test_error_message_contains_four_required_substrings() -> None:
     ctx = _mk_ctx(cards, workflows)
 
     args_schema = run_workflow._tool_definition.args_schema
-    args = args_schema.model_validate({
-        "ref": "andre/workflows/job_description_review",
-        "inputs": {},
-    })
+    args = args_schema.model_validate(
+        {
+            "ref": "andre/workflows/job_description_review",
+            "inputs": {},
+        }
+    )
     with pytest.raises(PlatformError) as exc_info:
         await run_workflow._tool_definition.func(args, ctx)
     msg = str(exc_info.value)
@@ -150,9 +154,7 @@ async def test_error_message_contains_four_required_substrings() -> None:
         f"error message missing workflow ref: {msg!r}"
     )
     # (b) The missing input name ``'url'`` appears.
-    assert "'url'" in msg, (
-        f"error message missing 'url' input name: {msg!r}"
-    )
+    assert "'url'" in msg, f"error message missing 'url' input name: {msg!r}"
     # (c) The literal JSON retry template ``inputs={"url":`` — the
     # marker that gives the model a shape to copy.
     assert 'inputs={"url":' in msg, (
@@ -185,10 +187,12 @@ graph:
     ctx = _mk_ctx(cards, workflows)
 
     args_schema = run_workflow._tool_definition.args_schema
-    args = args_schema.model_validate({
-        "ref": "andre/workflows/two_inputs",
-        "inputs": {},
-    })
+    args = args_schema.model_validate(
+        {
+            "ref": "andre/workflows/two_inputs",
+            "inputs": {},
+        }
+    )
     with pytest.raises(PlatformError) as exc_info:
         await run_workflow._tool_definition.func(args, ctx)
     msg = str(exc_info.value)
@@ -218,10 +222,12 @@ graph:
     ctx = _mk_ctx(cards, workflows)
 
     args_schema = run_workflow._tool_definition.args_schema
-    args = args_schema.model_validate({
-        "ref": "andre/workflows/partial",
-        "inputs": {"title": "Engineer"},
-    })
+    args = args_schema.model_validate(
+        {
+            "ref": "andre/workflows/partial",
+            "inputs": {"title": "Engineer"},
+        }
+    )
     with pytest.raises(PlatformError) as exc_info:
         await run_workflow._tool_definition.func(args, ctx)
     msg = str(exc_info.value)
@@ -252,13 +258,12 @@ def test_tool_description_mentions_protocol_and_example() -> None:
     )
     # (b) Names the {{ inputs.X }} reference discipline.
     assert "{{ inputs." in description or "inputs.x" in lowered, (
-        f"description doesn't mention {{{{ inputs.X }}}} references: "
-        f"{description!r}"
+        f"description doesn't mention {{{{ inputs.X }}}} references: {description!r}"
     )
     # (c) A concrete run_workflow(ref=..., inputs={...}) example.
     assert "run_workflow(ref=" in description, (
         f"description missing concrete example call: {description!r}"
     )
-    assert 'inputs={"url":' in description or "inputs={\"url\":" in description, (
+    assert 'inputs={"url":' in description or 'inputs={"url":' in description, (
         f"description missing example inputs shape: {description!r}"
     )

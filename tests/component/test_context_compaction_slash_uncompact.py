@@ -21,12 +21,11 @@ import pytest
 from engine import ExecutionContext
 from providers.compaction import ReferenceSummaryCompactionProvider
 from schemas import EventType
-
 from tests.component.test_context_compaction_slash_compact import (
-    _RecordingLLM,
     _build,
     _config,
     _fresh_thread,
+    _RecordingLLM,
 )
 
 
@@ -54,7 +53,8 @@ async def test_uncompact_revokes_most_recent_active_compaction(
         return recording
 
     provider = ReferenceSummaryCompactionProvider(
-        llm_for_model=factory, config={},
+        llm_for_model=factory,
+        config={},
     )
     engine, store = await _build(tmp_path, compaction_provider=provider)
     thread_id = await _fresh_thread(store)
@@ -71,7 +71,8 @@ async def test_uncompact_revokes_most_recent_active_compaction(
         await engine.execute(_config(), ctx)
 
     first = await engine.manual_compact(
-        config=_config(), thread_id=thread_id,
+        config=_config(),
+        thread_id=thread_id,
     )
     for turn in range(5, 10):
         ctx = ExecutionContext(
@@ -83,7 +84,8 @@ async def test_uncompact_revokes_most_recent_active_compaction(
         )
         await engine.execute(_config(), ctx)
     second = await engine.manual_compact(
-        config=_config(), thread_id=thread_id,
+        config=_config(),
+        thread_id=thread_id,
     )
     assert first is not None and second is not None
     assert first.event_id != second.event_id
@@ -93,7 +95,8 @@ async def test_uncompact_revokes_most_recent_active_compaction(
     # because the small context_length used by the test harness lets
     # the auto trigger fire on every exchange.
     all_compactions = [
-        e async for e in store.read_path_to_leaf(thread_id)
+        e
+        async for e in store.read_path_to_leaf(thread_id)
         if e.type == EventType.CONTEXT_COMPACTED
     ]
     assert len(all_compactions) >= 2
@@ -102,16 +105,10 @@ async def test_uncompact_revokes_most_recent_active_compaction(
     assert revoked is not None
     assert revoked.type == EventType.CONTEXT_COMPACTION_REVOKED
     # LIFO — the most-recent compaction on the thread wins.
-    assert (
-        revoked.data.get("compaction_event_id")
-        == str(all_compactions[-1].event_id)
-    )
+    assert revoked.data.get("compaction_event_id") == str(all_compactions[-1].event_id)
 
     # Second /uncompact must point at the second-most-recent
     # compaction (the one *before* the just-revoked event).
     revoked2 = await engine.manual_uncompact(thread_id=thread_id)
     assert revoked2 is not None
-    assert (
-        revoked2.data.get("compaction_event_id")
-        == str(all_compactions[-2].event_id)
-    )
+    assert revoked2.data.get("compaction_event_id") == str(all_compactions[-2].event_id)

@@ -110,12 +110,14 @@ lightweight event object and hands it to
 `WorkflowNodeRow.apply_sub_agent_event`."""
 
 
-_TERMINAL_RUN_KINDS = frozenset({
-    WorkflowEventKind.RUN_COMPLETED.value,
-    WorkflowEventKind.RUN_FAILED.value,
-    WorkflowEventKind.RUN_ABORTED.value,
-    WorkflowEventKind.RUN_TIMED_OUT.value,
-})
+_TERMINAL_RUN_KINDS = frozenset(
+    {
+        WorkflowEventKind.RUN_COMPLETED.value,
+        WorkflowEventKind.RUN_FAILED.value,
+        WorkflowEventKind.RUN_ABORTED.value,
+        WorkflowEventKind.RUN_TIMED_OUT.value,
+    }
+)
 """The four terminal run kinds the footer summarises."""
 
 
@@ -136,7 +138,7 @@ class _ReconstructedSubAgentEvent:
     populated on NODE_STARTED.
     """
 
-    type: "_EventType"
+    type: _EventType
     data: dict[str, Any]
     created_at: datetime
     trace_id: str
@@ -388,7 +390,9 @@ class WorkflowRenderer(Vertical):
         # Uses a distinct id so tests can query it. The line is empty
         # until the watcher populates it on a compact flip.
         self._compact_line = Static(
-            "", id=(f"{id}-compact" if id else None), markup=False,
+            "",
+            id=(f"{id}-compact" if id else None),
+            markup=False,
         )
         self._compact_line.display = False
 
@@ -596,9 +600,7 @@ class WorkflowRenderer(Vertical):
         trace_id = payload.get("trace_id")
         trace_id_val = trace_id if isinstance(trace_id, str) else None
         invocation_id = payload.get("invocation_id")
-        invocation_id_val = (
-            invocation_id if isinstance(invocation_id, str) else None
-        )
+        invocation_id_val = invocation_id if isinstance(invocation_id, str) else None
         # bug-036a: forward the node type (e.g. ``"kolsch/nodes/agent"``)
         # so the row's ``set_output`` gate can suppress the JSON
         # preview when an agent response already rendered. Executor
@@ -659,7 +661,9 @@ class WorkflowRenderer(Vertical):
             if isinstance(command, str) and command:
                 row.set_command_preview(command)
         self._register_node_with_adapter(
-            row, trace_id_val, invocation_id_val,
+            row,
+            trace_id_val,
+            invocation_id_val,
         )
 
     def _on_node_completed(self, payload: dict[str, Any]) -> None:
@@ -805,6 +809,7 @@ class WorkflowRenderer(Vertical):
             return
         try:
             from schemas.events import EventType  # noqa: PLC0415
+
             event_type = EventType(event_type_raw)
         except (ValueError, ImportError):
             return
@@ -826,11 +831,14 @@ class WorkflowRenderer(Vertical):
         )
         if self._adapter is not None:
             dispatch = getattr(
-                self._adapter, "dispatch_sub_agent_event", None,
+                self._adapter,
+                "dispatch_sub_agent_event",
+                None,
             )
             if callable(dispatch):
                 try:
                     import asyncio  # noqa: PLC0415
+
                     loop = asyncio.get_running_loop()
                 except RuntimeError:
                     return
@@ -843,11 +851,7 @@ class WorkflowRenderer(Vertical):
         # methods directly. Used by unit tests that construct the
         # renderer without an EventAdapter.
         node_name = payload.get("node_name")
-        row = (
-            self._node_rows.get(node_name)
-            if isinstance(node_name, str)
-            else None
-        )
+        row = self._node_rows.get(node_name) if isinstance(node_name, str) else None
         if row is None:
             return
         self._dispatch_reconstructed_to_row(row, reconstructed)
@@ -866,12 +870,14 @@ class WorkflowRenderer(Vertical):
         """
         try:
             import asyncio  # noqa: PLC0415
+
             loop = asyncio.get_running_loop()
         except RuntimeError:
             return
         event_id = getattr(event, "event_id", None)
         event_id_str = str(event_id) if event_id is not None else None
         from schemas.events import EventType  # noqa: PLC0415
+
         data = event.data
         if event.type == EventType.USER_MESSAGE:
             content = data.get("content") or {}
@@ -884,11 +890,14 @@ class WorkflowRenderer(Vertical):
                     from cli.chat.widgets.workflow_node_row import (  # noqa: PLC0415
                         _extract_content_text,
                     )
+
                     text = _extract_content_text(content) or ""
             if text:
                 task = loop.create_task(
                     row.mount_user_message(
-                        text, event.created_at, event_id=event_id_str,
+                        text,
+                        event.created_at,
+                        event_id=event_id_str,
                     ),
                 )
                 task.add_done_callback(_swallow_task_exception)
@@ -905,6 +914,7 @@ class WorkflowRenderer(Vertical):
                     from cli.chat.widgets.workflow_node_row import (  # noqa: PLC0415
                         _extract_content_text,
                     )
+
                     text = _extract_content_text(content) or ""
             if text and row.last_assistant_text() != text:
                 task = loop.create_task(
@@ -922,7 +932,9 @@ class WorkflowRenderer(Vertical):
             if isinstance(args, dict) and args:
                 try:
                     args_str = json.dumps(
-                        args, default=repr, sort_keys=True,
+                        args,
+                        default=repr,
+                        sort_keys=True,
                     )[:60]
                 except (TypeError, ValueError):
                     args_str = ""
@@ -934,19 +946,22 @@ class WorkflowRenderer(Vertical):
                     from cli.chat.widgets.workflow_node_row import (  # noqa: PLC0415
                         _format_content_dict,
                     )
+
                     body = _format_content_dict(result)
                 elif isinstance(result, str):
                     body = result
-            else:
-                # TOOL_CALLED — no result yet; put args in body.
-                if isinstance(args, dict) and args:
-                    from cli.chat.widgets.workflow_node_row import (  # noqa: PLC0415
-                        _format_content_dict,
-                    )
-                    body = _format_content_dict(args)
+            # TOOL_CALLED — no result yet; put args in body.
+            elif isinstance(args, dict) and args:
+                from cli.chat.widgets.workflow_node_row import (  # noqa: PLC0415
+                    _format_content_dict,
+                )
+
+                body = _format_content_dict(args)
             task = loop.create_task(
                 row.mount_tool_call(
-                    tool_name, args_str, body,
+                    tool_name,
+                    args_str,
+                    body,
                     failed=False,
                     event_id=event_id_str,
                 ),
@@ -1133,7 +1148,9 @@ class WorkflowRenderer(Vertical):
         if self._adapter is None or trace_id is None:
             return
         live_map = getattr(
-            self._adapter, "_live_nodes_by_trace_and_invocation", None,
+            self._adapter,
+            "_live_nodes_by_trace_and_invocation",
+            None,
         )
         if not isinstance(live_map, dict):
             return
@@ -1167,7 +1184,9 @@ class WorkflowRenderer(Vertical):
         if self._adapter is None or trace_id is None:
             return
         live_map = getattr(
-            self._adapter, "_live_nodes_by_trace_and_invocation", None,
+            self._adapter,
+            "_live_nodes_by_trace_and_invocation",
+            None,
         )
         if not isinstance(live_map, dict):
             return

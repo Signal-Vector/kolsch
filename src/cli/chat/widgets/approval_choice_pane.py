@@ -84,8 +84,7 @@ class ApprovalChoicePane(Vertical):
 
     def compose(self) -> ComposeResult:
         yield Static(
-            "[y] allow once   [a] allow + rule   "
-            "[n] deny once   [d] deny + rule",
+            "[y] allow once   [a] allow + rule   [n] deny once   [d] deny + rule",
             classes="choices",
             markup=False,
         )

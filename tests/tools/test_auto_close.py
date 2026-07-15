@@ -21,9 +21,9 @@ Six passes:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, AsyncIterator, cast
-from uuid import uuid4
+from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 from pydantic import BaseModel
@@ -52,7 +52,7 @@ class _RecordingAuthz:
         layers: tuple[Any, ...] = (),
         caller_chain: tuple[str, ...] = (),
         tool_call_id: str | None = None,
-    ) -> Any:  # noqa: ANN401
+    ) -> Any:
         class _AllowResult:
             allowed = True
             matched_rule = None
@@ -126,7 +126,7 @@ async def _collect_closed_payloads(
 
 
 def _make_defn(
-    tool_func: Any,  # noqa: ANN401
+    tool_func: Any,
     name: str = "t",
 ) -> ToolDefinition:
     return ToolDefinition(
@@ -143,7 +143,7 @@ async def _dispatch(
     defn: ToolDefinition,
     impl: CardsImpl,
     providers: tuple[DotenvSecretsProvider, NativeSandboxProvider],
-) -> Any:  # noqa: ANN401
+) -> Any:
     secrets, sandbox = providers
     return await dispatch_tool(
         defn=defn,
@@ -193,9 +193,7 @@ async def test_normal_return_auto_closes_open_cards(
         closed = await _collect_closed_payloads(store, impl._thread_id)
         # 1 explicit + 2 finalizer-emitted = 3 total.
         assert len(closed) == 3
-        by_id: dict[str, dict[str, Any]] = {
-            c["card_id"]: c for c in closed
-        }
+        by_id: dict[str, dict[str, Any]] = {c["card_id"]: c for c in closed}
         # The two finalizer-closed cards report success.
         for card_id in opened_ids[1:]:
             assert by_id[card_id]["final_status"] == "success"
@@ -227,9 +225,10 @@ async def test_exception_auto_closes_open_cards_with_error(
         with pytest.raises(Exception) as exc_info:
             await _dispatch(_make_defn(_body), impl, _providers)
         # The dispatch wraps the RuntimeError in `ToolExecutionFailed`.
-        assert "bad" in str(exc_info.value) or "ToolExecutionFailed" in type(
-            exc_info.value
-        ).__name__
+        assert (
+            "bad" in str(exc_info.value)
+            or "ToolExecutionFailed" in type(exc_info.value).__name__
+        )
         await _drain(impl)
 
         closed = await _collect_closed_payloads(store, impl._thread_id)
@@ -252,6 +251,7 @@ async def test_cancellederror_auto_closes_open_cards_as_cancelled(
 ) -> None:
     impl = await _mk_impl(store)
     try:
+
         async def _body(args: _EmptyArgs, ctx: ToolContext) -> str:
             _ = args
             assert ctx.cards is not None
@@ -282,6 +282,7 @@ async def test_error_message_truncated_to_200(
 ) -> None:
     impl = await _mk_impl(store)
     try:
+
         async def _body(args: _EmptyArgs, ctx: ToolContext) -> str:
             _ = args
             assert ctx.cards is not None
@@ -319,7 +320,7 @@ async def test_owner_transferred_card_survives_tool_return(
             assert ctx.cards is not None
             card = await ctx.cards.open("t1", kind="markdown")
             # Simulate `Workflows.start(card=card)` taking ownership.
-            card._owner_transferred = True  # noqa: SLF001
+            card._owner_transferred = True
             owned["card"] = card
             return "ok"
 
@@ -380,7 +381,9 @@ async def test_nested_tool_call_scopes_cards_per_invocation(
             return "outer-ok"
 
         result = await _dispatch(
-            _make_defn(_outer_body, name="outer"), impl, _providers,
+            _make_defn(_outer_body, name="outer"),
+            impl,
+            _providers,
         )
         assert result == "outer-ok"
         await _drain(impl)

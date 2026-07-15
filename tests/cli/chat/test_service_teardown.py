@@ -28,7 +28,7 @@ from cli.chat.service_registry import ChatServiceRegistry
 
 
 class _MockStore:
-    async def read_path_to_leaf(self, thread_id: Any) -> Any:  # noqa: ARG002
+    async def read_path_to_leaf(self, thread_id: Any) -> Any:
         if False:
             yield  # pragma: no cover
         return
@@ -37,7 +37,7 @@ class _MockStore:
 class _MockAuthz:
     def register_prompt_callback(
         self, callback: Any, *, on_rule_added: Any = None
-    ) -> None:  # noqa: ARG002
+    ) -> None:
         return None
 
     def clear_prompt_callback(self) -> None:
@@ -45,10 +45,9 @@ class _MockAuthz:
 
 
 class _MockEngine:
-    async def execute_stream(self, config: Any, ctx: Any):  # noqa: ARG002
+    async def execute_stream(self, config: Any, ctx: Any):
         if False:
             yield  # pragma: no cover
-        return
 
 
 class _MockRuntime:
@@ -138,9 +137,7 @@ async def test_on_unmount_swallows_service_aclose_exception(
     assert bad.aclose_called is True
     assert good.aclose_called is True
     # Exception was logged.
-    assert any(
-        "aclose raised" in record.getMessage() for record in caplog.records
-    )
+    assert any("aclose raised" in record.getMessage() for record in caplog.records)
 
 
 @pytest.mark.asyncio

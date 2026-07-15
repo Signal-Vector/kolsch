@@ -68,9 +68,7 @@ def test_estimate_tokens_single_message_is_positive() -> None:
 
 
 def test_estimate_tokens_scales_with_content() -> None:
-    small = estimate_tokens_for_messages(
-        [{"role": "user", "content": "short"}], None
-    )
+    small = estimate_tokens_for_messages([{"role": "user", "content": "short"}], None)
     large = estimate_tokens_for_messages(
         [{"role": "user", "content": "short " * 200}], None
     )
@@ -78,9 +76,7 @@ def test_estimate_tokens_scales_with_content() -> None:
 
 
 def test_estimate_tokens_includes_tool_schemas() -> None:
-    no_tools = estimate_tokens_for_messages(
-        [{"role": "user", "content": "hi"}], None
-    )
+    no_tools = estimate_tokens_for_messages([{"role": "user", "content": "hi"}], None)
     with_tools = estimate_tokens_for_messages(
         [{"role": "user", "content": "hi"}],
         [
@@ -188,9 +184,7 @@ async def test_compact_caps_refs_at_max_refs() -> None:
         for i in range(30)
     ]
     fake_ids = [_eid() for _ in range(60)]
-    refs_json = ",".join(
-        f'{{"event_id": "{eid}", "note": "n"}}' for eid in fake_ids
-    )
+    refs_json = ",".join(f'{{"event_id": "{eid}", "note": "n"}}' for eid in fake_ids)
     body = (
         '{"schema_version": 1, "summary_text": "s", "refs": ['
         + refs_json

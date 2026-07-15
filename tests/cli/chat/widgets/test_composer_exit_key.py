@@ -52,7 +52,8 @@ class _HostApp(App[None]):
         yield self._composer
 
     def on_composer_quit_requested(
-        self, event: Composer.QuitRequested,
+        self,
+        event: Composer.QuitRequested,
     ) -> None:
         self.captured.append(event)
 

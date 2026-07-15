@@ -13,8 +13,8 @@ Four passes:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator
 from uuid import uuid4
 
 import pytest
@@ -69,17 +69,20 @@ def _slow_events() -> list:
 
 
 async def test_aclose_fires_tokens_for_live_runs(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     impl = await _mk_impl(tmp_path, store)
     install_mock_executor_factory(
         impl,
         {
             "kolsch/workflows/a": MockExecutorSpec(
-                events=_slow_events(), per_event_delay=1.0,
+                events=_slow_events(),
+                per_event_delay=1.0,
             ),
             "kolsch/workflows/b": MockExecutorSpec(
-                events=_slow_events(), per_event_delay=1.0,
+                events=_slow_events(),
+                per_event_delay=1.0,
             ),
         },
         runs_root=tmp_path / "runs",
@@ -102,14 +105,16 @@ async def test_aclose_fires_tokens_for_live_runs(
 
 
 async def test_aclose_cancels_per_run_and_drain_tasks(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     impl = await _mk_impl(tmp_path, store)
     install_mock_executor_factory(
         impl,
         {
             "kolsch/workflows/x": MockExecutorSpec(
-                events=_slow_events(), per_event_delay=1.0,
+                events=_slow_events(),
+                per_event_delay=1.0,
             ),
         },
         runs_root=tmp_path / "runs",
@@ -129,7 +134,8 @@ async def test_aclose_cancels_per_run_and_drain_tasks(
 
 
 async def test_aclose_is_idempotent_and_start_raises_after(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     impl = await _mk_impl(tmp_path, store)
     await impl.aclose()
@@ -140,7 +146,8 @@ async def test_aclose_is_idempotent_and_start_raises_after(
 
 
 async def test_two_workflows_registry_before_aclose(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     impl = await _mk_impl(tmp_path, store)
     try:
@@ -148,10 +155,12 @@ async def test_two_workflows_registry_before_aclose(
             impl,
             {
                 "kolsch/workflows/a": MockExecutorSpec(
-                    events=_slow_events(), per_event_delay=0.5,
+                    events=_slow_events(),
+                    per_event_delay=0.5,
                 ),
                 "kolsch/workflows/b": MockExecutorSpec(
-                    events=_slow_events(), per_event_delay=0.5,
+                    events=_slow_events(),
+                    per_event_delay=0.5,
                 ),
             },
             runs_root=tmp_path / "runs",

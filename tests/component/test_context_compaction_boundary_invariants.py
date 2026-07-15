@@ -14,7 +14,6 @@ from uuid import uuid4
 from providers.compaction import snap_to_safe_boundary
 from schemas import Actor, Event, EventType
 
-
 _TID = f"th_{uuid4()}"
 _SID = f"ses_{uuid4()}"
 

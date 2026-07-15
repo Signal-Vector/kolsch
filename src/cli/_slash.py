@@ -1207,7 +1207,9 @@ async def _handler_workflow(arg_text: str, ctx: SlashContext) -> ControlSignal:
 
     try:
         run_id = await workflows_service.start(
-            entry.ref, inputs, card=card,
+            entry.ref,
+            inputs,
+            card=card,
         )
     except Exception as exc:  # noqa: BLE001 — surface as one-line notice
         # A failed start leaves the card ownership uncertain; close

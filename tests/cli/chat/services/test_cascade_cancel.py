@@ -18,9 +18,9 @@ Test 1 already covers the contextvar-driven populate path.
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import AsyncIterator
 from uuid import uuid4
 
 import pytest
@@ -92,7 +92,8 @@ def _install_run(
 
 
 async def test_cascade_true_walks_ancestors_and_descendants(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     """A→B→C: `cancel(B, cascade=True)` cancels A, B, C."""
     impl = await _mk_impl(tmp_path, store)
@@ -118,7 +119,8 @@ async def test_cascade_true_walks_ancestors_and_descendants(
 
 
 async def test_cascade_false_cancels_only_the_target(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     """Same tree; `cancel(B, cascade=False)` leaves A and C alone."""
     impl = await _mk_impl(tmp_path, store)
@@ -144,13 +146,16 @@ async def test_cascade_false_cancels_only_the_target(
 
 
 async def test_cascade_skips_terminal_runs(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     """A→B→C where A already `success`. Cascade over B skips A, hits B+C."""
     impl = await _mk_impl(tmp_path, store)
     try:
         a = _install_run(
-            impl, ref="kolsch/workflows/a", phase="success",
+            impl,
+            ref="kolsch/workflows/a",
+            phase="success",
         )
         b = _install_run(impl, ref="kolsch/workflows/b", parent_run_id=a)
         c = _install_run(impl, ref="kolsch/workflows/c", parent_run_id=b)
@@ -170,7 +175,8 @@ async def test_cascade_skips_terminal_runs(
 
 
 async def test_cascade_unknown_run_id_returns_false(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     """Unknown run_id + cascade=True → returns False (no work)."""
     impl = await _mk_impl(tmp_path, store)
@@ -186,7 +192,8 @@ async def test_cascade_unknown_run_id_returns_false(
 
 
 async def test_collect_cancel_tree_returns_full_walk(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     """`_collect_cancel_tree(B)` on A→B→C returns {A, B, C}.
 

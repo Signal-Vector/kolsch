@@ -885,8 +885,7 @@ async def _resolve_resume_session(
 
     if getattr(args, "session", None):
         sys.stderr.write(
-            "chat: --resume and --session are mutually exclusive; "
-            "pick one.\n",
+            "chat: --resume and --session are mutually exclusive; pick one.\n",
         )
         return 1
 

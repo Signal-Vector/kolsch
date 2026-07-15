@@ -56,7 +56,6 @@ from workflows.events import (
 )
 from workflows.ids import InvocationId, TraceId, WorkflowRunId
 
-
 # ---------------------------------------------------------------------------
 # Fixture — a workspace scaffolded via `kolsch setup --non-interactive`
 # ---------------------------------------------------------------------------
@@ -226,10 +225,12 @@ async def test_prose_run_workflow_triggers_run_workflow_tool_call(
         )
         install_mock_executor_factory(
             workflows_impl,
-            {workflow_ref: MockExecutorSpec(
-                events=_mk_workflow_events(),
-                per_event_delay=0.02,
-            )},
+            {
+                workflow_ref: MockExecutorSpec(
+                    events=_mk_workflow_events(),
+                    per_event_delay=0.02,
+                )
+            },
             runs_root=initialized_workspace / "runs",
         )
 
@@ -244,7 +245,8 @@ async def test_prose_run_workflow_triggers_run_workflow_tool_call(
         for _ in range(200):  # 200 * 50ms = 10s cap
             await pilot.pause()
             widgets = [
-                w for w in pilot.app.query(CardWidget)
+                w
+                for w in pilot.app.query(CardWidget)
                 if getattr(w, "kind", None) == "workflow"
             ]
             if widgets:
@@ -291,11 +293,13 @@ async def test_prose_run_workflow_triggers_run_workflow_tool_call(
                     continue
                 data = getattr(event, "data", None) or {}
                 if isinstance(data, dict):
-                    tool_events.append({
-                        "type": str(event.type),
-                        "tool_name": data.get("tool_name"),
-                        "error": (data.get("error") or {}).get("type"),
-                    })
+                    tool_events.append(
+                        {
+                            "type": str(event.type),
+                            "tool_name": data.get("tool_name"),
+                            "error": (data.get("error") or {}).get("type"),
+                        }
+                    )
             raise AssertionError(
                 "CardWidget[kind='workflow'] did not mount within 10s. "
                 "Either run_workflow was not called (Layer 1 regression) "

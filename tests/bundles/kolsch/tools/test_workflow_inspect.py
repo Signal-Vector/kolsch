@@ -24,15 +24,13 @@ from __future__ import annotations
 import importlib.util
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 import pytest
 
-from uuid import uuid4
-
 from errors import PlatformError
-from tools.decorator import ToolContext
 from schemas.identifiers import AgentId, SessionId, ThreadId
-
+from tools.decorator import ToolContext
 
 # ----------------------------------------------------------------------
 # Load the tool function from the bundle.
@@ -134,9 +132,11 @@ async def test_valid_ref_returns_expected_shape() -> None:
     ctx = _mk_ctx(workflows)
 
     args_schema = workflow_inspect._tool_definition.args_schema
-    args = args_schema.model_validate({
-        "ref": "andre/workflows/job_description_review",
-    })
+    args = args_schema.model_validate(
+        {
+            "ref": "andre/workflows/job_description_review",
+        }
+    )
     result = await workflow_inspect._tool_definition.func(args, ctx)
 
     assert isinstance(result, dict)
@@ -148,9 +148,7 @@ async def test_valid_ref_returns_expected_shape() -> None:
         "example_call",
     }
     assert result["ref"] == "andre/workflows/job_description_review"
-    assert result["description"] == (
-        "job description review — requires inputs.url"
-    )
+    assert result["description"] == ("job description review — requires inputs.url")
     assert result["required_inputs"] == ["url"]
     assert result["optional_inputs"] == []
 
@@ -222,9 +220,11 @@ async def test_example_call_is_valid_run_workflow_template(
     ctx = _mk_ctx(workflows)
 
     args_schema = workflow_inspect._tool_definition.args_schema
-    args = args_schema.model_validate({
-        "ref": "andre/workflows/job_description_review",
-    })
+    args = args_schema.model_validate(
+        {
+            "ref": "andre/workflows/job_description_review",
+        }
+    )
     result = await workflow_inspect._tool_definition.func(args, ctx)
 
     example = result["example_call"]
@@ -233,7 +233,7 @@ async def test_example_call_is_valid_run_workflow_template(
     # inputs={"url": "<value from user request>"}).
     assert example.startswith("run_workflow(")
     assert 'ref="andre/workflows/job_description_review"' in example
-    assert 'inputs={' in example
+    assert "inputs={" in example
     assert '"url"' in example
 
 

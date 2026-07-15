@@ -24,7 +24,6 @@ from typing import Any
 from textual.timer import Timer
 from textual.widgets import Markdown
 
-
 _DEFAULT_FLUSH_MS = 100
 """Default flush interval (ms). spec-007 §Live markdown coalescing."""
 

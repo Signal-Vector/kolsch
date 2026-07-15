@@ -101,7 +101,7 @@ class ForceKillConfirm(Vertical):
     def __init__(
         self,
         *,
-        run_id: "WorkflowRunId",
+        run_id: WorkflowRunId,
         n_related: int,
         workflows_impl: Any,
         session_store: Any = None,
@@ -132,9 +132,7 @@ class ForceKillConfirm(Vertical):
         if n <= 0:
             question = "Cancel this workflow?"
         else:
-            question = (
-                f"Cancel this workflow AND {n} related {suffix}?"
-            )
+            question = f"Cancel this workflow AND {n} related {suffix}?"
         yield Static(question, id="force-kill-question", markup=False)
         yield Static(
             "Press [y] to confirm, [n] or Esc to cancel.",
@@ -194,7 +192,7 @@ class ForceKillConfirm(Vertical):
             return
         try:
             await cancel(self._run_id, cascade=True)
-        except Exception:  # noqa: BLE001 — cancel is best-effort
+        except Exception:
             _LOGGER.exception(
                 "ForceKillConfirm: cascade cancel raised for %s",
                 self._run_id,
@@ -223,10 +221,11 @@ class ForceKillConfirm(Vertical):
             return
         try:
             from datetime import UTC, datetime
+            from uuid import uuid4
+
             from schemas.entities import Actor
             from schemas.events import Event, EventType
             from schemas.identifiers import EventId
-            from uuid import uuid4
 
             # Only synthesise if the run hasn't already gone terminal —
             # a live executor may have landed its own terminal event
@@ -235,7 +234,9 @@ class ForceKillConfirm(Vertical):
             if registry is not None:
                 record = registry.get(self._run_id)
                 if record is not None and record.phase in (
-                    "success", "error", "cancelled",
+                    "success",
+                    "error",
+                    "cancelled",
                 ):
                     return
 
@@ -260,7 +261,7 @@ class ForceKillConfirm(Vertical):
                 created_at=datetime.now(tz=UTC),
             )
             await self._session_store.append_event(self._thread_id, event)
-        except Exception:  # noqa: BLE001 — synthetic emit best-effort
+        except Exception:
             _LOGGER.exception(
                 "ForceKillConfirm: synthetic aborted emit failed for %s",
                 self._run_id,
@@ -295,7 +296,7 @@ class ForceKillConfirm(Vertical):
 class _suppress:
     """Tiny contextlib.suppress-style local helper (avoid import churn)."""
 
-    def __enter__(self) -> "_suppress":
+    def __enter__(self) -> _suppress:
         return self
 
     def __exit__(self, *_exc: Any) -> bool:

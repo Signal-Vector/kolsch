@@ -13,8 +13,8 @@ Four passes:
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator
 
 import pytest
 
@@ -72,10 +72,7 @@ async def test_progress_append_raises_type_error_before_emit(
             await card.append("x")
 
         # Zero WIRE_CARD_APPENDED events fired — gate fired before emit.
-        assert (
-            await _count_ui_events(store, impl._thread_id, WIRE_CARD_APPENDED)
-            == 0
-        )
+        assert await _count_ui_events(store, impl._thread_id, WIRE_CARD_APPENDED) == 0
     finally:
         await impl.aclose()
 
@@ -88,7 +85,9 @@ async def test_progress_set_progress_succeeds(store: SessionStore) -> None:
 
         assert (
             await _count_ui_events(
-                store, impl._thread_id, WIRE_CARD_SET_PROGRESS,
+                store,
+                impl._thread_id,
+                WIRE_CARD_SET_PROGRESS,
             )
             == 1
         )
@@ -104,10 +103,7 @@ async def test_confirm_append_raises_type_error(store: SessionStore) -> None:
         with pytest.raises(TypeError):
             await card.append("x")
 
-        assert (
-            await _count_ui_events(store, impl._thread_id, WIRE_CARD_APPENDED)
-            == 0
-        )
+        assert await _count_ui_events(store, impl._thread_id, WIRE_CARD_APPENDED) == 0
     finally:
         await impl.aclose()
 
@@ -120,7 +116,9 @@ async def test_workflow_set_progress_succeeds(store: SessionStore) -> None:
 
         assert (
             await _count_ui_events(
-                store, impl._thread_id, WIRE_CARD_SET_PROGRESS,
+                store,
+                impl._thread_id,
+                WIRE_CARD_SET_PROGRESS,
             )
             == 1
         )

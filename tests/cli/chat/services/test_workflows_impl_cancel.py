@@ -12,8 +12,8 @@ Four passes:
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator
 from uuid import uuid4
 
 import pytest
@@ -48,7 +48,8 @@ async def store(tmp_path: Path) -> AsyncIterator[SessionStore]:
 
 
 async def _mk_impl(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> tuple[WorkflowsImpl, CardsImpl]:
     session = await store.create_session("ag_test", name="w")
     threads = await store.list_threads(session.session_id)
@@ -80,7 +81,8 @@ def _mk_events() -> list:
 
 
 async def test_cancel_running_fires_token_and_writes_flag(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     impl, cards = await _mk_impl(tmp_path, store)
     try:
@@ -89,7 +91,8 @@ async def test_cancel_running_fires_token_and_writes_flag(
             impl,
             {
                 "kolsch/workflows/x": MockExecutorSpec(
-                    events=_mk_events(), per_event_delay=0.5,
+                    events=_mk_events(),
+                    per_event_delay=0.5,
                 ),
             },
             runs_root=tmp_path / "runs",
@@ -116,7 +119,8 @@ async def test_cancel_running_fires_token_and_writes_flag(
 
 
 async def test_cancel_unknown_returns_false(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     impl, cards = await _mk_impl(tmp_path, store)
     try:
@@ -129,7 +133,8 @@ async def test_cancel_unknown_returns_false(
 
 
 async def test_cancel_terminal_returns_false(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     impl, cards = await _mk_impl(tmp_path, store)
     try:
@@ -152,7 +157,8 @@ async def test_cancel_terminal_returns_false(
 
 
 async def test_cancel_transitions_card_status(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     impl, cards = await _mk_impl(tmp_path, store)
     try:
@@ -160,14 +166,17 @@ async def test_cancel_transitions_card_status(
             impl,
             {
                 "kolsch/workflows/x": MockExecutorSpec(
-                    events=_mk_events(), per_event_delay=0.5,
+                    events=_mk_events(),
+                    per_event_delay=0.5,
                 ),
             },
             runs_root=tmp_path / "runs",
         )
         card = await cards.open("workflow test", kind="workflow")
         rid = await impl.start(
-            "kolsch/workflows/x", {}, card=card,
+            "kolsch/workflows/x",
+            {},
+            card=card,
         )
         # Wait until run_dir populated.
         for _ in range(40):

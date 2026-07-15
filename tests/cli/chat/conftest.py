@@ -17,8 +17,9 @@ source of truth for what each widget expects at mount time.
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any, Callable
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -82,15 +83,26 @@ def _canonical_data(event_type: EventType) -> dict[str, Any]:
         case EventType.THREAD_EXCHANGE_COMPLETED:
             return {"thread_id": "thread-test"}
         case EventType.THREAD_EXCHANGE_FAILED:
-            return {"thread_id": "thread-test", "error": {"type": "test", "message": "canonical"}}
+            return {
+                "thread_id": "thread-test",
+                "error": {"type": "test", "message": "canonical"},
+            }
         case EventType.USER_MESSAGE:
             return {"content": {"type": "text", "text": "hello"}}
         case EventType.AGENT_MESSAGE:
             return {"content": {"type": "text", "text": "hi back"}}
         case EventType.TOOL_CALLED:
-            return {"tool_call_id": "call-1", "tool_name": "read_file", "arguments": {"path": "/tmp/x"}}
+            return {
+                "tool_call_id": "call-1",
+                "tool_name": "read_file",
+                "arguments": {"path": "/tmp/x"},
+            }
         case EventType.TOOL_RESULT:
-            return {"tool_call_id": "call-1", "tool_name": "read_file", "output": "canonical"}
+            return {
+                "tool_call_id": "call-1",
+                "tool_name": "read_file",
+                "output": "canonical",
+            }
         case EventType.TOOL_FAILED:
             return {
                 "tool_call_id": "call-1",
@@ -100,7 +112,11 @@ def _canonical_data(event_type: EventType) -> dict[str, Any]:
         case EventType.MODEL_REQUEST:
             return {"call_id": "call-1", "model": {}, "messages": [], "tools": []}
         case EventType.MODEL_RESPONSE:
-            return {"call_id": "call-1", "content": {"type": "text", "text": "response"}, "usage": {}}
+            return {
+                "call_id": "call-1",
+                "content": {"type": "text", "text": "response"},
+                "usage": {},
+            }
         case EventType.MODEL_STREAMING_TOKEN:
             return {"call_id": "call-1", "text_delta": "chunk"}
         case EventType.MODEL_FALLBACK:

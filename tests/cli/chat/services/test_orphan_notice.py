@@ -11,9 +11,10 @@ Three passes:
 
 from __future__ import annotations
 
+from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 
 import pytest
 
@@ -72,7 +73,8 @@ async def _mk_impl(
 
 
 async def test_fire_notice_after_two_orphans_reconciled(
-    tmp_path: Path, session_store: SessionStore,
+    tmp_path: Path,
+    session_store: SessionStore,
 ) -> None:
     """AC #5: 2 orphans reconciled → one notice with `"2 workflow"`."""
     run_store = WorkflowRunStore(tmp_path)
@@ -99,7 +101,8 @@ async def test_fire_notice_after_two_orphans_reconciled(
 
 
 async def test_fire_notice_idempotent(
-    tmp_path: Path, session_store: SessionStore,
+    tmp_path: Path,
+    session_store: SessionStore,
 ) -> None:
     """AC #5: second `fire_orphan_notice()` is a no-op."""
     run_store = WorkflowRunStore(tmp_path)
@@ -124,7 +127,8 @@ async def test_fire_notice_idempotent(
 
 
 async def test_fire_notice_no_op_when_no_orphans(
-    tmp_path: Path, session_store: SessionStore,
+    tmp_path: Path,
+    session_store: SessionStore,
 ) -> None:
     """AC #5: zero-orphan sweep + fire → no notice fired."""
     run_store = WorkflowRunStore(tmp_path)

@@ -60,7 +60,9 @@ def _platform_yaml(root: Path) -> None:
     (root / ".env").write_text("", encoding="utf-8")
 
 
-def _write_bundle_with_skills(root: Path, bundle: str, skills: list[dict[str, Any]]) -> None:
+def _write_bundle_with_skills(
+    root: Path, bundle: str, skills: list[dict[str, Any]]
+) -> None:
     bundle_dir = root / "bundles" / bundle
     (bundle_dir / "agents").mkdir(parents=True, exist_ok=True)
     (bundle_dir / "bundle.yaml").write_text(

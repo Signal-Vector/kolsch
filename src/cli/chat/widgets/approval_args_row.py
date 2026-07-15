@@ -205,7 +205,11 @@ class ApprovalArgsRow(Widget):
         long unbroken segments overflowing again. Char-wrap fits
         every line into (width - indent).
         """
-        width = self._last_width if self._last_width > 0 else len(self._target) + len(indent)
+        width = (
+            self._last_width
+            if self._last_width > 0
+            else len(self._target) + len(indent)
+        )
         inner = max(1, width - len(indent))
         if not self._target:
             return indent

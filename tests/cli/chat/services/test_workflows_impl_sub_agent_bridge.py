@@ -23,10 +23,10 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator
+from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -44,10 +44,6 @@ from schemas.wire_kinds import (
     WIRE_WORKFLOW_PROGRESS,
 )
 from store import SessionStore, SqliteBackend
-from tests.cli.chat.services.mocks import (
-    MockExecutorSpec,
-    install_mock_executor_factory,
-)
 from workflows.events import (
     WorkflowEvent,
     WorkflowNodeStartedEvent,
@@ -56,7 +52,6 @@ from workflows.events import (
 )
 from workflows.ids import InvocationId, TraceId, WorkflowRunId
 from workflows.run_store import WorkflowRunStore
-
 
 # ---------------------------------------------------------------------------
 # Fixtures + helpers.
@@ -76,7 +71,8 @@ async def store(tmp_path: Path) -> AsyncIterator[SessionStore]:
 
 
 async def _mk(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> tuple[WorkflowsImpl, CardsImpl]:
     session = await store.create_session("ag_test", name="w")
     threads = await store.list_threads(session.session_id)
@@ -118,7 +114,9 @@ def _make_event(
 
 
 async def _collect(
-    store: SessionStore, thread_id: str, kind: str,
+    store: SessionStore,
+    thread_id: str,
+    kind: str,
 ) -> list[dict[str, Any]]:
     out: list[dict[str, Any]] = []
     async for ev in store.read_events(thread_id):
@@ -155,7 +153,6 @@ def _install_sub_agent_mock(
     scripted `(node_name, invocation_id, event)` triples to the
     executor's `sub_agent_event_observer` before RUN_COMPLETED.
     """
-    from tests.cli.chat.services.mocks.workflow_executor import MockExecutor
     from workflows.run import RunDirectory
 
     class _MockWithSubAgent:
@@ -188,7 +185,7 @@ def _install_sub_agent_mock(
                     and self._sub_agent_observer is not None
                     and sub_agent_events
                 ):
-                    for (nn, inv, evt) in sub_agent_events:
+                    for nn, inv, evt in sub_agent_events:
                         self._sub_agent_observer(nn, inv, evt)
                         if self._per_event_delay > 0:
                             await asyncio.sleep(self._per_event_delay)
@@ -238,7 +235,8 @@ def _install_sub_agent_mock(
 
 @pytest.mark.asyncio
 async def test_bridge_emits_sub_agent_events_with_envelope(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     """Sub-agent events land on the JSONL as UI events with the
     spec-020 envelope, one per fired forwarder event."""
@@ -250,8 +248,10 @@ async def test_bridge_emits_sub_agent_events_with_envelope(
         events = [
             WorkflowRunStartedEvent(workflow_run_id=rid_seed, trace_id=tr),
             WorkflowNodeStartedEvent(
-                workflow_run_id=rid_seed, trace_id=tr,
-                invocation_id=inv, node_name="classify",
+                workflow_run_id=rid_seed,
+                trace_id=tr,
+                invocation_id=inv,
+                node_name="classify",
             ),
             WorkflowRunCompletedEvent(workflow_run_id=rid_seed, trace_id=tr),
         ]
@@ -290,11 +290,11 @@ async def test_bridge_emits_sub_agent_events_with_envelope(
         await asyncio.sleep(0.15)
 
         emitted = await _collect(
-            store, cards._thread_id, WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT,
+            store,
+            cards._thread_id,
+            WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT,
         )
-        assert len(emitted) == 2, (
-            f"expected 2 sub-agent UI events, got {len(emitted)}"
-        )
+        assert len(emitted) == 2, f"expected 2 sub-agent UI events, got {len(emitted)}"
         # Envelope shape — every key spec-020 lists.
         for env, (_nn, _inv, src_event) in zip(emitted, sub_events, strict=True):
             assert env["run_id"] == str(rid)
@@ -316,7 +316,8 @@ async def test_bridge_emits_sub_agent_events_with_envelope(
 
 @pytest.mark.asyncio
 async def test_bridge_drops_model_request_events(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     """spec-020 §Open questions — `model.request` is redundant with
     the follow-up `model.response`; the bridge drops it."""
@@ -328,21 +329,25 @@ async def test_bridge_drops_model_request_events(
         events = [
             WorkflowRunStartedEvent(workflow_run_id=rid_seed, trace_id=tr),
             WorkflowNodeStartedEvent(
-                workflow_run_id=rid_seed, trace_id=tr,
-                invocation_id=inv, node_name="classify",
+                workflow_run_id=rid_seed,
+                trace_id=tr,
+                invocation_id=inv,
+                node_name="classify",
             ),
             WorkflowRunCompletedEvent(workflow_run_id=rid_seed, trace_id=tr),
         ]
         sub_events = [
             (
-                "classify", str(inv),
+                "classify",
+                str(inv),
                 _make_event(
                     event_type=EventType.MODEL_REQUEST,
                     trace_id=str(tr),
                 ),
             ),
             (
-                "classify", str(inv),
+                "classify",
+                str(inv),
                 _make_event(
                     event_type=EventType.MODEL_RESPONSE,
                     trace_id=str(tr),
@@ -362,7 +367,9 @@ async def test_bridge_drops_model_request_events(
         await asyncio.sleep(0.15)
 
         emitted = await _collect(
-            store, cards._thread_id, WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT,
+            store,
+            cards._thread_id,
+            WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT,
         )
         assert len(emitted) == 1, emitted
         assert emitted[0]["event_type"] == "model.response"
@@ -378,7 +385,8 @@ async def test_bridge_drops_model_request_events(
 
 @pytest.mark.asyncio
 async def test_bridge_terminates_after_workflow_terminal(
-    tmp_path: Path, store: SessionStore,
+    tmp_path: Path,
+    store: SessionStore,
 ) -> None:
     """No sub-agent UI events land AFTER the workflow's terminal
     `RUN_COMPLETED` progress event — the observer stops naturally
@@ -391,14 +399,17 @@ async def test_bridge_terminates_after_workflow_terminal(
         events = [
             WorkflowRunStartedEvent(workflow_run_id=rid_seed, trace_id=tr),
             WorkflowNodeStartedEvent(
-                workflow_run_id=rid_seed, trace_id=tr,
-                invocation_id=inv, node_name="classify",
+                workflow_run_id=rid_seed,
+                trace_id=tr,
+                invocation_id=inv,
+                node_name="classify",
             ),
             WorkflowRunCompletedEvent(workflow_run_id=rid_seed, trace_id=tr),
         ]
         sub_events = [
             (
-                "classify", str(inv),
+                "classify",
+                str(inv),
                 _make_event(
                     event_type=EventType.AGENT_MESSAGE,
                     trace_id=str(tr),
@@ -437,14 +448,16 @@ async def test_bridge_terminates_after_workflow_terminal(
 
         # Terminal progress event is present.
         terminal_indices = [
-            i for i, (wk, inner) in enumerate(wire_kinds)
+            i
+            for i, (wk, inner) in enumerate(wire_kinds)
             if wk == WIRE_WORKFLOW_PROGRESS and inner == "workflow.run.completed"
         ]
         assert terminal_indices, "no RUN_COMPLETED progress event landed"
         last_terminal = terminal_indices[-1]
         # Every sub-agent UI event appears at or before `last_terminal`.
         sub_agent_indices = [
-            i for i, (wk, _inner) in enumerate(wire_kinds)
+            i
+            for i, (wk, _inner) in enumerate(wire_kinds)
             if wk == WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT
         ]
         assert sub_agent_indices, "sub-agent events were dropped entirely"

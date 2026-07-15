@@ -71,7 +71,6 @@ from workflows.events import (
 )
 from workflows.ids import InvocationId, TraceId, WorkflowRunId
 
-
 # ---------------------------------------------------------------------------
 # Fixture — workspace scaffolded via ``kolsch setup``.
 # ---------------------------------------------------------------------------
@@ -295,7 +294,8 @@ async def test_run_workflow_blocks_and_model_narrates_outputs(
 
     llm = _ScriptedLLM(virtual_tool_name=virtual_name)
     runtime = await bootstrap_runtime(
-        root=initialized_workspace, llm=llm.__call__,
+        root=initialized_workspace,
+        llm=llm.__call__,
     )
 
     config = await runtime.build_resolved_config("kolsch/agents/helper")
@@ -331,12 +331,14 @@ async def test_run_workflow_blocks_and_model_narrates_outputs(
         assert workflows_impl is not None
         install_mock_executor_factory(
             workflows_impl,
-            {workflow_ref: MockExecutorSpec(
-                events=_mk_workflow_events(),
-                # Small per-event delay — enough to visit the poll
-                # loop's ``asyncio.sleep(0.5)`` at least once.
-                per_event_delay=0.05,
-            )},
+            {
+                workflow_ref: MockExecutorSpec(
+                    events=_mk_workflow_events(),
+                    # Small per-event delay — enough to visit the poll
+                    # loop's ``asyncio.sleep(0.5)`` at least once.
+                    per_event_delay=0.05,
+                )
+            },
             runs_root=initialized_workspace / "runs",
         )
 
@@ -354,7 +356,8 @@ async def test_run_workflow_blocks_and_model_narrates_outputs(
             await pilot.pause()
             if card_widget is None:
                 widgets = [
-                    w for w in pilot.app.query(CardWidget)
+                    w
+                    for w in pilot.app.query(CardWidget)
                     if getattr(w, "kind", None) == "workflow"
                 ]
                 if widgets:
@@ -405,13 +408,9 @@ async def test_run_workflow_blocks_and_model_narrates_outputs(
         # ------------------------------------------------------------
         # AC #10.1 — turn 1 tool.result carries non-null ``outputs``.
         # ------------------------------------------------------------
-        virtual_results = [
-            r for r in tool_result
-            if r.get("tool_name") == virtual_name
-        ]
+        virtual_results = [r for r in tool_result if r.get("tool_name") == virtual_name]
         assert virtual_results, (
-            f"expected a tool_result for {virtual_name!r}. "
-            f"tool_result={tool_result!r}"
+            f"expected a tool_result for {virtual_name!r}. tool_result={tool_result!r}"
         )
         first_result = virtual_results[0]
         # The tool return dict lands under the result event's
@@ -423,7 +422,9 @@ async def test_run_workflow_blocks_and_model_narrates_outputs(
             f"tool_result output was not a dict: {output_payload!r}"
         )
         assert output_payload.get("phase") in (
-            "success", "error", "cancelled",
+            "success",
+            "error",
+            "cancelled",
         ), (
             f"expected terminal phase from bug-031 blocking tool. "
             f"Got: {output_payload.get('phase')!r}"
@@ -456,7 +457,8 @@ async def test_run_workflow_blocks_and_model_narrates_outputs(
         # The scripted turn 2 response mentions the output — that
         # response should also land as an AGENT_MESSAGE.
         prose_matches = [
-            m for m in agent_messages
+            m
+            for m in agent_messages
             if _EXPECTED_GREETING_STDOUT in _stringify_message(m)
         ]
         assert prose_matches, (

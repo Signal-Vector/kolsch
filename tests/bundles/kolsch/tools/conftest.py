@@ -23,9 +23,10 @@ registration time.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any, AsyncIterator, Awaitable, Callable
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -40,9 +41,7 @@ from tools.dispatch import _invoke_tool
 # Bundle-tool loading
 # --------------------------------------------------------------------
 
-_BUNDLE_TOOLS_DIR = (
-    Path(__file__).resolve().parents[4] / "bundles" / "kolsch" / "tools"
-)
+_BUNDLE_TOOLS_DIR = Path(__file__).resolve().parents[4] / "bundles" / "kolsch" / "tools"
 """Absolute path to ``bundles/kolsch/tools/`` at the repo root.
 
 Resolved lazily via ``__file__`` so the path is portable across
@@ -94,7 +93,8 @@ def download_with_progress_tool() -> Callable[..., Awaitable[Any]]:
 def confirm_dangerous_action_tool() -> Callable[..., Awaitable[Any]]:
     """Load the ``confirm_dangerous_action`` example tool."""
     return _load_tool(
-        "confirm_dangerous_action.py", "confirm_dangerous_action",
+        "confirm_dangerous_action.py",
+        "confirm_dangerous_action",
     )
 
 
@@ -109,10 +109,12 @@ class _MockAuthz:
     """
 
     def register_prompt_callback(
-        self, callback: Any, *, on_rule_added: Any = None,
+        self,
+        callback: Any,
+        *,
+        on_rule_added: Any = None,
     ) -> None:
         _ = callback, on_rule_added
-        return None
 
     def clear_prompt_callback(self) -> None:
         return None

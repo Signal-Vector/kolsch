@@ -13,7 +13,7 @@ Three passes:
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 from textual.app import App
@@ -39,9 +39,7 @@ async def test_parent_ref_renders_arrow_line(
             f"expected ↳ from line in header text; got {text!r}"
         )
         # Progress bar must still land on a separate line below the hint.
-        assert "\n" in text, (
-            "expected multi-line header when parent_ref set"
-        )
+        assert "\n" in text, "expected multi-line header when parent_ref set"
 
 
 @pytest.mark.asyncio
@@ -84,9 +82,7 @@ async def test_set_parent_ref_after_mount_refreshes_header(
         renderer.set_parent_ref("outer.ref")
         await pilot.pause()
         post = str(renderer._header.render())
-        assert "↳ from outer.ref" in post, (
-            f"expected refreshed hint; got {post!r}"
-        )
+        assert "↳ from outer.ref" in post, f"expected refreshed hint; got {post!r}"
 
 
 def test_progress_header_parent_ref_compute_text() -> None:
@@ -98,9 +94,7 @@ def test_progress_header_parent_ref_compute_text() -> None:
     """
     header = WorkflowProgressHeader(parent_ref="A.ref")
     text = header._compute_text()
-    assert text.startswith("↳ from A.ref\n"), (
-        f"expected hint line first; got {text!r}"
-    )
+    assert text.startswith("↳ from A.ref\n"), f"expected hint line first; got {text!r}"
     # And with no parent_ref: single-line.
     header_none = WorkflowProgressHeader()
     text_none = header_none._compute_text()
@@ -119,7 +113,6 @@ async def test_nested_workflow_progress_fanout_sets_parent_ref() -> None:
     renderer's `_parent_ref` to A's ref via the adapter's
     `_refresh_workflow_parent_ref` helper.
     """
-    from datetime import UTC, datetime
     from uuid import uuid4
 
     from cli.chat.event_adapter import EventAdapter
@@ -142,7 +135,8 @@ async def test_nested_workflow_progress_fanout_sets_parent_ref() -> None:
             self._workflow_registry = {
                 parent_run_id: _StubRecord(ref="A.ref"),
                 child_run_id: _StubRecord(
-                    ref="B.ref", parent_run_id=parent_run_id,
+                    ref="B.ref",
+                    parent_run_id=parent_run_id,
                 ),
             }
 
@@ -167,8 +161,7 @@ async def test_nested_workflow_progress_fanout_sets_parent_ref() -> None:
     adapter._refresh_workflow_parent_ref(renderer, child_run_id)
 
     assert renderer._parent_ref == "A.ref", (
-        f"expected renderer._parent_ref='A.ref'; got "
-        f"{renderer._parent_ref!r}"
+        f"expected renderer._parent_ref='A.ref'; got {renderer._parent_ref!r}"
     )
     # And the header's computed text carries the hint.
     header_text = renderer._header._compute_text()

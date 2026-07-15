@@ -26,8 +26,11 @@ from schemas.identifiers import EventId
 
 class _MockAuthz:
     def register_prompt_callback(
-        self, callback: Any, *, on_rule_added: Any = None,
-    ) -> None:  # noqa: ARG002
+        self,
+        callback: Any,
+        *,
+        on_rule_added: Any = None,
+    ) -> None:
         return None
 
     def clear_prompt_callback(self) -> None:
@@ -35,10 +38,9 @@ class _MockAuthz:
 
 
 class _MockEngine:
-    async def execute_stream(self, config: Any, ctx: Any):  # noqa: ARG002
+    async def execute_stream(self, config: Any, ctx: Any):
         if False:
             yield  # pragma: no cover
-        return
 
 
 @dataclass
@@ -154,7 +156,8 @@ async def test_ui_event_publish_reaches_adapter_handle(
             assert app._ui_event_bus_sub is not None
             await bus.unsubscribe(app._ui_event_bus_sub)
             app._ui_event_bus_sub = await bus.subscribe(
-                UI_EVENT_TOPIC, _spy,
+                UI_EVENT_TOPIC,
+                _spy,
             )
 
             from uuid import uuid4 as _uuid4

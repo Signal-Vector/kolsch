@@ -14,9 +14,9 @@ import pytest
 
 from errors import ConfigInvalid
 from providers.compaction import (
+    _REGISTRY,
     ContextCompactionProvider,
     ReferenceSummaryCompactionProvider,
-    _REGISTRY,
     make_compaction_provider,
     register_compaction_variant,
     validate_reference_summary_config,
@@ -158,9 +158,7 @@ def test_validator_rejects_invalid_trigger_at(trigger_at: object) -> None:
 
 
 def test_validator_rejects_invalid_keep_recent_fraction() -> None:
-    result = validate_reference_summary_config(
-        {"config": {"keep_recent_fraction": 0}}
-    )
+    result = validate_reference_summary_config({"config": {"keep_recent_fraction": 0}})
     assert not result.ok
     assert any(e.path == "/config/keep_recent_fraction" for e in result.errors)
 
@@ -176,9 +174,7 @@ def test_validator_rejects_summarizer_model_missing_provider() -> None:
         {"config": {"summarizer_model": {"model": "claude-haiku-4-5"}}}
     )
     assert not result.ok
-    assert any(
-        e.path == "/config/summarizer_model/provider" for e in result.errors
-    )
+    assert any(e.path == "/config/summarizer_model/provider" for e in result.errors)
 
 
 def test_validator_rejects_non_mapping_config() -> None:

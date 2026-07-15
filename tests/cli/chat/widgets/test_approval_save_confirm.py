@@ -23,7 +23,7 @@ from cli.chat.widgets.approval_save_confirm import ApprovalSaveConfirm
 @pytest.mark.asyncio
 async def test_preview_and_fallback_label_visible(mock_app_factory):
     widget = ApprovalSaveConfirm(
-        preview="authz.allow  bash(\"ls -la\")",
+        preview='authz.allow  bash("ls -la")',
         deny=False,
         fallback_label="allow once",
     )
@@ -40,7 +40,7 @@ async def test_preview_and_fallback_label_visible(mock_app_factory):
 @pytest.mark.asyncio
 async def test_deny_flag_marks_preview_class(mock_app_factory):
     widget = ApprovalSaveConfirm(
-        preview="authz.deny  bash(\"rm -rf /\")",
+        preview='authz.deny  bash("rm -rf /")',
         deny=True,
         fallback_label="deny once",
     )
@@ -61,10 +61,12 @@ async def test_deny_flag_marks_preview_class(mock_app_factory):
     ],
 )
 async def test_posts_chosen_for_each_key(
-    mock_app_factory, key_press: str, expected: str,
+    mock_app_factory,
+    key_press: str,
+    expected: str,
 ) -> None:
     widget = ApprovalSaveConfirm(
-        preview="authz.allow  bash(\"ls\")",
+        preview='authz.allow  bash("ls")',
         deny=False,
         fallback_label="allow once",
     )
@@ -77,7 +79,8 @@ async def test_posts_chosen_for_each_key(
             yield widget
 
         def on_approval_save_confirm_chosen(
-            self, message: ApprovalSaveConfirm.Chosen,
+            self,
+            message: ApprovalSaveConfirm.Chosen,
         ) -> None:
             seen.append(message.key)
 

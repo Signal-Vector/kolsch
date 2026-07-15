@@ -63,5 +63,4 @@ def test_cli_import_chain_uses_load_with_positions() -> None:
     ``kolsch chat`` startup.
     """
     from assets import manifest as _manifest  # noqa: F401
-
     from cli.main import main  # noqa: F401

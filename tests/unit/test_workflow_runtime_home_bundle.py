@@ -92,8 +92,7 @@ def test_workflow_runtime_stamps_home_bundle_on_all_builtin_defns(
     )
     # And, of course, the original sentinel must be untouched by our probe.
     assert defn.home_bundle is None, (
-        "This test must not mutate the shared ToolDefinition sentinel — "
-        "see bug-050."
+        "This test must not mutate the shared ToolDefinition sentinel — see bug-050."
     )
 
 

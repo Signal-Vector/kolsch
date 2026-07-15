@@ -120,9 +120,7 @@ def _fast_registry() -> RunnerRegistry:
     return reg
 
 
-def _single_node_workflow(
-    *, timeout_seconds: int | None = None
-) -> Workflow:
+def _single_node_workflow(*, timeout_seconds: int | None = None) -> Workflow:
     """Build a one-node workflow.
 
     The YAML schema requires ``timeout_seconds`` to be an integer
@@ -136,9 +134,7 @@ def _single_node_workflow(
     node: dict[str, Any] = {"type": "kolsch/nodes/noop"}
     if timeout_seconds is not None:
         node["timeout_seconds"] = timeout_seconds
-    return Workflow.model_validate(
-        {"nodes": {"only": node}, "graph": {"edges": []}}
-    )
+    return Workflow.model_validate({"nodes": {"only": node}, "graph": {"edges": []}})
 
 
 def _make_executor(
@@ -149,9 +145,7 @@ def _make_executor(
     default_node_timeout_seconds: float | None,
 ) -> tuple[IterativeExecutor, WorkflowRunStore, Any]:
     store = WorkflowRunStore(tmp_path)
-    run = store.create(
-        workflow_ref="tests/workflows/node_default_timeout", inputs={}
-    )
+    run = store.create(workflow_ref="tests/workflows/node_default_timeout", inputs={})
     ex = IterativeExecutor(
         workflow=workflow,
         run=run,
@@ -234,9 +228,10 @@ class TestExplicitTimeoutOverridesDefault:
         failed = [e for e in events if e.get("kind") == "workflow.node.failed"]
         assert len(failed) == 1
         assert failed[0]["payload"]["error_class"] == "NodeTimeoutExceeded"
-        assert failed[0]["payload"]["message"].startswith(
-            "Node 'only' exceeded timeout"
-        ) or "1" in failed[0]["payload"]["message"], (
+        assert (
+            failed[0]["payload"]["message"].startswith("Node 'only' exceeded timeout")
+            or "1" in failed[0]["payload"]["message"]
+        ), (
             "expected the failure message to reference the explicit 1s "
             "timeout, not the 60s default"
         )

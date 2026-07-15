@@ -53,7 +53,8 @@ class WorkflowStatusArgs(BaseModel):
     requires=["workflows"],
 )
 async def workflow_status(
-    args: WorkflowStatusArgs, ctx: ToolContext,
+    args: WorkflowStatusArgs,
+    ctx: ToolContext,
 ) -> dict[str, object]:
     """Return the run's phase view + a ``_chat_anchor`` for prose."""
     services = require_services(ctx, ["workflows"])

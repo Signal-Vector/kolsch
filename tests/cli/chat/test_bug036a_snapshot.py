@@ -21,7 +21,6 @@ from __future__ import annotations
 import json
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 import pytest
 from textual.app import App, ComposeResult
@@ -36,17 +35,15 @@ from tests.cli.chat.snapshot_helpers import assert_snapshot_matches
 
 _FIXTURE_PATH = (
     Path(__file__).resolve().parents[2]
-    / "fixtures" / "sessions" / "ses_bug036a_jd_review_excerpt.jsonl"
+    / "fixtures"
+    / "sessions"
+    / "ses_bug036a_jd_review_excerpt.jsonl"
 )
 _APP_SIZE = (200, 100)
 
 
 def _load_fixture() -> list[dict[str, Any]]:
-    return [
-        json.loads(line)
-        for line in _FIXTURE_PATH.read_text().splitlines()
-        if line
-    ]
+    return [json.loads(line) for line in _FIXTURE_PATH.read_text().splitlines() if line]
 
 
 def _event_from_row(row: dict[str, Any]) -> Event:
@@ -89,13 +86,20 @@ class _StubTranscriptApp(App[None]):
         yield VerticalScroll(id="transcript")
 
     async def mount_user_message(
-        self, text: str, timestamp: Any = None,
-        *, event_id: Any = None, content: Any = None,
+        self,
+        text: str,
+        timestamp: Any = None,
+        *,
+        event_id: Any = None,
+        content: Any = None,
     ) -> None:
         _ = text, timestamp, event_id, content
 
     async def mount_assistant_message(
-        self, text: str, *, event_id: Any = None,
+        self,
+        text: str,
+        *,
+        event_id: Any = None,
     ) -> None:
         _ = text, event_id
 
@@ -103,6 +107,7 @@ class _StubTranscriptApp(App[None]):
         class _P:
             async def append(self, text: str) -> None:
                 _ = text
+
         return _P()
 
     async def mount_tool_call(
@@ -118,8 +123,12 @@ class _StubTranscriptApp(App[None]):
         _ = tool_name, args, body, failed, recovery_hint, event_id
 
     async def mount_notice(
-        self, notice_id: str, text: str,
-        *, level: str = "info", event_id: Any = None,
+        self,
+        notice_id: str,
+        text: str,
+        *,
+        level: str = "info",
+        event_id: Any = None,
     ) -> None:
         _ = notice_id, text, level, event_id
 
@@ -170,7 +179,8 @@ async def test_snapshot_dedupe_transcript_all_expanded() -> None:
         await pilot.pause()
 
         assert_snapshot_matches(
-            pilot.app, "bug036a/dedupe_transcript_all_expanded",
+            pilot.app,
+            "bug036a/dedupe_transcript_all_expanded",
         )
 
 
@@ -190,7 +200,8 @@ async def test_snapshot_dedupe_transcript_all_collapsed() -> None:
         # Rows are collapsed by default — no expand needed.
 
         assert_snapshot_matches(
-            pilot.app, "bug036a/dedupe_transcript_all_collapsed",
+            pilot.app,
+            "bug036a/dedupe_transcript_all_collapsed",
         )
 
 
@@ -230,7 +241,8 @@ async def test_snapshot_late_message_race_fallback() -> None:
         # Late assistant message via the sink — dropped by
         # ``_buffer_frozen``.
         await row.mount_assistant_message(
-            "the answer is 42", event_id="ev_late",
+            "the answer is 42",
+            event_id="ev_late",
         )
 
         # Expand so the JSON preview is visible for the snapshot.
@@ -238,5 +250,6 @@ async def test_snapshot_late_message_race_fallback() -> None:
         await pilot.pause()
 
         assert_snapshot_matches(
-            pilot.app, "bug036a/late_race_shows_output_widget",
+            pilot.app,
+            "bug036a/late_race_shows_output_widget",
         )

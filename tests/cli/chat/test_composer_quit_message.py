@@ -23,7 +23,8 @@ from cli.chat.widgets.composer import Composer
 
 
 async def _empty_async_gen(
-    *_args: Any, **_kwargs: Any,
+    *_args: Any,
+    **_kwargs: Any,
 ) -> AsyncGenerator[Any, None]:
     """Async generator that yields nothing.
 
@@ -41,7 +42,10 @@ class _MockStore:
 
 class _MockAuthz:
     def register_prompt_callback(
-        self, callback: Any, *, on_rule_added: Any = None,
+        self,
+        callback: Any,
+        *,
+        on_rule_added: Any = None,
     ) -> None:
         _ = callback, on_rule_added
 
@@ -105,7 +109,9 @@ async def test_quit_requested_message_calls_action_quit_if_idle(
     """
     bundle = _make_bundle(tmp_path)
     app = ChatApp(
-        session=bundle, engine=bundle.runtime.engine, full_history=False,
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=False,
     )
 
     call_count = 0

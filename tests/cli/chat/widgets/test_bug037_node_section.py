@@ -192,7 +192,8 @@ async def test_command_preview_before_bound_inputs_race() -> None:
     app = _Host()
     async with app.run_test() as pilot:
         row = WorkflowNodeRow(
-            node_name="fetch_jd", node_type="kolsch/nodes/bash",
+            node_name="fetch_jd",
+            node_type="kolsch/nodes/bash",
         )
         slot = pilot.app.query_one("#slot", VerticalScroll)
         await slot.mount(row)
@@ -205,9 +206,7 @@ async def test_command_preview_before_bound_inputs_race() -> None:
         assert row._bash_input_section is not None
         first_section = row._bash_input_section
         # Body Static inside the section — no `bound inputs:` block.
-        statics = [
-            s for s in first_section.walk_children() if isinstance(s, Static)
-        ]
+        statics = [s for s in first_section.walk_children() if isinstance(s, Static)]
         combined = "\n".join(str(getattr(s, "content", "")) for s in statics)
         assert "bound inputs:" not in combined
         assert "command:" in combined
@@ -229,7 +228,8 @@ async def test_bash_row_creates_input_output_exit_sections() -> None:
     app = _Host()
     async with app.run_test() as pilot:
         row = WorkflowNodeRow(
-            node_name="fetch_jd", node_type="kolsch/nodes/bash",
+            node_name="fetch_jd",
+            node_type="kolsch/nodes/bash",
         )
         slot = pilot.app.query_one("#slot", VerticalScroll)
         await slot.mount(row)
@@ -260,7 +260,8 @@ async def test_bash_set_output_gate_scope() -> None:
     app = _Host()
     async with app.run_test() as pilot:
         row = WorkflowNodeRow(
-            node_name="fetch_jd", node_type="kolsch/nodes/bash",
+            node_name="fetch_jd",
+            node_type="kolsch/nodes/bash",
         )
         slot = pilot.app.query_one("#slot", VerticalScroll)
         await slot.mount(row)
@@ -345,9 +346,7 @@ async def test_map_iteration_rows_direct_children_of_contents() -> None:
         direct = [c for c in contents.children if isinstance(c, WorkflowNodeRow)]
         assert len(direct) == 3
         # No NodeSection sits between the map row and its iterations.
-        map_sections = [
-            c for c in contents.children if isinstance(c, NodeSection)
-        ]
+        map_sections = [c for c in contents.children if isinstance(c, NodeSection)]
         assert len(map_sections) == 0
 
 
@@ -369,8 +368,11 @@ async def test_tool_state_transition_via_tool_call_id() -> None:
 
         # First call — empty body → running state, `…` suffix.
         await row.mount_tool_call(
-            "browse_url", args_str='{"u":"..."}', body="",
-            event_id="tc_1", failed=False,
+            "browse_url",
+            args_str='{"u":"..."}',
+            body="",
+            event_id="tc_1",
+            failed=False,
         )
         await pilot.pause()
         assert len(list(_contents_of(row).query(NodeSection))) == 1
@@ -379,8 +381,11 @@ async def test_tool_state_transition_via_tool_call_id() -> None:
 
         # Second call — same tc_1 → SAME section transitions.
         await row.mount_tool_call(
-            "browse_url", args_str='{"u":"..."}', body="result body",
-            event_id="tc_1", failed=False,
+            "browse_url",
+            args_str='{"u":"..."}',
+            body="result body",
+            event_id="tc_1",
+            failed=False,
         )
         await pilot.pause()
 
@@ -408,8 +413,11 @@ async def test_tool_call_section_shows_name() -> None:
         await pilot.pause()
 
         await row.mount_tool_call(
-            "browse_url", args_str="", body="body",
-            event_id="tc_a", failed=False,
+            "browse_url",
+            args_str="",
+            body="body",
+            event_id="tc_a",
+            failed=False,
         )
         await pilot.pause()
 

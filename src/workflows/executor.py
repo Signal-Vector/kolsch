@@ -285,9 +285,7 @@ class IterativeExecutor:
         _call_chain: tuple[str, ...] = (),
         event_observer: Callable[[WorkflowEvent], None] | None = None,
         cancel_token: CancelToken | None = None,
-        sub_agent_event_observer: (
-            Callable[[str, str, "Event"], None] | None
-        ) = None,
+        sub_agent_event_observer: (Callable[[str, str, Event], None] | None) = None,
         default_node_timeout_seconds: float | None = None,
     ) -> None:
         # Nested-executor depth cap (shared with `extends:`; same
@@ -491,9 +489,10 @@ class IterativeExecutor:
         if self._event_observer is not None:
             try:
                 self._event_observer(event)
-            except Exception:  # noqa: BLE001 — observer is untrusted
+            except Exception:
                 logger.exception(
-                    "event_observer raised on event %s", event.kind,
+                    "event_observer raised on event %s",
+                    event.kind,
                 )
         return event_id
 
@@ -501,7 +500,7 @@ class IterativeExecutor:
         self,
         node_name: str,
         invocation_id: str,
-        event: "Event",
+        event: Event,
     ) -> None:
         """Fan a session-scoped sub-agent `Event` to the observer.
 
@@ -525,7 +524,7 @@ class IterativeExecutor:
             return
         try:
             self._sub_agent_event_observer(node_name, invocation_id, event)
-        except Exception:  # noqa: BLE001 — observer is untrusted
+        except Exception:
             logger.exception(
                 "sub_agent_event_observer raised on event %s "
                 "(node=%s, invocation_id=%s)",
@@ -1393,8 +1392,7 @@ class IterativeExecutor:
                         parent_event_id=failed_id,
                         payload={
                             "reason": (
-                                f"node {node_name!r} raised "
-                                f"{type(render_exc).__name__}"
+                                f"node {node_name!r} raised {type(render_exc).__name__}"
                             ),
                         },
                     ),
@@ -1819,9 +1817,9 @@ class IterativeExecutor:
                     ready_now.append(node_name)
 
                 # Dispatch every ready node as a task.
-                render_failure: (
-                    tuple[str, InvocationId, Any, BaseException] | None
-                ) = None
+                render_failure: tuple[str, InvocationId, Any, BaseException] | None = (
+                    None
+                )
                 for node_name in ready_now:
                     try:
                         pending = await self._prepare_concurrent_dispatch(
@@ -1854,8 +1852,7 @@ class IterativeExecutor:
                                             node_def_synth
                                         ),
                                         "caller_chain": list(
-                                            getattr(self._run, "caller_chain", ())
-                                            or ()
+                                            getattr(self._run, "caller_chain", ()) or ()
                                         ),
                                     },
                                 ),
@@ -2897,7 +2894,7 @@ class IterativeExecutor:
         # circuits — a wired runner can call it unconditionally.
         _node_name_for_sub_agent = node_name
 
-        def _on_sub_agent_event(event: "Event") -> None:
+        def _on_sub_agent_event(event: Event) -> None:
             if _node_name_for_sub_agent is None:
                 return
             self._emit_sub_agent_event(

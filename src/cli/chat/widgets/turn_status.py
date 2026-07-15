@@ -154,9 +154,7 @@ class TurnStatus(Horizontal):
         try:
             # qol-077: the formatter returns the number ONLY; the
             # parens are widget-specific chrome and stay here.
-            self.query_one("#elapsed", Static).update(
-                f"({format_duration(seconds)})"
-            )
+            self.query_one("#elapsed", Static).update(f"({format_duration(seconds)})")
         except Exception:
             pass
 

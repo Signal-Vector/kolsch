@@ -37,7 +37,6 @@ from providers.authz import RuleBasedAuthorizationProvider
 from schemas import AgentId
 from tools.subsystem import ToolsSubsystem
 
-
 # ---------------------------------------------------------------------------
 # Fixtures.
 # ---------------------------------------------------------------------------
@@ -108,7 +107,10 @@ def _subsystem(tmp_path: Path) -> ToolsSubsystem:
         catalog=None,
     )
     return ToolsSubsystem(
-        secrets=secrets, sandbox=sandbox, authz=authz, root=tmp_path,
+        secrets=secrets,
+        sandbox=sandbox,
+        authz=authz,
+        root=tmp_path,
     )
 
 
@@ -175,8 +177,7 @@ async def test_no_virtuals_when_workflows_impl_missing(
     names = {info.name for info in infos}
 
     assert "run_workflow" in names
-    assert not any(n.startswith("run_workflow_") and n != "run_workflow"
-                   for n in names)
+    assert not any(n.startswith("run_workflow_") and n != "run_workflow" for n in names)
 
 
 @pytest.mark.asyncio
@@ -268,7 +269,8 @@ async def test_generic_run_workflow_still_registered_alongside_virtuals(
     listed = _subsystem.list_registered_tools(agent_id)
     generic_defn = next(i for i in listed if i.name == "run_workflow")
     virtual_defn = next(
-        i for i in listed
+        i
+        for i in listed
         if i.name == "run_workflow_andre_workflows_job_description_review"
     )
     # Different args schemas — the generic has opaque `inputs: dict`,

@@ -24,12 +24,12 @@ from getpass import getpass
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TextIO
 
-from kolsch._yamlio import dump, load
 from errors import (
     LlmConnectorUnknown,
     LlmDiscoveryFailed,
     LlmValidationFailed,
 )
+from kolsch._yamlio import dump, load
 from llm import (
     Credentials,
     ProviderConfig,

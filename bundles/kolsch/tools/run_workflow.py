@@ -76,7 +76,6 @@ from tools.decorator import ToolContext, tool
 from tools.services import require_services
 from workflows.inputs_scan import extract_required_inputs
 
-
 _POLL_INTERVAL_SECONDS = 0.5
 """bug-031: how often the blocking tool re-reads ``status()``.
 
@@ -119,7 +118,7 @@ class RunWorkflowArgs(BaseModel):
         description=(
             "bug-031: upper bound on how long the tool blocks waiting "
             "for terminal. Default 300s. On timeout the tool returns "
-            "``phase=\"running\"`` with a note telling the model to "
+            '``phase="running"`` with a note telling the model to '
             "check ``workflow_status`` later."
         ),
     )
@@ -141,7 +140,7 @@ class RunWorkflowArgs(BaseModel):
         "`{run_id, card_id, phase, outputs, error_message, "
         "_chat_anchor}` — narrate the `outputs` to the user in prose "
         "after the tool returns. On timeout, returns "
-        "`{run_id, card_id, phase: \"running\", _chat_anchor, note}` — "
+        '`{run_id, card_id, phase: "running", _chat_anchor, note}` — '
         "tell the user the workflow is still running and offer to "
         "check `workflow_status(run_id=...)` later.\n\n"
         "The workflow card renders progress INLINE in the transcript "
@@ -164,14 +163,15 @@ class RunWorkflowArgs(BaseModel):
         "with the values sourced from the user's request. If unsure, "
         "call `workflow_inspect(ref=...)` first — it returns the "
         "required/optional input names and an example call.\n\n"
-        "Example: run_workflow(ref=\"andre/workflows/job_description_review\", "
-        "inputs={\"url\": \"https://example.com/job\"})."
+        'Example: run_workflow(ref="andre/workflows/job_description_review", '
+        'inputs={"url": "https://example.com/job"}).'
     ),
     args_schema=RunWorkflowArgs,
     requires=["cards", "workflows"],
 )
 async def run_workflow(
-    args: RunWorkflowArgs, ctx: ToolContext,
+    args: RunWorkflowArgs,
+    ctx: ToolContext,
 ) -> dict[str, object]:
     """Open a workflow-kind card + queue the run; block until terminal.
 
@@ -254,10 +254,13 @@ async def run_workflow(
                 )
 
     card = await services.cards.open(
-        f"Workflow · {args.ref}", kind="workflow",
+        f"Workflow · {args.ref}",
+        kind="workflow",
     )
     run_id = await services.workflows.start(
-        args.ref, dict(args.inputs), card=card,
+        args.ref,
+        dict(args.inputs),
+        card=card,
     )
 
     anchor: dict[str, object] = {
@@ -293,7 +296,9 @@ async def run_workflow(
         phase = getattr(status_view, "phase", None)
         if isinstance(phase, str) and phase in _TERMINAL_PHASES:
             outputs: dict[str, Any] | None = getattr(
-                status_view, "outputs", None,
+                status_view,
+                "outputs",
+                None,
             )
             error_message = getattr(status_view, "error_message", None)
             return {

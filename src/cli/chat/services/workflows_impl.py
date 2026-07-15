@@ -50,9 +50,10 @@ import contextvars
 import json
 import logging
 import uuid
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Any
 
 from schemas.entities import Actor
 from schemas.events import Event, EventType
@@ -82,7 +83,7 @@ from workflows.run import RunDirectory, WorkflowRunStatus
 if TYPE_CHECKING:
     from bus.event_bus import EventBus
     from cli.chat.services.workflow_layout import WorkflowLayoutManager
-    from engine.context import CancelToken as _CancelToken  # noqa: F401
+    from engine.context import CancelToken as _CancelToken
     from schemas.identifiers import SessionId, ThreadId
     from store.session_store import SessionStore
     from tools.services.cards import Card
@@ -146,10 +147,11 @@ Everything else (`tool.called`, `tool.result`, `agent.message`,
 # ---------------------------------------------------------------------------
 
 
-_current_workflow_run_id: contextvars.ContextVar[
-    "WorkflowRunId | None"
-] = contextvars.ContextVar(
-    "_current_workflow_run_id", default=None,
+_current_workflow_run_id: contextvars.ContextVar[WorkflowRunId | None] = (
+    contextvars.ContextVar(
+        "_current_workflow_run_id",
+        default=None,
+    )
 )
 """spec-017 nested detection.
 
@@ -229,7 +231,7 @@ class WorkflowRunSpec:
     run_id: WorkflowRunId
     ref: str
     inputs: dict[str, Any]
-    card: "Card | None"
+    card: Card | None
 
 
 @dataclass
@@ -250,7 +252,7 @@ class WorkflowRunRecord:
     run_id: WorkflowRunId
     ref: str
     phase: WorkflowRunPhase
-    card: "Card | None"
+    card: Card | None
     created_at: datetime
     started_at: datetime | None = None
     run_dir: RunDirectory | None = None
@@ -330,12 +332,12 @@ class WorkflowsImpl(AbstractWorkflows):
         runtime: Any,
         cards: Any,
         prompts: Any,
-        session_store: "SessionStore",
-        session_id: "SessionId",
-        thread_id: "ThreadId",
-        run_store: "WorkflowRunStore",
+        session_store: SessionStore,
+        session_id: SessionId,
+        thread_id: ThreadId,
+        run_store: WorkflowRunStore,
         executor_factory: ExecutorFactory | None = None,
-        bus: "EventBus | None" = None,
+        bus: EventBus | None = None,
         default_timeout_seconds: int | None = None,
     ) -> None:
         self._runtime = runtime
@@ -363,7 +365,7 @@ class WorkflowsImpl(AbstractWorkflows):
         # events in the SAME session. `None` in headless tests /
         # adapter-less fixtures — publish is a silent no-op, matching
         # the pre-bug-020 stub behaviour.
-        self._bus: "EventBus | None" = bus
+        self._bus: EventBus | None = bus
         # Test hook: default factory builds a real `IterativeExecutor`
         # via `_workflow_runtime.build_workflow_executor`. Test bundles
         # pass a mock that returns a stub executor + minted RunDirectory
@@ -379,9 +381,7 @@ class WorkflowsImpl(AbstractWorkflows):
         self._workflow_queue: asyncio.Queue[WorkflowRunSpec] = asyncio.Queue()
         self._workflow_registry: dict[WorkflowRunId, WorkflowRunRecord] = {}
         self._workflow_cancels: dict[WorkflowRunId, Any] = {}
-        self._workflow_bridges: dict[
-            WorkflowRunId, asyncio.Queue[Any]
-        ] = {}
+        self._workflow_bridges: dict[WorkflowRunId, asyncio.Queue[Any]] = {}
         self._per_run_drain_tasks: dict[WorkflowRunId, asyncio.Task[None]] = {}
         # spec-017 will populate this; the field exists here so the
         # cascade wiring lands cleanly.
@@ -402,14 +402,15 @@ class WorkflowsImpl(AbstractWorkflows):
         # manager needs a live transcript + card-widget lookup). Left
         # None in headless tests / adapter-less paths — the notify hook
         # is a silent no-op in that case.
-        self._layout_manager: "WorkflowLayoutManager | None" = None
+        self._layout_manager: WorkflowLayoutManager | None = None
 
     # ------------------------------------------------------------------
     # spec-016: WorkflowLayoutManager wiring
     # ------------------------------------------------------------------
 
     def register_layout_manager(
-        self, layout_manager: "WorkflowLayoutManager",
+        self,
+        layout_manager: WorkflowLayoutManager,
     ) -> None:
         """Wire a live layout manager after construction.
 
@@ -433,9 +434,10 @@ class WorkflowsImpl(AbstractWorkflows):
             return
         try:
             self._layout_manager.notify_card_state_changed(run_id)
-        except Exception:  # noqa: BLE001 — layout hook is best-effort
+        except Exception:
             _LOGGER.exception(
-                "WorkflowsImpl: layout notify failed for %s", run_id,
+                "WorkflowsImpl: layout notify failed for %s",
+                run_id,
             )
 
     # ------------------------------------------------------------------
@@ -447,7 +449,7 @@ class WorkflowsImpl(AbstractWorkflows):
         ref: str,
         inputs: dict[str, Any],
         *,
-        card: "Card | None" = None,
+        card: Card | None = None,
     ) -> WorkflowRunId:
         """Queue a run; return its id immediately.
 
@@ -766,7 +768,8 @@ class WorkflowsImpl(AbstractWorkflows):
                     aborted_event.model_dump(mode="json"),
                 )
                 self._run_store.update_status(
-                    meta.run_id, WorkflowRunStatus.ABORTED,
+                    meta.run_id,
+                    WorkflowRunStatus.ABORTED,
                 )
             except (OSError, FileNotFoundError):
                 # One bad run must not derail the sweep; log + continue.
@@ -808,7 +811,7 @@ class WorkflowsImpl(AbstractWorkflows):
         )
         try:
             notice(text, kind="warning")
-        except Exception:  # noqa: BLE001 — notice is best-effort
+        except Exception:
             _LOGGER.exception(
                 "WorkflowsImpl.fire_orphan_notice: notice fire failed",
             )
@@ -829,7 +832,7 @@ class WorkflowsImpl(AbstractWorkflows):
                 await self._run_one_workflow(spec)
             except asyncio.CancelledError:
                 raise
-            except Exception:  # noqa: BLE001 — drain must not die
+            except Exception:
                 _LOGGER.exception(
                     "WorkflowsImpl: run %s raised in drain",
                     spec.run_id,
@@ -908,7 +911,9 @@ class WorkflowsImpl(AbstractWorkflows):
         # drain shuts down on the `_STOP_SENTINEL` posted by
         # `_finalize_terminal`).
         def _sub_agent_observer(
-            node_name: str, invocation_id: str, event: Event,
+            node_name: str,
+            invocation_id: str,
+            event: Event,
         ) -> None:
             try:
                 bridge_queue.put_nowait(
@@ -975,7 +980,7 @@ class WorkflowsImpl(AbstractWorkflows):
             # requires an `inline=True` kwarg — it can't distinguish
             # an executor call site. `getattr` sidesteps the walker
             # without changing behaviour.
-            _executor_run = getattr(executor, "run")
+            _executor_run = executor.run
             try:
                 await _executor_run()
             except asyncio.CancelledError:
@@ -985,9 +990,10 @@ class WorkflowsImpl(AbstractWorkflows):
                     if spec.card is not None and not spec.card.is_closed:
                         await spec.card.close(final_status="cancelled")
                 raise
-            except Exception as _run_exc:  # noqa: BLE001 — bubble as run failure
+            except Exception as _run_exc:
                 _LOGGER.exception(
-                    "WorkflowsImpl: executor run failed for %s", run_id,
+                    "WorkflowsImpl: executor run failed for %s",
+                    run_id,
                 )
                 # bug-025: capture the run-time raise as a fallback
                 # diagnostic. The bridge drain converts a proper
@@ -1124,7 +1130,7 @@ class WorkflowsImpl(AbstractWorkflows):
 
     async def _emit_sub_agent_ui_event(
         self,
-        spec: "WorkflowRunSpec",
+        spec: WorkflowRunSpec,
         item: _SubAgentBridgeItem,
     ) -> None:
         """Translate a `_SubAgentBridgeItem` into a UI event.
@@ -1293,9 +1299,7 @@ class WorkflowsImpl(AbstractWorkflows):
                         await spec.card.close(
                             final_status=final,
                             error_message=(
-                                record.error_message
-                                if record is not None
-                                else None
+                                record.error_message if record is not None else None
                             ),
                         )
                 # spec-016: bridge-drain terminal — notify layout so
@@ -1340,7 +1344,9 @@ class WorkflowsImpl(AbstractWorkflows):
             if isinstance(msg, str) and msg:
                 record.error_message = msg[:400]
             node_name = payload.get("node_name") or getattr(
-                event, "node_name", None,
+                event,
+                "node_name",
+                None,
             )
             if isinstance(node_name, str) and node_name:
                 record.failed_node = node_name
@@ -1450,10 +1456,9 @@ class WorkflowsImpl(AbstractWorkflows):
         # over the meta's status.
         # bug-031: tuple is now (status, diag, outputs) so late polls
         # past ``_REGISTRY_EVICTION_SECONDS`` still see the outputs.
-        terminal_status, terminal_diag, terminal_outputs = (
-            _scan_tail_for_terminal(
-                run_dir.events_path, tail_bytes=tail_bytes,
-            )
+        terminal_status, terminal_diag, terminal_outputs = _scan_tail_for_terminal(
+            run_dir.events_path,
+            tail_bytes=tail_bytes,
         )
         effective_status = terminal_status or base_status
         phase = executor_status_to_phase(effective_status)
@@ -1663,6 +1668,7 @@ class WorkflowsImpl(AbstractWorkflows):
             return None
         try:
             from pathlib import Path  # noqa: PLC0415
+
             return Path(entry.path).read_text(encoding="utf-8")
         except OSError:
             return None
@@ -1696,11 +1702,9 @@ class WorkflowsImpl(AbstractWorkflows):
         ref: str,
         inputs: dict[str, Any],
         event_observer: Callable[[WorkflowEvent], None],
-        cancel_token: "_CancelToken",
-        sub_agent_event_observer: (
-            Callable[[str, str, Event], None] | None
-        ) = None,
-    ) -> "tuple[IterativeExecutor, RunDirectory]":
+        cancel_token: _CancelToken,
+        sub_agent_event_observer: (Callable[[str, str, Event], None] | None) = None,
+    ) -> tuple[IterativeExecutor, RunDirectory]:
         """Build a real `IterativeExecutor` via the shared helper.
 
         Wires the runtime's catalog / authz / secrets / sandbox
@@ -1736,14 +1740,10 @@ class WorkflowsImpl(AbstractWorkflows):
         entry = catalog.lookup(ref, expected_type="workflow")
         if entry is None:
             available = sorted(
-                a.ref
-                for a in catalog.assets.values()
-                if a.asset_type == "workflow"
+                a.ref for a in catalog.assets.values() if a.asset_type == "workflow"
             )
             available_hint = (
-                ", ".join(repr(r) for r in available[:20])
-                if available
-                else "<none>"
+                ", ".join(repr(r) for r in available[:20]) if available else "<none>"
             )
             msg = (
                 f"Workflow ref {ref!r} not found in catalog. "
@@ -1751,10 +1751,7 @@ class WorkflowsImpl(AbstractWorkflows):
             )
             raise WrappedError(
                 message=msg,
-                where=(
-                    "cli.chat.services.workflows_impl."
-                    "_default_executor_factory"
-                ),
+                where=("cli.chat.services.workflows_impl._default_executor_factory"),
                 detail={
                     "ref": ref,
                     "available_refs": available,
@@ -1800,9 +1797,9 @@ class WorkflowsImpl(AbstractWorkflows):
 
 _TERMINAL_KIND_TO_STATUS: dict[WorkflowEventKind, WorkflowRunStatus] = {
     WorkflowEventKind.RUN_COMPLETED: WorkflowRunStatus.SUCCEEDED,
-    WorkflowEventKind.RUN_FAILED:    WorkflowRunStatus.FAILED,
+    WorkflowEventKind.RUN_FAILED: WorkflowRunStatus.FAILED,
     WorkflowEventKind.RUN_TIMED_OUT: WorkflowRunStatus.TIMED_OUT,
-    WorkflowEventKind.RUN_ABORTED:   WorkflowRunStatus.ABORTED,
+    WorkflowEventKind.RUN_ABORTED: WorkflowRunStatus.ABORTED,
 }
 
 
@@ -1813,9 +1810,9 @@ _TERMINAL_EXECUTOR_KINDS: frozenset[WorkflowEventKind] = frozenset(
 
 _TERMINAL_JSONL_KIND_TO_STATUS: dict[str, WorkflowRunStatus] = {
     "workflow.run.completed": WorkflowRunStatus.SUCCEEDED,
-    "workflow.run.failed":    WorkflowRunStatus.FAILED,
+    "workflow.run.failed": WorkflowRunStatus.FAILED,
     "workflow.run.timed_out": WorkflowRunStatus.TIMED_OUT,
-    "workflow.run.aborted":   WorkflowRunStatus.ABORTED,
+    "workflow.run.aborted": WorkflowRunStatus.ABORTED,
 }
 
 

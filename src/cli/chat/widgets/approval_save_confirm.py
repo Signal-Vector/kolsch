@@ -94,14 +94,13 @@ class ApprovalSaveConfirm(Vertical):
         deny: bool,
         fallback_label: str,
     ) -> None:
-        """
-        Args:
-            preview: Rendered rule string, e.g. ``authz.allow  bash("ls")``.
-            deny: True when the rule to be saved is a ``deny`` — colours
-                the preview red instead of cyan. Purely visual.
-            fallback_label: Wording for the ``n`` branch — e.g.
-                ``allow once`` or ``deny once`` — inlined in the prompt
-                so the user sees what pressing ``n`` will do.
+        """Args:
+        preview: Rendered rule string, e.g. ``authz.allow  bash("ls")``.
+        deny: True when the rule to be saved is a ``deny`` — colours
+            the preview red instead of cyan. Purely visual.
+        fallback_label: Wording for the ``n`` branch — e.g.
+            ``allow once`` or ``deny once`` — inlined in the prompt
+            so the user sees what pressing ``n`` will do.
         """
         super().__init__()
         self._preview = preview
@@ -110,7 +109,9 @@ class ApprovalSaveConfirm(Vertical):
 
     def compose(self) -> ComposeResult:
         yield Static("Rule preview:", classes="preview-label", markup=False)
-        preview_classes = "preview " + ("preview-deny" if self._deny else "preview-allow")
+        preview_classes = "preview " + (
+            "preview-deny" if self._deny else "preview-allow"
+        )
         yield Static(self._preview, classes=preview_classes, markup=False)
         yield Static(
             f"Save this rule?  [y] save  ·  [n] cancel ({self._fallback_label})",

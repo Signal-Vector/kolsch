@@ -39,7 +39,6 @@ from schemas.identifiers import CardId, EventId, SessionId, ThreadId
 from schemas.wire_kinds import WIRE_PROMPT_ANSWERED, WIRE_PROMPT_REQUESTED
 from store import SessionStore, SqliteBackend
 
-
 _TEST_SESSION_ID = SessionId(f"ses_{uuid4()}")
 _TEST_THREAD_ID = ThreadId(f"th_{uuid4()}")
 
@@ -100,7 +99,9 @@ def test_register_widget_for_event_populates_dict() -> None:
     """Two registers under the same event id → both widgets in order."""
     adapter = _make_adapter()
     event = _mk_user_message(
-        session_id=_TEST_SESSION_ID, thread_id=_TEST_THREAD_ID, text="hi",
+        session_id=_TEST_SESSION_ID,
+        thread_id=_TEST_THREAD_ID,
+        text="hi",
     )
     w1 = _FakeWidget("first")
     w2 = _FakeWidget("second")
@@ -110,8 +111,7 @@ def test_register_widget_for_event_populates_dict() -> None:
 
     stored = adapter._event_widgets[event.event_id]
     assert stored == [w1, w2], (
-        "expected insertion-ordered list of both widgets under the "
-        "shared event id"
+        "expected insertion-ordered list of both widgets under the shared event id"
     )
 
 
@@ -119,10 +119,14 @@ def test_register_widget_for_event_different_events_independent() -> None:
     """Two events, two widgets each → dict entries stay independent."""
     adapter = _make_adapter()
     e1 = _mk_user_message(
-        session_id=_TEST_SESSION_ID, thread_id=_TEST_THREAD_ID, text="a",
+        session_id=_TEST_SESSION_ID,
+        thread_id=_TEST_THREAD_ID,
+        text="a",
     )
     e2 = _mk_user_message(
-        session_id=_TEST_SESSION_ID, thread_id=_TEST_THREAD_ID, text="b",
+        session_id=_TEST_SESSION_ID,
+        thread_id=_TEST_THREAD_ID,
+        text="b",
     )
     w_a1 = _FakeWidget("a1")
     w_a2 = _FakeWidget("a2")
@@ -224,7 +228,9 @@ def test_register_widget_for_event_ignores_none() -> None:
     """Passing ``None`` (mount-failed / stub path) is a silent no-op."""
     adapter = _make_adapter()
     event = _mk_user_message(
-        session_id=_TEST_SESSION_ID, thread_id=_TEST_THREAD_ID, text="hi",
+        session_id=_TEST_SESSION_ID,
+        thread_id=_TEST_THREAD_ID,
+        text="hi",
     )
 
     adapter._register_widget_for_event(event, None)
@@ -240,7 +246,10 @@ def test_register_widget_for_event_ignores_none() -> None:
 
 class _MockAuthz:
     def register_prompt_callback(
-        self, callback: Any, *, on_rule_added: Any = None,
+        self,
+        callback: Any,
+        *,
+        on_rule_added: Any = None,
     ) -> None:
         _ = callback, on_rule_added
 
@@ -249,7 +258,8 @@ class _MockAuthz:
 
 
 async def _empty_stream(
-    *_args: Any, **_kwargs: Any,
+    *_args: Any,
+    **_kwargs: Any,
 ) -> AsyncGenerator[Any, None]:
     return
     yield  # type: ignore[unreachable]  # pragma: no cover
@@ -263,10 +273,10 @@ class _MockEngine:
     async def maybe_compact_thread_eagerly(
         self,
         *,
-        thread_id: Any,  # noqa: ARG002
-        spec: Any,  # noqa: ARG002
-        tool_schemas: list[dict[str, Any]] | None = None,  # noqa: ARG002
-        trigger: str = "auto_resume",  # noqa: ARG002
+        thread_id: Any,
+        spec: Any,
+        tool_schemas: list[dict[str, Any]] | None = None,
+        trigger: str = "auto_resume",
     ) -> Any:
         return None
 
@@ -344,7 +354,10 @@ def _mk_bundle(env: dict[str, Any], *, is_resume: bool) -> _MockBundle:
 
 
 def _mk_user_message(
-    *, session_id: Any, thread_id: Any, text: str,
+    *,
+    session_id: Any,
+    thread_id: Any,
+    text: str,
 ) -> Event:
     return Event(
         event_id=EventId(f"ev_{uuid4()}"),
@@ -359,7 +372,10 @@ def _mk_user_message(
 
 
 def _mk_agent_message(
-    *, session_id: Any, thread_id: Any, text: str,
+    *,
+    session_id: Any,
+    thread_id: Any,
+    text: str,
 ) -> Event:
     return Event(
         event_id=EventId(f"ev_{uuid4()}"),
@@ -374,7 +390,9 @@ def _mk_agent_message(
 
 
 async def _seed(
-    store: SessionStore, thread_id: Any, events: list[Event],
+    store: SessionStore,
+    thread_id: Any,
+    events: list[Event],
 ) -> None:
     for ev in events:
         await store.append_event(thread_id, ev)
@@ -416,7 +434,9 @@ async def test_event_widgets_populated_by_replay(
 
     bundle = _mk_bundle(store_env, is_resume=True)
     app = ChatApp(
-        session=bundle, engine=bundle.runtime.engine, full_history=True,
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=True,
     )
 
     async with app.run_test() as pilot:
@@ -559,7 +579,10 @@ async def _count_events(store: SessionStore, thread_id: Any) -> int:
 
 
 async def _seed_pairs_then_compaction(
-    store_env: dict[str, Any], *, n_pairs: int = 5, preview: bool = False,
+    store_env: dict[str, Any],
+    *,
+    n_pairs: int = 5,
+    preview: bool = False,
 ) -> tuple[list[Event], Event]:
     """Seed ``n_pairs`` USER/AGENT + one CONTEXT_COMPACTED covering pairs 1..n_pairs-1.
 
@@ -575,12 +598,16 @@ async def _seed_pairs_then_compaction(
     for i in range(n_pairs):
         all_pairs.append(
             _mk_user_message(
-                session_id=session_id, thread_id=thread_id, text=f"user {i}",
+                session_id=session_id,
+                thread_id=thread_id,
+                text=f"user {i}",
             ),
         )
         all_pairs.append(
             _mk_agent_message(
-                session_id=session_id, thread_id=thread_id, text=f"agent {i}",
+                session_id=session_id,
+                thread_id=thread_id,
+                text=f"agent {i}",
             ),
         )
     # Covered slice: first (n_pairs - 1) pairs, i.e. events 0..2*n_pairs-3.
@@ -609,12 +636,15 @@ async def test_compacted_event_unmounts_covered_widgets(
     - The CompactionBlock is mounted.
     """
     covered, compaction = await _seed_pairs_then_compaction(
-        store_env, n_pairs=5,
+        store_env,
+        n_pairs=5,
     )
 
     bundle = _mk_bundle(store_env, is_resume=True)
     app = ChatApp(
-        session=bundle, engine=bundle.runtime.engine, full_history=True,
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=True,
     )
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -639,12 +669,10 @@ async def test_compacted_event_unmounts_covered_widgets(
         # Filter to the terminal `success` block from our synthetic
         # compaction to keep the assertion tight.
         success_blocks = [
-            b for b in pilot.app.query(CompactionBlock)
-            if b.state == "success"
+            b for b in pilot.app.query(CompactionBlock) if b.state == "success"
         ]
         assert len(success_blocks) == 1, (
-            f"expected exactly 1 success CompactionBlock, got "
-            f"{len(success_blocks)}"
+            f"expected exactly 1 success CompactionBlock, got {len(success_blocks)}"
         )
 
 
@@ -654,29 +682,31 @@ async def test_preview_compaction_does_not_unmount(
 ) -> None:
     """spec Test 2: preview compactions leave every covered widget mounted."""
     covered, _compaction = await _seed_pairs_then_compaction(
-        store_env, n_pairs=5, preview=True,
+        store_env,
+        n_pairs=5,
+        preview=True,
     )
 
     bundle = _mk_bundle(store_env, is_resume=True)
     app = ChatApp(
-        session=bundle, engine=bundle.runtime.engine, full_history=True,
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=True,
     )
     async with app.run_test() as pilot:
         await pilot.pause()
 
         tracked = app.event_adapter._event_widgets
         for ev in covered:
-            assert ev.event_id in tracked and tracked[ev.event_id], (
+            assert tracked.get(ev.event_id), (
                 f"preview compaction should NOT unmount covered widget for "
                 f"event {ev.event_id!s} — spec AC #4 regression"
             )
         preview_blocks = [
-            b for b in pilot.app.query(CompactionBlock)
-            if b.state == "preview"
+            b for b in pilot.app.query(CompactionBlock) if b.state == "preview"
         ]
         assert len(preview_blocks) == 1, (
-            f"expected exactly 1 preview CompactionBlock, got "
-            f"{len(preview_blocks)}"
+            f"expected exactly 1 preview CompactionBlock, got {len(preview_blocks)}"
         )
 
 
@@ -693,12 +723,15 @@ async def test_uncompact_remounts_covered_events(
     transitions to ``revoked``.
     """
     covered, compaction = await _seed_pairs_then_compaction(
-        store_env, n_pairs=5,
+        store_env,
+        n_pairs=5,
     )
 
     bundle = _mk_bundle(store_env, is_resume=True)
     app = ChatApp(
-        session=bundle, engine=bundle.runtime.engine, full_history=True,
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=True,
     )
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -717,7 +750,7 @@ async def test_uncompact_remounts_covered_events(
 
         tracked = app.event_adapter._event_widgets
         for ev in covered:
-            assert ev.event_id in tracked and tracked[ev.event_id], (
+            assert tracked.get(ev.event_id), (
                 f"expected covered event {ev.event_id!s} to be re-mounted "
                 f"after CONTEXT_COMPACTION_REVOKED"
             )
@@ -740,18 +773,22 @@ async def test_no_durable_writes_on_unmount_or_remount(
     revoked. All three must equal.
     """
     covered, compaction = await _seed_pairs_then_compaction(
-        store_env, n_pairs=5,
+        store_env,
+        n_pairs=5,
     )
     before = await _count_events(store_env["store"], store_env["thread_id"])
 
     bundle = _mk_bundle(store_env, is_resume=True)
     app = ChatApp(
-        session=bundle, engine=bundle.runtime.engine, full_history=True,
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=True,
     )
     async with app.run_test() as pilot:
         await pilot.pause()
         after_unmount = await _count_events(
-            store_env["store"], store_env["thread_id"],
+            store_env["store"],
+            store_env["thread_id"],
         )
         assert after_unmount == before, (
             f"replay must be UI-only — count changed {before} → "
@@ -766,7 +803,8 @@ async def test_no_durable_writes_on_unmount_or_remount(
         await app.event_adapter.handle(revoke)
         await pilot.pause()
         after_remount = await _count_events(
-            store_env["store"], store_env["thread_id"],
+            store_env["store"],
+            store_env["thread_id"],
         )
         assert after_remount == before, (
             f"/uncompact re-replay must be UI-only — count changed "
@@ -794,33 +832,45 @@ async def test_approval_inside_compacted_span_replays_terminal(
     thread_id = store_env["thread_id"]
     prompt_id = f"prm_{uuid4().hex[:12]}"
     req = _mk_prompt_requested(
-        session_id=session_id, thread_id=thread_id, prompt_id=prompt_id,
+        session_id=session_id,
+        thread_id=thread_id,
+        prompt_id=prompt_id,
     )
     ans = _mk_prompt_answered(
-        session_id=session_id, thread_id=thread_id, prompt_id=prompt_id,
+        session_id=session_id,
+        thread_id=thread_id,
+        prompt_id=prompt_id,
         response="y",
     )
     tail_user = _mk_user_message(
-        session_id=session_id, thread_id=thread_id, text="tail user",
+        session_id=session_id,
+        thread_id=thread_id,
+        text="tail user",
     )
     tail_agent = _mk_agent_message(
-        session_id=session_id, thread_id=thread_id, text="tail agent",
+        session_id=session_id,
+        thread_id=thread_id,
+        text="tail agent",
     )
     compaction = _mk_compacted(
-        session_id=session_id, thread_id=thread_id,
+        session_id=session_id,
+        thread_id=thread_id,
         # `compacted_event_ids` names the approval `.requested` only —
         # its widget is the ApprovalBlock we want to see re-mount as
         # terminal on `/uncompact`.
         compacted_event_ids=[str(req.event_id)],
     )
     await _seed(
-        store_env["store"], thread_id,
+        store_env["store"],
+        thread_id,
         [req, ans, tail_user, tail_agent, compaction],
     )
 
     bundle = _mk_bundle(store_env, is_resume=True)
     app = ChatApp(
-        session=bundle, engine=bundle.runtime.engine, full_history=True,
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=True,
     )
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -839,7 +889,8 @@ async def test_approval_inside_compacted_span_replays_terminal(
         # Fire the revoke and verify the ApprovalBlock re-mounts as
         # terminal (bug-056 semantics on re-replay).
         revoke = _mk_revoked(
-            session_id=session_id, thread_id=thread_id,
+            session_id=session_id,
+            thread_id=thread_id,
             compaction_event_id=str(compaction.event_id),
         )
         await app.event_adapter.handle(revoke)
@@ -871,12 +922,15 @@ async def test_duplicate_compaction_event_is_noop_on_second_fire(
     against the adapter.
     """
     covered, compaction = await _seed_pairs_then_compaction(
-        store_env, n_pairs=5,
+        store_env,
+        n_pairs=5,
     )
 
     bundle = _mk_bundle(store_env, is_resume=True)
     app = ChatApp(
-        session=bundle, engine=bundle.runtime.engine, full_history=True,
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=True,
     )
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -890,8 +944,7 @@ async def test_duplicate_compaction_event_is_noop_on_second_fire(
             [str(e.event_id) for e in covered],
         )
         assert count == 0, (
-            f"second unmount pass should be a no-op — got {count} "
-            f"widgets removed"
+            f"second unmount pass should be a no-op — got {count} widgets removed"
         )
         # Dispatching the same CONTEXT_COMPACTED event a second time
         # also stays safe (idempotent under duplicate replay).

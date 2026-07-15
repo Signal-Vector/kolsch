@@ -95,7 +95,7 @@ def test_kind_property_preserved() -> None:
 
 
 @pytest.mark.asyncio
-async def test_render_under_pilot(mock_app_factory) -> None:  # noqa: ANN001
+async def test_render_under_pilot(mock_app_factory) -> None:
     """Widget mounts and renders the prefixed body under Pilot."""
     widget = NoticeWidget(text="session resumed", kind="info")
     app = mock_app_factory(widget)

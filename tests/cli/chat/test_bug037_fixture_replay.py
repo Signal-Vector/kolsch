@@ -28,16 +28,14 @@ from schemas.identifiers import EventId, SessionId, ThreadId
 
 _FIXTURE_PATH = (
     Path(__file__).resolve().parents[2]
-    / "fixtures" / "sessions" / "ses_bug036a_jd_review_excerpt.jsonl"
+    / "fixtures"
+    / "sessions"
+    / "ses_bug036a_jd_review_excerpt.jsonl"
 )
 
 
 def _load_fixture() -> list[dict[str, Any]]:
-    return [
-        json.loads(line)
-        for line in _FIXTURE_PATH.read_text().splitlines()
-        if line
-    ]
+    return [json.loads(line) for line in _FIXTURE_PATH.read_text().splitlines() if line]
 
 
 def _event_from_row(row: dict[str, Any]) -> Event:
@@ -64,13 +62,20 @@ class _StubApp(App[None]):
         yield VerticalScroll(id="transcript")
 
     async def mount_user_message(
-        self, text: str, timestamp: Any = None,
-        *, event_id: Any = None, content: Any = None,
+        self,
+        text: str,
+        timestamp: Any = None,
+        *,
+        event_id: Any = None,
+        content: Any = None,
     ) -> None:
         _ = text, timestamp, event_id, content
 
     async def mount_assistant_message(
-        self, text: str, *, event_id: Any = None,
+        self,
+        text: str,
+        *,
+        event_id: Any = None,
     ) -> None:
         _ = text, event_id
 
@@ -78,18 +83,28 @@ class _StubApp(App[None]):
         class _P:
             async def append(self, text: str) -> None:
                 _ = text
+
         return _P()
 
     async def mount_tool_call(
-        self, tool_name: str, args: str, body: str,
-        *, failed: bool = False, recovery_hint: str | None = None,
+        self,
+        tool_name: str,
+        args: str,
+        body: str,
+        *,
+        failed: bool = False,
+        recovery_hint: str | None = None,
         event_id: Any = None,
     ) -> None:
         _ = tool_name, args, body, failed, recovery_hint, event_id
 
     async def mount_notice(
-        self, notice_id: str, text: str,
-        *, level: str = "info", event_id: Any = None,
+        self,
+        notice_id: str,
+        text: str,
+        *,
+        level: str = "info",
+        event_id: Any = None,
     ) -> None:
         _ = notice_id, text, level, event_id
 
@@ -133,7 +148,8 @@ async def test_fixture_replay_bash_row_has_three_sections() -> None:
         await pilot.pause()
 
         bash_rows = [
-            r for r in pilot.app.query(WorkflowNodeRow)
+            r
+            for r in pilot.app.query(WorkflowNodeRow)
             if r._node_type == "kolsch/nodes/bash"
         ]
         assert len(bash_rows) == 1
@@ -156,7 +172,8 @@ async def test_fixture_replay_agent_rows_have_input_and_response() -> None:
         await pilot.pause()
 
         agent_rows = [
-            r for r in pilot.app.query(WorkflowNodeRow)
+            r
+            for r in pilot.app.query(WorkflowNodeRow)
             if r._node_type == "kolsch/nodes/agent"
         ]
         assert len(agent_rows) >= 1
@@ -185,8 +202,7 @@ async def test_fixture_replay_deduper_has_three_input_sections() -> None:
         await pilot.pause()
 
         deduper_rows = [
-            r for r in pilot.app.query(WorkflowNodeRow)
-            if r._node_name == "deduper"
+            r for r in pilot.app.query(WorkflowNodeRow) if r._node_name == "deduper"
         ]
         assert len(deduper_rows) == 1
         row = deduper_rows[0]
@@ -194,7 +210,6 @@ async def test_fixture_replay_deduper_has_three_input_sections() -> None:
         await pilot.pause()
         await pilot.pause()
         input_titles = [
-            str(s.title) for s in _sections_of(row)
-            if str(s.title).startswith("input")
+            str(s.title) for s in _sections_of(row) if str(s.title).startswith("input")
         ]
         assert len(input_titles) == 3

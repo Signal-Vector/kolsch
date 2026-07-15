@@ -21,13 +21,13 @@ import sys
 from pathlib import Path
 from typing import Any, TextIO
 
-from kolsch._yamlio import dump, load
 from errors import (
     AuthzProtectedRule,
     AuthzRuleInvalid,
     AuthzRuleNotFound,
     WorkspaceNotInitialized,
 )
+from kolsch._yamlio import dump, load
 from platform_runtime.workspace import workspace_is_initialized
 from providers import (
     DEFAULT_DENY_RULE_ID,

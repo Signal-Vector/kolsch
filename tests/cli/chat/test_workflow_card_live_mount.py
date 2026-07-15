@@ -21,8 +21,9 @@ scaffolding, the fix is not complete (D-010 gate).
 from __future__ import annotations
 
 import asyncio
+from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any, Awaitable, Callable
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -47,10 +48,7 @@ from workflows.events import (
 )
 from workflows.ids import InvocationId, TraceId, WorkflowRunId
 
-
-_BUNDLE_TOOLS_DIR = (
-    Path(__file__).resolve().parents[3] / "bundles" / "kolsch" / "tools"
-)
+_BUNDLE_TOOLS_DIR = Path(__file__).resolve().parents[3] / "bundles" / "kolsch" / "tools"
 
 
 def _load_tool(filename: str, tool_name: str) -> Callable[..., Awaitable[Any]]:
@@ -79,10 +77,12 @@ def run_workflow_tool() -> Callable[..., Awaitable[Any]]:
 
 class _MockAuthz:
     def register_prompt_callback(
-        self, callback: Any, *, on_rule_added: Any = None,
+        self,
+        callback: Any,
+        *,
+        on_rule_added: Any = None,
     ) -> None:
         _ = callback, on_rule_added
-        return None
 
     def clear_prompt_callback(self) -> None:
         return None
@@ -252,7 +252,8 @@ async def test_workflow_card_mounts_live_without_manual_drain(
         for _ in range(40):  # 40 * 50ms = 2s worst case
             await pilot.pause()
             widgets = [
-                w for w in pilot.app.query(CardWidget)
+                w
+                for w in pilot.app.query(CardWidget)
                 if getattr(w, "kind", None) == "workflow"
             ]
             if widgets:

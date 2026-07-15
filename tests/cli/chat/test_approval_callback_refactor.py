@@ -18,8 +18,6 @@ from pathlib import Path
 from typing import Any
 from unittest.mock import AsyncMock
 
-import pytest
-
 from cli.chat.approval import InlineApprovalCallback
 from engine.context import ExecutionContext
 from providers.authz import AuthzEffect

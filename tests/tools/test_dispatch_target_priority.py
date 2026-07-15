@@ -18,7 +18,7 @@ Covers AC #10, #11. Five behaviour-level tests:
 
 from __future__ import annotations
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 from tools.dispatch import (
     _TARGET_ARG_FALLBACK_CHAR_LIMIT,

@@ -21,8 +21,6 @@ from datetime import UTC, datetime
 from typing import Any
 from uuid import uuid4
 
-import pytest
-
 from cli.chat.event_adapter import EventAdapter
 from schemas.entities import Actor
 from schemas.events import Event, EventType
@@ -109,7 +107,11 @@ async def test_snapshot_dispatched_twice_applies_once() -> None:
     )
     snap_ev = _mk_event(
         WIRE_CARD_SNAPSHOT,
-        {"card_id": str(card_id), "content": "full-snapshot", "superseded_event_ids": []},
+        {
+            "card_id": str(card_id),
+            "content": "full-snapshot",
+            "superseded_event_ids": [],
+        },
     )
     await adapter.handle(snap_ev)
     await adapter.handle(snap_ev)

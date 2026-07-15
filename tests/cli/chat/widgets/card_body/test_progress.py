@@ -34,10 +34,12 @@ async def test_set_progress_updates_message_and_bar(mock_app_factory) -> None:
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        widget.apply_event(_MockEvent(
-            "kolsch.card.set_progress",
-            {"current": 5, "total": 10, "message": "halfway"},
-        ))
+        widget.apply_event(
+            _MockEvent(
+                "kolsch.card.set_progress",
+                {"current": 5, "total": 10, "message": "halfway"},
+            )
+        )
         await pilot.pause()
         # The message Static (first child) rendered "halfway".
         message = widget.query_one(Static)
@@ -54,10 +56,12 @@ async def test_indeterminate_when_total_zero(mock_app_factory) -> None:
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        widget.apply_event(_MockEvent(
-            "kolsch.card.set_progress",
-            {"current": 3, "total": 0, "message": "indeterminate"},
-        ))
+        widget.apply_event(
+            _MockEvent(
+                "kolsch.card.set_progress",
+                {"current": 3, "total": 0, "message": "indeterminate"},
+            )
+        )
         await pilot.pause()
         bar = widget.query_one(ProgressBar)
         # Textual's ProgressBar renders a spinner when `total` is None.

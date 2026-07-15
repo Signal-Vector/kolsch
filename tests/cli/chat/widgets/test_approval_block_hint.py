@@ -11,7 +11,7 @@ Two passes:
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 from textual.app import App
@@ -41,7 +41,8 @@ async def test_parent_hint_renders_arrow_static(
         # The first child (`compose` order) must be the parent-hint
         # Static, sitting above the border box's breadcrumb.
         hint_children = [
-            c for c in block.children
+            c
+            for c in block.children
             if isinstance(c, Static) and c.has_class("parent-hint")
         ]
         assert len(hint_children) == 1
@@ -59,7 +60,8 @@ async def test_no_parent_hint_no_static_arrow(
     app = mock_app_factory(block)
     async with app.run_test():
         hint_children = [
-            c for c in block.children
+            c
+            for c in block.children
             if isinstance(c, Static) and c.has_class("parent-hint")
         ]
         assert hint_children == []

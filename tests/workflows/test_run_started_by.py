@@ -14,23 +14,19 @@ from __future__ import annotations
 
 import asyncio
 import json
+from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import AsyncIterator
 from uuid import uuid4
 
 import pytest
 
 from cli.chat.services.workflows_impl import WorkflowsImpl
 from store import SessionStore, SqliteBackend
-from tests.cli.chat.services.mocks import (
-    MockExecutorSpec,
-    install_mock_executor_factory,
-)
 from workflows.events import (
     WorkflowRunCompletedEvent,
     WorkflowRunStartedEvent,
 )
-from workflows.ids import TraceId, WorkflowRunId
+from workflows.ids import WorkflowRunId
 from workflows.run import WorkflowRun
 from workflows.run_store import WorkflowRunStore
 
@@ -101,7 +97,8 @@ def test_legacy_meta_without_field_validates(tmp_path: Path) -> None:
 
 
 async def test_workflows_impl_start_sets_in_process(
-    tmp_path: Path, session_store: SessionStore,
+    tmp_path: Path,
+    session_store: SessionStore,
 ) -> None:
     """AC #3: `WorkflowsImpl.start()` sets `"in-process"` end-to-end.
 
@@ -125,13 +122,10 @@ async def test_workflows_impl_start_sets_in_process(
         thread_id=threads[0].thread_id,
         run_store=run_store,
     )
+
     # Install a mock factory that calls run_store.create with the
     # correct kwarg — mirrors what the default factory does.
     def _factory(ref, inputs, observer, cancel_token):  # type: ignore[no-untyped-def]
-        from workflows.events import (
-            WorkflowRunCompletedEvent,
-            WorkflowRunStartedEvent,
-        )
         from tests.cli.chat.services.mocks.workflow_executor import MockExecutor
 
         # The factory MUST call `run_store.create(started_by="in-process")`

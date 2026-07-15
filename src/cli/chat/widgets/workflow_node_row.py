@@ -47,10 +47,10 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-from datetime import UTC, datetime
-from typing import Any, Awaitable, Callable, ClassVar
-
 import warnings
+from collections.abc import Awaitable, Callable
+from datetime import UTC, datetime
+from typing import Any, ClassVar
 
 from textual.reactive import reactive
 from textual.widget import Widget
@@ -472,7 +472,8 @@ class WorkflowNodeRow(Collapsible):
             return
         if isinstance(output, dict):
             pretty = _format_content_dict(
-                output, max_chars=self._OUTPUT_PREVIEW_MAX_LEN,
+                output,
+                max_chars=self._OUTPUT_PREVIEW_MAX_LEN,
             )
         else:
             try:
@@ -525,6 +526,7 @@ class WorkflowNodeRow(Collapsible):
     def _new_bash_input_section(self, body_text: str) -> Widget:
         """Build + mount the bash ``input`` NodeSection."""
         from cli.chat.widgets.node_section import NodeSection  # noqa: PLC0415
+
         section = NodeSection("input")
         inner = Static(body_text, classes="node-command-preview", markup=False)
         section._contents_list.append(inner)
@@ -535,6 +537,7 @@ class WorkflowNodeRow(Collapsible):
     def _mount_bash_output_sections(self, output: dict[str, Any]) -> None:
         """bug-037: mount ``output`` + ``exit: <code>`` sections."""
         from cli.chat.widgets.node_section import NodeSection  # noqa: PLC0415
+
         stdout = output.get("stdout") if isinstance(output, dict) else None
         stderr = output.get("stderr") if isinstance(output, dict) else None
         exit_code = output.get("exit_code") if isinstance(output, dict) else None
@@ -593,6 +596,7 @@ class WorkflowNodeRow(Collapsible):
             self._failure_sections_mounted = True
             return
         from cli.chat.widgets.node_section import NodeSection  # noqa: PLC0415
+
         # --- Input section ---------------------------------------------------
         # bug-037 already builds a bash `input` section on
         # `set_command_preview`. If it exists, keep it — no need to
@@ -704,6 +708,7 @@ class WorkflowNodeRow(Collapsible):
         async def _mount() -> None:
             from cli.chat.widgets.node_section import NodeSection  # noqa: PLC0415
             from cli.chat.widgets.user_chatbox import UserChatbox  # noqa: PLC0415
+
             if isinstance(content, dict) and content:
                 for key, value in content.items():
                     section = NodeSection(f"input: {key}")
@@ -717,7 +722,10 @@ class WorkflowNodeRow(Collapsible):
         await self._dispatch_mount(_mount, event_id)
 
     async def mount_assistant_message(
-        self, text: str, *, event_id: str | None = None,
+        self,
+        text: str,
+        *,
+        event_id: str | None = None,
     ) -> None:
         """Sink method — mount ``response`` (or ``response (N)``) section.
 
@@ -745,6 +753,7 @@ class WorkflowNodeRow(Collapsible):
         async def _mount() -> None:
             from cli.chat.widgets.assistant_prose import AssistantProse  # noqa: PLC0415
             from cli.chat.widgets.node_section import NodeSection  # noqa: PLC0415
+
             title = "response" if response_idx == 1 else f"response ({response_idx})"
             section = NodeSection(title)
             section._contents_list.append(AssistantProse(text))
@@ -780,8 +789,7 @@ class WorkflowNodeRow(Collapsible):
         # transition when the id is already known.
         tool_call_id = event_id or ""
         is_transition = (
-            tool_call_id in self._tool_sections
-            and event_id in self._mounted_event_ids
+            tool_call_id in self._tool_sections and event_id in self._mounted_event_ids
         )
         if tool_call_id and not is_transition:
             self._count_bump()
@@ -789,6 +797,7 @@ class WorkflowNodeRow(Collapsible):
         async def _mount() -> None:
             from cli.chat.widgets.node_section import NodeSection  # noqa: PLC0415
             from cli.chat.widgets.tool_call_block import ToolCallBlock  # noqa: PLC0415
+
             existing = self._tool_sections.get(tool_call_id) if tool_call_id else None
             if existing is not None:
                 # Transition — update section state + block body.
@@ -799,8 +808,10 @@ class WorkflowNodeRow(Collapsible):
                 if block is not None:
                     self._populate_tool_call_result(block, body, failed=failed)
                 return
-            state = "running" if not body and not failed else (
-                "failed" if failed else "completed"
+            state = (
+                "running"
+                if not body and not failed
+                else ("failed" if failed else "completed")
             )
             section = NodeSection(f"tool: {tool_name or '?'}", state=state)
             block = ToolCallBlock(
@@ -883,6 +894,7 @@ class WorkflowNodeRow(Collapsible):
 
         async def _mount() -> None:
             from cli.chat.widgets.notice import NoticeWidget  # noqa: PLC0415
+
             widget = NoticeWidget(text=text, kind=level)
             self._mount_notice_at_top(widget)
 
@@ -1041,6 +1053,7 @@ class WorkflowNodeRow(Collapsible):
             # a manual await. bug-036d AC #14: never ``get_event_loop``.
             with contextlib.suppress(Exception):
                 import asyncio  # noqa: PLC0415
+
                 loop = asyncio.get_running_loop()
                 loop.create_task(self._drain_pending_mounts())
 

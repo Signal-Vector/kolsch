@@ -19,8 +19,8 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
-from kolsch._yamlio import YAMLError, dump, load, load_with_positions
 from errors import ConfigInvalid
+from kolsch._yamlio import YAMLError, dump, load, load_with_positions
 
 if TYPE_CHECKING:
     from pathlib import Path

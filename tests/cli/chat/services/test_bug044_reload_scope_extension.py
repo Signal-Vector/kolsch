@@ -771,5 +771,3 @@ async def test_reload_handles_missing_agent_yaml_consistently(
     assert result.error is not None
     assert "Old rules still active" in result.error
     assert "butler" in result.error or "agent YAML" in result.error
-
-

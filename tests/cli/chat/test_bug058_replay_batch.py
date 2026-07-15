@@ -39,7 +39,6 @@ from schemas.events import EventType
 from schemas.identifiers import EventId
 from store import SessionStore, SqliteBackend
 
-
 # ---------------------------------------------------------------------------
 # Runtime + engine mocks (mirror bug-056's shape).
 # ---------------------------------------------------------------------------
@@ -47,7 +46,10 @@ from store import SessionStore, SqliteBackend
 
 class _MockAuthz:
     def register_prompt_callback(
-        self, callback: Any, *, on_rule_added: Any = None,
+        self,
+        callback: Any,
+        *,
+        on_rule_added: Any = None,
     ) -> None:
         _ = callback, on_rule_added
 
@@ -56,7 +58,8 @@ class _MockAuthz:
 
 
 async def _empty_stream(
-    *_args: Any, **_kwargs: Any,
+    *_args: Any,
+    **_kwargs: Any,
 ) -> AsyncGenerator[Any, None]:
     return
     yield  # type: ignore[unreachable]  # pragma: no cover
@@ -70,10 +73,10 @@ class _MockEngine:
     async def maybe_compact_thread_eagerly(
         self,
         *,
-        thread_id: Any,  # noqa: ARG002
-        spec: Any,  # noqa: ARG002
-        tool_schemas: list[dict[str, Any]] | None = None,  # noqa: ARG002
-        trigger: str = "auto_resume",  # noqa: ARG002
+        thread_id: Any,
+        spec: Any,
+        tool_schemas: list[dict[str, Any]] | None = None,
+        trigger: str = "auto_resume",
     ) -> Any:
         return None
 
@@ -158,7 +161,10 @@ def _mk_bundle(env: dict[str, Any], *, is_resume: bool) -> _MockBundle:
 
 
 def _mk_user_message(
-    *, session_id: Any, thread_id: Any, text: str,
+    *,
+    session_id: Any,
+    thread_id: Any,
+    text: str,
 ) -> Event:
     return Event(
         event_id=EventId(f"ev_{uuid4()}"),
@@ -173,7 +179,10 @@ def _mk_user_message(
 
 
 def _mk_agent_message(
-    *, session_id: Any, thread_id: Any, text: str,
+    *,
+    session_id: Any,
+    thread_id: Any,
+    text: str,
 ) -> Event:
     return Event(
         event_id=EventId(f"ev_{uuid4()}"),
@@ -188,7 +197,10 @@ def _mk_agent_message(
 
 
 def _synthesize_events(
-    session_id: Any, thread_id: Any, *, turns: int,
+    session_id: Any,
+    thread_id: Any,
+    *,
+    turns: int,
 ) -> list[Event]:
     """Build a synthetic session with ``turns`` USER/AGENT pairs.
 
@@ -217,7 +229,9 @@ def _synthesize_events(
 
 
 async def _seed(
-    store: SessionStore, thread_id: Any, events: list[Event],
+    store: SessionStore,
+    thread_id: Any,
+    events: list[Event],
 ) -> None:
     for ev in events:
         await store.append_event(thread_id, ev)
@@ -247,7 +261,9 @@ async def test_replay_history_completes_under_five_seconds_on_large_session(
 
     bundle = _mk_bundle(store_env, is_resume=True)
     app = ChatApp(
-        session=bundle, engine=bundle.runtime.engine, full_history=True,
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=True,
     )
 
     start = time.perf_counter()
@@ -281,7 +297,9 @@ async def test_transcript_anchored_after_on_mount(
     """
     bundle = _mk_bundle(store_env, is_resume=False)
     app = ChatApp(
-        session=bundle, engine=bundle.runtime.engine, full_history=False,
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=False,
     )
 
     async with app.run_test() as pilot:
@@ -313,7 +331,9 @@ async def test_anchor_releases_when_user_scrolls_up(
 
     bundle = _mk_bundle(store_env, is_resume=True)
     app = ChatApp(
-        session=bundle, engine=bundle.runtime.engine, full_history=True,
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=True,
     )
 
     async with app.run_test() as pilot:
@@ -356,7 +376,9 @@ async def test_batch_replay_mounts_all_widgets(
 
     bundle = _mk_bundle(store_env, is_resume=True)
     app = ChatApp(
-        session=bundle, engine=bundle.runtime.engine, full_history=True,
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=True,
     )
 
     async with app.run_test() as pilot:

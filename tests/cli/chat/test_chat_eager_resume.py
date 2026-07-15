@@ -25,7 +25,6 @@ from cli.chat.app import ChatApp
 from cli.chat.widgets.composer import Composer
 from cli.chat.widgets.notice import NoticeWidget
 
-
 # ---------------------------------------------------------------------------
 # Runtime + engine mocks
 # ---------------------------------------------------------------------------
@@ -34,7 +33,7 @@ from cli.chat.widgets.notice import NoticeWidget
 class _EmptyStore:
     """Store with zero events — the fresh-session case."""
 
-    async def read_path_to_leaf(self, thread_id: Any) -> Any:  # noqa: ARG002
+    async def read_path_to_leaf(self, thread_id: Any) -> Any:
         if False:
             yield  # pragma: no cover
         return
@@ -48,7 +47,7 @@ class _NonEmptyStore:
     against the real engine mock, not against this store's contents.
     """
 
-    async def read_path_to_leaf(self, thread_id: Any):  # noqa: ARG002
+    async def read_path_to_leaf(self, thread_id: Any):
         # Yield one event object that carries enough to satisfy the
         # event-adapter's replay path (it won't touch this in the
         # eager-compaction tests because is_resume=False AND we hook
@@ -60,7 +59,7 @@ class _NonEmptyStore:
 class _MockAuthz:
     def register_prompt_callback(
         self, callback: Any, *, on_rule_added: Any = None
-    ) -> None:  # noqa: ARG002
+    ) -> None:
         return None
 
     def clear_prompt_callback(self) -> None:
@@ -107,18 +106,17 @@ class _NoCompactEngine:
     def __init__(self) -> None:
         self.calls: int = 0
 
-    async def execute_stream(self, config: Any, ctx: Any):  # noqa: ARG002
+    async def execute_stream(self, config: Any, ctx: Any):
         if False:
             yield  # pragma: no cover
-        return
 
     async def maybe_compact_thread_eagerly(
         self,
         *,
-        thread_id: Any,  # noqa: ARG002
-        spec: Any,  # noqa: ARG002
-        tool_schemas: list[dict[str, Any]] | None = None,  # noqa: ARG002
-        trigger: str = "auto_resume",  # noqa: ARG002
+        thread_id: Any,
+        spec: Any,
+        tool_schemas: list[dict[str, Any]] | None = None,
+        trigger: str = "auto_resume",
     ) -> Any:
         self.calls += 1
         return None
@@ -130,18 +128,17 @@ class _RaisingEngine:
     def __init__(self) -> None:
         self.calls: int = 0
 
-    async def execute_stream(self, config: Any, ctx: Any):  # noqa: ARG002
+    async def execute_stream(self, config: Any, ctx: Any):
         if False:
             yield  # pragma: no cover
-        return
 
     async def maybe_compact_thread_eagerly(
         self,
         *,
-        thread_id: Any,  # noqa: ARG002
-        spec: Any,  # noqa: ARG002
-        tool_schemas: list[dict[str, Any]] | None = None,  # noqa: ARG002
-        trigger: str = "auto_resume",  # noqa: ARG002
+        thread_id: Any,
+        spec: Any,
+        tool_schemas: list[dict[str, Any]] | None = None,
+        trigger: str = "auto_resume",
     ) -> Any:
         self.calls += 1
         raise RuntimeError("simulated tier-3 uncompactable")
@@ -162,18 +159,17 @@ class _SlowCompactEngine:
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self.go = loop.create_future()
 
-    async def execute_stream(self, config: Any, ctx: Any):  # noqa: ARG002
+    async def execute_stream(self, config: Any, ctx: Any):
         if False:
             yield  # pragma: no cover
-        return
 
     async def maybe_compact_thread_eagerly(
         self,
         *,
-        thread_id: Any,  # noqa: ARG002
-        spec: Any,  # noqa: ARG002
-        tool_schemas: list[dict[str, Any]] | None = None,  # noqa: ARG002
-        trigger: str = "auto_resume",  # noqa: ARG002
+        thread_id: Any,
+        spec: Any,
+        tool_schemas: list[dict[str, Any]] | None = None,
+        trigger: str = "auto_resume",
     ) -> Any:
         self.calls += 1
         self.started.set()
@@ -214,9 +210,7 @@ async def test_fresh_session_boots_no_notice_composer_enabled(
     tmp_path: Path,
 ) -> None:
     engine = _NoCompactEngine()
-    bundle = _bundle(
-        tmp_path, engine, is_resume=False, store=_EmptyStore()
-    )
+    bundle = _bundle(tmp_path, engine, is_resume=False, store=_EmptyStore())
     app = ChatApp(session=bundle, engine=engine, full_history=False)
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -227,8 +221,7 @@ async def test_fresh_session_boots_no_notice_composer_enabled(
         notices = list(app.query(NoticeWidget))
         for w in notices:
             assert "compacting" not in w.text.lower(), (
-                f"unexpected compaction progress notice on fresh boot: "
-                f"{w.text!r}"
+                f"unexpected compaction progress notice on fresh boot: {w.text!r}"
             )
         await pilot.press("ctrl+d")
         await pilot.pause()
@@ -252,9 +245,7 @@ async def test_resume_session_calls_eager_compaction_then_enables_composer(
     2. After the check finishes the composer is re-enabled.
     """
     engine = _NoCompactEngine()
-    bundle = _bundle(
-        tmp_path, engine, is_resume=True, store=_NonEmptyStore()
-    )
+    bundle = _bundle(tmp_path, engine, is_resume=True, store=_NonEmptyStore())
     app = ChatApp(session=bundle, engine=engine, full_history=False)
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -277,9 +268,7 @@ async def test_tier3_hardfail_mounts_warning_notice_and_reenables_composer(
     tmp_path: Path,
 ) -> None:
     engine = _RaisingEngine()
-    bundle = _bundle(
-        tmp_path, engine, is_resume=True, store=_NonEmptyStore()
-    )
+    bundle = _bundle(tmp_path, engine, is_resume=True, store=_NonEmptyStore())
     app = ChatApp(session=bundle, engine=engine, full_history=False)
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -288,7 +277,8 @@ async def test_tier3_hardfail_mounts_warning_notice_and_reenables_composer(
         # A warning notice was mounted.
         notices = list(app.query(NoticeWidget))
         warning = [
-            w for w in notices
+            w
+            for w in notices
             if w.kind == "warning" and "eager compaction" in w.text.lower()
         ]
         assert warning, (

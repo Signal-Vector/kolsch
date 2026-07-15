@@ -17,10 +17,10 @@ Fail means: bookmark not read/written correctly, or replay loops.
 
 from __future__ import annotations
 
-import asyncio
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -202,6 +202,7 @@ async def test_unknown_bookmark_falls_back_to_full_replay(
         session_meta=meta,
     )
     import logging
+
     caplog.set_level(logging.WARNING)
     await adapter.start()
 
@@ -209,7 +210,8 @@ async def test_unknown_bookmark_falls_back_to_full_replay(
     assert len(adapter.dispatched_ids) == 6
     # Warning logged.
     assert any(
-        "bookmark" in record.getMessage() and "replaying entire log" in record.getMessage()
+        "bookmark" in record.getMessage()
+        and "replaying entire log" in record.getMessage()
         for record in caplog.records
     )
 

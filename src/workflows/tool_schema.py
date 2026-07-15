@@ -134,8 +134,7 @@ def _probe_default_value(yaml_source: str, name: str) -> tuple[type, Any] | None
     # Word boundaries around the name prevent
     # `inputs.limit_max` matching `inputs.limit`.
     pattern = re.compile(
-        r"inputs\." + re.escape(name)
-        + r"\b[^}]*?\|\s*default\s*\(\s*([^)]+?)\s*\)",
+        r"inputs\." + re.escape(name) + r"\b[^}]*?\|\s*default\s*\(\s*([^)]+?)\s*\)",
     )
     match = pattern.search(yaml_source)
     if match is None:
@@ -293,7 +292,7 @@ def _describe_optional(
 
 def build_virtual_tool_definitions(
     *,
-    workflows_impl: Any,  # noqa: ANN401 — duck-typed
+    workflows_impl: Any,
     home_bundle: str | None = None,
     authz_action: str | None = None,
 ) -> list[ToolDefinition]:
@@ -491,7 +490,7 @@ _VIRTUAL_TERMINAL_PHASES = frozenset({"success", "error", "cancelled"})
 def _make_virtual_invoker(
     ref: str,
     args_model: type[BaseModel],
-) -> Any:  # noqa: ANN401 — returns Callable[..., Awaitable[dict]]
+) -> Any:
     """Return an async invoker that starts ``ref`` with typed args.
 
     The returned coroutine mirrors ``bundles/kolsch/tools/run_workflow.py``:
@@ -541,10 +540,13 @@ def _make_virtual_invoker(
         # the args-model builder.
         inputs = args.model_dump()
         card = await services.cards.open(
-            f"Workflow · {ref}", kind="workflow",
+            f"Workflow · {ref}",
+            kind="workflow",
         )
         run_id = await services.workflows.start(
-            ref, dict(inputs), card=card,
+            ref,
+            dict(inputs),
+            card=card,
         )
         anchor: dict[str, object] = {
             "kind": "workflow_card",
@@ -564,8 +566,7 @@ def _make_virtual_invoker(
                 "phase": "running",
                 "_chat_anchor": anchor,
                 "note": (
-                    "Workflow started; this service does not expose "
-                    "status polling."
+                    "Workflow started; this service does not expose status polling."
                 ),
             }
 

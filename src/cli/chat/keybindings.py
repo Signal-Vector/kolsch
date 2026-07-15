@@ -36,7 +36,6 @@ from __future__ import annotations
 
 from textual.binding import Binding
 
-
 CHAT_BINDINGS = [
     Binding("escape", "cancel_exchange", "Cancel turn", show=False),
     Binding("ctrl+g", "cancel_exchange", "Cancel turn", show=False),

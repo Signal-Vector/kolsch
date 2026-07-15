@@ -49,7 +49,8 @@ class _StubAdapter:
 
     def __init__(self) -> None:
         self._live_nodes_by_trace_and_invocation: dict[
-            tuple[str, str], WorkflowNodeRow,
+            tuple[str, str],
+            WorkflowNodeRow,
         ] = {}
         self.dispatched: list[tuple[Any, str | None]] = []
 

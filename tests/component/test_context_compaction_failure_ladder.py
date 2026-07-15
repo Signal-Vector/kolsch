@@ -79,9 +79,7 @@ def _platform_yaml(root: Path) -> None:
                 "authorization": {
                     "variant": "rule_based",
                     "config": {
-                        "rules": [
-                            {"who": ".*", "what": ".*", "effect": "allow"}
-                        ]
+                        "rules": [{"who": ".*", "what": ".*", "effect": "allow"}]
                     },
                 },
                 "storage": {
@@ -214,9 +212,7 @@ class _ScriptedSummariser:
         item = self._script.pop(0)
         if isinstance(item, BaseException):
             raise item
-        return LLMResponse(
-            content=str(item), tool_calls=None, usage={}, raw={}
-        )
+        return LLMResponse(content=str(item), tool_calls=None, usage={}, raw={})
 
 
 def _valid_summary_json(summary_text: str = "prior turn was routine") -> str:
@@ -249,16 +245,13 @@ async def test_tier1_retry_survives_transient_summariser_failure(
     summariser is called MORE than once (retry actually happened).
     """
     summariser = _ScriptedSummariser(
-        [RuntimeError("transient network")]
-        + [_valid_summary_json() for _ in range(20)]
+        [RuntimeError("transient network")] + [_valid_summary_json() for _ in range(20)]
     )
 
     async def factory(_spec: Any) -> Any:
         return summariser
 
-    provider = ReferenceSummaryCompactionProvider(
-        llm_for_model=factory, config={}
-    )
+    provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
     engine, store = await _build(
         tmp_path,
         compaction_provider=provider,
@@ -275,9 +268,7 @@ async def test_tier1_retry_survives_transient_summariser_failure(
     assert summariser.calls >= 2
     events = [e async for e in store.read_path_to_leaf(ctx2.thread_id)]
     # The exchange completed (no THREAD_EXCHANGE_FAILED landed).
-    assert not any(
-        e.type == EventType.THREAD_EXCHANGE_FAILED for e in events
-    )
+    assert not any(e.type == EventType.THREAD_EXCHANGE_FAILED for e in events)
     # A CONTEXT_COMPACTED landed (from either the summariser or the
     # mechanical fallback — both paths respect the retry).
     assert any(e.type == EventType.CONTEXT_COMPACTED for e in events)
@@ -296,16 +287,12 @@ async def test_tier2_mechanical_truncation_when_retries_exhausted(
     # loop bails after tier-1 exhaustion (a raising summariser won't
     # succeed with a narrower tail), so we get exactly ONE
     # CONTEXT_COMPACTION_FAILED + one mechanical CONTEXT_COMPACTED.
-    summariser = _ScriptedSummariser(
-        [RuntimeError("boom-1"), RuntimeError("boom-2")]
-    )
+    summariser = _ScriptedSummariser([RuntimeError("boom-1"), RuntimeError("boom-2")])
 
     async def factory(_spec: Any) -> Any:
         return summariser
 
-    provider = ReferenceSummaryCompactionProvider(
-        llm_for_model=factory, config={}
-    )
+    provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
     engine, store = await _build(
         tmp_path,
         compaction_provider=provider,
@@ -402,9 +389,7 @@ async def test_non_shrinking_summary_emits_skipped_and_retries(
     async def factory(_spec: Any) -> Any:
         return summariser
 
-    provider = ReferenceSummaryCompactionProvider(
-        llm_for_model=factory, config={}
-    )
+    provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
     engine, store = await _build(
         tmp_path,
         compaction_provider=provider,
@@ -419,18 +404,12 @@ async def test_non_shrinking_summary_emits_skipped_and_retries(
     await engine.execute(_config(), ctx2)
 
     events = [e async for e in store.read_path_to_leaf(ctx2.thread_id)]
-    skipped = [
-        e for e in events if e.type == EventType.CONTEXT_COMPACTION_SKIPPED
-    ]
+    skipped = [e for e in events if e.type == EventType.CONTEXT_COMPACTION_SKIPPED]
     assert skipped, "non-shrinking guard should have emitted at least one skip"
-    assert all(
-        e.data.get("reason") == "no_net_savings" for e in skipped
-    )
+    assert all(e.data.get("reason") == "no_net_savings" for e in skipped)
     # After the retries exhaust the engine falls through to tier-2:
     # CONTEXT_COMPACTION_FAILED + a mechanical CONTEXT_COMPACTED.
-    assert any(
-        e.type == EventType.CONTEXT_COMPACTION_FAILED for e in events
-    )
+    assert any(e.type == EventType.CONTEXT_COMPACTION_FAILED for e in events)
 
 
 # ---------------------------------------------------------------------------
@@ -444,9 +423,7 @@ async def test_refs_beyond_max_refs_cluster_into_event_id_range(
 ) -> None:
     # Configure max_refs=3 and have the summariser return 5 refs; the
     # provider caps to 3 with the last entry an event_id_range cluster.
-    many_refs = ",".join(
-        f'{{"event_id": "ev_{i}", "note": "n"}}' for i in range(5)
-    )
+    many_refs = ",".join(f'{{"event_id": "ev_{i}", "note": "n"}}' for i in range(5))
     summary_json = (
         '{"schema_version": 1, "summary_text": "s", '
         f'"refs": [{many_refs}], "kept_files": [], '
@@ -467,10 +444,11 @@ async def test_refs_beyond_max_refs_cluster_into_event_id_range(
 
     events: list[Event] = []
     # Fake 6 events with valid EventIds so the compact path fires.
+    from datetime import UTC, datetime
     from uuid import uuid4
 
-    from schemas import Actor, EventId, EventType as ET, SessionId
-    from datetime import UTC, datetime
+    from schemas import Actor, EventId, SessionId
+    from schemas import EventType as ET
 
     session_id = SessionId(f"ses_{uuid4()}")
     thread_id = ThreadId(f"th_{uuid4()}")
@@ -510,9 +488,7 @@ async def test_refs_beyond_max_refs_cluster_into_event_id_range(
     # Last ref should be a cluster (event_id_range).
     cluster = refs[-1]
     assert isinstance(cluster, dict)
-    assert "event_id_range" in cluster, (
-        f"expected cluster ref at tail; got {cluster!r}"
-    )
+    assert "event_id_range" in cluster, f"expected cluster ref at tail; got {cluster!r}"
     rng = cluster["event_id_range"]
     assert rng["first_event_id"] == "ev_2"
     assert rng["last_event_id"] == "ev_4"

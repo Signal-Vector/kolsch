@@ -35,14 +35,21 @@ class _MockChatApp:
         self._last_assistant: str = ""
 
     async def mount_user_message(
-        self, text: str, timestamp: Any = None,
-        *, event_id: Any = None, content: Any = None,
+        self,
+        text: str,
+        timestamp: Any = None,
+        *,
+        event_id: Any = None,
+        content: Any = None,
     ) -> None:
         _ = timestamp, event_id, content
         self.mounts.append(f"user:{text}")
 
     async def mount_assistant_message(
-        self, text: str, *, event_id: Any = None,
+        self,
+        text: str,
+        *,
+        event_id: Any = None,
     ) -> None:
         _ = event_id
         self.mounts.append(f"assistant:{text}")
@@ -157,13 +164,12 @@ async def test_terminal_node_unregisters_from_live_map() -> None:
     node_complete_payload = dict(node_start_payload)
     node_complete_payload["kind"] = WorkflowEventKind.NODE_COMPLETED.value
     node_complete_payload["event_id"] = "ev_3"
-    renderer.apply_event(_MockEventData("kolsch.workflow.progress", node_complete_payload))
+    renderer.apply_event(
+        _MockEventData("kolsch.workflow.progress", node_complete_payload)
+    )
 
     # Cleanup: composite key evicted from the map.
-    assert (
-        ("tr_run", "inv_1")
-        not in adapter._live_nodes_by_trace_and_invocation
-    )
+    assert ("tr_run", "inv_1") not in adapter._live_nodes_by_trace_and_invocation
 
     # Follow-up event with the same trace falls through.
     event = _mk_agent_event(trace_id="tr_run")

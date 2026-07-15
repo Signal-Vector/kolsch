@@ -10,7 +10,6 @@ from __future__ import annotations
 import asyncio
 from pathlib import Path
 from typing import Any
-from uuid import uuid4
 
 import pytest
 
@@ -82,7 +81,7 @@ async def test_publish_to_bus_publishes_ui_event(tmp_path: Path) -> None:
 
 def test_topic_constant_matches_subscribe_topic() -> None:
     """`UI_EVENT_TOPIC` equals `EventType.UI_EVENT.value` — bus topic-pattern match."""
-    assert UI_EVENT_TOPIC == EventType.UI_EVENT.value
+    assert EventType.UI_EVENT.value == UI_EVENT_TOPIC
 
 
 @pytest.mark.asyncio

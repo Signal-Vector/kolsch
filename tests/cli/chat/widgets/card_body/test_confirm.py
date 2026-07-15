@@ -32,10 +32,12 @@ async def test_set_updates_confirm_text(mock_app_factory) -> None:
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        widget.apply_event(_MockEvent(
-            "kolsch.card.set",
-            {"content": "Are you sure?"},
-        ))
+        widget.apply_event(
+            _MockEvent(
+                "kolsch.card.set",
+                {"content": "Are you sure?"},
+            )
+        )
         await pilot.pause()
         text = widget.query_one(Static)
         assert "Are you sure?" in str(text.render())

@@ -63,7 +63,9 @@ def _platform_yaml(root: Path) -> None:
                 "sandbox": {"variant": "native", "config": {}},
                 "authorization": {
                     "variant": "rule_based",
-                    "config": {"rules": [{"who": ".*", "what": ".*", "effect": "allow"}]},
+                    "config": {
+                        "rules": [{"who": ".*", "what": ".*", "effect": "allow"}]
+                    },
                 },
                 "storage": {
                     "entity_backend": "sqlite",
@@ -139,7 +141,8 @@ async def _build(
         authz=authz,
         framework=MinimalFramework(),
         llm=default_llm,
-        llm_providers_config=llm_providers or {
+        llm_providers_config=llm_providers
+        or {
             # Tiny context_length so keep_tail (budget * 0.20) is a
             # handful of tokens — anything beyond a single event
             # spills into the middle span.
@@ -174,7 +177,10 @@ class _RecordingLLM:
     async def __call__(self, request: LLMRequest) -> LLMResponse:
         self.calls.append(request)
         return LLMResponse(
-            content=self.reply, tool_calls=None, usage={}, raw={},
+            content=self.reply,
+            tool_calls=None,
+            usage={},
+            raw={},
         )
 
 
@@ -191,7 +197,8 @@ async def test_manual_compact_forces_below_threshold(tmp_path: Path) -> None:
         return recording
 
     provider = ReferenceSummaryCompactionProvider(
-        llm_for_model=factory, config={},
+        llm_for_model=factory,
+        config={},
     )
     engine, store = await _build(tmp_path, compaction_provider=provider)
     thread_id = await _fresh_thread(store)
@@ -235,7 +242,8 @@ async def test_manual_compact_preview_sets_flag(tmp_path: Path) -> None:
         return recording
 
     provider = ReferenceSummaryCompactionProvider(
-        llm_for_model=factory, config={},
+        llm_for_model=factory,
+        config={},
     )
     engine, store = await _build(tmp_path, compaction_provider=provider)
     thread_id = await _fresh_thread(store)
@@ -272,7 +280,8 @@ async def test_manual_compact_threads_extra_instructions(tmp_path: Path) -> None
         return recording
 
     provider = ReferenceSummaryCompactionProvider(
-        llm_for_model=factory, config={},
+        llm_for_model=factory,
+        config={},
     )
     engine, store = await _build(tmp_path, compaction_provider=provider)
     thread_id = await _fresh_thread(store)

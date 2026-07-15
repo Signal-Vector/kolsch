@@ -17,7 +17,7 @@ the AC #2 mock claims.
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 from textual.app import App
@@ -31,7 +31,7 @@ from tests.cli.chat.snapshot_helpers import assert_snapshot_matches
 # on either side, so the compositor definitely truncates.
 _LONG_TARGET = (
     "curl -X POST https://example.com/api/v1/endpoint "
-    "-d '{\"json\":\"body\",\"more\":\"keys\"}' -H 'auth: Bearer sk-1234'"
+    '-d \'{"json":"body","more":"keys"}\' -H \'auth: Bearer sk-1234\''
 )
 
 

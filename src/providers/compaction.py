@@ -104,9 +104,7 @@ def estimate_tokens_for_messages(
     for tool in tools_schema or []:
         total += _PER_TOOL_OVERHEAD
         total += len(
-            encoding.encode(
-                json.dumps(tool, sort_keys=True, separators=(",", ":"))
-            )
+            encoding.encode(json.dumps(tool, sort_keys=True, separators=(",", ":")))
         )
     return total
 
@@ -432,8 +430,7 @@ class ReferenceSummaryCompactionProvider:
         from schemas.events import ContextCompactedData  # noqa: PLC0415
 
         max_refs = int(config.get("max_refs", 50))
-        if max_refs < 1:
-            max_refs = 1
+        max_refs = max(max_refs, 1)
         summarizer_model_cfg = config.get("summarizer_model")
         # feat-054 Phase 3 — `/compact --instructions "..."` and
         # `/compact --preview` reach the provider through these config
@@ -442,9 +439,7 @@ class ReferenceSummaryCompactionProvider:
         # / "auto") reflects reality. `extra_instructions` bias the
         # summariser prompt without changing its JSON contract.
         extra_instructions = config.get("extra_instructions")
-        if extra_instructions is not None and not isinstance(
-            extra_instructions, str
-        ):
+        if extra_instructions is not None and not isinstance(extra_instructions, str):
             extra_instructions = str(extra_instructions)
         trigger_override = config.get("trigger")
         if trigger_override not in (
@@ -997,9 +992,7 @@ def validate_reference_summary_config(
                     source="compaction.reference_summary",
                     path="/trigger_at",
                     code="out_of_range",
-                    message=(
-                        f"trigger_at must be in (0, 1]; got {trigger_at}"
-                    ),
+                    message=(f"trigger_at must be in (0, 1]; got {trigger_at}"),
                 )
             )
 
@@ -1011,9 +1004,7 @@ def validate_reference_summary_config(
                 source="compaction.reference_summary",
                 path="/config",
                 code="not_a_mapping",
-                message=(
-                    f"config must be a mapping; got {type(inner).__name__}"
-                ),
+                message=(f"config must be a mapping; got {type(inner).__name__}"),
             )
         )
         return ValidationResult(ok=not errors, errors=errors)
@@ -1041,8 +1032,7 @@ def validate_reference_summary_config(
                     path="/config/keep_recent_fraction",
                     code="out_of_range",
                     message=(
-                        f"keep_recent_fraction must be in (0, 1]; "
-                        f"got {keep_recent}"
+                        f"keep_recent_fraction must be in (0, 1]; got {keep_recent}"
                     ),
                 )
             )

@@ -35,7 +35,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any
 
-
 __all__ = [
     "InputsScanResult",
     "extract_required_inputs",
@@ -104,25 +103,33 @@ def scan_inputs(yaml_source: str) -> InputsScanResult:
     required: set[str] = set()
     optional: set[str] = set()
 
-    def _extract_key(node: Any) -> str | None:  # noqa: ANN401
+    def _extract_key(node: Any) -> str | None:
         """Return the top-level ``inputs.<name>`` key from a Getattr/Getitem chain."""
         # Getattr(node=Name('inputs'), attr='foo') -> 'foo'.
-        if isinstance(node, Getattr) and isinstance(node.node, Name) and node.node.name == "inputs":
+        if (
+            isinstance(node, Getattr)
+            and isinstance(node.node, Name)
+            and node.node.name == "inputs"
+        ):
             return str(node.attr)
         # Getitem(node=Name('inputs'), arg=Const('foo')) -> 'foo'.
-        if isinstance(node, Getitem) and isinstance(node.node, Name) and node.node.name == "inputs":
+        if (
+            isinstance(node, Getitem)
+            and isinstance(node.node, Name)
+            and node.node.name == "inputs"
+        ):
             arg = node.arg
             val = getattr(arg, "value", None)
             if isinstance(val, str) and val:
                 return val
         return None
 
-    def _collect_guarded_ids(node: Any, out: set[int]) -> None:  # noqa: ANN401
+    def _collect_guarded_ids(node: Any, out: set[int]) -> None:
         """Mark this node id (and descendant inputs chains) as guarded."""
         out.add(id(node))
         # Recurse into common containers so `default(inputs.foo)` and
         # `inputs.foo | default(...) | trim` still mark `inputs.foo`.
-        for child in getattr(node, "iter_child_nodes", lambda: [])():
+        for child in getattr(node, "iter_child_nodes", list)():
             _collect_guarded_ids(child, out)
 
     def _walk_string(s: str) -> None:
@@ -147,7 +154,7 @@ def scan_inputs(yaml_source: str) -> InputsScanResult:
             else:
                 required.add(key)
 
-    def _walk(node: Any) -> None:  # noqa: ANN401
+    def _walk(node: Any) -> None:
         if isinstance(node, str):
             _walk_string(node)
         elif isinstance(node, dict):

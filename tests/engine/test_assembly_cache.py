@@ -31,15 +31,14 @@ import pytest
 from engine import MinimalFramework
 from engine.assembly import ASSEMBLY_VERSION, assemble_context
 from engine.assembly_cache import (
+    _MAX_PER_THREAD,
     AssemblyCache,
     _Key,
-    _MAX_PER_THREAD,
     hash_tool_schemas,
 )
 from schemas import Actor, Event, EventId, EventType, ThreadId
 from tests.fixtures.engine_builder import build_engine
 from tests.fixtures.mock_llm import MockLLM, TextResponse
-
 
 _TID = ThreadId(f"th_{uuid4()}")
 _SID = f"ses_{uuid4()}"
@@ -331,12 +330,7 @@ def test_no_direct_assemble_context_calls_in_engine() -> None:
     means a new call site slipped in without going through the cache
     and would silently reintroduce the O(n²) behaviour on that path.
     """
-    engine_path = (
-        Path(__file__).resolve().parents[2]
-        / "src"
-        / "engine"
-        / "engine.py"
-    )
+    engine_path = Path(__file__).resolve().parents[2] / "src" / "engine" / "engine.py"
     source = engine_path.read_text(encoding="utf-8")
     count = source.count("assemble_context(")
     assert count == 1, (
@@ -363,33 +357,41 @@ def _synthetic_path(length: int) -> list[Event]:
     for i in range(length):
         cycle = i % 4
         if cycle == 0:
-            events.append(_mk(
-                EventType.USER_MESSAGE,
-                {"content": {"text": f"user msg {i}"}},
-            ))
+            events.append(
+                _mk(
+                    EventType.USER_MESSAGE,
+                    {"content": {"text": f"user msg {i}"}},
+                )
+            )
         elif cycle == 1:
-            events.append(_mk(
-                EventType.AGENT_MESSAGE,
-                {"content": {"text": f"agent msg {i}"}},
-            ))
+            events.append(
+                _mk(
+                    EventType.AGENT_MESSAGE,
+                    {"content": {"text": f"agent msg {i}"}},
+                )
+            )
         elif cycle == 2:
-            events.append(_mk(
-                EventType.TOOL_CALLED,
-                {
-                    "tool_call_id": f"tc_{i}",
-                    "tool_name": "noop",
-                    "arguments": {"n": i},
-                },
-            ))
+            events.append(
+                _mk(
+                    EventType.TOOL_CALLED,
+                    {
+                        "tool_call_id": f"tc_{i}",
+                        "tool_name": "noop",
+                        "arguments": {"n": i},
+                    },
+                )
+            )
         else:
-            events.append(_mk(
-                EventType.TOOL_RESULT,
-                {
-                    "tool_call_id": f"tc_{i - 1}",
-                    "tool_name": "noop",
-                    "result": {"ok": True, "n": i},
-                },
-            ))
+            events.append(
+                _mk(
+                    EventType.TOOL_RESULT,
+                    {
+                        "tool_call_id": f"tc_{i - 1}",
+                        "tool_name": "noop",
+                        "result": {"ok": True, "n": i},
+                    },
+                )
+            )
     return events
 
 

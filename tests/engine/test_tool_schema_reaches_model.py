@@ -28,7 +28,6 @@ from providers import (
 from schemas.identifiers import AgentId
 from tools.subsystem import ToolsSubsystem
 
-
 _STARTER_BUNDLE = (
     Path(__file__).resolve().parents[2] / "src" / "cli" / "_starter_bundle" / "kolsch"
 )
@@ -88,7 +87,7 @@ async def test_shipped_helper_registers_run_workflow(
 ) -> None:
     """`run_workflow` appears in `list_registered_tools` after registration."""
     agent_id = AgentId("ag_helper")
-    owner_map = {p: "kolsch" for p in declared_paths}
+    owner_map = dict.fromkeys(declared_paths, "kolsch")
     await tools_subsystem.register_for_agent(
         agent_id=agent_id,
         declared_paths=declared_paths,
@@ -121,7 +120,7 @@ async def test_shipped_run_workflow_description_survives_pipeline(
     to bash.
     """
     agent_id = AgentId("ag_helper")
-    owner_map = {p: "kolsch" for p in declared_paths}
+    owner_map = dict.fromkeys(declared_paths, "kolsch")
     await tools_subsystem.register_for_agent(
         agent_id=agent_id,
         declared_paths=declared_paths,

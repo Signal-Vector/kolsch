@@ -62,9 +62,7 @@ def _write_platform_yaml(root: Path) -> None:
                 "authorization": {
                     "variant": "rule_based",
                     "config": {
-                        "rules": [
-                            {"who": ".*", "what": ".*", "effect": "allow"}
-                        ]
+                        "rules": [{"who": ".*", "what": ".*", "effect": "allow"}]
                     },
                 },
                 "storage": {
@@ -140,9 +138,7 @@ async def _build(
     async def factory(_spec: Any) -> Any:
         return summariser
 
-    provider = ReferenceSummaryCompactionProvider(
-        llm_for_model=factory, config={}
-    )
+    provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
     llm_providers = {
         "mock": ProviderConfig(
             name="mock",

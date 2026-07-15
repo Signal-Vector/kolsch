@@ -96,7 +96,8 @@ def _build_example_call(
     requires=["workflows"],
 )
 async def workflow_inspect(
-    args: WorkflowInspectArgs, ctx: ToolContext,
+    args: WorkflowInspectArgs,
+    ctx: ToolContext,
 ) -> dict[str, object]:
     """Return the workflow's inputs contract + a copy-pasteable example."""
     services = require_services(ctx, ["workflows"])
@@ -121,10 +122,7 @@ async def workflow_inspect(
                 available = [str(r) for r in candidate if isinstance(r, str)]
         if available:
             refs_str = ", ".join(available)
-            msg = (
-                f"Workflow {args.ref!r} not found. "
-                f"Available refs: {refs_str}."
-            )
+            msg = f"Workflow {args.ref!r} not found. Available refs: {refs_str}."
         else:
             msg = (
                 f"Workflow {args.ref!r} not found. "

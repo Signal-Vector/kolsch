@@ -46,7 +46,8 @@ async def _mount_row_with_three_sections() -> WorkflowNodeRow:
 
 
 async def _add_three_response_sections(
-    row: WorkflowNodeRow, pilot: object,
+    row: WorkflowNodeRow,
+    pilot: object,
 ) -> None:
     await row.mount_assistant_message("A", event_id="a")
     await row.mount_assistant_message("B", event_id="b")
@@ -170,8 +171,11 @@ async def test_toolcallblock_inside_section_focus_order() -> None:
         await pilot.pause()
 
         await row.mount_tool_call(
-            "browse_url", args_str="", body="hi",
-            event_id="tc_a", failed=False,
+            "browse_url",
+            args_str="",
+            body="hi",
+            event_id="tc_a",
+            failed=False,
         )
         await pilot.pause()
 
@@ -192,9 +196,9 @@ async def test_toolcallblock_inside_section_focus_order() -> None:
 
         # We must have seen focus land on a title inside a ToolCallBlock.
         from cli.chat.widgets.tool_call_block import ToolCallBlock
+
         assert "ToolCallBlock" in titles_seen or any(
-            isinstance(t, ToolCallBlock)
-            for t in row.query(ToolCallBlock)
+            isinstance(t, ToolCallBlock) for t in row.query(ToolCallBlock)
         )
 
 
@@ -215,13 +219,17 @@ async def test_toolcallblock_expands_independently_from_section() -> None:
         await pilot.pause()
 
         await row.mount_tool_call(
-            "browse_url", args_str="", body="hi",
-            event_id="tc_a", failed=False,
+            "browse_url",
+            args_str="",
+            body="hi",
+            event_id="tc_a",
+            failed=False,
         )
         await pilot.pause()
 
         section = list(_contents_of(row).query(NodeSection))[0]
         from cli.chat.widgets.tool_call_block import ToolCallBlock
+
         block = section.query_one(ToolCallBlock)
 
         # Both start collapsed.
@@ -320,7 +328,8 @@ async def test_focus_skips_sections_on_collapsed_row() -> None:
         assert focused is not None
         # No CollapsibleTitle for a NodeSection is in the tree yet.
         section_titles = [
-            t for t in row.query("CollapsibleTitle")
+            t
+            for t in row.query("CollapsibleTitle")
             if isinstance(t.parent, NodeSection)
         ]
         assert len(section_titles) == 0

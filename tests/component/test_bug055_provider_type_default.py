@@ -444,9 +444,7 @@ async def test_workflow_node_failed_surface_carries_nested_error(
     assert status == WorkflowRunStatus.FAILED
 
     events = list(store.read_events(run.run_id))
-    failed = next(
-        e for e in events if e["kind"] == "workflow.node.failed"
-    )
+    failed = next(e for e in events if e["kind"] == "workflow.node.failed")
     payload = failed["payload"]
     # AC: nested_error propagated onto the payload verbatim.
     assert payload["nested_error"] == nested
@@ -457,9 +455,7 @@ async def test_workflow_node_failed_surface_carries_nested_error(
     # `ev_...` event linkage: the failed event's `parent_event_id`
     # chains to the node's `workflow.node.started` id (Coordinator
     # note — bug-055 must NOT replace this).
-    started = next(
-        e for e in events if e["kind"] == "workflow.node.started"
-    )
+    started = next(e for e in events if e["kind"] == "workflow.node.started")
     assert failed["parent_event_id"] == started["event_id"]
 
 

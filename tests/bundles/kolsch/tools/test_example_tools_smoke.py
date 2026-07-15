@@ -20,17 +20,15 @@ mode: workflow runner, one-shot CLI, or any test that constructs
 from __future__ import annotations
 
 import asyncio
-from typing import Awaitable, Callable
+from collections.abc import Awaitable, Callable
 
 import pytest
-
-from tools.services.exceptions import ToolNotAvailable
 
 from tests.bundles.kolsch.tools.conftest import (
     _headless_ctx,
     _invoke_tool_via_pilot,
 )
-
+from tools.services.exceptions import ToolNotAvailable
 
 # --------------------------------------------------------------------
 # Test 1 — hello_card

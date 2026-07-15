@@ -69,24 +69,30 @@ async def test_node_row_paused_on_awaiting_approval() -> None:
     """Dispatched WIRE_WORKFLOW_NODE_AWAITING_APPROVAL → row.state='paused'."""
     renderer = WorkflowRenderer()
     # Anchor via RUN_STARTED and land NODE_STARTED("n1").
-    renderer.apply_event(_mk_progress_event(
-        _mk_progress_payload(kind=WorkflowEventKind.RUN_STARTED.value),
-    ))
-    renderer.apply_event(_mk_progress_event(
-        _mk_progress_payload(
-            kind=WorkflowEventKind.NODE_STARTED.value,
-            node_name="n1",
-        ),
-    ))
+    renderer.apply_event(
+        _mk_progress_event(
+            _mk_progress_payload(kind=WorkflowEventKind.RUN_STARTED.value),
+        )
+    )
+    renderer.apply_event(
+        _mk_progress_event(
+            _mk_progress_payload(
+                kind=WorkflowEventKind.NODE_STARTED.value,
+                node_name="n1",
+            ),
+        )
+    )
     row = renderer._node_rows["n1"]
     assert row.state == "starting"
 
     # Dispatch the awaiting_approval event.
-    renderer.apply_event(_mk_approval_event(
-        kind="kolsch.workflow.node.awaiting_approval",
-        run_id="wrk_test",
-        node_name="n1",
-    ))
+    renderer.apply_event(
+        _mk_approval_event(
+            kind="kolsch.workflow.node.awaiting_approval",
+            run_id="wrk_test",
+            node_name="n1",
+        )
+    )
     assert row.state == "paused"
     # Glyph verified via canonical STATE_TOKENS table (qol-075).
     assert resolve_state(row.state).glyph == "⚠"
@@ -96,32 +102,40 @@ async def test_node_row_paused_on_awaiting_approval() -> None:
 async def test_node_row_running_on_approval_resolved() -> None:
     """Dispatched WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED → row.state='running'."""
     renderer = WorkflowRenderer()
-    renderer.apply_event(_mk_progress_event(
-        _mk_progress_payload(kind=WorkflowEventKind.RUN_STARTED.value),
-    ))
-    renderer.apply_event(_mk_progress_event(
-        _mk_progress_payload(
-            kind=WorkflowEventKind.NODE_STARTED.value,
-            node_name="n1",
-        ),
-    ))
+    renderer.apply_event(
+        _mk_progress_event(
+            _mk_progress_payload(kind=WorkflowEventKind.RUN_STARTED.value),
+        )
+    )
+    renderer.apply_event(
+        _mk_progress_event(
+            _mk_progress_payload(
+                kind=WorkflowEventKind.NODE_STARTED.value,
+                node_name="n1",
+            ),
+        )
+    )
     row = renderer._node_rows["n1"]
 
     # Pause first.
-    renderer.apply_event(_mk_approval_event(
-        kind="kolsch.workflow.node.awaiting_approval",
-        run_id="wrk_test",
-        node_name="n1",
-    ))
+    renderer.apply_event(
+        _mk_approval_event(
+            kind="kolsch.workflow.node.awaiting_approval",
+            run_id="wrk_test",
+            node_name="n1",
+        )
+    )
     assert row.state == "paused"
 
     # Resolve — row transitions back to running.
-    renderer.apply_event(_mk_approval_event(
-        kind="kolsch.workflow.node.approval_resolved",
-        run_id="wrk_test",
-        node_name="n1",
-        resolution="approved",
-    ))
+    renderer.apply_event(
+        _mk_approval_event(
+            kind="kolsch.workflow.node.approval_resolved",
+            run_id="wrk_test",
+            node_name="n1",
+            resolution="approved",
+        )
+    )
     assert row.state == "running"
     assert resolve_state(row.state).glyph == "▸"
 
@@ -130,29 +144,37 @@ async def test_node_row_running_on_approval_resolved() -> None:
 async def test_unrelated_node_unaffected() -> None:
     """Approval event for `n1` leaves `n2`'s row state untouched."""
     renderer = WorkflowRenderer()
-    renderer.apply_event(_mk_progress_event(
-        _mk_progress_payload(kind=WorkflowEventKind.RUN_STARTED.value),
-    ))
-    renderer.apply_event(_mk_progress_event(
-        _mk_progress_payload(
-            kind=WorkflowEventKind.NODE_STARTED.value,
-            node_name="n1",
-        ),
-    ))
-    renderer.apply_event(_mk_progress_event(
-        _mk_progress_payload(
-            kind=WorkflowEventKind.NODE_STARTED.value,
-            node_name="n2",
-        ),
-    ))
+    renderer.apply_event(
+        _mk_progress_event(
+            _mk_progress_payload(kind=WorkflowEventKind.RUN_STARTED.value),
+        )
+    )
+    renderer.apply_event(
+        _mk_progress_event(
+            _mk_progress_payload(
+                kind=WorkflowEventKind.NODE_STARTED.value,
+                node_name="n1",
+            ),
+        )
+    )
+    renderer.apply_event(
+        _mk_progress_event(
+            _mk_progress_payload(
+                kind=WorkflowEventKind.NODE_STARTED.value,
+                node_name="n2",
+            ),
+        )
+    )
     row_n1 = renderer._node_rows["n1"]
     row_n2 = renderer._node_rows["n2"]
 
-    renderer.apply_event(_mk_approval_event(
-        kind="kolsch.workflow.node.awaiting_approval",
-        run_id="wrk_test",
-        node_name="n1",
-    ))
+    renderer.apply_event(
+        _mk_approval_event(
+            kind="kolsch.workflow.node.awaiting_approval",
+            run_id="wrk_test",
+            node_name="n1",
+        )
+    )
     assert row_n1.state == "paused"
     # n2 is still in its initial `starting` state.
     assert row_n2.state == "starting"

@@ -17,7 +17,6 @@ from engine.context import CancelToken
 from platform_runtime import bootstrap_runtime
 from workflows.parser import load_workflow
 
-
 _HELLO_WORKFLOW_YAML = """
 nodes:
   greet:

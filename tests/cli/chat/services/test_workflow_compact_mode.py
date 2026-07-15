@@ -26,7 +26,6 @@ from cli.chat.widgets.card_widget import CardWidget
 from schemas.identifiers import CardId
 from workflows.ids import WorkflowRunId
 
-
 _BASE_TS = datetime(2026, 7, 5, 12, 0, 0, tzinfo=UTC)
 
 
@@ -114,7 +113,8 @@ async def test_two_workflows_full_render() -> None:
             _mk_record(suffix="02", phase="running", card=cards[1], started_offset=2),
         ]
         widget_map: dict[Any, Any] = {
-            cards[0].id: widgets[0], cards[1].id: widgets[1],
+            cards[0].id: widgets[0],
+            cards[1].id: widgets[1],
         }
         mgr = WorkflowLayoutManager(
             transcript=transcript,
@@ -185,13 +185,16 @@ async def test_lone_terminal_and_one_in_progress_both_full() -> None:
 
         records = [
             _mk_record(
-                suffix="01", phase="success",
-                card=cards[0], terminal_offset=5,
+                suffix="01",
+                phase="success",
+                card=cards[0],
+                terminal_offset=5,
             ),
             _mk_record(suffix="02", phase="running", card=cards[1], started_offset=1),
         ]
         widget_map: dict[Any, Any] = {
-            cards[0].id: widgets[0], cards[1].id: widgets[1],
+            cards[0].id: widgets[0],
+            cards[1].id: widgets[1],
         }
         mgr = WorkflowLayoutManager(
             transcript=transcript,
@@ -217,16 +220,21 @@ async def test_multiple_terminal_cards_go_compact() -> None:
 
         records = [
             _mk_record(
-                suffix="01", phase="success",
-                card=cards[0], terminal_offset=5,
+                suffix="01",
+                phase="success",
+                card=cards[0],
+                terminal_offset=5,
             ),
             _mk_record(
-                suffix="02", phase="success",
-                card=cards[1], terminal_offset=6,
+                suffix="02",
+                phase="success",
+                card=cards[1],
+                terminal_offset=6,
             ),
         ]
         widget_map: dict[Any, Any] = {
-            cards[0].id: widgets[0], cards[1].id: widgets[1],
+            cards[0].id: widgets[0],
+            cards[1].id: widgets[1],
         }
         mgr = WorkflowLayoutManager(
             transcript=transcript,
@@ -276,8 +284,10 @@ async def test_drop_from_three_to_two_returns_full() -> None:
 
         # Now record 2 goes terminal.
         records[2] = _mk_record(
-            suffix="03", phase="success",
-            card=cards[2], terminal_offset=10,
+            suffix="03",
+            phase="success",
+            card=cards[2],
+            terminal_offset=10,
         )
         await mgr._flush_reorder()
         await pilot.pause()

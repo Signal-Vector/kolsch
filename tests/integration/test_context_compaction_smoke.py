@@ -85,9 +85,7 @@ def _write_platform_yaml(root: Path) -> None:
                 "authorization": {
                     "variant": "rule_based",
                     "config": {
-                        "rules": [
-                            {"who": ".*", "what": ".*", "effect": "allow"}
-                        ]
+                        "rules": [{"who": ".*", "what": ".*", "effect": "allow"}]
                     },
                 },
                 "storage": {
@@ -168,9 +166,7 @@ async def _build(tmp_path: Path) -> tuple[AgentEngine, SessionStore]:
     async def factory(_spec: Any) -> Any:
         return summariser
 
-    provider = ReferenceSummaryCompactionProvider(
-        llm_for_model=factory, config={}
-    )
+    provider = ReferenceSummaryCompactionProvider(llm_for_model=factory, config={})
     llm_providers = {
         "mock": ProviderConfig(
             name="mock",
@@ -199,7 +195,7 @@ async def _build(tmp_path: Path) -> tuple[AgentEngine, SessionStore]:
     )
     # Stash the holder on the engine so the caller can update it once
     # a real event id is available.
-    setattr(engine, "_smoke_ref_id_holder", ref_id_holder)
+    engine._smoke_ref_id_holder = ref_id_holder
     return engine, store
 
 
@@ -237,29 +233,19 @@ async def test_compaction_smoke_end_to_end(tmp_path: Path) -> None:
 
     # Point the summariser at a real event_id from the seeded thread
     # so `context.reference_lookup` can resolve it later.
-    events_before = [
-        e async for e in store.read_path_to_leaf(thread_id)
-    ]
+    events_before = [e async for e in store.read_path_to_leaf(thread_id)]
     # Pick the first USER_MESSAGE — a nice deterministic anchor.
-    ref_event = next(
-        e for e in events_before if e.type == EventType.USER_MESSAGE
-    )
-    ref_id_holder = getattr(engine, "_smoke_ref_id_holder")
+    ref_event = next(e for e in events_before if e.type == EventType.USER_MESSAGE)
+    ref_id_holder = engine._smoke_ref_id_holder
     ref_id_holder["id"] = str(ref_event.event_id)
 
     # (1) Force a compaction via /compact's engine API.
-    emitted = await engine.manual_compact(
-        config=_config(), thread_id=thread_id
-    )
+    emitted = await engine.manual_compact(config=_config(), thread_id=thread_id)
     assert emitted is not None, "manual_compact should have compacted"
     assert emitted.type == EventType.CONTEXT_COMPACTED
 
-    events_after = [
-        e async for e in store.read_path_to_leaf(thread_id)
-    ]
-    assert any(
-        e.type == EventType.CONTEXT_COMPACTED for e in events_after
-    )
+    events_after = [e async for e in store.read_path_to_leaf(thread_id)]
+    assert any(e.type == EventType.CONTEXT_COMPACTED for e in events_after)
 
     # (2) /compaction-history renders a row for the fresh compaction.
     runtime = _Runtime(store)
@@ -281,8 +267,7 @@ async def test_compaction_smoke_end_to_end(tmp_path: Path) -> None:
     projection = assemble_context(events_after, tool_schemas=[])
     projected_texts = [m.content for m in projection.messages]
     assert any(
-        "<context-compaction>" in t and "<summary-json>" in t
-        for t in projected_texts
+        "<context-compaction>" in t and "<summary-json>" in t for t in projected_texts
     ), (
         f"projection should contain the compaction framing + JSON; "
         f"got: {projected_texts}"
@@ -313,19 +298,15 @@ async def test_compaction_smoke_end_to_end(tmp_path: Path) -> None:
     )
     ref_id = str(ref_event.event_id)
     # In-scope resolves.
-    from tools.context_reference import ReferenceLookupArgs  # noqa: PLC0415
+    from tools.context_reference import ReferenceLookupArgs
 
-    result = await lookup(
-        ReferenceLookupArgs(event_id=ref_id), tool_ctx
-    )
+    result = await lookup(ReferenceLookupArgs(event_id=ref_id), tool_ctx)
     assert result["event_id"] == ref_id
     assert result["type"] == "user.message"
 
     # Out-of-scope refuses with an actionable error.
     with pytest.raises(ToolExecutionFailed) as exc_info:
-        await lookup(
-            ReferenceLookupArgs(event_id="ev_not_in_scope"), tool_ctx
-        )
+        await lookup(ReferenceLookupArgs(event_id="ev_not_in_scope"), tool_ctx)
     assert "OutOfScope" in str(exc_info.value.detail.get("error_class", ""))
 
     # (6) /uncompact restores. The Coordinator decision is LIFO
@@ -339,12 +320,8 @@ async def test_compaction_smoke_end_to_end(tmp_path: Path) -> None:
     # design.
     revocation = await engine.manual_uncompact(thread_id=thread_id)
     assert revocation is not None
-    assert str(revocation.data.get("compaction_event_id")) == str(
-        emitted.event_id
-    )
-    events_after_uncompact = [
-        e async for e in store.read_path_to_leaf(thread_id)
-    ]
+    assert str(revocation.data.get("compaction_event_id")) == str(emitted.event_id)
+    events_after_uncompact = [e async for e in store.read_path_to_leaf(thread_id)]
     # The revocation event now cross-references the manual compaction;
     # Assembly's revoked set includes it; the manual compaction no
     # longer contributes to `compacted_span_ids`. That is the load-
@@ -370,13 +347,9 @@ async def test_compaction_smoke_end_to_end(tmp_path: Path) -> None:
         respect_compaction=False,
     )
     user_msg_count = sum(
-        1
-        for e in events_after_uncompact
-        if e.type == EventType.USER_MESSAGE
+        1 for e in events_after_uncompact if e.type == EventType.USER_MESSAGE
     )
-    projected_user_count = sum(
-        1 for m in projection_raw.messages if m.role == "user"
-    )
+    projected_user_count = sum(1 for m in projection_raw.messages if m.role == "user")
     assert projected_user_count == user_msg_count, (
         f"raw projection user count {projected_user_count} != raw "
         f"event user count {user_msg_count}"

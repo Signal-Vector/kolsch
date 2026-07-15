@@ -30,7 +30,6 @@ from schemas.identifiers import CardId
 from tools.services.workflows import NodeCounts
 from workflows.ids import WorkflowRunId
 
-
 _NOW = datetime.now(tz=UTC)
 
 
@@ -155,7 +154,10 @@ async def test_terminal_workflow_hides_strip() -> None:
 
         card = _MockCard(id=CardId("crd_00000000-0000-0000-0000-000000000010"))
         record = _mk_record(
-            suffix="b1", phase="running", card=card, started_offset=5,
+            suffix="b1",
+            phase="running",
+            card=card,
+            started_offset=5,
         )
         widget_map: dict[Any, Any] = {}
 

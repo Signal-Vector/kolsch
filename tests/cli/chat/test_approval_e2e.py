@@ -24,9 +24,10 @@ handshake is exercised without the Textual runtime.
 from __future__ import annotations
 
 import asyncio
+from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any
 from uuid import uuid4
 
 import pytest
@@ -100,7 +101,9 @@ async def test_end_to_end_approval_via_event_bus(
 
     # Poll the store for the emitted WIRE_PROMPT_REQUESTED event.
     requested_ev = await _poll_for_ui_event(
-        store, thread_id, WIRE_PROMPT_REQUESTED,
+        store,
+        thread_id,
+        WIRE_PROMPT_REQUESTED,
     )
     prompt_id = requested_ev.data["payload"]["prompt_id"]
 
@@ -154,8 +157,7 @@ async def test_answered_event_persists_with_logical_seq(
     async for ev in store.read_events(thread_id):
         events.append(ev)
     assert any(
-        ev.type == EventType.UI_EVENT
-        and ev.data.get("kind") == WIRE_PROMPT_ANSWERED
+        ev.type == EventType.UI_EVENT and ev.data.get("kind") == WIRE_PROMPT_ANSWERED
         for ev in events
     )
 

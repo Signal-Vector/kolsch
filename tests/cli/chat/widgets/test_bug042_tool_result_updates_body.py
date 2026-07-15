@@ -16,7 +16,7 @@ locks in that routing.
 
 from __future__ import annotations
 
-from typing import Callable
+from collections.abc import Callable
 
 import pytest
 from textual.app import App
@@ -34,7 +34,7 @@ _AppFactory = Callable[[Widget], App[None]]
 _URL_ENCODED_BRACKET_TAIL = (
     "%2FZRrhp7ghYJ26c1fhbGDYx%2FE4ZaNjXG4vKh3zCC%2B6DlUpDz8"
     "%2BK6SVW2a9RCOZlJ9RQ4sFOjtLnTChoH7j4xEb9aaMQVTrTq58e2vPDrKmxx"
-    "YBgAmzESJhu%2FDgArCSby0Bpcq6YZQ%3D%3D\"}]}\n"
+    'YBgAmzESJhu%2FDgArCSby0Bpcq6YZQ%3D%3D"}]}\n'
 )
 
 _PYDANTIC_ERROR_TAIL = (

@@ -49,8 +49,6 @@ from bus.in_process import InProcessEventBus
 from cli.chat.app import ChatApp
 from cli.chat.widgets.approval_block import ApprovalBlock
 from providers.authz import (
-    AuthzEffect,
-    Rule,
     RuleBasedAuthorizationConfig,
     RuleBasedAuthorizationProvider,
 )
@@ -60,7 +58,6 @@ from schemas.wire_kinds import WIRE_PROMPT_REQUESTED
 from store import SessionStore, SqliteBackend
 from tools.decorator import ToolContext
 
-
 # ----------------------------------------------------------------------
 # ChatApp harness — mirrors bug-021 flagship but with a REAL authz
 # provider so the rule-persist round-trip fires.
@@ -68,7 +65,8 @@ from tools.decorator import ToolContext
 
 
 async def _empty_stream(
-    *_args: Any, **_kwargs: Any,
+    *_args: Any,
+    **_kwargs: Any,
 ) -> Any:
     """The mock engine never runs a turn — the LLM path isn't exercised."""
     return
@@ -154,7 +152,7 @@ async def chat_app(tmp_path: Path) -> AsyncIterator[Any]:
     threads = await store.list_threads(session.session_id)
 
     # Construct the real authz provider from the seeded platform.yaml.
-    import yaml  # noqa: PLC0415
+    import yaml
 
     payload = yaml.safe_load(
         (tmp_path / "platform.yaml").read_text(encoding="utf-8"),
@@ -201,7 +199,9 @@ async def chat_app(tmp_path: Path) -> AsyncIterator[Any]:
 
 
 async def _wait_for_approval_block(
-    pilot: Any, *, timeout: float = 2.0,
+    pilot: Any,
+    *,
+    timeout: float = 2.0,
 ) -> ApprovalBlock:
     """Wait up to ``timeout`` seconds for an ApprovalBlock to mount."""
     for _ in range(int(timeout / 0.05)):
@@ -215,7 +215,8 @@ async def _wait_for_approval_block(
 
 
 async def _count_prompt_requested(
-    store: SessionStore, thread_id: Any,
+    store: SessionStore,
+    thread_id: Any,
 ) -> int:
     n = 0
     async for ev in store.read_events(thread_id):
@@ -279,8 +280,10 @@ async def test_persist_rule_prevents_reprompt(chat_app: Any) -> None:
         # --------------------------------------------------------------
         block = await _wait_for_approval_block(pilot, timeout=3.0)
 
-        from textual.widgets import Static  # noqa: PLC0415
-        from cli.chat.widgets.approval_args_row import ApprovalArgsRow  # noqa: PLC0415
+        from textual.widgets import Static
+
+        from cli.chat.widgets.approval_args_row import ApprovalArgsRow
+
         context_lines = [
             str(w.content) for w in block.query(".context").results(Static)
         ]
@@ -318,7 +321,8 @@ async def test_persist_rule_prevents_reprompt(chat_app: Any) -> None:
         for _ in range(40):  # 40 * 50ms = 2s
             await pilot.pause()
             text = yaml_path.read_text(encoding="utf-8")
-            import yaml  # noqa: PLC0415
+            import yaml
+
             payload = yaml.safe_load(text)
             rules = payload["authorization"]["config"]["rules"]
             # A NEW rule with effect=allow for `kolsch/tools/run_workflow`
@@ -395,8 +399,10 @@ async def test_args_line_shows_workflow_ref(chat_app: Any) -> None:
         )
         block = await _wait_for_approval_block(pilot, timeout=3.0)
 
-        from textual.widgets import Static  # noqa: PLC0415
-        from cli.chat.widgets.approval_args_row import ApprovalArgsRow  # noqa: PLC0415
+        from textual.widgets import Static
+
+        from cli.chat.widgets.approval_args_row import ApprovalArgsRow
+
         context_lines = [
             str(w.content) for w in block.query(".context").results(Static)
         ]
@@ -412,15 +418,13 @@ async def test_args_line_shows_workflow_ref(chat_app: Any) -> None:
             if text.startswith("Args"):
                 args_line = text
         assert args_line is not None
-        assert target_ref in args_line, (
-            f"Args line missing workflow ref: {args_line!r}"
-        )
+        assert target_ref in args_line, f"Args line missing workflow ref: {args_line!r}"
 
         # Clean up — press `n` to resolve the pending allow_task.
         await pilot.press("n")
         try:
             await asyncio.wait_for(_allow_task, timeout=1.0)
-        except asyncio.TimeoutError:
+        except TimeoutError:
             _allow_task.cancel()
 
 
@@ -451,11 +455,14 @@ async def test_run_workflow_input_validation_surfaces_error() -> None:
     ``TOOL_FAILED`` with the message verbatim in the payload — the
     LLM sees ``is_error=true`` via the framework wrapper.
     """
-    from errors import PlatformError  # noqa: PLC0415
+    from errors import PlatformError
 
     _tool_path = (
         Path(__file__).resolve().parents[3]
-        / "bundles" / "kolsch" / "tools" / "run_workflow.py"
+        / "bundles"
+        / "kolsch"
+        / "tools"
+        / "run_workflow.py"
     )
     spec = importlib.util.spec_from_file_location(
         "bundles.kolsch.tools.run_workflow_flagship_probe",
@@ -484,7 +491,11 @@ async def test_run_workflow_input_validation_surfaces_error() -> None:
             return _JD_YAML_STUB
 
         async def start(
-            self, ref: str, inputs: dict[str, Any], *, card: Any = None,
+            self,
+            ref: str,
+            inputs: dict[str, Any],
+            *,
+            card: Any = None,
         ) -> str:
             _ = ref, inputs, card
             return "wrk_should_not_reach"
@@ -500,10 +511,12 @@ async def test_run_workflow_input_validation_surfaces_error() -> None:
     )
 
     args_schema = run_workflow._tool_definition.args_schema
-    args = args_schema.model_validate({
-        "ref": "andre/workflows/job_description_review",
-        "inputs": {},  # missing `url`
-    })
+    args = args_schema.model_validate(
+        {
+            "ref": "andre/workflows/job_description_review",
+            "inputs": {},  # missing `url`
+        }
+    )
     with pytest.raises(PlatformError) as exc_info:
         await run_workflow._tool_definition.func(args, ctx)
     err = exc_info.value

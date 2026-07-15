@@ -29,7 +29,6 @@ from workflows.tool_schema import (
     virtual_tool_name,
 )
 
-
 # ---------------------------------------------------------------------------
 # Test fixtures — three workflow YAMLs the tests reuse.
 # ---------------------------------------------------------------------------
@@ -109,10 +108,12 @@ def test_build_virtual_defs_returns_one_per_workflow() -> None:
     )
     assert len(defs) == 2
     names = sorted(d.name for d in defs)
-    assert names == sorted([
-        "run_workflow_andre_workflows_job_description_review",
-        "run_workflow_kolsch_workflows_hello",
-    ])
+    assert names == sorted(
+        [
+            "run_workflow_andre_workflows_job_description_review",
+            "run_workflow_kolsch_workflows_hello",
+        ]
+    )
     # Home bundle stamped uniformly.
     assert all(d.home_bundle == "kolsch" for d in defs)
 
@@ -145,6 +146,7 @@ def test_virtual_tool_name_is_identifier_safe() -> None:
     assert len(name) <= 64
     # Matches the ``^[a-z][a-z0-9_]*$`` tool-name pattern.
     import re
+
     assert re.fullmatch(r"[a-z][a-z0-9_]*", name)
 
 
