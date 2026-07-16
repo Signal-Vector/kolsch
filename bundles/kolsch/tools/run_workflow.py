@@ -253,6 +253,51 @@ async def run_workflow(
                     },
                 )
 
+    # qol-088: full-workflow validation pre-flight. Runs the same
+    # `validate_workflow` gate the CLI `kolsch workflows validate`
+    # command uses — BEFORE opening the card / calling
+    # `services.workflows.start(...)` — so a definition-invalid
+    # workflow (unknown node ref, bind collision, malformed
+    # `nodes.X.Y` reference, etc.) is rejected up front with no
+    # doomed run/card. Session `ses_6e8e` observed the previous
+    # behaviour: ~6 launches of a broken workflow, each creating a
+    # run + card that died at run-start with an opaque "Workflow
+    # validation failed (N sub-exceptions)" — the LLM couldn't see
+    # WHICH problems and just relaunched blind. This layer enumerates
+    # each sub-exception (node + location + problem + fix) in the
+    # `TOOL_FAILED` payload the LLM sees, mirroring the input
+    # pre-flight (bug-025/-027) pattern.
+    #
+    # Duck-typed on the `Workflows` Protocol so headless test mocks
+    # without this method fall through to the pre-qol-088 no-
+    # validation path (matches the `resolve_workflow_yaml` /
+    # `list_workflow_refs` seams).
+    definition_validator = getattr(
+        services.workflows,
+        "validate_workflow_definition",
+        None,
+    )
+    if definition_validator is not None:
+        issues = definition_validator(args.ref)
+        if issues:
+            joined = "\n".join(f"- {issue}" for issue in issues)
+            msg = (
+                f"Workflow {args.ref} failed pre-flight validation "
+                f"({len(issues)} issue"
+                f"{'s' if len(issues) != 1 else ''}):\n"
+                f"{joined}\n"
+                f"Fix the workflow definition and retry — no run was "
+                f"created."
+            )
+            raise WrappedError(
+                message=msg,
+                where="bundles.kolsch.tools.run_workflow.validate_definition",
+                detail={
+                    "ref": args.ref,
+                    "issues": issues,
+                },
+            )
+
     card = await services.cards.open(
         f"Workflow · {args.ref}",
         kind="workflow",

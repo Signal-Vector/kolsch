@@ -1673,6 +1673,57 @@ class WorkflowsImpl(AbstractWorkflows):
         except OSError:
             return None
 
+    def validate_workflow_definition(self, ref: str) -> list[str] | None:
+        """Return per-issue diagnostic strings for the resolved workflow.
+
+        qol-088. The ``run_workflow`` tool calls this to run the full
+        [`validate_workflow`][workflows.validator.validate_workflow]
+        gate BEFORE opening a card or enqueueing a run, so a
+        definition-invalid workflow (unknown node ref, bind collision,
+        malformed Jinja `nodes.X.Y` reference, etc.) is rejected up
+        front instead of dying at run-start with an opaque
+        ``"Workflow validation failed (N sub-exceptions)"`` message.
+
+        Returns ``None`` when the catalog can't find the ref or the
+        file can't be read — the tool falls through so the downstream
+        error path (or the runtime) produces the specific failure.
+        Returns an empty list when the workflow is valid. Returns a
+        non-empty list of ``str(exc)`` diagnostics when the validator
+        collected errors; each string is the full-fat message with
+        file/line/problem/fix that the CLI ``workflows validate``
+        command surfaces.
+
+        Duck-typed at the tool via ``getattr(services.workflows,
+        "validate_workflow_definition", None)`` — the ``Workflows``
+        Protocol stays byte-identical, and test doubles that don't
+        expose the method fall through to the pre-qol-088
+        no-definition-validation path.
+        """
+        from pathlib import Path  # noqa: PLC0415
+
+        from workflows.errors import WorkflowValidationError  # noqa: PLC0415
+        from workflows.parser import load_workflow  # noqa: PLC0415
+        from workflows.validator import validate_workflow  # noqa: PLC0415
+
+        try:
+            catalog = self._runtime.asset_management.catalog()
+            entry = catalog.lookup(ref, expected_type="workflow")
+        except Exception:  # noqa: BLE001 — best-effort probe
+            return None
+        if entry is None:
+            return None
+        try:
+            workflow = load_workflow(Path(entry.path))
+        except WorkflowValidationError as exc:
+            # Parse-time failures (YAML syntax, Pydantic shape, ...)
+            # are definition errors too — surface them here so the tool
+            # rejects the launch instead of failing at run-start.
+            return [str(exc)]
+        except OSError:
+            return None
+        result = validate_workflow(workflow, catalog, file=entry.path)
+        return [str(err) for err in result.errors]
+
     def list_workflow_refs(self) -> list[str]:
         """Return every catalogued workflow ref (bug-027).
 
