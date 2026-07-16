@@ -120,6 +120,18 @@ class PlatformRuntime:
     # Background (defect 1) recurs. `None` disables the default
     # (raw runner runs unwrapped, matching pre-spec-069 behaviour).
     workflow_default_node_timeout_seconds: float | None = 240.0
+    # bug-086 — default per-LLM-call timeout (seconds) that wraps
+    # each `crewai.LLM.call` in `asyncio.wait_for`. Populated at
+    # bootstrap from `platform.yaml:workflows.llm_call_timeout_seconds`;
+    # when absent, derived as `max(configured provider timeout_seconds)
+    # + 30s margin` so the cap never undercuts a purpose-tuned
+    # provider timeout (spec-069's original 120s constant did — see
+    # bug-086 Background). `None` disables the wrap (unbounded call).
+    # The `KOLSCH_LLM_CALL_TIMEOUT_SECONDS` env var still overrides
+    # per-process; this field is what bootstrap installed into the
+    # engine adapter via `set_llm_call_timeout_default`, kept here
+    # for observability + parity with the sibling timeout fields.
+    llm_call_timeout_seconds: float | None = 210.0
 
     async def build_resolved_config(
         self,
@@ -191,6 +203,38 @@ class PlatformRuntime:
                 return value
             return None
         return None
+
+
+def _resolve_llm_call_timeout_default(
+    *,
+    workflows_cfg: dict[str, Any] | None,
+    llm_providers_config: dict[str, ProviderConfig],
+) -> float | None:
+    """Resolve the default LLM-call timeout for bug-086.
+
+    Resolution order (env var overrides this at read time — see
+    ``engine._crewai_adapter._read_llm_call_timeout_seconds``):
+
+    * ``workflows.llm_call_timeout_seconds`` present and ``null`` →
+      ``None`` (explicit opt-out; unbounded call).
+    * present and numeric → ``float(value)``.
+    * absent → derive ``max(provider.timeout_seconds) + 30s`` across
+      providers that declare a timeout so the cap never undercuts
+      a purpose-tuned provider timeout (the spec-069 regression
+      bug-086 fixes). Falls back to 210s (= opencode's tuned 180s
+      + 30s margin) when no providers declare a timeout.
+    """
+    if workflows_cfg is not None and "llm_call_timeout_seconds" in workflows_cfg:
+        raw = workflows_cfg["llm_call_timeout_seconds"]
+        return None if raw is None else float(raw)
+    provider_timeouts = [
+        provider.timeout_seconds
+        for provider in llm_providers_config.values()
+        if provider.timeout_seconds is not None
+    ]
+    if provider_timeouts:
+        return float(max(provider_timeouts)) + 30.0
+    return 210.0
 
 
 async def bootstrap_runtime(
@@ -441,6 +485,23 @@ async def bootstrap_runtime(
     else:
         workflow_default_node_timeout_seconds = float(raw_node_timeout)
 
+    # bug-086 — resolve the per-LLM-call timeout default from the same
+    # `workflows:` section, install it into the engine adapter, and
+    # store on the runtime for observability. Extracted to a helper
+    # so `bootstrap_runtime` stays under the PLR0912/PLR0915 style
+    # thresholds — the resolution has enough branches (explicit key
+    # present/absent, null-vs-number, provider-derivation fallback)
+    # to be worth its own function.
+    llm_call_timeout_seconds = _resolve_llm_call_timeout_default(
+        workflows_cfg=workflows_cfg,
+        llm_providers_config=llm_providers_config,
+    )
+    from engine._crewai_adapter import (  # noqa: PLC0415
+        set_llm_call_timeout_default,
+    )
+
+    set_llm_call_timeout_default(llm_call_timeout_seconds)
+
     return PlatformRuntime(
         root=root,
         asset_management=am,
@@ -459,4 +520,5 @@ async def bootstrap_runtime(
         llm_providers_config=llm_providers_config,
         workflow_default_timeout_seconds=workflow_default_timeout_seconds,
         workflow_default_node_timeout_seconds=workflow_default_node_timeout_seconds,
+        llm_call_timeout_seconds=llm_call_timeout_seconds,
     )

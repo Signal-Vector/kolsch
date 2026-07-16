@@ -1,11 +1,22 @@
 """spec-069 Part A — bounded LLM/network read via ``asyncio.wait_for``.
+bug-086 extends the resolver so the default is configurable via
+``platform.yaml:workflows.llm_call_timeout_seconds`` (env still
+overrides, hardcoded fallback bumped from 120s to 210s).
 
-Covers Acceptance Criterion 4 of spec-069:
+Covers Acceptance Criterion 4 of spec-069 and bug-086 AC1/AC3/AC4:
 
-- **AC4** — the blocking LLM call (CrewAI ``kickoff`` / provider
-  read inside ``asyncio.to_thread``) is bounded by a timeout so a
-  stalled provider read fails fast rather than pinning a worker
-  indefinitely.
+- **AC4 (spec-069)** — the blocking LLM call (CrewAI ``kickoff`` /
+  provider read inside ``asyncio.to_thread``) is bounded by a
+  timeout so a stalled provider read fails fast rather than
+  pinning a worker indefinitely.
+- **AC1 (bug-086)** — the bootstrap-installed default is honoured
+  when the env var is unset; env still overrides.
+- **AC3 (bug-086)** — with the new 210s hardcoded fallback, a
+  ~150s call is NOT cancelled by the bare-install shape (the old
+  120s constant would have killed it).
+- **AC4 (bug-086)** — env override semantics preserved (blank/0/
+  negative disables the wrap; malformed falls through to the
+  configured default).
 
 Two seams are wrapped in Part A — this file exercises the
 ``_crewai_adapter.make_llm_callable`` seam because it is the
@@ -31,12 +42,32 @@ from typing import TYPE_CHECKING, Any, cast
 
 import pytest
 
+from engine import _crewai_adapter
 from engine._crewai_adapter import make_llm_callable
 from engine.framework import LLMRequest, Message
 from errors import ModelTimeout
 
 if TYPE_CHECKING:
     from crewai import LLM
+
+
+@pytest.fixture(autouse=True)
+def _reset_configured_default_timeout(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Guarantee test isolation for the module-level configured default.
+
+    ``set_llm_call_timeout_default`` writes process-global state.
+    If a bootstrap-integration test runs earlier in the session, the
+    write persists and pollutes the assertions here. Reset to the
+    sentinel via monkeypatch so each test sees the hardcoded
+    fallback semantics until it explicitly installs a default.
+    """
+    monkeypatch.setattr(
+        _crewai_adapter,
+        "_configured_default_timeout",
+        _crewai_adapter._UNSET_CONFIGURED_DEFAULT,
+    )
 
 
 class _WedgedCrewaiLLM:
@@ -185,10 +216,85 @@ async def test_env_opt_out_disables_wrap(
     assert _read_llm_call_timeout_seconds() is None
 
     monkeypatch.setenv("KOLSCH_LLM_CALL_TIMEOUT_SECONDS", "not a float")
-    # Malformed values fall back to the module-level default
-    # (defensive — better a bounded call than an unbounded one
-    # when the operator typo'd the env var).
-    assert _read_llm_call_timeout_seconds() == 120.0
+    # Malformed values fall back to the bootstrap-configured default
+    # if any, else the hardcoded module-level fallback (defensive —
+    # better a bounded call than an unbounded one when the operator
+    # typo'd the env var). bug-086 bumped this fallback from 120s to
+    # 210s (= opencode's tuned 180s + 30s margin) so a bare-install
+    # no longer undercuts the provider timeout.
+    assert _read_llm_call_timeout_seconds() == 210.0
 
     monkeypatch.setenv("KOLSCH_LLM_CALL_TIMEOUT_SECONDS", "42.5")
     assert _read_llm_call_timeout_seconds() == pytest.approx(42.5)
+
+
+@pytest.mark.asyncio
+async def test_configured_default_used_when_env_unset(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """bug-086 AC1 — ``set_llm_call_timeout_default`` installs the fallback.
+
+    With no env override, ``_read_llm_call_timeout_seconds`` returns
+    the value bootstrap installed via ``set_llm_call_timeout_default``,
+    not the hardcoded 210s. This is the path
+    ``platform.yaml:workflows.llm_call_timeout_seconds`` travels.
+    """
+    from engine._crewai_adapter import (
+        _read_llm_call_timeout_seconds,
+        set_llm_call_timeout_default,
+    )
+
+    monkeypatch.delenv("KOLSCH_LLM_CALL_TIMEOUT_SECONDS", raising=False)
+
+    set_llm_call_timeout_default(60.0)
+    assert _read_llm_call_timeout_seconds() == pytest.approx(60.0)
+
+    # `None` = disable the wrap (explicit `null` in platform.yaml).
+    set_llm_call_timeout_default(None)
+    assert _read_llm_call_timeout_seconds() is None
+
+
+@pytest.mark.asyncio
+async def test_env_overrides_configured_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """bug-086 AC1 — env stays highest priority above the platform.yaml default.
+
+    Operators can still pin a per-process value via the env var
+    without editing the workspace's platform.yaml.
+    """
+    from engine._crewai_adapter import (
+        _read_llm_call_timeout_seconds,
+        set_llm_call_timeout_default,
+    )
+
+    set_llm_call_timeout_default(60.0)
+    monkeypatch.setenv("KOLSCH_LLM_CALL_TIMEOUT_SECONDS", "300")
+    assert _read_llm_call_timeout_seconds() == pytest.approx(300.0)
+
+    # Env disable (empty) beats the configured default too — the
+    # env var's opt-out semantics are preserved on top of the new
+    # configured-default layer.
+    monkeypatch.setenv("KOLSCH_LLM_CALL_TIMEOUT_SECONDS", "")
+    assert _read_llm_call_timeout_seconds() is None
+
+
+@pytest.mark.asyncio
+async def test_malformed_env_falls_through_to_configured_default(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """bug-086 — malformed env falls through to the platform.yaml default.
+
+    When the operator typos the env var, the resolver defends the
+    caller with the configured default rather than degrading to the
+    hardcoded fallback (which is the correct behaviour only when
+    NO bootstrap default has been installed).
+    """
+    from engine._crewai_adapter import (
+        _read_llm_call_timeout_seconds,
+        set_llm_call_timeout_default,
+    )
+
+    set_llm_call_timeout_default(60.0)
+    monkeypatch.setenv("KOLSCH_LLM_CALL_TIMEOUT_SECONDS", "not a float")
+    assert _read_llm_call_timeout_seconds() == pytest.approx(60.0)

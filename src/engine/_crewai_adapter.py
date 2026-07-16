@@ -50,29 +50,74 @@ if TYPE_CHECKING:
 # alive briefly on shutdown but no longer blocks the CALLER (chat
 # session, workflow node) that raised the timeout.
 #
-# Default 120s is long enough for real-provider latency on cold
-# tools + rate-limited retries but short enough that a stuck
-# request surfaces within ~2 minutes rather than hanging a chat
-# turn forever. Override at process start via
-# `KOLSCH_LLM_CALL_TIMEOUT_SECONDS` (float; blank/`0`/negative
-# disables the wrap, restoring the pre-spec-069 unbounded shape).
+# bug-086 — resolution order for the effective timeout:
+#   1. `KOLSCH_LLM_CALL_TIMEOUT_SECONDS` env var (float; blank/`0`/
+#      negative disables the wrap; malformed falls through).
+#   2. Bootstrap-configured default from `platform.yaml`'s
+#      `workflows.llm_call_timeout_seconds`, installed via
+#      `set_llm_call_timeout_default`.
+#   3. Hardcoded `_DEFAULT_LLM_CALL_TIMEOUT_SECONDS` fallback.
+#
+# The 210s hardcoded fallback = the opencode provider's tuned 180s
+# HTTP timeout + 30s margin, so a bare-install (no `platform.yaml`
+# knob, no env override) does not undercut the provider — the
+# spec-069 regression the bug fixes. When platform.yaml is present
+# bootstrap replaces this with `max(provider.timeout_seconds) + 30s`
+# across configured providers.
+
+
+_DEFAULT_LLM_CALL_TIMEOUT_SECONDS: float = 210.0
+
+# Sentinel — a `None` bootstrap-configured value is distinct from
+# "bootstrap never ran" (tests, direct engine embedders, tools that
+# import `make_llm_callable` outside a runtime). Sentinel = fall
+# through to the hardcoded default; explicit `None` = disable.
+_UNSET_CONFIGURED_DEFAULT: object = object()
+_configured_default_timeout: float | None | object = _UNSET_CONFIGURED_DEFAULT
+
+
+def set_llm_call_timeout_default(value: float | None) -> None:
+    """Install the bootstrap-resolved LLM-call timeout default.
+
+    Called by `bootstrap_runtime` after reading
+    `platform.yaml:workflows.llm_call_timeout_seconds`. The value
+    becomes the fallback used when `KOLSCH_LLM_CALL_TIMEOUT_SECONDS`
+    is unset or malformed. `None` disables the wrap (unbounded call);
+    a positive float bounds every subsequent call.
+
+    Process-global by design — the env var is process-global, and
+    the platform.yaml value is its persistent sibling. Callers that
+    construct their own `CrewAIFramework` outside `bootstrap_runtime`
+    can invoke this directly to tune the default.
+    """
+    global _configured_default_timeout  # noqa: PLW0603
+    _configured_default_timeout = value
+
+
 def _read_llm_call_timeout_seconds() -> float | None:
     raw = os.environ.get("KOLSCH_LLM_CALL_TIMEOUT_SECONDS")
-    if raw is None:
-        return _DEFAULT_LLM_CALL_TIMEOUT_SECONDS
-    stripped = raw.strip()
-    if not stripped:
-        return None
-    try:
-        value = float(stripped)
-    except ValueError:
-        return _DEFAULT_LLM_CALL_TIMEOUT_SECONDS
-    if value <= 0:
-        return None
-    return value
+    if raw is not None:
+        stripped = raw.strip()
+        if not stripped:
+            return None
+        try:
+            value = float(stripped)
+        except ValueError:
+            # Malformed env — fall through to the bootstrap-configured
+            # default (defensive: better a bounded call than an
+            # unbounded one when the operator typo'd the env var).
+            return _resolve_configured_default()
+        if value <= 0:
+            return None
+        return value
+    return _resolve_configured_default()
 
 
-_DEFAULT_LLM_CALL_TIMEOUT_SECONDS: float = 120.0
+def _resolve_configured_default() -> float | None:
+    if _configured_default_timeout is _UNSET_CONFIGURED_DEFAULT:
+        return _DEFAULT_LLM_CALL_TIMEOUT_SECONDS
+    # After the sentinel check, the remaining type is `float | None`.
+    return _configured_default_timeout  # type: ignore[return-value]
 
 
 def make_llm_callable(
