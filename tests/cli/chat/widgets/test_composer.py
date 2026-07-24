@@ -117,9 +117,7 @@ async def test_awaiting_approval_disables_and_swaps_placeholder(
         composer.awaiting_approval = True
         await pilot.pause()
         assert composer.disabled is True
-        assert composer.placeholder == (
-            "Approval required — respond in the block above"
-        )
+        assert composer.placeholder == Composer.AWAITING_PLACEHOLDER
 
         composer.awaiting_approval = False
         await pilot.pause()

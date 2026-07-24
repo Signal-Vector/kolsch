@@ -33,7 +33,15 @@ class Composer(TextArea):
         "Message… (Enter=send · Alt+Enter=newline · "
         "Ctrl+C=copy · /help · Ctrl+D or 'exit' to quit)"
     )
-    AWAITING_PLACEHOLDER = "Approval required — respond in the block above"
+    # spec-078 one-icon-per-block rule: the amber rail (Composer:disabled
+    # → `border-left: outer $warning`) is the primary "you can't type
+    # right now" cue. The pre-migration verbose placeholder
+    # ("Approval required — respond in the block above") stacked a
+    # third redundant "permission required" message on top of the
+    # visible ApprovalBlock + the TurnStatus warning row. Kept a
+    # short single-line cursor hint that pairs with the rail without
+    # repeating the whole sentence.
+    AWAITING_PLACEHOLDER = "Awaiting approval…"
 
     # spec-078: Composer is a `TextArea` subclass. Wrapping in a
     # GutterBlock container (`Widget` composition) would break the

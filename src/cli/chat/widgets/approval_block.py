@@ -712,6 +712,21 @@ class ApprovalBlock(Widget):
             await self._body.mount(Static(footer, classes=classes, markup=False))
         self._result = result
         self._resolved_event.set()
+        # Belt-and-braces: nudge the app-level composer-gate recompute
+        # directly from the widget. The pre-existing path is
+        # `_bridge_widget_resolution` → `WIRE_PROMPT_ANSWERED` append →
+        # `_handle_prompt_answered` → `recompute_awaiting_approval`,
+        # plus `InlineApprovalCallback.finally → clear_awaiting_approval`.
+        # If either path stalls (bridge task GC'd, store append
+        # deferred, callback torn down), the composer stays frozen and
+        # the user can't type. Calling recompute here means the
+        # unfreeze happens the moment `_resolved_event` fires — which
+        # is exactly when the widget considers itself done.
+        app = getattr(self, "app", None)
+        recompute = getattr(app, "recompute_awaiting_approval", None)
+        if callable(recompute):
+            with contextlib.suppress(Exception):
+                recompute()
 
     def _suggested_pattern(self) -> str:
         """Initial value for the pattern edit — the target verbatim."""
