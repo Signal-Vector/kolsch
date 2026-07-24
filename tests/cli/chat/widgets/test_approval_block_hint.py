@@ -42,7 +42,7 @@ async def test_parent_hint_renders_arrow_static(
         # Static, sitting above the border box's breadcrumb.
         hint_children = [
             c
-            for c in block.children
+            for c in block.body_children
             if isinstance(c, Static) and c.has_class("parent-hint")
         ]
         assert len(hint_children) == 1
@@ -61,7 +61,7 @@ async def test_no_parent_hint_no_static_arrow(
     async with app.run_test():
         hint_children = [
             c
-            for c in block.children
+            for c in block.body_children
             if isinstance(c, Static) and c.has_class("parent-hint")
         ]
         assert hint_children == []

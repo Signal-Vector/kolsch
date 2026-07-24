@@ -1,8 +1,10 @@
 """ApprovalBlock — Option-C inline approval flow.
 
-Framework-aligned three-step state machine. The block is a bordered
-``Vertical`` container that swaps a single "current pane" child as the
-user progresses:
+Framework-aligned three-step state machine. Post spec-078 the block
+is a :class:`Widget` container composing a
+:class:`~cli.chat.widgets._gutter_block.GutterBlock` (rail =
+``$warning``, glyph = ``⚠``) around an internal :class:`Vertical`
+body that swaps a single "current pane" child as the user progresses:
 
   step 1  choose      ApprovalChoicePane        y/a/n/d/esc
   step 2  pattern     ApprovalPatternEdit       edit rule pattern
@@ -57,6 +59,7 @@ from textual.containers import Vertical
 from textual.widget import Widget
 from textual.widgets import Static
 
+from cli.chat.widgets._gutter_block import GutterBlock
 from cli.chat.widgets.approval_args_row import ApprovalArgsRow
 from cli.chat.widgets.approval_choice_pane import ApprovalChoicePane
 from cli.chat.widgets.approval_pattern_edit import ApprovalPatternEdit
@@ -94,13 +97,20 @@ def response_key_from(result: PromptCallbackReturn) -> str:
     return "y" if result is AuthzEffect.ALLOW else "n"
 
 
-class ApprovalBlock(Vertical):
-    """Bordered three-step approval flow.
+class ApprovalBlock(Widget):
+    """GutterBlock-composed three-step approval flow.
 
     Public API:
 
     - Constructor: ``ApprovalBlock(rule_id, action, target)``.
     - ``resolved()``: async, returns the ``PromptCallbackReturn`` tuple.
+
+    Post spec-078 the widget is a :class:`Widget` container that
+    composes a single :class:`GutterBlock` (rail = ``$warning``,
+    glyph = ``⚠``) wrapping an internal :class:`Vertical` body. All
+    state-machine mounts / removes target that internal body via
+    :attr:`_body`; :meth:`query_one` continues to descend the whole
+    subtree, so its callers didn't need reshaping.
     """
 
     DEFAULT_CSS = """
@@ -114,54 +124,51 @@ class ApprovalBlock(Vertical):
     ApprovalBlock {
         height: auto;
         width: 1fr;
-        border: round $warning;
-        padding: 0 1;
-        margin: 0 0 1 0;
     }
 
-    ApprovalBlock > .breadcrumb {
+    ApprovalBlock .breadcrumb {
         color: $hint;
         height: 1;
     }
-    ApprovalBlock > .breadcrumb .-done {
+    ApprovalBlock .breadcrumb .-done {
         color: $tool-fg;
         text-style: bold;
     }
-    ApprovalBlock > .breadcrumb .-current {
+    ApprovalBlock .breadcrumb .-current {
         color: $warning;
         text-style: bold;
     }
 
-    ApprovalBlock > .context {
+    ApprovalBlock .context {
         color: $assistant-fg;
         height: 1;
     }
-    ApprovalBlock > .context-label {
+    ApprovalBlock .context-label {
         color: $hint;
     }
 
-    ApprovalBlock > .spacer {
+    ApprovalBlock .spacer {
         height: 1;
     }
 
-    ApprovalBlock > .footer-help {
+    ApprovalBlock .footer-help {
         color: $hint;
         text-style: italic;
         height: 1;
         margin-top: 1;
     }
-    ApprovalBlock > .resolved {
+    ApprovalBlock .resolved {
         height: 1;
         margin-top: 1;
         text-style: bold;
     }
-    ApprovalBlock > .resolved.-allowed {
+    ApprovalBlock .resolved.-allowed {
         color: $tool-fg;
     }
-    ApprovalBlock > .resolved.-denied {
+    ApprovalBlock .resolved.-denied {
         color: $error;
     }
-    ApprovalBlock > .parent-hint {
+    ApprovalBlock .parent-hint {
         color: $hint;
         padding: 0 0 0 1;
         height: 1;
@@ -221,6 +228,11 @@ class ApprovalBlock(Vertical):
         # ``asyncio.Event`` the PromptCallback implementation awaits via
         # ``resolved()``. One-shot — set once, never cleared.
         self._resolved_event: asyncio.Event = asyncio.Event()
+        # spec-078: the internal Vertical body inside the GutterBlock.
+        # State-machine mounts (`_swap_pane`, `_resolve`, `render_terminal`)
+        # target this container so new children land INSIDE the body
+        # rather than as siblings to the GutterBlock. Set in `compose`.
+        self._body: Vertical | None = None
         # bug-056: when non-None, this block was constructed to render a
         # historical (resolved / interrupted) outcome on session resume.
         # `compose` skips the interactive choice pane; `on_mount` skips
@@ -237,37 +249,72 @@ class ApprovalBlock(Vertical):
     # ------------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
-        # spec-014: `parent_hint` renders as `↳` above the border box
-        # so the workflow-scoped approval visually anchors to the
-        # workflow card that spawned it. When `None` (the default —
-        # standard tool-scoped approvals) no hint row is emitted.
+        """Compose the GutterBlock wrapping the state-machine body.
+
+        Spec-078: the widget is now a Widget container that yields a
+        single :class:`GutterBlock` (rail ``$warning``, glyph ``⚠``).
+        The GutterBlock's body is a :class:`Vertical` populated with
+        the pre-migration child list. All state-machine mounts /
+        removes target that internal body via :attr:`_body`;
+        :meth:`query_one` still descends through GutterBlock into the
+        body so its callers didn't need reshaping.
+
+        The pre-migration ``self.border_title = "⚠  Tool approval"``
+        goes away — the glyph is delivered by the GutterBlock rail
+        column, and the "Tool approval" text is folded into the
+        breadcrumb row per the spec-078 design mockup ("breadcrumb on
+        same row as title").
+        """
+        children: list[Widget] = []
+        # spec-014: `parent_hint` renders as `↳` above the block so the
+        # workflow-scoped approval visually anchors to the workflow
+        # card that spawned it. When `None` (the default — standard
+        # tool-scoped approvals) no hint row is emitted.
         if self._parent_hint is not None:
-            yield Static(" ↳", classes="parent-hint", markup=False)
-        self.border_title = "⚠  Tool approval"
-        yield Static(self._breadcrumb_text(), classes="breadcrumb", markup=True)
-        yield Static(f"Tool  {self._action}", classes="context", markup=False)
-        # qol-047: swap the previously-truncating Static for a small
-        # custom widget that detects overflow and offers a chevron +
-        # Tab-to-expand affordance. See ``approval_args_row.py``.
-        yield ApprovalArgsRow(self._target)
-        yield Static(f"Rule  {self._rule_id}", classes="context", markup=False)
-        yield Static("", classes="spacer")
-        # bug-056: a terminal-state block was constructed for a historical
-        # prompt on session resume. Skip the interactive choice pane +
-        # footer-help and yield the frozen resolved row directly, so the
-        # widget never surfaces an active keyboard capture and never
-        # sets `_resolved_event`.
+            children.append(Static(" ↳", classes="parent-hint", markup=False))
+        children.append(
+            Static(self._breadcrumb_text(), classes="breadcrumb", markup=True),
+        )
+        children.append(
+            Static(f"Tool  {self._action}", classes="context", markup=False),
+        )
+        # qol-047: overflow-aware ApprovalArgsRow — see approval_args_row.py.
+        children.append(ApprovalArgsRow(self._target))
+        children.append(
+            Static(f"Rule  {self._rule_id}", classes="context", markup=False),
+        )
+        children.append(Static("", classes="spacer"))
+        # bug-056: a terminal-state block was constructed for a
+        # historical prompt on session resume. Skip the interactive
+        # choice pane + footer-help and yield the frozen resolved row
+        # directly, so the widget never surfaces an active keyboard
+        # capture and never sets `_resolved_event`.
         if self._terminal_state is not None:
             allowed, footer = self._terminal_state
-            yield Static(footer, classes=self._resolved_classes(allowed), markup=False)
-            return
-        initial = ApprovalChoicePane()
-        self._current_pane = initial
-        yield initial
-        yield Static(
-            self._choice_footer_hint(),
-            classes="footer-help",
-            markup=False,
+            children.append(
+                Static(
+                    footer,
+                    classes=self._resolved_classes(allowed),
+                    markup=False,
+                ),
+            )
+        else:
+            initial = ApprovalChoicePane()
+            self._current_pane = initial
+            children.append(initial)
+            children.append(
+                Static(
+                    self._choice_footer_hint(),
+                    classes="footer-help",
+                    markup=False,
+                ),
+            )
+        body = Vertical(*children)
+        self._body = body
+        yield GutterBlock(
+            rail_color="$warning",
+            leading_glyph="⚠",
+            body=body,
         )
 
     @staticmethod
@@ -294,6 +341,21 @@ class ApprovalBlock(Vertical):
         await self._resolved_event.wait()
         assert self._result is not None  # noqa: S101
         return self._result
+
+    @property
+    def body_children(self) -> tuple[Widget, ...]:
+        """The widgets currently mounted inside the GutterBlock body.
+
+        Introduced by the spec-078 migration so tests and downstream
+        code that used to walk :attr:`children` for the block's
+        pane / context / footer Statics keep working — after
+        migration those live inside the internal Vertical instead
+        of directly on the block. Returns an empty tuple before
+        :meth:`compose` runs.
+        """
+        if self._body is None:
+            return ()
+        return tuple(self._body.children)
 
     @property
     def is_resolved(self) -> bool:
@@ -355,14 +417,15 @@ class ApprovalBlock(Vertical):
             self._current_pane = None
         with contextlib.suppress(Exception):
             await self.query_one(".footer-help", Static).remove()
-        with contextlib.suppress(Exception):
-            await self.mount(
-                Static(
-                    footer,
-                    classes=self._resolved_classes(allowed),
-                    markup=False,
-                ),
-            )
+        if self._body is not None:
+            with contextlib.suppress(Exception):
+                await self._body.mount(
+                    Static(
+                        footer,
+                        classes=self._resolved_classes(allowed),
+                        markup=False,
+                    ),
+                )
         self._terminal_state = (allowed, footer)
 
     # ------------------------------------------------------------------
@@ -604,11 +667,14 @@ class ApprovalBlock(Vertical):
         # Mount the new pane BEFORE the footer-help Static so the pane
         # stays sandwiched between context + footer. Textual mount()
         # accepts a `before=` selector for exactly this.
+        body = self._body
+        if body is None:
+            return
         try:
             footer = self.query_one(".footer-help", Static)
-            await self.mount(new_pane, before=footer)
+            await body.mount(new_pane, before=footer)
         except Exception:  # noqa: BLE001 — footer may not exist during resolve
-            await self.mount(new_pane)
+            await body.mount(new_pane)
         try:
             footer = self.query_one(".footer-help", Static)
             # qol-047: append the args-expand hint suffix when the row
@@ -637,7 +703,8 @@ class ApprovalBlock(Vertical):
         except Exception:  # noqa: BLE001
             pass
         classes = "resolved -allowed" if allowed else "resolved -denied"
-        await self.mount(Static(footer, classes=classes, markup=False))
+        if self._body is not None:
+            await self._body.mount(Static(footer, classes=classes, markup=False))
         self._result = result
         self._resolved_event.set()
 
