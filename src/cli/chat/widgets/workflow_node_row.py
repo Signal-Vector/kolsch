@@ -1101,7 +1101,16 @@ class WorkflowNodeRow(Collapsible):
                     glyph = resolve_state(self.state).glyph
                 except KeyError:
                     glyph = "?"
-        base = f"{glyph} {self._node_name}"
+        # spec-078: drop the leading glyph when it would double with
+        # Collapsible's own `▶`/`▼` chevron (canonical `running` glyph
+        # is `▸` — same visual family). Terminal glyphs (`✓`/`✗`/`⚠`/
+        # `─`) are cross/warning/rule characters — different family,
+        # no collision, keep them. Spinner frames (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`) are
+        # braille dots — no collision, keep.
+        if glyph == "▸":
+            base = self._node_name
+        else:
+            base = f"{glyph} {self._node_name}"
         if self.state == "failed":
             # bug-063: full error moved to Error section body; keep
             # only the state glyph + node name as a short marker.
