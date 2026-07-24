@@ -319,6 +319,31 @@ class AssistantProse(Widget):
             body=Vertical(*children),
         )
 
+    def get_block_class(self, block_name: str) -> type:
+        """Return the widget class that renders a given markdown block.
+
+        Delegated to the internal :class:`_ProseMarkdown` post spec-078
+        (the block-class table lives on the Markdown subclass). Kept
+        as a public method on :class:`AssistantProse` because
+        `tests/cli/test_no_color_code_blocks.py` and any downstream
+        introspection that predates the migration key off calling it
+        on the top-level widget. Works both pre- and post-mount —
+        pre-mount, the substitution rule (fence → `_PlainFence` under
+        `NO_COLOR`) is the same as it would be on the mounted child,
+        because the rule is a pure function of the env var.
+        """
+        if self._markdown_widget is not None:
+            return self._markdown_widget.get_block_class(block_name)
+        # Pre-mount: replicate the substitution rule inline. Once
+        # mounted, delegate to the child so any future rule changes
+        # only need one edit site.
+        if (
+            block_name in ("fence", "code_block")
+            and os.environ.get("NO_COLOR") is not None
+        ):
+            return _PlainFence
+        return Markdown.BLOCKS[block_name]
+
     @staticmethod
     def _build_identity_header(agent_name: str | None, timestamp: datetime) -> str:
         """Format the ``<agent> · HH:MM`` identity header.

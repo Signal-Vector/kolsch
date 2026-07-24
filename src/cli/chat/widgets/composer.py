@@ -50,6 +50,7 @@ class Composer(TextArea):
     # the transcript above and the InfoBar below.
     DEFAULT_CSS = """
     $user-border: #2ea043;
+    $warning: #ffb454;
 
     Composer {
         height: auto;
@@ -62,6 +63,17 @@ class Composer(TextArea):
     Composer:focus {
         border: none;
         border-left: outer $user-border;
+    }
+    /* awaiting-approval state (see `watch_awaiting_approval`): the
+     * widget sets `disabled = True` to freeze typing. Swap the rail
+     * color to `$warning` so the user's eye lands on the approval
+     * block above rather than defaulting to "still typing in the
+     * transcript" (Reviewer #2 finding — pre-fix the rail stayed
+     * bright green even during approval, colliding with the normal
+     * typing signal). */
+    Composer:disabled {
+        border: none;
+        border-left: outer $warning;
     }
     """
 
