@@ -1,24 +1,12 @@
 ▎⚠ ○ choose ─ ○ pattern ─ ○ save
 ▎  Tool  kolsch/tools/bash
 ▎  Args  ▾
-▎        curl -X POST https://example.com/api/v1/endpoint -d '{"json
-▎        ":"body","more":"keys"}' -H 'auth: Bearer sk-1234'
+▎        curl -X POST https://example.com/api/v1/endpoint -d '{"json":
+▎        "body","more":"keys"}' -H 'auth: Bearer sk-1234'
 ▎  Rule  rl_bash
 ▎
-▎  [y] allow once   [a] allow + rule   [n] deny once   [d] deny +
+▎  [y] allow once   [a] allow + rule   [n] deny once   [d] deny + rule
 ▎
 ▎  › ▊
 ▎
 ▎  Esc → deny once  ·  Tab → collapse args
-▎
-▎
-▎
-▎
-▎
-▎
-▎
-▎
-▎
-▎
-▎
-▎                                                                   ▇▇

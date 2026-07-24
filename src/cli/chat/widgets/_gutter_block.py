@@ -131,12 +131,18 @@ class _GutterRail(Widget):
     layout, and the rail matches it via ``height: 1fr``.
     """
 
+    # CRITICAL: `height: 100%` (matches sibling height), NOT `height: 1fr`.
+    # `1fr` in a `height: auto` container asks for "fill available
+    # parent" — which propagates up and makes the GutterBlock consume
+    # the entire transcript viewport even for one-line content. The
+    # user caught this: every widget composing a GutterBlock rendered
+    # at 100% viewport height until this was changed.
     DEFAULT_CSS = """
     _GutterRail {
         width: 1;
         min-width: 1;
         max-width: 1;
-        height: 1fr;
+        height: 100%;
     }
     """
 
@@ -160,12 +166,18 @@ class _GutterGlyph(Static):
     down the rail. ``content-align: center top`` pins it there.
     """
 
+    # Same `height: 100%` reasoning as `_GutterRail` — `1fr` here
+    # would balloon the container to viewport height even for a
+    # one-row body. Textual will only paint the glyph on the first
+    # row (`content-align: center top`); the rest of the column is
+    # empty background, matching the design mockup's "glyph adjacent
+    # to the first content line" intent.
     DEFAULT_CSS = """
     _GutterGlyph {
         width: 1;
         min-width: 1;
         max-width: 1;
-        height: 1fr;
+        height: 100%;
         content-align: center top;
     }
     """
