@@ -55,23 +55,36 @@ class ToolCallBlock(Collapsible):
     # theme.tcss overrides these variables at runtime. `$error`
     # already ships as a default Textual variable but is redeclared
     # here so the widget carries a coherent palette on its own.
+    # spec-078: ToolCallBlock is a `Collapsible` subclass whose base
+    # class owns expand/collapse, click handling, and the
+    # `CollapsibleTitle` child. Wrapping in a GutterBlock container
+    # (`Widget` composition) would require delegating every one of
+    # Collapsible's methods + reactive attributes — a large rewrite
+    # for a widget whose keybindings (Enter, c) and
+    # `Collapsible.collapsed`/`.title` surface are load-bearing in
+    # tests + downstream mounts. Rail is rendered via
+    # `border-left: outer $color` instead. Textual's `outer` paints
+    # `▌` on the left edge — one glyph wider than the spec's target
+    # `▎` from the GutterBlock primitive, but visually reads the
+    # same "colored left rail per state" the design review calls
+    # for. The `● tool` marker in the title is replaced by the
+    # canonical state glyph (`▸` running / `✗` failed) per spec-078.
     DEFAULT_CSS = """
     $tool-fg: #4dd0e1;
     $hint: #6e7681;
     ToolCallBlock {
         border: none;
+        border-left: outer $tool-fg;
+        background: transparent;
+    }
+    ToolCallBlock.-failed {
+        border-left: outer $error;
     }
     ToolCallBlock > CollapsibleTitle {
         color: $tool-fg;
     }
     ToolCallBlock.-failed > CollapsibleTitle {
         color: $error;
-    }
-    ToolCallBlock:focus-within {
-        border-left: thick $tool-fg;
-    }
-    ToolCallBlock.-failed:focus-within {
-        border-left: thick $error;
     }
     ToolCallBlock .body {
         color: $hint;
@@ -101,7 +114,11 @@ class ToolCallBlock(Collapsible):
         self._body_text = body
         self._recovery_hint = recovery_hint
         self._matched_rule = matched_rule
-        title = f"● {tool_name}({args})"
+        # spec-078: state glyph leads the title (was `●` fixed marker).
+        # `▸` running / `✗` failed matches the canonical STATE_TOKENS
+        # glyphs; the border-left color routes the per-state rail.
+        state_glyph = "✗" if failed else "▸"
+        title = f"{state_glyph} {tool_name}({args})"
         # feat-041 — when the failure was an authz deny (matched_rule
         # non-null), append the 2-line hint to the body Static (spec
         # Mockup 1) so the user sees `denied by rl_.../<file>:<line>`
