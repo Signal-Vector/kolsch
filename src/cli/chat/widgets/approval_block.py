@@ -713,20 +713,29 @@ class ApprovalBlock(Widget):
         self._result = result
         self._resolved_event.set()
         # Belt-and-braces: nudge the app-level composer-gate recompute
-        # directly from the widget. The pre-existing path is
+        # after the widget resolves. The pre-existing path is
         # `_bridge_widget_resolution` → `WIRE_PROMPT_ANSWERED` append →
         # `_handle_prompt_answered` → `recompute_awaiting_approval`,
         # plus `InlineApprovalCallback.finally → clear_awaiting_approval`.
-        # If either path stalls (bridge task GC'd, store append
-        # deferred, callback torn down), the composer stays frozen and
-        # the user can't type. Calling recompute here means the
-        # unfreeze happens the moment `_resolved_event` fires — which
-        # is exactly when the widget considers itself done.
+        # If either path stalls, the composer stays frozen. Calling
+        # recompute directly here bounds the unfreeze latency.
+        #
+        # CRITICAL: schedule via `call_after_refresh` — NOT sync. If we
+        # recompute inline, `composer.awaiting_approval` flips to False
+        # while the escape key event that triggered this resolve is
+        # still in-flight bubbling toward `app.on_key`. That handler
+        # checks `composer.awaiting_approval` as its "is there an
+        # approval up right now?" proxy — if the flag flipped to False
+        # mid-flight, escape falls through to the "cancel active
+        # butler turn" branch → `request_cancel` → engine raises
+        # `ExchangeCancelled('')` and the transcript shows
+        # `[exchange failed — Exchange cancelled at event '']`.
         app = getattr(self, "app", None)
         recompute = getattr(app, "recompute_awaiting_approval", None)
-        if callable(recompute):
+        call_after = getattr(self, "call_after_refresh", None)
+        if callable(recompute) and callable(call_after):
             with contextlib.suppress(Exception):
-                recompute()
+                call_after(recompute)
 
     def _suggested_pattern(self) -> str:
         """Initial value for the pattern edit — the target verbatim."""
