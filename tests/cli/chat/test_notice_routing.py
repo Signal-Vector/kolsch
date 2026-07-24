@@ -72,7 +72,7 @@ async def test_notice_without_card_id_mounts_at_transcript_root() -> None:
         # No `card_id` → mounted at transcript root.
         assert len(widgets) == 1
         # qol-080: widget prepends the severity glyph.
-        assert widgets[0].text == "ℹ hi"
+        assert widgets[0].text == "hi"
 
 
 @pytest.mark.asyncio
@@ -110,7 +110,7 @@ async def test_notice_with_card_id_mounts_inside_card() -> None:
         widgets = list(slot.query(NoticeWidget))
         assert len(widgets) == 1
         # qol-080: widget prepends the severity glyph.
-        assert widgets[0].text == "ℹ in-card"
+        assert widgets[0].text == "in-card"
 
         # No transcript-root NoticeWidget for this notice.
         transcript = app.query_one("#transcript", VerticalScroll)
@@ -194,4 +194,4 @@ async def test_repeat_notice_id_updates_existing_widget_in_place() -> None:
         # Only ONE widget in the slot — updated in place. qol-080: the
         # widget prepends the severity glyph on both mount and update.
         assert len(widgets) == 1
-        assert widgets[0].text == "⚠ dropped 20 events"
+        assert widgets[0].text == "dropped 20 events"
