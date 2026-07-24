@@ -1,27 +1,32 @@
-"""Pilot tests for `AssistantProse`.
+"""Pilot tests for :class:`AssistantProse` (post spec-078 migration).
 
-Per spec (`process/spec-textual-chat-ui.md` → widget subsection):
-- Widget mounts as an inline markdown block with a rounded
-  ``$assistant-fg`` border. (Was originally borderless — flipped
-  during the first live smoke test so the transcript reads as a
-  matched conversation of stacked turn boxes.)
-- Streaming: `async with widget.stream() as s: await s.write(chunk)`
-  grows the rendered document as chunks arrive.
-- Color theme: fenced code blocks render with Pygments spans
-  (verified by counting styled spans inside the fence's `Content`).
-- NO_COLOR: fenced code blocks render with no style spans
-  (Pygments suppressed; plain dim monospace).
+Post spec-078 the widget is a :class:`Widget` container composing a
+:class:`GutterBlock` (rail = ``$assistant-fg``) around a private
+:class:`_ProseMarkdown` child. All prior public API is preserved by
+delegating to that child:
 
-Uses the `mock_app_factory` fixture from `tests/cli/chat/conftest.py`
-so the widget is exercised in isolation without the full ChatApp.
+- :meth:`append` / :meth:`stream` / :attr:`source` still work — they
+  now proxy the internal Markdown widget.
+- The ``agent_name`` / ``timestamp`` kwargs continue to render the
+  identity header, but the header now lives inside the body slot
+  (a ``.ap-header`` Static) instead of on Textual's ``border_title``.
+- NO_COLOR fenced-code plainification (``_PlainFence``) is preserved.
+- JSON auto-wrapping (``_wrap_json_if_detected``) is preserved on
+  the constructor + ``append`` paths.
+
+Uses the ``mock_app_factory`` fixture from
+``tests/cli/chat/conftest.py`` so the widget is exercised in
+isolation without the full ChatApp.
 """
 
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import UTC, datetime
 
 import pytest
+from textual.widgets import Static
 
+from cli.chat.widgets._gutter_block import GutterBlock
 from cli.chat.widgets.assistant_prose import (
     AssistantProse,
     _PlainFence,
@@ -36,7 +41,6 @@ async def test_mount_yields_empty_markdown(mock_app_factory) -> None:
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        # Freshly mounted `Markdown` has no source content yet.
         assert widget.source == ""
 
 
@@ -63,8 +67,6 @@ async def test_stream_context_manager_grows_content(mock_app_factory) -> None:
             await stream.write("Token1 ")
             await stream.write("Token2 ")
             await stream.write("Token3")
-        # `stream()`'s __aexit__ awaits `stream.stop()`, which flushes
-        # any pending fragments into `Markdown.append`.
         await pilot.pause()
         source = widget.source
         assert "Token1" in source
@@ -85,37 +87,32 @@ async def test_stream_stops_on_context_exit(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_default_css_declares_bordered_box(mock_app_factory) -> None:
-    """DEFAULT_CSS boxes the assistant response in ``$assistant-fg``.
+async def test_composes_gutter_block_with_assistant_fg_rail(
+    mock_app_factory,
+) -> None:
+    """The widget composes exactly one GutterBlock with rail=$assistant-fg.
 
-    Original spec had the widget borderless; the user asked during
-    the first live smoke test for a matched pair with UserChatbox
-    so the transcript reads as a symmetric conversation of stacked
-    turn boxes.
+    Replaces the pre-migration DEFAULT_CSS check that asserted
+    ``border: round $assistant-fg`` — post-migration the visual
+    silhouette is delegated to the GutterBlock primitive.
     """
-    assert "border: round $assistant-fg" in AssistantProse.DEFAULT_CSS
-    assert "$assistant-fg" in AssistantProse.DEFAULT_CSS
-    # Ensure the widget still mounts with its own CSS.
     widget = AssistantProse()
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        # Textual computes styles at mount; if the CSS were malformed
-        # the widget would error before this line.
-        assert widget.is_mounted
+        blocks = list(widget.query(GutterBlock))
+        assert len(blocks) == 1
+        assert blocks[0].rail_color == "$assistant-fg"
+        assert blocks[0].leading_glyph is None
+        # No round frame anywhere.
+        assert "border: round" not in AssistantProse.DEFAULT_CSS
 
 
 @pytest.mark.asyncio
 async def test_fenced_code_block_uses_pygments_under_color(
     mock_app_factory, monkeypatch
 ) -> None:
-    """Under the color theme, fenced code blocks get Pygments spans.
-
-    We verify by rendering a fenced Python block via `append`, then
-    inspecting the mounted `MarkdownFence` child's highlighted content.
-    Coloured highlight → at least one styled span. This is the
-    baseline the NO_COLOR test contrasts against.
-    """
+    """Under the color theme, fenced code blocks get Pygments spans."""
     monkeypatch.delenv("NO_COLOR", raising=False)
     widget = AssistantProse()
     app = mock_app_factory(widget)
@@ -126,9 +123,7 @@ async def test_fenced_code_block_uses_pygments_under_color(
 
         fences = list(widget.query(MarkdownFence))
         assert fences, "Expected a MarkdownFence child for the fenced code block"
-        # Under the color theme the fence must NOT be our plain subclass.
         assert not isinstance(fences[0], _PlainFence)
-        # Pygments produced styled spans for `def` / `return` etc.
         highlighted = fences[0]._highlighted_code
         assert len(highlighted.spans) > 0, (
             "Pygments-highlighted fence should have style spans under color theme"
@@ -150,13 +145,11 @@ async def test_fenced_code_block_plain_under_no_color(
 
         fences = list(widget.query(MarkdownFence))
         assert fences, "Expected a MarkdownFence child under NO_COLOR too"
-        # Our substitute class extends MarkdownFence so `query` still
-        # finds it; identity check confirms the swap took effect.
         assert isinstance(fences[0], _PlainFence)
         highlighted = fences[0]._highlighted_code
         assert highlighted.spans == [], (
             "Under NO_COLOR the fence must have zero style spans "
-            "(Pygments suppressed); got spans=%r" % (highlighted.spans,)
+            f"(Pygments suppressed); got spans={highlighted.spans!r}"
         )
 
 
@@ -171,7 +164,6 @@ def test_wrap_json_helper_wraps_valid_json_array() -> None:
     wrapped = _wrap_json_if_detected(text)
     assert wrapped.startswith("```json\n")
     assert wrapped.endswith("\n```")
-    # Indented content preserves newlines Markdown would otherwise collapse.
     assert '"a": 1' in wrapped
     assert '"b": 2' in wrapped
     assert "\n" in wrapped[7:-4]
@@ -203,11 +195,7 @@ def test_wrap_json_helper_handles_empty_string() -> None:
 
 
 def test_wrap_json_helper_skips_bracket_but_non_json() -> None:
-    """Text starting with `[` but not JSON returns unchanged.
-
-    Prevents false positives for e.g. Markdown-style prose beginning
-    with a bracketed reference.
-    """
+    """Text starting with `[` but not JSON returns unchanged."""
     text = "[note] see attached appendix for details"
     assert _wrap_json_if_detected(text) == text
 
@@ -221,8 +209,6 @@ async def test_constructor_wraps_json_input(mock_app_factory) -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         assert "```json" in widget.source
-        # Real newlines survive — the fence protects them from
-        # Markdown paragraph reflow.
         assert '"a": 1' in widget.source
         assert '"b": 2' in widget.source
 
@@ -263,7 +249,7 @@ async def test_append_leaves_prose_unchanged(mock_app_factory) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Identity header (qol-081)
+# Identity header (qol-081, now inside body per spec-078)
 # ---------------------------------------------------------------------------
 
 
@@ -271,81 +257,74 @@ async def test_append_leaves_prose_unchanged(mock_app_factory) -> None:
 async def test_identity_header_renders_agent_name_and_time(
     mock_app_factory,
 ) -> None:
-    """With ``agent_name`` + ``timestamp``, the border title shows both."""
+    """With ``agent_name`` + ``timestamp`` the in-body header shows both."""
     widget = AssistantProse(
         agent_name="Claude",
-        timestamp=datetime(2026, 7, 15, 10, 32, 14),
+        timestamp=datetime(2026, 7, 15, 10, 32, 14, tzinfo=UTC),
     )
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        title = str(widget.border_title)
-        assert "Claude" in title
-        assert "10:32" in title
-        # `·` is the mid-dot separator locked by spec.
-        assert "·" in title
+        header = widget.query_one(".ap-header", Static)
+        text = header.content
+        assert "Claude" in text
+        assert "10:32" in text
+        assert "·" in text
 
 
 @pytest.mark.asyncio
 async def test_identity_header_falls_back_to_assistant(mock_app_factory) -> None:
-    """When ``agent_name`` is ``None``, the header uses ``Assistant``."""
+    """When ``agent_name`` is ``None`` the header uses ``Assistant``."""
     widget = AssistantProse(
         agent_name=None,
-        timestamp=datetime(2026, 7, 15, 10, 32, 0),
+        timestamp=datetime(2026, 7, 15, 10, 32, 0, tzinfo=UTC),
     )
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        title = str(widget.border_title)
-        assert "Assistant" in title
-        assert "10:32" in title
+        header = widget.query_one(".ap-header", Static)
+        assert "Assistant" in header.content
+        assert "10:32" in header.content
 
 
 @pytest.mark.asyncio
 async def test_identity_header_strips_seconds(mock_app_factory) -> None:
-    """Time renders ``HH:MM`` — seconds must be dropped from the title."""
+    """Time renders ``HH:MM`` — seconds must be dropped."""
     widget = AssistantProse(
         agent_name="Claude",
-        timestamp=datetime(2026, 7, 15, 10, 32, 59),
+        timestamp=datetime(2026, 7, 15, 10, 32, 59, tzinfo=UTC),
     )
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        title = str(widget.border_title)
-        assert "10:32" in title
-        assert "10:32:59" not in title
-        assert ":59" not in title
+        header = widget.query_one(".ap-header", Static)
+        assert "10:32" in header.content
+        assert "10:32:59" not in header.content
+        assert ":59" not in header.content
 
 
 @pytest.mark.asyncio
 async def test_identity_header_omitted_when_timestamp_missing(
     mock_app_factory,
 ) -> None:
-    """Callers that don't opt in (no ``timestamp``) keep the bare rail.
-
-    Nested prose (workflow-row response sections, ad-hoc gallery
-    fixtures) shouldn't invent a fake timestamp. The header is
-    strictly opt-in — matches the styleguide catalog / app-layer
-    contract.
-    """
+    """Callers that don't opt in (no ``timestamp``) keep the bare rail."""
     widget = AssistantProse("Some markdown.")
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        # ``border_title`` is unset — Textual's default is ``None`` or
-        # an empty renderable; either way, the header text is absent.
-        assert not widget.border_title
+        headers = list(widget.query(".ap-header"))
+        assert headers == [], "no timestamp → no identity header"
 
 
 def test_identity_header_css_declares_bold_assistant_fg() -> None:
-    """CSS must give the border title uniform bold ``$assistant-fg``.
+    """CSS gives the in-body header bold ``$assistant-fg``.
 
-    ``border_title`` is a plain string (Rich style tokens don't
-    resolve Textual theme vars); the theme colour comes from the
-    ``border-title-color`` / ``border-title-style`` rules in
-    ``DEFAULT_CSS``. Losing either rule silently drops the title
-    into Textual's default grey, breaking the AC.
+    Post-migration the identity header lives inside the GutterBlock's
+    body slot as a ``.ap-header`` Static (was Textual's border_title
+    before). This test locks in the color+bold contract so a future
+    tweak doesn't silently drop the identity into a default grey.
     """
     css = AssistantProse.DEFAULT_CSS
-    assert "border-title-color: $assistant-fg" in css
-    assert "border-title-style: bold" in css
+    assert ".ap-header" in css
+    assert "color: $assistant-fg" in css
+    assert "text-style: bold" in css

@@ -18,23 +18,29 @@ Composition (inside `Collapsible.Contents`):
   terminal-error close.
 
 State machine drives CSS class + header glyph via a
-`reactive("initializing")`. On `success` close the widget auto-
-collapses after 1s (matches the `ToolCallBlock` UX). On `error`
-close the widget **stays expanded** so the failure line is
-readable.
+`reactive("queued")`. On `success` close the widget auto-collapses
+after 1s (matches the `ToolCallBlock` UX). On `failed` close the
+widget **stays expanded** so the failure line is readable.
+
+qol-084: the reactive `state` uses the canonical vocabulary
+(`queued`/`running`/`success`/`failed`/`cancelled`/…). Wire vocab
+(`CardFinalStatus = Literal["success","error","cancelled"]` from
+``tools/services/cards.py``) enters through
+:meth:`apply_close` / :meth:`apply_status`; those methods translate
+via :data:`~cli.chat.state_tokens.WIRE_TO_CANONICAL` before storing
+on the reactive.
 """
 
 from __future__ import annotations
 
 import time
-import warnings
 from typing import Any
 
 from textual.app import ComposeResult
 from textual.reactive import reactive
 from textual.widgets import Collapsible, Static
 
-from cli.chat.state_tokens import resolve_state
+from cli.chat.state_tokens import WIRE_TO_CANONICAL, resolve_state
 from cli.chat.widgets.card_body import KIND_TO_RENDERER
 from cli.chat.widgets.notice_slot import NoticeSlot
 from tools.services.card_kinds import get_kind_spec
@@ -146,11 +152,11 @@ class _BoundedLRUSet:
             self._seen.popitem(last=False)
 
 
-# States driven by `card.status` + `card.closed`. `initializing` is
-# the mounted default; `running` fires on first content event.
-_TERMINAL_STATES = frozenset({"success", "error", "cancelled"})
+# States driven by `card.status` + `card.closed`. `queued` is the
+# mounted default; `running` fires on first content event.
+_TERMINAL_STATES = frozenset({"success", "failed", "cancelled"})
 _CSS_CLASS_STATES = frozenset(
-    {"queued", "paused", "cancelling", "error", "cancelled"},
+    {"queued", "paused", "cancelling", "failed", "cancelled"},
 )
 
 
@@ -167,10 +173,21 @@ class CardWidget(Collapsible):
 
     Auto-collapse on `success` fires 1s after `apply_close` — the
     delay lets the user see the terminal ✓ before the widget folds
-    away. `error` close keeps the widget expanded so the error line
+    away. `failed` close keeps the widget expanded so the error line
     is readable.
     """
 
+    # spec-078: CardWidget is a `Collapsible` subclass whose base
+    # class manages `_contents_list`, click-to-expand, and the
+    # `CollapsibleTitle` child. Wrapping in a GutterBlock container
+    # (`Widget` composition) would require delegating every one of
+    # Collapsible's methods + reactive attributes, so the rail is
+    # rendered via `border-left: outer $color` instead. Textual's
+    # `outer` style paints `▌` on the left edge — one glyph wider
+    # than the spec's target `▎` from the GutterBlock primitive, but
+    # visually reads the same "colored left rail per state" the
+    # design review calls for. Per-state color routing is preserved
+    # via the `.-queued` / `.-paused` / … class rules below.
     DEFAULT_CSS = """
     $tool-fg: #4dd0e1;
     $warning: #ffb454;
@@ -178,24 +195,25 @@ class CardWidget(Collapsible):
     $hint: #6e7681;
 
     CardWidget {
-        border: round $tool-fg;
+        border: none;
+        border-left: outer $tool-fg;
         padding: 0 1;
         margin: 0 0 1 0;
         height: auto;
         background: transparent;
     }
-    CardWidget.-queued     { border: round $hint; }
-    CardWidget.-paused     { border: round $warning; }
-    CardWidget.-cancelling { border: round $tool-fg; opacity: 0.7; }
-    CardWidget.-error      { border: round $error; }
-    CardWidget.-cancelled  { border: round $hint; }
+    CardWidget.-queued     { border-left: outer $hint; }
+    CardWidget.-paused     { border-left: outer $warning; }
+    CardWidget.-cancelling { border-left: outer $tool-fg; opacity: 0.7; }
+    CardWidget.-failed     { border-left: outer $error; }
+    CardWidget.-cancelled  { border-left: outer $hint; }
 
     CardWidget CardHeader {
         color: $tool-fg;
         text-style: bold;
         height: 1;
     }
-    CardWidget.-error     CardHeader { color: $error; }
+    CardWidget.-failed    CardHeader { color: $error; }
     CardWidget.-cancelled CardHeader { color: $hint; }
     CardWidget CardFooter {
         color: $hint;
@@ -214,10 +232,16 @@ class CardWidget(Collapsible):
         ("x", "force_kill", "Force-kill (when cancelling >5s)"),
     ]
 
-    state = reactive("initializing", init=False)
+    state = reactive("queued", init=False)
     """Reactive card state; drives CSS class + header glyph via
     `watch_state`. See spec-007 §CardWidget state machine table for
     the eight-state matrix.
+
+    qol-084: values are canonical
+    (``queued``/``running``/``success``/``failed``/``cancelled``/
+    ``paused``/``cancelling``/``awaiting``). Wire-vocab entries
+    (``"error"``, ``"initializing"``) are translated on their way in
+    at :meth:`apply_close` / :meth:`apply_status`.
     """
 
     # ------------------------------------------------------------------
@@ -242,7 +266,7 @@ class CardWidget(Collapsible):
         self.content: str = ""
         self.error_message: str | None = None
         # spec-016: optional callback fired when Enter is pressed on a
-        # card in ``error`` state. Set by ``WorkflowsImpl`` at card-bind
+        # card in ``failed`` state. Set by ``WorkflowsImpl`` at card-bind
         # time on workflow-kind cards; None for every other kind. The
         # callback receives no args — it looks up the run record via
         # its own closure and flips ``record.acked = True`` plus
@@ -253,8 +277,8 @@ class CardWidget(Collapsible):
         # :meth:`_time_in_state` to gate the ``x`` force-kill binding
         # (>5s in ``cancelling``). Updated inside ``watch_state`` on
         # every transition. Seeded here to the mount time so the
-        # initial ``initializing`` state has a well-defined entry
-        # timestamp — safer than ``None`` for the arithmetic path.
+        # initial ``queued`` state has a well-defined entry timestamp
+        # — safer than ``None`` for the arithmetic path.
         self._state_entered_at: float = time.monotonic()
         # feat-019: optional wiring for the ``x`` force-kill escalation.
         # ``_workflows_impl`` is the concrete WorkflowsImpl handle
@@ -337,7 +361,7 @@ class CardWidget(Collapsible):
                 payload={"chunk": chunk},
             )
         )
-        if self.state == "initializing":
+        if self.state == "queued":
             self.state = "running"
 
     def apply_snapshot(self, event_id: str, content: str) -> None:
@@ -354,17 +378,23 @@ class CardWidget(Collapsible):
             maxsize=_CARD_APPEND_LRU_MAXSIZE,
         )
         self._body.apply_snapshot(content)
-        if self.state == "initializing":
+        if self.state == "queued":
             self.state = "running"
 
     def apply_status(self, status: str) -> None:
-        """Last-writer-wins on `state`. Never crosses into terminal."""
-        if status in _TERMINAL_STATES:
+        """Last-writer-wins on `state`. Never crosses into terminal.
+
+        qol-084: translates tools-wire vocab (``"initializing"``) to
+        canonical (``"queued"``) via :data:`WIRE_TO_CANONICAL` before
+        storing on the reactive.
+        """
+        canonical = WIRE_TO_CANONICAL.get(status, status)
+        if canonical in _TERMINAL_STATES:
             # `status` events are informational; terminal transitions
             # only fire through `apply_close`. Ignore accidental
             # terminal writes here.
             return
-        self.state = status
+        self.state = canonical
 
     def apply_close(
         self,
@@ -374,16 +404,20 @@ class CardWidget(Collapsible):
         """Terminal transition. Idempotent — a terminal card stays put.
 
         - `success` → schedule auto-collapse after 1s.
-        - `error` → footer renders `✗ error: <msg>`; stays expanded.
+        - `failed` → footer renders `✗ error: <msg>`; stays expanded.
+          (Wire vocab ``"error"`` — from ``CardFinalStatus`` in
+          ``tools/services/cards.py`` — is translated to canonical
+          ``"failed"`` via :data:`WIRE_TO_CANONICAL`.)
         - `cancelled` → CSS class + glyph; no footer / no collapse.
         """
         if self.state in _TERMINAL_STATES:
             return
-        self.state = final_status
+        canonical = WIRE_TO_CANONICAL.get(final_status, final_status)
+        self.state = canonical
         self.error_message = error_message
-        if final_status == "error" and error_message:
+        if canonical == "failed" and error_message:
             self._footer.update(f"✗ error: {error_message}")
-        if final_status == "success":
+        if canonical == "success":
             # Match ToolCallBlock's collapse cadence for concise
             # kinds (text / progress / confirm). Guard with
             # `is_mounted` — headless tests may exercise `apply_close`
@@ -444,7 +478,7 @@ class CardWidget(Collapsible):
         ):
             # Body renderer handles these directly.
             self._body.apply_event(data)
-            if self.state == "initializing":
+            if self.state == "queued":
                 self.state = "running"
         elif kind == "kolsch.card.notice":
             # In-card notice routing lives on ``mount_notice`` — the
@@ -483,35 +517,30 @@ class CardWidget(Collapsible):
         # ``_time_in_state`` returns the residency in the *current*
         # state (not since mount).
         self._state_entered_at = time.monotonic()
-        for cls in ("-queued", "-paused", "-cancelling", "-error", "-cancelled"):
+        for cls in ("-queued", "-paused", "-cancelling", "-failed", "-cancelled"):
             self.remove_class(cls)
         if new in _CSS_CLASS_STATES:
             self.add_class(f"-{new}")
         # Update glyph. `running` uses the kind default when the
         # kind-spec map has no explicit entry. Out-of-kind states
         # (e.g. `paused` on a markdown card) fall through to the
-        # canonical `STATE_TOKENS` table via qol-075's
-        # `resolve_state`; unknown names paint `?` so a stray status
-        # can't crash the header. `catch_warnings` silences the alias
-        # DeprecationWarning per transition — the widget's reactive
-        # still holds the legacy vocabulary in a few positions
-        # (``initializing`` default, ``error`` from `apply_close`);
-        # the warning is aimed at external callers. The reactive
-        # migration itself is qol-084; the bridge dissolves then.
+        # canonical `STATE_TOKENS` table via `resolve_state`; unknown
+        # names paint `?` so a stray status can't crash the header.
+        # qol-084 dissolved the alias bridge — this path no longer
+        # needs `warnings.catch_warnings()` scaffolding because the
+        # reactive always holds canonical values.
         glyph = self._kind_spec.header_glyph_by_status.get(new)
         if glyph is None:
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                try:
-                    glyph = resolve_state(new).glyph
-                except KeyError:
-                    glyph = "?"
+            try:
+                glyph = resolve_state(new).glyph
+            except KeyError:
+                glyph = "?"
         self._header.set_glyph(glyph)
 
     def action_expand_or_ack(self) -> None:
-        """`Enter` binding — ack an error card, else expand.
+        """`Enter` binding — ack a failed card, else expand.
 
-        spec-016 AC #11: when the card is in ``error`` state (e.g. a
+        spec-016 AC #11: when the card is in ``failed`` state (e.g. a
         failed workflow pinned at the boundary between terminal and
         in-progress groups), pressing ``Enter`` fires the
         ``_on_error_ack`` callback (set at card-bind time by
@@ -523,7 +552,7 @@ class CardWidget(Collapsible):
         the binding behaves like the legacy ``action_expand`` — expand
         a collapsed card.
         """
-        if self.state == "error" and self._on_error_ack is not None:
+        if self.state == "failed" and self._on_error_ack is not None:
             try:
                 self._on_error_ack()
             except Exception:  # noqa: BLE001 — ack callback best-effort

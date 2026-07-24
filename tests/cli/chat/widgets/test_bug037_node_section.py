@@ -71,7 +71,7 @@ async def test_node_section_state_transitions(
     section = NodeSection("tool: browse_url", state="running")
     assert section.title.endswith("…")
 
-    section.set_state("completed")
+    section.set_state("success")
     assert not section.title.endswith("…")
     assert section.title == "tool: browse_url"
 

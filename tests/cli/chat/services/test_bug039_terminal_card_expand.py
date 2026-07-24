@@ -152,7 +152,7 @@ async def test_terminal_row_expand_after_completion_drains_buffer() -> None:
 
         # Terminal state on the row — buffer freezes, but the queue
         # survives (spec-021 replay-on-expand invariant).
-        row.set_state("completed", details="done")
+        row.set_state("success", details="done")
         await pilot.pause()
 
         # Layout manager runs its terminal reorder pass.

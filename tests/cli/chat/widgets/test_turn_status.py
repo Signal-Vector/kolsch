@@ -131,8 +131,15 @@ async def test_elapsed_revealed_after_two_seconds(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_awaiting_approval_reveals_warning_slot(mock_app_factory) -> None:
-    """Flipping ``awaiting_approval`` toggles the ``.-awaiting-approval`` class."""
+async def test_awaiting_approval_toggles_class(mock_app_factory) -> None:
+    """Flipping ``awaiting_approval`` toggles the ``.-awaiting-approval`` class.
+
+    spec-078 dropped the ``#warning`` child (redundant with the
+    ApprovalBlock's own `⚠` rail and Composer's amber rail); the
+    reactive + class contract is preserved so downstream consumers
+    (`recompute_awaiting_approval`, any future ancestor CSS) still
+    key off the class.
+    """
     widget = TurnStatus()
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
@@ -143,10 +150,6 @@ async def test_awaiting_approval_reveals_warning_slot(mock_app_factory) -> None:
         await pilot.pause()
 
         assert widget.has_class("-awaiting-approval")
-        # The warning static remains in the DOM — the CSS class flips
-        # it from ``display: none`` to ``display: block``.
-        warning = widget.query_one("#warning", Static)
-        assert warning is not None
 
         widget.awaiting_approval = False
         await pilot.pause()

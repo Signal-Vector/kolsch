@@ -1,5 +1,5 @@
 ▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔▔
-  ▼ ✓ headhunter_review (agent) · 2 sub-agent events
-
-     ▶ input: job_description
-     ▶ response
+▌  ▼ ✓ headhunter_review (agent) · 2 sub-agent events
+▌
+▌     ▶ input: job_description
+▌     ▶ response

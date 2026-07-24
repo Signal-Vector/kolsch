@@ -1,9 +1,17 @@
-"""Unit tests for :mod:`cli.chat.state_tokens` (qol-075).
+"""Unit tests for :mod:`cli.chat.state_tokens`.
 
 The canonical `STATE_TOKENS` table replaces the two divergent
-per-widget glyph maps (`WorkflowNodeRow` / `CardWidget`). Legacy
-names alias to canonical via `_LEGACY_ALIASES`; every legacy
-resolution emits a `DeprecationWarning`.
+per-widget glyph maps (`WorkflowNodeRow` / `CardWidget`) — shipped
+in qol-075. qol-084 dissolved the `_LEGACY_ALIASES` bridge that
+briefly mapped the historical vocabulary
+(``completed``/``error``/``initializing``/``starting``/``pruned``)
+to canonical; the widgets' reactive `state` now holds canonical
+values directly and the bridge is gone.
+
+Wire-vocab entries (``CardFinalStatus`` from
+``src/tools/services/cards.py``) that still use ``"error"`` /
+``"initializing"`` are translated at the widget boundary via the
+:data:`WIRE_TO_CANONICAL` mapping — the two-entry table below.
 """
 
 from __future__ import annotations
@@ -13,8 +21,8 @@ import warnings
 import pytest
 
 from cli.chat.state_tokens import (
-    _LEGACY_ALIASES,
     STATE_TOKENS,
+    WIRE_TO_CANONICAL,
     StateToken,
     resolve_state,
 )
@@ -52,9 +60,13 @@ def test_canonical_state_resolves_to_expected_token(
     name: str,
     expected: tuple[str, str, str],
 ) -> None:
-    """Every canonical state returns its `(glyph, color, text_style)`."""
+    """Every canonical state returns its `(glyph, color, text_style)`.
+
+    qol-084: no ``DeprecationWarning`` fires on any lookup because the
+    legacy-alias branch was removed — `resolve_state` is a plain
+    ``STATE_TOKENS[name]``.
+    """
     with warnings.catch_warnings():
-        # Canonical resolution must NOT warn.
         warnings.simplefilter("error", DeprecationWarning)
         token = resolve_state(name)
     assert isinstance(token, StateToken)
@@ -69,47 +81,63 @@ def test_state_token_is_frozen_dataclass() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Legacy alias resolution
+# qol-084: legacy aliases are gone; wire-vocab translation is a distinct map
 # ---------------------------------------------------------------------------
 
 
-_EXPECTED_ALIASES: dict[str, str] = {
-    "completed": "success",
-    "error": "failed",
-    "initializing": "queued",
-    "starting": "running",
-    "pruned": "cancelled",
-}
+_LEGACY_NAMES: tuple[str, ...] = (
+    "completed",
+    "error",
+    "initializing",
+    "starting",
+    "pruned",
+)
 
 
-def test_legacy_alias_table_covers_all_pre_qol075_names() -> None:
-    """`_LEGACY_ALIASES` matches the qol-075 bridge exactly."""
-    assert _LEGACY_ALIASES == _EXPECTED_ALIASES
+@pytest.mark.parametrize("legacy", _LEGACY_NAMES)
+def test_legacy_state_names_raise_key_error(legacy: str) -> None:
+    """qol-084: `_LEGACY_ALIASES` deleted — historical names no longer resolve."""
+    with pytest.raises(KeyError):
+        resolve_state(legacy)
+
+
+def test_resolve_state_does_not_emit_deprecation_warning() -> None:
+    """qol-084: the DeprecationWarning branch is gone — no callsite warns."""
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter("always")
+        for name in STATE_TOKENS:
+            resolve_state(name)
+    dep = [w for w in caught if issubclass(w.category, DeprecationWarning)]
+    assert dep == [], f"unexpected DeprecationWarning(s): {[str(w.message) for w in dep]}"
+
+
+# ---------------------------------------------------------------------------
+# WIRE_TO_CANONICAL — the two-entry wire→canonical translation table
+# ---------------------------------------------------------------------------
+
+
+def test_wire_to_canonical_covers_the_two_persistent_wire_names() -> None:
+    """The wire vocab from ``tools/services/cards.py`` still uses
+    ``"error"`` and ``"initializing"``; these are the only two names
+    the widget boundary must translate. Every other canonical name
+    is a wire-canonical-identity pair.
+    """
+    assert WIRE_TO_CANONICAL == {"error": "failed", "initializing": "queued"}
 
 
 @pytest.mark.parametrize(
-    ("legacy", "canonical"),
-    list(_EXPECTED_ALIASES.items()),
-    ids=list(_EXPECTED_ALIASES),
+    ("wire", "canonical"),
+    list(WIRE_TO_CANONICAL.items()),
 )
-def test_legacy_alias_resolves_to_canonical_with_deprecation_warning(
-    legacy: str,
+def test_wire_translation_lands_on_a_canonical_state(
+    wire: str,
     canonical: str,
 ) -> None:
-    """Each legacy name returns its canonical token and emits exactly one warning."""
-    with warnings.catch_warnings(record=True) as caught:
-        warnings.simplefilter("always")
-        token = resolve_state(legacy)
-
-    # Filter for the deprecation warnings from our module.
-    dep = [w for w in caught if issubclass(w.category, DeprecationWarning)]
-    assert len(dep) == 1, (
-        f"expected exactly one DeprecationWarning for legacy state "
-        f"{legacy!r}, got {len(dep)}"
-    )
-    msg = str(dep[0].message)
-    assert legacy in msg and canonical in msg
-    assert token is STATE_TOKENS[canonical]
+    """Each wire→canonical entry maps to a real STATE_TOKENS key."""
+    assert canonical in STATE_TOKENS
+    # Sanity: the wire name itself is NOT canonical (that's the whole
+    # reason it needs translation).
+    assert wire not in STATE_TOKENS
 
 
 # ---------------------------------------------------------------------------
@@ -118,13 +146,13 @@ def test_legacy_alias_resolves_to_canonical_with_deprecation_warning(
 
 
 def test_unknown_state_raises_key_error() -> None:
-    """Unrecognised names are neither canonical nor aliased — hard fail."""
-    with pytest.raises(KeyError, match="unknown state"):
+    """Unrecognised names — hard fail with a `KeyError`."""
+    with pytest.raises(KeyError):
         resolve_state("nonsense")
 
 
 def test_unknown_state_does_not_emit_deprecation_warning() -> None:
-    """Only legacy aliases warn; unknown names raise without warning."""
+    """qol-084: no branch of `resolve_state` warns anymore."""
     with warnings.catch_warnings(record=True) as caught:
         warnings.simplefilter("always")
         with pytest.raises(KeyError):

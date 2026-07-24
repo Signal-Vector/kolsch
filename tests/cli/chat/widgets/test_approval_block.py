@@ -57,7 +57,7 @@ def _make_block() -> ApprovalBlock:
 
 async def _current_pane(block: ApprovalBlock) -> Widget | None:
     """Return the current active pane, or ``None`` after resolution."""
-    for child in reversed(list(block.children)):
+    for child in reversed(list(block.body_children)):
         if isinstance(
             child,
             (ApprovalChoicePane, ApprovalPatternEdit, ApprovalSaveConfirm),
@@ -92,7 +92,7 @@ async def test_initial_state_shows_choice_pane(
         from cli.chat.widgets.approval_args_row import ApprovalArgsRow
 
         parts: list[str] = []
-        for child in block.children:
+        for child in block.body_children:
             if child.has_class("context"):
                 parts.append(str(child.render()))
             elif isinstance(child, ApprovalArgsRow):
@@ -121,7 +121,7 @@ async def test_press_y_resolves_allow_once(
         await pilot.press("y")
         result = await asyncio.wait_for(block.resolved(), timeout=2.0)
         assert result is AuthzEffect.ALLOW
-        footer = block.children[-1]
+        footer = block.body_children[-1]
         assert "✓ Allowed once" in str(footer.render())
         assert footer.has_class("-allowed")
 
@@ -141,7 +141,7 @@ async def test_press_n_resolves_deny_once(
         await pilot.press("n")
         result = await asyncio.wait_for(block.resolved(), timeout=2.0)
         assert result is AuthzEffect.DENY
-        footer = block.children[-1]
+        footer = block.body_children[-1]
         assert "✗ Denied once" in str(footer.render())
         assert footer.has_class("-denied")
 
@@ -161,7 +161,7 @@ async def test_press_escape_on_choice_pane_resolves_deny_once(
         await pilot.press("escape")
         result = await asyncio.wait_for(block.resolved(), timeout=2.0)
         assert result is AuthzEffect.DENY
-        footer = block.children[-1]
+        footer = block.body_children[-1]
         assert "✗ Denied once" in str(footer.render())
 
 
@@ -237,7 +237,7 @@ async def test_a_full_path_resolves_allow_with_rule(
         assert rule.what == "kolsch/tools/bash"
         assert rule.pattern == "ls -la"
         assert rule.effect == "allow"
-        footer = block.children[-1]
+        footer = block.body_children[-1]
         assert "Rule saved" in str(footer.render())
         assert footer.has_class("-allowed")
 
@@ -269,7 +269,7 @@ async def test_d_full_path_resolves_deny_with_rule(
         assert effect is AuthzEffect.DENY
         assert isinstance(rule, Rule)
         assert rule.effect == "deny"
-        footer = block.children[-1]
+        footer = block.body_children[-1]
         assert "Rule saved" in str(footer.render())
         assert footer.has_class("-denied")
 
@@ -322,5 +322,5 @@ async def test_save_confirm_n_falls_back_to_allow_once(
         await pilot.press("n")
         result = await asyncio.wait_for(block.resolved(), timeout=2.0)
         assert result is AuthzEffect.ALLOW
-        footer = block.children[-1]
+        footer = block.body_children[-1]
         assert "✓ Allowed once" in str(footer.render())

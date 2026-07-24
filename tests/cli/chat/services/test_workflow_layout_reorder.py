@@ -315,7 +315,10 @@ async def test_ack_error_moves_into_terminal_band() -> None:
         assert widget_b._on_error_ack is not None
 
         # Fire the ack (simulates Enter binding).
-        widget_b.state = "error"
+        # qol-084: widget-internal state uses canonical `failed`
+        # (wire `error` is only accepted via apply_close, which
+        # translates).
+        widget_b.state = "failed"
         widget_b.action_expand_or_ack()
         await pilot.pause()
 

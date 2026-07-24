@@ -215,7 +215,7 @@ class CardMountState(Protocol):
     kind: str
     applied_appends: _BoundedLRUSet
     applied_snapshots: _BoundedLRUSet
-    state: str  # "initializing" | "running" | ... | "success" | "error" | "cancelled"
+    state: str  # canonical (qol-084): "queued" | "running" | ... | "success" | "failed" | "cancelled"
     content: str
 
     def apply_append(self, event_id: str, chunk: str) -> None:
@@ -267,7 +267,11 @@ class _CardMountStub:
         self.applied_snapshots: _BoundedLRUSet = _BoundedLRUSet(
             maxsize=_CARD_SNAPSHOT_LRU_MAXSIZE,
         )
-        self.state: str = "initializing"
+        # qol-084: `state` holds canonical widget vocab. Wire vocab
+        # (``"initializing"``, ``"error"``) enters via `apply_status` /
+        # `apply_close` and is translated at that boundary through
+        # :data:`~cli.chat.state_tokens.WIRE_TO_CANONICAL`.
+        self.state: str = "queued"
         self.content: str = ""
         self.error_message: str | None = None
 
@@ -277,7 +281,7 @@ class _CardMountStub:
             return
         self.applied_appends.add(event_id)
         self.content += chunk
-        if self.state == "initializing":
+        if self.state == "queued":
             self.state = "running"
 
     def apply_snapshot(self, event_id: str, content: str) -> None:
@@ -291,22 +295,31 @@ class _CardMountStub:
         self.applied_appends = _BoundedLRUSet(
             maxsize=_CARD_APPEND_LRU_MAXSIZE,
         )
-        if self.state == "initializing":
+        if self.state == "queued":
             self.state = "running"
 
     def apply_status(self, status: str) -> None:
-        """Last-writer-wins."""
-        self.state = status
+        """Last-writer-wins. qol-084: translate wire → canonical."""
+        from cli.chat.state_tokens import WIRE_TO_CANONICAL  # noqa: PLC0415
+
+        self.state = WIRE_TO_CANONICAL.get(status, status)
 
     def apply_close(
         self,
         final_status: str,
         error_message: str | None,
     ) -> None:
-        """Terminal transition — no-op once already terminal."""
-        if self.state in ("success", "error", "cancelled"):
+        """Terminal transition — no-op once already terminal.
+
+        qol-084: translates wire ``final_status`` (``"error"``) to
+        canonical (``"failed"``) via
+        :data:`~cli.chat.state_tokens.WIRE_TO_CANONICAL`.
+        """
+        from cli.chat.state_tokens import WIRE_TO_CANONICAL  # noqa: PLC0415
+
+        if self.state in ("success", "failed", "cancelled"):
             return
-        self.state = final_status
+        self.state = WIRE_TO_CANONICAL.get(final_status, final_status)
         self.error_message = error_message
 
 

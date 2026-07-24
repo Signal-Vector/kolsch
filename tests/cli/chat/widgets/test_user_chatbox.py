@@ -1,22 +1,25 @@
-"""Pilot tests for `UserChatbox`.
+"""Pilot tests for :class:`UserChatbox` (post spec-078 migration).
 
-Modularity rule (spec Design Principles #2): the widget is tested
-in isolation via `mock_app_factory` from the package conftest —
-no other widget, no theme.tcss, no app-level wiring is required
-for the assertions below to hold.
+Modularity rule (spec-textual-chat-ui Design Principles #2): the
+widget is tested in isolation via ``mock_app_factory`` from the
+package conftest — no other widget, no theme.tcss, no app-level
+wiring is required for the assertions below to hold.
 
-What we assert:
+Post spec-078, the widget composes a :class:`GutterBlock` rather
+than rendering as a bordered ``Static``. Assertions reflect the new
+shape:
 
-1. Constructor accepts ``(text: str, timestamp: datetime)`` and
-   the widget mounts cleanly inside a minimal Textual app.
-2. The border title is exactly ``"You · HH:MM:SS"`` formatted
-   from the supplied timestamp.
-3. Body text is rendered **literally** — input containing
-   backticks (which Markdown would parse as code fences) is
-   preserved verbatim.
-4. The `DEFAULT_CSS` on the class references ``$user-border``
-   with a rounded border. That variable is theme-provided; the
-   widget must not hardcode a colour.
+1. Constructor still takes ``(text: str, timestamp: datetime)`` and
+   the widget mounts cleanly.
+2. The identity header inside the body renders ``"You · HH:MM"`` —
+   minute precision, zero-padded. (Pre-migration this was in
+   ``border_title`` at HH:MM:SS precision.)
+3. The body's raw-user-text ``Static`` is constructed with
+   ``markup=False`` so backticks and Rich markup brackets survive
+   verbatim — the same contract the pre-migration widget honored.
+4. The widget composes a :class:`GutterBlock` with
+   ``rail_color="$user-border"`` and no leading glyph — the
+   spec-078 target render.
 """
 
 from __future__ import annotations
@@ -24,30 +27,33 @@ from __future__ import annotations
 from datetime import UTC, datetime
 
 import pytest
+from textual.widgets import Static
 
+from cli.chat.widgets._gutter_block import GutterBlock
 from cli.chat.widgets.user_chatbox import UserChatbox
 
 
 @pytest.mark.asyncio
-async def test_user_chatbox_mounts_with_border_title(mock_app_factory) -> None:
+async def test_user_chatbox_mounts_with_identity_header(mock_app_factory) -> None:
+    """Identity header renders ``"You · HH:MM"`` from the timestamp."""
     ts = datetime(2026, 7, 4, 14, 30, 45, tzinfo=UTC)
     widget = UserChatbox("hello world", ts)
     app = mock_app_factory(widget)
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        # The widget composed the title from the timestamp verbatim.
-        assert widget.border_title == "You · 14:30:45"
+        header = widget.query_one(".uc-header", Static)
+        assert header.content == "You · 14:30"
 
 
 @pytest.mark.asyncio
 async def test_user_chatbox_renders_literal_text_with_backticks(
     mock_app_factory,
 ) -> None:
-    """Backticks (markdown code) and brackets (Rich markup) must
-    survive as literal characters — the user chatbox is NOT a
-    Markdown widget."""
-
+    """Backticks (markdown code) and brackets (Rich markup) survive
+    as literal characters — the body ``Static`` is constructed with
+    ``markup=False``, mirroring the pre-migration contract.
+    """
     ts = datetime(2026, 7, 4, 9, 0, 0, tzinfo=UTC)
     raw = "check `foo.py` and [bold]not bold[/bold]"
     widget = UserChatbox(raw, ts)
@@ -55,53 +61,65 @@ async def test_user_chatbox_renders_literal_text_with_backticks(
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        # Render the widget and capture the visible text.
-        rendered = widget.render()
-        # `Static.render()` returns a Rich renderable. Convert to a
-        # plain string via the console's segments so we can grep the
-        # actual glyphs the terminal would see.
-        console = widget.app.console
-        with console.capture() as cap:
-            console.print(rendered, end="")
-        text = cap.get()
-
-        # Every literal character survived — no markup was consumed
-        # and no fenced code was rendered.
-        assert "`foo.py`" in text
-        assert "[bold]not bold[/bold]" in text
+        body = widget.query_one(".uc-body", Static)
+        # The body Static keeps the raw string verbatim.
+        assert body.content == raw
 
 
 @pytest.mark.asyncio
-async def test_user_chatbox_default_css_uses_user_border_variable(
-    mock_app_factory,
-) -> None:
-    """The widget's DEFAULT_CSS must reference the ``$user-border``
-    theme variable (not a hardcoded hex) and declare a rounded
-    border. This is the modularity contract: swap the theme, the
-    border colour changes without touching the widget."""
-
+async def test_user_chatbox_composes_gutter_block(mock_app_factory) -> None:
+    """The widget composes exactly one :class:`GutterBlock` with
+    ``rail_color="$user-border"`` and no leading glyph.
+    """
     ts = datetime(2026, 7, 4, 0, 0, 0, tzinfo=UTC)
     widget = UserChatbox("x", ts)
     app = mock_app_factory(widget)
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        css = UserChatbox.DEFAULT_CSS
-        assert "$user-border" in css
-        assert "border: round" in css
+        blocks = list(widget.query(GutterBlock))
+        assert len(blocks) == 1
+        block = blocks[0]
+        assert block.rail_color == "$user-border"
+        assert block.leading_glyph is None
 
 
 @pytest.mark.asyncio
-async def test_user_chatbox_title_pads_single_digit_time(
+async def test_user_chatbox_header_pads_single_digit_time(
     mock_app_factory,
 ) -> None:
-    """Border title uses HH:MM:SS with zero-padding — never
-    ``9:5:1``."""
-
+    """Identity header uses HH:MM with zero-padding — never ``9:5``."""
     ts = datetime(2026, 1, 1, 9, 5, 1, tzinfo=UTC)
     widget = UserChatbox("morning", ts)
     app = mock_app_factory(widget)
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert widget.border_title == "You · 09:05:01"
+        header = widget.query_one(".uc-header", Static)
+        assert header.content == "You · 09:05"
+
+
+@pytest.mark.asyncio
+async def test_user_chatbox_no_round_border(mock_app_factory) -> None:
+    """Post-migration the widget must not declare ``border: round``
+    anywhere in its DEFAULT_CSS — the visual border is delegated to
+    the GutterBlock rail.
+    """
+    ts = datetime(2026, 7, 4, 0, 0, 0, tzinfo=UTC)
+    widget = UserChatbox("x", ts)
+    app = mock_app_factory(widget)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert "border: round" not in UserChatbox.DEFAULT_CSS
+
+
+@pytest.mark.asyncio
+async def test_public_text_and_timestamp_read_back(mock_app_factory) -> None:
+    """``text`` and ``timestamp`` properties read back the constructor args."""
+    ts = datetime(2026, 4, 1, 12, 34, 56, tzinfo=UTC)
+    widget = UserChatbox("readback", ts)
+    async with mock_app_factory(widget).run_test() as pilot:
+        await pilot.pause()
+        assert widget.text == "readback"
+        assert widget.timestamp == ts

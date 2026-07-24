@@ -83,7 +83,7 @@ async def test_node_row_paused_on_awaiting_approval() -> None:
         )
     )
     row = renderer._node_rows["n1"]
-    assert row.state == "starting"
+    assert row.state == "running"
 
     # Dispatch the awaiting_approval event.
     renderer.apply_event(
@@ -177,4 +177,4 @@ async def test_unrelated_node_unaffected() -> None:
     )
     assert row_n1.state == "paused"
     # n2 is still in its initial `starting` state.
-    assert row_n2.state == "starting"
+    assert row_n2.state == "running"

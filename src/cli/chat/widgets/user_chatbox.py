@@ -1,64 +1,109 @@
-"""UserChatbox widget — bordered display of the user's turn.
+"""UserChatbox widget — the user's turn in the chat stream.
 
-Framework-aligned: subclasses Textual's `Static` and uses the
-widget's own `border_title` reactive plus a `DEFAULT_CSS` block
-that references the `$user-border` theme variable. The body is
-rendered as **literal** text — no markdown, no Rich markup — so
-input like backticks or bracket-sequences survives verbatim.
+Composes the shared :class:`~cli.chat.widgets._gutter_block.GutterBlock`
+primitive: a ``$user-border`` rail, no leading glyph, and a body that
+stacks the ``You · HH:MM`` identity header above the raw user text.
 
-Spec: process/spec-textual-chat-ui.md → widget subsection
-"UserChatbox" (see also Coder Prompt step 15.b).
+Migrated in spec-078 from the round-frame ``Static`` silhouette
+(``border: round $user-border`` + ``border_title = "You · HH:MM:SS"``)
+onto the gutter primitive. Public API — class name, constructor
+signature, "mount and freeze" lifecycle — is unchanged. Body text is
+still rendered literally (``markup=False``) so backticks and Rich
+markup brackets survive verbatim.
 """
 
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
+from textual.containers import Vertical
+from textual.widget import Widget
 from textual.widgets import Static
 
+from cli.chat.widgets._gutter_block import GutterBlock
 
-class UserChatbox(Static):
-    """A single user turn rendered as a bordered box.
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
-    - Border: round, `$user-border`.
-    - Border title: ``You · HH:MM:SS`` (timestamp from the
-      originating event's ``ts`` field).
-    - Body: literal user text. Backticks, brackets, and any other
-      character that Rich markup or Markdown would normally
-      interpret are preserved as-is — ``markup=False`` on the
-      underlying ``Static``.
+
+class UserChatbox(Widget):
+    """A single user turn rendered through :class:`GutterBlock`.
+
+    Rail: ``$user-border``. No leading glyph. Body: identity header
+    (``You · HH:MM``) above the raw user text.
 
     Constructor:
-        text: The raw user input string.
-        timestamp: The event timestamp used for the border title.
+        text: The raw user input string. Rendered literally — backticks,
+            brackets, and any other Rich/markdown markup are preserved
+            as-is (``markup=False`` on the underlying ``Static``).
+        timestamp: The event timestamp used for the identity header.
+            The header renders at minute precision (``HH:MM``) —
+            seconds are too fine-grained for the chat stream's
+            per-row identity chrome.
 
     Design notes:
+
     - Once mounted, the widget is frozen — it does not react to
-      further events. This matches the "mount and freeze"
-      lifecycle described in the spec.
-    - No custom BINDINGS: the composer / transcript scroll owns
-      focus handling; a user chatbox is a passive display.
+      further events. Matches the "mount and freeze" lifecycle
+      shared by :class:`~cli.chat.widgets.assistant_prose.AssistantProse`
+      and :class:`~cli.chat.widgets.approval_block.ApprovalBlock`.
+    - No custom BINDINGS. The composer / transcript scroll owns focus
+      handling; a user chatbox is a passive display.
+    - Text preservation: the body ``Static`` is constructed with
+      ``markup=False`` so ``[bold]…[/bold]`` in user input renders as
+      literal text — this is the same contract the pre-migration
+      widget honored.
     """
 
     # The $user-border fallback keeps the widget self-sufficient
     # (Design Principles rule 2: modular — a widget must render
-    # correctly without theme.tcss loaded). The app-level
-    # theme.tcss overrides the variable at runtime.
+    # standalone without theme.tcss). The app-level theme.tcss
+    # overrides this at runtime because the app stylesheet cascades
+    # after DEFAULT_CSS.
     DEFAULT_CSS = """
     $user-border: #2ea043;
+
     UserChatbox {
-        border: round $user-border;
-        padding: 0 1;
+        height: auto;
+        width: 100%;
+    }
+    UserChatbox .uc-header {
+        color: $user-border;
+        text-style: bold;
+        height: 1;
+        width: 100%;
+    }
+    UserChatbox .uc-body {
         height: auto;
         width: 100%;
     }
     """
 
     def __init__(self, text: str, timestamp: datetime) -> None:
-        # markup=False → the raw input text is preserved verbatim.
-        # Rich would otherwise interpret `[bold]…[/]` etc. as markup
-        # and swallow the brackets.
-        super().__init__(text, markup=False)
+        super().__init__()
         self._text = text
         self._timestamp = timestamp
-        self.border_title = f"You · {timestamp:%H:%M:%S}"
+
+    @property
+    def text(self) -> str:
+        """The raw user text this widget was constructed with."""
+        return self._text
+
+    @property
+    def timestamp(self) -> datetime:
+        """The event timestamp this widget was constructed with."""
+        return self._timestamp
+
+    def compose(self) -> ComposeResult:
+        """Compose the identity header + literal body inside a ``GutterBlock``."""
+        header = Static(
+            f"You · {self._timestamp:%H:%M}",
+            classes="uc-header",
+            markup=False,
+        )
+        body_text = Static(self._text, classes="uc-body", markup=False)
+        yield GutterBlock(
+            rail_color="$user-border",
+            body=Vertical(header, body_text),
+        )

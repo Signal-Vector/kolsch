@@ -114,7 +114,15 @@ class TurnStatus(Horizontal):
         yield Static("", id="spinner-verb", markup=False)
         yield Static("", id="target", markup=False)
         yield Static("", id="elapsed", markup=False)
-        yield Static("⚠ approval required", id="warning", markup=False)
+        # spec-078 "one signal per block": the `⚠ approval required`
+        # child was a redundant fourth "you need to approve" cue on
+        # top of the ApprovalBlock (rail glyph `⚠`), the Composer's
+        # amber rail, and the composer placeholder. Not yielded any
+        # more. The `awaiting_approval` reactive + `-awaiting-approval`
+        # class + CSS rule stay — they're a no-op with no `#warning`
+        # child to reveal, but preserve the reactive-setter contract
+        # for `recompute_awaiting_approval` and any downstream
+        # consumer that keys off the class.
 
     # ------------------------------------------------------------------
     # Reactive watchers

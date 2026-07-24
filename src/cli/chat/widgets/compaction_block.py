@@ -45,6 +45,12 @@ class CompactionBlock(Collapsible):
 
     ALLOW_SELECT: ClassVar[bool] = True
 
+    # spec-078: CompactionBlock is a `Collapsible` subclass; same
+    # rationale as commits 5/7 — preserve base class, deliver rail
+    # via `border-left: outer $color` (`▌`, one glyph wider than the
+    # primitive's `▎` target). Rail color = `$tool-fg` for the
+    # success/preview/running family (compaction is a tool-family
+    # operation), `$error` for failure, `$hint` for skipped/revoked.
     DEFAULT_CSS = """
     $tool-fg: #4dd0e1;
     $hint: #6e7681;
@@ -52,7 +58,16 @@ class CompactionBlock(Collapsible):
 
     CompactionBlock {
         border: none;
+        border-left: outer $tool-fg;
+        background: transparent;
+        /* spec-078: match the GutterBlock primitive's breather so
+         * border-left widgets stack with the same vertical rhythm as
+         * widgets that compose the primitive. */
+        margin: 0 0 1 0;
     }
+    CompactionBlock.-failed  { border-left: outer $error; }
+    CompactionBlock.-skipped { border-left: outer $hint; }
+    CompactionBlock.-revoked { border-left: outer $hint; }
     CompactionBlock > CollapsibleTitle {
         color: $tool-fg;
     }
@@ -72,12 +87,6 @@ class CompactionBlock(Collapsible):
     CompactionBlock.-preview > CollapsibleTitle {
         color: $tool-fg;
         text-style: italic;
-    }
-    CompactionBlock:focus-within {
-        border-left: thick $tool-fg;
-    }
-    CompactionBlock.-failed:focus-within {
-        border-left: thick $error;
     }
     CompactionBlock .body {
         color: $hint;

@@ -33,28 +33,55 @@ class Composer(TextArea):
         "Message… (Enter=send · Alt+Enter=newline · "
         "Ctrl+C=copy · /help · Ctrl+D or 'exit' to quit)"
     )
-    AWAITING_PLACEHOLDER = "Approval required — respond in the block above"
+    # spec-078 one-icon-per-block rule: the amber rail (Composer:disabled
+    # → `border-left: outer $warning`) is the primary "you can't type
+    # right now" cue. The pre-migration verbose placeholder
+    # ("Approval required — respond in the block above") stacked a
+    # third redundant "permission required" message on top of the
+    # visible ApprovalBlock + the TurnStatus warning row. Kept a
+    # short single-line cursor hint that pairs with the rail without
+    # repeating the whole sentence.
+    AWAITING_PLACEHOLDER = "Awaiting approval…"
 
+    # spec-078: Composer is a `TextArea` subclass. Wrapping in a
+    # GutterBlock container (`Widget` composition) would break the
+    # widget's ability to accept keyboard input — TextArea methods
+    # like `_on_key`, `selection`, `_replace_via_keyboard`, and the
+    # reactive `disabled` toggle for `awaiting_approval` are all
+    # base-class-owned and drive the actual typing experience. So
+    # the rail is delivered via `border-left: outer $user-border`
+    # (Textual's `outer` paints `▌` on the left — one glyph wider
+    # than spec-078's target `▎` from the GutterBlock primitive but
+    # reads the same "colored left rail"). The pre-migration heavy
+    # over/under bars are dropped per spec-078 ("drop the heavy
+    # over/under bars"); the rail alone anchors the composer against
+    # the transcript above and the InfoBar below.
     DEFAULT_CSS = """
     $user-border: #2ea043;
-    /* Dividers above and below the input — no box border around it.
-     * The composer sits between the transcript (above) and the
-     * InfoBar (below); the top and bottom rules frame the input
-     * area cleanly. Idle and focused share the same borders — no
-     * visual jump when focus lands. */
+    $warning: #ffb454;
+
     Composer {
         height: auto;
         min-height: 1;
         max-height: 6;
         border: none;
-        border-top: heavy $user-border;
-        border-bottom: heavy $user-border;
+        border-left: outer $user-border;
         padding: 0 1;
     }
     Composer:focus {
         border: none;
-        border-top: heavy $user-border;
-        border-bottom: heavy $user-border;
+        border-left: outer $user-border;
+    }
+    /* awaiting-approval state (see `watch_awaiting_approval`): the
+     * widget sets `disabled = True` to freeze typing. Swap the rail
+     * color to `$warning` so the user's eye lands on the approval
+     * block above rather than defaulting to "still typing in the
+     * transcript" (Reviewer #2 finding — pre-fix the rail stayed
+     * bright green even during approval, colliding with the normal
+     * typing signal). */
+    Composer:disabled {
+        border: none;
+        border-left: outer $warning;
     }
     """
 

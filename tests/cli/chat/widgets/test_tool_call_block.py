@@ -57,7 +57,7 @@ async def test_tool_call_block_mounts_collapsed_by_default(mock_app_factory) -> 
         # expanded-by-default after live-smoke feedback).
         assert widget.collapsed is True
         # Title format is `● tool_name(args)`.
-        assert widget.title == "● read_file(path=/tmp/x)"
+        assert widget.title == "read_file(path=/tmp/x)"
         # No -failed class on the happy path.
         assert not widget.has_class("-failed")
 
@@ -74,7 +74,7 @@ async def test_tool_call_block_failed_adds_css_class(mock_app_factory) -> None:
         await pilot.pause()
         assert widget.has_class("-failed")
         # Title is unchanged — silhouette preserved.
-        assert widget.title == "● write_file(path=/tmp/x)"
+        assert widget.title == "✗ write_file(path=/tmp/x)"
 
 
 @pytest.mark.asyncio
@@ -180,6 +180,6 @@ async def test_tool_call_block_default_css_uses_theme_variables(
         assert "$tool-fg" in css
         assert "$error" in css
         assert "$hint" in css
-        # Focus indicator: border-left on :focus-within.
-        assert ":focus-within" in css
-        assert "border-left" in css
+        # spec-078: rail is an always-on `border-left: outer $color`
+        # per state class (was `:focus-within` thick-border pre-migration).
+        assert "border-left: outer" in css

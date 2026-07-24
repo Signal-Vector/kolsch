@@ -3,7 +3,7 @@
 Six Pilot passes exercising the state machine:
 
 1. Mount a `CardWidget(card_id, kind="markdown", title="t")` in a
-   Pilot session. Assert `.state == "initializing"`, no CSS state
+   Pilot session. Assert `.state == "queued"`, no CSS state
    class, header glyph `⠋`.
 2. Dispatch `card.appended("hi")` via `apply_event`. Assert state
    flips to `"running"`, header glyph stays kind-appropriate,
@@ -57,9 +57,9 @@ async def test_mount_initializing_state(mock_app_factory) -> None:
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        assert widget.state == "initializing"
+        assert widget.state == "queued"
         # No CSS state class (default state).
-        for cls in ("-queued", "-paused", "-cancelling", "-error", "-cancelled"):
+        for cls in ("-queued", "-paused", "-cancelling", "-failed", "-cancelled"):
             assert not widget.has_class(cls)
         # Initial glyph for a markdown card = ⠋ (running spinner).
         assert "⠋" in _header_text(widget)
@@ -124,8 +124,8 @@ async def test_closed_error_stays_expanded_with_footer(mock_app_factory) -> None
             )
         )
         await pilot.pause()
-        assert widget.state == "error"
-        assert widget.has_class("-error")
+        assert widget.state == "failed"
+        assert widget.has_class("-failed")
         assert "✗ error: oops" in _footer_text(widget)
         # Error stays expanded — no auto-collapse.
         await pilot.pause(1.2)

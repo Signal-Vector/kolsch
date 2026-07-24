@@ -1,10 +1,24 @@
-"""qol-080: `NoticeWidget` always renders a severity glyph.
+# ruff: noqa: RUF001, RUF002, RUF003
+"""Tests for :class:`NoticeWidget` (spec-078 rewire + qol-080).
 
-Under the redundant-carriers principle (see
-`docs/reference/chat-color-guide.md` §"NO_COLOR / mono strategy"),
-severity is carried by hue AND glyph AND text-style — every mode.
-These tests lock in that the glyph is unconditional (both color and
-NO_COLOR) and matches the per-severity mapping.
+Post spec-078 the widget is a :class:`Widget` container composing a
+:class:`GutterBlock` (rail = severity color, glyph = severity
+glyph). Pre-migration the glyph was prepended to the body Static's
+text (``"ℹ session resumed"``); post-migration the glyph lives in the
+GutterBlock's leading-glyph column and the body Static holds just the
+message. The redundant-carriers principle (qol-080) is preserved:
+rail + glyph column always render regardless of ``NO_COLOR``.
+
+The tests lock in:
+- Per-severity glyph mapping (``SEVERITY_GLYPHS``) — unchanged from
+  pre-migration.
+- Unknown ``kind`` falls back to ``info``.
+- The GutterBlock's ``leading_glyph`` is exactly the severity glyph
+  and equals across color + NO_COLOR modes.
+- ``.text`` returns the raw body message (no glyph prefix).
+- ``.kind`` returns the stored severity.
+- ``update_text`` replaces the body in place; the rail + glyph column
+  are unaffected.
 """
 
 from __future__ import annotations
@@ -14,6 +28,7 @@ from unittest import mock
 
 import pytest
 
+from cli.chat.widgets._gutter_block import GutterBlock
 from cli.chat.widgets.notice import SEVERITY_GLYPHS, NoticeWidget
 
 
@@ -22,70 +37,91 @@ def test_severity_glyphs_locked() -> None:
     assert SEVERITY_GLYPHS == {"info": "ℹ", "warning": "⚠", "error": "✗"}
 
 
-@pytest.mark.parametrize(
-    ("kind", "glyph"),
-    [("info", "ℹ"), ("warning", "⚠"), ("error", "✗")],
-)
-def test_glyph_leads_rendered_text_per_severity(kind: str, glyph: str) -> None:
-    """Each severity emits its glyph as the leading character in `.text`."""
-    widget = NoticeWidget(text="Operation completed", kind=kind)
-    assert widget.text.startswith(f"{glyph} "), (
-        f"kind={kind!r} expected leading {glyph!r}, got {widget.text!r}"
-    )
-    assert "Operation completed" in widget.text
+def test_text_property_returns_raw_body_no_glyph() -> None:
+    """Post spec-078 `.text` is the raw message — glyph is on the rail."""
+    widget = NoticeWidget(text="Operation completed", kind="info")
+    assert widget.text == "Operation completed"
 
 
-def test_unknown_kind_falls_back_to_info_glyph() -> None:
-    """Any unknown kind renders with the info glyph (see class docstring)."""
+def test_unknown_kind_falls_back_to_info() -> None:
+    """Any unknown kind resolves to ``info`` severity."""
     widget = NoticeWidget(text="Something", kind="mystery")
-    assert widget.text.startswith("ℹ ")
+    assert widget.kind == "info"
 
 
 @pytest.mark.parametrize(
     ("kind", "glyph"),
     [("info", "ℹ"), ("warning", "⚠"), ("error", "✗")],
 )
-def test_glyph_present_under_no_color(kind: str, glyph: str) -> None:
-    """The glyph is emitted under NO_COLOR — the accessibility principle.
+@pytest.mark.asyncio
+async def test_gutter_block_carries_severity_glyph(
+    kind: str, glyph: str, mock_app_factory
+) -> None:
+    """The GutterBlock's leading_glyph is exactly the severity glyph."""
+    widget = NoticeWidget(text="Operation completed", kind=kind)
+    async with mock_app_factory(widget).run_test() as pilot:
+        await pilot.pause()
+        block = widget.query_one(GutterBlock)
+        assert block.leading_glyph == glyph
+
+
+@pytest.mark.parametrize(
+    ("kind", "glyph"),
+    [("info", "ℹ"), ("warning", "⚠"), ("error", "✗")],
+)
+def test_glyph_present_under_no_color_construction(kind: str, glyph: str) -> None:
+    """Construction under NO_COLOR still produces the same glyph.
 
     NO_COLOR only affects theme selection (`ansi_default` for palette
-    variables); the widget's constructed body text must be identical.
+    variables); the widget's severity resolution + glyph column is
+    identical regardless.
     """
     with mock.patch.dict(os.environ, {"NO_COLOR": "1"}):
         widget = NoticeWidget(text="Operation completed", kind=kind)
-    assert widget.text.startswith(f"{glyph} ")
+    assert widget.kind == kind
+    assert SEVERITY_GLYPHS[kind] == glyph
 
 
 @pytest.mark.parametrize(
     ("kind", "glyph"),
     [("info", "ℹ"), ("warning", "⚠"), ("error", "✗")],
 )
-def test_glyph_matches_across_color_and_no_color(kind: str, glyph: str) -> None:
-    """The glyph is identical between color and NO_COLOR modes."""
+@pytest.mark.asyncio
+async def test_gutter_block_glyph_matches_across_color_and_no_color(
+    kind: str, glyph: str, mock_app_factory
+) -> None:
+    """The GutterBlock leading_glyph is identical between color + NO_COLOR."""
     env_no_color = dict(os.environ, NO_COLOR="1")
     env_color = {k: v for k, v in os.environ.items() if k != "NO_COLOR"}
 
     with mock.patch.dict(os.environ, env_color, clear=True):
-        color = NoticeWidget(text="Body", kind=kind).text
+        w_color = NoticeWidget(text="Body", kind=kind)
     with mock.patch.dict(os.environ, env_no_color, clear=True):
-        mono = NoticeWidget(text="Body", kind=kind).text
+        w_mono = NoticeWidget(text="Body", kind=kind)
 
-    assert color == mono
-    assert color.startswith(f"{glyph} ")
+    async with mock_app_factory(w_color).run_test() as pilot:
+        await pilot.pause()
+        color_glyph = w_color.query_one(GutterBlock).leading_glyph
+    async with mock_app_factory(w_mono).run_test() as pilot:
+        await pilot.pause()
+        mono_glyph = w_mono.query_one(GutterBlock).leading_glyph
+
+    assert color_glyph == mono_glyph == glyph
 
 
-def test_update_text_reapplies_glyph() -> None:
-    """Repeat dispatches update text in place — the glyph must survive.
+def test_update_text_replaces_body_in_place() -> None:
+    """`update_text` replaces the raw body; the rail + glyph are unaffected.
 
-    `event_adapter._handle_notice` calls `widget.update_text(new_text)`
-    with the raw payload string on repeat notices (drop rate-limit
-    count updates in spec-008 §Drop rate limit). If the glyph were only
-    prepended in `__init__`, repeats would strip the accessibility cue.
+    `event_adapter._handle_notice` calls this on repeat dispatches with
+    the same ``notice_id`` (drop rate-limit count updates — spec-008
+    §Drop rate limit). The body text updates; the widget stays mounted.
     """
     widget = NoticeWidget(text="Original", kind="warning")
-    assert widget.text.startswith("⚠ ")
+    assert widget.text == "Original"
     widget.update_text("Rate limit approaching (94/100)")
-    assert widget.text == "⚠ Rate limit approaching (94/100)"
+    assert widget.text == "Rate limit approaching (94/100)"
+    # Kind (and thus rail/glyph) unaffected.
+    assert widget.kind == "warning"
 
 
 def test_kind_property_preserved() -> None:
@@ -96,11 +132,13 @@ def test_kind_property_preserved() -> None:
 
 @pytest.mark.asyncio
 async def test_render_under_pilot(mock_app_factory) -> None:
-    """Widget mounts and renders the prefixed body under Pilot."""
+    """Widget mounts and the body renders under Pilot."""
     widget = NoticeWidget(text="session resumed", kind="info")
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
         await pilot.pause()
-        rendered = str(widget.render())
-        assert "ℹ" in rendered
-        assert "session resumed" in rendered
+        # The GutterBlock is present and carries the ℹ glyph.
+        block = widget.query_one(GutterBlock)
+        assert block.leading_glyph == "ℹ"
+        # The body Static holds the message text (no glyph prefix).
+        assert widget.text == "session resumed"

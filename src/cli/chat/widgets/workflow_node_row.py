@@ -7,11 +7,16 @@ on `workflow.node.started`. The row is a
 [`Collapsible`][textual.widgets.Collapsible] with a reactive
 `state` field driving CSS class + glyph.
 
-State machine (7 states, spec-013 §State table):
+State machine (6 canonical states — qol-084 migrated the historical
+7-state vocabulary onto the shared canonical set; the pre-qol-084
+``starting`` and ``running`` collapsed into a single ``running``
+that carries both the freshly-mounted spinner window and the
+observed sub-agent activity):
 
-- `starting` (`⠋`) — freshly mounted, no CSS class.
-- `running` (`▸`) — sub-agent activity observed.
-- `completed` (`✓`) — terminal success, class `.-completed`.
+- `running` (`▸`) — freshly mounted or sub-agent activity
+  observed. Animated: the spinner-frame table overrides the
+  canonical `▸` while the row is mid-execution.
+- `success` (`✓`) — terminal success, class `.-success`.
 - `failed` (`✗`) — terminal failure, class `.-failed`; the
   collapsed title carries an inline error preview truncated to
   60 chars (Coordinator #4).
@@ -19,8 +24,8 @@ State machine (7 states, spec-013 §State table):
   class `.-paused`.
 - `cancelling` (`⧗`) — run cancel fired, node unwinding, class
   `.-cancelling`.
-- `pruned` (`─`) — node never ran (branch cascade), class
-  `.-pruned`.
+- `cancelled` (`─`) — node never ran (branch cascade), class
+  `.-cancelled`.
 
 bug-036d — sink-consolidation refactor
 --------------------------------------
@@ -47,7 +52,6 @@ from __future__ import annotations
 import contextlib
 import json
 import logging
-import warnings
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from typing import Any, ClassVar
@@ -63,8 +67,13 @@ from cli.chat.state_tokens import resolve_state
 _LOGGER = logging.getLogger(__name__)
 
 
-_ANIMATED_STATES = frozenset({"starting", "running"})
-"""bug-031: states whose title uses the spinner frame."""
+_ANIMATED_STATES = frozenset({"running"})
+"""bug-031: states whose title uses the spinner frame.
+
+qol-084 collapsed the pre-migration ``starting``/``running`` pair
+into a single canonical ``running`` — both meanings now share the
+one animated state.
+"""
 
 
 _EVENT_BUFFER_MAX = 50
@@ -76,7 +85,7 @@ grow unbounded while a sub-agent runs.
 """
 
 
-_TERMINAL_STATES = frozenset({"completed", "failed", "cancelling", "pruned"})
+_TERMINAL_STATES = frozenset({"success", "failed", "cancelling", "cancelled"})
 """spec-021: states that freeze the pending-mount queue."""
 
 
@@ -271,31 +280,44 @@ class WorkflowNodeRow(Collapsible):
     # descends into this widget's children.
     ALLOW_SELECT: ClassVar[bool] = True
 
+    # spec-078: WorkflowNodeRow is a `Collapsible` subclass; same
+    # rationale as commits 5 (CardWidget) / 7 (ToolCallBlock) / 8
+    # (CompactionBlock). Preserve the base class + reactive `state`
+    # + its huge sub-agent + bash section machinery; deliver the
+    # rail via `border-left: outer $color` (`▌` — one glyph wider
+    # than spec-078's target `▎` from the GutterBlock primitive but
+    # reads the same "colored left rail per state"). Default state
+    # (``running``) routes to `$tool-fg`; terminal states route via
+    # the `.-success` / `.-failed` / `.-paused` / `.-cancelling` /
+    # `.-cancelled` classes below. The state glyph already renders
+    # inside the CollapsibleTitle; no separate glyph column is added.
     DEFAULT_CSS = """
     $tool-fg: #4dd0e1;
     $error: #ff5555;
     $warning: #ffb454;
     $hint: #6e7681;
 
-    WorkflowNodeRow { padding: 0 1; margin: 0; }
-    WorkflowNodeRow.-completed  { color: $tool-fg; }
-    WorkflowNodeRow.-failed     { color: $error; }
-    WorkflowNodeRow.-paused     { color: $warning; }
-    WorkflowNodeRow.-cancelling { color: $tool-fg; opacity: 0.6; }
-    WorkflowNodeRow.-pruned     { color: $hint; }
+    WorkflowNodeRow {
+        padding: 0 1;
+        margin: 0;
+        border-left: outer $tool-fg;
+        background: transparent;
+    }
+    WorkflowNodeRow.-success    { color: $tool-fg; border-left: outer $tool-fg; }
+    WorkflowNodeRow.-failed     { color: $error;   border-left: outer $error; }
+    WorkflowNodeRow.-paused     { color: $warning; border-left: outer $warning; }
+    WorkflowNodeRow.-cancelling { color: $tool-fg; opacity: 0.6; border-left: outer $tool-fg; }
+    WorkflowNodeRow.-cancelled  { color: $hint;    border-left: outer $hint; }
     """
 
     # State glyphs live in `src/cli/chat/state_tokens.py` — the
     # single canonical `STATE_TOKENS` table shared with `CardWidget`
-    # (qol-075). This row's reactive `state` still uses the historical
-    # vocabulary (``starting``/``completed``/``pruned``) because the
-    # widget's CSS classes, tests, and upstream `set_state` callers
-    # key off those names; :func:`resolve_state` bridges them to
-    # canonical via `_LEGACY_ALIASES`. Migrating the reactive
-    # vocabulary itself is a follow-up — see qol-084 (the aliases
-    # are the short-lived bridge until then).
+    # (qol-075). qol-084 migrated this row's reactive `state` to the
+    # canonical vocabulary; `_LEGACY_ALIASES` and the DeprecationWarning
+    # scaffolding are gone. Widget internals key on canonical names
+    # directly.
 
-    _TERMINAL_CSS_STATES = ("completed", "failed", "paused", "cancelling", "pruned")
+    _TERMINAL_CSS_STATES = ("success", "failed", "paused", "cancelling", "cancelled")
     """States that map to a `.-<state>` CSS class."""
 
     _ERROR_PREVIEW_MAX_LEN = 60
@@ -304,8 +326,15 @@ class WorkflowNodeRow(Collapsible):
     _OUTPUT_PREVIEW_MAX_LEN = _BODY_MAX_CHARS
     """bug-034: pretty-printed `payload.output` truncation cap."""
 
-    state = reactive("starting", init=False)
-    """Reactive; `watch_state` applies the `.-<state>` CSS class."""
+    state = reactive("running", init=False)
+    """Reactive; `watch_state` applies the `.-<state>` CSS class.
+
+    qol-084: values are canonical
+    (``running``/``success``/``failed``/``paused``/``cancelling``/
+    ``cancelled``). The default is ``running`` — a freshly-mounted
+    node is always in flight (a workflow only mounts the row on the
+    ``node.started`` event).
+    """
 
     def __init__(
         self,
@@ -373,15 +402,14 @@ class WorkflowNodeRow(Collapsible):
         # should gate the JSON preview for agent nodes.
         self._last_assistant_text: str = ""
         # bug-036b: pre-completion title includes ``(short_type)``.
-        # The initial ``⠋`` is a static placeholder for the ~80 ms
-        # gap between compose and the first spinner tick (installed
-        # in :meth:`on_mount`). It intentionally does NOT go through
-        # ``state_tokens.resolve_state`` — the canonical
-        # ``running`` glyph (``▸``) would flash briefly before the
-        # spinner overwrites it, changing a rendering that the
-        # bug-036b snapshot golden pins on ``⠋``. See qol-084 for
-        # the follow-up that unifies this with the spinner table.
-        title = f"⠋ {node_name}"
+        # The initial glyph is the spinner table's first frame — a
+        # static placeholder for the ~80 ms gap between compose and
+        # the first spinner tick (installed in :meth:`on_mount`).
+        # qol-084 dropped the hard-coded ``⠋`` literal in favor of
+        # ``SPINNER_FRAMES[0]`` — same visual, canonical source; the
+        # bug-036b snapshot golden pins on the same character either
+        # way, so no snapshot regeneration is triggered here.
+        title = f"{SPINNER_FRAMES[0]} {node_name}"
         if self._short_type:
             title += f" ({self._short_type})"
         super().__init__(title=title, collapsed=True)
@@ -563,7 +591,7 @@ class WorkflowNodeRow(Collapsible):
                 lines.append("")
                 lines.append("stderr:")
                 lines.append(_truncate(stderr, _BASH_BLOCK_MAX_CHARS))
-            state = "failed" if _is_failed_exit(exit_code) else "completed"
+            state = "failed" if _is_failed_exit(exit_code) else "success"
             exit_section = NodeSection(title, state=state)
             exit_section._contents_list.append(
                 Static("\n".join(lines) or "(empty)", markup=False),
@@ -801,7 +829,7 @@ class WorkflowNodeRow(Collapsible):
             existing = self._tool_sections.get(tool_call_id) if tool_call_id else None
             if existing is not None:
                 # Transition — update section state + block body.
-                new_state = "failed" if failed else "completed"
+                new_state = "failed" if failed else "success"
                 if hasattr(existing, "set_state"):
                     existing.set_state(new_state)
                 block = self._tool_blocks.get(tool_call_id)
@@ -811,7 +839,7 @@ class WorkflowNodeRow(Collapsible):
             state = (
                 "running"
                 if not body and not failed
-                else ("failed" if failed else "completed")
+                else ("failed" if failed else "success")
             )
             section = NodeSection(f"tool: {tool_name or '?'}", state=state)
             block = ToolCallBlock(
@@ -1070,21 +1098,25 @@ class WorkflowNodeRow(Collapsible):
         if self.state in _ANIMATED_STATES:
             glyph = spinner_frame(self._frame_idx)
         else:
-            # State-tokens (qol-075): legacy state names alias to
-            # canonical inside `resolve_state`; unknown names raise
-            # ``KeyError`` — mirror the pre-qol-075 ``.get(..., "?")``
-            # fallback so a stray state can't crash the title paint.
-            # `catch_warnings` silences the alias DeprecationWarning
-            # per repaint — this row's reactive still holds the legacy
-            # vocabulary; the warning is for external callers. The
-            # bridge dissolves when qol-084 migrates the reactive.
-            with warnings.catch_warnings():
-                warnings.simplefilter("ignore", DeprecationWarning)
-                try:
-                    glyph = resolve_state(self.state).glyph
-                except KeyError:
-                    glyph = "?"
-        base = f"{glyph} {self._node_name}"
+            # State-tokens: the reactive always holds a canonical name
+            # (qol-084); unknown names would still raise ``KeyError``
+            # from ``resolve_state``, so mirror the pre-qol-075
+            # ``.get(..., "?")`` fallback and paint ``?`` on a stray
+            # state rather than crashing the title paint.
+            try:
+                glyph = resolve_state(self.state).glyph
+            except KeyError:
+                glyph = "?"
+        # spec-078: drop the leading glyph when it would double with
+        # Collapsible's own `▶`/`▼` chevron (canonical `running` glyph
+        # is `▸` — same visual family). Terminal glyphs (`✓`/`✗`/`⚠`/
+        # `─`) are cross/warning/rule characters — different family,
+        # no collision, keep them. Spinner frames (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`) are
+        # braille dots — no collision, keep.
+        if glyph == "▸":
+            base = self._node_name
+        else:
+            base = f"{glyph} {self._node_name}"
         if self.state == "failed":
             # bug-063: full error moved to Error section body; keep
             # only the state glyph + node name as a short marker.

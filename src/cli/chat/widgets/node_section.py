@@ -4,10 +4,10 @@ bug-037: wraps ONE content widget (UserChatbox / AssistantProse /
 ToolCallBlock / Static) with a titled ``Collapsible`` frame so
 the row body reads as a per-type index the user drills into.
 
-State-aware title decoration:
-- ``starting`` / ``running`` → suffix ``…``
+State-aware title decoration (canonical vocabulary per qol-084):
+- ``running`` → suffix ``…``
 - ``failed`` → prefix ``✗ `` + ``-failed`` CSS class
-- ``completed`` (default) → plain title
+- ``success`` (default) → plain title
 """
 
 from __future__ import annotations
@@ -46,7 +46,7 @@ class NodeSection(Collapsible):
         self,
         title: str,
         *,
-        state: str = "completed",
+        state: str = "success",
         collapsed: bool = True,
         classes: str | None = None,
     ) -> None:
@@ -74,7 +74,7 @@ class NodeSection(Collapsible):
 
 
 def _decorate_title(base: str, state: str) -> str:
-    if state in ("starting", "running"):
+    if state == "running":
         return f"{base}{_RUNNING_SUFFIX}"
     if state == "failed":
         return f"{_FAILED_PREFIX}{base}"

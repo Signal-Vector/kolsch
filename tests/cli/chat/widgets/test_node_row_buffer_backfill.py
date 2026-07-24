@@ -152,7 +152,7 @@ async def test_terminal_state_freezes_queue(
         assert row._sub_agent_turn_count == 2
         assert len(row._pending_mounts) == 2
 
-        row.set_state("completed", details="done")
+        row.set_state("success", details="done")
         await pilot.pause()
 
         # Post-terminal mounts are dropped: neither the queue nor

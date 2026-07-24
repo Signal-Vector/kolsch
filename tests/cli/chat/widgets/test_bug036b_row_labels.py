@@ -70,7 +70,7 @@ async def test_row_title_drops_type_when_details_set(
         await pilot.pause()
         row.set_state("running")
         await pilot.pause()
-        row.set_state("completed", details="scored 8/10")
+        row.set_state("success", details="scored 8/10")
         await pilot.pause()
         assert "scored 8/10" in row.title
         assert "(agent)" not in row.title
