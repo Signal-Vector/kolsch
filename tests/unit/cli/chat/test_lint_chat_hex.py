@@ -1,17 +1,18 @@
 """Fixture tests for ``scripts/lint_chat_hex.py``.
 
-The lint uses a single regex to catch raw ``#hex`` literals in Textual
-color-accepting properties. Textual's shorthand for ``border``,
-``outline``, and ``hatch`` accepts a style keyword between the colon
-and the color (e.g. ``border: round #ff5555;``, mirroring the
-idiomatic ``border: round $error;`` shape in
-``card_widget.py``). Without an optional style-token slot in the
-regex, a future engineer copying that shape with a hex would silently
-pass the lint.
+The lint catches raw ``#hex`` literals in Textual color-accepting
+property values under ``src/cli/chat/widgets/**``. Since qol-083 it
+delegates TCSS parsing to Textual's own ``textual.css.tokenize``
+tokenizer, so it inherits the parser's grammar (multi-line values,
+arbitrary style-token counts, ``keyline``, ``variable_name`` vs
+``declaration_name`` distinction) instead of trying to reproduce it
+in a regex.
 
-These fixtures assert the regex accepts the optional style token
-without regressing the single-token ``color: #hex;`` case, and does
-not false-positive on the canonical ``$var`` variant.
+The historical Round-N comments below (Rounds 2/3/4/5) reference
+the qol-082 regex-era shape the fixtures were added to guard
+against. They're preserved as documentation of what the tokenizer-
+driven lint replaces, and their fixtures still pin real behavior —
+each shape must still fire (or pass) after the rewrite.
 """
 
 from __future__ import annotations
@@ -221,3 +222,83 @@ def test_assistant_fg_var_fallback_does_not_fire(tmp_path: Path) -> None:
 def test_hint_var_fallback_does_not_fire(tmp_path: Path) -> None:
     """``$hint: #6e7681;`` — single-segment palette var, MUST pass."""
     assert _run_lint_on('DEFAULT_CSS = """$hint: #6e7681;"""', tmp_path) == 0
+
+
+# --- qol-083 gap-closing fixtures --------------------------------------
+# qol-082 R5 flagged three residual gaps that the regex approach could
+# not fully close: multi-line CSS values (the regex was line-oriented),
+# missing `keyline` property (omitted from `_COLOR_PROPS`), and a
+# theoretical `$color: #hex;` false-positive (a `$var` named after a
+# property tripped the left-side guard). qol-083 rewrote the lint on
+# top of Textual's own tokenizer, closing the class of issue — these
+# three fixtures pin the specific instances the regex approach missed.
+
+
+def test_multi_line_border_value_hex_fires(tmp_path: Path) -> None:
+    """``border: heavy\\n    #ff5555;`` — CSS value split across lines still fires.
+
+    Textual's parser accepts arbitrary whitespace (including newlines)
+    between the style keyword and the color. The qol-082 regex was
+    line-oriented and missed this shape; qol-083 delegates to the
+    Textual tokenizer, which parses the value regardless of layout.
+    """
+    css = 'DEFAULT_CSS = """\nWidget {\n    border: heavy\n        #ff5555;\n}\n"""'
+    assert _run_lint_on(css, tmp_path) == 1
+
+
+def test_keyline_hex_fires(tmp_path: Path) -> None:
+    """``keyline: thin #ff5555;`` — Textual's ``keyline`` property accepts a color.
+
+    qol-082's ``_COLOR_PROPS`` allowlist omitted ``keyline``. qol-083
+    drops the allowlist entirely: the tokenizer emits ``color`` for
+    hex literals in ANY declaration scope, so new color-accepting
+    properties are absorbed automatically without a maintenance patch.
+    """
+    css = 'DEFAULT_CSS = """Widget { keyline: thin #ff5555; }"""'
+    assert _run_lint_on(css, tmp_path) == 1
+
+
+# --- Adversarial R1: unparseable CSS must not crash the linter -----------
+# qol-083 R1 review probed shapes Textual's own tokenizer refuses.
+# The most plausible one — a multi-line variable declaration
+# `$var:\n    #hex;` — is invalid TCSS in both bare-top-level and
+# selector-wrapped scopes. Textual would refuse to load a widget
+# shipping this CSS, so the "should not fire" invariant is really
+# "the linter must not crash — Textual will fail loudly at load time".
+# Prior behavior: uncaught TokenError propagated to the caller.
+
+
+def test_bare_multi_line_variable_declaration_does_not_crash(tmp_path: Path) -> None:
+    """Bare multi-line ``$var:\\n    #hex;`` — Textual rejects; lint must not crash.
+
+    Verifies the graceful-fallback path in ``_tokenize_css`` when
+    both the raw and the wrapped tokenize attempts raise
+    ``TokenError``. Exit 0 (no hits reported); Textual would
+    surface the parse error at widget-load time.
+    """
+    css = 'DEFAULT_CSS = """$user-border:\n    #2ea043;"""'
+    assert _run_lint_on(css, tmp_path) == 0
+
+
+def test_wrapped_multi_line_variable_declaration_does_not_crash(tmp_path: Path) -> None:
+    """Multi-line ``$var:\\n    #hex;`` inside a selector block — same graceful fallback.
+
+    Textual refuses this shape too; the lint should silently skip it
+    rather than crash with an uncaught ``TokenError``.
+    """
+    css = 'DEFAULT_CSS = """Widget {\n    $x:\n        #2ea043;\n}"""'
+    assert _run_lint_on(css, tmp_path) == 0
+
+
+def test_dollar_color_variable_does_not_fire(tmp_path: Path) -> None:
+    """``$color: #ff5555;`` — a var named after a property MUST pass.
+
+    Theoretical false-positive under the qol-082 regex: the left-side
+    guard ``(?:^|[^a-z-])`` treated ``$`` as a valid boundary before
+    the property-name-lookalike ``color``, so a widget-local var
+    literally named ``$color`` would trip the lint. qol-083 relies on
+    Textual's ``variable_name`` vs ``declaration_name`` distinction,
+    which makes ``$color:`` unambiguously a variable declaration and
+    exempts it by construction.
+    """
+    assert _run_lint_on('DEFAULT_CSS = """$color: #ff5555;"""', tmp_path) == 0
