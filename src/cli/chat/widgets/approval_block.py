@@ -625,7 +625,15 @@ class ApprovalBlock(Widget):
     # ------------------------------------------------------------------
 
     def _breadcrumb_text(self) -> str:
-        """Render the top breadcrumb with `●`/`○` for done/pending.
+        """Render the top breadcrumb with per-step text styling only.
+
+        spec-078 "one icon per block" rule: the block's leading icon
+        is the GutterBlock's ``⚠`` rail glyph. Adding `●`/`○` dots
+        per step here created a second leading icon (`⚠ ● choose …`)
+        that competed with the rail. Post-fix: text-only breadcrumb
+        — done steps render bold cyan, current bold yellow, pending
+        dim — same semantic distinctions without the extra glyph
+        family.
 
         Uses Rich markup for per-step styling — the ``breadcrumb``
         class is set on the outer Static with ``markup=True``.
@@ -638,15 +646,12 @@ class ApprovalBlock(Widget):
         ]
         for i, (step_id, label) in enumerate(labels):
             if step_id < self._step:
-                dot = "[b bright_cyan]●[/]"
                 text = f"[b bright_cyan]{label}[/]"
             elif step_id == self._step:
-                dot = "[b yellow]○[/]"
                 text = f"[b yellow]{label}[/]"
             else:
-                dot = "[dim]○[/]"
                 text = f"[dim]{label}[/]"
-            parts.append(f"{dot} {text}")
+            parts.append(text)
             if i < len(labels) - 1:
                 parts.append("[dim]─[/]")
         return " ".join(parts)

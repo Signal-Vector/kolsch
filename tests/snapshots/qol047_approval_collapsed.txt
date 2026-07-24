@@ -1,4 +1,4 @@
-▎⚠ ○ choose ─ ○ pattern ─ ○ save
+▎⚠ choose ─ pattern ─ save
 ▎  Tool  kolsch/tools/bash
 ▎  Args  curl -X POST https://example.com/api/v1/endpoint -d '{"json…▸
 ▎  Rule  rl_bash
