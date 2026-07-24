@@ -57,7 +57,7 @@ async def test_tool_call_block_mounts_collapsed_by_default(mock_app_factory) -> 
         # expanded-by-default after live-smoke feedback).
         assert widget.collapsed is True
         # Title format is `● tool_name(args)`.
-        assert widget.title == "▸ read_file(path=/tmp/x)"
+        assert widget.title == "read_file(path=/tmp/x)"
         # No -failed class on the happy path.
         assert not widget.has_class("-failed")
 

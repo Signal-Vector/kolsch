@@ -76,6 +76,11 @@ class ToolCallBlock(Collapsible):
         border: none;
         border-left: outer $tool-fg;
         background: transparent;
+        /* spec-078: match the GutterBlock primitive's breather so
+         * border-left widgets stack with the same vertical rhythm
+         * as widgets that compose the primitive. Without this, tool-
+         * call rows butted up against the next assistant response. */
+        margin: 0 0 1 0;
     }
     ToolCallBlock.-failed {
         border-left: outer $error;
@@ -114,11 +119,15 @@ class ToolCallBlock(Collapsible):
         self._body_text = body
         self._recovery_hint = recovery_hint
         self._matched_rule = matched_rule
-        # spec-078: state glyph leads the title (was `●` fixed marker).
-        # `▸` running / `✗` failed matches the canonical STATE_TOKENS
-        # glyphs; the border-left color routes the per-state rail.
-        state_glyph = "✗" if failed else "▸"
-        title = f"{state_glyph} {tool_name}({args})"
+        # spec-078: drop the pre-migration `● {tool_name}(...)` marker.
+        # Collapsible ships with its own `▶` (collapsed) / `▼`
+        # (expanded) chevron on the CollapsibleTitle; adding a running-
+        # state `▸` glyph next to it doubled the chevron. State is now
+        # signaled by the border-left rail color (`$tool-fg` default /
+        # `$error` failed). For failed calls a leading `✗` disambiguates
+        # from the collapsible chevron (different glyph family — cross,
+        # not arrow — so no collision).
+        title = f"✗ {tool_name}({args})" if failed else f"{tool_name}({args})"
         # feat-041 — when the failure was an authz deny (matched_rule
         # non-null), append the 2-line hint to the body Static (spec
         # Mockup 1) so the user sees `denied by rl_.../<file>:<line>`

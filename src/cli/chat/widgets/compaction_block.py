@@ -60,6 +60,10 @@ class CompactionBlock(Collapsible):
         border: none;
         border-left: outer $tool-fg;
         background: transparent;
+        /* spec-078: match the GutterBlock primitive's breather so
+         * border-left widgets stack with the same vertical rhythm as
+         * widgets that compose the primitive. */
+        margin: 0 0 1 0;
     }
     CompactionBlock.-failed  { border-left: outer $error; }
     CompactionBlock.-skipped { border-left: outer $hint; }
