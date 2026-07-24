@@ -278,6 +278,17 @@ class GutterBlock(Widget):
         yield _GutterRail(classes="gb-rail")
         if self._leading_glyph is not None:
             yield _GutterGlyph(self._leading_glyph, classes="gb-glyph-col")
+        # Textual's `Vertical` / `Container` / `Horizontal` all default
+        # to `height: 1fr` in their built-in DEFAULT_CSS, which cascades
+        # ABOVE the `.gb-body { height: auto }` rule below (element
+        # selector on the container class beats a descendant-class
+        # rule in Textual's practical cascade). Set inline here so
+        # every body — regardless of the caller's container choice —
+        # shrinks to its content instead of expanding to fill the
+        # transcript / app viewport. Without this, an AssistantProse
+        # wrapping a two-line markdown block ate 100% of the visible
+        # transcript height post spec-078.
+        self._body.styles.height = "auto"
         yield self._body
 
     def on_mount(self) -> None:
