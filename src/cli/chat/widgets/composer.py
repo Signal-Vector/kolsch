@@ -35,26 +35,33 @@ class Composer(TextArea):
     )
     AWAITING_PLACEHOLDER = "Approval required — respond in the block above"
 
+    # spec-078: Composer is a `TextArea` subclass. Wrapping in a
+    # GutterBlock container (`Widget` composition) would break the
+    # widget's ability to accept keyboard input — TextArea methods
+    # like `_on_key`, `selection`, `_replace_via_keyboard`, and the
+    # reactive `disabled` toggle for `awaiting_approval` are all
+    # base-class-owned and drive the actual typing experience. So
+    # the rail is delivered via `border-left: outer $user-border`
+    # (Textual's `outer` paints `▌` on the left — one glyph wider
+    # than spec-078's target `▎` from the GutterBlock primitive but
+    # reads the same "colored left rail"). The pre-migration heavy
+    # over/under bars are dropped per spec-078 ("drop the heavy
+    # over/under bars"); the rail alone anchors the composer against
+    # the transcript above and the InfoBar below.
     DEFAULT_CSS = """
     $user-border: #2ea043;
-    /* Dividers above and below the input — no box border around it.
-     * The composer sits between the transcript (above) and the
-     * InfoBar (below); the top and bottom rules frame the input
-     * area cleanly. Idle and focused share the same borders — no
-     * visual jump when focus lands. */
+
     Composer {
         height: auto;
         min-height: 1;
         max-height: 6;
         border: none;
-        border-top: heavy $user-border;
-        border-bottom: heavy $user-border;
+        border-left: outer $user-border;
         padding: 0 1;
     }
     Composer:focus {
         border: none;
-        border-top: heavy $user-border;
-        border-bottom: heavy $user-border;
+        border-left: outer $user-border;
     }
     """
 
