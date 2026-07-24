@@ -171,6 +171,17 @@ class CardWidget(Collapsible):
     is readable.
     """
 
+    # spec-078: CardWidget is a `Collapsible` subclass whose base
+    # class manages `_contents_list`, click-to-expand, and the
+    # `CollapsibleTitle` child. Wrapping in a GutterBlock container
+    # (`Widget` composition) would require delegating every one of
+    # Collapsible's methods + reactive attributes, so the rail is
+    # rendered via `border-left: outer $color` instead. Textual's
+    # `outer` style paints `▌` on the left edge — one glyph wider
+    # than the spec's target `▎` from the GutterBlock primitive, but
+    # visually reads the same "colored left rail per state" the
+    # design review calls for. Per-state color routing is preserved
+    # via the `.-queued` / `.-paused` / … class rules below.
     DEFAULT_CSS = """
     $tool-fg: #4dd0e1;
     $warning: #ffb454;
@@ -178,17 +189,18 @@ class CardWidget(Collapsible):
     $hint: #6e7681;
 
     CardWidget {
-        border: round $tool-fg;
+        border: none;
+        border-left: outer $tool-fg;
         padding: 0 1;
         margin: 0 0 1 0;
         height: auto;
         background: transparent;
     }
-    CardWidget.-queued     { border: round $hint; }
-    CardWidget.-paused     { border: round $warning; }
-    CardWidget.-cancelling { border: round $tool-fg; opacity: 0.7; }
-    CardWidget.-error      { border: round $error; }
-    CardWidget.-cancelled  { border: round $hint; }
+    CardWidget.-queued     { border-left: outer $hint; }
+    CardWidget.-paused     { border-left: outer $warning; }
+    CardWidget.-cancelling { border-left: outer $tool-fg; opacity: 0.7; }
+    CardWidget.-error      { border-left: outer $error; }
+    CardWidget.-cancelled  { border-left: outer $hint; }
 
     CardWidget CardHeader {
         color: $tool-fg;
