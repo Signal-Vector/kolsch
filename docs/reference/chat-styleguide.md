@@ -22,16 +22,35 @@ uv run python -m scripts.chat_styleguide   # → build/gallery.html
 
 ## 1. Layout & spacing scale
 
+**Spec-078 update:** the chat stream shares one primitive — `GutterBlock`
+(`src/cli/chat/widgets/_gutter_block.py`) — a 2-cell left rail plus an
+optional leading glyph column plus a body slot. Every widget in the
+transcript stream inherits from or composes it (or, for base-class-
+locked widgets like `Composer` / `ToolCallBlock` / `CompactionBlock` /
+`CardWidget` / `WorkflowNodeRow`, uses `border-left: outer $color` as
+the equivalent visual). Five widgets stay borderless / bare and do NOT
+migrate: `TurnStatus`, `StatusBar`, `InfoBar`, `SlashPopup`,
+`ScrollbackCue` — fixed chrome and transient overlays, not stream rows.
+
 Three values carry almost all of the widget spacing. They form the de-facto
 scale:
 
 ```
-gutter    padding: 0 1      │ text │           1 col L/R, 0 T/B    ← default text inset
-breather  margin:  0 0 1 0                      1 row below block   ← gap between blocks
-indent    padding: 0 0 0 1    ↳ nested          1 col left only     ← hierarchy / nesting
+rail      GutterBlock ▎ + 1 col pad         2-col left column, always on ← primitive anchor
+breather  margin:  0 0 1 0                  1 row below block            ← gap between blocks
+indent    padding: 0 0 0 1    ↳ nested      1 col left only              ← hierarchy / nesting
 ```
 
-![UserChatbox — gutter inset inside a round frame, breather below](chat-widgets/svg/user-chatbox-color.svg)
+The rail is rendered as an actual column of `▎` (U+258E LEFT ONE EIGHTH
+BLOCK) via a `_GutterRail` Widget's `render_line`. Textual's built-in
+border styles top out at `▊` (`tall`/`panel`, right edge only); rendering
+`▎` as widget content is what preserves the exact glyph the design
+review calls for. Widgets bound to base classes that make full
+composition infeasible (Collapsible / TextArea) use `border-left: outer`
+— Textual's `outer` paints `▌` on the left, one glyph wider than `▎`
+but visually reads as the same "colored left rail per state".
+
+![UserChatbox — gutter rail + `You · HH:MM` identity header](chat-widgets/svg/user-chatbox-color.svg)
 
 ### Value → widgets table
 
@@ -177,21 +196,35 @@ row above cites one shared helper.
 
 ## 4. Borders & focus
 
-Brief — the color guide holds the full
-[border-color conventions](chat-color-guide.md#border-color-conventions).
+**Spec-078 update:** round frames + heavy over/under rails are gone
+across the transcript stream. Every migrated widget now delivers its
+role/state signal via a colored left rail — either the exact `▎`
+glyph via the `GutterBlock` primitive (`_gutter_block.py`) or a
+`border-left: outer $color` (`▌` — Textual's closest border style)
+on widgets bound to base classes that can't be wrapped without
+breaking their contract.
 
-| Border type | Meaning | Widgets (`file:line`) |
-|-------------|---------|------------------------|
-| `round` | role / identity frame | `user_chatbox.py:50` (user), `assistant_prose.py:202` (assistant), `approval_block.py:117` / `force_kill_confirm.py:80` (approval, amber), `card_widget.py:180,186-190` (card, by state) |
-| `heavy` (top+bottom) | composer divider rails | `composer.py:50,51` (idle), `composer.py:56,57` (focus) |
-| `thick` (left) | **focus accent**, `:focus-within` only | `tool_call_block.py:71` / `:74` (under `:focus-within` at `:70,73`), `compaction_block.py:76` / `:79` (under `:focus-within` at `:75,78`) |
+| Rail source | Widgets |
+|-------------|---------|
+| GutterBlock primitive (exact `▎`) | `user_chatbox.py`, `assistant_prose.py`, `approval_block.py`, `notice.py`, `force_kill_confirm.py` |
+| `border-left: outer $color` (`▌`) | `card_widget.py`, `tool_call_block.py`, `compaction_block.py`, `workflow_node_row.py`, `composer.py` |
 
-The `thick` left bar is **not** an always-on state frame — it appears
-only while the widget (or a child) holds focus (`:focus-within`). See the
+Focus indicator: the primitive's `DEFAULT_CSS` includes
+`:focus-within > .gb-glyph-col { text-style: reverse }` — qol-079's
+seam for a per-widget focus rail without a full re-render. For
+base-class-locked widgets (Collapsible / TextArea) that don't compose
+a GutterBlock, Textual's default focus outline applies.
+
+Rail-color routing keys off palette variables (`$user-border`,
+`$assistant-fg`, `$warning`, `$tool-fg`, `$error`, `$hint`) — the
 color guide's [border-color conventions](chat-color-guide.md#border-color-conventions)
-for the per-state color mapping.
+lists the per-state mapping. The GutterBlock primitive resolves
+palette-var slot values via per-class CSS rules baked into its
+`DEFAULT_CSS` (`GutterBlock.-rail-<stem> > .gb-rail { color: $<stem>; }`)
+so palette-var resolution happens in the stylesheet where it works,
+not via inline `styles.color` (which rejects palette-var strings).
 
-![Composer idle — heavy top/bottom divider rails](chat-widgets/svg/composer-idle-color.svg)
+![Composer idle — user-border rail on the left, no heavy bars](chat-widgets/svg/composer-idle-color.svg)
 
 ---
 
@@ -232,5 +265,6 @@ duplicated here.)
 | 3 | **`▸` double meaning** — running-state glyph and collapsed chevron | `state_tokens.py` (`running`) & `approval_args_row.py:65` |
 | 4 | ~~**Two elapsed formats**~~ — resolved by qol-077 + qol-085: `src/cli/chat/metrics.py` now owns the single canonical `format_duration` (`Ns` under 60, `Mm SSs` above); every widget with a duration routes through it. qol-085 closed the last drift by adding a keyword-only `sub_second_precision` opt-in (applies only below 1s) and migrating the two `workflow_node_row.py` bash-timing sites. | ~~`turn_status.py:36` vs `card_body/workflow.py:251` vs `workflow_node_row.py:647,651`~~ |
 | 5 | ~~**Two count formats**~~ — resolved by qol-077: `src/cli/chat/metrics.py:format_counts` returns bare `N/M`; every call site migrated. | ~~`card_body/workflow.py:251` vs `:1078`~~ |
-| 6 | **Spacing outliers** — `margin: 1 0` (top+bottom) and `margin-left: 2` indent | `force_kill_confirm.py:82`, `approval_save_confirm.py:54` |
-| 7 | **Palette/color bypasses** | see [color guide backlog](chat-color-guide.md#palette-bypass-backlog) |
+| 6 | ~~**Spacing outliers**~~ — `force_kill_confirm.py`'s `margin: 1 0` outlier resolved by spec-078 (now composes a `GutterBlock` inheriting the primitive's `margin: 0 0 1 0`). `approval_save_confirm.py:54` `margin-left: 2` unchanged. | `approval_save_confirm.py:54` (residual) |
+| 7 | ~~**Round-frame vs borderless-with-rules vs bare-colored-text**~~ — resolved by spec-078: one primitive (`GutterBlock`) delivers a colored left rail + optional leading glyph column across all ten migrated widgets. Round frames + heavy over/under bars removed; Collapsible/TextArea subclasses use `border-left: outer $color` as the equivalent visual. | (resolved) |
+| 8 | **Palette/color bypasses** | see [color guide backlog](chat-color-guide.md#palette-bypass-backlog) |
