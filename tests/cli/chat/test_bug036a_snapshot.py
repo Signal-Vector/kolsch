@@ -231,10 +231,10 @@ async def test_snapshot_late_message_race_fallback() -> None:
         await transcript.mount(row)
         await pilot.pause()
 
-        # Race: NODE_COMPLETED first. ``set_state("completed")``
+        # Race: NODE_COMPLETED first. ``set_state("success")``
         # freezes further mounts; ``set_output`` mounts the JSON
         # preview because ``_last_assistant_text`` is empty.
-        row.set_state("completed")
+        row.set_state("success")
         row.set_output({"summary": "the answer is 42"})
         await pilot.pause()
 

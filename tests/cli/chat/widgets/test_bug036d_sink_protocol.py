@@ -252,7 +252,7 @@ async def test_terminal_state_drops_post_freeze_mounts(
         await pilot.pause()
         assert row._sub_agent_turn_count == 1
 
-        row.set_state("completed")
+        row.set_state("success")
         await pilot.pause()
         assert row._buffer_frozen is True
 

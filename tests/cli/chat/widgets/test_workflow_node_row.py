@@ -25,14 +25,14 @@ async def test_initial_starting_state(mock_app_factory) -> None:
         # bug-031: wait past the 0.08s spinner interval so the tick
         # replaces the ``__init__`` placeholder glyph.
         await pilot.pause(0.1)
-        assert row.state == "starting"
+        assert row.state == "running"
         # bug-031: the row now renders a braille spinner frame while
         # in an animated state — assert one of the eight frames is
         # present rather than the pre-bug-031 static ``⠋``.
         assert any(frame in row.title for frame in _SPINNER_FRAMES)
         assert "x" in row.title
         # No CSS class applied for the default state.
-        assert "-completed" not in row.classes
+        assert "-success" not in row.classes
         assert "-failed" not in row.classes
 
 
@@ -51,7 +51,7 @@ async def test_running_state_no_css(mock_app_factory) -> None:
         # not the pre-bug-031 static ``▸``.
         assert any(frame in row.title for frame in _SPINNER_FRAMES)
         # `running` is a default-palette state — no CSS class.
-        assert "-completed" not in row.classes
+        assert "-success" not in row.classes
         assert "-failed" not in row.classes
 
 
@@ -61,11 +61,11 @@ async def test_completed_state_with_details(mock_app_factory) -> None:
     app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
-        row.set_state("completed", details="42 files")
+        row.set_state("success", details="42 files")
         await pilot.pause()
-        assert row.state == "completed"
+        assert row.state == "success"
         assert "✓" in row.title
-        assert "-completed" in row.classes
+        assert "-success" in row.classes
         assert "42 files" in row.title
 
 
@@ -143,8 +143,8 @@ async def test_pruned_state(mock_app_factory) -> None:
     app = mock_app_factory(row)
     async with app.run_test() as pilot:
         await pilot.pause()
-        row.set_state("pruned")
+        row.set_state("cancelled")
         await pilot.pause()
-        assert row.state == "pruned"
+        assert row.state == "cancelled"
         assert "─" in row.title
-        assert "-pruned" in row.classes
+        assert "-cancelled" in row.classes

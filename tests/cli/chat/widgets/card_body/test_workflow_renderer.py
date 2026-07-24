@@ -100,7 +100,7 @@ async def test_run_start_node_complete_run_complete_flow(mock_app_factory) -> No
         rows = list(renderer.query(WorkflowNodeRow))
         assert len(rows) == 1
         assert rows[0]._node_name == "a"
-        assert rows[0].state == "starting"
+        assert rows[0].state == "running"
 
         renderer.apply_event(
             _MockEvent(
@@ -115,7 +115,7 @@ async def test_run_start_node_complete_run_complete_flow(mock_app_factory) -> No
         )
         await pilot.pause()
 
-        assert rows[0].state == "completed"
+        assert rows[0].state == "success"
         assert "✓" in rows[0].title
         # Header shows 1/1 (qol-077: bare counts, no brackets).
         header_render = str(renderer._header.render())
@@ -232,7 +232,7 @@ async def test_node_pruned_transitions_to_pruned(mock_app_factory) -> None:
         )
         await pilot.pause()
         row = renderer._node_rows["c"]
-        assert row.state == "pruned"
+        assert row.state == "cancelled"
         assert "─" in row.title
 
 

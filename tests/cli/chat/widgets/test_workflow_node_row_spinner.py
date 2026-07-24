@@ -82,7 +82,7 @@ async def test_node_row_spinner_stops_at_terminal_state(
         await pilot.pause(0.1)
 
         # Transition to terminal.
-        row.set_state("completed", details="42 rows")
+        row.set_state("success", details="42 rows")
         await pilot.pause()
 
         # Static glyph (``✓``) — no spinner frame in the title.

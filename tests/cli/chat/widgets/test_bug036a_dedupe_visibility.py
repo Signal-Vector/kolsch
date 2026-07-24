@@ -9,7 +9,7 @@ gate fires for agent nodes).
   render exactly one response (``AssistantProse``); the JSON-preview
   fallback in ``set_output`` is skipped.
 - A late assistant-message arriving AFTER ``_on_node_completed``
-  has fired ``set_state("completed")`` (which freezes the row) is
+  has fired ``set_state("success")`` (which freezes the row) is
   dropped — ``_last_assistant_text`` stays empty and the fallback
   ``set_output`` mounts the JSON preview. The row is never blank.
 - The last-assistant-text latches BEFORE the collapsed check, so a
@@ -63,7 +63,7 @@ async def test_agent_response_not_duplicated_on_normal_completion(
         await row.mount_assistant_message("the answer is 42")
         await pilot.pause()
 
-        row.set_state("completed")
+        row.set_state("success")
         row.set_output({"answer": "the answer is 42"})
         await pilot.pause()
 
@@ -85,7 +85,7 @@ async def test_late_agent_message_after_completion_falls_back_to_set_output(
 
         # NODE_COMPLETED lands first — ``set_state`` freezes the row,
         # ``set_output`` mounts the JSON preview.
-        row.set_state("completed")
+        row.set_state("success")
         row.set_output({"summary": "42"})
         await pilot.pause()
 
@@ -129,7 +129,7 @@ async def test_last_assistant_text_latches_on_collapsed_row(
         assert row._last_assistant_text == "the answer is 42"
 
         # NODE_COMPLETED with output — set_output must skip.
-        row.set_state("completed")
+        row.set_state("success")
         row.set_output({"answer": "the answer is 42"})
         await pilot.pause()
 

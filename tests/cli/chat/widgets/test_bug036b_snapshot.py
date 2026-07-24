@@ -160,7 +160,7 @@ async def test_snapshot_titles_drop_type_when_details_set() -> None:
         # pre-completion scenario for the same rationale. The agent
         # row will hit a static terminal glyph via ``completed``.
         _freeze_starting(bash_row)
-        agent_row.set_state("completed", details="scored 8/10")
+        agent_row.set_state("success", details="scored 8/10")
         await pilot.pause()
 
         assert_snapshot_matches(

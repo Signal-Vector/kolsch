@@ -699,7 +699,7 @@ class WorkflowRenderer(Vertical):
             candidate = payload.get("summary")
             if isinstance(candidate, str):
                 details = candidate
-        row.set_state("completed", details=details)
+        row.set_state("success", details=details)
         # bug-037: stash completion ts + duration_ms so bash `exit`
         # section title can carry `(Xs)`.
         completed_at = self._parse_ts(payload.get("ts"))
@@ -759,7 +759,7 @@ class WorkflowRenderer(Vertical):
         row = self._node_rows.get(node_name)
         if row is None:
             return
-        row.set_state("pruned")
+        row.set_state("cancelled")
         trace_id = payload.get("trace_id")
         invocation_id = payload.get("invocation_id")
         self._unregister_node_from_adapter(
@@ -1057,7 +1057,7 @@ class WorkflowRenderer(Vertical):
         completed = sum(
             1
             for row in self._node_rows.values()
-            if row.state in ("completed", "failed", "pruned")
+            if row.state in ("success", "failed", "cancelled")
         )
         elapsed = self._elapsed_now()
         self._header.update_progress(completed, total, elapsed)

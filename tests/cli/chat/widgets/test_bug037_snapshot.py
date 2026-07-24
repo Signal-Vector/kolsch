@@ -68,7 +68,7 @@ async def test_snapshot_mockup3_bash_expanded() -> None:
                 "exit_code": 0,
             }
         )
-        row.set_state("completed")
+        row.set_state("success")
         row.set_completed_at(duration_ms=8200.0)
         await pilot.pause()
 
@@ -107,7 +107,7 @@ async def test_snapshot_mockup4_agent_collapsed_sections() -> None:
             event_id="r1",
         )
         await pilot.pause()
-        row.set_state("completed")
+        row.set_state("success")
         row.collapsed = False
         await pilot.pause()
         await pilot.pause()
@@ -150,7 +150,7 @@ async def test_snapshot_mockup5_deduper_input_split() -> None:
             event_id="r1",
         )
         await pilot.pause()
-        row.set_state("completed")
+        row.set_state("success")
         await _expand_all(row)
         await pilot.pause()
         await pilot.pause()
