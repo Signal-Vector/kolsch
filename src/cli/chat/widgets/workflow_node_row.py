@@ -271,18 +271,35 @@ class WorkflowNodeRow(Collapsible):
     # descends into this widget's children.
     ALLOW_SELECT: ClassVar[bool] = True
 
+    # spec-078: WorkflowNodeRow is a `Collapsible` subclass; same
+    # rationale as commits 5 (CardWidget) / 7 (ToolCallBlock) / 8
+    # (CompactionBlock). Preserve the base class + reactive `state`
+    # + its huge sub-agent + bash section machinery; deliver the
+    # rail via `border-left: outer $color` (`▌` — one glyph wider
+    # than spec-078's target `▎` from the GutterBlock primitive but
+    # reads the same "colored left rail per state"). Default state
+    # (`starting` / `running`) routes to `$tool-fg`; terminal states
+    # route via the `.-completed` / `.-failed` / `.-paused` /
+    # `.-cancelling` / `.-pruned` classes below. The state glyph
+    # already renders inside the CollapsibleTitle; no separate glyph
+    # column is added.
     DEFAULT_CSS = """
     $tool-fg: #4dd0e1;
     $error: #ff5555;
     $warning: #ffb454;
     $hint: #6e7681;
 
-    WorkflowNodeRow { padding: 0 1; margin: 0; }
-    WorkflowNodeRow.-completed  { color: $tool-fg; }
-    WorkflowNodeRow.-failed     { color: $error; }
-    WorkflowNodeRow.-paused     { color: $warning; }
-    WorkflowNodeRow.-cancelling { color: $tool-fg; opacity: 0.6; }
-    WorkflowNodeRow.-pruned     { color: $hint; }
+    WorkflowNodeRow {
+        padding: 0 1;
+        margin: 0;
+        border-left: outer $tool-fg;
+        background: transparent;
+    }
+    WorkflowNodeRow.-completed  { color: $tool-fg; border-left: outer $tool-fg; }
+    WorkflowNodeRow.-failed     { color: $error;   border-left: outer $error; }
+    WorkflowNodeRow.-paused     { color: $warning; border-left: outer $warning; }
+    WorkflowNodeRow.-cancelling { color: $tool-fg; opacity: 0.6; border-left: outer $tool-fg; }
+    WorkflowNodeRow.-pruned     { color: $hint;    border-left: outer $hint; }
     """
 
     # State glyphs live in `src/cli/chat/state_tokens.py` — the
