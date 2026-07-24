@@ -35,7 +35,10 @@ from typing import TYPE_CHECKING, Any
 from textual import events
 from textual.app import ComposeResult
 from textual.containers import Vertical
+from textual.widget import Widget
 from textual.widgets import Static
+
+from cli.chat.widgets._gutter_block import GutterBlock
 
 if TYPE_CHECKING:
     from tools.services.workflows import WorkflowRunId
@@ -54,7 +57,7 @@ event so the card closes cleanly (avoids indefinitely-stuck cards).
 """
 
 
-class ForceKillConfirm(Vertical):
+class ForceKillConfirm(Widget):
     """Modal-ish confirm widget for cascade cancel of a stuck workflow.
 
     Constructor:
@@ -75,19 +78,27 @@ class ForceKillConfirm(Vertical):
             them collapses the emit path.
     """
 
+    # spec-078: composes a GutterBlock (rail = `$warning`, glyph =
+    # `⚠`) around the question + hint stack. Pre-migration:
+    # `border: round $warning`; post-migration: no round frame — the
+    # rail alone anchors the widget against the transcript. The
+    # `⚠` glyph moves off `border_title` (which is gone) onto the
+    # GutterBlock's leading-glyph column, matching the design
+    # review's mockup for this widget.
     DEFAULT_CSS = """
+    $warning: #ffb454;
+
     ForceKillConfirm {
-        border: round $warning;
-        padding: 0 1;
         margin: 1 0;
         height: auto;
-        background: $panel;
+        background: transparent;
+        width: 100%;
     }
-    ForceKillConfirm > #force-kill-question {
+    ForceKillConfirm #force-kill-question {
         color: $warning;
         text-style: bold;
     }
-    ForceKillConfirm > #force-kill-hint {
+    ForceKillConfirm #force-kill-hint {
         color: $text-muted;
     }
     """
@@ -127,17 +138,25 @@ class ForceKillConfirm(Vertical):
     # ------------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
+        """Compose the GutterBlock (warning rail + `⚠`) around question + hint."""
         suffix = "run" if self._n_related == 1 else "runs"
         n = self._n_related
         if n <= 0:
             question = "Cancel this workflow?"
         else:
             question = f"Cancel this workflow AND {n} related {suffix}?"
-        yield Static(question, id="force-kill-question", markup=False)
-        yield Static(
-            "Press [y] to confirm, [n] or Esc to cancel.",
-            id="force-kill-hint",
-            markup=False,
+        body = Vertical(
+            Static(question, id="force-kill-question", markup=False),
+            Static(
+                "Press [y] to confirm, [n] or Esc to cancel.",
+                id="force-kill-hint",
+                markup=False,
+            ),
+        )
+        yield GutterBlock(
+            rail_color="$warning",
+            leading_glyph="⚠",
+            body=body,
         )
 
     def on_mount(self) -> None:
