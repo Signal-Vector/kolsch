@@ -209,11 +209,25 @@ breaking their contract.
 | GutterBlock primitive (exact `▎`) | `user_chatbox.py`, `assistant_prose.py`, `approval_block.py`, `notice.py`, `force_kill_confirm.py` |
 | `border-left: outer $color` (`▌`) | `card_widget.py`, `tool_call_block.py`, `compaction_block.py`, `workflow_node_row.py`, `composer.py` |
 
-Focus indicator: the primitive's `DEFAULT_CSS` includes
-`:focus-within > .gb-glyph-col { text-style: reverse }` — qol-079's
-seam for a per-widget focus rail without a full re-render. For
-base-class-locked widgets (Collapsible / TextArea) that don't compose
-a GutterBlock, Textual's default focus outline applies.
+Focus indicator: unified across the surface via one selector pair
+in the `GutterBlock` primitive (qol-079):
+
+```css
+GutterBlock:focus-within > .gb-glyph-col { text-style: reverse; }
+GutterBlock:focus-within > .gb-rail       { text-style: reverse; }
+```
+
+Both fire together — on widgets with a leading glyph (`⚠` for
+`ApprovalBlock` / `NoticeWidget`, ℹ/✗ for other notice severities),
+the glyph inverts; on glyph-less widgets (`UserChatbox`,
+`AssistantProse`), the rail's `▎` inverts as the fallback cue; on
+widgets with both, the entire leftmost strip lights up bright. One
+mechanic, one selector pair, applied uniformly by the primitive —
+no per-widget focus CSS. `reverse` survives `NO_COLOR` for free (the
+terminal inverts fg/bg) and doesn't reflow, so no layout shift on
+focus arrival. For base-class-locked widgets (Collapsible / TextArea)
+that don't compose a GutterBlock, Textual's default focus outline
+applies to the focused child instead.
 
 Rail-color routing keys off palette variables (`$user-border`,
 `$assistant-fg`, `$warning`, `$tool-fg`, `$error`, `$hint`) — the

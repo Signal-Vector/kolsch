@@ -49,13 +49,25 @@ Pilot tests that don't load ``theme.tcss``. Real mounts under
 those values take precedence because the app's stylesheet cascades
 after this widget's defaults.
 
-Focus indicator:
+Focus indicator (qol-079):
 
-``:focus-within > .gb-glyph-col { text-style: reverse }`` is the
-selector qol-079 consumes to indicate keyboard focus on a chat block
-without redrawing the whole widget. When ``leading_glyph`` is ``None``
-the selector still parses cleanly — it just never matches, which is
-the intended behavior for glyph-less widgets like ``UserChatbox``.
+Two selectors, both ``text-style: reverse`` on the leftmost column
+that column is present:
+
+- ``:focus-within > .gb-glyph-col { text-style: reverse }`` inverts
+  the leading glyph — the primary cue on widgets that carry one
+  (``NoticeWidget`` ``⚠``, ``ApprovalBlock`` ``⚠``, …).
+- ``:focus-within > .gb-rail { text-style: reverse }`` inverts the
+  rail's ``▎`` glyph — the fallback cue for glyph-less widgets
+  (``UserChatbox``, ``AssistantProse``). On widgets that DO have a
+  glyph, both fire — the entire leftmost strip lights up bright,
+  reinforcing focus rather than diluting it.
+
+One mechanic, one selector pair, applied uniformly by the primitive
+— no per-widget focus CSS. The mechanic survives ``NO_COLOR`` (the
+terminal inverts fg/bg trivially) and reuses the same column state
+color already occupies, so one column carries two orthogonal
+signals (state = hue; focus = inversion).
 
 Non-migrated widgets — the following stay borderless / bare and
 intentionally do **not** inherit from or compose ``GutterBlock``:
@@ -215,6 +227,9 @@ class GutterBlock(Widget):
         height: auto;
     }
     GutterBlock:focus-within > .gb-glyph-col {
+        text-style: reverse;
+    }
+    GutterBlock:focus-within > .gb-rail {
         text-style: reverse;
     }
 

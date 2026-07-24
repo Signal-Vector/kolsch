@@ -120,7 +120,61 @@ async def test_focus_within_reverse_selector_present(mock_app_factory) -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         assert ":focus-within > .gb-glyph-col" in GutterBlock.DEFAULT_CSS
+        assert ":focus-within > .gb-rail" in GutterBlock.DEFAULT_CSS
         assert "text-style: reverse" in GutterBlock.DEFAULT_CSS
+
+
+@pytest.mark.asyncio
+async def test_focus_within_reverses_glyph(mock_app_factory) -> None:
+    """When focus lands inside a glyph-carrying block, the glyph column
+    computes ``text-style: reverse``. Verified by reading back the
+    resolved style after simulating focus with the ``:focus-within``
+    pseudo-class active.
+    """
+    from textual.widgets import Input  # noqa: PLC0415
+
+    body = Input()  # focusable so :focus-within fires
+    block = GutterBlock(
+        rail_color="$warning",
+        leading_glyph="⚠",
+        body=body,
+    )
+    app = mock_app_factory(block)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        body.focus()
+        await pilot.pause()
+        glyph = block.query_one(".gb-glyph-col", _GutterGlyph)
+        assert "reverse" in str(glyph.rich_style), (
+            f"glyph should render with reverse style when focus is within; "
+            f"got rich_style={glyph.rich_style!r}"
+        )
+
+
+@pytest.mark.asyncio
+async def test_focus_within_reverses_rail_when_glyphless(mock_app_factory) -> None:
+    """For a glyph-less block (``leading_glyph=None``), focus reverses
+    the rail's ``▎`` — the fallback focus cue for widgets like
+    ``UserChatbox`` / ``AssistantProse`` that don't carry a leading glyph.
+    """
+    from textual.widgets import Input  # noqa: PLC0415
+
+    body = Input()
+    block = GutterBlock(
+        rail_color="$user-border",
+        leading_glyph=None,
+        body=body,
+    )
+    app = mock_app_factory(block)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        body.focus()
+        await pilot.pause()
+        rail = block.query_one(".gb-rail", _GutterRail)
+        assert "reverse" in str(rail.rich_style), (
+            f"rail should render with reverse style when focus is within "
+            f"and no glyph column is present; got rich_style={rail.rich_style!r}"
+        )
 
 
 @pytest.mark.asyncio

@@ -127,52 +127,92 @@ remains.
 
 ## Border-color conventions
 
-Role frames use `round` borders in the owning role's color; dividers use
-`heavy`. The `thick` left bar is a **focus accent**: it is guarded by
-`:focus-within` and appears **only while the widget holds focus** — it is
-not a persistent state frame. When unfocused, `ToolCallBlock` and
-`CompactionBlock` convey state through their `CollapsibleTitle` text color
-instead (e.g. `tool_call_block.py:65,68`).
+**Post spec-078:** round frames + heavy dividers are gone across the
+transcript stream. Every widget carries its role/state via a colored
+**left rail** — either the exact `▎` glyph delivered by the
+`GutterBlock` primitive (`_gutter_block.py`), or `border-left: outer
+$color` (`▌`, one glyph wider) on widgets bound to base classes
+that can't be wrapped without breaking their contract.
 
-| Widget | Declaration | Color | Source |
+| Widget | Rail source | Color | Source |
 |---|---|---|---|
-| `UserChatbox` | `border: round $user-border` | user green | `user_chatbox.py:50` |
-| `AssistantProse` | `border: round $assistant-fg` | assistant blue-grey | `assistant_prose.py:202` |
-| `ApprovalBlock` | `border: round $warning` | amber | `approval_block.py:117` |
-| `ForceKillConfirm` | `border: round $warning` | amber | `force_kill_confirm.py:80` |
-| `CardWidget` (default) | `border: round $tool-fg` | cyan | `card_widget.py:181` |
-| `CardWidget.-queued` | `border: round $hint` | dim | `card_widget.py:187` |
-| `CardWidget.-paused` | `border: round $warning` | amber | `card_widget.py:188` |
-| `CardWidget.-cancelling` | `border: round $tool-fg; opacity: 0.7` | dimmed cyan | `card_widget.py:189` |
-| `CardWidget.-error` | `border: round $error` | red | `card_widget.py:190` |
-| `CardWidget.-cancelled` | `border: round $hint` | dim | `card_widget.py:191` |
-| `Composer` | `border-top/bottom: heavy $user-border` | user green dividers | `composer.py:50,51,56,57` |
-| `ToolCallBlock` (ok) | `:focus-within { border-left: thick $tool-fg }` | cyan bar — **focus only** | `tool_call_block.py:70` (decl. L71) |
-| `ToolCallBlock` (failed) | `.-failed:focus-within { border-left: thick $error }` | red bar — **focus only** | `tool_call_block.py:73` (decl. L74) |
-| `CompactionBlock` | `:focus-within { border-left: thick $tool-fg }` | cyan bar — **focus only** | `compaction_block.py:76` |
-| `CompactionBlock.-failed` | `.-failed:focus-within { border-left: thick $error }` | red bar — **focus only** | `compaction_block.py:79` |
+| `UserChatbox` | `GutterBlock(rail_color="$user-border")` | user green | `user_chatbox.py:106` |
+| `AssistantProse` | `GutterBlock(rail_color="$assistant-fg")` | assistant blue-grey | `assistant_prose.py:317` |
+| `ApprovalBlock` | `GutterBlock(rail_color="$warning", leading_glyph="⚠")` | amber | `approval_block.py:314` |
+| `ForceKillConfirm` | `GutterBlock(rail_color="$warning")` | amber | `force_kill_confirm.py` |
+| `NoticeWidget` | `GutterBlock(rail_color=<severity>, leading_glyph=<glyph>)` | ℹ/⚠/✗ per severity | `notice.py:157` |
+| `CardWidget` (default) | `border-left: outer $tool-fg` | cyan | `card_widget.py:193` |
+| `CardWidget.-queued` | `border-left: outer $hint` | dim | `card_widget.py:199` |
+| `CardWidget.-paused` | `border-left: outer $warning` | amber | `card_widget.py:200` |
+| `CardWidget.-cancelling` | `border-left: outer $tool-fg; opacity: 0.7` | dimmed cyan | `card_widget.py:201` |
+| `CardWidget.-error` | `border-left: outer $error` | red | `card_widget.py:202` |
+| `CardWidget.-cancelled` | `border-left: outer $hint` | dim | `card_widget.py:203` |
+| `Composer` (idle) | `border-left: outer $user-border` | user green | `composer.py:68` |
+| `Composer` (awaiting approval) | `border-left: outer $warning` | amber | `composer.py:84` |
+| `ToolCallBlock` (ok) | `border-left: outer $tool-fg` | cyan | `tool_call_block.py:77` |
+| `ToolCallBlock` (failed) | `border-left: outer $error` | red | `tool_call_block.py:86` |
+| `CompactionBlock` (default) | `border-left: outer $tool-fg` | cyan | `compaction_block.py:61` |
+| `CompactionBlock.-failed` | `border-left: outer $error` | red | `compaction_block.py:68` |
+| `CompactionBlock.-skipped/-revoked` | `border-left: outer $hint` | dim | `compaction_block.py:69,70` |
+| `WorkflowNodeRow` (default) | `border-left: outer $tool-fg` | cyan | `workflow_node_row.py:295` |
+| `WorkflowNodeRow.-failed` | `border-left: outer $error` | red | `workflow_node_row.py:299` |
+| `WorkflowNodeRow.-paused` | `border-left: outer $warning` | amber | `workflow_node_row.py:300` |
+| `WorkflowNodeRow.-pruned` | `border-left: outer $hint` | dim | `workflow_node_row.py:302` |
+
+### Focus
+
+**One mechanic across the surface:** `text-style: reverse` on the
+primitive's leftmost column when focus is anywhere within the widget.
+The `GutterBlock` `DEFAULT_CSS` (`_gutter_block.py`) declares:
+
+```css
+GutterBlock:focus-within > .gb-glyph-col { text-style: reverse; }
+GutterBlock:focus-within > .gb-rail       { text-style: reverse; }
+```
+
+Both rules fire together — on widgets that carry a leading glyph
+(`⚠` for `ApprovalBlock` / `NoticeWidget`, ℹ/✗ for other notice
+severities), the glyph inverts; on glyph-less widgets (`UserChatbox`,
+`AssistantProse`), the rail's `▎` inverts instead; on widgets with
+both, the entire leftmost strip lights up bright. State color and
+focus signal ride the same column — orthogonal signals on one
+carrier (state = hue; focus = inversion).
+
+`reverse` was chosen over a second border property (`thick`, `heavy`)
+because it survives `NO_COLOR` for free — the terminal itself
+inverts fg/bg — and because it doesn't reflow: no layout shift when
+focus arrives or leaves. See qol-079.
+
+The `border-left: outer $color` widgets (Collapsible / TextArea
+subclasses that can't compose GutterBlock) inherit Textual's default
+focus outline on their focused child (typically `CollapsibleTitle`
+or `TextArea`), not the primitive's rail-reverse mechanic. Base-class
+contracts prevent wrapping them in `GutterBlock`; the trade-off is
+documented in each widget's docstring (see spec-078 commits 7, 8, 9,
+10).
 
 <figure markdown>
-![UserChatbox — green round frame](chat-widgets/svg/user-chatbox-color.svg)
-![AssistantProse — blue-grey round frame](chat-widgets/svg/assistant-prose-color.svg)
-<figcaption>Role frames: user green (<code>$user-border</code>) vs assistant blue-grey (<code>$assistant-fg</code>). Both carry a matched identity header on the top rail — <code>You · HH:MM:SS</code> and <code>&lt;agent&gt; · HH:MM</code> respectively — so the transcript reads as a two-sided conversation, not a monologue with prompts (qol-081).</figcaption>
+![UserChatbox — green left rail](chat-widgets/svg/user-chatbox-color.svg)
+![AssistantProse — blue-grey left rail](chat-widgets/svg/assistant-prose-color.svg)
+<figcaption>Role rails: user green (<code>$user-border</code>) vs assistant blue-grey (<code>$assistant-fg</code>). Both carry a matched identity header inside the primitive's body slot — <code>You · HH:MM:SS</code> and <code>&lt;agent&gt; · HH:MM</code> respectively — so the transcript reads as a two-sided conversation, not a monologue with prompts (qol-081).</figcaption>
 </figure>
 
 <figure markdown>
-![CardWidget error — red frame](chat-widgets/svg/card-error-color.svg)
-![CardWidget paused — amber frame](chat-widgets/svg/card-paused-color.svg)
-![CardWidget queued — dim frame](chat-widgets/svg/card-queued-color.svg)
-<figcaption>CardWidget state frames: error red (<code>$error</code>), paused amber (<code>$warning</code>), queued dim (<code>$hint</code>).</figcaption>
+![CardWidget error — red rail](chat-widgets/svg/card-error-color.svg)
+![CardWidget paused — amber rail](chat-widgets/svg/card-paused-color.svg)
+![CardWidget queued — dim rail](chat-widgets/svg/card-queued-color.svg)
+<figcaption>CardWidget state rails: error red (<code>$error</code>), paused amber (<code>$warning</code>), queued dim (<code>$hint</code>).</figcaption>
 </figure>
 
 <figure markdown>
-![ToolCallBlock ok — cyan title text](chat-widgets/svg/tool-call-ok-color.svg)
-![ToolCallBlock failed — red title text](chat-widgets/svg/tool-call-failed-color.svg)
-<figcaption>State-colored <code>CollapsibleTitle</code> text: cyan when ok
-(<code>$tool-fg</code>, <code>tool_call_block.py:65</code>), red when failed
-(<code>$error</code>, <code>:68</code>). These tiles are captured
-<em>unfocused</em>, so the thick left bar — a <code>:focus-within</code>
-accent — is not shown.</figcaption>
+![ToolCallBlock ok — cyan rail + title text](chat-widgets/svg/tool-call-ok-color.svg)
+![ToolCallBlock failed — red rail + title text](chat-widgets/svg/tool-call-failed-color.svg)
+<figcaption>State-colored left rail + <code>CollapsibleTitle</code>
+text: cyan when ok (<code>$tool-fg</code>), red when failed
+(<code>$error</code>). Tiles captured unfocused; when focus is inside
+the collapsible, Textual's default focus outline highlights the
+<code>CollapsibleTitle</code> child (not the rail — see the Focus
+subsection above).</figcaption>
 </figure>
 
 ## Semantic usage rules
@@ -219,10 +259,10 @@ widgets do the per-role work in their own `DEFAULT_CSS`):
 
 | Role / state | Text style | Example |
 |---|---|---|
-| identity / action | `bold` | `card_widget.py:194`, `info_bar.py:63`, `approval_block.py:128` |
-| hint / disabled / low-emphasis | `dim` | `compaction_block.py:83`, `tool_call_block.py:78` |
-| secondary / de-emphasized | `italic` | `card_widget.py:201`, `notice.py:52` (`dim italic`) |
-| focus / selection | `reverse` | `assistant_prose.py:112` (`bold reverse`) |
+| identity / action | `bold` | `card_widget.py`, `info_bar.py`, `approval_block.py` |
+| hint / disabled / low-emphasis | `dim` | `compaction_block.py`, `tool_call_block.py` |
+| secondary / de-emphasized | `italic` | `card_widget.py`, `notice.py` (`dim italic`) |
+| focus / selection | `reverse` | `_gutter_block.py` (primitive `:focus-within` rule, qol-079) |
 
 Severity glyphs (`ℹ` / `⚠` / `✗`) are retained under `NO_COLOR` as
 information carriers per the redundant-carriers rule — see the callout
