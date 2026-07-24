@@ -1,24 +1,31 @@
 """`AssistantProse` widget — the assistant's streaming markdown response.
 
-Design (see `process/spec-textual-chat-ui.md` → Technical Context →
-widget subsection for `AssistantProse`):
+Post spec-078, this widget is a :class:`Widget` container that
+composes the shared :class:`~cli.chat.widgets._gutter_block.GutterBlock`
+primitive (rail = ``$assistant-fg``, no leading glyph). The Markdown
+document that actually renders the response lives in a private
+:class:`_ProseMarkdown` child (a :class:`~textual.widgets.Markdown`
+subclass) mounted inside the GutterBlock's body slot. Public API —
+:meth:`append`, :meth:`stream`, :attr:`source`, the ``agent_name`` /
+``timestamp`` constructor kwargs — is preserved by delegating to the
+child Markdown; no ``src/`` caller needed edits.
 
-- Subclass Textual's `Markdown` widget.
-- No border. Foreground colour `$assistant-fg` via `DEFAULT_CSS`.
-- Public API:
-    * `async with widget.stream() as stream: ...` — context manager
-      yielding a `MarkdownStream` for token-by-token append during a
-      streaming model response. `Markdown.get_stream` returns a
-      `MarkdownStream` started; on exit we call `await stream.stop()`.
-    * `async def append(text: str)` — one-shot append. Delegates to
-      the underlying `Markdown.append`. Non-streaming providers use
-      this on `MODEL_RESPONSE`.
-- `NO_COLOR` support: fenced code blocks render as plain dim
-  monospace. `MarkdownFence` normally runs Pygments via
-  `textual.widgets._markdown.highlight`; we suppress it by
-  substituting a `_PlainFence` subclass in the `BLOCKS` mapping when
-  `os.environ["NO_COLOR"]` is set. `_PlainFence.highlight` returns a
-  `Content` with no spans — the raw code text, no colour.
+Identity header (qol-081): when the caller passes a ``timestamp``,
+the widget renders ``<agent-name> · HH:MM`` as an in-body header
+Static above the markdown (bold in ``$assistant-fg``). Pre-migration
+this was Textual's ``border_title`` on the round frame; post-migration
+the frame is gone, so the header sits inside the GutterBlock's body
+slot and picks up the rail's color. Callers that don't pass a
+timestamp keep the bare rail — matches the pre-migration behavior.
+
+NO_COLOR support: fenced code blocks render as plain dim monospace
+via the :class:`_PlainFence` substitute — the private Markdown
+subclass overrides :meth:`~textual.widgets.Markdown.get_block_class`
+so the swap happens whenever ``NO_COLOR`` is set in the environment.
+
+feat-018 anchor markup — ``[<label>](kolsch-anchor://workflow_card/<run_id>)``
+— continues to route through :meth:`append` and mount focusable
+:class:`WorkflowAnchorButton` widgets inline with the prose.
 
 This widget is framework-aligned (rule 1), self-contained (rule 2),
 and delegates streaming + rendering to Textual (rule 3). No custom
@@ -34,11 +41,19 @@ import re
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from datetime import datetime
+from typing import TYPE_CHECKING, Any, ClassVar
 
-from textual import events
+from textual.containers import Vertical
 from textual.content import Content
+from textual.widget import Widget
 from textual.widgets import Markdown, Static
 from textual.widgets._markdown import MarkdownFence, MarkdownStream
+
+from cli.chat.widgets._gutter_block import GutterBlock
+
+if TYPE_CHECKING:
+    from textual import events
+    from textual.app import ComposeResult
 
 _ASSISTANT_FALLBACK_NAME = "Assistant"
 """Generic identity used when the caller doesn't supply an agent name.
@@ -52,12 +67,12 @@ _LOGGER = logging.getLogger(__name__)
 
 
 def _wrap_json_if_detected(text: str) -> str:
-    """Wrap ``text`` in ```json fences when it parses as JSON.
+    r"""Wrap ``text`` in ```json fences when it parses as JSON.
 
     Textual's ``Markdown`` widget reflows paragraphs — single newlines
     become spaces. A raw JSON array or object with embedded newlines
     flattens into a single-line paragraph, hiding structure. Wrapping
-    in ``\\`\\`\\`json`` fences renders it as a code block, honouring
+    in ``\`\`\`json`` fences renders it as a code block, honouring
     newlines + indentation.
 
     Detection is strict — full-string parse via ``json.loads``. Mixed
@@ -122,7 +137,7 @@ class WorkflowAnchorButton(Static):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         ("enter", "activate", "Scroll to workflow card"),
     ]
 
@@ -139,6 +154,7 @@ class WorkflowAnchorButton(Static):
         return self._run_id
 
     def on_click(self, event: events.Click) -> None:  # pragma: no cover - via Pilot
+        """Textual click handler — same effect as pressing Enter."""
         _ = event
         self._activate()
 
@@ -160,29 +176,65 @@ class WorkflowAnchorButton(Static):
 
 
 class _PlainFence(MarkdownFence):
-    """Fenced-code block that suppresses Pygments under `NO_COLOR`.
+    """Fenced-code block that suppresses Pygments under ``NO_COLOR``.
 
-    `Markdown.BLOCKS` maps `"fence"` / `"code_block"` to `MarkdownFence`,
-    which calls the module-level `highlight()` (Pygments-driven) inside
-    its `highlight` classmethod. We swap the mapping to this subclass
-    under `NO_COLOR`; `highlight` here returns a plain `Content` with
-    no style spans, so the fenced block renders as monospaced text
-    with the widget's ambient `text-style: dim` — no invented colour.
+    :attr:`Markdown.BLOCKS` maps ``"fence"`` / ``"code_block"`` to
+    :class:`MarkdownFence`, which calls the module-level ``highlight``
+    (Pygments-driven) inside its ``highlight`` classmethod. The
+    private :class:`_ProseMarkdown` swaps that mapping to this
+    subclass whenever ``NO_COLOR`` is set; :meth:`highlight` here
+    returns a plain :class:`Content` with no style spans, so the
+    fenced block renders as monospaced text with the widget's ambient
+    ``text-style: dim`` — no invented colour.
     """
 
     @classmethod
     def highlight(cls, code: str, language: str) -> Content:
-        # No spans → no colour. Normalise line endings the way the
-        # parent does (see `_markdown.highlight`) so line wrapping /
-        # width calculations match the coloured variant.
+        _ = language
         return Content("\n".join(code.splitlines()))
 
 
-class AssistantProse(Markdown):
-    """Assistant response widget — streaming markdown, rounded frame.
+class _ProseMarkdown(Markdown):
+    """Private Markdown child mounted inside :class:`AssistantProse`.
 
-    Reactive attributes: none of our own. Reactive state is fully
-    owned by the underlying `Markdown` widget's internal document.
+    Reason for the subclass: the spec-078 wrapper composes
+    ``AssistantProse`` as a :class:`Widget` container that HOSTS a
+    Markdown, rather than subclassing Markdown itself. The Markdown
+    still needs to swap in :class:`_PlainFence` under ``NO_COLOR``,
+    which requires overriding
+    :meth:`~textual.widgets.Markdown.get_block_class`. So the
+    NO_COLOR-aware fence swap moves onto this private subclass, and
+    :class:`AssistantProse` composes an instance of it.
+
+    Evaluation happens per call so tests can toggle ``NO_COLOR``
+    between runs (Pilot tests are function-scoped and may
+    monkeypatch the env).
+    """
+
+    DEFAULT_CSS = """
+    $assistant-fg: #b0c0d5;
+
+    _ProseMarkdown {
+        background: transparent;
+        color: $assistant-fg;
+        height: auto;
+        padding: 0;
+        margin: 0;
+    }
+    """
+
+    def get_block_class(self, block_name: str) -> type:
+        """Return the widget class that renders a given markdown block."""
+        if (
+            block_name in ("fence", "code_block")
+            and os.environ.get("NO_COLOR") is not None
+        ):
+            return _PlainFence
+        return Markdown.BLOCKS[block_name]
+
+
+class AssistantProse(Widget):
+    """Assistant response widget — GutterBlock rail + streaming markdown body.
 
     Auto-wraps raw JSON in ```json fences (non-streaming path only)
     so agent responses that return structured output don't collapse
@@ -190,12 +242,25 @@ class AssistantProse(Markdown):
     :func:`_wrap_json_if_detected`.
 
     Identity header (qol-081): when the caller passes a ``timestamp``,
-    the widget renders ``<agent-name> · HH:MM`` in the top rail so the
-    assistant carries the same identity chrome as
-    :class:`~cli.chat.widgets.user_chatbox.UserChatbox`. The agent name
-    is bold in ``$assistant-fg``; the time is dim in ``$hint``. Callers
-    that don't pass a timestamp (nested workflow-row prose, ad-hoc
-    literal markdown) keep the bare rail.
+    the widget renders ``<agent-name> · HH:MM`` as an in-body header
+    Static above the markdown (bold in ``$assistant-fg``). Callers
+    that don't pass a timestamp keep the bare rail.
+    """
+
+    # Fallback vars so the widget mounts under Pilot without theme.tcss.
+    DEFAULT_CSS = """
+    $assistant-fg: #b0c0d5;
+
+    AssistantProse {
+        height: auto;
+        width: 100%;
+    }
+    AssistantProse .ap-header {
+        color: $assistant-fg;
+        text-style: bold;
+        height: 1;
+        width: 100%;
+    }
     """
 
     def __init__(
@@ -204,72 +269,72 @@ class AssistantProse(Markdown):
         *,
         agent_name: str | None = None,
         timestamp: datetime | None = None,
-        **kwargs: object,
+        **kwargs: Any,
     ) -> None:
-        super().__init__(_wrap_json_if_detected(markdown), **kwargs)  # type: ignore[arg-type]
-        if timestamp is not None:
-            self.border_title = self._build_identity_header(agent_name, timestamp)
+        super().__init__()
+        self._initial_markdown = _wrap_json_if_detected(markdown)
+        self._agent_name = agent_name
+        self._timestamp = timestamp
+        self._markdown_kwargs = kwargs
+        # Set in compose(); read via `.source` / streaming / append.
+        self._markdown_widget: _ProseMarkdown | None = None
+
+    @property
+    def agent_name(self) -> str | None:
+        """The agent-name kwarg supplied at construction (may be ``None``)."""
+        return self._agent_name
+
+    @property
+    def timestamp(self) -> datetime | None:
+        """The timestamp kwarg supplied at construction (may be ``None``)."""
+        return self._timestamp
+
+    @property
+    def source(self) -> str:
+        """The Markdown document's current source text.
+
+        Before mount, returns the constructor's initial (possibly
+        JSON-wrapped) text; after mount, delegates to the child
+        Markdown's own :attr:`~textual.widgets.Markdown.source`
+        which reflects every :meth:`append` since.
+        """
+        if self._markdown_widget is None:
+            return self._initial_markdown
+        return self._markdown_widget.source
+
+    def compose(self) -> ComposeResult:
+        """Compose the identity header (optional) + Markdown body inside GutterBlock."""
+        md = _ProseMarkdown(self._initial_markdown, **self._markdown_kwargs)
+        self._markdown_widget = md
+        children: list[Widget] = []
+        if self._timestamp is not None:
+            header_text = self._build_identity_header(
+                self._agent_name,
+                self._timestamp,
+            )
+            children.append(Static(header_text, classes="ap-header", markup=False))
+        children.append(md)
+        yield GutterBlock(
+            rail_color="$assistant-fg",
+            body=Vertical(*children),
+        )
 
     @staticmethod
     def _build_identity_header(agent_name: str | None, timestamp: datetime) -> str:
-        """Format the ``<agent> · HH:MM`` border title.
+        """Format the ``<agent> · HH:MM`` identity header.
 
-        Returns a plain string; per-segment styling isn't possible via
-        ``border_title`` because Rich's style tokens don't resolve
-        Textual theme variables (``$assistant-fg``, ``$hint``). The
-        title picks up uniform ``border-title-color`` / ``-style`` from
-        this widget's ``DEFAULT_CSS`` (bold in ``$assistant-fg``) —
-        matching :class:`UserChatbox`'s uniform-title pattern. ``HH:MM``
-        is 24-hour, no seconds.
+        Same shape the pre-migration widget used for its border_title
+        — ``HH:MM`` (24-hour, no seconds). The header renders inside
+        the body slot now instead of on a border; the string format
+        is preserved so downstream consumers that keyed off the label
+        text keep working.
         """
         name = agent_name or _ASSISTANT_FALLBACK_NAME
         return f"{name} · {timestamp:%H:%M}"
 
-    # Fallback variable defaults so the widget mounts under Pilot
-    # without theme.tcss loaded (per the Design Principles' modularity
-    # rule: a widget must render standalone). When theme.tcss /
-    # mono.tcss ARE loaded by `ChatApp`, their values take precedence
-    # because they come later in the cascade.
-    DEFAULT_CSS = """
-    $assistant-fg: #b0c0d5;
-
-    /* Round border in `$assistant-fg` mirrors the `UserChatbox`
-     * green box — same silhouette so the transcript reads as a
-     * conversation of stacked turn boxes. Padding sits inside the
-     * border, giving the markdown a one-column gutter from the
-     * frame. `margin: 0 0 1 0` gives a one-row breather between
-     * turns. */
-    AssistantProse {
-        border: round $assistant-fg;
-        border-title-color: $assistant-fg;
-        border-title-style: bold;
-        padding: 0 1;
-        margin: 0 0 1 0;
-        color: $assistant-fg;
-        background: transparent;
-        height: auto;
-    }
-    """
-
-    def get_block_class(self, block_name: str) -> type:
-        """Return the widget class that renders a given markdown block.
-
-        Under `NO_COLOR`, substitute `_PlainFence` for the Pygments-
-        highlighted `MarkdownFence` so fenced code blocks render as
-        plain monospace with no invented colour. Evaluated per call
-        so tests can toggle `NO_COLOR` between runs (Pilot tests are
-        function-scoped and may monkeypatch the env).
-        """
-        if (
-            block_name in ("fence", "code_block")
-            and os.environ.get("NO_COLOR") is not None
-        ):
-            return _PlainFence
-        return Markdown.BLOCKS[block_name]
-
     @asynccontextmanager
     async def stream(self) -> AsyncIterator[MarkdownStream]:
-        """Yield a `MarkdownStream` for token-by-token appends.
+        """Yield a :class:`MarkdownStream` for token-by-token appends.
 
         Usage in the event adapter:
 
@@ -277,54 +342,61 @@ class AssistantProse(Markdown):
                 async for delta in deltas:
                     await stream.write(delta.text_delta)
 
-        The stream is started by `Markdown.get_stream` and stopped on
-        context exit (or on exception). Textual's `MarkdownStream`
-        handles the debouncing / batching so that N deltas per second
-        collapse to a manageable number of widget refreshes.
+        The stream is started by :meth:`Markdown.get_stream` on the
+        child Markdown widget and stopped on context exit (or on
+        exception). Textual's :class:`MarkdownStream` handles the
+        debouncing / batching so that N deltas per second collapse to
+        a manageable number of widget refreshes.
+
+        The widget must be mounted before streaming — if
+        ``_markdown_widget`` is still ``None`` (compose hasn't run),
+        this raises ``RuntimeError`` to surface the mistake loudly.
         """
-        stream = Markdown.get_stream(self)
+        if self._markdown_widget is None:
+            msg = "AssistantProse.stream() called before mount"
+            raise RuntimeError(msg)
+        stream = Markdown.get_stream(self._markdown_widget)
         try:
             yield stream
         finally:
             await stream.stop()
 
-    async def append(self, text: str) -> None:  # type: ignore[override]
-        """Append `text` to the underlying markdown document.
-
-        Thin async wrapper over `Markdown.append` — the base class
-        method returns an `AwaitComplete` that we await here so
-        callers get a plain coroutine. Non-streaming providers use
-        this on `MODEL_RESPONSE`; streaming providers should use
-        `stream()` instead so writes are debounced.
-
-        feat-018: when `text` contains
-        ``[<label>](kolsch-anchor://workflow_card/<run_id>)`` markup,
-        the anchor spans are split out and mounted as
-        :class:`WorkflowAnchorButton` widgets inline with the prose
-        blocks. The surrounding text is appended to the markdown
-        stream as normal.
+    async def append(self, text: str) -> None:
+        """Append ``text`` to the underlying markdown document.
 
         Auto-wraps raw JSON in ```json fences before the anchor scan
         so structured agent responses render as code blocks. Anchor
         markdown is a URL-syntax link, incompatible with a top-level
         JSON parse — the JSON detection returns unchanged for anchor-
         carrying prose.
+
+        feat-018: when ``text`` contains
+        ``[<label>](kolsch-anchor://workflow_card/<run_id>)`` markup,
+        the anchor spans are split out and mounted as
+        :class:`WorkflowAnchorButton` widgets inline with the prose
+        blocks. The surrounding text is appended to the markdown
+        stream as normal.
+
+        The widget must be mounted (compose completed) before this is
+        called; the streaming/append paths only run inside the app's
+        event loop after mount.
         """
+        if self._markdown_widget is None:
+            msg = "AssistantProse.append() called before mount"
+            raise RuntimeError(msg)
         text = _wrap_json_if_detected(text)
         if ANCHOR_PATTERN.search(text) is None:
-            await Markdown.append(self, text)
+            await self._markdown_widget.append(text)
             return
-        # Split text into (prose, anchor?, prose, anchor?, ...) chunks.
         pieces = self._split_anchors(text)
         for kind, prose_text, label, run_id in pieces:
             if kind == "prose":
                 if prose_text:
-                    await Markdown.append(self, prose_text)
+                    await self._markdown_widget.append(prose_text)
                 continue
-            # kind == "anchor"
             button = WorkflowAnchorButton(label=label, run_id=run_id)
             try:
-                await self.mount(button)
+                await self._markdown_widget.mount(button)
             except Exception:
                 _LOGGER.exception(
                     "assistant_prose: WorkflowAnchorButton mount failed for run_id=%r",
@@ -345,7 +417,7 @@ class AssistantProse(Markdown):
           anchor's payload; ``prose_text`` is the empty string.
 
         A flat 4-tuple keeps the return type mypy-friendly without
-        needing a `Union[str, tuple[str, str]]` per element.
+        needing a ``Union[str, tuple[str, str]]`` per element.
         """
         pieces: list[tuple[str, str, str, str]] = []
         cursor = 0
