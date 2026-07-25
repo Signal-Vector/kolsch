@@ -67,8 +67,13 @@ def main(argv: Sequence[str] | None = None) -> int:
     # before any subsystem boots so the user gets a friendly message
     # instead of a stack trace. `setup` is the one command exempt from
     # the initialization gate; it's what populates the workspace.
+    # `doctor` is also exempt — its job is to diagnose the workspace
+    # (including "no workspace at this path"), so a stack trace would
+    # be worse than a report saying "nothing to inspect here".
     resolved_root = resolve_workspace(args.root)
-    if args.command != "setup" and not workspace_is_initialized(resolved_root):
+    if args.command not in {"setup", "doctor"} and not workspace_is_initialized(
+        resolved_root
+    ):
         sys.stderr.write(_MISSING_WORKSPACE_MESSAGE.format(path=resolved_root))
         return _EXIT_MISSING_WORKSPACE
     args.root = resolved_root
@@ -346,6 +351,11 @@ def _build_parser() -> argparse.ArgumentParser:
     nodes_parser = add_nodes_subparser(sub)
     if nodes_parser is not None:
         _PARSER_REGISTRY["nodes"] = nodes_parser
+
+    # kolsch doctor — read-only bundle-drift report (qol-089).
+    from cli._doctor import add_doctor_subparser  # noqa: PLC0415
+
+    add_doctor_subparser(sub)
 
     return parser
 
@@ -928,6 +938,14 @@ async def _cmd_nodes(args: argparse.Namespace) -> int:
     return await cmd_nodes(args, out=sys.stdout, err=sys.stderr)
 
 
+async def _cmd_doctor(args: argparse.Namespace) -> int:
+    # qol-089 — bundle-drift report. Lazy import so `kolsch --help`
+    # doesn't pay the migrator + baseline module-load cost.
+    from cli._doctor import cmd_doctor  # noqa: PLC0415
+
+    return await cmd_doctor(args, out=sys.stdout, root=args.root)
+
+
 _DISPATCH = {
     "run": _cmd_run,
     "sessions": _cmd_sessions,
@@ -944,6 +962,7 @@ _DISPATCH = {
     "chat": _cmd_chat,
     "workflows": _cmd_workflows,
     "nodes": _cmd_nodes,
+    "doctor": _cmd_doctor,
 }
 
 

@@ -544,17 +544,25 @@ async def _step_d_starter_agent(io: _SetupIO, *, non_interactive: bool) -> str:
 def _copy_kolsch_bundle(root: Path) -> None:
     """Copy the packaged kolsch bundle template into the workspace.
 
-    The four `tools/*.py` files are copied verbatim — they're
-    standalone Python that the asset catalog discovers + the Tools
-    subsystem registers per the standard bundle-tool path. The
-    helper agent file is also a verbatim copy; the model value
-    lives in `platform.yaml`'s `defaults.model`, not the agent
-    file.
+    The `tools/*.py` files are copied verbatim — they're standalone
+    Python that the asset catalog discovers + the Tools subsystem
+    registers per the standard bundle-tool path. The helper agent
+    file is also a verbatim copy; the model value lives in
+    `platform.yaml`'s `defaults.model`, not the agent file.
+
+    On the install path (workspace absent), also writes
+    `.kolsch/bundle-baseline.json` (qol-089) recording the sha256 of
+    every shipped file — the oracle a later `kolsch doctor` uses to
+    classify drift. If the workspace bundle already exists, this is
+    still idempotent: no copy, no baseline overwrite. Drift *repair*
+    is the concern of qol-093 (`kolsch setup --sync-bundle`); this
+    function is the install-only path.
     """
     target = root / "bundles" / _STARTER_BUNDLE
     if target.exists():
         # Idempotent — leave existing bundle alone. Drift detection
-        # is a separate concern; setup doesn't overwrite.
+        # lives at `kolsch doctor`; drift repair at
+        # `kolsch setup --sync-bundle` (qol-093).
         return
 
     if not _STARTER_BUNDLE_TEMPLATE_DIR.exists():
@@ -565,6 +573,12 @@ def _copy_kolsch_bundle(root: Path) -> None:
         raise RuntimeError(msg)
 
     shutil.copytree(_STARTER_BUNDLE_TEMPLATE_DIR, target)
+    # qol-089 — record what we just shipped so `kolsch doctor` can
+    # detect drift later. Import lazily so `cli.main` doesn't pay the
+    # module-load cost on every subcommand.
+    from cli._bundle_baseline import write_baseline  # noqa: PLC0415
+
+    write_baseline(root, bundle_dir=target)
 
 
 def _write_defaults_model(yaml_path: Path, model: str | dict[str, str]) -> None:

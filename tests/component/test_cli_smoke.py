@@ -155,6 +155,7 @@ _TOP_LEVEL_SUBCOMMANDS: tuple[str, ...] = (
     "chat",
     "workflows",
     "nodes",
+    "doctor",
 )
 
 

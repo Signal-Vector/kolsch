@@ -32,7 +32,14 @@ from typing import Any
 from ruamel.yaml import YAML
 from ruamel.yaml.error import YAMLError
 
-__all__ = ["YAMLError", "dump", "load", "load_with_positions"]
+__all__ = [
+    "YAMLError",
+    "dump",
+    "dump_round_trip",
+    "load",
+    "load_round_trip",
+    "load_with_positions",
+]
 
 # Module-level singleton — cheap to share and sufficient for our
 # single-threaded CLI / setup use cases. ``typ='safe'`` mirrors
@@ -94,4 +101,34 @@ def dump(data: Any) -> str:  # noqa: ANN401
     """Serialize ``data`` to a YAML string in block style, key-order preserved."""
     buf = StringIO()
     _yaml.dump(data, buf)
+    return buf.getvalue()
+
+
+# Round-trip pair: ``load_round_trip`` + ``dump_round_trip`` preserve
+# comments, blank lines, and key order end-to-end. qol-089's tool-refs
+# migrator uses these so ``platform.yaml``'s heavy comment structure
+# survives a rewrite. Prefer these over the plain ``load``/``dump``
+# pair whenever a caller reads a user-authored YAML, mutates it, and
+# writes it back — the plain pair is safe-mode and DROPS comments on
+# dump.
+def load_round_trip(text: str) -> Any:  # noqa: ANN401
+    """Parse ``text`` in round-trip mode (comments preserved).
+
+    Alias for :func:`load_with_positions` — the same singleton, named
+    for callers whose intent is "read → mutate → dump" rather than
+    "read source-line positions". Either name is fine.
+    """
+    return _yaml_rt.load(text)
+
+
+def dump_round_trip(data: Any) -> str:  # noqa: ANN401
+    """Serialize ``data`` in round-trip mode (comments/blank lines preserved).
+
+    Only meaningful when ``data`` was itself loaded via
+    :func:`load_round_trip` / :func:`load_with_positions` — comment and
+    blank-line metadata rides on the ``CommentedMap``/``CommentedSeq``
+    nodes those loaders return.
+    """
+    buf = StringIO()
+    _yaml_rt.dump(data, buf)
     return buf.getvalue()
