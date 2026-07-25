@@ -35,6 +35,7 @@ from pydantic import BaseModel, Field
 
 from errors import ToolExecutionFailed, ToolTimeout
 from errors.engine import ExchangeCancelled
+from errors.recovery import recovery_hint
 from tools.decorator import ToolContext, tool
 
 if TYPE_CHECKING:
@@ -144,6 +145,7 @@ async def fetch_url(args: FetchUrlArgs, ctx: ToolContext) -> dict[str, Any]:
         raise ToolExecutionFailed(
             tool_name="fetch_url",
             error_class="RuntimeDepMissing",
+            recovery_hint=recovery_hint("RuntimeDepMissing"),
         ) from exc
 
     timeout = httpx.Timeout(float(args.request_timeout_seconds))

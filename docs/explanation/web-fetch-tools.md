@@ -193,16 +193,17 @@ raises `ExchangeCancelled(where="kolsch.tools.browse_url._navigate_with_cancel")
 
 - `InvalidUrl` (via `ToolExecutionFailed`) — same as `fetch_url`.
 - `BrowseUrlExtraNotInstalled` — the `kolsch[browse]` extra is not
-  installed, so `import playwright.async_api` failed. Message
-  directs the user to
-  `uv tool install 'kolsch[browse]'`.
+  installed, so `import playwright.async_api` failed. The failure
+  carries a `recovery_hint` (qol-090) with the exact install command
+  for the detected install mode (source / tool / pip); see
+  [browse install](../how-to/workspace-and-setup.md#enabling-browse_url).
 - `BrowserBinaryMissing` — Playwright imported cleanly but Chromium
-  isn't on disk. Message directs the user to
-  `playwright install chromium`. The detection matches either the
-  historical `"Executable doesn't exist"` phrase or the surviving
-  `"playwright install"` install-hint token, so a Playwright message
-  rewording upstream does not silently demote the diagnostic to
-  `NavigationError`.
+  isn't on disk. Same `recovery_hint` shape, hint pointing at
+  `playwright install chromium` (adjusted for install mode). The
+  detection matches either the historical `"Executable doesn't
+  exist"` phrase or the surviving `"playwright install"` install-hint
+  token, so a Playwright message rewording upstream does not
+  silently demote the diagnostic to `NavigationError`.
 - `NavigationError` — any other `PlaywrightError` at launch or
   navigation.
 - `ToolTimeout` — the tool's `request_timeout_seconds` budget
@@ -271,22 +272,12 @@ kolsch setup
 
 `fetch_url` works out of the box. To enable `browse_url`:
 
-```bash
-uv tool install 'kolsch[browse]'        # pulls playwright + beautifulsoup4
-playwright install chromium             # separate ~150 MB browser binary
-```
+--8<-- "docs/_includes/browse-install.md"
 
 The two-step install is intentional: the pip / uv extra brings in
-the Python package, and Playwright's browser download is a
-separate step because it's large and belongs in image builds for
-container users. Docker/Podman images that ship kolsch should add:
-
-```
-RUN uv tool install 'kolsch[browse]' && playwright install chromium
-```
-
-so image-shipped kolsch environments are ready to fetch on first
-run rather than hitting `BrowserBinaryMissing` mid-chat.
+the Python package, and Playwright's browser download is a separate
+step because it's large and belongs in image builds for container
+users.
 
 **Authz defaults** land at `src/cli/_setup.py`:
 

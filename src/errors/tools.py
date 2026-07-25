@@ -186,7 +186,14 @@ class ToolInvalidArguments(PlatformError):
 
 
 class ToolExecutionFailed(PlatformError):
-    """Raised when the tool function raised during execution."""
+    """Raised when the tool function raised during execution.
+
+    Optionally carries a `recovery_hint` — the exact command a user
+    should run to unblock this failure. See `errors.recovery` for
+    the registry that builds hints per `error_class` and current
+    install mode. The observer forwards `recovery_hint` verbatim into
+    the `tool.failed` event and the LLM-visible payload (qol-090).
+    """
 
     code = "tool.execution_failed"
     level = Level.DIAGNOSTIC
@@ -197,12 +204,14 @@ class ToolExecutionFailed(PlatformError):
         error_class: str,
         *,
         where: str = "tools.dispatch.execute",
+        recovery_hint: str | None = None,
     ) -> None:
         super().__init__(
             message=(f"Tool {tool_name!r} raised {error_class}"),
             where=where,
             detail={"tool_name": tool_name, "error_class": error_class},
         )
+        self.recovery_hint = recovery_hint
 
 
 class ToolTimeout(PlatformError):

@@ -165,19 +165,14 @@ The setup-time `{{MODEL_LINE}}` placeholder mechanism was removed
 in E-BUG-MODELLINE-001 (it collided with Phase 2.2 Jinja syntax in
 agent YAMLs). The starter file now ships as plain, unprocessed YAML.
 
-To enable `browse_url`:
+### Enabling `browse_url`
 
-```
-uv tool install 'kolsch[browse]'
-playwright install chromium
-```
+--8<-- "docs/_includes/browse-install.md"
 
 Chromium is a ~150 MB download and is NOT installed
 automatically — mid-chat downloads of that size are user-hostile,
 so kolsch surfaces the missing binary as an actionable error
-rather than a silent install. Container users: add
-`RUN playwright install chromium` as a layer at image-build time so
-image-shipped kolsch envs are ready to fetch on first run.
+rather than a silent install.
 
 ## Scripted setup (CI, devcontainers)
 

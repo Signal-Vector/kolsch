@@ -355,16 +355,27 @@ class _ObservedToolHandle:
                 return {"error": payload}
             except PlatformError as exc:
                 err = Error.from_platform_error(exc)
+                # qol-090: forward the recovery_hint carried on the
+                # exception (currently ToolExecutionFailed sets it via
+                # errors.recovery.recovery_hint) into both the event
+                # payload and the LLM-visible tool_result envelope.
+                # Mirrors the ToolUnauthorized arm above; hint is None
+                # for any exception class that doesn't opt in.
+                recovery_hint = getattr(exc, "recovery_hint", None)
                 await self._emit(
                     type_=EventType.TOOL_FAILED,
                     data=ToolFailedData(
                         tool_call_id=tool_call_id,
                         tool_name=call.name,
                         error=err,
+                        recovery_hint=recovery_hint,
                     ).model_dump(mode="json"),
                     actor=Actor(kind="agent", id=self._agent_id),
                 )
-                return {"error": err.model_dump(mode="json")}
+                payload = err.model_dump(mode="json")
+                if recovery_hint is not None:
+                    payload["recovery_hint"] = recovery_hint
+                return {"error": payload}
             except (ExchangeCancelled, asyncio.CancelledError):
                 # spec-068 Part A — cancel between `tool.called` and
                 # `tool.result`/`tool.failed` used to leave the span

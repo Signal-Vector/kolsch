@@ -42,6 +42,7 @@ from pydantic import BaseModel, Field
 
 from errors import ToolExecutionFailed, ToolTimeout
 from errors.engine import ExchangeCancelled
+from errors.recovery import recovery_hint
 from tools.decorator import ToolContext, tool
 
 if TYPE_CHECKING:
@@ -174,6 +175,7 @@ async def browse_url(args: BrowseUrlArgs, ctx: ToolContext) -> dict[str, Any]:
         raise ToolExecutionFailed(
             tool_name="browse_url",
             error_class="BrowseUrlExtraNotInstalled",
+            recovery_hint=recovery_hint("BrowseUrlExtraNotInstalled"),
         ) from exc
 
     started = time.monotonic()
@@ -194,6 +196,7 @@ async def browse_url(args: BrowseUrlArgs, ctx: ToolContext) -> dict[str, Any]:
                 raise ToolExecutionFailed(
                     tool_name="browse_url",
                     error_class="BrowserBinaryMissing",
+                    recovery_hint=recovery_hint("BrowserBinaryMissing"),
                 ) from exc
             raise ToolExecutionFailed(
                 tool_name="browse_url",

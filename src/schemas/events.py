@@ -292,17 +292,23 @@ class ToolResultData(_DataModel):
 class ToolFailedData(_DataModel):
     """`tool.failed.data` — a tool invocation that raised.
 
-    When the failure was an authz denial (`error.type ==
-    "authz.denied"` or the wrapped `tool.unauthorized` whose detail
-    names a deny rule), the engine populates `recovery_hint` with the
-    exact `/perm allow …` chat command the user can type to un-block.
-    The chat renderer surfaces it inside the denied capsule; the
-    framework forwards the whole event payload to the model so the
-    agent sees the actionable text and stops flailing.
+    `recovery_hint` (when set) is the exact command a user should run
+    to unblock the failure. The chat renderer surfaces it inside the
+    failure capsule; the framework forwards the whole event payload
+    to the model so the agent sees the actionable text and stops
+    flailing. Two shapes populate it:
 
-    `recovery_hint` is `None` for every non-authz failure — the field
-    is purely a convenience layer for the authz path; other tool
-    failures continue to surface through `error.message` alone.
+    - **Authz denial** — the engine's authz arm computes a `/perm
+      allow <tool> <pattern>` command from the matched rule and the
+      in-flight args.
+    - **Tool exception carrying `.recovery_hint`** (qol-090) — any
+      `ToolExecutionFailed` that opts in via the `recovery_hint`
+      constructor kwarg; the observer's generic `PlatformError` arm
+      forwards it. `errors.recovery.recovery_hint()` is the canonical
+      builder — it detects the install mode and returns the exact
+      install command per registered `error_class`.
+
+    `recovery_hint` is `None` for any failure that neither opts in.
     """
 
     tool_call_id: str
