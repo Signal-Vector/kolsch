@@ -2721,32 +2721,160 @@ class _Exchange:
 # ---------------------------------------------------------------------------
 
 
-def _context_length_for_spec(
-    providers: dict[str, Any],
-    spec: Any,
-) -> int | None:
-    """Look up the declared ``context_length`` for ``spec`` in ``providers``.
+def _entry_context_length(entry: Any) -> int | None:
+    """Extract ``context_length`` from a provider-catalog entry, or ``None``.
 
-    Duplicates the tiny helper on ``PlatformRuntime`` so the engine
-    can answer without holding a reference back to the runtime object.
-    ``None`` when the provider isn't declared, the model isn't listed,
-    or the ``context_length`` field is absent / null / non-int.
+    Defensive: returns ``None`` for non-dict entries, missing keys,
+    booleans (``bool`` subclasses ``int`` in Python so ``True`` would
+    otherwise become ``1``), and non-int values.
     """
-    provider = providers.get(spec.provider)
-    if provider is None:
+    if not isinstance(entry, dict):
         return None
+    value = entry.get("context_length")
+    if isinstance(value, bool):
+        return None
+    if isinstance(value, int):
+        return value
+    return None
+
+
+def _model_ids_match(a: str, b: str) -> bool:
+    """Match two provider-catalog model IDs allowing vendor-prefix suffixes.
+
+    Two IDs match when they are equal, or when one is a ``vendor/name``
+    form whose trailing segment (after the final ``/``) equals the
+    other. Handles the common opencode↔openrouter shape:
+    ``kimi-k2.6`` ↔ ``moonshotai/kimi-k2.6``. Empty strings never match.
+    """
+    if not a or not b:
+        return False
+    if a == b:
+        return True
+    return a.rsplit("/", 1)[-1] == b.rsplit("/", 1)[-1]
+
+
+def _lookup_context_length_in_provider(
+    provider: Any,
+    model: str,
+    *,
+    allow_suffix: bool,
+) -> int | None:
+    """Walk ``provider.models`` for a matching entry and return its context_length.
+
+    ``allow_suffix=False`` restricts to exact ``id == model`` (used for
+    the direct-lookup fast path so it stays byte-identical to the
+    pre-qol behavior). ``allow_suffix=True`` also accepts the
+    vendor-prefix suffix shape (see :func:`_model_ids_match`).
+    """
     for entry in getattr(provider, "models", []) or []:
         if not isinstance(entry, dict):
             continue
-        if entry.get("id") != spec.model:
+        entry_id = entry.get("id")
+        if not isinstance(entry_id, str):
             continue
-        value = entry.get("context_length")
-        if isinstance(value, bool):
-            return None
-        if isinstance(value, int):
+        if allow_suffix:
+            if not _model_ids_match(entry_id, model):
+                continue
+        elif entry_id != model:
+            continue
+        value = _entry_context_length(entry)
+        if value is not None:
             return value
-        return None
     return None
+
+
+def _context_length_for_spec(
+    providers: dict[str, Any] | None,
+    spec: Any,
+) -> int | None:
+    """Look up the declared ``context_length`` for ``spec`` across ``providers``.
+
+    Three-tier lookup, in order:
+
+    1. **Direct match** in the caller's own provider (byte-identical
+       to the pre-qol fast path — ``spec.model == entry.id``).
+    2. **Own-provider suffix match** — same provider, trailing-segment
+       equality after splitting each candidate ``entry.id`` on ``/``.
+       Handles a short-form spec (``kimi-k2.6``) against a catalog
+       carrying vendor prefixes (``moonshotai/kimi-k2.6``).
+    3. **Cross-provider fallback** — iterate every OTHER configured
+       provider in ``platform.yaml`` insertion order, applying
+       exact-then-suffix rules. First int-valued hit wins;
+       ``None``-valued candidates carry no signal and are skipped
+       entirely. If a second candidate exists with a *different*
+       ``int`` value, a ``warning``-level log fires naming both
+       candidates + values (silent when they agree).
+
+    ``spec.provider == "mock"`` short-circuits to the direct fast path
+    only — the mock provider's ID space (``mock-model``,
+    ``mock-summariser``) can collide with real-provider suffixes
+    ending in ``/mock``; silent ``None`` is safer than borrowed
+    metadata.
+
+    Never raises. Every degenerate input returns ``None``.
+    """
+    if not providers:
+        return None
+    spec_provider = getattr(spec, "provider", None)
+    spec_model = getattr(spec, "model", None)
+    if not isinstance(spec_provider, str) or not isinstance(spec_model, str):
+        return None
+
+    own = providers.get(spec_provider)
+    if own is not None:
+        # Tier 1 — direct exact match in the caller's own provider.
+        direct = _lookup_context_length_in_provider(own, spec_model, allow_suffix=False)
+        if direct is not None:
+            return direct
+
+    # Mock short-circuit: never borrow metadata for the mock provider.
+    if spec_provider == "mock":
+        return None
+
+    if own is not None:
+        # Tier 2 — same provider, suffix match.
+        own_suffix = _lookup_context_length_in_provider(
+            own, spec_model, allow_suffix=True
+        )
+        if own_suffix is not None:
+            return own_suffix
+
+    # Tier 3 — cross-provider fallback. Iterate every other configured
+    # provider in insertion order; first int-valued hit wins. Warn on
+    # disagreement.
+    matches: list[tuple[str, int]] = []
+    for other_name, other_provider in providers.items():
+        if other_name == spec_provider:
+            continue
+        value = _lookup_context_length_in_provider(
+            other_provider, spec_model, allow_suffix=True
+        )
+        if value is None:
+            continue
+        matches.append((other_name, value))
+
+    if not matches:
+        return None
+
+    winner_name, winner_value = matches[0]
+    disagreements = [
+        (name, value) for name, value in matches[1:] if value != winner_value
+    ]
+    if disagreements:
+        conflict_summary = ", ".join(
+            f"{name}={value}"
+            for name, value in [(winner_name, winner_value), *matches[1:]]
+        )
+        _log.warning(
+            "context_length fallback for %s/%s: candidates disagree (%s); "
+            "using %s=%d (first-in-config-order wins)",
+            spec_provider,
+            spec_model,
+            conflict_summary,
+            winner_name,
+            winner_value,
+        )
+    return winner_value
 
 
 def _extract_trigger_content(trigger: dict[str, Any]) -> dict[str, Any]:

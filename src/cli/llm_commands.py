@@ -654,7 +654,17 @@ def _emit_models_json(
 
 
 async def cmd_refresh(args: argparse.Namespace, io: _CommandIO) -> int:
-    """Re-run discovery against connected providers and rewrite their model lists."""
+    """Re-run discovery against connected providers and rewrite their model lists.
+
+    Self-heal: refreshed entries are passed through :func:`_maybe_augment`
+    (same helper ``cmd_connect`` calls) so a provider without
+    ``context_length`` metadata picks up values from any connected
+    :class:`MetadataSourceConnector`. Additionally, any provider block
+    whose connector qualifies as a metadata source but lacks the
+    ``serves_as_metadata_source: true`` marker gets it written back
+    idempotently — closes the drift for workspaces connected before
+    the marker was introduced.
+    """
     payload = _load_platform_yaml(io.root)
     providers = payload.get("llm_providers") or {}
     if not providers:
@@ -699,7 +709,33 @@ async def cmd_refresh(args: argparse.Namespace, io: _CommandIO) -> int:
             io.out.write(f"error refreshing {name}: {exc.detail['reason']}\n")
             continue
         io.out.write(f"✓ {name}: {len(entries)} models\n")
+
+        # Self-heal: augment refreshed entries from any connected
+        # metadata source (typically OpenRouter). Uses the caller's
+        # current payload as the source-of-truth for who else is
+        # connected — same shape `cmd_connect` uses.
+        existing_providers = _provider_configs_from_payload(payload)
+        entries = await _maybe_augment(entries, existing_providers, connector, name, io)
+
         entry["models"] = [_model_entry_to_yaml(e) for e in entries]
+
+    # Retroactive marker sweep. For any provider block whose connector
+    # qualifies as a metadata source but lacks the flag, add it. This
+    # heals workspaces connected before the marker was introduced and
+    # is idempotent — re-runs write no diff.
+    for name, entry in providers.items():
+        if not isinstance(entry, dict):
+            continue
+        if entry.get("serves_as_metadata_source"):
+            continue
+        try:
+            connector = io.connector_factory(entry.get("type") or name)
+        except LlmConnectorUnknown:
+            continue
+        if is_metadata_source(connector):
+            entry["serves_as_metadata_source"] = True
+            io.out.write(f"✓ {name}: marked as metadata source\n")
+
     providers_after = dict(providers)
     payload["llm_providers"] = providers_after
     _write_platform_yaml_atomic(io.root, payload)

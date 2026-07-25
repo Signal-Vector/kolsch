@@ -166,43 +166,32 @@ class PlatformRuntime:
     def context_length_for(self, spec: ModelSpec) -> int | None:
         """Return the declared ``context_length`` (tokens) for ``spec``, or ``None``.
 
-        Walks :attr:`llm_providers_config` for a provider matching
-        ``spec.provider`` and looks up an entry in that provider's
-        ``models`` list whose ``id`` matches ``spec.model``. Returns
-        the entry's ``context_length`` when the model declares one.
+        Delegates to the engine's :func:`engine._context_length_for_spec`,
+        which walks :attr:`llm_providers_config` for the caller's own
+        provider first (direct and vendor-prefix suffix match), then
+        falls back to every other configured provider (typically a
+        metadata source like OpenRouter) so a short-form entry in one
+        provider can borrow ``context_length`` from a vendor-prefixed
+        entry in another. See qol-091.
 
         Returns ``None`` when:
 
         - The provider is not present in ``llm_providers_config``
-          (e.g. ``spec.provider == "mock"`` on the default tier).
-        - No model entry matches ``spec.model``.
+          (e.g. ``spec.provider == "mock"`` on the default tier —
+          the mock provider short-circuits fallback intentionally).
+        - No model entry matches ``spec.model`` in any configured
+          provider.
         - The matching entry has ``context_length: null`` (many
-          ``opencode`` models legitimately don't declare one).
+          ``opencode`` models legitimately don't declare one, and no
+          other configured provider supplies a value either).
 
-        The compaction pre-flight (feat-054, lands in Phase 2) uses
-        this to compute the trigger budget. ``None`` is a signal to
-        skip compaction for the current exchange and emit a diagnostic
-        rather than hard-failing.
+        The compaction pre-flight uses this to compute the trigger
+        budget. ``None`` is a signal to skip compaction for the current
+        exchange and emit a diagnostic rather than hard-failing.
         """
-        provider = self.llm_providers_config.get(spec.provider)
-        if provider is None:
-            return None
-        for entry in provider.models:
-            # `ProviderConfig.models` is typed as `list[dict[str, Any]]`.
-            # A malformed non-dict slipped in at load time would raise
-            # `AttributeError` here — that's the correct signal (bug in
-            # config parsing) rather than silently masking the miss.
-            if entry.get("id") != spec.model:
-                continue
-            value = entry.get("context_length")
-            # `bool` is a subclass of `int`; reject it before the int
-            # check so `context_length: true` does not become `1`.
-            if isinstance(value, bool):
-                return None
-            if isinstance(value, int):
-                return value
-            return None
-        return None
+        from engine.engine import _context_length_for_spec  # noqa: PLC0415
+
+        return _context_length_for_spec(self.llm_providers_config, spec)
 
 
 def _resolve_llm_call_timeout_default(
