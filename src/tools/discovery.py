@@ -11,6 +11,7 @@ discovery is the Tools subsystem's responsibility.
 from __future__ import annotations
 
 import importlib.util
+import sys
 from typing import TYPE_CHECKING, Any
 
 from errors import ToolSetupFailed
@@ -56,6 +57,13 @@ def discover_tools_in_file(path: Path) -> list[Callable[..., Awaitable[Any]]]:
             reason=f"could not build import spec for {path}",
         )
     module = importlib.util.module_from_spec(spec)
+    # Register in sys.modules BEFORE exec_module so Pydantic's model_rebuild
+    # (called from `model_json_schema()` at tool-registration time) can resolve
+    # string annotations like `Literal[...]` from `sys.modules[cls.__module__]`.
+    # Mirrors the pattern in builtins.py:323 / :375. Without this, a tool file
+    # that uses `from __future__ import annotations` + forward-ref types (e.g.
+    # `Literal[...]`) fails registration with PydanticUserError. See bug-088.
+    sys.modules[module_name] = module
     try:
         spec.loader.exec_module(module)
     except Exception as exc:
