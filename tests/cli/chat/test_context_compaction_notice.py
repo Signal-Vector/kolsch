@@ -207,3 +207,59 @@ async def test_context_compaction_skipped_warning_on_other_reason() -> None:
     state, title, body = _first_mount(app)
     assert state == "skipped"
     assert "context_length_unknown" in title or "context_length_unknown" in body
+
+
+# ---------------------------------------------------------------------------
+# qol-092 — CONTEXT_COMPACTION_SKIPPED(no_context_length) rendering
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_context_compaction_skipped_no_context_length_renders_detail() -> None:
+    """qol-092 AC-2: no_context_length reason renders model spec + hint."""
+    app = _CapturingApp()
+    adapter = EventAdapter(app)
+    event = _event(
+        EventType.CONTEXT_COMPACTION_SKIPPED,
+        {
+            "reason": "no_context_length",
+            "tokens_before": 0,
+            "tokens_after": 0,
+            "detail": {
+                "provider": "opencode",
+                "model": "kimi-k2.6",
+                "remediation_hint": (
+                    "Run `kolsch refresh opencode` to backfill "
+                    "`context_length` from the connected metadata source."
+                ),
+            },
+        },
+    )
+    await adapter.handle(event)
+    state, title, body = _first_mount(app)
+    assert state == "skipped"
+    # Title still names the reason (same shape as other skip reasons).
+    assert "no_context_length" in title
+    # Body carries the model spec and the remediation hint (multi-line).
+    assert "opencode/kimi-k2.6" in body
+    assert "kolsch refresh opencode" in body
+
+
+@pytest.mark.asyncio
+async def test_context_compaction_skipped_no_net_savings_body_unchanged() -> None:
+    """qol-092 AC-2 regression guard: no_net_savings body stays one-line.
+
+    The old ``transition_to_skipped(reason=...)`` produced body
+    ``"reason: no_net_savings"``. qol-092's ``detail`` branch must not
+    fire when ``detail`` is absent — this test pins the byte-shape of
+    the pre-qol path.
+    """
+    app = _CapturingApp()
+    adapter = EventAdapter(app)
+    event = _event(
+        EventType.CONTEXT_COMPACTION_SKIPPED,
+        {"reason": "no_net_savings", "tokens_before": 100, "tokens_after": 95},
+    )
+    await adapter.handle(event)
+    _state, _title, body = _first_mount(app)
+    assert body == "reason: no_net_savings"

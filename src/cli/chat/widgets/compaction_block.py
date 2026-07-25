@@ -193,8 +193,32 @@ class CompactionBlock(Collapsible):
             body_lines.append(f"fallback tier fired: {fallback_tier}")
         self._apply("failure", title, "\n".join(body_lines))
 
-    def transition_to_skipped(self, *, reason: str) -> None:
+    def transition_to_skipped(
+        self,
+        *,
+        reason: str,
+        detail: dict[str, str] | None = None,
+    ) -> None:
+        """Move the block into ``skipped`` state.
+
+        ``detail`` is qol-092's optional per-reason context — for the
+        ``no_context_length`` reason it carries ``provider`` / ``model``
+        / ``remediation_hint`` and the body renders the model spec
+        followed by the hint text so the operator sees what to do.
+        Other reasons pass ``detail=None`` and get today's one-line body.
+        """
         title = f"↷ Compaction skipped: {reason}"
+        if detail:
+            body_lines: list[str] = [f"reason: {reason}"]
+            provider = detail.get("provider")
+            model = detail.get("model")
+            if provider and model:
+                body_lines.append(f"model: {provider}/{model}")
+            hint = detail.get("remediation_hint")
+            if hint:
+                body_lines.append(hint)
+            self._apply("skipped", title, "\n".join(body_lines))
+            return
         self._apply("skipped", title, f"reason: {reason}")
 
     def transition_to_revoked(self, *, target_short_id: str) -> None:

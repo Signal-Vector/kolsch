@@ -2449,6 +2449,28 @@ class _Exchange:
                 self.config.model.provider,
                 self.config.model.model,
             )
+            # qol-092 — surface the silent skip as a chat-visible event
+            # so the operator sees a distinct notice (with actionable
+            # remediation) instead of the session running unchecked to
+            # the LLM's real ceiling. Mirrors the ``no_net_savings``
+            # emit shape at :2519 — same event type, same actor kind.
+            await self._emit(
+                type_=EventType.CONTEXT_COMPACTION_SKIPPED,
+                data={
+                    "reason": "no_context_length",
+                    "tokens_before": 0,
+                    "tokens_after": 0,
+                    "detail": {
+                        "provider": self.config.model.provider,
+                        "model": self.config.model.model,
+                        "remediation_hint": _no_context_length_remediation(
+                            self.engine._llm_providers_config,
+                            self.config.model,
+                        ),
+                    },
+                },
+                actor=Actor(kind="system"),
+            )
             return events
 
         compaction_cfg = (self.engine._assets._platform_config or {}).get(
@@ -2875,6 +2897,51 @@ def _context_length_for_spec(
             winner_value,
         )
     return winner_value
+
+
+def _no_context_length_remediation(
+    providers: dict[str, Any] | None,
+    spec: Any,
+) -> str:
+    """Return an operator-facing hint for the ``no_context_length`` skip.
+
+    Same "compute engine-side, thread through the event" pattern
+    qol-090 established for tool-execution recovery hints. The chat
+    adapter renders the returned string verbatim.
+
+    Two branches, decided by whether any currently-configured
+    :class:`llm.protocol.MetadataSourceConnector` provider is present:
+
+    - **Metadata source connected** — recommend
+      ``kolsch refresh <spec.provider>`` (qol-091 self-heal picks up
+      the missing ``context_length`` on the next refresh).
+    - **No metadata source connected** — recommend
+      ``kolsch connect openrouter`` OR a direct ``platform.yaml``
+      edit to pin ``context_length`` on the specific model.
+    """
+    spec_provider = getattr(spec, "provider", None) or "?"
+    spec_model = getattr(spec, "model", None) or "?"
+
+    has_metadata_source = False
+    if providers:
+        from llm import connected_metadata_sources  # noqa: PLC0415
+
+        try:
+            has_metadata_source = bool(connected_metadata_sources(providers))
+        except Exception:  # noqa: BLE001 — hint is best-effort; never raise
+            has_metadata_source = False
+
+    if has_metadata_source:
+        return (
+            f"Run `kolsch refresh {spec_provider}` to backfill "
+            f"`context_length` from the connected metadata source."
+        )
+    return (
+        "Connect a metadata source (`kolsch connect openrouter`) to "
+        f"auto-populate, OR add `context_length: <N>` under "
+        f"`llm_providers.{spec_provider}.models[id={spec_model}]` in "
+        "`platform.yaml`."
+    )
 
 
 def _extract_trigger_content(trigger: dict[str, Any]) -> dict[str, Any]:

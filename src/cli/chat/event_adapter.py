@@ -1688,7 +1688,17 @@ class EventAdapter:
         # bug-060 Part 1: register the block under the skipped event's
         # id. Skipped-state blocks are still transcript DOM.
         self._register_widget_for_event(event, block)
-        block.transition_to_skipped(reason=reason)
+        # qol-092 — the ``no_context_length`` reason carries a ``detail``
+        # dict with ``provider`` / ``model`` / ``remediation_hint`` the
+        # widget renders verbatim so the operator sees actionable
+        # direction. Other reasons keep today's one-line body.
+        raw_detail = event.data.get("detail")
+        detail: dict[str, str] | None = (
+            {str(k): str(v) for k, v in raw_detail.items()}
+            if isinstance(raw_detail, dict)
+            else None
+        )
+        block.transition_to_skipped(reason=reason, detail=detail)
 
     async def _acquire_compaction_block(self, *, event_id: str) -> Any:
         """Return the CompactionBlock to write into.

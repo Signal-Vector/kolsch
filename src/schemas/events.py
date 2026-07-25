@@ -434,15 +434,31 @@ class ContextCompactionFailedData(_DataModel):
 class ContextCompactionSkippedData(_DataModel):
     """`context.compaction_skipped.data` — a compaction attempt was discarded.
 
-    Emitted when the produced summary did not shrink the projected
-    context enough to be worth swapping (`tokens_after > tokens_before
-    * 0.90`) or when the engine could not compute a compaction (missing
-    `context_length`, etc.).
+    Emitted at the compaction pre-flight. Documented reasons:
+
+    - ``no_net_savings`` — the summariser ran but produced no worthwhile
+      shrink (``tokens_after > tokens_before * 0.90``). ``tokens_before``
+      / ``tokens_after`` carry the observed sizes.
+    - ``no_context_length`` — the model has no declared ``context_length``
+      and no cross-provider metadata source (see qol-091) could supply
+      one, so the compaction budget is uncomputable. ``detail`` carries
+      the model spec and an operator-facing remediation hint.
+    - ``unknown`` — historical/replay fallback when the reason string
+      is missing from the payload.
+
+    ``detail`` is an optional string-valued map for reason-specific
+    context (added by qol-092 for ``no_context_length``: ``provider``,
+    ``model``, ``remediation_hint``). Consumers should treat unknown
+    keys as opaque strings and ignore missing keys. Non-string values
+    (numbers, nested dicts, lists) would need a schema widen — keep
+    keys/values as strings, or bump the field type when a genuine
+    richer shape is needed.
     """
 
     reason: str
     tokens_before: int = 0
     tokens_after: int = 0
+    detail: dict[str, str] | None = None
 
 
 class AgentTemplateWarningData(_DataModel):
