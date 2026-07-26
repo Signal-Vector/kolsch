@@ -139,6 +139,49 @@ knows them, `context_length`, `supports_tools`,
 `supports_streaming`, and `pricing`. A failure on one provider is
 reported and the next continues.
 
+**Self-heal on refresh** (qol-091). `refresh` also:
+
+- Re-runs metadata augmentation against any currently-connected
+  `MetadataSourceConnector` (OpenRouter is the shipping one) so
+  models from providers that don't publish `context_length`
+  themselves — chiefly `opencode` — get the field filled in from
+  the metadata source. Useful when a provider was connected BEFORE
+  the metadata source, since the connect-time augmentation loop
+  would have found no source to consult.
+- Retroactively writes `serves_as_metadata_source: true` on any
+  provider block whose connector is a metadata source but whose
+  entry lacks the flag (older workspaces that predate the marker).
+
+Idempotent — re-running produces no diff once everything's aligned.
+
+### Cross-provider `context_length` fallback (runtime)
+
+Independent of `refresh`, the engine's runtime `context_length`
+lookup falls through to other configured providers when the
+caller's own provider entry has no value. Two things happen at
+resolution:
+
+1. **Same-provider suffix match** — a short-form spec
+   (`kimi-k2.6`) resolves against a same-provider entry with a
+   vendor-prefixed id (`moonshotai/kimi-k2.6`), or the reverse.
+2. **Cross-provider fallback** — if the caller's provider has
+   nothing, iterate every other configured provider in
+   `platform.yaml` insertion order looking for the same model (with
+   the same suffix-matching). First int-valued hit wins.
+
+If two other providers disagree (different `context_length` for the
+same suffix), the first-in-config-order value wins AND a `warning`
+log fires naming both candidates + values. `None`-valued candidates
+are skipped entirely — they carry no signal. The `mock` provider
+short-circuits the fallback (its id space collides with real
+providers' suffixes; borrowed metadata would be worse than an
+honest `None`).
+
+The upshot for daily use: connect OpenRouter alongside OpenCode (or
+any metadata-poor provider), and compaction resolves the correct
+context length for opencode-served models without you having to
+paste a `context_length` into `platform.yaml` by hand.
+
 ## Listing what's available
 
 ```bash

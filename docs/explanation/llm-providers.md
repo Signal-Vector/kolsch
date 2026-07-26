@@ -282,6 +282,55 @@ This is a few lines in the CLI command — no separate module. If a
 second metadata source ever exists, the loop handles it
 unchanged.
 
+**qol-091 self-heal on refresh.** `refresh` also runs
+`_maybe_augment(...)` before writing entries — so a provider
+connected BEFORE the metadata source (which would have found no
+source to consult at connect time) picks up the metadata on the
+next `refresh` invocation. `refresh` also retroactively writes the
+`serves_as_metadata_source: true` marker on any provider block
+whose connector is a metadata source but whose entry lacks the
+flag. Both operations are idempotent.
+
+### 3.5 Runtime cross-provider `context_length` fallback
+
+Independent of the connect/refresh-time augmentation, the engine's
+runtime lookup at `_context_length_for_spec` (`src/engine/engine.py`)
+falls through to other configured providers when the caller's own
+provider entry has no `context_length` value. Three tiers:
+
+1. **Direct match** — `spec.model == entry.id` in the caller's own
+   provider.
+2. **Own-provider suffix match** — split each `entry.id` on `/` and
+   compare only the last segment (`kimi-k2.6` matches
+   `moonshotai/kimi-k2.6`), and the reverse (prefixed spec against
+   short-id entry).
+3. **Cross-provider fallback** — iterate every OTHER configured
+   provider in `platform.yaml` insertion order, applying
+   exact-then-suffix match.
+
+`PlatformRuntime.context_length_for` delegates to the same helper so
+both call paths return identical values (feat-054 documented the
+runtime method as *the* API even before qol-091 wired it through
+the fallback).
+
+**Semantics on ambiguity:**
+
+- First int-valued hit wins. Config-file insertion order is stable.
+- `None`-valued candidates are skipped entirely — no signal.
+- Two int candidates with **different** values → a `warning` log
+  fires naming both providers + values. Two candidates in
+  agreement → silent.
+- `mock` provider short-circuits — its id space (`mock-model`,
+  `mock-summariser`) collides too easily with real-provider
+  suffixes. Direct-lookup for a mock spec still works.
+
+The upshot: connecting OpenRouter alongside a metadata-poor
+provider (chiefly `opencode`) resolves `context_length` for
+opencode-served models automatically, without editing
+`platform.yaml`. Without a metadata source configured, the lookup
+returns `None` and compaction skips silently — see the
+compaction docs for the resulting user-facing notice.
+
 ---
 
 ## Part 4 — Reference Implementations

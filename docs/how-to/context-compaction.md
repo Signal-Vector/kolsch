@@ -318,6 +318,52 @@ If all retries fail to shrink, tier 2 fires.
 **Never fails your exchange.** Compaction is background prevention;
 your user turn only fails on the tier-3 hard-fail case above.
 
+### The `no_context_length` skip (wedged provider)
+
+Compaction only fires when the engine can look up the model's
+declared `context_length`. Providers that don't publish this field
+in their model catalog (chiefly `opencode`) rely on
+[`kolsch refresh` self-heal](connect-a-provider.md#model-discovery-kolsch-refresh)
+or the [runtime cross-provider fallback](../explanation/llm-providers.md#35-runtime-cross-provider-context_length-fallback)
+to fill it in from a metadata source.
+
+When neither succeeds — a workspace with the wedged provider AND no
+metadata source configured — the lookup returns `None`, compaction
+skips, and the chat surface mounts a distinct `CompactionBlock`
+carrying:
+
+- The model spec (`opencode/kimi-k2.6`)
+- An operator-facing `recovery_hint` telling you the exact command
+  to run for your install mode (`kolsch refresh <provider>` if a
+  metadata source is connected but the entry is missing;
+  `kolsch connect openrouter` OR direct `platform.yaml` edit
+  otherwise).
+
+Three call sites emit this event; each fires exactly once per
+thread-session (bug-097 per-thread guard):
+
+- **Per-turn** — every user message runs a compaction pre-flight;
+  the first turn on a wedged thread emits the notice.
+- **Session-open eager** — resumed threads with real
+  conversation history (`USER_MESSAGE` present) emit at chat-open
+  so you see the warning before your first post-resume turn.
+- **`/compact`** — user-initiated; emits **unguarded** (every
+  invocation of `/compact` on a wedged thread produces a fresh
+  distinct notice, because the `CompactionBlock` mounted by the
+  slash handler needs consuming each time).
+
+The old opaque *"nothing to compact (short session, compaction
+disabled, or model has no declared context_length)"* notice is
+now reserved for genuine short-session skips — the `/compact`
+handler no longer mounts it when the underlying skip was
+`no_context_length`.
+
+Fresh sessions with no `USER_MESSAGE` events stay silent at
+session-open — the notice only surfaces when there's real
+conversation history at risk. Bootstrap-only threads
+(`SESSION_OPENED` + `CONFIG_SET` alone) don't count as history
+worth warning about.
+
 ---
 
 ## Add a custom variant
