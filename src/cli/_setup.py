@@ -209,6 +209,19 @@ async def run_setup(args: argparse.Namespace, io: _SetupIO) -> int:
     classifier-driven hint derived from the failure code, not a
     hardcoded "check provider credentials" string.
     """
+    # qol-093 — `--sync-bundle` runs a completely different flow:
+    # skip A/B/C/D/E/F, dispatch to the drift-repair pass. Returns
+    # 0 clean / non-zero on any skipped drift item.
+    if bool(getattr(args, "sync_bundle", False)):
+        from cli._bundle_sync import sync_kolsch_bundle  # noqa: PLC0415
+
+        return await sync_kolsch_bundle(
+            io,
+            dry_run=bool(getattr(args, "dry_run", False)),
+            yes=bool(getattr(args, "yes", False)),
+            no=bool(getattr(args, "no", False)),
+        )
+
     non_interactive: bool = bool(getattr(args, "non_interactive", False))
     if non_interactive:
         io = _SetupIO(

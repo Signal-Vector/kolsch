@@ -269,6 +269,48 @@ def _build_parser() -> argparse.ArgumentParser:
             "starter agent ships with `provider: mock`."
         ),
     )
+    # qol-093 — bundle-drift repair. When --sync-bundle is passed,
+    # setup skips the install flow and runs the sync pass instead
+    # (rewrites kolsch-owned drift per the qol-089 migrator +
+    # baseline; reports user-owned drift). --dry-run touches nothing.
+    # --yes / --no drive per-file default answers in non-interactive
+    # runs (both = safe default: keep-local for modified files, keep
+    # for retired-at-source; either triggers partial-success exit).
+    setup.add_argument(
+        "--sync-bundle",
+        dest="sync_bundle",
+        action="store_true",
+        help=(
+            "Repair `bundles/kolsch/**` drift against the packaged "
+            "source (qol-093). Rewrites kolsch-owned drift; reports "
+            "user-owned drift; never writes user bundles."
+        ),
+    )
+    setup.add_argument(
+        "--dry-run",
+        dest="dry_run",
+        action="store_true",
+        help="With --sync-bundle: print planned changes; write nothing.",
+    )
+    setup.add_argument(
+        "--yes",
+        dest="yes",
+        action="store_true",
+        help=(
+            "With --sync-bundle: non-interactive. Keeps locally-modified "
+            "files (safe default); triggers partial-success exit if any "
+            "drift item was skipped."
+        ),
+    )
+    setup.add_argument(
+        "--no",
+        dest="no",
+        action="store_true",
+        help=(
+            "With --sync-bundle: non-interactive. Same safe defaults as "
+            "--yes; kept as a symmetric knob for scripting."
+        ),
+    )
 
     # ---- connect / disconnect / providers / refresh ------------------
     connect = sub.add_parser("connect", help="Connect an LLM provider.")
