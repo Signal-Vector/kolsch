@@ -211,6 +211,79 @@ graph:
     assert workflows.starts == [("kolsch/workflows/hello", {})]
 
 
+# ----------------------------------------------------------------------
+# qol-097 — dispatch guard promotes required set via preferred seam.
+# ----------------------------------------------------------------------
+
+
+class _MockWorkflowsWithPromotedSet:
+    """Duck-typed impl exposing qol-097's ``resolve_effective_required_inputs``.
+
+    Test 8 fixture: parent has NO direct ``{{ inputs.X }}`` refs in
+    its yaml, but a sub-workflow child requires ``url``. The promoted
+    seam returns ``["url"]`` — the tool's preferred branch fires and
+    the caller sees ``requires input(s) 'url'`` at dispatch time.
+    """
+
+    def __init__(self, *, effective_required_map: dict[str, list[str]]) -> None:
+        self._effective = effective_required_map
+        self.starts: list[tuple[str, dict[str, Any]]] = []
+
+    def resolve_effective_required_inputs(self, ref: str) -> list[str] | None:
+        return self._effective.get(ref)
+
+    # `resolve_workflow_yaml` intentionally omitted — the preferred
+    # branch is the ONLY path exercised in this test.
+
+    async def start(
+        self,
+        ref: str,
+        inputs: dict[str, Any],
+        *,
+        card: Any = None,
+    ) -> str:
+        _ = card
+        self.starts.append((ref, inputs))
+        return "wrk_never_started"
+
+
+@pytest.mark.asyncio
+async def test_dispatch_guard_reports_promoted_required() -> None:
+    """qol-097: mock exposes the preferred seam → promoted `url` fires the guard.
+
+    Parent ``autoply/workflows/apply_pipeline`` has no direct
+    ``{{ inputs.X }}`` refs, but its sub-workflow child requires
+    ``url``. The preferred seam is the ONLY validation path in this
+    mock; the tool must surface a ``WrappedError`` with
+    ``detail["missing_inputs"] == ["url"]`` and never call
+    ``services.workflows.start``.
+    """
+    run_workflow = _load_run_workflow()
+    cards = _MockCards()
+    workflows = _MockWorkflowsWithPromotedSet(
+        effective_required_map={"autoply/workflows/apply_pipeline": ["url"]},
+    )
+    ctx = _mk_ctx(cards, workflows)
+
+    args_schema = run_workflow._tool_definition.args_schema
+    args = args_schema.model_validate(
+        {
+            "ref": "autoply/workflows/apply_pipeline",
+            "inputs": {},
+        }
+    )
+    with pytest.raises(PlatformError) as exc_info:
+        await run_workflow._tool_definition.func(args, ctx)
+    err = exc_info.value
+    assert "url" in str(err), f"expected 'url' in error, got {err!s}"
+    assert "requires input" in str(err)
+    assert err.detail["ref"] == "autoply/workflows/apply_pipeline"
+    assert err.detail["missing_inputs"] == ["url"]
+    # No fire-and-forget: the run must not have been dispatched.
+    assert workflows.starts == []
+    assert cards.opened == []
+
+
 @pytest.mark.asyncio
 async def test_resolver_absent_falls_back_to_pre_bug025_shape() -> None:
     """Mock workflows without ``resolve_workflow_yaml`` skip validation.

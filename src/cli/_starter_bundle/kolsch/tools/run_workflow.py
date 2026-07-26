@@ -203,57 +203,81 @@ async def run_workflow(
     assert services.cards is not None  # narrowed by require_services
     assert services.workflows is not None  # narrowed by require_services
 
-    # bug-025: fetch the workflow YAML via the service seam and
-    # validate `inputs` against the declared `{{ inputs.X }}`
-    # references. Duck-typed to keep the `Workflows` Protocol byte-
-    # identical — headless test mocks without this method fall
-    # through to the no-validation path (matches pre-bug-025).
-    resolver = getattr(services.workflows, "resolve_workflow_yaml", None)
-    if resolver is not None:
-        yaml_source = resolver(args.ref)
-        if isinstance(yaml_source, str):
-            required = extract_required_inputs(yaml_source)
-            supplied = set(args.inputs.keys())
-            missing = sorted(required - supplied)
-            if missing:
-                # bug-027: build a copy-pasteable JSON retry template
-                # so the model has a shape to fill in rather than
-                # guessing from a text-only error message. AC #1
-                # requires four substrings: ref, missing names,
-                # literal `inputs={"<key>": "..."}` template, and the
-                # supplied inputs.
-                names = ", ".join(f"'{n}'" for n in missing)
-                # Build the retry template dict with the first missing
-                # key as the example — every missing key maps to the
-                # same placeholder so the model can extend the shape
-                # for the rest.
-                template_pairs = ", ".join(
-                    f'"{n}": "<value from user request>"' for n in missing
-                )
-                template = "{" + template_pairs + "}"
-                msg = (
-                    f"Workflow {args.ref} requires input(s) {names}. "
-                    f"Retry with: inputs={template} "
-                    f"(fill each missing key with the value from the "
-                    f"user's request). You sent: inputs={sorted(supplied)!r}."
-                )
-                # `WrappedError` is a Diagnostic `PlatformError` whose
-                # `message` is preserved verbatim through the engine
-                # observer at `src/engine/observers.py:284` — the LLM
-                # sees the specific "requires input 'url'" text in the
-                # `TOOL_FAILED` payload with `is_error=true`. Preferred
-                # over `raise ValueError(msg)` (which the dispatch
-                # would wrap in `ToolExecutionFailed(error_class=
-                # "ValueError")`, hiding the message inside `cause`).
-                raise WrappedError(
-                    message=msg,
-                    where="bundles.kolsch.tools.run_workflow.validate_inputs",
-                    detail={
-                        "ref": args.ref,
-                        "missing_inputs": missing,
-                        "supplied_inputs": sorted(supplied),
-                    },
-                )
+    # bug-025 / qol-097: validate `inputs` against declared
+    # `{{ inputs.X }}` references — including references coming from
+    # sub-workflow children (qol-097's promoted set). Preferred path
+    # calls `resolve_effective_required_inputs` (widens the required
+    # set to cover child requirements not covered by inbound-edge
+    # binds). Fallback preserves bug-025's direct-scan behaviour
+    # byte-identically so headless test mocks that only stub
+    # `resolve_workflow_yaml` fall through to the same code path they
+    # exercised pre-qol-097.
+    required: set[str] | None = None
+
+    # PREFERRED — promoted required set (sees through sub-workflow
+    # children). Duck-typed: absent on older mocks → `getattr` yields
+    # None → we fall through to the legacy branch below.
+    effective_fn = getattr(
+        services.workflows, "resolve_effective_required_inputs", None
+    )
+    if effective_fn is not None:
+        result = effective_fn(args.ref)
+        if isinstance(result, list):
+            required = set(result)
+
+    # FALLBACK — legacy direct-scan (byte-preserved from bug-025).
+    # Fires when the preferred seam is absent OR returned None
+    # (catalog miss — legacy will also miss and both silently
+    # accept, matching pre-qol-097 behaviour for unknown refs).
+    if required is None:
+        resolver = getattr(services.workflows, "resolve_workflow_yaml", None)
+        if resolver is not None:
+            yaml_source = resolver(args.ref)
+            if isinstance(yaml_source, str):
+                required = extract_required_inputs(yaml_source)
+
+    if required is not None:
+        supplied = set(args.inputs.keys())
+        missing = sorted(required - supplied)
+        if missing:
+            # bug-027: build a copy-pasteable JSON retry template
+            # so the model has a shape to fill in rather than
+            # guessing from a text-only error message. AC #1
+            # requires four substrings: ref, missing names,
+            # literal `inputs={"<key>": "..."}` template, and the
+            # supplied inputs.
+            names = ", ".join(f"'{n}'" for n in missing)
+            # Build the retry template dict with the first missing
+            # key as the example — every missing key maps to the
+            # same placeholder so the model can extend the shape
+            # for the rest.
+            template_pairs = ", ".join(
+                f'"{n}": "<value from user request>"' for n in missing
+            )
+            template = "{" + template_pairs + "}"
+            msg = (
+                f"Workflow {args.ref} requires input(s) {names}. "
+                f"Retry with: inputs={template} "
+                f"(fill each missing key with the value from the "
+                f"user's request). You sent: inputs={sorted(supplied)!r}."
+            )
+            # `WrappedError` is a Diagnostic `PlatformError` whose
+            # `message` is preserved verbatim through the engine
+            # observer at `src/engine/observers.py:284` — the LLM
+            # sees the specific "requires input 'url'" text in the
+            # `TOOL_FAILED` payload with `is_error=true`. Preferred
+            # over `raise ValueError(msg)` (which the dispatch
+            # would wrap in `ToolExecutionFailed(error_class=
+            # "ValueError")`, hiding the message inside `cause`).
+            raise WrappedError(
+                message=msg,
+                where="bundles.kolsch.tools.run_workflow.validate_inputs",
+                detail={
+                    "ref": args.ref,
+                    "missing_inputs": missing,
+                    "supplied_inputs": sorted(supplied),
+                },
+            )
 
     # qol-088: full-workflow validation pre-flight. Runs the same
     # `validate_workflow` gate the CLI `kolsch workflows validate`

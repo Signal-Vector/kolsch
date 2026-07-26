@@ -105,14 +105,19 @@ def _build_example_call(
     description=(
         "Inspect a workflow's inputs contract before calling "
         "`run_workflow`. Returns `{ref, description, required_inputs, "
-        "optional_inputs, example_call}` — `required_inputs` are keys "
-        "you MUST supply in `run_workflow`'s `inputs` dict, "
-        "`optional_inputs` have `{{ inputs.X | default(...) }}` "
-        "guards and can be omitted, `example_call` is a ready-to-copy "
-        "`run_workflow(...)` invocation. Read-only — safe to call "
-        "before every `run_workflow` when you're unsure which inputs "
-        "the target workflow needs. Prefer this over the `bash` tool "
-        "for workflow introspection."
+        "optional_inputs, required_inputs_including_children, "
+        "example_call}` — `required_inputs` are keys you MUST supply "
+        "in `run_workflow`'s `inputs` dict for the workflow's OWN "
+        "direct references, `optional_inputs` have `{{ inputs.X | "
+        "default(...) }}` guards and can be omitted, "
+        "`required_inputs_including_children` also folds in "
+        "sub-workflow-child requirements that aren't covered by "
+        "explicit edge binds (this is the set `example_call` targets), "
+        "`example_call` is a ready-to-copy `run_workflow(...)` "
+        "invocation. Read-only — safe to call before every "
+        "`run_workflow` when you're unsure which inputs the target "
+        "workflow needs. Prefer this over the `bash` tool for "
+        "workflow introspection."
     ),
     args_schema=WorkflowInspectArgs,
     requires=["workflows"],
@@ -171,9 +176,26 @@ async def workflow_inspect(
 
     scan = scan_inputs(yaml_source)
     description = _extract_description(yaml_source)
+
+    # qol-097: probe the promoted required set (direct scan + refs
+    # coming from sub-workflow children minus edge-bind coverage).
+    # Duck-typed via the `resolve_effective_required_inputs` seam so
+    # older service instances / mocks that don't expose the method
+    # fall through to `required_inputs_including_children ==
+    # required_inputs` (backwards-compat). `example_call` is rebuilt
+    # from the promoted set so bug-027's copy-pasteable retry
+    # template matches the reported requirements.
+    promoted_fn = getattr(services.workflows, "resolve_effective_required_inputs", None)
+    promoted = promoted_fn(args.ref) if promoted_fn is not None else None
+    # Sort the fallback so both branches produce the same ordering for
+    # any given ref — the promoted branch already returns sorted.
+    required_including_children: list[str] = (
+        promoted if isinstance(promoted, list) else sorted(scan.required)
+    )
+
     example = _build_example_call(
         args.ref,
-        scan.required,
+        required_including_children,
         prefer_virtual=_virtuals_enabled(),
     )
     return {
@@ -181,6 +203,7 @@ async def workflow_inspect(
         "description": description,
         "required_inputs": list(scan.required),
         "optional_inputs": list(scan.optional),
+        "required_inputs_including_children": required_including_children,
         "example_call": example,
     }
 

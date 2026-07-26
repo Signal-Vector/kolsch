@@ -966,6 +966,108 @@ class TestComputeTerminalOutputDict:
 # ---------------------------------------------------------------------------
 
 
+# ---------------------------------------------------------------------------
+# qol-097 — parent inputs propagate to sub-workflow child runs
+# ---------------------------------------------------------------------------
+
+
+class TestParentInputsPropagateToChild:
+    """qol-097: `WorkflowSubRunner.run` merges parent `workflow_inputs`
+    with edge `bound_inputs` (parent first, edge binds win on conflict) so
+    sub-workflow children inherit parent inputs the same way leaf nodes
+    already do via the executor's `_render_jinja` inputs-overlay.
+    """
+
+    async def test_parent_inputs_propagate_to_child(self, tmp_path: Path) -> None:
+        """Child run's inputs carry the parent's `url` even without an edge bind.
+
+        Also: parent's own `workflow_inputs` mapping is not mutated by
+        the merge — the runtime creates a fresh dict.
+        """
+        parent_yaml = """
+        nodes:
+          sub:
+            type: kolsch/nodes/workflow
+            ref: demo/workflows/child
+        """
+        child_yaml = """
+        nodes:
+          only:
+            type: kolsch/nodes/noop
+        graph:
+          edges: []
+        """
+        ex, store, parent_run, _ = _run_parent(
+            tmp_path,
+            parent_yaml=parent_yaml,
+            parent_ref="demo/workflows/parent",
+            children={"demo/workflows/child": child_yaml},
+            parent_inputs={"url": "https://ex"},
+        )
+        # Capture parent's inputs identity + snapshot BEFORE dispatch.
+        parent_inputs_before = dict(parent_run.inputs)
+        parent_inputs_id_before = id(parent_run.inputs)
+
+        status = await ex.run()
+        assert status == WorkflowRunStatus.SUCCEEDED
+
+        # Locate child's run via parent's called_workflow event.
+        from workflows.ids import WorkflowRunId
+
+        events = list(store.read_events(parent_run.run_id))
+        called = next(e for e in events if e["kind"] == "workflow.node.called_workflow")
+        child_run_id = WorkflowRunId(called["payload"]["child_workflow_run_id"])
+        child_run = store.read(child_run_id)
+        # AC #1: child inherited parent's `url`.
+        assert child_run.inputs["url"] == "https://ex"
+
+        # AC #2: parent's mapping unchanged (fresh dict via unpack).
+        assert id(parent_run.inputs) == parent_inputs_id_before
+        assert dict(parent_run.inputs) == parent_inputs_before
+
+    async def test_edge_bind_overrides_parent_input(self, tmp_path: Path) -> None:
+        """Edge `binds: {url: "override"}` masks parent's `url`."""
+        parent_yaml = """
+        nodes:
+          ready:
+            type: kolsch/nodes/noop
+          sub:
+            type: kolsch/nodes/workflow
+            ref: demo/workflows/child
+        graph:
+          edges:
+            - from: ready
+              to: sub
+              binds:
+                url: "override"
+        """
+        child_yaml = """
+        nodes:
+          only:
+            type: kolsch/nodes/noop
+        graph:
+          edges: []
+        """
+        ex, store, parent_run, _ = _run_parent(
+            tmp_path,
+            parent_yaml=parent_yaml,
+            parent_ref="demo/workflows/parent",
+            children={"demo/workflows/child": child_yaml},
+            parent_inputs={"url": "parent-value"},
+        )
+        status = await ex.run()
+        assert status == WorkflowRunStatus.SUCCEEDED
+
+        from workflows.ids import WorkflowRunId
+
+        events = list(store.read_events(parent_run.run_id))
+        called = next(e for e in events if e["kind"] == "workflow.node.called_workflow")
+        child_run_id = WorkflowRunId(called["payload"]["child_workflow_run_id"])
+        child_run = store.read(child_run_id)
+        # Edge bind wins on conflict.
+        assert child_run.inputs["url"] == "override"
+
+
 class TestUnknownChildRef:
     async def test_unknown_ref_raises_node_failed(self, tmp_path: Path) -> None:
         parent_yaml = """

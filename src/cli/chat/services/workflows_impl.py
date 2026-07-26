@@ -1673,6 +1673,64 @@ class WorkflowsImpl(AbstractWorkflows):
         except OSError:
             return None
 
+    def resolve_effective_required_inputs(self, ref: str) -> list[str] | None:
+        """Return the promoted required-input set for ``ref``, or ``None``.
+
+        qol-097. Sibling of :meth:`resolve_workflow_yaml` — the
+        ``run_workflow`` and ``workflow_inspect`` tools call this via
+        the duck-typed ``getattr(services.workflows,
+        "resolve_effective_required_inputs", None)`` seam to compute
+        the caller-facing required set. Widens bug-025's dispatch
+        guard so a parent that has no direct ``{{ inputs.X }}`` refs
+        but sub-workflow children that DO can surface a specific
+        ``requires input 'X'`` error at the tool boundary instead of
+        an opaque ``ChildWorkflowFailed`` mid-run.
+
+        Delegates to
+        :func:`workflows.inputs_scan.effective_required_inputs` which
+        walks the parent's direct references + each sub-workflow
+        child's promoted required set minus edge-bind coverage
+        (memoized per-ref, cycle-safe).
+
+        Duck-typed on the ``Workflows`` Protocol (matches
+        ``resolve_workflow_yaml`` / ``validate_workflow_definition``
+        / ``list_workflow_refs``) — the Protocol stays byte-identical
+        and older mocks that don't expose this method fall through to
+        the legacy direct-scan path in the tool.
+
+        Returns ``None`` when the catalog can't find the ref or the
+        file can't be read; matches ``resolve_workflow_yaml``
+        semantics so the tool's preferred/fallback swap can treat
+        both misses identically.
+        """
+        from pathlib import Path  # noqa: PLC0415
+
+        from workflows.inputs_scan import (  # noqa: PLC0415
+            effective_required_inputs,
+        )
+        from workflows.parser import load_workflow  # noqa: PLC0415
+
+        try:
+            catalog = self._runtime.asset_management.catalog()
+            entry = catalog.lookup(ref, expected_type="workflow")
+        except Exception:  # noqa: BLE001 — best-effort probe
+            return None
+        if entry is None:
+            return None
+        try:
+            source = Path(entry.path).read_text(encoding="utf-8")
+            workflow = load_workflow(Path(entry.path))
+        except OSError:
+            return None
+        except Exception:  # noqa: BLE001 — parse errors surface via other paths
+            return None
+        return effective_required_inputs(
+            workflow,
+            catalog,
+            source=source,
+            ref=entry.ref,
+        )
+
     def validate_workflow_definition(self, ref: str) -> list[str] | None:
         """Return per-issue diagnostic strings for the resolved workflow.
 

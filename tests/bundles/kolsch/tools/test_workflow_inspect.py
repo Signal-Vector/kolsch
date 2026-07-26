@@ -145,6 +145,7 @@ async def test_valid_ref_returns_expected_shape() -> None:
         "description",
         "required_inputs",
         "optional_inputs",
+        "required_inputs_including_children",
         "example_call",
     }
     assert result["ref"] == "andre/workflows/job_description_review"
@@ -317,6 +318,82 @@ async def test_unknown_ref_without_lister_seam_still_raises() -> None:
     err = exc_info.value
     assert "kolsch/workflows/nope" in str(err)
     assert "not found" in str(err)
+
+
+# ----------------------------------------------------------------------
+# qol-097 — `required_inputs_including_children` (promoted set).
+# ----------------------------------------------------------------------
+
+
+class _MockWorkflowsWithPromoted:
+    """Duck-typed impl exposing qol-097's ``resolve_effective_required_inputs``.
+
+    The parent's yaml has NO direct ``{{ inputs.X }}`` refs, so
+    ``required_inputs`` (direct scan) is empty; the promoted seam
+    returns ``["url"]`` (sub-workflow child requirement) so
+    ``required_inputs_including_children`` reports it.
+    """
+
+    def __init__(
+        self,
+        *,
+        yaml_by_ref: dict[str, str],
+        promoted_by_ref: dict[str, list[str]],
+    ) -> None:
+        self._yaml_by_ref = yaml_by_ref
+        self._promoted_by_ref = promoted_by_ref
+
+    def resolve_workflow_yaml(self, ref: str) -> str | None:
+        return self._yaml_by_ref.get(ref)
+
+    def resolve_effective_required_inputs(self, ref: str) -> list[str] | None:
+        return self._promoted_by_ref.get(ref)
+
+
+_PARENT_ONLY_SUB_YAML = """
+description: "parent that only calls a sub-workflow (child needs url)"
+nodes:
+  sub:
+    type: kolsch/nodes/workflow
+    ref: demo/workflows/child
+graph:
+  edges: []
+"""
+
+
+@pytest.mark.asyncio
+async def test_inspect_reports_required_including_children(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """qol-097: parent with no direct inputs but sub-workflow child needing ``url``.
+
+    ``required_inputs`` (direct scan) is empty; the promoted seam
+    returns ``["url"]`` so
+    ``required_inputs_including_children == ["url"]`` and
+    ``example_call`` is rebuilt from the promoted set (contains
+    ``url``, matches bug-027's template shape).
+    """
+    monkeypatch.setenv("KOLSCH_VIRTUAL_WORKFLOW_TOOLS", "0")
+    workflow_inspect = _load_workflow_inspect()
+    workflows = _MockWorkflowsWithPromoted(
+        yaml_by_ref={"demo/workflows/parent": _PARENT_ONLY_SUB_YAML},
+        promoted_by_ref={"demo/workflows/parent": ["url"]},
+    )
+    ctx = _mk_ctx(workflows)
+
+    args_schema = workflow_inspect._tool_definition.args_schema
+    args = args_schema.model_validate({"ref": "demo/workflows/parent"})
+    result = await workflow_inspect._tool_definition.func(args, ctx)
+
+    assert result["required_inputs"] == []  # backwards-compat: direct scan only
+    assert result["required_inputs_including_children"] == ["url"]
+    example = result["example_call"]
+    assert isinstance(example, str)
+    # bug-027 template shape rebuilt from the promoted set.
+    assert example.startswith("run_workflow(")
+    assert 'ref="demo/workflows/parent"' in example
+    assert "inputs={" in example
+    assert '"url": "<value from user request>"' in example
 
 
 @pytest.mark.asyncio

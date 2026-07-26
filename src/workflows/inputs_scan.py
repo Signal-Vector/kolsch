@@ -33,10 +33,15 @@ nested filter, say) doesn't drift between the two consumers.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from assets.catalog import AssetCatalog
+    from workflows.parser import Workflow
 
 __all__ = [
     "InputsScanResult",
+    "effective_required_inputs",
     "extract_required_inputs",
     "scan_inputs",
 ]
@@ -183,3 +188,110 @@ def extract_required_inputs(yaml_source: str) -> set[str]:
     pre-bug-027 shape exactly.
     """
     return set(scan_inputs(yaml_source).required)
+
+
+def effective_required_inputs(
+    workflow: Workflow,
+    catalog: AssetCatalog,
+    *,
+    source: str,
+    ref: str,
+    _probe: list[int] | None = None,
+) -> list[str]:
+    """Caller-facing required inputs — direct scan + promoted-from-children.
+
+    Returns the union of (workflow's own direct-scan required) and
+    (each sub-workflow child's effective required minus what's covered
+    by inbound-edge binds on that child's sub-workflow node).
+    Cycle-safe via ``in_progress`` (bounded recursion — the runtime's
+    :class:`WorkflowCallCycle` remains authoritative). Memoized per-ref
+    via ``memo`` so DAG re-convergence isn't under-counted. Silent skip
+    on unresolved refs and on malformed child YAML — this is a
+    best-effort probe; ``kolsch workflows validate`` and the run-start
+    gate remain the source of truth for those failures.
+
+    ``_probe``, when provided, is appended to on each recursive
+    child-load — used by tests to prove bounded recursion under
+    cycles.
+
+    Design (qol-097): two-map recursion state — ``memo`` caches
+    per-ref computed effective sets so sibling sub-workflow nodes to
+    the same child compute the child ONCE, then subtract per-caller
+    edge-binds independently at each call site. ``in_progress`` is
+    the short-lived cycle guard, popped as the recursion unwinds. A
+    shared ``_seen`` set would silently drop requirements when
+    sibling sub-workflow nodes point at the same child with different
+    edge-bind coverage; the memo pattern is correct under DAG
+    re-convergence.
+
+    Args:
+        workflow: Parsed parent :class:`Workflow`.
+        catalog: :class:`AssetCatalog` used to resolve sub-workflow
+            child refs.
+        source: The parent workflow's raw YAML string (needed for the
+            direct :func:`scan_inputs` pass).
+        ref: The caller's ref-string identity for ``workflow``. Used
+            only by the cycle guard; memoization keys off the
+            catalog's canonical ``entry.ref``.
+        _probe: Optional counter list; appended-to on each recursive
+            child-load. Test-only affordance.
+
+    Returns:
+        Sorted list of effective required input names.
+    """
+    # Function-scope imports preserve ``inputs_scan.py``'s
+    # zero-workflows-deps design (see module docstring line 17).
+    # Matches the ``_yamlio`` / ``jinja2`` pattern already used at
+    # ``scan_inputs`` (lines 83-93).
+    from pathlib import Path  # noqa: PLC0415
+
+    from workflows.parser import (  # noqa: PLC0415
+        WorkflowNodeDef,
+        load_workflow,
+    )
+
+    memo: dict[str, set[str]] = {}
+    in_progress: set[str] = set()
+
+    def _child_required(child_ref: str) -> set[str]:
+        if child_ref in memo:
+            return memo[child_ref]
+        if child_ref in in_progress:
+            return set()  # cycle
+        entry = catalog.lookup(child_ref, expected_type="workflow")
+        if entry is None:
+            return set()
+        in_progress.add(child_ref)
+        if _probe is not None:
+            _probe.append(1)
+        try:
+            # Best-effort probe: one bad child yaml MUST NOT wipe out
+            # promoted requirements from OTHER children. Parse/read
+            # failures surface via ``kolsch workflows validate`` and
+            # the run-start gate.
+            try:
+                child_source = Path(entry.path).read_text(encoding="utf-8")
+                child_wf = load_workflow(Path(entry.path))
+            except Exception:  # noqa: BLE001 — best-effort probe
+                return set()
+            result = _compute(child_wf, child_source)
+            memo[child_ref] = result
+            return result
+        finally:
+            in_progress.discard(child_ref)
+
+    def _compute(wf: Workflow, src: str) -> set[str]:
+        required: set[str] = set(scan_inputs(src).required)
+        edges = wf.graph.edges if wf.graph else []
+        for node_name, node_def in wf.nodes.items():
+            if not isinstance(node_def, WorkflowNodeDef):
+                continue
+            child_required = _child_required(node_def.ref)
+            bound = {k for edge in edges if edge.to == node_name for k in edge.binds}
+            required |= child_required - bound
+        return required
+
+    # `ref` is retained on the outer signature for cycle-guard identity
+    # under future aliasing but is not consumed today.
+    _ = ref
+    return sorted(_compute(workflow, source))

@@ -36,6 +36,22 @@ parent's executor emits the canonical `workflow.node.failed` +
 auto-resume the child. The leaf is resumed first; the operator
 then resumes the parent and the runner detects the child reached
 a terminal-ish status and harvests.
+
+**Parent-inputs pass-through (qol-097).** At Step 4 the child run
+is created with ``inputs = {**ctx.workflow_inputs, **bound_inputs}``
+— parent's workflow inputs first, edge binds overriding on
+conflict. Mirrors the leaf-node ``_render_jinja(...,
+inputs_overlay=)`` composition at
+``src/workflows/executor.py:2785-2788`` so sub-workflow children
+inherit parent inputs the same way leaves already do (e.g. a
+child's ``{{ inputs.url }}`` sees the parent's ``url`` even when
+the workflow-node has no explicit ``binds:`` for ``url``).
+
+Consequence: a sub-workflow node whose inbound edges are all pruned
+by the executor's when/branch gating now receives the parent's
+``workflow_inputs`` as its child-run ``inputs`` (previously
+received ``{}``). This restores symmetry with leaf-node runners
+under the same pruned-edge conditions.
 """
 
 from __future__ import annotations
@@ -195,9 +211,15 @@ class WorkflowSubRunner:
             workflow_run_id=WorkflowRunId(ctx.workflow_run_id),
             invocation_id=InvocationId(ctx.invocation_id),
         )
+        # qol-097: parent's workflow_inputs first, edge binds
+        # override on conflict — mirrors the leaf-node inputs-overlay
+        # at `executor.py:2785-2788` so sub-workflow children inherit
+        # parent inputs the same way leaves do. Fresh dict via unpack;
+        # parent's mapping reference is not mutated.
+        merged_inputs: dict[str, Any] = {**ctx.workflow_inputs, **bound_inputs}
         child_run = self._store.create(
             workflow_ref=child_ref,
-            inputs=dict(bound_inputs),
+            inputs=merged_inputs,
             trace_id=ctx.trace_id,
             parent=parent_ptr,
         )
