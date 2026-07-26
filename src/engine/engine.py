@@ -515,11 +515,13 @@ class AgentEngine:
         ``preview=True``) so downstream telemetry can tell a user-
         initiated compaction apart from an auto-fired one.
 
-        Returns the emitted event, or ``None`` when the middle span
-        was empty (nothing to compact — a short session), when the
-        provider is not wired, or when the model has no declared
-        context_length (matches the auto path's silent-skip
-        behaviour).
+        Returns the emitted event on the happy path (``CONTEXT_COMPACTED``)
+        OR — post-bug-098 — a ``CONTEXT_COMPACTION_SKIPPED`` event with
+        ``reason="no_context_length"`` when the resolved model has no
+        declared ``context_length`` (deliberately unguarded: each
+        user-initiated ``/compact`` deserves a fresh notice). Returns
+        ``None`` only when the middle span was empty (short session) or
+        the provider is not wired.
 
         Raises the summariser exception on failure. The caller
         (``ChatApp._handle_compact``) mounts a notice with the error;
@@ -560,7 +562,18 @@ class AgentEngine:
             config.model,
         )
         if context_length is None:
-            return None
+            # bug-098 — emit the distinct ``no_context_length`` skip
+            # event so the ``/compact`` slash handler's opaque
+            # three-way notice is superseded by the event adapter's
+            # remediation-hint-bearing ``CompactionBlock``. Unguarded
+            # (user-initiated action deserves a fresh response each
+            # time; the pending ``CompactionBlock`` mounted by the
+            # slash handler is consumed via
+            # ``_acquire_compaction_block``).
+            return await self._emit_no_context_length_skip_event(
+                thread_id=thread_id,
+                spec=config.model,
+            )
         events = [e async for e in self._store.read_path_to_leaf(thread_id)]
         compaction_cfg = (self._assets._platform_config or {}).get(
             "compaction",
@@ -623,7 +636,7 @@ class AgentEngine:
         spec: ModelSpec,
         tool_schemas: list[dict[str, Any]] | None = None,
         trigger: Literal["auto_resume"] = "auto_resume",
-    ) -> Any:
+    ) -> Event | None:
         """Check ``thread_id`` for over-threshold context and compact if so.
 
         feat-054 Phase 5 — session-open eager compaction. Safe to call
@@ -646,11 +659,14 @@ class AgentEngine:
         downstream telemetry can distinguish resume-time compaction
         from per-exchange compaction.
 
-        Returns the emitted ``ContextCompactedData`` outcome (as a
-        :class:`Event`) on success, ``None`` when compaction was NOT
-        needed (thread under threshold, provider not wired, model has
-        no declared ``context_length``, or the middle span is empty
-        because the session is short).
+        Returns the emitted event on success (``CONTEXT_COMPACTED``) OR
+        — post-bug-098 — a ``CONTEXT_COMPACTION_SKIPPED`` with
+        ``reason="no_context_length"`` when the resolved model has no
+        declared ``context_length`` AND the thread has history at risk
+        (guarded by bug-097's per-thread set to prevent double-render on
+        session-open). Returns ``None`` when compaction was NOT needed
+        (thread under threshold, provider not wired, or fresh session
+        with no events).
         """
         # Serialise against a concurrent in-flight exchange OR a
         # concurrent /compact call on the same thread — same lock
@@ -675,18 +691,39 @@ class AgentEngine:
         provider = self._compaction_provider
         if provider is None:
             return None
+        # Read the thread's events BEFORE the wedged-provider notice —
+        # bug-098 review F2: a brand-new session on a wedged provider
+        # has no user activity yet, so surfacing the "no_context_length"
+        # notice on chat launch is noise. The notice only warrants
+        # emission when there's actual conversation history at risk.
+        # ``USER_MESSAGE`` is the load-bearing signal — bootstrap events
+        # (``SESSION_OPENED`` / ``CONFIG_SET``) are always present and
+        # don't count as "history the user has invested in preserving."
+        events = [e async for e in self._store.read_path_to_leaf(thread_id)]
+        has_user_activity = any(e.type == EventType.USER_MESSAGE for e in events)
+        if not has_user_activity:
+            # Fresh session — nothing to compact and nothing to warn
+            # about. Fast no-op path so a brand-new chat doesn't
+            # spuriously call the summariser OR mount the wedged notice.
+            return None
         context_length = _context_length_for_spec(
             self._llm_providers_config,
             spec,
         )
         if context_length is None:
-            return None
-        # Load current path.
-        events = [e async for e in self._store.read_path_to_leaf(thread_id)]
-        if not events:
-            # Fresh session — nothing to compact. Fast no-op path so a
-            # brand-new chat doesn't spuriously call the summariser.
-            return None
+            # bug-098 — emit the distinct ``no_context_length`` skip
+            # event (engine-initiated eager check, shares bug-097's
+            # per-thread guard so a session that already got the
+            # notice from a per-turn or ``/compact`` emit doesn't
+            # double-render on session-open).
+            if str(thread_id) in self._no_context_length_skip_emitted:
+                return None
+            emitted = await self._emit_no_context_length_skip_event(
+                thread_id=thread_id,
+                spec=spec,
+            )
+            self._no_context_length_skip_emitted.add(str(thread_id))
+            return emitted
 
         compaction_cfg = (self._assets._platform_config or {}).get(
             "compaction",
@@ -830,6 +867,46 @@ class AgentEngine:
             thread_id=thread_id,
             event_type=EventType.CONTEXT_COMPACTED,
             data=mechanical.model_dump(mode="json"),
+        )
+
+    async def _emit_no_context_length_skip_event(
+        self,
+        *,
+        thread_id: ThreadId,
+        spec: ModelSpec,
+    ) -> Event:
+        """Engine-side emit of the ``no_context_length`` compaction-skip event.
+
+        bug-098 — sibling to the exchange-side emit at
+        ``_maybe_compact_events`` (:~2470). Extracted so both
+        ``_manual_compact_locked`` (``/compact`` slash command) and
+        ``_eager_compact_locked`` (session-open eager path) emit the
+        same shape as the per-turn site — model spec + operator-facing
+        remediation hint in ``detail``, ``system`` actor.
+
+        Unguarded — callers decide whether to consult the bug-097
+        per-thread guard (``_no_context_length_skip_emitted``). The
+        ``/compact`` path deliberately does NOT gate: each user
+        invocation of ``/compact`` deserves a fresh distinct notice
+        (with a new pending ``CompactionBlock`` consumed via
+        ``_acquire_compaction_block``). The eager path does gate for
+        symmetry with the per-turn cadence.
+        """
+        return await self._emit_thread_event(
+            thread_id=thread_id,
+            event_type=EventType.CONTEXT_COMPACTION_SKIPPED,
+            data={
+                "reason": "no_context_length",
+                "tokens_before": 0,
+                "tokens_after": 0,
+                "detail": {
+                    "provider": spec.provider,
+                    "model": spec.model,
+                    "remediation_hint": _no_context_length_remediation(
+                        self._llm_providers_config, spec
+                    ),
+                },
+            },
         )
 
     async def _emit_thread_event(

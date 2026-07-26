@@ -365,6 +365,169 @@ async def test_skip_emit_is_idempotent_across_turns(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_manual_compact_emits_no_context_length(tmp_path: Path) -> None:
+    """bug-098 AC-1: ``/compact`` (via manual_compact) emits distinct event on wedged workspace.
+
+    Before bug-098 the sibling ``_manual_compact_locked`` silent-returned
+    None on ``context_length is None`` — the chat surfaced only the
+    opaque three-way notice at ``app.py:2292-2296`` with no remediation
+    hint. After: emits ``CONTEXT_COMPACTION_SKIPPED(no_context_length)``
+    with the same payload shape as the per-turn (qol-092) emit and
+    returns the event, which routes the slash handler into the
+    "adapter mounts the distinct notice" branch.
+    """
+    engine, store = await _build(tmp_path, llm_providers=_opencode_no_ctx_len())
+    ctx = await _fresh_ctx(store)
+
+    emitted = await engine.manual_compact(config=_config(), thread_id=ctx.thread_id)
+
+    assert emitted is not None, (
+        "manual_compact must return the emitted event so the slash handler "
+        "skips the opaque three-way notice"
+    )
+    assert emitted.type == EventType.CONTEXT_COMPACTION_SKIPPED
+    assert emitted.data.get("reason") == "no_context_length"
+    detail = emitted.data.get("detail") or {}
+    assert detail.get("provider") == "opencode"
+    assert detail.get("model") == "kimi-k2.6"
+    assert (
+        isinstance(detail.get("remediation_hint"), str) and detail["remediation_hint"]
+    )
+
+    # And the JSONL stored the event.
+    events = [e async for e in store.read_path_to_leaf(ctx.thread_id)]
+    skipped = [
+        e
+        for e in events
+        if e.type == EventType.CONTEXT_COMPACTION_SKIPPED
+        and e.data.get("reason") == "no_context_length"
+    ]
+    assert len(skipped) == 1
+
+
+@pytest.mark.asyncio
+async def test_eager_compaction_emits_no_context_length(tmp_path: Path) -> None:
+    """bug-098 AC-2: session-open eager path emits distinct event on wedged workspace.
+
+    Before bug-098 the eager path silent-returned None; a resumed
+    wedged session opened with zero warning and ran to the LLM
+    ceiling. After: eager emits the distinct event so the chat surface
+    warns on resume — but ONLY when the thread has history at risk
+    (bug-098 review F2). Populate the thread via a per-turn exchange
+    first to establish the "resume-with-history" precondition, then
+    clear the guard so eager gets a fresh chance to emit.
+    """
+    engine, store = await _build(tmp_path, llm_providers=_opencode_no_ctx_len())
+    ctx = await _fresh_ctx(store)
+    spec = ModelSpec(provider="opencode", model="kimi-k2.6")
+
+    # Populate thread history; per-turn will emit + populate guard.
+    await engine.execute(_config(), ctx)
+    # Clear the guard so eager gets a chance to emit on this call —
+    # simulates a fresh process resume where the in-memory guard is
+    # empty but the on-disk thread carries prior events.
+    engine._no_context_length_skip_emitted.clear()
+
+    result = await engine.maybe_compact_thread_eagerly(
+        thread_id=ctx.thread_id,
+        spec=spec,
+    )
+
+    assert result is not None, "eager path must return the emitted skip event"
+    assert result.type == EventType.CONTEXT_COMPACTION_SKIPPED
+    assert result.data.get("reason") == "no_context_length"
+
+
+@pytest.mark.asyncio
+async def test_eager_on_fresh_empty_session_stays_silent(tmp_path: Path) -> None:
+    """bug-098 review F2: eager on empty session must NOT emit.
+
+    Fresh chat launch on a wedged provider used to trip the skip emit
+    at chat-open time before the user even sent a message — noise,
+    since there's no history at risk yet. The fix reorders the checks
+    so eager consults the thread's event stream first and no-ops
+    silently on empty history.
+    """
+    engine, store = await _build(tmp_path, llm_providers=_opencode_no_ctx_len())
+    ctx = await _fresh_ctx(store)
+    spec = ModelSpec(provider="opencode", model="kimi-k2.6")
+
+    # Thread is empty (just the fresh context — no execute has run).
+    result = await engine.maybe_compact_thread_eagerly(
+        thread_id=ctx.thread_id,
+        spec=spec,
+    )
+
+    assert result is None, (
+        "eager on an empty session must silently no-op — a wedged provider "
+        "notice at chat-launch with no history is noise"
+    )
+    events = [e async for e in store.read_path_to_leaf(ctx.thread_id)]
+    skipped = [
+        e
+        for e in events
+        if e.type == EventType.CONTEXT_COMPACTION_SKIPPED
+        and e.data.get("reason") == "no_context_length"
+    ]
+    assert not skipped, (
+        f"eager on empty session must not append a skip event; got {len(skipped)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_shared_guard_suppresses_eager_after_per_turn_emit(
+    tmp_path: Path,
+) -> None:
+    """bug-098 AC-3: eager path shares bug-097's per-thread guard.
+
+    Sequence: per-turn ``execute`` emits (populates guard). Then a
+    later eager call on the same thread finds the guard set and
+    returns None (no duplicate notice on session resume).
+
+    ``/compact`` (``_manual_compact_locked``) deliberately does NOT
+    share the guard — user-initiated actions get fresh responses each
+    time (a new pending CompactionBlock is mounted by the slash
+    handler and consumed via ``_acquire_compaction_block``).
+    """
+    engine, store = await _build(tmp_path, llm_providers=_opencode_no_ctx_len())
+    ctx = await _fresh_ctx(store)
+    spec = ModelSpec(provider="opencode", model="kimi-k2.6")
+
+    # Turn 1 via per-turn path — populates the guard.
+    await engine.execute(_config(), ctx)
+    # Now eager is called (e.g. simulated session resume) — should be
+    # suppressed by the shared guard.
+    eager_result = await engine.maybe_compact_thread_eagerly(
+        thread_id=ctx.thread_id,
+        spec=spec,
+    )
+    assert eager_result is None, (
+        "eager path must respect the per-thread guard set by the per-turn emit"
+    )
+
+    # /compact by contrast IS user-initiated — still emits.
+    manual_result = await engine.manual_compact(
+        config=_config(), thread_id=ctx.thread_id
+    )
+    assert manual_result is not None
+    assert manual_result.type == EventType.CONTEXT_COMPACTION_SKIPPED
+    assert manual_result.data.get("reason") == "no_context_length"
+
+    # Cross-check: JSONL now has TWO events (per-turn's first emit +
+    # /compact's fresh emit), zero from eager (guard suppressed).
+    events = [e async for e in store.read_path_to_leaf(ctx.thread_id)]
+    skipped = [
+        e
+        for e in events
+        if e.type == EventType.CONTEXT_COMPACTION_SKIPPED
+        and e.data.get("reason") == "no_context_length"
+    ]
+    assert len(skipped) == 2, (
+        f"expected 2 no_context_length events (per-turn + /compact); got {len(skipped)}"
+    )
+
+
+@pytest.mark.asyncio
 async def test_guard_is_thread_scoped(tmp_path: Path) -> None:
     """bug-097 AC-3: two threads → each gets its own first-turn emit.
 
