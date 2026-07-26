@@ -309,3 +309,84 @@ def test_schema_accepts_detail_dict() -> None:
     )
     assert data.detail is not None
     assert data.detail["provider"] == "opencode"
+
+
+# ---------------------------------------------------------------------------
+# bug-097 — per-thread idempotency guard on the ``no_context_length`` emit
+# ---------------------------------------------------------------------------
+
+
+def _ctx_for_thread(thread_id: Any, message: str) -> ExecutionContext:
+    """Build an ExecutionContext for a specific thread + trigger message."""
+    return ExecutionContext(
+        thread_id=thread_id,
+        trigger={"kind": "user_message", "content": message},
+    )
+
+
+@pytest.mark.asyncio
+async def test_skip_emit_is_idempotent_across_turns(tmp_path: Path) -> None:
+    """bug-097 AC-1: a wedged multi-turn session emits ONE skip event, not N.
+
+    The debug log still fires per turn (engine-side observability), but the
+    chat-visible emit is thread-scoped so the transcript doesn't stack N
+    duplicate ``CompactionBlock`` widgets.
+    """
+    engine, store = await _build(tmp_path, llm_providers=_opencode_no_ctx_len())
+    ctx = await _fresh_ctx(store)
+    thread_id = ctx.thread_id
+
+    # Simulate five user turns on the same thread. Each ``execute`` call
+    # runs one exchange → one ``_maybe_compact_events`` call → potential
+    # skip emit. Post-fix: only the first exchange emits.
+    for i in range(5):
+        await engine.execute(_config(), _ctx_for_thread(thread_id, f"msg-{i}"))
+
+    events = [e async for e in store.read_path_to_leaf(thread_id)]
+    skipped = [
+        e
+        for e in events
+        if e.type == EventType.CONTEXT_COMPACTION_SKIPPED
+        and e.data.get("reason") == "no_context_length"
+    ]
+    assert len(skipped) == 1, (
+        f"expected exactly one no_context_length skip event across 5 turns; "
+        f"got {len(skipped)}"
+    )
+    # AC-4 completeness — confirm the guard didn't silently drop
+    # subsequent turns. Every ``execute`` call should have appended
+    # its user message + at least one exchange terminal, so the JSONL
+    # carries evidence that all 5 turns actually ran.
+    user_messages = [e for e in events if e.type == EventType.USER_MESSAGE]
+    assert len(user_messages) == 5, (
+        f"expected 5 user messages across 5 turns (guard must not "
+        f"abort the exchange); got {len(user_messages)}"
+    )
+
+
+@pytest.mark.asyncio
+async def test_guard_is_thread_scoped(tmp_path: Path) -> None:
+    """bug-097 AC-3: two threads → each gets its own first-turn emit.
+
+    Rules out a process-scoped guard that would incorrectly silence the
+    second thread's first turn.
+    """
+    engine, store = await _build(tmp_path, llm_providers=_opencode_no_ctx_len())
+    ctx_a = await _fresh_ctx(store)
+    ctx_b = await _fresh_ctx(store)
+    assert ctx_a.thread_id != ctx_b.thread_id
+
+    await engine.execute(_config(), ctx_a)
+    await engine.execute(_config(), ctx_b)
+
+    for thread_id in (ctx_a.thread_id, ctx_b.thread_id):
+        events = [e async for e in store.read_path_to_leaf(thread_id)]
+        skipped = [
+            e
+            for e in events
+            if e.type == EventType.CONTEXT_COMPACTION_SKIPPED
+            and e.data.get("reason") == "no_context_length"
+        ]
+        assert len(skipped) == 1, (
+            f"thread {thread_id} expected exactly one skip event; got {len(skipped)}"
+        )

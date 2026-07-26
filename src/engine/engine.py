@@ -245,6 +245,18 @@ class AgentEngine:
         # ``_lock_for_thread(str(thread_id))``, which every
         # ``assemble_context`` call site holds.
         self._assembly_cache: AssemblyCache = AssemblyCache()
+        # bug-097: per-thread idempotency guard for the
+        # ``no_context_length`` compaction-skip emit (qol-092). The emit
+        # sits inside ``_maybe_compact_events``, which fires per user
+        # turn — without a guard, a wedged session (opencode + no
+        # declared ``context_length`` + no cross-provider fallback per
+        # qol-091) stacks a fresh ``CompactionBlock`` widget per turn
+        # of the transcript.
+        # Thread-scoped so distinct threads each get their first-turn
+        # notice; process-scoped would incorrectly silence resumed
+        # sessions. Only the ``no_context_length`` reason is gated —
+        # ``no_net_savings`` intentionally repeats per attempt.
+        self._no_context_length_skip_emitted: set[str] = set()
 
     # ---- Public API ----------------------------------------------------
 
@@ -2454,23 +2466,34 @@ class _Exchange:
             # remediation) instead of the session running unchecked to
             # the LLM's real ceiling. Mirrors the ``no_net_savings``
             # emit shape at :2519 — same event type, same actor kind.
-            await self._emit(
-                type_=EventType.CONTEXT_COMPACTION_SKIPPED,
-                data={
-                    "reason": "no_context_length",
-                    "tokens_before": 0,
-                    "tokens_after": 0,
-                    "detail": {
-                        "provider": self.config.model.provider,
-                        "model": self.config.model.model,
-                        "remediation_hint": _no_context_length_remediation(
-                            self.engine._llm_providers_config,
-                            self.config.model,
-                        ),
+            #
+            # bug-097 — gate the emit on a per-thread guard so a wedged
+            # session doesn't stack N ``CompactionBlock`` widgets (one
+            # per user turn). Debug log above still fires every turn
+            # for engine-side observability. The guard is marked ONLY
+            # after a successful ``_emit`` — if the underlying
+            # ``store.append_event`` raises, the thread stays un-marked
+            # and the next turn retries the emit rather than silently
+            # skipping forever.
+            if self.thread_id not in self.engine._no_context_length_skip_emitted:
+                await self._emit(
+                    type_=EventType.CONTEXT_COMPACTION_SKIPPED,
+                    data={
+                        "reason": "no_context_length",
+                        "tokens_before": 0,
+                        "tokens_after": 0,
+                        "detail": {
+                            "provider": self.config.model.provider,
+                            "model": self.config.model.model,
+                            "remediation_hint": _no_context_length_remediation(
+                                self.engine._llm_providers_config,
+                                self.config.model,
+                            ),
+                        },
                     },
-                },
-                actor=Actor(kind="system"),
-            )
+                    actor=Actor(kind="system"),
+                )
+                self.engine._no_context_length_skip_emitted.add(self.thread_id)
             return events
 
         compaction_cfg = (self.engine._assets._platform_config or {}).get(
