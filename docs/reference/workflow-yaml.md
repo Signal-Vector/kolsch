@@ -669,6 +669,33 @@ the parent's trace id.
 **Binds accepted:** narrowed to the child workflow's declared
 inputs — the runtime enforces the child's Inputs model at run-start.
 
+**Parent-inputs inheritance** (qol-097). The child run's inputs are
+`{**parent.workflow_inputs, **edge_binds}` — the parent's inputs
+overlay first, then the sub-workflow node's edge binds override.
+Mirror of the leaf-node Jinja `inputs` overlay: a parent workflow
+whose YAML has no direct `{{ inputs.X }}` reference used to drop
+the parent's `X` on the floor when calling a sub-workflow — the
+child would fail deep inside with an opaque `ChildWorkflowFailed`.
+Now the parent's inputs flow through by default; the sub-workflow
+node's edge binds still take precedence when they overlap.
+
+**Effective required-input propagation** (qol-097). The parent
+workflow's caller-facing required inputs are the union of:
+
+1. The parent's directly-referenced inputs (`{{ inputs.X }}` on any
+   parent node's binds), plus
+2. Each sub-workflow child's effective required set MINUS whatever
+   the sub-workflow node's edge binds already supply.
+
+Computed by `effective_required_inputs` in `workflows/inputs_scan.py`
+with a per-ref memo + short-lived cycle guard so DAG reconvergence
+(two parent nodes pointing at the same child with different
+edge-bind coverage) doesn't under-count requirements. Practical
+upshot: `kolsch workflows run <parent>` refuses to launch when a
+sub-workflow's declared input has no supply path — you get the
+missing-input error up-front at the caller layer instead of a
+deep runtime failure.
+
 **State read / written:** the child receives its own fresh `state`;
 parent state is not visible inside the child.
 
@@ -688,6 +715,28 @@ run_sub:
   type: kolsch/nodes/workflow
   ref: kolsch/workflows/deploy
 ```
+
+**Example — inputs inheritance:**
+
+```yaml
+# apply_pipeline.yaml — parent workflow. Note: no direct `{{ inputs.X }}` refs
+# on any parent node's binds. Post-qol-097, `url` is still forwarded to
+# the child workflow that requires it.
+inputs:
+  properties:
+    url: { type: string }
+  required: [url]
+
+nodes:
+  jd_review:
+    type: kolsch/nodes/workflow
+    ref: autoply/workflows/job_description_review  # child requires `url`
+```
+
+The parent's `url` flows into `jd_review` automatically because
+`inputs=` on the child run is `{**parent.workflow_inputs,
+**bound_inputs}`. Adding an edge bind on `jd_review` would override
+this.
 
 ### `copy_of:` — inheritance from another node
 
