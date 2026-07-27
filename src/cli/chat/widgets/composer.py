@@ -89,7 +89,7 @@ class Composer(TextArea):
     }
     """
 
-    awaiting_approval: reactive[bool] = reactive(False)
+    awaiting_approval: reactive[bool] = reactive(False)  # noqa: FBT003 — Textual reactive API
 
     class Submitted(Message):
         """Posted when the user presses Enter to send the composer content."""
@@ -112,7 +112,7 @@ class Composer(TextArea):
         self,
         text: str = "",
         *,
-        id: str | None = None,
+        id: str | None = None,  # noqa: A002 — Textual kwarg
         classes: str | None = None,
     ) -> None:
         super().__init__(
@@ -175,7 +175,7 @@ class Composer(TextArea):
             return
         await super()._on_key(event)
 
-    def watch_awaiting_approval(self, awaiting: bool) -> None:
+    def watch_awaiting_approval(self, awaiting: bool) -> None:  # noqa: FBT001 — Textual reactive-watcher signature
         """Toggle disabled + swap the placeholder when approval is pending.
 
         Textual hides the cursor on a disabled `TextArea` automatically,

@@ -1,3 +1,5 @@
+# ruff: noqa: E501 — module docstring holds an atomic mkdocs cross-ref that
+# must stay on one line for autorefs to resolve; unsplittable.
 """`WorkflowNodeRow` — per-node collapsible row inside a workflow card.
 
 spec-013 §WorkflowNodeRow. Mounted inside a
@@ -452,7 +454,11 @@ class WorkflowNodeRow(Collapsible):
     WorkflowNodeRow.-success    { color: $tool-fg; border-left: outer $tool-fg; }
     WorkflowNodeRow.-failed     { color: $error;   border-left: outer $error; }
     WorkflowNodeRow.-paused     { color: $warning; border-left: outer $warning; }
-    WorkflowNodeRow.-cancelling { color: $tool-fg; opacity: 0.6; border-left: outer $tool-fg; }
+    WorkflowNodeRow.-cancelling {
+        color: $tool-fg;
+        opacity: 0.6;
+        border-left: outer $tool-fg;
+    }
     WorkflowNodeRow.-cancelled  { color: $hint;    border-left: outer $hint; }
     WorkflowNodeRow.-pending    { color: $hint;    border-left: outer $hint; }
     WorkflowNodeRow.-skipped    { color: $hint;    border-left: outer $hint; }
@@ -1379,7 +1385,7 @@ class WorkflowNodeRow(Collapsible):
             if not self.collapsed:
                 try:
                     await _mount()
-                except Exception:
+                except Exception:  # noqa: BLE001 — best-effort UI mount; logged, must not kill the row
                     _LOGGER.warning(
                         "workflow_node_row: tool transition raised on %s",
                         self._node_name,
@@ -1518,7 +1524,7 @@ class WorkflowNodeRow(Collapsible):
         if not self.collapsed:
             try:
                 await closure()
-            except Exception:
+            except Exception:  # noqa: BLE001 — best-effort UI mount; logged, must not kill the row
                 _LOGGER.warning(
                     "workflow_node_row: live-mount closure raised on %s",
                     self._node_name,
@@ -1577,7 +1583,7 @@ class WorkflowNodeRow(Collapsible):
         if new in _TERMINAL_STATES:
             self._buffer_frozen = True
 
-    def watch_collapsed(self, old: bool, new: bool) -> None:
+    def watch_collapsed(self, old: bool, new: bool) -> None:  # noqa: FBT001 — Textual reactive-watcher signature
         """spec-021: replay pending mounts on expand.
 
         bug-036d: uses ``call_after_refresh`` to schedule the async
@@ -1599,7 +1605,7 @@ class WorkflowNodeRow(Collapsible):
                 import asyncio  # noqa: PLC0415
 
                 loop = asyncio.get_running_loop()
-                loop.create_task(self._drain_pending_mounts())
+                loop.create_task(self._drain_pending_mounts())  # noqa: RUF006 — fire-and-forget teardown-path fallback; no lifecycle owner
 
     def _update_title(self) -> None:
         """Refresh the collapsed title from state + details + count.

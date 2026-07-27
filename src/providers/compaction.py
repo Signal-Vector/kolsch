@@ -175,7 +175,7 @@ def snap_to_safe_boundary(
     return cut
 
 
-def _cut_is_safe(events: list[Event], cut: int) -> bool:
+def _cut_is_safe(events: list[Event], cut: int) -> bool:  # noqa: PLR0911, PLR0912 — one guarded early-return per boundary invariant; splitting would obscure the checks
     """Return ``True`` when ``events[:cut] | events[cut:]`` respects invariants."""
     if cut <= 0 or cut >= len(events):
         return True
@@ -279,7 +279,7 @@ def _cut_is_safe(events: list[Event], cut: int) -> bool:
     return True
 
 
-def _classify_event_for_boundary(
+def _classify_event_for_boundary(  # noqa: PLR0913 — one set arg per boundary invariant; a bundling struct would just move the arity
     e: Event,
     called_ids: set[str],
     result_ids: set[str],
@@ -337,7 +337,7 @@ class ContextCompactionProvider(Protocol):
     want to pin the first N events verbatim have a place to plug in.
     """
 
-    async def compact(
+    async def compact(  # noqa: PLR0913 — keyword-only interface signature shared across variants
         self,
         *,
         events: list[Event],
@@ -395,14 +395,14 @@ class ReferenceSummaryCompactionProvider:
         self._llm_for_model = llm_for_model
         self._config = dict(config)
 
-    async def compact(
+    async def compact(  # noqa: PLR0913, PLR0912, PLR0915 — keyword-only interface signature; the summariser algorithm is a single cohesive spec §4-§5 pipeline
         self,
         *,
         events: list[Event],
-        keep_head: int,
+        keep_head: int,  # noqa: ARG002 — interface arg; head-pinning reserved for future variants
         keep_tail: int,
-        model_context_length: int,
-        thread_id: ThreadId,
+        model_context_length: int,  # noqa: ARG002 — interface arg; budgeting lands in a later phase
+        thread_id: ThreadId,  # noqa: ARG002 — interface arg; not needed by reference_summary
         config: dict[str, Any],
     ) -> ContextCompactedData:
         """Summarise the middle of ``events`` into a reference-summary payload.
@@ -776,7 +776,7 @@ def _parse_summariser_json(raw: str) -> dict[str, Any]:
     if text.startswith("```"):
         # Strip fence — first line is ``` or ```json; last line is ```.
         parts = text.split("\n", 1)
-        if len(parts) == 2:
+        if len(parts) == 2:  # noqa: PLR2004 — split(maxsplit=1) yields at most 2 parts
             text = parts[1]
         if text.rstrip().endswith("```"):
             text = text.rstrip()[: -len("```")].rstrip()
@@ -787,7 +787,7 @@ def _parse_summariser_json(raw: str) -> dict[str, Any]:
         raise ValueError(msg) from exc
     if not isinstance(parsed, dict):
         msg = f"summariser returned a non-object JSON value: {type(parsed).__name__}"
-        raise ValueError(msg)
+        raise ValueError(msg)  # noqa: TRY004 — documented ValueError contract; trigger site catches ValueError to skip compaction
     return parsed
 
 
@@ -949,7 +949,7 @@ def build_mechanical_truncation_payload(
 # ---------------------------------------------------------------------------
 
 
-def validate_reference_summary_config(
+def validate_reference_summary_config(  # noqa: PLR0912 — one branch per config field; flat validation reads clearer than nested helpers
     body: dict[str, Any],
 ) -> ValidationResult:
     """Validate a `reference_summary` config body at Layer 3.

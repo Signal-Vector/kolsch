@@ -113,7 +113,7 @@ async def build_compaction_history_table(
     if not compactions:
         return "↳ /compaction-history: no compactions on this thread yet."
 
-    header = f"{'evt':<14} {'fired':<10} {'tokens':<11} {'compacted_range':<28} {'preview':<7} revoked"
+    header = f"{'evt':<14} {'fired':<10} {'tokens':<11} {'compacted_range':<28} {'preview':<7} revoked"  # noqa: E501 — fixed-width table header, columns must not wrap
     rule = "-" * len(header)
     rows: list[str] = [header, rule]
     for e in compactions:

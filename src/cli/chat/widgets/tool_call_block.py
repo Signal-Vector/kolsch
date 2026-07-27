@@ -101,7 +101,7 @@ class ToolCallBlock(Collapsible):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("c", "collapse", "Collapse tool block", show=False),
     ]
 
@@ -110,7 +110,7 @@ class ToolCallBlock(Collapsible):
         tool_name: str,
         args: str,
         body: str,
-        failed: bool = False,
+        failed: bool = False,  # noqa: FBT001, FBT002 — positional per spec constructor + existing callers
         recovery_hint: str | None = None,
         matched_rule: dict[str, object] | None = None,
     ) -> None:

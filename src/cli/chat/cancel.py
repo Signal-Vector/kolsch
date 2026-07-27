@@ -15,6 +15,7 @@ internals for the state.
 
 from __future__ import annotations
 
+import contextlib
 from typing import TYPE_CHECKING
 
 from engine import CancelToken
@@ -37,13 +38,10 @@ def request_cancel(app: ChatApp, *, reason: str = "interrupted") -> None:
     token = getattr(app, "active_cancel", None)
     if token is None:
         return
-    try:
+    # A cancellation on an already-cancelled token surfaces as noise;
+    # silence it. The engine's teardown is the source of truth.
+    with contextlib.suppress(Exception):
         token.cancel()
-    except Exception:
-        # A cancellation on an already-cancelled token surfaces as
-        # noise; silence it. The engine's teardown is the source of
-        # truth.
-        pass
     app.last_cancel_reason = reason
 
 

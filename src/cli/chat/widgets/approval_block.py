@@ -52,7 +52,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from textual.binding import Binding
 from textual.containers import Vertical
@@ -183,7 +183,7 @@ class ApprovalBlock(Widget):
     # none of those panes bind Tab, and Input doesn't either, so this
     # binding is reached via Textual's bubble-up-to-ancestors mechanism
     # before Screen's default ``app.focus_next`` binding wins.
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("tab", "toggle_args", "expand/collapse Args", show=False),
     ]
 
@@ -321,7 +321,7 @@ class ApprovalBlock(Widget):
         )
 
     @staticmethod
-    def _resolved_classes(allowed: bool | None) -> str:
+    def _resolved_classes(allowed: bool | None) -> str:  # noqa: FBT001 — tri-state domain value (allow/deny/dangling), not a behavior flag
         """Pick the CSS classes for a resolved-row Static.
 
         Matches the interactive path's `_resolve` mapping — ``True``
@@ -439,6 +439,7 @@ class ApprovalBlock(Widget):
         self,
         event: ApprovalChoicePane.Chosen,
     ) -> None:
+        """Handle the choice pane's key: resolve fast or advance to pattern."""
         event.stop()
         key = event.key
         if key == "y":
@@ -466,6 +467,7 @@ class ApprovalBlock(Widget):
         self,
         event: ApprovalPatternEdit.Confirmed,
     ) -> None:
+        """Advance to the save-confirm pane with the edited pattern."""
         event.stop()
         self._pending_pattern = event.pattern
         self._step = self._STEP_SAVE
@@ -487,6 +489,7 @@ class ApprovalBlock(Widget):
         self,
         event: ApprovalPatternEdit.Cancelled,
     ) -> None:
+        """Return to the choice pane, discarding the pending effect/pattern."""
         event.stop()
         self._pending_effect = None
         self._pending_pattern = None
@@ -501,6 +504,7 @@ class ApprovalBlock(Widget):
         self,
         event: ApprovalSaveConfirm.Chosen,
     ) -> None:
+        """Save the rule and resolve, or fall back on cancel."""
         event.stop()
         key = event.key
         if key == "y":
@@ -683,14 +687,12 @@ class ApprovalBlock(Widget):
             await body.mount(new_pane, before=footer)
         except Exception:  # noqa: BLE001 — footer may not exist during resolve
             await body.mount(new_pane)
-        try:
+        with contextlib.suppress(Exception):
             footer = self.query_one(".footer-help", Static)
             # qol-047: append the args-expand hint suffix when the row
             # overflows. ``footer_help`` remains the source of truth for
             # the pane-specific wording; the suffix rides along.
             footer.update(footer_help + self._args_footer_suffix())
-        except Exception:  # noqa: BLE001
-            pass
         # Focus the new pane so its bindings + Input see keystrokes.
         new_pane.focus()
 
@@ -706,10 +708,8 @@ class ApprovalBlock(Widget):
             await self._current_pane.remove()
             self._current_pane = None
         # Remove the footer hint — it's replaced by the resolution row.
-        try:
+        with contextlib.suppress(Exception):
             await self.query_one(".footer-help", Static).remove()
-        except Exception:  # noqa: BLE001
-            pass
         classes = "resolved -allowed" if allowed else "resolved -denied"
         if self._body is not None:
             await self._body.mount(Static(footer, classes=classes, markup=False))

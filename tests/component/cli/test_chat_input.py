@@ -54,19 +54,21 @@ def test_tc_chat_18_chat_module_is_not_full_screen() -> None:
         src = py.read_text()
         tree = ast.parse(src)
         for node in ast.walk(tree):
-            if isinstance(node, ast.Call) and isinstance(node.func, ast.Attribute):
-                if node.func.attr in {"run", "run_async"}:
-                    kws = {k.arg for k in node.keywords}
-                    assert "inline" in kws, (
-                        f"{py}:{node.lineno}: App.run/run_async "
-                        f"without inline=True kwarg"
-                    )
-                    for kw in node.keywords:
-                        if kw.arg == "inline":
-                            assert (
-                                isinstance(kw.value, ast.Constant)
-                                and kw.value.value is True
-                            ), f"{py}:{node.lineno}: inline must be True"
+            if (
+                isinstance(node, ast.Call)
+                and isinstance(node.func, ast.Attribute)
+                and node.func.attr in {"run", "run_async"}
+            ):
+                kws = {k.arg for k in node.keywords}
+                assert "inline" in kws, (
+                    f"{py}:{node.lineno}: App.run/run_async without inline=True kwarg"
+                )
+                for kw in node.keywords:
+                    if kw.arg == "inline":
+                        assert (
+                            isinstance(kw.value, ast.Constant)
+                            and kw.value.value is True
+                        ), f"{py}:{node.lineno}: inline must be True"
         # Legacy prompt_toolkit guard, still enforced across the tree.
         for pattern in ("full_screen=True", "\x1b[?1049h", "[?1049h"):
             assert pattern not in src, f"{py}: forbidden pattern {pattern!r}"

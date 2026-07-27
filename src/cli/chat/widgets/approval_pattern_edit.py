@@ -61,21 +61,25 @@ class ApprovalPatternEdit(Vertical):
         self.suggested_pattern = suggested_pattern
 
     def compose(self) -> ComposeResult:
+        """Yield the ``Pattern:`` label and its editable pattern ``Input``."""
         yield Static("Pattern:", classes="label")
         yield Input(value=self.suggested_pattern, id="pattern")
 
     def on_mount(self) -> None:
+        """Focus the pattern ``Input`` when the pane mounts."""
         # Framework-native focus: Textual renders the cursor inside the
         # focused Input, no manual cursor management.
         self.query_one(Input).focus()
 
     def on_input_submitted(self, event: Input.Submitted) -> None:
+        """Post ``Confirmed`` with the entered pattern on Enter."""
         # Stop the Input.Submitted from bubbling further; parent listens
         # for the Confirmed message instead.
         event.stop()
         self.post_message(self.Confirmed(event.value))
 
     async def on_key(self, event: events.Key) -> None:
+        """Post ``Cancelled`` on Escape."""
         if event.key == "escape":
             event.stop()
             self.post_message(self.Cancelled())

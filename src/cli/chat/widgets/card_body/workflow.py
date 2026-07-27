@@ -170,7 +170,7 @@ class WorkflowProgressHeader(Static):
     def __init__(
         self,
         *,
-        id: str | None = None,
+        id: str | None = None,  # noqa: A002 — matches Textual Widget's `id` kwarg
         parent_ref: str | None = None,
     ) -> None:
         self._run_id: str | None = None
@@ -332,7 +332,7 @@ class WorkflowRenderer(Vertical):
     WorkflowRenderer.-compact WorkflowSummaryFooter { display: none; }
     """
 
-    compact_mode: reactive[bool] = reactive(False, init=False)
+    compact_mode: reactive[bool] = reactive(False, init=False)  # noqa: FBT003 — Textual reactive API
     """Compact-mode toggle (spec-016).
 
     ``True`` hides the node list + footer and shows a single-line
@@ -345,7 +345,7 @@ class WorkflowRenderer(Vertical):
     def __init__(
         self,
         *,
-        id: str | None = None,
+        id: str | None = None,  # noqa: A002 — matches Textual Widget's `id` kwarg
         parent_ref: str | None = None,
     ) -> None:
         super().__init__(id=id)
@@ -1401,7 +1401,7 @@ class WorkflowRenderer(Vertical):
     # spec-016: compact mode
     # ------------------------------------------------------------------
 
-    def watch_compact_mode(self, old: bool, new: bool) -> None:
+    def watch_compact_mode(self, old: bool, new: bool) -> None:  # noqa: FBT001 — Textual reactive-watcher signature
         """React to a ``compact_mode`` flip — hide/show node list + footer.
 
         Also toggles the ``.-compact`` CSS class on the renderer so

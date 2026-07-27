@@ -25,7 +25,7 @@ async def test_pane_mounts_three_statics(mock_app_factory) -> None:
         assert len(statics) == 3
         # First: question. Second: options. Third: cursor.
         assert "OK?" in str(statics[0].render())
-        assert "›" in str(statics[2].render())
+        assert "›" in str(statics[2].render())  # noqa: RUF001 — asserts the literal glyph rendered
 
 
 @pytest.mark.asyncio

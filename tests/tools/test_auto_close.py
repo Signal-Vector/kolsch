@@ -290,7 +290,7 @@ async def test_error_message_truncated_to_200(
             await ctx.cards.open("t1", kind="markdown")
             raise RuntimeError("x" * 500)
 
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 — asserts dispatch propagates any error
             await _dispatch(_make_defn(_body), impl, _providers)
         await _drain(impl)
 

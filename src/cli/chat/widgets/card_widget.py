@@ -33,8 +33,10 @@ on the reactive.
 
 from __future__ import annotations
 
+import contextlib
 import time
-from typing import TYPE_CHECKING, Any
+from collections import OrderedDict
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from textual.reactive import reactive
 from textual.widgets import Collapsible, Static
@@ -73,7 +75,7 @@ class CardHeader(Static):
     lifetime (`title` is fixed at open).
     """
 
-    def __init__(self, *, id: str | None = None) -> None:
+    def __init__(self, *, id: str | None = None) -> None:  # noqa: A002 — Textual widget API uses `id`
         # bug-040: ``set_title`` receives executor-supplied
         # ``payload["title"]`` from ``kolsch.card.opened`` wire events,
         # and ``_rerender`` pipes it through ``self.update(...)``.
@@ -115,7 +117,7 @@ class CardHeader(Static):
 class CardFooter(Static):
     """Empty by default; renders `✗ error: <msg>` on error close."""
 
-    def __init__(self, *, id: str | None = None) -> None:
+    def __init__(self, *, id: str | None = None) -> None:  # noqa: A002 — Textual widget API uses `id`
         # bug-040: ``CardWidget._apply_close_error`` writes
         # ``f"✗ error: {error_message}"`` here where ``error_message``
         # is executor-sourced. Disable Textual markup so bracket
@@ -134,8 +136,6 @@ class _BoundedLRUSet:
     __slots__ = ("_maxsize", "_seen")
 
     def __init__(self, *, maxsize: int) -> None:
-        from collections import OrderedDict
-
         self._maxsize = maxsize
         self._seen: OrderedDict[str, None] = OrderedDict()
 
@@ -224,7 +224,7 @@ class CardWidget(Collapsible):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         ("enter", "expand_or_ack", "Expand or acknowledge"),
         ("c", "collapse", "Collapse"),
         # feat-019: force-kill escalation. Guarded inside
@@ -259,7 +259,7 @@ class CardWidget(Collapsible):
         card_id: Any,
         kind: str,
         title: str = "",
-        id: str | None = None,
+        id: str | None = None,  # noqa: A002 — Textual widget API uses `id`
     ) -> None:
         # Cast for headless tests that pass raw strings.
         self.card_id = card_id
@@ -419,24 +419,23 @@ class CardWidget(Collapsible):
         self.error_message = error_message
         if canonical == "failed" and error_message:
             self._footer.update(f"✗ error: {error_message}")
-        if canonical == "success":
-            # Match ToolCallBlock's collapse cadence for concise
-            # kinds (text / progress / confirm). Guard with
-            # `is_mounted` — headless tests may exercise `apply_close`
-            # before mount (no timer scheduler yet).
-            #
-            # bug-035: workflow cards STAY expanded on success. The
-            # user's mental model is "the workflow finished, show me
-            # what it did" — auto-collapsing hides the whole node
-            # timeline behind a title that says only "✓". For other
-            # card kinds the timeline is trivial (one line of text /
-            # a bar) and auto-collapse keeps the transcript tidy.
-            if self.kind != "workflow":
-                try:
-                    if self.is_mounted:
-                        self.set_timer(1.0, self._collapse_after_success)
-                except Exception:  # noqa: BLE001 — timer scheduling is best-effort
-                    pass
+        # Match ToolCallBlock's collapse cadence for concise
+        # kinds (text / progress / confirm). Guard with
+        # `is_mounted` — headless tests may exercise `apply_close`
+        # before mount (no timer scheduler yet).
+        #
+        # bug-035: workflow cards STAY expanded on success. The
+        # user's mental model is "the workflow finished, show me
+        # what it did" — auto-collapsing hides the whole node
+        # timeline behind a title that says only "✓". For other
+        # card kinds the timeline is trivial (one line of text /
+        # a bar) and auto-collapse keeps the transcript tidy.
+        if canonical == "success" and self.kind != "workflow":
+            # timer scheduling is best-effort — headless tests have no
+            # scheduler, so a failure here must not break apply_close.
+            with contextlib.suppress(Exception):
+                if self.is_mounted:
+                    self.set_timer(1.0, self._collapse_after_success)
 
     # ------------------------------------------------------------------
     # Additional `CardWidget`-only surface
@@ -491,9 +490,10 @@ class CardWidget(Collapsible):
             return
 
     def mount_notice(self, text: str, kind: str) -> Any:
-        """Mount a notice inside the card's
-        [`NoticeSlot`][cli.chat.widgets.notice_slot.NoticeSlot].
+        """Mount a notice inside the card's notice slot.
 
+        Mounts into the
+        [`NoticeSlot`][cli.chat.widgets.notice_slot.NoticeSlot].
         Delegates to
         [`NoticeSlot.add_notice`][cli.chat.widgets.notice_slot.NoticeSlot.add_notice].
         Warning-kind notices additionally trip the header's ``⚠``
@@ -555,10 +555,10 @@ class CardWidget(Collapsible):
         a collapsed card.
         """
         if self.state == "failed" and self._on_error_ack is not None:
-            try:
+            # ack callback is best-effort — a failing hook must not
+            # block the card's own state handling.
+            with contextlib.suppress(Exception):
                 self._on_error_ack()
-            except Exception:  # noqa: BLE001 — ack callback best-effort
-                pass
             return
         if self.collapsed:
             self.collapsed = False
@@ -671,11 +671,10 @@ class CardWidget(Collapsible):
             thread_id=self._thread_id,
             session_id=self._session_id,
         )
-        try:
+        # mount is best-effort — a detached/headless widget has no app.
+        with contextlib.suppress(Exception):
             if self.app is not None:
                 self.app.mount(modal)
-        except Exception:  # noqa: BLE001 — mount is best-effort
-            pass
 
 
 class _MockEventData:

@@ -1,5 +1,4 @@
-"""Ask the user to confirm a dangerous action — the recommended
-Prompts pattern.
+"""Ask the user to confirm a dangerous action (recommended Prompts pattern).
 
 Demonstrates:
 - `@tool(requires=["prompts"])` — opts the tool into the Prompts
@@ -70,7 +69,7 @@ async def confirm_dangerous_action(
 ) -> dict[str, object]:
     """Ask a yes/no choice; retry once on ``PromptBusy``."""
     services = require_services(ctx, ["prompts"])
-    assert services.prompts is not None  # narrowed by require_services
+    assert services.prompts is not None  # noqa: S101 — type-narrowing after require_services
     source = _make_source(ctx)
     question = f"Confirm: {args.action_description}?"
     options = ["yes", "no"]

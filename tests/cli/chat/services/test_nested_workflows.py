@@ -111,7 +111,7 @@ async def test_parent_populated(
             # `start()` runs while the outer executor is still
             # awaiting its own run.
             loop = asyncio.get_running_loop()
-            loop.create_task(_spawn_child_from_outer())
+            loop.create_task(_spawn_child_from_outer())  # noqa: RUF006 — deliberate fire-and-forget spawn
 
         install_mock_executor_factory(
             impl,

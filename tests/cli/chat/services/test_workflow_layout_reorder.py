@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
+from textual.css.query import NoMatches
 from textual.widgets import Static
 
 from cli.chat.services.workflow_layout import (
@@ -120,7 +121,7 @@ async def test_three_in_progress_no_divider() -> None:
         try:
             transcript.query_one(f"#{DIVIDER_ID}", Static)
             has_divider = True
-        except Exception:
+        except NoMatches:
             has_divider = False
         assert not has_divider, "divider should not mount with only in-progress"
 

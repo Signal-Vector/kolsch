@@ -34,6 +34,14 @@ from typing import TYPE_CHECKING
 
 import pytest
 
+from cli._slash import (
+    ChatSessionState,
+    ControlSignal,
+    SlashContext,
+    dispatch_slash,
+)
+from platform_runtime import PlatformRuntime, bootstrap_runtime
+
 # bug-020: retired — see module docstring.
 pytestmark = pytest.mark.skip(
     reason=(
@@ -43,14 +51,6 @@ pytestmark = pytest.mark.skip(
         "and tests/cli/_slash/test_workflow_handler_routes_through_impl.py."
     ),
 )
-
-from cli._slash import (
-    ChatSessionState,
-    ControlSignal,
-    SlashContext,
-    dispatch_slash,
-)
-from platform_runtime import PlatformRuntime, bootstrap_runtime
 
 if TYPE_CHECKING:
     from pathlib import Path

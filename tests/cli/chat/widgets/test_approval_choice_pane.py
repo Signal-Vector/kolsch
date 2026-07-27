@@ -25,8 +25,8 @@ async def test_pane_shows_all_four_choices_and_prompt(mock_app_factory):
     """The pane renders a single choices line + a prompt cursor line.
 
     The choices row is one ``Static`` (rendered ``markup=False`` so
-    brackets stay literal), and a second ``Static`` shows the ``› ▊``
-    prompt affordance — every label must be present in the choices
+    brackets stay literal), and a second ``Static`` shows the angle +
+    cursor prompt affordance — every label must be present in the choices
     line. The earlier one-Static-per-choice layout clipped to just
     ``[y]`` on narrow terminals; this test guards the fix.
     """
@@ -43,7 +43,7 @@ async def test_pane_shows_all_four_choices_and_prompt(mock_app_factory):
             "[d] deny + rule",
         ):
             assert label in choices_text, f"missing {label!r} from choices row"
-        assert "›" in prompt_text
+        assert "›" in prompt_text  # noqa: RUF001 — asserts the literal glyph rendered
         assert "▊" in prompt_text
 
 

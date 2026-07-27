@@ -57,7 +57,7 @@ async def cancel_workflow(
     a structured no-op instead of a silent ``cancelled=false``.
     """
     services = require_services(ctx, ["workflows"])
-    assert services.workflows is not None  # narrowed by require_services
+    assert services.workflows is not None  # noqa: S101 — type-narrowing after require_services
     run_id = WorkflowRunId(args.run_id)
     fired = await services.workflows.cancel(run_id, cascade=args.cascade)
     result: dict[str, object] = {

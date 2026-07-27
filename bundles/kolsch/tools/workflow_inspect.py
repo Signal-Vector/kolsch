@@ -136,7 +136,7 @@ async def workflow_inspect(
     surface shape bug-025 established for ``run_workflow``.
     """
     services = require_services(ctx, ["workflows"])
-    assert services.workflows is not None  # narrowed by require_services
+    assert services.workflows is not None  # noqa: S101 — type-narrowing after require_services
 
     resolver = getattr(services.workflows, "resolve_workflow_yaml", None)
     yaml_source: str | None = None

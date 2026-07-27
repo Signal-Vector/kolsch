@@ -36,11 +36,12 @@ class ConfirmRenderer(Vertical):
     }
     """
 
-    def __init__(self, *, id: str | None = None) -> None:
+    def __init__(self, *, id: str | None = None) -> None:  # noqa: A002 — matches Textual Widget's `id` kwarg
         super().__init__(id=id)
         self._text = Static("", classes="confirm-text", markup=False)
 
     def compose(self) -> ComposeResult:
+        """Yield the confirm-text ``Static`` (also the prompt-pane mount slot)."""
         yield self._text
         # `CardPromptPane` mount slot — populated transiently by
         # spec-014 when a workflow approval fires against this card.

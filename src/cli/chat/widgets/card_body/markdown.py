@@ -51,7 +51,7 @@ class MarkdownRenderer(Markdown):
     }
     """
 
-    def __init__(self, *, id: str | None = None) -> None:
+    def __init__(self, *, id: str | None = None) -> None:  # noqa: A002 — matches Textual Widget's `id` kwarg
         super().__init__(id=id)
         self._buffer: list[str] = []
         self._FLUSH_MS = int(

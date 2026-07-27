@@ -672,6 +672,7 @@ class WorkflowsImpl(AbstractWorkflows):
 
     @property
     def default_timeout_seconds(self) -> int:
+        """Default per-run timeout applied when a run omits its own."""
         return self._default_timeout_seconds
 
     async def aclose(self) -> None:

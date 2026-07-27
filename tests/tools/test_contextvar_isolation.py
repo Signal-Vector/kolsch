@@ -250,7 +250,7 @@ async def test_contextvar_reset_on_exception(
             assert isinstance(open_cards, list)
             raise RuntimeError("boom")
 
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 — asserts dispatch propagates any error
             await dispatch_tool(
                 defn=_make_defn(_body),
                 args={},

@@ -73,7 +73,7 @@ def test_split_anchors_ordering() -> None:
 
 @pytest.mark.asyncio
 async def test_anchor_button_mounts_inline_in_assistant_prose(
-    chat_app: ChatApp,
+    chat_app: ChatApp,  # noqa: F811 — pytest fixture injection, not a redefinition
 ) -> None:
     """A message with anchor markup mounts a WorkflowAnchorButton."""
     async with chat_app.run_test() as pilot:
@@ -92,7 +92,7 @@ async def test_anchor_button_mounts_inline_in_assistant_prose(
 
 @pytest.mark.asyncio
 async def test_anchor_button_activation_scrolls_to_card(
-    chat_app: ChatApp,
+    chat_app: ChatApp,  # noqa: F811 — pytest fixture injection, not a redefinition
 ) -> None:
     """Enter on the anchor button routes to _scroll_to_workflow_card."""
     async with chat_app.run_test() as pilot:
@@ -133,7 +133,7 @@ async def test_anchor_button_activation_scrolls_to_card(
         transcript = pilot.app.query_one("#transcript")
         scrolled: list[object] = []
 
-        def _record(widget: object, animate: bool = True) -> None:
+        def _record(widget: object, animate: bool = True) -> None:  # noqa: FBT001, FBT002 — matches scroll_to_widget signature
             _ = animate
             scrolled.append(widget)
 
@@ -150,7 +150,7 @@ async def test_anchor_button_activation_scrolls_to_card(
 
 @pytest.mark.asyncio
 async def test_anchor_button_unknown_run_id_logs_and_is_noop(
-    chat_app: ChatApp,
+    chat_app: ChatApp,  # noqa: F811 — pytest fixture injection, not a redefinition
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Unknown run_id: button renders, activation logs warning, no scroll."""

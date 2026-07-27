@@ -67,7 +67,7 @@ class EventType(StrEnum):
     # framework paths emit zero of these; the whole response still
     # arrives on `MODEL_RESPONSE`. See
     # `process/spec-textual-chat-ui.md` for the wire contract.
-    MODEL_STREAMING_TOKEN = "model.streaming_token"
+    MODEL_STREAMING_TOKEN = "model.streaming_token"  # noqa: S105 — event kind, not a secret
     # Emitted once per fallback transition.
     MODEL_FALLBACK = "model.fallback"
 

@@ -36,12 +36,13 @@ class ProgressRenderer(Vertical):
     }
     """
 
-    def __init__(self, *, id: str | None = None) -> None:
+    def __init__(self, *, id: str | None = None) -> None:  # noqa: A002 — matches Textual Widget's `id` kwarg
         super().__init__(id=id)
         self._message = Static("", markup=False)
         self._bar = ProgressBar(total=100, show_eta=False)
 
     def compose(self) -> ComposeResult:
+        """Yield the message ``Static`` and the ``ProgressBar``."""
         yield self._message
         yield self._bar
 

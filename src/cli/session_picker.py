@@ -52,7 +52,7 @@ def _format_row_label(session: Session, last_at: datetime | None) -> str:
     last-activity, id) but joined on `` • `` since the picker is a
     single-column list, not a table.
     """
-    from cli.main import (
+    from cli.main import (  # noqa: PLC0415 — lazy import avoids circular dep
         _format_delta,
     )
 

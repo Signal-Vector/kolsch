@@ -90,7 +90,7 @@ async def test_multiple_notices_stack_in_order() -> None:
         widgets = list(slot.query(NoticeWidget))
         assert len(widgets) == 3
         # Mount order preserved. qol-080: `.text` carries the leading
-        # severity glyph (`ℹ` for info, `⚠` for warning).
+        # severity glyph (info / warning markers).
         assert widgets[0].text == "first"
         assert widgets[1].text == "second"
         assert widgets[2].text == "third"

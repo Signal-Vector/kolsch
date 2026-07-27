@@ -203,7 +203,7 @@ async def chat_app(tmp_path: Path) -> AsyncIterator[Any]:
 async def _wait_for_approval_block(
     pilot: Any,
     *,
-    timeout: float = 2.0,
+    timeout: float = 2.0,  # noqa: ASYNC109 — test polling deadline, not a cancel scope
 ) -> ApprovalBlock:
     """Wait up to ``timeout`` seconds for an ApprovalBlock to mount."""
     for _ in range(int(timeout / 0.05)):

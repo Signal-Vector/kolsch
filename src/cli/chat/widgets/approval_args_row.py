@@ -160,6 +160,7 @@ class ApprovalArgsRow(Widget):
     # ------------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
+        """Yield the single ``Static`` child holding the rendered body."""
         # Single Static child holds the whole rendered body. Static's
         # ``update`` is cheap and avoids the mount-tree churn of
         # remove+re-yield. ``markup=False`` is mandatory: target may

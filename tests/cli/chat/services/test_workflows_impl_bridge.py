@@ -2,7 +2,7 @@
 
 Three passes:
 
-1. Mock executor emits 5 events (RUN_STARTED, 3× NODE_*,
+1. Mock executor emits 5 events (RUN_STARTED, 3x NODE_*,
    RUN_COMPLETED). Observer enqueues each into the bridge; bridge
    drain fires 5 `kolsch.workflow.progress` UI events plus a
    `card.closed` on terminal.

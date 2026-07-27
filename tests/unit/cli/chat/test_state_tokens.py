@@ -79,7 +79,7 @@ def test_canonical_state_resolves_to_expected_token(
 def test_state_token_is_frozen_dataclass() -> None:
     """`StateToken` is immutable — enables safe module-level reuse."""
     token = resolve_state("success")
-    with pytest.raises(Exception):  # dataclasses.FrozenInstanceError subclass
+    with pytest.raises(Exception):  # noqa: B017 — dataclasses.FrozenInstanceError subclass
         token.glyph = "?"  # type: ignore[misc]
 
 

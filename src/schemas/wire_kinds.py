@@ -1,7 +1,7 @@
-"""Wire kind constants — one canonical location for every
-``kolsch.*`` UI event kind. Every emit site and every dispatch site
-matches on these constants; raw string literals are a spec
-violation.
+"""Wire kind constants — canonical location for every ``kolsch.*`` UI event kind.
+
+Every emit site and every dispatch site matches on these constants;
+raw string literals are a spec violation.
 
 Adding a new kind is a two-line change:
 
@@ -77,6 +77,9 @@ ALL_PLATFORM_KINDS: frozenset[str] = frozenset(
 )
 
 
+_MIN_KIND_COMPONENTS = 3  # <owner>.<domain>.<verb>
+
+
 def is_valid_kind(kind: str) -> bool:
     """Return True iff ``kind`` is a dotted ``<owner>.<domain>.<verb>``.
 
@@ -91,7 +94,7 @@ def is_valid_kind(kind: str) -> bool:
     digit.
     """
     parts = kind.split(".")
-    if len(parts) < 3:
+    if len(parts) < _MIN_KIND_COMPONENTS:
         return False
     return all(p and p.isidentifier() for p in parts)
 

@@ -687,7 +687,7 @@ class AgentEngine:
         tool_schemas: list[dict[str, Any]],
         trigger: str,
     ) -> Event | None:
-        """Body of :meth:`maybe_compact_thread_eagerly`, invoked inside the thread lock."""
+        """Body of :meth:`maybe_compact_thread_eagerly`, run under the thread lock."""
         provider = self._compaction_provider
         if provider is None:
             return None
@@ -952,7 +952,7 @@ class AgentEngine:
         *,
         thread_id: ThreadId,
     ) -> Event | None:
-        """Append a ``CONTEXT_COMPACTION_REVOKED`` event for the most-recent active compaction.
+        """Append a ``CONTEXT_COMPACTION_REVOKED`` for the newest active compaction.
 
         feat-054 Phase 3 — powers the ``/uncompact`` slash command.
         Walks the thread from newest to oldest, finds the first
@@ -2518,7 +2518,7 @@ class _Exchange:
            actionable error rather than a mid-stream provider bailout.
 
         Non-shrinking guard (Phase 4 §B): if the successful summary
-        does not reduce projected tokens below ``0.90 ×
+        does not reduce projected tokens below ``0.90 *
         tokens_before``, the compaction is discarded, a
         ``CONTEXT_COMPACTION_SKIPPED`` event is emitted with
         ``reason="no_net_savings"``, and the trigger retries with a

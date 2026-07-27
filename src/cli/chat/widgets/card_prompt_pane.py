@@ -1,3 +1,4 @@
+# ruff: noqa: RUF002 — docstring documents the actual cursor glyphs it renders
 """`CardPromptPane` — inline prompt pane widget skeleton.
 
 spec-007 §CardPromptPane. Three-`Static` skeleton (question row +
@@ -49,13 +50,14 @@ class CardPromptPane(Vertical):
         *,
         question: str,
         options: list[str],
-        id: str | None = None,
+        id: str | None = None,  # noqa: A002 — matches Textual Widget's `id` kwarg
     ) -> None:
         super().__init__(id=id)
         self._question = question
         self._options = list(options)
 
     def compose(self) -> ComposeResult:
+        """Yield the question row, the options row, and the cursor line."""
         # bug-040: `_question` is a constructor arg wired from
         # `PromptsImpl` (spec-014). Bracket content in the prompt
         # question would otherwise trip `MarkupError` — disable
@@ -74,7 +76,7 @@ class CardPromptPane(Vertical):
             classes="prompt-options",
             markup=False,
         )
-        yield Static("› ▊", classes="prompt-cursor")
+        yield Static("› ▊", classes="prompt-cursor")  # noqa: RUF001 — intentional cursor glyph (visual input affordance)
 
 
 __all__ = ["CardPromptPane"]

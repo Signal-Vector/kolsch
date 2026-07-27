@@ -56,7 +56,7 @@ async def _mk_impl(store: SessionStore) -> PromptsImpl:
 async def _wait_for_requested(
     store: SessionStore,
     thread_id: str,
-    timeout: float = 1.0,
+    timeout: float = 1.0,  # noqa: ASYNC109 — test polling deadline, not a cancel scope
 ) -> dict:
     """Poll the store for a `WIRE_PROMPT_REQUESTED` payload."""
     deadline = asyncio.get_running_loop().time() + timeout

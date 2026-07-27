@@ -137,6 +137,7 @@ class SlashPopup(Vertical):
     ROW_NAME_WIDTH: ClassVar[int] = 12
 
     def compose(self) -> ComposeResult:  # pragma: no cover - trivial
+        """Yield nothing on mount; ``watch_prefix`` mounts rows on demand."""
         # Compose starts empty; watch_prefix populates rows on first
         # meaningful update. Keeping compose empty avoids "flash of
         # empty popup" on mount before the first update.

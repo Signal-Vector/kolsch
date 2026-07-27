@@ -310,9 +310,9 @@ class AgentRunner:
             )
             async for event in stream:
                 if forward is not None:
-                    try:
+                    try:  # noqa: SIM105 — comment documents the deliberate swallow
                         forward(event)
-                    except Exception:  # noqa: BLE001 — best-effort tee
+                    except Exception:  # noqa: BLE001, S110 — best-effort tee
                         # The executor-bound callback already swallows
                         # via `_emit_sub_agent_event`. Belt-and-braces
                         # for test-injected callbacks.

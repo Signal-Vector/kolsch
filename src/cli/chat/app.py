@@ -521,7 +521,7 @@ class ChatApp(App):
     # to False via ``call_later`` and ``Esc`` returns to FIFO
     # semantics. Watched by :meth:`watch__esc_toast_active` which
     # pushes / clears the toast text on the :class:`StatusBar`.
-    _esc_toast_active: reactive[bool] = reactive(False)
+    _esc_toast_active: reactive[bool] = reactive(False)  # noqa: FBT003 — Textual reactive API
 
     # In inline mode, Textual's Screen sizes itself to
     # `get_content_height` (sum of children) unless the Screen has an
@@ -675,6 +675,7 @@ class ChatApp(App):
     # ------------------------------------------------------------------
 
     def compose(self) -> ComposeResult:
+        """Yield the chat surface's child widgets in mount order."""
         yield VerticalScroll(id="transcript")
         with Vertical(id="bottom-stack"):
             yield TurnStatus(id="turn-status")
@@ -1092,11 +1093,10 @@ class ChatApp(App):
         # follow the tail. Textual's built-in ``_check_anchor``
         # (``widget.py:792-799``) handles scroll-back-to-tail re-engage
         # natively — no subclass required.
-        try:
+        # headless fixtures may lack #transcript
+        with contextlib.suppress(Exception):
             transcript = self.query_one("#transcript", VerticalScroll)
             transcript.anchor()
-        except Exception:  # noqa: BLE001 — headless fixtures may lack #transcript
-            pass
 
         # feat-054 Phase 5 — session-open eager compaction. Fire BEFORE
         # the user's first post-resume message so the summariser delay
@@ -1202,7 +1202,7 @@ class ChatApp(App):
                 exc_info=True,
             )
             if transcript is not None:
-                try:
+                with contextlib.suppress(Exception):
                     from cli.chat.widgets.notice import (  # noqa: PLC0415
                         NoticeWidget,
                     )
@@ -1217,23 +1217,17 @@ class ChatApp(App):
                             kind="warning",
                         )
                     )
-                except Exception:  # noqa: BLE001
-                    pass
         finally:
             # Remove the transient "compacting…" progress notice —
             # the event adapter's standard handler mounted the real
             # CONTEXT_COMPACTED notice via bus publish.
             if notice_widget is not None:
-                try:
+                with contextlib.suppress(Exception):
                     await notice_widget.remove()
-                except Exception:  # noqa: BLE001
-                    pass
             # Re-enable the composer regardless of outcome.
             if composer is not None:
-                try:
+                with contextlib.suppress(Exception):
                     composer.disabled = False
-                except Exception:  # noqa: BLE001
-                    pass
 
     def _install_owned_default_executor(self) -> None:
         """Install an app-owned daemon-thread executor on the loop.
@@ -1600,7 +1594,7 @@ class ChatApp(App):
             for event in selected:
                 try:
                     await self.event_adapter.handle(event)
-                except Exception:
+                except Exception:  # noqa: BLE001, S112 — replay is best-effort; a bad event shouldn't crash the chat
                     # Replay is best-effort; a bad event shouldn't crash
                     # the chat. Continue.
                     continue
@@ -1666,17 +1660,15 @@ class ChatApp(App):
             try:
                 async for event in event_stream:
                     await self.event_adapter.handle(event)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 — surface any exchange failure to the transcript
                 await self.mount_exchange_failed(str(exc))
         finally:
             self.active_cancel = None
             # Ensure turn status clears after any exchange path.
-            try:
+            with contextlib.suppress(Exception):
                 turn = self.query_one(TurnStatus)
                 turn.verb = ""
                 turn.target = ""
-            except Exception:
-                pass
 
     # ------------------------------------------------------------------
     # Mount helpers — called by EventAdapter and InlineApprovalCallback
@@ -1690,8 +1682,9 @@ class ChatApp(App):
         event_id: str | None = None,
         content: dict[str, Any] | None = None,
     ) -> Any | None:
+        """Mount a user message chatbox at the transcript root."""
         _ = event_id, content  # bug-036d/037 sink kwargs — App ignores.
-        ts = timestamp if timestamp is not None else datetime.now()
+        ts = timestamp if timestamp is not None else datetime.now()  # noqa: DTZ005 — local time is right for the wall-clock header
         transcript = self.query_one("#transcript", VerticalScroll)
         widget = UserChatbox(text, ts)
         await transcript.mount(widget)
@@ -1708,11 +1701,12 @@ class ChatApp(App):
         *,
         event_id: str | None = None,
     ) -> Any | None:
+        """Mount a completed assistant prose message at the transcript root."""
         _ = event_id  # bug-036d: sink-protocol dedupe key — App ignores.
         transcript = self.query_one("#transcript", VerticalScroll)
         prose = AssistantProse(
             agent_name=self.session.config.name,
-            timestamp=datetime.now(),
+            timestamp=datetime.now(),  # noqa: DTZ005 — local time is right for the wall-clock header
         )
         await transcript.mount(prose)
         await prose.append(text)
@@ -1721,10 +1715,11 @@ class ChatApp(App):
         return prose
 
     async def mount_assistant_streaming_widget(self) -> AssistantProse:
+        """Mount an empty assistant prose widget for incremental streaming."""
         transcript = self.query_one("#transcript", VerticalScroll)
         prose = AssistantProse(
             agent_name=self.session.config.name,
-            timestamp=datetime.now(),
+            timestamp=datetime.now(),  # noqa: DTZ005 — local time is right for the wall-clock header
         )
         await transcript.mount(prose)
         self._last_assistant_widget = prose
@@ -1741,6 +1736,7 @@ class ChatApp(App):
         matched_rule: dict[str, object] | None = None,
         event_id: str | None = None,
     ) -> Any | None:
+        """Mount a tool-call block at the transcript root."""
         _ = event_id  # bug-036d: sink-protocol dedupe key — App ignores.
         transcript = self.query_one("#transcript", VerticalScroll)
         block = ToolCallBlock(
@@ -1787,10 +1783,10 @@ class ChatApp(App):
         *,
         kind: str = "info",
     ) -> None:
-        """Internal helper — mount a
-        [`NoticeWidget`][cli.chat.widgets.notice.NoticeWidget] at the
-        transcript root.
+        """Mount a ``NoticeWidget`` at the transcript root (internal helper).
 
+        Links to
+        [`NoticeWidget`][cli.chat.widgets.notice.NoticeWidget].
         spec-008 retired the public ``ChatApp.mount_notice`` in favour
         of ``Cards.notice()`` as the single notice-mount seam. This
         private helper preserves the "slash output → transcript
@@ -1804,6 +1800,7 @@ class ChatApp(App):
         await transcript.mount(notice)
 
     async def mount_exchange_failed(self, message: str) -> Any | None:
+        """Mount a red error notice reporting a failed exchange."""
         transcript = self.query_one("#transcript", VerticalScroll)
         notice = Static(f"[exchange failed — {message}]", classes="error", markup=False)
         notice.styles.color = "red"
@@ -1820,6 +1817,7 @@ class ChatApp(App):
         parent_hint: str | None = None,
         terminal: tuple[bool | None, str] | None = None,
     ) -> ApprovalBlock:
+        """Mount an approval block and recompute the composer gate."""
         transcript = self.query_one("#transcript", VerticalScroll)
         block = ApprovalBlock(
             rule_id,
@@ -1851,21 +1849,18 @@ class ChatApp(App):
         """
         try:
             blocks = list(self.query(ApprovalBlock))
-        except Exception:
+        except Exception:  # noqa: BLE001 — headless fixtures may lack a mounted DOM
             blocks = []
         awaiting = any(not block.is_resolved for block in blocks)
-        try:
+        with contextlib.suppress(Exception):
             composer = self.query_one(Composer)
             composer.awaiting_approval = awaiting
-        except Exception:
-            pass
-        try:
+        with contextlib.suppress(Exception):
             turn = self.query_one(TurnStatus)
             turn.awaiting_approval = awaiting
-        except Exception:
-            pass
 
     def clear_awaiting_approval(self) -> None:
+        """Recompute the composer gate after an approval resolves."""
         # bug-056: the sole clear site (InlineApprovalCallback.finally)
         # used to hard-set the gate to False, which raced with a second
         # still-open live approval. Recompute instead so a stacked live
@@ -1874,25 +1869,24 @@ class ChatApp(App):
         self.recompute_awaiting_approval()
 
     async def set_turn_verb(self, verb: str, *, target: str = "") -> None:
-        try:
+        """Set the turn-status verb/target and sync the StatusBar flag."""
+        with contextlib.suppress(Exception):
             turn = self.query_one(TurnStatus)
             turn.verb = verb
             turn.target = target
-        except Exception:
-            pass
         # feat-019: keep the StatusBar's ``turn_active`` in lockstep so
         # the workflow strip is suppressed during an active turn
         # (Coordinator Q1 lock). Empty verb clears the flag.
-        try:
+        with contextlib.suppress(Exception):
             status_bar = self.query_one("#status-bar", StatusBar)
             status_bar.set_turn_active(bool(verb))
-        except Exception:
-            pass
 
     def last_assistant_text(self) -> str:
+        """Return the most recent assistant message text."""
         return self._last_assistant_text
 
     def set_last_assistant_text(self, text: str) -> None:
+        """Record the most recent assistant message text."""
         self._last_assistant_text = text
 
     # ------------------------------------------------------------------
@@ -1945,10 +1939,8 @@ class ChatApp(App):
         # Clear the composer for the next input.
         composer.text = ""
         # Collapse the slash popup, if it was showing suggestions.
-        try:
+        with contextlib.suppress(Exception):  # popup may be unmounted
             self.query_one(SlashPopup).prefix = ""
-        except Exception:  # noqa: BLE001 — popup may be unmounted
-            pass
         text = text.strip()
         if not text:
             return
@@ -2106,11 +2098,11 @@ class ChatApp(App):
         user knows where to find the file. On failure, mount the
         error message.
         """
-        stamp = datetime.now().strftime("%Y-%m-%d-%H%M")
+        stamp = datetime.now().strftime("%Y-%m-%d-%H%M")  # noqa: DTZ005 — local time is right for the export filename
         session_slug = str(self.session.session_id)[:12]
         target: Path
         if arg_text.strip():
-            target = Path(arg_text.strip()).expanduser().resolve()
+            target = Path(arg_text.strip()).expanduser().resolve()  # noqa: ASYNC240 — sync IO is intentional
         else:
             exports_dir = Path.home() / ".kolsch" / "exports"
             exports_dir.mkdir(parents=True, exist_ok=True)
@@ -2122,7 +2114,7 @@ class ChatApp(App):
                 f"# thread:  {self.session.thread_id}",
                 f"# agent:   {self.session.config.name}",
                 f"# model:   {self.session.model_label}",
-                f"# exported: {datetime.now().isoformat(timespec='seconds')}",
+                f"# exported: {datetime.now().isoformat(timespec='seconds')}",  # noqa: DTZ005 — local time is right for the export header
                 "",
             ]
             async for event in self.session.runtime.store.read_path_to_leaf(
@@ -2282,10 +2274,8 @@ class ChatApp(App):
                 None,
             )
             if pending is not None:
-                try:
+                with contextlib.suppress(Exception):
                     await pending.remove()
-                except Exception:  # noqa: BLE001
-                    pass
             await self._mount_transcript_notice(
                 "↳ /compact: nothing to compact (short session, "
                 "compaction disabled, or model has no declared "
@@ -2500,12 +2490,10 @@ class ChatApp(App):
             return
         # spec-014 approval takes precedence (existing behaviour).
         # Check composer's ``awaiting_approval`` flag as a proxy.
-        try:
+        with contextlib.suppress(Exception):
             composer = self.query_one(Composer)
             if getattr(composer, "awaiting_approval", False):
                 return  # let default handling run
-        except Exception:
-            pass
 
         # Second Esc inside the toast window — cancel the oldest workflow.
         if self._esc_toast_active:
@@ -2573,7 +2561,7 @@ class ChatApp(App):
         self._esc_toast_active = False
         self._esc_toast_timer = None
 
-    def watch__esc_toast_active(self, _old: bool, new: bool) -> None:
+    def watch__esc_toast_active(self, _old: bool, new: bool) -> None:  # noqa: FBT001 — Textual reactive-watcher signature
         """React to Esc-toast flag changes: push / clear the toast text.
 
         feat-019 AC #6 — the status bar renders the toast text while
@@ -2583,7 +2571,7 @@ class ChatApp(App):
         """
         try:
             status_bar = self.query_one("#status-bar", StatusBar)
-        except Exception:
+        except Exception:  # noqa: BLE001 — headless fixtures may lack #status-bar
             return
         if new:
             status_bar.set_toast(_ESC_TOAST_TEXT)
@@ -2632,7 +2620,7 @@ class ChatApp(App):
         """``ctrl+d`` — exit if the composer is empty."""
         try:
             composer = self.query_one(Composer)
-        except Exception:
+        except Exception:  # noqa: BLE001 — no composer mounted → nothing to guard, just exit
             self.exit(0)
             return
         if not composer.text:

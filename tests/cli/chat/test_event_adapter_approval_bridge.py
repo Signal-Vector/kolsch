@@ -128,7 +128,7 @@ async def _await_answered_event(
     thread_id: Any,
     prompt_id: str,
     *,
-    timeout: float = 2.0,
+    timeout: float = 2.0,  # noqa: ASYNC109 — test polling deadline, not a cancel scope
 ) -> Event:
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout

@@ -29,8 +29,9 @@ need a scroll.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from textual.containers import Vertical
 from textual.widget import Widget
@@ -104,7 +105,7 @@ class ForceKillConfirm(Widget):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
         ("y", "confirm", "Confirm force-kill"),
         ("n", "cancel", "Cancel"),
         ("escape", "cancel", "Cancel"),
@@ -165,14 +166,13 @@ class ForceKillConfirm(Widget):
         # Textual routes key events to the focused widget; make sure
         # this modal has focus on mount so the bindings work without a
         # click.
-        try:
+        # Focus can raise on some headless test paths; the widget still
+        # processes `on_key` via message bubble.
+        with contextlib.suppress(Exception):
             self.focus()
-        except Exception:
-            # Focus can raise on some headless test paths; the widget
-            # still processes `on_key` via message bubble.
-            pass
 
     def can_focus(self) -> bool:  # type: ignore[override]
+        """Return True so the modal accepts focus and its bindings fire."""
         return True
 
     # ------------------------------------------------------------------
@@ -187,7 +187,7 @@ class ForceKillConfirm(Widget):
     async def action_cancel(self) -> None:
         """``n`` / ``escape`` — unmount without cancelling."""
         if self._fallback_handle is not None:
-            with _suppress():
+            with contextlib.suppress(Exception):
                 self._fallback_handle.cancel()
             self._fallback_handle = None
         await self._unmount_safely()
@@ -240,12 +240,15 @@ class ForceKillConfirm(Widget):
         if self._session_store is None:
             return
         try:
-            from datetime import UTC, datetime
-            from uuid import uuid4
+            # Lazy imports: keep schemas off the widget import path and
+            # avoid a circular dep; this fallback only runs when a
+            # session store is wired.
+            from datetime import UTC, datetime  # noqa: PLC0415 — see comment above
+            from uuid import uuid4  # noqa: PLC0415 — see comment above
 
-            from schemas.entities import Actor
-            from schemas.events import Event, EventType
-            from schemas.identifiers import EventId
+            from schemas.entities import Actor  # noqa: PLC0415 — see comment above
+            from schemas.events import Event, EventType  # noqa: PLC0415 — see above
+            from schemas.identifiers import EventId  # noqa: PLC0415 — see above
 
             # Only synthesise if the run hasn't already gone terminal —
             # a live executor may have landed its own terminal event
@@ -289,10 +292,10 @@ class ForceKillConfirm(Widget):
 
     async def _unmount_safely(self) -> None:
         """Remove the widget from the DOM; safe under teardown."""
-        try:
+        # Remove can raise during teardown; the widget is going away
+        # regardless.
+        with contextlib.suppress(Exception):
             await self.remove()
-        except Exception:  # noqa: BLE001 — remove during teardown
-            pass
 
     # ------------------------------------------------------------------
     # Key event fallback
@@ -311,16 +314,6 @@ class ForceKillConfirm(Widget):
         elif event.key in ("n", "escape"):
             event.stop()
             await self.action_cancel()
-
-
-class _suppress:
-    """Tiny contextlib.suppress-style local helper (avoid import churn)."""
-
-    def __enter__(self) -> _suppress:
-        return self
-
-    def __exit__(self, *_exc: Any) -> bool:
-        return True
 
 
 __all__ = ["ForceKillConfirm"]

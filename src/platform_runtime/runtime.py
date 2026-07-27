@@ -226,7 +226,7 @@ def _resolve_llm_call_timeout_default(
     return 210.0
 
 
-async def bootstrap_runtime(
+async def bootstrap_runtime(  # noqa: PLR0915 — linear runtime-assembly sequence
     *,
     root: Path,
     framework: Framework | None = None,

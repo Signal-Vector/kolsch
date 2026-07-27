@@ -51,7 +51,7 @@ async def _await_first_requested_payload(
     store: SessionStore,
     thread_id: ThreadId,
     *,
-    timeout: float = 1.0,
+    timeout: float = 1.0,  # noqa: ASYNC109 — test polling deadline, not a cancel scope
 ) -> dict[str, Any]:
     """Poll the store for the first `WIRE_PROMPT_REQUESTED` payload."""
     loop = asyncio.get_running_loop()

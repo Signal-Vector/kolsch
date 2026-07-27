@@ -149,7 +149,10 @@ class AbstractPrompts(ABC):
         raise NotImplementedError
 
     async def aclose(self) -> None:
-        """Called from ChatApp.on_unmount. Cancels drain tasks, snapshot timers, cancel tokens. Idempotent. Post-aclose, subsequent mutation raises RuntimeError.
+        """Called from ChatApp.on_unmount to tear the service down.
+
+        Cancels drain tasks, snapshot timers, cancel tokens. Idempotent.
+        Post-aclose, subsequent mutation raises RuntimeError.
 
         The ABC default is a no-op — test mocks and the placeholder
         `ChatServiceRegistry` fields (all `None` today) don't need real

@@ -196,7 +196,7 @@ async def _poll_for_ui_event(
     store: SessionStore,
     thread_id: Any,
     kind: str,
-    timeout: float = 1.0,
+    timeout: float = 1.0,  # noqa: ASYNC109 — test polling deadline, not a cancel scope
 ) -> Event:
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:

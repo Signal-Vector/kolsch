@@ -26,12 +26,18 @@ this widget is a dumb view over its reactive attributes.
 
 from __future__ import annotations
 
+import contextlib
+from typing import TYPE_CHECKING
+
 from textual.containers import Horizontal
 from textual.reactive import reactive
 from textual.widgets import Static
 
 from cli.chat.metrics import format_duration
 from cli.chat.spinner import SPINNER_FRAMES, spinner_frame
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 
 class TurnStatus(Horizontal):
@@ -91,8 +97,8 @@ class TurnStatus(Horizontal):
     verb: reactive[str] = reactive("")
     target: reactive[str] = reactive("")
     elapsed_seconds: reactive[int] = reactive(0)
-    show_elapsed: reactive[bool] = reactive(False)
-    awaiting_approval: reactive[bool] = reactive(False)
+    show_elapsed: reactive[bool] = reactive(False)  # noqa: FBT003 — Textual reactive API
+    awaiting_approval: reactive[bool] = reactive(False)  # noqa: FBT003 — Textual reactive API
 
     def __init__(
         self,
@@ -109,7 +115,8 @@ class TurnStatus(Horizontal):
         self._frame_timer = None
         self._spinner_index = 0
 
-    def compose(self):  # type: ignore[override]
+    def compose(self) -> ComposeResult:  # type: ignore[override]
+        """Yield the spinner-verb, target, and elapsed status statics."""
         # IDs match the DEFAULT_CSS selectors; keep them in sync.
         yield Static("", id="spinner-verb", markup=False)
         yield Static("", id="target", markup=False)
@@ -149,24 +156,23 @@ class TurnStatus(Horizontal):
             self._render_spinner_verb()
 
     def watch_target(self, target: str) -> None:
+        """Update the ``#target`` static when the target reactive changes."""
         # Textual's Static.update accepts a plain str; the italic style
         # comes from DEFAULT_CSS.
-        try:
+        # During teardown the child may already be gone; a silent skip is
+        # fine, we don't hold state here.
+        with contextlib.suppress(Exception):
             self.query_one("#target", Static).update(target)
-        except Exception:
-            # During teardown the child may already be gone; a silent
-            # skip is fine, we don't hold state here.
-            pass
 
     def watch_elapsed_seconds(self, seconds: int) -> None:
-        try:
-            # qol-077: the formatter returns the number ONLY; the
-            # parens are widget-specific chrome and stay here.
+        """Rewrite the ``#elapsed`` static with the formatted duration."""
+        # qol-077: the formatter returns the number ONLY; the parens are
+        # widget-specific chrome and stay here.
+        with contextlib.suppress(Exception):
             self.query_one("#elapsed", Static).update(f"({format_duration(seconds)})")
-        except Exception:
-            pass
 
-    def watch_show_elapsed(self, show: bool) -> None:
+    def watch_show_elapsed(self, show: bool) -> None:  # noqa: FBT001 — Textual reactive-watcher signature
+        """Toggle the ``-show-elapsed`` class on the elapsed-visibility gate."""
         # CSS class carries the visibility; keeping the Python and CSS
         # in one place matches the spec's "framework-aligned" rule.
         if show:
@@ -174,7 +180,8 @@ class TurnStatus(Horizontal):
         else:
             self.remove_class("-show-elapsed")
 
-    def watch_awaiting_approval(self, awaiting: bool) -> None:
+    def watch_awaiting_approval(self, awaiting: bool) -> None:  # noqa: FBT001 — Textual reactive-watcher signature
+        """Toggle the ``-awaiting-approval`` class when approval is pending."""
         if awaiting:
             self.add_class("-awaiting-approval")
         else:
@@ -203,12 +210,10 @@ class TurnStatus(Horizontal):
         for handle_name in ("_elapsed_gate_timer", "_tick_timer", "_frame_timer"):
             handle = getattr(self, handle_name, None)
             if handle is not None:
-                try:
+                # Textual raises during shutdown; a stopped timer is the
+                # desired end-state regardless.
+                with contextlib.suppress(Exception):
                     handle.stop()
-                except Exception:
-                    # Textual raises during shutdown; a stopped timer
-                    # is the desired end-state regardless.
-                    pass
                 setattr(self, handle_name, None)
 
     def _reveal_elapsed(self) -> None:
@@ -230,12 +235,9 @@ class TurnStatus(Horizontal):
         """
         frame = spinner_frame(self._spinner_index) if self.verb else ""
         text = f"{frame} {self.verb}".strip()
-        try:
+        # Widget not yet mounted; ``on_mount`` will trigger the first render.
+        with contextlib.suppress(Exception):
             self.query_one("#spinner-verb", Static).update(text)
-        except Exception:
-            # Widget not yet mounted; ``on_mount`` will trigger the
-            # first render.
-            pass
 
     def on_mount(self) -> None:
         """Render whatever reactive state was set before mount.
