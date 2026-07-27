@@ -9,11 +9,13 @@ approval integration); this spec ships the widget skeleton.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Static
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 
 class ConfirmRenderer(Vertical):

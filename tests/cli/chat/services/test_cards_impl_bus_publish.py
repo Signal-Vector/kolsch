@@ -8,15 +8,18 @@ match with `EventType.UI_EVENT`, and the best-effort semantics
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from cli.chat.services.cards_impl import UI_EVENT_TOPIC, CardsImpl
-from schemas import Event
 from schemas.events import EventType
 from schemas.identifiers import SessionId, ThreadId
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    from schemas import Event
 
 
 class _MockBus:

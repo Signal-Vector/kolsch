@@ -49,11 +49,15 @@ Design notes:
 
 from __future__ import annotations
 
-from textual import events
-from textual.app import ComposeResult
+from typing import TYPE_CHECKING
+
 from textual.message import Message
 from textual.widget import Widget
 from textual.widgets import Static
+
+if TYPE_CHECKING:
+    from textual import events
+    from textual.app import ComposeResult
 
 # Prefix used by all three context rows (Tool/Args/Rule). The two
 # trailing spaces align target text at column 6 — the expanded body
@@ -233,7 +237,7 @@ class ApprovalArgsRow(Widget):
     # ------------------------------------------------------------------
 
     def _recompute_overflow(self) -> bool:
-        """Recompute ``self._overflow`` from current width + target shape.
+        r"""Recompute ``self._overflow`` from current width + target shape.
 
         A target counts as overflowing when EITHER (a) its raw length
         exceeds the available row width OR (b) it contains an embedded

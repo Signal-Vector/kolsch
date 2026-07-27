@@ -54,16 +54,18 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from textual.reactive import reactive
-from textual.widget import Widget
 from textual.widgets import Collapsible, Static
 
 from cli.chat.metrics import format_duration
 from cli.chat.spinner import SPINNER_FRAMES, spinner_frame
 from cli.chat.state_tokens import resolve_state
 from cli.chat.widgets.assistant_prose import WorkflowAnchorButton
+
+if TYPE_CHECKING:
+    from textual.widget import Widget
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -1633,10 +1635,7 @@ class WorkflowNodeRow(Collapsible):
         node_label = self._node_name
         if self._iteration_index is not None:
             node_label = f"{self._node_name}[{self._iteration_index}]"
-        if glyph == "▸":
-            base = node_label
-        else:
-            base = f"{glyph} {node_label}"
+        base = node_label if glyph == "▸" else f"{glyph} {node_label}"
         if self.state == "failed":
             # bug-063: full error moved to Error section body; keep
             # only the state glyph + node name as a short marker.

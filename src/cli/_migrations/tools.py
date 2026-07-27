@@ -156,9 +156,7 @@ class ToolsMigrationResult:
     def clean(self) -> bool:
         """True when nothing needs writing and no drift/parse-failure was found."""
         return (
-            not self.rewrites
-            and not self.user_owned_hits
-            and not self.parse_failures
+            not self.rewrites and not self.user_owned_hits and not self.parse_failures
         )
 
 

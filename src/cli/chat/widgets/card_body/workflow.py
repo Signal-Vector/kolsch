@@ -48,7 +48,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.reactive import reactive
 from textual.widgets import Static
@@ -66,6 +65,8 @@ from schemas.wire_kinds import WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT
 from workflows.events import WorkflowEventKind
 
 if TYPE_CHECKING:
+    from textual.app import ComposeResult
+
     from schemas.events import EventType as _EventType
 
 

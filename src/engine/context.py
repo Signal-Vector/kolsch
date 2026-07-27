@@ -89,8 +89,9 @@ class CombinedCancelToken(CancelToken):
     def __init__(self, *inner: CancelToken) -> None:
         super().__init__()
         if len(inner) < 1:
+            msg = "CombinedCancelToken requires at least one inner token"
             raise ValueError(
-                "CombinedCancelToken requires at least one inner token",
+                msg,
             )
         self._inner: tuple[CancelToken, ...] = inner
 

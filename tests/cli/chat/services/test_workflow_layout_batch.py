@@ -99,7 +99,7 @@ async def test_three_simultaneous_notifies_fire_one_flush() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.10,
         )
 
@@ -164,7 +164,7 @@ async def test_final_dom_order_matches_sort() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.05,
         )
 

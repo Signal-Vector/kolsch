@@ -8,12 +8,14 @@ TTY.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from cli.chat.app import ChatApp
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class _MockStore:

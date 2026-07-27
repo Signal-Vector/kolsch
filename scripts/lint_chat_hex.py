@@ -133,7 +133,9 @@ def _tokenize_css(css: str, source_name: str) -> tuple[list, int]:
     except TokenError:
         wrapped = f"{_FIXTURE_WRAPPER_SEL} {{\n{css}\n}}\n"
         try:
-            return list(tokenize(wrapped, (source_name, source_name))), -_FIXTURE_WRAPPER_HEADER_LINES
+            return list(
+                tokenize(wrapped, (source_name, source_name))
+            ), -_FIXTURE_WRAPPER_HEADER_LINES
         except TokenError as exc:
             print(
                 f"lint_chat_hex: {source_name}: unparseable CSS fragment — "
@@ -189,8 +191,10 @@ def _bypass_hits(css: str, source_name: str) -> list[tuple[int, str]]:
 def _scan(path: Path) -> list[str]:
     """Return ``path:line:content`` hits for every property-value hex in ``path``."""
     hits: list[str] = []
-    files = [path] if path.is_file() and path.suffix == ".py" else sorted(
-        path.rglob("*.py") if path.is_dir() else []
+    files = (
+        [path]
+        if path.is_file() and path.suffix == ".py"
+        else sorted(path.rglob("*.py") if path.is_dir() else [])
     )
     for py in files:
         for css, base_lineno in _default_css_strings(py):

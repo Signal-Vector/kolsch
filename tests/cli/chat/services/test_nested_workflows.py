@@ -18,8 +18,7 @@ correctly returns None.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import pytest
@@ -39,6 +38,10 @@ from workflows.events import (
 )
 from workflows.ids import TraceId, WorkflowRunId
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 
 @pytest.fixture

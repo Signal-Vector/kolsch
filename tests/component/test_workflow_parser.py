@@ -24,10 +24,9 @@ bind-collisions, timeout sign, branching arms all land in Step 5.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
-from pydantic import BaseModel
 
 from workflows.catalog_node import BUILTIN_TYPE_NAMES, CatalogNodeDef
 from workflows.errors import WorkflowInvalidRef, WorkflowValidationError
@@ -64,6 +63,9 @@ from workflows.parser import (
     WriteFileNodeDef,
     load_workflow,
 )
+
+if TYPE_CHECKING:
+    from pydantic import BaseModel
 
 # ---------------------------------------------------------------------------
 # Helpers

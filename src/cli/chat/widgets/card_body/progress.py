@@ -8,11 +8,13 @@ cards carry no cumulative history).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import ProgressBar, Static
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 
 class ProgressRenderer(Vertical):

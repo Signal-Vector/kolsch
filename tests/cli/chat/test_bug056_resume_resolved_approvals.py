@@ -25,10 +25,8 @@ Coverage:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterator
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -47,6 +45,10 @@ from schemas.wire_kinds import (
     WIRE_PROMPT_REQUESTED,
 )
 from store import SessionStore, SqliteBackend
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, AsyncIterator
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Fixture — real store + bus, ChatApp not yet booted (caller sets is_resume).

@@ -21,6 +21,7 @@ See ``docs/tutorials/write-a-card-tool.md`` for the walkthrough.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from pydantic import BaseModel
@@ -28,7 +29,9 @@ from pydantic import BaseModel
 from tools.decorator import ToolContext, tool
 from tools.services import require_services
 from tools.services.exceptions import PromptBusy
-from tools.services.prompts import PromptSource
+
+if TYPE_CHECKING:
+    from tools.services.prompts import PromptSource
 
 
 class ConfirmArgs(BaseModel):

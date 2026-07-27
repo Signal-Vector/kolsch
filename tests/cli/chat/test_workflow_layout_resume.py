@@ -137,7 +137,7 @@ async def test_resume_produces_sorted_order_not_chronological() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.01,
         )
         # Single flush at end of replay.
@@ -215,7 +215,7 @@ async def test_two_flush_passes_produce_identical_order() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()

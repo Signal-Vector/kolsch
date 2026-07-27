@@ -21,8 +21,6 @@ Six passes:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -39,6 +37,9 @@ from tools.decorator import ToolContext, ToolDefinition
 from tools.dispatch import dispatch_tool
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
+
     from providers.authz import AuthorizationProvider
 
 

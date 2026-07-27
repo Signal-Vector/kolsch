@@ -103,7 +103,7 @@ async def test_layout_manager_push_shows_strip() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: [record],
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.02,
             status_bar=status_bar,
         )
@@ -164,7 +164,7 @@ async def test_terminal_workflow_hides_strip() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: [record],
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.02,
             status_bar=status_bar,
         )

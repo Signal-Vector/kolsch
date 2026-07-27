@@ -34,9 +34,8 @@ on the reactive.
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from textual.app import ComposeResult
 from textual.reactive import reactive
 from textual.widgets import Collapsible, Static
 
@@ -44,6 +43,9 @@ from cli.chat.state_tokens import WIRE_TO_CANONICAL, resolve_state
 from cli.chat.widgets.card_body import KIND_TO_RENDERER
 from cli.chat.widgets.notice_slot import NoticeSlot
 from tools.services.card_kinds import get_kind_spec
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 # feat-019: hardcoded threshold — the ``x`` force-kill binding only
 # fires when a card has been in ``cancelling`` state for more than this

@@ -25,8 +25,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from textual import events
@@ -38,6 +37,9 @@ from cli.chat.widgets.status_bar import StatusBar
 from schemas.identifiers import SessionId, ThreadId
 from tools.services.workflows import NodeCounts
 from workflows.ids import WorkflowRunId
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _NOW = datetime.now(tz=UTC)
 

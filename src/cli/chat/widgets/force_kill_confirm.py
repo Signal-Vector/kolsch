@@ -32,8 +32,6 @@ import asyncio
 import logging
 from typing import TYPE_CHECKING, Any
 
-from textual import events
-from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widget import Widget
 from textual.widgets import Static
@@ -41,6 +39,9 @@ from textual.widgets import Static
 from cli.chat.widgets._gutter_block import GutterBlock
 
 if TYPE_CHECKING:
+    from textual import events
+    from textual.app import ComposeResult
+
     from tools.services.workflows import WorkflowRunId
 
 

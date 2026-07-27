@@ -19,10 +19,12 @@ is cleared on replace to avoid re-appending post-snapshot content.
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from textual.timer import Timer
 from textual.widgets import Markdown
+
+if TYPE_CHECKING:
+    from textual.timer import Timer
 
 _DEFAULT_FLUSH_MS = 100
 """Default flush interval (ms). spec-007 §Live markdown coalescing."""

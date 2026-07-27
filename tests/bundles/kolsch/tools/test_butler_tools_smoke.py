@@ -23,10 +23,9 @@ Assertions cover:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -52,6 +51,9 @@ from workflows.events import (
     WorkflowRunStartedEvent,
 )
 from workflows.ids import TraceId, WorkflowRunId
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 # --------------------------------------------------------------------
 # Fixtures

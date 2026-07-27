@@ -122,7 +122,7 @@ async def test_info_bar_empty_reactives_render_empty(mock_app_factory) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "width,expected_visible",
+    ("width", "expected_visible"),
     [
         # width, set-of-segment-ids-that-must-be-displayed
         (100, {"info-identity", "info-session", "info-branch", "info-cwd"}),

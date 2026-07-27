@@ -11,14 +11,18 @@ Two passes:
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import pytest
-from textual.app import App
-from textual.widget import Widget
 from textual.widgets import Static
 
 from cli.chat.widgets.approval_block import ApprovalBlock
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 
 def _make_block(*, parent_hint: str | None) -> ApprovalBlock:

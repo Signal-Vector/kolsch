@@ -36,10 +36,9 @@ import asyncio
 import contextlib
 import inspect
 import uuid
-from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -65,6 +64,9 @@ from workflows.events import (
 )
 from workflows.ids import InvocationId, TraceId, WorkflowRunId
 from workflows.run import RunDirectory, WorkflowRunStatus
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 _BUNDLE_TOOLS_DIR = Path(__file__).resolve().parents[3] / "bundles" / "kolsch" / "tools"
 
@@ -485,12 +487,6 @@ async def test_sub_agent_widgets_mount_in_expanded_node_row(
                 if ev.type == EventType.UI_EVENT:
                     data = ev.data if isinstance(ev.data, dict) else {}
                     ui_events.append(data.get("kind"))
-            print(f"DEBUG UI events: {ui_events}")
-            print(
-                f"DEBUG row.collapsed={node_row.collapsed} "
-                f"turn_count={node_row._sub_agent_turn_count}"
-            )
-            print(f"DEBUG row.query: {[type(w).__name__ for w in node_row.query('*')]}")
         assert seen == want, (
             f"expected sub-agent widgets to mount inside the row; "
             f"got {sorted(t.__name__ for t in seen)}"

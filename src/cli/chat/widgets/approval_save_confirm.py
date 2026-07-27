@@ -21,11 +21,15 @@ Escape is delivered as ``"esc"`` so the parent can map it to the
 
 from __future__ import annotations
 
-from textual.app import ComposeResult
+from typing import TYPE_CHECKING
+
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.message import Message
 from textual.widgets import Static
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 
 class ApprovalSaveConfirm(Vertical):

@@ -522,10 +522,11 @@ class ReferenceSummaryCompactionProvider:
         # `llm_for_model` factory. On short-tests where no factory is
         # wired, raise so the trigger site can fall back / skip.
         if self._llm_for_model is None:
-            raise RuntimeError(
+            msg = (
                 "ReferenceSummaryCompactionProvider.compact invoked without "
                 "an `llm_for_model` factory — no way to reach a summariser."
             )
+            raise RuntimeError(msg)
         model_spec = _resolve_summarizer_spec(summarizer_model_cfg)
         llm = await self._llm_for_model(model_spec)
 
@@ -760,7 +761,7 @@ def _build_summariser_prompt(
 
 
 def _parse_summariser_json(raw: str) -> dict[str, Any]:
-    """Parse the summariser's JSON reply; be tolerant of code-fence framing.
+    r"""Parse the summariser's JSON reply; be tolerant of code-fence framing.
 
     Accepts:
 
@@ -782,11 +783,11 @@ def _parse_summariser_json(raw: str) -> dict[str, Any]:
     try:
         parsed = json.loads(text)
     except json.JSONDecodeError as exc:
-        raise ValueError(f"summariser returned non-JSON: {exc}") from exc
+        msg = f"summariser returned non-JSON: {exc}"
+        raise ValueError(msg) from exc
     if not isinstance(parsed, dict):
-        raise ValueError(
-            f"summariser returned a non-object JSON value: {type(parsed).__name__}"
-        )
+        msg = f"summariser returned a non-object JSON value: {type(parsed).__name__}"
+        raise ValueError(msg)
     return parsed
 
 

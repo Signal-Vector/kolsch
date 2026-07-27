@@ -77,7 +77,7 @@ async def test_workflow_node_row_allows_select(mock_app_factory: _AppFactory) ->
         body_statics = [
             s for s in row.query(Static) if type(s).__name__ != "CollapsibleTitle"
         ]
-        assert body_statics or True  # WorkflowNodeRow can be empty
+        assert True  # WorkflowNodeRow can be empty
         assert all(s.ALLOW_SELECT for s in body_statics)
 
 

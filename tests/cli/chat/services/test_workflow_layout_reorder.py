@@ -110,7 +110,7 @@ async def test_three_in_progress_no_divider() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widgets.get(cid),
+            get_card_widget=widgets.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()
@@ -172,7 +172,7 @@ async def test_terminal_success_moves_to_top_and_divider_mounts() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widgets.get(cid),
+            get_card_widget=widgets.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()
@@ -238,7 +238,7 @@ async def test_terminal_error_pins_at_boundary() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widgets.get(cid),
+            get_card_widget=widgets.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()
@@ -305,7 +305,7 @@ async def test_ack_error_moves_into_terminal_band() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widgets.get(cid),
+            get_card_widget=widgets.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()

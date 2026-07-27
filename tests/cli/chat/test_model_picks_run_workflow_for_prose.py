@@ -300,7 +300,7 @@ async def test_prose_run_workflow_triggers_run_workflow_tool_call(
                             "error": (data.get("error") or {}).get("type"),
                         }
                     )
-            raise AssertionError(
+            msg = (
                 "CardWidget[kind='workflow'] did not mount within 10s. "
                 "Either run_workflow was not called (Layer 1 regression) "
                 "or the bus subscription seam is broken.\n"
@@ -309,6 +309,7 @@ async def test_prose_run_workflow_triggers_run_workflow_tool_call(
                 f"{sorted(str(n) for n in tool_names_seen_by_model)}\n"
                 f"Tool events: {tool_events!r}"
             )
+            raise AssertionError(msg)
         assert isinstance(card_widget._body, WorkflowRenderer), (
             f"card body is {type(card_widget._body).__name__}, "
             "expected WorkflowRenderer"

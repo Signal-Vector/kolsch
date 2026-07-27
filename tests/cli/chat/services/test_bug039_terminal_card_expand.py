@@ -108,7 +108,7 @@ async def test_solo_terminal_card_keeps_node_list_visible() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()
@@ -169,7 +169,7 @@ async def test_terminal_row_expand_after_completion_drains_buffer() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()
@@ -218,7 +218,7 @@ async def test_multi_in_progress_still_compacts_terminal_card() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()
@@ -266,7 +266,7 @@ async def test_terminal_card_with_one_in_progress_stays_full() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()

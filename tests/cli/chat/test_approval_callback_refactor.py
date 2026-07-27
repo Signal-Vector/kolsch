@@ -15,15 +15,17 @@ Three passes:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
 
 from cli.chat.approval import InlineApprovalCallback
 from engine.context import ExecutionContext
 from providers.authz import AuthzEffect
 from schemas.identifiers import ThreadId
-from tools.services.prompts import PromptSource
 from workflows.ids import WorkflowRunId
+
+if TYPE_CHECKING:
+    from tools.services.prompts import PromptSource
 
 
 class _MockApp:

@@ -38,9 +38,8 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
-from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -57,6 +56,9 @@ from schemas.identifiers import AgentId, SessionId, ThreadId
 from schemas.wire_kinds import WIRE_PROMPT_REQUESTED
 from store import SessionStore, SqliteBackend
 from tools.decorator import ToolContext
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 # ----------------------------------------------------------------------
 # ChatApp harness — mirrors bug-021 flagship but with a REAL authz

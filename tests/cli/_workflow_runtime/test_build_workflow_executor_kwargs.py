@@ -8,14 +8,16 @@ identical).
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from engine.context import CancelToken
 from platform_runtime import bootstrap_runtime
 from workflows.parser import load_workflow
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _HELLO_WORKFLOW_YAML = """
 nodes:

@@ -21,8 +21,7 @@ Scenarios:
 from __future__ import annotations
 
 import asyncio
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import yaml
@@ -55,6 +54,9 @@ from schemas import (
 from skills import SkillsSubsystem
 from store import SessionStore, SqliteBackend
 from tools import ToolsSubsystem
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _platform_yaml(root: Path) -> None:
@@ -218,7 +220,8 @@ class _RaisingSummariser:
 
     async def __call__(self, _request: LLMRequest) -> LLMResponse:
         self.calls += 1
-        raise RuntimeError(f"boom-{self.calls}")
+        msg = f"boom-{self.calls}"
+        raise RuntimeError(msg)
 
 
 # ---------------------------------------------------------------------------

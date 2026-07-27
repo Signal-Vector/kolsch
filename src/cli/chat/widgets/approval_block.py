@@ -52,8 +52,8 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+from typing import TYPE_CHECKING
 
-from textual.app import ComposeResult
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.widget import Widget
@@ -65,6 +65,9 @@ from cli.chat.widgets.approval_choice_pane import ApprovalChoicePane
 from cli.chat.widgets.approval_pattern_edit import ApprovalPatternEdit
 from cli.chat.widgets.approval_save_confirm import ApprovalSaveConfirm
 from providers.authz import AuthzEffect, Rule
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 # Type alias for the return contract at ``src/cli/_modal.py:168``.
 PromptCallbackReturn = AuthzEffect | tuple[AuthzEffect, Rule]

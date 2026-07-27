@@ -15,12 +15,12 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
 
-from cli.chat.app import ChatApp
 from cli.chat.services.workflows_impl import (
     WorkflowRunRecord,
     WorkflowsImpl,
@@ -34,6 +34,9 @@ from tests.bundles.kolsch.tools.conftest import (  # noqa: F401 — re-exports f
     chat_app,
 )
 from workflows.ids import WorkflowRunId
+
+if TYPE_CHECKING:
+    from cli.chat.app import ChatApp
 
 
 def test_anchor_pattern_matches_expected_shape() -> None:

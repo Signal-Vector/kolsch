@@ -13,16 +13,20 @@ Three passes:
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import pytest
-from textual.app import App
-from textual.widget import Widget
 
 from cli.chat.widgets.card_body.workflow import (
     WorkflowProgressHeader,
     WorkflowRenderer,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 
 @pytest.mark.asyncio

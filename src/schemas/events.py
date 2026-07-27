@@ -505,12 +505,13 @@ class UIEventData(_DataModel):
     @classmethod
     def _validate_dotted(cls, v: str) -> str:
         if not is_valid_kind(v):
-            raise ValueError(
+            msg = (
                 f"kind must be dotted <owner>.<domain>.<verb>; got {v!r}. "
                 "See src/schemas/wire_kinds.py for the platform set "
                 "(all `kolsch.*`). Bundle authors: prefix with your "
                 "bundle name."
             )
+            raise ValueError(msg)
         return v
 
 

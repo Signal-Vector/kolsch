@@ -17,19 +17,22 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
-from collections.abc import AsyncIterator
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
 
 from cli.chat.services.prompts_impl import PromptsImpl
 from schemas.events import EventType
-from schemas.identifiers import ThreadId
 from schemas.wire_kinds import WIRE_PROMPT_REQUESTED
 from store import SessionStore, SqliteBackend
-from tools.services.prompts import PromptSource
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
+
+    from schemas.identifiers import ThreadId
+    from tools.services.prompts import PromptSource
 
 
 @pytest.fixture

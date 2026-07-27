@@ -14,8 +14,7 @@ Four passes:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -24,6 +23,10 @@ from schemas.events import EventType
 from schemas.wire_kinds import WIRE_CARD_CLOSED
 from store import SessionStore, SqliteBackend
 from tools.services.exceptions import CardClosed
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 
 @pytest.fixture

@@ -23,10 +23,8 @@ from __future__ import annotations
 
 import asyncio
 import uuid
-from collections.abc import AsyncIterator, Callable
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -52,6 +50,10 @@ from workflows.events import (
 )
 from workflows.ids import InvocationId, TraceId, WorkflowRunId
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Callable
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Fixtures + helpers.
@@ -175,7 +177,7 @@ def _install_sub_agent_mock(
             from workflows.events import WorkflowEventKind
             from workflows.run import WorkflowRunStatus
 
-            for idx, event in enumerate(self._events):
+            for _idx, event in enumerate(self._events):
                 self._observer(event)
                 if self._per_event_delay > 0:
                     await asyncio.sleep(self._per_event_delay)

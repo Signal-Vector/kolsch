@@ -93,7 +93,7 @@ async def test_one_workflow_full_render() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()
@@ -119,7 +119,7 @@ async def test_two_workflows_full_render() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()
@@ -149,7 +149,7 @@ async def test_three_workflows_all_compact() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()
@@ -199,7 +199,7 @@ async def test_lone_terminal_and_one_in_progress_both_full() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()
@@ -239,7 +239,7 @@ async def test_multiple_terminal_cards_go_compact() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()
@@ -271,7 +271,7 @@ async def test_drop_from_three_to_two_returns_full() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()

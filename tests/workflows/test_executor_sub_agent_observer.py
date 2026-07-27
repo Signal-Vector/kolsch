@@ -26,8 +26,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -39,6 +38,9 @@ from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Helpers.

@@ -19,10 +19,8 @@ Fixture shape mirrors ``tests/cli/chat/test_bug058_replay_batch.py`` — real
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterator
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -36,6 +34,10 @@ from schemas.entities import Actor
 from schemas.events import EventType
 from schemas.identifiers import EventId
 from store import SessionStore, SqliteBackend
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, AsyncIterator
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Runtime + engine mocks (mirror bug-058's shape).

@@ -39,14 +39,16 @@ Design principles (from ``process/spec-textual-chat-ui.md``):
 
 from __future__ import annotations
 
-from typing import ClassVar
+from typing import TYPE_CHECKING, ClassVar
 
-from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.reactive import reactive
 from textual.widgets import Static
 
 from cli._slash import COMMAND_REGISTRY, SlashCommand
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 
 def _head_token(text: str) -> str:

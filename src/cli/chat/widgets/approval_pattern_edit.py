@@ -19,11 +19,15 @@ swaps children accordingly (see the Approval flow subsection of
 
 from __future__ import annotations
 
-from textual import events
-from textual.app import ComposeResult
+from typing import TYPE_CHECKING
+
 from textual.containers import Vertical
 from textual.message import Message
 from textual.widgets import Input, Static
+
+if TYPE_CHECKING:
+    from textual import events
+    from textual.app import ComposeResult
 
 
 class ApprovalPatternEdit(Vertical):

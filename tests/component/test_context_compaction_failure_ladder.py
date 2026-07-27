@@ -28,8 +28,7 @@ Covers spec §8 tier transitions + §B non-shrinking-summary retry:
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import yaml
@@ -66,6 +65,9 @@ from schemas import (
 from skills import SkillsSubsystem
 from store import SessionStore, SqliteBackend
 from tools import ToolsSubsystem
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _platform_yaml(root: Path) -> None:

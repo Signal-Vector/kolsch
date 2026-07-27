@@ -17,18 +17,21 @@ source of truth for what each widget expects at mount time.
 
 from __future__ import annotations
 
-from collections.abc import Callable
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
 from textual.app import App, ComposeResult
-from textual.widget import Widget
 
 from schemas.entities import Actor
 from schemas.events import Event, EventType
 from schemas.identifiers import EventId, SessionId, ThreadId
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.widget import Widget
 
 
 @pytest.fixture
@@ -156,7 +159,8 @@ def _canonical_data(event_type: EventType) -> dict[str, Any]:
                 "payload": {"card_id": "canonical"},
             }
     # Fail loud on any missing branch; the coverage test relies on this.
-    raise KeyError(f"conftest.canonical_event: no branch for {event_type!r}")
+    msg = f"conftest.canonical_event: no branch for {event_type!r}"
+    raise KeyError(msg)
 
 
 @pytest.fixture

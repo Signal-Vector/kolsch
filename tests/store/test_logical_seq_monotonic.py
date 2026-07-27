@@ -17,9 +17,8 @@ from __future__ import annotations
 
 import asyncio
 import json
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import pytest
@@ -34,6 +33,10 @@ from schemas import (
 from schemas.identifiers import EventId
 from store import SessionStore, SqliteBackend
 from store.jsonl import append_event_sync, jsonl_path
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 
 @pytest.fixture

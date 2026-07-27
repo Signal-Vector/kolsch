@@ -11,8 +11,7 @@ Exercises :func:`build_why_compact_card`:
 from __future__ import annotations
 
 import json
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -28,6 +27,9 @@ from tests.component.test_context_compaction_slash_compact import (
     _RecordingLLM,
 )
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 
 class _Runtime:
     def __init__(self, store: Any) -> None:
@@ -39,7 +41,7 @@ async def test_why_compact_missing_event_id_returns_none(
     tmp_path: Path,
 ) -> None:
     """AC #9 — unknown id → ``None`` (caller mounts a hint notice)."""
-    engine, store = await _build(tmp_path, compaction_provider=None)
+    _engine, store = await _build(tmp_path, compaction_provider=None)
     thread_id = await _fresh_thread(store)
     runtime = _Runtime(store)
     result = await build_why_compact_card(

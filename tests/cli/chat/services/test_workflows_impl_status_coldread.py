@@ -13,8 +13,7 @@ Three passes:
 from __future__ import annotations
 
 import json
-from collections.abc import AsyncIterator
-from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import pytest
@@ -23,6 +22,10 @@ from cli.chat.services.workflows_impl import WorkflowsImpl
 from store import SessionStore, SqliteBackend
 from workflows.ids import WorkflowRunId
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 
 @pytest.fixture

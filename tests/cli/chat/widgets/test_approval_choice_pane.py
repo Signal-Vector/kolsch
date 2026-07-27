@@ -10,9 +10,14 @@ flow → ApprovalChoicePane for the widget's contract.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from cli.chat.widgets.approval_choice_pane import ApprovalChoicePane
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 
 @pytest.mark.asyncio
@@ -74,7 +79,6 @@ async def test_pane_posts_chosen_message_for_each_key(
 
     # Rebuild with the recording host subclass so the app-level
     # handler receives the bubbled message.
-    from textual.app import ComposeResult
 
     class _RecordingApp(_Host):
         def compose(self) -> ComposeResult:

@@ -10,8 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -22,6 +21,9 @@ from schemas import Event
 from schemas.entities import Actor
 from schemas.events import EventType
 from schemas.identifiers import EventId
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class _MockAuthz:

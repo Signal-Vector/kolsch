@@ -20,7 +20,7 @@ mode: workflow runner, one-shot CLI, or any test that constructs
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -29,6 +29,9 @@ from tests.bundles.kolsch.tools.conftest import (
     _invoke_tool_via_pilot,
 )
 from tools.services.exceptions import ToolNotAvailable
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
 
 # --------------------------------------------------------------------
 # Test 1 — hello_card

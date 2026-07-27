@@ -131,7 +131,7 @@ async def test_focus_within_reverses_glyph(mock_app_factory) -> None:
     resolved style after simulating focus with the ``:focus-within``
     pseudo-class active.
     """
-    from textual.widgets import Input  # noqa: PLC0415
+    from textual.widgets import Input
 
     body = Input()  # focusable so :focus-within fires
     block = GutterBlock(
@@ -157,7 +157,7 @@ async def test_focus_within_reverses_rail_when_glyphless(mock_app_factory) -> No
     the rail's ``▎`` — the fallback focus cue for widgets like
     ``UserChatbox`` / ``AssistantProse`` that don't carry a leading glyph.
     """
-    from textual.widgets import Input  # noqa: PLC0415
+    from textual.widgets import Input
 
     body = Input()
     block = GutterBlock(

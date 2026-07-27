@@ -142,7 +142,7 @@ async def test_section_expand_collapses_via_enter() -> None:
         await row.mount_assistant_message("A", event_id="a")
         await pilot.pause()
 
-        section = list(_contents_of(row).query(NodeSection))[0]
+        section = next(iter(_contents_of(row).query(NodeSection)))
         title = section.query_one("CollapsibleTitle")
         pilot.app.screen.set_focus(title)
         await pilot.pause()
@@ -180,7 +180,7 @@ async def test_toolcallblock_inside_section_focus_order() -> None:
         await pilot.pause()
 
         # Expand the tool section so ToolCallBlock is visible.
-        section = list(_contents_of(row).query(NodeSection))[0]
+        section = next(iter(_contents_of(row).query(NodeSection)))
         section.collapsed = False
         await pilot.pause()
 
@@ -227,7 +227,7 @@ async def test_toolcallblock_expands_independently_from_section() -> None:
         )
         await pilot.pause()
 
-        section = list(_contents_of(row).query(NodeSection))[0]
+        section = next(iter(_contents_of(row).query(NodeSection)))
         from cli.chat.widgets.tool_call_block import ToolCallBlock
 
         block = section.query_one(ToolCallBlock)
@@ -270,7 +270,7 @@ async def test_focus_survives_collapse_expand_cycle() -> None:
 
         await row.mount_assistant_message("A", event_id="a")
         await pilot.pause()
-        section = list(_contents_of(row).query(NodeSection))[0]
+        section = next(iter(_contents_of(row).query(NodeSection)))
         title = section.query_one("CollapsibleTitle")
 
         # Focus title, collapse, expand.

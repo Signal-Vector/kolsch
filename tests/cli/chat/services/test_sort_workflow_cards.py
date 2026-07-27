@@ -16,11 +16,14 @@ Six passes:
 from __future__ import annotations
 
 from datetime import UTC, datetime, timedelta
+from typing import TYPE_CHECKING
 
 from cli.chat.services.workflow_layout import sort_workflow_cards
 from cli.chat.services.workflows_impl import WorkflowRunRecord
-from tools.services.workflows import WorkflowRunPhase
 from workflows.ids import WorkflowRunId
+
+if TYPE_CHECKING:
+    from tools.services.workflows import WorkflowRunPhase
 
 _BASE_TS = datetime(2026, 7, 5, 12, 0, 0, tzinfo=UTC)
 

@@ -331,10 +331,7 @@ def _describe_optional(
     probe: tuple[type, Any] | None,
 ) -> str:
     """Human-readable description for an optional per-workflow field."""
-    if probe is None:
-        default_repr = "(no probeable default)"
-    else:
-        default_repr = repr(probe[1])
+    default_repr = "(no probeable default)" if probe is None else repr(probe[1])
     if line is None:
         return (
             f"Optional value for {{{{ inputs.{name} | default(...) }}}}. "

@@ -22,10 +22,8 @@ Pilot — see the note in `test_approval_e2e.py`):
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -46,6 +44,10 @@ from store import SessionStore, SqliteBackend
 from workflows.events import WorkflowEventKind
 from workflows.ids import WorkflowRunId
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 
 class _MockApp:

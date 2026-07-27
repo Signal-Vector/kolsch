@@ -17,15 +17,19 @@ the AC #2 mock claims.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import pytest
-from textual.app import App
-from textual.widget import Widget
 
 from cli.chat.widgets.approval_args_row import ApprovalArgsRow
 from cli.chat.widgets.approval_block import ApprovalBlock
 from tests.cli.chat.snapshot_helpers import assert_snapshot_matches
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 # Deliberately long: overflows the 70-col Pilot viewport with margin
 # on either side, so the compositor definitely truncates.

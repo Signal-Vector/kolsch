@@ -15,10 +15,14 @@ tinting, and no Python-side max-row clamp — CSS + Textual's own
 
 from __future__ import annotations
 
-from textual import events
+from typing import TYPE_CHECKING
+
 from textual.message import Message
 from textual.reactive import reactive
 from textual.widgets import TextArea
+
+if TYPE_CHECKING:
+    from textual import events
 
 
 class Composer(TextArea):

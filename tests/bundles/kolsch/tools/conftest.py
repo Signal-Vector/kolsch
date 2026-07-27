@@ -23,10 +23,9 @@ registration time.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -36,6 +35,9 @@ from schemas.identifiers import AgentId, SessionId, ThreadId
 from tools.decorator import ToolContext, get_tool_definition
 from tools.discovery import discover_tools_in_file
 from tools.dispatch import _invoke_tool
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
 # --------------------------------------------------------------------
 # Bundle-tool loading

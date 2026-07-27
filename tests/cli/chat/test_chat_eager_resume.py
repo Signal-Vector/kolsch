@@ -15,8 +15,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -24,6 +23,9 @@ import pytest
 from cli.chat.app import ChatApp
 from cli.chat.widgets.composer import Composer
 from cli.chat.widgets.notice import NoticeWidget
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Runtime + engine mocks

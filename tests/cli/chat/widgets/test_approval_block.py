@@ -29,17 +29,21 @@ no longer user-editable, so the flow is 3 steps not 4):
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import pytest
-from textual.app import App
-from textual.widget import Widget
 
 from cli.chat.widgets.approval_block import ApprovalBlock
 from cli.chat.widgets.approval_choice_pane import ApprovalChoicePane
 from cli.chat.widgets.approval_pattern_edit import ApprovalPatternEdit
 from cli.chat.widgets.approval_save_confirm import ApprovalSaveConfirm
 from providers.authz import AuthzEffect, Rule
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 # --------------------------------------------------------------------
 # Helpers

@@ -14,10 +14,14 @@ Coverage:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
-from textual.app import ComposeResult
 
 from cli.chat.widgets.approval_save_confirm import ApprovalSaveConfirm
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 
 @pytest.mark.asyncio

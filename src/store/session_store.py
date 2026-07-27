@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
@@ -52,6 +51,7 @@ from store.jsonl import (
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from pathlib import Path
 
     from store.backend import EntityBackend
 

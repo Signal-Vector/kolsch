@@ -111,7 +111,9 @@ def test_resolve_state_does_not_emit_deprecation_warning() -> None:
         for name in STATE_TOKENS:
             resolve_state(name)
     dep = [w for w in caught if issubclass(w.category, DeprecationWarning)]
-    assert dep == [], f"unexpected DeprecationWarning(s): {[str(w.message) for w in dep]}"
+    assert dep == [], (
+        f"unexpected DeprecationWarning(s): {[str(w.message) for w in dep]}"
+    )
 
 
 # ---------------------------------------------------------------------------

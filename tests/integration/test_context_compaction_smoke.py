@@ -19,8 +19,7 @@ compaction, then walks the AC #15 checklist end-to-end:
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import yaml
@@ -61,6 +60,9 @@ from store import SessionStore, SqliteBackend
 from tools import ToolsSubsystem
 from tools.context_reference import make_reference_lookup
 from tools.decorator import ToolContext
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 class _Runtime:

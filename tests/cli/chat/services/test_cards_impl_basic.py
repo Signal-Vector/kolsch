@@ -15,8 +15,7 @@ Five passes:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -29,6 +28,10 @@ from schemas.wire_kinds import (
 )
 from store import SessionStore, SqliteBackend
 from tools.services.exceptions import CardClosed, UnknownCardKind
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 
 @pytest.fixture

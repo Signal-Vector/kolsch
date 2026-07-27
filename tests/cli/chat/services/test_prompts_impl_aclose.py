@@ -11,8 +11,7 @@ Three passes:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -20,7 +19,12 @@ from cli.chat.services.prompts_impl import PromptsImpl
 from schemas.events import EventType
 from schemas.wire_kinds import WIRE_PROMPT_REQUESTED
 from store import SessionStore, SqliteBackend
-from tools.services.prompts import PromptSource
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
+
+    from tools.services.prompts import PromptSource
 
 
 @pytest.fixture

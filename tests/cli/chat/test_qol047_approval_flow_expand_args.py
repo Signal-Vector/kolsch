@@ -16,16 +16,20 @@ Both AC #8 tests:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import pytest
-from textual.app import App
-from textual.widget import Widget
 from textual.widgets import Static
 
 from cli.chat.widgets.approval_args_row import ApprovalArgsRow
 from cli.chat.widgets.approval_block import ApprovalBlock
 from providers.authz import AuthzEffect
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 
 def _rendered_row_text(row: ApprovalArgsRow) -> str:

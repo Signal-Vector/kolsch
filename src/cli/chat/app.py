@@ -13,6 +13,7 @@ alt-screen / full-screen.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import io
 import logging
 import os
@@ -1106,10 +1107,8 @@ class ChatApp(App):
         await self._maybe_eager_compact_on_open()
 
         # Focus the composer so the user can start typing.
-        try:
+        with contextlib.suppress(Exception):
             self.query_one(Composer).focus()
-        except Exception:
-            pass
 
     async def _maybe_eager_compact_on_open(self) -> None:
         """Run the feat-054 Phase 5 session-open eager compaction check.
@@ -1449,10 +1448,8 @@ class ChatApp(App):
         """
         authz = self.session.runtime.authz
         if isinstance(authz, RuleBasedAuthorizationProvider):
-            try:
+            with contextlib.suppress(Exception):
                 authz.clear_prompt_callback()
-            except Exception:
-                pass
 
         # bug-020: unsubscribe the UI-event bus handler BEFORE the
         # service registry tear-down so any late-fired publish from
@@ -2515,10 +2512,8 @@ class ChatApp(App):
             event.stop()
             self._esc_toast_active = False
             if self._esc_toast_timer is not None:
-                try:
+                with contextlib.suppress(Exception):
                     self._esc_toast_timer.cancel()
-                except Exception:
-                    pass
                 self._esc_toast_timer = None
             oldest_id = self._find_oldest_running_workflow()
             if oldest_id is not None:
