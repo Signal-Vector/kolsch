@@ -348,7 +348,13 @@ class WorkflowRenderer(Vertical):
         parent_ref: str | None = None,
     ) -> None:
         super().__init__(id=id)
-        self._node_rows: dict[str, WorkflowNodeRow] = {}
+        # bug-095: keyed on the composite ``(node_name, invocation_id)``.
+        # bug-033 already rekeyed the adapter's routing map for the same
+        # reason (``node_name``/``trace_id`` alone is not unique across a
+        # run); this closes the second half at the row-dedup layer so a
+        # ``kolsch/nodes/map`` node's N same-named iterations no longer
+        # collapse to one row. Missing invocation_id → ``(name, "")``.
+        self._node_rows: dict[tuple[str, str], WorkflowNodeRow] = {}
         # bug-096: total top-level node count from the RUN_STARTED
         # manifest. When set, it pins the header denominator to a
         # stable `N` from the first tick (was `len(self._node_rows)`,
@@ -608,13 +614,15 @@ class WorkflowRenderer(Vertical):
     def _mount_placeholder_rows(self, nodes: list[dict[str, Any]]) -> None:
         """bug-096: mount one ``pending`` placeholder row per manifest node.
 
-        Rows mount in the manifest's topological order, keyed by the
-        (unique, top-level) ``node_name`` in the string-keyed
-        ``_node_rows`` map. Idempotent on a replayed RUN_STARTED — a
-        name already present is skipped rather than double-mounted.
-        Malformed entries (missing/non-string ``name`` or ``type``)
-        are dropped defensively so an old/odd payload can't crash the
-        pre-mount walk.
+        Rows mount in the manifest's topological order. bug-095: the
+        placeholder has no invocation_id yet (NODE_STARTED brings it), so
+        it lands under the ``(name, "")`` composite key; the adopt path in
+        ``_on_node_started`` rekeys it to ``(name, invocation_id)`` once
+        the real event arrives. Idempotent on a replayed RUN_STARTED — a
+        name already present (under any invocation half) is skipped rather
+        than double-mounted. Malformed entries (missing/non-string
+        ``name`` or ``type``) are dropped defensively so an old/odd
+        payload can't crash the pre-mount walk.
         """
         for entry in nodes:
             if not isinstance(entry, dict):
@@ -623,14 +631,14 @@ class WorkflowRenderer(Vertical):
             node_type = entry.get("type")
             if not isinstance(name, str) or not isinstance(node_type, str):
                 continue
-            if name in self._node_rows:
+            if any(key_name == name for key_name, _ in self._node_rows):
                 continue  # idempotent on replayed RUN_STARTED
             row = WorkflowNodeRow(
                 node_name=name,
                 node_type=node_type,
                 initial_state="pending",
             )
-            self._node_rows[name] = row
+            self._node_rows[self._row_key(name, None)] = row
             self._node_list.add_node(row)
 
     def _populate_row_from_started(
@@ -700,12 +708,24 @@ class WorkflowRenderer(Vertical):
         `WorkflowsImpl._drain_workflow_bridge`; a missing value
         (older payload shape) falls back to the trace-only sentinel
         with a WARNING log inside `_register_node_with_adapter`.
+
+        bug-095: ``_node_rows`` is keyed on ``(node_name, invocation_id)``
+        so a ``kolsch/nodes/map`` node's N same-named iterations each get
+        their own row. Iteration events (carrying ``parent_invocation_id``)
+        mount as CHILD rows inside the parent map row rather than as
+        siblings in the node list.
         """
         node_name = payload.get("node_name")
         if not isinstance(node_name, str) or not node_name:
             return
         trace_id = payload.get("trace_id")
         trace_id_val = trace_id if isinstance(trace_id, str) else None
+        # bug-095: the child's own invocation_id is hoisted top-level by
+        # the bridge; compute the composite key from it FIRST so every
+        # branch below (dedup guard, adopt, fresh-mount) keys the same.
+        invocation_id = payload.get("invocation_id")
+        invocation_id_val = invocation_id if isinstance(invocation_id, str) else None
+        key = self._row_key(node_name, invocation_id_val)
         # bug-036a: forward the node type (e.g. ``"kolsch/nodes/agent"``)
         # so the row's ``set_output`` gate can suppress the JSON
         # preview when an agent response already rendered. Executor
@@ -722,38 +742,98 @@ class WorkflowRenderer(Vertical):
             candidate = payload.get("type")
             if isinstance(candidate, str):
                 node_type_val = candidate
-        # bug-096: adopt-in-place. A placeholder pre-mounted on
-        # RUN_STARTED already sits at ``_node_rows[node_name]`` in the
-        # ``pending`` state. The pre-bug-096 early-return dedup guard
-        # would wrongly treat this first real NODE_STARTED as a replay
-        # and drop it, so it never rendered. Restructure: look the row
-        # up; if it is a pending placeholder, transition it in place
-        # (→ ``running``, populate) rather than mounting a second row.
-        existing = self._node_rows.get(node_name)
-        if existing is not None:
-            if existing.state == "pending":
-                # NODE_STARTED is authoritative for the node type —
-                # overwrite what the placeholder was pre-mounted with
-                # (the manifest and NODE_STARTED could disagree only if
-                # the catalog changed mid-run; NODE_STARTED wins).
-                if node_type_val is not None:
-                    existing._node_type = node_type_val
-                    existing._short_type = node_type_val.rsplit("/", 1)[-1]
-                existing.set_state("running")
-                self._populate_row_from_started(existing, payload)
-            # else: already started or decided — genuine replay dedup;
-            # do not mount a second row.
+        # bug-095: iteration correlation fields arrive NESTED under
+        # ``payload["payload"]`` (the executor domain payload); the
+        # bridge only hoists the child's own invocation_id top-level.
+        parent_invocation_id: str | None = None
+        iteration_index: int | None = None
+        iteration_total: int | None = None
+        if isinstance(inner, dict):
+            candidate = inner.get("parent_invocation_id")
+            if isinstance(candidate, str):
+                parent_invocation_id = candidate
+            idx = inner.get("iteration_index")
+            if isinstance(idx, int):
+                iteration_index = idx
+            tot = inner.get("iteration_total")
+            if isinstance(tot, int):
+                iteration_total = tot
+        if parent_invocation_id is None:
+            candidate = payload.get("parent_invocation_id")
+            if isinstance(candidate, str):
+                parent_invocation_id = candidate
+        # bug-095: dedup guard runs on the composite key BEFORE any
+        # stamping. A replayed NODE_STARTED for an already-mounted
+        # iteration (or node) is a no-op — the existing row's state is
+        # never reset (regression trap: a replayed START must not knock a
+        # completed iteration back to ``running``).
+        if key in self._node_rows:
             return
-        # No placeholder (old session with no manifest, or an unknown
-        # node): fresh-mount in ``running`` and populate.
+        # bug-096 + bug-095: adopt-in-place. A placeholder pre-mounted on
+        # RUN_STARTED sits under the ``(name, "")`` composite key in the
+        # ``pending`` state (it had no invocation_id yet). When the real
+        # NODE_STARTED arrives it carries the invocation_id, so its key is
+        # ``(name, invocation_id)`` — a MISS on the dedup guard above.
+        # Find the pending placeholder under ``(name, "")``, transition it
+        # in place, and REKEY it to the real composite key so subsequent
+        # COMPLETED/FAILED events (which carry the invocation_id) route to
+        # it. Iterations never adopt a placeholder (a map spawns rows for
+        # names it pre-mounted only as the single map header, not the
+        # per-iteration applied node), so this branch is guarded off the
+        # top-level path (``parent_invocation_id is None``).
+        if parent_invocation_id is None:
+            placeholder_key = self._row_key(node_name, None)
+            existing = self._node_rows.get(placeholder_key)
+            if existing is not None:
+                if existing.state == "pending":
+                    # NODE_STARTED is authoritative for the node type —
+                    # overwrite what the placeholder was pre-mounted with
+                    # (manifest and NODE_STARTED could disagree only if the
+                    # catalog changed mid-run; NODE_STARTED wins).
+                    if node_type_val is not None:
+                        existing._node_type = node_type_val
+                        existing._short_type = node_type_val.rsplit("/", 1)[-1]
+                    existing._invocation_id = invocation_id_val
+                    existing.set_state("running")
+                    # Rekey ``(name, "")`` → ``(name, invocation_id)`` so
+                    # terminal events route to the adopted row.
+                    if placeholder_key != key:
+                        del self._node_rows[placeholder_key]
+                        self._node_rows[key] = existing
+                    self._populate_row_from_started(existing, payload)
+                # else: already started or decided — genuine replay dedup;
+                # do not mount a second row.
+                return
+        # Fresh-mount in ``running`` and populate.
         row = WorkflowNodeRow(
             node_name=node_name,
             trace_id=trace_id_val,
             node_type=node_type_val,
+            invocation_id=invocation_id_val,
             initial_state="running",
         )
-        self._node_rows[node_name] = row
-        self._node_list.add_node(row)
+        # bug-095: iteration event → mount as a CHILD of the parent map
+        # row instead of a sibling in the node list.
+        if parent_invocation_id is not None:
+            parent = self._find_row_by_invocation_id(parent_invocation_id)
+            if parent is not None:
+                row._is_iteration_child = True
+                parent.add_iteration_child(
+                    row,
+                    iteration_index if iteration_index is not None else 0,
+                    iteration_total if iteration_total is not None else 0,
+                )
+            else:
+                _LOGGER.warning(
+                    "bug-095: parent map row not found for iteration "
+                    "invocation_id=%s (node %s); mounting at workflow level.",
+                    parent_invocation_id,
+                    node_name,
+                )
+                self._node_list.add_node(row)
+        else:
+            self._node_list.add_node(row)
+        self._node_rows[key] = row
         self._populate_row_from_started(row, payload)
 
     def _on_node_completed(self, payload: dict[str, Any]) -> None:
@@ -769,7 +849,7 @@ class WorkflowRenderer(Vertical):
         node_name = payload.get("node_name")
         if not isinstance(node_name, str):
             return
-        row = self._node_rows.get(node_name)
+        row = self._lookup_row(payload)
         if row is None:
             return
         details = None
@@ -816,7 +896,7 @@ class WorkflowRenderer(Vertical):
         node_name = payload.get("node_name")
         if not isinstance(node_name, str):
             return
-        row = self._node_rows.get(node_name)
+        row = self._lookup_row(payload)
         if row is None:
             return
         error_preview: str | None = None
@@ -846,15 +926,16 @@ class WorkflowRenderer(Vertical):
 
         bug-096: a pruned node (branch never taken) now renders as its
         own ``skipped`` state (was ``cancelled``/``─``), visually
-        distinct from a user-cancelled run. The row is found via the
-        unchanged string-keyed ``_node_rows.get(node_name)`` — a
-        pruned placeholder that never started is adopted for free
-        because the key is the stable ``node_name``.
+        distinct from a user-cancelled run. bug-095: the row is found via
+        ``_lookup_row`` — a pruned placeholder that never started still
+        sits under the ``(node_name, "")`` key (its synthetic
+        invocation_id never matched a live row), and the composite-key
+        lookup falls back to it.
         """
         node_name = payload.get("node_name")
         if not isinstance(node_name, str):
             return
-        row = self._node_rows.get(node_name)
+        row = self._lookup_row(payload)
         if row is None:
             return
         row.set_state("skipped")
@@ -869,10 +950,11 @@ class WorkflowRenderer(Vertical):
         """feat-104: route a `workflow.node.called_workflow` into the row.
 
         The parent's ``kolsch/nodes/workflow`` node row (found by the
-        hoisted top-level ``node_name``, via the same string-keyed
-        ``_node_rows.get`` lookup the other node handlers use — bug-096
-        kept the map string-keyed) gains a forward link to the child
-        sub-workflow's peer card. ``child_workflow_run_id`` /
+        hoisted top-level ``node_name``, via the same ``_lookup_row``
+        composite-key lookup the other node handlers use — bug-095
+        rekeyed ``_node_rows`` to ``(name, invocation_id)``) gains a
+        forward link to the child sub-workflow's peer card.
+        ``child_workflow_run_id`` /
         ``child_workflow_ref`` live under the NESTED ``payload["payload"]``
         (the domain-event body), mirroring how ``_on_node_completed``
         reads ``inner = payload.get("payload")``.
@@ -885,7 +967,7 @@ class WorkflowRenderer(Vertical):
         node_name = payload.get("node_name")
         if not isinstance(node_name, str):
             return
-        row = self._node_rows.get(node_name)
+        row = self._lookup_row(payload)
         if row is None:
             return
         inner = payload.get("payload")
@@ -909,7 +991,7 @@ class WorkflowRenderer(Vertical):
         node_name = payload.get("node_name")
         if not isinstance(node_name, str):
             return
-        row = self._node_rows.get(node_name)
+        row = self._lookup_row(payload)
         if row is None:
             return
         inner = payload.get("payload")
@@ -931,7 +1013,9 @@ class WorkflowRenderer(Vertical):
         node_name = payload.get("node_name")
         if not isinstance(node_name, str) or not node_name:
             return
-        row = self._node_rows.get(node_name)
+        # bug-095: approval payloads carry no invocation_id — resolve by
+        # name (approval nodes are top-level, never map iterations).
+        row = self._find_row_by_name(node_name)
         if row is None:
             return
         row.set_state("paused")
@@ -1003,8 +1087,19 @@ class WorkflowRenderer(Vertical):
         # Adapter-less fallback: dispatch through the row's sink
         # methods directly. Used by unit tests that construct the
         # renderer without an EventAdapter.
+        #
+        # bug-095: route on the composite ``(node_name, invocation_id)``
+        # key so a sub-agent event for a specific map iteration lands on
+        # that iteration's child row — NOT the first same-named sibling.
+        # ``invocation_id`` is already validated non-None above.
         node_name = payload.get("node_name")
-        row = self._node_rows.get(node_name) if isinstance(node_name, str) else None
+        row: WorkflowNodeRow | None = None
+        if isinstance(node_name, str):
+            row = self._node_rows.get(self._row_key(node_name, invocation_id))
+        if row is None:
+            # Fall back to invocation-only match (covers rows registered
+            # under a name that differs from the envelope's node_name).
+            row = self._find_row_by_invocation_id(invocation_id)
         if row is None:
             return
         self._dispatch_reconstructed_to_row(row, reconstructed)
@@ -1134,7 +1229,9 @@ class WorkflowRenderer(Vertical):
         node_name = payload.get("node_name")
         if not isinstance(node_name, str) or not node_name:
             return
-        row = self._node_rows.get(node_name)
+        # bug-095: approval payloads carry no invocation_id — resolve by
+        # name (approval nodes are top-level, never map iterations).
+        row = self._find_row_by_name(node_name)
         if row is None:
             return
         row.set_state("running")
@@ -1211,14 +1308,24 @@ class WorkflowRenderer(Vertical):
         # from the first tick (was `len(self._node_rows)`, which grew
         # as nodes fired → the `1/1, 2/2, 3/3` climb). Fall back to the
         # live row count on old sessions with no manifest.
+        # bug-095: iteration child rows (a map's per-iteration applied
+        # nodes) do NOT count toward the workflow's static DAG node
+        # count — a 35-iteration map is still ONE DAG node. Filter them
+        # from both the denominator's live-count fallback and the
+        # completed numerator. The compact-mode summary reads
+        # ``_header._completed`` / ``_total``, so it inherits this filter
+        # transitively (no separate compact edit).
+        top_level_rows = [
+            row for row in self._node_rows.values() if not row._is_iteration_child
+        ]
         total = (
             self._planned_node_count
             if self._planned_node_count is not None
-            else len(self._node_rows)
+            else len(top_level_rows)
         )
         completed = sum(
             1
-            for row in self._node_rows.values()
+            for row in top_level_rows
             if row.state in ("success", "failed", "cancelled", "skipped")
         )
         elapsed = self._elapsed_now()
@@ -1286,6 +1393,91 @@ class WorkflowRenderer(Vertical):
         with contextlib.suppress(TypeError):
             return max(0.0, (anchor - self._start_time).total_seconds())
         return 0.0
+
+    # ------------------------------------------------------------------
+    # bug-095: composite-key helpers
+    # ------------------------------------------------------------------
+
+    def _row_key(
+        self,
+        node_name: str,
+        invocation_id: str | None,
+    ) -> tuple[str, str]:
+        """bug-095: derive the ``(node_name, invocation_id)`` map key.
+
+        Missing invocation_id (older payload shape / replay) collapses to
+        the ``(node_name, "")`` sentinel — matching bug-033's routing-map
+        fallback so ancient JSONL sessions still dedup on ``node_name``.
+        """
+        return (node_name, invocation_id or "")
+
+    def _lookup_row(
+        self,
+        payload: dict[str, Any],
+    ) -> WorkflowNodeRow | None:
+        """bug-095: resolve a row for a per-node event from its payload.
+
+        Tries the composite ``(node_name, invocation_id)`` key first (the
+        common path — a started node rekeys to its real invocation_id).
+        Falls back to the ``(node_name, "")`` placeholder key so events
+        that carry no matching invocation_id still land — chiefly
+        NODE_PRUNED for a branch-pruned placeholder that never started
+        (its synthetic invocation_id never matched a live row) and
+        old-shape sessions with no invocation_id at all.
+        """
+        node_name = payload.get("node_name")
+        if not isinstance(node_name, str):
+            return None
+        invocation_id = payload.get("invocation_id")
+        invocation_id_val = invocation_id if isinstance(invocation_id, str) else None
+        row = self._node_rows.get(self._row_key(node_name, invocation_id_val))
+        if row is not None:
+            return row
+        if invocation_id_val is not None:
+            return self._node_rows.get(self._row_key(node_name, None))
+        return None
+
+    def _find_row_by_name(self, node_name: str) -> WorkflowNodeRow | None:
+        """bug-095: resolve a row by ``node_name`` when no invocation_id.
+
+        The approval-lifecycle events
+        (``kolsch.workflow.node.awaiting_approval`` /
+        ``.approval_resolved``) and the adapter-less sub-agent fallback
+        carry only ``run_id`` + ``node_name`` — no invocation_id — so
+        they can't use the composite key. Approval nodes are ordinary
+        top-level nodes (never map iterations), so a name match is
+        unambiguous: return the first row whose ``node_name`` matches,
+        preferring a NON-iteration-child row (iterations share the
+        applied node's name but never independently pause / receive
+        adapter-less routing).
+        """
+        fallback: WorkflowNodeRow | None = None
+        for (key_name, _), row in self._node_rows.items():
+            if key_name != node_name:
+                continue
+            if not row._is_iteration_child:
+                return row
+            if fallback is None:
+                fallback = row
+        return fallback
+
+    def _find_row_by_invocation_id(
+        self,
+        invocation_id: str,
+    ) -> WorkflowNodeRow | None:
+        """bug-095: locate a row by the composite KEY's invocation half.
+
+        Linear scan of ``_node_rows`` matching ``key[1] == invocation_id``.
+        Used by ``_on_node_started`` to find a map iteration's parent row.
+        The composite key is the authoritative source for the lookup (the
+        row's own ``_invocation_id`` slot exists only for the
+        ``add_iteration_child`` idempotency comparison). Fine at N of
+        tens, worst case low hundreds.
+        """
+        for (_, key_invocation), row in self._node_rows.items():
+            if key_invocation == invocation_id:
+                return row
+        return None
 
     # ------------------------------------------------------------------
     # Adapter registration hooks (spec-013 §EventAdapter trace_id routing)

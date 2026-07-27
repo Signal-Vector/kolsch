@@ -263,7 +263,7 @@ async def test_child_agent_node_drill_in_shows_sub_agent_detail(
         )
         await pilot.pause()
 
-        row = child._node_rows["classify"]
+        row = child._node_rows[("classify", "inv_classify")]
         row.collapsed = False
         await pilot.pause()
 
@@ -329,7 +329,8 @@ async def test_child_agent_node_drill_in_via_adapter(
         child.register_adapter(adapter)
 
         row = WorkflowNodeRow(node_name="classify", trace_id="tr_shared")
-        child._node_rows["classify"] = row
+        # bug-095: _node_rows is composite-keyed (name, invocation_id).
+        child._node_rows[("classify", "inv_c")] = row
         adapter._live_nodes_by_trace_and_invocation[("tr_shared", "inv_c")] = row
 
         sa_payload = _mk_sub_agent_payload(

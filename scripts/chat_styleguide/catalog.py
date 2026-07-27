@@ -191,6 +191,29 @@ def _drive_workflow_call_link(w: Any) -> None:  # noqa: ANN401
     w.set_child_status("succeeded")
 
 
+def _drive_workflow_map_iterations(w: Any) -> None:  # noqa: ANN401
+    # bug-095: a `kolsch/nodes/map` row with collapsed iteration children.
+    # Each iteration is a child `WorkflowNodeRow` mounted inside the map
+    # row's Contents via `add_iteration_child`, titled `<name>[<i>]`. With
+    # a total of 12 (>10) the children collapse by default; the map row's
+    # title carries the live rollup `(map · N iterations · X done, Y
+    # running, Z failed)`. Drive a mix of states so the rollup is non-trivial.
+    w.set_state("running")
+    total = 12
+    states = {0: "success", 1: "success", 2: "failed"}
+    for i in range(total):
+        child = WorkflowNodeRow(
+            node_name="score_one_resume",
+            trace_id="tr_map",
+            node_type="kolsch/nodes/agent",
+            invocation_id=f"inv_child_{i}",
+        )
+        w.add_iteration_child(child, i, total)
+        target = states.get(i)
+        if target is not None:
+            child.set_state(target)
+
+
 def _expand_approval_args_row(w: Any) -> None:  # noqa: ANN401
     w._expanded = True
     w._refresh_static()
@@ -306,6 +329,27 @@ CATALOG: list[CatalogEntry] = [
         ),
         states={
             "workflow_call": _drive_workflow_call_link,
+        },
+        expand_collapsible=True,
+    ),
+    CatalogEntry(
+        # bug-095: a `kolsch/nodes/map` node row with its per-iteration
+        # child rows collapsed underneath. Captures the `<name>[<i>]`
+        # child-title suffix + the `(map · N iterations · X done, Y
+        # running, Z failed)` rollup on the map header. Distinct catalog
+        # name so it does not disturb the WorkflowNodeRow state-set
+        # validation.
+        name="WorkflowMapIterations",
+        family="transcript",
+        source_file="workflow_node_row.py",
+        make=lambda: WorkflowNodeRow(
+            node_name="score_resumes",
+            trace_id="tr_map",
+            node_type="kolsch/nodes/map",
+            invocation_id="inv_map",
+        ),
+        states={
+            "map_iterations": _drive_workflow_map_iterations,
         },
         expand_collapsible=True,
     ),

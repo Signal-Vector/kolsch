@@ -280,6 +280,40 @@ Both fire the same app action on Enter/click —
 transcript to the target card; the `▸` glyph is deliberately distinct
 from the backward `↳` connector.
 
+### Map-iteration child rows
+
+A `kolsch/nodes/map` node fans one applied node out over N inputs. Each
+iteration is a full `WorkflowNodeRow` in its own right, but it is
+rendered as a **child row nested inside the map row's
+`Collapsible.Contents`** — never as a sibling in the flat
+`WorkflowNodeList` (bug-095). The renderer keys its `_node_rows` map on
+the composite `(node_name, invocation_id)`, so the N same-named
+iterations no longer collapse to one row the way a `node_name`-only key
+did.
+
+Layout conventions:
+
+- **Child title suffix** — an iteration child's name carries its 0-based
+  index in brackets: `score_one_resume[0]`, `score_one_resume[1]`, … .
+  Non-iteration rows are unchanged (no bracket). Children are ordered by
+  `iteration_index`, not by arrival / completion order, so the on-screen
+  index is a stable coordinate for cross-referencing logs.
+- **Collapse threshold** — children collapse by default when the map has
+  **more than 10** iterations (a legibility threshold); a 5-iteration map
+  shows its children expanded. A user who click-expands a specific
+  iteration is not re-collapsed.
+- **Map-header rollup** — the map row's own title carries a live counter
+  `(map · N iterations · X done, Y running, Z failed)`, recomputed on
+  every child state change (`done` = `success`; `failed` = `failed` /
+  `cancelled`; `running` = everything else). It shares the plain title
+  style — no extra color or glyph.
+- **Header denominator** — iteration children do **not** count toward the
+  workflow-card header's `N/M` progress: a 30-iteration map is still one
+  DAG node. The compact-mode summary inherits this filter transitively.
+
+The `WorkflowMapIterations` gallery specimen captures a >10-iteration map
+with a mixed rollup (`… · 2 done, 9 running, 1 failed`).
+
 ---
 
 ## 5. NO_COLOR / mono

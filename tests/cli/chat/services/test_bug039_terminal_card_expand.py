@@ -141,7 +141,8 @@ async def test_terminal_row_expand_after_completion_drains_buffer() -> None:
         # Mount a node row inside the workflow renderer.
         renderer = widgets[0]._body
         row = WorkflowNodeRow(node_name="n")
-        renderer._node_rows["n"] = row
+        # bug-095: _node_rows is composite-keyed (name, invocation_id).
+        renderer._node_rows[("n", "")] = row
         renderer._node_list.add_node(row)
         await pilot.pause()
 

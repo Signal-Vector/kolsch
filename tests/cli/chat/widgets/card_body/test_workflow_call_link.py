@@ -134,7 +134,7 @@ async def test_called_workflow_mounts_link_and_title_hint(mock_app_factory) -> N
         )
         await pilot.pause()
 
-        row = renderer._node_rows["call_child"]
+        row = renderer._node_rows[("call_child", "inv_call_child")]
         links = list(row.query(WorkflowCallLink))
         assert len(links) == 1
         link = links[0]
@@ -307,7 +307,7 @@ async def test_non_workflow_row_ignores_child_calls(mock_app_factory) -> None:
         )
         await pilot.pause()
 
-        row = renderer._node_rows["run_bash"]
+        row = renderer._node_rows[("run_bash", "inv_run_bash")]
 
         renderer.apply_event(
             _MockEvent(
@@ -367,7 +367,7 @@ async def test_replayed_called_workflow_mounts_one_link(mock_app_factory) -> Non
         renderer.apply_event(called)
         await pilot.pause()
 
-        row = renderer._node_rows["call_child"]
+        row = renderer._node_rows[("call_child", "inv_call_child")]
         assert len(list(row.query(WorkflowCallLink))) == 1
 
 

@@ -444,11 +444,29 @@ class WorkflowNodeRow(Collapsible):
         node_name: str,
         trace_id: str | None = None,
         node_type: str | None = None,
+        invocation_id: str | None = None,
         initial_state: str = "running",
     ) -> None:
         self._node_name = node_name
         self._trace_id = trace_id
         self._node_type = node_type
+        # bug-095: the row's own invocation_id. The renderer keys its
+        # ``_node_rows`` map on ``(node_name, invocation_id)`` and passes
+        # the payload's top-level ``invocation_id`` through here. Rows did
+        # NOT carry this before — ``add_iteration_child`` needs it to
+        # compare a stored iteration child against an incoming one (the
+        # same-index-different-invocation idempotency guard).
+        self._invocation_id: str | None = invocation_id
+        # bug-095: map-iteration child machinery. A ``kolsch/nodes/map``
+        # row collects one child row per iteration keyed by
+        # ``iteration_index`` (0-based); each child is stamped with its
+        # index / total / a back-pointer to the parent map row so its
+        # ``set_state`` transitions roll up into the parent's title.
+        self._iteration_children: dict[int, WorkflowNodeRow] = {}
+        self._is_iteration_child: bool = False
+        self._iteration_index: int | None = None
+        self._iteration_total: int | None = None
+        self._parent_map_row: WorkflowNodeRow | None = None
         self._short_type: str | None = (
             node_type.rsplit("/", 1)[-1] if node_type else None
         )
@@ -605,6 +623,9 @@ class WorkflowNodeRow(Collapsible):
         self._update_title()
         if state == "failed":
             self._mount_failure_sections()
+        # bug-095: an iteration child's state change rolls up into the
+        # parent map row's title counter (X done, Y running, Z failed).
+        self._notify_parent_state_change()
 
     def set_output(self, output: Any) -> None:
         """bug-032 + bug-034 + bug-037: mount output section(s).
@@ -885,6 +906,87 @@ class WorkflowNodeRow(Collapsible):
             self._node_completed_at = ts
         if duration_ms is not None:
             self._node_duration_ms = duration_ms
+
+    # ------------------------------------------------------------------
+    # bug-095: map-iteration child rows
+    # ------------------------------------------------------------------
+
+    def add_iteration_child(
+        self,
+        child_row: WorkflowNodeRow,
+        iteration_index: int,
+        iteration_total: int,
+    ) -> WorkflowNodeRow:
+        """bug-095: mount ``child_row`` as this map row's iteration ``[i]``.
+
+        A ``kolsch/nodes/map`` node spawns N iterations of one applied
+        node; each iteration is rendered as a CHILD row inside this map
+        row's ``Collapsible.Contents``, index-ordered by
+        ``iteration_index`` (0-based) regardless of arrival order.
+
+        Idempotent on a repeated ``iteration_index``: returns the stored
+        child unchanged. If the incoming child's ``_invocation_id``
+        differs from the stored child's, that is an executor bug
+        (two distinct invocations claiming the same iteration slot) —
+        log a WARNING and keep the original.
+
+        Collapse-by-default at N>10 is a legibility threshold: children
+        of a large map start collapsed so the map header stays legible.
+        A user who click-expands a specific iteration is not overridden
+        (this method never re-collapses an existing child).
+        """
+        existing = self._iteration_children.get(iteration_index)
+        if existing is not None:
+            if existing._invocation_id != child_row._invocation_id:
+                _LOGGER.warning(
+                    "bug-095: iteration_index=%s on map node %s already "
+                    "mounted with invocation_id=%s; ignoring a second "
+                    "invocation_id=%s (executor bug — duplicate iteration "
+                    "slot).",
+                    iteration_index,
+                    self._node_name,
+                    existing._invocation_id,
+                    child_row._invocation_id,
+                )
+            return existing
+        # Stamp the child so its title reads ``<name>[<index>]`` and its
+        # state transitions roll up into this map row's title.
+        child_row._iteration_index = iteration_index
+        child_row._iteration_total = iteration_total
+        child_row._parent_map_row = self
+        child_row._is_iteration_child = True
+        child_row._update_title()
+        # Collapse-by-default only for large maps (>10). Small maps show
+        # their iterations expanded. WorkflowNodeRow constructs collapsed,
+        # so a small map must explicitly expand.
+        child_row.collapsed = iteration_total > 10
+        # Insert index-ordered: mount BEFORE the first already-mounted
+        # child whose index is greater than this one; append when none.
+        before_widget: WorkflowNodeRow | None = None
+        for key in sorted(self._iteration_children.keys()):
+            if key > iteration_index:
+                before_widget = self._iteration_children[key]
+                break
+        self._iteration_children[iteration_index] = child_row
+        with contextlib.suppress(Exception):
+            self._mount_in_contents(child_row, before=before_widget)
+        # Refresh this map row's title so the rollup counter appears as
+        # soon as the first child mounts.
+        self._update_title()
+        return child_row
+
+    def _notify_parent_state_change(self) -> None:
+        """bug-095: tell the parent map row one of its children changed.
+
+        Called at the end of :meth:`set_state`. A no-op for non-iteration
+        rows (``_parent_map_row is None``).
+        """
+        if self._parent_map_row is not None:
+            self._parent_map_row._on_child_state_changed()
+
+    def _on_child_state_changed(self) -> None:
+        """bug-095: refresh the map row's rollup title after a child change."""
+        self._update_title()
 
     # ------------------------------------------------------------------
     # bug-036d: ChatMountSink implementation
@@ -1295,10 +1397,16 @@ class WorkflowNodeRow(Collapsible):
         # `─`) are cross/warning/rule characters — different family,
         # no collision, keep them. Spinner frames (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`) are
         # braille dots — no collision, keep.
+        # bug-095: an iteration child's name carries the iteration index
+        # as a bracket suffix (``score_one_resume[3]``). Non-iteration
+        # rows (``_iteration_index is None``) are unchanged.
+        node_label = self._node_name
+        if self._iteration_index is not None:
+            node_label = f"{self._node_name}[{self._iteration_index}]"
         if glyph == "▸":
-            base = self._node_name
+            base = node_label
         else:
-            base = f"{glyph} {self._node_name}"
+            base = f"{glyph} {node_label}"
         if self.state == "failed":
             # bug-063: full error moved to Error section body; keep
             # only the state glyph + node name as a short marker.
@@ -1317,7 +1425,31 @@ class WorkflowNodeRow(Collapsible):
         # ``_child_ref`` (the gate lives in ``set_child_workflow``).
         if self._child_ref is not None:
             base += f"   ▸ {self._child_ref}"
+        # bug-095: a map row with iteration children carries a live
+        # rollup counter — `(map · N iterations · X done, Y running,
+        # Z failed)`. Recomputed here (like the sub-agent counter) so
+        # the ~80 ms spinner tick can't clobber a one-shot append.
+        if self._iteration_children:
+            base += f"   {self._iteration_rollup()}"
         self.title = base
+
+    def _iteration_rollup(self) -> str:
+        """bug-095: `(map · N iterations · X done, Y running, Z failed)`.
+
+        ``done`` = ``success``; ``failed`` = ``failed``/``cancelled``;
+        ``running`` = everything else (including ``paused`` — iterations
+        never independently pause today, but handle it defensively as a
+        still-in-flight state).
+        """
+        children = self._iteration_children.values()
+        total = len(children)
+        done = sum(1 for c in children if c.state == "success")
+        failed = sum(1 for c in children if c.state in ("failed", "cancelled"))
+        running = total - done - failed
+        return (
+            f"(map · {total} iterations · "
+            f"{done} done, {running} running, {failed} failed)"
+        )
 
     def _truncate_preview(
         self,
@@ -1333,7 +1465,12 @@ class WorkflowNodeRow(Collapsible):
     # bug-035 mount-tree helper (unchanged)
     # ------------------------------------------------------------------
 
-    def _mount_in_contents(self, widget: Widget) -> None:
+    def _mount_in_contents(
+        self,
+        widget: Widget,
+        *,
+        before: Widget | None = None,
+    ) -> None:
         """bug-035: mount ``widget`` inside the Collapsible's Contents slot.
 
         Textual's :class:`Collapsible.compose_add_child` only wires
@@ -1344,12 +1481,22 @@ class WorkflowNodeRow(Collapsible):
         responds to the ``.-collapsed > Contents { display: none }``
         CSS, so sibling mounts stay visible regardless of the row's
         collapsed state.
+
+        bug-095: ``before`` forwards to Textual's
+        ``Widget.mount(widget, before=other)`` so map-iteration children
+        can be inserted index-ordered rather than always appended. A
+        ``before`` widget that isn't a live sibling of ``Contents`` (the
+        row hasn't composed yet) falls through to a plain append.
         """
         try:
             contents = self.query_one(Collapsible.Contents)
         except Exception:  # noqa: BLE001 — Contents not composed yet
             contents = None
         if contents is not None:
+            if before is not None:
+                with contextlib.suppress(Exception):
+                    contents.mount(widget, before=before)
+                    return
             contents.mount(widget)
             return
         # Row not fully mounted yet — mount at the outer level.

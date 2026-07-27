@@ -106,9 +106,11 @@ async def test_run_started_premounts_pending_placeholders(mock_app_factory) -> N
         renderer.apply_event(_MockEvent(_WIRE, payload))
         await pilot.pause()
 
-        assert set(renderer._node_rows) == {"a", "b"}
-        row_a = renderer._node_rows["a"]
-        row_b = renderer._node_rows["b"]
+        # bug-095: placeholders land under the ``(name, "")`` composite
+        # key (no invocation_id until NODE_STARTED brings it).
+        assert set(renderer._node_rows) == {("a", ""), ("b", "")}
+        row_a = renderer._node_rows[("a", "")]
+        row_b = renderer._node_rows[("b", "")]
         assert row_a.state == "pending"
         assert row_b.state == "pending"
         # Both carry the `.-pending` CSS class; neither spins
@@ -153,7 +155,7 @@ async def test_node_started_adopts_placeholder_in_place(mock_app_factory) -> Non
             )
         )
         await pilot.pause()
-        placeholder_a = renderer._node_rows["a"]
+        placeholder_a = renderer._node_rows[("a", "")]
 
         renderer.apply_event(
             _MockEvent(
@@ -168,12 +170,14 @@ async def test_node_started_adopts_placeholder_in_place(mock_app_factory) -> Non
         await pilot.pause()
 
         # No new row — still exactly a + b, and the SAME object adopted.
-        assert set(renderer._node_rows) == {"a", "b"}
-        assert renderer._node_rows["a"] is placeholder_a
+        # bug-095: adopting ``a`` rekeys ``("a", "")`` → ``("a", "inv_a")``;
+        # ``b`` is still a pending placeholder under ``("b", "")``.
+        assert set(renderer._node_rows) == {("a", "inv_a"), ("b", "")}
+        assert renderer._node_rows[("a", "inv_a")] is placeholder_a
         assert placeholder_a.state == "running"
         assert not placeholder_a.has_class("-pending")
         # b untouched.
-        assert renderer._node_rows["b"].state == "pending"
+        assert renderer._node_rows[("b", "")].state == "pending"
         # Header still 0/2 (a is running, not decided).
         assert "0/2" in str(renderer._header.render())
 
@@ -224,7 +228,7 @@ async def test_node_completed_after_adopt(mock_app_factory) -> None:
         )
         await pilot.pause()
 
-        assert renderer._node_rows["a"].state == "success"
+        assert renderer._node_rows[("a", "inv_a")].state == "success"
         assert "1/2" in str(renderer._header.render())
 
 
@@ -270,7 +274,10 @@ async def test_node_pruned_transitions_pending_to_skipped(mock_app_factory) -> N
         )
         await pilot.pause()
 
-        row_a = renderer._node_rows["a"]
+        # bug-095: the pruned placeholder was never adopted, so it stays
+        # under ``("a", "")``; the synthetic prune invocation_id misses
+        # the composite key and ``_lookup_row`` falls back to it.
+        row_a = renderer._node_rows[("a", "")]
         assert row_a.state == "skipped"
         assert row_a.has_class("-skipped")
         assert "⊘" in row_a.title
@@ -306,8 +313,8 @@ async def test_old_shape_run_started_without_nodes(mock_app_factory) -> None:
             )
         )
         await pilot.pause()
-        assert set(renderer._node_rows) == {"z"}
-        assert renderer._node_rows["z"].state == "running"
+        assert set(renderer._node_rows) == {("z", "inv_z")}
+        assert renderer._node_rows[("z", "inv_z")].state == "running"
         # Fallback denominator = len(_node_rows) = 1.
         assert "0/1" in str(renderer._header.render())
 
@@ -345,7 +352,7 @@ async def test_adopted_placeholder_registers_with_adapter() -> None:
         )
     )
     # Placeholder present, not yet in the routing map.
-    assert renderer._node_rows["b"].state == "pending"
+    assert renderer._node_rows[("b", "")].state == "pending"
     assert (
         "tr_run",
         "inv_b",
@@ -364,9 +371,10 @@ async def test_adopted_placeholder_registers_with_adapter() -> None:
             ),
         )
     )
-    assert renderer._node_rows["b"].state == "running"
+    # bug-095: adopting ``b`` rekeys ``("b", "")`` → ``("b", "inv_b")``.
+    assert renderer._node_rows[("b", "inv_b")].state == "running"
     routed = adapter._live_nodes_by_trace_and_invocation.get(("tr_run", "inv_b"))
-    assert routed is renderer._node_rows["b"]
+    assert routed is renderer._node_rows[("b", "inv_b")]
 
 
 # ---------------------------------------------------------------------------
@@ -398,8 +406,8 @@ async def test_placeholder_for_nested_workflow_node(mock_app_factory) -> None:
         )
         await pilot.pause()
         # Exactly one placeholder — no cross-card pre-mount of children.
-        assert set(renderer._node_rows) == {"sub"}
-        assert renderer._node_rows["sub"]._node_type == "kolsch/nodes/workflow"
+        assert set(renderer._node_rows) == {("sub", "")}
+        assert renderer._node_rows[("sub", "")]._node_type == "kolsch/nodes/workflow"
 
         renderer.apply_event(
             _MockEvent(
@@ -412,9 +420,13 @@ async def test_placeholder_for_nested_workflow_node(mock_app_factory) -> None:
             )
         )
         await pilot.pause()
-        assert set(renderer._node_rows) == {"sub"}
-        assert renderer._node_rows["sub"].state == "running"
-        assert renderer._node_rows["sub"]._node_type == "kolsch/nodes/workflow"
+        # bug-095: adopting rekeys ``("sub", "")`` → ``("sub", "inv_sub")``.
+        assert set(renderer._node_rows) == {("sub", "inv_sub")}
+        assert renderer._node_rows[("sub", "inv_sub")].state == "running"
+        assert (
+            renderer._node_rows[("sub", "inv_sub")]._node_type
+            == "kolsch/nodes/workflow"
+        )
 
 
 # ---------------------------------------------------------------------------

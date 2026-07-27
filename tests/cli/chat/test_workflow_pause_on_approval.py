@@ -82,7 +82,7 @@ async def test_node_row_paused_on_awaiting_approval() -> None:
             ),
         )
     )
-    row = renderer._node_rows["n1"]
+    row = renderer._node_rows[("n1", "")]
     assert row.state == "running"
 
     # Dispatch the awaiting_approval event.
@@ -115,7 +115,7 @@ async def test_node_row_running_on_approval_resolved() -> None:
             ),
         )
     )
-    row = renderer._node_rows["n1"]
+    row = renderer._node_rows[("n1", "")]
 
     # Pause first.
     renderer.apply_event(
@@ -165,8 +165,8 @@ async def test_unrelated_node_unaffected() -> None:
             ),
         )
     )
-    row_n1 = renderer._node_rows["n1"]
-    row_n2 = renderer._node_rows["n2"]
+    row_n1 = renderer._node_rows[("n1", "")]
+    row_n2 = renderer._node_rows[("n2", "")]
 
     renderer.apply_event(
         _mk_approval_event(
