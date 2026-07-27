@@ -154,10 +154,12 @@ that can't be wrapped without breaking their contract.
 | `CompactionBlock` (default) | `border-left: outer $tool-fg` | cyan | `compaction_block.py:61` |
 | `CompactionBlock.-failed` | `border-left: outer $error` | red | `compaction_block.py:68` |
 | `CompactionBlock.-skipped/-revoked` | `border-left: outer $hint` | dim | `compaction_block.py:69,70` |
-| `WorkflowNodeRow` (default) | `border-left: outer $tool-fg` | cyan | `workflow_node_row.py:295` |
-| `WorkflowNodeRow.-failed` | `border-left: outer $error` | red | `workflow_node_row.py:299` |
-| `WorkflowNodeRow.-paused` | `border-left: outer $warning` | amber | `workflow_node_row.py:300` |
-| `WorkflowNodeRow.-pruned` | `border-left: outer $hint` | dim | `workflow_node_row.py:302` |
+| `WorkflowNodeRow` (default) | `border-left: outer $tool-fg` | cyan | `workflow_node_row.py:314` |
+| `WorkflowNodeRow.-failed` | `border-left: outer $error` | red | `workflow_node_row.py:316` |
+| `WorkflowNodeRow.-paused` | `border-left: outer $warning` | amber | `workflow_node_row.py:317` |
+| `WorkflowNodeRow.-cancelled` | `border-left: outer $hint` | dim | `workflow_node_row.py:319` |
+| `WorkflowNodeRow.-pending` | `border-left: outer $hint` | dim | `workflow_node_row.py:320` |
+| `WorkflowNodeRow.-skipped` | `border-left: outer $hint` | dim | `workflow_node_row.py:321` |
 
 ### Focus
 

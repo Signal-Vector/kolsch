@@ -207,7 +207,9 @@ async def test_node_failed_error_lands_in_error_section(mock_app_factory) -> Non
 
 
 @pytest.mark.asyncio
-async def test_node_pruned_transitions_to_pruned(mock_app_factory) -> None:
+async def test_node_pruned_transitions_to_skipped(mock_app_factory) -> None:
+    # bug-096: a pruned node now renders as its own `skipped` state
+    # (glyph `⊘`) rather than reusing `cancelled` (`─`).
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
     async with app.run_test() as pilot:
@@ -232,8 +234,8 @@ async def test_node_pruned_transitions_to_pruned(mock_app_factory) -> None:
         )
         await pilot.pause()
         row = renderer._node_rows["c"]
-        assert row.state == "cancelled"
-        assert "─" in row.title
+        assert row.state == "skipped"
+        assert "⊘" in row.title
 
 
 @pytest.mark.asyncio

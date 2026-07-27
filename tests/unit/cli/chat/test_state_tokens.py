@@ -41,11 +41,14 @@ _EXPECTED_CANONICAL: dict[str, tuple[str, str, str]] = {
     "awaiting": ("⚠", "$warning", "bold italic"),
     "cancelling": ("⧗", "$warning", "bold italic"),
     "cancelled": ("─", "$hint", "dim"),
+    # bug-096: distinct pre-mount / branch-skip states.
+    "pending": ("○", "$hint", "dim"),
+    "skipped": ("⊘", "$hint", "dim"),
 }
 
 
 def test_canonical_states_cover_the_full_vocabulary() -> None:
-    """`STATE_TOKENS` exposes exactly the 8 canonical names."""
+    """`STATE_TOKENS` exposes exactly the 10 canonical names."""
     assert set(STATE_TOKENS) == set(_EXPECTED_CANONICAL), (
         "STATE_TOKENS drifted from the qol-075 canonical vocabulary"
     )

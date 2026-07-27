@@ -623,6 +623,21 @@ class IterativeExecutor:
         }
         if self._workflow.concurrency == "auto":
             started_payload["concurrency_mode"] = "auto"
+        # bug-096: emit the topological node manifest so the chat UI
+        # can pre-mount a placeholder row per top-level node on
+        # RUN_STARTED (see `WorkflowRenderer._mount_placeholder_rows`).
+        # `topo` excludes map-worker-only templates (their iteration
+        # children mount dynamically); `predecessors` is the full
+        # reachability closure, sorted alphabetically for byte-stable
+        # JSONL. Additive-optional — ancient sessions replay unchanged.
+        started_payload["nodes"] = [
+            {
+                "name": n,
+                "type": _node_type_ref(self._workflow.nodes[n]),
+                "predecessors": sorted(predecessors[n]),
+            }
+            for n in topo
+        ]
         self._last_event_id = self._emit_event(
             WorkflowRunStartedEvent(
                 workflow_run_id=run_id,

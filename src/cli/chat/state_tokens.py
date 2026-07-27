@@ -31,7 +31,8 @@ class StateToken:
     """A rendered state's glyph + color + text-style triple.
 
     - ``glyph`` — the Unicode leading character for the state
-      (``✓``, ``✗``, ``▸``, ``⋯``, ``⚠``, ``⧗``, ``─``). While a
+      (``✓``, ``✗``, ``▸``, ``⋯``, ``⚠``, ``⧗``, ``─``, ``○``, ``⊘``).
+      While a
       widget is *animating* a state (see ``_ANIMATED_STATES`` in
       ``workflow_node_row.py``) the spinner-frame table overrides
       this glyph — the token's ``glyph`` is the resting/static
@@ -59,10 +60,18 @@ STATE_TOKENS: dict[str, StateToken] = {
     "awaiting": StateToken("⚠", "$warning", "bold italic"),
     "cancelling": StateToken("⧗", "$warning", "bold italic"),
     "cancelled": StateToken("─", "$hint", "dim"),
+    # bug-096: distinct pre-mount / branch-skip states. `pending`
+    # (`○`) is the placeholder a workflow card mounts for every
+    # top-level node on RUN_STARTED before it fires; `skipped` (`⊘`)
+    # is a node the executor pruned (branch never taken). Both are
+    # dim `$hint` — visually distinct from user-`cancelled` (`─`) and
+    # `queued` (`⋯`).
+    "pending": StateToken("○", "$hint", "dim"),
+    "skipped": StateToken("⊘", "$hint", "dim"),
 }
 """Canonical state → token map.
 
-The eight canonical names are the vocabulary every chat widget uses
+The ten canonical names are the vocabulary every chat widget uses
 internally. Callers passing state strings to widget APIs
 (``set_state``, ``apply_status``) must use these names; the
 :data:`WIRE_TO_CANONICAL` map handles the one-shot translation

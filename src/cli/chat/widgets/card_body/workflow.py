@@ -349,6 +349,13 @@ class WorkflowRenderer(Vertical):
     ) -> None:
         super().__init__(id=id)
         self._node_rows: dict[str, WorkflowNodeRow] = {}
+        # bug-096: total top-level node count from the RUN_STARTED
+        # manifest. When set, it pins the header denominator to a
+        # stable `N` from the first tick (was `len(self._node_rows)`,
+        # which grew as nodes fired → the `1/1, 2/2, 3/3` climb). Stays
+        # `None` on old sessions with no manifest → fallback to
+        # `len(self._node_rows)`.
+        self._planned_node_count: int | None = None
         self._run_id: str | None = None
         self._workflow_ref: str | None = None
         self._start_time: datetime | None = None
@@ -582,52 +589,65 @@ class WorkflowRenderer(Vertical):
         if ts is not None:
             self._start_time = ts
             self._last_ts = ts
+        # bug-096: pre-mount a placeholder row per top-level node from
+        # the topological manifest. The bridge nests the executor
+        # domain payload under the envelope's ``payload`` key (see
+        # ``workflows_impl._drain_workflow_bridge``), so the manifest
+        # arrives at ``payload["payload"]["nodes"]`` — the SAME nested
+        # path ``inputs`` uses above, NOT top-level. Reading top-level
+        # ``payload.get("nodes")`` would pre-mount nothing.
+        nodes = inner.get("nodes") if isinstance(inner, dict) else None
+        if isinstance(nodes, list):
+            self._planned_node_count = len(nodes)
+            self._mount_placeholder_rows(nodes)
 
-    def _on_node_started(self, payload: dict[str, Any]) -> None:
-        """Mount a `WorkflowNodeRow`; register `(trace_id, invocation_id)`.
+    def _mount_placeholder_rows(self, nodes: list[dict[str, Any]]) -> None:
+        """bug-096: mount one ``pending`` placeholder row per manifest node.
 
-        bug-033: extracts `invocation_id` from the payload alongside
-        `trace_id` so the adapter's routing map can key on the
-        per-node composite. `invocation_id` is hoisted at the
-        envelope top level by
-        `WorkflowsImpl._drain_workflow_bridge`; a missing value
-        (older payload shape) falls back to the trace-only sentinel
-        with a WARNING log inside `_register_node_with_adapter`.
+        Rows mount in the manifest's topological order, keyed by the
+        (unique, top-level) ``node_name`` in the string-keyed
+        ``_node_rows`` map. Idempotent on a replayed RUN_STARTED — a
+        name already present is skipped rather than double-mounted.
+        Malformed entries (missing/non-string ``name`` or ``type``)
+        are dropped defensively so an old/odd payload can't crash the
+        pre-mount walk.
         """
-        node_name = payload.get("node_name")
-        if not isinstance(node_name, str) or not node_name:
-            return
+        for entry in nodes:
+            if not isinstance(entry, dict):
+                continue
+            name = entry.get("name")
+            node_type = entry.get("type")
+            if not isinstance(name, str) or not isinstance(node_type, str):
+                continue
+            if name in self._node_rows:
+                continue  # idempotent on replayed RUN_STARTED
+            row = WorkflowNodeRow(
+                node_name=name,
+                node_type=node_type,
+                initial_state="pending",
+            )
+            self._node_rows[name] = row
+            self._node_list.add_node(row)
+
+    def _populate_row_from_started(
+        self,
+        row: WorkflowNodeRow,
+        payload: dict[str, Any],
+    ) -> None:
+        """bug-096: populate a row from a NODE_STARTED payload.
+
+        Extracted from the former inline body of ``_on_node_started``
+        so BOTH the adopt-in-place branch (a pre-mounted placeholder)
+        and the fresh-mount branch (no manifest / unknown node) share
+        one populate path — no duplication. Registers the row with the
+        adapter's ``(trace_id, invocation_id)`` routing map so an
+        adopted agent placeholder still receives its sub-agent events.
+        """
+        inner = payload.get("payload")
         trace_id = payload.get("trace_id")
         trace_id_val = trace_id if isinstance(trace_id, str) else None
         invocation_id = payload.get("invocation_id")
         invocation_id_val = invocation_id if isinstance(invocation_id, str) else None
-        # bug-036a: forward the node type (e.g. ``"kolsch/nodes/agent"``)
-        # so the row's ``set_output`` gate can suppress the JSON
-        # preview when an agent response already rendered. Executor
-        # emits ``type`` nested under ``payload.payload`` (see the
-        # NODE_STARTED envelope shape); fall back to a top-level
-        # ``payload.type`` for older payload shapes just in case.
-        node_type_val: str | None = None
-        inner = payload.get("payload")
-        if isinstance(inner, dict):
-            candidate = inner.get("type")
-            if isinstance(candidate, str):
-                node_type_val = candidate
-        if node_type_val is None:
-            candidate = payload.get("type")
-            if isinstance(candidate, str):
-                node_type_val = candidate
-        if node_name in self._node_rows:
-            # Idempotent — a replay of the same NODE_STARTED shouldn't
-            # mount a second row.
-            return
-        row = WorkflowNodeRow(
-            node_name=node_name,
-            trace_id=trace_id_val,
-            node_type=node_type_val,
-        )
-        self._node_rows[node_name] = row
-        self._node_list.add_node(row)
         # bug-037: stash bound inputs BEFORE set_command_preview so
         # bash rows can render `bound inputs:` inside their `input`
         # section. Reversing the order leaves the section without
@@ -665,6 +685,72 @@ class WorkflowRenderer(Vertical):
             trace_id_val,
             invocation_id_val,
         )
+
+    def _on_node_started(self, payload: dict[str, Any]) -> None:
+        """Mount a `WorkflowNodeRow`; register `(trace_id, invocation_id)`.
+
+        bug-033: extracts `invocation_id` from the payload alongside
+        `trace_id` so the adapter's routing map can key on the
+        per-node composite. `invocation_id` is hoisted at the
+        envelope top level by
+        `WorkflowsImpl._drain_workflow_bridge`; a missing value
+        (older payload shape) falls back to the trace-only sentinel
+        with a WARNING log inside `_register_node_with_adapter`.
+        """
+        node_name = payload.get("node_name")
+        if not isinstance(node_name, str) or not node_name:
+            return
+        trace_id = payload.get("trace_id")
+        trace_id_val = trace_id if isinstance(trace_id, str) else None
+        # bug-036a: forward the node type (e.g. ``"kolsch/nodes/agent"``)
+        # so the row's ``set_output`` gate can suppress the JSON
+        # preview when an agent response already rendered. Executor
+        # emits ``type`` nested under ``payload.payload`` (see the
+        # NODE_STARTED envelope shape); fall back to a top-level
+        # ``payload.type`` for older payload shapes just in case.
+        node_type_val: str | None = None
+        inner = payload.get("payload")
+        if isinstance(inner, dict):
+            candidate = inner.get("type")
+            if isinstance(candidate, str):
+                node_type_val = candidate
+        if node_type_val is None:
+            candidate = payload.get("type")
+            if isinstance(candidate, str):
+                node_type_val = candidate
+        # bug-096: adopt-in-place. A placeholder pre-mounted on
+        # RUN_STARTED already sits at ``_node_rows[node_name]`` in the
+        # ``pending`` state. The pre-bug-096 early-return dedup guard
+        # would wrongly treat this first real NODE_STARTED as a replay
+        # and drop it, so it never rendered. Restructure: look the row
+        # up; if it is a pending placeholder, transition it in place
+        # (→ ``running``, populate) rather than mounting a second row.
+        existing = self._node_rows.get(node_name)
+        if existing is not None:
+            if existing.state == "pending":
+                # NODE_STARTED is authoritative for the node type —
+                # overwrite what the placeholder was pre-mounted with
+                # (the manifest and NODE_STARTED could disagree only if
+                # the catalog changed mid-run; NODE_STARTED wins).
+                if node_type_val is not None:
+                    existing._node_type = node_type_val
+                    existing._short_type = node_type_val.rsplit("/", 1)[-1]
+                existing.set_state("running")
+                self._populate_row_from_started(existing, payload)
+            # else: already started or decided — genuine replay dedup;
+            # do not mount a second row.
+            return
+        # No placeholder (old session with no manifest, or an unknown
+        # node): fresh-mount in ``running`` and populate.
+        row = WorkflowNodeRow(
+            node_name=node_name,
+            trace_id=trace_id_val,
+            node_type=node_type_val,
+            initial_state="running",
+        )
+        self._node_rows[node_name] = row
+        self._node_list.add_node(row)
+        self._populate_row_from_started(row, payload)
 
     def _on_node_completed(self, payload: dict[str, Any]) -> None:
         """Transition the row to `completed`; inline any summary.
@@ -752,14 +838,22 @@ class WorkflowRenderer(Vertical):
         )
 
     def _on_node_pruned(self, payload: dict[str, Any]) -> None:
-        """Transition the row to `pruned` (glyph `─`)."""
+        """Transition the row to `skipped` (glyph `⊘`).
+
+        bug-096: a pruned node (branch never taken) now renders as its
+        own ``skipped`` state (was ``cancelled``/``─``), visually
+        distinct from a user-cancelled run. The row is found via the
+        unchanged string-keyed ``_node_rows.get(node_name)`` — a
+        pruned placeholder that never started is adopted for free
+        because the key is the stable ``node_name``.
+        """
         node_name = payload.get("node_name")
         if not isinstance(node_name, str):
             return
         row = self._node_rows.get(node_name)
         if row is None:
             return
-        row.set_state("cancelled")
+        row.set_state("skipped")
         trace_id = payload.get("trace_id")
         invocation_id = payload.get("invocation_id")
         self._unregister_node_from_adapter(
@@ -1053,11 +1147,20 @@ class WorkflowRenderer(Vertical):
 
     def _update_header(self) -> None:
         """Refresh the header counters from the current node state."""
-        total = len(self._node_rows)
+        # bug-096: pin the denominator to the planned node count from
+        # the RUN_STARTED manifest so the header reads a stable `0/N`
+        # from the first tick (was `len(self._node_rows)`, which grew
+        # as nodes fired → the `1/1, 2/2, 3/3` climb). Fall back to the
+        # live row count on old sessions with no manifest.
+        total = (
+            self._planned_node_count
+            if self._planned_node_count is not None
+            else len(self._node_rows)
+        )
         completed = sum(
             1
             for row in self._node_rows.values()
-            if row.state in ("success", "failed", "cancelled")
+            if row.state in ("success", "failed", "cancelled", "skipped")
         )
         elapsed = self._elapsed_now()
         self._header.update_progress(completed, total, elapsed)

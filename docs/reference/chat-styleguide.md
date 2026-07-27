@@ -101,7 +101,9 @@ Legacy widget-specific state names (`completed`, `error`,
 | `✗` | terminal failure | leading title glyph | `failed` | `compaction_block.py:210` (`failure`), `node_section.py:39` (error color) |
 | `⧗` | cancelling | leading title glyph | `cancelling` | — |
 | `⚠` | paused / warning | leading title glyph | `paused`, `awaiting` | — |
-| `─` | pruned / cancelled | leading title glyph | `cancelled` (legacy `pruned` aliases) | — |
+| `─` | run cancelled | leading title glyph | `cancelled` | — |
+| `○` | pending — pre-mounted placeholder node | leading title glyph | `pending` | `approval_block.py` (breadcrumb `○` — unrelated) |
+| `⊘` | skipped — branch-pruned node | leading title glyph | `skipped` | — |
 | `▸` | running (static) / collapsed | leading glyph **and** collapse chevron | `running` (legacy `starting` aliases) | `approval_args_row.py:65` (`_CHEVRON_COLLAPSED`) — ⚑ **double meaning** |
 | `▾` | expanded | collapse chevron | — | `approval_args_row.py:66` (`_CHEVRON_EXPANDED`) — pairs with `▸` |
 | `⋯` | queued | leading title glyph | `queued` (legacy `initializing` aliases) | — |
@@ -132,7 +134,19 @@ The canonical state names (source of truth: `src/cli/chat/state_tokens.py`):
 | `paused`     | `⚠` | `$warning` | `bold italic` | — |
 | `awaiting`   | `⚠` | `$warning` | `bold italic` | — |
 | `cancelling` | `⧗` | `$warning` | `bold italic` | — |
-| `cancelled`  | `─` | `$hint`    | `dim`  | `pruned` |
+| `cancelled`  | `─` | `$hint`    | `dim`  | — |
+| `pending`    | `○` | `$hint`    | `dim`  | — |
+| `skipped`    | `⊘` | `$hint`    | `dim`  | — |
+
+`pending` and `skipped` are bug-096 additions (distinct canonical
+states, not reuses of `queued`/`cancelled`). A workflow card now
+pre-mounts every top-level node as a `pending` (`○`, dim) placeholder
+row on `workflow.run.started` — so the full run shape is visible
+immediately — then adopts each placeholder in place as its
+`NODE_STARTED` (→ `running`) or `NODE_PRUNED` (→ `skipped`, `⊘`) event
+arrives. A node that the executor pruned (branch never taken) renders
+as `skipped`; `cancelled` (`─`) is now reserved for a user-cancelled
+run.
 
 Legacy alias resolution emits a `DeprecationWarning` (see the
 `_LEGACY_ALIASES` table); the aliases are the one-release bridge for

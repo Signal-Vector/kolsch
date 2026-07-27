@@ -85,8 +85,17 @@ grow unbounded while a sub-agent runs.
 """
 
 
-_TERMINAL_STATES = frozenset({"success", "failed", "cancelling", "cancelled"})
-"""spec-021: states that freeze the pending-mount queue."""
+_TERMINAL_STATES = frozenset(
+    {"success", "failed", "cancelling", "cancelled", "skipped"}
+)
+"""spec-021: states that freeze the pending-mount queue.
+
+bug-096: ``skipped`` (a branch-pruned node that never ran) joins the
+freeze set — a node the executor pruned will never produce sub-agent
+mounts, so freezing its buffer is correct. ``pending`` is
+deliberately NOT here: a placeholder must still accept mounts once it
+adopts on NODE_STARTED, so its buffer stays live.
+"""
 
 
 _BASH_SHAPE_KEYS = frozenset({"stdout", "stderr", "exit_code"})
@@ -308,6 +317,8 @@ class WorkflowNodeRow(Collapsible):
     WorkflowNodeRow.-paused     { color: $warning; border-left: outer $warning; }
     WorkflowNodeRow.-cancelling { color: $tool-fg; opacity: 0.6; border-left: outer $tool-fg; }
     WorkflowNodeRow.-cancelled  { color: $hint;    border-left: outer $hint; }
+    WorkflowNodeRow.-pending    { color: $hint;    border-left: outer $hint; }
+    WorkflowNodeRow.-skipped    { color: $hint;    border-left: outer $hint; }
     """
 
     # State glyphs live in `src/cli/chat/state_tokens.py` — the
@@ -317,8 +328,26 @@ class WorkflowNodeRow(Collapsible):
     # scaffolding are gone. Widget internals key on canonical names
     # directly.
 
-    _TERMINAL_CSS_STATES = ("success", "failed", "paused", "cancelling", "cancelled")
-    """States that map to a `.-<state>` CSS class."""
+    _TERMINAL_CSS_STATES = (
+        "success",
+        "failed",
+        "paused",
+        "cancelling",
+        "cancelled",
+        "pending",
+        "skipped",
+    )
+    """States that map to a `.-<state>` CSS class.
+
+    bug-096: this set is NO LONGER strictly "terminal" — it is the set
+    of states `watch_state` iterates to remove/apply the `.-<state>`
+    CSS class. It now includes the NON-terminal ``pending`` (the
+    pre-mount placeholder rail) alongside ``skipped``. Buffer-freeze
+    keys on the SEPARATE ``_TERMINAL_STATES`` frozenset, so adding
+    ``pending`` here paints the ``.-pending`` rail WITHOUT freezing the
+    mount buffer — the exact separation that makes a non-terminal
+    colored rail safe.
+    """
 
     _ERROR_PREVIEW_MAX_LEN = 60
     """Coordinator #4 lock — fixed 60 char error preview truncation."""
@@ -342,6 +371,7 @@ class WorkflowNodeRow(Collapsible):
         node_name: str,
         trace_id: str | None = None,
         node_type: str | None = None,
+        initial_state: str = "running",
     ) -> None:
         self._node_name = node_name
         self._trace_id = trace_id
@@ -409,10 +439,32 @@ class WorkflowNodeRow(Collapsible):
         # ``SPINNER_FRAMES[0]`` — same visual, canonical source; the
         # bug-036b snapshot golden pins on the same character either
         # way, so no snapshot regeneration is triggered here.
-        title = f"{SPINNER_FRAMES[0]} {node_name}"
+        # bug-096: the leading glyph is spinner-frame 0 ONLY for the
+        # animated ``running`` state (a freshly-mounted in-flight
+        # node). A non-animated ``initial_state`` (``pending``) starts
+        # with its resting canonical glyph (``○``) so a placeholder
+        # never appears to spin before its first frame tick.
+        if initial_state in _ANIMATED_STATES:
+            leading_glyph = SPINNER_FRAMES[0]
+        else:
+            try:
+                leading_glyph = resolve_state(initial_state).glyph
+            except KeyError:
+                leading_glyph = "?"
+        title = f"{leading_glyph} {node_name}"
         if self._short_type:
             title += f" ({self._short_type})"
         super().__init__(title=title, collapsed=True)
+        # bug-096: assign the reactive AFTER ``super().__init__`` so
+        # ``watch_state`` fires and applies the ``.-<state>`` class
+        # (e.g. ``.-pending``). The spinner-stop branch inside
+        # ``watch_state`` is a no-op here (``_spinner_handle`` is
+        # ``None`` until ``on_mount``); ``pending`` is not in
+        # ``_TERMINAL_STATES`` so no buffer-freeze. The ``running``
+        # default already matches the reactive default — skip the
+        # assignment so existing rows behave exactly as before.
+        if initial_state != "running":
+            self.state = initial_state
 
     # ------------------------------------------------------------------
     # Lifecycle

@@ -271,6 +271,9 @@ CATALOG: list[CatalogEntry] = [
             "paused": lambda w: w.set_state("paused"),
             "cancelling": lambda w: w.set_state("cancelling"),
             "pruned": lambda w: w.set_state("pruned"),
+            # bug-096: pre-mount placeholder (`○`) + branch-skip (`⊘`).
+            "pending": lambda w: w.set_state("pending"),
+            "skipped": lambda w: w.set_state("skipped"),
         },
         expand_collapsible=True,
     ),
@@ -639,6 +642,9 @@ def validate_catalog(catalog: list[CatalogEntry]) -> None:
                 "paused",
                 "cancelling",
                 "pruned",
+                # bug-096: pre-mount placeholder + branch-skip states.
+                "pending",
+                "skipped",
             }
         ),
         "CardWidget": frozenset(
