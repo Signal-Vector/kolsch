@@ -104,7 +104,7 @@ Legacy widget-specific state names (`completed`, `error`,
 | `─` | run cancelled | leading title glyph | `cancelled` | — |
 | `○` | pending — pre-mounted placeholder node | leading title glyph | `pending` | `approval_block.py` (breadcrumb `○` — unrelated) |
 | `⊘` | skipped — branch-pruned node | leading title glyph | `skipped` | — |
-| `▸` | running (static) / collapsed | leading glyph **and** collapse chevron | `running` (legacy `starting` aliases) | `approval_args_row.py:65` (`_CHEVRON_COLLAPSED`) — ⚑ **double meaning** |
+| `▸` | running (static) / collapsed / workflow-card anchor | leading glyph, collapse chevron **and** focusable card-link bracket | `running` (legacy `starting` aliases) | `approval_args_row.py:65` (`_CHEVRON_COLLAPSED`) — ⚑ **double meaning**; `assistant_prose.py:113` (`WorkflowAnchorButton` `[▸ …]`); `workflow_node_row.py` (`WorkflowCallLink` `[▸ <child_ref> · <status>]`, feat-104) |
 | `▾` | expanded | collapse chevron | — | `approval_args_row.py:66` (`_CHEVRON_EXPANDED`) — pairs with `▸` |
 | `⋯` | queued | leading title glyph | `queued` (legacy `initializing` aliases) | — |
 | `…` | truncation ellipsis | trailing, in overflow | — | `approval_args_row.py:67` (`_ELLIPSIS`) |
@@ -165,10 +165,13 @@ index into it. See qol-076.
 
 ### ⚑ `▸` double meaning
 
-`▸` is both the **running-state glyph** (`STATE_TOKENS['running']` in
-`src/cli/chat/state_tokens.py`) and the **collapsed-chevron** for
-collapsible rows (`_CHEVRON_COLLAPSED`, `approval_args_row.py:65`). Note
-that while a node is *animating* it actually renders the braille spinner
+`▸` is the **running-state glyph** (`STATE_TOKENS['running']` in
+`src/cli/chat/state_tokens.py`), the **collapsed-chevron** for
+collapsible rows (`_CHEVRON_COLLAPSED`, `approval_args_row.py:65`), and
+the **focusable card-anchor bracket** (`[▸ …]`, `WorkflowAnchorButton` /
+`WorkflowCallLink` — see [§4 Focusable card-anchor
+links](#focusable-card-anchor-links)). Note that while a node is
+*animating* it actually renders the braille spinner
 (`workflow_node_row.py` picks `_SPINNER_FRAMES` for animated states),
 so `▸` is the static/non-animating running glyph — but it still
 collides with the collapse chevron's meaning.
@@ -253,6 +256,29 @@ so palette-var resolution happens in the stylesheet where it works,
 not via inline `styles.color` (which rejects palette-var strings).
 
 ![Composer idle — user-border rail on the left, no heavy bars](chat-widgets/svg/composer-idle-color.svg)
+
+### Focusable card-anchor links
+
+Two widgets render a **focusable inline reference to a workflow card**
+using one shared visual — the `[▸ <label>]` bracket in `$tool-fg`
+(cyan) `bold`, inverting to `bold reverse` on `:focus`:
+
+- `WorkflowAnchorButton` (`assistant_prose.py`, feat-018) — the
+  assistant embeds `[<label>](kolsch-anchor://workflow_card/<run_id>)`
+  markup; the prose swaps the match for this button inline.
+- `WorkflowCallLink` (`workflow_node_row.py`, feat-104) — a
+  `WorkflowAnchorButton` subclass mounted inside a
+  `kolsch/nodes/workflow` node row's Contents. It renders
+  `[▸ <child_ref> · <status>]` (status: `running` while live, then
+  `✓ succeeded` / `✗ failed` / `⚠ waiting`) and, alongside a
+  `▸ <child_ref>` collapsed-title hint, is the **forward** pointer from
+  a parent workflow node to its child sub-workflow's peer card (the
+  dual of the child card's backward `↳ from <parent>` breadcrumb).
+
+Both fire the same app action on Enter/click —
+`ChatApp.action_scroll_to_workflow_card(run_id)` — which scrolls the
+transcript to the target card; the `▸` glyph is deliberately distinct
+from the backward `↳` connector.
 
 ---
 

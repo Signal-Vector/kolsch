@@ -178,6 +178,19 @@ def _drive_workflow_content(w: Any) -> None:  # noqa: ANN401
         )
 
 
+def _drive_workflow_call_link(w: Any) -> None:  # noqa: ANN401
+    # feat-104: a `kolsch/nodes/workflow` row that has called a child
+    # sub-workflow. `set_child_workflow` mounts the focusable
+    # `WorkflowCallLink` ([▸ <child_ref> · <status>]) in the row's
+    # Contents + a `▸ <child_ref>` collapsed-title hint;
+    # `set_child_status` then updates the suffix to `✓ succeeded`. The
+    # row is already mounted when this driver runs, so the
+    # `_mount_in_contents` path resolves the Contents slot.
+    w.set_state("success")
+    w.set_child_workflow("wrk_child_deploy", "kolsch/workflows/deploy-child")
+    w.set_child_status("succeeded")
+
+
 def _expand_approval_args_row(w: Any) -> None:  # noqa: ANN401
     w._expanded = True
     w._refresh_static()
@@ -274,6 +287,25 @@ CATALOG: list[CatalogEntry] = [
             # bug-096: pre-mount placeholder (`○`) + branch-skip (`⊘`).
             "pending": lambda w: w.set_state("pending"),
             "skipped": lambda w: w.set_state("skipped"),
+        },
+        expand_collapsible=True,
+    ),
+    CatalogEntry(
+        # feat-104: a `kolsch/nodes/workflow` node row carrying the
+        # focusable forward link to its child sub-workflow's peer card.
+        # Distinct catalog name (not "WorkflowNodeRow") so it captures
+        # the `WorkflowCallLink` specimen without disturbing the
+        # node-row state-set validation.
+        name="WorkflowCallLink",
+        family="transcript",
+        source_file="workflow_node_row.py",
+        make=lambda: WorkflowNodeRow(
+            node_name="call_child",
+            trace_id="tr_wf",
+            node_type="kolsch/nodes/workflow",
+        ),
+        states={
+            "workflow_call": _drive_workflow_call_link,
         },
         expand_collapsible=True,
     ),

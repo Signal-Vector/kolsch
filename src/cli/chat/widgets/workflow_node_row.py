@@ -63,6 +63,7 @@ from textual.widgets import Collapsible, Static
 from cli.chat.metrics import format_duration
 from cli.chat.spinner import SPINNER_FRAMES, spinner_frame
 from cli.chat.state_tokens import resolve_state
+from cli.chat.widgets.assistant_prose import WorkflowAnchorButton
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -272,6 +273,78 @@ def _extract_content_text(content: Any) -> str:
     return _truncate(str(content), _BODY_MAX_CHARS)
 
 
+_WORKFLOW_NODE_TYPE = "kolsch/nodes/workflow"
+"""feat-104: the sub-workflow node literal (``parser.py:429``).
+
+A ``WorkflowNodeRow`` whose ``_node_type`` matches this string is a
+``kolsch/nodes/workflow`` invocation — the parent side of a
+parent→child sub-workflow edge. Only these rows grow the forward
+:class:`WorkflowCallLink` to the child's peer card (feat-104 gate,
+mirroring the ``== "kolsch/nodes/agent"`` gate in ``set_output``).
+"""
+
+
+_CHILD_STATUS_SUFFIXES: dict[str, str] = {
+    "succeeded": "✓ succeeded",
+    "failed": "✗ failed",
+    "waiting_for_input": "⚠ waiting",
+}
+"""feat-104: child-status → link-suffix mapping.
+
+`child_status` is the child run's terminal-ish status
+(``WorkflowNodeCalledWorkflowCompletedPayload.child_status``): one of
+``succeeded`` / ``failed`` / ``waiting_for_input`` / ``aborted`` /
+``timed_out``. The three status glyphs the PINNED visual spec locks
+in map here; any other status (``aborted`` / ``timed_out`` / an
+unknown string) falls back to the raw status text so the link never
+renders a bare bracket.
+"""
+
+
+class WorkflowCallLink(WorkflowAnchorButton):
+    """feat-104: focusable forward link from a parent workflow node.
+
+    Mounted inside a ``kolsch/nodes/workflow`` :class:`WorkflowNodeRow`'s
+    Contents by :meth:`WorkflowNodeRow.set_child_workflow`. Subclasses
+    :class:`~cli.chat.widgets.assistant_prose.WorkflowAnchorButton`
+    verbatim — same ``can_focus``, the ``enter`` binding, ``on_click``,
+    and ``_activate`` (which calls the app's
+    ``action_scroll_to_workflow_card`` with the child run id). Reuse of
+    the feat-018 family keeps the CSS ($tool-fg cyan, bold, ``:focus``
+    bold reverse) and the ``[▸ <label>]`` bracket format identical to
+    the assistant-prose card anchor.
+
+    The only addition is :meth:`update_status`, which re-renders the
+    label with a status suffix (``[▸ <child_ref> · <status>]``) when
+    the child run completes.
+    """
+
+    def __init__(self, *, child_ref: str, child_run_id: str) -> None:
+        # feat-104: while the child is live the suffix reads ``running``;
+        # `update_status` swaps it on CALLED_WORKFLOW_COMPLETED.
+        self._child_ref = child_ref
+        self._status_suffix = "running"
+        super().__init__(
+            label=self._compose_label(),
+            run_id=child_run_id,
+        )
+
+    def _compose_label(self) -> str:
+        """Return ``<child_ref> · <status>`` (bracket added by the base)."""
+        return f"{self._child_ref} · {self._status_suffix}"
+
+    def update_status(self, child_status: str) -> None:
+        """feat-104: re-render the label suffix from the child status.
+
+        Maps the child run's terminal-ish status onto the PINNED glyph
+        suffix (``✓ succeeded`` / ``✗ failed`` / ``⚠ waiting``); any
+        other status renders its raw text so the bracket stays intact.
+        """
+        self._status_suffix = _CHILD_STATUS_SUFFIXES.get(child_status, child_status)
+        self._label = self._compose_label()
+        self.update(f"[▸ {self._label}]")
+
+
 class WorkflowNodeRow(Collapsible):
     """Per-node row inside a `WorkflowNodeList`.
 
@@ -431,6 +504,15 @@ class WorkflowNodeRow(Collapsible):
         # means "nothing rendered"; non-empty means ``set_output``
         # should gate the JSON preview for agent nodes.
         self._last_assistant_text: str = ""
+        # feat-104: forward link to a child sub-workflow's peer card.
+        # Only populated on a ``kolsch/nodes/workflow`` row via
+        # ``set_child_workflow``. ``_child_ref`` feeds the collapsed-
+        # title hint (``▸ <child_ref>``); ``_child_link`` is the mounted
+        # focusable widget (idempotent — a replayed CALLED_WORKFLOW does
+        # not mount a second link).
+        self._child_ref: str | None = None
+        self._child_run_id: str | None = None
+        self._child_link: WorkflowCallLink | None = None
         # bug-036b: pre-completion title includes ``(short_type)``.
         # The initial glyph is the spinner table's first frame — a
         # static placeholder for the ~80 ms gap between compose and
@@ -569,6 +651,54 @@ class WorkflowNodeRow(Collapsible):
         self._output_widget = widget
         with contextlib.suppress(Exception):
             self._mount_in_contents(widget)
+
+    def set_child_workflow(self, child_run_id: str, child_ref: str) -> None:
+        """feat-104: mount a forward link to the child sub-workflow's card.
+
+        Called by
+        [`WorkflowRenderer._on_called_workflow`][cli.chat.widgets.card_body.workflow.WorkflowRenderer._on_called_workflow]
+        when the parent's ``workflow.node.called_workflow`` event lands.
+        Gated on ``self._node_type == "kolsch/nodes/workflow"`` (same gate
+        style as the ``kolsch/nodes/agent`` check in ``set_output``); a
+        non-workflow row ignores the call.
+
+        Mounts a focusable :class:`WorkflowCallLink` inside the row's
+        Contents (revealed on expand — putting it here avoids fighting
+        the Collapsible's Enter-toggles-expand behaviour) and adds a
+        ``▸ <child_ref>`` discoverability hint to the collapsed title.
+        Idempotent: a replayed CALLED_WORKFLOW does NOT mount a second
+        link (AC #7).
+        """
+        if self._node_type != _WORKFLOW_NODE_TYPE:
+            return
+        if self._child_link is not None:
+            # feat-104 AC #7: replay-safe — the link is already mounted.
+            return
+        self._child_run_id = child_run_id
+        self._child_ref = child_ref
+        link = WorkflowCallLink(child_ref=child_ref, child_run_id=child_run_id)
+        self._child_link = link
+        with contextlib.suppress(Exception):
+            self._mount_in_contents(link)
+        # feat-104: surface the `▸ <child_ref>` hint on the collapsed
+        # title so the link is discoverable without expanding the row.
+        self._update_title()
+
+    def set_child_status(self, child_status: str) -> None:
+        """feat-104: update the child link's status suffix on completion.
+
+        Called by
+        [`WorkflowRenderer._on_called_workflow_completed`][cli.chat.widgets.card_body.workflow.WorkflowRenderer._on_called_workflow_completed]
+        when the parent's ``workflow.node.called_workflow_completed``
+        event lands. Gated on the workflow node type; a no-op when no
+        link was mounted (e.g. a CALLED_WORKFLOW_COMPLETED that arrived
+        without a preceding CALLED_WORKFLOW).
+        """
+        if self._node_type != _WORKFLOW_NODE_TYPE:
+            return
+        if self._child_link is None:
+            return
+        self._child_link.update_status(child_status)
 
     def set_bound_inputs(self, inputs: dict[str, Any]) -> None:
         """bug-037: stash bound inputs for later section rendering.
@@ -1179,6 +1309,14 @@ class WorkflowNodeRow(Collapsible):
             base += f" ({self._short_type})"
         if self._sub_agent_turn_count > 0:
             base += f" · {self._sub_agent_turn_count} sub-agent events"
+        # feat-104: `▸ <child_ref>` discoverability hint for the forward
+        # link to the child sub-workflow's card. Recomputed here (not
+        # appended once) because the ~80 ms spinner tick re-renders the
+        # whole title — a one-shot append would be clobbered on the next
+        # frame. Only ``kolsch/nodes/workflow`` rows ever set
+        # ``_child_ref`` (the gate lives in ``set_child_workflow``).
+        if self._child_ref is not None:
+            base += f"   ▸ {self._child_ref}"
         self.title = base
 
     def _truncate_preview(
@@ -1218,4 +1356,4 @@ class WorkflowNodeRow(Collapsible):
         self.mount(widget)
 
 
-__all__ = ["WorkflowNodeRow"]
+__all__ = ["WorkflowCallLink", "WorkflowNodeRow"]

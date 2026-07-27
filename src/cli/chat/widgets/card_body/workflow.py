@@ -526,6 +526,10 @@ class WorkflowRenderer(Vertical):
             self._on_node_failed(payload)
         elif workflow_event_kind == WorkflowEventKind.NODE_PRUNED.value:
             self._on_node_pruned(payload)
+        elif workflow_event_kind == WorkflowEventKind.CALLED_WORKFLOW.value:
+            self._on_called_workflow(payload)
+        elif workflow_event_kind == WorkflowEventKind.CALLED_WORKFLOW_COMPLETED.value:
+            self._on_called_workflow_completed(payload)
         elif workflow_event_kind in _TERMINAL_RUN_KINDS:
             self._on_terminal(workflow_event_kind, payload)
         # Non-terminal / non-dispatched kinds are ignored — the
@@ -860,6 +864,61 @@ class WorkflowRenderer(Vertical):
             trace_id if isinstance(trace_id, str) else None,
             invocation_id if isinstance(invocation_id, str) else None,
         )
+
+    def _on_called_workflow(self, payload: dict[str, Any]) -> None:
+        """feat-104: route a `workflow.node.called_workflow` into the row.
+
+        The parent's ``kolsch/nodes/workflow`` node row (found by the
+        hoisted top-level ``node_name``, via the same string-keyed
+        ``_node_rows.get`` lookup the other node handlers use — bug-096
+        kept the map string-keyed) gains a forward link to the child
+        sub-workflow's peer card. ``child_workflow_run_id`` /
+        ``child_workflow_ref`` live under the NESTED ``payload["payload"]``
+        (the domain-event body), mirroring how ``_on_node_completed``
+        reads ``inner = payload.get("payload")``.
+
+        The workflow-node gate lives in
+        :meth:`WorkflowNodeRow.set_child_workflow`, so an errant call
+        against a non-workflow row is a safe no-op. An unknown
+        ``node_name`` (no matching row) is a silent no-op (AC #1).
+        """
+        node_name = payload.get("node_name")
+        if not isinstance(node_name, str):
+            return
+        row = self._node_rows.get(node_name)
+        if row is None:
+            return
+        inner = payload.get("payload")
+        if not isinstance(inner, dict):
+            return
+        child_run_id = inner.get("child_workflow_run_id")
+        child_ref = inner.get("child_workflow_ref")
+        if not isinstance(child_run_id, str) or not isinstance(child_ref, str):
+            return
+        row.set_child_workflow(child_run_id, child_ref)
+
+    def _on_called_workflow_completed(self, payload: dict[str, Any]) -> None:
+        """feat-104: route a `…_completed` into the row's status suffix.
+
+        Reads ``child_status`` from the nested ``payload["payload"]``
+        and calls :meth:`WorkflowNodeRow.set_child_status` on the same
+        row so the link's suffix updates (``✓ succeeded`` / ``✗ failed``
+        / ``⚠ waiting``). Unknown ``node_name`` / missing status → no-op
+        (AC #2).
+        """
+        node_name = payload.get("node_name")
+        if not isinstance(node_name, str):
+            return
+        row = self._node_rows.get(node_name)
+        if row is None:
+            return
+        inner = payload.get("payload")
+        if not isinstance(inner, dict):
+            return
+        child_status = inner.get("child_status")
+        if not isinstance(child_status, str):
+            return
+        row.set_child_status(child_status)
 
     def _on_awaiting_approval(self, payload: dict[str, Any]) -> None:
         """Transition the matching row to `paused` (glyph `⚠`).
