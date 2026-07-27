@@ -56,6 +56,7 @@ under the same pruned-edge conditions.
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -307,6 +308,26 @@ class WorkflowSubRunner:
                 child_run_id=str(child_run.run_id),
                 child_status=str(WorkflowRunStatus.WAITING_FOR_INPUT),
             )
+            raise
+        except Exception:
+            # spec-103 follow-up: an UNEXPECTED error escaping the child
+            # run (anything other than the pause handled above — e.g. a
+            # bug in the nested executor that raises instead of returning
+            # a terminal status) must STILL emit called_completed. Every
+            # normal terminal arm below emits it; without this arm the
+            # parent-side chat lane never sees a completion, so it never
+            # posts the child bridge's stop-sentinel and the child's UI
+            # drain task lingers until session close. Best-effort:
+            # `child_status="failed"` reflects the abnormal termination,
+            # and a secondary failure in the emit must never shadow the
+            # original error.
+            with contextlib.suppress(Exception):
+                await self._emit_called_completed(
+                    ctx=ctx,
+                    node_name=node_name,
+                    child_run_id=str(child_run.run_id),
+                    child_status=str(WorkflowRunStatus.FAILED),
+                )
             raise
 
         if status == WorkflowRunStatus.WAITING_FOR_INPUT:
