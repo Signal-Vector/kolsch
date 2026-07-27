@@ -181,6 +181,25 @@ never recurses — the 16-deep cap is a data check on
 independently, each with its own JSONL, joined only by the shared
 `trace_id`.
 
+**The child surfaces in the chat TUI as its own flat peer card**
+(spec-103). The parent Executor's `event_observer` and
+`sub_agent_event_observer` are threaded into the child Executor via
+`NodeContext` fields (populated in `_build_ctx`, forwarded by
+`WorkflowSubRunner`), so the child's `run.started` / `node.*` /
+`run.completed` events — and every child `agent` node's sub-agent
+messages + tool calls — reach the same observer channel as the
+parent's. On the parent-side `workflow.node.called_workflow` event,
+`WorkflowsImpl` opens a second workflow card, registers a child run
+record (with `parent_run_id` set), and drains the child's events onto
+that card. The child renders through the same `WorkflowRenderer` as a
+top-level run, laid out as a flat PEER (never nested inside the
+parent's node row — the r4 flat-cards invariant keeps indentation
+bounded as sub-workflows nest) with a `↳ from <parent-ref>`
+breadcrumb. Each nested level (grandchild and deeper) gets its own
+peer card the same way. The forward navigable link from the parent's
+`workflow`-node row to the child card is a separate concern
+(feat-104); this surface makes the child visible and drill-in-able.
+
 ## Validation
 
 The validator runs nine layers when a workflow loads. It
@@ -236,6 +255,11 @@ alone.
 runs another workflow, the child run gets its own
 `runs/<wrk_id>/events.jsonl`. Cross-JSONL forensics follows the
 parent pointer; the child and parent stay independently replayable.
+For the LIVE chat surface the child does not rely on tailing that
+JSONL — the parent's observers are threaded into the child Executor so
+the child's events (including session-scoped sub-agent detail, which
+is never written to the workflow JSONL) stream straight onto the
+child's own peer card (see [Sub-workflows](#sub-workflows) above).
 
 **Pause is a first-class terminal state.** A `user_input` node
 raises `WorkflowPausedForInput`, the Executor writes a `waiting_at`

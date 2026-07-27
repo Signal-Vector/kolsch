@@ -192,6 +192,32 @@ class NodeContext:
         default=None,
         repr=False,
     )
+    # spec-103: the executor-scoped observer handles, threaded through
+    # the NodeContext so `WorkflowSubRunner` can forward them into the
+    # nested (child) executor it builds — making the child's events
+    # (RUN_STARTED / NODE_* / RUN_COMPLETED and its sub-agent detail)
+    # reach the SAME observer channel as the parent's. This is what
+    # lets a `kolsch/nodes/workflow` child surface as its own flat peer
+    # card in the chat TUI. Both `None` outside the executor's worklist
+    # (e.g. `for_test`) and for top-level runs constructed without
+    # observers (headless CLI); populated by `_build_ctx` from the
+    # executor's `_event_observer` / `_sub_agent_event_observer`.
+    #
+    # `event_observer` mirrors the executor's `event_observer` param
+    # (one `WorkflowEvent` per emit). `sub_agent_event_observer` mirrors
+    # the executor's `sub_agent_event_observer` param — spec-103
+    # approach (A): a leading `run_id: str` carries the emitting run's
+    # id so the service can route a child's sub-agent events to the
+    # child lane. Typed `Callable[..., None]` to avoid duplicating the
+    # 4-arg signature (and the `Event` forward-ref) here.
+    event_observer: Callable[[WorkflowEvent], None] | None = field(
+        default=None,
+        repr=False,
+    )
+    sub_agent_event_observer: Callable[..., None] | None = field(
+        default=None,
+        repr=False,
+    )
 
     def derive_for_iteration(
         self,

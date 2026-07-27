@@ -9,8 +9,9 @@ never touch it.
 Three tests:
 
 1. A runner that fires the callback with a synthetic `Event` reaches
-   the executor's `sub_agent_event_observer` verbatim (with the
-   owning `(node_name, invocation_id)` tuple).
+   the executor's `sub_agent_event_observer` verbatim (spec-103
+   approach A: with the emitting run's id first, then the owning
+   `(node_name, invocation_id)` tuple).
 2. When the executor is constructed without a
    `sub_agent_event_observer`, the callback still runs but the
    executor's `_emit_sub_agent_event` short-circuits — no crash,
@@ -124,7 +125,7 @@ def _make_executor(
 
 
 # ---------------------------------------------------------------------------
-# Test 1 — Observer receives `(node_name, invocation_id, event)`.
+# Test 1 — Observer receives `(run_id, node_name, invocation_id, event)`.
 # ---------------------------------------------------------------------------
 
 
@@ -132,12 +133,12 @@ def _make_executor(
 async def test_sub_agent_observer_receives_events(tmp_path: Path) -> None:
     """Every callback firing reaches the observer with correct id shape."""
     runner = ForwardingRunner(event_count=3)
-    received: list[tuple[str, str, Event]] = []
+    received: list[tuple[str, str, str, Event]] = []
 
-    def observer(node_name: str, inv_id: str, event: Event) -> None:
-        received.append((node_name, inv_id, event))
+    def observer(run_id: str, node_name: str, inv_id: str, event: Event) -> None:
+        received.append((run_id, node_name, inv_id, event))
 
-    ex, _store, _run = _make_executor(
+    ex, _store, run = _make_executor(
         tmp_path,
         runner=runner,
         sub_agent_event_observer=observer,
@@ -145,16 +146,19 @@ async def test_sub_agent_observer_receives_events(tmp_path: Path) -> None:
     status = await ex.run()
     assert status == WorkflowRunStatus.SUCCEEDED
     assert len(received) == 3
+    # spec-103 approach A: the emitting run's id is passed first — this
+    # executor's own run.
+    assert {r for r, _n, _i, _e in received} == {str(run.run_id)}
     # All three carry the same `node_name` + `invocation_id` (one
     # per-invocation callback binding — the executor's `_build_ctx`
     # captures both in the closure).
-    assert {n for n, _i, _e in received} == {"only"}
-    inv_ids = {i for _n, i, _e in received}
+    assert {n for _r, n, _i, _e in received} == {"only"}
+    inv_ids = {i for _r, _n, i, _e in received}
     assert len(inv_ids) == 1
     (only_inv,) = inv_ids
     assert only_inv.startswith("inv_")
     # Events are the same objects the runner forwarded, in order.
-    assert [e for _n, _i, e in received] == runner.forwarded
+    assert [e for _r, _n, _i, e in received] == runner.forwarded
 
 
 # ---------------------------------------------------------------------------
@@ -190,8 +194,8 @@ async def test_sub_agent_observer_exception_caught(
     """A raising observer must NOT propagate into the executor."""
     runner = ForwardingRunner(event_count=2)
 
-    def bad(node_name: str, inv_id: str, event: Event) -> None:
-        _ = (node_name, inv_id, event)
+    def bad(run_id: str, node_name: str, inv_id: str, event: Event) -> None:
+        _ = (run_id, node_name, inv_id, event)
         raise RuntimeError("bad sub-agent observer")
 
     ex, _store, _run = _make_executor(

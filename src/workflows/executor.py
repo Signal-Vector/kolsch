@@ -285,7 +285,9 @@ class IterativeExecutor:
         _call_chain: tuple[str, ...] = (),
         event_observer: Callable[[WorkflowEvent], None] | None = None,
         cancel_token: CancelToken | None = None,
-        sub_agent_event_observer: (Callable[[str, str, Event], None] | None) = None,
+        sub_agent_event_observer: (
+            Callable[[str, str, str, Event], None] | None
+        ) = None,
         default_node_timeout_seconds: float | None = None,
     ) -> None:
         # Nested-executor depth cap (shared with `extends:`; same
@@ -439,11 +441,14 @@ class IterativeExecutor:
         # `_sub_agent_event_observer` is a synchronous callable the
         # executor invokes once per session-scoped `Event` yielded from
         # `AgentEngine.execute_stream(...)` inside an `AgentRunner`
-        # (or any other runner that spawns a sub-agent stream). The
-        # callable receives the owning `(node_name, invocation_id,
-        # event)` tuple so the bridge on the other end can translate
-        # each into a `kolsch.workflow.node.sub_agent_event` UI event
-        # keyed on bug-033's `(trace_id, invocation_id)` map.
+        # (or any other runner that spawns a sub-agent stream). spec-103
+        # approach (A): the callable receives the emitting run's id
+        # FIRST, then the owning `(node_name, invocation_id, event)`
+        # tuple — `(run_id, node_name, invocation_id, event)` — so the
+        # bridge on the other end can route the item to the emitting
+        # run's lane (a child's sub-agent events go to the child card)
+        # AND translate each into a `kolsch.workflow.node.sub_agent_event`
+        # UI event keyed on bug-033's `(trace_id, invocation_id)` map.
         #
         # Observer exceptions are caught and logged — a raising
         # observer must NOT propagate up into the executor run loop
@@ -519,11 +524,22 @@ class IterativeExecutor:
         No-ops when `sub_agent_event_observer` is unset (the CLI
         headless path never wires one). Observer exceptions are
         caught + logged, matching the `_event_observer` discipline.
+
+        spec-103 approach (A): the emitting run's id is passed FIRST so
+        the receiver can route a child run's sub-agent detail to the
+        child card's lane. `self._run.run_id` is this executor's own run
+        — for a nested (child) executor that is the child run, so the
+        child's `agent`-node sub-agent events route correctly.
         """
         if self._sub_agent_event_observer is None:
             return
         try:
-            self._sub_agent_event_observer(node_name, invocation_id, event)
+            self._sub_agent_event_observer(
+                str(self._run.run_id),
+                node_name,
+                invocation_id,
+                event,
+            )
         except Exception:
             logger.exception(
                 "sub_agent_event_observer raised on event %s "
@@ -2960,6 +2976,14 @@ class IterativeExecutor:
             # yields lands here; the closure fans to the executor's
             # `_sub_agent_event_observer` (see `_emit_sub_agent_event`).
             on_sub_agent_event_callback=_on_sub_agent_event,
+            # spec-103: thread the executor's observer handles into the
+            # context so `WorkflowSubRunner` can forward them into the
+            # nested (child) executor it builds — making the child's
+            # events reach the SAME observer channel as the parent's.
+            # `None` when this executor was constructed without observers
+            # (headless CLI); no behaviour change for top-level runs.
+            event_observer=self._event_observer,
+            sub_agent_event_observer=self._sub_agent_event_observer,
         )
 
     # ------------------------------------------------------------------

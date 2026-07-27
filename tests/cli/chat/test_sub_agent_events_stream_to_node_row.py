@@ -316,7 +316,10 @@ class _MockExecutorWithSubAgent:
                     data={"content": {"text": "here is my response"}},
                 ),
             ):
+                # spec-103 approach A: the executor passes the emitting
+                # run's id first.
                 self._sub_agent_observer(
+                    str(self.run_id),
                     self.node_name,
                     str(self.invocation_id),
                     evt,

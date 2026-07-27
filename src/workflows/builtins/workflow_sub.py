@@ -265,6 +265,17 @@ class WorkflowSubRunner:
             catalog=self._catalog,
             _call_depth=ctx.call_depth + 1,
             _call_chain=(*ctx.call_chain, child_ref),
+            # spec-103: forward the parent executor's observer handles
+            # into the child executor so the child's events (RUN_STARTED
+            # / NODE_* / RUN_COMPLETED and its `agent`-node sub-agent
+            # detail) reach the SAME observer channel — letting the child
+            # surface as its own flat peer card in the chat TUI. `None`
+            # for headless runs (no observers wired); a no-op change
+            # there. The service routes each event by `workflow_run_id`,
+            # so the child's events (whose id is the child run's) land in
+            # the child card's lane.
+            event_observer=ctx.event_observer,
+            sub_agent_event_observer=ctx.sub_agent_event_observer,
         )
 
         # Step 8 — run the child. Two pause-signalling shapes from
