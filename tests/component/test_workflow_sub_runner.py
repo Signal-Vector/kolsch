@@ -92,6 +92,24 @@ class _RaisingRunner:
         raise self._exc
 
 
+class _RaisingExecutor:
+    """Mock nested executor whose ``run()`` raises directly.
+
+    Models the spec-103 follow-up gap: an UNEXPECTED error escaping the
+    child's ``nested.run()`` (a bug in the nested executor, not a normal
+    node failure the executor converts to a FAILED status). Accepts the
+    factory kwargs and exposes ``_captured``/``_pruned`` (unused on the
+    raise path) for parity with the real executor.
+    """
+
+    def __init__(self, **_: Any) -> None:
+        self._captured: dict[str, Any] = {}
+        self._pruned: set[str] = set()
+
+    async def run(self) -> Any:
+        raise RuntimeError("nested executor blew up")
+
+
 class _PausingRunner:
     """Always raises :class:`WorkflowPausedForInput` — mimics user_input."""
 
@@ -564,6 +582,84 @@ class TestChildFailurePropagates:
         # And the message names the failed child run.
         assert "child workflow run" in node_failed["payload"]["message"]
         # The completed marker still emits with child_status=failed.
+        cw_completed = next(
+            e for e in events if e["kind"] == "workflow.node.called_workflow_completed"
+        )
+        assert cw_completed["payload"]["child_status"] == "failed"
+
+
+# ---------------------------------------------------------------------------
+# spec-103 follow-up — unexpected error escaping the nested executor
+# ---------------------------------------------------------------------------
+
+
+class TestChildExecutorRaises:
+    async def test_child_executor_raise_still_emits_completed(
+        self, tmp_path: Path
+    ) -> None:
+        """An UNEXPECTED exception escaping ``nested.run()`` must STILL
+        emit ``called_workflow_completed`` (child_status=failed).
+
+        Every normal terminal arm emits the completed bookend; before the
+        spec-103 follow-up, a raw exception from the nested executor
+        skipped it, so the chat child-lane never received a completion,
+        never posted the child bridge's stop-sentinel, and the child's UI
+        drain task lingered until session close. This guards the added
+        ``except Exception`` arm in ``WorkflowSubRunner.run``.
+        """
+        parent_yaml = """
+        nodes:
+          sub:
+            type: kolsch/nodes/workflow
+            ref: demo/workflows/child
+        """
+        child_yaml = """
+        nodes:
+          only:
+            type: kolsch/nodes/noop
+        graph:
+          edges: []
+        """
+        # Build the setup manually so the workflow-sub slot uses a factory
+        # that returns a nested executor whose run() raises directly.
+        parent_path = tmp_path / "bundles" / "demo" / "workflows" / "parent.yaml"
+        _write_workflow(parent_path, parent_yaml)
+        child_path = tmp_path / "bundles" / "demo" / "workflows" / "child.yaml"
+        _write_workflow(child_path, child_yaml)
+        catalog = AssetCatalog(
+            assets={
+                "demo/workflows/parent": _entry("demo/workflows/parent", parent_path),
+                "demo/workflows/child": _entry("demo/workflows/child", child_path),
+            }
+        )
+        store = WorkflowRunStore(tmp_path)
+        parent_run = store.create(workflow_ref="demo/workflows/parent", inputs={})
+        registry = RunnerRegistry()
+        registry.register("kolsch/nodes/noop", NoopRunner())
+        registry.register(
+            "kolsch/nodes/workflow",
+            WorkflowSubRunner(
+                catalog=catalog,
+                store=store,
+                executor_factory=_RaisingExecutor,
+                registry=registry,
+            ),
+        )
+        executor = IterativeExecutor(
+            workflow=load_workflow(parent_path),
+            run=parent_run,
+            store=store,
+            registry=registry,
+            catalog=catalog,
+        )
+        status = await executor.run()
+        assert status == WorkflowRunStatus.FAILED
+
+        events = list(store.read_events(parent_run.run_id))
+        # The parent-side called_workflow marker is present ...
+        assert any(e["kind"] == "workflow.node.called_workflow" for e in events)
+        # ... AND the completed bookend is emitted despite the raise
+        # (the fix — previously absent, which stranded the chat child lane).
         cw_completed = next(
             e for e in events if e["kind"] == "workflow.node.called_workflow_completed"
         )

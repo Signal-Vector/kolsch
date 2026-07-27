@@ -98,7 +98,8 @@ async def test_sub_agent_event_dispatched_via_adapter(
         renderer.register_adapter(adapter)
 
         row = WorkflowNodeRow(node_name="classify", trace_id="tr_x")
-        renderer._node_rows["classify"] = row
+        # bug-095: _node_rows is composite-keyed (name, invocation_id).
+        renderer._node_rows[("classify", "inv_1")] = row
         adapter._live_nodes_by_trace_and_invocation[("tr_x", "inv_1")] = row
 
         payload = _mk_sub_agent_payload(
@@ -135,7 +136,9 @@ async def test_sub_agent_event_falls_back_to_row_sink(
         await pilot.pause()
 
         row = WorkflowNodeRow(node_name="classify", trace_id="tr_x")
-        renderer._node_rows["classify"] = row
+        # bug-095: composite key; the fallback routes on the sub-agent
+        # envelope's (node_name, invocation_id) → ("classify", "inv_missing").
+        renderer._node_rows[("classify", "inv_missing")] = row
         row.collapsed = False
         await pilot.pause()
 
@@ -198,7 +201,8 @@ async def test_sub_agent_malformed_payloads_dropped(
         adapter = _StubAdapter()
         renderer.register_adapter(adapter)
         row = WorkflowNodeRow(node_name="classify", trace_id="tr_x")
-        renderer._node_rows["classify"] = row
+        # bug-095: composite key.
+        renderer._node_rows[("classify", "inv_1")] = row
         adapter._live_nodes_by_trace_and_invocation[("tr_x", "inv_1")] = row
 
         payload = _mk_sub_agent_payload(

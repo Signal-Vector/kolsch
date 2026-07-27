@@ -185,8 +185,15 @@ def _install_sub_agent_mock(
                     and self._sub_agent_observer is not None
                     and sub_agent_events
                 ):
+                    # spec-103 approach A: the executor passes the
+                    # emitting run's id first. Use the event's own
+                    # `workflow_run_id`; the service's run-dispatching
+                    # observer falls back to the home (this run's) bridge
+                    # for an unrecognised id, so the item still routes to
+                    # this run's card.
+                    emitting_run_id = str(event.workflow_run_id)
                     for nn, inv, evt in sub_agent_events:
-                        self._sub_agent_observer(nn, inv, evt)
+                        self._sub_agent_observer(emitting_run_id, nn, inv, evt)
                         if self._per_event_delay > 0:
                             await asyncio.sleep(self._per_event_delay)
             # Terminal status derivation.

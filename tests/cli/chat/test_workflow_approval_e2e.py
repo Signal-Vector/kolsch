@@ -263,7 +263,7 @@ async def test_e2e_workflow_approval_paused(
 
     # Dispatch it through the adapter — renderer transitions the row.
     await adapter.handle(awaiting_ev)
-    assert renderer._node_rows["build"].state == "paused"
+    assert renderer._node_rows[("build", "")].state == "paused"
 
 
 @pytest.mark.asyncio
@@ -358,10 +358,10 @@ async def test_e2e_workflow_approval_resolved_transitions_back(
         if data.get("kind") == WIRE_WORKFLOW_NODE_AWAITING_APPROVAL:
             await adapter.handle(ev)
             break
-    assert renderer._node_rows["build"].state == "paused"
+    assert renderer._node_rows[("build", "")].state == "paused"
 
     await adapter.handle(resolved_ev)
-    assert renderer._node_rows["build"].state == "running"
+    assert renderer._node_rows[("build", "")].state == "running"
 
 
 @pytest.mark.asyncio

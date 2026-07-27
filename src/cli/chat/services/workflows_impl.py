@@ -838,6 +838,221 @@ class WorkflowsImpl(AbstractWorkflows):
                     spec.run_id,
                 )
 
+    # ------------------------------------------------------------------
+    # spec-103: run-dispatching observers + child-lane lifecycle.
+    # ------------------------------------------------------------------
+
+    def _make_dispatch_event_observer(
+        self,
+        home_run_id: WorkflowRunId,
+        home_record: WorkflowRunRecord,
+    ) -> Callable[[WorkflowEvent], None]:
+        """Build the run-dispatching `event_observer` (spec-103 AC #4/#5).
+
+        The returned closure is threaded into the top-level executor AND
+        — via the `NodeContext` seam — into every descendant executor a
+        `kolsch/nodes/workflow` node spawns. It routes each event to the
+        bridge for that run so a child's events land in the child card's
+        lane, not the parent's.
+
+        Routing key (deviation from the spec's literal pseudocode —
+        documented in the handoff): the bridge/record/UI run_id for the
+        TOP-LEVEL run is the queue-time ``spec.run_id``, but the executor
+        emits events carrying its STORE-minted ``run.run_id`` (bug-066:
+        the two id-spaces are distinct — the bridge is created under the
+        queue id BEFORE the factory mints the store id). The pre-spec-103
+        parent-keyed observer closed over the single bridge and ignored
+        ``event.workflow_run_id`` for exactly this reason. So we route
+        children by ``event.workflow_run_id`` (a child's card/record IS
+        keyed by its store-minted ``child_workflow_run_id``, so this
+        matches) and FALL BACK to this observer's ``home`` bridge for any
+        event whose id isn't a registered lane — i.e. the top-level run's
+        own store-id events, which land on the ``home`` (=``spec.run_id``)
+        bridge exactly as before. No behaviour change for top-level runs.
+
+        Race guard (AC #5): `CALLED_WORKFLOW` is emitted on the PARENT
+        stream BEFORE the child executor runs, but the child card +
+        drain are set up asynchronously in `_drain_workflow_bridge`
+        (which lags). So the child's first `RUN_STARTED` could fire
+        before the async setup. We `setdefault` the child bridge queue
+        SYNCHRONOUSLY here on `CALLED_WORKFLOW` so child events buffer
+        immediately; the async `_open_child_lane` then drains the
+        buffer. No child event is lost in the spawn→first-event window.
+        """
+
+        def _dispatch_event(event: WorkflowEvent) -> None:
+            # Race guard — create the child bridge synchronously so the
+            # child's first event has somewhere to land before the async
+            # lane setup runs.
+            if event.kind == WorkflowEventKind.CALLED_WORKFLOW:
+                child_id = self._child_run_id_from_payload(event.payload)
+                if child_id is not None:
+                    self._workflow_bridges.setdefault(
+                        child_id,
+                        asyncio.Queue(maxsize=_BRIDGE_QUEUE_MAXSIZE),
+                    )
+            queue = self._workflow_bridges.get(event.workflow_run_id)
+            record = self._workflow_registry.get(event.workflow_run_id)
+            if queue is None:
+                # Not a registered lane — this is the top-level run's own
+                # store-id event (queue-id ≠ store-id; see docstring).
+                # Fall back to the home bridge so the top-level card
+                # renders exactly as it did pre-spec-103.
+                queue = self._workflow_bridges.get(home_run_id)
+                record = home_record
+            if queue is None:
+                return
+            try:
+                queue.put_nowait(event)
+            except asyncio.QueueFull:
+                if record is not None:
+                    record.dropped_events += 1
+
+        return _dispatch_event
+
+    def _make_dispatch_sub_agent_observer(
+        self,
+        home_run_id: WorkflowRunId,
+        home_record: WorkflowRunRecord,
+    ) -> Callable[..., None]:
+        """Build the run-dispatching `sub_agent_event_observer` (approach A).
+
+        spec-103. The executor passes the emitting run's id first —
+        ``(run_id, node_name, invocation_id, event)`` — so a child
+        `agent`-node's sub-agent detail routes to the child card's lane.
+        The wrapped `_SubAgentBridgeItem` lands in the bridge for that
+        run; the child drain tags the UI envelope with the child run id
+        so `WorkflowRenderer` drills the detail into the child's node
+        row.
+
+        Same queue-id vs store-id fallback as the event observer: the
+        top-level run's sub-agent events carry its store-minted
+        ``run.run_id`` (approach A passes ``str(self._run.run_id)``),
+        which is not the queue-time bridge key, so an unrecognised
+        ``run_id`` falls back to the ``home`` bridge — the top-level run.
+        Children carry their own store id, which matches their lane.
+        """
+
+        def _sub_agent_observer(
+            run_id: str,
+            node_name: str,
+            invocation_id: str,
+            event: Event,
+        ) -> None:
+            key = WorkflowRunId(run_id)
+            queue = self._workflow_bridges.get(key)
+            record = self._workflow_registry.get(key)
+            if queue is None:
+                queue = self._workflow_bridges.get(home_run_id)
+                record = home_record
+            if queue is None:
+                return
+            try:
+                queue.put_nowait(
+                    _SubAgentBridgeItem(
+                        node_name=node_name,
+                        invocation_id=invocation_id,
+                        event=event,
+                    ),
+                )
+            except asyncio.QueueFull:
+                if record is not None:
+                    record.dropped_events += 1
+
+        return _sub_agent_observer
+
+    @staticmethod
+    def _child_run_id_from_payload(payload: Any) -> WorkflowRunId | None:
+        """Read ``child_workflow_run_id`` from a `CALLED_WORKFLOW` payload.
+
+        The payload may be the typed
+        `WorkflowNodeCalledWorkflowPayload` (live observer path) or a
+        plain dict (defensive / replay path), so read both shapes.
+        Returns `None` when absent.
+        """
+        value = getattr(payload, "child_workflow_run_id", None)
+        if value is None and isinstance(payload, dict):
+            value = payload.get("child_workflow_run_id")
+        if value is None:
+            return None
+        return WorkflowRunId(str(value))
+
+    @staticmethod
+    def _child_ref_from_payload(payload: Any) -> str | None:
+        """Read ``child_workflow_ref`` from a `CALLED_WORKFLOW` payload."""
+        value = getattr(payload, "child_workflow_ref", None)
+        if value is None and isinstance(payload, dict):
+            value = payload.get("child_workflow_ref")
+        return str(value) if value is not None else None
+
+    async def _open_child_lane(
+        self,
+        parent_run_id: WorkflowRunId,
+        payload: Any,
+    ) -> None:
+        """Open a peer card + record + drain for a spawned child (AC #6).
+
+        Called from `_drain_workflow_bridge` when the parent drain
+        dequeues a `CALLED_WORKFLOW` event. Idempotent — a replayed
+        `CALLED_WORKFLOW` (same child_run_id) does NOT open a second
+        card. The child's bridge queue was already created synchronously
+        by the dispatch observer (race guard); we open the card +
+        `WorkflowRunRecord` (with `parent_run_id` set so the run_id-keyed
+        `_refresh_workflow_parent_ref` path draws the `↳ from <parent>`
+        breadcrumb) and start the child's own `_drain_workflow_bridge`.
+        """
+        child_id = self._child_run_id_from_payload(payload)
+        if child_id is None:
+            return
+        child_ref = self._child_ref_from_payload(payload) or ""
+        # Idempotency — a replayed `CALLED_WORKFLOW` must not re-open.
+        if child_id in self._workflow_registry:
+            return
+
+        card = await self._cards.open(
+            f"Workflow · {child_ref}",
+            kind="workflow",
+        )
+        # The workflow service owns the terminal close of this card;
+        # mark it so any opener-side auto-close finalizer skips it
+        # (parity with `start()`'s owner transfer).
+        with contextlib.suppress(Exception):
+            card._owner_transferred = True
+
+        record = WorkflowRunRecord(
+            run_id=child_id,
+            ref=child_ref,
+            phase="running",
+            card=card,
+            created_at=datetime.now(tz=UTC),
+            started_at=datetime.now(tz=UTC),
+            parent_run_id=parent_run_id,
+        )
+        self._workflow_registry[child_id] = record
+        self._children_of.setdefault(parent_run_id, []).append(child_id)
+
+        # The child bridge queue already exists (race-guard created it
+        # on the observer's `CALLED_WORKFLOW`); guard for the replay /
+        # test path where the observer didn't run first.
+        self._workflow_bridges.setdefault(
+            child_id,
+            asyncio.Queue(maxsize=_BRIDGE_QUEUE_MAXSIZE),
+        )
+
+        child_spec = WorkflowRunSpec(
+            run_id=child_id,
+            ref=child_ref,
+            inputs={},
+            card=card,
+        )
+        loop = asyncio.get_running_loop()
+        self._per_run_drain_tasks[child_id] = loop.create_task(
+            self._drain_workflow_bridge(child_spec, None, child_lane=True),
+        )
+
+        # spec-016: place the child peer card in the sorted layout.
+        self._notify_layout(child_id)
+
     async def _run_one_workflow(self, spec: WorkflowRunSpec) -> None:
         """Build the executor, wire observer + cancel, drive to terminal.
 
@@ -889,42 +1104,29 @@ class WorkflowsImpl(AbstractWorkflows):
         )
         self._per_run_drain_tasks[run_id] = bridge_task
 
-        # Observer: synchronous callable the executor invokes
-        # post-append. Enqueue into the per-run bridge with drop
-        # policy on saturation.
-        def _observer(event: WorkflowEvent) -> None:
-            try:
-                bridge_queue.put_nowait(event)
-            except asyncio.QueueFull:
-                record.dropped_events += 1
+        # spec-103: run-dispatching event observer. A single observer
+        # object is threaded into the parent AND every descendant
+        # executor (via the engine's `NodeContext` seam), so it MUST
+        # route each event to the bridge for `event.workflow_run_id`
+        # rather than closing over this run's single `bridge_queue`.
+        # For a top-level run this behaves identically (its events
+        # carry its own run_id → its own bridge). For a child spawned by
+        # a `kolsch/nodes/workflow` node, the child's events carry the
+        # child run's id → the child bridge (created synchronously on
+        # `CALLED_WORKFLOW`, below), so the child surfaces on its own
+        # peer card.
+        _observer = self._make_dispatch_event_observer(run_id, record)
 
-        # spec-020: sub-agent event forwarder. The executor invokes
-        # this per session-scoped `Event` yielded by
-        # `AgentEngine.execute_stream(...)` inside an `AgentRunner`.
-        # We wrap each in a `_SubAgentBridgeItem` so the drain can
-        # distinguish it from a `WorkflowEvent`. The observer
-        # terminates naturally when the workflow node reaches
-        # terminal — `AgentEngine.execute_stream(...)` closes its
-        # iterator, `AgentRunner.run` returns, and the runner never
-        # calls the forwarder again. No explicit unwire needed
-        # (matches the `_event_observer` discipline; the bridge
-        # drain shuts down on the `_STOP_SENTINEL` posted by
-        # `_finalize_terminal`).
-        def _sub_agent_observer(
-            node_name: str,
-            invocation_id: str,
-            event: Event,
-        ) -> None:
-            try:
-                bridge_queue.put_nowait(
-                    _SubAgentBridgeItem(
-                        node_name=node_name,
-                        invocation_id=invocation_id,
-                        event=event,
-                    ),
-                )
-            except asyncio.QueueFull:
-                record.dropped_events += 1
+        # spec-020 / spec-103: run-dispatching sub-agent forwarder. The
+        # executor now passes the emitting run's id first (approach A);
+        # we route the wrapped `_SubAgentBridgeItem` to that run's bridge
+        # so a child `agent`-node's sub-agent detail lands in the child
+        # card's lane. The observer terminates naturally when the
+        # workflow node reaches terminal — `AgentEngine.execute_stream`
+        # closes its iterator, `AgentRunner.run` returns, and the runner
+        # never calls the forwarder again. No explicit unwire needed
+        # (the bridge drain shuts down on the `_STOP_SENTINEL`).
+        _sub_agent_observer = self._make_dispatch_sub_agent_observer(run_id, record)
 
         try:
             try:
@@ -1182,6 +1384,8 @@ class WorkflowsImpl(AbstractWorkflows):
         self,
         spec: WorkflowRunSpec,
         cancel: Any,
+        *,
+        child_lane: bool = False,
     ) -> None:
         """Convert `WorkflowEvent`s to `kolsch.workflow.progress` UI events.
 
@@ -1189,6 +1393,14 @@ class WorkflowsImpl(AbstractWorkflows):
         bound card with the matching `final_status`, and terminate
         the drain (via the `_STOP_SENTINEL` the enclosing
         `_run_one_workflow` posts).
+
+        spec-103: a child lane (opened by `_open_child_lane` for a
+        `kolsch/nodes/workflow` child) is NOT owned by a
+        `_run_one_workflow` frame, so nothing calls `_finalize_terminal`
+        for it. When `child_lane=True` the drain cleans up its own
+        per-run trackers (`_per_run_drain_tasks` / `_workflow_bridges` /
+        `_workflow_cancels`) on exit so no drain task leaks after the
+        child's terminal RUN_* + stop-sentinel.
         """
         _ = cancel
         run_id = spec.run_id
@@ -1196,7 +1408,73 @@ class WorkflowsImpl(AbstractWorkflows):
         bridge_queue = self._workflow_bridges.get(run_id)
         if bridge_queue is None:
             return
+        try:
+            await self._drain_workflow_bridge_loop(spec, bridge_queue, record)
+        finally:
+            if child_lane:
+                await self._finalize_child_lane(spec, record)
 
+    async def _finalize_child_lane(
+        self,
+        spec: WorkflowRunSpec,
+        record: WorkflowRunRecord | None,
+    ) -> None:
+        """Self-cleanup for a child lane after its drain loop exits.
+
+        spec-103. A child lane is NOT owned by a `_run_one_workflow`
+        frame, so `_finalize_terminal` never runs for it. Mirror the
+        parts of that finalizer that matter for the child: drop the
+        per-run trackers (so the drain task + bridge don't leak), stamp
+        `terminal_at`, and schedule the 60s registry eviction so
+        `status()` cold-reads the child after the retention window (the
+        child's JSONL stays authoritative). The child's terminal RUN_*
+        already closed the child card via the drain loop; we only
+        best-effort close it here if the loop exited without a terminal
+        (e.g. cancelled mid-flight).
+        """
+        run_id = spec.run_id
+        self._per_run_drain_tasks.pop(run_id, None)
+        self._workflow_bridges.pop(run_id, None)
+        self._workflow_cancels.pop(run_id, None)
+
+        if record is not None and record.terminal_at is None:
+            record.terminal_at = datetime.now(tz=UTC)
+
+        if spec.card is not None and not spec.card.is_closed:
+            final = self._card_final_status_for_phase(
+                record.phase if record is not None else "error"
+            )
+            with contextlib.suppress(Exception):
+                # Fallback close for the no-terminal-event exit; the
+                # drain loop already closed it on a normal terminal.
+                await spec.card.close(
+                    final_status=final,
+                    error_message=(
+                        record.error_message if record is not None else None
+                    ),
+                )
+
+        if not self._closed:
+            loop = asyncio.get_running_loop()
+            loop.call_later(
+                _REGISTRY_EVICTION_SECONDS,
+                self._evict_registry_record,
+                run_id,
+            )
+
+    async def _drain_workflow_bridge_loop(
+        self,
+        spec: WorkflowRunSpec,
+        bridge_queue: asyncio.Queue[Any],
+        record: WorkflowRunRecord | None,
+    ) -> None:
+        """Inner drain loop — one iteration per bridge item.
+
+        Extracted from `_drain_workflow_bridge` so the child-lane
+        self-cleanup can wrap the loop in a `finally` without
+        re-indenting the whole body.
+        """
+        run_id = spec.run_id
         while True:
             item = await bridge_queue.get()
             if isinstance(item, _StopSentinel):
@@ -1266,6 +1544,30 @@ class WorkflowsImpl(AbstractWorkflows):
             # showed 90.4s + 65s dead zones on the strip because the
             # pre-bug-031 code only pinged the manager on terminal.
             self._notify_layout(run_id)
+
+            # spec-103: child-lane lifecycle. `CALLED_WORKFLOW` /
+            # `CALLED_WORKFLOW_COMPLETED` are PARENT-stream events, so
+            # they only ever land here on the PARENT's drain — the
+            # child's own bridge only carries the child's own events.
+            if event.kind == WorkflowEventKind.CALLED_WORKFLOW:
+                # Open the child's peer card + record + drain. Idempotent
+                # on a replayed `CALLED_WORKFLOW`. The child bridge queue
+                # already exists (the dispatch observer race-guarded it),
+                # so any child event that arrived before this async setup
+                # is buffered and drained by the task we start here.
+                await self._open_child_lane(run_id, event.payload)
+            elif event.kind == WorkflowEventKind.CALLED_WORKFLOW_COMPLETED:
+                # End the child drain. The child's own terminal RUN_*
+                # (drained through the child bridge) already closed the
+                # child card with the right final status; this sentinel
+                # just terminates the child's drain loop. Guard for a
+                # child whose lane was never opened (dropped / replay).
+                child_id = self._child_run_id_from_payload(event.payload)
+                if child_id is not None:
+                    child_queue = self._workflow_bridges.get(child_id)
+                    if child_queue is not None:
+                        with contextlib.suppress(asyncio.QueueFull):
+                            child_queue.put_nowait(_STOP_SENTINEL)
 
             # Terminal-kind bookkeeping.
             if event.kind in _TERMINAL_EXECUTOR_KINDS:
@@ -1812,7 +2114,9 @@ class WorkflowsImpl(AbstractWorkflows):
         inputs: dict[str, Any],
         event_observer: Callable[[WorkflowEvent], None],
         cancel_token: _CancelToken,
-        sub_agent_event_observer: (Callable[[str, str, Event], None] | None) = None,
+        sub_agent_event_observer: (
+            Callable[[str, str, str, Event], None] | None
+        ) = None,
     ) -> tuple[IterativeExecutor, RunDirectory]:
         """Build a real `IterativeExecutor` via the shared helper.
 

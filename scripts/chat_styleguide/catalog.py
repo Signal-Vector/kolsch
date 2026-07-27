@@ -178,6 +178,42 @@ def _drive_workflow_content(w: Any) -> None:  # noqa: ANN401
         )
 
 
+def _drive_workflow_call_link(w: Any) -> None:  # noqa: ANN401
+    # feat-104: a `kolsch/nodes/workflow` row that has called a child
+    # sub-workflow. `set_child_workflow` mounts the focusable
+    # `WorkflowCallLink` ([▸ <child_ref> · <status>]) in the row's
+    # Contents + a `▸ <child_ref>` collapsed-title hint;
+    # `set_child_status` then updates the suffix to `✓ succeeded`. The
+    # row is already mounted when this driver runs, so the
+    # `_mount_in_contents` path resolves the Contents slot.
+    w.set_state("success")
+    w.set_child_workflow("wrk_child_deploy", "kolsch/workflows/deploy-child")
+    w.set_child_status("succeeded")
+
+
+def _drive_workflow_map_iterations(w: Any) -> None:  # noqa: ANN401
+    # bug-095: a `kolsch/nodes/map` row with collapsed iteration children.
+    # Each iteration is a child `WorkflowNodeRow` mounted inside the map
+    # row's Contents via `add_iteration_child`, titled `<name>[<i>]`. With
+    # a total of 12 (>10) the children collapse by default; the map row's
+    # title carries the live rollup `(map · N iterations · X done, Y
+    # running, Z failed)`. Drive a mix of states so the rollup is non-trivial.
+    w.set_state("running")
+    total = 12
+    states = {0: "success", 1: "success", 2: "failed"}
+    for i in range(total):
+        child = WorkflowNodeRow(
+            node_name="score_one_resume",
+            trace_id="tr_map",
+            node_type="kolsch/nodes/agent",
+            invocation_id=f"inv_child_{i}",
+        )
+        w.add_iteration_child(child, i, total)
+        target = states.get(i)
+        if target is not None:
+            child.set_state(target)
+
+
 def _expand_approval_args_row(w: Any) -> None:  # noqa: ANN401
     w._expanded = True
     w._refresh_static()
@@ -271,6 +307,49 @@ CATALOG: list[CatalogEntry] = [
             "paused": lambda w: w.set_state("paused"),
             "cancelling": lambda w: w.set_state("cancelling"),
             "pruned": lambda w: w.set_state("pruned"),
+            # bug-096: pre-mount placeholder (`○`) + branch-skip (`⊘`).
+            "pending": lambda w: w.set_state("pending"),
+            "skipped": lambda w: w.set_state("skipped"),
+        },
+        expand_collapsible=True,
+    ),
+    CatalogEntry(
+        # feat-104: a `kolsch/nodes/workflow` node row carrying the
+        # focusable forward link to its child sub-workflow's peer card.
+        # Distinct catalog name (not "WorkflowNodeRow") so it captures
+        # the `WorkflowCallLink` specimen without disturbing the
+        # node-row state-set validation.
+        name="WorkflowCallLink",
+        family="transcript",
+        source_file="workflow_node_row.py",
+        make=lambda: WorkflowNodeRow(
+            node_name="call_child",
+            trace_id="tr_wf",
+            node_type="kolsch/nodes/workflow",
+        ),
+        states={
+            "workflow_call": _drive_workflow_call_link,
+        },
+        expand_collapsible=True,
+    ),
+    CatalogEntry(
+        # bug-095: a `kolsch/nodes/map` node row with its per-iteration
+        # child rows collapsed underneath. Captures the `<name>[<i>]`
+        # child-title suffix + the `(map · N iterations · X done, Y
+        # running, Z failed)` rollup on the map header. Distinct catalog
+        # name so it does not disturb the WorkflowNodeRow state-set
+        # validation.
+        name="WorkflowMapIterations",
+        family="transcript",
+        source_file="workflow_node_row.py",
+        make=lambda: WorkflowNodeRow(
+            node_name="score_resumes",
+            trace_id="tr_map",
+            node_type="kolsch/nodes/map",
+            invocation_id="inv_map",
+        ),
+        states={
+            "map_iterations": _drive_workflow_map_iterations,
         },
         expand_collapsible=True,
     ),
@@ -639,6 +718,9 @@ def validate_catalog(catalog: list[CatalogEntry]) -> None:
                 "paused",
                 "cancelling",
                 "pruned",
+                # bug-096: pre-mount placeholder + branch-skip states.
+                "pending",
+                "skipped",
             }
         ),
         "CardWidget": frozenset(

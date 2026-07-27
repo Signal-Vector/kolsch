@@ -63,6 +63,7 @@ from textual.widgets import Collapsible, Static
 from cli.chat.metrics import format_duration
 from cli.chat.spinner import SPINNER_FRAMES, spinner_frame
 from cli.chat.state_tokens import resolve_state
+from cli.chat.widgets.assistant_prose import WorkflowAnchorButton
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -85,8 +86,17 @@ grow unbounded while a sub-agent runs.
 """
 
 
-_TERMINAL_STATES = frozenset({"success", "failed", "cancelling", "cancelled"})
-"""spec-021: states that freeze the pending-mount queue."""
+_TERMINAL_STATES = frozenset(
+    {"success", "failed", "cancelling", "cancelled", "skipped"}
+)
+"""spec-021: states that freeze the pending-mount queue.
+
+bug-096: ``skipped`` (a branch-pruned node that never ran) joins the
+freeze set — a node the executor pruned will never produce sub-agent
+mounts, so freezing its buffer is correct. ``pending`` is
+deliberately NOT here: a placeholder must still accept mounts once it
+adopts on NODE_STARTED, so its buffer stays live.
+"""
 
 
 _BASH_SHAPE_KEYS = frozenset({"stdout", "stderr", "exit_code"})
@@ -205,36 +215,98 @@ def _render_bash_blocks(content: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _render_workflow_inputs_used_block(
+    workflow_inputs_used: dict[str, Any] | None,
+) -> list[str]:
+    """bug-094: render the ``workflow inputs used:`` sub-block lines.
+
+    Empty / ``None`` → no lines. Otherwise a labelled block mirroring the
+    ``bound inputs:`` per-key formatting, so the user can see WHICH
+    workflow-scope inputs this node's templated config referenced (a
+    distinct source from the inbound-edge binds shown by ``bound inputs:``).
+    """
+    if not workflow_inputs_used:
+        return []
+    lines = ["workflow inputs used:"]
+    for key, value in workflow_inputs_used.items():
+        lines.append(f"· {key}: {_format_input_value(value)}")
+    return lines
+
+
+def _render_command_block(command: str, rendered: str | None) -> list[str]:
+    """bug-036c + bug-094: the ``command:`` block lines.
+
+    When ``rendered`` is present AND differs from the raw ``command``
+    (string equality), the RENDERED form is the primary ``command:`` line
+    and the raw template drops to a subordinate ``template:`` line. When
+    ``rendered`` is ``None`` or equal to the raw command, a single
+    ``command:`` line renders (today's behaviour).
+    """
+    lines = ["command:"]
+    if rendered is not None and rendered != command:
+        lines.append(_truncate(rendered, 500))
+        lines.append("template:")
+        lines.append(_truncate(command, 500))
+    else:
+        lines.append(_truncate(command, 500))
+    return lines
+
+
 def _render_bash_input_body(
     bound_inputs: dict[str, Any],
     command: str,
+    *,
+    rendered_command: str | None = None,
+    workflow_inputs_used: dict[str, Any] | None = None,
 ) -> str:
-    """bug-037: render the bash `input` section body — inputs + command."""
+    """bug-037 + bug-094: render the bash `input` section body.
+
+    Layout: ``bound inputs:`` (inbound-edge binds) → ``workflow inputs
+    used:`` (bug-094; the workflow-scope inputs this node's templates
+    referenced) → ``command:`` (with a subordinate ``template:`` line when
+    a differing rendered form is available). Each block is present only
+    when non-empty.
+    """
     lines: list[str] = []
     if bound_inputs:
         lines.append("bound inputs:")
         for key, value in bound_inputs.items():
             lines.append(f"· {key}: {_format_input_value(value)}")
         lines.append("")
-    lines.append("command:")
-    lines.append(_truncate(command, 500))
+    used_lines = _render_workflow_inputs_used_block(workflow_inputs_used)
+    if used_lines:
+        lines.extend(used_lines)
+        lines.append("")
+    lines.extend(_render_command_block(command, rendered_command))
     return "\n".join(lines)
 
 
-def _render_bound_inputs_body(bound_inputs: dict[str, Any]) -> str:
-    """bug-063: render a generic Input section body from bound inputs.
+def _render_bound_inputs_body(
+    bound_inputs: dict[str, Any],
+    *,
+    workflow_inputs_used: dict[str, Any] | None = None,
+) -> str:
+    """bug-063 + bug-094: render a generic Input section body from bound inputs.
 
     Used on the failure path for node types (e.g. agent) that lack a
     reusable bound-inputs section. Mirrors the ``bound inputs:`` block
-    from :func:`_render_bash_input_body` but without the trailing
-    ``command:`` block. Empty inputs render as the empty-note constant
-    so a failed row always shows a populated Input section.
+    from :func:`_render_bash_input_body` (plus the bug-094 ``workflow
+    inputs used:`` sub-block) but without the trailing ``command:`` block.
+    Empty inputs (and no workflow-inputs-used) render as the empty-note
+    constant so a failed row always shows a populated Input section.
     """
-    if not bound_inputs:
+    used_lines = _render_workflow_inputs_used_block(workflow_inputs_used)
+    if not bound_inputs and not used_lines:
         return _FAILED_INPUT_EMPTY_NOTE
-    lines: list[str] = ["bound inputs:"]
-    for key, value in bound_inputs.items():
-        lines.append(f"· {key}: {_format_input_value(value)}")
+    lines: list[str] = []
+    if bound_inputs:
+        lines.append("bound inputs:")
+        for key, value in bound_inputs.items():
+            lines.append(f"· {key}: {_format_input_value(value)}")
+    if used_lines:
+        if lines:
+            lines.append("")
+        lines.extend(used_lines)
     return "\n".join(lines)
 
 
@@ -261,6 +333,78 @@ def _extract_content_text(content: Any) -> str:
                 return value
         return _format_content_dict(content)
     return _truncate(str(content), _BODY_MAX_CHARS)
+
+
+_WORKFLOW_NODE_TYPE = "kolsch/nodes/workflow"
+"""feat-104: the sub-workflow node literal (``parser.py:429``).
+
+A ``WorkflowNodeRow`` whose ``_node_type`` matches this string is a
+``kolsch/nodes/workflow`` invocation — the parent side of a
+parent→child sub-workflow edge. Only these rows grow the forward
+:class:`WorkflowCallLink` to the child's peer card (feat-104 gate,
+mirroring the ``== "kolsch/nodes/agent"`` gate in ``set_output``).
+"""
+
+
+_CHILD_STATUS_SUFFIXES: dict[str, str] = {
+    "succeeded": "✓ succeeded",
+    "failed": "✗ failed",
+    "waiting_for_input": "⚠ waiting",
+}
+"""feat-104: child-status → link-suffix mapping.
+
+`child_status` is the child run's terminal-ish status
+(``WorkflowNodeCalledWorkflowCompletedPayload.child_status``): one of
+``succeeded`` / ``failed`` / ``waiting_for_input`` / ``aborted`` /
+``timed_out``. The three status glyphs the PINNED visual spec locks
+in map here; any other status (``aborted`` / ``timed_out`` / an
+unknown string) falls back to the raw status text so the link never
+renders a bare bracket.
+"""
+
+
+class WorkflowCallLink(WorkflowAnchorButton):
+    """feat-104: focusable forward link from a parent workflow node.
+
+    Mounted inside a ``kolsch/nodes/workflow`` :class:`WorkflowNodeRow`'s
+    Contents by :meth:`WorkflowNodeRow.set_child_workflow`. Subclasses
+    :class:`~cli.chat.widgets.assistant_prose.WorkflowAnchorButton`
+    verbatim — same ``can_focus``, the ``enter`` binding, ``on_click``,
+    and ``_activate`` (which calls the app's
+    ``action_scroll_to_workflow_card`` with the child run id). Reuse of
+    the feat-018 family keeps the CSS ($tool-fg cyan, bold, ``:focus``
+    bold reverse) and the ``[▸ <label>]`` bracket format identical to
+    the assistant-prose card anchor.
+
+    The only addition is :meth:`update_status`, which re-renders the
+    label with a status suffix (``[▸ <child_ref> · <status>]``) when
+    the child run completes.
+    """
+
+    def __init__(self, *, child_ref: str, child_run_id: str) -> None:
+        # feat-104: while the child is live the suffix reads ``running``;
+        # `update_status` swaps it on CALLED_WORKFLOW_COMPLETED.
+        self._child_ref = child_ref
+        self._status_suffix = "running"
+        super().__init__(
+            label=self._compose_label(),
+            run_id=child_run_id,
+        )
+
+    def _compose_label(self) -> str:
+        """Return ``<child_ref> · <status>`` (bracket added by the base)."""
+        return f"{self._child_ref} · {self._status_suffix}"
+
+    def update_status(self, child_status: str) -> None:
+        """feat-104: re-render the label suffix from the child status.
+
+        Maps the child run's terminal-ish status onto the PINNED glyph
+        suffix (``✓ succeeded`` / ``✗ failed`` / ``⚠ waiting``); any
+        other status renders its raw text so the bracket stays intact.
+        """
+        self._status_suffix = _CHILD_STATUS_SUFFIXES.get(child_status, child_status)
+        self._label = self._compose_label()
+        self.update(f"[▸ {self._label}]")
 
 
 class WorkflowNodeRow(Collapsible):
@@ -308,6 +452,8 @@ class WorkflowNodeRow(Collapsible):
     WorkflowNodeRow.-paused     { color: $warning; border-left: outer $warning; }
     WorkflowNodeRow.-cancelling { color: $tool-fg; opacity: 0.6; border-left: outer $tool-fg; }
     WorkflowNodeRow.-cancelled  { color: $hint;    border-left: outer $hint; }
+    WorkflowNodeRow.-pending    { color: $hint;    border-left: outer $hint; }
+    WorkflowNodeRow.-skipped    { color: $hint;    border-left: outer $hint; }
     """
 
     # State glyphs live in `src/cli/chat/state_tokens.py` — the
@@ -317,8 +463,26 @@ class WorkflowNodeRow(Collapsible):
     # scaffolding are gone. Widget internals key on canonical names
     # directly.
 
-    _TERMINAL_CSS_STATES = ("success", "failed", "paused", "cancelling", "cancelled")
-    """States that map to a `.-<state>` CSS class."""
+    _TERMINAL_CSS_STATES = (
+        "success",
+        "failed",
+        "paused",
+        "cancelling",
+        "cancelled",
+        "pending",
+        "skipped",
+    )
+    """States that map to a `.-<state>` CSS class.
+
+    bug-096: this set is NO LONGER strictly "terminal" — it is the set
+    of states `watch_state` iterates to remove/apply the `.-<state>`
+    CSS class. It now includes the NON-terminal ``pending`` (the
+    pre-mount placeholder rail) alongside ``skipped``. Buffer-freeze
+    keys on the SEPARATE ``_TERMINAL_STATES`` frozenset, so adding
+    ``pending`` here paints the ``.-pending`` rail WITHOUT freezing the
+    mount buffer — the exact separation that makes a non-terminal
+    colored rail safe.
+    """
 
     _ERROR_PREVIEW_MAX_LEN = 60
     """Coordinator #4 lock — fixed 60 char error preview truncation."""
@@ -342,10 +506,29 @@ class WorkflowNodeRow(Collapsible):
         node_name: str,
         trace_id: str | None = None,
         node_type: str | None = None,
+        invocation_id: str | None = None,
+        initial_state: str = "running",
     ) -> None:
         self._node_name = node_name
         self._trace_id = trace_id
         self._node_type = node_type
+        # bug-095: the row's own invocation_id. The renderer keys its
+        # ``_node_rows`` map on ``(node_name, invocation_id)`` and passes
+        # the payload's top-level ``invocation_id`` through here. Rows did
+        # NOT carry this before — ``add_iteration_child`` needs it to
+        # compare a stored iteration child against an incoming one (the
+        # same-index-different-invocation idempotency guard).
+        self._invocation_id: str | None = invocation_id
+        # bug-095: map-iteration child machinery. A ``kolsch/nodes/map``
+        # row collects one child row per iteration keyed by
+        # ``iteration_index`` (0-based); each child is stamped with its
+        # index / total / a back-pointer to the parent map row so its
+        # ``set_state`` transitions roll up into the parent's title.
+        self._iteration_children: dict[int, WorkflowNodeRow] = {}
+        self._is_iteration_child: bool = False
+        self._iteration_index: int | None = None
+        self._iteration_total: int | None = None
+        self._parent_map_row: WorkflowNodeRow | None = None
         self._short_type: str | None = (
             node_type.rsplit("/", 1)[-1] if node_type else None
         )
@@ -357,6 +540,31 @@ class WorkflowNodeRow(Collapsible):
         self._output_widget: Widget | None = None
         self._command_widget: Widget | None = None
         self._pending_command: str | None = None
+        # bug-094: rendered companion for the bash `command` preview. When
+        # present AND != the raw template, the input section shows the
+        # rendered form as the primary `command:` line and the raw template
+        # on a subordinate `template:` line.
+        self._pending_command_rendered: str | None = None
+        # bug-094: persistent copies of the bash command + its rendered
+        # companion, kept AFTER `_flush_pending_previews` resets the pending
+        # slots to None (bug-036c invariant: `_pending_command is None`
+        # post-mount). These let `_refresh_bash_input_body` re-render the
+        # already-mounted body when a later `set_workflow_inputs_used` /
+        # `set_bound_inputs` arrives out of order. `None` ⇒ not a bash
+        # command section (compute/map/workflow previews leave these unset).
+        self._command_text: str | None = None
+        self._command_rendered: str | None = None
+        # bug-094: stashed non-bash config preview (compute `value`, map
+        # `over`, nested-workflow `ref`/`binds`), deferred until mount like
+        # `_pending_command`. `("value"|"over", raw, rendered)` or
+        # `("workflow", ref, binds, rendered_binds)`.
+        self._pending_config_preview: tuple[Any, ...] | None = None
+        # bug-094: the subset of workflow-scope inputs this node's templated
+        # fields referenced (from `NODE_STARTED.payload.workflow_inputs_used`).
+        # Surfaced as a `workflow inputs used:` sub-block on the live bash
+        # input body. Stashed BEFORE the section mounts (mirrors
+        # `_bound_inputs`).
+        self._workflow_inputs_used: dict[str, Any] = {}
         # bug-037: per-type sections. Bash rows own an `input`
         # section (bound_inputs + command), an `output` section
         # (stdout), and an `exit: <code>` section. Agent rows own
@@ -401,6 +609,15 @@ class WorkflowNodeRow(Collapsible):
         # means "nothing rendered"; non-empty means ``set_output``
         # should gate the JSON preview for agent nodes.
         self._last_assistant_text: str = ""
+        # feat-104: forward link to a child sub-workflow's peer card.
+        # Only populated on a ``kolsch/nodes/workflow`` row via
+        # ``set_child_workflow``. ``_child_ref`` feeds the collapsed-
+        # title hint (``▸ <child_ref>``); ``_child_link`` is the mounted
+        # focusable widget (idempotent — a replayed CALLED_WORKFLOW does
+        # not mount a second link).
+        self._child_ref: str | None = None
+        self._child_run_id: str | None = None
+        self._child_link: WorkflowCallLink | None = None
         # bug-036b: pre-completion title includes ``(short_type)``.
         # The initial glyph is the spinner table's first frame — a
         # static placeholder for the ~80 ms gap between compose and
@@ -409,10 +626,32 @@ class WorkflowNodeRow(Collapsible):
         # ``SPINNER_FRAMES[0]`` — same visual, canonical source; the
         # bug-036b snapshot golden pins on the same character either
         # way, so no snapshot regeneration is triggered here.
-        title = f"{SPINNER_FRAMES[0]} {node_name}"
+        # bug-096: the leading glyph is spinner-frame 0 ONLY for the
+        # animated ``running`` state (a freshly-mounted in-flight
+        # node). A non-animated ``initial_state`` (``pending``) starts
+        # with its resting canonical glyph (``○``) so a placeholder
+        # never appears to spin before its first frame tick.
+        if initial_state in _ANIMATED_STATES:
+            leading_glyph = SPINNER_FRAMES[0]
+        else:
+            try:
+                leading_glyph = resolve_state(initial_state).glyph
+            except KeyError:
+                leading_glyph = "?"
+        title = f"{leading_glyph} {node_name}"
         if self._short_type:
             title += f" ({self._short_type})"
         super().__init__(title=title, collapsed=True)
+        # bug-096: assign the reactive AFTER ``super().__init__`` so
+        # ``watch_state`` fires and applies the ``.-<state>`` class
+        # (e.g. ``.-pending``). The spinner-stop branch inside
+        # ``watch_state`` is a no-op here (``_spinner_handle`` is
+        # ``None`` until ``on_mount``); ``pending`` is not in
+        # ``_TERMINAL_STATES`` so no buffer-freeze. The ``running``
+        # default already matches the reactive default — skip the
+        # assignment so existing rows behave exactly as before.
+        if initial_state != "running":
+            self.state = initial_state
 
     # ------------------------------------------------------------------
     # Lifecycle
@@ -471,6 +710,9 @@ class WorkflowNodeRow(Collapsible):
         self._update_title()
         if state == "failed":
             self._mount_failure_sections()
+        # bug-095: an iteration child's state change rolls up into the
+        # parent map row's title counter (X done, Y running, Z failed).
+        self._notify_parent_state_change()
 
     def set_output(self, output: Any) -> None:
         """bug-032 + bug-034 + bug-037: mount output section(s).
@@ -518,6 +760,54 @@ class WorkflowNodeRow(Collapsible):
         with contextlib.suppress(Exception):
             self._mount_in_contents(widget)
 
+    def set_child_workflow(self, child_run_id: str, child_ref: str) -> None:
+        """feat-104: mount a forward link to the child sub-workflow's card.
+
+        Called by
+        [`WorkflowRenderer._on_called_workflow`][cli.chat.widgets.card_body.workflow.WorkflowRenderer._on_called_workflow]
+        when the parent's ``workflow.node.called_workflow`` event lands.
+        Gated on ``self._node_type == "kolsch/nodes/workflow"`` (same gate
+        style as the ``kolsch/nodes/agent`` check in ``set_output``); a
+        non-workflow row ignores the call.
+
+        Mounts a focusable :class:`WorkflowCallLink` inside the row's
+        Contents (revealed on expand — putting it here avoids fighting
+        the Collapsible's Enter-toggles-expand behaviour) and adds a
+        ``▸ <child_ref>`` discoverability hint to the collapsed title.
+        Idempotent: a replayed CALLED_WORKFLOW does NOT mount a second
+        link (AC #7).
+        """
+        if self._node_type != _WORKFLOW_NODE_TYPE:
+            return
+        if self._child_link is not None:
+            # feat-104 AC #7: replay-safe — the link is already mounted.
+            return
+        self._child_run_id = child_run_id
+        self._child_ref = child_ref
+        link = WorkflowCallLink(child_ref=child_ref, child_run_id=child_run_id)
+        self._child_link = link
+        with contextlib.suppress(Exception):
+            self._mount_in_contents(link)
+        # feat-104: surface the `▸ <child_ref>` hint on the collapsed
+        # title so the link is discoverable without expanding the row.
+        self._update_title()
+
+    def set_child_status(self, child_status: str) -> None:
+        """feat-104: update the child link's status suffix on completion.
+
+        Called by
+        [`WorkflowRenderer._on_called_workflow_completed`][cli.chat.widgets.card_body.workflow.WorkflowRenderer._on_called_workflow_completed]
+        when the parent's ``workflow.node.called_workflow_completed``
+        event lands. Gated on the workflow node type; a no-op when no
+        link was mounted (e.g. a CALLED_WORKFLOW_COMPLETED that arrived
+        without a preceding CALLED_WORKFLOW).
+        """
+        if self._node_type != _WORKFLOW_NODE_TYPE:
+            return
+        if self._child_link is None:
+            return
+        self._child_link.update_status(child_status)
+
     def set_bound_inputs(self, inputs: dict[str, Any]) -> None:
         """bug-037: stash bound inputs for later section rendering.
 
@@ -525,31 +815,171 @@ class WorkflowNodeRow(Collapsible):
         rows can include the bound-inputs block inside their ``input``
         section. If ``set_command_preview`` fires first (race), the
         section is created without the block; a subsequent
-        ``set_bound_inputs`` is a no-op — the section is NOT rebuilt.
+        ``set_bound_inputs`` refreshes the already-mounted body in place
+        (bug-094 — so an out-of-order setter still surfaces).
         """
-        if self._bash_input_section is not None:
-            # Section already mounted (race): don't rebuild.
-            self._bound_inputs = dict(inputs)
-            return
         self._bound_inputs = dict(inputs)
+        self._refresh_bash_input_body()
 
-    def set_command_preview(self, command: str) -> None:
-        """bug-036c + bug-037: mount an ``input`` section w/ command."""
+    def set_workflow_inputs_used(self, inputs: dict[str, Any]) -> None:
+        """bug-094: stash the workflow-scope inputs this node referenced.
+
+        Mirrors :meth:`set_bound_inputs`. Surfaced as a ``workflow inputs
+        used:`` sub-block on the live bash input body (below ``bound
+        inputs:``). Stashed before the section mounts; if it arrives after
+        the section is already mounted the body is refreshed in place.
+        """
+        self._workflow_inputs_used = dict(inputs)
+        self._refresh_bash_input_body()
+
+    def set_command_preview(self, command: str, *, rendered: str | None = None) -> None:
+        """bug-036c + bug-037 + bug-094: mount an ``input`` section w/ command.
+
+        ``rendered`` is the fire-time rendered form of the command
+        template; when present and differing from ``command`` the section
+        shows it as the primary ``command:`` line with the raw template on
+        a subordinate ``template:`` line.
+        """
         if self._command_widget is not None:
+            # Section already mounted (out-of-order setter): refresh body.
+            self._command_text = command
+            self._command_rendered = rendered
+            self._refresh_bash_input_body()
             return
         self._pending_command = command
+        self._pending_command_rendered = rendered
         if self.is_mounted:
             self._flush_pending_previews()
 
-    def _flush_pending_previews(self) -> None:
-        """bug-036c + bug-037: mount deferred command preview once composed."""
-        if self._pending_command is None or self._command_widget is not None:
+    def set_value_preview(self, value: str, *, rendered: str | None = None) -> None:
+        """bug-094: mount a compute ``value`` preview (rendered + template)."""
+        self._stash_config_preview(("value", value, rendered))
+
+    def set_over_preview(self, over: str, *, rendered: str | None = None) -> None:
+        """bug-094: mount a map ``over`` preview (rendered + template)."""
+        self._stash_config_preview(("over", over, rendered))
+
+    def set_workflow_binds_preview(
+        self,
+        ref: str,
+        binds: dict[str, Any],
+        rendered_binds: dict[str, Any],
+    ) -> None:
+        """bug-094: mount a nested-workflow ``ref`` + rendered ``binds`` preview.
+
+        Shows the sub-workflow ``ref:`` line plus a per-bind ``key: rendered
+        (template: raw)`` block so the parent row surfaces what each bind
+        resolved to at fire-time — the class the design review flagged as
+        "where propagation matters most".
+        """
+        self._stash_config_preview(("workflow", ref, binds, rendered_binds))
+
+    def _stash_config_preview(self, spec: tuple[Any, ...]) -> None:
+        """bug-094: stash a non-bash config preview + flush if mounted.
+
+        Mirrors :meth:`set_command_preview`'s defer-until-mount pattern so a
+        preview set while the row is still composing still renders. ``spec``
+        is ``("value"|"over", raw, rendered)`` or
+        ``("workflow", ref, binds, rendered_binds)``.
+        """
+        if self._command_widget is not None:
             return
-        body = _render_bash_input_body(self._bound_inputs, self._pending_command)
-        section = self._new_bash_input_section(body)
-        self._bash_input_section = section
-        self._command_widget = section
-        self._pending_command = None
+        self._pending_config_preview = spec
+        if self.is_mounted:
+            self._flush_pending_previews()
+
+    def _config_preview_body(self, spec: tuple[Any, ...]) -> str:
+        """bug-094: build a non-bash config-preview section body from ``spec``."""
+        lines: list[str] = []
+        used_lines = _render_workflow_inputs_used_block(self._workflow_inputs_used)
+        kind = spec[0]
+        if kind == "workflow":
+            _, ref, binds, rendered_binds = spec
+            lines.append(f"ref: {ref}")
+            if binds:
+                lines.append("")
+                lines.append("binds:")
+                for key in binds:
+                    rendered = rendered_binds.get(key)
+                    raw = binds.get(key)
+                    if rendered is not None and str(rendered) != str(raw):
+                        lines.append(f"· {key}: {_truncate(str(rendered), 500)}")
+                        lines.append(f"  template: {_truncate(str(raw), 500)}")
+                    else:
+                        lines.append(f"· {key}: {_truncate(str(raw), 500)}")
+            if used_lines:
+                lines.append("")
+                lines.extend(used_lines)
+            return "\n".join(lines)
+        # compute `value` / map `over`: rendered primary + `template:` sub.
+        label, raw, rendered = spec
+        if used_lines:
+            lines.extend(used_lines)
+            lines.append("")
+        lines.append(f"{label}:")
+        if rendered is not None and rendered != raw:
+            lines.append(_truncate(rendered, 500))
+            lines.append("template:")
+            lines.append(_truncate(raw, 500))
+        else:
+            lines.append(_truncate(raw, 500))
+        return "\n".join(lines)
+
+    def _flush_pending_previews(self) -> None:
+        """bug-036c + bug-037 + bug-094: mount deferred config preview.
+
+        Bash rows flush the ``command`` body; compute/map/workflow rows
+        flush the stashed non-bash preview. Guarded against a double-mount
+        via ``_command_widget``.
+        """
+        if self._command_widget is not None:
+            return
+        if self._pending_command is not None:
+            # Promote the pending bash command to the persistent fields so a
+            # later out-of-order setter can refresh the body; then clear the
+            # pending slots (bug-036c invariant: `_pending_command is None`
+            # post-mount).
+            self._command_text = self._pending_command
+            self._command_rendered = self._pending_command_rendered
+            self._pending_command = None
+            self._pending_command_rendered = None
+            body = _render_bash_input_body(
+                self._bound_inputs,
+                self._command_text,
+                rendered_command=self._command_rendered,
+                workflow_inputs_used=self._workflow_inputs_used,
+            )
+            section = self._new_bash_input_section(body)
+            self._bash_input_section = section
+            self._command_widget = section
+            return
+        if self._pending_config_preview is not None:
+            body = self._config_preview_body(self._pending_config_preview)
+            section = self._new_bash_input_section(body)
+            self._bash_input_section = section
+            self._command_widget = section
+
+    def _refresh_bash_input_body(self) -> None:
+        """bug-094: re-render the already-mounted bash input body in place.
+
+        Handles out-of-order setters (a ``set_workflow_inputs_used`` or
+        ``set_bound_inputs`` arriving after the bash ``input`` section is
+        mounted). No-op when the section isn't mounted yet (the pending
+        stashes are picked up by :meth:`_flush_pending_previews`) or when the
+        mounted section is NOT a bash command section (compute/map/workflow
+        previews own their own body; ``_command_text`` stays ``None``).
+        """
+        if self._bash_input_section is None or self._command_text is None:
+            return
+        body = _render_bash_input_body(
+            self._bound_inputs,
+            self._command_text,
+            rendered_command=self._command_rendered,
+            workflow_inputs_used=self._workflow_inputs_used,
+        )
+        inner = self._bash_input_section._contents_list[0]
+        with contextlib.suppress(Exception):
+            inner.update(body)
 
     def _new_bash_input_section(self, body_text: str) -> Widget:
         """Build + mount the bash ``input`` NodeSection."""
@@ -632,7 +1062,10 @@ class WorkflowNodeRow(Collapsible):
         # `_bound_inputs` (this is the NEW render for agent nodes,
         # which have no reusable bound-inputs section).
         if self._bash_input_section is None:
-            input_body = _render_bound_inputs_body(self._bound_inputs)
+            input_body = _render_bound_inputs_body(
+                self._bound_inputs,
+                workflow_inputs_used=self._workflow_inputs_used,
+            )
             input_section = NodeSection("input")
             input_section._contents_list.append(
                 Static(input_body, markup=False),
@@ -703,6 +1136,87 @@ class WorkflowNodeRow(Collapsible):
             self._node_completed_at = ts
         if duration_ms is not None:
             self._node_duration_ms = duration_ms
+
+    # ------------------------------------------------------------------
+    # bug-095: map-iteration child rows
+    # ------------------------------------------------------------------
+
+    def add_iteration_child(
+        self,
+        child_row: WorkflowNodeRow,
+        iteration_index: int,
+        iteration_total: int,
+    ) -> WorkflowNodeRow:
+        """bug-095: mount ``child_row`` as this map row's iteration ``[i]``.
+
+        A ``kolsch/nodes/map`` node spawns N iterations of one applied
+        node; each iteration is rendered as a CHILD row inside this map
+        row's ``Collapsible.Contents``, index-ordered by
+        ``iteration_index`` (0-based) regardless of arrival order.
+
+        Idempotent on a repeated ``iteration_index``: returns the stored
+        child unchanged. If the incoming child's ``_invocation_id``
+        differs from the stored child's, that is an executor bug
+        (two distinct invocations claiming the same iteration slot) —
+        log a WARNING and keep the original.
+
+        Collapse-by-default at N>10 is a legibility threshold: children
+        of a large map start collapsed so the map header stays legible.
+        A user who click-expands a specific iteration is not overridden
+        (this method never re-collapses an existing child).
+        """
+        existing = self._iteration_children.get(iteration_index)
+        if existing is not None:
+            if existing._invocation_id != child_row._invocation_id:
+                _LOGGER.warning(
+                    "bug-095: iteration_index=%s on map node %s already "
+                    "mounted with invocation_id=%s; ignoring a second "
+                    "invocation_id=%s (executor bug — duplicate iteration "
+                    "slot).",
+                    iteration_index,
+                    self._node_name,
+                    existing._invocation_id,
+                    child_row._invocation_id,
+                )
+            return existing
+        # Stamp the child so its title reads ``<name>[<index>]`` and its
+        # state transitions roll up into this map row's title.
+        child_row._iteration_index = iteration_index
+        child_row._iteration_total = iteration_total
+        child_row._parent_map_row = self
+        child_row._is_iteration_child = True
+        child_row._update_title()
+        # Collapse-by-default only for large maps (>10). Small maps show
+        # their iterations expanded. WorkflowNodeRow constructs collapsed,
+        # so a small map must explicitly expand.
+        child_row.collapsed = iteration_total > 10
+        # Insert index-ordered: mount BEFORE the first already-mounted
+        # child whose index is greater than this one; append when none.
+        before_widget: WorkflowNodeRow | None = None
+        for key in sorted(self._iteration_children.keys()):
+            if key > iteration_index:
+                before_widget = self._iteration_children[key]
+                break
+        self._iteration_children[iteration_index] = child_row
+        with contextlib.suppress(Exception):
+            self._mount_in_contents(child_row, before=before_widget)
+        # Refresh this map row's title so the rollup counter appears as
+        # soon as the first child mounts.
+        self._update_title()
+        return child_row
+
+    def _notify_parent_state_change(self) -> None:
+        """bug-095: tell the parent map row one of its children changed.
+
+        Called at the end of :meth:`set_state`. A no-op for non-iteration
+        rows (``_parent_map_row is None``).
+        """
+        if self._parent_map_row is not None:
+            self._parent_map_row._on_child_state_changed()
+
+    def _on_child_state_changed(self) -> None:
+        """bug-095: refresh the map row's rollup title after a child change."""
+        self._update_title()
 
     # ------------------------------------------------------------------
     # bug-036d: ChatMountSink implementation
@@ -1113,10 +1627,16 @@ class WorkflowNodeRow(Collapsible):
         # `─`) are cross/warning/rule characters — different family,
         # no collision, keep them. Spinner frames (`⠋⠙⠹⠸⠼⠴⠦⠧⠇⠏`) are
         # braille dots — no collision, keep.
+        # bug-095: an iteration child's name carries the iteration index
+        # as a bracket suffix (``score_one_resume[3]``). Non-iteration
+        # rows (``_iteration_index is None``) are unchanged.
+        node_label = self._node_name
+        if self._iteration_index is not None:
+            node_label = f"{self._node_name}[{self._iteration_index}]"
         if glyph == "▸":
-            base = self._node_name
+            base = node_label
         else:
-            base = f"{glyph} {self._node_name}"
+            base = f"{glyph} {node_label}"
         if self.state == "failed":
             # bug-063: full error moved to Error section body; keep
             # only the state glyph + node name as a short marker.
@@ -1127,7 +1647,39 @@ class WorkflowNodeRow(Collapsible):
             base += f" ({self._short_type})"
         if self._sub_agent_turn_count > 0:
             base += f" · {self._sub_agent_turn_count} sub-agent events"
+        # feat-104: `▸ <child_ref>` discoverability hint for the forward
+        # link to the child sub-workflow's card. Recomputed here (not
+        # appended once) because the ~80 ms spinner tick re-renders the
+        # whole title — a one-shot append would be clobbered on the next
+        # frame. Only ``kolsch/nodes/workflow`` rows ever set
+        # ``_child_ref`` (the gate lives in ``set_child_workflow``).
+        if self._child_ref is not None:
+            base += f"   ▸ {self._child_ref}"
+        # bug-095: a map row with iteration children carries a live
+        # rollup counter — `(map · N iterations · X done, Y running,
+        # Z failed)`. Recomputed here (like the sub-agent counter) so
+        # the ~80 ms spinner tick can't clobber a one-shot append.
+        if self._iteration_children:
+            base += f"   {self._iteration_rollup()}"
         self.title = base
+
+    def _iteration_rollup(self) -> str:
+        """bug-095: `(map · N iterations · X done, Y running, Z failed)`.
+
+        ``done`` = ``success``; ``failed`` = ``failed``/``cancelled``;
+        ``running`` = everything else (including ``paused`` — iterations
+        never independently pause today, but handle it defensively as a
+        still-in-flight state).
+        """
+        children = self._iteration_children.values()
+        total = len(children)
+        done = sum(1 for c in children if c.state == "success")
+        failed = sum(1 for c in children if c.state in ("failed", "cancelled"))
+        running = total - done - failed
+        return (
+            f"(map · {total} iterations · "
+            f"{done} done, {running} running, {failed} failed)"
+        )
 
     def _truncate_preview(
         self,
@@ -1143,7 +1695,12 @@ class WorkflowNodeRow(Collapsible):
     # bug-035 mount-tree helper (unchanged)
     # ------------------------------------------------------------------
 
-    def _mount_in_contents(self, widget: Widget) -> None:
+    def _mount_in_contents(
+        self,
+        widget: Widget,
+        *,
+        before: Widget | None = None,
+    ) -> None:
         """bug-035: mount ``widget`` inside the Collapsible's Contents slot.
 
         Textual's :class:`Collapsible.compose_add_child` only wires
@@ -1154,16 +1711,26 @@ class WorkflowNodeRow(Collapsible):
         responds to the ``.-collapsed > Contents { display: none }``
         CSS, so sibling mounts stay visible regardless of the row's
         collapsed state.
+
+        bug-095: ``before`` forwards to Textual's
+        ``Widget.mount(widget, before=other)`` so map-iteration children
+        can be inserted index-ordered rather than always appended. A
+        ``before`` widget that isn't a live sibling of ``Contents`` (the
+        row hasn't composed yet) falls through to a plain append.
         """
         try:
             contents = self.query_one(Collapsible.Contents)
         except Exception:  # noqa: BLE001 — Contents not composed yet
             contents = None
         if contents is not None:
+            if before is not None:
+                with contextlib.suppress(Exception):
+                    contents.mount(widget, before=before)
+                    return
             contents.mount(widget)
             return
         # Row not fully mounted yet — mount at the outer level.
         self.mount(widget)
 
 
-__all__ = ["WorkflowNodeRow"]
+__all__ = ["WorkflowCallLink", "WorkflowNodeRow"]

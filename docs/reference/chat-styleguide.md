@@ -101,8 +101,10 @@ Legacy widget-specific state names (`completed`, `error`,
 | `✗` | terminal failure | leading title glyph | `failed` | `compaction_block.py:210` (`failure`), `node_section.py:39` (error color) |
 | `⧗` | cancelling | leading title glyph | `cancelling` | — |
 | `⚠` | paused / warning | leading title glyph | `paused`, `awaiting` | — |
-| `─` | pruned / cancelled | leading title glyph | `cancelled` (legacy `pruned` aliases) | — |
-| `▸` | running (static) / collapsed | leading glyph **and** collapse chevron | `running` (legacy `starting` aliases) | `approval_args_row.py:65` (`_CHEVRON_COLLAPSED`) — ⚑ **double meaning** |
+| `─` | run cancelled | leading title glyph | `cancelled` | — |
+| `○` | pending — pre-mounted placeholder node | leading title glyph | `pending` | `approval_block.py` (breadcrumb `○` — unrelated) |
+| `⊘` | skipped — branch-pruned node | leading title glyph | `skipped` | — |
+| `▸` | running (static) / collapsed / workflow-card anchor | leading glyph, collapse chevron **and** focusable card-link bracket | `running` (legacy `starting` aliases) | `approval_args_row.py:65` (`_CHEVRON_COLLAPSED`) — ⚑ **double meaning**; `assistant_prose.py:113` (`WorkflowAnchorButton` `[▸ …]`); `workflow_node_row.py` (`WorkflowCallLink` `[▸ <child_ref> · <status>]`, feat-104) |
 | `▾` | expanded | collapse chevron | — | `approval_args_row.py:66` (`_CHEVRON_EXPANDED`) — pairs with `▸` |
 | `⋯` | queued | leading title glyph | `queued` (legacy `initializing` aliases) | — |
 | `…` | truncation ellipsis | trailing, in overflow | — | `approval_args_row.py:67` (`_ELLIPSIS`) |
@@ -132,7 +134,19 @@ The canonical state names (source of truth: `src/cli/chat/state_tokens.py`):
 | `paused`     | `⚠` | `$warning` | `bold italic` | — |
 | `awaiting`   | `⚠` | `$warning` | `bold italic` | — |
 | `cancelling` | `⧗` | `$warning` | `bold italic` | — |
-| `cancelled`  | `─` | `$hint`    | `dim`  | `pruned` |
+| `cancelled`  | `─` | `$hint`    | `dim`  | — |
+| `pending`    | `○` | `$hint`    | `dim`  | — |
+| `skipped`    | `⊘` | `$hint`    | `dim`  | — |
+
+`pending` and `skipped` are bug-096 additions (distinct canonical
+states, not reuses of `queued`/`cancelled`). A workflow card now
+pre-mounts every top-level node as a `pending` (`○`, dim) placeholder
+row on `workflow.run.started` — so the full run shape is visible
+immediately — then adopts each placeholder in place as its
+`NODE_STARTED` (→ `running`) or `NODE_PRUNED` (→ `skipped`, `⊘`) event
+arrives. A node that the executor pruned (branch never taken) renders
+as `skipped`; `cancelled` (`─`) is now reserved for a user-cancelled
+run.
 
 Legacy alias resolution emits a `DeprecationWarning` (see the
 `_LEGACY_ALIASES` table); the aliases are the one-release bridge for
@@ -151,10 +165,13 @@ index into it. See qol-076.
 
 ### ⚑ `▸` double meaning
 
-`▸` is both the **running-state glyph** (`STATE_TOKENS['running']` in
-`src/cli/chat/state_tokens.py`) and the **collapsed-chevron** for
-collapsible rows (`_CHEVRON_COLLAPSED`, `approval_args_row.py:65`). Note
-that while a node is *animating* it actually renders the braille spinner
+`▸` is the **running-state glyph** (`STATE_TOKENS['running']` in
+`src/cli/chat/state_tokens.py`), the **collapsed-chevron** for
+collapsible rows (`_CHEVRON_COLLAPSED`, `approval_args_row.py:65`), and
+the **focusable card-anchor bracket** (`[▸ …]`, `WorkflowAnchorButton` /
+`WorkflowCallLink` — see [§4 Focusable card-anchor
+links](#focusable-card-anchor-links)). Note that while a node is
+*animating* it actually renders the braille spinner
 (`workflow_node_row.py` picks `_SPINNER_FRAMES` for animated states),
 so `▸` is the static/non-animating running glyph — but it still
 collides with the collapse chevron's meaning.
@@ -239,6 +256,107 @@ so palette-var resolution happens in the stylesheet where it works,
 not via inline `styles.color` (which rejects palette-var strings).
 
 ![Composer idle — user-border rail on the left, no heavy bars](chat-widgets/svg/composer-idle-color.svg)
+
+### Focusable card-anchor links
+
+Two widgets render a **focusable inline reference to a workflow card**
+using one shared visual — the `[▸ <label>]` bracket in `$tool-fg`
+(cyan) `bold`, inverting to `bold reverse` on `:focus`:
+
+- `WorkflowAnchorButton` (`assistant_prose.py`, feat-018) — the
+  assistant embeds `[<label>](kolsch-anchor://workflow_card/<run_id>)`
+  markup; the prose swaps the match for this button inline.
+- `WorkflowCallLink` (`workflow_node_row.py`, feat-104) — a
+  `WorkflowAnchorButton` subclass mounted inside a
+  `kolsch/nodes/workflow` node row's Contents. It renders
+  `[▸ <child_ref> · <status>]` (status: `running` while live, then
+  `✓ succeeded` / `✗ failed` / `⚠ waiting`) and, alongside a
+  `▸ <child_ref>` collapsed-title hint, is the **forward** pointer from
+  a parent workflow node to its child sub-workflow's peer card (the
+  dual of the child card's backward `↳ from <parent>` breadcrumb).
+
+Both fire the same app action on Enter/click —
+`ChatApp.action_scroll_to_workflow_card(run_id)` — which scrolls the
+transcript to the target card; the `▸` glyph is deliberately distinct
+from the backward `↳` connector.
+
+### Map-iteration child rows
+
+A `kolsch/nodes/map` node fans one applied node out over N inputs. Each
+iteration is a full `WorkflowNodeRow` in its own right, but it is
+rendered as a **child row nested inside the map row's
+`Collapsible.Contents`** — never as a sibling in the flat
+`WorkflowNodeList` (bug-095). The renderer keys its `_node_rows` map on
+the composite `(node_name, invocation_id)`, so the N same-named
+iterations no longer collapse to one row the way a `node_name`-only key
+did.
+
+Layout conventions:
+
+- **Child title suffix** — an iteration child's name carries its 0-based
+  index in brackets: `score_one_resume[0]`, `score_one_resume[1]`, … .
+  Non-iteration rows are unchanged (no bracket). Children are ordered by
+  `iteration_index`, not by arrival / completion order, so the on-screen
+  index is a stable coordinate for cross-referencing logs.
+- **Collapse threshold** — children collapse by default when the map has
+  **more than 10** iterations (a legibility threshold); a 5-iteration map
+  shows its children expanded. A user who click-expands a specific
+  iteration is not re-collapsed.
+- **Map-header rollup** — the map row's own title carries a live counter
+  `(map · N iterations · X done, Y running, Z failed)`, recomputed on
+  every child state change (`done` = `success`; `failed` = `failed` /
+  `cancelled`; `running` = everything else). It shares the plain title
+  style — no extra color or glyph.
+- **Header denominator** — iteration children do **not** count toward the
+  workflow-card header's `N/M` progress: a 30-iteration map is still one
+  DAG node. The compact-mode summary inherits this filter transitively.
+
+The `WorkflowMapIterations` gallery specimen captures a >10-iteration map
+with a mixed rollup (`… · 2 done, 9 running, 1 failed`).
+
+### Node-row `input` section — rendered vs `template:` (bug-094)
+
+A node row's `input` `NodeSection` shows what the runner was handed at
+fire-time, not just the raw template. Two conventions:
+
+- **Rendered-primary, template-subordinate.** For a covered node type's
+  templated config field, the **rendered** form is the primary line and
+  the raw template drops to a subordinate `template:` line:
+
+  ```
+  command:
+  python3 -c "requests.get('https://jd.example/4444217343', …)"
+  template:
+  python3 -c "requests.get('{{ inputs.url }}', …)"
+  ```
+
+  The subordinate line appears **only** when the rendered form differs
+  from the raw template (string equality). When they match — an
+  all-literal command, or a value with no Jinja tokens — a single
+  `command:` line renders, exactly as before. Compute `value:` and map
+  `over:` follow the same two-line shape; a nested-workflow row shows
+  `ref:` plus each bind's rendered value with a per-bind `template:`.
+
+- **`workflow inputs used:` sub-block.** Below `bound inputs:` on the
+  live `input` body, a labelled block lists the workflow-scope
+  `inputs.*` the node's templates referenced (same per-key
+  `· key: value` formatting as `bound inputs:`, distinct label so the
+  source is unambiguous). Present only when non-empty:
+
+  ```
+  bound inputs:
+  · job_description: a JD (1240 chars)
+
+  workflow inputs used:
+  · url: https://jd.example/4444217343
+
+  command:
+  …
+  ```
+
+  Agent rows carry no rendered config preview (an agent has no inline
+  prompt field), but still surface `workflow inputs used:` from their
+  inbound-edge binds.
 
 ---
 

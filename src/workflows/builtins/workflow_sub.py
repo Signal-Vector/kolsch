@@ -56,6 +56,7 @@ under the same pruned-edge conditions.
 
 from __future__ import annotations
 
+import contextlib
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -265,6 +266,17 @@ class WorkflowSubRunner:
             catalog=self._catalog,
             _call_depth=ctx.call_depth + 1,
             _call_chain=(*ctx.call_chain, child_ref),
+            # spec-103: forward the parent executor's observer handles
+            # into the child executor so the child's events (RUN_STARTED
+            # / NODE_* / RUN_COMPLETED and its `agent`-node sub-agent
+            # detail) reach the SAME observer channel — letting the child
+            # surface as its own flat peer card in the chat TUI. `None`
+            # for headless runs (no observers wired); a no-op change
+            # there. The service routes each event by `workflow_run_id`,
+            # so the child's events (whose id is the child run's) land in
+            # the child card's lane.
+            event_observer=ctx.event_observer,
+            sub_agent_event_observer=ctx.sub_agent_event_observer,
         )
 
         # Step 8 — run the child. Two pause-signalling shapes from
@@ -296,6 +308,26 @@ class WorkflowSubRunner:
                 child_run_id=str(child_run.run_id),
                 child_status=str(WorkflowRunStatus.WAITING_FOR_INPUT),
             )
+            raise
+        except Exception:
+            # spec-103 follow-up: an UNEXPECTED error escaping the child
+            # run (anything other than the pause handled above — e.g. a
+            # bug in the nested executor that raises instead of returning
+            # a terminal status) must STILL emit called_completed. Every
+            # normal terminal arm below emits it; without this arm the
+            # parent-side chat lane never sees a completion, so it never
+            # posts the child bridge's stop-sentinel and the child's UI
+            # drain task lingers until session close. Best-effort:
+            # `child_status="failed"` reflects the abnormal termination,
+            # and a secondary failure in the emit must never shadow the
+            # original error.
+            with contextlib.suppress(Exception):
+                await self._emit_called_completed(
+                    ctx=ctx,
+                    node_name=node_name,
+                    child_run_id=str(child_run.run_id),
+                    child_status=str(WorkflowRunStatus.FAILED),
+                )
             raise
 
         if status == WorkflowRunStatus.WAITING_FOR_INPUT:

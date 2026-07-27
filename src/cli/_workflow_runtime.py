@@ -58,7 +58,7 @@ def build_workflow_executor(
     store: WorkflowRunStore,
     event_observer: Callable[[WorkflowEvent], None] | None = None,
     cancel_token: CancelToken | None = None,
-    sub_agent_event_observer: (Callable[[str, str, Event], None] | None) = None,
+    sub_agent_event_observer: (Callable[[str, str, str, Event], None] | None) = None,
 ) -> IterativeExecutor:
     """Construct a fully-wired `IterativeExecutor`.
 
@@ -99,8 +99,12 @@ def build_workflow_executor(
         sub_agent_event_observer: spec-020 — optional synchronous
             callable the executor invokes once per session-scoped
             `Event` yielded by `AgentEngine.execute_stream(...)`
-            inside an `AgentRunner`. When provided, threaded onto
-            the executor so the chat runtime's bridge drain
+            inside an `AgentRunner`. spec-103 approach (A): the
+            callable receives the emitting run's id first —
+            `(run_id, node_name, invocation_id, event)` — so a child
+            run's sub-agent detail routes to the child card's lane.
+            When provided, threaded onto the executor so the chat
+            runtime's bridge drain
             (`WorkflowsImpl._drain_workflow_bridge`) translates each
             into a `kolsch.workflow.node.sub_agent_event` UI event
             keyed on the owning `(trace_id, invocation_id)`.

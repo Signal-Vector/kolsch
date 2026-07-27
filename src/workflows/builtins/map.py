@@ -61,7 +61,12 @@ from workflows.events import (
     WorkflowNodeFailedEvent,
     WorkflowNodeStartedEvent,
 )
-from workflows.executor import _is_jinja_marked
+from workflows.executor import (
+    _build_config_preview,
+    _extract_input_refs,
+    _is_jinja_marked,
+    _scanned_template_sources,
+)
 from workflows.ids import InvocationId, WorkflowRunId
 
 if TYPE_CHECKING:
@@ -416,6 +421,31 @@ class MapRunner:
             iteration_total=total,
         )
 
+        # bug-094: per-iteration config preview + workflow_inputs_used. The
+        # map site has no `self._captured`/`self._run` accessor, so it renders
+        # via `ctx.render_jinja` (which resolves `nodes.*` through the
+        # executor's captured outputs) with the iteration overlay threaded
+        # onto the `inputs.*` namespace. `workflow_inputs_used` is the
+        # subset of workflow-scope inputs (`ctx.workflow_inputs`) the
+        # worker's own templated field references.
+        def _iter_render(source: str) -> Any:
+            return ctx.render_jinja(source, inputs_overlay=iteration_overlay)
+
+        iter_config_preview = _build_config_preview(
+            worker_def,
+            workflow_inputs=ctx.workflow_inputs,
+            bound_inputs=iteration_overlay,
+            render=_iter_render,
+        )
+        iter_refs: set[str] = set()
+        for _source in _scanned_template_sources(worker_def, edge_binds={}):
+            iter_refs |= _extract_input_refs(_source)
+        iter_inputs_used = {
+            k: ctx.workflow_inputs[k]
+            for k in sorted(iter_refs)
+            if k in ctx.workflow_inputs
+        }
+
         iter_started_id = await ctx.emit_workflow_event(
             WorkflowNodeStartedEvent(
                 workflow_run_id=WorkflowRunId(ctx.workflow_run_id),
@@ -428,6 +458,8 @@ class MapRunner:
                     "invocation_id": str(iter_ctx.invocation_id),
                     "type": getattr(worker_def, "type", "<copy_of>"),
                     "inputs": dict(iteration_overlay),
+                    "node_config_preview": iter_config_preview,
+                    "workflow_inputs_used": dict(iter_inputs_used),
                     "caller_chain": list(ctx.caller_chain or ()),
                     # Iteration correlation for forensics.
                     "parent_invocation_id": str(ctx.invocation_id),

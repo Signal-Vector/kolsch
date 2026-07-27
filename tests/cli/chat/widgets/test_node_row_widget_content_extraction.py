@@ -143,9 +143,15 @@ async def test_tool_call_block_mounts_via_sink(
 
 
 def test_helpers_are_module_private() -> None:
-    """Helpers stay underscore-prefixed; public surface is still just the row."""
+    """Helpers stay underscore-prefixed; public surface is the row + link.
+
+    feat-104 adds ``WorkflowCallLink`` (the parent workflow node's
+    forward link to the child sub-workflow's card) to the module's
+    public surface — the internal ``_format_*`` / ``_extract_*`` helpers
+    remain underscore-prefixed and out of ``__all__``.
+    """
     from cli.chat.widgets import workflow_node_row as mod
 
     assert callable(getattr(mod, "_format_content_dict", None))
     assert callable(getattr(mod, "_extract_content_text", None))
-    assert mod.__all__ == ["WorkflowNodeRow"]
+    assert mod.__all__ == ["WorkflowCallLink", "WorkflowNodeRow"]

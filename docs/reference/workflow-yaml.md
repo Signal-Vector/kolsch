@@ -91,6 +91,49 @@ the edge chose to hand it under `inputs.*`.
     contains a `ticket_text` argument" without any Jinja
     substitution.
 
+## Chat UI: node-row config previews (bug-094)
+
+When a workflow runs in the chat UI, each node row surfaces what the
+runner was actually handed at fire-time — not just the raw template:
+
+- **Rendered config previews.** For the templated config field of a
+  covered node type, the row's `input` section shows the **rendered
+  form** as the primary line, with the raw template on a subordinate
+  `template:` line. When the rendered form equals the raw template (no
+  Jinja tokens, or an all-literal value) a single line renders.
+
+  | Node type | Field | Preview |
+  |---|---|---|
+  | `kolsch/nodes/bash` | `command` | rendered command + `template:` |
+  | `kolsch/nodes/compute` | `value` | rendered value (JSON, capped at 2000 chars) + `template:` |
+  | `kolsch/nodes/map` | `over` | rendered list (first 20 items + `…N more`) + `template:` |
+  | `kolsch/nodes/workflow` | `ref` + `binds` | the sub-workflow `ref:` plus each bind's rendered value + per-bind `template:` |
+
+  `kolsch/nodes/agent` nodes are **not** covered — an `AgentNodeDef`
+  has no inline `prompt:` field (the prompt loads asynchronously at
+  agent-load), so an agent row shows no rendered config preview.
+
+- **`workflow inputs used:` block.** Below the `bound inputs:` block,
+  a node row lists the subset of the workflow's top-level `inputs.*`
+  that the node's templated fields (its config field, its inbound-edge
+  `binds:`, or — for agent nodes — only its edge binds) reference. The
+  set is extracted by a static Jinja-AST walk, so it is independent of
+  whether rendering succeeded. Dynamic `{{ inputs[key] }}` lookups are
+  not captured by the static walk (the rendered value still shows the
+  substituted result; only the labeled row is omitted).
+
+!!! warning "Rendered previews expose caller-supplied inputs"
+
+    Shipping the rendered form means every `{{ inputs.api_token }}`-style
+    substitution lands in the JSONL session file **and** the chat UI —
+    where the raw template would previously have hidden it. Session
+    files are already sensitive (they hold user prompts and agent
+    output); the incremental risk is workflow-scope inputs routed
+    through templates. Redaction of secrets in rendered previews is
+    tracked as a separate follow-up and is **not** part of this
+    behavior. Authors who route secrets through workflow inputs should
+    be aware.
+
 ## Node captured outputs — quick reference
 
 Every node's captured output is available downstream via
