@@ -691,16 +691,17 @@ class AgentEngine:
         provider = self._compaction_provider
         if provider is None:
             return None
-        # Read the thread's events BEFORE the wedged-provider notice —
-        # bug-098 review F2: a brand-new session on a wedged provider
-        # has no user activity yet, so surfacing the "no_context_length"
-        # notice on chat launch is noise. The notice only warrants
-        # emission when there's actual conversation history at risk.
-        # ``USER_MESSAGE`` is the load-bearing signal — bootstrap events
-        # (``SESSION_OPENED`` / ``CONFIG_SET``) are always present and
-        # don't count as "history the user has invested in preserving."
-        events = [e async for e in self._store.read_path_to_leaf(thread_id)]
-        has_user_activity = any(e.type == EventType.USER_MESSAGE for e in events)
+        # bug-098 review F2 + qol-100: gate the wedged-provider notice
+        # on real conversation history (``USER_MESSAGE`` — bootstrap
+        # events like ``SESSION_OPENED`` / ``CONFIG_SET`` are always
+        # present and don't count as "history the user has invested
+        # in preserving"). qol-100 replaces the full ``read_path_to_leaf``
+        # + ``any(...)`` with the cheap ``has_any_event_of_type`` probe
+        # so healthy providers don't pay a full-log read at chat-open
+        # just to answer a boolean.
+        has_user_activity = await self._store.has_any_event_of_type(
+            thread_id, EventType.USER_MESSAGE
+        )
         if not has_user_activity:
             # Fresh session — nothing to compact and nothing to warn
             # about. Fast no-op path so a brand-new chat doesn't
@@ -725,6 +726,11 @@ class AgentEngine:
             self._no_context_length_skip_emitted.add(str(thread_id))
             return emitted
 
+        # Healthy provider with user history — the summariser + estimate
+        # paths need the full events list. Deferred to after the cheap
+        # presence + wedged checks so wedged sessions bail without paying
+        # the full-log read (qol-100).
+        events = [e async for e in self._store.read_path_to_leaf(thread_id)]
         compaction_cfg = (self._assets._platform_config or {}).get(
             "compaction",
             {},

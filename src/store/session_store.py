@@ -512,6 +512,52 @@ class SessionStore:
         async for event in self.read_events(thread_id):
             yield event
 
+    async def has_any_event_of_type(
+        self,
+        thread_id: ThreadId,
+        event_type: EventType,
+    ) -> bool:
+        """Return True if `thread_id` has at least one event of `event_type`.
+
+        Cheap presence-check that short-circuits at the JSONL level —
+        `read_lines` is a lazy generator, so this stops parsing on
+        the first match. Preferred over
+        ``any(e.type == t for e in read_path_to_leaf(...))`` when the
+        caller only needs presence, not the events themselves:
+        ``read_events`` materialises the full log as a list up-front
+        (for async-iteration safety) and paying that read on every
+        chat-open just to detect a single event type is wasteful.
+
+        qol-100 introduced this to restore the pre-bug-098 baseline
+        for the eager compaction path: on a wedged provider (no
+        declared ``context_length`` + no cross-provider fallback), a
+        fresh session with no user activity now bails on a cheap
+        presence-check instead of reading the full log.
+
+        Args:
+            thread_id: The thread to probe.
+            event_type: The event type to look for.
+
+        Returns:
+            True on the first matching event, False if the log is
+            empty or no matching event exists.
+
+        Raises:
+            ThreadNotFound: No thread record exists for `thread_id`.
+            StoreCorruptLog: The JSONL has a malformed mid-file line.
+        """
+        thread = await self.get_thread(thread_id)
+        path = jsonl_path(self._root, thread.session_id)
+        await asyncio.to_thread(recover_partial_final_line, path)
+
+        def _probe() -> bool:
+            for event in read_lines(path):
+                if event.thread_id == thread_id and event.type == event_type:
+                    return True
+            return False
+
+        return await asyncio.to_thread(_probe)
+
     async def get_last_logical_seq(self, session_id: SessionId) -> int:
         """Return the `logical_seq` on the session's JSONL tail, or 0.
 

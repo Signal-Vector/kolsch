@@ -439,6 +439,74 @@ async def test_eager_compaction_emits_no_context_length(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
+async def test_eager_healthy_provider_avoids_full_log_read(tmp_path: Path) -> None:
+    """qol-100 AC-1: healthy providers don't pay a full ``read_path_to_leaf``
+    at chat-open.
+
+    bug-098's fold-in moved ``read_path_to_leaf`` + ``any(...)`` BEFORE
+    the ``context_length`` check, which fixed the fresh-session-noise
+    problem but made healthy providers pay a full-log read for a
+    boolean. qol-100 replaces that with the cheap
+    ``has_any_event_of_type`` probe. This test spies on both to
+    verify the cheap path is taken and the expensive path is not
+    (until it's genuinely needed downstream).
+    """
+    # Healthy provider: OpenRouter-shaped entry with context_length declared.
+    from llm import ProviderConfig
+
+    providers: dict[str, ProviderConfig] = {
+        "openrouter": ProviderConfig(
+            name="openrouter",
+            type="openrouter",
+            api_key_secret=None,
+            base_url=None,
+            timeout_seconds=None,
+            extras={},
+            models=[
+                {"id": "moonshotai/kimi-k2.6", "context_length": 262144},
+            ],
+        ),
+    }
+    engine, store = await _build(tmp_path, llm_providers=providers)
+    ctx = await _fresh_ctx(store)
+    thread_id = ctx.thread_id
+    spec = ModelSpec(provider="openrouter", model="moonshotai/kimi-k2.6")
+
+    # Fresh thread — no USER_MESSAGE yet.
+    read_path_calls = 0
+    has_probe_calls = 0
+
+    original_read_path = store.read_path_to_leaf
+    original_has_probe = store.has_any_event_of_type
+
+    def _count_read_path(*args: Any, **kwargs: Any) -> Any:
+        nonlocal read_path_calls
+        read_path_calls += 1
+        return original_read_path(*args, **kwargs)
+
+    async def _count_probe(*args: Any, **kwargs: Any) -> bool:
+        nonlocal has_probe_calls
+        has_probe_calls += 1
+        return await original_has_probe(*args, **kwargs)
+
+    store.read_path_to_leaf = _count_read_path  # type: ignore[method-assign]
+    store.has_any_event_of_type = _count_probe  # type: ignore[method-assign]
+    try:
+        await engine.maybe_compact_thread_eagerly(thread_id=thread_id, spec=spec)
+    finally:
+        store.read_path_to_leaf = original_read_path  # type: ignore[method-assign]
+        store.has_any_event_of_type = original_has_probe  # type: ignore[method-assign]
+
+    assert has_probe_calls == 1, (
+        f"eager should call has_any_event_of_type exactly once; got {has_probe_calls}"
+    )
+    assert read_path_calls == 0, (
+        f"eager on a fresh session must NOT call read_path_to_leaf — "
+        f"the cheap probe should have short-circuited; got {read_path_calls} calls"
+    )
+
+
+@pytest.mark.asyncio
 async def test_eager_on_fresh_empty_session_stays_silent(tmp_path: Path) -> None:
     """bug-098 review F2: eager on empty session must NOT emit.
 
