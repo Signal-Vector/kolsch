@@ -694,7 +694,12 @@ edge-bind coverage) doesn't under-count requirements. Practical
 upshot: `kolsch workflows run <parent>` refuses to launch when a
 sub-workflow's declared input has no supply path — you get the
 missing-input error up-front at the caller layer instead of a
-deep runtime failure.
+deep runtime failure. Applies to `kolsch workflows run <parent>`,
+the generic `run_workflow(ref=..., inputs=...)` tool,
+`workflow_inspect`, AND per-workflow virtual tools
+(`run_workflow_<bundle>_<name>`) — every caller surface refuses to
+launch when a sub-workflow child's required input has no supply
+path (qol-101 wired the virtual-tool path through the same seam).
 
 **State read / written:** the child receives its own fresh `state`;
 parent state is not visible inside the child.

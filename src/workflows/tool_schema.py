@@ -182,6 +182,8 @@ def _lineno_of(yaml_source: str, name: str) -> int | None:
 def build_workflow_args_model(
     ref: str,
     yaml_source: str,
+    *,
+    effective_required: list[str] | None = None,
 ) -> type[BaseModel]:
     """Build a dynamic Pydantic model describing the workflow's inputs.
 
@@ -198,14 +200,32 @@ def build_workflow_args_model(
     tool-list JSON schema still explains WHY the key exists even for
     models that ignore top-level tool descriptions.
 
+    qol-101: ``effective_required`` — when provided — is the
+    qol-097 promoted required set (parent direct-scan unioned with
+    each sub-workflow child's effective required minus edge-bind
+    coverage). Names appearing ONLY in ``effective_required`` (not in
+    the parent's direct scan) are added as required ``str`` fields
+    with a generic "promoted per qol-097" description — the line
+    reference doesn't apply because the ``{{ inputs.X }}`` lives in a
+    child YAML this function does not read. Names appearing in BOTH
+    keep the direct-scan description (with parent YAML line number).
+    ``None`` (default) preserves pre-qol-101 behaviour byte-identically
+    — required fields come from ``scan.required`` alone.
+
     Args:
         ref: The workflow's catalog ref — used to shape the model's
             class name (helps model tracebacks in tests).
         yaml_source: The workflow YAML as a raw string.
+        effective_required: Optional qol-097 promoted required-input
+            set. When ``None`` (the pre-qol-101 default), only the
+            parent's direct ``{{ inputs.X }}`` scan seeds the required
+            fields. When a list, its members are unioned with
+            ``scan.required`` — names in only the promoted set get a
+            generic ``_describe_promoted`` description.
 
     Returns:
         A Pydantic ``BaseModel`` subclass whose fields correspond
-        one-to-one to the workflow's ``inputs.X`` references.
+        one-to-one to the workflow's effective ``inputs.X`` references.
     """
     scan = scan_inputs(yaml_source)
 
@@ -217,9 +237,24 @@ def build_workflow_args_model(
 
     fields: dict[str, Any] = {}
 
-    for name in scan.required:
-        line = _lineno_of(yaml_source, name)
-        desc = _describe_required(name, line)
+    # qol-101: union direct-scan required with the qol-097 promoted
+    # set. Sort so field ordering is stable across runs (Pydantic
+    # preserves insertion order into ``model_fields`` and the JSON
+    # schema's ``required`` list, which downstream tool-list snapshots
+    # rely on).
+    direct_required = set(scan.required)
+    promoted_required = set(effective_required or [])
+    required_names = sorted(direct_required | promoted_required)
+
+    for name in required_names:
+        if name in direct_required:
+            line = _lineno_of(yaml_source, name)
+            desc = _describe_required(name, line)
+        else:
+            # Promoted-only: the ``{{ inputs.X }}`` reference lives
+            # in a sub-workflow child, not this parent's YAML. No
+            # line probe.
+            desc = _describe_promoted(name)
         # `(str, Field(...))` — Field with no `default` → required.
         # mypy: create_model's field spec is Any; the ignore is
         # narrow to the call.
@@ -229,6 +264,17 @@ def build_workflow_args_model(
         )
 
     for name in scan.optional:
+        # qol-101: a name promoted-required from a sub-workflow child
+        # takes precedence over a parent's local ``| default(...)``
+        # guard. Without this skip, the optional-field write would
+        # overwrite the required-field entry and downgrade the field
+        # to `default=<parent-default>` — silently defeating the
+        # dispatcher-level rejection this qol exists to enable. Only
+        # fires when ``effective_required`` is provided (pre-qol-101
+        # ``InputsScanResult`` guarantees `optional ∩ required == ∅`,
+        # so this skip is a no-op on the legacy path).
+        if name in fields:
+            continue
         probe = _probe_default_value(yaml_source, name)
         line = _lineno_of(yaml_source, name)
         desc = _describe_optional(name, line, probe)
@@ -260,6 +306,22 @@ def _describe_required(name: str, line: int | None) -> str:
     return (
         f"Value for {{{{ inputs.{name} }}}} referenced at "
         f"workflow YAML line {line}. Sourced from the user's request."
+    )
+
+
+def _describe_promoted(name: str) -> str:
+    """Description for a required field promoted from a sub-workflow child.
+
+    qol-101: the ``{{ inputs.<name> }}`` reference lives in a child
+    workflow YAML this builder does not read, so no line number is
+    available — the blurb identifies the field as a qol-097 promoted
+    requirement so a caller viewing the tool schema knows why the key
+    is required even though it doesn't appear in the parent YAML.
+    """
+    return (
+        f"Value for {{{{ inputs.{name} }}}} required by a sub-workflow "
+        f"child of this workflow (promoted per qol-097). Sourced from "
+        f"the user's request."
     )
 
 
@@ -356,6 +418,14 @@ def build_virtual_tool_definitions(
     resolver = getattr(workflows_impl, "resolve_workflow_yaml", None)
     if list_refs is None or resolver is None:
         return []
+    # qol-101: probe the qol-097 promoted-required-set seam ONCE up
+    # front. Mirrors the duck-typed pattern established in
+    # ``bundles/kolsch/tools/run_workflow.py:206-220``: preferred path
+    # when the impl exposes ``resolve_effective_required_inputs``;
+    # otherwise fall through to legacy direct-scan behaviour by
+    # passing ``effective_required=None`` into
+    # ``build_workflow_args_model``.
+    effective_fn = getattr(workflows_impl, "resolve_effective_required_inputs", None)
     try:
         refs = list_refs()
     except Exception:  # noqa: BLE001 — best-effort probe
@@ -373,8 +443,24 @@ def build_virtual_tool_definitions(
             continue
         if not isinstance(yaml_source, str):
             continue
+        # qol-101: per-ref promoted set. Broken/absent seam → None
+        # → ``build_workflow_args_model`` uses the pre-qol-101
+        # direct-scan path only. Silent fallback matches the
+        # surrounding best-effort probe pattern.
+        promoted: list[str] | None = None
+        if effective_fn is not None:
+            try:
+                result = effective_fn(ref)
+            except Exception:  # noqa: BLE001 — best-effort probe
+                result = None
+            if isinstance(result, list):
+                promoted = [r for r in result if isinstance(r, str)]
         try:
-            args_model = build_workflow_args_model(ref, yaml_source)
+            args_model = build_workflow_args_model(
+                ref,
+                yaml_source,
+                effective_required=promoted,
+            )
         except Exception:  # noqa: BLE001 — best-effort probe
             # Skipping is safer than raising during tool-list
             # assembly: a broken virtual would take down every tool
