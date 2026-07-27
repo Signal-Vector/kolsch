@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import asyncio
 import contextlib
+import json
 import logging
 import os
 import uuid
@@ -1392,7 +1393,23 @@ class IterativeExecutor:
                             "invocation_id": str(inv_id),
                             "type": _node_type_ref(node_def),
                             "inputs": {},
-                            "node_config_preview": _config_preview_for(node_def),
+                            # bug-094: render failed (bound-input rendering
+                            # raised), so `bound_inputs={}` and the rendered
+                            # companions come back `None`; the raw templates
+                            # + static-AST `workflow_inputs_used` still emit
+                            # symmetrically with the success path.
+                            "node_config_preview": _build_config_preview(
+                                node_def,
+                                workflow_inputs=self._run.inputs,
+                                bound_inputs={},
+                                render=_render_unavailable,
+                                raw_binds=self._inbound_edge_binds(node_name),
+                            ),
+                            "workflow_inputs_used": self._workflow_inputs_used_for(
+                                node_def,
+                                node_name=node_name,
+                                workflow_inputs=self._run.inputs,
+                            ),
                             "caller_chain": list(
                                 getattr(self._run, "caller_chain", ()) or ()
                             ),
@@ -1462,11 +1479,29 @@ class IterativeExecutor:
                     "invocation_id": str(inv_id),
                     "type": _node_type_ref(node_def),
                     "inputs": bound_inputs,
-                    # bug-036c: per-node-type config surface for the
-                    # chat UI (bash's shell command today; other types
-                    # emit `{}`). Additive optional field — old
-                    # renderers ignore the key.
-                    "node_config_preview": _config_preview_for(node_def),
+                    # bug-036c + bug-094: per-node-type config surface for
+                    # the chat UI. bug-094 promotes this from the raw bash
+                    # `command` to a rendered-companion preview across
+                    # bash/compute/map/workflow (agent → `{}`). Additive
+                    # optional field — old renderers ignore the new keys.
+                    "node_config_preview": _build_config_preview(
+                        node_def,
+                        workflow_inputs=self._run.inputs,
+                        bound_inputs=bound_inputs,
+                        render=lambda s, _bound=bound_inputs: self._render_jinja(
+                            s, inputs_overlay=_bound
+                        ),
+                        raw_binds=self._inbound_edge_binds(node_name),
+                    ),
+                    # bug-094: the subset of workflow-scope inputs this
+                    # node's templated fields (config + edge binds)
+                    # actually reference. Empty dict when nothing
+                    # referenced. Additive optional field.
+                    "workflow_inputs_used": self._workflow_inputs_used_for(
+                        node_def,
+                        node_name=node_name,
+                        workflow_inputs=self._run.inputs,
+                    ),
                     # `caller_chain` carrier: the workflow run's own
                     # caller chain (the frames it was invoked
                     # through). The chain is populated by sub-workflow
@@ -1879,8 +1914,24 @@ class IterativeExecutor:
                                         "invocation_id": str(inv_id_synth),
                                         "type": _node_type_ref(node_def_synth),
                                         "inputs": {},
-                                        "node_config_preview": _config_preview_for(
-                                            node_def_synth
+                                        # bug-094: concurrent render-failure
+                                        # fallback — same symmetric emission
+                                        # as the sequential fallback (site 1).
+                                        "node_config_preview": _build_config_preview(
+                                            node_def_synth,
+                                            workflow_inputs=self._run.inputs,
+                                            bound_inputs={},
+                                            render=_render_unavailable,
+                                            raw_binds=self._inbound_edge_binds(
+                                                node_name
+                                            ),
+                                        ),
+                                        "workflow_inputs_used": (
+                                            self._workflow_inputs_used_for(
+                                                node_def_synth,
+                                                node_name=node_name,
+                                                workflow_inputs=self._run.inputs,
+                                            )
                                         ),
                                         "caller_chain": list(
                                             getattr(self._run, "caller_chain", ()) or ()
@@ -2077,9 +2128,23 @@ class IterativeExecutor:
             "invocation_id": str(inv_id),
             "type": _node_type_ref(node_def),
             "inputs": bound_inputs,
-            # bug-036c: mirror the sibling started-payload site so
-            # map-iterated bash nodes surface their command too.
-            "node_config_preview": _config_preview_for(node_def),
+            # bug-036c + bug-094: mirror the sequential normal-fire site so
+            # concurrently-dispatched nodes surface the same rendered
+            # config preview + workflow_inputs_used.
+            "node_config_preview": _build_config_preview(
+                node_def,
+                workflow_inputs=self._run.inputs,
+                bound_inputs=bound_inputs,
+                render=lambda s, _bound=bound_inputs: self._render_jinja(
+                    s, inputs_overlay=_bound
+                ),
+                raw_binds=self._inbound_edge_binds(node_name),
+            ),
+            "workflow_inputs_used": self._workflow_inputs_used_for(
+                node_def,
+                node_name=node_name,
+                workflow_inputs=self._run.inputs,
+            ),
             "caller_chain": list(getattr(self._run, "caller_chain", ()) or ()),
         }
         async with self._emit_lock:
@@ -2572,6 +2637,49 @@ class IterativeExecutor:
                     )
                 bound[key] = rendered
         return bound
+
+    def _inbound_edge_binds(self, node_name: str) -> dict[str, Any]:
+        """bug-094: merge every inbound edge's RAW (un-rendered) ``binds:``.
+
+        Unlike :meth:`_render_bound_inputs` (which renders each bind and
+        skips pruned edges), this returns the raw bind TEMPLATES across all
+        inbound edges — the source strings the config-preview + AST walk
+        scan. Pruned edges are still skipped (their binds never fire).
+        """
+        binds: dict[str, Any] = {}
+        if self._workflow.graph is None:
+            return binds
+        for edge in self._workflow.graph.edges:
+            if edge.to != node_name:
+                continue
+            if (edge.from_, edge.to) in self._pruned_edges:
+                continue
+            binds.update(edge.binds)
+        return binds
+
+    def _workflow_inputs_used_for(
+        self,
+        node_def: Any,
+        *,
+        node_name: str,
+        workflow_inputs: Mapping[str, Any],
+    ) -> dict[str, Any]:
+        """bug-094: subset of workflow inputs the node's templates reference.
+
+        Static Jinja-AST extraction over every scanned field (the node's own
+        templated config field per type + every inbound-edge bind value),
+        intersected with the workflow-scope ``workflow_inputs`` dict. A key
+        referenced but absent from ``workflow_inputs`` is omitted (it renders
+        to Undefined at runtime). Independent of render success.
+        """
+        sources = _scanned_template_sources(
+            node_def,
+            edge_binds=self._inbound_edge_binds(node_name),
+        )
+        refs: set[str] = set()
+        for source in sources:
+            refs |= _extract_input_refs(source)
+        return {k: workflow_inputs[k] for k in sorted(refs) if k in workflow_inputs}
 
     def _known_output_fields(self, source_node_name: str) -> tuple[str, ...] | None:
         """Best-effort output-field discovery for a source node at runtime.
@@ -3097,21 +3205,204 @@ def _node_type_ref(node_def: Any) -> str:
     return "<copy_of>"
 
 
-def _config_preview_for(node_def: Any) -> dict[str, Any]:
-    """bug-036c: per-node-type preview for NODE_STARTED payload.
+# bug-094: cap the rendered-preview payload bytes. The rendered form of a
+# templated config field lands in the JSONL and the chat UI; a compute
+# `value` that materialises an entire resume index (or a nested-workflow
+# bind referencing a huge `nodes.X.stdout`) must not bloat the payload. The
+# cap is enforced HERE (in the preview builder) so JSONL bytes stay bounded
+# regardless of the UI layer.
+_PREVIEW_RENDER_MAX_CHARS = 2000
+"""Per-field cap for a rendered preview string (compute `value`, each
+nested-workflow `binds` value)."""
 
-    Populates the ``node_config_preview`` key so the chat UI can
-    surface the source config that motivated the node (bash's shell
-    command, etc.) without re-reading the workflow YAML.
+_PREVIEW_OVER_MAX_ITEMS = 20
+"""Cap on the number of map `over:` items surfaced in the rendered
+preview before the ``…N more`` sentinel is appended."""
 
-    Note: this helper is a *config* preview — declarative
-    source-of-truth from the workflow YAML. Runtime inputs bound
-    from inbound edges are already emitted on
-    ``NODE_STARTED.payload.inputs`` at the sibling top level; this
-    helper never duplicates them. Future node types extend the
-    dispatch (agent `prompt`, map `over_expr`, browse_url `url`, …).
+
+def _scanned_template_sources(
+    node_def: Any,
+    *,
+    edge_binds: Mapping[str, Any],
+) -> list[str]:
+    """bug-094: the template strings to scan for ``inputs.*`` references.
+
+    The union covers the node's own templated config field (per type) plus
+    every inbound-edge bind value. Non-string field values contribute
+    nothing (a bare YAML literal has no template refs). Agent nodes have no
+    scanned config field — their ``workflow_inputs_used`` derives ENTIRELY
+    from inbound-edge binds (available synchronously).
+    """
+    sources: list[str] = []
+    t = _node_type_ref(node_def)
+    if t == "kolsch/nodes/bash":
+        sources.append(getattr(node_def, "command", ""))
+    elif t == "kolsch/nodes/compute":
+        sources.append(getattr(node_def, "value", None))
+    elif t == "kolsch/nodes/map":
+        sources.append(getattr(node_def, "over", None))
+    # kolsch/nodes/workflow scans only its binds (below); it has no other
+    # templated config field. agent / noop / … scan only their edge binds.
+    sources.extend(edge_binds.values())
+    return [s for s in sources if isinstance(s, str)]
+
+
+def _extract_input_refs(source: str) -> set[str]:
+    """bug-094: walk the Jinja AST for ``inputs.<attr>`` / ``inputs["k"]`` refs.
+
+    Static-syntactic: parses ``source`` under the shared ``JINJA_ENV`` and
+    returns the set of ``inputs.*`` key names referenced. Only a
+    ``Getattr``/``Getitem`` whose ROOT target is ``Name('inputs')`` matches;
+    ``nodes.*`` / ``state.*`` and any other reference is silently ignored.
+    Never raises on a non-``inputs`` reference. A non-string / unparseable
+    source yields the empty set (a bare literal has no template refs).
+    """
+    if not isinstance(source, str):
+        return set()
+    from jinja2 import nodes as jn  # noqa: PLC0415
+
+    try:
+        ast = JINJA_ENV.parse(source)
+    except Exception:  # noqa: BLE001 — a malformed template contributes no refs
+        return set()
+    keys: set[str] = set()
+    for node in ast.find_all((jn.Getattr, jn.Getitem)):
+        target = node.node
+        if isinstance(target, jn.Name) and target.name == "inputs":
+            if isinstance(node, jn.Getattr):
+                keys.add(node.attr)
+            else:  # Getitem
+                arg = node.arg
+                if isinstance(arg, jn.Const) and isinstance(arg.value, str):
+                    keys.add(arg.value)
+    return keys
+
+
+def _render_unavailable(_source: str) -> Any:
+    """bug-094: ``render`` sentinel for the render-failure fallback sites.
+
+    When bound-input rendering already raised, the config preview's rendered
+    companions are untrustworthy — this sentinel forces every
+    ``rendered_*`` to ``None`` while the raw templates + static-AST
+    ``workflow_inputs_used`` still emit symmetrically with the success path.
+    """
+    msg = "render unavailable on the render-failure fallback path"
+    raise RuntimeError(msg)
+
+
+def _render_preview_or_none(render: Callable[[str], Any], source: str) -> Any:
+    """bug-094: render ``source`` via ``render``; return ``None`` on failure.
+
+    A render exception (Undefined reference, sandbox block, anything) must
+    never crash the NODE_STARTED emission — the raw template is still
+    surfaced; the rendered companion is simply absent.
+    """
+    try:
+        return render(source)
+    except Exception:  # noqa: BLE001 — rendered preview is best-effort only
+        return None
+
+
+def _truncate_preview(text: str) -> str:
+    """Tail-truncate a rendered preview string at ``_PREVIEW_RENDER_MAX_CHARS``."""
+    if len(text) <= _PREVIEW_RENDER_MAX_CHARS:
+        return text
+    return text[: _PREVIEW_RENDER_MAX_CHARS - 1] + "…"
+
+
+def _dumps_preview(value: Any) -> str:
+    """JSON-encode a rendered value for a preview string (``default=repr``)."""
+    return json.dumps(value, default=repr, ensure_ascii=False)
+
+
+def _build_config_preview(
+    node_def: Any,
+    *,
+    workflow_inputs: Mapping[str, Any],  # noqa: ARG001 — kept for signature symmetry
+    bound_inputs: Mapping[str, Any],  # noqa: ARG001 — kept for signature symmetry
+    render: Callable[[str], Any],
+    raw_binds: Mapping[str, Any] | None = None,
+) -> dict[str, Any]:
+    """bug-094 (was bug-036c ``_config_preview_for``): per-node config preview.
+
+    Returns ``{raw_key: <template>, rendered_key: <str or None>, ...}`` for
+    the node's templated config fields, so the chat UI can surface both the
+    RENDERED form (what the runner was handed at fire-time) and the raw
+    template. Unsupported / config-less node types return ``{}`` — same
+    non-behaviour they had under ``_config_preview_for``.
+
+    ``render`` renders one template string against the node's context.
+    Executor sites pass a closure over ``self._render_jinja(s,
+    inputs_overlay=bound_inputs)`` (which overlays the edge-bound inputs
+    onto the ``inputs.*`` namespace and resolves ``nodes.*`` through
+    ``self._captured``); the map-iteration site passes a closure over
+    ``ctx.render_jinja`` (no ``self._captured`` accessor there — see the
+    "Two render paths" note in the bug-094 spec). Any render exception is
+    swallowed and the rendered companion is ``None`` — the emission never
+    crashes.
+
+    ``workflow_inputs`` / ``bound_inputs`` are accepted for signature
+    symmetry with the emission sites (and to keep the helper's contract
+    stable if future coverage needs them directly); today the render
+    closure already carries the effective namespaces.
+
+    ``raw_binds`` is the raw (un-rendered) inbound-edge ``binds:`` template
+    dict for a ``kolsch/nodes/workflow`` node — the node def itself carries
+    only ``ref``; binds live on the edges. ``None`` for non-workflow nodes.
     """
     t = _node_type_ref(node_def)
     if t == "kolsch/nodes/bash":
-        return {"command": getattr(node_def, "command", "")}
+        command = getattr(node_def, "command", "")
+        rendered = _render_preview_or_none(render, command)
+        return {
+            "command": command,
+            "rendered_command": str(rendered) if rendered is not None else None,
+        }
+    if t == "kolsch/nodes/compute":
+        value = getattr(node_def, "value", None)
+        rendered_value: Any = None
+        if isinstance(value, str):
+            rendered = _render_preview_or_none(render, value)
+            if rendered is not None:
+                rendered_value = _truncate_preview(_dumps_preview(rendered))
+        return {"value": value, "rendered_value": rendered_value}
+    if t == "kolsch/nodes/map":
+        over = getattr(node_def, "over", None)
+        rendered_over: str | None = None
+        if isinstance(over, str):
+            rendered = _render_preview_or_none(render, over)
+            if rendered is not None:
+                rendered_over = _preview_over_list(rendered)
+        return {"over": over, "rendered_over": rendered_over}
+    if t == "kolsch/nodes/workflow":
+        ref = getattr(node_def, "ref", "")
+        binds: dict[str, Any] = dict(raw_binds or {})
+        rendered_binds: dict[str, Any] = {}
+        for key, template in binds.items():
+            if isinstance(template, str) and _is_jinja_marked(template):
+                rendered = _render_preview_or_none(render, template)
+                if rendered is not None:
+                    rendered_binds[key] = _truncate_preview(_dumps_preview(rendered))
+            else:
+                # A bare (non-Jinja) bind value renders to itself.
+                rendered_binds[key] = _truncate_preview(_dumps_preview(template))
+        return {"ref": ref, "binds": binds, "rendered_binds": rendered_binds}
+    # agent / noop / read_file / … — no renderable inline config. Agent
+    # nodes in particular have NO `prompt` field (the prompt loads via the
+    # async config builder), so there is nothing to render here.
     return {}
+
+
+def _preview_over_list(rendered: Any) -> str:
+    """bug-094: cap + JSON-encode a rendered map ``over:`` for the preview.
+
+    Lists are capped at ``_PREVIEW_OVER_MAX_ITEMS`` with a trailing
+    ``…N more`` sentinel; non-lists fall through to ``_dumps_preview``.
+    """
+    if isinstance(rendered, list):
+        total = len(rendered)
+        capped: list[Any] = list(rendered)[:_PREVIEW_OVER_MAX_ITEMS]
+        if total > _PREVIEW_OVER_MAX_ITEMS:
+            capped.append(f"…{total - _PREVIEW_OVER_MAX_ITEMS} more")
+        return _dumps_preview(capped)
+    return _dumps_preview(rendered)

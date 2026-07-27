@@ -670,14 +670,29 @@ class WorkflowRenderer(Vertical):
             if isinstance(candidate, dict):
                 bound_inputs = candidate
         row.set_bound_inputs(bound_inputs)
+        # bug-094: stash the workflow-scope inputs this node referenced
+        # BEFORE the config-preview setters mount the input section, so the
+        # `workflow inputs used:` sub-block lands on the live body. Mirrors
+        # the bug-037 bound-inputs ordering rationale.
+        workflow_inputs_used: dict[str, Any] = {}
+        if isinstance(inner, dict):
+            candidate = inner.get("workflow_inputs_used")
+            if isinstance(candidate, dict):
+                workflow_inputs_used = candidate
+        if not workflow_inputs_used:
+            candidate = payload.get("workflow_inputs_used")
+            if isinstance(candidate, dict):
+                workflow_inputs_used = candidate
+        row.set_workflow_inputs_used(workflow_inputs_used)
         # bug-037: stash NODE_STARTED ts for duration derivation.
         started_at = self._parse_ts(payload.get("ts"))
         if started_at is not None:
             row.set_started_at(started_at)
-        # bug-036c: forward the per-node-type config preview. Today
-        # only bash carries a `command` — other types emit `{}` and
-        # the empty branch below is a no-op. The mount-race pattern
-        # inside `set_command_preview` handles the "row not yet
+        # bug-036c + bug-094: forward the per-node-type config preview.
+        # bash → command/rendered_command, compute → value/rendered_value,
+        # map → over/rendered_over, workflow → ref/binds/rendered_binds.
+        # Unsupported types (agent/noop/…) emit `{}` and route nowhere. The
+        # mount-race pattern inside the setters handles the "row not yet
         # composed" case (see `_flush_pending_previews`).
         config_preview: dict[str, Any] | None = None
         if isinstance(inner, dict):
@@ -689,14 +704,60 @@ class WorkflowRenderer(Vertical):
             if isinstance(candidate, dict):
                 config_preview = candidate
         if config_preview is not None:
-            command = config_preview.get("command")
-            if isinstance(command, str) and command:
-                row.set_command_preview(command)
+            self._route_config_preview(row, config_preview)
         self._register_node_with_adapter(
             row,
             trace_id_val,
             invocation_id_val,
         )
+
+    def _route_config_preview(
+        self,
+        row: WorkflowNodeRow,
+        config_preview: dict[str, Any],
+    ) -> None:
+        """bug-094: route a ``node_config_preview`` to the matching setter.
+
+        Dispatches on which raw key is present (mutually exclusive across
+        the covered node types): bash ``command``, compute ``value``, map
+        ``over``, nested-workflow ``ref``/``binds``. An empty preview (agent
+        / noop / unsupported) routes nowhere. ``rendered_*`` companions are
+        forwarded as the setter's ``rendered=`` argument (``None`` when the
+        render failed → single-line render).
+        """
+        command = config_preview.get("command")
+        if isinstance(command, str) and command:
+            rendered = config_preview.get("rendered_command")
+            row.set_command_preview(
+                command,
+                rendered=rendered if isinstance(rendered, str) else None,
+            )
+            return
+        value = config_preview.get("value")
+        if isinstance(value, str) and value:
+            rendered = config_preview.get("rendered_value")
+            row.set_value_preview(
+                value,
+                rendered=rendered if isinstance(rendered, str) else None,
+            )
+            return
+        over = config_preview.get("over")
+        if isinstance(over, str) and over:
+            rendered = config_preview.get("rendered_over")
+            row.set_over_preview(
+                over,
+                rendered=rendered if isinstance(rendered, str) else None,
+            )
+            return
+        ref = config_preview.get("ref")
+        if isinstance(ref, str):
+            binds = config_preview.get("binds")
+            rendered_binds = config_preview.get("rendered_binds")
+            row.set_workflow_binds_preview(
+                ref,
+                binds if isinstance(binds, dict) else {},
+                rendered_binds if isinstance(rendered_binds, dict) else {},
+            )
 
     def _on_node_started(self, payload: dict[str, Any]) -> None:
         """Mount a `WorkflowNodeRow`; register `(trace_id, invocation_id)`.

@@ -215,36 +215,98 @@ def _render_bash_blocks(content: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
+def _render_workflow_inputs_used_block(
+    workflow_inputs_used: dict[str, Any] | None,
+) -> list[str]:
+    """bug-094: render the ``workflow inputs used:`` sub-block lines.
+
+    Empty / ``None`` → no lines. Otherwise a labelled block mirroring the
+    ``bound inputs:`` per-key formatting, so the user can see WHICH
+    workflow-scope inputs this node's templated config referenced (a
+    distinct source from the inbound-edge binds shown by ``bound inputs:``).
+    """
+    if not workflow_inputs_used:
+        return []
+    lines = ["workflow inputs used:"]
+    for key, value in workflow_inputs_used.items():
+        lines.append(f"· {key}: {_format_input_value(value)}")
+    return lines
+
+
+def _render_command_block(command: str, rendered: str | None) -> list[str]:
+    """bug-036c + bug-094: the ``command:`` block lines.
+
+    When ``rendered`` is present AND differs from the raw ``command``
+    (string equality), the RENDERED form is the primary ``command:`` line
+    and the raw template drops to a subordinate ``template:`` line. When
+    ``rendered`` is ``None`` or equal to the raw command, a single
+    ``command:`` line renders (today's behaviour).
+    """
+    lines = ["command:"]
+    if rendered is not None and rendered != command:
+        lines.append(_truncate(rendered, 500))
+        lines.append("template:")
+        lines.append(_truncate(command, 500))
+    else:
+        lines.append(_truncate(command, 500))
+    return lines
+
+
 def _render_bash_input_body(
     bound_inputs: dict[str, Any],
     command: str,
+    *,
+    rendered_command: str | None = None,
+    workflow_inputs_used: dict[str, Any] | None = None,
 ) -> str:
-    """bug-037: render the bash `input` section body — inputs + command."""
+    """bug-037 + bug-094: render the bash `input` section body.
+
+    Layout: ``bound inputs:`` (inbound-edge binds) → ``workflow inputs
+    used:`` (bug-094; the workflow-scope inputs this node's templates
+    referenced) → ``command:`` (with a subordinate ``template:`` line when
+    a differing rendered form is available). Each block is present only
+    when non-empty.
+    """
     lines: list[str] = []
     if bound_inputs:
         lines.append("bound inputs:")
         for key, value in bound_inputs.items():
             lines.append(f"· {key}: {_format_input_value(value)}")
         lines.append("")
-    lines.append("command:")
-    lines.append(_truncate(command, 500))
+    used_lines = _render_workflow_inputs_used_block(workflow_inputs_used)
+    if used_lines:
+        lines.extend(used_lines)
+        lines.append("")
+    lines.extend(_render_command_block(command, rendered_command))
     return "\n".join(lines)
 
 
-def _render_bound_inputs_body(bound_inputs: dict[str, Any]) -> str:
-    """bug-063: render a generic Input section body from bound inputs.
+def _render_bound_inputs_body(
+    bound_inputs: dict[str, Any],
+    *,
+    workflow_inputs_used: dict[str, Any] | None = None,
+) -> str:
+    """bug-063 + bug-094: render a generic Input section body from bound inputs.
 
     Used on the failure path for node types (e.g. agent) that lack a
     reusable bound-inputs section. Mirrors the ``bound inputs:`` block
-    from :func:`_render_bash_input_body` but without the trailing
-    ``command:`` block. Empty inputs render as the empty-note constant
-    so a failed row always shows a populated Input section.
+    from :func:`_render_bash_input_body` (plus the bug-094 ``workflow
+    inputs used:`` sub-block) but without the trailing ``command:`` block.
+    Empty inputs (and no workflow-inputs-used) render as the empty-note
+    constant so a failed row always shows a populated Input section.
     """
-    if not bound_inputs:
+    used_lines = _render_workflow_inputs_used_block(workflow_inputs_used)
+    if not bound_inputs and not used_lines:
         return _FAILED_INPUT_EMPTY_NOTE
-    lines: list[str] = ["bound inputs:"]
-    for key, value in bound_inputs.items():
-        lines.append(f"· {key}: {_format_input_value(value)}")
+    lines: list[str] = []
+    if bound_inputs:
+        lines.append("bound inputs:")
+        for key, value in bound_inputs.items():
+            lines.append(f"· {key}: {_format_input_value(value)}")
+    if used_lines:
+        if lines:
+            lines.append("")
+        lines.extend(used_lines)
     return "\n".join(lines)
 
 
@@ -478,6 +540,31 @@ class WorkflowNodeRow(Collapsible):
         self._output_widget: Widget | None = None
         self._command_widget: Widget | None = None
         self._pending_command: str | None = None
+        # bug-094: rendered companion for the bash `command` preview. When
+        # present AND != the raw template, the input section shows the
+        # rendered form as the primary `command:` line and the raw template
+        # on a subordinate `template:` line.
+        self._pending_command_rendered: str | None = None
+        # bug-094: persistent copies of the bash command + its rendered
+        # companion, kept AFTER `_flush_pending_previews` resets the pending
+        # slots to None (bug-036c invariant: `_pending_command is None`
+        # post-mount). These let `_refresh_bash_input_body` re-render the
+        # already-mounted body when a later `set_workflow_inputs_used` /
+        # `set_bound_inputs` arrives out of order. `None` ⇒ not a bash
+        # command section (compute/map/workflow previews leave these unset).
+        self._command_text: str | None = None
+        self._command_rendered: str | None = None
+        # bug-094: stashed non-bash config preview (compute `value`, map
+        # `over`, nested-workflow `ref`/`binds`), deferred until mount like
+        # `_pending_command`. `("value"|"over", raw, rendered)` or
+        # `("workflow", ref, binds, rendered_binds)`.
+        self._pending_config_preview: tuple[Any, ...] | None = None
+        # bug-094: the subset of workflow-scope inputs this node's templated
+        # fields referenced (from `NODE_STARTED.payload.workflow_inputs_used`).
+        # Surfaced as a `workflow inputs used:` sub-block on the live bash
+        # input body. Stashed BEFORE the section mounts (mirrors
+        # `_bound_inputs`).
+        self._workflow_inputs_used: dict[str, Any] = {}
         # bug-037: per-type sections. Bash rows own an `input`
         # section (bound_inputs + command), an `output` section
         # (stdout), and an `exit: <code>` section. Agent rows own
@@ -728,31 +815,171 @@ class WorkflowNodeRow(Collapsible):
         rows can include the bound-inputs block inside their ``input``
         section. If ``set_command_preview`` fires first (race), the
         section is created without the block; a subsequent
-        ``set_bound_inputs`` is a no-op — the section is NOT rebuilt.
+        ``set_bound_inputs`` refreshes the already-mounted body in place
+        (bug-094 — so an out-of-order setter still surfaces).
         """
-        if self._bash_input_section is not None:
-            # Section already mounted (race): don't rebuild.
-            self._bound_inputs = dict(inputs)
-            return
         self._bound_inputs = dict(inputs)
+        self._refresh_bash_input_body()
 
-    def set_command_preview(self, command: str) -> None:
-        """bug-036c + bug-037: mount an ``input`` section w/ command."""
+    def set_workflow_inputs_used(self, inputs: dict[str, Any]) -> None:
+        """bug-094: stash the workflow-scope inputs this node referenced.
+
+        Mirrors :meth:`set_bound_inputs`. Surfaced as a ``workflow inputs
+        used:`` sub-block on the live bash input body (below ``bound
+        inputs:``). Stashed before the section mounts; if it arrives after
+        the section is already mounted the body is refreshed in place.
+        """
+        self._workflow_inputs_used = dict(inputs)
+        self._refresh_bash_input_body()
+
+    def set_command_preview(self, command: str, *, rendered: str | None = None) -> None:
+        """bug-036c + bug-037 + bug-094: mount an ``input`` section w/ command.
+
+        ``rendered`` is the fire-time rendered form of the command
+        template; when present and differing from ``command`` the section
+        shows it as the primary ``command:`` line with the raw template on
+        a subordinate ``template:`` line.
+        """
         if self._command_widget is not None:
+            # Section already mounted (out-of-order setter): refresh body.
+            self._command_text = command
+            self._command_rendered = rendered
+            self._refresh_bash_input_body()
             return
         self._pending_command = command
+        self._pending_command_rendered = rendered
         if self.is_mounted:
             self._flush_pending_previews()
 
-    def _flush_pending_previews(self) -> None:
-        """bug-036c + bug-037: mount deferred command preview once composed."""
-        if self._pending_command is None or self._command_widget is not None:
+    def set_value_preview(self, value: str, *, rendered: str | None = None) -> None:
+        """bug-094: mount a compute ``value`` preview (rendered + template)."""
+        self._stash_config_preview(("value", value, rendered))
+
+    def set_over_preview(self, over: str, *, rendered: str | None = None) -> None:
+        """bug-094: mount a map ``over`` preview (rendered + template)."""
+        self._stash_config_preview(("over", over, rendered))
+
+    def set_workflow_binds_preview(
+        self,
+        ref: str,
+        binds: dict[str, Any],
+        rendered_binds: dict[str, Any],
+    ) -> None:
+        """bug-094: mount a nested-workflow ``ref`` + rendered ``binds`` preview.
+
+        Shows the sub-workflow ``ref:`` line plus a per-bind ``key: rendered
+        (template: raw)`` block so the parent row surfaces what each bind
+        resolved to at fire-time — the class the design review flagged as
+        "where propagation matters most".
+        """
+        self._stash_config_preview(("workflow", ref, binds, rendered_binds))
+
+    def _stash_config_preview(self, spec: tuple[Any, ...]) -> None:
+        """bug-094: stash a non-bash config preview + flush if mounted.
+
+        Mirrors :meth:`set_command_preview`'s defer-until-mount pattern so a
+        preview set while the row is still composing still renders. ``spec``
+        is ``("value"|"over", raw, rendered)`` or
+        ``("workflow", ref, binds, rendered_binds)``.
+        """
+        if self._command_widget is not None:
             return
-        body = _render_bash_input_body(self._bound_inputs, self._pending_command)
-        section = self._new_bash_input_section(body)
-        self._bash_input_section = section
-        self._command_widget = section
-        self._pending_command = None
+        self._pending_config_preview = spec
+        if self.is_mounted:
+            self._flush_pending_previews()
+
+    def _config_preview_body(self, spec: tuple[Any, ...]) -> str:
+        """bug-094: build a non-bash config-preview section body from ``spec``."""
+        lines: list[str] = []
+        used_lines = _render_workflow_inputs_used_block(self._workflow_inputs_used)
+        kind = spec[0]
+        if kind == "workflow":
+            _, ref, binds, rendered_binds = spec
+            lines.append(f"ref: {ref}")
+            if binds:
+                lines.append("")
+                lines.append("binds:")
+                for key in binds:
+                    rendered = rendered_binds.get(key)
+                    raw = binds.get(key)
+                    if rendered is not None and str(rendered) != str(raw):
+                        lines.append(f"· {key}: {_truncate(str(rendered), 500)}")
+                        lines.append(f"  template: {_truncate(str(raw), 500)}")
+                    else:
+                        lines.append(f"· {key}: {_truncate(str(raw), 500)}")
+            if used_lines:
+                lines.append("")
+                lines.extend(used_lines)
+            return "\n".join(lines)
+        # compute `value` / map `over`: rendered primary + `template:` sub.
+        label, raw, rendered = spec
+        if used_lines:
+            lines.extend(used_lines)
+            lines.append("")
+        lines.append(f"{label}:")
+        if rendered is not None and rendered != raw:
+            lines.append(_truncate(rendered, 500))
+            lines.append("template:")
+            lines.append(_truncate(raw, 500))
+        else:
+            lines.append(_truncate(raw, 500))
+        return "\n".join(lines)
+
+    def _flush_pending_previews(self) -> None:
+        """bug-036c + bug-037 + bug-094: mount deferred config preview.
+
+        Bash rows flush the ``command`` body; compute/map/workflow rows
+        flush the stashed non-bash preview. Guarded against a double-mount
+        via ``_command_widget``.
+        """
+        if self._command_widget is not None:
+            return
+        if self._pending_command is not None:
+            # Promote the pending bash command to the persistent fields so a
+            # later out-of-order setter can refresh the body; then clear the
+            # pending slots (bug-036c invariant: `_pending_command is None`
+            # post-mount).
+            self._command_text = self._pending_command
+            self._command_rendered = self._pending_command_rendered
+            self._pending_command = None
+            self._pending_command_rendered = None
+            body = _render_bash_input_body(
+                self._bound_inputs,
+                self._command_text,
+                rendered_command=self._command_rendered,
+                workflow_inputs_used=self._workflow_inputs_used,
+            )
+            section = self._new_bash_input_section(body)
+            self._bash_input_section = section
+            self._command_widget = section
+            return
+        if self._pending_config_preview is not None:
+            body = self._config_preview_body(self._pending_config_preview)
+            section = self._new_bash_input_section(body)
+            self._bash_input_section = section
+            self._command_widget = section
+
+    def _refresh_bash_input_body(self) -> None:
+        """bug-094: re-render the already-mounted bash input body in place.
+
+        Handles out-of-order setters (a ``set_workflow_inputs_used`` or
+        ``set_bound_inputs`` arriving after the bash ``input`` section is
+        mounted). No-op when the section isn't mounted yet (the pending
+        stashes are picked up by :meth:`_flush_pending_previews`) or when the
+        mounted section is NOT a bash command section (compute/map/workflow
+        previews own their own body; ``_command_text`` stays ``None``).
+        """
+        if self._bash_input_section is None or self._command_text is None:
+            return
+        body = _render_bash_input_body(
+            self._bound_inputs,
+            self._command_text,
+            rendered_command=self._command_rendered,
+            workflow_inputs_used=self._workflow_inputs_used,
+        )
+        inner = self._bash_input_section._contents_list[0]
+        with contextlib.suppress(Exception):
+            inner.update(body)
 
     def _new_bash_input_section(self, body_text: str) -> Widget:
         """Build + mount the bash ``input`` NodeSection."""
@@ -835,7 +1062,10 @@ class WorkflowNodeRow(Collapsible):
         # `_bound_inputs` (this is the NEW render for agent nodes,
         # which have no reusable bound-inputs section).
         if self._bash_input_section is None:
-            input_body = _render_bound_inputs_body(self._bound_inputs)
+            input_body = _render_bound_inputs_body(
+                self._bound_inputs,
+                workflow_inputs_used=self._workflow_inputs_used,
+            )
             input_section = NodeSection("input")
             input_section._contents_list.append(
                 Static(input_body, markup=False),

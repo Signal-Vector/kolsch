@@ -314,6 +314,50 @@ Layout conventions:
 The `WorkflowMapIterations` gallery specimen captures a >10-iteration map
 with a mixed rollup (`… · 2 done, 9 running, 1 failed`).
 
+### Node-row `input` section — rendered vs `template:` (bug-094)
+
+A node row's `input` `NodeSection` shows what the runner was handed at
+fire-time, not just the raw template. Two conventions:
+
+- **Rendered-primary, template-subordinate.** For a covered node type's
+  templated config field, the **rendered** form is the primary line and
+  the raw template drops to a subordinate `template:` line:
+
+  ```
+  command:
+  python3 -c "requests.get('https://jd.example/4444217343', …)"
+  template:
+  python3 -c "requests.get('{{ inputs.url }}', …)"
+  ```
+
+  The subordinate line appears **only** when the rendered form differs
+  from the raw template (string equality). When they match — an
+  all-literal command, or a value with no Jinja tokens — a single
+  `command:` line renders, exactly as before. Compute `value:` and map
+  `over:` follow the same two-line shape; a nested-workflow row shows
+  `ref:` plus each bind's rendered value with a per-bind `template:`.
+
+- **`workflow inputs used:` sub-block.** Below `bound inputs:` on the
+  live `input` body, a labelled block lists the workflow-scope
+  `inputs.*` the node's templates referenced (same per-key
+  `· key: value` formatting as `bound inputs:`, distinct label so the
+  source is unambiguous). Present only when non-empty:
+
+  ```
+  bound inputs:
+  · job_description: a JD (1240 chars)
+
+  workflow inputs used:
+  · url: https://jd.example/4444217343
+
+  command:
+  …
+  ```
+
+  Agent rows carry no rendered config preview (an agent has no inline
+  prompt field), but still surface `workflow inputs used:` from their
+  inbound-edge binds.
+
 ---
 
 ## 5. NO_COLOR / mono
