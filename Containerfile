@@ -73,5 +73,11 @@ COPY docs ./docs
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --all-groups
 
+# scripts/ holds commit-gate helpers — the gate runs
+# `uv run python scripts/lint_chat_hex.py` (compose.test.yml). It is NOT
+# part of the installed package (no force-include), so copy it AFTER the
+# dependency sync so editing a script doesn't bust the sync cache layer.
+COPY scripts ./scripts
+
 # Default command keeps the dev container alive for `compose exec`.
 CMD ["sleep", "infinity"]
