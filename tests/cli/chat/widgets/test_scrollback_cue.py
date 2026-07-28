@@ -15,9 +15,17 @@ fixed dim rule string. Tests assert:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from cli.chat.widgets.scrollback_cue import ScrollbackCue
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 
 def test_default_css_declared_on_class() -> None:
@@ -48,7 +56,9 @@ def test_cue_text_matches_spec() -> None:
 
 
 @pytest.mark.asyncio
-async def test_mounts_under_pilot(mock_app_factory) -> None:
+async def test_mounts_under_pilot(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """Widget mounts under `App.run_test()` and renders the cue text."""
     widget = ScrollbackCue()
     app = mock_app_factory(widget)
@@ -60,7 +70,9 @@ async def test_mounts_under_pilot(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_widget_is_one_shot_lifecycle(mock_app_factory) -> None:
+async def test_widget_is_one_shot_lifecycle(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """No sticky/docked behaviour — the widget participates in normal flow.
 
     The lifecycle lock in the spec is "one-shot, mounted once, never

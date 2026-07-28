@@ -39,6 +39,7 @@ from tools.services.workflows import NodeCounts
 from workflows.ids import WorkflowRunId
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from pathlib import Path
 
 _NOW = datetime.now(tz=UTC)
@@ -58,9 +59,9 @@ class _MockAuthz:
 
 
 class _MockEngine:
-    async def execute_stream(self, config: Any, ctx: Any):
-        if False:
-            yield  # pragma: no cover
+    async def execute_stream(self, config: Any, ctx: Any) -> AsyncIterator[Any]:
+        return
+        yield  # pragma: no cover
 
 
 @dataclass
@@ -86,9 +87,9 @@ class _MockBundle:
 class _MockStore:
     """Minimal store stub — read_path_to_leaf yields nothing."""
 
-    async def read_path_to_leaf(self, _thread_id: Any):
-        if False:
-            yield  # pragma: no cover
+    async def read_path_to_leaf(self, _thread_id: Any) -> AsyncIterator[Any]:
+        return
+        yield  # pragma: no cover
 
     async def append_event(self, _thread_id: Any, _event: Any) -> None:
         return None
@@ -121,7 +122,7 @@ class _StubWorkflowsImpl:
         rec = WorkflowRunRecord(
             run_id=rid,
             ref="test/ref",
-            phase=phase,  # type: ignore[arg-type]
+            phase=phase,
             card=None,
             created_at=_NOW,
             started_at=_NOW - timedelta(seconds=started_offset),
@@ -139,7 +140,7 @@ class _StubWorkflowsImpl:
         self.cancel_calls.append((run_id, cascade))
         rec = self._workflow_registry.get(run_id)
         if rec is not None:
-            rec.phase = "cancelling"  # type: ignore[assignment]
+            rec.phase = "cancelling"
         return True
 
     async def aclose(self) -> None:
@@ -274,7 +275,10 @@ async def test_second_esc_within_window_cancels_workflow(
         await _press_escape(app)
         await pilot.pause()
         assert not app._esc_toast_active
-        assert len(workflows.cancel_calls) == 1
+        # mypy stale-narrows the reactive `_esc_toast_active` from the
+        # earlier positive assert; it mutates at runtime via
+        # _press_escape, so this line IS reached (ignore below).
+        assert len(workflows.cancel_calls) == 1  # type: ignore[unreachable]
 
 
 @pytest.mark.asyncio
@@ -314,7 +318,10 @@ async def test_toast_auto_dismisses_after_window(
         # (still active_cancel), but toast is off so we take the FIFO
         # branch (butler first). Simulate no butler active this time by
         # clearing the token first.
-        app.active_cancel = None
+        # mypy stale-narrows the reactive `_esc_toast_active` from the
+        # earlier positive assert; it mutates at runtime via the
+        # auto-dismiss timer, so this line IS reached (ignore below).
+        app.active_cancel = None  # type: ignore[unreachable]
         await _press_escape(app)
         await pilot.pause()
         # Expect direct workflow cancel via FIFO.

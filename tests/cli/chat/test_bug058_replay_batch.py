@@ -64,7 +64,7 @@ async def _empty_stream(
     **_kwargs: Any,
 ) -> AsyncGenerator[Any, None]:
     return
-    yield  # type: ignore[unreachable]  # pragma: no cover
+    yield  # pragma: no cover
 
 
 class _MockEngine:

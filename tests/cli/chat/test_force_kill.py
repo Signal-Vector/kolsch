@@ -43,7 +43,7 @@ class _StubWorkflowsImpl:
         return True
 
 
-class _HostApp(App):
+class _HostApp(App[None]):
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="transcript")
 

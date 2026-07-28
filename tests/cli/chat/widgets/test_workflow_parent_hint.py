@@ -31,7 +31,7 @@ if TYPE_CHECKING:
 
 @pytest.mark.asyncio
 async def test_parent_ref_renders_arrow_line(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """`parent_ref='release-candidate'` → `↳ from release-candidate` above bar."""
     renderer = WorkflowRenderer(parent_ref="release-candidate")
@@ -48,7 +48,7 @@ async def test_parent_ref_renders_arrow_line(
 
 @pytest.mark.asyncio
 async def test_no_parent_ref_no_arrow_line(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Default (`parent_ref=None`) → single-line progress bar only."""
     renderer = WorkflowRenderer()
@@ -67,7 +67,7 @@ async def test_no_parent_ref_no_arrow_line(
 
 @pytest.mark.asyncio
 async def test_set_parent_ref_after_mount_refreshes_header(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """`set_parent_ref` after mount replaces the hint text.
 
@@ -154,8 +154,8 @@ async def test_nested_workflow_progress_fanout_sets_parent_ref() -> None:
     renderer._run_id = child_run_id
 
     adapter = EventAdapter(
-        _MockApp(),  # type: ignore[arg-type]
-        workflows_impl=_StubWorkflowsImpl(),  # type: ignore[arg-type]
+        _MockApp(),
+        workflows_impl=_StubWorkflowsImpl(),
     )
 
     # Directly exercise the fan-out helper — a bare

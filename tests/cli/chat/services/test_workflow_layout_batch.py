@@ -37,7 +37,7 @@ class _MockCard:
     is_closed: bool = False
 
 
-class _TranscriptApp(App):
+class _TranscriptApp(App[None]):
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="transcript")
 
@@ -53,8 +53,8 @@ def _mk_record(
     return WorkflowRunRecord(
         run_id=WorkflowRunId(f"wrk_00000000-0000-0000-0000-0000000000{suffix}"),
         ref="test/ref",
-        phase=phase,  # type: ignore[arg-type]
-        card=card,  # type: ignore[arg-type]
+        phase=phase,
+        card=card,
         created_at=_BASE_TS,
         started_at=_BASE_TS + timedelta(seconds=started_offset),
         terminal_at=(

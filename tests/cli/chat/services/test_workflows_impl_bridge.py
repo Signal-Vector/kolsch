@@ -14,7 +14,7 @@ Three passes:
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -29,6 +29,7 @@ from tests.cli.chat.services.mocks import (
     install_mock_executor_factory,
 )
 from workflows.events import (
+    WorkflowEvent,
     WorkflowNodeCompletedEvent,
     WorkflowNodeStartedEvent,
     WorkflowRunAbortedEvent,
@@ -80,7 +81,7 @@ async def _mk(
     return impl, cards
 
 
-def _five_events() -> list:
+def _five_events() -> list[WorkflowEvent]:
     rid = WorkflowRunId(f"wrk_{uuid4()}")
     tr = TraceId(f"tr_{uuid4()}")
     inv = InvocationId(f"inv_{uuid4()}")
@@ -112,8 +113,8 @@ async def _collect(
     store: SessionStore,
     thread_id: str,
     kind: str,
-) -> list[dict]:
-    out: list[dict] = []
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
     async for ev in store.read_events(thread_id):
         if ev.type != EventType.UI_EVENT:
             continue
@@ -125,7 +126,7 @@ async def _collect(
     return out
 
 
-async def _wait_terminal(impl: WorkflowsImpl, rid) -> None:
+async def _wait_terminal(impl: WorkflowsImpl, rid: WorkflowRunId) -> None:
     for _ in range(80):
         await asyncio.sleep(0.05)
         phase = impl.status(rid).phase

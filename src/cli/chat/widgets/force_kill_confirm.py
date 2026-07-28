@@ -42,6 +42,7 @@ from cli.chat.widgets._gutter_block import GutterBlock
 if TYPE_CHECKING:
     from textual import events
     from textual.app import ComposeResult
+    from textual.binding import BindingType
 
     from tools.services.workflows import WorkflowRunId
 
@@ -105,7 +106,7 @@ class ForceKillConfirm(Widget):
     }
     """
 
-    BINDINGS: ClassVar[list[tuple[str, str, str]]] = [
+    BINDINGS: ClassVar[list[BindingType]] = [
         ("y", "confirm", "Confirm force-kill"),
         ("n", "cancel", "Cancel"),
         ("escape", "cancel", "Cancel"),

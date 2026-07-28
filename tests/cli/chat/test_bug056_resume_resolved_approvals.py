@@ -73,7 +73,7 @@ async def _empty_stream(
     **_kwargs: Any,
 ) -> AsyncGenerator[Any, None]:
     return
-    yield  # type: ignore[unreachable]  # pragma: no cover
+    yield  # pragma: no cover
 
 
 class _MockEngine:
@@ -710,9 +710,14 @@ async def test_new_approval_after_resume_is_interactive(
         for _ in range(40):
             await pilot.pause()
             if not composer.awaiting_approval:
-                break
+                # mypy stale-narrows the reactive `awaiting_approval` to
+                # Literal[True] from the earlier `is True` assert; it flips
+                # at runtime when the prompt resolves, so this IS reached.
+                break  # type: ignore[unreachable]
             await asyncio.sleep(0.05)
         assert composer.awaiting_approval is False, (
             "composer did not free after the live prompt resolved"
         )
-        assert new_block.is_resolved is True
+        # mypy still holds the stale Literal[True] narrowing here, so it
+        # reads this final assert as unreachable; it runs at runtime.
+        assert new_block.is_resolved is True  # type: ignore[unreachable]

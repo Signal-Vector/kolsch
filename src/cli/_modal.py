@@ -48,6 +48,7 @@ if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
 
     from cli._slash import ChatSessionState
+    from engine.context import ExecutionContext
 
 
 # ---------------------------------------------------------------------------
@@ -248,6 +249,7 @@ class ApprovalModal:
         action: str,
         target: str | None,
         caller_chain: tuple[str, ...] = (),
+        execution_context: ExecutionContext | None = None,  # noqa: ARG002 — accepted for prompt-callback signature parity
     ) -> PromptCallbackReturn:
         """Run the modal; return the authz callback shape.
 

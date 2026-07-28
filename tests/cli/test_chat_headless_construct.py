@@ -15,13 +15,14 @@ import pytest
 from cli.chat.app import ChatApp
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from pathlib import Path
 
 
 class _MockStore:
-    async def read_path_to_leaf(self, thread_id: Any) -> Any:
+    async def read_path_to_leaf(self, thread_id: Any) -> AsyncIterator[Any]:
         if False:
-            yield  # pragma: no cover
+            yield  # type: ignore[unreachable]  # empty-async-generator idiom
         return
 
 
@@ -43,9 +44,9 @@ class _MockRuntime:
 
 
 class _MockEngine:
-    async def execute_stream(self, config: Any, ctx: Any):
+    async def execute_stream(self, config: Any, ctx: Any) -> AsyncIterator[Any]:
         if False:
-            yield  # pragma: no cover
+            yield  # type: ignore[unreachable]  # empty-async-generator idiom
 
 
 @dataclass

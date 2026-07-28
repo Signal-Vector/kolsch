@@ -52,8 +52,8 @@ async def _add_three_response_sections(
     await row.mount_assistant_message("A", event_id="a")
     await row.mount_assistant_message("B", event_id="b")
     await row.mount_assistant_message("C", event_id="c")
-    await pilot.pause()  # type: ignore[attr-defined]
-    await pilot.pause()  # type: ignore[attr-defined]
+    await pilot.pause()
+    await pilot.pause()
 
 
 # ---------------------------------------------------------------------------

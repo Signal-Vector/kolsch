@@ -69,6 +69,8 @@ from cli.chat.widgets.assistant_prose import WorkflowAnchorButton
 if TYPE_CHECKING:
     from textual.widget import Widget
 
+    from cli.chat.widgets.node_section import NodeSection
+
 _LOGGER = logging.getLogger(__name__)
 
 
@@ -580,7 +582,7 @@ class WorkflowNodeRow(Collapsible):
         # per-tool_call_id `tool: <name>` sections.
         self._response_count: int = 0
         self._bound_inputs: dict[str, Any] = {}
-        self._bash_input_section: Widget | None = None
+        self._bash_input_section: NodeSection | None = None
         self._bash_output_section: Widget | None = None
         self._bash_exit_section: Widget | None = None
         self._tool_sections: dict[str, Widget] = {}
@@ -985,11 +987,14 @@ class WorkflowNodeRow(Collapsible):
             rendered_command=self._command_rendered,
             workflow_inputs_used=self._workflow_inputs_used,
         )
+        # `_contents_list[0]` is the `Static` preview mounted by
+        # `_new_bash_input_section`; narrow to reach `Static.update`.
         inner = self._bash_input_section._contents_list[0]
-        with contextlib.suppress(Exception):
-            inner.update(body)
+        if isinstance(inner, Static):
+            with contextlib.suppress(Exception):
+                inner.update(body)
 
-    def _new_bash_input_section(self, body_text: str) -> Widget:
+    def _new_bash_input_section(self, body_text: str) -> NodeSection:
         """Build + mount the bash ``input`` NodeSection."""
         from cli.chat.widgets.node_section import NodeSection  # noqa: PLC0415
 

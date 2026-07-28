@@ -55,7 +55,7 @@ HEREDOC_TARGET = "cat <<EOF\nfoo\nbar\nEOF"
 @pytest.mark.asyncio
 @pytest.mark.parametrize("width", [200, 40, 20])
 async def test_multiline_target_shows_chevron_at_any_width(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
     width: int,
 ) -> None:
     """Multi-line targets flag as overflowing regardless of terminal width.
@@ -85,7 +85,7 @@ async def test_multiline_target_shows_chevron_at_any_width(
 
 @pytest.mark.asyncio
 async def test_multiline_target_expanded_renders_all_lines(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Expanding a multi-line target reveals every ``\\n``-separated line.
 
@@ -124,7 +124,7 @@ async def test_multiline_target_expanded_renders_all_lines(
 
 @pytest.mark.asyncio
 async def test_multiline_target_footer_hint_present(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Mounting an ``ApprovalBlock`` with a multi-line target shows the hint.
 
@@ -156,7 +156,7 @@ async def test_multiline_target_footer_hint_present(
 
 @pytest.mark.asyncio
 async def test_crlf_target_treated_as_multiline(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """``\\r\\n`` line endings also trigger overflow (``\\n`` is a substring).
 
@@ -175,7 +175,7 @@ async def test_crlf_target_treated_as_multiline(
 
 @pytest.mark.asyncio
 async def test_single_line_target_at_wide_width_still_no_chevron(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Regression: a short single-line target still has no chevron.
 

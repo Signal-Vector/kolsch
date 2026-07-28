@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from textual.app import App, ComposeResult
@@ -26,6 +26,9 @@ from cli.chat.widgets.card_widget import CardWidget
 from schemas.identifiers import CardId
 from workflows.ids import WorkflowRunId
 
+if TYPE_CHECKING:
+    from textual.pilot import Pilot
+
 _BASE_TS = datetime(2026, 7, 5, 12, 0, 0, tzinfo=UTC)
 
 
@@ -35,7 +38,7 @@ class _MockCard:
     is_closed: bool = False
 
 
-class _TranscriptApp(App):
+class _TranscriptApp(App[None]):
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="transcript")
 
@@ -51,8 +54,8 @@ def _mk_record(
     return WorkflowRunRecord(
         run_id=WorkflowRunId(f"wrk_00000000-0000-0000-0000-0000000000{suffix}"),
         ref="test/ref",
-        phase=phase,  # type: ignore[arg-type]
-        card=card,  # type: ignore[arg-type]
+        phase=phase,
+        card=card,
         created_at=_BASE_TS,
         started_at=_BASE_TS + timedelta(seconds=started_offset),
         terminal_at=(
@@ -63,7 +66,7 @@ def _mk_record(
     )
 
 
-async def _setup_cards(pilot, n: int) -> tuple[Any, list[Any], list[Any]]:
+async def _setup_cards(pilot: Pilot[None], n: int) -> tuple[Any, list[Any], list[Any]]:
     """Return (transcript, widgets, cards) with `n` mounted workflow cards."""
     transcript = pilot.app.query_one("#transcript", VerticalScroll)
     widgets = []
@@ -293,8 +296,11 @@ async def test_drop_from_three_to_two_returns_full() -> None:
         await pilot.pause()
 
         # In-progress count now 2; those two should be FULL render again.
+        # mypy pins `.compact_mode` to Literal[True] from the earlier
+        # `is True` asserts and cannot see the reactive mutate at runtime,
+        # so it reads the flipped-back checks as unreachable.
         assert widgets[0]._body.compact_mode is False
-        assert widgets[1]._body.compact_mode is False
+        assert widgets[1]._body.compact_mode is False  # type: ignore[unreachable]  # reactive flipped back to False at runtime
         # bug-039: with only 1 terminal card and no in-progress space
         # pressure, the terminal card also stays full-render so the
         # user can drill into its rows.

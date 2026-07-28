@@ -15,7 +15,7 @@ Three passes:
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -68,9 +68,9 @@ async def _read_ui_events(
     store: SessionStore,
     thread_id: str,
     kind: str,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Collect every UI_EVENT of `kind` from the store's read path."""
-    hits: list[dict] = []
+    hits: list[dict[str, Any]] = []
     async for ev in store.read_events(thread_id):
         if ev.type != EventType.UI_EVENT:
             continue

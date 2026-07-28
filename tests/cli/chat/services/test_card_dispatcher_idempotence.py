@@ -59,7 +59,7 @@ class _StubApp:
 
 
 def _mk_adapter() -> EventAdapter:
-    return EventAdapter(_StubApp())  # type: ignore[arg-type]
+    return EventAdapter(_StubApp())
 
 
 async def test_opened_dispatched_twice_mounts_once() -> None:

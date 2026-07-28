@@ -67,7 +67,7 @@ async def _mk_impl_paused(
         _ = event
         await park.wait()
 
-    impl._publish_to_bus = _park  # type: ignore[assignment]
+    impl._publish_to_bus = _park  # type: ignore[method-assign]
 
     notice_log: list[dict[str, Any]] = []
     original_notice = impl.notice
@@ -90,7 +90,7 @@ async def _mk_impl_paused(
         # blocks on the full queue).
         _ = original_notice
 
-    impl.notice = _spy_notice  # type: ignore[assignment]
+    impl.notice = _spy_notice  # type: ignore[method-assign]
     return impl, notice_log
 
 

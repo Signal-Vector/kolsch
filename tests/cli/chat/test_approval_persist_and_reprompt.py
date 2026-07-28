@@ -208,7 +208,7 @@ async def _wait_for_approval_block(
     """Wait up to ``timeout`` seconds for an ApprovalBlock to mount."""
     for _ in range(int(timeout / 0.05)):
         await pilot.pause()
-        widgets = list(pilot.app.query(ApprovalBlock))
+        widgets: list[ApprovalBlock] = list(pilot.app.query(ApprovalBlock))
         if widgets:
             return widgets[0]
         await asyncio.sleep(0.05)

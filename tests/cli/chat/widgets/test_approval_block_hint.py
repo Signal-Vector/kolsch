@@ -36,7 +36,7 @@ def _make_block(*, parent_hint: str | None) -> ApprovalBlock:
 
 @pytest.mark.asyncio
 async def test_parent_hint_renders_arrow_static(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """`parent_hint` set → first `Static` child is ` ↳` with `parent-hint` class."""
     block = _make_block(parent_hint="workflow foo")
@@ -57,7 +57,7 @@ async def test_parent_hint_renders_arrow_static(
 
 @pytest.mark.asyncio
 async def test_no_parent_hint_no_static_arrow(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """`parent_hint=None` (default) → no `.parent-hint` Static."""
     block = _make_block(parent_hint=None)

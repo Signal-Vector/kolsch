@@ -35,7 +35,7 @@ if TYPE_CHECKING:
 
 
 @pytest.fixture
-def mock_app_factory() -> Callable[[Widget], App]:
+def mock_app_factory() -> Callable[[Widget], App[None]]:
     """Return a factory that wraps a single widget in a minimal `App`.
 
     Usage in a widget test:
@@ -53,8 +53,8 @@ def mock_app_factory() -> Callable[[Widget], App]:
     coupling, not a modular unit.
     """
 
-    def _factory(widget: Widget) -> App:
-        class _WidgetHostApp(App):
+    def _factory(widget: Widget) -> App[None]:
+        class _WidgetHostApp(App[None]):
             def compose(self) -> ComposeResult:
                 yield widget
 
@@ -159,7 +159,7 @@ def _canonical_data(event_type: EventType) -> dict[str, Any]:
                 "payload": {"card_id": "canonical"},
             }
     # Fail loud on any missing branch; the coverage test relies on this.
-    msg = f"conftest.canonical_event: no branch for {event_type!r}"
+    msg = f"conftest.canonical_event: no branch for {event_type!r}"  # type: ignore[unreachable]  # defensive fallback for future EventType members not yet in the exhaustive match
     raise KeyError(msg)
 
 

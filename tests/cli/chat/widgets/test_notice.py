@@ -24,12 +24,19 @@ The tests lock in:
 from __future__ import annotations
 
 import os
+from typing import TYPE_CHECKING
 from unittest import mock
 
 import pytest
 
 from cli.chat.widgets._gutter_block import GutterBlock
 from cli.chat.widgets.notice import SEVERITY_GLYPHS, NoticeWidget
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 
 def test_severity_glyphs_locked() -> None:
@@ -55,7 +62,7 @@ def test_unknown_kind_falls_back_to_info() -> None:
 )
 @pytest.mark.asyncio
 async def test_gutter_block_carries_severity_glyph(
-    kind: str, glyph: str, mock_app_factory
+    kind: str, glyph: str, mock_app_factory: Callable[[Widget], App[None]]
 ) -> None:
     """The GutterBlock's leading_glyph is exactly the severity glyph."""
     widget = NoticeWidget(text="Operation completed", kind=kind)
@@ -88,7 +95,7 @@ def test_glyph_present_under_no_color_construction(kind: str, glyph: str) -> Non
 )
 @pytest.mark.asyncio
 async def test_gutter_block_glyph_matches_across_color_and_no_color(
-    kind: str, glyph: str, mock_app_factory
+    kind: str, glyph: str, mock_app_factory: Callable[[Widget], App[None]]
 ) -> None:
     """The GutterBlock leading_glyph is identical between color + NO_COLOR."""
     env_no_color = dict(os.environ, NO_COLOR="1")
@@ -131,7 +138,9 @@ def test_kind_property_preserved() -> None:
 
 
 @pytest.mark.asyncio
-async def test_render_under_pilot(mock_app_factory) -> None:
+async def test_render_under_pilot(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """Widget mounts and the body renders under Pilot."""
     widget = NoticeWidget(text="session resumed", kind="info")
     app = mock_app_factory(widget)

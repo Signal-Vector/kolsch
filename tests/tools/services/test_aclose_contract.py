@@ -60,30 +60,40 @@ async def test_abstract_cards_aclose_returns_none_idempotent() -> None:
     stub = _CardsStub()
     # aclose is async.
     assert inspect.iscoroutinefunction(stub.aclose)
-    assert await stub.aclose() is None
+    # `aclose` is typed `-> None`; capturing the awaited value is a
+    # deliberate runtime contract pin (the ABC no-op MUST return None).
+    first = await stub.aclose()  # type: ignore[func-returns-value]
+    assert first is None
     # Second call is also None (idempotent no-op).
-    assert await stub.aclose() is None
+    second = await stub.aclose()  # type: ignore[func-returns-value]
+    assert second is None
 
 
 @pytest.mark.asyncio
 async def test_abstract_prompts_aclose_returns_none_idempotent() -> None:
     stub = _PromptsStub()
     assert inspect.iscoroutinefunction(stub.aclose)
-    assert await stub.aclose() is None
-    assert await stub.aclose() is None
+    first = await stub.aclose()  # type: ignore[func-returns-value]
+    assert first is None
+    second = await stub.aclose()  # type: ignore[func-returns-value]
+    assert second is None
 
 
 @pytest.mark.asyncio
 async def test_abstract_workflows_aclose_returns_none_idempotent() -> None:
     stub = _WorkflowsStub()
     assert inspect.iscoroutinefunction(stub.aclose)
-    assert await stub.aclose() is None
-    assert await stub.aclose() is None
+    first = await stub.aclose()  # type: ignore[func-returns-value]
+    assert first is None
+    second = await stub.aclose()  # type: ignore[func-returns-value]
+    assert second is None
 
 
 @pytest.mark.asyncio
 async def test_abstract_session_view_aclose_returns_none_idempotent() -> None:
     stub = _SessionViewStub()
     assert inspect.iscoroutinefunction(stub.aclose)
-    assert await stub.aclose() is None
-    assert await stub.aclose() is None
+    first = await stub.aclose()  # type: ignore[func-returns-value]
+    assert first is None
+    second = await stub.aclose()  # type: ignore[func-returns-value]
+    assert second is None

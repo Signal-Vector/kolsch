@@ -83,8 +83,12 @@ async def _default_chooser(  # pragma: no cover — interactive TTY path
         values=values,
     )
     chosen = await dialog.run_async()
+    # prompt_toolkit types `run_async` as returning a non-optional
+    # result, but `radiolist_dialog` genuinely returns `None` on
+    # cancel (Esc) — the guard IS reachable at runtime; the stub is
+    # over-narrow.
     if chosen is None:
-        return None
+        return None  # type: ignore[unreachable]
     return SessionId(str(chosen))
 
 

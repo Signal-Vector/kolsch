@@ -125,10 +125,10 @@ class _MockAuthz:
 class _MockEngine:
     """Non-yielding engine stub — the smoke suite never runs a turn."""
 
-    async def execute_stream(self, config: Any, ctx: Any):
+    async def execute_stream(self, config: Any, ctx: Any) -> AsyncIterator[Any]:
         _ = config, ctx
         if False:  # pragma: no cover
-            yield
+            yield  # type: ignore[unreachable]  # `if False` idiom: makes this an empty async generator
 
 
 @dataclass
@@ -202,7 +202,7 @@ async def chat_app(tmp_path: Path) -> AsyncIterator[ChatApp]:
         is_resume=False,
     )
     app = ChatApp(
-        session=bundle,  # type: ignore[arg-type]
+        session=bundle,
         engine=bundle.runtime.engine,
         full_history=False,
     )

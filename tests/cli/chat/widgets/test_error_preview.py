@@ -23,11 +23,19 @@ that deletes the helper doesn't break this file.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 from textual.widgets import Collapsible, Static
 
 from cli.chat.widgets.node_section import NodeSection
 from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 
 def _error_section_body(row: WorkflowNodeRow) -> str:
@@ -47,7 +55,7 @@ def _error_section_body(row: WorkflowNodeRow) -> str:
 
 @pytest.mark.asyncio
 async def test_long_error_message_full_in_error_section_body(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """A 200-char error appears IN FULL in the Error section body.
 
@@ -81,7 +89,7 @@ async def test_long_error_message_full_in_error_section_body(
 
 @pytest.mark.asyncio
 async def test_short_error_message_in_error_section_body(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """A short error appears in the Error section body (not the title)."""
     row = WorkflowNodeRow(node_name="n")

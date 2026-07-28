@@ -18,7 +18,7 @@ Five passes:
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -57,8 +57,8 @@ async def _mk_impl(store: SessionStore) -> CardsImpl:
 async def _snapshot_payloads(
     store: SessionStore,
     thread_id: str,
-) -> list[dict]:
-    out: list[dict] = []
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
     async for ev in store.read_events(thread_id):
         if ev.type != EventType.UI_EVENT:
             continue

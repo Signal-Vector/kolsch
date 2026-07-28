@@ -38,7 +38,7 @@ def _rendered_row_text(row: ApprovalArgsRow) -> str:
 
 @pytest.mark.asyncio
 async def test_approval_flow_expand_args_visible_before_choice(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Full flow: mount long target → chevron → Tab → visible → ``y`` → ALLOW."""
     long_target = (
@@ -77,7 +77,7 @@ async def test_approval_flow_expand_args_visible_before_choice(
 
 @pytest.mark.asyncio
 async def test_approval_flow_tab_noop_when_target_short(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """A short target: pressing Tab does not change the row's rendering.
 

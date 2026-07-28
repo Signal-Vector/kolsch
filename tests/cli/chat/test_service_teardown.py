@@ -26,14 +26,14 @@ from cli.chat.app import ChatApp
 from cli.chat.service_registry import ChatServiceRegistry
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
     from pathlib import Path
 
 
 class _MockStore:
-    async def read_path_to_leaf(self, thread_id: Any) -> Any:
-        if False:
-            yield  # pragma: no cover
+    async def read_path_to_leaf(self, thread_id: Any) -> AsyncIterator[Any]:
         return
+        yield  # pragma: no cover
 
 
 class _MockAuthz:
@@ -47,9 +47,9 @@ class _MockAuthz:
 
 
 class _MockEngine:
-    async def execute_stream(self, config: Any, ctx: Any):
-        if False:
-            yield  # pragma: no cover
+    async def execute_stream(self, config: Any, ctx: Any) -> AsyncIterator[Any]:
+        return
+        yield  # pragma: no cover
 
 
 class _MockRuntime:

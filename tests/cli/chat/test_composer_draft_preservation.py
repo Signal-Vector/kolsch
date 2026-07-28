@@ -16,14 +16,22 @@ refactor can't silently drop the draft.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from cli.chat.widgets.composer import Composer
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
+
 
 @pytest.mark.asyncio
 async def test_composer_draft_preserved_through_awaiting_approval(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """`awaiting_approval=True` disables the composer WITHOUT clearing text."""
     composer = Composer()
@@ -45,7 +53,7 @@ async def test_composer_draft_preserved_through_awaiting_approval(
 
 @pytest.mark.asyncio
 async def test_composer_draft_survives_full_approval_cycle(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Type → pause → resolve → text still `"draft"`; composer re-enabled."""
     composer = Composer()
@@ -66,5 +74,8 @@ async def test_composer_draft_survives_full_approval_cycle(
         composer.awaiting_approval = False
         await pilot.pause()
         assert composer.disabled is False
-        # Draft intact through the full pause/resume cycle.
-        assert composer.text == "draft"
+        # Draft intact through the full pause/resume cycle. mypy
+        # stale-narrows the reactive `disabled` from the earlier
+        # `is True` assert; it flips at runtime via the
+        # awaiting_approval watcher, so this line IS reached.
+        assert composer.text == "draft"  # type: ignore[unreachable]

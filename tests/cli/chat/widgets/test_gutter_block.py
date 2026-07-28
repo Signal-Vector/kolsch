@@ -29,6 +29,8 @@ mounts standalone (Design Principles rule 2: modular).
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 from textual.widgets import Static
 
@@ -40,9 +42,17 @@ from cli.chat.widgets._gutter_block import (
     _GutterRail,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
+
 
 @pytest.mark.asyncio
-async def test_mount_rail_only_no_glyph(mock_app_factory) -> None:
+async def test_mount_rail_only_no_glyph(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """No ``leading_glyph`` → rail + body only, no glyph column."""
     body = Static("hello", markup=False)
     block = GutterBlock(rail_color="$user-border", body=body)
@@ -59,7 +69,9 @@ async def test_mount_rail_only_no_glyph(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_mount_rail_and_glyph(mock_app_factory) -> None:
+async def test_mount_rail_and_glyph(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """``leading_glyph`` → glyph column mounts between rail and body."""
     body = Static("warning body", markup=False)
     block = GutterBlock(
@@ -78,7 +90,9 @@ async def test_mount_rail_and_glyph(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_body_slot_accepts_arbitrary_widget(mock_app_factory) -> None:
+async def test_body_slot_accepts_arbitrary_widget(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """The body slot is unconstrained — any Textual widget composes."""
     body = Static("literal text", markup=False)
     block = GutterBlock(
@@ -94,7 +108,9 @@ async def test_body_slot_accepts_arbitrary_widget(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_rail_renders_one_glyph_per_line(mock_app_factory) -> None:
+async def test_rail_renders_one_glyph_per_line(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """``_GutterRail.render_line`` always emits a single ``▎`` segment."""
     body = Static("row1\nrow2\nrow3", markup=False)
     block = GutterBlock(rail_color="$user-border", body=body)
@@ -108,7 +124,9 @@ async def test_rail_renders_one_glyph_per_line(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_focus_within_reverse_selector_present(mock_app_factory) -> None:
+async def test_focus_within_reverse_selector_present(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """qol-079 focus indicator selector present in DEFAULT_CSS."""
     body = Static("focusable body", markup=False)
     block = GutterBlock(
@@ -125,7 +143,9 @@ async def test_focus_within_reverse_selector_present(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_focus_within_reverses_glyph(mock_app_factory) -> None:
+async def test_focus_within_reverses_glyph(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """When focus lands inside a glyph-carrying block, the glyph column
     computes ``text-style: reverse``. Verified by reading back the
     resolved style after simulating focus with the ``:focus-within``
@@ -152,7 +172,9 @@ async def test_focus_within_reverses_glyph(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_focus_within_reverses_rail_when_glyphless(mock_app_factory) -> None:
+async def test_focus_within_reverses_rail_when_glyphless(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """For a glyph-less block (``leading_glyph=None``), focus reverses
     the rail's ``▎`` — the fallback focus cue for widgets like
     ``UserChatbox`` / ``AssistantProse`` that don't carry a leading glyph.
@@ -178,7 +200,9 @@ async def test_focus_within_reverses_rail_when_glyphless(mock_app_factory) -> No
 
 
 @pytest.mark.asyncio
-async def test_leading_glyph_color_defaults_to_rail(mock_app_factory) -> None:
+async def test_leading_glyph_color_defaults_to_rail(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """``leading_glyph_color=None`` → glyph color equals ``rail_color``."""
     body = Static("state body", markup=False)
     block = GutterBlock(
@@ -192,7 +216,9 @@ async def test_leading_glyph_color_defaults_to_rail(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_leading_glyph_color_overridable(mock_app_factory) -> None:
+async def test_leading_glyph_color_overridable(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """Passing ``leading_glyph_color`` diverges from the rail color."""
     body = Static("hint body", markup=False)
     block = GutterBlock(
@@ -208,7 +234,9 @@ async def test_leading_glyph_color_overridable(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_public_slot_properties_read_back(mock_app_factory) -> None:
+async def test_public_slot_properties_read_back(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """The four slot properties read back the constructor args verbatim."""
     body = Static("readback body", markup=False)
     block = GutterBlock(
@@ -226,7 +254,9 @@ async def test_public_slot_properties_read_back(mock_app_factory) -> None:
 
 @pytest.mark.parametrize("stem", sorted(_PALETTE_VARS))
 @pytest.mark.asyncio
-async def test_palette_var_class_dispatch(stem, mock_app_factory) -> None:
+async def test_palette_var_class_dispatch(
+    stem: str, mock_app_factory: Callable[[Widget], App[None]]
+) -> None:
     """A palette-var ``rail_color`` adds the ``-rail-<stem>`` class
     so Textual's stylesheet resolves the palette var via the CSS rule
     in ``DEFAULT_CSS``.
@@ -241,7 +271,9 @@ async def test_palette_var_class_dispatch(stem, mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_literal_color_inline_assignment(mock_app_factory) -> None:
+async def test_literal_color_inline_assignment(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """A literal hex ``rail_color`` is applied inline to the rail's
     ``styles.color`` — no dispatch class is added.
     """
@@ -259,7 +291,9 @@ async def test_literal_color_inline_assignment(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_unknown_palette_var_falls_through_to_inline(mock_app_factory) -> None:
+async def test_unknown_palette_var_falls_through_to_inline(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """A palette-var-shaped value that isn't in :data:`_PALETTE_VARS`
     falls through to inline assignment. Textual's Color parser then
     rejects it — the failure is loud, not silent.

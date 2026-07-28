@@ -38,14 +38,17 @@ if TYPE_CHECKING:
     from schemas.identifiers import CardId
 
 
-CardStatus = Literal["running", "success", "error", "cancelled"]
+CardStatus = Literal["queued", "running", "cancelling", "success", "error", "cancelled"]
 """Every visible state a card can be in.
 
 `running` is the default the widget layer paints while a tool is
 still working; the three terminal states are what `close(final_status=...)`
-accepts. `set_status` may drive through any of the four (the widget
-layer picks the glyph via
-[`CARD_KIND_REGISTRY`][tools.services.card_kinds.CARD_KIND_REGISTRY]).
+accepts. `queued` and `cancelling` are intermediate states — the
+widget layer paints a glyph for each (see
+[`CARD_KIND_REGISTRY`][tools.services.card_kinds.CARD_KIND_REGISTRY]'s
+`header_glyph_by_status`); `cancelling` is the services-only state
+`WorkflowsImpl.cancel()` drives cards through. `set_status` may drive
+through any of the six.
 """
 
 CardFinalStatus = Literal["success", "error", "cancelled"]

@@ -22,7 +22,7 @@ from cli.chat.widgets.notice import NoticeWidget
 from cli.chat.widgets.notice_slot import NoticeSlot
 
 
-class _HostApp(App):
+class _HostApp(App[None]):
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="transcript")
 
@@ -70,7 +70,7 @@ async def test_warning_notice_adds_header_indicator() -> None:
         # Rendered text includes the indicator. `Static.render`
         # returns the current content — captures whatever was last
         # passed to `update()`.
-        rendered = str(card._header.render())
+        rendered = str(card._header.render())  # type: ignore[unreachable]  # mypy narrows _warning_indicator to Literal[False] at the earlier assert; mount_notice()->Any can't re-widen it, so it treats the `is True` assert as always-false. Runtime flips it to True and the test passes.
         assert "⚠" in rendered
 
 

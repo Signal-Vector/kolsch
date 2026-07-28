@@ -14,7 +14,7 @@ from __future__ import annotations
 
 import asyncio
 import json
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -74,7 +74,7 @@ def test_legacy_meta_without_field_validates(tmp_path: Path) -> None:
     """AC #1 backward compat: legacy meta without the field validates."""
     # Build a meta.json payload with none of the feat-015 field, then
     # round-trip through the model — must default to "subprocess".
-    legacy_payload = {
+    legacy_payload: dict[str, Any] = {
         "run_id": f"wrk_{uuid4()}",
         "trace_id": f"tr_{uuid4()}",
         "workflow_ref": "demo/workflows/legacy",

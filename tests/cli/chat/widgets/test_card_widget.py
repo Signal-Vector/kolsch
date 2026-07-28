@@ -20,11 +20,17 @@ Six Pilot passes exercising the state machine:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from cli.chat.widgets.card_widget import CardFooter, CardHeader, CardWidget
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 
 class _MockEvent:
@@ -52,7 +58,9 @@ def _footer_text(widget: CardWidget) -> str:
 
 
 @pytest.mark.asyncio
-async def test_mount_initializing_state(mock_app_factory) -> None:
+async def test_mount_initializing_state(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     widget = CardWidget(card_id="crd_test1", kind="markdown", title="t")
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
@@ -68,7 +76,9 @@ async def test_mount_initializing_state(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_appended_transitions_to_running(mock_app_factory) -> None:
+async def test_appended_transitions_to_running(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     widget = CardWidget(card_id="crd_test2", kind="markdown", title="hello")
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
@@ -89,7 +99,9 @@ async def test_appended_transitions_to_running(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_closed_success_auto_collapses(mock_app_factory) -> None:
+async def test_closed_success_auto_collapses(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     widget = CardWidget(card_id="crd_test3", kind="markdown", title="done")
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
@@ -111,7 +123,9 @@ async def test_closed_success_auto_collapses(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_closed_error_stays_expanded_with_footer(mock_app_factory) -> None:
+async def test_closed_error_stays_expanded_with_footer(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     widget = CardWidget(card_id="crd_test4", kind="markdown", title="fail")
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
@@ -133,7 +147,9 @@ async def test_closed_error_stays_expanded_with_footer(mock_app_factory) -> None
 
 
 @pytest.mark.asyncio
-async def test_closed_cancelled_applies_class_and_glyph(mock_app_factory) -> None:
+async def test_closed_cancelled_applies_class_and_glyph(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     widget = CardWidget(card_id="crd_test5", kind="markdown", title="c")
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
@@ -152,7 +168,9 @@ async def test_closed_cancelled_applies_class_and_glyph(mock_app_factory) -> Non
 
 
 @pytest.mark.asyncio
-async def test_status_paused_applies_class_and_glyph(mock_app_factory) -> None:
+async def test_status_paused_applies_class_and_glyph(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     widget = CardWidget(card_id="crd_test6", kind="markdown", title="p")
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:

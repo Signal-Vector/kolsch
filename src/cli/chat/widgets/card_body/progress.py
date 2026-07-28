@@ -61,7 +61,7 @@ class ProgressRenderer(Vertical):
         raw_current = payload.get("current", 0)
         # `total=None` or `total=0` → indeterminate: pass `None`
         # to Textual so the bar renders its spinner form.
-        if raw_total in (None, 0):
+        if raw_total is None or raw_total == 0:
             self._bar.total = None
         else:
             try:

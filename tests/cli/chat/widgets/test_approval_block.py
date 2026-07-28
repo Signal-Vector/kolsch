@@ -77,7 +77,7 @@ async def _current_pane(block: ApprovalBlock) -> Widget | None:
 
 @pytest.mark.asyncio
 async def test_initial_state_shows_choice_pane(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """On mount the current pane is an ``ApprovalChoicePane``.
 
@@ -112,7 +112,7 @@ async def test_initial_state_shows_choice_pane(
 
 @pytest.mark.asyncio
 async def test_press_y_resolves_allow_once(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """``y`` → immediate ``AuthzEffect.ALLOW``; frozen footer mounted."""
     block = _make_block()
@@ -132,7 +132,7 @@ async def test_press_y_resolves_allow_once(
 
 @pytest.mark.asyncio
 async def test_press_n_resolves_deny_once(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """``n`` → immediate ``AuthzEffect.DENY``; footer has ``.-denied``."""
     block = _make_block()
@@ -152,7 +152,7 @@ async def test_press_n_resolves_deny_once(
 
 @pytest.mark.asyncio
 async def test_press_escape_on_choice_pane_resolves_deny_once(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Escape on the choice pane is deny-once per Coordinator decision #4."""
     block = _make_block()
@@ -171,7 +171,7 @@ async def test_press_escape_on_choice_pane_resolves_deny_once(
 
 @pytest.mark.asyncio
 async def test_a_swaps_to_pattern_edit(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """``a`` swaps the pane to ``ApprovalPatternEdit`` (no resolution)."""
     block = _make_block()
@@ -190,7 +190,7 @@ async def test_a_swaps_to_pattern_edit(
 
 @pytest.mark.asyncio
 async def test_a_confirm_pattern_swaps_to_save_confirm(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """``a`` → confirm pattern → ``ApprovalSaveConfirm`` is now the pane."""
     block = _make_block()
@@ -213,7 +213,7 @@ async def test_a_confirm_pattern_swaps_to_save_confirm(
 
 @pytest.mark.asyncio
 async def test_a_full_path_resolves_allow_with_rule(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """``a`` → pattern confirm → save-confirm ``y`` → ``(ALLOW, Rule)``."""
     block = _make_block()
@@ -248,7 +248,7 @@ async def test_a_full_path_resolves_allow_with_rule(
 
 @pytest.mark.asyncio
 async def test_d_full_path_resolves_deny_with_rule(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """``d`` → pattern confirm → save-confirm ``y`` → ``(DENY, Rule)``."""
     block = _make_block()
@@ -280,7 +280,7 @@ async def test_d_full_path_resolves_deny_with_rule(
 
 @pytest.mark.asyncio
 async def test_escape_in_pattern_edit_returns_to_choice_pane(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Escape inside ``ApprovalPatternEdit`` swaps back to the choice pane."""
     block = _make_block()
@@ -301,7 +301,7 @@ async def test_escape_in_pattern_edit_returns_to_choice_pane(
 
 @pytest.mark.asyncio
 async def test_save_confirm_n_falls_back_to_allow_once(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """``a`` path, then ``n`` on save-confirm → allow-once fallback.
 

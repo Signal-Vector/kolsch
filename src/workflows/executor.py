@@ -1488,7 +1488,10 @@ class IterativeExecutor:
                         node_def,
                         workflow_inputs=self._run.inputs,
                         bound_inputs=bound_inputs,
-                        render=lambda s, _bound=bound_inputs: self._render_jinja(
+                        # mypy can't match a default-arg lambda (the
+                        # `_bound=` late-binding capture adds an arg) against
+                        # the expected `Callable[[str], Any]` render param.
+                        render=lambda s, _bound=bound_inputs: self._render_jinja(  # type: ignore[misc]
                             s, inputs_overlay=_bound
                         ),
                         raw_binds=self._inbound_edge_binds(node_name),
@@ -2135,7 +2138,10 @@ class IterativeExecutor:
                 node_def,
                 workflow_inputs=self._run.inputs,
                 bound_inputs=bound_inputs,
-                render=lambda s, _bound=bound_inputs: self._render_jinja(
+                # mypy can't match a default-arg lambda (the `_bound=`
+                # late-binding capture adds an arg) against the expected
+                # `Callable[[str], Any]` render param.
+                render=lambda s, _bound=bound_inputs: self._render_jinja(  # type: ignore[misc]
                     s, inputs_overlay=_bound
                 ),
                 raw_binds=self._inbound_edge_binds(node_name),
@@ -3233,7 +3239,11 @@ def _scanned_template_sources(
     scanned config field — their ``workflow_inputs_used`` derives ENTIRELY
     from inbound-edge binds (available synchronously).
     """
-    sources: list[str] = []
+    # Heterogeneous by design: `getattr(..., None)` and raw edge-bind
+    # values land here as `Any`, and the trailing comprehension keeps
+    # only the `str` entries — so the list element type is `Any`, not
+    # `str`.
+    sources: list[Any] = []
     t = _node_type_ref(node_def)
     if t == "kolsch/nodes/bash":
         sources.append(getattr(node_def, "command", ""))
@@ -3258,7 +3268,11 @@ def _extract_input_refs(source: str) -> set[str]:
     source yields the empty set (a bare literal has no template refs).
     """
     if not isinstance(source, str):
-        return set()
+        # Defensive: the sole caller passes only `str` (its source list
+        # is pre-filtered), so the declared `str` param makes this branch
+        # statically dead — but the guard documents the runtime contract
+        # for any future non-`str` caller.
+        return set()  # type: ignore[unreachable]
     from jinja2 import nodes as jn  # noqa: PLC0415
 
     try:
@@ -3267,14 +3281,23 @@ def _extract_input_refs(source: str) -> set[str]:
         return set()
     keys: set[str] = set()
     for node in ast.find_all((jn.Getattr, jn.Getitem)):
-        target = node.node
-        if isinstance(target, jn.Name) and target.name == "inputs":
-            if isinstance(node, jn.Getattr):
-                keys.add(node.attr)
-            else:  # Getitem
-                arg = node.arg
-                if isinstance(arg, jn.Const) and isinstance(arg.value, str):
-                    keys.add(arg.value)
+        # `find_all` with a tuple widens the element type to the common
+        # base `Expr` (which lacks `.node` / `.attr` / `.arg`); narrow
+        # back to the concrete subclasses to reach those fields.
+        if (
+            isinstance(node, jn.Getattr)
+            and isinstance(node.node, jn.Name)
+            and node.node.name == "inputs"
+        ):
+            keys.add(node.attr)
+        elif (
+            isinstance(node, jn.Getitem)
+            and isinstance(node.node, jn.Name)
+            and node.node.name == "inputs"
+        ):
+            arg = node.arg
+            if isinstance(arg, jn.Const) and isinstance(arg.value, str):
+                keys.add(arg.value)
     return keys
 
 

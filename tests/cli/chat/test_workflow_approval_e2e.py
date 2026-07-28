@@ -186,7 +186,7 @@ async def test_e2e_workflow_approval_paused(
     """Prompt.requested with workflow source → row paused + parent_hint."""
     impl, session_id, thread_id = await _mk_impl(tmp_path, store)
     app = _MockApp()
-    adapter = EventAdapter(app)  # type: ignore[arg-type]
+    adapter = EventAdapter(app)
     adapter.register_workflows_impl(impl)
 
     # Seed the impl's registry so the adapter's parent_hint derives
@@ -276,7 +276,7 @@ async def test_e2e_workflow_approval_resolved_transitions_back(
     """User presses `y` → resolved event fires → row transitions to running."""
     impl, session_id, thread_id = await _mk_impl(tmp_path, store)
     app = _MockApp()
-    adapter = EventAdapter(app)  # type: ignore[arg-type]
+    adapter = EventAdapter(app)
     adapter.register_workflows_impl(impl)
 
     run_id = WorkflowRunId("wrk_00000000-0000-0000-0000-0000000000e3")
@@ -380,7 +380,7 @@ async def test_e2e_workflow_approval_denied_still_transitions_running(
     """
     impl, session_id, thread_id = await _mk_impl(tmp_path, store)
     app = _MockApp()
-    adapter = EventAdapter(app)  # type: ignore[arg-type]
+    adapter = EventAdapter(app)
     adapter.register_workflows_impl(impl)
 
     run_id = WorkflowRunId("wrk_00000000-0000-0000-0000-0000000000e4")

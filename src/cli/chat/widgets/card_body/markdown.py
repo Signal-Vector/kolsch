@@ -63,7 +63,7 @@ class MarkdownRenderer(Markdown):
         # 2 asserts the 40Hz→≤10Hz ratio via this counter.
         self._flush_count: int = 0
 
-    def on_mount(self) -> None:  # type: ignore[override]
+    def on_mount(self) -> None:
         """Install the flush interval on mount.
 
         The interval fires every `_FLUSH_MS / 1000` seconds; each

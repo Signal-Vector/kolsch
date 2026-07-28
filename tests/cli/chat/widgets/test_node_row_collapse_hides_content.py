@@ -10,7 +10,7 @@ from __future__ import annotations
 from collections.abc import Callable
 
 import pytest
-from textual.app import App
+from textual.app import App, ComposeResult
 from textual.widget import Widget
 from textual.widgets import Collapsible
 
@@ -25,7 +25,7 @@ _AppFactory = Callable[[Widget], App[None]]
 def mock_app_factory() -> _AppFactory:
     def factory(child: Widget) -> App[None]:
         class _MockApp(App[None]):
-            def compose(self):
+            def compose(self) -> ComposeResult:
                 yield child
 
         return _MockApp()

@@ -82,7 +82,7 @@ def test_register_compaction_variant_adds_to_registry() -> None:
             raise NotImplementedError
 
     try:
-        register_compaction_variant("custom_test_variant", _Custom)  # type: ignore[arg-type]
+        register_compaction_variant("custom_test_variant", _Custom)
         assert "custom_test_variant" in _REGISTRY
         provider = make_compaction_provider(
             config={"variant": "custom_test_variant", "config": {"x": 1}},
@@ -108,7 +108,7 @@ async def test_reference_summary_compact_no_op_on_empty_events() -> None:
         keep_head=0,
         keep_tail=100,
         model_context_length=100_000,
-        thread_id="thread_test",  # type: ignore[arg-type]
+        thread_id="thread_test",
         config={},
     )
     assert outcome.compacted_event_ids == []

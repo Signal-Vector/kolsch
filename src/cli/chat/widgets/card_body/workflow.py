@@ -612,7 +612,7 @@ class WorkflowRenderer(Vertical):
             self._planned_node_count = len(nodes)
             self._mount_placeholder_rows(nodes)
 
-    def _mount_placeholder_rows(self, nodes: list[dict[str, Any]]) -> None:
+    def _mount_placeholder_rows(self, nodes: list[Any]) -> None:
         """bug-096: mount one ``pending`` placeholder row per manifest node.
 
         Rows mount in the manifest's topological order. bug-095: the

@@ -17,15 +17,21 @@ from __future__ import annotations
 from typing import TYPE_CHECKING
 
 import pytest
+from textual.app import App
 
 from cli.chat.widgets.approval_save_confirm import ApprovalSaveConfirm
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from textual.app import ComposeResult
+    from textual.widget import Widget
 
 
 @pytest.mark.asyncio
-async def test_preview_and_fallback_label_visible(mock_app_factory):
+async def test_preview_and_fallback_label_visible(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     widget = ApprovalSaveConfirm(
         preview='authz.allow  bash("ls -la")',
         deny=False,
@@ -42,7 +48,9 @@ async def test_preview_and_fallback_label_visible(mock_app_factory):
 
 
 @pytest.mark.asyncio
-async def test_deny_flag_marks_preview_class(mock_app_factory):
+async def test_deny_flag_marks_preview_class(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     widget = ApprovalSaveConfirm(
         preview='authz.deny  bash("rm -rf /")',
         deny=True,
@@ -65,7 +73,7 @@ async def test_deny_flag_marks_preview_class(mock_app_factory):
     ],
 )
 async def test_posts_chosen_for_each_key(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
     key_press: str,
     expected: str,
 ) -> None:
@@ -74,11 +82,13 @@ async def test_posts_chosen_for_each_key(
         deny=False,
         fallback_label="allow once",
     )
-    app = mock_app_factory(widget)
 
     seen: list[str] = []
 
-    class _RecordingApp(type(app)):
+    # Recording host: mirrors `mock_app_factory` (composes the single
+    # widget) but adds the app-level handler so the bubbled message is
+    # recorded.
+    class _RecordingApp(App[None]):
         def compose(self) -> ComposeResult:
             yield widget
 

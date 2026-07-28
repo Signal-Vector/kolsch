@@ -87,7 +87,7 @@ persistent chrome or a transient overlay, don't.
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, ClassVar
+from typing import TYPE_CHECKING
 
 from rich.segment import Segment
 from textual.strip import Strip
@@ -158,7 +158,7 @@ class _GutterRail(Widget):
     }
     """
 
-    can_focus: ClassVar[bool] = False
+    can_focus: bool = False  # matches Widget.can_focus (a plain attr, not ClassVar)
 
     def render_line(self, y: int) -> Strip:
         # y is passed for signature parity; the rail is invariant per
@@ -194,7 +194,7 @@ class _GutterGlyph(Static):
     }
     """
 
-    can_focus: ClassVar[bool] = False
+    can_focus: bool = False  # matches Widget.can_focus (a plain attr, not ClassVar)
 
 
 class GutterBlock(Widget):
@@ -250,7 +250,7 @@ class GutterBlock(Widget):
     GutterBlock.-glyph-hint > .gb-glyph-col { color: $hint; }
     """
 
-    can_focus: ClassVar[bool] = False
+    can_focus: bool = False  # matches Widget.can_focus (a plain attr, not ClassVar)
 
     def __init__(
         self,

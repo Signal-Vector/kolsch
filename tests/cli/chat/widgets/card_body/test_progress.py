@@ -12,12 +12,18 @@ Two passes:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from textual.widgets import ProgressBar, Static
 
 from cli.chat.widgets.card_body.progress import ProgressRenderer
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 
 class _MockEvent:
@@ -29,7 +35,9 @@ class _MockEvent:
 
 
 @pytest.mark.asyncio
-async def test_set_progress_updates_message_and_bar(mock_app_factory) -> None:
+async def test_set_progress_updates_message_and_bar(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     widget = ProgressRenderer()
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
@@ -50,7 +58,9 @@ async def test_set_progress_updates_message_and_bar(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_indeterminate_when_total_zero(mock_app_factory) -> None:
+async def test_indeterminate_when_total_zero(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """`total=0` → indeterminate: bar's total is `None` (spinner mode)."""
     widget = ProgressRenderer()
     app = mock_app_factory(widget)

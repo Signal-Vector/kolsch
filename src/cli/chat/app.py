@@ -501,7 +501,7 @@ class _DaemonThreadPoolExecutor(ThreadPoolExecutor):
         super().shutdown(wait=wait, cancel_futures=cancel_futures)
 
 
-class ChatApp(App):
+class ChatApp(App[None]):
     """Textual chat surface.
 
     Constructor:
@@ -570,7 +570,12 @@ class ChatApp(App):
     ) -> None:
         # Resolve theme path per-instance so NO_COLOR toggles work
         # in tests that monkeypatch the env between constructions.
-        self.CSS_PATH = _resolve_css_path()
+        # Textual reads `self.CSS_PATH` inside `App.__init__` (see
+        # site-packages/textual/app.py: `css_path or self.CSS_PATH`), so
+        # this per-instance override MUST land before `super().__init__()`.
+        # `CSS_PATH` is a Textual `ClassVar`; the instance-level set is the
+        # supported way to resolve the theme per-construction (NO_COLOR).
+        self.CSS_PATH = _resolve_css_path()  # type: ignore[misc]  # intentional per-instance ClassVar override, read by App.__init__
         super().__init__()
         self.session = session
         self.engine = engine
@@ -988,8 +993,12 @@ class ChatApp(App):
                 if registry is not None and card_widgets is not None:
                     layout_manager = WorkflowLayoutManager(
                         transcript=transcript,
-                        get_records=lambda reg=registry: list(reg.values()),
-                        get_card_widget=(lambda cid, cw=card_widgets: cw.get(cid)),
+                        # mypy can't infer a lambda whose default-arg
+                        # capture value is `Any` (the `getattr(..., None)`
+                        # results); the default-arg is a late-binding
+                        # idiom over vars that are never rebound here.
+                        get_records=lambda reg=registry: list(reg.values()),  # type: ignore[misc]
+                        get_card_widget=(lambda cid, cw=card_widgets: cw.get(cid)),  # type: ignore[misc]
                     )
                     active_workflows.register_layout_manager(layout_manager)
                     self._workflow_layout_manager = layout_manager
@@ -2082,7 +2091,7 @@ class ChatApp(App):
             )
 
         if signal is ControlSignal.EXIT:
-            self.exit(0)
+            self.exit(return_code=0)
 
     async def _handle_export(self, arg_text: str) -> None:
         """Dump the current thread's transcript to a text file.
@@ -2621,10 +2630,10 @@ class ChatApp(App):
         try:
             composer = self.query_one(Composer)
         except Exception:  # noqa: BLE001 — no composer mounted → nothing to guard, just exit
-            self.exit(0)
+            self.exit(return_code=0)
             return
         if not composer.text:
-            self.exit(0)
+            self.exit(return_code=0)
 
 
 # ---------------------------------------------------------------------------

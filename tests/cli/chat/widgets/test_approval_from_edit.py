@@ -8,15 +8,24 @@ this keeps the widget honest as a modular unit.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 from textual.widgets import Input
 
 from cli.chat.widgets.approval_from_edit import ApprovalFromEdit
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.message import Message
+    from textual.widget import Widget
+
 
 @pytest.mark.asyncio
 async def test_mounts_with_suggested_from_and_input_has_focus(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     widget = ApprovalFromEdit(suggested_from="agent:*")
     app = mock_app_factory(widget)
@@ -30,7 +39,7 @@ async def test_mounts_with_suggested_from_and_input_has_focus(
 
 @pytest.mark.asyncio
 async def test_enter_posts_confirmed_with_current_value(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     widget = ApprovalFromEdit(suggested_from="agent:*")
     app = mock_app_factory(widget)
@@ -43,7 +52,7 @@ async def test_enter_posts_confirmed_with_current_value(
         # Intercept Confirmed messages posted by the widget.
         original = widget.post_message
 
-        def _capture(message):  # type: ignore[no-untyped-def]
+        def _capture(message: Message) -> bool:
             if isinstance(message, ApprovalFromEdit.Confirmed):
                 received.append(message)
             return original(message)
@@ -58,7 +67,9 @@ async def test_enter_posts_confirmed_with_current_value(
 
 
 @pytest.mark.asyncio
-async def test_enter_confirms_edited_value(mock_app_factory) -> None:
+async def test_enter_confirms_edited_value(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     widget = ApprovalFromEdit(suggested_from="")
     app = mock_app_factory(widget)
 
@@ -68,7 +79,7 @@ async def test_enter_confirms_edited_value(mock_app_factory) -> None:
         await pilot.pause()
         original = widget.post_message
 
-        def _capture(message):  # type: ignore[no-untyped-def]
+        def _capture(message: Message) -> bool:
             if isinstance(message, ApprovalFromEdit.Confirmed):
                 received.append(message)
             return original(message)
@@ -85,7 +96,9 @@ async def test_enter_confirms_edited_value(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_escape_posts_cancelled(mock_app_factory) -> None:
+async def test_escape_posts_cancelled(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     widget = ApprovalFromEdit(suggested_from="agent:*")
     app = mock_app_factory(widget)
 
@@ -95,7 +108,7 @@ async def test_escape_posts_cancelled(mock_app_factory) -> None:
         await pilot.pause()
         original = widget.post_message
 
-        def _capture(message):  # type: ignore[no-untyped-def]
+        def _capture(message: Message) -> bool:
             if isinstance(message, ApprovalFromEdit.Cancelled):
                 received.append(message)
             return original(message)

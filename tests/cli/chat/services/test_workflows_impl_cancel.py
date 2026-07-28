@@ -27,6 +27,7 @@ from tests.cli.chat.services.mocks import (
     install_mock_executor_factory,
 )
 from workflows.events import (
+    WorkflowEvent,
     WorkflowRunCompletedEvent,
     WorkflowRunStartedEvent,
 )
@@ -74,7 +75,7 @@ async def _mk_impl(
     return impl, cards
 
 
-def _mk_events() -> list:
+def _mk_events() -> list[WorkflowEvent]:
     rid = WorkflowRunId(f"wrk_{uuid4()}")
     tr = TraceId(f"tr_{uuid4()}")
     return [

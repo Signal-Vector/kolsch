@@ -18,7 +18,7 @@ def _base_ctx(**overrides: object) -> ToolContext:
         thread_id=ThreadId(f"th_{uuid4()}"),
         principal="test",
         secrets={},
-        **overrides,  # type: ignore[arg-type]
+        **overrides,
     )
 
 

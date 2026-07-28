@@ -91,9 +91,9 @@ async def test_end_to_end_approval_via_event_bus(
         session_id=session.session_id,
         thread_id=thread_id,
     )
-    adapter = EventAdapter(app)  # type: ignore[arg-type]
+    adapter = EventAdapter(app)
     adapter.register_prompts_impl(impl)
-    cb = InlineApprovalCallback(app, impl)  # type: ignore[arg-type]
+    cb = InlineApprovalCallback(app, impl)
 
     # Fire the callback in a task; poll for the emitted request; dispatch
     # both events through the adapter as if the live bus had done so.

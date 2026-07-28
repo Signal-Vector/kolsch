@@ -472,7 +472,7 @@ def _mk_event(
 def test_route_to_workflow_node_returns_row_or_none() -> None:
     """``_route_to_workflow_node`` returns the row for a matching trace, else None."""
     app = _MockChatApp()
-    adapter = EventAdapter(app)  # type: ignore[arg-type]
+    adapter = EventAdapter(app)
     row = WorkflowNodeRow(node_name="n", trace_id="tr_x")
     adapter._live_nodes_by_trace_and_invocation[("tr_x", "inv_A")] = row
 
@@ -495,7 +495,7 @@ async def test_unwrap_mismatched_trace_id_drops_event(
 ) -> None:
     """A trace-id mismatch on the sub-agent dispatch drops the event."""
     app = _MockChatApp()
-    adapter = EventAdapter(app)  # type: ignore[arg-type]
+    adapter = EventAdapter(app)
 
     inner = _mk_event(
         trace_id="tr_B",

@@ -31,11 +31,19 @@ What we assert:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 from textual.widgets import Static
 from textual.widgets._collapsible import CollapsibleTitle
 
 from cli.chat.widgets.tool_call_block import ToolCallBlock
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 
 def _body_statics(widget: ToolCallBlock) -> list[Static]:
@@ -47,7 +55,9 @@ def _body_statics(widget: ToolCallBlock) -> list[Static]:
 
 
 @pytest.mark.asyncio
-async def test_tool_call_block_mounts_collapsed_by_default(mock_app_factory) -> None:
+async def test_tool_call_block_mounts_collapsed_by_default(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     widget = ToolCallBlock("read_file", "path=/tmp/x", "canonical body")
     app = mock_app_factory(widget)
 
@@ -63,7 +73,9 @@ async def test_tool_call_block_mounts_collapsed_by_default(mock_app_factory) -> 
 
 
 @pytest.mark.asyncio
-async def test_tool_call_block_failed_adds_css_class(mock_app_factory) -> None:
+async def test_tool_call_block_failed_adds_css_class(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """`failed=True` adds the ``-failed`` class. Colours change via
     CSS only — no runtime colour attribute is set."""
 
@@ -78,7 +90,9 @@ async def test_tool_call_block_failed_adds_css_class(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_tool_call_block_body_static_rendered(mock_app_factory) -> None:
+async def test_tool_call_block_body_static_rendered(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     widget = ToolCallBlock("read_file", "path=/tmp/x", "the body text")
     app = mock_app_factory(widget)
 
@@ -95,7 +109,7 @@ async def test_tool_call_block_body_static_rendered(mock_app_factory) -> None:
 
 @pytest.mark.asyncio
 async def test_tool_call_block_recovery_hint_renders_arrow_line(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """When ``recovery_hint`` is supplied, an extra ``↳ hint: …``
     Static is mounted inside the body with the ``hint`` CSS class."""
@@ -127,7 +141,7 @@ async def test_tool_call_block_recovery_hint_renders_arrow_line(
 
 @pytest.mark.asyncio
 async def test_tool_call_block_no_hint_when_recovery_omitted(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     widget = ToolCallBlock("read_file", "path=/tmp/x", "output")
     app = mock_app_factory(widget)
@@ -140,7 +154,9 @@ async def test_tool_call_block_no_hint_when_recovery_omitted(
 
 
 @pytest.mark.asyncio
-async def test_tool_call_block_c_binding_collapses(mock_app_factory) -> None:
+async def test_tool_call_block_c_binding_collapses(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """Pressing ``c`` while the block is focused collapses it. The
     binding is declared on `ToolCallBlock`, not inherited from
     `Collapsible`.
@@ -165,7 +181,7 @@ async def test_tool_call_block_c_binding_collapses(mock_app_factory) -> None:
 
 @pytest.mark.asyncio
 async def test_tool_call_block_default_css_uses_theme_variables(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """The widget's ``DEFAULT_CSS`` references the theme variables
     for the palette. This is the modularity contract: theme.tcss

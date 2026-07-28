@@ -131,6 +131,7 @@ class _ObservedLLMHandle:
         # the event. Non-streaming providers stay on the non-streaming
         # `__call__` path — behaviour parity with today's flow.
         stream_method = getattr(self._llm, "stream", None)
+        response: LLMResponse
         try:
             if callable(stream_method):
 

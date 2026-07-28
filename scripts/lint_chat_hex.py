@@ -56,7 +56,7 @@ import sys
 from pathlib import Path
 
 from textual.css.tokenize import tokenize
-from textual.css.tokenizer import TokenError
+from textual.css.tokenizer import Token, TokenError
 
 _FIXTURE_WRAPPER_SEL = "_LintFixtureScope"
 _FIXTURE_WRAPPER_HEADER_LINES = 1  # `_LintFixtureScope {\n` is 1 line
@@ -102,7 +102,7 @@ def _default_css_strings(path: Path) -> list[tuple[str, int]]:
     return strings
 
 
-def _tokenize_css(css: str, source_name: str) -> tuple[list, int]:
+def _tokenize_css(css: str, source_name: str) -> tuple[list[Token], int]:
     """Tokenize ``css`` with a synthetic-selector fallback for bare fragments.
 
     Real widget ``DEFAULT_CSS`` strings are complete stylesheets with

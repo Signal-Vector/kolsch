@@ -24,6 +24,7 @@ from tests.cli.chat.services.mocks import (
     install_mock_executor_factory,
 )
 from workflows.events import (
+    WorkflowEvent,
     WorkflowNodeCompletedEvent,
     WorkflowNodeStartedEvent,
     WorkflowRunCompletedEvent,
@@ -64,7 +65,7 @@ async def _mk_impl(tmp_path: Path, store: SessionStore) -> WorkflowsImpl:
     )
 
 
-def _mk_events_with_node() -> list:
+def _mk_events_with_node() -> list[WorkflowEvent]:
     from uuid import uuid4
 
     rid = WorkflowRunId(f"wrk_{uuid4()}")

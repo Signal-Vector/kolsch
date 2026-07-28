@@ -82,7 +82,7 @@ def _install_run(
     record = WorkflowRunRecord(
         run_id=run_id,
         ref=ref,
-        phase=phase,  # type: ignore[arg-type]
+        phase=phase,
         card=None,
         created_at=datetime.now(tz=UTC),
         parent_run_id=parent_run_id,

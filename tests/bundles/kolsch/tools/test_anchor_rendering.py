@@ -137,7 +137,9 @@ async def test_anchor_button_activation_scrolls_to_card(
             _ = animate
             scrolled.append(widget)
 
-        transcript.scroll_to_widget = _record  # type: ignore[method-assign]
+        # method-assign: intentional monkey-patch of the Textual method;
+        # assignment: the recorder stub uses a simplified signature.
+        transcript.scroll_to_widget = _record  # type: ignore[method-assign, assignment]
 
         button = prose.query(WorkflowAnchorButton).first()
         button.focus()
@@ -170,9 +172,14 @@ async def test_anchor_button_unknown_run_id_logs_and_is_noop(
 
         transcript = pilot.app.query_one("#transcript")
         scrolled: list[object] = []
-        transcript.scroll_to_widget = (  # type: ignore[method-assign]
-            lambda widget, animate=True: scrolled.append(widget)
-        )
+
+        def _record(widget: object, animate: bool = True) -> None:  # noqa: FBT001, FBT002 — matches scroll_to_widget signature
+            _ = animate
+            scrolled.append(widget)
+
+        # method-assign: intentional monkey-patch of the Textual method;
+        # assignment: the recorder stub uses a simplified signature.
+        transcript.scroll_to_widget = _record  # type: ignore[method-assign, assignment]
 
         with caplog.at_level(logging.WARNING, logger="cli.chat.event_adapter"):
             buttons.first().focus()

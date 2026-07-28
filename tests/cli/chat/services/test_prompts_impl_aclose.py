@@ -11,7 +11,7 @@ Three passes:
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -53,7 +53,7 @@ async def _wait_for_requested(
     store: SessionStore,
     thread_id: str,
     timeout: float = 1.0,  # noqa: ASYNC109 — test polling deadline, not a cancel scope
-) -> dict:
+) -> dict[str, Any]:
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:
         async for ev in store.read_events(thread_id):

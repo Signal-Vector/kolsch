@@ -67,7 +67,7 @@ async def _mk_impl_paused(store: SessionStore) -> CardsImpl:
         _ = event
         await park.wait()
 
-    impl._publish_to_bus = _park  # type: ignore[assignment]
+    impl._publish_to_bus = _park  # type: ignore[method-assign]
     return impl
 
 

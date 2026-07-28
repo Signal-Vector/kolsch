@@ -38,6 +38,7 @@ from cli.chat.spinner import SPINNER_FRAMES, spinner_frame
 
 if TYPE_CHECKING:
     from textual.app import ComposeResult
+    from textual.timer import Timer
 
 
 class TurnStatus(Horizontal):
@@ -110,12 +111,12 @@ class TurnStatus(Horizontal):
         # Timer handles retained so ``watch_verb`` can cancel them when
         # the turn ends. Textual's timer API returns handles with a
         # ``.stop()`` method.
-        self._elapsed_gate_timer = None
-        self._tick_timer = None
-        self._frame_timer = None
+        self._elapsed_gate_timer: Timer | None = None
+        self._tick_timer: Timer | None = None
+        self._frame_timer: Timer | None = None
         self._spinner_index = 0
 
-    def compose(self) -> ComposeResult:  # type: ignore[override]
+    def compose(self) -> ComposeResult:
         """Yield the spinner-verb, target, and elapsed status statics."""
         # IDs match the DEFAULT_CSS selectors; keep them in sync.
         yield Static("", id="spinner-verb", markup=False)

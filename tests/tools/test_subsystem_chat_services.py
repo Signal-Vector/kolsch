@@ -71,7 +71,7 @@ def _subsystem(tmp_path: Path) -> ToolsSubsystem:
     # when a rule set is present).
     authz = RuleBasedAuthorizationProvider(
         config={"rules": []},
-        catalog=None,  # type: ignore[arg-type]
+        catalog=None,
     )
     return ToolsSubsystem(
         secrets=secrets,
@@ -85,14 +85,16 @@ def test_set_chat_services_stores_registry(
     _subsystem: ToolsSubsystem,
 ) -> None:
     """AC #1 — the setter round-trips a `ChatServiceRegistry` onto the impl."""
-    assert _subsystem._chat_services is None  # default
+    default = _subsystem._chat_services
+    assert default is None  # default
     sentinel_cards = object()
     registry = ChatServiceRegistry(cards=sentinel_cards)
 
     _subsystem.set_chat_services(registry)
 
-    assert _subsystem._chat_services is registry
-    assert _subsystem._chat_services.cards is sentinel_cards
+    stored = _subsystem._chat_services
+    assert stored is registry
+    assert stored.cards is sentinel_cards
 
 
 def test_set_chat_services_none_detaches(

@@ -71,7 +71,7 @@ def _make_defn(
         args_schema=_EmptyArgs,
         func=_capture_tool,
         home_bundle="kolsch",
-        requires=list(requires or []),  # type: ignore[arg-type]
+        requires=list(requires or []),
     )
 
 

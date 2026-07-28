@@ -41,7 +41,7 @@ _LONG_TARGET = (
 
 @pytest.mark.asyncio
 async def test_snapshot_collapsed_overflow_shows_chevron(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Golden — collapsed row ends with `…▸`, footer hints Tab expand."""
     block = ApprovalBlock(
@@ -61,7 +61,7 @@ async def test_snapshot_collapsed_overflow_shows_chevron(
 
 @pytest.mark.asyncio
 async def test_snapshot_expanded_overflow_wraps_target(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Golden — expanded row shows `Args  ▾` + wrapped body indented."""
     block = ApprovalBlock(
