@@ -8,14 +8,16 @@ yields two deltas, then asserts the emitted event log carries two
 
 from __future__ import annotations
 
-from collections.abc import Callable
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from engine.framework import LLMRequest, LLMResponse, Message
 from engine.observers import _ObservedLLMHandle
 from schemas.events import EventType
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 class _MockStreamingLLM:
@@ -50,7 +52,7 @@ async def test_streaming_llm_emits_delta_events() -> None:
     """Two deltas → two MODEL_STREAMING_TOKEN events + one MODEL_RESPONSE."""
     emitted: list[dict[str, Any]] = []
 
-    async def _emit(*, type_: EventType, data: dict, actor: Any) -> None:
+    async def _emit(*, type_: EventType, data: dict[str, Any], actor: Any) -> None:
         emitted.append({"type": type_, "data": data})
 
     handle = _ObservedLLMHandle(
@@ -90,7 +92,7 @@ async def test_non_streaming_llm_emits_zero_deltas() -> None:
     """Non-streaming provider path: only MODEL_REQUEST + MODEL_RESPONSE."""
     emitted: list[dict[str, Any]] = []
 
-    async def _emit(*, type_: EventType, data: dict, actor: Any) -> None:
+    async def _emit(*, type_: EventType, data: dict[str, Any], actor: Any) -> None:
         emitted.append({"type": type_, "data": data})
 
     handle = _ObservedLLMHandle(

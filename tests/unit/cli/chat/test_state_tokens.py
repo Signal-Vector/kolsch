@@ -79,7 +79,7 @@ def test_canonical_state_resolves_to_expected_token(
 def test_state_token_is_frozen_dataclass() -> None:
     """`StateToken` is immutable — enables safe module-level reuse."""
     token = resolve_state("success")
-    with pytest.raises(Exception):  # dataclasses.FrozenInstanceError subclass
+    with pytest.raises(Exception):  # noqa: B017 — dataclasses.FrozenInstanceError subclass
         token.glyph = "?"  # type: ignore[misc]
 
 
@@ -111,7 +111,9 @@ def test_resolve_state_does_not_emit_deprecation_warning() -> None:
         for name in STATE_TOKENS:
             resolve_state(name)
     dep = [w for w in caught if issubclass(w.category, DeprecationWarning)]
-    assert dep == [], f"unexpected DeprecationWarning(s): {[str(w.message) for w in dep]}"
+    assert dep == [], (
+        f"unexpected DeprecationWarning(s): {[str(w.message) for w in dep]}"
+    )
 
 
 # ---------------------------------------------------------------------------

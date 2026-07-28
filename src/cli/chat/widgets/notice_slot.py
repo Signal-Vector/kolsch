@@ -21,9 +21,9 @@ from cli.chat.widgets.notice import NoticeWidget
 
 
 class NoticeSlot(Vertical):
-    """Vertical container holding in-card
-    [`NoticeWidget`][cli.chat.widgets.notice.NoticeWidget] children.
+    """Vertical container holding in-card notice children.
 
+    Holds [`NoticeWidget`][cli.chat.widgets.notice.NoticeWidget] children.
     Empty container by default (``height: auto`` collapses to zero
     when no children); grows as ``add_notice`` mounts widgets.
     """
@@ -35,15 +35,14 @@ class NoticeSlot(Vertical):
     }
     """
 
-    def __init__(self, *, id: str | None = None) -> None:
+    def __init__(self, *, id: str | None = None) -> None:  # noqa: A002 — Textual widget API uses `id`
         super().__init__(id=id)
         self._notices: list[NoticeWidget] = []
 
     def add_notice(self, text: str, kind: str) -> NoticeWidget:
-        """Mount a fresh
-        [`NoticeWidget`][cli.chat.widgets.notice.NoticeWidget]
-        and return it.
+        """Mount a fresh notice widget and return it.
 
+        Mounts a [`NoticeWidget`][cli.chat.widgets.notice.NoticeWidget].
         The widget is appended to the internal list (so
         ``last_notice`` sees it). The mount is fire-and-forget —
         Textual's ``mount`` returns an awaitable, but callers of

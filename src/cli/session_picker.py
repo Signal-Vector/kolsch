@@ -52,7 +52,7 @@ def _format_row_label(session: Session, last_at: datetime | None) -> str:
     last-activity, id) but joined on `` • `` since the picker is a
     single-column list, not a table.
     """
-    from cli.main import (
+    from cli.main import (  # noqa: PLC0415 — lazy import avoids circular dep
         _format_delta,
     )
 
@@ -83,8 +83,12 @@ async def _default_chooser(  # pragma: no cover — interactive TTY path
         values=values,
     )
     chosen = await dialog.run_async()
+    # prompt_toolkit types `run_async` as returning a non-optional
+    # result, but `radiolist_dialog` genuinely returns `None` on
+    # cancel (Esc) — the guard IS reachable at runtime; the stub is
+    # over-narrow.
     if chosen is None:
-        return None
+        return None  # type: ignore[unreachable]
     return SessionId(str(chosen))
 
 

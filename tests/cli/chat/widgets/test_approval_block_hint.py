@@ -11,14 +11,18 @@ Two passes:
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import pytest
-from textual.app import App
-from textual.widget import Widget
 from textual.widgets import Static
 
 from cli.chat.widgets.approval_block import ApprovalBlock
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 
 def _make_block(*, parent_hint: str | None) -> ApprovalBlock:
@@ -32,7 +36,7 @@ def _make_block(*, parent_hint: str | None) -> ApprovalBlock:
 
 @pytest.mark.asyncio
 async def test_parent_hint_renders_arrow_static(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """`parent_hint` set → first `Static` child is ` ↳` with `parent-hint` class."""
     block = _make_block(parent_hint="workflow foo")
@@ -53,7 +57,7 @@ async def test_parent_hint_renders_arrow_static(
 
 @pytest.mark.asyncio
 async def test_no_parent_hint_no_static_arrow(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """`parent_hint=None` (default) → no `.parent-hint` Static."""
     block = _make_block(parent_hint=None)

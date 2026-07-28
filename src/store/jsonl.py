@@ -144,7 +144,7 @@ def _parses_as_json(payload: bytes) -> bool:
     return True
 
 
-def _read_last_logical_seq(path: Path) -> int:
+def _read_last_logical_seq(path: Path) -> int:  # noqa: PLR0911 — flat guard-clause returns
     """Return the `logical_seq` on the JSONL's last non-empty line, or 0.
 
     Called by [`append_event_sync`][store.jsonl.append_event_sync] under

@@ -15,10 +15,9 @@ Three passes:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -31,6 +30,9 @@ from cli.chat.services.workflows_impl import (
 from store import SessionStore, SqliteBackend
 from workflows.ids import WorkflowRunId
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 
 @pytest.fixture
@@ -129,7 +131,7 @@ async def test_run_chain_populated_and_formatted_for_nested_chain(
         c = _install_run(impl, ref="C.ref", parent_run_id=b)
 
         app = _MockApp()
-        adapter = EventAdapter(app, workflows_impl=impl)  # type: ignore[arg-type]
+        adapter = EventAdapter(app, workflows_impl=impl)
 
         payload: dict[str, Any] = {
             "prompt_id": "prm_test1",
@@ -178,7 +180,7 @@ async def test_single_workflow_breadcrumb_no_arrow(
         top = _install_run(impl, ref="only.ref")
 
         app = _MockApp()
-        adapter = EventAdapter(app, workflows_impl=impl)  # type: ignore[arg-type]
+        adapter = EventAdapter(app, workflows_impl=impl)
 
         payload: dict[str, Any] = {
             "prompt_id": "prm_top",
@@ -227,7 +229,7 @@ async def test_run_chain_helper_shape() -> None:
             b = _install_run(impl, ref="B.ref", parent_run_id=a)
 
             adapter = EventAdapter(
-                _MockApp(),  # type: ignore[arg-type]
+                _MockApp(),
                 workflows_impl=impl,
             )
             chain = adapter._build_run_chain(str(b), "leaf")

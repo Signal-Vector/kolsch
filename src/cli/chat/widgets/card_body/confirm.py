@@ -9,11 +9,13 @@ approval integration); this spec ships the widget skeleton.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import Static
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 
 class ConfirmRenderer(Vertical):
@@ -34,11 +36,12 @@ class ConfirmRenderer(Vertical):
     }
     """
 
-    def __init__(self, *, id: str | None = None) -> None:
+    def __init__(self, *, id: str | None = None) -> None:  # noqa: A002 — matches Textual Widget's `id` kwarg
         super().__init__(id=id)
         self._text = Static("", classes="confirm-text", markup=False)
 
     def compose(self) -> ComposeResult:
+        """Yield the confirm-text ``Static`` (also the prompt-pane mount slot)."""
         yield self._text
         # `CardPromptPane` mount slot — populated transiently by
         # spec-014 when a workflow approval fires against this card.

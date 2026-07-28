@@ -15,8 +15,7 @@ Three passes:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -28,6 +27,10 @@ from schemas.wire_kinds import (
 )
 from store import SessionStore, SqliteBackend
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 
 @pytest.fixture
@@ -65,9 +68,9 @@ async def _read_ui_events(
     store: SessionStore,
     thread_id: str,
     kind: str,
-) -> list[dict]:
+) -> list[dict[str, Any]]:
     """Collect every UI_EVENT of `kind` from the store's read path."""
-    hits: list[dict] = []
+    hits: list[dict[str, Any]] = []
     async for ev in store.read_events(thread_id):
         if ev.type != EventType.UI_EVENT:
             continue

@@ -15,7 +15,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from textual.app import App, ComposeResult
@@ -30,6 +30,9 @@ from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 from schemas.identifiers import CardId
 from workflows.ids import WorkflowRunId
 
+if TYPE_CHECKING:
+    from textual.pilot import Pilot
+
 _BASE_TS = datetime(2026, 7, 10, 12, 0, 0, tzinfo=UTC)
 
 
@@ -39,7 +42,7 @@ class _MockCard:
     is_closed: bool = False
 
 
-class _TranscriptApp(App):
+class _TranscriptApp(App[None]):
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="transcript")
 
@@ -55,8 +58,8 @@ def _mk_record(
     return WorkflowRunRecord(
         run_id=WorkflowRunId(f"wrk_00000000-0000-0000-0000-0000000000{suffix}"),
         ref="test/ref",
-        phase=phase,  # type: ignore[arg-type]
-        card=card,  # type: ignore[arg-type]
+        phase=phase,
+        card=card,
         created_at=_BASE_TS,
         started_at=_BASE_TS + timedelta(seconds=started_offset),
         terminal_at=(
@@ -67,7 +70,7 @@ def _mk_record(
     )
 
 
-async def _setup(pilot, n: int) -> tuple[Any, list[Any], list[Any]]:
+async def _setup(pilot: Pilot[None], n: int) -> tuple[Any, list[Any], list[Any]]:
     transcript = pilot.app.query_one("#transcript", VerticalScroll)
     widgets = []
     cards = []
@@ -108,7 +111,7 @@ async def test_solo_terminal_card_keeps_node_list_visible() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()
@@ -169,7 +172,7 @@ async def test_terminal_row_expand_after_completion_drains_buffer() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()
@@ -218,7 +221,7 @@ async def test_multi_in_progress_still_compacts_terminal_card() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()
@@ -266,7 +269,7 @@ async def test_terminal_card_with_one_in_progress_stays_full() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()

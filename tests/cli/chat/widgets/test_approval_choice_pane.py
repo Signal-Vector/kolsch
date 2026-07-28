@@ -10,18 +10,29 @@ flow → ApprovalChoicePane for the widget's contract.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
+from textual.app import App
 
 from cli.chat.widgets.approval_choice_pane import ApprovalChoicePane
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import ComposeResult
+    from textual.widget import Widget
+
 
 @pytest.mark.asyncio
-async def test_pane_shows_all_four_choices_and_prompt(mock_app_factory):
+async def test_pane_shows_all_four_choices_and_prompt(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """The pane renders a single choices line + a prompt cursor line.
 
     The choices row is one ``Static`` (rendered ``markup=False`` so
-    brackets stay literal), and a second ``Static`` shows the ``› ▊``
-    prompt affordance — every label must be present in the choices
+    brackets stay literal), and a second ``Static`` shows the angle +
+    cursor prompt affordance — every label must be present in the choices
     line. The earlier one-Static-per-choice layout clipped to just
     ``[y]`` on narrow terminals; this test guards the fix.
     """
@@ -38,7 +49,7 @@ async def test_pane_shows_all_four_choices_and_prompt(mock_app_factory):
             "[d] deny + rule",
         ):
             assert label in choices_text, f"missing {label!r} from choices row"
-        assert "›" in prompt_text
+        assert "›" in prompt_text  # noqa: RUF001 — asserts the literal glyph rendered
         assert "▊" in prompt_text
 
 
@@ -54,7 +65,9 @@ async def test_pane_shows_all_four_choices_and_prompt(mock_app_factory):
     ],
 )
 async def test_pane_posts_chosen_message_for_each_key(
-    mock_app_factory, key_press: str, expected: str
+    mock_app_factory: Callable[[Widget], App[None]],
+    key_press: str,
+    expected: str,
 ) -> None:
     """Each bound key posts a `Chosen(key=...)` message with the mapped key.
 
@@ -62,23 +75,20 @@ async def test_pane_posts_chosen_message_for_each_key(
     can distinguish an explicit deny from an abandoned rule write.
     """
     pane = ApprovalChoicePane()
-    app = mock_app_factory(pane)
 
     seen: list[str] = []
 
-    class _Host(type(app)):
+    # Recording host: mirrors `mock_app_factory` (composes the single
+    # widget) but adds the app-level handler so the bubbled message is
+    # recorded.
+    class _RecordingApp(App[None]):
+        def compose(self) -> ComposeResult:
+            yield pane
+
         def on_approval_choice_pane_chosen(
             self, message: ApprovalChoicePane.Chosen
         ) -> None:
             seen.append(message.key)
-
-    # Rebuild with the recording host subclass so the app-level
-    # handler receives the bubbled message.
-    from textual.app import ComposeResult
-
-    class _RecordingApp(_Host):
-        def compose(self) -> ComposeResult:
-            yield pane
 
     recording_app = _RecordingApp()
 

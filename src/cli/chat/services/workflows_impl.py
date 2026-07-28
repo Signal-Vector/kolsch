@@ -86,7 +86,7 @@ if TYPE_CHECKING:
     from engine.context import CancelToken as _CancelToken
     from schemas.identifiers import SessionId, ThreadId
     from store.session_store import SessionStore
-    from tools.services.cards import Card
+    from tools.services.cards import Card, CardFinalStatus
     from workflows.executor import IterativeExecutor
     from workflows.run_store import WorkflowRunStore
 
@@ -672,6 +672,7 @@ class WorkflowsImpl(AbstractWorkflows):
 
     @property
     def default_timeout_seconds(self) -> int:
+        """Default per-run timeout applied when a run omits its own."""
         return self._default_timeout_seconds
 
     async def aclose(self) -> None:
@@ -1318,7 +1319,7 @@ class WorkflowsImpl(AbstractWorkflows):
         self._workflow_registry.pop(run_id, None)
 
     @staticmethod
-    def _card_final_status_for_phase(phase: WorkflowRunPhase) -> str:
+    def _card_final_status_for_phase(phase: WorkflowRunPhase) -> CardFinalStatus:
         """Map a services phase to a card `final_status`."""
         if phase == "success":
             return "success"

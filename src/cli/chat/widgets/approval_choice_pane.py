@@ -1,3 +1,4 @@
+# ruff: noqa: RUF002 — docstring documents the actual cursor glyphs it renders
 """ApprovalChoicePane — step 1 of the approval flow.
 
 The four-choice row + a visible input prompt line ``› ▊``. Rendered as
@@ -26,11 +27,15 @@ semantics).
 
 from __future__ import annotations
 
-from textual.app import ComposeResult
+from typing import TYPE_CHECKING, ClassVar
+
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.message import Message
 from textual.widgets import Static
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 
 class ApprovalChoicePane(Vertical):
@@ -65,7 +70,7 @@ class ApprovalChoicePane(Vertical):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("y", "choose('y')", "allow once", show=False),
         Binding("a", "choose('a')", "allow + rule", show=False),
         Binding("n", "choose('n')", "deny once", show=False),
@@ -83,6 +88,7 @@ class ApprovalChoicePane(Vertical):
             self.key = key
 
     def compose(self) -> ComposeResult:
+        """Yield the choice grid and the visible input-cursor affordance."""
         yield Static(
             "[y] allow once   [a] allow + rule   [n] deny once   [d] deny + rule",
             classes="choices",
@@ -91,7 +97,7 @@ class ApprovalChoicePane(Vertical):
         # Visible cursor affordance. The ``▊`` character is a stable
         # width in monospace fonts and reads as "waiting for input"
         # without pretending to be a real Input widget.
-        yield Static("› ▊", classes="prompt", markup=False)
+        yield Static("› ▊", classes="prompt", markup=False)  # noqa: RUF001 — intentional cursor glyph (visual input affordance)
 
     def action_choose(self, key: str) -> None:
         """Bindings handler — post the choice to the parent."""

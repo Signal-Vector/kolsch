@@ -23,10 +23,9 @@ Assertions cover:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -52,6 +51,11 @@ from workflows.events import (
     WorkflowRunStartedEvent,
 )
 from workflows.ids import TraceId, WorkflowRunId
+
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from cli.chat.app import ChatApp
 
 # --------------------------------------------------------------------
 # Fixtures
@@ -132,7 +136,7 @@ def _install_scripted_workflows(
 
 @pytest.mark.asyncio
 async def test_run_workflow_smoke(
-    chat_app,
+    chat_app: ChatApp,
     run_workflow_tool: Callable[..., Awaitable[Any]],
 ) -> None:
     """run_workflow blocks until terminal + returns phase/outputs.
@@ -210,7 +214,7 @@ async def test_run_workflow_smoke(
 
 @pytest.mark.asyncio
 async def test_workflow_status_smoke(
-    chat_app,
+    chat_app: ChatApp,
     run_workflow_tool: Callable[..., Awaitable[Any]],
     workflow_status_tool: Callable[..., Awaitable[Any]],
 ) -> None:
@@ -296,7 +300,7 @@ async def test_workflow_status_smoke(
 
 @pytest.mark.asyncio
 async def test_cancel_workflow_smoke(
-    chat_app,
+    chat_app: ChatApp,
     run_workflow_tool: Callable[..., Awaitable[Any]],
     cancel_workflow_tool: Callable[..., Awaitable[Any]],
 ) -> None:
@@ -362,7 +366,7 @@ async def test_cancel_workflow_smoke(
 
 @pytest.mark.asyncio
 async def test_cancel_workflow_cascade_smoke(
-    chat_app,
+    chat_app: ChatApp,
     cancel_workflow_tool: Callable[..., Awaitable[Any]],
 ) -> None:
     """cascade=True walks parent + child in the registry."""
@@ -410,7 +414,7 @@ async def test_cancel_workflow_cascade_smoke(
 
 @pytest.mark.asyncio
 async def test_cancel_workflow_unknown_returns_false(
-    chat_app,
+    chat_app: ChatApp,
     cancel_workflow_tool: Callable[..., Awaitable[Any]],
 ) -> None:
     """Unknown run_id -> {cancelled: False, ...}."""
@@ -445,9 +449,9 @@ async def test_butler_tools_headless_raise(
     cancel_workflow_tool: Callable[..., Awaitable[Any]],
 ) -> None:
     """All three tools raise ``ToolNotAvailable`` when services missing."""
-    run_defn = run_workflow_tool._tool_definition  # type: ignore[attr-defined]
-    status_defn = workflow_status_tool._tool_definition  # type: ignore[attr-defined]
-    cancel_defn = cancel_workflow_tool._tool_definition  # type: ignore[attr-defined]
+    run_defn = run_workflow_tool._tool_definition
+    status_defn = workflow_status_tool._tool_definition
+    cancel_defn = cancel_workflow_tool._tool_definition
 
     with pytest.raises(ToolNotAvailable):
         await run_workflow_tool(

@@ -57,7 +57,8 @@ def _make_executor(
 def _run_started_nodes(store: WorkflowRunStore, run_id: Any) -> list[dict[str, Any]]:
     events = list(store.read_events(run_id))
     started = next(e for e in events if e["kind"] == "workflow.run.started")
-    return started["payload"]["nodes"]
+    nodes: list[dict[str, Any]] = started["payload"]["nodes"]
+    return nodes
 
 
 async def test_run_started_emits_topological_node_manifest(tmp_path: Path) -> None:

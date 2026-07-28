@@ -13,8 +13,7 @@ Four passes:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -22,6 +21,10 @@ from cli.chat.services.cards_impl import CardsImpl
 from schemas.events import EventType
 from schemas.wire_kinds import WIRE_CARD_APPENDED, WIRE_CARD_SET_PROGRESS
 from store import SessionStore, SqliteBackend
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 
 @pytest.fixture

@@ -35,7 +35,7 @@ class _MockCard:
     is_closed: bool = False
 
 
-class _HostApp(App):
+class _HostApp(App[None]):
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="transcript")
         with Vertical(id="bottom-stack"):
@@ -56,8 +56,8 @@ def _mk_record(
     return WorkflowRunRecord(
         run_id=WorkflowRunId(f"wrk_00000000-0000-0000-0000-0000000000{suffix}"),
         ref=ref,
-        phase=phase,  # type: ignore[arg-type]
-        card=card,  # type: ignore[arg-type]
+        phase=phase,
+        card=card,
         created_at=_NOW,
         started_at=_NOW - timedelta(seconds=started_offset),
         terminal_at=(
@@ -99,7 +99,7 @@ async def test_start_three_workflows_shows_compact_strip() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.02,
             status_bar=status_bar,
         )
@@ -146,7 +146,7 @@ async def test_one_terminal_updates_strip() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.02,
             status_bar=status_bar,
         )
@@ -157,7 +157,7 @@ async def test_one_terminal_updates_strip() -> None:
         assert "▸ multi/" in first_text
 
         # Terminal one — the second workflow.
-        records[1].phase = "success"  # type: ignore[assignment]
+        records[1].phase = "success"
         records[1].terminal_at = _NOW
 
         await mgr._flush_reorder()
@@ -199,7 +199,7 @@ async def test_all_terminal_hides_strip() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.02,
             status_bar=status_bar,
         )
@@ -210,7 +210,7 @@ async def test_all_terminal_hides_strip() -> None:
 
         # Terminal all three.
         for r in records:
-            r.phase = "success"  # type: ignore[assignment]
+            r.phase = "success"
             r.terminal_at = _NOW
 
         await mgr._flush_reorder()

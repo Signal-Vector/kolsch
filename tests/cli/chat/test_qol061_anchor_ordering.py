@@ -19,10 +19,8 @@ Fixture shape mirrors ``tests/cli/chat/test_bug058_replay_batch.py`` — real
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncGenerator, AsyncIterator
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -36,6 +34,10 @@ from schemas.entities import Actor
 from schemas.events import EventType
 from schemas.identifiers import EventId
 from store import SessionStore, SqliteBackend
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, AsyncIterator
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Runtime + engine mocks (mirror bug-058's shape).
@@ -60,7 +62,7 @@ async def _empty_stream(
     **_kwargs: Any,
 ) -> AsyncGenerator[Any, None]:
     return
-    yield  # type: ignore[unreachable]  # pragma: no cover
+    yield  # pragma: no cover
 
 
 class _MockEngine:
@@ -479,7 +481,10 @@ async def test_scroll_back_to_tail_reengages_anchor_natively(
         )
 
         # Mount another widget — should follow the tail via the compositor.
-        await transcript.mount(
+        # mypy stale-narrows `_anchor_released` to Literal[True] from the
+        # earlier `is True` assert; Textual flips it back to False on
+        # scroll-to-tail (widget.py:799), so this block IS reached.
+        await transcript.mount(  # type: ignore[unreachable]
             NoticeWidget(text="qol-061 post-reengage mount"),
         )
         await pilot.pause()

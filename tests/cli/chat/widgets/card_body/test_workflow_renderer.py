@@ -17,13 +17,19 @@ Five passes:
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from cli.chat.widgets.card_body.workflow import WorkflowRenderer
 from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 from workflows.events import WorkflowEventKind
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 
 class _MockEvent:
@@ -69,7 +75,9 @@ def _mk_payload(
 
 
 @pytest.mark.asyncio
-async def test_run_start_node_complete_run_complete_flow(mock_app_factory) -> None:
+async def test_run_start_node_complete_run_complete_flow(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """Happy-path: RUN_STARTED → NODE_STARTED(a) → NODE_COMPLETED(a) → RUN_COMPLETED."""
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
@@ -137,7 +145,9 @@ async def test_run_start_node_complete_run_complete_flow(mock_app_factory) -> No
 
 
 @pytest.mark.asyncio
-async def test_node_failed_error_lands_in_error_section(mock_app_factory) -> None:
+async def test_node_failed_error_lands_in_error_section(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """bug-063 — full error lives in the Error NodeSection body.
 
     REWRITTEN from ``test_node_failed_shows_truncated_error`` which
@@ -207,7 +217,9 @@ async def test_node_failed_error_lands_in_error_section(mock_app_factory) -> Non
 
 
 @pytest.mark.asyncio
-async def test_node_pruned_transitions_to_skipped(mock_app_factory) -> None:
+async def test_node_pruned_transitions_to_skipped(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     # bug-096: a pruned node now renders as its own `skipped` state
     # (glyph `⊘`) rather than reusing `cancelled` (`─`).
     renderer = WorkflowRenderer()
@@ -239,7 +251,9 @@ async def test_node_pruned_transitions_to_skipped(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_failed_footer(mock_app_factory) -> None:
+async def test_run_failed_footer(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
     async with app.run_test() as pilot:
@@ -262,7 +276,9 @@ async def test_run_failed_footer(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_run_aborted_footer(mock_app_factory) -> None:
+async def test_run_aborted_footer(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
     async with app.run_test() as pilot:

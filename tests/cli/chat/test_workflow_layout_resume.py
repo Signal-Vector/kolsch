@@ -38,7 +38,7 @@ class _MockCard:
     is_closed: bool = False
 
 
-class _TranscriptApp(App):
+class _TranscriptApp(App[None]):
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="transcript")
 
@@ -55,8 +55,8 @@ def _mk_record(
     return WorkflowRunRecord(
         run_id=WorkflowRunId(f"wrk_00000000-0000-0000-0000-0000000000{suffix}"),
         ref="test/ref",
-        phase=phase,  # type: ignore[arg-type]
-        card=card,  # type: ignore[arg-type]
+        phase=phase,
+        card=card,
         created_at=_BASE_TS + timedelta(seconds=created_offset),
         started_at=(
             _BASE_TS + timedelta(seconds=started_offset)
@@ -137,7 +137,7 @@ async def test_resume_produces_sorted_order_not_chronological() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.01,
         )
         # Single flush at end of replay.
@@ -215,7 +215,7 @@ async def test_two_flush_passes_produce_identical_order() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()

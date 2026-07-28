@@ -15,7 +15,7 @@ Covers spec §8 tier transitions + §B non-shrinking-summary retry:
   budget: the exchange fails with
   ``error.type = "context.overflow_uncompactable"``.
 - **Non-shrinking guard.** Summariser returns a payload whose
-  ``tokens_after > tokens_before × 0.90``; the compaction is
+  ``tokens_after > tokens_before * 0.90``; the compaction is
   discarded, ``CONTEXT_COMPACTION_SKIPPED`` fires with
   ``reason="no_net_savings"``, and the trigger retries with a
   tighter ``keep_recent_fraction``.
@@ -28,8 +28,7 @@ Covers spec §8 tier transitions + §B non-shrinking-summary retry:
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 import yaml
@@ -66,6 +65,9 @@ from schemas import (
 from skills import SkillsSubsystem
 from store import SessionStore, SqliteBackend
 from tools import ToolsSubsystem
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 def _platform_yaml(root: Path) -> None:
@@ -448,7 +450,7 @@ async def test_refs_beyond_max_refs_cluster_into_event_id_range(
     from uuid import uuid4
 
     from schemas import Actor, EventId, SessionId
-    from schemas import EventType as ET
+    from schemas import EventType as ET  # noqa: N817 — terse fixture-local alias
 
     session_id = SessionId(f"ses_{uuid4()}")
     thread_id = ThreadId(f"th_{uuid4()}")

@@ -87,7 +87,7 @@ def _mk_ui_event(kind: str, prompt_id: str, **payload: Any) -> Event:
 
 async def test_requested_dispatched_twice_mounts_once() -> None:
     app = _MockApp()
-    adapter = EventAdapter(app)  # type: ignore[arg-type]
+    adapter = EventAdapter(app)
 
     ev = _mk_ui_event(
         WIRE_PROMPT_REQUESTED,
@@ -106,8 +106,8 @@ async def test_requested_dispatched_twice_mounts_once() -> None:
 async def test_answered_dispatched_twice_resolves_once() -> None:
     app = _MockApp()
     prompts = _MockPromptsImpl()
-    adapter = EventAdapter(app)  # type: ignore[arg-type]
-    adapter.register_prompts_impl(prompts)  # type: ignore[arg-type]
+    adapter = EventAdapter(app)
+    adapter.register_prompts_impl(prompts)
 
     ev = _mk_ui_event(WIRE_PROMPT_ANSWERED, "prm_1", response="y")
     await adapter.handle(ev)
@@ -119,8 +119,8 @@ async def test_answered_dispatched_twice_resolves_once() -> None:
 async def test_cancelled_dispatched_twice_cancels_once() -> None:
     app = _MockApp()
     prompts = _MockPromptsImpl()
-    adapter = EventAdapter(app)  # type: ignore[arg-type]
-    adapter.register_prompts_impl(prompts)  # type: ignore[arg-type]
+    adapter = EventAdapter(app)
+    adapter.register_prompts_impl(prompts)
 
     ev = _mk_ui_event(WIRE_PROMPT_CANCELLED, "prm_1")
     await adapter.handle(ev)
@@ -136,7 +136,7 @@ async def test_bounded_lru_evicts_first_at_maxsize() -> None:
     id triggers a fresh mount.
     """
     app = _MockApp()
-    adapter = EventAdapter(app)  # type: ignore[arg-type]
+    adapter = EventAdapter(app)
 
     # Dispatch 1000 unique ids; each mounts once.
     ids = [f"prm_{i}" for i in range(1000)]

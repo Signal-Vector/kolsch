@@ -83,8 +83,10 @@ class _RecordingTool:
         result: Any,
         events: list[str],
         schema: dict[str, Any] | None = None,
+        description: str = "Records lifecycle markers and returns a fixed payload.",
     ) -> None:
         self.name = name
+        self.description = description
         self.schema = schema or {"properties": {"message": {"type": "string"}}}
         self._result = result
         self._events = events

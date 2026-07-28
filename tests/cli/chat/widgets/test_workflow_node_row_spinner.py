@@ -19,15 +19,23 @@ signal.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from cli.chat.spinner import SPINNER_FRAMES as _SPINNER_FRAMES
 from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
+
 
 @pytest.mark.asyncio
 async def test_node_row_spinner_rotates_while_running(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """The row's collapsed-title glyph rotates during the running state."""
     row = WorkflowNodeRow(node_name="deduper")
@@ -66,7 +74,7 @@ async def test_node_row_spinner_rotates_while_running(
 
 @pytest.mark.asyncio
 async def test_node_row_spinner_stops_at_terminal_state(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Terminal-state transition stops the spinner interval.
 
@@ -96,7 +104,9 @@ async def test_node_row_spinner_stops_at_terminal_state(
 
 
 @pytest.mark.asyncio
-async def test_spinner_stops_on_node_failed(mock_app_factory) -> None:
+async def test_spinner_stops_on_node_failed(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """bug-063 VERIFY — ``node.failed`` transitions stop the spinner.
 
     ``failed`` is a terminal state; ``watch_state`` clears the

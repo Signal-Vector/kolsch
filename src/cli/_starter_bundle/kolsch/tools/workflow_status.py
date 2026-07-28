@@ -58,7 +58,7 @@ async def workflow_status(
 ) -> dict[str, object]:
     """Return the run's phase view + a ``_chat_anchor`` for prose."""
     services = require_services(ctx, ["workflows"])
-    assert services.workflows is not None  # narrowed by require_services
+    assert services.workflows is not None  # noqa: S101 — type-narrowing after require_services
     status = services.workflows.status(WorkflowRunId(args.run_id))
     node_counts: dict[str, int] | None = None
     if status.node_counts is not None:

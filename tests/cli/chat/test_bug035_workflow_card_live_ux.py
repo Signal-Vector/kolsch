@@ -28,11 +28,11 @@ The harness mirrors ``test_sub_agent_events_stream_to_node_row.py``
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import uuid
-from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -44,7 +44,6 @@ from cli.chat.widgets.assistant_prose import AssistantProse
 from cli.chat.widgets.card_body.workflow import WorkflowRenderer
 from cli.chat.widgets.card_widget import CardWidget
 from cli.chat.widgets.user_chatbox import UserChatbox
-from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 from schemas.entities import Actor
 from schemas.events import Event, EventType
 from schemas.identifiers import AgentId, EventId, SessionId, ThreadId
@@ -59,6 +58,11 @@ from workflows.events import (
 )
 from workflows.ids import InvocationId, TraceId, WorkflowRunId
 from workflows.run import RunDirectory, WorkflowRunStatus
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Awaitable, Callable
+
+    from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 
 _BUNDLE_TOOLS_DIR = Path(__file__).resolve().parents[3] / "bundles" / "kolsch" / "tools"
 
@@ -91,10 +95,9 @@ class _MockAuthz:
 
 
 class _MockEngine:
-    async def execute_stream(self, config: Any, ctx: Any) -> Any:
-        _ = config, ctx
-        if False:  # pragma: no cover
-            yield
+    async def execute_stream(self, _config: Any, _ctx: Any) -> AsyncIterator[Any]:
+        return
+        yield  # pragma: no cover
 
 
 class _MockConfig:
@@ -142,7 +145,7 @@ async def chat_app(tmp_path: Path) -> Any:
         is_resume=False,
     )
     app = ChatApp(
-        session=bundle,  # type: ignore[arg-type]
+        session=bundle,
         engine=bundle.runtime.engine,
         full_history=False,
     )
@@ -302,7 +305,10 @@ def _install_mock(impl: WorkflowsImpl, tmp_path: Path) -> dict[str, _MockExecuto
         holder["mock"] = mock
         return mock, run_dir
 
-    impl._executor_factory = _factory
+    # _factory returns the local _MockExecutor stand-in (not a real
+    # IterativeExecutor) — deliberate test seam, so the factory-slot
+    # type is intentionally incompatible.
+    impl._executor_factory = _factory  # type: ignore[assignment]
     return holder
 
 
@@ -434,10 +440,8 @@ async def test_collapse_hides_sub_agent_widgets_in_live_app(
 
         # Clean up: cancel the still-running tool task.
         tool_task.cancel()
-        try:
+        with contextlib.suppress(TimeoutError, asyncio.CancelledError):
             await asyncio.wait_for(tool_task, timeout=5.0)
-        except (TimeoutError, asyncio.CancelledError):
-            pass
 
 
 @pytest.mark.asyncio
@@ -471,10 +475,8 @@ async def test_user_message_produces_userchatbox_widget_in_live_app(
         )
 
         tool_task.cancel()
-        try:
+        with contextlib.suppress(TimeoutError, asyncio.CancelledError):
             await asyncio.wait_for(tool_task, timeout=5.0)
-        except (TimeoutError, asyncio.CancelledError):
-            pass
 
 
 @pytest.mark.asyncio

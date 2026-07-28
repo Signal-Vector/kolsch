@@ -14,8 +14,7 @@ Four passes:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -24,6 +23,10 @@ from schemas.events import EventType
 from schemas.wire_kinds import WIRE_CARD_CLOSED
 from store import SessionStore, SqliteBackend
 from tools.services.exceptions import CardClosed
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 
 @pytest.fixture
@@ -51,8 +54,8 @@ async def _mk_impl(store: SessionStore) -> CardsImpl:
 async def _last_closed_payload(
     store: SessionStore,
     thread_id: str,
-) -> dict:
-    payload: dict = {}
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
     async for ev in store.read_events(thread_id):
         if ev.type != EventType.UI_EVENT:
             continue

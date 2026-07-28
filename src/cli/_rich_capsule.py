@@ -26,9 +26,12 @@ surfaces to Textual widgets if desired.
 from __future__ import annotations
 
 from datetime import datetime
+from typing import TYPE_CHECKING
 
-from rich.console import Console
 from rich.text import Text
+
+if TYPE_CHECKING:
+    from rich.console import Console
 
 _BAR = "│"
 

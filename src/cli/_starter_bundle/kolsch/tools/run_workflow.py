@@ -200,8 +200,8 @@ async def run_workflow(
     codebase's ``get_running_loop`` convention (D-006).
     """
     services = require_services(ctx, ["cards", "workflows"])
-    assert services.cards is not None  # narrowed by require_services
-    assert services.workflows is not None  # narrowed by require_services
+    assert services.cards is not None  # noqa: S101 — type-narrowing after require_services
+    assert services.workflows is not None  # noqa: S101 — type-narrowing after require_services
 
     # bug-025 / qol-097: validate `inputs` against declared
     # `{{ inputs.X }}` references — including references coming from

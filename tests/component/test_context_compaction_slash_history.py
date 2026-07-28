@@ -13,8 +13,7 @@ events:
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -30,6 +29,9 @@ from tests.component.test_context_compaction_slash_compact import (
     _RecordingLLM,
 )
 
+if TYPE_CHECKING:
+    from pathlib import Path
+
 
 @pytest.mark.asyncio
 async def test_compaction_history_empty_thread(tmp_path: Path) -> None:
@@ -39,7 +41,7 @@ async def test_compaction_history_empty_thread(tmp_path: Path) -> None:
         def __init__(self, store: Any) -> None:
             self.store = store
 
-    engine, store = await _build(tmp_path, compaction_provider=None)
+    _engine, store = await _build(tmp_path, compaction_provider=None)
     thread_id = await _fresh_thread(store)
     runtime = _Runtime(store)
     text = await build_compaction_history_table(runtime, thread_id)

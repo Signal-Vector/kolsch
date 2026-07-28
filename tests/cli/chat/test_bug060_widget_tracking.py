@@ -18,10 +18,8 @@ Fixture pattern mirrors ``tests/cli/chat/test_bug058_replay_batch.py``
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, AsyncIterator
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -38,6 +36,10 @@ from schemas.events import EventType
 from schemas.identifiers import CardId, EventId, SessionId, ThreadId
 from schemas.wire_kinds import WIRE_PROMPT_ANSWERED, WIRE_PROMPT_REQUESTED
 from store import SessionStore, SqliteBackend
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, AsyncIterator
+    from pathlib import Path
 
 _TEST_SESSION_ID = SessionId(f"ses_{uuid4()}")
 _TEST_THREAD_ID = ThreadId(f"th_{uuid4()}")
@@ -262,7 +264,7 @@ async def _empty_stream(
     **_kwargs: Any,
 ) -> AsyncGenerator[Any, None]:
     return
-    yield  # type: ignore[unreachable]  # pragma: no cover
+    yield  # pragma: no cover
 
 
 class _MockEngine:

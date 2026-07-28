@@ -22,10 +22,8 @@ from ``tests/cli/chat/test_chat_eager_resume.py``.
 from __future__ import annotations
 
 import time
-from collections.abc import AsyncGenerator, AsyncIterator
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -38,6 +36,10 @@ from schemas.entities import Actor
 from schemas.events import EventType
 from schemas.identifiers import EventId
 from store import SessionStore, SqliteBackend
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, AsyncIterator
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Runtime + engine mocks (mirror bug-056's shape).
@@ -62,7 +64,7 @@ async def _empty_stream(
     **_kwargs: Any,
 ) -> AsyncGenerator[Any, None]:
     return
-    yield  # type: ignore[unreachable]  # pragma: no cover
+    yield  # pragma: no cover
 
 
 class _MockEngine:

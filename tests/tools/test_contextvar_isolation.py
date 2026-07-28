@@ -14,8 +14,6 @@ Three passes:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -35,6 +33,9 @@ from tools.dispatch import (
 )
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
+
     from providers.authz import AuthorizationProvider
 
 
@@ -249,7 +250,7 @@ async def test_contextvar_reset_on_exception(
             assert isinstance(open_cards, list)
             raise RuntimeError("boom")
 
-        with pytest.raises(Exception):
+        with pytest.raises(Exception):  # noqa: B017 — asserts dispatch propagates any error
             await dispatch_tool(
                 defn=_make_defn(_body),
                 args={},

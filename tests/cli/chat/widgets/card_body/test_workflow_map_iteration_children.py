@@ -23,7 +23,7 @@ Harness mirrors ``test_workflow_renderer.py`` (``_MockEvent`` +
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from textual.widgets import Collapsible
@@ -32,6 +32,12 @@ from cli.chat.widgets.card_body.workflow import WorkflowRenderer
 from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 from schemas.wire_kinds import WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT
 from workflows.events import WorkflowEventKind
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 _WIRE = "kolsch.workflow.progress"
 _MAP_TYPE = "kolsch/nodes/map"
@@ -170,7 +176,9 @@ def _map_row(renderer: WorkflowRenderer) -> WorkflowNodeRow:
 
 
 @pytest.mark.asyncio
-async def test_thirty_iterations_mount_as_children(mock_app_factory) -> None:
+async def test_thirty_iterations_mount_as_children(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """T1: 30 iterations → 31 rows total; all children collapsed."""
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
@@ -212,7 +220,9 @@ async def test_thirty_iterations_mount_as_children(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_small_map_children_expanded(mock_app_factory) -> None:
+async def test_small_map_children_expanded(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """T2: 5 iterations (≤10) → children NOT collapsed by default."""
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
@@ -234,7 +244,9 @@ async def test_small_map_children_expanded(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_iterations_mount_in_index_order(mock_app_factory) -> None:
+async def test_iterations_mount_in_index_order(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """T3: shuffled arrival → DOM order is index-ascending."""
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
@@ -257,7 +269,9 @@ async def test_iterations_mount_in_index_order(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_replay_does_not_double_mount_or_reset(mock_app_factory) -> None:
+async def test_replay_does_not_double_mount_or_reset(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """T4: replayed NODE_STARTED for a completed iteration is a no-op."""
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
@@ -299,7 +313,9 @@ async def test_replay_does_not_double_mount_or_reset(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_completed_failed_reach_correct_child(mock_app_factory) -> None:
+async def test_completed_failed_reach_correct_child(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """T5: iteration 7 succeeds, 15 fails; header rollup reflects both."""
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
@@ -354,7 +370,9 @@ async def test_completed_failed_reach_correct_child(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_sub_agent_event_reaches_correct_child(mock_app_factory) -> None:
+async def test_sub_agent_event_reaches_correct_child(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """T6: a sub-agent event for child[3]'s invocation lands on child[3]."""
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
@@ -393,7 +411,9 @@ async def test_sub_agent_event_reaches_correct_child(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_header_counter_excludes_iteration_children(mock_app_factory) -> None:
+async def test_header_counter_excludes_iteration_children(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """T7: a 30-iteration map + 2 nodes reads 3/3, not 33/33."""
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
@@ -460,7 +480,9 @@ async def test_header_counter_excludes_iteration_children(mock_app_factory) -> N
 
 
 @pytest.mark.asyncio
-async def test_non_iteration_node_mounts_at_workflow_level(mock_app_factory) -> None:
+async def test_non_iteration_node_mounts_at_workflow_level(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """T8: a bash node with no parent_invocation_id mounts in the node list."""
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
@@ -493,7 +515,9 @@ async def test_non_iteration_node_mounts_at_workflow_level(mock_app_factory) -> 
 
 
 @pytest.mark.asyncio
-async def test_old_shape_payload_falls_back(mock_app_factory) -> None:
+async def test_old_shape_payload_falls_back(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """T9: no invocation_id → (name, "") key; a second same-name STARTED dedups."""
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)

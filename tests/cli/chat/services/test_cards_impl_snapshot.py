@@ -18,8 +18,7 @@ Five passes:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -27,6 +26,10 @@ from cli.chat.services.cards_impl import CardsImpl
 from schemas.events import EventType
 from schemas.wire_kinds import WIRE_CARD_SNAPSHOT
 from store import SessionStore, SqliteBackend
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 
 @pytest.fixture
@@ -54,8 +57,8 @@ async def _mk_impl(store: SessionStore) -> CardsImpl:
 async def _snapshot_payloads(
     store: SessionStore,
     thread_id: str,
-) -> list[dict]:
-    out: list[dict] = []
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
     async for ev in store.read_events(thread_id):
         if ev.type != EventType.UI_EVENT:
             continue

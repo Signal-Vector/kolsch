@@ -9,13 +9,19 @@ One pass:
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from textual.widgets import Static
 
 from cli.chat.widgets.card_body.confirm import ConfirmRenderer
 from cli.chat.widgets.card_prompt_pane import CardPromptPane
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 
 class _MockEvent:
@@ -27,7 +33,9 @@ class _MockEvent:
 
 
 @pytest.mark.asyncio
-async def test_set_updates_confirm_text(mock_app_factory) -> None:
+async def test_set_updates_confirm_text(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     widget = ConfirmRenderer()
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:

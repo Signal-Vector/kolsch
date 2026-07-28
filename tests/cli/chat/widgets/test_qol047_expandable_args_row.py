@@ -22,15 +22,19 @@ The AC #7 coverage matrix, one test per bullet:
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import pytest
-from textual.app import App
-from textual.widget import Widget
 from textual.widgets import Static
 
 from cli.chat.widgets.approval_args_row import ApprovalArgsRow
 from cli.chat.widgets.approval_block import ApprovalBlock
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 # --------------------------------------------------------------------
 # Helpers
@@ -49,7 +53,7 @@ def _rendered(widget: ApprovalArgsRow) -> str:
 
 @pytest.mark.asyncio
 async def test_short_target_no_chevron(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """A target that fits inside the row width has no chevron."""
     row = ApprovalArgsRow("ls -la")
@@ -65,7 +69,7 @@ async def test_short_target_no_chevron(
 
 @pytest.mark.asyncio
 async def test_long_target_shows_chevron_collapsed(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """A target too long for the row ends with ``…▸`` when collapsed."""
     # Force overflow at 40 cols: prefix (6) + 100-char target ≫ 40.
@@ -82,7 +86,7 @@ async def test_long_target_shows_chevron_collapsed(
 
 @pytest.mark.asyncio
 async def test_toggle_expands_row(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """``action_toggle_expand`` on an overflowing row reveals the full target."""
     long_target = "abcdefghij" * 20  # 200 chars — well over 40 wide
@@ -107,7 +111,7 @@ async def test_toggle_expands_row(
 
 @pytest.mark.asyncio
 async def test_toggle_collapses_row(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Two toggles return the row to collapsed state."""
     row = ApprovalArgsRow("x" * 100)
@@ -120,14 +124,16 @@ async def test_toggle_collapses_row(
         row.action_toggle_expand()
         await pilot.pause()
         assert row.expanded is False
-        text = _rendered(row)
+        # mypy narrows `expanded` to a Literal via the asserts above and
+        # can't see the reactive toggle, so it flags the rest unreachable.
+        text = _rendered(row)  # type: ignore[unreachable]  # reactive toggled `expanded` between asserts
         assert text.endswith("…▸")
         assert "▾" not in text
 
 
 @pytest.mark.asyncio
 async def test_on_resize_updates_overflow(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Resizing the terminal flips ``overflowing`` in both directions.
 
@@ -144,7 +150,9 @@ async def test_on_resize_updates_overflow(
         await pilot.resize_terminal(200, 24)
         await pilot.pause()
         assert row.overflowing is False
-        text = _rendered(row)
+        # mypy narrows `overflowing` to a Literal via the asserts above and
+        # can't see the resize recompute, so it flags the rest unreachable.
+        text = _rendered(row)  # type: ignore[unreachable]  # resize recomputed `overflowing` between asserts
         assert "▸" not in text and "▾" not in text
         # Narrow again — overflow returns.
         await pilot.resize_terminal(30, 24)
@@ -155,7 +163,7 @@ async def test_on_resize_updates_overflow(
 
 @pytest.mark.asyncio
 async def test_click_toggles_expansion(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """A mouse click on the row toggles expansion (AC #4 unit-side)."""
     row = ApprovalArgsRow("x" * 100)
@@ -166,15 +174,16 @@ async def test_click_toggles_expansion(
         await pilot.click(ApprovalArgsRow)
         await pilot.pause()
         assert row.expanded is True
-        # A second click collapses again.
-        await pilot.click(ApprovalArgsRow)
+        # A second click collapses again. mypy narrows `expanded` to a
+        # Literal above and can't see the click toggle → unreachable.
+        await pilot.click(ApprovalArgsRow)  # type: ignore[unreachable]  # click toggled `expanded` between asserts
         await pilot.pause()
         assert row.expanded is False
 
 
 @pytest.mark.asyncio
 async def test_tab_binding_toggles_when_focused_pane_present(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Tab pressed on the focused choice pane toggles the args row.
 
@@ -206,8 +215,9 @@ async def test_tab_binding_toggles_when_focused_pane_present(
         await pilot.press("tab")
         await pilot.pause()
         assert args_row.expanded is True
-        # And a second Tab collapses again.
-        await pilot.press("tab")
+        # And a second Tab collapses again. mypy narrows `expanded` to a
+        # Literal above and can't see the Tab toggle → unreachable.
+        await pilot.press("tab")  # type: ignore[unreachable]  # Tab toggled `expanded` between asserts
         await pilot.pause()
         assert args_row.expanded is False
 
@@ -219,7 +229,7 @@ async def test_tab_binding_toggles_when_focused_pane_present(
 
 @pytest.mark.asyncio
 async def test_chevron_char_flips_between_toggled_states(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Explicit paranoia — ``▸`` and ``▾`` are distinct chars.
 
@@ -251,7 +261,7 @@ def _footer_text(block: ApprovalBlock) -> str:
 
 @pytest.mark.asyncio
 async def test_resize_updates_footer_hint(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Round-2 Fix 1: a resize that flips overflow flips the footer too.
 
@@ -280,16 +290,18 @@ async def test_resize_updates_footer_hint(
             f"footer should have shed the args-expand hint, got: "
             f"{_footer_text(block)!r}"
         )
-        # Narrow again — overflow returns, footer suffix returns.
+        # Narrow again — overflow returns, footer suffix returns. mypy
+        # narrowed `overflowing` to Literal[False] above and can't see the
+        # resize recompute, so it flags the re-asserted branch unreachable.
         await pilot.resize_terminal(40, 24)
         await pilot.pause()
         assert row.overflowing is True
-        assert "Tab → expand args" in _footer_text(block)
+        assert "Tab → expand args" in _footer_text(block)  # type: ignore[unreachable]  # resize recomputed `overflowing` between asserts
 
 
 @pytest.mark.asyncio
 async def test_resize_from_expanded_wide_snaps_back_to_collapsed(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Round-2 Fix 1 corner: expanded row + widen = collapsed + no hint.
 
@@ -312,10 +324,13 @@ async def test_resize_from_expanded_wide_snaps_back_to_collapsed(
         await pilot.resize_terminal(200, 24)
         await pilot.pause()
         assert row.overflowing is False
+        # mypy narrowed `expanded` to Literal[True] above and can't see the
+        # overflow-driven snap-back, so it flags the re-asserted branch
+        # unreachable.
         assert row.expanded is False, (
             "expanded state must snap back when overflow disappears"
         )
-        assert "Tab" not in _footer_text(block)
+        assert "Tab" not in _footer_text(block)  # type: ignore[unreachable]  # overflow snap-back reset `expanded` between asserts
 
 
 # --------------------------------------------------------------------
@@ -325,7 +340,7 @@ async def test_resize_from_expanded_wide_snaps_back_to_collapsed(
 
 @pytest.mark.asyncio
 async def test_tab_toggles_args_when_pattern_edit_pane_focused(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """AC #3: Tab still toggles the args row when the pattern pane owns focus.
 
@@ -358,15 +373,16 @@ async def test_tab_toggles_args_when_pattern_edit_pane_focused(
         await pilot.press("tab")
         await pilot.pause()
         assert args_row.expanded is True
-        # A second Tab collapses again.
-        await pilot.press("tab")
+        # A second Tab collapses again. mypy narrows `expanded` to a Literal
+        # above and can't see the Tab toggle → unreachable.
+        await pilot.press("tab")  # type: ignore[unreachable]  # Tab toggled `expanded` between asserts
         await pilot.pause()
         assert args_row.expanded is False
 
 
 @pytest.mark.asyncio
 async def test_tab_toggles_args_when_save_confirm_pane_focused(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """AC #3: Tab still toggles the args row when save-confirm owns focus.
 
@@ -402,6 +418,8 @@ async def test_tab_toggles_args_when_save_confirm_pane_focused(
         await pilot.press("tab")
         await pilot.pause()
         assert args_row.expanded is True
-        await pilot.press("tab")
+        # A second Tab collapses again. mypy narrows `expanded` to a Literal
+        # above and can't see the Tab toggle → unreachable.
+        await pilot.press("tab")  # type: ignore[unreachable]  # Tab toggled `expanded` between asserts
         await pilot.pause()
         assert args_row.expanded is False

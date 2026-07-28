@@ -17,15 +17,19 @@ the AC #2 mock claims.
 
 from __future__ import annotations
 
-from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import pytest
-from textual.app import App
-from textual.widget import Widget
 
 from cli.chat.widgets.approval_args_row import ApprovalArgsRow
 from cli.chat.widgets.approval_block import ApprovalBlock
 from tests.cli.chat.snapshot_helpers import assert_snapshot_matches
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 # Deliberately long: overflows the 70-col Pilot viewport with margin
 # on either side, so the compositor definitely truncates.
@@ -37,7 +41,7 @@ _LONG_TARGET = (
 
 @pytest.mark.asyncio
 async def test_snapshot_collapsed_overflow_shows_chevron(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Golden — collapsed row ends with `…▸`, footer hints Tab expand."""
     block = ApprovalBlock(
@@ -57,7 +61,7 @@ async def test_snapshot_collapsed_overflow_shows_chevron(
 
 @pytest.mark.asyncio
 async def test_snapshot_expanded_overflow_wraps_target(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Golden — expanded row shows `Args  ▾` + wrapped body indented."""
     block = ApprovalBlock(

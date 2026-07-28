@@ -13,11 +13,17 @@ Three passes:
 from __future__ import annotations
 
 import asyncio
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from cli.chat.widgets.card_body.markdown import MarkdownRenderer
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 
 class _MockEvent:
@@ -45,7 +51,10 @@ async def _feed_40hz(widget: MarkdownRenderer, chunks: list[str]) -> None:
 
 
 @pytest.mark.asyncio
-async def test_40hz_flush_ratio_bounded(mock_app_factory, monkeypatch) -> None:
+async def test_40hz_flush_ratio_bounded(
+    mock_app_factory: Callable[[Widget], App[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """40Hz input → ≤10 underlying `Markdown.append` calls per second.
 
     The `MarkdownRenderer._flush_count` counter increments on every
@@ -71,7 +80,10 @@ async def test_40hz_flush_ratio_bounded(mock_app_factory, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_flush_ms_env_override(mock_app_factory, monkeypatch) -> None:
+async def test_flush_ms_env_override(
+    mock_app_factory: Callable[[Widget], App[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """`KOLSCH_CARD_MARKDOWN_FLUSH_MS=30` → higher flush cadence.
 
     Under a 30ms interval the same 40Hz input drains more often —
@@ -93,7 +105,10 @@ async def test_flush_ms_env_override(mock_app_factory, monkeypatch) -> None:
 
 
 @pytest.mark.asyncio
-async def test_no_data_loss_under_streaming(mock_app_factory, monkeypatch) -> None:
+async def test_no_data_loss_under_streaming(
+    mock_app_factory: Callable[[Widget], App[None]],
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
     """After flush drain, the underlying `Markdown.source` contains
     the concatenation of all chunks — no chunk swallowed by
     coalescing.

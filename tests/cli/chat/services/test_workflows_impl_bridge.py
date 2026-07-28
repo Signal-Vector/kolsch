@@ -2,7 +2,7 @@
 
 Three passes:
 
-1. Mock executor emits 5 events (RUN_STARTED, 3× NODE_*,
+1. Mock executor emits 5 events (RUN_STARTED, 3x NODE_*,
    RUN_COMPLETED). Observer enqueues each into the bridge; bridge
    drain fires 5 `kolsch.workflow.progress` UI events plus a
    `card.closed` on terminal.
@@ -14,8 +14,7 @@ Three passes:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from pathlib import Path
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -30,6 +29,7 @@ from tests.cli.chat.services.mocks import (
     install_mock_executor_factory,
 )
 from workflows.events import (
+    WorkflowEvent,
     WorkflowNodeCompletedEvent,
     WorkflowNodeStartedEvent,
     WorkflowRunAbortedEvent,
@@ -39,6 +39,10 @@ from workflows.events import (
 )
 from workflows.ids import InvocationId, TraceId, WorkflowRunId
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 
 @pytest.fixture
@@ -77,7 +81,7 @@ async def _mk(
     return impl, cards
 
 
-def _five_events() -> list:
+def _five_events() -> list[WorkflowEvent]:
     rid = WorkflowRunId(f"wrk_{uuid4()}")
     tr = TraceId(f"tr_{uuid4()}")
     inv = InvocationId(f"inv_{uuid4()}")
@@ -109,8 +113,8 @@ async def _collect(
     store: SessionStore,
     thread_id: str,
     kind: str,
-) -> list[dict]:
-    out: list[dict] = []
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
     async for ev in store.read_events(thread_id):
         if ev.type != EventType.UI_EVENT:
             continue
@@ -122,7 +126,7 @@ async def _collect(
     return out
 
 
-async def _wait_terminal(impl: WorkflowsImpl, rid) -> None:
+async def _wait_terminal(impl: WorkflowsImpl, rid: WorkflowRunId) -> None:
     for _ in range(80):
         await asyncio.sleep(0.05)
         phase = impl.status(rid).phase

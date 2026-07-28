@@ -26,8 +26,7 @@ from __future__ import annotations
 import logging
 import uuid
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -39,6 +38,9 @@ from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Helpers.
@@ -206,7 +208,7 @@ async def test_sub_agent_observer_exception_caught(
     with caplog.at_level(logging.ERROR, logger="workflows.executor"):
         status = await ex.run()
     assert status == WorkflowRunStatus.SUCCEEDED
-    # `logger.exception` fired on each raise — two events × one raise
+    # `logger.exception` fired on each raise — two events, one raise
     # each.
     joined = "\n".join(rec.getMessage() for rec in caplog.records)
     assert "sub_agent_event_observer raised" in joined

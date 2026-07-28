@@ -15,8 +15,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -24,6 +23,10 @@ import pytest
 from cli.chat.app import ChatApp
 from cli.chat.widgets.composer import Composer
 from cli.chat.widgets.notice import NoticeWidget
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 # ---------------------------------------------------------------------------
 # Runtime + engine mocks
@@ -33,10 +36,9 @@ from cli.chat.widgets.notice import NoticeWidget
 class _EmptyStore:
     """Store with zero events — the fresh-session case."""
 
-    async def read_path_to_leaf(self, thread_id: Any) -> Any:
-        if False:
-            yield  # pragma: no cover
+    async def read_path_to_leaf(self, thread_id: Any) -> AsyncIterator[Any]:
         return
+        yield  # pragma: no cover
 
 
 class _NonEmptyStore:
@@ -47,7 +49,7 @@ class _NonEmptyStore:
     against the real engine mock, not against this store's contents.
     """
 
-    async def read_path_to_leaf(self, thread_id: Any):
+    async def read_path_to_leaf(self, thread_id: Any) -> AsyncIterator[Any]:
         # Yield one event object that carries enough to satisfy the
         # event-adapter's replay path (it won't touch this in the
         # eager-compaction tests because is_resume=False AND we hook
@@ -106,9 +108,9 @@ class _NoCompactEngine:
     def __init__(self) -> None:
         self.calls: int = 0
 
-    async def execute_stream(self, config: Any, ctx: Any):
-        if False:
-            yield  # pragma: no cover
+    async def execute_stream(self, config: Any, ctx: Any) -> AsyncIterator[Any]:
+        return
+        yield  # pragma: no cover
 
     async def maybe_compact_thread_eagerly(
         self,
@@ -128,9 +130,9 @@ class _RaisingEngine:
     def __init__(self) -> None:
         self.calls: int = 0
 
-    async def execute_stream(self, config: Any, ctx: Any):
-        if False:
-            yield  # pragma: no cover
+    async def execute_stream(self, config: Any, ctx: Any) -> AsyncIterator[Any]:
+        return
+        yield  # pragma: no cover
 
     async def maybe_compact_thread_eagerly(
         self,
@@ -159,9 +161,9 @@ class _SlowCompactEngine:
     def bind_loop(self, loop: asyncio.AbstractEventLoop) -> None:
         self.go = loop.create_future()
 
-    async def execute_stream(self, config: Any, ctx: Any):
-        if False:
-            yield  # pragma: no cover
+    async def execute_stream(self, config: Any, ctx: Any) -> AsyncIterator[Any]:
+        return
+        yield  # pragma: no cover
 
     async def maybe_compact_thread_eagerly(
         self,

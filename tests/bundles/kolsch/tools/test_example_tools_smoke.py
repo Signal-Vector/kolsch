@@ -20,7 +20,7 @@ mode: workflow runner, one-shot CLI, or any test that constructs
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -30,6 +30,11 @@ from tests.bundles.kolsch.tools.conftest import (
 )
 from tools.services.exceptions import ToolNotAvailable
 
+if TYPE_CHECKING:
+    from collections.abc import Awaitable, Callable
+
+    from cli.chat.app import ChatApp
+
 # --------------------------------------------------------------------
 # Test 1 — hello_card
 # --------------------------------------------------------------------
@@ -37,7 +42,7 @@ from tools.services.exceptions import ToolNotAvailable
 
 @pytest.mark.asyncio
 async def test_hello_card_smoke(
-    chat_app,
+    chat_app: ChatApp,
     hello_card_tool: Callable[..., Awaitable[object]],
 ) -> None:
     """hello_card streams three chunks + closes as success."""
@@ -73,7 +78,7 @@ async def test_hello_card_smoke(
 
 @pytest.mark.asyncio
 async def test_download_with_progress_smoke(
-    chat_app,
+    chat_app: ChatApp,
     download_with_progress_tool: Callable[..., Awaitable[object]],
 ) -> None:
     """download_with_progress advances the bar to total_kb / total_kb."""
@@ -111,7 +116,7 @@ async def test_download_with_progress_smoke(
 
 @pytest.mark.asyncio
 async def test_confirm_dangerous_action_smoke(
-    chat_app,
+    chat_app: ChatApp,
     confirm_dangerous_action_tool: Callable[..., Awaitable[object]],
 ) -> None:
     """confirm_dangerous_action mounts an ApprovalBlock; ``y`` resolves it."""
@@ -173,9 +178,9 @@ async def test_tool_not_available_headless(
     confirm_dangerous_action_tool: Callable[..., Awaitable[object]],
 ) -> None:
     """All three tools raise ``ToolNotAvailable`` when services are absent."""
-    hello_defn = hello_card_tool._tool_definition  # type: ignore[attr-defined]
-    dl_defn = download_with_progress_tool._tool_definition  # type: ignore[attr-defined]
-    confirm_defn = confirm_dangerous_action_tool._tool_definition  # type: ignore[attr-defined]
+    hello_defn = hello_card_tool._tool_definition
+    dl_defn = download_with_progress_tool._tool_definition
+    confirm_defn = confirm_dangerous_action_tool._tool_definition
 
     # `hello_card` requires cards; `ctx.cards is None` -> ToolNotAvailable.
     with pytest.raises(ToolNotAvailable):

@@ -102,8 +102,15 @@ class Prompts(Protocol):
         self,
         *,
         source: PromptSource,
+        timeout: float = 30.0,  # noqa: ASYNC109 — Prompts Protocol contract
     ) -> Any:  # noqa: ANN401
-        """Block until the prompt slot is free for this source."""
+        """Block until the prompt slot is free for this source.
+
+        ``timeout`` bounds the wait; callers that want to queue rather
+        than fail (e.g. ``confirm_dangerous_action``) pass a shorter
+        value and catch ``PromptBusy`` on expiry. Part of the contract
+        the concrete ``PromptsImpl`` implements.
+        """
         ...
 
 
@@ -144,12 +151,16 @@ class AbstractPrompts(ABC):
         self,
         *,
         source: PromptSource,
+        timeout: float = 30.0,  # noqa: ASYNC109 — Prompts Protocol contract
     ) -> Any:  # noqa: ANN401
         """Default stub — subclasses override. Raises `NotImplementedError`."""
         raise NotImplementedError
 
     async def aclose(self) -> None:
-        """Called from ChatApp.on_unmount. Cancels drain tasks, snapshot timers, cancel tokens. Idempotent. Post-aclose, subsequent mutation raises RuntimeError.
+        """Called from ChatApp.on_unmount to tear the service down.
+
+        Cancels drain tasks, snapshot timers, cancel tokens. Idempotent.
+        Post-aclose, subsequent mutation raises RuntimeError.
 
         The ABC default is a no-op — test mocks and the placeholder
         `ChatServiceRegistry` fields (all `None` today) don't need real

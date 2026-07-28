@@ -11,13 +11,16 @@ Two passes:
 from __future__ import annotations
 
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from cli.chat.app import ChatApp
 from cli.chat.services.cards_impl import CardsImpl
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 
 class _MockAuthz:
@@ -34,9 +37,9 @@ class _MockAuthz:
 
 
 class _MockEngine:
-    async def execute_stream(self, config: Any, ctx: Any):
-        if False:
-            yield  # pragma: no cover
+    async def execute_stream(self, config: Any, ctx: Any) -> AsyncIterator[Any]:
+        return
+        yield  # pragma: no cover
 
 
 @dataclass

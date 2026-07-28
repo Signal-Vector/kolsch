@@ -36,10 +36,9 @@ import asyncio
 import contextlib
 import inspect
 import uuid
-from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -65,6 +64,9 @@ from workflows.events import (
 )
 from workflows.ids import InvocationId, TraceId, WorkflowRunId
 from workflows.run import RunDirectory, WorkflowRunStatus
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
 _BUNDLE_TOOLS_DIR = Path(__file__).resolve().parents[3] / "bundles" / "kolsch" / "tools"
 
@@ -104,10 +106,9 @@ class _MockAuthz:
 
 
 class _MockEngine:
-    async def execute_stream(self, config: Any, ctx: Any) -> Any:
-        _ = config, ctx
-        if False:  # pragma: no cover
-            yield
+    async def execute_stream(self, _config: Any, _ctx: Any) -> AsyncIterator[Any]:
+        return
+        yield  # pragma: no cover
 
 
 class _MockConfig:
@@ -172,7 +173,7 @@ async def chat_app(tmp_path: Path) -> Any:
         is_resume=False,
     )
     app = ChatApp(
-        session=bundle,  # type: ignore[arg-type]
+        session=bundle,
         engine=bundle.runtime.engine,
         full_history=False,
     )
@@ -384,7 +385,10 @@ def _install_sub_agent_factory(
         holder["mock"] = mock
         return mock, run_dir
 
-    impl._executor_factory = _factory
+    # _factory returns the local _MockExecutorWithSubAgent stand-in
+    # (not a real IterativeExecutor) — deliberate test seam, so the
+    # factory-slot type is intentionally incompatible.
+    impl._executor_factory = _factory  # type: ignore[assignment]
     return holder
 
 
@@ -485,12 +489,6 @@ async def test_sub_agent_widgets_mount_in_expanded_node_row(
                 if ev.type == EventType.UI_EVENT:
                     data = ev.data if isinstance(ev.data, dict) else {}
                     ui_events.append(data.get("kind"))
-            print(f"DEBUG UI events: {ui_events}")
-            print(
-                f"DEBUG row.collapsed={node_row.collapsed} "
-                f"turn_count={node_row._sub_agent_turn_count}"
-            )
-            print(f"DEBUG row.query: {[type(w).__name__ for w in node_row.query('*')]}")
         assert seen == want, (
             f"expected sub-agent widgets to mount inside the row; "
             f"got {sorted(t.__name__ for t in seen)}"

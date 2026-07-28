@@ -7,9 +7,8 @@ compaction's refs is fetchable; anything else raises
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -17,6 +16,9 @@ import pytest
 from errors import ToolExecutionFailed
 from schemas import Actor, Event, EventType
 from tools.context_reference import ReferenceLookupArgs, make_reference_lookup
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 _TID = f"th_{uuid4()}"
 _SID = f"ses_{uuid4()}"

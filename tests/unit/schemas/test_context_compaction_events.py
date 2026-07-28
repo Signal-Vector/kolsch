@@ -68,7 +68,7 @@ def _minimal_compacted_kwargs() -> dict[str, object]:
 
 def test_context_compacted_data_defaults_are_backwards_compatible() -> None:
     # Existing emitters that don't set the new fields still validate.
-    data = ContextCompactedData(**_minimal_compacted_kwargs())  # type: ignore[arg-type]
+    data = ContextCompactedData(**_minimal_compacted_kwargs())
     assert data.revoked_by is None
     assert data.preview is False
     assert data.trigger == "auto"
@@ -77,7 +77,7 @@ def test_context_compacted_data_defaults_are_backwards_compatible() -> None:
 def test_context_compacted_data_accepts_new_fields() -> None:
     revoked_by = _evt()
     data = ContextCompactedData(
-        **_minimal_compacted_kwargs(),  # type: ignore[arg-type]
+        **_minimal_compacted_kwargs(),
         revoked_by=revoked_by,
         preview=True,
         trigger="manual_preview",
@@ -92,14 +92,14 @@ def test_context_compacted_data_rejects_invalid_trigger_literal() -> None:
 
     with pytest.raises(ValidationError):
         ContextCompactedData(
-            **_minimal_compacted_kwargs(),  # type: ignore[arg-type]
-            trigger="whatever",  # type: ignore[arg-type]
+            **_minimal_compacted_kwargs(),
+            trigger="whatever",
         )
 
 
 def test_context_compacted_data_round_trips_through_dict() -> None:
     original = ContextCompactedData(
-        **_minimal_compacted_kwargs(),  # type: ignore[arg-type]
+        **_minimal_compacted_kwargs(),
         revoked_by=_evt(),
         preview=True,
         trigger="manual",
@@ -110,7 +110,7 @@ def test_context_compacted_data_round_trips_through_dict() -> None:
 
 
 def test_context_compacted_data_round_trips_json() -> None:
-    original = ContextCompactedData(**_minimal_compacted_kwargs())  # type: ignore[arg-type]
+    original = ContextCompactedData(**_minimal_compacted_kwargs())
     json_str = original.model_dump_json()
     restored = ContextCompactedData.model_validate_json(json_str)
     assert restored == original

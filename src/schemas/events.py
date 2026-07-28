@@ -67,7 +67,7 @@ class EventType(StrEnum):
     # framework paths emit zero of these; the whole response still
     # arrives on `MODEL_RESPONSE`. See
     # `process/spec-textual-chat-ui.md` for the wire contract.
-    MODEL_STREAMING_TOKEN = "model.streaming_token"
+    MODEL_STREAMING_TOKEN = "model.streaming_token"  # noqa: S105 — event kind, not a secret
     # Emitted once per fallback transition.
     MODEL_FALLBACK = "model.fallback"
 
@@ -505,12 +505,13 @@ class UIEventData(_DataModel):
     @classmethod
     def _validate_dotted(cls, v: str) -> str:
         if not is_valid_kind(v):
-            raise ValueError(
+            msg = (
                 f"kind must be dotted <owner>.<domain>.<verb>; got {v!r}. "
                 "See src/schemas/wire_kinds.py for the platform set "
                 "(all `kolsch.*`). Bundle authors: prefix with your "
                 "bundle name."
             )
+            raise ValueError(msg)
         return v
 
 

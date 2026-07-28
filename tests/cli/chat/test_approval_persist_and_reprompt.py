@@ -38,9 +38,8 @@ from __future__ import annotations
 
 import asyncio
 import importlib.util
-from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -57,6 +56,9 @@ from schemas.identifiers import AgentId, SessionId, ThreadId
 from schemas.wire_kinds import WIRE_PROMPT_REQUESTED
 from store import SessionStore, SqliteBackend
 from tools.decorator import ToolContext
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 # ----------------------------------------------------------------------
 # ChatApp harness — mirrors bug-021 flagship but with a REAL authz
@@ -201,12 +203,12 @@ async def chat_app(tmp_path: Path) -> AsyncIterator[Any]:
 async def _wait_for_approval_block(
     pilot: Any,
     *,
-    timeout: float = 2.0,
+    timeout: float = 2.0,  # noqa: ASYNC109 — test polling deadline, not a cancel scope
 ) -> ApprovalBlock:
     """Wait up to ``timeout`` seconds for an ApprovalBlock to mount."""
     for _ in range(int(timeout / 0.05)):
         await pilot.pause()
-        widgets = list(pilot.app.query(ApprovalBlock))
+        widgets: list[ApprovalBlock] = list(pilot.app.query(ApprovalBlock))
         if widgets:
             return widgets[0]
         await asyncio.sleep(0.05)

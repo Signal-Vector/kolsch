@@ -21,6 +21,7 @@ from typing import Any
 import pytest
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
+from textual.css.query import NoMatches
 from textual.widgets import Static
 
 from cli.chat.services.workflow_layout import (
@@ -41,7 +42,7 @@ class _MockCard:
     is_closed: bool = False
 
 
-class _TranscriptApp(App):
+class _TranscriptApp(App[None]):
     """Host app exposing a single ``#transcript`` VerticalScroll."""
 
     def compose(self) -> ComposeResult:
@@ -59,8 +60,8 @@ def _mk_record(
     return WorkflowRunRecord(
         run_id=WorkflowRunId(f"wrk_00000000-0000-0000-0000-0000000000{run_id_suffix}"),
         ref="test/ref",
-        phase=phase,  # type: ignore[arg-type]
-        card=card,  # type: ignore[arg-type]
+        phase=phase,
+        card=card,
         created_at=_BASE_TS,
         started_at=_BASE_TS + timedelta(seconds=started_offset),
         terminal_at=(
@@ -110,7 +111,7 @@ async def test_three_in_progress_no_divider() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widgets.get(cid),
+            get_card_widget=widgets.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()
@@ -120,7 +121,7 @@ async def test_three_in_progress_no_divider() -> None:
         try:
             transcript.query_one(f"#{DIVIDER_ID}", Static)
             has_divider = True
-        except Exception:
+        except NoMatches:
             has_divider = False
         assert not has_divider, "divider should not mount with only in-progress"
 
@@ -172,7 +173,7 @@ async def test_terminal_success_moves_to_top_and_divider_mounts() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widgets.get(cid),
+            get_card_widget=widgets.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()
@@ -238,7 +239,7 @@ async def test_terminal_error_pins_at_boundary() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widgets.get(cid),
+            get_card_widget=widgets.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()
@@ -305,7 +306,7 @@ async def test_ack_error_moves_into_terminal_band() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: records,
-            get_card_widget=lambda cid: widgets.get(cid),
+            get_card_widget=widgets.get,
             reorder_tick=0.01,
         )
         await mgr._flush_reorder()

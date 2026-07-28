@@ -22,6 +22,7 @@ isolation without the full ChatApp.
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 import pytest
 from textual.widgets import Static
@@ -33,9 +34,17 @@ from cli.chat.widgets.assistant_prose import (
     _wrap_json_if_detected,
 )
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
+
 
 @pytest.mark.asyncio
-async def test_mount_yields_empty_markdown(mock_app_factory) -> None:
+async def test_mount_yields_empty_markdown(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """The widget mounts cleanly and starts empty (no source text)."""
     widget = AssistantProse()
     app = mock_app_factory(widget)
@@ -45,7 +54,9 @@ async def test_mount_yields_empty_markdown(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_append_grows_content(mock_app_factory) -> None:
+async def test_append_grows_content(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """`append(text)` writes into the underlying markdown document."""
     widget = AssistantProse()
     app = mock_app_factory(widget)
@@ -58,7 +69,9 @@ async def test_append_grows_content(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_context_manager_grows_content(mock_app_factory) -> None:
+async def test_stream_context_manager_grows_content(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """`stream()` yields a `MarkdownStream`; writes accumulate in source."""
     widget = AssistantProse()
     app = mock_app_factory(widget)
@@ -75,7 +88,9 @@ async def test_stream_context_manager_grows_content(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_stream_stops_on_context_exit(mock_app_factory) -> None:
+async def test_stream_stops_on_context_exit(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """After `stream()` exits, writing to the stream must raise."""
     widget = AssistantProse()
     app = mock_app_factory(widget)
@@ -88,7 +103,7 @@ async def test_stream_stops_on_context_exit(mock_app_factory) -> None:
 
 @pytest.mark.asyncio
 async def test_composes_gutter_block_with_assistant_fg_rail(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """The widget composes exactly one GutterBlock with rail=$assistant-fg.
 
@@ -110,7 +125,8 @@ async def test_composes_gutter_block_with_assistant_fg_rail(
 
 @pytest.mark.asyncio
 async def test_fenced_code_block_uses_pygments_under_color(
-    mock_app_factory, monkeypatch
+    mock_app_factory: Callable[[Widget], App[None]],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Under the color theme, fenced code blocks get Pygments spans."""
     monkeypatch.delenv("NO_COLOR", raising=False)
@@ -132,7 +148,8 @@ async def test_fenced_code_block_uses_pygments_under_color(
 
 @pytest.mark.asyncio
 async def test_fenced_code_block_plain_under_no_color(
-    mock_app_factory, monkeypatch
+    mock_app_factory: Callable[[Widget], App[None]],
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """Under NO_COLOR, fenced code blocks are plain (no Pygments spans)."""
     monkeypatch.setenv("NO_COLOR", "1")
@@ -201,7 +218,9 @@ def test_wrap_json_helper_skips_bracket_but_non_json() -> None:
 
 
 @pytest.mark.asyncio
-async def test_constructor_wraps_json_input(mock_app_factory) -> None:
+async def test_constructor_wraps_json_input(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """`AssistantProse(json_text)` wraps the initial text as fenced code."""
     text = '[{"a": 1}, {"b": 2}]'
     widget = AssistantProse(text)
@@ -214,7 +233,9 @@ async def test_constructor_wraps_json_input(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_constructor_leaves_prose_unchanged(mock_app_factory) -> None:
+async def test_constructor_leaves_prose_unchanged(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """Non-JSON initial text renders as regular Markdown."""
     widget = AssistantProse("Just some prose.")
     app = mock_app_factory(widget)
@@ -225,7 +246,9 @@ async def test_constructor_leaves_prose_unchanged(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_append_wraps_json_input(mock_app_factory) -> None:
+async def test_append_wraps_json_input(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """`append(json_text)` wraps before appending to the document."""
     widget = AssistantProse()
     app = mock_app_factory(widget)
@@ -237,7 +260,9 @@ async def test_append_wraps_json_input(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_append_leaves_prose_unchanged(mock_app_factory) -> None:
+async def test_append_leaves_prose_unchanged(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """`append(prose)` passes through — no false wrap."""
     widget = AssistantProse()
     app = mock_app_factory(widget)
@@ -255,7 +280,7 @@ async def test_append_leaves_prose_unchanged(mock_app_factory) -> None:
 
 @pytest.mark.asyncio
 async def test_identity_header_renders_agent_name_and_time(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """With ``agent_name`` + ``timestamp`` the in-body header shows both."""
     widget = AssistantProse(
@@ -266,14 +291,16 @@ async def test_identity_header_renders_agent_name_and_time(
     async with app.run_test() as pilot:
         await pilot.pause()
         header = widget.query_one(".ap-header", Static)
-        text = header.content
+        text = str(header.content)
         assert "Claude" in text
         assert "10:32" in text
         assert "·" in text
 
 
 @pytest.mark.asyncio
-async def test_identity_header_falls_back_to_assistant(mock_app_factory) -> None:
+async def test_identity_header_falls_back_to_assistant(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """When ``agent_name`` is ``None`` the header uses ``Assistant``."""
     widget = AssistantProse(
         agent_name=None,
@@ -283,12 +310,15 @@ async def test_identity_header_falls_back_to_assistant(mock_app_factory) -> None
     async with app.run_test() as pilot:
         await pilot.pause()
         header = widget.query_one(".ap-header", Static)
-        assert "Assistant" in header.content
-        assert "10:32" in header.content
+        content = str(header.content)
+        assert "Assistant" in content
+        assert "10:32" in content
 
 
 @pytest.mark.asyncio
-async def test_identity_header_strips_seconds(mock_app_factory) -> None:
+async def test_identity_header_strips_seconds(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """Time renders ``HH:MM`` — seconds must be dropped."""
     widget = AssistantProse(
         agent_name="Claude",
@@ -298,14 +328,15 @@ async def test_identity_header_strips_seconds(mock_app_factory) -> None:
     async with app.run_test() as pilot:
         await pilot.pause()
         header = widget.query_one(".ap-header", Static)
-        assert "10:32" in header.content
-        assert "10:32:59" not in header.content
-        assert ":59" not in header.content
+        content = str(header.content)
+        assert "10:32" in content
+        assert "10:32:59" not in content
+        assert ":59" not in content
 
 
 @pytest.mark.asyncio
 async def test_identity_header_omitted_when_timestamp_missing(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Callers that don't opt in (no ``timestamp``) keep the bare rail."""
     widget = AssistantProse("Some markdown.")

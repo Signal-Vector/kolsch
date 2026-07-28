@@ -77,7 +77,7 @@ async def test_workflow_node_row_allows_select(mock_app_factory: _AppFactory) ->
         body_statics = [
             s for s in row.query(Static) if type(s).__name__ != "CollapsibleTitle"
         ]
-        assert body_statics or True  # WorkflowNodeRow can be empty
+        assert True  # WorkflowNodeRow can be empty
         assert all(s.ALLOW_SELECT for s in body_statics)
 
 
@@ -124,7 +124,9 @@ async def test_tool_call_block_allows_select(mock_app_factory: _AppFactory) -> N
 
 def _binding_for(key: str) -> Binding | None:
     for binding in CHAT_BINDINGS:
-        if binding.key == key:
+        # CHAT_BINDINGS is typed list[BindingType] (Binding | tuple);
+        # narrow to Binding to read .key. Every element is a Binding.
+        if isinstance(binding, Binding) and binding.key == key:
             return binding
     return None
 

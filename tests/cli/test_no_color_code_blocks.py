@@ -15,7 +15,7 @@ from textual.widgets._markdown import MarkdownFence
 from cli.chat.widgets.assistant_prose import AssistantProse, _PlainFence
 
 
-class _HostApp(App):
+class _HostApp(App[None]):
     def __init__(self, widget: AssistantProse) -> None:
         super().__init__()
         self._widget = widget

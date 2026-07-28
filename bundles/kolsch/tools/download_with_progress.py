@@ -51,7 +51,7 @@ async def download_with_progress(
 ) -> dict[str, int]:
     """Open a progress card; loop with ``set_progress``; auto-close."""
     services = require_services(ctx, ["cards"])
-    assert services.cards is not None  # narrowed by require_services
+    assert services.cards is not None  # noqa: S101 — type-narrowing after require_services
     async with await services.cards.open(
         f"Downloading {args.total_kb} KB",
         kind="progress",

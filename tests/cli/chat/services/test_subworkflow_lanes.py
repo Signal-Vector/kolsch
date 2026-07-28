@@ -15,7 +15,7 @@ observer threading is covered by
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -140,8 +140,10 @@ def _called_completed_event(
     )
 
 
-async def _collect_progress(store: SessionStore, thread_id: str) -> list[dict]:
-    out: list[dict] = []
+async def _collect_progress(
+    store: SessionStore, thread_id: str
+) -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
     async for ev in store.read_events(thread_id):
         if ev.type != EventType.UI_EVENT:
             continue
@@ -168,8 +170,8 @@ async def test_dispatch_observer_routes_by_run_id(
         run_b = WorkflowRunId(f"wrk_{uuid4()}")
         tr = TraceId(f"tr_{uuid4()}")
 
-        q_a: asyncio.Queue = asyncio.Queue()
-        q_b: asyncio.Queue = asyncio.Queue()
+        q_a: asyncio.Queue[Any] = asyncio.Queue()
+        q_b: asyncio.Queue[Any] = asyncio.Queue()
         impl._workflow_bridges[run_a] = q_a
         impl._workflow_bridges[run_b] = q_b
         impl._workflow_registry[run_a] = _record(run_a)
@@ -350,7 +352,7 @@ async def test_child_lane_shuts_down_on_completion(
         child = WorkflowRunId(f"wrk_{uuid4()}")
         tr = TraceId(f"tr_{uuid4()}")
         impl._workflow_registry[parent] = _record(parent, ref="b/workflow/parent")
-        parent_queue: asyncio.Queue = asyncio.Queue()
+        parent_queue: asyncio.Queue[Any] = asyncio.Queue()
         impl._workflow_bridges[parent] = parent_queue
 
         observer = impl._make_dispatch_event_observer(
@@ -420,7 +422,7 @@ async def test_parent_drain_opens_and_closes_child_lane(
         rec = _record(parent, ref="b/workflow/parent")
         rec.card = parent_card
         impl._workflow_registry[parent] = rec
-        parent_queue: asyncio.Queue = asyncio.Queue()
+        parent_queue: asyncio.Queue[Any] = asyncio.Queue()
         impl._workflow_bridges[parent] = parent_queue
 
         observer = impl._make_dispatch_event_observer(parent, rec)

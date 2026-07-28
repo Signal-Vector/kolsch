@@ -16,16 +16,26 @@ widget with hidden coupling.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 from textual.widgets import Static
 
 from cli.chat.widgets.info_bar import InfoBar
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
+
 # ── Basic mount / composition ────────────────────────────────────────
 
 
 @pytest.mark.asyncio
-async def test_info_bar_mounts_with_default_reactives(mock_app_factory) -> None:
+async def test_info_bar_mounts_with_default_reactives(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """Widget mounts cleanly with all reactives at their empty defaults."""
     bar = InfoBar()
     app = mock_app_factory(bar)
@@ -41,7 +51,9 @@ async def test_info_bar_mounts_with_default_reactives(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_info_bar_is_docked_bottom(mock_app_factory) -> None:
+async def test_info_bar_is_docked_bottom(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """DEFAULT_CSS docks the InfoBar to the bottom of its parent."""
     bar = InfoBar()
     app = mock_app_factory(bar)
@@ -57,7 +69,9 @@ async def test_info_bar_is_docked_bottom(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_info_bar_reactives_populate_segments(mock_app_factory) -> None:
+async def test_info_bar_reactives_populate_segments(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """Setting the reactives updates the corresponding Static text."""
     bar = InfoBar()
     app = mock_app_factory(bar)
@@ -79,7 +93,9 @@ async def test_info_bar_reactives_populate_segments(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_info_bar_identity_handles_missing_pieces(mock_app_factory) -> None:
+async def test_info_bar_identity_handles_missing_pieces(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """Identity slot drops empty pieces so we never render a bare ' · '."""
     bar = InfoBar()
     app = mock_app_factory(bar)
@@ -98,7 +114,9 @@ async def test_info_bar_identity_handles_missing_pieces(mock_app_factory) -> Non
 
 
 @pytest.mark.asyncio
-async def test_info_bar_empty_reactives_render_empty(mock_app_factory) -> None:
+async def test_info_bar_empty_reactives_render_empty(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """An unset reactive keeps its segment empty (no placeholder text)."""
     bar = InfoBar()
     app = mock_app_factory(bar)
@@ -122,7 +140,7 @@ async def test_info_bar_empty_reactives_render_empty(mock_app_factory) -> None:
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize(
-    "width,expected_visible",
+    ("width", "expected_visible"),
     [
         # width, set-of-segment-ids-that-must-be-displayed
         (100, {"info-identity", "info-session", "info-branch", "info-cwd"}),
@@ -132,7 +150,9 @@ async def test_info_bar_empty_reactives_render_empty(mock_app_factory) -> None:
     ],
 )
 async def test_info_bar_segments_collapse_by_width(
-    mock_app_factory, width: int, expected_visible: set[str]
+    mock_app_factory: Callable[[Widget], App[None]],
+    width: int,
+    expected_visible: set[str],
 ) -> None:
     """At narrower widths the droppable segments hide in priority order.
 
@@ -158,7 +178,9 @@ async def test_info_bar_segments_collapse_by_width(
 
 
 @pytest.mark.asyncio
-async def test_info_bar_identity_always_present(mock_app_factory) -> None:
+async def test_info_bar_identity_always_present(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """Even at the narrowest tested width, identity keeps displaying."""
     bar = InfoBar()
     app = mock_app_factory(bar)

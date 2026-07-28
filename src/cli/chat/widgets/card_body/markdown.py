@@ -19,10 +19,12 @@ is cleared on replace to avoid re-appending post-snapshot content.
 from __future__ import annotations
 
 import os
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from textual.timer import Timer
 from textual.widgets import Markdown
+
+if TYPE_CHECKING:
+    from textual.timer import Timer
 
 _DEFAULT_FLUSH_MS = 100
 """Default flush interval (ms). spec-007 §Live markdown coalescing."""
@@ -49,7 +51,7 @@ class MarkdownRenderer(Markdown):
     }
     """
 
-    def __init__(self, *, id: str | None = None) -> None:
+    def __init__(self, *, id: str | None = None) -> None:  # noqa: A002 — matches Textual Widget's `id` kwarg
         super().__init__(id=id)
         self._buffer: list[str] = []
         self._FLUSH_MS = int(
@@ -61,7 +63,7 @@ class MarkdownRenderer(Markdown):
         # 2 asserts the 40Hz→≤10Hz ratio via this counter.
         self._flush_count: int = 0
 
-    def on_mount(self) -> None:  # type: ignore[override]
+    def on_mount(self) -> None:
         """Install the flush interval on mount.
 
         The interval fires every `_FLUSH_MS / 1000` seconds; each

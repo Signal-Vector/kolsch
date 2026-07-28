@@ -84,7 +84,8 @@ def _started_for(
 ) -> dict[str, Any]:
     for e in _started_events(store, run_id):
         if e["payload"]["node_name"] == node_name:
-            return e["payload"]
+            payload: dict[str, Any] = e["payload"]
+            return payload
     msg = f"no NODE_STARTED for {node_name!r}"
     raise AssertionError(msg)
 

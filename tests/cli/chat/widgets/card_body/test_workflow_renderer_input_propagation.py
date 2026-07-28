@@ -12,7 +12,7 @@ AC #7 — ancient sessions render exactly as they do today.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 from textual.widgets import Collapsible, Static
@@ -20,6 +20,12 @@ from textual.widgets import Collapsible, Static
 from cli.chat.widgets.card_body.workflow import WorkflowRenderer
 from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 from workflows.events import WorkflowEventKind
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 
 class _MockEvent:
@@ -76,7 +82,7 @@ def _input_body_text(row: WorkflowNodeRow) -> str:
 
 @pytest.mark.asyncio
 async def test_renderer_wires_rendered_command_and_inputs_used(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """T7: the row surfaces the rendered command + workflow-inputs-used."""
     renderer = WorkflowRenderer()
@@ -108,7 +114,9 @@ async def test_renderer_wires_rendered_command_and_inputs_used(
 
 
 @pytest.mark.asyncio
-async def test_renderer_back_compat_without_new_fields(mock_app_factory) -> None:
+async def test_renderer_back_compat_without_new_fields(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """T7 back-compat: a NODE_STARTED lacking the new fields renders as today
     — raw command, single line, no `workflow inputs used:` block."""
     renderer = WorkflowRenderer()

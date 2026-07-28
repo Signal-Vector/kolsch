@@ -112,11 +112,25 @@ def test_abstract_card_aexit_signature_fully_annotated() -> None:
 
 
 def test_card_status_literal_members() -> None:
-    """`CardStatus` covers all four visible states."""
+    """`CardStatus` covers every state a card can hold.
+
+    Includes the intermediate `queued` / `cancelling` states —
+    `WorkflowsImpl.set_status("cancelling")` and the `queued` phase
+    are real callers, and `card_kinds.header_glyph_by_status` renders
+    a glyph for each. (Previously the Literal was missing both; mypy
+    surfaced the drift once the gate's type step ran.)
+    """
     from typing import get_args
 
     members = set(get_args(CardStatus))
-    assert members == {"running", "success", "error", "cancelled"}
+    assert members == {
+        "queued",
+        "running",
+        "cancelling",
+        "success",
+        "error",
+        "cancelled",
+    }
 
 
 def test_card_final_status_literal_members() -> None:

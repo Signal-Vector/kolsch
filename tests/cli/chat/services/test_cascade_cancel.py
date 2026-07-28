@@ -18,9 +18,8 @@ Test 1 already covers the contextvar-driven populate path.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from pathlib import Path
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 import pytest
@@ -33,6 +32,10 @@ from engine.context import CancelToken
 from store import SessionStore, SqliteBackend
 from workflows.ids import WorkflowRunId
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 
 @pytest.fixture
@@ -79,7 +82,7 @@ def _install_run(
     record = WorkflowRunRecord(
         run_id=run_id,
         ref=ref,
-        phase=phase,  # type: ignore[arg-type]
+        phase=phase,
         card=None,
         created_at=datetime.now(tz=UTC),
         parent_run_id=parent_run_id,

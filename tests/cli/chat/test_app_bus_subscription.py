@@ -10,8 +10,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -22,6 +21,10 @@ from schemas import Event
 from schemas.entities import Actor
 from schemas.events import EventType
 from schemas.identifiers import EventId
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 
 class _MockAuthz:
@@ -38,9 +41,9 @@ class _MockAuthz:
 
 
 class _MockEngine:
-    async def execute_stream(self, config: Any, ctx: Any):
-        if False:
-            yield  # pragma: no cover
+    async def execute_stream(self, config: Any, ctx: Any) -> AsyncIterator[Any]:
+        return
+        yield  # pragma: no cover
 
 
 @dataclass
@@ -94,7 +97,7 @@ async def _bootstrap_app(tmp_path: Path) -> tuple[ChatApp, InProcessEventBus, An
         is_resume=False,
     )
     app = ChatApp(
-        session=bundle,  # type: ignore[arg-type]
+        session=bundle,
         engine=bundle.runtime.engine,
         full_history=False,
     )

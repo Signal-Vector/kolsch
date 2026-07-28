@@ -9,13 +9,15 @@ fallback path.
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from cli.chat.approval import InlineApprovalCallback
 from providers.authz import AuthzEffect
-from tools.services.prompts import PromptSource
+
+if TYPE_CHECKING:
+    from tools.services.prompts import PromptSource
 
 
 class _SpyPrompts:

@@ -485,7 +485,7 @@ class CardImpl(AbstractCard):
     def __init__(
         self,
         *,
-        id: CardId,
+        id: CardId,  # noqa: A002 — matches Card protocol/handle surface
         kind: str,
         title: str,
         kind_spec: CardKindSpec,
@@ -536,6 +536,7 @@ class CardImpl(AbstractCard):
 
     @property
     def is_closed(self) -> bool:
+        """Whether this card has been closed."""
         return self._closed
 
     async def append(self, chunk: str) -> None:

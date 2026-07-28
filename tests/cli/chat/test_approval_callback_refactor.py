@@ -15,15 +15,17 @@ Three passes:
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from unittest.mock import AsyncMock
 
 from cli.chat.approval import InlineApprovalCallback
 from engine.context import ExecutionContext
 from providers.authz import AuthzEffect
 from schemas.identifiers import ThreadId
-from tools.services.prompts import PromptSource
 from workflows.ids import WorkflowRunId
+
+if TYPE_CHECKING:
+    from tools.services.prompts import PromptSource
 
 
 class _MockApp:
@@ -50,7 +52,7 @@ async def test_callback_calls_prompts_choice_with_tool_source() -> None:
     mock_prompts = AsyncMock()
     mock_prompts.choice = AsyncMock(return_value="y")
 
-    cb = InlineApprovalCallback(app, mock_prompts)  # type: ignore[arg-type]
+    cb = InlineApprovalCallback(app, mock_prompts)
 
     result = await cb(
         rule_id="rl_x",
@@ -74,7 +76,7 @@ async def test_callback_translates_y_to_allow() -> None:
     app = _MockApp()
     mock_prompts = AsyncMock()
     mock_prompts.choice = AsyncMock(return_value="y")
-    cb = InlineApprovalCallback(app, mock_prompts)  # type: ignore[arg-type]
+    cb = InlineApprovalCallback(app, mock_prompts)
 
     result = await cb(rule_id=None, action="tool", target=None)
     assert result is AuthzEffect.ALLOW
@@ -84,7 +86,7 @@ async def test_callback_translates_n_to_deny() -> None:
     app = _MockApp()
     mock_prompts = AsyncMock()
     mock_prompts.choice = AsyncMock(return_value="n")
-    cb = InlineApprovalCallback(app, mock_prompts)  # type: ignore[arg-type]
+    cb = InlineApprovalCallback(app, mock_prompts)
 
     result = await cb(rule_id=None, action="tool", target=None)
     assert result is AuthzEffect.DENY
@@ -139,7 +141,7 @@ async def test_derive_source_workflow_scoped() -> None:
     app = _MockApp()
     mock_prompts = AsyncMock()
     mock_prompts.choice = AsyncMock(return_value="n")
-    cb = InlineApprovalCallback(app, mock_prompts)  # type: ignore[arg-type]
+    cb = InlineApprovalCallback(app, mock_prompts)
 
     run_id = WorkflowRunId(
         "wrk_00000000-0000-0000-0000-000000000042",
@@ -163,7 +165,7 @@ async def test_clear_awaiting_approval_called_on_exit() -> None:
     app = _MockApp()
     mock_prompts = AsyncMock()
     mock_prompts.choice = AsyncMock(return_value="y")
-    cb = InlineApprovalCallback(app, mock_prompts)  # type: ignore[arg-type]
+    cb = InlineApprovalCallback(app, mock_prompts)
 
     await cb(rule_id=None, action="tool", target=None)
     assert app.cleared_calls == 1

@@ -23,12 +23,18 @@ regression signal.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from cli.chat.widgets.card_body.workflow import WorkflowRenderer
 from workflows.events import WorkflowEventKind
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 _WIRE = "kolsch.workflow.progress"
 
@@ -56,7 +62,7 @@ def _mk_run_started_payload(ts: datetime) -> dict[str, Any]:
 
 @pytest.mark.asyncio
 async def test_renderer_elapsed_advances_without_events(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """The header's elapsed counter advances between executor events.
 
@@ -131,7 +137,7 @@ async def test_renderer_elapsed_advances_without_events(
 
 @pytest.mark.asyncio
 async def test_renderer_stops_ticking_after_terminal(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Terminal events flip ``_is_terminal`` and the tick timer stops.
 
@@ -177,7 +183,7 @@ async def test_renderer_stops_ticking_after_terminal(
 
 @pytest.mark.asyncio
 async def test_renderer_stops_ticking_after_run_failed(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """bug-063 VERIFY — ``run.failed`` also flips ``_is_terminal``.
 
@@ -223,7 +229,7 @@ async def test_renderer_stops_ticking_after_run_failed(
 
 @pytest.mark.asyncio
 async def test_node_failed_alone_does_not_freeze_card(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """bug-063 GUARDRAIL — ``node.failed`` alone must NOT freeze the card.
 

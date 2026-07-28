@@ -20,11 +20,19 @@ What we assert:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 from textual.widgets import Static
 
 from cli._slash import COMMAND_REGISTRY
 from cli.chat.widgets.slash_popup import SlashPopup
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 
 def _visible_rows(widget: SlashPopup) -> list[str]:
@@ -36,7 +44,9 @@ def _visible_rows(widget: SlashPopup) -> list[str]:
 
 
 @pytest.mark.asyncio
-async def test_empty_prefix_hides_popup(mock_app_factory) -> None:
+async def test_empty_prefix_hides_popup(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     popup = SlashPopup()
     app = mock_app_factory(popup)
     async with app.run_test() as pilot:
@@ -46,7 +56,9 @@ async def test_empty_prefix_hides_popup(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_non_slash_prefix_hides_popup(mock_app_factory) -> None:
+async def test_non_slash_prefix_hides_popup(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     popup = SlashPopup()
     app = mock_app_factory(popup)
     async with app.run_test() as pilot:
@@ -57,7 +69,9 @@ async def test_non_slash_prefix_hides_popup(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_slash_prefix_shows_every_command(mock_app_factory) -> None:
+async def test_slash_prefix_shows_every_command(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     popup = SlashPopup()
     app = mock_app_factory(popup)
     async with app.run_test() as pilot:
@@ -73,7 +87,9 @@ async def test_slash_prefix_shows_every_command(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_prefix_filters_to_matching_command(mock_app_factory) -> None:
+async def test_prefix_filters_to_matching_command(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     popup = SlashPopup()
     app = mock_app_factory(popup)
     async with app.run_test() as pilot:
@@ -92,7 +108,9 @@ async def test_prefix_filters_to_matching_command(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_no_match_shows_empty_row(mock_app_factory) -> None:
+async def test_no_match_shows_empty_row(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     popup = SlashPopup()
     app = mock_app_factory(popup)
     async with app.run_test() as pilot:
@@ -106,7 +124,9 @@ async def test_no_match_shows_empty_row(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_alias_shows_own_row(mock_app_factory) -> None:
+async def test_alias_shows_own_row(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     popup = SlashPopup()
     app = mock_app_factory(popup)
     async with app.run_test() as pilot:

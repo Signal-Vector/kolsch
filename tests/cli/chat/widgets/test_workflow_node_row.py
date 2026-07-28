@@ -11,14 +11,24 @@ still use the static entries from ``cli.chat.state_tokens``
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from cli.chat.spinner import SPINNER_FRAMES as _SPINNER_FRAMES
 from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
+
 
 @pytest.mark.asyncio
-async def test_initial_starting_state(mock_app_factory) -> None:
+async def test_initial_starting_state(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     row = WorkflowNodeRow(node_name="x")
     app = mock_app_factory(row)
     async with app.run_test() as pilot:
@@ -37,7 +47,9 @@ async def test_initial_starting_state(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_running_state_no_css(mock_app_factory) -> None:
+async def test_running_state_no_css(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     row = WorkflowNodeRow(node_name="x")
     app = mock_app_factory(row)
     async with app.run_test() as pilot:
@@ -56,7 +68,9 @@ async def test_running_state_no_css(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_completed_state_with_details(mock_app_factory) -> None:
+async def test_completed_state_with_details(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     row = WorkflowNodeRow(node_name="x")
     app = mock_app_factory(row)
     async with app.run_test() as pilot:
@@ -70,7 +84,9 @@ async def test_completed_state_with_details(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_failed_state_error_in_section_not_title(mock_app_factory) -> None:
+async def test_failed_state_error_in_section_not_title(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """bug-063 — full error moved from row title to Error NodeSection body.
 
     REWRITTEN from ``test_failed_state_with_truncated_error`` which
@@ -112,7 +128,9 @@ async def test_failed_state_error_in_section_not_title(mock_app_factory) -> None
 
 
 @pytest.mark.asyncio
-async def test_paused_state(mock_app_factory) -> None:
+async def test_paused_state(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     row = WorkflowNodeRow(node_name="x")
     app = mock_app_factory(row)
     async with app.run_test() as pilot:
@@ -125,7 +143,9 @@ async def test_paused_state(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_cancelling_state(mock_app_factory) -> None:
+async def test_cancelling_state(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     row = WorkflowNodeRow(node_name="x")
     app = mock_app_factory(row)
     async with app.run_test() as pilot:
@@ -138,7 +158,9 @@ async def test_cancelling_state(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_pruned_state(mock_app_factory) -> None:
+async def test_pruned_state(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     row = WorkflowNodeRow(node_name="x")
     app = mock_app_factory(row)
     async with app.run_test() as pilot:

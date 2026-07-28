@@ -76,7 +76,7 @@ def _detach_tool_definition(
     original_defn = get_tool_definition(fn)
 
     @functools.wraps(fn)
-    async def _wrapper(*args: Any, **kwargs: Any) -> Any:
+    async def _wrapper(*args: Any, **kwargs: Any) -> Any:  # noqa: ANN401 — transparent passthrough wrapper
         return await fn(*args, **kwargs)
 
     # bug-050 Reviewer finding: bare `_dc_replace(original_defn)` shares

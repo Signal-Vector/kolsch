@@ -39,7 +39,7 @@ class _MockCard:
     is_closed: bool = False
 
 
-class _HostApp(App):
+class _HostApp(App[None]):
     """Minimal host — transcript on top, StatusBar in the bottom stack."""
 
     def compose(self) -> ComposeResult:
@@ -61,8 +61,8 @@ def _mk_record(
     return WorkflowRunRecord(
         run_id=WorkflowRunId(f"wrk_00000000-0000-0000-0000-0000000000{suffix}"),
         ref=ref,
-        phase=phase,  # type: ignore[arg-type]
-        card=card,  # type: ignore[arg-type]
+        phase=phase,
+        card=card,
         created_at=_NOW,
         started_at=_NOW - timedelta(seconds=started_offset),
         node_counts=NodeCounts(total=total, completed=completed),
@@ -103,7 +103,7 @@ async def test_layout_manager_push_shows_strip() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: [record],
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.02,
             status_bar=status_bar,
         )
@@ -164,7 +164,7 @@ async def test_terminal_workflow_hides_strip() -> None:
         mgr = WorkflowLayoutManager(
             transcript=transcript,
             get_records=lambda: [record],
-            get_card_widget=lambda cid: widget_map.get(cid),
+            get_card_widget=widget_map.get,
             reorder_tick=0.02,
             status_bar=status_bar,
         )
@@ -175,7 +175,7 @@ async def test_terminal_workflow_hides_strip() -> None:
         assert status_bar.has_class("-visible")
 
         # Flip terminal.
-        record.phase = "success"  # type: ignore[assignment]
+        record.phase = "success"
         record.terminal_at = _NOW
 
         # Second flush after the phase change.

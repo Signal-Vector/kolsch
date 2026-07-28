@@ -16,16 +16,20 @@ Both AC #8 tests:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
+from typing import TYPE_CHECKING
 
 import pytest
-from textual.app import App
-from textual.widget import Widget
 from textual.widgets import Static
 
 from cli.chat.widgets.approval_args_row import ApprovalArgsRow
 from cli.chat.widgets.approval_block import ApprovalBlock
 from providers.authz import AuthzEffect
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 
 def _rendered_row_text(row: ApprovalArgsRow) -> str:
@@ -34,7 +38,7 @@ def _rendered_row_text(row: ApprovalArgsRow) -> str:
 
 @pytest.mark.asyncio
 async def test_approval_flow_expand_args_visible_before_choice(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Full flow: mount long target → chevron → Tab → visible → ``y`` → ALLOW."""
     long_target = (
@@ -73,7 +77,7 @@ async def test_approval_flow_expand_args_visible_before_choice(
 
 @pytest.mark.asyncio
 async def test_approval_flow_tab_noop_when_target_short(
-    mock_app_factory: Callable[[Widget], App],
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """A short target: pressing Tab does not change the row's rendering.
 

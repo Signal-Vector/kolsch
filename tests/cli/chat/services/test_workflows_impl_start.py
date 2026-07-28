@@ -12,8 +12,7 @@ Three passes:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
@@ -24,11 +23,16 @@ from tests.cli.chat.services.mocks import (
     install_mock_executor_factory,
 )
 from workflows.events import (
+    WorkflowEvent,
     WorkflowRunCompletedEvent,
     WorkflowRunStartedEvent,
 )
 from workflows.ids import TraceId, WorkflowRunId
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 
 @pytest.fixture
@@ -61,7 +65,7 @@ async def _mk_impl(
     )
 
 
-def _mk_events_for(run_id: str) -> tuple[list, TraceId]:
+def _mk_events_for(run_id: str) -> tuple[list[WorkflowEvent], TraceId]:
     from uuid import uuid4
 
     trace = TraceId(f"tr_{uuid4()}")

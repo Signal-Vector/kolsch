@@ -21,19 +21,23 @@ the AgentRunner + engine machinery doesn't need to be spun up.
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import logging
-from pathlib import Path
-from typing import Any
-
-import pytest
+from typing import TYPE_CHECKING, Any
 
 from assets.catalog import AssetCatalog
 from engine.context import CancelToken, CombinedCancelToken, ExecutionContext
 from schemas import ThreadId
-from workflows.events import WorkflowEvent
 from workflows.executor import IterativeExecutor, RunnerRegistry
 from workflows.parser import Workflow
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from pathlib import Path
+
+    import pytest
+
+    from workflows.events import WorkflowEvent
 
 # ---------------------------------------------------------------------------
 # Test helpers.
@@ -323,10 +327,8 @@ class TestCancelTokenReachesSubagent:
             result = await asyncio.wait_for(ex.run(), timeout=2.0)
         finally:
             cancel_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await cancel_task
-            except (asyncio.CancelledError, Exception):
-                pass
 
         # Run finished; the runner observed the cancel.
         assert result is not None
@@ -375,10 +377,8 @@ class TestCompositionPreservesExchange:
             await asyncio.wait_for(ex.run(), timeout=2.0)
         finally:
             fire_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await fire_task
-            except (asyncio.CancelledError, Exception):
-                pass
 
         assert sub_runner.captured_ctx is not None
         assert sub_runner.captured_ctx.cancellation is not None
@@ -416,10 +416,8 @@ class TestCompositionPreservesExchange:
             await asyncio.wait_for(ex.run(), timeout=2.0)
         finally:
             fire_task.cancel()
-            try:
+            with contextlib.suppress(asyncio.CancelledError, Exception):
                 await fire_task
-            except (asyncio.CancelledError, Exception):
-                pass
 
         assert sub_runner.captured_ctx is not None
         assert sub_runner.captured_ctx.cancellation is not None

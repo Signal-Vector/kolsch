@@ -94,7 +94,7 @@ class CompactionBlock(Collapsible):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("c", "collapse", "Collapse compaction block", show=False),
     ]
 
@@ -116,10 +116,12 @@ class CompactionBlock(Collapsible):
 
     @property
     def state(self) -> CompactionState:
+        """Return the block's current lifecycle state."""
         return self._state
 
     @property
     def body_text(self) -> str:
+        """Return the current expandable body text."""
         return self._body_text
 
     def _apply(self, state: CompactionState, title: str, body: str) -> None:
@@ -140,6 +142,7 @@ class CompactionBlock(Collapsible):
         trigger: str = "auto",
         refs_count: int | None = None,
     ) -> None:
+        """Move the block into ``success`` state with token savings."""
         saved = tokens_before - tokens_after
         pct = f"{(saved * 100 // tokens_before)}%" if tokens_before else "?%"
         title = (
@@ -163,6 +166,7 @@ class CompactionBlock(Collapsible):
         tokens_before: int,
         tokens_after: int,
     ) -> None:
+        """Move the block into ``preview`` state (projected, not applied)."""
         saved = tokens_before - tokens_after
         pct = f"{(saved * 100 // tokens_before)}%" if tokens_before else "?%"
         title = (
@@ -186,6 +190,7 @@ class CompactionBlock(Collapsible):
         message: str,
         fallback_tier: str | None = None,
     ) -> None:
+        """Move the block into ``failure`` state with the error message."""
         short = message.splitlines()[0] if message else "unknown"
         title = f"✗ Compaction failed: {short}"
         body_lines = [f"error: {message or 'unknown'}"]
@@ -222,6 +227,7 @@ class CompactionBlock(Collapsible):
         self._apply("skipped", title, f"reason: {reason}")
 
     def transition_to_revoked(self, *, target_short_id: str) -> None:
+        """Move the block into ``revoked`` state for a restored compaction."""
         title = f"↶ Compaction {target_short_id} restored"
         self._apply("revoked", title, f"restored compaction: {target_short_id}")
 
@@ -233,6 +239,7 @@ class CompactionBlock(Collapsible):
         self._body_static.update(message)
 
     def action_collapse(self) -> None:
+        """Collapse this block. Bound to ``c`` (see ``BINDINGS``)."""
         self.collapsed = True
 
 

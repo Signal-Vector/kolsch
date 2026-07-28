@@ -17,10 +17,8 @@ Fail means: bookmark not read/written correctly, or replay loops.
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -34,6 +32,10 @@ from schemas import (
 )
 from schemas.identifiers import EventId
 from store import SessionStore, SqliteBackend
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 
 class _MockChatApp:
@@ -121,7 +123,7 @@ class _RecordingAdapter(EventAdapter):
         super().__init__(*args, **kwargs)
         self.dispatched_ids: list[str] = []
 
-    async def handle(self, event: Event) -> None:  # type: ignore[override]
+    async def handle(self, event: Event) -> None:
         self.dispatched_ids.append(str(event.event_id))
         # Delegate to default dispatch to make sure the wire path
         # exercises the same code.
@@ -138,7 +140,7 @@ async def test_no_bookmark_replays_all_events(store: SessionStore) -> None:
 
     app = _MockChatApp()
     adapter = _RecordingAdapter(
-        app,  # type: ignore[arg-type]
+        app,
         session_store=store,
         session_id=session.session_id,
         thread_id=thread_id,
@@ -165,7 +167,7 @@ async def test_bookmark_replays_only_after_marker(store: SessionStore) -> None:
 
     app = _MockChatApp()
     adapter = _RecordingAdapter(
-        app,  # type: ignore[arg-type]
+        app,
         session_store=store,
         session_id=session.session_id,
         thread_id=thread_id,
@@ -195,7 +197,7 @@ async def test_unknown_bookmark_falls_back_to_full_replay(
 
     app = _MockChatApp()
     adapter = _RecordingAdapter(
-        app,  # type: ignore[arg-type]
+        app,
         session_store=store,
         session_id=session.session_id,
         thread_id=thread_id,
@@ -231,7 +233,7 @@ async def test_bookmark_persists_every_100_dispatches(
 
     app = _MockChatApp()
     adapter = _RecordingAdapter(
-        app,  # type: ignore[arg-type]
+        app,
         session_store=store,
         session_id=session.session_id,
         thread_id=thread_id,
@@ -278,7 +280,7 @@ async def test_start_is_idempotent(store: SessionStore) -> None:
 
     app = _MockChatApp()
     adapter = _RecordingAdapter(
-        app,  # type: ignore[arg-type]
+        app,
         session_store=store,
         session_id=session.session_id,
         thread_id=thread_id,

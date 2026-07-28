@@ -15,8 +15,7 @@ Five passes:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
-from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -29,6 +28,10 @@ from schemas.wire_kinds import (
 )
 from store import SessionStore, SqliteBackend
 from tools.services.exceptions import CardClosed, UnknownCardKind
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 
 @pytest.fixture
@@ -57,8 +60,8 @@ async def _collect_ui_events(
     store: SessionStore,
     thread_id: str,
     kind: str,
-) -> list[dict]:
-    payloads: list[dict] = []
+) -> list[dict[str, Any]]:
+    payloads: list[dict[str, Any]] = []
     async for ev in store.read_events(thread_id):
         if ev.type != EventType.UI_EVENT:
             continue
@@ -147,6 +150,6 @@ async def test_unknown_kind_raises(store: SessionStore) -> None:
     impl = await _mk_impl(store)
     try:
         with pytest.raises(UnknownCardKind):
-            await impl.open("t", kind="unknown")  # type: ignore[arg-type]
+            await impl.open("t", kind="unknown")
     finally:
         await impl.aclose()

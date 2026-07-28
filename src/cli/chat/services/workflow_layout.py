@@ -283,8 +283,10 @@ class WorkflowLayoutManager:
         self._push_workflow_strip()
 
     def _push_workflow_strip(self) -> None:
-        """Recompute the strip via ``format_live_workflow_strip`` and
-        push into the registered :class:`StatusBar`.
+        """Recompute the strip and push into the registered ``StatusBar``.
+
+        Recomputes via ``format_live_workflow_strip`` and pushes into the
+        registered :class:`StatusBar`.
 
         Silent no-op when no status bar is wired (headless fixtures /
         adapter-less paths). Best-effort — any raise from the widget
@@ -366,8 +368,8 @@ class WorkflowLayoutManager:
             for record in ordered:
                 self._apply_compact_mode(
                     record,
-                    should_compact,
-                    should_compact_terminal,
+                    should_compact_in_progress=should_compact,
+                    should_compact_terminal=should_compact_terminal,
                 )
 
             # DOM move: diff and apply. Q4 lock — divider mount AFTER.
@@ -378,7 +380,11 @@ class WorkflowLayoutManager:
                 r.phase in ("success", "error", "cancelled") for r in ordered
             )
             has_in_progress = len(in_progress) > 0
-            await self._sync_divider(ordered, has_terminal, has_in_progress)
+            await self._sync_divider(
+                ordered,
+                has_terminal=has_terminal,
+                has_in_progress=has_in_progress,
+            )
 
             # feat-019: push the current live-workflow strip into the
             # registered StatusBar. Done AFTER the DOM shuffle so the
@@ -396,6 +402,7 @@ class WorkflowLayoutManager:
     def _apply_compact_mode(
         self,
         record: WorkflowRunRecord,
+        *,
         should_compact_in_progress: bool,
         should_compact_terminal: bool,
     ) -> None:
@@ -506,6 +513,7 @@ class WorkflowLayoutManager:
     async def _sync_divider(
         self,
         ordered: list[WorkflowRunRecord],
+        *,
         has_terminal: bool,
         has_in_progress: bool,
     ) -> None:

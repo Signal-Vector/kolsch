@@ -48,7 +48,6 @@ from dataclasses import dataclass
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 
-from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.reactive import reactive
 from textual.widgets import Static
@@ -66,6 +65,8 @@ from schemas.wire_kinds import WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT
 from workflows.events import WorkflowEventKind
 
 if TYPE_CHECKING:
+    from textual.app import ComposeResult
+
     from schemas.events import EventType as _EventType
 
 
@@ -169,7 +170,7 @@ class WorkflowProgressHeader(Static):
     def __init__(
         self,
         *,
-        id: str | None = None,
+        id: str | None = None,  # noqa: A002 — matches Textual Widget's `id` kwarg
         parent_ref: str | None = None,
     ) -> None:
         self._run_id: str | None = None
@@ -331,7 +332,7 @@ class WorkflowRenderer(Vertical):
     WorkflowRenderer.-compact WorkflowSummaryFooter { display: none; }
     """
 
-    compact_mode: reactive[bool] = reactive(False, init=False)
+    compact_mode: reactive[bool] = reactive(False, init=False)  # noqa: FBT003 — Textual reactive API
     """Compact-mode toggle (spec-016).
 
     ``True`` hides the node list + footer and shows a single-line
@@ -344,7 +345,7 @@ class WorkflowRenderer(Vertical):
     def __init__(
         self,
         *,
-        id: str | None = None,
+        id: str | None = None,  # noqa: A002 — matches Textual Widget's `id` kwarg
         parent_ref: str | None = None,
     ) -> None:
         super().__init__(id=id)
@@ -611,7 +612,7 @@ class WorkflowRenderer(Vertical):
             self._planned_node_count = len(nodes)
             self._mount_placeholder_rows(nodes)
 
-    def _mount_placeholder_rows(self, nodes: list[dict[str, Any]]) -> None:
+    def _mount_placeholder_rows(self, nodes: list[Any]) -> None:
         """bug-096: mount one ``pending`` placeholder row per manifest node.
 
         Rows mount in the manifest's topological order. bug-095: the
@@ -1400,7 +1401,7 @@ class WorkflowRenderer(Vertical):
     # spec-016: compact mode
     # ------------------------------------------------------------------
 
-    def watch_compact_mode(self, old: bool, new: bool) -> None:
+    def watch_compact_mode(self, old: bool, new: bool) -> None:  # noqa: FBT001 — Textual reactive-watcher signature
         """React to a ``compact_mode`` flip — hide/show node list + footer.
 
         Also toggles the ``.-compact`` CSS class on the renderer so

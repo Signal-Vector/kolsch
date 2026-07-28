@@ -45,8 +45,6 @@ import asyncio
 import os
 import subprocess
 import sys
-from collections.abc import AsyncIterator
-from pathlib import Path
 from typing import TYPE_CHECKING, Any, cast
 
 import pytest
@@ -62,6 +60,9 @@ from store import SessionStore, SqliteBackend
 from workflows.run_store import WorkflowRunStore
 
 if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
+
     from schemas import Event
 
 

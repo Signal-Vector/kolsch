@@ -1522,7 +1522,10 @@ COMMAND_REGISTRY: dict[str, SlashCommand] = {
     ),
     "/reload": SlashCommand(
         name="/reload",
-        description="reload authz rules across all 4 layers (platform + bundle + workflow + agent)",
+        description=(
+            "reload authz rules across all 4 layers "
+            "(platform + bundle + workflow + agent)"
+        ),
         usage="/reload   rescan disk + rebuild the authz provider atomically",
         handler=None,
     ),
@@ -1532,7 +1535,9 @@ COMMAND_REGISTRY: dict[str, SlashCommand] = {
     # standing dispatcher can't reach.
     "/compact": SlashCommand(
         name="/compact",
-        description="force-compact the conversation now (or preview what would compact)",
+        description=(
+            "force-compact the conversation now (or preview what would compact)"
+        ),
         usage="/compact [--preview] [--instructions '<text>']",
         handler=None,
         free_form_arg_hint="[--preview] [--instructions '<text>']",
@@ -1552,7 +1557,9 @@ COMMAND_REGISTRY: dict[str, SlashCommand] = {
     ),
     "/why-compact": SlashCommand(
         name="/why-compact",
-        description="dump the summary + pre_compaction payload for one compaction event",
+        description=(
+            "dump the summary + pre_compaction payload for one compaction event"
+        ),
         usage="/why-compact <event_id>",
         handler=None,
         state_changing=False,

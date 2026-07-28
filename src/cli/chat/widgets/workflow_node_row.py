@@ -1,3 +1,5 @@
+# ruff: noqa: E501 — module docstring holds an atomic mkdocs cross-ref that
+# must stay on one line for autorefs to resolve; unsplittable.
 """`WorkflowNodeRow` — per-node collapsible row inside a workflow card.
 
 spec-013 §WorkflowNodeRow. Mounted inside a
@@ -54,16 +56,20 @@ import json
 import logging
 from collections.abc import Awaitable, Callable
 from datetime import UTC, datetime
-from typing import Any, ClassVar
+from typing import TYPE_CHECKING, Any, ClassVar
 
 from textual.reactive import reactive
-from textual.widget import Widget
 from textual.widgets import Collapsible, Static
 
 from cli.chat.metrics import format_duration
 from cli.chat.spinner import SPINNER_FRAMES, spinner_frame
 from cli.chat.state_tokens import resolve_state
 from cli.chat.widgets.assistant_prose import WorkflowAnchorButton
+
+if TYPE_CHECKING:
+    from textual.widget import Widget
+
+    from cli.chat.widgets.node_section import NodeSection
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -450,7 +456,11 @@ class WorkflowNodeRow(Collapsible):
     WorkflowNodeRow.-success    { color: $tool-fg; border-left: outer $tool-fg; }
     WorkflowNodeRow.-failed     { color: $error;   border-left: outer $error; }
     WorkflowNodeRow.-paused     { color: $warning; border-left: outer $warning; }
-    WorkflowNodeRow.-cancelling { color: $tool-fg; opacity: 0.6; border-left: outer $tool-fg; }
+    WorkflowNodeRow.-cancelling {
+        color: $tool-fg;
+        opacity: 0.6;
+        border-left: outer $tool-fg;
+    }
     WorkflowNodeRow.-cancelled  { color: $hint;    border-left: outer $hint; }
     WorkflowNodeRow.-pending    { color: $hint;    border-left: outer $hint; }
     WorkflowNodeRow.-skipped    { color: $hint;    border-left: outer $hint; }
@@ -572,7 +582,7 @@ class WorkflowNodeRow(Collapsible):
         # per-tool_call_id `tool: <name>` sections.
         self._response_count: int = 0
         self._bound_inputs: dict[str, Any] = {}
-        self._bash_input_section: Widget | None = None
+        self._bash_input_section: NodeSection | None = None
         self._bash_output_section: Widget | None = None
         self._bash_exit_section: Widget | None = None
         self._tool_sections: dict[str, Widget] = {}
@@ -977,11 +987,14 @@ class WorkflowNodeRow(Collapsible):
             rendered_command=self._command_rendered,
             workflow_inputs_used=self._workflow_inputs_used,
         )
+        # `_contents_list[0]` is the `Static` preview mounted by
+        # `_new_bash_input_section`; narrow to reach `Static.update`.
         inner = self._bash_input_section._contents_list[0]
-        with contextlib.suppress(Exception):
-            inner.update(body)
+        if isinstance(inner, Static):
+            with contextlib.suppress(Exception):
+                inner.update(body)
 
-    def _new_bash_input_section(self, body_text: str) -> Widget:
+    def _new_bash_input_section(self, body_text: str) -> NodeSection:
         """Build + mount the bash ``input`` NodeSection."""
         from cli.chat.widgets.node_section import NodeSection  # noqa: PLC0415
 
@@ -1377,7 +1390,7 @@ class WorkflowNodeRow(Collapsible):
             if not self.collapsed:
                 try:
                     await _mount()
-                except Exception:
+                except Exception:  # noqa: BLE001 — best-effort UI mount; logged, must not kill the row
                     _LOGGER.warning(
                         "workflow_node_row: tool transition raised on %s",
                         self._node_name,
@@ -1516,7 +1529,7 @@ class WorkflowNodeRow(Collapsible):
         if not self.collapsed:
             try:
                 await closure()
-            except Exception:
+            except Exception:  # noqa: BLE001 — best-effort UI mount; logged, must not kill the row
                 _LOGGER.warning(
                     "workflow_node_row: live-mount closure raised on %s",
                     self._node_name,
@@ -1575,7 +1588,7 @@ class WorkflowNodeRow(Collapsible):
         if new in _TERMINAL_STATES:
             self._buffer_frozen = True
 
-    def watch_collapsed(self, old: bool, new: bool) -> None:
+    def watch_collapsed(self, old: bool, new: bool) -> None:  # noqa: FBT001 — Textual reactive-watcher signature
         """spec-021: replay pending mounts on expand.
 
         bug-036d: uses ``call_after_refresh`` to schedule the async
@@ -1597,7 +1610,7 @@ class WorkflowNodeRow(Collapsible):
                 import asyncio  # noqa: PLC0415
 
                 loop = asyncio.get_running_loop()
-                loop.create_task(self._drain_pending_mounts())
+                loop.create_task(self._drain_pending_mounts())  # noqa: RUF006 — fire-and-forget teardown-path fallback; no lifecycle owner
 
     def _update_title(self) -> None:
         """Refresh the collapsed title from state + details + count.
@@ -1633,10 +1646,7 @@ class WorkflowNodeRow(Collapsible):
         node_label = self._node_name
         if self._iteration_index is not None:
             node_label = f"{self._node_name}[{self._iteration_index}]"
-        if glyph == "▸":
-            base = node_label
-        else:
-            base = f"{glyph} {node_label}"
+        base = node_label if glyph == "▸" else f"{glyph} {node_label}"
         if self.state == "failed":
             # bug-063: full error moved to Error section body; keep
             # only the state glyph + node name as a short marker.

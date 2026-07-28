@@ -13,8 +13,7 @@ Covers :meth:`AgentEngine.manual_uncompact` — the seam
 
 from __future__ import annotations
 
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -27,6 +26,9 @@ from tests.component.test_context_compaction_slash_compact import (
     _fresh_thread,
     _RecordingLLM,
 )
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 
 @pytest.mark.asyncio

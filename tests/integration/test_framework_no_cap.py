@@ -74,6 +74,7 @@ class _NoopTool:
     deterministic for golden-style comparisons."""
 
     name = "noop"
+    description = "Echoes its arguments back for deterministic assertions."
     schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {"i": {"type": "integer"}},
@@ -185,6 +186,7 @@ class _HangingTool:
     """Tool that sleeps long enough for cancellation to fire mid-await."""
 
     name = "hang"
+    description = "Sleeps long enough for cancellation to fire mid-await."
     schema: dict[str, Any] = {  # noqa: RUF012
         "type": "object",
         "properties": {"i": {"type": "integer"}},

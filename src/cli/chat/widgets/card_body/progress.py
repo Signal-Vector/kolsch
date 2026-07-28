@@ -8,11 +8,13 @@ cards carry no cumulative history).
 
 from __future__ import annotations
 
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-from textual.app import ComposeResult
 from textual.containers import Vertical
 from textual.widgets import ProgressBar, Static
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 
 class ProgressRenderer(Vertical):
@@ -34,12 +36,13 @@ class ProgressRenderer(Vertical):
     }
     """
 
-    def __init__(self, *, id: str | None = None) -> None:
+    def __init__(self, *, id: str | None = None) -> None:  # noqa: A002 — matches Textual Widget's `id` kwarg
         super().__init__(id=id)
         self._message = Static("", markup=False)
         self._bar = ProgressBar(total=100, show_eta=False)
 
     def compose(self) -> ComposeResult:
+        """Yield the message ``Static`` and the ``ProgressBar``."""
         yield self._message
         yield self._bar
 
@@ -58,7 +61,7 @@ class ProgressRenderer(Vertical):
         raw_current = payload.get("current", 0)
         # `total=None` or `total=0` → indeterminate: pass `None`
         # to Textual so the bar renders its spinner form.
-        if raw_total in (None, 0):
+        if raw_total is None or raw_total == 0:
             self._bar.total = None
         else:
             try:

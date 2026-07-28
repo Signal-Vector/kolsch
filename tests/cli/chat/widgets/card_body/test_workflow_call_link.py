@@ -28,6 +28,8 @@ from cli.chat.widgets.workflow_node_row import WorkflowCallLink, WorkflowNodeRow
 from workflows.events import WorkflowEventKind
 
 if TYPE_CHECKING:
+    from collections.abc import Callable
+
     from textual.widget import Widget
 
 _WORKFLOW_NODE_TYPE = "kolsch/nodes/workflow"
@@ -113,7 +115,9 @@ async def _seed_workflow_node(
 
 
 @pytest.mark.asyncio
-async def test_called_workflow_mounts_link_and_title_hint(mock_app_factory) -> None:
+async def test_called_workflow_mounts_link_and_title_hint(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """AC #1/#3/#4 — CALLED_WORKFLOW mounts a WorkflowCallLink + title hint."""
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
@@ -201,7 +205,9 @@ async def test_link_activation_calls_scroll_action() -> None:
 
 
 @pytest.mark.asyncio
-async def test_called_workflow_completed_updates_status(mock_app_factory) -> None:
+async def test_called_workflow_completed_updates_status(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """AC #2/#6 — CALLED_WORKFLOW_COMPLETED(succeeded) updates the suffix."""
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
@@ -242,7 +248,9 @@ async def test_called_workflow_completed_updates_status(mock_app_factory) -> Non
 
 
 @pytest.mark.asyncio
-async def test_called_workflow_completed_failed_status(mock_app_factory) -> None:
+async def test_called_workflow_completed_failed_status(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """AC #6 — a failed child renders `✗ failed` in the suffix."""
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
@@ -285,7 +293,9 @@ async def test_called_workflow_completed_failed_status(mock_app_factory) -> None
 
 
 @pytest.mark.asyncio
-async def test_non_workflow_row_ignores_child_calls(mock_app_factory) -> None:
+async def test_non_workflow_row_ignores_child_calls(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """AC #3 — a bash-type row mounts no link and keeps its title."""
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
@@ -346,7 +356,9 @@ async def test_set_child_workflow_direct_gate() -> None:
 
 
 @pytest.mark.asyncio
-async def test_replayed_called_workflow_mounts_one_link(mock_app_factory) -> None:
+async def test_replayed_called_workflow_mounts_one_link(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """AC #7 — two CALLED_WORKFLOW events mount exactly one link."""
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
@@ -388,7 +400,9 @@ class _NoActionApp(App[None]):
 
 
 @pytest.mark.asyncio
-async def test_activation_without_scroll_action_no_crash(caplog) -> None:
+async def test_activation_without_scroll_action_no_crash(
+    caplog: pytest.LogCaptureFixture,
+) -> None:
     """AC #5 fallback — activating with no resolvable action no-ops + warns.
 
     Mirrors feat-018's ``WorkflowAnchorButton._activate`` fallback: when

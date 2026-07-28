@@ -12,12 +12,14 @@ so `record.run_dir.cancel_flag_path` is a real writable path.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Callable
 from dataclasses import dataclass, field
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from workflows.events import WorkflowEvent, WorkflowEventKind
 from workflows.run import RunDirectory, WorkflowRunStatus
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
 
 
 @dataclass

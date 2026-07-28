@@ -18,13 +18,23 @@ adapter.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 
 from cli.chat.widgets.composer import Composer
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
+
 
 @pytest.mark.asyncio
-async def test_default_placeholder_matches_spec(mock_app_factory) -> None:
+async def test_default_placeholder_matches_spec(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """Fresh composer shows the spec-mandated placeholder text."""
     composer = Composer()
     app = mock_app_factory(composer)
@@ -49,7 +59,7 @@ async def test_default_placeholder_matches_spec(mock_app_factory) -> None:
 
 @pytest.mark.asyncio
 async def test_max_height_enforced_after_typing_eight_lines(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """CSS `max-height: 6` bounds the widget region at six rows.
 
@@ -76,19 +86,21 @@ async def test_max_height_enforced_after_typing_eight_lines(
 
 @pytest.mark.asyncio
 async def test_enter_posts_submitted_message_with_content(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Pressing Enter posts `Composer.Submitted` with the current text."""
     captured: list[str] = []
 
-    class _Host(type(mock_app_factory(Composer()))):
+    # mypy can't type a class whose base is computed at runtime; the base
+    # is the factory's host-App subclass, which is a plain App subclass.
+    class _Host(type(mock_app_factory(Composer()))):  # type: ignore[misc]  # dynamic base = factory host App
         def on_composer_submitted(self, event: Composer.Submitted) -> None:
             captured.append(event.content)
 
     composer = Composer()
     app = _Host()
     # Swap in our composer so the host yields the instance we assert on.
-    app.compose = lambda: iter([composer])  # type: ignore[method-assign]
+    app.compose = lambda: iter([composer])
     async with app.run_test() as pilot:
         composer.focus()
         await pilot.pause()
@@ -104,7 +116,7 @@ async def test_enter_posts_submitted_message_with_content(
 
 @pytest.mark.asyncio
 async def test_awaiting_approval_disables_and_swaps_placeholder(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Toggling `awaiting_approval` disables + swaps; toggling back restores."""
     composer = Composer()
@@ -117,7 +129,9 @@ async def test_awaiting_approval_disables_and_swaps_placeholder(
         composer.awaiting_approval = True
         await pilot.pause()
         assert composer.disabled is True
-        assert composer.placeholder == Composer.AWAITING_PLACEHOLDER
+        # mypy narrows `disabled` to Literal[False] from the assert above and
+        # can't see the reactive change, so it flags the next line unreachable.
+        assert composer.placeholder == Composer.AWAITING_PLACEHOLDER  # type: ignore[unreachable]  # reactive mutated `disabled` between asserts
 
         composer.awaiting_approval = False
         await pilot.pause()
@@ -127,7 +141,7 @@ async def test_awaiting_approval_disables_and_swaps_placeholder(
 
 @pytest.mark.asyncio
 async def test_enter_while_awaiting_approval_does_not_submit(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Disabled composer swallows key input and does not post `Submitted`.
 
@@ -137,13 +151,15 @@ async def test_enter_while_awaiting_approval_does_not_submit(
     """
     captured: list[str] = []
 
-    class _Host(type(mock_app_factory(Composer()))):
+    # mypy can't type a class whose base is computed at runtime; the base
+    # is the factory's host-App subclass, which is a plain App subclass.
+    class _Host(type(mock_app_factory(Composer()))):  # type: ignore[misc]  # dynamic base = factory host App
         def on_composer_submitted(self, event: Composer.Submitted) -> None:
             captured.append(event.content)
 
     composer = Composer()
     app = _Host()
-    app.compose = lambda: iter([composer])  # type: ignore[method-assign]
+    app.compose = lambda: iter([composer])
     async with app.run_test() as pilot:
         composer.text = "should not submit"
         composer.awaiting_approval = True

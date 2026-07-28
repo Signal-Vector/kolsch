@@ -21,11 +21,15 @@ Escape is delivered as ``"esc"`` so the parent can map it to the
 
 from __future__ import annotations
 
-from textual.app import ComposeResult
+from typing import TYPE_CHECKING, ClassVar
+
 from textual.binding import Binding
 from textual.containers import Vertical
 from textual.message import Message
 from textual.widgets import Static
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 
 class ApprovalSaveConfirm(Vertical):
@@ -72,7 +76,7 @@ class ApprovalSaveConfirm(Vertical):
     }
     """
 
-    BINDINGS = [
+    BINDINGS: ClassVar = [
         Binding("y", "choose('y')", "save rule", show=False),
         Binding("n", "choose('n')", "cancel (fall back)", show=False),
         Binding("escape", "choose('esc')", "cancel (fall back)", show=False),
@@ -94,13 +98,15 @@ class ApprovalSaveConfirm(Vertical):
         deny: bool,
         fallback_label: str,
     ) -> None:
-        """Args:
-        preview: Rendered rule string, e.g. ``authz.allow  bash("ls")``.
-        deny: True when the rule to be saved is a ``deny`` — colours
-            the preview red instead of cyan. Purely visual.
-        fallback_label: Wording for the ``n`` branch — e.g.
-            ``allow once`` or ``deny once`` — inlined in the prompt
-            so the user sees what pressing ``n`` will do.
+        """Store the preview text, deny flag, and fallback wording.
+
+        Args:
+            preview: Rendered rule string, e.g. ``authz.allow  bash("ls")``.
+            deny: True when the rule to be saved is a ``deny`` — colours
+                the preview red instead of cyan. Purely visual.
+            fallback_label: Wording for the ``n`` branch — e.g.
+                ``allow once`` or ``deny once`` — inlined in the prompt
+                so the user sees what pressing ``n`` will do.
         """
         super().__init__()
         self._preview = preview
@@ -108,6 +114,7 @@ class ApprovalSaveConfirm(Vertical):
         self._fallback_label = fallback_label
 
     def compose(self) -> ComposeResult:
+        """Yield the preview, the save/cancel prompt, and the cursor line."""
         yield Static("Rule preview:", classes="preview-label", markup=False)
         preview_classes = "preview " + (
             "preview-deny" if self._deny else "preview-allow"
@@ -118,7 +125,7 @@ class ApprovalSaveConfirm(Vertical):
             classes="choices",
             markup=False,
         )
-        yield Static("› ▊", classes="prompt", markup=False)
+        yield Static("› ▊", classes="prompt", markup=False)  # noqa: RUF001 — intentional cursor glyph (visual input affordance)
 
     def action_choose(self, key: str) -> None:
         """Bindings handler — post the choice to the parent."""

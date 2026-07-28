@@ -24,7 +24,7 @@ import json
 import logging
 from collections import OrderedDict
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any, Protocol
+from typing import TYPE_CHECKING, Any, ClassVar, Protocol
 from uuid import uuid4
 
 from schemas.entities import Actor
@@ -215,7 +215,9 @@ class CardMountState(Protocol):
     kind: str
     applied_appends: _BoundedLRUSet
     applied_snapshots: _BoundedLRUSet
-    state: str  # canonical (qol-084): "queued" | "running" | ... | "success" | "failed" | "cancelled"
+    # canonical (qol-084): "queued" | "running" | ... | "success" |
+    # "failed" | "cancelled"
+    state: str
     content: str
 
     def apply_append(self, event_id: str, chunk: str) -> None:
@@ -470,7 +472,7 @@ def _detect_code_blocks(text: str) -> list[tuple[str, str]]:
     """Split ``text`` into a sequence of ``(kind, body)`` chunks.
 
     ``kind`` is ``"prose"`` or ``"code"``. Ported from the inline
-    heuristic at ``_renderer.py:103–149``; extracted here so the
+    heuristic at ``_renderer.py:103-149``; extracted here so the
     adapter can be tested in isolation without spinning up a
     ``Renderer``.
 
@@ -528,7 +530,7 @@ class EventAdapter:
     # Class-level dispatch table: EventType → method name. Missing
     # entries fail Test 5 (event-coverage smoke) — every EventType
     # member must have a branch.
-    _DISPATCH: dict[EventType, str] = {
+    _DISPATCH: ClassVar[dict[EventType, str]] = {
         EventType.SESSION_OPENED: "_handle_session_opened",
         EventType.THREAD_EXCHANGE_STARTED: "_handle_thread_exchange_started",
         EventType.THREAD_EXCHANGE_COMPLETED: "_handle_thread_exchange_completed",
@@ -806,7 +808,7 @@ class EventAdapter:
             return
         try:
             await self.handle(inner_event)
-        except Exception:
+        except Exception:  # noqa: BLE001 — best-effort sub-agent dispatch; logged, one bad event must not crash the adapter
             _LOGGER.warning(
                 "event_adapter: sub-agent handler raised for %r",
                 getattr(inner_event, "event_id", "<unknown>"),
@@ -1019,9 +1021,9 @@ class EventAdapter:
         best-effort, a bad event shouldn't crash the chat (mirrors
         `ChatApp._replay_history`).
         """
-        assert self._session_store is not None
-        assert self._session_id is not None
-        assert self._thread_id is not None
+        assert self._session_store is not None  # noqa: S101 — internal invariant; caller wires these before replay
+        assert self._session_id is not None  # noqa: S101 — internal invariant; caller wires these before replay
+        assert self._thread_id is not None  # noqa: S101 — internal invariant; caller wires these before replay
 
         # First, sanity-check the bookmark by scanning the full log
         # for the bookmark event. If the bookmark points at an event
@@ -1194,11 +1196,10 @@ class EventAdapter:
         sink = self._route_to_workflow_node(event) or self._app
         content = event.data.get("content") or {}
         text = _extract_text(content)
-        if not text:
-            # Fallback: extract via the row's readable-dict path so
-            # workflow bound-inputs (no ``text`` key) still render.
-            if isinstance(content, dict) and content:
-                text = _content_dict_text(content)
+        # Fallback: extract via the row's readable-dict path so
+        # workflow bound-inputs (no ``text`` key) still render.
+        if not text and isinstance(content, dict) and content:
+            text = _content_dict_text(content)
         if not text:
             return
         # bug-037: pass the raw dict through so row sinks can split
@@ -1399,21 +1400,20 @@ class EventAdapter:
             await self._app.set_turn_verb("Thinking…", target="")
             return
         sink = self._route_to_workflow_node(event) or self._app
-        if text:
-            # bug-036d dedupe against the sink's last-assistant-text
-            # (matches _handle_agent_message shape). Prevents double-
-            # mount when both MODEL_RESPONSE and AGENT_MESSAGE fire
-            # with identical content.
-            if sink.last_assistant_text() != text:
-                widget = await sink.mount_assistant_message(
-                    text,
-                    event_id=_event_id_str(event),
-                )
-                sink.set_last_assistant_text(text)
-                # bug-060 Part 1: register the mounted widget under
-                # the source event's id (App sinks only — row sinks
-                # return ``None``).
-                self._register_widget_for_event(event, widget)
+        # bug-036d dedupe against the sink's last-assistant-text
+        # (matches _handle_agent_message shape). Prevents double-
+        # mount when both MODEL_RESPONSE and AGENT_MESSAGE fire
+        # with identical content.
+        if text and sink.last_assistant_text() != text:
+            widget = await sink.mount_assistant_message(
+                text,
+                event_id=_event_id_str(event),
+            )
+            sink.set_last_assistant_text(text)
+            # bug-060 Part 1: register the mounted widget under
+            # the source event's id (App sinks only — row sinks
+            # return ``None``).
+            self._register_widget_for_event(event, widget)
         if sink is self._app:
             await self._app.set_turn_verb("Thinking…", target="")
 
@@ -2157,7 +2157,7 @@ class EventAdapter:
         try:
             # Local import to avoid a circular src/cli/chat/widgets ↔
             # src/cli/chat/event_adapter cycle at module load time.
-            from cli.chat.widgets.approval_block import (
+            from cli.chat.widgets.approval_block import (  # noqa: PLC0415 — lazy import avoids circular dep
                 response_key_from,
             )
 
@@ -2652,7 +2652,9 @@ class EventAdapter:
         caller falls back to `_CardMountStub` in that case.
         """
         try:
-            from cli.chat.widgets.card_widget import CardWidget
+            from cli.chat.widgets.card_widget import (  # noqa: PLC0415 — lazy import avoids circular dep
+                CardWidget,
+            )
         except Exception:  # noqa: BLE001 — widget layer optional
             return None
         try:
@@ -2899,7 +2901,7 @@ class EventAdapter:
             widget = await self._mount_root_notice(raw_id, text_str, kind_str)
             self._register_widget_for_event(source_event, widget)
 
-        asyncio.create_task(_mount_and_register())
+        asyncio.create_task(_mount_and_register())  # noqa: RUF006 — fire-and-forget mount; lifetime is the mount coroutine
 
     def _mount_in_card_notice(
         self,
@@ -3394,10 +3396,9 @@ class EventAdapter:
         text: str,
         kind: str,
     ) -> Any | None:
-        """Mount a
-        [`NoticeWidget`][cli.chat.widgets.notice.NoticeWidget] at the
-        transcript root.
+        """Mount a notice widget at the transcript root.
 
+        Mounts a [`NoticeWidget`][cli.chat.widgets.notice.NoticeWidget].
         Falls back silently when ``#transcript`` isn't available
         (headless service tests). The widget handle is tracked under
         ``notice_id`` so a repeat dispatch's update-in-place path

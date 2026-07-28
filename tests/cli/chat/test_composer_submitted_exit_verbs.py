@@ -17,15 +17,17 @@ prove:
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator
 from dataclasses import dataclass
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from cli.chat.app import ChatApp
 from cli.chat.widgets.composer import Composer
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator
+    from pathlib import Path
 
 
 async def _empty_async_gen(

@@ -17,8 +17,7 @@ path :mod:`workflows.executor` takes when a workflow node of type
 from __future__ import annotations
 
 import logging
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -57,6 +56,9 @@ from tools import ToolsSubsystem
 from workflows.builtins.agent import AgentRunner
 from workflows.context import NodeContext
 from workflows.parser import AgentNodeDef
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _CHILD_AGENT_REF = "kolsch/agents/child"
 

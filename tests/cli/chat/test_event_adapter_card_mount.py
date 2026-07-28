@@ -32,7 +32,7 @@ from schemas.wire_kinds import (
 )
 
 
-class _HostApp(App):
+class _HostApp(App[None]):
     """Minimal host app carrying a `#transcript` container.
 
     The EventAdapter looks up `#transcript` via `query_one` to mount
@@ -76,7 +76,7 @@ def _mk_ui_event(kind: str, payload: dict[str, Any]) -> Event:
 async def test_opened_mounts_card_widget_in_transcript() -> None:
     app = _HostApp()
     async with app.run_test() as pilot:
-        adapter = EventAdapter(app)  # type: ignore[arg-type]
+        adapter = EventAdapter(app)
         card_id = f"crd_{uuid4()}"
         await adapter.handle(_mk_opened(card_id, kind="markdown", title="hello"))
         await pilot.pause()
@@ -95,7 +95,7 @@ async def test_opened_mounts_card_widget_in_transcript() -> None:
 async def test_duplicate_opened_does_not_mount_second_widget() -> None:
     app = _HostApp()
     async with app.run_test() as pilot:
-        adapter = EventAdapter(app)  # type: ignore[arg-type]
+        adapter = EventAdapter(app)
         card_id = f"crd_{uuid4()}"
         opened_ev = _mk_opened(card_id)
         await adapter.handle(opened_ev)
@@ -119,11 +119,14 @@ async def test_content_events_dispatch_to_widget_apply() -> None:
     """
     app = _HostApp()
     async with app.run_test() as pilot:
-        adapter = EventAdapter(app)  # type: ignore[arg-type]
+        adapter = EventAdapter(app)
         card_id = f"crd_{uuid4()}"
         await adapter.handle(_mk_opened(card_id, kind="markdown", title="live"))
         await pilot.pause()
-        widget = adapter._card_widgets[CardId(card_id)]
+        # Widen to `object` first: the dict value is the `CardMountState`
+        # Protocol, whose intersection with `CardWidget` mypy reads as
+        # empty; `object` lets the isinstance narrow cleanly to CardWidget.
+        widget: object = adapter._card_widgets[CardId(card_id)]
         assert isinstance(widget, CardWidget)
 
         # `card.appended` — Protocol seam writes via `apply_append`.
@@ -162,7 +165,9 @@ async def test_content_events_dispatch_to_widget_apply() -> None:
             )
         )
         await pilot.pause()
-        progress_widget = adapter._card_widgets[CardId(progress_id)]
+        # Widen to `object` (see note above) so the isinstance narrows
+        # cleanly to CardWidget rather than the empty Protocol intersection.
+        progress_widget: object = adapter._card_widgets[CardId(progress_id)]
         assert isinstance(progress_widget, CardWidget)
         # The progress renderer bar reflects the update.
         from textual.widgets import ProgressBar

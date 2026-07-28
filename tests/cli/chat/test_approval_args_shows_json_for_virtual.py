@@ -27,9 +27,8 @@ import asyncio
 import os
 import subprocess
 import sys
-from collections.abc import AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -52,6 +51,9 @@ from workflows.events import (
     WorkflowRunStartedEvent,
 )
 from workflows.ids import InvocationId, TraceId, WorkflowRunId
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
 
 # ---------------------------------------------------------------------------
 # Fixture — scaffold via ``kolsch setup``; keep ``run_workflow`` at ``prompt``.

@@ -58,7 +58,8 @@ class _CapturingApp:
     def query_one(self, selector: str, *_args: Any, **_kwargs: Any) -> Any:
         if selector == "#transcript":
             return self.transcript
-        raise LookupError(f"unknown selector {selector!r}")
+        msg = f"unknown selector {selector!r}"
+        raise LookupError(msg)
 
     def _mount_root_notice(self, *_args: Any, **_kwargs: Any) -> None:
         raise AttributeError(

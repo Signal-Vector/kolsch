@@ -20,10 +20,14 @@ Design principles (from the spec):
 
 from __future__ import annotations
 
-from textual.app import ComposeResult
+from typing import TYPE_CHECKING
+
 from textual.containers import Horizontal
 from textual.reactive import reactive
 from textual.widgets import Static
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 
 class InfoBar(Horizontal):
@@ -85,6 +89,7 @@ class InfoBar(Horizontal):
     _CWD_ID = "info-cwd"
 
     def compose(self) -> ComposeResult:
+        """Yield the identity, session, branch, and cwd segment statics."""
         # `identity` is agent + model, one segment, bold — the spec calls
         # this out as the leftmost never-drops slot.
         yield Static(
@@ -127,20 +132,25 @@ class InfoBar(Horizontal):
     # populated the tree during construction.
 
     def watch_agent(self, _old: str, _new: str) -> None:
+        """Repaint the identity slot when the agent reactive changes."""
         self._refresh_identity()
 
     def watch_model(self, _old: str, _new: str) -> None:
+        """Repaint the identity slot when the model reactive changes."""
         self._refresh_identity()
 
     def watch_session(self, _old: str, new: str) -> None:
+        """Update the session segment when the session reactive changes."""
         if self.is_mounted:
             self.query_one(f"#{self._SESSION_ID}", Static).update(new)
 
     def watch_branch(self, _old: str, new: str) -> None:
+        """Update the branch segment when the branch reactive changes."""
         if self.is_mounted:
             self.query_one(f"#{self._BRANCH_ID}", Static).update(new)
 
     def watch_cwd(self, _old: str, new: str) -> None:
+        """Update the cwd segment when the cwd reactive changes."""
         if self.is_mounted:
             self.query_one(f"#{self._CWD_ID}", Static).update(new)
 
@@ -162,6 +172,7 @@ class InfoBar(Horizontal):
     _COLLAPSE_WIDTH_SESSION = 40
 
     def on_resize(self) -> None:  # pragma: no cover - trivial dispatch
+        """Re-apply width-based segment collapse on terminal resize."""
         self._apply_collapse(self.size.width)
 
     def _apply_collapse(self, width: int) -> None:

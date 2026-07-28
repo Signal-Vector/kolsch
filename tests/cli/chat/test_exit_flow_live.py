@@ -40,9 +40,8 @@ API is the single input surface.
 
 from __future__ import annotations
 
-from collections.abc import AsyncGenerator, AsyncIterator
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -51,6 +50,9 @@ from cli.chat.app import ChatApp
 from cli.chat.widgets.composer import Composer
 from schemas.events import EventType
 from store import SessionStore, SqliteBackend
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncGenerator, AsyncIterator
 
 
 class _MockAuthz:

@@ -23,10 +23,9 @@ registration time.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator, Awaitable, Callable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -36,6 +35,9 @@ from schemas.identifiers import AgentId, SessionId, ThreadId
 from tools.decorator import ToolContext, get_tool_definition
 from tools.discovery import discover_tools_in_file
 from tools.dispatch import _invoke_tool
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
 # --------------------------------------------------------------------
 # Bundle-tool loading
@@ -123,10 +125,10 @@ class _MockAuthz:
 class _MockEngine:
     """Non-yielding engine stub — the smoke suite never runs a turn."""
 
-    async def execute_stream(self, config: Any, ctx: Any):
+    async def execute_stream(self, config: Any, ctx: Any) -> AsyncIterator[Any]:
         _ = config, ctx
         if False:  # pragma: no cover
-            yield
+            yield  # type: ignore[unreachable]  # `if False` idiom: makes this an empty async generator
 
 
 @dataclass
@@ -200,7 +202,7 @@ async def chat_app(tmp_path: Path) -> AsyncIterator[ChatApp]:
         is_resume=False,
     )
     app = ChatApp(
-        session=bundle,  # type: ignore[arg-type]
+        session=bundle,
         engine=bundle.runtime.engine,
         full_history=False,
     )

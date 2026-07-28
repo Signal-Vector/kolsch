@@ -119,10 +119,10 @@ def _make_state(
     runtime = _MockRuntime(_MockCatalog(catalog_refs))
     registry = ChatServiceRegistry(cards=cards, workflows=workflows)
     state = ChatSessionState(
-        runtime=runtime,  # type: ignore[arg-type]
-        config=None,  # type: ignore[arg-type]
-        session_id="ses_x",  # type: ignore[arg-type]
-        thread_id="th_x",  # type: ignore[arg-type]
+        runtime=runtime,
+        config=None,
+        session_id="ses_x",
+        thread_id="th_x",
     )
     state.service_registry = registry
     return state
@@ -223,10 +223,10 @@ async def test_handler_workflow_missing_registry_prints_notice() -> None:
     """No service registry -> friendly one-line notice, no raise."""
     runtime = _MockRuntime(_MockCatalog(["kolsch/workflows/demo"]))
     state = ChatSessionState(
-        runtime=runtime,  # type: ignore[arg-type]
-        config=None,  # type: ignore[arg-type]
-        session_id="ses_x",  # type: ignore[arg-type]
-        thread_id="th_x",  # type: ignore[arg-type]
+        runtime=runtime,
+        config=None,
+        session_id="ses_x",
+        thread_id="th_x",
     )
     # Note: service_registry left as default (None).
     ctx = _make_ctx(state)
@@ -234,7 +234,7 @@ async def test_handler_workflow_missing_registry_prints_notice() -> None:
     result = await _handler_workflow("kolsch/workflows/demo", ctx)
 
     assert result == ControlSignal.CONTINUE
-    output = ctx.stdout.getvalue()  # type: ignore[attr-defined]
+    output = ctx.stdout.getvalue()
     assert "service registry" in output.lower()
 
 

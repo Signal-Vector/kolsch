@@ -53,10 +53,12 @@ def _load_renderers() -> dict[str, type]:
     Lazy so a widget subpackage import can't cycle back through
     this module before the class is defined.
     """
-    from cli.chat.widgets.card_body.confirm import ConfirmRenderer
-    from cli.chat.widgets.card_body.markdown import MarkdownRenderer
-    from cli.chat.widgets.card_body.progress import ProgressRenderer
-    from cli.chat.widgets.card_body.workflow import WorkflowRenderer
+    # Lazy imports (PLC0415) avoid a circular dep against the top-level
+    # cli.chat.widgets package — see this function's docstring.
+    from cli.chat.widgets.card_body.confirm import ConfirmRenderer  # noqa: PLC0415
+    from cli.chat.widgets.card_body.markdown import MarkdownRenderer  # noqa: PLC0415
+    from cli.chat.widgets.card_body.progress import ProgressRenderer  # noqa: PLC0415
+    from cli.chat.widgets.card_body.workflow import WorkflowRenderer  # noqa: PLC0415
 
     return {
         "markdown": MarkdownRenderer,

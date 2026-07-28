@@ -109,10 +109,10 @@ class _NoTranscriptApp:
         raise LookupError("no #transcript")
 
 
-def _multi_renderer_app_factory(*renderers: Widget) -> App:
+def _multi_renderer_app_factory(*renderers: Widget) -> App[None]:
     """Host app that mounts several `WorkflowRenderer`s as flat peers."""
 
-    class _HostApp(App):
+    class _HostApp(App[None]):
         def compose(self) -> ComposeResult:
             yield from renderers
 
@@ -216,8 +216,8 @@ async def test_child_renders_as_peer_with_breadcrumb() -> None:
             ),
         }
         adapter = EventAdapter(
-            _NoTranscriptApp(),  # type: ignore[arg-type]
-            workflows_impl=_StubWorkflowsImpl(registry),  # type: ignore[arg-type]
+            _NoTranscriptApp(),
+            workflows_impl=_StubWorkflowsImpl(registry),
         )
         adapter._refresh_workflow_parent_ref(child, child_run)
         await pilot.pause()
@@ -409,8 +409,8 @@ async def test_grandchild_gets_its_own_peer_card() -> None:
             ),
         }
         adapter = EventAdapter(
-            _NoTranscriptApp(),  # type: ignore[arg-type]
-            workflows_impl=_StubWorkflowsImpl(registry),  # type: ignore[arg-type]
+            _NoTranscriptApp(),
+            workflows_impl=_StubWorkflowsImpl(registry),
         )
         adapter._refresh_workflow_parent_ref(child, child_run)
         adapter._refresh_workflow_parent_ref(grandchild, grandchild_run)

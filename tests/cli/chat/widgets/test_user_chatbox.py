@@ -25,6 +25,7 @@ shape:
 from __future__ import annotations
 
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 import pytest
 from textual.widgets import Static
@@ -32,9 +33,17 @@ from textual.widgets import Static
 from cli.chat.widgets._gutter_block import GutterBlock
 from cli.chat.widgets.user_chatbox import UserChatbox
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
+
 
 @pytest.mark.asyncio
-async def test_user_chatbox_mounts_with_identity_header(mock_app_factory) -> None:
+async def test_user_chatbox_mounts_with_identity_header(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """Identity header renders ``"You · HH:MM"`` from the timestamp."""
     ts = datetime(2026, 7, 4, 14, 30, 45, tzinfo=UTC)
     widget = UserChatbox("hello world", ts)
@@ -48,7 +57,7 @@ async def test_user_chatbox_mounts_with_identity_header(mock_app_factory) -> Non
 
 @pytest.mark.asyncio
 async def test_user_chatbox_renders_literal_text_with_backticks(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Backticks (markdown code) and brackets (Rich markup) survive
     as literal characters — the body ``Static`` is constructed with
@@ -67,7 +76,9 @@ async def test_user_chatbox_renders_literal_text_with_backticks(
 
 
 @pytest.mark.asyncio
-async def test_user_chatbox_composes_gutter_block(mock_app_factory) -> None:
+async def test_user_chatbox_composes_gutter_block(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """The widget composes exactly one :class:`GutterBlock` with
     ``rail_color="$user-border"`` and no leading glyph.
     """
@@ -86,7 +97,7 @@ async def test_user_chatbox_composes_gutter_block(mock_app_factory) -> None:
 
 @pytest.mark.asyncio
 async def test_user_chatbox_header_pads_single_digit_time(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Identity header uses HH:MM with zero-padding — never ``9:5``."""
     ts = datetime(2026, 1, 1, 9, 5, 1, tzinfo=UTC)
@@ -100,7 +111,9 @@ async def test_user_chatbox_header_pads_single_digit_time(
 
 
 @pytest.mark.asyncio
-async def test_user_chatbox_no_round_border(mock_app_factory) -> None:
+async def test_user_chatbox_no_round_border(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """Post-migration the widget must not declare ``border: round``
     anywhere in its DEFAULT_CSS — the visual border is delegated to
     the GutterBlock rail.
@@ -115,7 +128,9 @@ async def test_user_chatbox_no_round_border(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_public_text_and_timestamp_read_back(mock_app_factory) -> None:
+async def test_public_text_and_timestamp_read_back(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """``text`` and ``timestamp`` properties read back the constructor args."""
     ts = datetime(2026, 4, 1, 12, 34, 56, tzinfo=UTC)
     widget = UserChatbox("readback", ts)

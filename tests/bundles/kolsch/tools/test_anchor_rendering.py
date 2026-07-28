@@ -15,12 +15,12 @@ from __future__ import annotations
 import logging
 from collections.abc import AsyncIterator
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 from unittest.mock import MagicMock
 from uuid import uuid4
 
 import pytest
 
-from cli.chat.app import ChatApp
 from cli.chat.services.workflows_impl import (
     WorkflowRunRecord,
     WorkflowsImpl,
@@ -34,6 +34,9 @@ from tests.bundles.kolsch.tools.conftest import (  # noqa: F401 — re-exports f
     chat_app,
 )
 from workflows.ids import WorkflowRunId
+
+if TYPE_CHECKING:
+    from cli.chat.app import ChatApp
 
 
 def test_anchor_pattern_matches_expected_shape() -> None:
@@ -70,7 +73,7 @@ def test_split_anchors_ordering() -> None:
 
 @pytest.mark.asyncio
 async def test_anchor_button_mounts_inline_in_assistant_prose(
-    chat_app: ChatApp,
+    chat_app: ChatApp,  # noqa: F811 — pytest fixture injection, not a redefinition
 ) -> None:
     """A message with anchor markup mounts a WorkflowAnchorButton."""
     async with chat_app.run_test() as pilot:
@@ -89,7 +92,7 @@ async def test_anchor_button_mounts_inline_in_assistant_prose(
 
 @pytest.mark.asyncio
 async def test_anchor_button_activation_scrolls_to_card(
-    chat_app: ChatApp,
+    chat_app: ChatApp,  # noqa: F811 — pytest fixture injection, not a redefinition
 ) -> None:
     """Enter on the anchor button routes to _scroll_to_workflow_card."""
     async with chat_app.run_test() as pilot:
@@ -130,11 +133,13 @@ async def test_anchor_button_activation_scrolls_to_card(
         transcript = pilot.app.query_one("#transcript")
         scrolled: list[object] = []
 
-        def _record(widget: object, animate: bool = True) -> None:
+        def _record(widget: object, animate: bool = True) -> None:  # noqa: FBT001, FBT002 — matches scroll_to_widget signature
             _ = animate
             scrolled.append(widget)
 
-        transcript.scroll_to_widget = _record  # type: ignore[method-assign]
+        # method-assign: intentional monkey-patch of the Textual method;
+        # assignment: the recorder stub uses a simplified signature.
+        transcript.scroll_to_widget = _record  # type: ignore[method-assign, assignment]
 
         button = prose.query(WorkflowAnchorButton).first()
         button.focus()
@@ -147,7 +152,7 @@ async def test_anchor_button_activation_scrolls_to_card(
 
 @pytest.mark.asyncio
 async def test_anchor_button_unknown_run_id_logs_and_is_noop(
-    chat_app: ChatApp,
+    chat_app: ChatApp,  # noqa: F811 — pytest fixture injection, not a redefinition
     caplog: pytest.LogCaptureFixture,
 ) -> None:
     """Unknown run_id: button renders, activation logs warning, no scroll."""
@@ -167,9 +172,14 @@ async def test_anchor_button_unknown_run_id_logs_and_is_noop(
 
         transcript = pilot.app.query_one("#transcript")
         scrolled: list[object] = []
-        transcript.scroll_to_widget = (  # type: ignore[method-assign]
-            lambda widget, animate=True: scrolled.append(widget)
-        )
+
+        def _record(widget: object, animate: bool = True) -> None:  # noqa: FBT001, FBT002 — matches scroll_to_widget signature
+            _ = animate
+            scrolled.append(widget)
+
+        # method-assign: intentional monkey-patch of the Textual method;
+        # assignment: the recorder stub uses a simplified signature.
+        transcript.scroll_to_widget = _record  # type: ignore[method-assign, assignment]
 
         with caplog.at_level(logging.WARNING, logger="cli.chat.event_adapter"):
             buttons.first().focus()

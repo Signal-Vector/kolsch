@@ -19,15 +19,18 @@ rate-limit path fires without waiting for it to reach the store.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
 from cli.chat.services.cards_impl import CardsImpl
-from schemas.events import Event
 from store import SessionStore, SqliteBackend
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
+
+    from schemas.events import Event
 
 
 @pytest.fixture
@@ -64,7 +67,7 @@ async def _mk_impl_paused(
         _ = event
         await park.wait()
 
-    impl._publish_to_bus = _park  # type: ignore[assignment]
+    impl._publish_to_bus = _park  # type: ignore[method-assign]
 
     notice_log: list[dict[str, Any]] = []
     original_notice = impl.notice
@@ -87,7 +90,7 @@ async def _mk_impl_paused(
         # blocks on the full queue).
         _ = original_notice
 
-    impl.notice = _spy_notice  # type: ignore[assignment]
+    impl.notice = _spy_notice  # type: ignore[method-assign]
     return impl, notice_log
 
 

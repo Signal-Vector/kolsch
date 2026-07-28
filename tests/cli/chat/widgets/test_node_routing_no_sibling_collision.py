@@ -296,8 +296,8 @@ async def test_route_finds_correct_row_by_invocation_id() -> None:
         _ = args, kwargs
         hits["beta"] += 1
 
-    row_alpha.mount_assistant_message = _spy_alpha  # type: ignore[method-assign]
-    row_beta.mount_assistant_message = _spy_beta  # type: ignore[method-assign]
+    row_alpha.mount_assistant_message = _spy_alpha
+    row_beta.mount_assistant_message = _spy_beta
 
     event = _mk_agent_event(trace_id="tr_1", invocation_id="inv_A")
     await adapter.handle(event)

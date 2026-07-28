@@ -1,6 +1,6 @@
 """feat-041 — authz introspection: inline hint + /why + /reload tests.
 
-Fifteen tests spanning ACs #1–#8. Each test targets one of the
+Fifteen tests spanning ACs #1-#8. Each test targets one of the
 spec's acceptance criteria; the module-level docstring at the top of
 each test names the AC it covers.
 """

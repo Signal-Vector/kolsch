@@ -267,9 +267,7 @@ def _render_retired_at_source(retired: list[str], *, out: TextIO) -> None:
     out.write("\n")
 
 
-def _render_parse_failures(
-    migration: ToolsMigrationResult, *, out: TextIO
-) -> None:
+def _render_parse_failures(migration: ToolsMigrationResult, *, out: TextIO) -> None:
     """Print kolsch-owned YAMLs the migrator couldn't parse.
 
     Rendered only when the section has entries — doctor's whole reason
@@ -298,9 +296,7 @@ def _render_kolsch_owned_rewrites(
             # pointer when it's set so the operator sees the intended
             # migration target, not just "gone".
             hint = (
-                f" (consider: `{rewrite.replacement}`)"
-                if rewrite.replacement
-                else ""
+                f" (consider: `{rewrite.replacement}`)" if rewrite.replacement else ""
             )
             out.write(f"  - {rewrite.path}: remove `{rewrite.old_ref}`{hint}\n")
         else:

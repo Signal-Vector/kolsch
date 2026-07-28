@@ -14,15 +14,25 @@ row directly. These regressions cover:
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 import pytest
 from textual.widgets import Collapsible
 
 from cli.chat.widgets.assistant_prose import AssistantProse
 from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
+
 
 @pytest.mark.asyncio
-async def test_three_sub_agent_events_increment_count(mock_app_factory) -> None:
+async def test_three_sub_agent_events_increment_count(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     row = WorkflowNodeRow(node_name="n")
     app = mock_app_factory(row)
     async with app.run_test() as pilot:
@@ -36,7 +46,7 @@ async def test_three_sub_agent_events_increment_count(mock_app_factory) -> None:
 
 @pytest.mark.asyncio
 async def test_collapsed_row_does_not_mount_sub_agent(
-    mock_app_factory,
+    mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
     """Collapsed row: closures queued in ``_pending_mounts``; counter still bumps."""
     row = WorkflowNodeRow(node_name="n")
@@ -58,7 +68,9 @@ async def test_collapsed_row_does_not_mount_sub_agent(
 
 
 @pytest.mark.asyncio
-async def test_expanded_row_mounts_sub_agent(mock_app_factory) -> None:
+async def test_expanded_row_mounts_sub_agent(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     row = WorkflowNodeRow(node_name="n")
     app = mock_app_factory(row)
     async with app.run_test() as pilot:

@@ -20,7 +20,7 @@ against a top-level renderer read and both would be wrong.
 from __future__ import annotations
 
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -31,6 +31,12 @@ from cli.chat.widgets.workflow_node_row import (
     WorkflowNodeRow,
 )
 from workflows.events import WorkflowEventKind
+
+if TYPE_CHECKING:
+    from collections.abc import Callable
+
+    from textual.app import App
+    from textual.widget import Widget
 
 
 class _MockEvent:
@@ -90,7 +96,9 @@ def _mk_payload(
 
 
 @pytest.mark.asyncio
-async def test_run_started_premounts_pending_placeholders(mock_app_factory) -> None:
+async def test_run_started_premounts_pending_placeholders(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """T3: two nested manifest entries → two ``pending`` placeholder rows."""
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
@@ -132,7 +140,9 @@ async def test_run_started_premounts_pending_placeholders(mock_app_factory) -> N
 
 
 @pytest.mark.asyncio
-async def test_node_started_adopts_placeholder_in_place(mock_app_factory) -> None:
+async def test_node_started_adopts_placeholder_in_place(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """T4: NODE_STARTED(a) transitions the placeholder, mounts no new row."""
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
@@ -188,7 +198,9 @@ async def test_node_started_adopts_placeholder_in_place(mock_app_factory) -> Non
 
 
 @pytest.mark.asyncio
-async def test_node_completed_after_adopt(mock_app_factory) -> None:
+async def test_node_completed_after_adopt(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """T5: NODE_COMPLETED(a) → success; header 1/2."""
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
@@ -238,7 +250,9 @@ async def test_node_completed_after_adopt(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_node_pruned_transitions_pending_to_skipped(mock_app_factory) -> None:
+async def test_node_pruned_transitions_pending_to_skipped(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """T6: NODE_PRUNED(a) on a never-started placeholder → skipped."""
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
@@ -291,7 +305,9 @@ async def test_node_pruned_transitions_pending_to_skipped(mock_app_factory) -> N
 
 
 @pytest.mark.asyncio
-async def test_old_shape_run_started_without_nodes(mock_app_factory) -> None:
+async def test_old_shape_run_started_without_nodes(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """T7: no manifest → no placeholders; NODE_STARTED fresh-mounts."""
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
@@ -383,7 +399,9 @@ async def test_adopted_placeholder_registers_with_adapter() -> None:
 
 
 @pytest.mark.asyncio
-async def test_placeholder_for_nested_workflow_node(mock_app_factory) -> None:
+async def test_placeholder_for_nested_workflow_node(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """T9: a `kolsch/nodes/workflow` node is ONE placeholder that adopts."""
     renderer = WorkflowRenderer()
     app = mock_app_factory(renderer)
@@ -435,7 +453,9 @@ async def test_placeholder_for_nested_workflow_node(mock_app_factory) -> None:
 
 
 @pytest.mark.asyncio
-async def test_pending_is_non_terminal_skipped_is_terminal(mock_app_factory) -> None:
+async def test_pending_is_non_terminal_skipped_is_terminal(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
     """T10: pending does not freeze the buffer; skipped does."""
     pending_row = WorkflowNodeRow(node_name="p", initial_state="pending")
     app = mock_app_factory(pending_row)

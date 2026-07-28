@@ -24,10 +24,8 @@ handshake is exercised without the Textual runtime.
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
 from datetime import UTC, datetime
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -44,6 +42,10 @@ from schemas.wire_kinds import (
     WIRE_PROMPT_REQUESTED,
 )
 from store import SessionStore, SqliteBackend
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 
 class _MockApp:
@@ -89,9 +91,9 @@ async def test_end_to_end_approval_via_event_bus(
         session_id=session.session_id,
         thread_id=thread_id,
     )
-    adapter = EventAdapter(app)  # type: ignore[arg-type]
+    adapter = EventAdapter(app)
     adapter.register_prompts_impl(impl)
-    cb = InlineApprovalCallback(app, impl)  # type: ignore[arg-type]
+    cb = InlineApprovalCallback(app, impl)
 
     # Fire the callback in a task; poll for the emitted request; dispatch
     # both events through the adapter as if the live bus had done so.
@@ -194,7 +196,7 @@ async def _poll_for_ui_event(
     store: SessionStore,
     thread_id: Any,
     kind: str,
-    timeout: float = 1.0,
+    timeout: float = 1.0,  # noqa: ASYNC109 — test polling deadline, not a cancel scope
 ) -> Event:
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:

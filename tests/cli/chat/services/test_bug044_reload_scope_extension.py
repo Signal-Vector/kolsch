@@ -45,7 +45,7 @@ class _MockStore:
     async def read_path_to_leaf(self, thread_id: object) -> Any:
         _ = thread_id
         if False:
-            yield  # keep as async-generator
+            yield  # type: ignore[unreachable]  # keep as async-generator (never-run yield fixes the return type)
 
 
 @dataclass
@@ -66,7 +66,7 @@ class _MockRuntime:
 
     def __post_init__(self) -> None:
         if self.store is None:
-            self.store = _MockStore()
+            self.store = _MockStore()  # type: ignore[unreachable]  # runtime default is None despite the _MockStore-typed field
 
 
 def _write_platform_yaml_raw(root: Path, yaml_text: str) -> None:
@@ -715,7 +715,7 @@ async def test_reload_handles_missing_bundle_yaml_consistently(
         catalog_module.scan = lambda _root: stale_catalog  # type: ignore[assignment]
         result = await handle_reload(runtime)
     finally:
-        catalog_module.scan = original_scan  # type: ignore[assignment]
+        catalog_module.scan = original_scan
 
     # Bundle layer surfaces a typed error when the YAML disappears
     # mid-reload — mirroring the agent layer's OSError abort.
@@ -763,7 +763,7 @@ async def test_reload_handles_missing_agent_yaml_consistently(
         catalog_module.scan = lambda _root: stale_catalog  # type: ignore[assignment]
         result = await handle_reload(runtime)
     finally:
-        catalog_module.scan = original_scan  # type: ignore[assignment]
+        catalog_module.scan = original_scan
 
     # Same observable behavior as the bundle case: typed error,
     # "Old rules still active" clause, offending file cited.

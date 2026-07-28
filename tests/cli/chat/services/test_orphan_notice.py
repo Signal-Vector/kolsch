@@ -11,10 +11,8 @@ Three passes:
 
 from __future__ import annotations
 
-from collections.abc import AsyncIterator
 from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -22,6 +20,10 @@ from cli.chat.services.workflows_impl import WorkflowsImpl
 from store import SessionStore, SqliteBackend
 from workflows.run import WorkflowRunStatus
 from workflows.run_store import WorkflowRunStore
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
 
 
 @dataclass

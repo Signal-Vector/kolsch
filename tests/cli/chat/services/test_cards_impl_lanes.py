@@ -21,14 +21,18 @@ deadlock against a saturated queue).
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from pathlib import Path
+from typing import TYPE_CHECKING
 
 import pytest
 
 from cli.chat.services.cards_impl import CardsImpl
-from schemas.events import Event
 from store import SessionStore, SqliteBackend
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
+
+    from schemas.events import Event
 
 
 @pytest.fixture
@@ -63,7 +67,7 @@ async def _mk_impl_paused(store: SessionStore) -> CardsImpl:
         _ = event
         await park.wait()
 
-    impl._publish_to_bus = _park  # type: ignore[assignment]
+    impl._publish_to_bus = _park  # type: ignore[method-assign]
     return impl
 
 

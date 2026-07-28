@@ -33,7 +33,7 @@ from schemas.identifiers import EventId, SessionId, ThreadId
 from schemas.wire_kinds import WIRE_CARD_NOTICE, WIRE_CARD_OPENED
 
 
-class _HostApp(App):
+class _HostApp(App[None]):
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="transcript")
 
@@ -54,7 +54,7 @@ def _mk_ui_event(kind: str, payload: dict[str, Any]) -> Event:
 async def test_notice_without_card_id_mounts_at_transcript_root() -> None:
     app = _HostApp()
     async with app.run_test() as pilot:
-        adapter = EventAdapter(app)  # type: ignore[arg-type]
+        adapter = EventAdapter(app)
         await adapter.handle(
             _mk_ui_event(
                 WIRE_CARD_NOTICE,
@@ -79,7 +79,7 @@ async def test_notice_without_card_id_mounts_at_transcript_root() -> None:
 async def test_notice_with_card_id_mounts_inside_card() -> None:
     app = _HostApp()
     async with app.run_test() as pilot:
-        adapter = EventAdapter(app)  # type: ignore[arg-type]
+        adapter = EventAdapter(app)
         card_id = f"crd_{uuid4()}"
         # First mount the card.
         await adapter.handle(
@@ -124,7 +124,7 @@ async def test_notice_with_card_id_mounts_inside_card() -> None:
 async def test_notice_for_unknown_card_id_dropped_silently() -> None:
     app = _HostApp()
     async with app.run_test() as pilot:
-        adapter = EventAdapter(app)  # type: ignore[arg-type]
+        adapter = EventAdapter(app)
         # No card mounted yet — send a notice for one anyway.
         await adapter.handle(
             _mk_ui_event(
@@ -149,7 +149,7 @@ async def test_notice_for_unknown_card_id_dropped_silently() -> None:
 async def test_repeat_notice_id_updates_existing_widget_in_place() -> None:
     app = _HostApp()
     async with app.run_test() as pilot:
-        adapter = EventAdapter(app)  # type: ignore[arg-type]
+        adapter = EventAdapter(app)
         card_id = f"crd_{uuid4()}"
         notice_id = f"ntc_{uuid4()}"
         await adapter.handle(

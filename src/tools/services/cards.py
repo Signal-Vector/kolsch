@@ -38,14 +38,17 @@ if TYPE_CHECKING:
     from schemas.identifiers import CardId
 
 
-CardStatus = Literal["running", "success", "error", "cancelled"]
+CardStatus = Literal["queued", "running", "cancelling", "success", "error", "cancelled"]
 """Every visible state a card can be in.
 
 `running` is the default the widget layer paints while a tool is
 still working; the three terminal states are what `close(final_status=...)`
-accepts. `set_status` may drive through any of the four (the widget
-layer picks the glyph via
-[`CARD_KIND_REGISTRY`][tools.services.card_kinds.CARD_KIND_REGISTRY]).
+accepts. `queued` and `cancelling` are intermediate states — the
+widget layer paints a glyph for each (see
+[`CARD_KIND_REGISTRY`][tools.services.card_kinds.CARD_KIND_REGISTRY]'s
+`header_glyph_by_status`); `cancelling` is the services-only state
+`WorkflowsImpl.cancel()` drives cards through. `set_status` may drive
+through any of the six.
 """
 
 CardFinalStatus = Literal["success", "error", "cancelled"]
@@ -267,8 +270,10 @@ class Cards(Protocol):
         title: str,
         kind: CardKindLiteral = "markdown",
     ) -> Card:
-        """Open a streaming card. Returns the
-        [`Card`][tools.services.cards.Card] handle the tool mutates.
+        """Open a streaming card.
+
+        Returns the [`Card`][tools.services.cards.Card] handle the tool
+        mutates.
         """
         ...
 
@@ -311,7 +316,10 @@ class AbstractCards(ABC):
         raise NotImplementedError
 
     async def aclose(self) -> None:
-        """Called from ChatApp.on_unmount. Cancels drain tasks, snapshot timers, cancel tokens. Idempotent. Post-aclose, subsequent mutation raises RuntimeError.
+        """Called from ChatApp.on_unmount to tear the service down.
+
+        Cancels drain tasks, snapshot timers, cancel tokens. Idempotent.
+        Post-aclose, subsequent mutation raises RuntimeError.
 
         The ABC default is a no-op — test mocks and the placeholder
         `ChatServiceRegistry` fields (all `None` today) don't need real

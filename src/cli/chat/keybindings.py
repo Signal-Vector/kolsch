@@ -34,9 +34,13 @@ competing with app-level bindings.
 
 from __future__ import annotations
 
-from textual.binding import Binding
+from textual.binding import Binding, BindingType
 
-CHAT_BINDINGS = [
+# Typed as the base ``DOMNode.BINDINGS`` element type (``BindingType``)
+# so the ``list`` is assignable to the invariant
+# ``ClassVar[list[BindingType]]`` slot on ``ChatApp`` without a variance
+# error (a bare ``list[Binding]`` is NOT — see mypy invariance note).
+CHAT_BINDINGS: list[BindingType] = [
     Binding("escape", "cancel_exchange", "Cancel turn", show=False),
     Binding("ctrl+g", "cancel_exchange", "Cancel turn", show=False),
     Binding("ctrl+d", "quit_if_idle", "Quit", show=False),

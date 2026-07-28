@@ -35,10 +35,15 @@ Esc-Esc toast fires.
 
 from __future__ import annotations
 
-from textual.app import ComposeResult
+import contextlib
+from typing import TYPE_CHECKING
+
 from textual.containers import Horizontal
 from textual.reactive import reactive
 from textual.widgets import Static
+
+if TYPE_CHECKING:
+    from textual.app import ComposeResult
 
 
 class StatusBar(Horizontal):
@@ -95,7 +100,7 @@ class StatusBar(Horizontal):
     :attr:`workflow_strip_text` when non-empty (see class docstring).
     """
 
-    turn_active: reactive[bool] = reactive(False)
+    turn_active: reactive[bool] = reactive(False)  # noqa: FBT003 — Textual reactive API
     """When True, the workflow strip is suppressed so ``TurnStatus``
     owns the transient bottom row (Coordinator Q1 lock).
 
@@ -106,6 +111,7 @@ class StatusBar(Horizontal):
     _TEXT_ID = "status-bar-text"
 
     def compose(self) -> ComposeResult:
+        """Yield the single status-strip text static."""
         yield Static("", id=self._TEXT_ID, classes="status-bar-text", markup=False)
 
     # ------------------------------------------------------------------
@@ -134,7 +140,7 @@ class StatusBar(Horizontal):
         """
         self.toast_text = text or ""
 
-    def set_turn_active(self, active: bool) -> None:
+    def set_turn_active(self, active: bool) -> None:  # noqa: FBT001 — positional bool kept for established call sites
         """Toggle the turn-precedence flag.
 
         Called by ``ChatApp.set_turn_verb`` — non-empty verb marks the
@@ -147,12 +153,15 @@ class StatusBar(Horizontal):
     # ------------------------------------------------------------------
 
     def watch_workflow_strip_text(self, _old: str, _new: str) -> None:
+        """Repaint the strip when the workflow-strip text changes."""
         self._refresh_visible_text()
 
     def watch_toast_text(self, _old: str, _new: str) -> None:
+        """Repaint the strip when the toast text changes."""
         self._refresh_visible_text()
 
-    def watch_turn_active(self, _old: bool, _new: bool) -> None:
+    def watch_turn_active(self, _old: bool, _new: bool) -> None:  # noqa: FBT001 — Textual reactive-watcher signature
+        """Repaint the strip when the turn-active flag changes."""
         self._refresh_visible_text()
 
     # ------------------------------------------------------------------
@@ -193,12 +202,10 @@ class StatusBar(Horizontal):
         else:
             self.remove_class("-visible")
         if self.is_mounted:
-            try:
+            # Textual raises during teardown; a stopped write is the
+            # desired end-state.
+            with contextlib.suppress(Exception):
                 self.query_one(f"#{self._TEXT_ID}", Static).update(text)
-            except Exception:
-                # Textual raises during teardown; a stopped write is
-                # the desired end-state.
-                pass
 
     def on_mount(self) -> None:
         """Render whatever reactive state was set before mount.

@@ -205,9 +205,9 @@ def _stringify_message(msg: object) -> str:
             # Pydantic model — walk ``model_dump`` if present.
             dump = getattr(obj, "model_dump", None)
             if callable(dump):
-                try:
+                try:  # noqa: SIM105 — comment documents the deliberate swallow
                     _walk(dump())
-                except Exception:  # noqa: BLE001 — best-effort
+                except Exception:  # noqa: BLE001, S110 — best-effort
                     pass
             else:
                 content = getattr(obj, "content", None)

@@ -15,8 +15,7 @@ Three passes:
 from __future__ import annotations
 
 import asyncio
-from collections.abc import AsyncIterator
-from pathlib import Path
+from typing import TYPE_CHECKING, Any
 
 import pytest
 
@@ -24,7 +23,12 @@ from cli.chat.services.prompts_impl import PromptsImpl
 from schemas.events import EventType
 from schemas.wire_kinds import WIRE_PROMPT_REQUESTED
 from store import SessionStore, SqliteBackend
-from tools.services.prompts import PromptSource
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator
+    from pathlib import Path
+
+    from tools.services.prompts import PromptSource
 
 
 @pytest.fixture
@@ -52,8 +56,8 @@ async def _mk_impl(store: SessionStore) -> PromptsImpl:
 async def _wait_for_requested(
     store: SessionStore,
     thread_id: str,
-    timeout: float = 1.0,
-) -> dict:
+    timeout: float = 1.0,  # noqa: ASYNC109 — test polling deadline, not a cancel scope
+) -> dict[str, Any]:
     """Poll the store for a `WIRE_PROMPT_REQUESTED` payload."""
     deadline = asyncio.get_running_loop().time() + timeout
     while asyncio.get_running_loop().time() < deadline:

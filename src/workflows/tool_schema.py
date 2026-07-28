@@ -331,10 +331,7 @@ def _describe_optional(
     probe: tuple[type, Any] | None,
 ) -> str:
     """Human-readable description for an optional per-workflow field."""
-    if probe is None:
-        default_repr = "(no probeable default)"
-    else:
-        default_repr = repr(probe[1])
+    default_repr = "(no probeable default)" if probe is None else repr(probe[1])
     if line is None:
         return (
             f"Optional value for {{{{ inputs.{name} | default(...) }}}}. "
@@ -439,7 +436,7 @@ def build_virtual_tool_definitions(
             continue
         try:
             yaml_source = resolver(ref)
-        except Exception:  # noqa: BLE001 — best-effort probe
+        except Exception:  # noqa: BLE001, S112 — best-effort probe; skip broken ref
             continue
         if not isinstance(yaml_source, str):
             continue
@@ -461,7 +458,7 @@ def build_virtual_tool_definitions(
                 yaml_source,
                 effective_required=promoted,
             )
-        except Exception:  # noqa: BLE001 — best-effort probe
+        except Exception:  # noqa: BLE001, S112 — best-effort probe
             # Skipping is safer than raising during tool-list
             # assembly: a broken virtual would take down every tool
             # registration for this agent.
@@ -617,8 +614,8 @@ def _make_virtual_invoker(
         from tools.services import require_services  # noqa: PLC0415
 
         services = require_services(ctx, ["cards", "workflows"])
-        assert services.cards is not None  # narrowed by require_services
-        assert services.workflows is not None  # narrowed by require_services
+        assert services.cards is not None  # noqa: S101 — type-narrowing after require_services
+        assert services.workflows is not None  # noqa: S101 — type-narrowing after require_services
 
         # ``model_dump()`` gives us the plain dict shape ``workflows.
         # start`` expects. Extra Pydantic serialisation flags are not

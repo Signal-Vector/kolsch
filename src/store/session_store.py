@@ -17,7 +17,6 @@ from __future__ import annotations
 import asyncio
 import json
 from datetime import UTC, datetime
-from pathlib import Path
 from typing import TYPE_CHECKING, Literal
 from uuid import uuid4
 
@@ -52,6 +51,7 @@ from store.jsonl import (
 
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
+    from pathlib import Path
 
     from store.backend import EntityBackend
 
@@ -754,7 +754,7 @@ class SessionStore:
         )
 
 
-def _read_meta_sync(path: Path) -> SessionMeta:
+def _read_meta_sync(path: Path) -> SessionMeta:  # noqa: PLR0911 — flat guard-clause returns
     """Read `path` as a `SessionMeta`, returning defaults on any error.
 
     Called from `SessionStore.read_meta` under `asyncio.to_thread`.
@@ -783,7 +783,7 @@ def _read_meta_sync(path: Path) -> SessionMeta:
 
 
 def _write_meta_sync(path: Path, meta: SessionMeta) -> None:
-    """Atomically write `meta` to `path` via a temp file + `os.replace`.
+    """Atomically write `meta` to `path` via a temp file + `Path.replace`.
 
     Best-effort — silently swallows OSError so the caller (typically
     `EventAdapter._persist_bookmark`) doesn't have to guard against
@@ -791,13 +791,11 @@ def _write_meta_sync(path: Path, meta: SessionMeta) -> None:
     authoritative for the events themselves; the meta.json is an
     optimisation.
     """
-    import os as _os  # noqa: PLC0415 — local to avoid extra module-scope import
-
     try:
         path.parent.mkdir(parents=True, exist_ok=True)
         tmp = path.with_suffix(path.suffix + ".tmp")
         tmp.write_text(meta.model_dump_json(), encoding="utf-8")
-        _os.replace(tmp, path)
+        tmp.replace(path)
     except OSError:
         # Best-effort — bookmark drift is tolerated. See spec-003
         # coordinator decision #1: JSONL tail is authoritative.

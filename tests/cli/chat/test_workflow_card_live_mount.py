@@ -21,9 +21,8 @@ scaffolding, the fix is not complete (D-010 gate).
 from __future__ import annotations
 
 import asyncio
-from collections.abc import Awaitable, Callable
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -47,6 +46,9 @@ from workflows.events import (
     WorkflowRunStartedEvent,
 )
 from workflows.ids import InvocationId, TraceId, WorkflowRunId
+
+if TYPE_CHECKING:
+    from collections.abc import AsyncIterator, Awaitable, Callable
 
 _BUNDLE_TOOLS_DIR = Path(__file__).resolve().parents[3] / "bundles" / "kolsch" / "tools"
 
@@ -89,10 +91,9 @@ class _MockAuthz:
 
 
 class _MockEngine:
-    async def execute_stream(self, config: Any, ctx: Any) -> Any:
-        _ = config, ctx
-        if False:  # pragma: no cover
-            yield
+    async def execute_stream(self, _config: Any, _ctx: Any) -> AsyncIterator[Any]:
+        return
+        yield  # pragma: no cover
 
 
 class _MockConfig:
@@ -157,7 +158,7 @@ async def chat_app(tmp_path: Path) -> Any:
         is_resume=False,
     )
     app = ChatApp(
-        session=bundle,  # type: ignore[arg-type]
+        session=bundle,
         engine=bundle.runtime.engine,
         full_history=False,
     )

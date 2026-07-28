@@ -1,5 +1,4 @@
-"""Ask the user to confirm a dangerous action — the recommended
-Prompts pattern.
+"""Ask the user to confirm a dangerous action (recommended Prompts pattern).
 
 Demonstrates:
 - `@tool(requires=["prompts"])` — opts the tool into the Prompts
@@ -21,6 +20,7 @@ See ``docs/tutorials/write-a-card-tool.md`` for the walkthrough.
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
 from uuid import uuid4
 
 from pydantic import BaseModel
@@ -28,7 +28,9 @@ from pydantic import BaseModel
 from tools.decorator import ToolContext, tool
 from tools.services import require_services
 from tools.services.exceptions import PromptBusy
-from tools.services.prompts import PromptSource
+
+if TYPE_CHECKING:
+    from tools.services.prompts import PromptSource
 
 
 class ConfirmArgs(BaseModel):
@@ -67,7 +69,7 @@ async def confirm_dangerous_action(
 ) -> dict[str, object]:
     """Ask a yes/no choice; retry once on ``PromptBusy``."""
     services = require_services(ctx, ["prompts"])
-    assert services.prompts is not None  # narrowed by require_services
+    assert services.prompts is not None  # noqa: S101 — type-narrowing after require_services
     source = _make_source(ctx)
     question = f"Confirm: {args.action_description}?"
     options = ["yes", "no"]

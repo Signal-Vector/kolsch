@@ -35,6 +35,7 @@ from __future__ import annotations
 import asyncio
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
+from uuid import uuid4
 
 from schemas.entities import Actor
 from schemas.events import Event, EventType
@@ -83,6 +84,7 @@ class PromptResponse(str):
         *,
         rule: dict[str, Any] | None = None,
     ) -> PromptResponse:
+        """Construct the `str` subclass, attaching the optional `rule`."""
         obj = super().__new__(cls, key)
         obj.rule = rule
         return obj
@@ -108,8 +110,6 @@ if TYPE_CHECKING:
 
 def _new_event_id() -> EventId:
     """Build a fresh `EventId` for a synthesised UI event."""
-    from uuid import uuid4
-
     return EventId(f"ev_{uuid4()}")
 
 
@@ -307,7 +307,7 @@ class PromptsImpl(AbstractPrompts):
         self,
         *,
         source: PromptSource | None = None,
-        timeout: float = 30.0,
+        timeout: float = 30.0,  # noqa: ASYNC109 — Prompts Protocol contract
     ) -> None:
         """Block until the current in-flight prompt resolves.
 

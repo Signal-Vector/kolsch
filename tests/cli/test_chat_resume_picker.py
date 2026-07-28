@@ -21,7 +21,6 @@ from __future__ import annotations
 
 import argparse
 import importlib
-from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 import pytest
@@ -37,6 +36,7 @@ cli_main = importlib.import_module("cli.main")
 
 if TYPE_CHECKING:
     from collections.abc import Callable
+    from pathlib import Path
 
     from schemas.entities import Session
 
