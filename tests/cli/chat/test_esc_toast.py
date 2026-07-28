@@ -22,7 +22,6 @@ exercised without booting a real workflow executor.
 
 from __future__ import annotations
 
-import asyncio
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from typing import TYPE_CHECKING, Any
@@ -284,14 +283,16 @@ async def test_second_esc_within_window_cancels_workflow(
 @pytest.mark.asyncio
 async def test_toast_auto_dismisses_after_window(
     bundle: _MockBundle,
-    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
-    """After 3s the toast auto-dismisses via the timer callback."""
-    # Shorten the window for the test.
-    from cli.chat import app as app_module
+    """Esc schedules the auto-dismiss timer whose callback clears the toast.
 
-    monkeypatch.setattr(app_module, "_ESC_TOAST_SECONDS", 0.05)
-
+    Production dismisses on a wall clock
+    (``loop.call_later(_ESC_TOAST_SECONDS, self._dismiss_esc_toast)``).
+    Driving that callback directly keeps this deterministic instead of
+    racing ``pilot.pause()`` against a shortened window — a 50ms window
+    lost that race under the slower CI runner (the pause exceeded 50ms,
+    so the timer fired before the "active" assertion).
+    """
     workflows = _StubWorkflowsImpl()
     workflows.add_record(suffix="c1", phase="running", started_offset=5)
     app = await _make_app(bundle, workflows)
@@ -304,13 +305,16 @@ async def test_toast_auto_dismisses_after_window(
 
         app.active_cancel = _MockToken()
 
-        # First Esc — toast fires.
+        # First Esc — toast fires and schedules the auto-dismiss timer.
         await _press_escape(app)
         await pilot.pause()
         assert app._esc_toast_active
+        assert app._esc_toast_timer is not None
 
-        # Wait past the shortened window.
-        await asyncio.sleep(0.10)
+        # Fire the scheduled auto-dismiss callback directly (what
+        # ``loop.call_later`` invokes after ``_ESC_TOAST_SECONDS``) —
+        # deterministic, no wall-clock race against ``pilot.pause``.
+        app._dismiss_esc_toast()
         await pilot.pause()
 
         assert not app._esc_toast_active
