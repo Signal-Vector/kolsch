@@ -21,6 +21,7 @@ from ``tests/cli/chat/test_chat_eager_resume.py``.
 
 from __future__ import annotations
 
+import sys
 import time
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
@@ -40,6 +41,28 @@ from store import SessionStore, SqliteBackend
 if TYPE_CHECKING:
     from collections.abc import AsyncGenerator, AsyncIterator
     from pathlib import Path
+
+
+def _coverage_tracing_active() -> bool:
+    """True when line-coverage instrumentation is installed on this process.
+
+    `--cov` roughly triples wall-clock (pyproject notes this on the
+    `[tool.pytest.ini_options]` block), which invalidates a hard
+    wall-clock perf budget. Detect both tracer flavours: the classic
+    ``sys.settrace`` C tracer (Python < 3.12 and coverage's `ctrace`
+    core) and the PEP 669 ``sys.monitoring`` core that coverage 7.x
+    uses by default on 3.12+.
+    """
+    if sys.gettrace() is not None:
+        return True
+    monitoring = getattr(sys, "monitoring", None)
+    if monitoring is None:  # Python < 3.12
+        return False
+    try:
+        return monitoring.get_tool(monitoring.COVERAGE_ID) is not None
+    except (ValueError, AttributeError):  # pragma: no cover - defensive
+        return False
+
 
 # ---------------------------------------------------------------------------
 # Runtime + engine mocks (mirror bug-056's shape).
@@ -275,6 +298,16 @@ async def test_replay_history_completes_under_five_seconds_on_large_session(
         # `_replay_history` + deferred `_scroll_tail` settle.
         await pilot.pause()
         elapsed = time.perf_counter() - start
+        # The replay path above has already executed (and been traced
+        # for coverage) regardless of the timing check. Under `--cov`
+        # the ~3x instrumentation slowdown makes a 5s wall-clock budget
+        # meaningless, so enforce it only on an untraced run.
+        if _coverage_tracing_active():
+            pytest.skip(
+                "wall-clock replay budget is invalid under coverage "
+                "instrumentation (~3x slowdown); replay path still "
+                "exercised above for coverage"
+            )
         assert elapsed < 5.0, (
             f"replay took {elapsed:.2f}s; expected < 5.0s "
             f"(target < 2.0s per three-engineer prediction)"

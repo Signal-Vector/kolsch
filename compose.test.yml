@@ -39,10 +39,18 @@ services:
     #      property values under `src/cli/chat/widgets/`. Widget-local
     #      `$var: #hex;` fallbacks (isolation-invariant per qol-082) are
     #      exempted by the regex's left-side guard.
-    #   5. unit + component + integration tests (golden inclusive)
+    #   5. the full non-e2e test suite (all tiers)
+    #
+    # The pytest target is the whole `tests/` tree so `--cov` (source =
+    # ["src"]) measures the real, gate-enforced coverage floor
+    # (fail_under = 85). Listing only a subset of tiers here silently
+    # dropped `tests/cli`, `tests/workflows`, `tests/tools`, etc. from
+    # the count and pinned coverage at ~64% — well under the floor.
     #
     # E2E tests are NOT in the gate; they cost tokens and run on a
-    # separate schedule.
+    # separate schedule. They are excluded by the `-m "not e2e"` marker
+    # in `[tool.pytest.ini_options].addopts`, so passing the whole tree
+    # here still deselects them (4 tests) rather than running them.
     command:
       - sh
       - -ec
@@ -55,7 +63,4 @@ services:
             --cov \
             --cov-report=xml \
             --cov-report=term \
-            tests/unit \
-            tests/component \
-            tests/integration \
-            tests/golden
+            tests

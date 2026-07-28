@@ -69,6 +69,17 @@ COPY tests ./tests
 COPY AGENTS.md ./AGENTS.md
 COPY docs ./docs
 
+# bundles/ is the tracked `kolsch` agent bundle (bundle.yaml +
+# tools/*.py + *.yaml). It is NOT under src/ and is NOT installed as
+# package data — the test suite loads it straight from the committed
+# tree via repo-root-relative paths (e.g.
+# `Path(__file__).resolve().parents[4] / "bundles"` in
+# tests/bundles/**, plus bundle-referencing tests under
+# tests/component, tests/integration, tests/unit). Without this COPY
+# those tests fail in the gate with `ToolSetupFailed: tool file does
+# not exist: /workspace/bundles/...`.
+COPY bundles ./bundles
+
 # Install the project package itself (editable in-tree).
 RUN --mount=type=cache,target=/root/.cache/uv \
     uv sync --frozen --all-groups

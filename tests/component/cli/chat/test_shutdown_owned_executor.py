@@ -475,22 +475,32 @@ def test_wedged_worker_does_not_hang_interpreter_exit() -> None:
         """
     )
 
-    # 5s is the spec-069 AC5 budget for teardown wall-clock. In
-    # practice the subprocess exits in ~1.5s with the fix in place;
-    # without it, exit blocks past `timeout` (empirically 15s+ hang).
-    timeout_s = 5.0
+    # A real regression here is an *unbounded* hang: the wedged
+    # worker's Event is never set, so at interpreter exit
+    # `_python_exit` joins it forever (unless BOTH the daemon flag and
+    # the `_threads_queues` detach hold). Any generous finite budget
+    # therefore cleanly separates "finalizes" from "hangs".
+    #
+    # The budget must clear cold-start Python + a heavy
+    # `import cli.chat.app` in a *fresh* subprocess under CI load. The
+    # earlier 5s conflated that import cost with teardown (finalization
+    # itself is instant) and flaked when the runner was busy. The
+    # strict ≤5s AC5 *teardown* wall-clock is enforced without the
+    # subprocess-import confound by
+    # `test_teardown_wall_clock_bounded_with_wedged_worker` above.
+    kill_timeout_s = 30.0  # exceeding this ⇒ finalization is hanging
     t0 = time.monotonic()
     try:
         result = subprocess.run(
             [sys.executable, "-c", script],
-            timeout=timeout_s,
+            timeout=kill_timeout_s,
             capture_output=True,
             check=False,
         )
     except subprocess.TimeoutExpired as exc:
         elapsed = time.monotonic() - t0
         pytest.fail(
-            f"Interpreter did not exit within {timeout_s:.1f}s "
+            f"Interpreter did not exit within {kill_timeout_s:.1f}s "
             f"(elapsed {elapsed:.2f}s) — spec-069 AC5 regression. "
             f"Likely cause: `_DaemonThreadPoolExecutor.shutdown` no "
             f"longer detaches workers from "
@@ -503,9 +513,14 @@ def test_wedged_worker_does_not_hang_interpreter_exit() -> None:
         f"Subprocess failed (rc={result.returncode}): "
         f"stdout={result.stdout!r} stderr={result.stderr!r}"
     )
-    # Guard against a slow-but-not-timeout regression too. The AC5
-    # budget is 5s; healthy exit is well under 3s locally.
-    assert elapsed < timeout_s, (
-        f"Interpreter took {elapsed:.2f}s to exit "
-        f"(spec-069 AC5 target: <{timeout_s:.0f}s)"
+    # Catch a *bounded-but-slow* regression (e.g. an accidental
+    # `wait=True` join against a worker with a finite timeout) that
+    # would not trip the hang budget above. Set well above realistic
+    # cold-import time (a few seconds) yet far below any real join
+    # stall, so a busy runner never trips it.
+    prompt_budget_s = 20.0
+    assert elapsed < prompt_budget_s, (
+        f"Interpreter took {elapsed:.2f}s to exit — spec-069 AC5 "
+        f"teardown should stay well under {prompt_budget_s:.0f}s "
+        f"(bounded-slow regression?)"
     )
