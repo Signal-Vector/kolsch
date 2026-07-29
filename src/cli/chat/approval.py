@@ -150,7 +150,20 @@ class InlineApprovalCallback:
         helper falls back to an empty string — the workflow-scoped
         renderer routes by `run_id` + `node_name` and doesn't require
         the call id.
+
+        bug-107: prefer the explicit `execution_context` parameter (kept
+        for test surface); when `None`, fall back to the engine-set
+        `_current_execution_context` ContextVar (production wiring —
+        `_Exchange.run` publishes `self.context` there). Without this
+        fallback the parameter is always `None` in production (no caller
+        in `providers/authz.py::_resolve_prompt` / `_resolve_no_rule`
+        threads it through), so the workflow branch below is dead code
+        and every workflow-nested approval ships as `source.kind="tool"`.
         """
+        if execution_context is None:
+            from engine.engine import current_execution_context  # noqa: PLC0415
+
+            execution_context = current_execution_context()
         raw_call_id = (
             getattr(execution_context, "tool_call_id", None)
             if execution_context is not None

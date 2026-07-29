@@ -24,6 +24,10 @@ from uuid import uuid4
 import pytest
 from textual.app import App, ComposeResult
 
+from engine.engine import (
+    _current_execution_context,
+    current_execution_context,
+)
 from schemas.entities import Actor
 from schemas.events import Event, EventType
 from schemas.identifiers import EventId, SessionId, ThreadId
@@ -32,6 +36,32 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from textual.widget import Widget
+
+
+@pytest.fixture(autouse=True)
+def _isolate_current_execution_context() -> Any:
+    """Guarantee `_current_execution_context` starts at `None` per test.
+
+    bug-107 wired `_derive_source` to fall back to this ContextVar when
+    its parameter is `None`. Existing tests
+    (`test_approval_callback_refactor.py::test_derive_source_workflow_scoped`
+    and peers) pass `execution_context=None` and expect
+    `source["kind"] == "tool"`; if a prior test on the same worker leaked
+    a workflow-scoped `ExecutionContext` into the ContextVar, that
+    expectation would silently flip. This fixture asserts the pristine
+    state on entry, captures a `Token` for the (usually already-None)
+    current value, and resets after the test so any test that sets the
+    var directly is cleaned up.
+    """
+    assert current_execution_context() is None, (
+        "test-suite bleed: _current_execution_context should be None on "
+        "setup but was populated — a prior test leaked its ExecutionContext"
+    )
+    token = _current_execution_context.set(None)
+    try:
+        yield
+    finally:
+        _current_execution_context.reset(token)
 
 
 @pytest.fixture

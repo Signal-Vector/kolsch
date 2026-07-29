@@ -157,6 +157,41 @@ def current_span_registry() -> _ExchangeSpanRegistry | None:
     return _current_exchange_span_registry.get()
 
 
+# bug-107 — publish the running exchange's `ExecutionContext` into a
+# task-local ContextVar so subsystems whose call site sits deep inside
+# the tool-dispatch chain (today: `InlineApprovalCallback._derive_source`
+# reached from `providers/authz.py::_resolve_prompt` / `_resolve_no_rule`
+# via `tools/dispatch.py`) can read `execution_context.workflow_run_id`
+# without threading a parameter through 4 files. Mirrors the shape of
+# `_current_exchange_span_registry` above; the token is set/reset in
+# `_Exchange.run` alongside the span-registry token so butler-scope
+# (workflow_run_id=None) AND workflow-scope (workflow_run_id populated
+# via `AgentRunner`'s ExecutionContext at `workflows/builtins/agent.py`)
+# exchanges are covered by a single set-site. Distinct from
+# `_current_workflow_run_id` at `services/workflows_impl.py:1229-1235`,
+# which is a str tracking nested-run detection with a different
+# lifecycle.
+_current_execution_context: contextvars.ContextVar[ExecutionContext | None] = (
+    contextvars.ContextVar(
+        "_current_execution_context",
+        default=None,
+    )
+)
+
+
+def current_execution_context() -> ExecutionContext | None:
+    """Return the running exchange's `ExecutionContext`, or `None`.
+
+    `InlineApprovalCallback._derive_source` reads this to tag emitted
+    `kolsch.prompt.requested` payloads with `source.kind="workflow"`
+    (populated `run_id` + `node_name`) when the invoking tool is
+    running under a workflow-scoped exchange. Returns `None` outside
+    of an engine exchange (headless unit tests, synthetic reads), in
+    which case the caller falls back to a tool-scoped source shape.
+    """
+    return _current_execution_context.get()
+
+
 #: Engine version — bump when the public contract changes.
 ENGINE_VERSION = "0.1"
 
@@ -1345,9 +1380,21 @@ class _Exchange:
         span_registry_token = _current_exchange_span_registry.set(
             (self.register_span, self.close_span),
         )
+        # bug-107 — publish this exchange's ExecutionContext so the
+        # approval callback (`InlineApprovalCallback._derive_source`)
+        # reached via the tool-dispatch chain can tag its
+        # `kolsch.prompt.requested` source as `kind="workflow"` when
+        # `self.context.workflow_run_id` is populated. `_Exchange.__init__`
+        # already stores the ExecutionContext handed to `execute_stream`
+        # (butler-scope: `workflow_run_id=None`; sub-agent-scope:
+        # populated by `AgentRunner` in `workflows/builtins/agent.py`),
+        # so this single set-site covers every exchange uniformly. Token
+        # reset in the finally mirrors the span-registry pattern.
+        exec_ctx_token = _current_execution_context.set(self.context)
         try:
             await self._run_body()
         finally:
+            _current_execution_context.reset(exec_ctx_token)
             _current_exchange_span_registry.reset(span_registry_token)
 
     async def _run_body(self) -> None:
