@@ -138,6 +138,16 @@ from `nodes.run_tests.exit_code` on the edge.
     tone: "polite"                        # literal — no Jinja
 ```
 
+!!! danger "Don't put secrets in inputs or binds"
+
+    `inputs.*` and `binds:` values are observable — they render into the
+    chat node-row previews and the JSONL session file in full, with no
+    redaction. Secrets belong to the secrets subsystem instead: an authored
+    `@node` declares `secrets_needed=["NAME"]` and reads
+    `ctx.secrets["NAME"]`. The `secrets.*` namespace is never in the
+    render/preview scope, so it never leaks (invariant S-I1 + Engine I10).
+    See [Write a workflow node → Secrets](write-a-workflow-node.md#secrets).
+
 ## Branching
 
 Two source types produce a boolean the edge dispatcher uses:

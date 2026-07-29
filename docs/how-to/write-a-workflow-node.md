@@ -82,6 +82,43 @@ rendering the edge `binds:` block into the target namespace. A
 Pydantic `ValidationError` propagates as a node failure — you get
 Pydantic's usual field-path error message for free.
 
+## Secrets
+
+**Never route a secret through a workflow input or an edge `bind:`.**
+Inputs and binds are ordinary, observable data — they render into the
+node's config preview, the `bound inputs:` / `workflow inputs used:`
+blocks, the chat UI, and the JSONL session file, in full. There is no
+redaction of that surface (a key-name filter was evaluated and rejected
+as unsolvable — it cannot catch renamed keys, nested values, or
+`nodes.*`-derived secrets, so it would only give false assurance).
+
+Declare the secrets your node needs with `secrets_needed`, and read the
+resolved values from `ctx.secrets` (a `Mapping[str, str]`):
+
+```python
+from workflows import NodeContext, node
+
+
+@node(secrets_needed=["SERPAPI_KEY"])
+async def run(inputs: SearchInputs, ctx: NodeContext) -> SearchOutputs:
+    api_key = ctx.secrets["SERPAPI_KEY"]  # resolved at fire-time
+    ...
+```
+
+The engine resolves each declared name through the configured secret
+store and injects it into `ctx.secrets` before your function runs; a
+missing secret fails the node before dispatch. Crucially, the resolved
+value is placed **only** on `ctx.secrets` for your running function — it
+is never added to the Jinja scope that renders node configs and previews
+(that scope is `inputs` / `nodes` / `state` only) and never written to
+the event log. So a secret read from `ctx.secrets` **never appears in
+previews, the event log, or JSONL** (secrets/sandbox/authz invariant
+**S-I1** + Engine **I10**). Treat session JSONL as sensitive regardless.
+
+See the [Secrets / Sandbox / Authz contract](../explanation/secrets-sandbox-authz-contract.md)
+for the resolution model, the `dotenv` / `native` store variants, and how
+built-in tool nodes (e.g. bash) declare and consume the secrets they need.
+
 ## Where the file lives
 
 ```

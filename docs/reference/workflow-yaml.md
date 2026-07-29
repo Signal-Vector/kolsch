@@ -122,17 +122,37 @@ runner was actually handed at fire-time — not just the raw template:
   not captured by the static walk (the rendered value still shows the
   substituted result; only the labeled row is omitted).
 
-!!! warning "Rendered previews expose caller-supplied inputs"
+!!! danger "Never route secrets through workflow inputs or binds"
 
-    Shipping the rendered form means every `{{ inputs.api_token }}`-style
-    substitution lands in the JSONL session file **and** the chat UI —
-    where the raw template would previously have hidden it. Session
-    files are already sensitive (they hold user prompts and agent
-    output); the incremental risk is workflow-scope inputs routed
-    through templates. Redaction of secrets in rendered previews is
-    tracked as a separate follow-up and is **not** part of this
-    behavior. Authors who route secrets through workflow inputs should
-    be aware.
+    Workflow **inputs** (`--input` values) and edge **`binds:`** are
+    ordinary, observable data — **not** a secret channel. Every
+    `{{ inputs.api_token }}`-style substitution lands, in full, in the
+    JSONL session file **and** the chat UI (the rendered preview, the
+    `bound inputs:` block, and the `workflow inputs used:` block). There
+    is **no** redaction: a key-name redaction pass was evaluated and
+    **rejected as unsolvable** — it cannot catch renamed keys
+    (`inputs.config`), nested values, `nodes.*`/`state.*`-derived
+    secrets, or transformed values, so it would only give false
+    assurance. Treat session JSONL as sensitive regardless.
+
+    ```yaml
+    # ❌ leaks: the token renders into the preview + JSONL + UI
+    fetch:
+      type: kolsch/nodes/bash
+      command: "curl -H 'Authorization: Bearer {{ inputs.api_key }}' …"
+    ```
+
+    **Use the secret channel instead.** Secrets are handled by the secrets
+    subsystem, which resolves declared secrets into the running node's
+    context and keeps them **out of the Jinja scope** that renders configs
+    and previews (that scope is `inputs` / `nodes` / `state` only). An
+    authored `@node` function declares `secrets_needed=["API_KEY"]` and reads
+    `ctx.secrets["API_KEY"]`; see the contract for how built-in tool nodes
+    (e.g. bash) declare and consume the secrets they need. Values resolved
+    this way **never** appear in previews, the event log, or JSONL (invariant
+    **S-I1** + Engine **I10**). See
+    [Write a workflow node → Secrets](../how-to/write-a-workflow-node.md#secrets)
+    and the [Secrets / Sandbox / Authz contract](../explanation/secrets-sandbox-authz-contract.md).
 
 ## Node captured outputs — quick reference
 
