@@ -1486,11 +1486,18 @@ class WorkflowNodeRow(Collapsible):
             if isinstance(content, dict) and content:
                 for key, value in content.items():
                     section = NodeSection(f"input: {key}")
-                    section._contents_list.append(UserChatbox(str(value), ts))
+                    # qol-109: cap per-key content dict values at the row
+                    # sink so the resulting `UserChatbox` subtree stays
+                    # cheap to first-arrange when its NodeSection expands.
+                    capped_value = _cap_with_tail(str(value), max_chars=16_000)
+                    section._contents_list.append(UserChatbox(capped_value, ts))
                     self._mount_in_contents(section)
             else:
                 section = NodeSection("input")
-                section._contents_list.append(UserChatbox(text, ts))
+                # qol-109: cap flat-branch text at the row sink; see the
+                # per-key cap above for rationale.
+                capped_text = _cap_with_tail(text, max_chars=16_000)
+                section._contents_list.append(UserChatbox(capped_text, ts))
                 self._mount_in_contents(section)
 
         await self._dispatch_mount(_mount, event_id)
@@ -1530,7 +1537,12 @@ class WorkflowNodeRow(Collapsible):
 
             title = "response" if response_idx == 1 else f"response ({response_idx})"
             section = NodeSection(title)
-            section._contents_list.append(AssistantProse(text))
+            # qol-109: cap the assistant response text at the row sink.
+            # Textual's `Markdown` mounts one `MarkdownBlock` per token
+            # and measures each on first display-flip; large responses
+            # cost ~1.8 s per toggle uncapped. See spec qol-109.
+            capped_text = _cap_with_tail(text, max_chars=16_000)
+            section._contents_list.append(AssistantProse(capped_text))
             self._mount_in_contents(section)
 
         await self._dispatch_mount(_mount, event_id)
@@ -1580,7 +1592,13 @@ class WorkflowNodeRow(Collapsible):
                     existing.set_state(new_state)
                 block = self._tool_blocks.get(tool_call_id)
                 if block is not None:
-                    self._populate_tool_call_result(block, body, failed=failed)
+                    # qol-109: cap the transition body at the row sink
+                    # before it lands in `ToolCallBlock.update_body`.
+                    # Large `browse_url` / `read_file` / `bash` outputs
+                    # otherwise pay the same measurement cost as agent
+                    # responses when the `▶ tool: <name>` section opens.
+                    capped_body = _cap_with_tail(body, max_chars=16_000)
+                    self._populate_tool_call_result(block, capped_body, failed=failed)
                 return
             state = (
                 "running"
@@ -1669,7 +1687,14 @@ class WorkflowNodeRow(Collapsible):
         async def _mount() -> None:
             from cli.chat.widgets.notice import NoticeWidget  # noqa: PLC0415
 
-            widget = NoticeWidget(text=text, kind=level)
+            # qol-109: cap notice text at the row sink for symmetry with
+            # the other three mount methods (assistant / tool / user).
+            # `NoticeWidget` renders a single Static so the reflow cost
+            # is smaller than `AssistantProse`, but the cap keeps every
+            # row-sink surface uniform and future-proofs a very large
+            # template-warning payload.
+            capped_text = _cap_with_tail(text, max_chars=16_000)
+            widget = NoticeWidget(text=capped_text, kind=level)
             self._mount_notice_at_top(widget)
 
         await self._dispatch_mount(_mount, event_id)
