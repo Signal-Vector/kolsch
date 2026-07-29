@@ -418,11 +418,25 @@ class AgentEngine:
             # its own emit failures. The primary owner of each span
             # is its emit site (e.g. `_ObservedToolHandle`'s
             # `try/finally`); this is the belt to those suspenders.
+            #
+            # bug-106: catch ``BaseException`` (not just ``Exception``)
+            # so a re-raised ``CancelledError`` from the drain (whose
+            # per-emit shielding requires us to propagate ambient
+            # cancels to the caller — see ``close_all_open_spans``)
+            # does NOT bypass ``_QUEUE_END``. If the sentinel never
+            # queues, every downstream stream consumer hangs. The
+            # inner try/finally guarantees the sentinel lands
+            # regardless of raise/return; the outer wrapper still
+            # logs the drain failure and re-raises so cancellation
+            # surfaces to callers of ``_run_exchange``'s task.
             try:
-                await ex.close_all_open_spans()
-            except Exception:  # noqa: BLE001 — finally safety net
-                _log.exception("close_all_open_spans safety net raised")
-            queue.put_nowait(_QUEUE_END)
+                try:
+                    await ex.close_all_open_spans()
+                except BaseException:
+                    _log.exception("close_all_open_spans safety net raised")
+                    raise
+            finally:
+                queue.put_nowait(_QUEUE_END)
 
     # ---- Internal helpers used by _Exchange ---------------------------
 
@@ -1126,11 +1140,25 @@ class _Exchange:
         is logged but does not prevent subsequent spans from closing.
         The registry is drained regardless — a second call to this
         method is a no-op.
+
+        bug-106: each per-span emit is wrapped in ``asyncio.shield`` so
+        an ambient task-cancel arriving mid-``await`` (e.g. an
+        ``asyncio.wait_for`` timeout on a workflow node) doesn't cancel
+        the emit itself; the shielded coroutine runs to completion, the
+        awaiter here sees ``CancelledError``, we mark ambient-cancel
+        and continue to the next span so every registered factory
+        fires. After the drain, if any per-span await saw a cancel we
+        re-raise ``CancelledError`` (with the current task's cancel
+        flag set) so outer ``asyncio.wait_for`` / ``_run_exchange``
+        machinery treats the frame as properly cancelled — this method
+        must not swallow ambient cancellation. Per-span emit
+        exceptions (``Exception``) remain best-effort as before.
         """
         # Snapshot + clear so a concurrent close_span (e.g. from a
         # racing observer arm still in flight) can't double-close.
         factories = list(self._open_spans.items())
         self._open_spans.clear()
+        ambient_cancelled = False
         for span_id, factory in factories:
             try:
                 type_, data, actor = factory()
@@ -1141,12 +1169,36 @@ class _Exchange:
                 )
                 continue
             try:
-                await self._emit(type_=type_, data=data, actor=actor)
+                await asyncio.shield(self._emit(type_=type_, data=data, actor=actor))
+            except asyncio.CancelledError:
+                # Ambient task-cancel arrived while we were awaiting
+                # the shielded emit. The shielded coroutine keeps
+                # running to completion in the background; we record
+                # the cancel and continue draining so subsequent
+                # spans' terminals still fire. Propagation is
+                # preserved below the loop.
+                ambient_cancelled = True
+                _log.info(
+                    "close_all_open_spans: emit for span %s cancelled mid-drain",
+                    span_id,
+                )
             except Exception:  # noqa: BLE001 — emit is best-effort in finally
                 _log.exception(
                     "close_all_open_spans: emit terminal for span %s failed",
                     span_id,
                 )
+        if ambient_cancelled:
+            # Preserve ambient cancellation for the caller
+            # (``asyncio.wait_for``, ``_run_exchange``, etc). Bare
+            # ``raise CancelledError`` unwinds the stack but does NOT
+            # set the current task's cancel flag; call
+            # ``task.cancel()`` first so
+            # ``asyncio.current_task().cancelling() > 0`` holds and
+            # outer machinery treats the frame as properly cancelled.
+            task = asyncio.current_task()
+            if task is not None:
+                task.cancel()
+            raise asyncio.CancelledError
 
     # ---- Resume reconciliation (spec-068 Part B) ----------------------
 
