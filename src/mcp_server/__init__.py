@@ -14,10 +14,17 @@ authz gate are Phase 2 per `process/spec-105-mcp-operator-server.md`.
 
 Package naming note: the spec called for `src/mcp/`, but the MCP
 Python SDK also ships a top-level `mcp` package (imported via
-`mcp.server.fastmcp.FastMCP`), and Python's import resolver would
-shadow one with the other (site-packages precedes `src/` on sys.path).
-Renamed to `src/mcp_server/` to avoid the collision; the user-facing
-`kolsch mcp serve` subcommand name is unchanged.
+`mcp.server.fastmcp.FastMCP`). Two concrete risks with a `src/mcp/`
+name: (a) intra-package imports — inside `src/mcp/server.py`, an
+`import mcp.views` intended to reach a sibling module would in fact
+resolve to the SDK (whose `views` submodule doesn't exist), silently
+breaking; (b) readability — two `mcp`s in the same repo, one an SDK
+we import from and one a local package, is confusing to anyone
+skimming the diff. Note that Python's import machinery would NOT
+silently shadow the SDK the way a naive reading suggests
+(`site-packages/` precedes `src/` on sys.path), but the two risks
+above are enough. Renamed to `src/mcp_server/` to sidestep both; the
+user-facing `kolsch mcp serve` subcommand name is unchanged.
 """
 
 from __future__ import annotations

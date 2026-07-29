@@ -29,11 +29,15 @@ Two MCP surfaces exist in kolsch:
   — no `ANTHROPIC_API_KEY` in the child env).
 - An initialised workspace (`kolsch setup --non-interactive` or the
   interactive flow).
+- **`kolsch` on your PATH** — the `[project.scripts]` entry installs a
+  `kolsch` console script into your venv's `bin/` directory. Verify
+  with `which kolsch`; if it returns nothing, either activate the venv
+  (`source .venv/bin/activate`) or use one of the alternative
+  invocations below.
 
 ## The `mcp-config.json`
 
-Ship the config alongside your workspace, or drop it in the current
-working directory when you invoke `claude`:
+The default recipe assumes `kolsch` is on PATH (see Prerequisites):
 
 ```json
 {
@@ -50,6 +54,25 @@ working directory when you invoke `claude`:
 The [committed
 `mcp-config.json`](mcp-config.json){:target="_blank"} alongside this
 page is byte-for-byte the same file.
+
+### Alternative invocations (when `kolsch` isn't on PATH)
+
+If you're running `claude` outside an activated venv, replace the
+`command`/`args` pair with one of these — pick the one that matches
+how you have kolsch installed:
+
+- **`uv`-managed venv, no activation:** `"command": "uv"`, `"args":
+  ["run", "kolsch", "mcp", "serve"]`. Requires that Claude's cwd
+  contains the `uv` project (i.e. Claude invokes it from your
+  workspace root).
+- **Explicit venv path:** `"command": "/absolute/path/to/kolsch/.venv/bin/kolsch"`,
+  `"args": ["mcp", "serve"]`. Most portable — works from any cwd, no
+  environment dependencies.
+- **System-installed via `uv tool install kolsch`:** `"command":
+  "kolsch"` is on PATH globally; the default config works as-is.
+
+If Claude Code reports the server as `"status": "failed"` in its init
+frame, this is the first thing to check.
 
 ## Run the round-trip
 
@@ -144,6 +167,14 @@ guarded so a stray `print(...)` in a dependency can't corrupt the
 frame stream, but a corrupted `mcp-config.json` (e.g. invalid JSON)
 would still trip Claude Code before the server ever runs. Validate
 the config with `jq .` first.
+
+**`"mcpServers":[{"name":"kolsch","status":"failed"}]` in the init
+frame.** Claude Code couldn't spawn the server — almost always a
+PATH / command resolution issue. Check that `which kolsch` returns a
+path (activate the venv or use one of the "Alternative invocations"
+recipes above). Run `kolsch mcp serve </dev/null` directly in a shell
+to confirm the binary is invocable at all; you should get a stdio
+server that reads nothing and exits cleanly.
 
 **"claude: no subscription auth found."** Run `claude auth login`
 against your Pro/Max subscription. Do NOT set `ANTHROPIC_API_KEY` in
