@@ -369,6 +369,92 @@ def test_config_preview_bash_renders_command() -> None:
     assert preview == {"command": "echo hi", "rendered_command": "echo hi"}
 
 
+def test_write_file_preview() -> None:
+    """qol-108 Test 1: write_file emits ``{path, content, rendered_*}``.
+
+    Render closure resolves ``{{ inputs.name }}`` → ``"alice"``; the preview
+    dict must carry both raw templates AND their rendered companions.
+    """
+    node_def = _node(
+        {
+            "type": "kolsch/nodes/write_file",
+            "path": "scratch/{{ inputs.name }}.md",
+            "content": "hello {{ inputs.name }}",
+        }
+    )
+
+    def _render_alice(source: str) -> Any:
+        return source.replace("{{ inputs.name }}", "alice")
+
+    preview = _build_config_preview(
+        node_def,
+        workflow_inputs={},
+        bound_inputs={},
+        render=_render_alice,
+    )
+    assert preview == {
+        "path": "scratch/{{ inputs.name }}.md",
+        "content": "hello {{ inputs.name }}",
+        "rendered_path": "scratch/alice.md",
+        "rendered_content": "hello alice",
+    }
+
+
+def test_write_file_preview_render_failure() -> None:
+    """qol-108 Test 2: render failures land ``rendered_* = None``.
+
+    Matches bash's ``rendered_command=None`` on undefined-variable errors —
+    raw templates still surface; the rendered companions gracefully drop.
+    """
+    node_def = _node(
+        {
+            "type": "kolsch/nodes/write_file",
+            "path": "scratch/{{ inputs.name }}.md",
+            "content": "hello {{ inputs.name }}",
+        }
+    )
+    preview = _build_config_preview(
+        node_def,
+        workflow_inputs={},
+        bound_inputs={},
+        render=_render_unavailable,
+    )
+    assert preview["path"] == "scratch/{{ inputs.name }}.md"
+    assert preview["content"] == "hello {{ inputs.name }}"
+    assert preview["rendered_path"] is None
+    assert preview["rendered_content"] is None
+
+
+def test_write_file_preview_bytes_content() -> None:
+    """qol-108 Test 6: bytes content emits ``<{N} bytes>`` + is JSON-safe.
+
+    ``WriteFileNodeDef.content`` is typed ``str | bytes``. A binary content
+    field must round-trip through ``json.dumps`` without a ``TypeError`` and
+    render as a length placeholder (``rendered_content=None``).
+    """
+    import json
+
+    raw_bytes = b"\x00\x01\x02" * 100  # 300 bytes
+    node_def = _node(
+        {
+            "type": "kolsch/nodes/write_file",
+            "path": "out.bin",
+            "content": raw_bytes,
+        }
+    )
+    preview = _build_config_preview(
+        node_def,
+        workflow_inputs={},
+        bound_inputs={},
+        render=_identity_render,
+    )
+    assert preview["path"] == "out.bin"
+    assert preview["content"] == "<300 bytes>"
+    assert preview["rendered_content"] is None
+    # Round-trip through json.dumps must NOT raise (bytes would).
+    json.dumps(preview)
+
+
 def test_config_preview_compute_renders_value() -> None:
     """A compute node's string ``value`` is rendered + JSON-preview'd."""
     node_def = _node({"type": "kolsch/nodes/compute", "value": "{{ 1 + 1 }}"})

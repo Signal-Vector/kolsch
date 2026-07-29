@@ -734,6 +734,23 @@ class WorkflowRenderer(Vertical):
                 rendered=rendered if isinstance(rendered, str) else None,
             )
             return
+        # qol-108: write_file dispatch — a ``path`` key routes to
+        # :meth:`WorkflowNodeRow.set_write_file_preview`, which mounts
+        # ``▶ path`` + ``▶ content`` sections.
+        path = config_preview.get("path")
+        if isinstance(path, str) and path:
+            content = config_preview.get("content")
+            rendered_path = config_preview.get("rendered_path")
+            rendered_content = config_preview.get("rendered_content")
+            row.set_write_file_preview(
+                path,
+                content if isinstance(content, str) else "",
+                rendered_path=rendered_path if isinstance(rendered_path, str) else None,
+                rendered_content=(
+                    rendered_content if isinstance(rendered_content, str) else None
+                ),
+            )
+            return
         value = config_preview.get("value")
         if isinstance(value, str) and value:
             rendered = config_preview.get("rendered_value")

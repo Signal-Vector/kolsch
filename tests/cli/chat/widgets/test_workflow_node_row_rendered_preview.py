@@ -57,7 +57,9 @@ async def test_rendered_command_primary_template_subordinate() -> None:
         await pilot.pause()
 
         body = _input_body_text(row)
-        assert "command:\npython -c 'https://x'" in body
+        # qol-108: the ``command:`` label is gone (the section title is now
+        # ``command``); the rendered form is the primary body line.
+        assert "python -c 'https://x'" in body
         assert "template:\npython -c '{{ inputs.url }}'" in body
         # Ordering: rendered command must come BEFORE the template line.
         assert body.index("python -c 'https://x'") < body.index("template:")
@@ -77,7 +79,8 @@ async def test_command_single_line_when_no_rendered() -> None:
         await pilot.pause()
 
         body = _input_body_text(row)
-        assert "command:\necho hi" in body
+        # qol-108: no ``command:`` label — section title is ``command``.
+        assert "echo hi" in body
         assert "template:" not in body
 
 
@@ -95,7 +98,8 @@ async def test_command_single_line_when_rendered_equals_raw() -> None:
         await pilot.pause()
 
         body = _input_body_text(row)
-        assert "command:\necho hi" in body
+        # qol-108: no ``command:`` label — section title is ``command``.
+        assert "echo hi" in body
         assert "template:" not in body
 
 

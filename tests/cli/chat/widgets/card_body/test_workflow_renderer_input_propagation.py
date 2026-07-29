@@ -107,7 +107,10 @@ async def test_renderer_wires_rendered_command_and_inputs_used(
         rows = list(renderer.query(WorkflowNodeRow))
         assert len(rows) == 1
         body = _input_body_text(rows[0])
-        assert "command:\nget https://x" in body
+        # qol-108: the ``command:`` label was dropped when the bash command
+        # became its own top-level ``▶ command`` section; the body carries
+        # the rendered form directly.
+        assert "get https://x" in body
         assert "template:\nget {{ inputs.url }}" in body
         assert "workflow inputs used:" in body
         assert "url: https://x" in body
@@ -137,6 +140,7 @@ async def test_renderer_back_compat_without_new_fields(
         rows = list(renderer.query(WorkflowNodeRow))
         assert len(rows) == 1
         body = _input_body_text(rows[0])
-        assert "command:\nget {{ inputs.url }}" in body
+        # qol-108: no ``command:`` label; raw template appears as the body.
+        assert "get {{ inputs.url }}" in body
         assert "template:" not in body
         assert "workflow inputs used:" not in body

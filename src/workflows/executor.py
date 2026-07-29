@@ -3381,6 +3381,35 @@ def _build_config_preview(
             "command": command,
             "rendered_command": str(rendered) if rendered is not None else None,
         }
+    if t == "kolsch/nodes/write_file":
+        # qol-108: emit a write_file config preview so the chat row can
+        # mount ``▶ path`` + ``▶ content`` sections. ``WriteFileNodeDef.content``
+        # is typed ``str | bytes`` (see ``parser.py``); bytes payloads are
+        # not Jinja-rendered by the runner (see ``write_file.py``) and are
+        # not JSON-safe, so emit a length placeholder ``f"<{N} bytes>"``
+        # with ``rendered_content=None`` (mirrors bash's rendered=None on
+        # render failure). ``path`` is always ``str`` per the parser.
+        path = getattr(node_def, "path", "")
+        raw_content = getattr(node_def, "content", "")
+        content: str
+        rendered_content: str | None
+        if isinstance(raw_content, bytes):
+            content = f"<{len(raw_content)} bytes>"
+            rendered_content = None
+        else:
+            content = raw_content if isinstance(raw_content, str) else ""
+            rendered_c = _render_preview_or_none(render, content)
+            rendered_content = str(rendered_c) if rendered_c is not None else None
+        rendered_p = (
+            _render_preview_or_none(render, path) if isinstance(path, str) else None
+        )
+        rendered_path = str(rendered_p) if rendered_p is not None else None
+        return {
+            "path": path,
+            "content": content,
+            "rendered_path": rendered_path,
+            "rendered_content": rendered_content,
+        }
     if t == "kolsch/nodes/compute":
         value = getattr(node_def, "value", None)
         rendered_value: Any = None

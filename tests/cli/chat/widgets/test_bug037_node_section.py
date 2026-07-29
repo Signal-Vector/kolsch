@@ -184,10 +184,14 @@ async def test_agent_row_dict_input_creates_per_key_sections() -> None:
 
 @pytest.mark.asyncio
 async def test_command_preview_before_bound_inputs_race() -> None:
-    """`set_command_preview` first → section built w/o bound-inputs block.
+    """qol-108: ``set_command_preview`` first → ``▶ command`` section only.
 
-    A subsequent `set_bound_inputs` is a no-op — the section is NOT
-    rebuilt.
+    Pre-qol-108 this test asserted the lumped bash ``▶ input`` section held
+    the command; a late ``set_bound_inputs`` was a no-op. Post-qol-108
+    ``▶ input`` (binds) and ``▶ command`` are separate top-level sections.
+    A ``set_command_preview`` without prior binds mounts ``▶ command`` only
+    (no ``▶ input``); a LATER ``set_bound_inputs`` now mounts the missing
+    ``▶ input`` section (ownership shifted to the binds setters).
     """
     app = _Host()
     async with app.run_test() as pilot:
@@ -203,18 +207,32 @@ async def test_command_preview_before_bound_inputs_race() -> None:
         row.set_command_preview("ls")
         await pilot.pause()
 
-        assert row._bash_input_section is not None
-        first_section = row._bash_input_section
-        # Body Static inside the section — no `bound inputs:` block.
-        statics = [s for s in first_section.walk_children() if isinstance(s, Static)]
+        # No binds yet → no ``▶ input`` section; ``▶ command`` mounted.
+        assert row._bash_input_section is None
+        assert row._command_widget is not None
+        cmd_section = row._command_widget
+        statics = [s for s in cmd_section.walk_children() if isinstance(s, Static)]
         combined = "\n".join(str(getattr(s, "content", "")) for s in statics)
         assert "bound inputs:" not in combined
-        assert "command:" in combined
+        # qol-108: body no longer carries a redundant ``command:`` label.
+        assert "ls" in combined
 
-        # Late set_bound_inputs → no-op (section unchanged).
+        # Late set_bound_inputs → mounts the missing ``▶ input`` section.
         row.set_bound_inputs({"a": "1"})
         await pilot.pause()
-        assert row._bash_input_section is first_section
+        # ``_bash_input_section`` was narrowed to ``None`` by the earlier
+        # ``assert ... is None``; use ``getattr`` to bypass mypy's stale
+        # narrowing (the intervening ``set_bound_inputs`` mounts the
+        # section, but mypy can't see the mutation).
+        late_section = getattr(row, "_bash_input_section", None)
+        assert late_section is not None
+        input_body_parts: list[str] = []
+        for s in late_section.walk_children():
+            if isinstance(s, Static):
+                input_body_parts.append(str(getattr(s, "content", "")))
+        input_body = "\n".join(input_body_parts)
+        assert "bound inputs:" in input_body
+        assert "a: 1" in input_body
 
 
 # ---------------------------------------------------------------------------
@@ -241,12 +259,15 @@ async def test_bash_row_creates_input_output_exit_sections() -> None:
         row.set_output({"stdout": "hi\n", "stderr": "", "exit_code": 0})
         await pilot.pause()
 
+        # qol-108: bash rows split the input/command lump into two
+        # top-level sections. Order: input → command → output → exit.
         sections = list(_contents_of(row).query(NodeSection))
-        assert len(sections) == 3
+        assert len(sections) == 4
         titles = [str(s.title) for s in sections]
         assert titles[0] == "input"
-        assert titles[1] == "output"
-        assert titles[2].startswith("exit: 0")
+        assert titles[1] == "command"
+        assert titles[2] == "output"
+        assert titles[3].startswith("exit: 0")
 
 
 # ---------------------------------------------------------------------------

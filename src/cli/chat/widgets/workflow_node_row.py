@@ -142,6 +142,42 @@ def _truncate(text: str, max_chars: int) -> str:
     return text[: max_chars - 1] + "…"
 
 
+_CAP_MAX_CHARS = 20_000
+"""qol-108: soft ceiling on content/command body chars.
+
+Applied to write_file ``content`` and bash ``command`` bodies (both of
+which can be arbitrarily long). Char-count (not bytes) — matches
+``len(str)`` semantics natively and avoids UTF-8 multi-byte edge cases
+in the truncation-marker assertions. Shared with qol-109, which passes
+``max_chars=16_000`` explicitly to `_cap_with_tail` for its own body
+sizing.
+"""
+
+
+_CAP_MARKER_TEMPLATE = "\n… ({n_more} more chars; see session JSONL)"
+"""qol-108: tail marker appended by :func:`_cap_with_tail` on truncation.
+
+Pinned as a module-level template so Test 5's substring assertion has a
+stable contract; ``n_more`` = ``len(text) - max_chars``.
+"""
+
+
+def _cap_with_tail(text: str, max_chars: int = _CAP_MAX_CHARS) -> str:
+    """qol-108: char-cap ``text`` at ``max_chars`` with a JSONL-tail marker.
+
+    Shared helper for the write_file ``content`` and bash ``command`` body
+    sizing. Under the cap → passthrough. Over the cap → the first
+    ``max_chars`` chars followed by ``_CAP_MARKER_TEMPLATE`` (populated
+    with the number of chars dropped). Callers keep the truncated body
+    visible in the row while the durable session JSONL retains the full
+    text.
+    """
+    if len(text) <= max_chars:
+        return text
+    n_more = len(text) - max_chars
+    return text[:max_chars] + _CAP_MARKER_TEMPLATE.format(n_more=n_more)
+
+
 def _format_inputs_summary(
     inputs: dict[str, Any],
     *,
@@ -240,50 +276,83 @@ def _render_workflow_inputs_used_block(
 
 
 def _render_command_block(command: str, rendered: str | None) -> list[str]:
-    """bug-036c + bug-094: the ``command:`` block lines.
+    """qol-108 (was bug-036c + bug-094): the ``▶ command`` section body lines.
 
-    When ``rendered`` is present AND differs from the raw ``command``
-    (string equality), the RENDERED form is the primary ``command:`` line
-    and the raw template drops to a subordinate ``template:`` line. When
-    ``rendered`` is ``None`` or equal to the raw command, a single
-    ``command:`` line renders (today's behaviour).
+    Post-qol-108 the bash ``command`` block owns its own top-level
+    ``NodeSection`` (title ``command``); the body no longer carries a
+    redundant ``command:`` label. Layout:
+
+    - ``rendered is None`` OR ``rendered == command`` → single body of the
+      command text, capped via :func:`_cap_with_tail` (~20 000 chars).
+    - ``rendered != command`` → rendered form (capped via
+      :func:`_cap_with_tail`) as the primary body, followed by a
+      ``template:`` sub-block whose value stays capped at 500 chars
+      (short-form context, not the primary body).
     """
-    lines = ["command:"]
+    lines: list[str] = []
     if rendered is not None and rendered != command:
-        lines.append(_truncate(rendered, 500))
+        lines.append(_cap_with_tail(rendered))
         lines.append("template:")
         lines.append(_truncate(command, 500))
     else:
-        lines.append(_truncate(command, 500))
+        lines.append(_cap_with_tail(command))
     return lines
 
 
-def _render_bash_input_body(
+def _render_path_body(path: str, rendered: str | None) -> str:
+    """qol-108: body text for a write_file ``▶ path`` section.
+
+    Paths are short-form (a filesystem path), so the primary body stays
+    capped at 500 chars. When ``rendered`` differs from the raw ``path``
+    template, the rendered form is the primary line and a ``template:``
+    sub-block carries the raw (also 500-cap — short-form context).
+    """
+    if rendered is not None and rendered != path:
+        return "\n".join(
+            [
+                _truncate(rendered, 500),
+                "template:",
+                _truncate(path, 500),
+            ]
+        )
+    return _truncate(path, 500)
+
+
+def _render_content_body(content: str, rendered: str | None) -> str:
+    """qol-108: body text for a write_file ``▶ content`` section.
+
+    Content can be arbitrarily long — the primary body is capped via
+    :func:`_cap_with_tail` (~20 000 chars with a JSONL-tail marker).
+    ``template:`` sub-block (when raw != rendered) stays at 500 chars
+    per the rendered-vs-template convention (short-form context).
+    """
+    return "\n".join(_render_command_block(content, rendered))
+
+
+def _render_bash_binds_body(
     bound_inputs: dict[str, Any],
-    command: str,
     *,
-    rendered_command: str | None = None,
     workflow_inputs_used: dict[str, Any] | None = None,
 ) -> str:
-    """bug-037 + bug-094: render the bash `input` section body.
+    """qol-108 (was ``_render_bash_input_body``): the bash ``▶ input`` body.
 
-    Layout: ``bound inputs:`` (inbound-edge binds) → ``workflow inputs
-    used:`` (bug-094; the workflow-scope inputs this node's templates
-    referenced) → ``command:`` (with a subordinate ``template:`` line when
-    a differing rendered form is available). Each block is present only
-    when non-empty.
+    Post-qol-108 the ``command:`` block lives in its own top-level
+    ``▶ command`` section; the ``▶ input`` section on a bash row now
+    carries ONLY the binds surface (``bound inputs:`` + bug-094's
+    ``workflow inputs used:``). Each block renders only when non-empty;
+    both empty → empty string (the caller suppresses the mount, per
+    bug-037's empty-block-suppressed convention).
     """
     lines: list[str] = []
     if bound_inputs:
         lines.append("bound inputs:")
         for key, value in bound_inputs.items():
             lines.append(f"· {key}: {_format_input_value(value)}")
-        lines.append("")
     used_lines = _render_workflow_inputs_used_block(workflow_inputs_used)
     if used_lines:
+        if lines:
+            lines.append("")
         lines.extend(used_lines)
-        lines.append("")
-    lines.extend(_render_command_block(command, rendered_command))
     return "\n".join(lines)
 
 
@@ -296,10 +365,10 @@ def _render_bound_inputs_body(
 
     Used on the failure path for node types (e.g. agent) that lack a
     reusable bound-inputs section. Mirrors the ``bound inputs:`` block
-    from :func:`_render_bash_input_body` (plus the bug-094 ``workflow
-    inputs used:`` sub-block) but without the trailing ``command:`` block.
-    Empty inputs (and no workflow-inputs-used) render as the empty-note
-    constant so a failed row always shows a populated Input section.
+    from :func:`_render_bash_binds_body` (plus the bug-094 ``workflow
+    inputs used:`` sub-block). Empty inputs (and no workflow-inputs-used)
+    render as the empty-note constant so a failed row always shows a
+    populated Input section.
     """
     used_lines = _render_workflow_inputs_used_block(workflow_inputs_used)
     if not bound_inputs and not used_lines:
@@ -585,6 +654,15 @@ class WorkflowNodeRow(Collapsible):
         self._bash_input_section: NodeSection | None = None
         self._bash_output_section: Widget | None = None
         self._bash_exit_section: Widget | None = None
+        # qol-108: write_file rows own two top-level NodeSections
+        # (``▶ path`` + ``▶ content``). Deferred until mount via the
+        # same pattern as ``_pending_command``: a stashed 4-tuple
+        # ``(path, content, rendered_path, rendered_content)``.
+        self._pending_write_file_preview: (
+            tuple[str, str, str | None, str | None] | None
+        ) = None
+        self._write_file_path_section: NodeSection | None = None
+        self._write_file_content_section: NodeSection | None = None
         self._tool_sections: dict[str, Widget] = {}
         self._tool_blocks: dict[str, Widget] = {}
         # bug-063: failure-path Input/Output/Error sections. Mounted
@@ -819,45 +897,82 @@ class WorkflowNodeRow(Collapsible):
         self._child_link.update_status(child_status)
 
     def set_bound_inputs(self, inputs: dict[str, Any]) -> None:
-        """bug-037: stash bound inputs for later section rendering.
+        """bug-037 + qol-108: stash bound inputs; own the bash ``▶ input`` section.
 
-        Called BEFORE ``set_command_preview`` by the renderer so bash
-        rows can include the bound-inputs block inside their ``input``
-        section. If ``set_command_preview`` fires first (race), the
-        section is created without the block; a subsequent
-        ``set_bound_inputs`` refreshes the already-mounted body in place
-        (bug-094 — so an out-of-order setter still surfaces).
+        Ownership shift (qol-108): the bash ``▶ input`` section is now
+        owned by :meth:`set_bound_inputs` / :meth:`set_workflow_inputs_used`
+        (previously :meth:`set_command_preview` mounted it as a lumped
+        section). Called BEFORE the config-preview setters by the renderer
+        so bash rows still get their binds surface before the ``▶ command``
+        section mounts. Empty-block-suppressed: no mount when both
+        ``bound_inputs`` and ``workflow_inputs_used`` are empty (matches
+        bug-037's convention).
         """
         self._bound_inputs = dict(inputs)
-        self._refresh_bash_input_body()
+        self._refresh_bash_binds_body()
 
     def set_workflow_inputs_used(self, inputs: dict[str, Any]) -> None:
-        """bug-094: stash the workflow-scope inputs this node referenced.
+        """bug-094 + qol-108: stash the workflow-scope inputs this node used.
 
         Mirrors :meth:`set_bound_inputs`. Surfaced as a ``workflow inputs
-        used:`` sub-block on the live bash input body (below ``bound
-        inputs:``). Stashed before the section mounts; if it arrives after
-        the section is already mounted the body is refreshed in place.
+        used:`` sub-block on the bash ``▶ input`` body (below ``bound
+        inputs:``). For compute/map/workflow rows the stash is picked up
+        by :meth:`_config_preview_body` — the mount ownership shift
+        applies to bash only.
         """
         self._workflow_inputs_used = dict(inputs)
-        self._refresh_bash_input_body()
+        self._refresh_bash_binds_body()
 
     def set_command_preview(self, command: str, *, rendered: str | None = None) -> None:
-        """bug-036c + bug-037 + bug-094: mount an ``input`` section w/ command.
+        """qol-108 (was bug-036c + bug-037 + bug-094): mount ``▶ command``.
 
-        ``rendered`` is the fire-time rendered form of the command
-        template; when present and differing from ``command`` the section
-        shows it as the primary ``command:`` line with the raw template on
-        a subordinate ``template:`` line.
+        Post-qol-108 this method owns the ``▶ command`` section only. The
+        bash ``▶ input`` section (binds surface) is owned by
+        :meth:`set_bound_inputs` / :meth:`set_workflow_inputs_used`. When
+        ``rendered`` differs from ``command``, the section body shows the
+        rendered form as primary and adds a ``template:`` sub-block with
+        the raw (see :func:`_render_command_block`).
         """
         if self._command_widget is not None:
             # Section already mounted (out-of-order setter): refresh body.
             self._command_text = command
             self._command_rendered = rendered
-            self._refresh_bash_input_body()
+            self._refresh_command_body()
             return
         self._pending_command = command
         self._pending_command_rendered = rendered
+        if self.is_mounted:
+            self._flush_pending_previews()
+
+    def set_write_file_preview(
+        self,
+        path: str,
+        content: str,
+        *,
+        rendered_path: str | None = None,
+        rendered_content: str | None = None,
+    ) -> None:
+        """qol-108: mount ``▶ path`` + ``▶ content`` sections for write_file.
+
+        Mirrors :meth:`set_command_preview`'s defer-until-mount pattern
+        (line pattern ``_pending_command`` / ``_flush_pending_previews``):
+        when the row isn't yet composed the tuple is stashed and flushed
+        from :meth:`on_mount`. Each section is a top-level ``NodeSection``
+        with a single ``Static`` body; rendered-vs-template convention is
+        preserved (see :func:`_render_path_body` /
+        :func:`_render_content_body`).
+
+        Idempotent: a second call with the section already mounted is a
+        no-op (write_file previews don't refresh in place today).
+        """
+        if self._write_file_path_section is not None:
+            return
+        self._pending_write_file_preview = (
+            path,
+            content,
+            rendered_path,
+            rendered_content,
+        )
         if self.is_mounted:
             self._flush_pending_previews()
 
@@ -936,12 +1051,34 @@ class WorkflowNodeRow(Collapsible):
         return "\n".join(lines)
 
     def _flush_pending_previews(self) -> None:
-        """bug-036c + bug-037 + bug-094: mount deferred config preview.
+        """qol-108 (was bug-036c + bug-037 + bug-094): mount deferred previews.
 
-        Bash rows flush the ``command`` body; compute/map/workflow rows
-        flush the stashed non-bash preview. Guarded against a double-mount
-        via ``_command_widget``.
+        Post-qol-108 the bash flush mounts a top-level ``▶ command`` section
+        (the ``▶ input`` binds section is owned separately by
+        :meth:`set_bound_inputs` / :meth:`set_workflow_inputs_used`).
+        Write_file rows mount two top-level sections (``▶ path`` +
+        ``▶ content``). Compute/map/workflow rows still flush the stashed
+        non-bash preview into an ``▶ input`` section (unchanged shape).
+        Guarded against a double-mount via ``_command_widget`` (bash /
+        compute / map / workflow) and ``_write_file_path_section``
+        (write_file).
         """
+        # qol-108: bash binds section may need mounting first (if
+        # `set_bound_inputs` fired before `on_mount`).
+        self._refresh_bash_binds_body()
+        # write_file has its own two-section flush; run independently of the
+        # `_command_widget` guard because write_file does not use it.
+        if (
+            self._pending_write_file_preview is not None
+            and self._write_file_path_section is None
+        ):
+            path, content, rendered_path, rendered_content = (
+                self._pending_write_file_preview
+            )
+            self._pending_write_file_preview = None
+            self._mount_write_file_sections(
+                path, content, rendered_path, rendered_content
+            )
         if self._command_widget is not None:
             return
         if self._pending_command is not None:
@@ -953,14 +1090,10 @@ class WorkflowNodeRow(Collapsible):
             self._command_rendered = self._pending_command_rendered
             self._pending_command = None
             self._pending_command_rendered = None
-            body = _render_bash_input_body(
-                self._bound_inputs,
-                self._command_text,
-                rendered_command=self._command_rendered,
-                workflow_inputs_used=self._workflow_inputs_used,
+            body = "\n".join(
+                _render_command_block(self._command_text, self._command_rendered)
             )
-            section = self._new_bash_input_section(body)
-            self._bash_input_section = section
+            section = self._new_command_section(body)
             self._command_widget = section
             return
         if self._pending_config_preview is not None:
@@ -969,33 +1102,74 @@ class WorkflowNodeRow(Collapsible):
             self._bash_input_section = section
             self._command_widget = section
 
-    def _refresh_bash_input_body(self) -> None:
-        """bug-094: re-render the already-mounted bash input body in place.
+    def _refresh_bash_binds_body(self) -> None:
+        """qol-108 (was ``_refresh_bash_input_body``): own the bash binds section.
 
-        Handles out-of-order setters (a ``set_workflow_inputs_used`` or
-        ``set_bound_inputs`` arriving after the bash ``input`` section is
-        mounted). No-op when the section isn't mounted yet (the pending
-        stashes are picked up by :meth:`_flush_pending_previews`) or when the
-        mounted section is NOT a bash command section (compute/map/workflow
-        previews own their own body; ``_command_text`` stays ``None``).
+        Bash rows: mount the ``▶ input`` (binds) section on first non-empty
+        setter (from ``_flush_pending_previews`` running in ``on_mount``,
+        OR from a live setter after mount), refresh in place on subsequent
+        setters. Both ``_bound_inputs`` and ``_workflow_inputs_used`` empty
+        → no mount (empty-block-suppressed convention per AC #5).
+
+        The mount call is deferred to :meth:`_flush_pending_previews` when
+        the row hasn't composed yet — a pre-compose setter can't find
+        ``Collapsible.Contents`` and its ``_mount_in_contents`` fallback
+        would land the Static as a sibling of Contents (violating
+        bug-035). ``_flush_pending_previews`` runs from ``on_mount``, at
+        which point Contents is queryable.
+
+        Non-bash rows are left alone: compute/map/workflow rows carry
+        ``workflow_inputs_used`` inside their own ``▶ input`` config-preview
+        section via :meth:`_config_preview_body` (unchanged shape).
         """
-        if self._bash_input_section is None or self._command_text is None:
+        if self._node_type != "kolsch/nodes/bash":
             return
-        body = _render_bash_input_body(
+        body = _render_bash_binds_body(
             self._bound_inputs,
-            self._command_text,
-            rendered_command=self._command_rendered,
             workflow_inputs_used=self._workflow_inputs_used,
         )
-        # `_contents_list[0]` is the `Static` preview mounted by
-        # `_new_bash_input_section`; narrow to reach `Static.update`.
+        if self._bash_input_section is None:
+            if not body:
+                return
+            # Pre-compose setter → defer the mount to ``_flush_pending_previews``
+            # (invoked by ``on_mount`` once Contents exists). Note the
+            # `_bash_input_section` remains None so the flush path retries.
+            try:
+                self.query_one(Collapsible.Contents)
+            except Exception:  # noqa: BLE001 — Contents not composed yet
+                return
+            self._bash_input_section = self._new_bash_input_section(body)
+            return
         inner = self._bash_input_section._contents_list[0]
         if isinstance(inner, Static):
             with contextlib.suppress(Exception):
                 inner.update(body)
 
+    def _refresh_command_body(self) -> None:
+        """qol-108: re-render the mounted ``▶ command`` body in place.
+
+        No-op when the section isn't mounted yet or when the mounted
+        widget doesn't carry the bash command (compute/map/workflow
+        previews own the ``_command_widget`` slot with their own body).
+        """
+        if self._command_widget is None or self._command_text is None:
+            return
+        body = "\n".join(
+            _render_command_block(self._command_text, self._command_rendered)
+        )
+        # ``_command_widget`` is the ``▶ command`` NodeSection; narrow to
+        # its inner Static (mounted by :meth:`_new_command_section`).
+        section = self._command_widget
+        try:
+            inner = section._contents_list[0]  # type: ignore[attr-defined]
+        except (AttributeError, IndexError):
+            return
+        if isinstance(inner, Static):
+            with contextlib.suppress(Exception):
+                inner.update(body)
+
     def _new_bash_input_section(self, body_text: str) -> NodeSection:
-        """Build + mount the bash ``input`` NodeSection."""
+        """Build + mount the bash ``input`` NodeSection (binds surface)."""
         from cli.chat.widgets.node_section import NodeSection  # noqa: PLC0415
 
         section = NodeSection("input")
@@ -1004,6 +1178,51 @@ class WorkflowNodeRow(Collapsible):
         with contextlib.suppress(Exception):
             self._mount_in_contents(section)
         return section
+
+    def _new_command_section(self, body_text: str) -> NodeSection:
+        """qol-108: build + mount a top-level ``▶ command`` NodeSection."""
+        from cli.chat.widgets.node_section import NodeSection  # noqa: PLC0415
+
+        section = NodeSection("command")
+        inner = Static(body_text, classes="node-command-preview", markup=False)
+        section._contents_list.append(inner)
+        with contextlib.suppress(Exception):
+            self._mount_in_contents(section)
+        return section
+
+    def _mount_write_file_sections(
+        self,
+        path: str,
+        content: str,
+        rendered_path: str | None,
+        rendered_content: str | None,
+    ) -> None:
+        """qol-108: mount ``▶ path`` + ``▶ content`` for a write_file row.
+
+        Ordering pinned by AC #6: ``▶ path`` mounts before ``▶ content``.
+        Each section wraps a single ``Static`` with the rendered-vs-
+        template convention preserved via :func:`_render_path_body` /
+        :func:`_render_content_body`.
+        """
+        from cli.chat.widgets.node_section import NodeSection  # noqa: PLC0415
+
+        path_body = _render_path_body(path, rendered_path)
+        path_section = NodeSection("path")
+        path_section._contents_list.append(
+            Static(path_body, classes="node-command-preview", markup=False),
+        )
+        with contextlib.suppress(Exception):
+            self._mount_in_contents(path_section)
+        self._write_file_path_section = path_section
+
+        content_body = _render_content_body(content, rendered_content)
+        content_section = NodeSection("content")
+        content_section._contents_list.append(
+            Static(content_body, classes="node-command-preview", markup=False),
+        )
+        with contextlib.suppress(Exception):
+            self._mount_in_contents(content_section)
+        self._write_file_content_section = content_section
 
     def _mount_bash_output_sections(self, output: dict[str, Any]) -> None:
         """bug-037: mount ``output`` + ``exit: <code>`` sections."""
@@ -1069,11 +1288,11 @@ class WorkflowNodeRow(Collapsible):
         from cli.chat.widgets.node_section import NodeSection  # noqa: PLC0415
 
         # --- Input section ---------------------------------------------------
-        # bug-037 already builds a bash `input` section on
-        # `set_command_preview`. If it exists, keep it — no need to
-        # mount a second one. Otherwise, mount a generic Input from
-        # `_bound_inputs` (this is the NEW render for agent nodes,
-        # which have no reusable bound-inputs section).
+        # bug-037 + qol-108: bash rows mount the `▶ input` section from
+        # `set_bound_inputs` / `set_workflow_inputs_used` when either is
+        # non-empty. If it already exists (bash with binds), reuse it.
+        # Otherwise (agent nodes, or bash without binds), mount a generic
+        # Input from `_bound_inputs`.
         if self._bash_input_section is None:
             input_body = _render_bound_inputs_body(
                 self._bound_inputs,

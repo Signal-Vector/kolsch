@@ -5,8 +5,8 @@
 ▌
 ▌       bound inputs:
 ▌       · url: https://example.com/jd
+▌     ▼ command
 ▌
-▌       command:
 ▌       curl {{ inputs.url }}
 ▌     ▼ output
 ▌

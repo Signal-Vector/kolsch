@@ -192,16 +192,16 @@ async def test_fixture_replay_header_and_bash_command() -> None:
             for c in contents.walk_children()
             if isinstance(c, Static) and c.has_class("node-command-preview")
         ]
-        assert len(previews) == 1, (
-            f"bash row should carry one command preview inside "
-            f"Contents; got {len(previews)}"
-        )
-        # bug-037: the preview Static now lives inside the `input`
-        # NodeSection, and its body carries `command:` as one of two
-        # labeled blocks (`bound inputs:` + `command:`).
-        preview_text = str(previews[0].render())
-        assert "command:" in preview_text, (
-            f"preview should include 'command:'; got {preview_text!r}"
+        # qol-108: post-split a bash row mounts a ``▶ command`` section
+        # (always, when a command preview is delivered) and optionally a
+        # ``▶ input`` section (when binds / workflow-inputs-used are
+        # present). The command widget lives inside ``▶ command``; the
+        # section title is now the ``command`` label, so the body no
+        # longer carries a redundant ``command:`` prefix.
+        assert previews, "bash row should carry at least one node-command-preview"
+        preview_text = "\n".join(str(p.render()) for p in previews)
+        assert preview_text.strip(), (
+            f"preview should carry non-empty body text; got {preview_text!r}"
         )
 
         # Sanity: fixture actually opened a workflow card.
