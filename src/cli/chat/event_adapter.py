@@ -627,6 +627,18 @@ class EventAdapter:
         # source dict (the `.answered` / `.cancelled` payloads don't
         # carry `source` by spec-004 shape).
         self._workflow_prompt_sources: dict[str, tuple[str, str]] = {}
+        # bug-110: prompt_id → live interactive ApprovalBlock. Populated
+        # at the LIVE mount branch of `_handle_prompt_requested` (never
+        # the terminal/resume branch — those blocks are born resolved
+        # via `_terminal_state`). Consumed by `_handle_prompt_cancelled`
+        # to flip the mounted block to terminal-resolved so the composer
+        # gate (`recompute_awaiting_approval`) unfreezes — the resume
+        # path already does this on boot; this closes the same gap for
+        # a live cancel (Esc-cancel-turn / node-timeout). Popped in
+        # both `_handle_prompt_answered` (hygiene) and
+        # `_handle_prompt_cancelled` (consumption). Widget type is `Any`
+        # to avoid a Textual import cycle with `cli.chat.widgets.*`.
+        self._live_prompt_blocks: dict[str, Any] = {}
 
         # spec-006/007: per-card tracking for the `_handle_card_*`
         # handlers. `_card_widgets` keys are `CardId`; values are
@@ -1794,7 +1806,7 @@ class EventAdapter:
             self._handle_prompt_answered(payload)
             return
         if kind == WIRE_PROMPT_CANCELLED:
-            self._handle_prompt_cancelled(payload)
+            await self._handle_prompt_cancelled(payload)
             return
         # spec-006/007: card kinds route to the `_handle_card_*`
         # branch. Only `_handle_card_opened` is async (widget mount);
@@ -2064,6 +2076,16 @@ class EventAdapter:
         # the mock-app fallback path stays safe.
         if event is not None:
             self._register_widget_for_event(event, block)
+
+        # bug-110: register the live block under its prompt_id so
+        # `_handle_prompt_cancelled` can flip it to terminal-resolved
+        # when the turn is cancelled (Esc / node timeout) — the resume
+        # path already produces that terminal state on boot; this closes
+        # the same gap for a live cancel. Only the LIVE branch registers
+        # (the terminal branch above returns early); mock-app fallback
+        # with `block is None` is skipped.
+        if block is not None:
+            self._live_prompt_blocks[prompt_id] = block
 
         # bug-021 Symptom 2: bridge the widget's local resolution back
         # onto the store as a `WIRE_PROMPT_ANSWERED` event.
@@ -2378,8 +2400,18 @@ class EventAdapter:
         if not isinstance(prompt_id, str) or not prompt_id:
             return
         if prompt_id in self._resolved_prompt_ids:
+            # bug-110: drop any stale registry entry so it can't leak
+            # past the guard (hygiene — the widget's own `_resolve` sets
+            # `_resolved_event`, no `render_terminal` needed here).
+            self._live_prompt_blocks.pop(prompt_id, None)
             return
         self._resolved_prompt_ids.add(prompt_id)
+        # bug-110: pop the live-block registry entry — the interactive
+        # `_resolve` path already flipped the widget to resolved (its
+        # `_resolved_event.set()`), so no `render_terminal` call here.
+        # Only the registry mapping needs cleanup so it doesn't leak
+        # across a long session.
+        self._live_prompt_blocks.pop(prompt_id, None)
         response = payload.get("response", payload.get("answer", ""))
         if not isinstance(response, str):
             response = str(response)
@@ -2411,7 +2443,7 @@ class EventAdapter:
         if callable(recompute):
             recompute()
 
-    def _handle_prompt_cancelled(self, payload: dict[str, Any]) -> None:
+    async def _handle_prompt_cancelled(self, payload: dict[str, Any]) -> None:
         """Cancel the in-flight `PromptsImpl` future on `.cancelled`.
 
         Raises `asyncio.CancelledError` from the awaiting `choice()`
@@ -2422,16 +2454,47 @@ class EventAdapter:
         spec-014: same workflow-source branch as
         `_handle_prompt_answered`; the emitted `.approval_resolved`
         payload's `resolution` is `"cancelled"`.
+
+        bug-110: also flips the mounted interactive ``ApprovalBlock``
+        (if any) to terminal-resolved via ``render_terminal(allowed=None,
+        footer="⊘ Interrupted")`` — the same widget state the resume
+        path produces for a cancelled/dangling prompt on boot. Without
+        this, `_resolved_event` stays unset on the mounted block, so
+        `ApprovalBlock.is_resolved` reports ``False`` and
+        `ChatApp.recompute_awaiting_approval` keeps the composer frozen
+        on "Awaiting approval…" indefinitely (nothing to interact with,
+        only kill + ``--resume`` recovers). The flip goes through
+        `render_terminal` — NOT `_resolved_event.set()` — so the
+        `resolved()` bridge stays asleep and no duplicate
+        `WIRE_PROMPT_ANSWERED` is appended to the durable log.
         """
         prompt_id = payload.get("prompt_id")
         if not isinstance(prompt_id, str) or not prompt_id:
             return
         if prompt_id in self._resolved_prompt_ids:
+            # bug-110: idempotence — a duplicate `.cancelled` (or a
+            # `.cancelled` after `.answered`) is a no-op; also drop any
+            # stale registry entry so it can't leak past the guard.
+            self._live_prompt_blocks.pop(prompt_id, None)
             return
         self._resolved_prompt_ids.add(prompt_id)
         if self._prompts_impl is not None:
             self._prompts_impl.cancel_pending(prompt_id)
         self._maybe_emit_approval_resolved(prompt_id, "cancelled")
+        # bug-110: flip the live block to terminal BEFORE the
+        # recompute, so `recompute_awaiting_approval` observes the
+        # freshly resolved widget and unfreezes the composer in the
+        # same tick. Best-effort — headless/mock contexts without a
+        # matching mounted block are a no-op (registry pop returns
+        # `None`); any DOM/mount race is suppressed so the durable
+        # `approval_resolved` emit above still fires unaffected.
+        block = self._live_prompt_blocks.pop(prompt_id, None)
+        if block is not None and hasattr(block, "render_terminal"):
+            with contextlib.suppress(Exception):
+                await block.render_terminal(
+                    allowed=None,
+                    footer="⊘ Interrupted",
+                )
         # bug-056: same recompute nudge as the answered path.
         recompute = getattr(self._app, "recompute_awaiting_approval", None)
         if callable(recompute):
