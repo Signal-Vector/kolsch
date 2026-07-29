@@ -158,6 +158,14 @@ packages = [
     "src/llm",
     "src/templating",
     "src/kolsch",
+    # spec-105 — MCP operator server (Surface B). Distinct from
+    # `src/tools/mcp.py`, which is the client-direction `MCPServer`
+    # Protocol. Package named `mcp_server` (not `mcp`) because the
+    # MCP Python SDK's `mcp` package sits earlier on sys.path
+    # (site-packages precedes `src/`), so a `src/mcp/` package would
+    # be shadowed and the SDK unreachable — see the module docstring
+    # for the collision detail.
+    "src/mcp_server",
 ]
 
 # Phase 2.2 (ENV-R13 / E-2.2-001 A3) — repo-root docs ship as
@@ -492,6 +500,21 @@ convention = "google"
 # value never needs TYPE_CHECKING gating because it goes into the
 # AgentEngine constructor immediately.
 "src/platform_runtime/**" = ["TC001", "TC003"]
+# MCP operator server — spec-105.
+# - SLF001: FastMCP exposes only a public `run_stdio_async()` that
+#   binds stdio and calls `_mcp_server.run(...)` in one blob; the
+#   HARD-GUARD `contextlib.redirect_stdout(sys.stderr)` MUST wrap the
+#   inner `_mcp_server.run(...)` but NOT the outer `stdio_server()`
+#   bind (or `stdio_server` would capture `sys.stderr.buffer` and
+#   the JSON-RPC frames would land on stderr, not stdout — breaking
+#   the client). Reaching in for the two private members is the
+#   only way to interleave the guard between bind and serve.
+# - FBT001/FBT002: FastMCP tool signatures MUST be flat typed
+#   positional/keyword params so the resulting `inputSchema` puts
+#   `starred`/`archived`/`limit` at top level (not wrapped under a
+#   required `params:` object). Boolean args are load-bearing here —
+#   the MCP surface mirrors `GET /sessions?starred=...&archived=...`.
+"src/mcp_server/**" = ["SLF001", "TC001", "TC003", "FBT001", "FBT002"]
 # Same for engine — value-type Pydantic models (LLMRequest, Message,
 # AssembledContext, etc.) need their type imports at runtime. PLR0913
 # is suppressed because AgentEngine.__init__ takes one keyword per
@@ -558,6 +581,7 @@ known-first-party = [
     "cli",
     "api",
     "platform_runtime",
+    "mcp_server",
 ]
 
 [tool.ruff.format]

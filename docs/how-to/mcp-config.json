@@ -1,0 +1,9 @@
+{
+  "mcpServers": {
+    "kolsch": {
+      "command": "kolsch",
+      "args": ["mcp", "serve"],
+      "env": {}
+    }
+  }
+}

@@ -156,6 +156,7 @@ _TOP_LEVEL_SUBCOMMANDS: tuple[str, ...] = (
     "workflows",
     "nodes",
     "doctor",
+    "mcp",
 )
 
 
@@ -245,6 +246,24 @@ def test_tc_cli_smoke_06_permissions_no_op_does_not_crash(
             f"`kolsch permissions` help missing operation {op!r}; got:\n"
             f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
         )
+
+
+def test_tc_cli_smoke_06_mcp_no_op_does_not_crash(
+    initialized_workspace: Path,
+) -> None:
+    """TC-CLI-SMOKE-06b (spec-105): ``kolsch mcp`` (no operation)
+    exits non-zero with the subparser help on stderr — same pattern
+    as SMOKE-05/-06. Guards against a future refactor accidentally
+    letting bare ``kolsch mcp`` boot the serve loop and hang the
+    smoke suite."""
+    result = _run("mcp", workspace=initialized_workspace)
+    assert result.returncode != 0
+    _assert_no_traceback(result)
+    combined = (result.stdout + result.stderr).lower()
+    assert "serve" in combined, (
+        f"`kolsch mcp` help missing operation 'serve'; got:\n"
+        f"stdout:\n{result.stdout}\nstderr:\n{result.stderr}"
+    )
 
 
 # ===========================================================================
@@ -358,6 +377,10 @@ _NESTED_HELP_INVOCATIONS: tuple[tuple[str, ...], ...] = (
     ("permissions", "add", "--help"),
     ("permissions", "remove", "--help"),
     ("permissions", "show", "--help"),
+    # spec-105 — `kolsch mcp serve --help` must exit 0 without booting
+    # the runtime or the stdio serve loop (argparse handles --help
+    # before dispatch, so this is a proof of that guarantee).
+    ("mcp", "serve", "--help"),
 )
 
 

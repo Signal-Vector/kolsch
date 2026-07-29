@@ -399,6 +399,23 @@ def _build_parser() -> argparse.ArgumentParser:
 
     add_doctor_subparser(sub)
 
+    # kolsch mcp {serve} — MCP operator server (spec-105). Nested
+    # subparser so future subactions (`inspect`, `probe`, ...) slot
+    # in without a schema break; today only `serve` exists.
+    mcp = sub.add_parser(
+        "mcp",
+        help="MCP operator server (spec-105) — read-only stdio bridge.",
+    )
+    _PARSER_REGISTRY["mcp"] = mcp
+    mcp_sub = mcp.add_subparsers(dest="mcp_command", metavar="<op>")
+    mcp_sub.add_parser(
+        "serve",
+        help=(
+            "Serve the MCP operator server on stdio. Pairs with "
+            "`claude -p --mcp-config` under a Pro/Max subscription."
+        ),
+    )
+
     return parser
 
 
@@ -988,6 +1005,40 @@ async def _cmd_doctor(args: argparse.Namespace) -> int:
     return await cmd_doctor(args, out=sys.stdout, root=args.root)
 
 
+async def _cmd_mcp(args: argparse.Namespace) -> int:
+    """Dispatch the `mcp` op (spec-105).
+
+    Mirrors ``_cmd_sessions`` / ``_cmd_permissions``: when no op is
+    supplied, print the subparser help to stderr and exit 1 rather
+    than silently booting a serve loop that a fresh
+    ``kolsch mcp --help`` invocation would then hang against.
+    """
+    if args.mcp_command is None:
+        return _print_subcommand_help_and_exit("mcp")
+    if args.mcp_command == "serve":
+        return await _cmd_mcp_serve(args)
+    return 1
+
+
+async def _cmd_mcp_serve(args: argparse.Namespace) -> int:
+    """Serve the MCP operator server on stdio until EOF.
+
+    Boots a `PlatformRuntime` under the workspace guard inherited from
+    `main` (`main.py:72-77`), then awaits the FastMCP stdio loop. The
+    blocking `run_stdio` call itself is only reachable via the
+    real-`claude` e2e round-trip; every non-blocking piece
+    (`build_server`, the tool body, the view mirror) is covered by
+    in-process tests. `# pragma: no cover` marks the two blocking
+    lines so the 85% global floor is not depressed by a line that
+    only the e2e path can exercise.
+    """
+    from mcp_server import run_stdio  # noqa: PLC0415
+
+    runtime = await bootstrap_runtime(root=args.root)
+    await run_stdio(runtime)  # pragma: no cover — e2e-only path
+    return 0  # pragma: no cover — stdio_server returns on EOF
+
+
 _DISPATCH = {
     "run": _cmd_run,
     "sessions": _cmd_sessions,
@@ -1005,6 +1056,7 @@ _DISPATCH = {
     "workflows": _cmd_workflows,
     "nodes": _cmd_nodes,
     "doctor": _cmd_doctor,
+    "mcp": _cmd_mcp,
 }
 
 
