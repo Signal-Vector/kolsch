@@ -1803,7 +1803,7 @@ class EventAdapter:
             await self._handle_prompt_requested(payload, event=event)
             return
         if kind == WIRE_PROMPT_ANSWERED:
-            self._handle_prompt_answered(payload)
+            await self._handle_prompt_answered(payload)
             return
         if kind == WIRE_PROMPT_CANCELLED:
             await self._handle_prompt_cancelled(payload)
@@ -2382,12 +2382,19 @@ class EventAdapter:
             return f"workflow {refs} · node {node_name}"
         return f"workflow {refs}"
 
-    def _handle_prompt_answered(self, payload: dict[str, Any]) -> None:
+    async def _handle_prompt_answered(self, payload: dict[str, Any]) -> None:
         """Resolve the in-flight `PromptsImpl` future on `.answered`.
 
         Idempotent per `prompt_id`; a second dispatch is a no-op
         (setting a done future's result would raise
         `InvalidStateError`).
+
+        bug-114: an auto-denied answer carries
+        `reason="approval_window_elapsed"`. Such a prompt had no
+        interactive `_resolve`, so its mounted block never set
+        `_resolved_event`; this handler flips it to a distinct terminal
+        (like `.cancelled`) so the composer unfreezes. Made `async` for
+        that `render_terminal` await (interactive answers skip it).
 
         spec-014: if the answered prompt was workflow-scoped
         (tracked in `_workflow_prompt_sources` from the matching
@@ -2406,12 +2413,12 @@ class EventAdapter:
             self._live_prompt_blocks.pop(prompt_id, None)
             return
         self._resolved_prompt_ids.add(prompt_id)
-        # bug-110: pop the live-block registry entry — the interactive
-        # `_resolve` path already flipped the widget to resolved (its
-        # `_resolved_event.set()`), so no `render_terminal` call here.
-        # Only the registry mapping needs cleanup so it doesn't leak
-        # across a long session.
-        self._live_prompt_blocks.pop(prompt_id, None)
+        # bug-110: pop the live-block registry entry. For an INTERACTIVE
+        # answer the widget's own `_resolve` already flipped it to
+        # resolved (its `_resolved_event.set()`), so no `render_terminal`
+        # is needed. bug-114: an auto-denied answer (window elapsed) has
+        # NO interactive resolve, so the captured block is flipped below.
+        block = self._live_prompt_blocks.pop(prompt_id, None)
         response = payload.get("response", payload.get("answer", ""))
         if not isinstance(response, str):
             response = str(response)
@@ -2430,6 +2437,24 @@ class EventAdapter:
                 response,
                 rule=rule_dict,
             )
+        # bug-114: flip the live block to terminal for an auto-denied
+        # (window-elapsed) answer BEFORE the recompute below, so
+        # `recompute_awaiting_approval` observes a resolved widget and
+        # unfreezes the composer in the same tick. Interactive answers
+        # already flipped via `_resolve` and carry no marker, so they
+        # never enter this branch. Goes through `render_terminal` — NOT
+        # `_resolved_event.set()` (bug-110) — so the `resolved()` bridge
+        # stays asleep and no duplicate durable answer is appended.
+        if (
+            payload.get("reason") == "approval_window_elapsed"
+            and block is not None
+            and hasattr(block, "render_terminal")
+        ):
+            with contextlib.suppress(Exception):
+                await block.render_terminal(
+                    allowed=False,
+                    footer="⊘ Auto-denied — no response",
+                )
         # spec-014: workflow branch — schedule the durable
         # `approval_resolved` emit. Fire-and-forget so the sync
         # handler stays sync; the awaiting `choice()` unblocks via

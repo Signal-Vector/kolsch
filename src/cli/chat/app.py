@@ -765,6 +765,13 @@ class ChatApp(App[None]):
                     # adapter subscription (ApprovalBlock mounts in
                     # the SAME session).
                     bus=getattr(self.session.runtime, "bus", None),
+                    # bug-114: bound in-workflow approval prompts by the
+                    # configured window (None/OFF by default).
+                    approval_response_seconds=getattr(
+                        self.session.runtime,
+                        "workflow_approval_response_seconds",
+                        None,
+                    ),
                 )
             except Exception:  # noqa: BLE001 — headless fixtures may lack a real store
                 _LOGGER.debug(

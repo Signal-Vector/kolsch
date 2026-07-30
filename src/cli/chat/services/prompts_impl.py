@@ -40,7 +40,11 @@ from uuid import uuid4
 from schemas.entities import Actor
 from schemas.events import Event, EventType
 from schemas.identifiers import EventId, PromptId, new_prompt_id
-from schemas.wire_kinds import WIRE_PROMPT_CANCELLED, WIRE_PROMPT_REQUESTED
+from schemas.wire_kinds import (
+    WIRE_PROMPT_ANSWERED,
+    WIRE_PROMPT_CANCELLED,
+    WIRE_PROMPT_REQUESTED,
+)
 from tools.services.exceptions import PromptBusy
 from tools.services.prompts import AbstractPrompts, PromptSource
 
@@ -138,10 +142,20 @@ class PromptsImpl(AbstractPrompts):
         session_id: SessionId,
         thread_id: ThreadId,
         bus: EventBus | None = None,
+        approval_response_seconds: float | None = None,
     ) -> None:
         self._session_store = session_store
         self._session_id = session_id
         self._thread_id = thread_id
+        # bug-114 — approval-response window for prompts raised INSIDE a
+        # workflow node. `None`/`<= 0` = OFF (unbounded wait, pre-bug-114
+        # behavior). When set, an unanswered workflow-scoped approval
+        # auto-resolves to a deny after this many seconds via the normal
+        # `WIRE_PROMPT_ANSWERED` bridge — so the node fails as a legible
+        # denial instead of the compute timeout absorbing the wait and
+        # dying with an opaque `NodeTimeoutExceeded`. Sourced from
+        # `platform.yaml:workflows.approval_response_seconds`.
+        self._approval_response_seconds = approval_response_seconds
         # bug-020: symmetric with `CardsImpl` / `WorkflowsImpl` — when
         # a runtime bus is injected, `_append_ui_event` publishes each
         # WIRE_PROMPT_* event on `UI_EVENT_TOPIC` so the live
@@ -238,7 +252,17 @@ class PromptsImpl(AbstractPrompts):
         payload["source"] = dict(source)
         try:
             await self._append_ui_event(WIRE_PROMPT_REQUESTED, payload)
-            return await future
+            # bug-114: bound in-workflow approval prompts by the
+            # configured window; unbounded (pre-bug-114) otherwise.
+            window = self._approval_window_seconds(source)
+            if window is None:
+                return await future
+            return await self._await_answer_bounded(
+                future,
+                window=window,
+                prompt_id=prompt_id,
+                source=source,
+            )
         finally:
             self._pending_future = None
             self._pending_prompt_id = None
@@ -440,6 +464,93 @@ class PromptsImpl(AbstractPrompts):
         if self._pending_future is not None:
             msg = f"Another prompt is unresolved: prompt_id={self._pending_prompt_id}"
             raise PromptBusy(msg)
+
+    # -- bug-114 approval-response window ------------------------------
+
+    def _approval_window_seconds(self, source: PromptSource) -> float | None:
+        """Return the approval-response window for this prompt, or `None`.
+
+        bug-114: only prompts raised INSIDE a workflow node
+        (`source["kind"] == "workflow"`) are bounded, and only when a
+        positive window is configured. Returns `None` otherwise — an
+        unbounded await, the pre-bug-114 behavior (chat approvals never
+        auto-deny; the window is OFF by default).
+        """
+        window = self._approval_response_seconds
+        if window is None or window <= 0:
+            return None
+        if source.get("kind") != "workflow":
+            return None
+        return float(window)
+
+    async def _await_answer_bounded(
+        self,
+        future: asyncio.Future[str],
+        *,
+        window: float,
+        prompt_id: PromptId,
+        source: PromptSource,
+    ) -> str:
+        """Await the answer, auto-denying after `window` seconds (bug-114).
+
+        Races the pending future against a `window`-second timer. If the
+        operator answers first, returns their response verbatim. If the
+        window elapses first, emits a durable
+        `WIRE_PROMPT_ANSWERED(response="n", reason="approval_window_elapsed")`
+        — riding the normal answered bridge so the mounted `ApprovalBlock`
+        flips terminal and the composer unfreezes — then resolves and
+        returns the deny.
+
+        Deliberately does NOT cancel the future (a `CancelledError` would
+        surface as a turn-cancel, not a deny) and does NOT touch the
+        widget's `_resolved_event` (bug-110: that wakes the answered
+        bridge and double-writes the durable answer). The single durable
+        answer is the emitted event; the direct `resolve_pending` below
+        is idempotent with the adapter's own resolve so a headless
+        (no-bus) impl still unblocks.
+        """
+        loop = asyncio.get_running_loop()
+        timer: asyncio.Task[None] = loop.create_task(asyncio.sleep(window))
+        # `future` (Future[str]) and `timer` (Task[None]) are both
+        # Futures — annotate the set so `asyncio.wait`'s type var binds.
+        awaitables: set[asyncio.Future[Any]] = {future, timer}
+        try:
+            await asyncio.wait(
+                awaitables,
+                return_when=asyncio.FIRST_COMPLETED,
+            )
+        finally:
+            if not timer.done():
+                timer.cancel()
+        if future.done():
+            return future.result()
+        # Window elapsed with no answer — auto-deny via the answered
+        # bridge, then resolve (idempotent with the adapter's resolve).
+        await self._emit_auto_deny(prompt_id, source)
+        self.resolve_pending(str(prompt_id), "n")
+        return await future
+
+    async def _emit_auto_deny(
+        self,
+        prompt_id: PromptId,
+        source: PromptSource,
+    ) -> None:
+        """Emit the durable auto-deny `WIRE_PROMPT_ANSWERED` (bug-114).
+
+        `response="n"` deny-once; `reason="approval_window_elapsed"` marks
+        it as a window-elapsed auto-deny (vs an interactive `n`) so the
+        adapter renders a distinct terminal footer. Rides
+        `EventAdapter._handle_prompt_answered`, which flips the widget +
+        fires the workflow-scoped `approval_resolved`. On resume the
+        event replays as a plain deny (born-resolved).
+        """
+        payload: dict[str, Any] = {
+            "prompt_id": str(prompt_id),
+            "response": "n",
+            "reason": "approval_window_elapsed",
+            "source": dict(source),
+        }
+        await self._append_ui_event(WIRE_PROMPT_ANSWERED, payload)
 
     async def _append_ui_event(self, kind: str, payload: dict[str, Any]) -> None:
         """Append a `UI_EVENT` for the given kind + payload.
