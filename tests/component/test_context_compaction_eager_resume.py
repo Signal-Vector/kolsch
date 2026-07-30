@@ -427,6 +427,10 @@ async def test_summariser_fails_twice_falls_through_to_mechanical(
     last_compacted = compacted[-1]
     summary = last_compacted.data.get("summary") or {}
     assert summary.get("trigger") == "auto_truncation"
+    # bug-113 — the top-level trigger now agrees with summary.trigger
+    # (previously it borrowed "auto"); an auto/eager mechanical fallback
+    # reads as "auto_truncation" on both fields.
+    assert last_compacted.data.get("trigger") == "auto_truncation"
     # And the eager method returned the Event it emitted.
     assert result is not None
 

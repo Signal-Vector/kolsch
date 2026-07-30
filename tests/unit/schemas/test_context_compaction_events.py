@@ -87,6 +87,20 @@ def test_context_compacted_data_accepts_new_fields() -> None:
     assert data.trigger == "manual_preview"
 
 
+def test_context_compacted_data_accepts_truncation_triggers() -> None:
+    # bug-113 — mechanical-truncation fallback stamps a `*_truncation`
+    # trigger on BOTH the top-level field and nested summary.trigger.
+    for value in ("auto_truncation", "manual_truncation"):
+        data = ContextCompactedData(
+            **_minimal_compacted_kwargs(),
+            trigger=value,
+        )
+        assert data.trigger == value
+        # Round-trips through JSON (the load-bearing on-disk contract).
+        restored = ContextCompactedData.model_validate_json(data.model_dump_json())
+        assert restored.trigger == value
+
+
 def test_context_compacted_data_rejects_invalid_trigger_literal() -> None:
     from pydantic import ValidationError
 

@@ -801,14 +801,16 @@ def build_mechanical_truncation_payload(
     *,
     keep_tail_tokens: int,
     max_refs: int = 50,
+    trigger: Literal["auto_truncation", "manual_truncation"] = "auto_truncation",
 ) -> ContextCompactedData | None:
     """Construct a mechanical-truncation ``ContextCompactedData``.
 
     feat-054 Phase 4 tier 2 — used by the engine's compaction ladder
-    when the summariser LLM exhausts its retries. Snaps the same
-    boundary the reference-summary provider would use, then produces a
-    ``ContextCompactedData`` whose ``summary`` carries **no LLM prose
-    at all** — just:
+    when the summariser LLM exhausts its retries (or, per bug-113,
+    when a user-invoked ``/compact`` overflows the summariser window).
+    Snaps the same boundary the reference-summary provider would use,
+    then produces a ``ContextCompactedData`` whose ``summary`` carries
+    **no LLM prose at all** — just:
 
     - a stock ``summary_text`` telling the model the span was
       mechanically dropped and pointing at ``context.reference_lookup``,
@@ -816,10 +818,13 @@ def build_mechanical_truncation_payload(
       (clustered per :func:`_cluster_refs` when the span exceeds
       ``max_refs``) so :func:`context.reference_lookup` still resolves
       dropped events,
-    - a ``trigger`` of ``"auto_truncation"``. This is a fourth value on
-      the ``ContextCompactedData.trigger`` literal beyond the
-      auto/manual/manual_preview set — extend the model's Literal when
-      wiring this in.
+    - a ``trigger`` of ``trigger`` — set on BOTH the top-level
+      ``ContextCompactedData.trigger`` and the nested
+      ``summary["trigger"]`` so the two agree. Callers pass
+      ``"auto_truncation"`` for the auto/eager ladder and
+      ``"manual_truncation"`` for a user-invoked ``/compact`` that fell
+      back to mechanical truncation (bug-113). Both values live on the
+      ``ContextCompactedData.trigger`` Literal in ``schemas.events``.
 
     Returns ``None`` when the middle span is empty (nothing to drop —
     tier 3 hard-fail should fire at the engine instead).
@@ -924,7 +929,7 @@ def build_mechanical_truncation_payload(
                 "last_event_id": last_id,
                 "event_count": span_count,
             },
-            "trigger": "auto_truncation",
+            "trigger": trigger,
             "compactor": {
                 "variant": "mechanical_truncation",
                 "model": None,
@@ -936,11 +941,13 @@ def build_mechanical_truncation_payload(
         # bypassed for this path so an exact estimate isn't load-bearing.
         tokens_after=min(pre_tokens // 4, 500),
         preview=False,
-        # `trigger` on ContextCompactedData is still one of
-        # auto/manual/manual_preview; keep "auto" so the pydantic
-        # literal validates. The mechanical marker rides on
-        # `summary.trigger` + `pre_compaction.fallback`.
-        trigger="auto",
+        # bug-113: the mechanical-truncation marker rides on the
+        # top-level `trigger` (a `*_truncation` value now on the
+        # `ContextCompactedData.trigger` Literal), the nested
+        # `summary.trigger`, AND `pre_compaction.fallback`. Top-level and
+        # nested carry the same value so `/why-compact` and telemetry
+        # read consistently.
+        trigger=trigger,
     )
 
 

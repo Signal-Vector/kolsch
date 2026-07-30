@@ -386,7 +386,12 @@ class ContextCompactedData(_DataModel):
     absorbed into the resume UX instead of the first exchange),
     `"auto_resume_preview"` for the read-only variant of the eager
     check, `"manual"` for a user-invoked `/compact`, and
-    `"manual_preview"` for `/compact --preview`.
+    `"manual_preview"` for `/compact --preview`. The two `*_truncation`
+    values mark a *mechanical* (non-LLM) truncation fallback rather than
+    an LLM summary: `"auto_truncation"` when the auto/eager ladder's
+    summariser was exhausted, and `"manual_truncation"` when a
+    user-invoked `/compact` fell back to mechanical truncation (e.g. the
+    middle span overflowed the summariser's context window).
     """
 
     compacted_event_ids: list[EventId]
@@ -402,6 +407,8 @@ class ContextCompactedData(_DataModel):
         "auto_resume_preview",
         "manual",
         "manual_preview",
+        "auto_truncation",
+        "manual_truncation",
     ] = "auto"
 
 

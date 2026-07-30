@@ -254,12 +254,13 @@ async def test_eager_compaction_on_resume_fires_before_first_exchange(
         # marker is the new Phase 5 value.
         assert result.data.get("trigger") in (
             "auto_resume",
-            # Mechanical fallback stamps summary.trigger, not the
-            # top-level trigger — the outer CONTEXT_COMPACTED still
-            # carries `auto` in that path. Accept either shape so
-            # a tiny-context flakiness in the seed loop doesn't
-            # break the assertion.
-            "auto",
+            # bug-113: the mechanical fallback now stamps BOTH the
+            # top-level trigger and summary.trigger with
+            # "auto_truncation" (previously the top-level borrowed
+            # "auto"). Accept the tier-1 summary value and the
+            # truncation value so a tiny-context seed-loop flake
+            # doesn't break the assertion.
+            "auto_truncation",
         )
         if result.data.get("trigger") == "auto_resume":
             assert len(post_auto_resume) == pre_auto_resume + 1

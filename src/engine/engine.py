@@ -49,6 +49,7 @@ from errors import (
     CapabilityMismatch,
     ConfigExtendsTemplateWithoutInheritance,
     ConfigFallbackDuplicate,
+    ModelContextOverflow,
     ModelRetryExhausted,
     PlatformError,
     PlatformInternalError,
@@ -68,7 +69,7 @@ from schemas import (
     ToolResultData,
     UserMessageData,
 )
-from schemas.events import AgentMessageData
+from schemas.events import AgentMessageData, ContextCompactedData
 from tools import ToolContext
 
 if TYPE_CHECKING:
@@ -561,8 +562,9 @@ class AgentEngine:
         Emits a
         `CONTEXT_COMPACTED` event
         with ``trigger="manual"`` (or ``"manual_preview"`` when
-        ``preview=True``) so downstream telemetry can tell a user-
-        initiated compaction apart from an auto-fired one.
+        ``preview=True``, or ``"manual_truncation"`` when it falls back
+        to mechanical truncation — see below) so downstream telemetry can
+        tell a user-initiated compaction apart from an auto-fired one.
 
         Returns the emitted event on the happy path (``CONTEXT_COMPACTED``)
         OR — post-bug-098 — a ``CONTEXT_COMPACTION_SKIPPED`` event with
@@ -572,9 +574,19 @@ class AgentEngine:
         ``None`` only when the middle span was empty (short session) or
         the provider is not wired.
 
-        Raises the summariser exception on failure. The caller
-        (``ChatApp._handle_compact``) mounts a notice with the error;
-        the failure ladder in Phase 4 will retry.
+        bug-113 — on a summariser failure the (non-preview) manual path
+        runs the same tier-1 → tier-2 → tier-3 fallback ladder as the
+        auto paths (:meth:`_run_compaction_ladder`): a
+        ``ModelContextOverflow`` (or exhausted retries) degrades to
+        mechanical truncation and STILL emits a ``CONTEXT_COMPACTED``
+        (``trigger="manual_truncation"``) rather than raising — so
+        ``/compact`` no longer hard-fails when the middle overflows the
+        summariser window. It raises ``ContextOverflowUncompactable``
+        only when even mechanical truncation finds nothing to drop. The
+        ``--preview`` path is the exception: it stays tier-1-only and
+        re-raises the summariser error (a preview must never emit a live
+        mechanical compaction); the caller (``ChatApp._handle_compact``)
+        mounts a failure notice.
         """
         # feat-054 Phase 4 — thread-safety: serialise the read-then-emit
         # of a manual compaction against any concurrent in-flight
@@ -632,10 +644,9 @@ class AgentEngine:
             compaction_cfg.get("config", {}).get("max_output_tokens", 4096)
         )
         budget = max(context_length - max_output, 1)
-        keep_recent_fraction = float(
+        base_keep_recent_fraction = float(
             compaction_cfg.get("config", {}).get("keep_recent_fraction", 0.20)
         )
-        keep_tail_tokens = max(int(budget * keep_recent_fraction), 1)
         inner_config: dict[str, Any] = dict(compaction_cfg.get("config", {}) or {})
         # Route the manual-invocation markers through the provider's
         # config dict so the summariser prompt + emitted event both
@@ -646,37 +657,38 @@ class AgentEngine:
         if extra_instructions:
             inner_config["extra_instructions"] = extra_instructions
 
-        outcome = await provider.compact(
+        # bug-113 — run the same tier-1 → tier-2 → tier-3 fallback ladder
+        # the eager path uses, so `/compact` degrades to mechanical
+        # truncation instead of hard-failing when the middle overflows the
+        # summariser window. `allow_skip_emit=False` keeps the manual path
+        # from emitting auto-cadence CONTEXT_COMPACTION_SKIPPED / _FAILED
+        # events (a user-initiated /compact deserves a single terminal
+        # CONTEXT_COMPACTED) and returns a no-net-savings tier-1 *success*
+        # as-is rather than downgrading a real summary to truncation.
+        # `preview=preview` keeps a --preview run tier-1-only so it can
+        # never emit a live (preview=False) mechanical compaction.
+        outcome = await self._run_compaction_ladder(
+            provider=provider,
+            thread_id=thread_id,
             events=events,
-            keep_head=0,
-            keep_tail=keep_tail_tokens,
-            model_context_length=context_length,
-            thread_id=thread_id,
-            config=inner_config,
+            budget=budget,
+            base_keep_recent_fraction=base_keep_recent_fraction,
+            inner_config=inner_config,
+            context_length=context_length,
+            allow_skip_emit=False,
+            preview=preview,
         )
-        if not outcome.compacted_event_ids:
+        if outcome is None or not outcome.compacted_event_ids:
             return None
-
-        # Manual compaction is not exchange-scoped. Emit through the
-        # store directly with a system Actor and a per-thread event.
-        thread = await self._store.get_thread(thread_id)
-        emitted = Event(
-            event_id=EventId(f"ev_{uuid4().hex}"),
-            session_id=thread.session_id,
+        # Manual compaction is not exchange-scoped — emit a per-thread
+        # system event (same shape the eager path uses via
+        # `_emit_thread_event`: system Actor, no parent override,
+        # append + publish).
+        return await self._emit_thread_event(
             thread_id=thread_id,
-            parent_event_id=None,
-            created_at=datetime.now(UTC),
-            type=EventType.CONTEXT_COMPACTED,
+            event_type=EventType.CONTEXT_COMPACTED,
             data=outcome.model_dump(mode="json"),
-            actor=Actor(kind="system"),
         )
-        stored = await self._store.append_event(thread_id, emitted)
-        # Publish so live subscribers (chat event adapter) see it.
-        try:
-            await self._bus.publish(stored)
-        except Exception:  # noqa: BLE001
-            _log.exception("manual_compact: bus publish failed")
-        return stored
 
     async def maybe_compact_thread_eagerly(
         self,
@@ -792,7 +804,6 @@ class AgentEngine:
             respect_compaction=True,
         )
         from providers.compaction import (  # noqa: PLC0415
-            build_mechanical_truncation_payload,
             estimate_tokens_for_messages,
         )
 
@@ -811,20 +822,108 @@ class AgentEngine:
         base_keep_recent_fraction = float(
             compaction_cfg.get("config", {}).get("keep_recent_fraction", 0.20)
         )
+        inner_config: dict[str, Any] = dict(compaction_cfg.get("config", {}) or {})
+        # Propagate the requested trigger through the provider so the
+        # emitted ContextCompactedData.trigger reflects reality.
+        inner_config["trigger"] = trigger
+        # bug-113 — the tier-1 → tier-2 → tier-3 ladder now lives in a
+        # shared helper (also used by the manual `/compact` path). The
+        # eager/auto path keeps its CONTEXT_COMPACTION_SKIPPED / _FAILED
+        # cadence via `allow_skip_emit=True`; it is never a preview.
+        outcome = await self._run_compaction_ladder(
+            provider=provider,
+            thread_id=thread_id,
+            events=events,
+            budget=budget,
+            base_keep_recent_fraction=base_keep_recent_fraction,
+            inner_config=inner_config,
+            context_length=context_length,
+            allow_skip_emit=True,
+            preview=False,
+        )
+        if outcome is None:
+            return None
+        return await self._emit_thread_event(
+            thread_id=thread_id,
+            event_type=EventType.CONTEXT_COMPACTED,
+            data=outcome.model_dump(mode="json"),
+        )
+
+    async def _run_compaction_ladder(
+        self,
+        *,
+        provider: ContextCompactionProvider,
+        thread_id: ThreadId,
+        events: list[Event],
+        budget: int,
+        base_keep_recent_fraction: float,
+        inner_config: dict[str, Any],
+        context_length: int,
+        allow_skip_emit: bool,
+        preview: bool,
+    ) -> ContextCompactedData | None:
+        """Shared tier-1 → tier-2 → tier-3 compaction fallback ladder.
+
+        bug-113 — extracted from :meth:`_eager_compact_locked` so the
+        manual ``/compact`` path (:meth:`_manual_compact_locked`) runs the
+        identical ladder instead of a single un-guarded summariser call.
+        The per-exchange path (:meth:`_Exchange._maybe_compact_events`)
+        deliberately does NOT share this helper — it emits through a
+        different, exchange-scoped seam.
+
+        Tiers:
+
+        1. Summariser (``provider.compact``) across shrinking
+           keep-fractions (``base``, ``base*0.5``, ``base*0.25``), each
+           retried once. On a :class:`ModelContextOverflow` the ladder
+           SHORT-CIRCUITS straight to tier 2 — shrinking the tail only
+           grows the middle (``snap_to_safe_boundary(..., "later")``), so
+           retrying a size-driven overflow is counter-productive.
+        2. Mechanical (non-LLM) truncation via
+           :func:`build_mechanical_truncation_payload` — cannot overflow.
+        3. Hard-fail :class:`ContextOverflowUncompactable` when even
+           mechanical truncation finds nothing to drop (empty middle).
+
+        Returns the ``ContextCompactedData`` the caller should emit as a
+        ``CONTEXT_COMPACTED`` event, or ``None`` for the empty-middle
+        no-op (short session).
+
+        ``allow_skip_emit`` — the eager/auto path (``True``) emits
+        ``CONTEXT_COMPACTION_SKIPPED`` on a no-net-savings summary and
+        ``CONTEXT_COMPACTION_FAILED`` before tier 2. The manual path
+        (``False``) does neither: a no-net-savings tier-1 *success* is
+        returned as-is (honour the user's request with the real summary
+        rather than downgrading to mechanical truncation), and no
+        intermediate failure event is emitted.
+
+        ``preview`` — when ``True`` the ladder runs TIER 1 ONLY.
+        Mechanical truncation hard-codes ``preview=False`` and would emit
+        a live, context-mutating compaction, so a ``/compact --preview``
+        that overflows must surface the failure (re-raise) rather than
+        fall to tier 2.
+        """
+        from providers.compaction import (  # noqa: PLC0415
+            build_mechanical_truncation_payload,
+        )
+
+        trigger = str(inner_config.get("trigger", "auto"))
+        truncation_trigger: Literal["auto_truncation", "manual_truncation"] = (
+            "manual_truncation"
+            if trigger in ("manual", "manual_preview")
+            else "auto_truncation"
+        )
         keep_fractions: list[float] = [
             base_keep_recent_fraction,
             base_keep_recent_fraction * 0.5,
             base_keep_recent_fraction * 0.25,
         ]
         last_error: Exception | None = None
+        overflow = False
         for attempt_index, kf in enumerate(keep_fractions):
             keep_tail_tokens = max(int(budget * kf), 1)
-            inner_config: dict[str, Any] = dict(compaction_cfg.get("config", {}) or {})
-            inner_config["keep_recent_fraction"] = kf
-            # Propagate the requested trigger through the provider so
-            # the emitted ContextCompactedData.trigger reflects reality.
-            inner_config["trigger"] = trigger
-            outcome: Any = None
+            attempt_config: dict[str, Any] = dict(inner_config)
+            attempt_config["keep_recent_fraction"] = kf
+            outcome: ContextCompactedData | None = None
             attempt_error: Exception | None = None
             for retry in range(2):
                 try:
@@ -834,27 +933,49 @@ class AgentEngine:
                         keep_tail=keep_tail_tokens,
                         model_context_length=context_length,
                         thread_id=thread_id,
-                        config=inner_config,
+                        config=attempt_config,
                     )
                 except Exception as exc:  # noqa: BLE001 — ladder catches any raise
                     attempt_error = exc
+                    # bug-113 short-circuit: a size-driven overflow won't
+                    # be fixed by retrying (the ladder shrinks the tail,
+                    # which grows the middle) — bail straight to tier 2.
+                    if isinstance(exc, ModelContextOverflow) or (
+                        getattr(exc, "code", "") == "model.context_overflow"
+                    ):
+                        overflow = True
+                        _log.warning(
+                            "compaction: summariser context overflow — "
+                            "short-circuiting to mechanical truncation (%s)",
+                            exc,
+                        )
+                        outcome = None
+                        break
                     _log.warning(
-                        "compaction (eager): summariser attempt %d/2 failed (%s)",
+                        "compaction: summariser attempt %d/2 failed (%s)",
                         retry + 1,
                         exc,
                     )
                     outcome = None
                     continue
                 break
+            if overflow:
+                last_error = attempt_error
+                break
             if outcome is None:
                 last_error = attempt_error
                 break
             if not outcome.compacted_event_ids:
-                # No middle to summarise (short session) — nothing to do.
+                # Empty middle (short session) — genuine no-op.
                 return None
             if outcome.tokens_before > 0 and (
                 outcome.tokens_after > outcome.tokens_before * 0.90
             ):
+                if not allow_skip_emit:
+                    # Manual intent: honour the user's request with the
+                    # real summary even below the net-savings bar rather
+                    # than downgrading to mechanical truncation (bug-113).
+                    return outcome
                 await self._emit_thread_event(
                     thread_id=thread_id,
                     event_type=EventType.CONTEXT_COMPACTION_SKIPPED,
@@ -872,42 +993,46 @@ class AgentEngine:
                     "compaction produced no net token savings on any retry"
                 )
                 break
-            # Success — emit the compacted event.
-            return await self._emit_thread_event(
-                thread_id=thread_id,
-                event_type=EventType.CONTEXT_COMPACTED,
-                data=outcome.model_dump(mode="json"),
-            )
+            # Tier-1 success.
+            return outcome
 
-        # Tier 1 exhausted — emit CONTEXT_COMPACTION_FAILED then attempt
-        # tier 2 mechanical truncation.
-        await self._emit_thread_event(
-            thread_id=thread_id,
-            event_type=EventType.CONTEXT_COMPACTION_FAILED,
-            data={
-                "error": {
-                    "type": (
-                        type(last_error).__name__
-                        if last_error is not None
-                        else "unknown"
-                    ),
-                    "message": (
-                        str(last_error)
-                        if last_error is not None
-                        else "summariser exhausted retries"
-                    ),
-                    "where": "engine.compaction.maybe_compact_thread_eagerly",
-                    "detail": {},
+        # Tier 1 exhausted (or an overflow short-circuit). A preview must
+        # NOT fall to a live mechanical truncation (it forces
+        # preview=False) — surface the failure instead.
+        if preview:
+            if last_error is not None:
+                raise last_error
+            return None
+
+        if allow_skip_emit:
+            await self._emit_thread_event(
+                thread_id=thread_id,
+                event_type=EventType.CONTEXT_COMPACTION_FAILED,
+                data={
+                    "error": {
+                        "type": (
+                            type(last_error).__name__
+                            if last_error is not None
+                            else "unknown"
+                        ),
+                        "message": (
+                            str(last_error)
+                            if last_error is not None
+                            else "summariser exhausted retries"
+                        ),
+                        "where": "engine.compaction._run_compaction_ladder",
+                        "detail": {},
+                    },
+                    "span_first_event_id": None,
+                    "span_last_event_id": None,
                 },
-                "span_first_event_id": None,
-                "span_last_event_id": None,
-            },
-        )
+            )
 
         keep_tail_tokens = max(int(budget * base_keep_recent_fraction), 1)
         mechanical = build_mechanical_truncation_payload(
             events=events,
             keep_tail_tokens=keep_tail_tokens,
+            trigger=truncation_trigger,
         )
         if mechanical is None:
             from errors import ContextOverflowUncompactable  # noqa: PLC0415
@@ -917,12 +1042,7 @@ class AgentEngine:
                 keep_tail_tokens=keep_tail_tokens,
                 budget_tokens=budget,
             )
-
-        return await self._emit_thread_event(
-            thread_id=thread_id,
-            event_type=EventType.CONTEXT_COMPACTED,
-            data=mechanical.model_dump(mode="json"),
-        )
+        return mechanical
 
     async def _emit_no_context_length_skip_event(
         self,

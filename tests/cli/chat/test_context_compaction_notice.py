@@ -122,6 +122,32 @@ async def test_context_compacted_success_mounts_info_notice() -> None:
 
 
 @pytest.mark.asyncio
+async def test_context_compacted_manual_truncation_mounts_success_notice() -> None:
+    """bug-113 — a manual mechanical-truncation CONTEXT_COMPACTED flows
+    through the adapter as a SUCCESS block (not a failure). The overflow
+    that used to hard-fail /compact now degrades to a successful
+    mechanical truncation, and the widget must reflect that."""
+    app = _CapturingApp()
+    adapter = EventAdapter(app)
+    event = _event(
+        EventType.CONTEXT_COMPACTED,
+        {
+            "compacted_event_ids": [f"ev_x_{i:032d}" for i in range(30)],
+            "pre_compaction": {"fallback": "mechanical_truncation"},
+            "summary": {"schema_version": 1, "trigger": "manual_truncation"},
+            "tokens_before": 9000,
+            "tokens_after": 500,
+            "trigger": "manual_truncation",
+            "preview": False,
+        },
+    )
+    await adapter.handle(event)
+    state, title, _body = _first_mount(app)
+    assert state == "success"
+    assert "Compacted 30 events" in title
+
+
+@pytest.mark.asyncio
 async def test_context_compacted_preview_mounts_preview_notice() -> None:
     app = _CapturingApp()
     adapter = EventAdapter(app)
