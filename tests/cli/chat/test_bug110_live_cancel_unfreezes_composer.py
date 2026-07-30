@@ -23,7 +23,7 @@ from __future__ import annotations
 
 import asyncio
 from datetime import UTC, datetime
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import pytest
@@ -260,7 +260,9 @@ def _resolved_row(block: ApprovalBlock) -> Any | None:
     return None
 
 
-async def _publish(bus: InProcessEventBus, store: SessionStore, thread_id: Any, ev: Event) -> None:
+async def _publish(
+    bus: InProcessEventBus, store: SessionStore, thread_id: Any, ev: Event
+) -> None:
     await store.append_event(thread_id, ev)
     await bus.publish(ev)
 
@@ -271,7 +273,7 @@ async def _wait_for_block(pilot: Any, prompt_id: str) -> ApprovalBlock:
         await pilot.pause()
         blocks = list(pilot.app.query(ApprovalBlock))
         if blocks:
-            return blocks[-1]
+            return cast("ApprovalBlock", blocks[-1])
         await asyncio.sleep(0.02)
     msg = f"block never mounted for prompt_id={prompt_id!r}"
     raise AssertionError(msg)
@@ -314,13 +316,24 @@ async def test_live_cancel_flips_block_terminal_and_unfreezes_composer(
 
         # Interactive, not resolved — composer frozen.
         composer = pilot.app.query_one(Composer)
-        assert block.is_resolved is False
+        # `bool(...)` widens the property read back to `bool` — mypy
+        # otherwise narrows `is_resolved` to `Literal[False]` via the
+        # `is False` predicate and holds that narrowing across the
+        # rest of the function, marking the poll-loop's `break` and
+        # the post-cancel `is True` assertion as unreachable.
+        assert bool(block.is_resolved) is False
         for _ in range(40):
             await pilot.pause()
             if composer.awaiting_approval:
                 break
             await asyncio.sleep(0.02)
-        assert composer.awaiting_approval is True, (
+        # `bool(...)` widens the property read back to `bool` — mypy
+        # otherwise narrows `awaiting_approval` to `Literal[True]` via
+        # the `is True` predicate and holds that narrowing across the
+        # rest of the function, marking the later poll-loop's
+        # `break` (waiting for the composer to un-freeze) as
+        # unreachable.
+        assert bool(composer.awaiting_approval) is True, (
             "composer never froze on the live approval"
         )
 
