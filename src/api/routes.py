@@ -20,6 +20,7 @@ from fastapi import FastAPI, HTTPException, Query
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict, Field
 
+from api.views import _SessionView, session_view
 from engine import AgentExecutionError, ExecutionContext
 from errors import (
     AssetsNotFound,
@@ -63,18 +64,6 @@ class _UpdateSessionRequest(BaseModel):
     name: str | None = None
     starred: bool | None = None
     archived: bool | None = None
-
-
-class _SessionView(BaseModel):
-    model_config = ConfigDict(extra="forbid")
-
-    session_id: str
-    agent_id: str
-    name: str
-    starred: bool
-    archived: bool
-    created_at: str
-    updated_at: str
 
 
 class _ExecuteRequest(BaseModel):
@@ -130,7 +119,7 @@ def register_routes(app: FastAPI, runtime: PlatformRuntime) -> None:
             req.agent_id,
             name=req.name,
         )
-        return _session_view(session)
+        return session_view(session)
 
     @app.get("/sessions", response_model=list[_SessionView])
     async def list_sessions(
@@ -143,7 +132,7 @@ def register_routes(app: FastAPI, runtime: PlatformRuntime) -> None:
             archived=archived,
             limit=limit,
         )
-        return [_session_view(s) for s in sessions]
+        return [session_view(s) for s in sessions]
 
     @app.patch("/sessions/{session_id}", response_model=_SessionView)
     async def update_session(
@@ -163,7 +152,7 @@ def register_routes(app: FastAPI, runtime: PlatformRuntime) -> None:
             )
         except SessionNotFound as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
-        return _session_view(updated)
+        return session_view(updated)
 
     @app.delete("/sessions/{session_id}", status_code=204)
     async def delete_session(session_id: str) -> None:
@@ -356,19 +345,6 @@ def _looks_like_file_ref(key: str) -> bool:
     `file_ref` type at the API layer.
     """
     return key.endswith(("_file", "_path", "_ref"))
-
-
-def _session_view(session: object) -> _SessionView:
-    data = session.model_dump(mode="json")  # type: ignore[attr-defined]
-    return _SessionView(
-        session_id=data["session_id"],
-        agent_id=data["agent_id"],
-        name=data["name"],
-        starred=data["starred"],
-        archived=data["archived"],
-        created_at=data["created_at"],
-        updated_at=data["updated_at"],
-    )
 
 
 def _sse_format(*, event: str, data: str) -> bytes:

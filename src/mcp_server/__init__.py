@@ -8,9 +8,15 @@ kolsch without booting a workflow. Distinct from
 `MCPServer` Protocol kolsch consumes when it dispatches to a remote MCP
 tool from inside an exchange; this package is the *server* side.
 
-Phase 1 exposes exactly one tool, `list_sessions`, which mirrors the
-existing `GET /sessions` FastAPI surface. Write/execute tools and the
-authz gate are Phase 2 per `process/spec-105-mcp-operator-server.md`.
+Two read-only tools ship today: ``list_sessions`` (spec-105) and
+``read_session_events`` (spec-111). Both mirror existing FastAPI
+surfaces (``GET /sessions`` and ``GET /sessions/{id}/events``
+respectively). Write/execute tools and the authz gate are Phase 2 per
+``process/spec-105-mcp-operator-server.md``.
+
+Session-view helpers moved to :mod:`api.views` in spec-111 (single
+source of truth for both the FastAPI and MCP surfaces); import
+``session_view`` from there rather than through this package.
 
 Package naming note: the spec called for `src/mcp/`, but the MCP
 Python SDK also ships a top-level `mcp` package (imported via
@@ -30,6 +36,5 @@ user-facing `kolsch mcp serve` subcommand name is unchanged.
 from __future__ import annotations
 
 from mcp_server.server import build_server, run_stdio
-from mcp_server.views import session_view
 
-__all__ = ["build_server", "run_stdio", "session_view"]
+__all__ = ["build_server", "run_stdio"]

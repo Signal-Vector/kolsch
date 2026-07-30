@@ -1,11 +1,12 @@
-"""Test 7 (spec-105): real-`claude` round-trip smoke against `kolsch mcp serve`.
+"""Test 7 (spec-105) + Test 8 (spec-111): real-`claude` round-trip smoke
+against `kolsch mcp serve`.
 
 Module-level `pytestmark = pytest.mark.e2e` so the CI gate's
-`-m "not e2e"` deselects it. Coder runs this manually before
-signalling Complete; the paste of captured stdout (three signals:
-MCP tool-invocation frame naming `mcp__kolsch__list_sessions`,
-tool-result frame with JSON session data, `claude`'s final
-assistant message referencing returned sessions) goes into the
+`-m "not e2e"` deselects it. Coder runs each test manually before
+signalling Complete; the paste of captured stdout (three signals per
+tool: MCP tool-invocation frame naming
+`mcp__kolsch__<tool>`, tool-result frame with JSON data, `claude`'s
+final assistant message referencing the tool output) goes into the
 Complete report so the Reviewer can confirm the loop ran once.
 
 The pytest wrapper here is a convenience — the spec allows either
@@ -116,6 +117,7 @@ def test_real_claude_roundtrip_lists_sessions(
             "list my kolsch sessions",
             "--output-format",
             "stream-json",
+            "--verbose",
             "--mcp-config",
             str(cfg),
             "--allowedTools",
@@ -134,5 +136,99 @@ def test_real_claude_roundtrip_lists_sessions(
     combined = proc.stdout + proc.stderr
     assert "mcp__kolsch__list_sessions" in combined, (
         f"no mcp__kolsch__list_sessions invocation frame in output; "
+        f"rc={proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
+    )
+
+
+def test_real_claude_roundtrip_reads_session_events(
+    tmp_path: Path,
+) -> None:
+    """Test 8 (spec-111): `claude -p` invokes `read_session_events` via
+    MCP-over-stdio.
+
+    Prereqs same as the `list_sessions` case above. Prompt asks
+    `claude` to page a session's events; the assistant is expected to
+    compose `list_sessions` → pick an id → call `read_session_events`
+    → return a natural-language summary.
+
+    Skips (not fails) when `claude` isn't on PATH.
+    """
+    claude = _claude_binary()
+    if not claude:
+        pytest.skip(
+            f"`claude` binary not on PATH — set {_CLAUDE_BINARY_ENV}=... "
+            "to override, or install Claude Code to run the round-trip."
+        )
+
+    setup = subprocess.run(
+        [
+            sys.executable,
+            "-m",
+            "cli",
+            "setup",
+            "--non-interactive",
+        ],
+        env={**os.environ, "KOLSCH_WORKSPACE": str(tmp_path)},
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=120,
+    )
+    if setup.returncode != 0:
+        pytest.skip(
+            f"kolsch setup --non-interactive failed (rc={setup.returncode}); "
+            f"stderr:\n{setup.stderr}"
+        )
+
+    cfg = tmp_path / "mcp-config.json"
+    cfg.write_text(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "kolsch": {
+                        "command": sys.executable,
+                        "args": ["-m", "cli", "mcp", "serve"],
+                        "env": {
+                            "KOLSCH_WORKSPACE": str(tmp_path),
+                        },
+                    }
+                }
+            },
+            indent=2,
+        ),
+        encoding="utf-8",
+    )
+
+    child_env = {k: v for k, v in os.environ.items() if k != "ANTHROPIC_API_KEY"}
+    proc = subprocess.run(
+        [
+            claude,
+            "-p",
+            (
+                "First call list_sessions to find any kolsch session, "
+                "then call read_session_events with tail=5 on the first "
+                "session you find and summarise the events."
+            ),
+            "--output-format",
+            "stream-json",
+            "--verbose",
+            "--mcp-config",
+            str(cfg),
+            "--allowedTools",
+            "mcp__kolsch__list_sessions,mcp__kolsch__read_session_events",
+        ],
+        env=child_env,
+        capture_output=True,
+        text=True,
+        check=False,
+        timeout=240,
+    )
+
+    combined = proc.stdout + proc.stderr
+    # Signals per spec-111 Test 8 (a) + (b):
+    #   - MCP tool-invocation frame naming mcp__kolsch__read_session_events.
+    #   - Tool-result frame with JSON event data.
+    assert "mcp__kolsch__read_session_events" in combined, (
+        f"no mcp__kolsch__read_session_events invocation frame in output; "
         f"rc={proc.returncode}\nstdout:\n{proc.stdout}\nstderr:\n{proc.stderr}"
     )
