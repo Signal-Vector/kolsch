@@ -35,17 +35,29 @@ repos:
           instead — those survive renumbering. Restricted to .py files
           so stale __pycache__/*.pyc bytecode doesn't trip the hook.
 
-  - repo: https://github.com/pre-commit/mirrors-mypy
-    rev: v1.11.2
+  # mypy runs in the PROJECT environment via `uv run`, NOT the
+  # mirrors-mypy isolated venv. That isolated env only installed
+  # `pydantic`, so it could not resolve first-/third-party imports
+  # (tiktoken, crewai, textual, pytest, uvicorn, ...) and emitted
+  # hundreds of false `import-not-found` errors on every run. `uv run`
+  # uses the same interpreter + uv.lock-pinned dependencies as the CI
+  # gate, so pre-commit and CI agree on findings and the mypy version
+  # tracks uv.lock instead of a separately-pinned mirror rev.
+  #
+  # `pass_filenames: false` → mypy type-checks the whole
+  # `files = ["src", "tests"]` set declared in pyproject.toml. mypy is a
+  # whole-program analyser; passing only the staged files misses
+  # cross-file breakage (a staged change to A that breaks B) and can
+  # mis-resolve packages. The `files:` regex below only decides WHETHER
+  # to run — a commit that touches no `src/`|`tests/` `.py` skips mypy.
+  - repo: local
     hooks:
       - id: mypy
-        # Run with the same config the gate uses. Restrict to src/ and
-        # tests/ so the hook doesn't try to type-check stray YAML or
-        # markdown that the staged-file glob may include.
+        name: mypy (project env, whole-tree)
+        entry: uv run mypy --config-file=pyproject.toml
+        language: system
         files: ^(src|tests)/.*\.py$
-        args: ["--config-file=pyproject.toml"]
-        additional_dependencies:
-          - "pydantic>=2.7,<3"
+        pass_filenames: false
 
   - repo: https://github.com/pre-commit/pre-commit-hooks
     rev: v4.6.0
