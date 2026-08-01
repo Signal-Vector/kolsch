@@ -2404,6 +2404,14 @@ class ChatApp(App[None]):
             await child.remove()
         self._last_assistant_widget = None
         self._last_assistant_text = ""
+        # bug-115: the children just removed include the workflow cards
+        # and the layout manager's divider. Reset the manager so its
+        # compact-mode count / divider state don't carry stale cards into
+        # the post-clear (or `/new`) session — a fresh card would
+        # otherwise render compact because the old cards' records still
+        # count toward the overload threshold.
+        if self._workflow_layout_manager is not None:
+            self._workflow_layout_manager.reset()
 
     # ------------------------------------------------------------------
     # Action handlers (from BINDINGS)

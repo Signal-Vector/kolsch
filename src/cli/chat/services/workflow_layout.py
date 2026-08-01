@@ -336,6 +336,56 @@ class WorkflowLayoutManager:
             lambda: loop.create_task(self._flush_reorder()),
         )
 
+    def reset(self) -> None:
+        """Drop transcript-scoped view state after a ``/clear`` / ``/new``.
+
+        bug-115: ``ChatApp._clear_transcript`` unmounts every transcript
+        child — the workflow cards AND the ``──── in-progress ────``
+        divider this manager owns. Clear the now-dangling ``_divider``
+        reference and the ``_pending_reorder`` flag so a flush scheduled
+        just before the clear can't resurrect stale layout. The run
+        registry is deliberately untouched (``/clear`` is display-only);
+        the mounted-ness filter in :meth:`_flush_reorder` handles the
+        compact-mode count so a fresh card in the post-clear session
+        renders full instead of inheriting the old cards' overload.
+        """
+        self._divider = None
+        self._pending_reorder = False
+
+    def _card_is_mounted(self, record: WorkflowRunRecord) -> bool:
+        """Whether ``record``'s card is still attached to the live DOM.
+
+        (``is_attached`` walks the parent chain to the *app* DOM root, not
+        the ``#transcript`` container specifically — identical here since
+        workflow cards only ever mount into ``#transcript``.)
+
+        bug-115: compact-mode density (and DOM order + divider) must
+        reflect the cards the user can actually see, not every record the
+        run registry still holds. ``/clear`` / ``/new`` unmount the card
+        widgets but do not prune the registry, and ``_card_widgets`` is
+        never pruned on unmount — so ``_get_card_widget`` keeps returning
+        the *detached* widget. Only a widget that is known AND detached is
+        dropped; a record with no bound card, or one whose widget isn't in
+        the map yet (a brand-new card mid-mount), still counts so a genuine
+        overload is never under-counted.
+
+        Uses Textual's ``is_attached`` (walks the parent chain to the DOM
+        root), NOT ``is_mounted``: ``is_mounted`` latches True on the first
+        mount and is never reset on removal, so it cannot tell a live card
+        from a ``/clear``-detached one. Any missing attribute or raise from
+        the property defaults to "attached" (count it) so a non-Textual
+        stub or transient error never silently drops a real card.
+        """
+        if record.card is None:
+            return True
+        widget = self._get_card_widget(record.card.id)
+        if widget is None:
+            return True
+        try:
+            return bool(widget.is_attached)
+        except Exception:  # noqa: BLE001 — unknown state → count the card
+            return True
+
     async def _flush_reorder(self) -> None:
         """Apply the canonical order to the transcript's children.
 
@@ -350,6 +400,13 @@ class WorkflowLayoutManager:
         self.flush_count += 1
         try:
             records = self._get_records()
+            # bug-115: count only cards still mounted in the transcript.
+            # `/clear` and `/new` unmount the old cards but do NOT prune
+            # `WorkflowsImpl._workflow_registry` (nor `_card_widgets`), so
+            # without this filter the stale records keep inflating the
+            # `len(in_progress) > 2` / `len(terminal) > 1` overload counts
+            # and a fresh, lone card in the "new" session renders compact.
+            records = [r for r in records if self._card_is_mounted(r)]
             ordered = sort_workflow_cards(records)
 
             in_progress = [r for r in ordered if r.phase in _IN_PROGRESS_PHASES]
