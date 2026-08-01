@@ -892,7 +892,11 @@ plus ``kolsch chat --session <id>``.
 
 
 async def _cmd_chat(args: argparse.Namespace) -> int:
-    from cli.chat.app import ChatApp, register_chat_slash_commands  # noqa: PLC0415
+    from cli.chat.app import (  # noqa: PLC0415
+        ChatApp,
+        force_process_exit,
+        register_chat_slash_commands,
+    )
     from cli.chat.session import build_session  # noqa: PLC0415
 
     # Register ChatApp-owned slash commands (`/export`) on the shared
@@ -923,11 +927,75 @@ async def _cmd_chat(args: argparse.Namespace) -> int:
         engine=session.runtime.engine,
         full_history=getattr(args, "full_history", False),
     )
+    # bug-116: install a SIGHUP hard-exit before the app runs. If the
+    # controlling terminal is torn away (window closed / SSH drop) while
+    # the event loop is idle in `select()`, we die immediately instead of
+    # letting Textual's NON-daemon input reader busy-loop on the dead tty
+    # and later wedge `Py_Finalize`. The terminal is already gone, so
+    # skipping its restore is moot.
+    _install_chat_hangup_guard()
+
     # `inline_no_clear=True` bakes the transcript into terminal
     # scrollback on exit — so the conversation stays visible where
     # the user quit the app instead of vanishing.
     await app.run_async(inline=True, inline_no_clear=True)
-    return int(app.return_code or 0)
+    code = int(app.return_code or 0)
+    # bug-116: hard-exit the moment the app loop returns. The Textual
+    # inline driver's input reader is a NON-daemon thread; if it is still
+    # spinning on a dead stdin, a normal return would wedge `Py_Finalize`
+    # in `threading._shutdown()`'s join and strand the process at 100%
+    # CPU. `force_process_exit` (prod `os._exit`) skips that join; under a
+    # test exit-hook spy it returns and control falls through to `return`.
+    #
+    # If `run_async` RAISES instead of returning, this line is skipped and
+    # the exception propagates out — but that is not a hang: Textual joins
+    # the input thread in `stop_application_mode` (bounded — the reader
+    # rechecks `exit_event` every 0.1s) before either swallowing the error
+    # into `return_code` or re-raising, so no live non-daemon thread
+    # survives to block finalization on that path.
+    force_process_exit(code)
+    return code
+
+
+def _install_chat_hangup_guard() -> None:
+    """bug-116: hard-exit `kolsch chat` at once on SIGHUP (terminal lost).
+
+    When the controlling terminal goes away the process gets SIGHUP; the
+    default action would terminate it, but if some path has left SIGHUP
+    handled/blocked the process can instead survive with a dead stdin,
+    whose EOF drives Textual's non-daemon input reader into a 100%-CPU
+    busy-loop. Installing an explicit hard-exit makes terminal loss
+    terminal for the process, immediately, before that spin can start.
+
+    Best-effort and main-thread-only: `signal.signal` raises off the main
+    thread and SIGHUP is absent on Windows, so both are swallowed. Routes
+    through the same `force_process_exit` seam the post-run path uses, so
+    a test can assert the handler fires via `_set_exit_hook` without
+    sending a real signal. `128 + signum` is the conventional shell code.
+
+    SIGTERM is deliberately NOT handled: its default disposition already
+    terminates the process, and terminal loss delivers SIGHUP (not
+    SIGTERM). A hard-exit on SIGTERM would skip Textual's terminal restore
+    while the terminal is often still alive (kill/orchestrator), leaving
+    it in raw mode — strictly worse than the default.
+    """
+    import contextlib  # noqa: PLC0415
+    import signal  # noqa: PLC0415
+
+    from cli.chat.app import force_process_exit  # noqa: PLC0415
+
+    sighup = getattr(signal, "SIGHUP", None)
+    if sighup is None:
+        return
+
+    def _on_hangup(signum: int, _frame: Any) -> None:
+        force_process_exit(128 + signum)
+
+    # `signal.signal` raises off the main thread / where SIGHUP is
+    # unsupported; the post-run `force_process_exit` still backstops the
+    # finalize hang, so a failed install is a best-effort no-op.
+    with contextlib.suppress(ValueError, OSError):
+        signal.signal(sighup, _on_hangup)
 
 
 async def _resolve_resume_session(

@@ -236,6 +236,34 @@ def _set_exit_hook(hook: Callable[[int], None]) -> None:
     _EXIT_HOOK = hook
 
 
+def force_process_exit(code: int) -> None:
+    """Hard-exit the process through the module-level `_EXIT_HOOK`.
+
+    bug-116: `kolsch chat`'s Textual inline driver runs its input reader
+    as a NON-daemon thread. When the controlling terminal goes away
+    (window closed / SSH drop) stdin becomes a dead tty at permanent EOF
+    and that thread busy-loops (`select()` returns instantly on EOF, the
+    read yields empty, the `while not exit_event` loop spins), pinning a
+    CPU core. Because the thread is non-daemon the interpreter then blocks
+    in `Py_Finalize`'s `threading._shutdown()` join and never exits — a
+    100%-CPU zombie that outlives its terminal for days.
+
+    The chat entrypoint calls this the moment `App.run_async()` returns so
+    the interpreter never reaches that join. In production `_EXIT_HOOK` is
+    `os._exit`, safe here by the store contract: JSONL append is
+    `O_APPEND + flock + fsync` (recoverable via
+    `recover_partial_final_line`) and sqlite runs WAL autocommit (durable;
+    WAL recovery handles an abrupt exit). Tests install a spy via
+    `_set_exit_hook`, so this returns instead of killing the process.
+
+    Same class of fix as the bug-067 shutdown watchdog, which guards only
+    the `on_unmount` teardown window and disarms before interpreter
+    finalization; this covers the later `run_async()`-returned → finalize
+    window that the watchdog never reaches.
+    """
+    _EXIT_HOOK(code)
+
+
 _ESC_TOAST_SECONDS = 3.0
 """feat-019: the Esc-Esc toast auto-dismiss window.
 

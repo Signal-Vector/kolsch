@@ -227,6 +227,23 @@ def _install_launch_spy(monkeypatch: pytest.MonkeyPatch) -> _NeverLaunched:
         "cli.chat.app.register_chat_slash_commands",
         lambda: None,
     )
+    # bug-116: `_cmd_chat` now hard-exits via `force_process_exit`
+    # (`_EXIT_HOOK` = `os._exit`) the moment `run_async` returns, and
+    # installs a SIGHUP hard-exit guard beforehand. Swap the hook for a
+    # no-op and neuter the guard so the in-process launch-path tests
+    # neither kill the runner nor leak a real signal handler into the
+    # pytest session. (`cli.main` must be patched via its module object —
+    # the string form mis-resolves to the re-exported `main` function.)
+    import importlib
+
+    from cli.chat import app as _chat_app_module
+
+    monkeypatch.setattr(_chat_app_module, "_EXIT_HOOK", lambda _code: None)
+    monkeypatch.setattr(
+        importlib.import_module("cli.main"),
+        "_install_chat_hangup_guard",
+        lambda: None,
+    )
     return spy
 
 
