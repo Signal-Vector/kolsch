@@ -88,6 +88,10 @@ class _BoundedLRUSet:
     def __len__(self) -> int:
         return len(self._seen)
 
+    def clear(self) -> None:
+        """Drop every remembered key (feat-117 `/new` session switch)."""
+        self._seen.clear()
+
     def add(self, key: str) -> None:
         """Insert `key`, evicting the oldest entry if the bound is hit.
 
@@ -779,6 +783,46 @@ class EventAdapter:
     def handles(cls, event_type: EventType) -> bool:
         """True if a handler is registered for ``event_type``."""
         return event_type in cls._DISPATCH
+
+    def reset_for_session(
+        self,
+        session_id: SessionId,
+        thread_id: ThreadId,
+    ) -> None:
+        """feat-117: repoint + wipe per-session state for a `/new` switch.
+
+        The adapter is app-scoped (built once in ``ChatApp.on_mount``), so a
+        session switch must (a) retarget the durable-write / bookmark ids and
+        (b) drop every per-session widget + dedupe map so no card, notice,
+        prompt, streaming buffer, or bookmark from the old session bleeds into
+        the new one. Service references (``_cards``, ``_prompts_impl``,
+        ``_workflows_impl``, ``_session_store``) and config
+        (``_bookmark_persist_every``) are intentionally preserved.
+        """
+        self._session_id = session_id
+        self._thread_id = thread_id
+        # Bookmark / replay state — a fresh session has nothing to replay.
+        self._bookmark = None
+        self._bookmark_dispatch_count = 0
+        self._started = False
+        self._replay_prompt_outcomes.clear()
+        self._remounted_events.clear()
+        # Mount-tracking + widget registries.
+        self._card_widgets.clear()
+        self._event_widgets.clear()
+        self._compaction_widgets.clear()
+        self._notice_widgets.clear()
+        self._live_prompt_blocks.clear()
+        self._live_nodes_by_trace_and_invocation.clear()
+        self._streaming_widgets.clear()
+        self._streaming_buffers.clear()
+        self._tool_call_args.clear()
+        self._suppressed_tool_calls.clear()
+        self._workflow_prompt_sources.clear()
+        # Idempotence guards.
+        self._applied_notice_ids.clear()
+        self._applied_prompt_ids.clear()
+        self._resolved_prompt_ids.clear()
 
     async def dispatch_sub_agent_event(
         self,

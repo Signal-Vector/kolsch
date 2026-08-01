@@ -404,6 +404,19 @@ class WorkflowsImpl(AbstractWorkflows):
         # is a silent no-op in that case.
         self._layout_manager: WorkflowLayoutManager | None = None
 
+    def rebind_session(self, session_id: SessionId, thread_id: ThreadId) -> None:
+        """feat-117: retarget durable writes + drop the old run registry (`/new`).
+
+        Repoints the cached durable-write ids and empties
+        ``_workflow_registry`` so the new session starts with no live /
+        terminal workflow cards carried over from the old one. The idle guard
+        in ``ChatApp._open_new_session`` ensures no workflow is live when this
+        runs, so nothing in the registry is mid-flight.
+        """
+        self._session_id = session_id
+        self._thread_id = thread_id
+        self._workflow_registry.clear()
+
     # ------------------------------------------------------------------
     # spec-016: WorkflowLayoutManager wiring
     # ------------------------------------------------------------------

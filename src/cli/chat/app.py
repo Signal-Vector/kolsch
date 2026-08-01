@@ -2105,12 +2105,17 @@ class ChatApp(App[None]):
         if state.pending_clear:
             await self._clear_transcript()
             state.pending_clear = False
-        if state.pending_new_session or state.pending_session_id:
-            await self._mount_transcript_notice(
-                "session lifecycle (/new, /session) is deferred to the "
-                "slash follow-up spec; state noted, no switch performed."
-            )
+        if state.pending_new_session:
+            # feat-117: `/new` now performs the real session switch (idle-
+            # guarded inside `_open_new_session`). It owns its own transcript
+            # clear, so `_handler_new` no longer sets `pending_clear`.
+            await self._open_new_session()
             state.pending_new_session = False
+        if state.pending_session_id:
+            await self._mount_transcript_notice(
+                "session lifecycle (/session) is deferred to the slash "
+                "follow-up spec; state noted, no switch performed."
+            )
             state.pending_session_id = None
         if state.pending_workflow_run_id:
             await self._mount_transcript_notice(
@@ -2440,6 +2445,72 @@ class ChatApp(App[None]):
         # count toward the overload threshold.
         if self._workflow_layout_manager is not None:
             self._workflow_layout_manager.reset()
+
+    async def _open_new_session(self) -> None:
+        """feat-117: mint + switch to a fresh session under the same agent.
+
+        Called from `_handle_slash` when `/new` set `pending_new_session`.
+        Guarded to idle: a butler turn in flight or a live workflow blocks
+        the switch (a mid-turn switch would orphan durable writes to the old
+        thread; a live workflow would lose its registry handle) — the user is
+        told to finish/cancel first and NOTHING changes. Otherwise: mint a new
+        session + thread, repoint every per-session handle (`self.session`,
+        `_chat_state`, the `EventAdapter`, and the three durable-writing impls
+        `PromptsImpl`/`CardsImpl`/`WorkflowsImpl`), reset the transcript (which
+        also resets the workflow layout manager, bug-115), refresh the info
+        bar, and announce the new id. The old session stays intact on disk
+        (resumable via `kolsch chat <agent> --session <old_id>`).
+        """
+        if self._butler_turn_active() or self._has_live_workflow():
+            await self._mount_transcript_notice(
+                "/new: can't start a new session while a turn or workflow is "
+                "active — cancel or wait for it to finish, then /new again.",
+                kind="warning",
+            )
+            return
+
+        runtime = self.session.runtime
+        session = await runtime.store.create_session(
+            str(self.session.config.agent_id),
+            name=f"chat:{self.session.agent_ref}",
+        )
+        threads = await runtime.store.list_threads(session.session_id)
+        if not threads:
+            await self._mount_transcript_notice(
+                f"/new: new session {session.session_id} has no thread; aborting.",
+                kind="error",
+            )
+            return
+        new_session_id = session.session_id
+        new_thread_id = threads[0].thread_id
+
+        # Repoint every per-session handle. The three impls each cache the
+        # ids and `append_event(self._thread_id, ...)`, so missing one would
+        # silently write the new session's events into the old thread.
+        self.session.session_id = new_session_id
+        self.session.thread_id = new_thread_id
+        self.session.is_resume = False
+        if self._chat_state is not None:
+            self._chat_state.session_id = new_session_id
+            self._chat_state.thread_id = new_thread_id
+        self.event_adapter.reset_for_session(new_session_id, new_thread_id)
+        registry = self._service_registry
+        if registry is not None:
+            for impl in (registry.prompts, registry.cards, registry.workflows):
+                rebind = getattr(impl, "rebind_session", None)
+                if rebind is not None:
+                    rebind(new_session_id, new_thread_id)
+
+        # Reset the visible transcript (also resets the layout manager).
+        await self._clear_transcript()
+
+        # Refresh the info-bar identity + announce the new session.
+        with contextlib.suppress(Exception):
+            self.query_one(InfoBar).session = str(new_session_id)[:8]
+        await self._mount_transcript_notice(
+            f"kolsch chat • {self.session.config.name} • "
+            f"{self.session.model_label} • {new_session_id}"
+        )
 
     # ------------------------------------------------------------------
     # Action handlers (from BINDINGS)
