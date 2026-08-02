@@ -269,6 +269,14 @@ async def cmd_connect(args: argparse.Namespace, io: _CommandIO) -> int:
         _set_dotenv_entry(io.root, new_entry["api_key_secret"], api_key_value)
         io.out.write(f"✓ wrote {new_entry['api_key_secret']} to .env\n")
 
+    # spec-118 (M1): persist an operator-provided binary-path override so it is
+    # honored at runtime (round-trips into `ProviderConfig.extras`, read by the
+    # connector's `build_llm`). Guarded on the connector actually prompting for
+    # it, so connectors without a `binary_path` field are unaffected.
+    binary_path = responses.get("binary_path")
+    if binary_path:
+        new_entry["binary_path"] = binary_path
+
     payload = dict(existing_payload)
     llm_providers = dict(payload.get("llm_providers") or {})
     llm_providers[provider_name] = new_entry
@@ -370,11 +378,15 @@ def _build_provider_entry(
     entries: list[ModelEntry],
     provider_name: str,
 ) -> dict[str, Any]:
-    secret_name = _secret_name_for(provider_name)
-    new_entry: dict[str, Any] = {
-        "type": connector.type_name,
-        "api_key_secret": secret_name,
-    }
+    new_entry: dict[str, Any] = {"type": connector.type_name}
+    # Null-key connect (spec-118, general): only write `api_key_secret`
+    # when the connector actually declares a `kind="secret"` field. A
+    # subscription/keyless provider (e.g. `claude_code`) has none, so the
+    # written entry omits the key entirely — `build_llm`'s resolve branch
+    # is then skipped at runtime and no `LlmSecretMissing` is raised. Any
+    # future keyless provider benefits; keyed providers are unchanged.
+    if any(f.kind == "secret" for f in connector.auth_prompt_spec().fields):
+        new_entry["api_key_secret"] = _secret_name_for(provider_name)
     if base_url:
         new_entry["base_url"] = base_url
     if is_metadata_source(connector):

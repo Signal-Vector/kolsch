@@ -83,6 +83,7 @@ from errors import (
     MemoryWriteDisabled,
     ModelAuthenticationFailed,
     ModelBadRequest,
+    ModelBinaryUnavailable,
     ModelContextOverflow,
     ModelMalformedResponse,
     ModelRateLimited,
@@ -368,6 +369,11 @@ CONSTRUCTOR_ARGS: dict[type[PlatformError], dict[str, Any]] = {
         "model": "anthropic/x",
         "status_code": 400,
         "reason": "malformed",
+    },
+    ModelBinaryUnavailable: {
+        "provider": "claude_code",
+        "model": "sonnet",
+        "reason": "`claude` binary not found on PATH",
     },
     LlmAllModelsFailed: {
         "primary": {"provider": "anthropic", "model": "opus"},

@@ -20,6 +20,8 @@ Fatal — abort without consulting the chain:
 - `ModelAuthenticationFailed` — HTTP 401/403; the same key fails
   everywhere.
 - `ModelBadRequest` — HTTP 400; the request itself is broken.
+- `ModelBinaryUnavailable` — a native connector's local CLI is
+  missing or logged out; a sibling model on the same binary fails too.
 
 Engine-loop terminus:
 
@@ -226,6 +228,43 @@ class ModelBadRequest(PlatformError):
                 "status_code": status_code,
                 "reason": reason,
             },
+        )
+
+
+class ModelBinaryUnavailable(PlatformError):
+    """Raised when a subscription connector's local CLI is missing or logged out.
+
+    Fatal — a native connector (e.g. `claude_code`) shells a local
+    binary (`claude`) under the operator's subscription. When the
+    binary is absent from `PATH`, or present but not authenticated
+    (`claude auth login` never run), no amount of fallback helps: a
+    sibling model routed through the same binary would fail identically,
+    and there is no HTTP status to map to the `model.*` REST family. The
+    operator must install / log in. There is deliberately NO child
+    stdout/stderr, argv, or rendered prompt in `detail` — the "no
+    secrets in the log" rule (see the connector docstring) forbids it;
+    only the typed code plus a generic reason survive.
+    """
+
+    code = "model.binary_unavailable"
+    level = Level.FATAL
+
+    def __init__(
+        self,
+        provider: str,
+        model: str,
+        reason: str,
+        *,
+        where: str = "llm.connector.call",
+    ) -> None:
+        super().__init__(
+            message=(
+                f"Provider {provider!r} could not run its local CLI for "
+                f"model {model!r}: {reason}. Install the `claude` CLI and run "
+                f"`claude auth login`."
+            ),
+            where=where,
+            detail={"provider": provider, "model": model, "reason": reason},
         )
 
 
