@@ -536,6 +536,14 @@ convention = "google"
     # typed via a forward reference inside TYPE_CHECKING.
     "ANN401",
 ]
+# `src/llm/providers/claude_code.py` — `_ClaudeCodeLLM.call` overrides
+# `crewai.BaseLLM.call`, whose signature is fixed at 7 params (PLR0913)
+# with `Any`-typed `callbacks` / `available_functions` / `from_task` /
+# `from_agent` / `response_model` (ANN401). Overriding with narrower
+# types would break the LSP contract CrewAI relies on; the same
+# suppression is applied to `src/engine/**` (`_CrewAILLM`) for the
+# identical reason.
+"src/llm/providers/claude_code.py" = ["ANN401", "PLR0913"]
 # Package-level docstring optional — each module under the package
 # carries its own docstring, which is where the contract lives.
 "src/**/__init__.py" = ["D104"]

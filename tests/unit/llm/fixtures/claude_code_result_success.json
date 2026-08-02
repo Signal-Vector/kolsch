@@ -1,0 +1,31 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": false,
+  "api_error_status": null,
+  "duration_ms": 3437,
+  "duration_api_ms": 5776,
+  "num_turns": 1,
+  "result": "ping",
+  "stop_reason": "end_turn",
+  "session_id": "f444b805-79da-4f93-91d2-12920f3a02ee",
+  "total_cost_usd": 0.0340524,
+  "usage": {
+    "input_tokens": 2,
+    "cache_creation_input_tokens": 5417,
+    "cache_read_input_tokens": 3058,
+    "output_tokens": 4,
+    "service_tier": "standard"
+  },
+  "modelUsage": {
+    "claude-sonnet-5": {
+      "inputTokens": 2,
+      "outputTokens": 4,
+      "contextWindow": 1000000,
+      "maxOutputTokens": 64000
+    }
+  },
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "uuid": "861b4a55-1632-48d0-8299-45449fa23300"
+}

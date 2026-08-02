@@ -10,11 +10,13 @@ Adding a provider is two steps:
 The registry takes care of the rest.
 """
 
+from llm.providers.claude_code import ClaudeCodeConnector
 from llm.providers.opencode import OpenCodeConnector
 from llm.providers.openrouter import OpenRouterConnector
 from llm.registry import register
 
+register(ClaudeCodeConnector.type_name, ClaudeCodeConnector)
 register(OpenCodeConnector.type_name, OpenCodeConnector)
 register(OpenRouterConnector.type_name, OpenRouterConnector)
 
-__all__ = ["OpenCodeConnector", "OpenRouterConnector"]
+__all__ = ["ClaudeCodeConnector", "OpenCodeConnector", "OpenRouterConnector"]

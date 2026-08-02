@@ -150,6 +150,10 @@ CATALOG: dict[str, Level] = {
     # Two Fatal model.* codes — abort without consulting the chain.
     "model.authentication_failed": Level.FATAL,
     "model.bad_request": Level.FATAL,
+    # The local CLI a subscription connector shells is missing or not
+    # logged in — no HTTP analog, and the fallback chain can't help
+    # (a sibling model on the same broken binary would fail too).
+    "model.binary_unavailable": Level.FATAL,
     # Engine fallback-loop terminus.
     "llm.all_models_failed": Level.FATAL,
     # Layer 1 validator warning surface — Diagnostic since the Error

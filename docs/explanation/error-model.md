@@ -640,6 +640,7 @@ Phase 1.3 patch §2.2; the levels below MUST match.
 | `model.context_overflow` | Recoverable | `{provider, model, requested_tokens, max_tokens?}` | connector's call layer |
 | `model.authentication_failed` | Fatal | `{provider, model, status_code}` | connector's call layer (HTTP 401/403) |
 | `model.bad_request` | Fatal | `{provider, model, status_code, reason}` | connector's call layer (HTTP 400) |
+| `model.binary_unavailable` | Fatal | `{provider, model, reason}` | native connector's call layer (local CLI missing / logged out) |
 | `llm.all_models_failed` | Fatal | `{primary, attempts: [{model, error_code, detail}], reason}` | engine model loop, after exhausting the chain |
 | `config.fallback_duplicate` | Diagnostic | `{agent, model, positions}` | Layer 1 validator at agent load (warning surface) |
 
@@ -647,10 +648,13 @@ Phase 1.3 patch §2.2; the levels below MUST match.
 another model might handle differently (a rate limit on Opus does
 not constrain Haiku; a transient 5xx from one provider is unlikely
 to repeat at another; a different model may have a larger context
-window). The two Fatal `model.*` codes are conditions the chain
+window). The Fatal `model.*` codes are conditions the chain
 won't help with: an auth failure with one provider's key won't
-succeed against another model on the same key, and a malformed
-request is broken regardless of which model receives it. The
+succeed against another model on the same key, a malformed
+request is broken regardless of which model receives it, and a
+`model.binary_unavailable` (a native connector's local CLI is
+missing or logged out — e.g. `claude_code`) would fail identically
+for any sibling model routed through the same binary. The
 engine MUST NOT consult the fallback chain on Fatal `model.*`.
 
 **`llm.all_models_failed`'s `attempts` field** is the full ordered

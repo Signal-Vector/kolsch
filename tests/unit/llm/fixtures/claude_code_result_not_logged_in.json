@@ -1,0 +1,18 @@
+{
+  "type": "result",
+  "subtype": "success",
+  "is_error": true,
+  "api_error_status": null,
+  "duration_ms": 13,
+  "duration_api_ms": 0,
+  "num_turns": 1,
+  "result": "Not logged in · Please run /login",
+  "stop_reason": "stop_sequence",
+  "session_id": "3cdd1d4e-dfd0-4194-b309-efe31b365abc",
+  "total_cost_usd": 0,
+  "usage": {},
+  "modelUsage": {},
+  "permission_denials": [],
+  "terminal_reason": "completed",
+  "uuid": "0d04f391-5d9e-4514-9335-eaa3233ec61f"
+}

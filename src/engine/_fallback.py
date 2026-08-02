@@ -98,6 +98,11 @@ _FATAL_MODEL_CODES: frozenset[str] = frozenset(
         "model.bad_request",
         # Chain won't help — we already retried.
         "model.retry_exhausted",
+        # A native connector's local CLI (e.g. `claude`) is missing or
+        # logged out. A sibling model routed through the same binary
+        # would fail identically, so advancing the chain is pointless —
+        # the operator must install / log in (spec-118).
+        "model.binary_unavailable",
     }
 )
 
