@@ -525,6 +525,39 @@ generic asset error. Coordinator resolution (PR 1) enforces this
 at engine pre-flight (option (b)); validator-side enforcement at
 agent-load time is tracked as FUL-1.
 
+### 4.5b MCP tool bridge (spec-120)
+
+The `ToolBridgeServer` + `kolsch mcp bridge` trust boundary. Two
+rules govern these codes:
+
+1. **They never reach the external wire.** The bridge answers every
+   refusal with a constant generic literal; these types feed the
+   server-side log, the CLI exit path, and the catalog contract.
+   Their `detail` payloads are internal diagnostics only.
+2. **Uniform auth failure.** Bad, expired, and already-bound tokens
+   all raise the single `bridge.auth_failed` type (which reason is
+   log-only `detail`), so distinct classes cannot become a token
+   oracle.
+
+Transport/auth refusals are Recoverable — only the external client's
+session is refused; the exchange in the running kolsch process
+continues. Security-invariant violations (`bridge.socket_insecure`)
+and wire-name catalog corruption (`bridge.name_collision` — two tool
+names mapping to one `mcp__<server>__<name>` would mis-route
+`tools/call`) are Fatal.
+
+| Code | Level | Detail | Where (typical) |
+|------|-------|--------|-----------------|
+| `bridge.auth_failed` | Recoverable | `{reason}` | `tools.bridge.server.bind` |
+| `bridge.not_bound` | Recoverable | `{op}` | `tools.bridge.server.dispatch` |
+| `bridge.socket_unavailable` | Recoverable | `{transport_error}` | `tools.bridge.proxy.connect` |
+| `bridge.socket_insecure` | Fatal | `{check, path}` | `tools.bridge.server.open` |
+| `bridge.frame_too_large` | Recoverable | `{declared, max_bytes}` | `tools.bridge.framing.read` |
+| `bridge.frame_malformed` | Recoverable | `{}` | `tools.bridge.framing.read` |
+| `bridge.malformed_request` | Recoverable | `{method}` | `tools.bridge.proxy.dispatch` |
+| `bridge.request_refused` | Recoverable | `{op}` | `tools.bridge.proxy.request` |
+| `bridge.name_collision` | Fatal | `{wire_name, first, second}` | `tools.bridge.server.catalog` |
+
 ### 4.6 Memory
 
 | Code | Level | Detail | Where (typical) |

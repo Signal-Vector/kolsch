@@ -42,6 +42,17 @@ from errors.base import (
     iter_error_classes,
     registered_subclasses,
 )
+from errors.bridge import (
+    BridgeAuthFailed,
+    BridgeFrameMalformed,
+    BridgeFrameTooLarge,
+    BridgeMalformedRequest,
+    BridgeNameCollision,
+    BridgeNotBound,
+    BridgeRequestRefused,
+    BridgeSocketInsecure,
+    BridgeSocketUnavailable,
+)
 from errors.bus import BusPublishFailed, BusUnavailable
 from errors.catalog import CATALOG, get_catalog_level, list_catalog_codes
 from errors.engine import (
@@ -170,6 +181,15 @@ __all__ = [
     "AuthzRuleInvalid",
     "AuthzRuleNotFound",
     "AuthzToolRefUnknown",
+    "BridgeAuthFailed",
+    "BridgeFrameMalformed",
+    "BridgeFrameTooLarge",
+    "BridgeMalformedRequest",
+    "BridgeNameCollision",
+    "BridgeNotBound",
+    "BridgeRequestRefused",
+    "BridgeSocketInsecure",
+    "BridgeSocketUnavailable",
     "BusPublishFailed",
     "BusUnavailable",
     "CapabilityMismatch",

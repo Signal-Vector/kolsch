@@ -87,6 +87,20 @@ CATALOG: dict[str, Level] = {
     "mcp.server_unreachable": Level.DIAGNOSTIC,
     "mcp.upstream_error": Level.DIAGNOSTIC,
     "mcp.protocol_error": Level.DIAGNOSTIC,
+    # ----- MCP tool bridge (spec-120) ----------------------------------
+    # The ToolBridgeServer + `kolsch mcp bridge` trust boundary.
+    # Auth/transport refusals are Recoverable (only the external
+    # client's session is refused; the exchange continues); security
+    # -invariant violations and wire-name catalog corruption are Fatal.
+    "bridge.auth_failed": Level.RECOVERABLE,
+    "bridge.not_bound": Level.RECOVERABLE,
+    "bridge.socket_unavailable": Level.RECOVERABLE,
+    "bridge.socket_insecure": Level.FATAL,
+    "bridge.frame_too_large": Level.RECOVERABLE,
+    "bridge.frame_malformed": Level.RECOVERABLE,
+    "bridge.malformed_request": Level.RECOVERABLE,
+    "bridge.request_refused": Level.RECOVERABLE,
+    "bridge.name_collision": Level.FATAL,
     # Raised by engine pre-flight when a declared tool ref doesn't
     # resolve in the asset catalog. Named `config.*` rather than
     # `tool.*` because it's a config validity failure — the agent's
