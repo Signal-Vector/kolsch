@@ -74,6 +74,11 @@ def _run(
     env = dict(os.environ)
     env.pop("KOLSCH_PROVIDER", None)
     env.pop("KOLSCH_PROVIDER_KEY", None)
+    # spec-120: an ambient bridge env (a live `kolsch mcp bridge`
+    # session in the invoking shell) must not leak into smoke runs —
+    # TC-CLI-SMOKE-16 asserts the env-absent path.
+    env.pop("KOLSCH_MCP_SOCKET", None)
+    env.pop("KOLSCH_MCP_TOKEN", None)
     if workspace is not None:
         env["KOLSCH_WORKSPACE"] = str(workspace)
     else:
@@ -381,6 +386,8 @@ _NESTED_HELP_INVOCATIONS: tuple[tuple[str, ...], ...] = (
     # the runtime or the stdio serve loop (argparse handles --help
     # before dispatch, so this is a proof of that guarantee).
     ("mcp", "serve", "--help"),
+    # spec-120 — the tool-bridge stdio proxy, same guarantee.
+    ("mcp", "bridge", "--help"),
 )
 
 
@@ -397,6 +404,27 @@ def test_tc_cli_smoke_15_nested_subcommand_help(
         f"stderr:\n{result.stderr}"
     )
     _assert_no_traceback(result)
+
+
+# ===========================================================================
+# TC-CLI-SMOKE-16 — spec-120: `mcp bridge` env contract
+# ===========================================================================
+
+
+def test_tc_cli_smoke_16_mcp_bridge_without_env_exits_cleanly() -> None:
+    """TC-CLI-SMOKE-16: bare ``kolsch mcp bridge`` with no
+    ``KOLSCH_MCP_SOCKET``/``KOLSCH_MCP_TOKEN`` exits non-zero without
+    booting anything (no runtime, no serve loop, no workspace
+    requirement — the proxy is spawnable from any cwd/env), with a
+    clean actionable message and no traceback."""
+    result = _run("mcp", "bridge")
+    assert result.returncode == 2, (
+        f"expected exit 2 (missing bridge env); got {result.returncode}; "
+        f"stderr:\n{result.stderr}"
+    )
+    _assert_no_traceback(result)
+    assert "KOLSCH_MCP_SOCKET" in result.stderr
+    assert result.stdout == ""
 
 
 # ===========================================================================

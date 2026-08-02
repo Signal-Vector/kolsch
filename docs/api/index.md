@@ -133,6 +133,10 @@ resolved agent config) render in the
     options:
       heading_level: 3
 
+::: errors.bridge
+    options:
+      heading_level: 3
+
 ::: errors.workspace
     options:
       heading_level: 3
@@ -266,6 +270,18 @@ resolved agent config) render in the
       heading_level: 3
 
 ::: tools.observed
+    options:
+      heading_level: 3
+
+::: tools.bridge.sink
+    options:
+      heading_level: 3
+
+::: tools.bridge.server
+    options:
+      heading_level: 3
+
+::: tools.bridge.proxy
     options:
       heading_level: 3
 

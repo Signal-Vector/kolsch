@@ -71,9 +71,14 @@ def main(argv: Sequence[str] | None = None) -> int:
     # (including "no workspace at this path"), so a stack trace would
     # be worse than a report saying "nothing to inspect here".
     resolved_root = resolve_workspace(args.root)
-    if args.command not in {"setup", "doctor"} and not workspace_is_initialized(
-        resolved_root
-    ):
+    # `mcp bridge` (spec-120) is also exempt: it is a pure socket
+    # proxy an EXTERNAL harness spawns — all state lives in the
+    # running kolsch process behind KOLSCH_MCP_SOCKET, so requiring a
+    # workspace here would break spawning from any cwd/env.
+    workspace_exempt = args.command in {"setup", "doctor"} or (
+        args.command == "mcp" and getattr(args, "mcp_command", None) == "bridge"
+    )
+    if not workspace_exempt and not workspace_is_initialized(resolved_root):
         sys.stderr.write(_MISSING_WORKSPACE_MESSAGE.format(path=resolved_root))
         return _EXIT_MISSING_WORKSPACE
     args.root = resolved_root
@@ -413,6 +418,19 @@ def _build_parser() -> argparse.ArgumentParser:
         help=(
             "Serve the MCP operator server on stdio. Pairs with "
             "`claude -p --mcp-config` under a Pro/Max subscription."
+        ),
+    )
+    # kolsch mcp bridge — the tool-bridge stdio proxy (spec-120). A
+    # stateless subprocess an external MCP-client harness spawns; it
+    # forwards tools/list + tools/call over KOLSCH_MCP_SOCKET into a
+    # running kolsch exchange. Distinct from `serve` (the read-only
+    # operator server).
+    mcp_sub.add_parser(
+        "bridge",
+        help=(
+            "Serve the MCP tool bridge on stdio (spec-120). Spawned by "
+            "an external agent harness; requires KOLSCH_MCP_SOCKET and "
+            "KOLSCH_MCP_TOKEN from a running kolsch exchange."
         ),
     )
 
@@ -1085,7 +1103,23 @@ async def _cmd_mcp(args: argparse.Namespace) -> int:
         return _print_subcommand_help_and_exit("mcp")
     if args.mcp_command == "serve":
         return await _cmd_mcp_serve(args)
+    if args.mcp_command == "bridge":
+        return await _cmd_mcp_bridge(args)
     return 1
+
+
+async def _cmd_mcp_bridge(args: argparse.Namespace) -> int:
+    """Serve the MCP tool-bridge proxy on stdio (spec-120).
+
+    A pure socket proxy — it boots NO runtime and touches NO
+    workspace; all authority lives in the running kolsch process
+    behind ``KOLSCH_MCP_SOCKET``. With the env contract absent it
+    exits non-zero without booting anything.
+    """
+    del args  # the proxy's whole contract is the two env vars
+    from tools.bridge import run_bridge_stdio  # noqa: PLC0415
+
+    return await run_bridge_stdio()
 
 
 async def _cmd_mcp_serve(args: argparse.Namespace) -> int:
