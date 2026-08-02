@@ -399,7 +399,7 @@ async def test_perm_sys_03b_perm_allow_with_from_scopes_rule(
 # CSS class + hint line) and the event-adapter smoke at
 # ``tests/cli/chat/test_event_adapter_coverage.py``. PERM-SYS-05 below
 # still exercises the schema-level round-trip of ``recovery_hint``
-# and the engine's ``_derive_authz_recovery_hint`` derivation — the
+# and the ``tools.observed._derive_authz_recovery_hint`` derivation — the
 # load-bearing wire-level shape, unchanged by the UI rewrite.
 # ===========================================================================
 
@@ -413,10 +413,10 @@ def test_perm_sys_05_tool_failed_carries_recovery_hint() -> None:
     """``ToolFailedData.recovery_hint`` round-trips through
     ``model_dump`` so the framework's payload (the model's view)
     and the JSONL (the replay view) both see the actionable text.
-    The engine's ``_derive_authz_recovery_hint`` produces it from
+    ``tools.observed._derive_authz_recovery_hint`` produces it from
     the matched rule + the in-flight args."""
-    from engine.observers import _derive_authz_recovery_hint
     from errors import ToolUnauthorized
+    from tools.observed import _derive_authz_recovery_hint
 
     # Step 1 — derive the hint from a denied invocation.
     exc = ToolUnauthorized(

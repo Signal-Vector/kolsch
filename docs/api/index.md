@@ -265,6 +265,10 @@ resolved agent config) render in the
     options:
       heading_level: 3
 
+::: tools.observed
+    options:
+      heading_level: 3
+
 ::: tools.builtins
     options:
       heading_level: 3

@@ -25,19 +25,25 @@ from tools.decorator import (
 )
 from tools.discovery import discover_tools_in_file
 from tools.mcp import MCPServer
+from tools.observed import Denied, Failed, Ok, ToolOutcome, invoke_observed
 from tools.subsystem import ToolsSubsystem
 from tools.validator import validate_standard_config
 
 __all__ = [
+    "Denied",
+    "Failed",
     "MCPServer",
+    "Ok",
     "ToolContext",
     "ToolDefinition",
     "ToolInfo",
+    "ToolOutcome",
     "ToolResult",
     "ToolsSubsystem",
     "builtin_names",
     "discover_tools_in_file",
     "get_tool_definition",
+    "invoke_observed",
     "make_bash",
     "make_builtin",
     "make_edit",

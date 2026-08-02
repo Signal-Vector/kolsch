@@ -19,12 +19,12 @@ from __future__ import annotations
 
 import asyncio
 import logging
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, assert_never
 from uuid import uuid4
 
 from engine._crewai_adapter import _tool_to_openai_spec
 from engine._think_strip import strip_leading_think
-from errors import ExchangeCancelled, PlatformError, ToolUnauthorized
+from errors import ExchangeCancelled, PlatformError
 from schemas import (
     Actor,
     AgentCallId,
@@ -33,12 +33,10 @@ from schemas import (
     EventType,
     ModelRequestData,
     ModelResponseData,
-    ToolCalledData,
     ToolFailedData,
-    ToolResultData,
 )
 from schemas.events import ModelStreamingTokenData
-from tools import ToolContext
+from tools.observed import Denied, Failed, Ok, invoke_observed
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -276,118 +274,94 @@ class _ObservedToolHandle:
         self.schema = defn.args_schema.model_json_schema()
 
     async def __call__(self, call: ToolCall) -> Any:
-        tool_call_id = call.tool_call_id or f"tc_{uuid4()}"
+        # spec-119 — the emit + invoke + happy/denied/errored arms
+        # live in the caller-agnostic core `tools.observed.
+        # invoke_observed`; this wrapper keeps everything that is
+        # genuinely exchange-coupled: the span registry and the
+        # cancel terminal. The interposed emit below threads the two
+        # facts the wrapper needs back out of the core WITHOUT the
+        # core knowing about spans or cancellation:
+        #
+        # - `tool_call_id`: the id the core minted (it owns the
+        #   `call.tool_call_id or f"tc_{uuid4()}"` fallback). Captured
+        #   AFTER the `tool.called` append returns — which is also
+        #   the spec-068 registration point, so the registry can
+        #   never fire a `tool.failed` for a call the log never
+        #   mentions.
+        # - `in_terminal_emit`: flipped BEFORE awaiting a
+        #   `tool.result`/`tool.failed` append. A cancel escaping
+        #   during that emit did NOT come from `invoke_tool`, so the
+        #   cancel arm must not write a second terminal — identical
+        #   to the pre-split method, whose cancel `except` wrapped
+        #   only the `invoke_tool` call.
+        tool_call_id: str | None = None
+        in_terminal_emit = False
 
-        # BEFORE — tool.called.
-        await self._emit(
-            type_=EventType.TOOL_CALLED,
-            data=ToolCalledData(
-                tool_name=call.name,
-                tool_call_id=tool_call_id,
-                arguments=dict(call.arguments),
-            ).model_dump(mode="json"),
-            actor=Actor(kind="agent", id=self._agent_id),
-        )
+        async def _emit_and_register(
+            *,
+            type_: EventType,
+            data: dict[str, Any],
+            actor: Actor,
+        ) -> None:
+            nonlocal in_terminal_emit, tool_call_id
+            if type_ is not EventType.TOOL_CALLED:
+                in_terminal_emit = True
+            await self._emit(type_=type_, data=data, actor=actor)
+            if type_ is not EventType.TOOL_CALLED:
+                return
+            tool_call_id = str(data["tool_call_id"])
+            # spec-068 Part A — register the span AFTER `tool.called`
+            # has been appended. The factory closes over the id +
+            # `call.name` so the exchange finally can build a
+            # symmetric terminal payload without re-walking the log.
+            if self._register_span is not None:
+                span_id = tool_call_id
+                tool_name = call.name
 
-        # spec-068 Part A — register the span AFTER `tool.called` has
-        # been appended so the registry can never fire a `tool.failed`
-        # for a call the log never mentions. The factory closes over
-        # `tool_call_id` + `call.name` so the exchange finally can
-        # build a symmetric terminal payload without needing to
-        # re-walk the log.
-        if self._register_span is not None:
-            span_id = tool_call_id
-            tool_name = call.name
+                def _terminal_factory() -> tuple[EventType, dict[str, Any], Actor]:
+                    return _build_session_interrupted_tool_failed(
+                        tool_call_id=span_id,
+                        tool_name=tool_name,
+                    )
 
-            def _terminal_factory() -> tuple[EventType, dict[str, Any], Actor]:
-                return _build_session_interrupted_tool_failed(
-                    tool_call_id=span_id,
-                    tool_name=tool_name,
-                )
+                self._register_span(span_id, _terminal_factory)
 
-            self._register_span(span_id, _terminal_factory)
-
-        # spec-068 Part A — the outer `try/finally` guarantees that a
-        # cancel firing between `tool.called` and any downstream
-        # terminal still emits a `tool.failed(session.interrupted)`
-        # BEFORE the exception propagates. The `ExchangeCancelled` /
+        # spec-068 Part A — the `try/finally` guarantees a cancel
+        # firing between `tool.called` and any downstream terminal
+        # still emits a `tool.failed(session.interrupted)` BEFORE the
+        # exception propagates. The `ExchangeCancelled` /
         # `CancelledError` arm below is the observer's own belt; the
         # exchange finally is the outer suspenders (registry-based).
-        # On every normal arm below we also `close_span` so the
-        # exchange finally doesn't double-emit.
+        # On every normal arm the core has already appended a
+        # terminal, and the `finally` `close_span`s so the exchange
+        # finally doesn't double-emit.
         try:
-            try:
-                result = await self._tools_subsystem.invoke_tool(
-                    tool_name=call.name,
-                    args=dict(call.arguments),
-                    context=ToolContext(
-                        agent_id=self._agent_id,  # type: ignore[arg-type]
-                        session_id=self._session_id,  # type: ignore[arg-type]
-                        thread_id=self._thread_id,  # type: ignore[arg-type]
-                        principal=f"agent.{self._agent_id}",
-                        secrets={},
-                        tool_call_id=tool_call_id,
-                        cancellation=self._cancel,
-                    ),
-                )
-            except ToolUnauthorized as exc:
-                err = Error.from_platform_error(exc)
-                # Derive the exact `/perm allow` chat command from the
-                # matched rule's `what` + the in-flight args. The model
-                # and the chat renderer both see this hint; the user
-                # types it to un-block.
-                recovery_hint = _derive_authz_recovery_hint(
-                    exc, arguments=call.arguments
-                )
-                await self._emit(
-                    type_=EventType.TOOL_FAILED,
-                    data=ToolFailedData(
-                        tool_call_id=tool_call_id,
-                        tool_name=call.name,
-                        error=err,
-                        recovery_hint=recovery_hint,
-                    ).model_dump(mode="json"),
-                    actor=Actor(kind="agent", id=self._agent_id),
-                )
-                # Diagnostic — return error payload so framework continues.
-                payload = err.model_dump(mode="json")
-                if recovery_hint is not None:
-                    payload["recovery_hint"] = recovery_hint
-                return {"error": payload}
-            except PlatformError as exc:
-                err = Error.from_platform_error(exc)
-                # qol-090: forward the recovery_hint carried on the
-                # exception (currently ToolExecutionFailed sets it via
-                # errors.recovery.recovery_hint) into both the event
-                # payload and the LLM-visible tool_result envelope.
-                # Mirrors the ToolUnauthorized arm above; hint is None
-                # for any exception class that doesn't opt in.
-                recovery_hint = getattr(exc, "recovery_hint", None)
-                await self._emit(
-                    type_=EventType.TOOL_FAILED,
-                    data=ToolFailedData(
-                        tool_call_id=tool_call_id,
-                        tool_name=call.name,
-                        error=err,
-                        recovery_hint=recovery_hint,
-                    ).model_dump(mode="json"),
-                    actor=Actor(kind="agent", id=self._agent_id),
-                )
-                payload = err.model_dump(mode="json")
-                if recovery_hint is not None:
-                    payload["recovery_hint"] = recovery_hint
-                return {"error": payload}
-            except (ExchangeCancelled, asyncio.CancelledError):
-                # spec-068 Part A — cancel between `tool.called` and
-                # `tool.result`/`tool.failed` used to leave the span
-                # dangling; downstream assembly then permanently
-                # 400'd the session ("tool_call_ids did not have
-                # response messages"). Emit the same synthetic
-                # terminal shape `EventAdapter._append_synthetic_
-                # tool_failed` writes today (Part B rips out the
-                # renderer's durable write in favour of engine
-                # emission), then re-raise so the exchange failure
-                # path still runs.
+            outcome = await invoke_observed(
+                emit=_emit_and_register,
+                agent_id=self._agent_id,
+                session_id=self._session_id,
+                thread_id=self._thread_id,
+                tools_subsystem=self._tools_subsystem,
+                tool_name=call.name,
+                args=call.arguments,
+                tool_call_id=call.tool_call_id,
+                cancel=self._cancel,
+            )
+        except (ExchangeCancelled, asyncio.CancelledError):
+            # spec-068 Part A — cancel between `tool.called` and
+            # `tool.result`/`tool.failed` used to leave the span
+            # dangling; downstream assembly then permanently
+            # 400'd the session ("tool_call_ids did not have
+            # response messages"). Emit the same synthetic
+            # terminal shape `EventAdapter._append_synthetic_
+            # tool_failed` writes today (Part B rips out the
+            # renderer's durable write in favour of engine
+            # emission), then re-raise so the exchange failure
+            # path still runs. Skipped when `tool.called` never
+            # landed (nothing to pair) or when the cancel escaped
+            # from a terminal emit (a terminal may already be
+            # appended) — both identical to the pre-split method.
+            if tool_call_id is not None and not in_terminal_emit:
                 type_, data, actor = _build_session_interrupted_tool_failed(
                     tool_call_id=tool_call_id,
                     tool_name=call.name,
@@ -414,29 +388,38 @@ class _ObservedToolHandle:
                         "failed for tool_call_id=%s",
                         tool_call_id,
                     )
-                raise
-
-            # AFTER — tool.result.
-            result_payload = _normalize_result(result.result)
-            await self._emit(
-                type_=EventType.TOOL_RESULT,
-                data=ToolResultData(
-                    tool_call_id=tool_call_id,
-                    tool_name=call.name,
-                    result=result_payload,
-                ).model_dump(mode="json"),
-                actor=Actor(kind="agent", id=self._agent_id),
-            )
-            return result.result
+            raise
         finally:
-            # Every arm above (result, failed, cancel-with-emit) has
-            # already appended a terminal for this span — mark it
+            # Every completed arm (result, failed, cancel-with-emit)
+            # has already appended a terminal for this span — mark it
             # closed so the exchange finally does not double-emit. If
-            # the emit itself raised before appending (rare — the
-            # store is durable-first), the span stays open and the
-            # exchange finally picks it up.
-            if self._close_span is not None:
+            # an emit raised before appending (rare — the store is
+            # durable-first), either the span was never registered
+            # (`tool.called` emit failed → id is None) or it stays
+            # open and the exchange finally picks it up.
+            if self._close_span is not None and tool_call_id is not None:
                 self._close_span(tool_call_id)
+
+        # Outcome → the framework's return shape. Raw result on `Ok`
+        # (the emit-normalized / return-raw split is the core's
+        # contract); Diagnostic error payload on `Denied`/`Failed` so
+        # the framework continues and the model sees the failure —
+        # WITH `recovery_hint` forwarded (this engine mapper is the
+        # surface where the hint is deliberately model-visible; an
+        # external bridge mapper drops it instead).
+        match outcome:
+            case Ok(result=raw_result):
+                return raw_result
+            case (
+                Denied(error=error, recovery_hint=recovery_hint)
+                | Failed(error=error, recovery_hint=recovery_hint)
+            ):
+                payload = error.model_dump(mode="json")
+                if recovery_hint is not None:
+                    payload["recovery_hint"] = recovery_hint
+                return {"error": payload}
+            case _:
+                assert_never(outcome)
 
 
 def _build_session_interrupted_tool_failed(
@@ -473,111 +456,8 @@ def _build_session_interrupted_tool_failed(
     return EventType.TOOL_FAILED, data, Actor(kind="system")
 
 
-def _normalize_result(value: object) -> dict[str, Any]:
-    """Wrap a tool result for the event-data dict shape.
-
-    The event payload `tool.result.data.result` is a dict. Dict
-    results pass through; everything else is wrapped under a `value`
-    key so the verbatim content remains capturable.
-    """
-    if isinstance(value, dict):
-        return value
-    return {"value": value}
-
-
-# ---------------------------------------------------------------------------
-# Denied-recovery hint — derives the `/perm allow` slash command
-# ---------------------------------------------------------------------------
-
-
-_TARGET_ARG_PRIORITY = ("path", "command", "url")
-"""Same order as `tools.dispatch._TARGET_ARG_PRIORITY`. Duplicated
-here (rather than imported) because the observer can't take a
-dependency on the dispatcher's internal helper — both modules read
-the convention from the same contract."""
-
-
-def _derive_authz_recovery_hint(
-    exc: ToolUnauthorized,
-    *,
-    arguments: dict[str, Any] | None,
-) -> str | None:
-    """Build the `/perm allow <tool> <pattern>` hint string.
-
-    Reads `ToolUnauthorized.detail`'s `matched_rule` to find the
-    qualified tool ref (or falls back to the legacy action namespace
-    `tool.<name>` when the matched rule's `what` is in old shape).
-    The suggested pattern is derived from the in-flight arguments
-    via the same convention the modal uses (first whitespace-bounded
-    token for bash; parent dir for file tools; `*` otherwise).
-    Returns `None` if there's nothing actionable to surface (e.g.
-    no rule matched — pure default deny — in which case the user
-    can use `/perm allow <ref> *`).
-
-    The pattern is intentionally **broad** by default (`*`); the
-    user can edit before submitting. The point of the hint is to
-    save them from looking up the qualified tool ref and the
-    slash-command grammar — not to guess their intent precisely.
-    """
-    detail = exc.detail or {}
-    tool_name = detail.get("tool_name") or ""
-    matched_rule = detail.get("matched_rule") or {}
-    if not isinstance(tool_name, str) or not tool_name:
-        return None
-
-    # Prefer the matched rule's `what` when it's the new
-    # qualified-ref shape (contains `/`); fall back to a legacy
-    # `tool.<name>` action namespace and ultimately to the bare
-    # tool name. Bare-name fallback isn't a valid /perm tool arg
-    # — we suppress the hint so we never tell the user to type
-    # `/perm allow bash` (which would fail validation).
-    what = matched_rule.get("what") if isinstance(matched_rule, dict) else None
-    tool_ref = what if isinstance(what, str) and "/" in what else None
-
-    if tool_ref is None:
-        return None
-
-    pattern = _suggest_glob_pattern(tool_name=tool_name, arguments=arguments)
-    # Quote when the pattern contains whitespace so the slash
-    # parser splits the verb / ref / pattern correctly.
-    quoted = f'"{pattern}"' if " " in pattern else pattern
-    return f"/perm allow {tool_ref} {quoted}"
-
-
-def _suggest_glob_pattern(
-    *,
-    tool_name: str,
-    arguments: dict[str, Any] | None,
-) -> str:
-    """Mirror the chat modal's `suggest_pattern` helper.
-
-    Same three heuristics in priority order:
-
-    1. bash with a command target: first whitespace-bounded token
-       → `"<token> *"`.
-    2. File tools with a path target: parent-dir glob
-       `"<parent>/*"`.
-    3. Fallback: `"*"`.
-
-    Kept independent of the modal so the engine can run without
-    importing chat code (the engine doesn't depend on `cli/`).
-    """
-    if not arguments:
-        return "*"
-    target: str | None = None
-    for attr in _TARGET_ARG_PRIORITY:
-        value = arguments.get(attr)
-        if isinstance(value, str):
-            target = value
-            break
-    if target is None:
-        return "*"
-    if tool_name == "bash":
-        first_token = target.strip().split(maxsplit=1)[0] if target.strip() else ""
-        if first_token:
-            return f"{first_token} *"
-    if tool_name in {"read_file", "write_file", "list_files"}:
-        parent, sep, _name = target.rpartition("/")
-        if sep:
-            return f"{parent}/*"
-    return "*"
+# spec-119: `_normalize_result`, `_derive_authz_recovery_hint`, and
+# `_suggest_glob_pattern` moved to `tools.observed` — the invocation
+# core builds the `tool.result`/`tool.failed` event data, and a
+# `tools/`-side module cannot import helpers from `engine/` without
+# an import cycle.

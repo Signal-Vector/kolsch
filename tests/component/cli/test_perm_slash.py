@@ -341,15 +341,15 @@ def test_tool_failed_data_recovery_hint_defaults_to_none() -> None:
 
 
 # ===========================================================================
-# Group 5 — engine derives the recovery hint
+# Group 5 — the platform derives the recovery hint (tools.observed)
 # ===========================================================================
 
 
 def test_engine_derives_hint_for_bash_authz_denial() -> None:
-    """The engine helper produces ``/perm allow <tool_ref> "<first-token> *"``
+    """The ``tools.observed`` helper produces ``/perm allow <tool_ref> "<first-token> *"``
     for a bash invocation that was denied by a new-shape rule."""
-    from engine.observers import _derive_authz_recovery_hint
     from errors import ToolUnauthorized
+    from tools.observed import _derive_authz_recovery_hint
 
     exc = ToolUnauthorized(
         tool_name="bash",
@@ -364,8 +364,8 @@ def test_engine_derives_hint_for_bash_authz_denial() -> None:
 def test_engine_skips_hint_when_matched_rule_lacks_qualified_ref() -> None:
     """Legacy matched rule (regex `what`) → no hint (we'd have to
     guess the qualified ref, and a wrong guess is worse than no hint)."""
-    from engine.observers import _derive_authz_recovery_hint
     from errors import ToolUnauthorized
+    from tools.observed import _derive_authz_recovery_hint
 
     exc = ToolUnauthorized(
         tool_name="bash",
@@ -383,8 +383,8 @@ def test_engine_skips_hint_when_matched_rule_lacks_qualified_ref() -> None:
 
 def test_engine_hint_uses_star_when_no_args() -> None:
     """No args → `*` pattern, since we have nothing better to suggest."""
-    from engine.observers import _derive_authz_recovery_hint
     from errors import ToolUnauthorized
+    from tools.observed import _derive_authz_recovery_hint
 
     exc = ToolUnauthorized(
         tool_name="bash",
