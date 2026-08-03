@@ -117,7 +117,11 @@ def test_claude_code_registry_resolves_connector() -> None:
     assert connector.type_name == "claude_code"
 
 
-def test_claude_code_models_all_have_context_length() -> None:
+def test_claude_code_models_all_have_context_length(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
+    # qol-124: isolate from any real ~/.claude.json cache — pure static base.
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     connector = ClaudeCodeConnector()
     entries = asyncio.run(connector.discover_models(Credentials(), None))
     ids = {e.id for e in entries}
@@ -127,9 +131,13 @@ def test_claude_code_models_all_have_context_length() -> None:
         assert entry.context_length > 0
 
 
-def test_claude_code_discover_includes_versioned_pins() -> None:
+def test_claude_code_discover_includes_versioned_pins(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Any
+) -> None:
     """qol-123 — discover surfaces the aliases AND current versioned ids,
     each at the conservative 200k subscription window."""
+    # qol-124: isolate from any real ~/.claude.json cache — pure static base.
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(tmp_path))
     connector = ClaudeCodeConnector()
     entries = asyncio.run(connector.discover_models(Credentials(), None))
     ids = {e.id for e in entries}
@@ -149,6 +157,47 @@ def test_claude_code_versioned_pin_serializes_with_context_length() -> None:
 
     row = _model_entry_to_yaml(ModelEntry(id="claude-opus-4-8", context_length=200_000))
     assert row == {"id": "claude-opus-4-8", "context_length": 200_000}
+
+
+def test_discover_merges_cache_extra_models(
+    tmp_path: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """qol-124 — discover_models merges the account's cache extras onto the
+    static base (deduped, static-first, all 200k), and a discovered entry
+    persists with its context_length."""
+    from cli.llm_commands import _model_entry_to_yaml
+
+    cfg_dir = tmp_path / "cc"
+    cfg_dir.mkdir()
+    (cfg_dir / ".claude.json").write_text(
+        json.dumps(
+            {
+                "additionalModelOptionsCache": [
+                    {"value": "claude-opus-4-6", "label": "Opus 4.6"},  # new -> merged
+                    {"value": "claude-opus-4-8[1m]"},  # already in base -> deduped
+                ]
+            }
+        ),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_dir))
+
+    connector = ClaudeCodeConnector()
+    entries = asyncio.run(connector.discover_models(Credentials(), None))
+    ids = [e.id for e in entries]
+
+    assert "claude-opus-4-6" in ids  # discovered extra, merged on top
+    assert ids.count("claude-opus-4-8") == 1  # cache dup did NOT duplicate the base
+    assert "opus" in ids  # static base survives
+    assert len(ids) == len(set(ids))  # no dups
+    for entry in entries:
+        assert entry.context_length == 200_000
+
+    discovered = next(e for e in entries if e.id == "claude-opus-4-6")
+    assert _model_entry_to_yaml(discovered) == {
+        "id": "claude-opus-4-6",
+        "context_length": 200_000,
+    }
 
 
 def test_claude_code_auth_prompt_has_no_secret_field() -> None:

@@ -38,7 +38,9 @@ raised error.
 
 from __future__ import annotations
 
+import json
 import os
+from pathlib import Path
 from typing import Any
 
 # The model ids the `claude` CLI accepts via `--model`, each with the
@@ -80,6 +82,83 @@ STATIC_MODELS: tuple[tuple[str, int], ...] = (
     # and prices above Opus; fails at runtime more readily than the other pins.
     ("claude-fable-5", 200_000),
 )
+
+# ``context_length`` for a discovered (cache-merged) model — the same
+# conservative subscription window as the static base (qol-124).
+_DISCOVERED_CONTEXT_LENGTH = 200_000
+
+# Claude Code's local config key holding the account's *additional* model
+# options (beyond the built-in opus/sonnet/haiku aliases). Verified shape
+# (`~/.claude.json`, claude 2.1.197): a list of
+# ``{"value": "claude-fable-5[1m]", "label": ..., "description": ...}``.
+_MODEL_OPTIONS_CACHE_KEY = "additionalModelOptionsCache"
+
+
+def _resolve_claude_config_path(config_path: Path | None) -> Path:
+    """Locate Claude Code's config file.
+
+    Explicit override, else ``$CLAUDE_CONFIG_DIR/.claude.json``, else
+    ``~/.claude.json``.
+    """
+    if config_path is not None:
+        return config_path
+    config_dir = os.environ.get("CLAUDE_CONFIG_DIR")
+    if config_dir:
+        return Path(config_dir) / ".claude.json"
+    return Path.home() / ".claude.json"
+
+
+def _normalize_cache_model_value(value: object) -> str | None:
+    """Turn a cache ``value`` into a bare ``claude-*`` id, or ``None``.
+
+    Strips a trailing context-variant marker
+    (``claude-fable-5[1m]`` -> ``claude-fable-5``) and rejects anything
+    that isn't a non-empty ``claude-``-prefixed string, so a schema change
+    can't inject a junk id.
+    """
+    if not isinstance(value, str):
+        return None
+    base = value.split("[", 1)[0].strip()
+    # Require a real model name after the prefix — reject a bare "claude-".
+    if not base.startswith("claude-") or len(base) <= len("claude-"):
+        return None
+    return base
+
+
+def read_claude_code_extra_models(config_path: Path | None = None) -> list[str]:
+    """Best-effort discovery of the account's *extra* Claude models.
+
+    Reads ``additionalModelOptionsCache`` from Claude Code's local config
+    (``~/.claude.json``). Returns normalized, de-duplicated,
+    order-preserving bare ``claude-*`` ids. Returns ``[]`` on ANY problem:
+    the file is Claude Code's PRIVATE, undocumented cache, so every field is
+    untrusted and the first surprise degrades to the static catalog. Never
+    raises. Only the model-options key is read — never the config's secret
+    fields.
+    """
+    path = _resolve_claude_config_path(config_path)
+    try:
+        with path.open("r", encoding="utf-8") as handle:
+            data = json.load(handle)
+        if not isinstance(data, dict):
+            return []
+        raw = data.get(_MODEL_OPTIONS_CACHE_KEY)
+        if not isinstance(raw, list):
+            return []
+        out: list[str] = []
+        seen: set[str] = set()
+        for entry in raw:
+            if not isinstance(entry, dict):
+                continue
+            model_id = _normalize_cache_model_value(entry.get("value"))
+            if model_id is not None and model_id not in seen:
+                seen.add(model_id)
+                out.append(model_id)
+    except (OSError, ValueError, TypeError, KeyError):
+        return []
+    else:
+        return out
+
 
 # Every var that would redirect the child off the subscription onto a
 # *billed* path or override the configured model. There is no "prefer

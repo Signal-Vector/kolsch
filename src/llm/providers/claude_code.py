@@ -92,6 +92,7 @@ shows "N/A (subscription)" rather than blank/zero garbage.
 from __future__ import annotations
 
 import json
+import logging
 import shutil
 import subprocess
 import tempfile
@@ -113,12 +114,14 @@ from errors import (
 # `_ClaudeResultError`, `_looks_not_logged_in`) working unchanged —
 # spec-118's tests are the byte-for-byte contract.
 from llm.claude_cli import (
+    _DISCOVERED_CONTEXT_LENGTH,
     SCRUBBED_ENV_VARS,
     STATIC_MODELS,
     _ClaudeResultError,
     _looks_not_logged_in,  # noqa: F401 — re-export for pre-extraction importers
     build_base_argv,
     extract_result_text,
+    read_claude_code_extra_models,
     scrubbed_env,
 )
 from llm.protocol import (
@@ -141,6 +144,8 @@ if TYPE_CHECKING:
 # moved the definitions to `llm.claude_cli`).
 _STATIC_MODELS = STATIC_MODELS
 _SCRUBBED_ENV_VARS = SCRUBBED_ENV_VARS
+
+logger = logging.getLogger(__name__)
 
 # The connector's own subprocess timeout. Deliberately BELOW the
 # adapter's `KOLSCH_LLM_CALL_TIMEOUT_SECONDS` (default 210s) so the
@@ -554,20 +559,43 @@ class ClaudeCodeConnector:
 
     async def discover_models(
         self,
-        credentials: Credentials,  # noqa: ARG002 — static catalog, no live call
+        credentials: Credentials,  # noqa: ARG002 — no live call; local read only
         base_url: str | None,  # noqa: ARG002 — no base URL for a local CLI
     ) -> list[ModelEntry]:
-        """Return the static supported Claude aliases with context windows.
+        """Return the static base catalog merged with cache-discovered models.
 
-        Static by design (see the module docstring's static-catalog
-        exception): the `claude` CLI exposes no list-models endpoint, the
-        aliases are stable, and each entry carries a `context_length` so
-        compaction never hits the `no_context_length` skip.
+        Discovered from Claude Code's local config (qol-124). The `claude`
+        CLI exposes no list-models endpoint, but Claude Code
+        caches the account's *additional* model options in `~/.claude.json`
+        (`additionalModelOptionsCache`). Start from the stable static base
+        (aliases + current pins), then merge any discovered ids on top,
+        de-duplicated and static-first. The read is best-effort: an absent
+        / empty / unparseable cache degrades to the static base, so
+        `connect`/`refresh` never fail on it.
+
+        Every entry — base and discovered — carries a conservative 200k
+        `context_length` (the SUBSCRIPTION window, NOT the API's 1M): the
+        cache carries no reliable per-model window, and over-stating it
+        would overflow the real `claude -p` call.
         """
-        return [
+        catalog = [
             ModelEntry(id=alias, context_length=window)
             for alias, window in _STATIC_MODELS
         ]
+        seen = {entry.id for entry in catalog}
+        discovered = [
+            ModelEntry(id=model_id, context_length=_DISCOVERED_CONTEXT_LENGTH)
+            for model_id in read_claude_code_extra_models()
+            if model_id not in seen
+        ]
+        if discovered:
+            logger.debug(
+                "claude_code discover_models: %d static + %d discovered "
+                "(from Claude Code local cache)",
+                len(catalog),
+                len(discovered),
+            )
+        return catalog + discovered
 
     async def build_llm(
         self,

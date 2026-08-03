@@ -10,13 +10,17 @@ this file guards the alias layer itself).
 
 from __future__ import annotations
 
+import json
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from llm import claude_cli
 from llm.claude_cli import (
     SCRUBBED_ENV_VARS,
     STATIC_MODELS,
+    _resolve_claude_config_path,
     build_base_argv,
+    read_claude_code_extra_models,
     scrubbed_env,
 )
 
@@ -79,3 +83,76 @@ def test_static_models_catalog_shape() -> None:
         assert mid and isinstance(mid, str)
         # conservative 200k on EVERY entry — subscription window, not API 1M
         assert window == 200_000
+
+
+def test_extra_models_normalize_and_dedup(tmp_path: Path) -> None:
+    """qol-124 — cache values normalize to bare claude-* ids; junk and
+    duplicates are dropped; genuine new ids are kept, order-preserving."""
+    cache = {
+        "additionalModelOptionsCache": [
+            {"value": "claude-fable-5[1m]"},  # strip the [1m] variant
+            {"value": "claude-fable-5"},  # duplicate of the above -> dropped
+            {"value": ""},  # empty -> dropped
+            {"value": "claude-"},  # bare prefix, no model name -> dropped
+            {"value": "gpt-4o"},  # non-claude -> dropped
+            {"value": 123},  # non-str -> dropped
+            {"value": "claude-opus-4-6"},  # genuine new id -> kept
+            {"label": "no value key"},  # missing value -> dropped
+        ]
+    }
+    path = tmp_path / ".claude.json"
+    path.write_text(json.dumps(cache), encoding="utf-8")
+    assert read_claude_code_extra_models(path) == ["claude-fable-5", "claude-opus-4-6"]
+
+
+def test_extra_models_fallback_on_every_failure(tmp_path: Path) -> None:
+    """qol-124 — the read returns [] (→ static base) on ANY problem and never
+    raises. Covers each failure mode Claude Code's private cache can show."""
+    key = "additionalModelOptionsCache"
+
+    missing = tmp_path / "nope.json"
+    assert read_claude_code_extra_models(missing) == []  # file absent
+
+    a_dir = tmp_path / "adir.json"
+    a_dir.mkdir()
+    assert read_claude_code_extra_models(a_dir) == []  # path is a dir (OSError)
+
+    non_json = tmp_path / "bad.json"
+    non_json.write_text("not json {", encoding="utf-8")
+    assert read_claude_code_extra_models(non_json) == []  # non-JSON
+
+    top_not_dict = tmp_path / "list.json"
+    top_not_dict.write_text(json.dumps([1, 2, 3]), encoding="utf-8")
+    assert read_claude_code_extra_models(top_not_dict) == []  # top-level not a dict
+
+    no_key = tmp_path / "nokey.json"
+    no_key.write_text(json.dumps({"other": 1}), encoding="utf-8")
+    assert read_claude_code_extra_models(no_key) == []  # key absent
+
+    wrong_type = tmp_path / "wrong.json"
+    wrong_type.write_text(json.dumps({key: {"not": "a list"}}), encoding="utf-8")
+    assert read_claude_code_extra_models(wrong_type) == []  # key not a list
+
+    malformed = tmp_path / "malformed.json"
+    malformed.write_text(
+        json.dumps({key: ["a string", 5, None, {}, {"value": None}]}),
+        encoding="utf-8",
+    )
+    assert read_claude_code_extra_models(malformed) == []  # entries not usable
+
+
+def test_extra_models_config_dir_resolution(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """qol-124 — CLAUDE_CONFIG_DIR relocates the read; unset -> ~/.claude.json."""
+    cfg_dir = tmp_path / "cc"
+    cfg_dir.mkdir()
+    (cfg_dir / ".claude.json").write_text(
+        json.dumps({"additionalModelOptionsCache": [{"value": "claude-fable-5[1m]"}]}),
+        encoding="utf-8",
+    )
+    monkeypatch.setenv("CLAUDE_CONFIG_DIR", str(cfg_dir))
+    assert read_claude_code_extra_models() == ["claude-fable-5"]
+
+    monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+    assert _resolve_claude_config_path(None) == Path.home() / ".claude.json"
