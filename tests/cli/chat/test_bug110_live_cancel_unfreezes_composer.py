@@ -232,7 +232,13 @@ def _mk_answered(
     thread_id: Any,
     prompt_id: str,
     response: str,
+    reason: str | None = None,
 ) -> Event:
+    payload: dict[str, Any] = {"prompt_id": prompt_id, "response": response}
+    # bug-114: an auto-deny (window-elapsed) answer carries a marker so
+    # the adapter flips the mounted block to a distinct terminal.
+    if reason is not None:
+        payload["reason"] = reason
     return Event(
         event_id=EventId(f"ev_{uuid4()}"),
         parent_event_id=None,
@@ -242,10 +248,7 @@ def _mk_answered(
         data={
             "schema_version": 1,
             "kind": WIRE_PROMPT_ANSWERED,
-            "payload": {
-                "prompt_id": prompt_id,
-                "response": response,
-            },
+            "payload": payload,
         },
         actor=Actor(kind="system"),
         created_at=datetime.now(UTC),
@@ -563,3 +566,100 @@ async def test_duplicate_and_late_cancel_are_no_ops(
             f"terminal footer mutated on duplicate cancel: {row.content!r}"
         )
         assert block.is_resolved is True
+
+
+# ---------------------------------------------------------------------------
+# bug-114 — an auto-deny answer (approval-response window elapsed) flips the
+# mounted block to a DISTINCT terminal, exactly like a live cancel, via
+# `render_terminal` (NOT `_resolved_event.set()`), and unfreezes the
+# composer. Drives `_handle_prompt_answered`'s marker branch end to end —
+# the PromptsImpl-level bug-114 tests stop before the widget.
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_bug114_auto_deny_flips_block_terminal_and_unfreezes_composer(
+    store_env: dict[str, Any],
+) -> None:
+    bundle = _mk_bundle(store_env, is_resume=False)
+    app = ChatApp(session=bundle, engine=bundle.runtime.engine, full_history=False)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        bus = pilot.app.session.runtime.bus
+        store = pilot.app.session.runtime.store
+        thread_id = pilot.app.session.thread_id
+        session_id = pilot.app.session.session_id
+
+        # Live requested prompt → interactive block mounts, composer freezes.
+        pid = f"prm_auto_{uuid4().hex[:8]}"
+        await _publish(
+            bus,
+            store,
+            thread_id,
+            _mk_requested(
+                session_id=session_id,
+                thread_id=thread_id,
+                prompt_id=pid,
+            ),
+        )
+        block = await _wait_for_block(pilot, pid)
+        composer = pilot.app.query_one(Composer)
+        assert bool(block.is_resolved) is False
+        for _ in range(40):
+            await pilot.pause()
+            if composer.awaiting_approval:
+                break
+            await asyncio.sleep(0.02)
+        assert bool(composer.awaiting_approval) is True, (
+            "composer never froze on the live approval"
+        )
+
+        # Auto-deny: the marker answer `PromptsImpl` emits on window elapse.
+        await _publish(
+            bus,
+            store,
+            thread_id,
+            _mk_answered(
+                session_id=session_id,
+                thread_id=thread_id,
+                prompt_id=pid,
+                response="n",
+                reason="approval_window_elapsed",
+            ),
+        )
+
+        for _ in range(60):
+            await pilot.pause()
+            if block.is_resolved:
+                break
+            await asyncio.sleep(0.02)
+
+        # Flipped via terminal state (render_terminal), NOT `_resolved_event`.
+        assert block.is_resolved is True, (
+            "auto-denied block never reported resolved — bug-114 widget flip missing"
+        )
+        terminal = block._terminal_state
+        assert terminal is not None, (
+            "terminal flip went through `_resolved_event`, not `render_terminal`"
+        )
+        # Guard: the raw event stays UN-set so the bridge stays asleep (bug-110).
+        assert block._resolved_event.is_set() is False, (
+            "`_resolved_event` was set on an auto-denied block — would wake the "
+            "bridge and append a duplicate WIRE_PROMPT_ANSWERED"
+        )
+        # Distinct auto-deny footer (vs manual '✗ Denied once' / '⊘ Interrupted').
+        assert "Auto-denied" in terminal[1], (
+            f"expected auto-deny footer, got {terminal[1]!r}"
+        )
+
+        # Composer unfreezes now that the block reports resolved.
+        for _ in range(40):
+            await pilot.pause()
+            if not composer.awaiting_approval:
+                break
+            await asyncio.sleep(0.02)
+        assert bool(composer.awaiting_approval) is False, (
+            "composer stayed frozen after auto-deny — bug-110 redux"
+        )

@@ -121,6 +121,15 @@ class PlatformRuntime:
     # Background (defect 1) recurs. `None` disables the default
     # (raw runner runs unwrapped, matching pre-spec-069 behaviour).
     workflow_default_node_timeout_seconds: float | None = 240.0
+    # bug-114 — approval-response window (seconds) that bounds an
+    # approval prompt raised INSIDE a workflow node. On expiry the
+    # prompt auto-resolves to a deny (via the normal answered bridge)
+    # instead of the node's compute timeout absorbing the wait and
+    # dying with an opaque `NodeTimeoutExceeded`. Populated at bootstrap
+    # from `platform.yaml:workflows.approval_response_seconds`. `None`
+    # (default) = OFF: unbounded wait, exactly the pre-bug-114 behavior.
+    # Applies only to workflow-scoped prompts (chat approvals unchanged).
+    workflow_approval_response_seconds: float | None = None
     # bug-086 — default per-LLM-call timeout (seconds) that wraps
     # each `crewai.LLM.call` in `asyncio.wait_for`. Populated at
     # bootstrap from `platform.yaml:workflows.llm_call_timeout_seconds`;
@@ -225,6 +234,22 @@ def _resolve_llm_call_timeout_default(
     if provider_timeouts:
         return float(max(provider_timeouts)) + 30.0
     return 210.0
+
+
+def _resolve_approval_window(
+    workflows_cfg: dict[str, Any] | None,
+) -> float | None:
+    """Resolve `workflows.approval_response_seconds` for bug-114.
+
+    OFF by default: key absent OR explicitly ``null`` → ``None``
+    (unbounded approval wait, the pre-bug-114 behavior). A number →
+    ``float(value)`` — the seconds an approval prompt raised inside a
+    workflow node may sit unanswered before auto-resolving to a deny.
+    """
+    if workflows_cfg is None or "approval_response_seconds" not in workflows_cfg:
+        return None
+    raw = workflows_cfg["approval_response_seconds"]
+    return None if raw is None else float(raw)
 
 
 async def bootstrap_runtime(  # noqa: PLR0915 — linear runtime-assembly sequence
@@ -480,6 +505,12 @@ async def bootstrap_runtime(  # noqa: PLR0915 — linear runtime-assembly sequen
     else:
         workflow_default_node_timeout_seconds = float(raw_node_timeout)
 
+    # bug-114 — approval-response window from the same `workflows:`
+    # section (OFF by default). Extracted to `_resolve_approval_window`
+    # so `bootstrap_runtime` stays under the PLR0912 branch threshold
+    # (same reason the LLM-call-timeout resolution is a helper).
+    workflow_approval_response_seconds = _resolve_approval_window(workflows_cfg)
+
     # bug-086 — resolve the per-LLM-call timeout default from the same
     # `workflows:` section, install it into the engine adapter, and
     # store on the runtime for observability. Extracted to a helper
@@ -515,5 +546,6 @@ async def bootstrap_runtime(  # noqa: PLR0915 — linear runtime-assembly sequen
         llm_providers_config=llm_providers_config,
         workflow_default_timeout_seconds=workflow_default_timeout_seconds,
         workflow_default_node_timeout_seconds=workflow_default_node_timeout_seconds,
+        workflow_approval_response_seconds=workflow_approval_response_seconds,
         llm_call_timeout_seconds=llm_call_timeout_seconds,
     )
