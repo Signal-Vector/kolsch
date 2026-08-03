@@ -340,12 +340,16 @@ async def _handler_new(arg_text: str, ctx: SlashContext) -> ControlSignal:
     Handler signals via `ctx.state`; the input loop performs the
     actual `store.create_session` call so session-lifecycle
     transitions stay in one place.
+
+    feat-117: only `pending_new_session` is set — NOT `pending_clear`. The
+    Textual app's `_open_new_session` owns the transcript clear so that a
+    `/new` blocked by the idle guard (turn / workflow in flight) leaves the
+    screen untouched instead of wiping it for a switch that didn't happen.
     """
     _ = arg_text
     if ctx.state is None:
         ctx.stdout.write("/new requires a chat runtime; not available here.\n")
         return ControlSignal.CONTINUE
-    ctx.state.pending_clear = True
     ctx.state.pending_new_session = True
     return ControlSignal.NEW_SESSION
 

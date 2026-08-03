@@ -2102,15 +2102,24 @@ class ChatApp(App[None]):
         # Pending flags: consume the ones we can honour locally now;
         # flag the others as "coming soon" so behaviour is honest.
         state = self._chat_state
+        # `pending_clear` currently has no setter in the Textual app: `/clear`
+        # wipes via the ANSI-escape path above, and feat-117 moved `/new`'s
+        # clear into `_open_new_session`. The branch is retained (harmless) as
+        # the seam a future flag-driven clear would reuse.
         if state.pending_clear:
             await self._clear_transcript()
             state.pending_clear = False
-        if state.pending_new_session or state.pending_session_id:
-            await self._mount_transcript_notice(
-                "session lifecycle (/new, /session) is deferred to the "
-                "slash follow-up spec; state noted, no switch performed."
-            )
+        if state.pending_new_session:
+            # feat-117: `/new` now performs the real session switch (idle-
+            # guarded inside `_open_new_session`). It owns its own transcript
+            # clear, so `_handler_new` no longer sets `pending_clear`.
+            await self._open_new_session()
             state.pending_new_session = False
+        if state.pending_session_id:
+            await self._mount_transcript_notice(
+                "session lifecycle (/session) is deferred to the slash "
+                "follow-up spec; state noted, no switch performed."
+            )
             state.pending_session_id = None
         if state.pending_workflow_run_id:
             await self._mount_transcript_notice(
@@ -2441,6 +2450,94 @@ class ChatApp(App[None]):
         if self._workflow_layout_manager is not None:
             self._workflow_layout_manager.reset()
 
+    async def _open_new_session(self) -> None:
+        """feat-117: mint + switch to a fresh session under the same agent.
+
+        Called from `_handle_slash` when `/new` set `pending_new_session`.
+        Guarded to idle: a butler turn in flight, or a live (running/
+        cancelling) OR queued workflow, blocks the switch (a mid-turn switch
+        would orphan durable writes to the old thread; a live/queued workflow
+        would lose its registry handle) — the user is told to finish/cancel
+        first and NOTHING changes. Otherwise: mint a new session + thread,
+        repoint every per-session handle (`self.session`, `_chat_state`
+        [incl. clearing its per-turn flags], the `EventAdapter`, and the three
+        durable-writing impls `PromptsImpl`/`CardsImpl`/`WorkflowsImpl`), reset
+        the transcript (which also resets the workflow layout manager,
+        bug-115), refresh the info bar, and announce the new id. The old
+        session stays intact on disk (resumable via
+        `kolsch chat <agent> --session <old_id>`).
+        """
+        if (
+            self._butler_turn_active()
+            or self._has_live_workflow()
+            or self._has_queued_workflow()
+        ):
+            await self._mount_transcript_notice(
+                "/new: can't start a new session while a turn or workflow is "
+                "active — cancel or wait for it to finish, then /new again.",
+                kind="warning",
+            )
+            return
+
+        runtime = self.session.runtime
+        try:
+            session = await runtime.store.create_session(
+                str(self.session.config.agent_id),
+                name=f"chat:{self.session.agent_ref}",
+            )
+            threads = await runtime.store.list_threads(session.session_id)
+        except Exception as exc:  # noqa: BLE001 — any store failure → notice, not crash
+            await self._mount_transcript_notice(
+                f"/new: could not create a new session: {type(exc).__name__}: {exc}",
+                kind="error",
+            )
+            return
+        if not threads:
+            await self._mount_transcript_notice(
+                f"/new: new session {session.session_id} has no thread; aborting.",
+                kind="error",
+            )
+            return
+        new_session_id = session.session_id
+        new_thread_id = threads[0].thread_id
+
+        # Repoint every per-session handle. The three impls each cache the
+        # ids and `append_event(self._thread_id, ...)`, so missing one would
+        # silently write the new session's events into the old thread.
+        self.session.session_id = new_session_id
+        self.session.thread_id = new_thread_id
+        self.session.is_resume = False
+        if self._chat_state is not None:
+            self._chat_state.session_id = new_session_id
+            self._chat_state.thread_id = new_thread_id
+            # The fresh session must start with a clean per-turn slate.
+            # Without this, `/skill X` then `/new` would silently force-invoke
+            # X on the FIRST message of the new session, and a paused-workflow
+            # / awaited-input flag would leak across the session boundary. (The
+            # legacy REPL cleared `pending_force_skill` on switch; the workflow
+            # flags were cleared by its workflow slash handlers.)
+            self._chat_state.pending_force_skill.clear()
+            self._chat_state.pending_workflow_run_id = None
+            self._chat_state.expecting_user_input_response = False
+        self.event_adapter.reset_for_session(new_session_id, new_thread_id)
+        registry = self._service_registry
+        if registry is not None:
+            for impl in (registry.prompts, registry.cards, registry.workflows):
+                rebind = getattr(impl, "rebind_session", None)
+                if rebind is not None:
+                    rebind(new_session_id, new_thread_id)
+
+        # Reset the visible transcript (also resets the layout manager).
+        await self._clear_transcript()
+
+        # Refresh the info-bar identity + announce the new session.
+        with contextlib.suppress(Exception):
+            self.query_one(InfoBar).session = str(new_session_id)[:8]
+        await self._mount_transcript_notice(
+            f"kolsch chat • {self.session.config.name} • "
+            f"{self.session.model_label} • {new_session_id}"
+        )
+
     # ------------------------------------------------------------------
     # Action handlers (from BINDINGS)
     # ------------------------------------------------------------------
@@ -2481,6 +2578,26 @@ class ChatApp(App[None]):
             if getattr(record, "phase", None) in ("running", "cancelling"):
                 return True
         return False
+
+    def _has_queued_workflow(self) -> bool:
+        """True when at least one workflow is ``queued`` (feat-117 `/new` guard).
+
+        `/new` blocks on queued runs too — not just the running/cancelling
+        that :meth:`_has_live_workflow` covers. The drain is serial, so a
+        queued run will be promoted to running and written into the session;
+        switching + clearing the registry mid-queue would silently drop it.
+        Kept separate from :meth:`_has_live_workflow` so the Esc-cancel-oldest
+        path (which targets running runs) is unaffected.
+        """
+        workflows_impl = self._active_workflows()
+        if workflows_impl is None:
+            return False
+        registry = getattr(workflows_impl, "_workflow_registry", None)
+        if registry is None:
+            return False
+        return any(
+            getattr(record, "phase", None) == "queued" for record in registry.values()
+        )
 
     def _find_oldest_running_workflow(self) -> Any:
         """Return the ``run_id`` of the oldest live workflow, or None.

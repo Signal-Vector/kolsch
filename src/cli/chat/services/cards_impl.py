@@ -180,6 +180,16 @@ class CardsImpl(AbstractCards):
         # right before shutdown would leak.
         self._pending_tasks: set[asyncio.Task[EventId]] = set()
 
+    def rebind_session(self, session_id: SessionId, thread_id: ThreadId) -> None:
+        """feat-117: retarget durable writes to a new session/thread (`/new`).
+
+        The impl caches the ids and appends events with them
+        (``append_event(self._thread_id, ...)``); a `/new` session switch
+        must repoint them or new-session events would land in the old thread.
+        """
+        self._session_id = session_id
+        self._thread_id = thread_id
+
     # ------------------------------------------------------------------
     # Public surface (Cards Protocol)
     # ------------------------------------------------------------------
