@@ -69,7 +69,7 @@ OpenRouter when both are connected.
 subscription** through the local `claude` CLI, no API key and no
 external proxy. See [Claude via your subscription
 (`claude_code`)](#claude-via-your-subscription-claude_code) below for the
-login prerequisite, the text-only v1 limitation, and the
+login prerequisite, the text-only vs. tool-calling modes, and the
 subscription/ToS caveat.
 
 ## `kolsch connect`
@@ -282,16 +282,47 @@ works. Operators should **not** hand-write the `models:` list.
 model: { provider: claude_code, model: sonnet }
 ```
 
-### v1 is text-only — the workflow-node caveat
+### Two modes: text-only, or tool-calling (automatic)
 
-**A `claude_code` agent gets no kolsch tools.** v1 is
-text-generation only: kolsch-orchestrated tool-calling (the model
-returning tool calls for kolsch to dispatch through its own
-authorization) is **not** wired for this provider. If you place a
-`claude_code` agent on a workflow node that expects tool use, it will
-receive no kolsch tools and may **emit tool calls as prose** in its
-reply instead of invoking anything. Use an API-key provider
-(`openrouter` / `opencode`) for tool-using nodes.
+Which mode a `claude_code` agent runs in is decided **automatically by
+whether it declares tools** — there is no extra flag:
+
+- **No tools → text-only.** kolsch drives Claude as a plain model
+  (`claude -p`) and the agent generates text. The simplest path.
+- **≥1 tool declared → tool-calling.** kolsch gives Claude its own
+  agentic loop: it spawns `claude -p` with an MCP **tool bridge** wired
+  to the agent's kolsch tools, and Claude calls them itself. Every call
+  is routed **back through kolsch's real dispatch** — the same
+  authorization rules, sandbox, and JSONL event log (`tool.called` /
+  `tool.result`) as an in-engine tool call, under the agent's own
+  `agent.<id>` principal. Denials are **sanitized**: the model sees a
+  generic failure, never kolsch's internal rule details.
+
+To give a Claude agent tools, just declare them as you would for any
+agent — no other change:
+
+```yaml
+# a tool-calling claude_code agent
+model: { provider: claude_code, model: sonnet }
+subsystems:
+  tools:
+    variant: standard
+    config:
+      declared:
+        - ref: kolsch/tools/read_file
+        - ref: kolsch/tools/bash
+```
+
+Run it and Claude drives its own loop, calling `read_file`/`bash`
+through the bridge; the tool results land in the JSONL log exactly like
+any agent's, and the final message reflects them.
+
+**Workflow-execution tools are denied over the bridge in v1.**
+`run_workflow` and `cancel_workflow` are **not** exposed to a
+`claude_code` tool-calling agent for now — a conservative default, since
+a Claude agent spawning nested workflows is deferred until that path is
+validated. Declaring them is harmless; they simply won't appear to the
+Claude agent. Every other tool works.
 
 ### Behaviour to expect
 
@@ -350,7 +381,8 @@ provider, or the next agent load will fail with
 | `claude_code` connect reports "`claude` not found" | The `claude` CLI isn't installed / on PATH | Install Claude Code; re-run with an explicit binary path at the prompt |
 | `claude_code` connect reports "not logged in" | Subscription not authenticated | Run `claude auth login`, then re-run `kolsch connect claude_code` |
 | `claude_code` agent fails with `model.binary_unavailable` at runtime | `claude` was removed / logged out after connect | Reinstall or `claude auth login`; this is Fatal (no fallback) |
-| `claude_code` agent emits tool calls as prose | v1 is text-only — the node expects tools | Use `openrouter` / `opencode` for tool-using nodes |
+| `claude_code` agent emits tool calls as prose instead of calling them | The agent declared **no** tools, so it ran in text-only mode | Declare the tools in the agent's `subsystems.tools` — a `claude_code` agent with ≥1 tool auto-uses the bridged tool-calling path |
+| `claude_code` tool-calling agent can't run a workflow | `run_workflow`/`cancel_workflow` are denied over the bridge in v1 | Expected — deferred by design; drive workflows from a non-`claude_code` agent or the CLI for now |
 
 ## A worked example — OpenRouter + Claude, from empty
 
