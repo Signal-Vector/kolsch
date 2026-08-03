@@ -187,6 +187,19 @@ def _build_parser() -> argparse.ArgumentParser:
             "Refs not in the agent's enabled list fail at submit time."
         ),
     )
+    run.add_argument(
+        "--model",
+        type=str,
+        default=None,
+        metavar="<provider>/<model>",
+        help=(
+            "Override the agent's model for THIS run only (no file edit). "
+            "Accepts the same forms as a YAML model: a compact "
+            "'provider/model' string or a platform.yaml model_aliases alias. "
+            "The agent's fallback chain is cleared for the override; the "
+            "model's provider must be connected."
+        ),
+    )
 
     # ---- sessions ----------------------------------------------------
     sessions = sub.add_parser("sessions", help="Session operations.")
@@ -495,6 +508,49 @@ def _add_chat_subparser(sub: argparse._SubParsersAction[Any]) -> None:
 # ---------------------------------------------------------------------------
 
 
+def apply_run_model_override(
+    config: ResolvedAgentConfig,
+    model_ref: str,
+    runtime: PlatformRuntime,
+) -> ResolvedAgentConfig | None:
+    """Replace `config`'s model with the `--model` override, or return `None`.
+
+    Returns `None` (after printing a stderr error) when `model_ref` is
+    malformed, an unknown alias, or names an unconnected provider. The
+    override accepts the SAME grammar as a YAML `model:` string — a compact
+    `provider/model` or a `platform.yaml` `model_aliases` alias — via the
+    shared `assets.assembler._normalize_model_value`. It clears the agent's
+    `fallback_models` (an explicit single-model CLI choice), and its provider
+    must be connected (in `llm_providers`) or be `mock`, else it fails fast
+    so the run doesn't silently fall through to the echo path.
+    """
+    from assets.assembler import _normalize_model_value  # noqa: PLC0415
+    from schemas import ModelSpec  # noqa: PLC0415
+
+    try:
+        raw_aliases = runtime.asset_management.get_platform_config("model_aliases")
+    except KeyError:
+        raw_aliases = {}  # no model_aliases section — compact strings still work
+    aliases = {k: v for k, v in raw_aliases.items() if isinstance(v, str)}
+    try:
+        normalized = _normalize_model_value(model_ref, aliases)
+        if not isinstance(normalized, dict):
+            msg = f"unexpected normalization shape: {type(normalized).__name__}"
+            raise TypeError(msg)  # noqa: TRY301
+        spec = ModelSpec(**normalized)
+    except Exception as exc:  # noqa: BLE001 — surface every validation flavour
+        sys.stderr.write(f"run: --model {model_ref!r} is invalid: {exc}\n")
+        return None
+    if spec.provider != "mock" and spec.provider not in runtime.llm_providers_config:
+        connected = ", ".join(sorted(runtime.llm_providers_config)) or "(none)"
+        sys.stderr.write(
+            f"run: --model provider {spec.provider!r} is not connected. "
+            f"Run `kolsch connect {spec.provider}` first (connected: {connected}).\n"
+        )
+        return None
+    return config.model_copy(update={"model": spec, "fallback_models": []})
+
+
 async def _cmd_run(args: argparse.Namespace) -> int:
     from engine import ExecutionContext  # noqa: PLC0415
 
@@ -502,6 +558,14 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     # Route through runtime.build_resolved_config so Layer 3
     # validators fire — see PlatformRuntime docstring.
     config = await runtime.build_resolved_config(args.agent_ref)
+
+    # qol-122 — `--model` overrides the resolved model for THIS run only,
+    # applied before the silent-echo check so the warning reflects it.
+    if getattr(args, "model", None):
+        overridden = apply_run_model_override(config, args.model, runtime)
+        if overridden is None:
+            return 2  # error already printed to stderr
+        config = overridden
 
     # Re-targeted post-bug-fix (bug-echo-on-real-provider): warn when
     # a real-provider agent is about to run against the silent-echo

@@ -186,6 +186,15 @@ def test_tc_cli_smoke_02_subcommand_help_exits_zero(subcommand: str) -> None:
     _assert_no_traceback(result)
 
 
+def test_run_help_documents_model_override() -> None:
+    """qol-122: ``kolsch run --help`` advertises the ``--model`` override."""
+    result = _run("run", "--help")
+    assert result.returncode == 0
+    assert "--model" in result.stdout
+    assert "override" in result.stdout.lower()
+    _assert_no_traceback(result)
+
+
 # ===========================================================================
 # TC-CLI-SMOKE-03 — top-level no-args (no fixture)
 # ===========================================================================

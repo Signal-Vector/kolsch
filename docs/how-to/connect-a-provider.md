@@ -282,6 +282,16 @@ works. Operators should **not** hand-write the `models:` list.
 model: { provider: claude_code, model: sonnet }
 ```
 
+Or override for a single run without editing the agent — same grammar as the
+YAML `model:` (a compact `provider/model`, or a `model_aliases` alias):
+
+```bash
+kolsch run kolsch/agents/helper --model claude_code/sonnet
+```
+
+`--model` clears the agent's fallback chain for that run and fails fast if the
+provider isn't connected. (`kolsch chat` has the equivalent via `/model`.)
+
 ### Two modes: text-only, or tool-calling (automatic)
 
 Which mode a `claude_code` agent runs in is decided **automatically by
