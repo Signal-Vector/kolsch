@@ -301,7 +301,9 @@ class _McpProc:
 async def test_wire_handshake_full_round_trip(tmp_path: Path) -> None:
     """`initialize` (negotiated version), `notifications/initialized`
     no-reply, `ping` → `{}`, `tools/list` → the bound catalog with
-    `mcp__<server>__<bare>` names + object-rooted inputSchema."""
+    BARE names (spec-121 correction: the MCP client namespaces server
+    tools itself, so the client-visible name lands on T2's intended
+    `mcp__<server>__<bare>` exactly once) + object-rooted inputSchema."""
     async with _bound_server(tmp_path) as bound:
         client = await _McpProc.spawn(socket_path=bound.socket_path, token=bound.token)
         try:
@@ -330,15 +332,13 @@ async def test_wire_handshake_full_round_trip(tmp_path: Path) -> None:
 
             tools = (await client.request("tools/list"))["result"]["tools"]
             names = [t["name"] for t in tools]
-            assert names == [
-                mcp_wire_name("kolsch", "echo"),
-                mcp_wire_name("kolsch", "blocked"),
-                mcp_wire_name("kolsch", "guarded"),
-                mcp_wire_name("kolsch", "slow"),
-            ]
+            assert names == ["echo", "blocked", "guarded", "slow"]
             for tool in tools:
                 assert tool["description"]
                 assert tool["inputSchema"]["type"] == "object"
+                # The socket-internal wire_to_bare rider never reaches
+                # the MCP client.
+                assert "wire_to_bare" not in tool
         finally:
             await client.close()
 
@@ -363,7 +363,9 @@ async def test_wire_handshake_version_mismatch(tmp_path: Path) -> None:
 async def test_allowed_call_runs_and_emits_engine_equivalent_events(
     tmp_path: Path,
 ) -> None:
-    """An allowed `tools/call` returns `isError: false` with the raw
+    """An allowed `tools/call` (by the client-visible BARE name — the
+    proxy translates back to the socket wire name, refreshing its map
+    on a first-call miss) returns `isError: false` with the raw
     result serialized; `tool.called` → `tool.result` land in the REAL
     store with the bound actor + trace_id + parent chain; the dispatch
     saw principal `agent.<agent_id>`."""
@@ -374,7 +376,7 @@ async def test_allowed_call_runs_and_emits_engine_equivalent_events(
             resp = await client.request(
                 "tools/call",
                 {
-                    "name": mcp_wire_name("kolsch", "echo"),
+                    "name": "echo",
                     "arguments": {"message": "hi"},
                 },
             )
@@ -425,7 +427,9 @@ async def test_denied_call_sanitized_no_leak(tmp_path: Path) -> None:
     constant generic text; no tool body runs; `tool.failed` lands in
     the store (ground truth keeps the full detail); the WIRE payload
     carries none of the internal markers and cannot distinguish
-    deny from prompt."""
+    deny from prompt. Deliberately calls with the FULL wire names —
+    a pre-spec-121 client shape — proving the proxy's untranslated
+    pass-through still routes."""
     async with _bound_server(tmp_path) as bound:
         client = await _McpProc.spawn(socket_path=bound.socket_path, token=bound.token)
         raw_by_tool: dict[str, bytes] = {}
@@ -582,7 +586,8 @@ async def test_in_process_initialize_and_list_mirror_subprocess(
         assert by_id[2]["result"]["protocolVersion"] == LATEST_PROTOCOL_VERSION
         assert by_id[3]["result"] == {}
         names = [t["name"] for t in by_id[4]["result"]["tools"]]
-        assert names[0] == mcp_wire_name("kolsch", "echo")
+        # Client-visible names are BARE (spec-121 correction).
+        assert names[0] == "echo"
 
 
 # ---------------------------------------------------------------------------
@@ -941,6 +946,89 @@ async def test_run_bridge_stdio_env_and_refusal_paths(
         refused_err = capsys.readouterr().err
     # Uniform: a dead socket and a refused token print the same line.
     assert refused_err == missing_socket_err
+
+
+# ---------------------------------------------------------------------------
+# spec-121 Test 6 — decision-#2 denylist: workflow control never crosses
+# the bridge.
+# ---------------------------------------------------------------------------
+
+
+def _with_workflow_tools(bound: _Bound) -> None:
+    """Extend the stub catalog with the two denylisted workflow tools."""
+    infos = bound.stub.list_registered_tools(_AGENT_ID)
+    empty = {"type": "object", "properties": {}, "title": "NoArgs"}
+    extended = [
+        *infos,
+        ToolInfo(name="run_workflow", description="Run a workflow.", args_schema=empty),
+        ToolInfo(
+            name="cancel_workflow", description="Cancel a workflow.", args_schema=empty
+        ),
+    ]
+    bound.stub.list_registered_tools = (  # type: ignore[method-assign]
+        lambda agent_id: list(extended)
+    )
+
+
+async def test_denylist_absent_from_list_and_wire_names(tmp_path: Path) -> None:
+    """`run_workflow`/`cancel_workflow` registered on the subsystem are
+    absent from `tools/list` AND from `wire_tool_names()` (the
+    `--allowedTools` feed) — one filter in `_list_infos` covers both."""
+    async with _bound_server(tmp_path) as bound:
+        _with_workflow_tools(bound)
+        client = await _SocketClient.connect(bound.socket_path)
+        try:
+            await client.request("bind", token=bound.token)
+            listed = await client.request("list_tools")
+        finally:
+            await client.close()
+        names = [t["name"] for t in listed["tools"]]
+        assert mcp_wire_name("kolsch", "run_workflow") not in names
+        assert mcp_wire_name("kolsch", "cancel_workflow") not in names
+        # Plain tools still list.
+        assert mcp_wire_name("kolsch", "echo") in names
+        # The framework's --allowedTools feed sees the same filter.
+        assert bound.server.wire_tool_names() == names
+
+
+async def test_denylist_direct_call_hits_unknown_tool_arm(tmp_path: Path) -> None:
+    """A direct `call_tool` for a denylisted tool: generic unknown-tool
+    error, NO dispatch, NO event — indistinguishable from a tool that
+    was never registered. A plain tool still dispatches."""
+    async with _bound_server(tmp_path) as bound:
+        _with_workflow_tools(bound)
+        client = await _SocketClient.connect(bound.socket_path)
+        try:
+            await client.request("bind", token=bound.token)
+            for bare in ("run_workflow", "cancel_workflow"):
+                result = await client.request(
+                    "call_tool",
+                    name=mcp_wire_name("kolsch", bare),
+                    arguments={},
+                )
+                assert result["isError"] is True
+                assert result["content"][0]["text"] == (
+                    "Unknown tool for this kolsch bridge."
+                )
+            # No dispatch was reached, no event emitted for either.
+            assert bound.stub.calls == []
+            assert [e.type.value for e in await bound.events()] == ["session.opened"]
+
+            # A plain tool on the SAME connection still round-trips.
+            ok = await client.request(
+                "call_tool",
+                name=mcp_wire_name("kolsch", "echo"),
+                arguments={"message": "still works"},
+            )
+            assert ok["isError"] is False
+        finally:
+            await client.close()
+        assert bound.stub.bodies_run == ["echo"]
+        assert [e.type.value for e in await bound.events()] == [
+            "session.opened",
+            "tool.called",
+            "tool.result",
+        ]
 
 
 async def test_framing_second_concurrent_bind_rejected(tmp_path: Path) -> None:

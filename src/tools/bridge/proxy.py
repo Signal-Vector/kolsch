@@ -17,7 +17,12 @@ Wire contract implemented here (a real client depends on it):
   notification).
 - `ping` → `{}`.
 - `tools/list` / `tools/call` → forwarded frames; results pass through
-  (the server already produced sanitized MCP shapes).
+  (the server already produced sanitized MCP shapes) — EXCEPT the
+  tool NAMES, which this proxy localizes to the bare form: the MCP
+  client namespaces server tools itself (`mcp__<server>__<name>`),
+  so the harness-visible name lands on T2's intended
+  `mcp__<server>__<bare>` exactly once (spec-121 correction; see
+  `BridgeStdioServer`).
 - unknown method → `-32601`; malformed params → `-32602`; parse error
   → `-32700`; bridge/transport failure → `-32000` with a CONSTANT
   generic message (the proxy never interpolates an exception).
@@ -221,11 +226,27 @@ class BridgeStdioServer:
     (returns `b""` at EOF) and a `write_message` coroutine, so
     component tests drive the full loop in-process while
     `run_bridge_stdio` wires the real stdin/stdout.
+
+    Naming (spec-121 correction, verified against live Claude Code):
+    the SOCKET leg speaks the full `mcp__<server>__<bare>` wire names,
+    but this stdio surface serves the client the BARE names — a real
+    MCP client namespaces server tools itself, so forwarding the
+    pre-prefixed names verbatim produced
+    `mcp__kolsch__mcp__kolsch__<bare>` client-side and broke
+    `--allowedTools`. `tools/list` localizes via the socket's
+    `wire_to_bare` map (stripped before the reply); `tools/call`
+    translates the client's bare name back to the wire name. A client
+    that calls with a FULL wire name still routes (the untranslated
+    name is forwarded as-is and the socket accepts it) — backwards
+    compatible with pre-correction clients.
     """
 
     def __init__(self, client: _SocketClient) -> None:
         self._client = client
         self._tasks: set[asyncio.Task[None]] = set()
+        # bare (client-facing) name -> full socket wire name. Filled
+        # by every tools/list; refreshed once on a call-name miss.
+        self._bare_to_wire: dict[str, str] = {}
 
     async def serve(
         self,
@@ -287,7 +308,7 @@ class BridgeStdioServer:
             elif method == "ping":
                 result = {}
             elif method == "tools/list":
-                result = await self._client.request("list_tools")
+                result = self._localize_tools(await self._client.request("list_tools"))
             elif method == "tools/call":
                 result = await self._tools_call(params)
             else:
@@ -335,6 +356,33 @@ class BridgeStdioServer:
             },
         }
 
+    def _localize_tools(self, raw: dict[str, Any]) -> dict[str, Any]:
+        """Socket `list_tools` result → client-facing bare-named catalog.
+
+        Rebuilds the bare→wire map from the socket's `wire_to_bare`
+        rider (authoritative — the server computed it from the same
+        catalog read) and strips the rider from the reply. Unknown
+        shapes pass through untouched (the trust boundary stays with
+        the server's sanitization).
+        """
+        tools = raw.get("tools")
+        wire_to_bare = raw.get("wire_to_bare")
+        if not isinstance(tools, list) or not isinstance(wire_to_bare, dict):
+            return {"tools": tools if isinstance(tools, list) else []}
+        localized: list[Any] = []
+        for tool in tools:
+            if not isinstance(tool, dict):
+                localized.append(tool)
+                continue
+            wire = tool.get("name")
+            bare = wire_to_bare.get(wire) if isinstance(wire, str) else None
+            if isinstance(bare, str) and isinstance(wire, str):
+                self._bare_to_wire[bare] = wire
+                localized.append({**tool, "name": bare})
+            else:
+                localized.append(tool)
+        return {"tools": localized}
+
     async def _tools_call(self, params: object) -> dict[str, Any]:
         if not isinstance(params, dict):
             raise BridgeMalformedRequest(method="tools/call")
@@ -342,9 +390,19 @@ class BridgeStdioServer:
         arguments = params.get("arguments", {})
         if not isinstance(name, str) or not isinstance(arguments, dict):
             raise BridgeMalformedRequest(method="tools/call")
+        wire = self._bare_to_wire.get(name)
+        if wire is None:
+            # Miss: either the client never listed (map empty) or the
+            # name is unknown/already a full wire name. Refresh the
+            # map once from the live catalog, then forward — an
+            # untranslatable name goes through as-is and lands on the
+            # server's sanitized unknown-tool arm.
+            with contextlib.suppress(PlatformError):
+                self._localize_tools(await self._client.request("list_tools"))
+            wire = self._bare_to_wire.get(name, name)
         return await self._client.request(
             "call_tool",
-            name=name,
+            name=wire,
             arguments=arguments,
         )
 

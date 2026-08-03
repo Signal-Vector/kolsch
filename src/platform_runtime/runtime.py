@@ -32,6 +32,7 @@ from engine import (
 )
 from engine.dev_llm import EchoLLMDriver
 from engine.framework import Framework
+from engine.subprocess_framework import ClaudeCodeHarness, SubprocessAgentFramework
 from files import PathPolicy, load_policy
 from providers import (
     AuthorizationProvider,
@@ -432,6 +433,11 @@ async def bootstrap_runtime(  # noqa: PLR0915 — linear runtime-assembly sequen
         sandbox=sandbox,
         authz=authz,
         framework=chosen_framework,
+        # spec-121: constructed unconditionally — cheap (no I/O until
+        # `run_exchange`) and only AUTO-selected by the engine for a
+        # `claude_code` agent with ≥1 registered tool. Every other
+        # exchange stays on `chosen_framework`.
+        subprocess_framework=SubprocessAgentFramework(descriptor=ClaudeCodeHarness()),
         llm=chosen_llm,
         llm_for_model=chosen_llm_for_model,
         llm_providers_config=llm_providers_config,

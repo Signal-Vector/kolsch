@@ -90,7 +90,6 @@ shows "N/A (subscription)" rather than blank/zero garbage.
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import subprocess
 import tempfile
@@ -103,6 +102,22 @@ from errors import (
     ModelBinaryUnavailable,
     ModelServerError,
     ModelTimeout,
+)
+
+# The shared `claude` CLI mechanics were extracted to `llm.claude_cli`
+# by spec-121 (the SubprocessAgentFramework consumes them too). The
+# re-imports keep every pre-extraction import site
+# (`from llm.providers.claude_code import extract_result_text`,
+# `_ClaudeResultError`, `_looks_not_logged_in`) working unchanged —
+# spec-118's tests are the byte-for-byte contract.
+from llm.claude_cli import (
+    SCRUBBED_ENV_VARS,
+    STATIC_MODELS,
+    _ClaudeResultError,
+    _looks_not_logged_in,  # noqa: F401 — re-export for pre-extraction importers
+    build_base_argv,
+    extract_result_text,
+    scrubbed_env,
 )
 from llm.protocol import (
     AuthPromptSpec,
@@ -119,37 +134,11 @@ if TYPE_CHECKING:
     import crewai
 
 
-# The `claude` model aliases the CLI accepts, each with the context
-# window compaction needs. Static by design (see module docstring) —
-# the CLI has no list-models endpoint. 200k is the stable published
-# window for the current Sonnet/Opus/Haiku generation the aliases
-# resolve to; the connector deliberately quotes the conservative
-# published figure rather than a per-model max so compaction never
-# over-fills.
-_STATIC_MODELS: tuple[tuple[str, int], ...] = (
-    ("sonnet", 200_000),
-    ("opus", 200_000),
-    ("haiku", 200_000),
-)
-
-# Every var that would redirect the child off the subscription onto a
-# *billed* path or override the configured model. There is no "prefer
-# subscription" flag — the only lever is to UNSET these. Kept as a
-# frozenset so the scrub and its test assert against one source of truth.
-_SCRUBBED_ENV_VARS: frozenset[str] = frozenset(
-    {
-        "ANTHROPIC_API_KEY",
-        "ANTHROPIC_AUTH_TOKEN",
-        "ANTHROPIC_BASE_URL",
-        "CLAUDE_CODE_USE_BEDROCK",
-        "CLAUDE_CODE_USE_VERTEX",
-        "ANTHROPIC_FOUNDRY_RESOURCE",
-        "ANTHROPIC_MODEL",
-        "ANTHROPIC_DEFAULT_SONNET_MODEL",
-        "ANTHROPIC_DEFAULT_OPUS_MODEL",
-        "ANTHROPIC_DEFAULT_HAIKU_MODEL",
-    }
-)
+# Pre-extraction private names, aliased for backwards compatibility
+# (tests and callers imported these from this module before spec-121
+# moved the definitions to `llm.claude_cli`).
+_STATIC_MODELS = STATIC_MODELS
+_SCRUBBED_ENV_VARS = SCRUBBED_ENV_VARS
 
 # The connector's own subprocess timeout. Deliberately BELOW the
 # adapter's `KOLSCH_LLM_CALL_TIMEOUT_SECONDS` (default 210s) so the
@@ -222,90 +211,6 @@ def _default_runner(
         timeout=timeout,
         check=False,
     )
-
-
-def _scrubbed_env() -> dict[str, str]:
-    """Return `os.environ` with every `_SCRUBBED_ENV_VARS` entry removed."""
-    return {k: v for k, v in os.environ.items() if k not in _SCRUBBED_ENV_VARS}
-
-
-def extract_result_text(payload: dict[str, Any]) -> str:
-    """Extract the assistant text from a `claude -p --output-format json` object.
-
-    The CLI returns ONE JSON object with the completed assistant text
-    in the top-level `result` string (plus `subtype`, `is_error`, …).
-    This is the fixture-locked extraction contract (Test 1).
-
-    Args:
-        payload: The parsed `--output-format json` object.
-
-    Returns:
-        The `result` string.
-
-    Raises:
-        _ClaudeResultError: `is_error` is truthy, or `result` is missing
-            / not a string. Carries a generic, secret-free reason — the
-            raw payload is NOT embedded.
-    """
-    if payload.get("is_error"):
-        # A not-logged-in / rate-limit / upstream hiccup lands here. The
-        # `result` field carries a human string ("Not logged in · …")
-        # that we classify by shape but never persist verbatim.
-        subtype = payload.get("subtype")
-        raise _ClaudeResultError(
-            reason="the CLI reported an error result",
-            is_error=True,
-            not_logged_in=_looks_not_logged_in(payload),
-            subtype=str(subtype) if subtype is not None else None,
-        )
-    result = payload.get("result")
-    if not isinstance(result, str):
-        raise _ClaudeResultError(
-            reason="the CLI response had no `result` string",
-            is_error=False,
-            not_logged_in=False,
-            subtype=None,
-        )
-    return result
-
-
-def _looks_not_logged_in(payload: dict[str, Any]) -> bool:
-    """Best-effort: does this error result mean 'run claude auth login'?
-
-    The CLI reports a logged-out subscription as an `is_error` result
-    whose `result` text mentions login (e.g. "Not logged in · Please
-    run /login"). We inspect the string ONLY to pick Fatal-auth vs
-    Recoverable-server classification; the string never leaves this
-    module.
-    """
-    result = payload.get("result")
-    if not isinstance(result, str):
-        return False
-    lowered = result.lower()
-    return "not logged in" in lowered or "/login" in lowered or "please run" in lowered
-
-
-class _ClaudeResultError(Exception):
-    """Internal signal that the JSON object did not yield usable text.
-
-    Never crosses a public boundary — `_ClaudeCodeLLM.call` catches it
-    and re-raises a catalogued `model.*` `PlatformError`. Carries only
-    booleans + a generic reason, no raw payload / prompt / stdout.
-    """
-
-    def __init__(
-        self,
-        *,
-        reason: str,
-        is_error: bool,
-        not_logged_in: bool,
-        subtype: str | None,
-    ) -> None:
-        super().__init__(reason)
-        self.reason = reason
-        self.is_error = is_error
-        self.not_logged_in = not_logged_in
-        self.subtype = subtype
 
 
 def _render_prompt(messages: list[dict[str, Any]]) -> tuple[str | None, str]:
@@ -424,6 +329,12 @@ class _ClaudeCodeLLM(BaseLLM):
     def _build_argv(self, system_prompt: str | None, body: str) -> list[str]:
         """Assemble the `claude` argv.
 
+        The shared prefix comes from
+        [`build_base_argv`][llm.claude_cli.build_base_argv] (spec-121
+        extraction); this provider then appends its text-only mode flag
+        `--disallowedTools "*"` — a no-TTY child never blocks on a tool
+        permission prompt and cannot run tools at all.
+
         DEVIATION FROM SPEC (spike-confirmed): the spec recommends
         `--bare`, but against the installed `claude` 2.1.x `--bare`
         forces auth to `ANTHROPIC_API_KEY`/apiKeyHelper and *never reads
@@ -437,20 +348,8 @@ class _ClaudeCodeLLM(BaseLLM):
         plugins, and MCP servers are not loaded). Verified in the spike:
         this combination isolates config AND keeps subscription auth.
         """
-        argv = [
-            self.binary_path,
-            "-p",
-            "--output-format",
-            "json",
-            "--model",
-            self.model,
-            "--disallowedTools",
-            "*",
-            "--permission-mode",
-            "dontAsk",
-            "--setting-sources",
-            "user",
-        ]
+        argv = build_base_argv(binary=self.binary_path, model=self.model)
+        argv += ["--disallowedTools", "*"]
         if system_prompt:
             argv += ["--append-system-prompt", system_prompt]
         argv.append(body)
@@ -466,7 +365,7 @@ class _ClaudeCodeLLM(BaseLLM):
         try:
             completed = self.runner(
                 argv,
-                env=_scrubbed_env(),
+                env=scrubbed_env(),
                 cwd=neutral_cwd,
                 timeout=self.timeout_seconds,
             )

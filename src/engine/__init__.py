@@ -44,6 +44,7 @@ from engine.framework import (
     ToolCall,
     ToolHandle,
 )
+from engine.subprocess_framework import ClaudeCodeHarness, SubprocessAgentFramework
 
 __all__ = [
     "ASSEMBLY_VERSION",
@@ -52,6 +53,7 @@ __all__ = [
     "AgentExecutionError",
     "AssembledContext",
     "CancelToken",
+    "ClaudeCodeHarness",
     "CrewAIFramework",
     "EngineCapabilities",
     "ExecutionContext",
@@ -62,6 +64,7 @@ __all__ = [
     "LLMResponse",
     "Message",
     "MinimalFramework",
+    "SubprocessAgentFramework",
     "ToolCall",
     "ToolHandle",
     "assemble_context",

@@ -190,6 +190,14 @@ class Framework(Protocol):
     fires. The engine does not impose a cap in v1; the kwarg remains
     on the Protocol so individual frameworks can offer a per-call
     override if they need one.
+
+    `tool_bridge` (spec-121) is an optional, engine-owned per-exchange
+    tool bridge (`tools.bridge.ToolBridgeServer` — typed `Any` here so
+    this module needs no `tools.bridge` import; the concrete framework
+    narrows it). The engine opens/closes it and passes it only when it
+    AUTO-selects the subprocess framework path (a `claude_code` agent
+    with ≥1 registered tool); every other framework ignores the kwarg,
+    exactly like `max_iterations`.
     """
 
     async def run_exchange(
@@ -203,6 +211,7 @@ class Framework(Protocol):
         max_iterations: int | None = None,
         cancellation: Callable[[], bool] | None = None,
         cancel_token: Any = None,
+        tool_bridge: Any = None,
     ) -> str:
         """Drive one exchange to completion and return the agent's final text."""
 

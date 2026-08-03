@@ -60,6 +60,7 @@ class MinimalFramework:
         max_iterations: int | None = None,  # noqa: ARG002
         cancellation: Callable[[], bool] | None = None,
         cancel_token: Any = None,
+        tool_bridge: Any = None,  # noqa: ARG002
     ) -> str:
         """Drive one deterministic exchange to completion and return the final text.
 

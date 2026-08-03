@@ -31,10 +31,16 @@ Security posture (the trust boundary rules):
   body is read.
 
 Naming contract (frozen here for T3): a registered tool's bare
-`ToolInfo.name` is exposed as `mcp__<server>__<bare-name>`; the
-reverse map (wire name → bare name) routes `tools/call`; a wire-name
-collision fails loudly (`BridgeNameCollision`). The ≤64-char length
-budget is T3's concern.
+`ToolInfo.name` is exposed to the HARNESS as `mcp__<server>__<bare-name>`;
+the reverse map (wire name → bare name) routes `tools/call`; a
+wire-name collision fails loudly (`BridgeNameCollision`). The
+≤64-char length budget is T3's concern. Two legs realize that name
+(spec-121 correction, verified against live Claude Code): the SOCKET
+leg (this server ↔ the proxy) speaks the full wire names; the
+proxy's STDIO leg serves the client BARE names, because a real MCP
+client namespaces server tools itself — serving pre-prefixed names
+double-prefixes (`mcp__kolsch__mcp__kolsch__…`) and breaks
+`--allowedTools`.
 
 This module imports nothing from `bundles/*/tools/`, hardcodes no
 tool names, and never imports `engine`.
@@ -99,6 +105,17 @@ prompt-collapse are indistinguishable on the wire."""
 _GENERIC_UNKNOWN_TOOL_TEXT = "Unknown tool for this kolsch bridge."
 """Constant text for a `tools/call` naming a tool outside the bound
 catalog. No dispatch runs and no event is emitted for these."""
+
+_V1_BRIDGE_DENYLIST = frozenset({"run_workflow", "cancel_workflow"})
+"""spec-121 decision #2 — workflow-control tools are NOT exposed over
+the bridge in v1. An external harness's own agentic loop must not be
+able to start or kill kolsch workflows. Applied inside `_list_infos`
+(the ONE catalog read both `list_tools` and `call_tool` route
+through), so the tools never appear in `tools/list`, never make it
+into a harness's `--allowedTools`, and a direct `tools/call` for them
+hits the unknown-tool arm — no dispatch, no event. Defense-in-depth
+via a workspace authz deny-rule is documented, not built (no new
+authz machinery)."""
 
 
 # ---------------------------------------------------------------------------
@@ -489,13 +506,22 @@ class ToolBridgeServer:
                 await self._send(conn, {"id": frame_id, "ok": True, "result": {}})
             elif op == "list_tools":
                 self._require_bound(conn, op)
-                tools, _reverse = build_wire_catalog(
+                tools, reverse = build_wire_catalog(
                     self._list_infos(),
                     server_name=self._server_name,
                 )
+                # `wire_to_bare` (spec-121) rides along for the stdio
+                # proxy, which must serve BARE names to its MCP client
+                # (the client namespaces them back to
+                # `mcp__<server>__<bare>` itself — Claude Code verified
+                # live). Socket-internal only; the proxy strips it.
                 await self._send(
                     conn,
-                    {"id": frame_id, "ok": True, "result": {"tools": tools}},
+                    {
+                        "id": frame_id,
+                        "ok": True,
+                        "result": {"tools": tools, "wire_to_bare": reverse},
+                    },
                 )
             elif op == "call_tool":
                 self._require_bound(conn, op)
@@ -543,14 +569,36 @@ class ToolBridgeServer:
         Recomputed per `list_tools` AND per `call_tool` so the reverse
         map can never go stale against the live subsystem (a stale map
         would be a routing/authz drift, not just a UX bug). Exactly
-        `list_registered_tools(agent_id)` — virtual per-workflow tools
-        appear only when the bound subsystem registered them for this
-        agent; the bridge adds and removes nothing.
+        `list_registered_tools(agent_id)` minus the
+        `_V1_BRIDGE_DENYLIST` (spec-121 decision #2) — virtual
+        per-workflow tools appear only when the bound subsystem
+        registered them for this agent; beyond the denylist the bridge
+        adds and removes nothing. Filtering HERE (rather than at the
+        op handlers) is what makes the denylist one source of truth
+        for `list_tools`, `call_tool`, and `wire_tool_names` alike.
         """
-        infos: list[ToolInfo] = list(
-            self._tools_subsystem.list_registered_tools(self._agent_id)
-        )
+        infos: list[ToolInfo] = [
+            info
+            for info in self._tools_subsystem.list_registered_tools(self._agent_id)
+            if info.name not in _V1_BRIDGE_DENYLIST
+        ]
         return infos
+
+    def wire_tool_names(self) -> list[str]:
+        """The filtered catalog's MCP wire names (spec-121).
+
+        The `--allowedTools` feed for `SubprocessAgentFramework`:
+        computed from the same `_list_infos` read that serves
+        `list_tools`/`call_tool`, so the v1 denylist and the live
+        registered set are honored by construction — a tool absent
+        here is equally absent from `tools/list` and unroutable via
+        `tools/call`.
+        """
+        tools, _reverse = build_wire_catalog(
+            self._list_infos(),
+            server_name=self._server_name,
+        )
+        return [str(tool["name"]) for tool in tools]
 
     async def _start_call(
         self,
