@@ -119,9 +119,7 @@ async def test_workflow_prompt_auto_denies_after_window(store: SessionStore) -> 
     assert isinstance(result, PromptResponse)
     assert result == "n"  # deny-once
 
-    answered = [
-        e for e in bus.events if e.data.get("kind") == WIRE_PROMPT_ANSWERED
-    ]
+    answered = [e for e in bus.events if e.data.get("kind") == WIRE_PROMPT_ANSWERED]
     assert len(answered) == 1, "exactly one durable auto-deny answer"
     payload: dict[str, Any] = answered[0].data["payload"]
     assert payload["response"] == "n"
