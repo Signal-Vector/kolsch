@@ -41,17 +41,44 @@ from __future__ import annotations
 import os
 from typing import Any
 
-# The `claude` model aliases the CLI accepts, each with the context
-# window compaction needs. Static by design (see the provider module
-# docstring's static-catalog exception) — the CLI has no list-models
-# endpoint. 200k is the stable published window for the current
-# Sonnet/Opus/Haiku generation the aliases resolve to; the
-# conservative published figure is quoted rather than a per-model max
-# so compaction never over-fills.
+# The model ids the `claude` CLI accepts via `--model`, each with the
+# context window compaction needs. Static by design (see the provider
+# module docstring's static-catalog exception) — the CLI has NO
+# list-models endpoint (`claude --help`: `--model` takes "an alias for
+# the latest model … or the model's full name"; there is no `claude
+# models` subcommand), so the set is curated here, not discovered.
+#
+# Two kinds of entry:
+#   - the 3 stable ALIASES (opus/sonnet/haiku) — always valid under any
+#     subscription, auto-track the latest of each tier; the recommended
+#     default.
+#   - current pinned versioned ids — for reproducibility when the
+#     subscription entitles that model.
+# Sourced from the Anthropic model list (claude-api reference,
+# 2026-08-03); exclude retired ids and re-verify when updating.
+#
+# `context_length` is a CONSERVATIVE 200_000 on EVERY entry — NOT the
+# Anthropic API's 1M. `claude_code` runs `claude -p` under SUBSCRIPTION
+# auth, whose effective window is the standard 200k; over-stating it
+# would overflow the real call, while under-stating only makes
+# compaction trigger earlier (safe). A user on a larger-context tier can
+# raise a specific entry by hand in platform.yaml.
 STATIC_MODELS: tuple[tuple[str, int], ...] = (
-    ("sonnet", 200_000),
+    # aliases — recommended; auto-track the latest of each tier
     ("opus", 200_000),
+    ("sonnet", 200_000),
     ("haiku", 200_000),
+    # current pinned versioned ids (top of each tier); older still-active ids
+    # (claude-opus-4-6/-4-5, claude-sonnet-4-5) are omitted — hand-add in
+    # platform.yaml if a subscription entitles them.
+    ("claude-opus-4-8", 200_000),
+    ("claude-opus-4-7", 200_000),
+    ("claude-sonnet-5", 200_000),
+    ("claude-sonnet-4-6", 200_000),
+    ("claude-haiku-4-5", 200_000),
+    # most capable — needs subscription entitlement + 30-day data retention,
+    # and prices above Opus; fails at runtime more readily than the other pins.
+    ("claude-fable-5", 200_000),
 )
 
 # Every var that would redirect the child off the subscription onto a

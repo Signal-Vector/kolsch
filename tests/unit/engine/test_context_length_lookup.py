@@ -370,3 +370,18 @@ def test_platform_runtime_context_length_for_delegates() -> None:
     assert runtime.context_length_for(_spec("opencode", "kimi-k2.6")) == (
         _context_length_for_spec(providers_cfg, _spec("opencode", "kimi-k2.6"))
     )
+
+
+def test_claude_code_versioned_pin_resolves_context_length() -> None:
+    """qol-123 — a claude_code agent selecting a versioned id (not just an
+    alias) resolves the catalog's 200k window from platform.yaml, so
+    compaction never hits the ``no_context_length`` skip."""
+    from llm.claude_cli import STATIC_MODELS
+
+    models = [{"id": mid, "context_length": window} for mid, window in STATIC_MODELS]
+    providers = _providers(claude_code=models)
+    assert _context_length_for_spec(providers, _spec("claude_code", "opus")) == 200_000
+    assert (
+        _context_length_for_spec(providers, _spec("claude_code", "claude-opus-4-8"))
+        == 200_000
+    )
