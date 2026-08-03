@@ -20,6 +20,8 @@ from typing import TYPE_CHECKING, Any, cast
 from uuid import uuid4
 
 import pytest
+from textual.containers import VerticalScroll
+from textual.widgets import Static
 
 from bus.in_process import InProcessEventBus
 from cli.chat.app import ChatApp
@@ -27,6 +29,7 @@ from cli.chat.event_adapter import EventAdapter
 from cli.chat.services.cards_impl import CardsImpl
 from cli.chat.services.prompts_impl import PromptsImpl
 from cli.chat.services.workflows_impl import WorkflowsImpl
+from cli.chat.widgets import InfoBar
 from schemas.entities import Actor
 from schemas.events import Event, EventType
 from schemas.identifiers import EventId, SessionId, ThreadId
@@ -36,6 +39,9 @@ from workflows.ids import WorkflowRunId
 if TYPE_CHECKING:
     from collections.abc import AsyncIterator
     from pathlib import Path
+
+_TRUTHY: bool = True  # `bool`-typed (not `Literal[True]`) to dodge mypy narrowing
+_PENDING_WF: str | None = "wrk_00000000-0000-0000-0000-0000000000dd"
 
 _OLD_SES = SessionId("ses_00000000-0000-0000-0000-000000000001")
 _OLD_TH = ThreadId("th_00000000-0000-0000-0000-000000000001")
@@ -337,3 +343,106 @@ async def test_new_session_resets_workflow_registry(tmp_path: Path) -> None:
         await pilot.pause()
 
         assert wf._workflow_registry == {}
+
+
+@pytest.mark.asyncio
+async def test_new_session_clears_per_turn_flags(tmp_path: Path) -> None:
+    """reviewer MAJOR: the new session starts with a clean per-turn slate.
+
+    Without clearing these, `/skill X` then `/new` would silently force-invoke
+    X on the first message of the new session, and a paused-workflow /
+    awaited-input flag would leak across the boundary.
+    """
+    app, _store = await _bootstrap_app(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert app._chat_state is not None
+        # Pre-switch values are assigned from field-typed module constants so
+        # mypy narrows the attrs to their declared types (not literals) and
+        # doesn't read the post-switch `is None`/`is False` asserts as
+        # unreachable.
+        app._chat_state.pending_force_skill.append("deploy")
+        app._chat_state.pending_workflow_run_id = _PENDING_WF
+        app._chat_state.expecting_user_input_response = _TRUTHY
+
+        await app._open_new_session()
+        await pilot.pause()
+
+        assert app._chat_state.pending_force_skill == []
+        assert app._chat_state.pending_workflow_run_id is None
+        assert app._chat_state.expecting_user_input_response is False
+
+
+@pytest.mark.asyncio
+async def test_new_session_blocked_when_workflow_queued(tmp_path: Path) -> None:
+    """reviewer MEDIUM: a QUEUED workflow blocks `/new` too (not just live).
+
+    A queued run would be promoted to running and written into the session;
+    switching + clearing the registry mid-queue would silently drop it.
+    """
+    app, _store = await _bootstrap_app(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        old_ses = app.session.session_id
+        reg = app._service_registry
+        assert reg is not None
+        wf = cast("Any", reg.workflows)
+        wf._workflow_registry[
+            WorkflowRunId("wrk_00000000-0000-0000-0000-0000000000ee")
+        ] = SimpleNamespace(phase="queued")
+
+        await app._open_new_session()
+        await pilot.pause()
+
+        assert app.session.session_id == old_ses  # unchanged — blocked
+
+
+@pytest.mark.asyncio
+async def test_new_session_store_error_is_reported_not_raised(tmp_path: Path) -> None:
+    """reviewer MINOR: a store failure degrades to a notice, not an app crash."""
+    app, _store = await _bootstrap_app(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        old_ses = app.session.session_id
+
+        async def _boom(*args: Any, **kwargs: Any) -> Any:
+            _ = (args, kwargs)
+            raise RuntimeError("db down")
+
+        app.session.runtime.store.create_session = _boom  # type: ignore[method-assign]
+
+        await app._open_new_session()  # must NOT raise
+        await pilot.pause()
+
+        assert app.session.session_id == old_ses  # unchanged
+
+
+@pytest.mark.asyncio
+async def test_new_session_clears_transcript_infobar_and_adapter(
+    tmp_path: Path,
+) -> None:
+    """reviewer coverage: transcript wiped, info bar updated, adapter maps wiped.
+
+    Asserts the user-visible + adapter-state effects of the switch end-to-end
+    (the unit test covers `reset_for_session` in isolation; this proves it is
+    actually wired into `_open_new_session`).
+    """
+    app, _store = await _bootstrap_app(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        transcript = app.query_one("#transcript", VerticalScroll)
+        await transcript.mount(Static("SENTINEL", id="feat117-sentinel"))
+        cast("Any", app.event_adapter)._card_widgets["crd"] = object()
+        await pilot.pause()
+        assert app.query("#feat117-sentinel")
+
+        await app._open_new_session()
+        await pilot.pause()
+
+        new_ses = app.session.session_id
+        # Transcript wiped — the pre-switch sentinel is gone.
+        assert not app.query("#feat117-sentinel")
+        # Info bar reflects the new session id.
+        assert app.query_one(InfoBar).session == str(new_ses)[:8]
+        # Adapter per-session state wiped end-to-end (not just in the unit test).
+        assert not cast("Any", app.event_adapter)._card_widgets
