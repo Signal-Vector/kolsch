@@ -352,6 +352,18 @@ class FallbackLLMHandle:
         # lazy-build behaviour.
         self.factory_calls: list[ModelSpec] = []
 
+    @property
+    def primary_spec(self) -> ModelSpec:
+        """The exchange's primary `ModelSpec` (read-only).
+
+        spec-121: `SubprocessAgentFramework` reads the model id from
+        the engine-provided LLM handle (this class on every engine
+        path) to build `claude --model <id>` — the subprocess path
+        never invokes `__call__`, so this is the one channel the
+        model spec crosses the Framework seam on.
+        """
+        return self._primary_spec
+
     async def __call__(self, request: LLMRequest) -> LLMResponse:
         all_specs = [self._primary_spec, *self._chain]
         attempts: list[dict[str, Any]] = []

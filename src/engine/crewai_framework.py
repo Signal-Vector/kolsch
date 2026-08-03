@@ -112,6 +112,7 @@ class CrewAIFramework:
         max_iterations: int | None = None,
         cancellation: Callable[[], bool] | None = None,
         cancel_token: Any = None,
+        tool_bridge: Any = None,  # noqa: ARG002
     ) -> str:
         """Drive one CrewAI exchange to completion and return the final text.
 

@@ -221,6 +221,7 @@ class AgentEngine:
         sandbox: SandboxProvider,
         authz: AuthorizationProvider,
         framework: Framework,
+        subprocess_framework: Framework | None = None,
         llm: Callable[[LLMRequest], Awaitable[LLMResponse]] | None = None,
         llm_providers_config: dict[str, ProviderConfig] | None = None,
         llm_for_model: (
@@ -242,6 +243,12 @@ class AgentEngine:
         self._sandbox = sandbox
         self._authz = authz
         self._framework = framework
+        # spec-121 Phase A — the optional subprocess framework (T3's
+        # `SubprocessAgentFramework`). AUTO-selected per exchange in
+        # `_Exchange._run_framework` when the agent's provider is
+        # `claude_code` AND it has ≥1 registered tool; `None` (tests,
+        # minimal wirings) keeps every exchange on `self._framework`.
+        self._subprocess_framework = subprocess_framework
         self._llm = llm
         # Async factory `llm_for_model` lets the fallback orchestrator
         # lazily build per-attempt LLM clients. Tests can wire a
@@ -2574,92 +2581,162 @@ class _Exchange:
         user_message_text = _last_user_text(assembled.messages)
         history_messages = _history_before_last_user(assembled.messages)
 
-        # Engine-owned retry on Recoverable failures.
-        max_attempts = self.config.runtime.max_retries + 1
-        attempts_data: list[dict[str, Any]] = []
-        last_exc: PlatformError | None = None
-        for _attempt in range(max_attempts):
-            if self.cancel.is_cancelled():
-                from errors import ExchangeCancelled  # noqa: PLC0415
+        # spec-121 Phase A — AUTO framework selection + engine-owned
+        # bridge lifecycle. A `claude_code` agent with ≥1 registered
+        # tool routes to the subprocess framework (Claude runs its own
+        # agentic loop, calling kolsch tools over the T2 bridge); a
+        # 0-tool `claude_code` agent stays on the default text-only
+        # provider path (spec-118, `self._framework`), and every other
+        # provider is untouched. The `provider == "claude_code"`
+        # conditional IS the whole v1 selection surface — no registry.
+        framework: Framework = self.engine._framework
+        tool_bridge: Any = None
+        if (
+            self.config.model.provider == "claude_code"
+            and len(registered) >= 1
+            and self.engine._subprocess_framework is not None
+        ):
+            from tools.bridge import (  # noqa: PLC0415
+                ToolBridgeServer,
+                make_bridge_emit_sink,
+            )
 
-                raise ExchangeCancelled(
-                    cancelled_at_event_id=self.exchange_started_id or "",
-                )
-            try:
-                return await self.engine._framework.run_exchange(
-                    system_prompt=assembled.system_prompt,
-                    user_message=user_message_text,
-                    history=history_messages,
-                    llm=llm_handle,
-                    tools=tool_handles,
-                    cancellation=self.cancel.is_cancelled,
-                    # The raw token gives the framework access to
-                    # `wait_cancelled()` so it can race in-flight
-                    # awaits instead of only polling at iteration
-                    # boundaries.
-                    cancel_token=self.cancel,
-                )
-            except PlatformError as exc:
-                if exc.level.name != "RECOVERABLE":
-                    raise
-                attempts_data.append(
-                    Error.from_platform_error(exc).model_dump(mode="json")
-                )
-                last_exc = exc
-                continue
-            except asyncio.CancelledError:
-                from errors import ExchangeCancelled  # noqa: PLC0415
+            framework = self.engine._subprocess_framework
+            # The bridge's emit sink mirrors `_emit` (same store, same
+            # per-thread lock, same bus — minus the live-UI queue).
+            # `trace_id` is threaded through so bridge tool events
+            # never orphan from the workflow trace (None-preserving).
+            sink = make_bridge_emit_sink(
+                store=self.engine._store,
+                bus=self.engine._bus,
+                lock=self._lock,
+                session_id=self.session_id,
+                thread_id=self.thread_id,
+                trace_id=(
+                    str(self.context.trace_id)
+                    if self.context.trace_id is not None
+                    else None
+                ),
+            )
+            tool_bridge = ToolBridgeServer(
+                agent_id=self.agent_id,
+                session_id=self.session_id,
+                thread_id=self.thread_id,
+                tools_subsystem=self.engine._tools,
+                emit=sink,
+                cancel=self.cancel,
+            )
+            # Open ONCE, before the retry loop — a Recoverable retry
+            # reuses the same socket + token (reconnect-within-exchange
+            # is a supported bridge behaviour). Closed exactly once in
+            # the spawn-scoped `finally` below — NOT the exchange-level
+            # finally (that's `close_all_open_spans`' territory).
+            await tool_bridge.open()
 
-                raise ExchangeCancelled(
-                    cancelled_at_event_id=self.exchange_started_id or "",
-                ) from None
-            except Exception as exc:
-                # IN-LOOP cause-chain classifier. A transport failure
-                # whose `__cause__` carries a known typed exception
-                # (e.g. `openai.APITimeoutError` through CrewAI's
-                # adapter's `raise ConnectionError(...) from e`)
-                # classifies as ModelUpstreamError (Recoverable) and
-                # the loop retries up to `max_retries+1` attempts
-                # before exhausting. `runtime.max_retries` finally
-                # means something for transport hiccups.
-                #
-                # Branch table:
-                #   Recoverable match → append to attempts_data,
-                #                       continue (mirrors the
-                #                       PlatformError-Recoverable
-                #                       branch above).
-                #   Fatal match       → `raise classified from exc`
-                #                       so the outer
-                #                       `except PlatformError` at
-                #                       run() picks it up as the
-                #                       typed surface (e.g.
-                #                       `agent.unauthorized` instead
-                #                       of `platform.internal_error`).
-                #   No match          → bare `raise`; the outer
-                #                       boundary's cause-chain safety
-                #                       net takes over, ultimately
-                #                       falling through to
-                #                       PlatformInternalError for
-                #                       genuine engine bugs.
-                from engine._classify import (  # noqa: PLC0415
-                    classify_from_cause_chain,
-                )
+        try:
+            # Engine-owned retry on Recoverable failures.
+            max_attempts = self.config.runtime.max_retries + 1
+            attempts_data: list[dict[str, Any]] = []
+            last_exc: PlatformError | None = None
+            for _attempt in range(max_attempts):
+                if self.cancel.is_cancelled():
+                    from errors import ExchangeCancelled  # noqa: PLC0415
 
-                classified = classify_from_cause_chain(exc, agent_id=self.agent_id)
-                if classified is None:
-                    raise
-                if classified.level.name != "RECOVERABLE":
-                    raise classified from exc
-                attempts_data.append(
-                    Error.from_platform_error(classified).model_dump(mode="json")
-                )
-                last_exc = classified
-                continue
+                    raise ExchangeCancelled(
+                        cancelled_at_event_id=self.exchange_started_id or "",
+                    )
+                try:
+                    # NOTE (spec-121 hazard #1): `self._lock` is NOT
+                    # held here. The bridge sink acquires it per-emit
+                    # (the same serialization `_emit` uses); holding it
+                    # across the framework await would deadlock the
+                    # subprocess path against its own tool calls.
+                    return await framework.run_exchange(
+                        system_prompt=assembled.system_prompt,
+                        user_message=user_message_text,
+                        history=history_messages,
+                        llm=llm_handle,
+                        tools=tool_handles,
+                        cancellation=self.cancel.is_cancelled,
+                        # The raw token gives the framework access to
+                        # `wait_cancelled()` so it can race in-flight
+                        # awaits instead of only polling at iteration
+                        # boundaries.
+                        cancel_token=self.cancel,
+                        tool_bridge=tool_bridge,
+                    )
+                except PlatformError as exc:
+                    if exc.level.name != "RECOVERABLE":
+                        raise
+                    attempts_data.append(
+                        Error.from_platform_error(exc).model_dump(mode="json")
+                    )
+                    last_exc = exc
+                    continue
+                except asyncio.CancelledError:
+                    from errors import ExchangeCancelled  # noqa: PLC0415
 
-        # Exhausted retries — Fatal.
-        raise ModelRetryExhausted(
-            attempts=attempts_data,
-        ) from last_exc
+                    raise ExchangeCancelled(
+                        cancelled_at_event_id=self.exchange_started_id or "",
+                    ) from None
+                except Exception as exc:
+                    # IN-LOOP cause-chain classifier. A transport failure
+                    # whose `__cause__` carries a known typed exception
+                    # (e.g. `openai.APITimeoutError` through CrewAI's
+                    # adapter's `raise ConnectionError(...) from e`)
+                    # classifies as ModelUpstreamError (Recoverable) and
+                    # the loop retries up to `max_retries+1` attempts
+                    # before exhausting. `runtime.max_retries` finally
+                    # means something for transport hiccups.
+                    #
+                    # Branch table:
+                    #   Recoverable match → append to attempts_data,
+                    #                       continue (mirrors the
+                    #                       PlatformError-Recoverable
+                    #                       branch above).
+                    #   Fatal match       → `raise classified from exc`
+                    #                       so the outer
+                    #                       `except PlatformError` at
+                    #                       run() picks it up as the
+                    #                       typed surface (e.g.
+                    #                       `agent.unauthorized` instead
+                    #                       of `platform.internal_error`).
+                    #   No match          → bare `raise`; the outer
+                    #                       boundary's cause-chain safety
+                    #                       net takes over, ultimately
+                    #                       falling through to
+                    #                       PlatformInternalError for
+                    #                       genuine engine bugs.
+                    from engine._classify import (  # noqa: PLC0415
+                        classify_from_cause_chain,
+                    )
+
+                    classified = classify_from_cause_chain(exc, agent_id=self.agent_id)
+                    if classified is None:
+                        raise
+                    if classified.level.name != "RECOVERABLE":
+                        raise classified from exc
+                    attempts_data.append(
+                        Error.from_platform_error(classified).model_dump(mode="json")
+                    )
+                    last_exc = classified
+                    continue
+
+            # Exhausted retries — Fatal.
+            raise ModelRetryExhausted(
+                attempts=attempts_data,
+            ) from last_exc
+        finally:
+            # spec-121 hazard #3 — the bridge close is scoped to the
+            # spawn (this method), NOT the exchange-level finally: the
+            # token is revoked and the socket removed as soon as the
+            # framework returns/raises, even on cancel-bubble. Shielded
+            # (bug-106 idiom) so an ambient task-cancel arriving
+            # mid-close doesn't abandon the socket/token cleanup — the
+            # shielded close runs to completion in its own task while
+            # the CancelledError still propagates out of this frame.
+            if tool_bridge is not None:
+                await asyncio.shield(tool_bridge.close())
 
     # ---- Finalize -----------------------------------------------------
 
