@@ -127,6 +127,30 @@ def test_claude_code_models_all_have_context_length() -> None:
         assert entry.context_length > 0
 
 
+def test_claude_code_discover_includes_versioned_pins() -> None:
+    """qol-123 — discover surfaces the aliases AND current versioned ids,
+    each at the conservative 200k subscription window."""
+    connector = ClaudeCodeConnector()
+    entries = asyncio.run(connector.discover_models(Credentials(), None))
+    ids = {e.id for e in entries}
+    assert "opus" in ids  # a stable alias
+    assert "claude-opus-4-8" in ids  # a versioned pin
+    assert len(entries) > 3
+    for entry in entries:
+        assert entry.context_length == 200_000
+
+
+def test_claude_code_versioned_pin_serializes_with_context_length() -> None:
+    """qol-123 — a versioned-id catalog entry round-trips through the
+    platform.yaml serializer WITH its context_length, so a fresh connect /
+    refresh never writes a context-less entry."""
+    from cli.llm_commands import _model_entry_to_yaml
+    from llm.protocol import ModelEntry
+
+    row = _model_entry_to_yaml(ModelEntry(id="claude-opus-4-8", context_length=200_000))
+    assert row == {"id": "claude-opus-4-8", "context_length": 200_000}
+
+
 def test_claude_code_auth_prompt_has_no_secret_field() -> None:
     connector = ClaudeCodeConnector()
     spec = connector.auth_prompt_spec()

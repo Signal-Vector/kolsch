@@ -37,12 +37,14 @@ outside Claude Code has been throttled/blocked before. See the how-to.
 
 **Static catalog exception.**
 [`discover_models`][llm.providers.claude_code.ClaudeCodeConnector.discover_models]
-returns a *static* alias list (`sonnet`/`opus`/`haiku`), departing from
-`src/llm/providers/README.md`'s "don't ship a static catalog" guidance.
-Justified: the `claude` CLI exposes no list-models endpoint, the aliases
-are stable, and compaction needs a `context_length` — so each entry
-carries one. This is the deliberate exception the README allows a
-provider to state.
+returns a *static* catalog — the stable aliases (`opus`/`sonnet`/`haiku`)
+plus current versioned pins (see `STATIC_MODELS` in `llm.claude_cli`) —
+departing from `src/llm/providers/README.md`'s "don't ship a static
+catalog" guidance. Justified: the `claude` CLI exposes no list-models
+endpoint, the set is stable, and compaction needs a `context_length` — so
+each entry carries one (a conservative 200k subscription window, NOT the
+API's 1M). This is the deliberate exception the README allows a provider
+to state.
 
 **Subprocess hygiene.**
 

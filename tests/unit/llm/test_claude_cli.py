@@ -61,3 +61,21 @@ def test_provider_module_reexports_pre_extraction_names() -> None:
     assert provider.extract_result_text is claude_cli.extract_result_text
     assert provider._ClaudeResultError is claude_cli._ClaudeResultError
     assert provider._looks_not_logged_in is claude_cli._looks_not_logged_in
+
+
+def test_static_models_catalog_shape() -> None:
+    """qol-123 — the catalog carries the stable aliases AND current
+    versioned pins, every entry a conservative 200k subscription window
+    (NOT the API's 1M)."""
+    ids = [mid for mid, _ in STATIC_MODELS]
+    # the 3 stable aliases (recommended default)
+    assert {"opus", "sonnet", "haiku"} <= set(ids)
+    # a representative sample of current versioned pins
+    assert {"claude-opus-4-8", "claude-sonnet-5", "claude-haiku-4-5"} <= set(ids)
+    # fuller than the original 3, unique, non-empty
+    assert len(ids) > 3
+    assert len(ids) == len(set(ids))
+    for mid, window in STATIC_MODELS:
+        assert mid and isinstance(mid, str)
+        # conservative 200k on EVERY entry — subscription window, not API 1M
+        assert window == 200_000
