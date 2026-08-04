@@ -1,6 +1,6 @@
 # Write a workflow node
 
-The 14 built-in node types cover the common cases — running a shell
+The 15 built-in node types cover the common cases — running a shell
 command, invoking an agent, mutating state, mapping over a list.
 Anything beyond those, you write yourself as a **Python `@node`
 module** inside a bundle. The parser routes any `type:` ref that
@@ -130,10 +130,10 @@ same 3-segment ref format as tools, skills, agents, and prompts.
 No manifest entry is required; the catalog scanner finds every
 `.py` file under `nodes/` at startup.
 
-**Reserved names.** These 14 slugs are reserved for the built-in
-runners in `kolsch/nodes/`: `agent`, `bash`, `branch`, `compute`,
-`delete_state`, `filter`, `list_files`, `map`, `noop`, `read_file`,
-`set_state`, `user_input`, `workflow`, `write_file`. A file that
+**Reserved names.** These 15 slugs are reserved for the built-in
+runners in `kolsch/nodes/`: `agent`, `bash`, `branch`, `browse_url`,
+`compute`, `delete_state`, `filter`, `list_files`, `map`, `noop`,
+`read_file`, `set_state`, `user_input`, `workflow`, `write_file`. A file that
 would collide with one raises `WorkflowBuiltinShadowed` at catalog
 scan time.
 
@@ -285,5 +285,5 @@ whether it will pass validation before it ends up in a workflow.
 
 The parser and runtime references are at
 [API: Workflows](../api/index.md#workflows). For the complete YAML
-field spec covering both authored nodes and the 14 built-ins, see
+field spec covering both authored nodes and the 15 built-ins, see
 the [workflow YAML reference](../reference/workflow-yaml.md).

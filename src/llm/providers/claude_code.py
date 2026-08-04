@@ -14,7 +14,7 @@ fallback/retry, and compaction — it behaves like any other provider.
 
 **v1 is text-generation only.**
 [`build_llm`][llm.providers.claude_code.ClaudeCodeConnector.build_llm]
-returns a [`_ClaudeCodeLLM`][llm.providers.claude_code._ClaudeCodeLLM]
+returns a `_ClaudeCodeLLM`
 whose *synchronous* `.call` renders messages → a prompt, spawns
 `claude -p --output-format json`, reads the assistant text from the
 top-level `.result` string, and **returns a bare `str`**. The existing
@@ -73,15 +73,15 @@ carry only the typed code plus a generic message.
 **Error mapping.** Reuses the catalogued `model.*` family so the
 engine's fallback ladder engages unchanged:
 
-- timeout → [`ModelTimeout`][errors.ModelTimeout] (`model.timeout`,
+- timeout → `ModelTimeout` (`model.timeout`,
   Recoverable).
 - non-zero exit / `is_error` upstream hiccup →
-  [`ModelServerError`][errors.ModelServerError] (`model.server_error`,
+  `ModelServerError` (`model.server_error`,
   Recoverable).
 - a not-logged-in `is_error` result →
-  [`ModelAuthenticationFailed`][errors.ModelAuthenticationFailed]
+  `ModelAuthenticationFailed`
   (`model.authentication_failed`, Fatal).
-- missing binary → [`ModelBinaryUnavailable`][errors.ModelBinaryUnavailable]
+- missing binary → `ModelBinaryUnavailable`
   (`model.binary_unavailable`, Fatal — the one net-new code).
 
 **Usage / cost.** Subscription auth returns no per-token usage kolsch
@@ -170,7 +170,7 @@ class _CompletedProcess(Protocol):
 class _ProcessRunner(Protocol):
     """The injected spawn seam — mirrors `subprocess.run(..., env=…)`.
 
-    Production wires [`_default_runner`][llm.providers.claude_code._default_runner]
+    Production wires `_default_runner`
     (a thin `subprocess.run` wrapper that reaps on timeout). Tests pass
     a stub capturing `argv` / `env` / `cwd` and returning a canned
     `_CompletedProcess`, so the gate never shells a live `claude`.
@@ -458,7 +458,7 @@ class ClaudeCodeConnector:
 
     Stateless. Construct with `runner=<stub>` in tests to bypass a live
     `claude`; production uses the registry's no-argument `cls()` path
-    (defaulting to [`_default_runner`][llm.providers.claude_code._default_runner]).
+    (defaulting to `_default_runner`).
 
     Attributes:
         type_name: The registry key — `"claude_code"`.

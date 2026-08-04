@@ -98,6 +98,17 @@ runs. Tools never touch env vars or file paths — moving secret
 resolution into the tool would let a buggy tool log its own secrets
 to the event log.
 
+**An external harness can drive tools through the same guarantees.**
+When a `SubprocessAgentFramework` agent runs (e.g. Claude Code), the
+harness reaches kolsch tools over the **MCP tool bridge**
+(`tools.bridge.ToolBridgeServer`, exposed by `kolsch mcp bridge`). Each
+bridged call still routes through the governed path — authz, secrets,
+event recording — via the shared **observed invocation core**
+(`tools.observed.invoke_observed`, whose `Ok` / `Denied` / `Failed`
+outcomes both the in-process dispatch and the bridge consume). The
+bridge is a transport, not a bypass: a tool called from an external
+harness is logged and gated exactly like one called in-process.
+
 ---
 
 The class reference is at [API: Tools](../api/index.md#tools).

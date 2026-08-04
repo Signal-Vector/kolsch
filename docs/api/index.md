@@ -105,6 +105,10 @@ resolved agent config) render in the
     options:
       heading_level: 3
 
+::: engine.subprocess_framework
+    options:
+      heading_level: 3
+
 ::: engine.dev_llm
     options:
       heading_level: 3
@@ -190,6 +194,30 @@ resolved agent config) render in the
       heading_level: 3
 
 ::: llm.registry
+    options:
+      heading_level: 3
+
+::: llm.providers.openrouter
+    options:
+      heading_level: 3
+
+::: llm.providers.opencode
+    options:
+      heading_level: 3
+
+::: llm.providers.claude_code
+    options:
+      heading_level: 3
+
+::: llm.claude_cli
+    options:
+      heading_level: 3
+
+---
+
+## MCP Server
+
+::: mcp_server.server
     options:
       heading_level: 3
 

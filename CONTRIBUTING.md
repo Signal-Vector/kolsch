@@ -21,8 +21,8 @@ in [`docs/`](docs/index.md). Start here, follow the links.
   [`README.md`](README.md).
 
 - **Documentation tree** — Diátaxis-structured under
-  [`docs/`](docs/index.md). The Master Index gives a recommended
-  reading order.
+  [`docs/`](docs/index.md); [`docs/index.md`](docs/index.md) is the
+  entry point with a recommended reading order.
 
 ---
 

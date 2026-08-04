@@ -173,7 +173,13 @@ These are non-negotiable. Violating them blocks merges.
 - **Never burn tokens in tests.** Use the Mock LLM. Real-LLM tests are
   the E2E layer only, run deliberately, never on every change.
 - **Document as you go.** A user-facing change includes its docs in the
-  same change. See the Diátaxis structure in `docs/`.
+  same change. See the Diátaxis structure in `docs/`. **If a change
+  touches the command surface, the provider/connector list, the
+  framework-adapter list, or a built-in count (e.g. node types), update
+  the overview layer too** — `README.md`, `docs/index.md`,
+  `docs/architecture/index.md`, and `docs/architecture/cli.md`. Those
+  pages drift silently: `mkdocs --strict` (run in CI) catches broken
+  links, not stale-but-valid prose.
 - **Default to SQLite + in-process bus.** Don't introduce hard
   dependencies on Postgres or Redis; they are opt-in scale-up backends
   behind contracts.

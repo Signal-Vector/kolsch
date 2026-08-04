@@ -8,6 +8,16 @@
 
 ---
 
+> **Historical (design vision).** This is an early consolidated design
+> sketch. Several of its concrete technology choices were **not** built as
+> written — the shipped stack uses SQLite + JSONL (not Postgres), an
+> in-process event bus (not Redis/Arq), and a Textual TUI chat (not a React
+> IDE). Read it for the original architectural reasoning; the
+> [architecture overview](../architecture/index.md) and the per-subsystem
+> pages describe what actually ships.
+
+---
+
 ## Part 1 — Vision and Goals
 
 ### 1.1 One-sentence vision

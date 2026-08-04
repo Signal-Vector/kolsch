@@ -47,7 +47,7 @@ proximity to the verb "execute".
 | Use | What it means | Where it lives |
 |---|---|---|
 | **engine** | The Agent Engine — long-lived, wraps the framework, runs exchanges. | `engine/engine.py` (`AgentEngine`) |
-| **framework** | The wrapped library (CrewAI). The engine drives it. | `engine/framework.py`, `engine/crewai_framework.py` |
+| **framework** | The adapter that runs the agent loop for the engine — `MinimalFramework` (built-in, the default), `CrewAIFramework` (opt-in), or `SubprocessAgentFramework` (external harness). | `engine/framework.py`, `engine/mock_framework.py`, `engine/crewai_framework.py`, `engine/subprocess_framework.py` |
 | **executor** | The workflow subsystem's dispatcher that hands each node to its runner. | `workflows/executor.py` (`RunnerRegistry`, `execute_workflow`) |
 | **runner** | The per-node-type worker registered on the executor. Also, the CLI shell surfaces at `cli/_workflow_chat_runner.py` etc. | `workflows/executor.py` (`NodeRunner` protocol), `cli/*_runner.py` |
 
@@ -159,9 +159,10 @@ A close-reading checklist for the pairs most often confused:
   match at runtime; the words are still different jobs.
 - **caller vs principal** — caller is *"what code called this"*;
   principal is *"whose permissions do we check"*.
-- **engine vs framework** — engine is ours; framework is the wrapped
-  library (CrewAI). If you say "the framework iterates", you mean
-  CrewAI, not us.
+- **engine vs framework** — engine is ours; framework is the adapter
+  that runs the loop (the built-in `MinimalFramework` by default, or
+  CrewAI / the subprocess adapter). If you say "the framework iterates",
+  you mean the adapter's loop, not us.
 - **session vs thread** — session is the conversation; thread is the
   persistence unit inside it. One-to-one today; write docstrings that
   respect the distinction.

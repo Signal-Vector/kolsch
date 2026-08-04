@@ -1,12 +1,23 @@
 # Framework Protocol — Design Spike
 
-**Draft 0.1 · 2026-05-28 · Status: pre-Step-12 research**
+**Draft 0.1 · 2026-05-28 · Status: historical design spike**
 
-> Purpose: define the minimal Python Protocol that the Agent Engine depends
-> on, informed by what CrewAI actually exposes today, so the MinimalFramework
-> used by Step 12a's integration tests only assumes guarantees the eventual
-> CrewAI adapter can also provide. Read-only spike: no installs, no engine
-> code, no dependency edits.
+> **Historical.** This was the pre-implementation research spike. Since
+> then the Framework Protocol and **three** conforming adapters have
+> shipped: `MinimalFramework` (`engine/mock_framework.py`) — the built-in
+> default loop — plus the opt-in `CrewAIFramework`
+> (`engine/crewai_framework.py`) and `SubprocessAgentFramework` +
+> `ClaudeCodeHarness` (`engine/subprocess_framework.py`). The subprocess
+> adapter takes a different path — it spawns an
+> external harness that drives the loop and reaches kolsch tools through
+> the MCP tool bridge, rather than driving the LLM/tool seams this spike
+> centers on. Kept for the original design rationale.
+>
+> Purpose (original): define the minimal Python Protocol that the Agent
+> Engine depends on, informed by what CrewAI actually exposes today, so the
+> MinimalFramework used by Step 12a's integration tests only assumes
+> guarantees the eventual CrewAI adapter can also provide. Read-only spike:
+> no installs, no engine code, no dependency edits.
 
 ---
 

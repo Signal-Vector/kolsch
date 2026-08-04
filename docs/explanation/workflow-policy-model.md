@@ -56,8 +56,6 @@ The engine — not the matcher — decides WHICH layers are included in the walk
 
 This is structural at the call site — no rule field is required, no `from:` declaration is involved. It prevents embedded agents from inheriting the workflow's elevations: a workflow that's allowed `bash` does NOT silently grant the embedded agent `bash`; the agent must declare its own `bash` allowance via `agent_policy`. The caller chain (below) is still RECORDED for forensics and `from:` matching, but layer SELECTION is purely a proximate-caller decision.
 
-(The author-facing docs `docs/workflows.md#policy-from` carry a prominent callout block re-stating this rule for policy authors; a cross-link from a `#layer-selection` anchor lets error messages deep-link readers to the explanation.)
-
 ### `from:` field on Rule (caller-chain scoping)
 
 Optional `from:` glob on any Rule, constrained at v1 to match agent and workflow refs ONLY:

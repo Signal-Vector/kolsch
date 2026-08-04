@@ -6,7 +6,8 @@ that follows it — model calls, tool calls, retries — through to the
 agent's final reply.
 
 The Agent Engine doesn't talk to the model directly. It drives a framework
-adapter (CrewAI in production, a mock one for tests) that knows how to
+adapter (a built-in minimal loop by default, CrewAI as an opt-in
+alternative, or a subprocess/external-harness adapter) that knows how to
 hold an agent loop and a tool-use protocol. The framework calls the
 LLM. The LLM replies with text or with a tool-use request. When it's
 a tool-use request, the framework hands it back to the Agent Engine; the
@@ -16,7 +17,7 @@ feeds the result back into the framework for the next turn.
 ```mermaid
 graph LR
     Caller[CLI<br/>Workflow<br/>API] -->|execute| Engine[Agent Engine]
-    Engine --> Framework[Framework adapter<br/>CrewAI]
+    Engine --> Framework[Framework adapter<br/>minimal / CrewAI / subprocess]
     Framework --> LLM[LLM Connector]
     Engine --> Tools
     Engine ==> Store[(Event Log)]
@@ -84,13 +85,18 @@ final `agent.message`. The streaming variant doesn't raise on
 failure. Pick by error-handling style; the logged event sequence is
 identical.
 
-**CrewAI is a choice, not a lock-in.** Today the Agent Engine drives
-CrewAI as the library that talks to the LLM, runs the agent loop,
-and formats tool-use requests. That's an implementation choice
-scoped behind the `Framework` protocol — a future adapter (the
-OpenAI Assistants API, a hand-rolled loop, another agent framework)
-means writing a new `Framework` implementation, not changing the
-Engine. A mock framework drives tests without burning tokens.
+**The framework is a choice, not a lock-in.** The default is
+`MinimalFramework` — a built-in loop that talks to the LLM seam,
+dispatches tool calls, and iterates. `CrewAIFramework` is an opt-in
+alternative that wraps CrewAI for extra production affordances
+(cancellation during a hung call, retry translation, tracing
+suppression); pass it explicitly. `SubprocessAgentFramework` is
+auto-selected for external-harness agents (e.g. Claude Code): the
+harness runs the loop itself and reaches kolsch tools through the MCP
+tool bridge. All three sit behind the `Framework` protocol; either way
+the Engine only records, it never reimplements the loop. Tests run the
+same `MinimalFramework` against a mock LLM driver, so they burn no
+tokens.
 
 **The LLM client is per-exchange.** The Agent Engine doesn't hold an LLM
 client across exchanges. Each call resolves the model spec, calls

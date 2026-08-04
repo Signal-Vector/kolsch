@@ -508,14 +508,22 @@ authorization:
   variant: rule_based
   config:
     rules:
-      - what: "*"
-        pattern: "*"
-        effect: allow
+      - { what: agent.execute.*,        pattern: "*", effect: allow }
+      - { what: kolsch/tools/read_file,    pattern: "*", effect: allow }
+      - { what: kolsch/tools/list_files,   pattern: "*", effect: allow }
+      - { what: kolsch/tools/write_file,   pattern: "*", effect: prompt }
+      - { what: kolsch/tools/bash,         pattern: "*", effect: prompt }
+      - { what: kolsch/tools/fetch_url,    pattern: "*", effect: prompt }
+      - { what: kolsch/tools/browse_url,   pattern: "*", effect: prompt }
+      - { what: kolsch/tools/run_workflow, pattern: "*", effect: prompt }
+      - { what: "*",                    pattern: "*", effect: deny }   # protected tail
 ```
 
-The default v1 rule set: one rule, allow everything. The mechanism
-is in place; the rule is permissive. Restrictive setups edit the
-rule list.
+The shipped default rule set is workspace-only, not allow-everything:
+read-only tools run silently, mutating/networked tools (`write_file`,
+`bash`, `fetch_url`, `browse_url`, `run_workflow`) prompt, and a
+protected default-deny tail catches everything else. `kolsch setup`
+writes it. Restrictive setups edit the list.
 
 Example with restrictions:
 
@@ -879,9 +887,11 @@ platform:
     variant: rule_based
     config:
       rules:
-        - what: "*"
-          pattern: "*"
-          effect: allow
+        - { what: agent.execute.*,      pattern: "*", effect: allow }
+        - { what: kolsch/tools/read_file,  pattern: "*", effect: allow }
+        - { what: kolsch/tools/write_file, pattern: "*", effect: prompt }
+        - { what: kolsch/tools/bash,       pattern: "*", effect: prompt }
+        - { what: "*",                  pattern: "*", effect: deny }   # protected tail
 ```
 
 (The platform-level config schema is not yet specified as a formal

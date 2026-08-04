@@ -16,11 +16,13 @@
 
 ## Part 1 — Decisions Locked
 
-1. **No new LLM client abstraction.** The standard is
-   `crewai.LLM`. The platform ships a small `build_llm` *helper*,
-   not a parallel client hierarchy. The Agent Engine works with
-   `crewai.LLM` objects directly; tests inject the Mock LLM by
-   subclassing `crewai.LLM` (or its base).
+1. **No new LLM client abstraction (with one exception).** The
+   standard is `crewai.LLM`. The platform ships a small `build_llm`
+   *helper*, not a parallel client hierarchy; the Agent Engine works
+   with `crewai.LLM` objects directly, and tests inject the Mock LLM by
+   subclassing `crewai.LLM` (or its base). The one exception is
+   `claude_code`, which shells the `claude` CLI instead of going through
+   litellm.
 2. **No shipped model registry.** Platforms shipping registries go
    stale. Discovery at connect time from each provider's own API,
    augmented (optionally) by cross-provider metadata from
@@ -31,11 +33,14 @@
    one file in `src/llm/providers/` + one line in
    `src/llm/providers/__init__.py`. The CLI, config schema, and
    engine never grow.
-4. **v1.1 ships OpenCode + OpenRouter only.** Two reference shapes
-   covering the bulk of the design space. The four other named
-   providers (Anthropic, OpenAI, Bedrock, Llama-local) are
-   documented as worked planning examples (Part 5); their
-   implementation is later patches.
+4. **Three connectors ship: OpenCode, OpenRouter, and Claude Code.**
+   OpenCode and OpenRouter are the two OpenAI-compatible reference
+   shapes; `claude_code` drives the `claude` CLI under a Claude
+   subscription (no API key) and discovers its models from the CLI's
+   own local cache rather than an HTTP list endpoint. The other named
+   providers (Anthropic-direct, OpenAI-direct, Bedrock, Llama-local)
+   remain worked planning examples (Part 5); their implementation is
+   later patches.
 5. **Default install requires no LLM provider.** A fresh `kolsch`
    install runs the CLI, accepts agent definitions, and serves the
    HTTP surface. *Executing* an agent requires a provider —
@@ -247,9 +252,11 @@ Registration happens once, in `src/llm/providers/__init__.py`:
 
 ```python
 from src.llm.registry import register
+from .claude_code import ClaudeCodeConnector
 from .opencode import OpenCodeConnector
 from .openrouter import OpenRouterConnector
 
+register("claude_code", ClaudeCodeConnector)
 register("opencode", OpenCodeConnector)
 register("openrouter", OpenRouterConnector)
 ```

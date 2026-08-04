@@ -45,7 +45,7 @@ Fatal because the chain's other entries likely route through
 different providers anyway.
 
 The classification helper
-[`classify_http_response`][llm.providers._errors.classify_http_response]
+`classify_http_response`
 is shared with the other OpenAI-compat providers via
 `llm.providers._errors` so a new provider that picks up the same
 shape doesn't reimplement it.

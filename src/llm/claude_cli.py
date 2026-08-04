@@ -15,7 +15,7 @@ The tool-mode flags are deliberately NOT unified here — they are the
 one place the two callers differ, and each appends its own. Everything
 in this module is mode-agnostic:
 
-- [`SCRUBBED_ENV_VARS`][llm.claude_cli.SCRUBBED_ENV_VARS] /
+- `SCRUBBED_ENV_VARS` /
   [`scrubbed_env`][llm.claude_cli.scrubbed_env] — strip every var that
   would redirect auth/billing/model off the subscription path.
 - [`build_base_argv`][llm.claude_cli.build_base_argv] — the shared
@@ -27,8 +27,8 @@ in this module is mode-agnostic:
 - [`extract_result_text`][llm.claude_cli.extract_result_text] — pull
   the assistant text out of the `--output-format json` object,
   classifying `is_error` results via
-  [`_ClaudeResultError`][llm.claude_cli._ClaudeResultError].
-- [`STATIC_MODELS`][llm.claude_cli.STATIC_MODELS] — the stable model
+  `_ClaudeResultError`.
+- `STATIC_MODELS` — the stable model
   aliases + context windows (the CLI has no list-models endpoint).
 
 Redaction rule carried over verbatim from spec-118: nothing in this

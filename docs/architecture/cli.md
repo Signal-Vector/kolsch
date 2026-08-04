@@ -39,8 +39,9 @@ multi-line input, mid-session model switches, slash commands for
 permissions (`/perm`), and resuming a prior session with `--session`.
 
 `kolsch run` invokes a single agent for one exchange and prints the
-final reply (or one model call in `single_shot` mode). Workflows
-have their own verb: `kolsch workflows run <ref>`.
+final reply (or one model call in `single_shot` mode); `--model <ref>`
+overrides the model for that one run. Workflows have their own verb:
+`kolsch workflows run <ref>`.
 
 `kolsch models`, `kolsch nodes` (workflow node definitions),
 `kolsch skills`, `kolsch sessions`, `kolsch permissions`,
@@ -53,6 +54,13 @@ model discovery against the connected LLM providers.
 `kolsch server` starts the HTTP API. `kolsch reconstruct` rebuilds
 the entity records (sessions, threads) from the JSONL event log —
 useful after moving a workspace or recovering from corruption.
+
+`kolsch mcp` exposes kolsch over the Model Context Protocol: `mcp serve`
+runs a read-only operator server (list sessions, read events) that an
+external agent can drive over stdio, and `mcp bridge` bridges the
+running session's tools to an in-workflow external-harness agent.
+`kolsch doctor` diagnoses a workspace — provider connectivity, catalog
+integrity, and common misconfigurations.
 
 ## Principles
 
@@ -90,5 +98,5 @@ process, not in-process from a test.
 ---
 
 The class reference is at [API: CLI](../api/index.md#cli).
-The setup flow, the chat surface architecture, and the slash-command
-catalog all live under [Explanation](../explanation/specification.md).
+The setup flow, the chat surface, and the slash-command catalog are
+covered in the [how-to guides](../how-to/README.md).

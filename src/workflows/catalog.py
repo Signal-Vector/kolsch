@@ -59,7 +59,7 @@ __all__ = [
 _log = logging.getLogger("workflows.catalog")
 
 
-# The 14 reserved built-in catalog slots — `BUILTIN_TYPE_NAMES`
+# The 15 reserved built-in catalog slots — `BUILTIN_TYPE_NAMES`
 # composed with the `kolsch/nodes/<name>` template via `build_ref`
 # (no inline f-strings).
 RESERVED_BUILTIN_NODE_REFS: frozenset[str] = frozenset(

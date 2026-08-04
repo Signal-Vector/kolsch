@@ -1,7 +1,7 @@
 # Write a tool
 
 Tools are the Python functions agents call to do work in the world.
-The 14 built-in workflow node types cover the workflow layer; tools
+The 15 built-in workflow node types cover the workflow layer; tools
 cover what the model itself can invoke inside an exchange. This guide
 shows you how to author one.
 

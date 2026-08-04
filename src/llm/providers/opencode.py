@@ -81,7 +81,7 @@ Truly out-of-band failures (DNS resolution, connection refused) raise
 `model.timeout` since they prevent a first-byte response.
 
 The classification helper
-[`classify_http_response`][llm.providers._errors.classify_http_response]
+`classify_http_response`
 is pure and testable in isolation. A future commit wires it into the
 call layer that wraps `crewai.LLM` invocation; today the engine
 exercises the same mapping through the Mock-LLM test path.

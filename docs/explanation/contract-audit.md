@@ -11,6 +11,16 @@
 
 ---
 
+> **Historical (pre-implementation).** This audit reflects the Phase-1
+> contract state *before* implementation. The gaps it raises (G1–G19) were
+> subsequently resolved in shipped code — e.g. the `bus.publish`-after-
+> `append_event` ordering, the content store (`src/store/content.py`), and
+> the `agent.execute.*` authz pre-flight all landed. Read it for
+> provenance, not as a list of open work; the current per-subsystem
+> contract docs describe what ships.
+
+---
+
 ## Part 0 — Method
 
 For each pair of modules that interact, the audit covers:
