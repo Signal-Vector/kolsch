@@ -91,8 +91,12 @@ podman-compose exec dev uv run pytest tests/golden
 #   Unexpected golden diff = your change altered emitted events.
 #   If intentional: ... uv run pytest --update-golden, then review the diff.
 
-# Commit gate: clean rebuild + full suite (pre-commit hook runs this).
-# Do NOT trust the dev container for the final check — rebuild clean:
+# Full gate: clean rebuild + whole suite + coverage (the pre-push hook
+# runs this on a push to `main`). Do NOT trust the dev container for the
+# final check — rebuild clean. Easiest is the wrapper:
+scripts/commit-gate            # cached build
+scripts/commit-gate --clean    # pristine --no-cache rebuild
+# ...which is equivalent to:
 podman-compose -f compose.test.yml down -v
 podman-compose -f compose.test.yml build --no-cache app
 podman-compose -f compose.test.yml up --abort-on-container-exit --exit-code-from app
@@ -102,14 +106,54 @@ git commit -m "fix(store): correct parent_event_id under concurrent append"
 ```
 
 The inner loop is fast because source is live-mounted — no rebuild for
-code edits. The commit gate does a clean rebuild so what you commit is
+code edits. The full gate does a clean rebuild so what you commit is
 verified against a pristine environment (catching "forgot to add the
-dependency to pyproject.toml" and local-state bugs). CI runs the exact
-same `compose.test.yml` flow, so passing the gate locally means passing
-in CI.
+dependency to pyproject.toml" and local-state bugs).
 
-Pre-commit hooks run the gate automatically; if blocked, fix the issue
-rather than bypassing.
+### Two-tier gate (qol-125)
+
+The test gate is split into two scopes of the **same**
+`compose.test.yml` container (both run ruff → ruff-format → mypy →
+chat-hex lint first, fail-fast), selected by `GATE_SCOPE`:
+
+- **`full`** (default) — the whole `tests/` tree WITH coverage and the
+  **85% floor**. This is the hard landing gate. It runs **locally** at
+  push-to-`main` via the `.githooks/pre-push` hook (which calls
+  `scripts/commit-gate`), and blocks the push on any failure. Run it by
+  hand anytime with `scripts/commit-gate` (cached) / `--clean` (pristine).
+- **`sanity`** — the whole tree **minus** the two heavy dirs
+  (`tests/cli`, `tests/component`), **no** coverage. This is what
+  **GitHub CI** runs on every push (~3 min vs ~16 min). `tests/golden`
+  and `tests/security` DO run in sanity — only the two heavy tiers and
+  the coverage floor are dropped.
+
+Development reaches `main` via local `git merge` + `git push origin
+main`, so the pre-push hook is the enforcement point. One-time setup per
+clone is the same `git config core.hooksPath .githooks` documented in
+`.githooks/README.md` — without it, local pushes to `main` are ungated.
+
+### Risks & Non-Guarantees (accepted)
+
+The full gate is **local-only** — there is deliberately **no GitHub
+backstop**. Known, accepted consequences:
+
+1. **`git push --no-verify` skips the full gate.** A `--no-verify` push
+   to `main` lands unvalidated. Intended escape hatch, not a bug.
+2. **A fresh clone / second machine has no enforcement** until
+   `git config core.hooksPath .githooks` is run. Until then, pushes to
+   `main` are ungated locally.
+3. **The 85% coverage floor and the two heavy tiers (`cli`,
+   `component`) are not on GitHub.** `golden` and `security` still run on
+   GitHub every push; the coverage floor and the two heavy tiers do not.
+   A coverage regression or a `cli`/`component` regression is invisible
+   on GitHub until the local full gate runs at push-to-`main`.
+4. **The `pull_request` trigger runs only the sanity subset.** If code
+   ever reaches `main` via a GitHub PR merge (rather than a local push),
+   the full gate never fires and no branch protection requires the hook.
+5. **CI green now means "sanity passed," not "full gate passed."** Do
+   not treat a green `ci` badge as "safe to build on."
+
+If the gate blocks a push, fix the issue rather than bypassing.
 
 ---
 

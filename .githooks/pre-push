@@ -1,0 +1,35 @@
+#!/usr/bin/env bash
+# pre-push — run the FULL local landing gate before a push to `main`
+# (qol-125). Development reaches `main` via local `git merge` + `git push
+# origin main`, so push-to-main is the enforcement point.
+#
+# Git feeds pre-push hooks one line per pushed ref on stdin:
+#   <local_ref> <local_sha> <remote_ref> <remote_sha>
+# We gate only when `refs/heads/main` is among the pushed remote refs AND
+# its local sha is not all-zeros (all-zeros = a branch DELETE — nothing to
+# validate). Every other case (non-main refs, deletes, empty stdin) is a
+# no-op exit 0.
+#
+# This runs the whole compose.test.yml suite (~16 min) — the fast per-push
+# check lives on GitHub (sanity scope). `git push --no-verify` skips this.
+#
+# Lives in .githooks/ (core.hooksPath = .githooks); git ignores .git/hooks/.
+
+set -euo pipefail
+
+ZERO_SHA="0000000000000000000000000000000000000000"
+
+# Resolve the gate script relative to the repo root so the hook works
+# regardless of the cwd git invokes it from.
+REPO="$(git rev-parse --show-toplevel)"
+
+# `while read` returns non-zero at EOF (the failing final read is the loop
+# CONDITION, which `set -e` exempts — so the normal no-match path exits 0
+# cleanly without a spurious `|| true` that could mask a real gate failure).
+while read -r local_ref local_sha remote_ref remote_sha; do
+  if [ "$remote_ref" = "refs/heads/main" ] && [ "$local_sha" != "$ZERO_SHA" ]; then
+    exec "$REPO/scripts/commit-gate"
+  fi
+done
+
+exit 0

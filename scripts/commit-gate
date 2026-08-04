@@ -1,0 +1,59 @@
+#!/usr/bin/env bash
+# commit-gate — the FULL local landing gate (qol-125).
+#
+# Runs the whole compose.test.yml flow at GATE_SCOPE=full: clean rebuild
+# (COPYed source, not mounted) then ruff → ruff-format → mypy → chat-hex
+# lint → the whole tests/ tree WITH coverage (85% floor). This is what
+# the .githooks/pre-push hook runs before a push to `main`, and what the
+# handbook calls the commit gate (§9.2).
+#
+# Usage:
+#   scripts/commit-gate            # cached build (fast on repeat runs)
+#   scripts/commit-gate --clean    # pristine --no-cache rebuild
+#
+# GITHUB CI does NOT run this — it runs the fast `sanity` scope instead.
+# See AGENTS.md → Risks & Non-Guarantees.
+
+set -euo pipefail
+
+# Run from the repo root so the bare `compose.test.yml` path resolves no
+# matter where this is invoked from (the pre-push hook, or by hand from a
+# subdirectory). Requires being inside the repo — which is always true for
+# both callers.
+cd "$(git rev-parse --show-toplevel)"
+
+# --- flags ------------------------------------------------------------
+no_cache=""
+for arg in "$@"; do
+  case "$arg" in
+    --clean) no_cache="--no-cache" ;;
+    *)
+      echo "commit-gate: unknown argument: $arg" >&2
+      echo "usage: scripts/commit-gate [--clean]" >&2
+      exit 2
+      ;;
+  esac
+done
+
+# --- compose command detection ----------------------------------------
+# Prefer a REAL `docker` binary (GitHub runners) → `docker compose`.
+# This host aliases `docker`→`podman` (shell alias, not a binary, so
+# `command -v docker` misses it) and ships `podman-compose` at
+# ~/.local/bin → use the hyphenated tool. Fail clearly if neither.
+if command -v docker >/dev/null 2>&1; then
+  cmp=(docker compose)
+elif command -v podman-compose >/dev/null 2>&1; then
+  cmp=(podman-compose)
+else
+  echo "commit-gate: no docker/podman-compose on PATH — cannot run the gate." >&2
+  echo "  (a terminal 'git push' has ~/.local/bin on PATH; a GUI client may not)" >&2
+  exit 127
+fi
+
+# --- run the full gate ------------------------------------------------
+# GATE_SCOPE unset → compose defaults the container to `full`.
+"${cmp[@]}" -f compose.test.yml down -v
+"${cmp[@]}" -f compose.test.yml build ${no_cache:+$no_cache} app
+"${cmp[@]}" -f compose.test.yml up \
+  --abort-on-container-exit \
+  --exit-code-from app

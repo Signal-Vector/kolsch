@@ -1,7 +1,10 @@
-# CI — runs the identical compose.test.yml flow as the local commit
-# gate (handbook §9.3). "Passes at commit" == "passes in CI" because
-# the environment is the same image, freshly built, run against the
-# same Postgres + Redis services.
+# CI — runs the FAST "sanity" scope of compose.test.yml (whole tests/
+# tree MINUS the two heavy dirs tests/cli + tests/component, no coverage;
+# ~3 min vs ~16 min) via GATE_SCOPE=sanity (qol-125). This is NOT the
+# full local landing gate: the full suite (whole tree + coverage + 85%
+# floor) runs LOCALLY at push-to-main via the .githooks/pre-push hook +
+# scripts/commit-gate. So a green `ci` here means "sanity passed," not
+# "full gate passed" — see AGENTS.md → Risks & Non-Guarantees.
 
 name: ci
 
@@ -40,6 +43,8 @@ jobs:
         run: docker compose -f compose.test.yml build --no-cache app
 
       - name: Run the gate
+        env:
+          GATE_SCOPE: sanity
         run: |
           docker compose -f compose.test.yml up \
             --abort-on-container-exit \

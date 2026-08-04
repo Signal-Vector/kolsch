@@ -1,7 +1,7 @@
 # compose.test.yml — the commit gate and CI (handbook §8.2.2, §9.2).
 #
 # Deliberately the opposite of compose.dev.yml: clean rebuild, source
-# COPIED in (not mounted), runs the full gate.
+# COPIED in (not mounted), runs the gate.
 #
 # Run with:
 #   podman compose -f compose.test.yml down -v
@@ -9,7 +9,15 @@
 #   podman compose -f compose.test.yml up \
 #       --abort-on-container-exit --exit-code-from app
 #
-# CI runs the same flow. "Passes at commit" == "passes in CI."
+# Two scopes, selected by GATE_SCOPE (qol-125):
+#   full   (default) — whole tests/ tree + coverage + 85% floor. The
+#                      hard local landing gate (run by scripts/commit-gate
+#                      and the .githooks/pre-push hook at push-to-main).
+#   sanity           — whole tree MINUS the two heavy dirs (tests/cli,
+#                      tests/component), no coverage. What GitHub CI runs
+#                      on every push (~3 min vs ~16 min).
+# GitHub CI runs the SANITY scope, not this full flow — "passes at commit"
+# no longer equals "passes in CI" (see AGENTS.md → Risks & Non-Guarantees).
 #
 # Phase 2 backend-swap note: a postgres + redis service pair previously
 # lived here to back `test_tc_int_07_backend_swap_is_transparent` (an
@@ -29,6 +37,10 @@ services:
     environment:
       # testcontainers + Podman compatibility (handbook §8.2.3).
       TESTCONTAINERS_RYUK_DISABLED: "true"
+      # Gate scope (qol-125). Compose interpolates the HOST value here
+      # (single `$` → parse-time substitution); `full` when unset. The
+      # container's shell then drives the `case` in `command` off this.
+      GATE_SCOPE: ${GATE_SCOPE:-full}
     working_dir: /workspace
     # The full gate, in fail-fast order (handbook §9.3):
     #   1. ruff check
@@ -39,18 +51,31 @@ services:
     #      property values under `src/cli/chat/widgets/`. Widget-local
     #      `$var: #hex;` fallbacks (isolation-invariant per qol-082) are
     #      exempted by the regex's left-side guard.
-    #   5. the full non-e2e test suite (all tiers)
+    #   5. the test suite — scope selected by GATE_SCOPE (qol-125):
+    #        full  : the whole non-e2e tree WITH coverage (the floor).
+    #        sanity: the whole tree MINUS tests/cli + tests/component,
+    #                no coverage (fast; what GitHub CI runs).
     #
-    # The pytest target is the whole `tests/` tree so `--cov` (source =
-    # ["src"]) measures the real, gate-enforced coverage floor
-    # (fail_under = 85). Listing only a subset of tiers here silently
-    # dropped `tests/cli`, `tests/workflows`, `tests/tools`, etc. from
-    # the count and pinned coverage at ~64% — well under the floor.
+    # In the `full` scope the pytest target is the whole `tests/` tree so
+    # `--cov` (source = ["src"]) measures the real, gate-enforced coverage
+    # floor (fail_under = 85). Listing only a subset of tiers here silently
+    # dropped `tests/cli`, `tests/workflows`, `tests/tools`, etc. from the
+    # count and pinned coverage at ~64% — well under the floor.
+    #
+    # The `sanity` subset is expressed with `--ignore` (deny-list), NOT an
+    # allowlist, so no fast dir (incl. `security`, `golden`, and the loose
+    # root file) is ever silently dropped. Tradeoff: if a FUTURE dir turns
+    # heavy, add it to the `--ignore` list here.
+    #
+    # `$$GATE_SCOPE` uses a DOUBLE `$` so compose passes the literal
+    # `${GATE_SCOPE:-full}` through to the container, whose `sh` expands it
+    # from its own env at RUNTIME (a single `$` would be eaten by compose's
+    # parse-time interpolation, baking the scope into the image).
     #
     # E2E tests are NOT in the gate; they cost tokens and run on a
     # separate schedule. They are excluded by the `-m "not e2e"` marker
     # in `[tool.pytest.ini_options].addopts`, so passing the whole tree
-    # here still deselects them (4 tests) rather than running them.
+    # here still deselects them (8 tests) rather than running them.
     command:
       - sh
       - -ec
@@ -59,8 +84,21 @@ services:
         uv run ruff format --check .
         uv run mypy .
         uv run python scripts/lint_chat_hex.py
-        uv run pytest \
-            --cov \
-            --cov-report=xml \
-            --cov-report=term \
-            tests
+        case "$${GATE_SCOPE:-full}" in
+          full)
+            uv run pytest \
+                --cov \
+                --cov-report=xml \
+                --cov-report=term \
+                tests
+            ;;
+          sanity)
+            uv run pytest tests \
+                --ignore=tests/cli \
+                --ignore=tests/component
+            ;;
+          *)
+            echo "unknown GATE_SCOPE: $${GATE_SCOPE}" >&2
+            exit 2
+            ;;
+        esac
