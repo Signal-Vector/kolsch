@@ -14,12 +14,12 @@ only.
 The codebase already uses Google-style docstrings informally
 (`src/engine/context.py`, `src/tools/decorator.py`, and others).
 [MkDocs](https://www.mkdocs.org/) with the
-[`mkdocstrings`](https://mkdocstrings.github.io/) plugin is on the
-roadmap for generated API docs but is **not yet wired up**.
+[`mkdocstrings`](https://mkdocstrings.github.io/) plugin is **wired up**
+(see `mkdocs.yml`) and publishes the generated API docs.
 
-Codifying the rules now means that when MkDocs lands, the existing
-docstrings render without rewrites — no autodoc landmines, no
-heading-level breakage, no orphaned cross-references.
+Following these rules keeps every docstring rendering cleanly through
+`mkdocstrings` — no autodoc landmines, no heading-level breakage, no
+orphaned cross-references.
 
 The two guideposts:
 
@@ -180,9 +180,10 @@ Drives [`AgentEngine.execute`][engine.AgentEngine.execute] through
 the run loop.
 ```
 
-Once `mkdocstrings` is wired up, the `[label][target]` form resolves
-to the generated API page. Until then, it renders as plain code text —
-which is fine. Write these now; they'll start working later.
+The `[label][target]` form resolves to the generated API page for
+symbols exposed on the API site; for a symbol not (yet) autodoc'd it
+renders as plain code text — which is fine. Prefer this form for all
+code-symbol cross-references.
 
 ### reST roles (`:meth:`, `:class:`) — acceptable, not required
 

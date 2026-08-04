@@ -2,10 +2,11 @@
 
 LLM Connectors are how Kolsch talks to language model APIs. Each
 connector knows the request and response shapes for one provider.
-The two production connectors today are OpenRouter (the broadest
-catalog, routes to Anthropic, OpenAI, and others) and OpenCode (the
-local-model gateway). Anthropic and other vendors are reachable
-through OpenRouter; a direct Anthropic connector hasn't shipped yet.
+The production connectors today are OpenRouter (the broadest catalog,
+routes to Anthropic, OpenAI, and others), OpenCode (the local-model
+gateway), and Claude Code (drives the `claude` CLI under a Claude
+subscription, no API key). Anthropic is also reachable through
+OpenRouter; there's no direct Anthropic-API connector.
 
 ```mermaid
 graph LR
@@ -33,8 +34,8 @@ plus `discover_models(credentials, base_url)`,
 `kolsch connect` flow.
 
 The connector registry lives in `llm.registry` — connectors register
-at import time via `register(type_name, connector)`. The two
-registered types today are `opencode` and `openrouter`.
+at import time via `register(type_name, connector)`. The three
+registered types today are `claude_code`, `opencode`, and `openrouter`.
 
 `ProviderConfig` is the per-connector configuration block under
 `platform.yaml`'s `llm_providers`. It holds the API key reference,

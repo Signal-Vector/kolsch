@@ -24,9 +24,10 @@ Write/execute tools land in Phase 2 alongside a principal rework.
 
 Two MCP surfaces exist in kolsch:
 
-- **Surface A — tool bridge** (in-workflow, session-scoped): lets Claude
-  Code run *as a kolsch agent inside a workflow* and call the running
-  session's per-agent tools. High cost/risk; not shipped yet.
+- **Surface A — tool bridge** (in-workflow, session-scoped): lets an
+  external harness run *as a kolsch agent inside a workflow* and call the
+  running session's per-agent tools. Shipped as `kolsch mcp bridge`
+  (spec-120/121).
 - **Surface B — operator server** (this page): lets an *external* agent
   orchestrate/observe kolsch over stdio. Low cost, additive, no engine
   change.
@@ -222,7 +223,7 @@ it's the same coupling the HTTP surface already ships with.
   `prompt`-effect tool with the approval pinned to the canonical
   `{tool, args, session}` so it can't be mutated post-approval.
 
-Both are the **Phase 2 / Surface A** path.
+Both belong to the **Surface A** (tool-bridge) path.
 
 **No secrets in tool arguments.** Even though `list_sessions` takes
 no secret input, the tool description carries the standing kolsch

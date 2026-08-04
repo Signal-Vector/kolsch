@@ -647,19 +647,21 @@ surface.
 
 ## Audit: what was prompted, what was denied
 
+`kolsch sessions events ses_<id>` prints every event in the session
+as one JSON line, so filter with `jq` — `.type` is the event kind:
+
 ```bash
-kolsch sessions events ses_<id> --type tool.failed
-kolsch sessions events ses_<id> --type tool.called
+kolsch sessions events ses_<id> | jq -c 'select(.type=="tool.failed")'
+kolsch sessions events ses_<id> | jq -c 'select(.type=="tool.called")'
 ```
 
-Each `tool.failed` whose `error.type == tool.unauthorized`
-carries a `recovery_hint` field with the exact `/perm allow`
-command that would un-block. Pipe through `jq` if you want a
-quick summary:
+Each `tool.failed` whose `.data.error.type == "tool.unauthorized"`
+carries a `.data.recovery_hint` field with the exact `/perm allow`
+command that would un-block. Pull just the hints:
 
 ```bash
-kolsch sessions events ses_<id> --type tool.failed --json | \
-  jq -r 'select(.data.error.type=="tool.unauthorized") | .data.recovery_hint'
+kolsch sessions events ses_<id> \
+  | jq -r 'select(.type=="tool.failed" and .data.error.type=="tool.unauthorized") | .data.recovery_hint'
 ```
 
 ---

@@ -57,14 +57,15 @@ Add it in `src/workflows/jinja_env.py`. The function must be:
 
 ### Step 2 — Register the filter
 
-Register it in the `_register_builtin_filters()` method of
-`WorkflowJinjaEnvironment`. Do not register filters from outside this
-method; the method is the single audit point.
+Register it in the module-level `_register_builtin_filters(env)`
+function in `src/workflows/jinja_env.py`. Do not register filters from
+outside this function; it is the single audit point.
 
 ### Step 3 — Write tests
 
 - **Unit test:** filter returns expected values for valid inputs and
-  raises the documented error class for invalid inputs.
+  raises on invalid inputs (a JSON parse error propagates as
+  `json.JSONDecodeError`).
 - **Sandbox test:** confirm the filter cannot be combined with attribute
   access to escape the sandbox.
 - **Fixture test:** at least one fixture YAML using the filter
@@ -73,7 +74,7 @@ method; the method is the single audit point.
 ### Step 4 — Update docs
 
 - Add to the §2.7.3 filter list in `process/phase3.0-workflow-spec.md`.
-- Add a usage example in `docs/workflows.md` if non-obvious.
+- Add a usage example in `docs/architecture/workflows.md` if non-obvious.
 
 ### Step 5 — Submit PR
 
@@ -91,30 +92,27 @@ Sample implementation in `src/workflows/jinja_env.py`:
 import json
 from typing import Any
 
-def _from_json(value: str) -> Any:
-    """Parse a JSON string into Python values.
+def _from_json_filter(value: str) -> Any:
+    """The `from_json` Jinja filter.
+
+    Wraps `json.loads`; a parse error propagates the underlying
+    `json.JSONDecodeError` up to the engine boundary.
 
     Example:
         {{ nodes.fetch.stdout | from_json | attr('first_name') }}
-
-    Raises:
-        WorkflowJinjaFilterError on parse failure.
     """
-    if not isinstance(value, str):
-        raise WorkflowJinjaFilterError(...)
     return json.loads(value)
 
 
-class WorkflowJinjaEnvironment(ImmutableSandboxedEnvironment):
-    def _register_builtin_filters(self) -> None:
-        """Built-in Jinja filters. To add a new filter, write a pure
-        function above and register it here. See
-        docs/explanation/jinja-extensions.md."""
-        self.filters["from_json"] = _from_json
+def _register_builtin_filters(env: WorkflowJinjaEnvironment) -> None:
+    """Register the kolsch-maintained core Jinja filters. To add a
+    new filter, write a pure function above and register it here.
+    See docs/explanation/jinja-extensions.md."""
+    env.filters["from_json"] = _from_json_filter
 ```
 
-The docstring on `_register_builtin_filters` points back to this file so
-the audit trail is discoverable from the code.
+Keep the audit trail discoverable from the code — reference this file
+from the registration docstring, as the sample above does.
 
 ---
 

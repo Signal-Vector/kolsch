@@ -93,13 +93,12 @@ Kolsch is in early development. What's not yet in place:
 
 - Single-node executor. No distributed runtime.
 - One thread per session. No user-visible branching.
-- CrewAI is the only framework adapter.
 - YAML shapes may still shift.
 - No bundle registry. Sharing means copying the folder.
 - License is TBD.
 
-Use it for local, replayable, YAML-defined agents. Not for a
-multi-tenant SaaS.
+Use it for local, replayable, YAML-defined agents and workflows. Not
+for a multi-tenant SaaS.
 
 ## Get started in 15 minutes
 

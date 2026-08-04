@@ -4,22 +4,25 @@
 [![docs](https://github.com/Signal-Vector/kolsch/actions/workflows/docs.yml/badge.svg)](https://signal-vector.github.io/kolsch/)
 
 A local-first, definition-orchestrated multi-agent workflow platform.
-YAML is the source of truth; a Python/CrewAI backend executes agents;
-everything is captured in an append-only event log (JSONL) that serves
-as ground truth.
+YAML is the source of truth; a Python backend executes agents through a
+pluggable framework adapter; everything is captured in an append-only
+event log (JSONL) that serves as ground truth.
 
-**Phase 1 (current): single-agent foundation.** Define an agent in YAML,
-run it via CLI or HTTP API, watch it work through tool use, get a
-result — fully replayable, inspectable, and resumable.
+Define an agent in YAML, run it via CLI or HTTP API, watch it work
+through tool use, or compose agents and Python steps into workflows —
+every session fully replayable, inspectable, and resumable.
 
 ---
 
 ## Status
 
-This repository currently holds the **complete Phase 1 specification
-suite** — the design, contracts, API reference, engineering practices,
-and test strategy that implementation is built against. Code lands on
-top of these specs.
+Early but real. What ships today: the single-agent foundation, the
+workflow engine (agents and Python steps composed into DAGs), three
+framework adapters (a built-in minimal loop by default, opt-in CrewAI,
+and an external-harness subprocess adapter), three LLM connectors
+(OpenRouter, OpenCode, and Claude Code), and an MCP operator server. Still moving: YAML shapes may shift, there's no bundle
+registry yet, and the license is TBD. Use it locally — not for a
+multi-tenant SaaS.
 
 ## Design at a glance
 
@@ -32,9 +35,11 @@ top of these specs.
   sandbox, authorization), and subsystems (asset management, store, bus,
   tools, skills) each sit behind a contract so implementations can be
   swapped or extended without rewrites.
-- **Engine as recorder, framework as driver.** The Agent Engine wraps
-  CrewAI and records its activity as events; it doesn't reimplement the
-  agent loop.
+- **Engine as recorder, framework as driver.** The Agent Engine wraps a
+  framework adapter and records its activity as events; it doesn't
+  reimplement the agent loop. The default is a built-in minimal loop;
+  CrewAI is an opt-in alternative; and a subprocess adapter drives an
+  external harness (e.g. the Claude Code CLI) through the same contract.
 
 ## Install and first run
 
@@ -57,8 +62,7 @@ conversation against the agent (token-by-token rendering,
 collapsible tool-call blocks, a four-choice approval modal for
 `prompt`-effect rules, slash commands like `/exit` / `/clear` /
 `/model`, and `--session <id>` to resume an earlier
-conversation). The full contract is in
-`docs/process/phase2.1-chat-specs.md`; everyday recipes live in
+conversation). Everyday recipes live in
 `docs/how-to/chatting-effectively.md`.
 
 `kolsch setup` scaffolds a workspace at `~/Documents/kolsch` (override
@@ -91,8 +95,8 @@ for the model-discovery recipes.
 
 Start with the documentation index: [`docs/index.md`](docs/index.md).
 
-For the recommended reading order and a topical index of every concept,
-see the [master index](docs/reference/master-index.md).
+The full documentation renders at
+[signal-vector.github.io/kolsch](https://signal-vector.github.io/kolsch/).
 
 If you are an AI agent working on this codebase, read
 [`AGENTS.md`](AGENTS.md) first.
@@ -101,13 +105,12 @@ If you are an AI agent working on this codebase, read
 
 Documentation follows the [Diátaxis](https://diataxis.fr/) framework:
 
-- **`docs/explanation/`** — architecture and rationale (the specs).
-- **`docs/reference/`** — schemas, the module API reference, the master
-  index.
-- **`docs/process/`** — engineering practices, testing strategy, the
-  test catalog.
-- **`docs/how-to/`** — task guides (added during implementation).
-- **`docs/tutorials/`** — learning paths (added during implementation).
+- **`docs/explanation/`** — architecture and rationale.
+- **`docs/architecture/`** — per-subsystem design overviews.
+- **`docs/reference/`** — schemas and the module API reference.
+- **`docs/process/`** — engineering practices and testing strategy.
+- **`docs/how-to/`** — task guides.
+- **`docs/tutorials/`** — learning paths.
 
 ## Development
 

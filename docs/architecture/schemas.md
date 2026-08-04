@@ -45,7 +45,7 @@ the event itself.
 
 `Event` is the wrapper around a log record. It carries the
 identifiers, the type tag, the actor, the timestamp, and a typed
-`data` payload. Each of the 18 event types has a dedicated `*Data`
+`data` payload. Each of the 23 event types has a dedicated `*Data`
 Pydantic model; the full list lives in the
 [schemas reference](../reference/schemas.md).
 

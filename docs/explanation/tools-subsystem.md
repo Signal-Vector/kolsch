@@ -23,8 +23,8 @@
 - **Parameter schemas: Pydantic models**, JSON Schema exported for the model.
 - **Discovery: hybrid.** Tool directories scanned per bundle; agent
   configs enable by namespaced reference.
-- **Built-in tools**: `read`, `write`, `edit`, `bash`. Four tools, full spec
-  in Part 4.
+- **Built-in tools**: `read_file`, `write_file`, `list_files`, `bash`.
+  Four tools, full spec in §4.5.
 - **MCP lifecycle**: `lazy` by default; `eager` opt-in.
 - **Large tool results**: truncate inline at ~50KB; store full content in
   a sidecar file referenced by content-hash for events that need it.
@@ -48,8 +48,9 @@ bundles make available.
 
 ### 1.1 The three tool sources
 
-**Builtin tools** ship with the platform. v1 has four: `read`, `write`,
-`edit`, `bash`. They are available to any agent that lists them.
+**Builtin tools** ship with the platform. There are four: `read_file`,
+`write_file`, `list_files`, `bash`. They are available to any agent that
+lists them.
 
 **Declared tools** are Python functions provided by the user or by
 installed bundles, defined with the `@tool` decorator (Part 2). They live
@@ -65,8 +66,7 @@ platform doesn't have to ship itself.
 - The format of a tool definition.
 - The discovery mechanism for finding tools.
 - The registration flow that makes tools available to the Agent Engine
-  (which then registers them with the underlying framework, CrewAI in
-  v1).
+  (which then registers them with the underlying framework).
 - The invocation flow that calls a tool when the model requests it,
   routing through Authorization, Secrets, and Sandbox.
 - The MCP server lifecycle (spawn, ready-check, tool listing).
@@ -75,8 +75,8 @@ platform doesn't have to ship itself.
 
 ### 1.3 What the subsystem doesn't own
 
-- Tool *execution* mechanics — the underlying framework (CrewAI) does
-  the actual function call; this subsystem prepares and observes.
+- Tool *execution* mechanics — the underlying framework does the actual
+  function call; this subsystem prepares and observes.
 - The session event log — the Agent Engine emits `tool.called`,
   `tool.result`, `tool.failed` events; this subsystem provides the data
   for those events.
@@ -247,7 +247,7 @@ subsystems:
   tools:
     variant: standard
     config:
-      builtin: ["read", "write", "edit", "bash"]
+      builtin: ["read_file", "write_file", "list_files", "bash"]
       declared:
         - ref: "local/web-search"
         - ref: "acme-research/scholarly-search"
@@ -277,8 +277,8 @@ path (Option B asset references). The format is
 `<package>/tools/<tool-name>`. Conventional packages:
 - `local` — tools defined in the user's own (un-packaged) `tools/`
   directory.
-- `kolsch` — platform-shipped tools. The four builtin tools (`read`,
-  `write`, `edit`, `bash`) are registered by the Tools subsystem at
+- `kolsch` — platform-shipped tools. The four builtin tools (`read_file`,
+  `write_file`, `list_files`, `bash`) are registered by the Tools subsystem at
   startup and are not bundle files; bundle-resident platform tools
   would live under `bundles/kolsch/tools/`. No bundle-name
   reservation enforces this — `kolsch` participates in the standard
@@ -321,6 +321,11 @@ and the specific issue.
 ---
 
 ## Part 4 — Built-in Tools
+
+> **Superseded by §4.5.** This early sketch specced `read`/`write`/`edit`/
+> `bash`; the shipping set is `read_file`/`write_file`/`list_files`/`bash`
+> (there is no `edit` tool — `list_files` replaced it). See §4.5 for the
+> concrete shipping set; this part is kept for the original design notes.
 
 The platform's standard library. Four tools, specified concretely.
 
@@ -732,7 +737,7 @@ The Tools subsystem participates in the engine's pre-flight:
    yet (they're resolved at invocation time).
 4. **Start eager MCP servers.** For each MCP server with
    `lifecycle: eager`, spawn the subprocess with injected env vars.
-5. **Register all tools with the framework** (CrewAI). The platform
+5. **Register all tools with the framework.** The platform
    wraps each tool in a framework-compatible adapter that:
    - Performs the authorization check before the tool's actual function.
    - Resolves secrets and constructs the `ToolContext`.
@@ -1025,3 +1030,20 @@ on the effect rather than raise.
    defer is a small
    open question (the answer is probably "defer; users can declare
    them locally if needed").
+
+---
+
+## Part 6 — External-harness invocation: the observed core and MCP bridge
+
+Tool invocation has **one core with two callers**. Both the in-engine
+dispatch and the MCP tool bridge route through
+`tools.observed.invoke_observed`, which returns an `Ok` / `Denied` /
+`Failed` outcome. A tool called by an external harness (a
+`SubprocessAgentFramework` agent such as Claude Code) through
+`kolsch mcp bridge` (`tools.bridge.ToolBridgeServer`) traverses the
+*identical* Authorization → Secrets → Sandbox → emit path as one called
+from inside the engine. The bridge is a transport, not a bypass: it
+sanitizes denials (dropping `recovery_hint`) before they leave the
+process, and the subsystem's invariants — dispatch owns the event
+sequence, secrets resolve in dispatch, only dispatch writes tool events —
+hold on both paths.

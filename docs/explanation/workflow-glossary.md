@@ -16,8 +16,6 @@ These terms have precise meanings in this spec. Defined here; used (and disambig
 | **invocation** | The runtime fire of a node. Owns an `InvocationId`. A single node may produce multiple invocations over a run's lifetime (re-fires, map workers, retries). |
 | **node NAME** | The `nodes:` mapping key. The sole identifier for addressing a node from Jinja, edges, `copy_of:`, `map.apply:`, etc. `description:` is a USER AID for display only — NEVER an identifier. |
 
-The same glossary appears at the top of `docs/workflows.md`.
-
 ---
 
 ## 21. Reference Map

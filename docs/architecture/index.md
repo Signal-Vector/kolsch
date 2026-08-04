@@ -17,7 +17,7 @@ graph LR
     CLI --> WF[Workflow Runtime]
     CLI --> Engine[Agent Engine]
     WF --> Engine
-    Engine --> Framework[Framework adapter<br/>CrewAI]
+    Engine --> Framework[Framework adapter<br/>minimal / CrewAI / subprocess]
     Framework --> LLM[LLM Connector]
     Engine --> Tools
     Engine --> Skills
@@ -43,15 +43,18 @@ Bold arrows are the events the runtime writes for every step. The
 dashed arrow is the asset catalog being pulled in at startup. Solid
 arrows are runtime calls. The Workflow Runtime is the layer that
 handles jobs with more than one agent; the Agent Engine runs one agent at
-a time. The framework adapter is the wrapper around the third-party
-agent library — CrewAI by default — so the library can be swapped
-without touching the Agent Engine.
+a time. The framework adapter runs the agent loop — a built-in minimal
+loop by default, CrewAI as an opt-in alternative, or a subprocess
+adapter that drives an external harness (e.g. the Claude Code CLI) — so
+the loop can be swapped without touching the Agent Engine.
 
 ## Subsystems
 
 [CLI](cli.md) and [API](api.md) are the entry points. The CLI handles
 chat, workflow runs, permissions, and sessions; the API exposes the
-same operations over HTTP.
+same operations over HTTP. The [MCP Server](mcp_server.md) is a third,
+read-only surface — it lets an external agent observe and orchestrate
+kolsch over the Model Context Protocol.
 
 [Workflows](workflows.md) coordinates jobs across multiple agents.
 [Engine](engine.md) runs one agent per exchange. [Tools](tools.md)
@@ -70,8 +73,8 @@ runtime; in-process by default, Redis for cross-process delivery.
 
 Memory, secrets, sandbox, and authorization sit behind protocols you
 can swap per workspace. [Providers](providers.md) covers all four.
-[LLM Connectors](llm.md) wires up Anthropic, OpenRouter, OpenCode,
-and a mock provider for tests. [Files](files.md) enforces the path
+[LLM Connectors](llm.md) wires up OpenRouter, OpenCode, and Claude
+Code, plus a mock provider for tests. [Files](files.md) enforces the path
 policy that file-touching tools have to honor.
 
 [Schemas](schemas.md) defines the shared types — identifiers,

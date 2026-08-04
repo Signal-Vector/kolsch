@@ -13,14 +13,14 @@ This section enumerates every decision finalized before spec drafting. It is the
 These are the cross-cutting decisions that shape multiple sections:
 
 - **3-segment refs canonical EVERYWHERE.** Tools, agents, workflows, nodes — all use `<bundle>/<asset_type>/<name>`. The 2-segment form is deprecated across the board (migration shim continues to accept it on read). One builder: `src/assets/refs.py:build_ref`. See `docs/explanation/workflow-policy-model.md`, *Node-type refs* and *Refs unification (single grammar across agents, tools, workflows, nodes)*.
-- **14 built-in node types (no `python` literal).** Authored Python nodes are referenced as `type: <bundle>/nodes/<name>` (a 3-segment catalog ref). See §4 and §4.0.1 of `process/phase3.0-workflow-spec.md`.
+- **15 built-in node types (no `python` literal).** Authored Python nodes are referenced as `type: <bundle>/nodes/<name>` (a 3-segment catalog ref). See §4 and §4.0.1 of `process/phase3.0-workflow-spec.md`.
 - **Multi-input edges as the fan-in mechanism.** A node may have any number of incoming edges; the engine fires it once ALL incoming edges' sources have completed (AND-strict). Edge shape: `{from, to, binds, branch}` — no `ref:` field. `binds:` keys flow into `inputs.<key>` at the receiver; collisions across edges are a parse error (`WorkflowBindCollision`). See §6.4 and §7.2 of `process/phase3.0-workflow-spec.md`.
 - **`WorkflowNodeNotDefined` (renamed from `WorkflowUnknownNodeRef`)** is the structural "this YAML name doesn't exist in `nodes:`" error. Distinct from `WorkflowJinjaRefUnknown` (Jinja predecessor / schema). See §7.1 and §12.1 of `process/phase3.0-workflow-spec.md`.
-- **ruamel.yaml** replaces PyYAML across kolsch via a new `src/_yaml.py` helper module. Phase-3.0 Step 0. See §12.3 of `process/phase3.0-workflow-spec.md` and Phase 3.0 in §18.2 of `process/phase3.x-roadmap.md`.
+- **ruamel.yaml** replaces PyYAML across kolsch via a new `src/kolsch/_yamlio.py` helper module. Phase-3.0 Step 0. See §12.3 of `process/phase3.0-workflow-spec.md` and Phase 3.0 in §18.2 of `process/phase3.x-roadmap.md`.
 - **`NodeContext` is `@dataclass(frozen=True, slots=True)`** with `secrets: Mapping[str, str]` and `state: Mapping[str, Any]` (both wrapped in `MappingProxyType` at runtime — read-only). The `bundle: str` and `emit_fn: Callable` fields are PUBLIC test seams (renamed from `_bundle` / `_emit_fn` per L7-3); `ctx.emit(subkind, payload)` is a real method that calls through `emit_fn`. A `NodeContext.for_test(**overrides)` classmethod provides a one-line construction shortcut for unit tests. See §5.5 of `process/phase3.0-workflow-spec.md`.
 - **stdlib `ExceptionGroup` for multi-error reporting.** No custom group class. Filter via Python 3.11+'s `except* <SubClass>:`. See §7.2 and §12.1 of `process/phase3.0-workflow-spec.md`.
 - **Strict single-line error messages with literal `Fix: ` token.** Format: `<ClassName>: <file>:<line> <names>: <summary>. Fix: <action>.` No `\n`, no embedded YAML, no snippet block. See §12.3 of `process/phase3.0-workflow-spec.md`.
-- **Type-level `label:` property on node types.** Built-in types declare `LABEL = "..."`; `@node(label="...")` is the kwarg for authored Python. Chat capsule fallback: per-instance `description:` → type-level `label:` → cleaned function/class name (§15.4 of `process/phase3.9-chat-surface-spec.md`).
+- **Type-level label on node types.** Authored Python nodes set it via `@node(label="...")`; the chat-capsule fallback resolves through `display_label` (`src/workflows/labels.py`): per-instance `description:` → the type-level label → a cleaned function/class name (§15.4 of `process/phase3.9-chat-surface-spec.md`).
 - **§6.0 minimal example + §6.0.1 common patterns** added at the head of §6 (pattern reference: linear, branching, fan-in via multi-input edges, sub-workflow).
 
 ### 2.1 Authoring shape
@@ -102,8 +102,8 @@ Orthogonal to node type:
 
 Every node TYPE declares a `label: str` — a short human-readable name describing the kind of thing it does. This is distinct from the per-instance `description:` modifier above.
 
-- For **built-in node types**, `LABEL` is exported as a module-level constant from the type's source file (e.g., `src/workflows/builtin/bash.py` exports `LABEL = "Shell"`).
-- For **authored Python node types**, the `@node` decorator accepts an optional `label="..."` keyword: `@node(label="Enrich lead with CRM data", secrets_needed=[...])`. When omitted, the label defaults to the function/class name (cleaned: snake_case → title-case).
+- Labels resolve through `display_label` (`src/workflows/labels.py`), the single source of truth — a three-step fallback: per-instance `description:` → a type-level label → a cleaned class/function name.
+- For **authored Python node types**, the `@node` decorator accepts an optional `label="..."` keyword: `@node(label="Enrich lead with CRM data", secrets_needed=[...])`, supplying that type-level label. When omitted, the label falls back to the cleaned function/class name (snake_case → title-case).
 
 The label is what chat capsules and `show` CLI fall back to when the per-node `description:` is absent (§15.4 of `process/phase3.9-chat-surface-spec.md` algorithm). `description:` is OPTIONAL universally; the type-level `label:` guarantees there's always something readable to show.
 

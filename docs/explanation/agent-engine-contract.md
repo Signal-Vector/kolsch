@@ -2,8 +2,10 @@
 
 **Draft 0.1**
 
-> The contract the Agent Engine must honor. v1 implementation wraps CrewAI;
-> the contract is framework-agnostic and survives engine swaps.
+> The contract the Agent Engine must honor. The default adapter is the
+> built-in `MinimalFramework`; `CrewAIFramework` is opt-in and
+> `SubprocessAgentFramework` is auto-selected for external-harness agents.
+> The contract is framework-agnostic and survives adapter swaps.
 >
 > Builds on Phase 1 Schemas draft 0.4. References to §A, §B, §C are sections
 > of that document.
@@ -18,7 +20,7 @@
 - **Streaming is the primitive; sync is the convenience.** One execution
   path, two surface modes.
 - **The engine is a recorder, not a driver.** The underlying framework
-  (CrewAI in v1) does the agentic work — model calls, tool dispatch, retry
+  does the agentic work — model calls, tool dispatch, retry
   loops. The engine prepares inputs, registers hooks, observes execution,
   emits events per the schema, returns the result.
 - **Conformance is specified as observable outcomes** — events on the tree
@@ -73,8 +75,10 @@ The engine depends on these collaborators at construction time:
   `SkillsSubsystem`, `MemoryProvider`, `SecretsProvider`,
   `SandboxProvider`, `AuthorizationProvider` — per the dependency
   matrix in Module API Reference §12.
-- `Framework` — the chosen framework adapter (MinimalFramework in tests
-  and dev; CrewAIFramework in production).
+- `Framework` — the chosen framework adapter. `MinimalFramework` (a
+  built-in loop) is the `bootstrap_runtime` default and drives real
+  providers; `CrewAIFramework` is opt-in; `SubprocessAgentFramework` is
+  auto-selected for external-harness agents.
 - **`build_llm` helper** *(Phase 1.1, LLM-R4)* — the bridge between
   `ModelSpec` and a usable `crewai.LLM`. The engine calls this at
   pre-flight step 6 (§2.1) for each exchange. The helper itself
@@ -400,8 +404,8 @@ work. Its responsibilities, in order of an `execute` call:
 The engine is now passive: it receives callbacks from the framework's
 lifecycle hooks. Each callback triggers an event emission per §3.
 
-**Note on concurrent callbacks.** The framework (CrewAI) may invoke
-lifecycle callbacks from different async contexts concurrently. The
+**Note on concurrent callbacks.** A framework with async lifecycle hooks
+(CrewAI) may invoke callbacks from different async contexts concurrently. The
 engine's adapter MUST serialize event construction per thread to avoid
 race conditions in `parent_event_id` computation.
 

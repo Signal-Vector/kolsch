@@ -4,7 +4,7 @@ A **workflow** is a YAML file that names some nodes and draws edges
 between them. The executor topologically sorts the graph, fires each
 node with its inputs, captures the output, and moves on. All the
 plumbing — argument passing, branching, state, JSONL — is handled by
-the 14 built-in node types. This guide shows you how to author one.
+the 15 built-in node types. This guide shows you how to author one.
 
 For a per-field reference see the
 [Workflow YAML reference](../reference/workflow-yaml.md). To write a
@@ -15,7 +15,7 @@ custom node in Python, see [Write a workflow node](write-a-workflow-node.md).
 Every workflow YAML has two top-level blocks:
 
 - `nodes:` — a map of `<name>: <NodeDef>`. Each entry sets `type:` to
-  one of the 14 built-in 3-segment refs (`kolsch/nodes/bash`,
+  one of the 15 built-in 3-segment refs (`kolsch/nodes/bash`,
   `kolsch/nodes/agent`, `kolsch/nodes/branch`, ...) or a catalog ref
   for an authored Python node.
 - `graph:` — a `{ edges: [...] }` block. Each edge has `from`, `to`,
@@ -192,8 +192,7 @@ audit trail.
 ## Where to put the file
 
 `bundles/<bundle>/workflows/<name>.yaml`. The catalog indexes it as
-the 3-segment ref `<bundle>/workflow/<name>` (singular
-`workflow`). List with:
+the 3-segment ref `<bundle>/workflows/<name>`. List with:
 
 ```
 kolsch workflows list
@@ -202,7 +201,7 @@ kolsch workflows list
 ## How to run the workflow
 
 ```
-kolsch workflows run <bundle>/workflow/<name> \
+kolsch workflows run <bundle>/workflows/<name> \
     --input key=value --input other=42
 ```
 

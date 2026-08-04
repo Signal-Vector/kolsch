@@ -123,6 +123,7 @@ nav:
       - architecture/index.md
       - CLI: architecture/cli.md
       - API: architecture/api.md
+      - MCP Server: architecture/mcp_server.md
       - Workflows: architecture/workflows.md
       - Agent Engine: architecture/engine.md
       - Tools: architecture/tools.md

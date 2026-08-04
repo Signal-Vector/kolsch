@@ -186,7 +186,8 @@ log.
 Connect OpenRouter. One connection covers most major models and
 provides model metadata for any other provider you connect later.
 OpenCode works the same way — swap the provider name if that's what
-you have.
+you have. If you have a Claude subscription rather than an API key,
+`kolsch connect claude_code` uses the local `claude` CLI instead.
 
 ```bash
 uv run kolsch connect openrouter

@@ -12,6 +12,22 @@
 
 ---
 
+> **Status (2026-08).** This is the original v1 *scope* document. Several
+> items it files under EXCLUDES (Part 3) have since shipped and are now
+> part of the product: the **workflow engine** (§3.1 — DAGs, nodes,
+> branching, `map`, the `author_workflow` agent, and the `workflow.*` /
+> run events all exist), a **second framework adapter**
+> (`SubprocessAgentFramework`), a third **LLM connector** (`claude_code`,
+> beyond the `opencode`/`openrouter` of §2.4), an **event-bus subscriber**
+> (the Textual TUI chat, §3.4), and **HITL approval gates** (an authz
+> `prompt` effect, §3.4). §2.1 also now ships the `rule_based` authz
+> variant, not `allow_all`. Read the exclusion list below as the original
+> v1 boundary; where a bullet is marked "now shipped", the status here
+> governs. Still genuinely excluded: the web IDE, semantic memory, the
+> docker sandbox, vault secrets, and policy-based authz.
+
+---
+
 ## Part 1 — What v1 IS
 
 v1 is a **local-first, single-agent platform** that lets a developer
@@ -46,7 +62,7 @@ That is the entire user-facing surface of v1. It is intentionally small.
   - Memory: `recent_buffer` variant.
   - Secrets: `.env` variant.
   - Sandbox: `native` variant (no actual sandboxing).
-  - Authorization: `allow_all` variant (single admin user).
+  - Authorization: `rule_based` variant (a real allow/deny/prompt ACL).
 - **Built-in tools** — minimal standard library, see §2.6.
 - **Skills** — Agent Skills standard format; discovery; lazy load; force
   invoke.
@@ -133,9 +149,10 @@ chain ← agent` (wholesale-per-field override; see Schemas
   - `kolsch models [<provider>] [--filter <substring>] [--verbose]
     [--json]` — list discovered models per connected provider so
     users know what to put in agent YAML's `model:` field.
-  v1.1 implements these for `opencode` and `openrouter`; the four
-  other named providers (anthropic, openai, bedrock, llama) are
-  planned for later patches per the established connector pattern.
+  These are implemented for `opencode`, `openrouter`, and `claude_code`
+  (the Claude CLI under a subscription); the four other named providers
+  (anthropic-direct, openai-direct, bedrock, llama) are planned for
+  later patches per the established connector pattern.
 - **Permissions management CLI** *(Phase 2.0, TOOL-R6)* — four
   commands for live-editing the workspace's authorization rule
   list out of chat:
@@ -214,7 +231,8 @@ or context in which it returns.
 ### 3.1 Orchestration and multi-agent
 
 - **The Workflow Engine.** No DAGs, no nodes, no fan-out/fan-in, no
-  conditionals, no edges, no workflow definitions. Workflows are *Phase 2*.
+  conditionals, no edges, no workflow definitions. Workflows were
+  *Phase 2* — **now shipped** (see status note).
 - **Multi-agent workflows.** No mechanism for two agents to coordinate.
   An agent can hand off to a sub-agent via tool calls if the framework
   supports it, but there is no workflow-level construct. *Phase 2.*
@@ -222,8 +240,10 @@ or context in which it returns.
   *Phase 2+.*
 - **The `author_workflow` capability.** The signature capability of the
   built-in agent (writing workflow YAML from a conversation's context)
-  does not exist in v1 because workflows do not exist. *Phase 2.*
-- **`run_*` event types and the `run` envelope field.** *Phase 2.*
+  did not exist in original v1 because workflows did not. **Now shipped**
+  (see status note).
+- **`run_*` event types and the `run` envelope field.** *Phase 2* —
+  **now shipped**.
 
 ### 3.2 UI and consumers
 

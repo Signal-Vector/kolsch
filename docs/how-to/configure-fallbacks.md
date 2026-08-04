@@ -5,7 +5,7 @@ hiccup doesn't kill an exchange. For *why* fallback works the way
 it does, read the [error model §4.15](../explanation/error-model.md)
 and the [engine contract §2.1 step 7 + §2.4](../explanation/agent-engine-contract.md).
 The first-agent tutorial introduces the field in
-[step 10](../tutorials/first-agent.md).
+[step 11](../tutorials/first-agent.md).
 
 ## Per-agent fallback
 
@@ -46,7 +46,7 @@ to every agent that doesn't specify its own:
 # platform.yaml
 defaults:
   model:
-    provider: anthropic
+    provider: claude_code
     model: claude-opus-4-7
   fallback_models:
     - haiku
@@ -63,7 +63,7 @@ against:
 | Concern | Chain shape | Why |
 |---|---|---|
 | Provider-side rate limits | Same-provider alternatives first (`[opus, haiku]`), then a different provider (`gpt4o`). | Same provider's other models share infrastructure but not rate-limit pools per model. |
-| Provider-side outages | Different providers first (`[openrouter/anthropic/…, anthropic/…]`). | Diversified routing — when OpenRouter is down, the direct Anthropic key still works. |
+| Provider-side outages | Different providers first (`[openrouter/anthropic/…, claude_code/opus]`). | Diversified routing — when OpenRouter is down, your Claude subscription (`claude_code`) still answers. |
 | Cost ceilings | Cheapest viable model first. | If the cheap model usually answers, only fall back to the expensive one on actual transient errors. |
 | Context overflow | A larger-context model anywhere in the chain (`[gpt4o, claude-opus-200k]`). | `model.context_overflow` is Recoverable; a larger window is the fix. |
 
@@ -168,7 +168,7 @@ connector that wants to handle 429 internally.
 
 ## Where to read next
 
-- Tutorial: [first-agent.md step 10](../tutorials/first-agent.md) —
+- Tutorial: [first-agent.md step 11](../tutorials/first-agent.md) —
   the guided introduction.
 - Spec: [error-model.md §4.15](../explanation/error-model.md) — the
   canonical trigger table + level declarations.

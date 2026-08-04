@@ -96,7 +96,7 @@ workflow can `copy_of:` or reference.
 
 ## Node types
 
-Fourteen built-in node types ship with the platform, each
+Fifteen built-in node types ship with the platform, each
 registered at `kolsch/nodes/<name>`:
 
 - `bash` — run a shell command. Branchable on exit code.
@@ -112,6 +112,8 @@ registered at `kolsch/nodes/<name>`:
   under an optional semaphore.
 - `read_file`, `write_file`, `list_files` — file-IO wrappers over
   the corresponding tools.
+- `browse_url` — fetch a rendered web page via the `browse_url`
+  tool (opt-in `kolsch[browse]` extra: Playwright + Chromium).
 - `agent` — invoke a catalogued Kolsch agent through the Agent Engine.
 - `workflow` — spawn a sub-workflow (nested runs share the trace
   id; depth is capped at 16).

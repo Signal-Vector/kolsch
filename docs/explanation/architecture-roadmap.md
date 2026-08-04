@@ -9,6 +9,21 @@
 
 ---
 
+> **Status (2026-08).** This roadmap is the original phased *design*.
+> Much of what it files under "Phase 2" has since shipped: the workflow
+> engine (agents and Python steps composed into DAGs), a second
+> framework adapter (`SubprocessAgentFramework`, which drives an
+> external harness through the same `Framework` contract), HITL approval
+> gates (implemented as an authz `prompt` effect plus a chat modal, not
+> a separate provider), and an internal event-bus subscriber (the
+> Textual TUI chat). Genuinely still future: the web IDE, the docker
+> sandbox, semantic memory, vault secrets, and policy-based authz. Read
+> the phase framing below as design rationale, not the current feature
+> line — where a "Phase 2 adds…" or "not yet" claim has been overtaken,
+> the shipped reality above governs.
+
+---
+
 ## Part 1 — Phase 1 Architecture (Single-Agent Foundation)
 
 ### 1.1 What Phase 1 Is
