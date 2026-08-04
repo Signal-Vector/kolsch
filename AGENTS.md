@@ -43,17 +43,19 @@ understand how something connects, query the index first. This is faster
 and more accurate than reading files top-to-bottom or grepping for
 names.
 
-If the index seems stale, it can be refreshed; check
-`docs/how-to/codanna.md` for refresh commands and setup.
+If the index seems stale, refresh it with `codanna index -f .` — the
+`.githooks/` post-commit / post-checkout / post-merge hooks do this
+automatically in the background (see `.githooks/README.md`).
 
 ---
 
 ## Before you change code
 
-1. **Understand the contract.** Every subsystem has a public API defined
-   in `docs/reference/module-api-reference.md`. Changes must honor it.
-   If you need to change a contract, update the reference in the same
-   change and flag it in your summary.
+1. **Understand the contract.** Every subsystem has a public API in the
+   generated reference (`docs/api/index.md`, rendered from docstrings)
+   and behavioral contracts under `docs/explanation/`. Changes must honor
+   them. If you change a contract, update the source docstring and the
+   contract doc in the same change and flag it in your summary.
 
 2. **Find the affected area via Codanna.** Query the index for the
    functions and call sites you'll touch. Know what depends on what
@@ -164,7 +166,7 @@ These are non-negotiable. Violating them blocks merges.
 - **Type hints everywhere.** `mypy --strict` must pass. No untyped public
   functions, no implicit `Any`.
 - **No bare exceptions.** Raise `PlatformError` subclasses (see
-  `docs/reference/error-catalog.md`). Never let a non-PlatformError
+  `docs/explanation/error-model.md`). Never let a non-PlatformError
   escape a public method — wrap it.
 - **The filesystem JSONL is ground truth.** Never add state that can't be
   rebuilt from the event log.
@@ -382,8 +384,9 @@ explains *what and why*.
 
 ## If you're unsure
 
-- **Contract ambiguity** → `docs/reference/module-api-reference.md`
-  is the arbiter; if it's silent, flag it rather than guessing.
+- **Contract ambiguity** → the subsystem contract docs under
+  `docs/explanation/` (and the API reference `docs/api/index.md`) are the
+  arbiter; if they're silent, flag it rather than guessing.
 - **Where something lives** → query Codanna.
 - **Whether a change is safe** → check the dependency matrix and run the
   integration + golden tests.
