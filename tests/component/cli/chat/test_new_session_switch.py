@@ -294,21 +294,31 @@ async def test_durable_write_after_new_targets_new_thread(tmp_path: Path) -> Non
 
 
 @pytest.mark.asyncio
-async def test_new_session_blocked_when_turn_active(tmp_path: Path) -> None:
+async def test_new_session_proceeds_and_retires_active_turn(tmp_path: Path) -> None:
+    """feat-127: `/new` no longer refuses on an active turn — it cancels it."""
     app, _store = await _bootstrap_app(tmp_path)
     async with app.run_test() as pilot:
         await pilot.pause()
         old_ses = app.session.session_id
-        app.active_cancel = object()  # simulate an in-flight butler turn
+
+        class _Tok:
+            def cancel(self) -> None:
+                # Simulate `_run_exchange`'s finally nulling `active_cancel`
+                # once the fired token unwinds the awaiting turn.
+                app.active_cancel = None
+
+        app.active_cancel = _Tok()
 
         await app._open_new_session()
         await pilot.pause()
 
-        assert app.session.session_id == old_ses  # unchanged — blocked
+        assert app.session.session_id != old_ses  # proceeded — not blocked
+        assert app.active_cancel is None  # the turn was retired
 
 
 @pytest.mark.asyncio
-async def test_new_session_blocked_when_workflow_live(tmp_path: Path) -> None:
+async def test_new_session_proceeds_and_retires_live_workflow(tmp_path: Path) -> None:
+    """feat-127: a live workflow no longer blocks `/new` — it's retired."""
     app, _store = await _bootstrap_app(tmp_path)
     async with app.run_test() as pilot:
         await pilot.pause()
@@ -323,7 +333,8 @@ async def test_new_session_blocked_when_workflow_live(tmp_path: Path) -> None:
         await app._open_new_session()
         await pilot.pause()
 
-        assert app.session.session_id == old_ses  # unchanged — blocked
+        assert app.session.session_id != old_ses  # proceeded — not blocked
+        assert wf._workflow_registry == {}  # retired + registry reset
 
 
 @pytest.mark.asyncio
@@ -374,11 +385,11 @@ async def test_new_session_clears_per_turn_flags(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_new_session_blocked_when_workflow_queued(tmp_path: Path) -> None:
-    """reviewer MEDIUM: a QUEUED workflow blocks `/new` too (not just live).
+async def test_new_session_proceeds_and_discards_queued_workflow(tmp_path: Path) -> None:
+    """feat-127: a QUEUED workflow no longer blocks `/new` — it's discarded.
 
-    A queued run would be promoted to running and written into the session;
-    switching + clearing the registry mid-queue would silently drop it.
+    Pre-feat-127 a queued run blocked the switch (it would promote + be lost).
+    Now `/new` retires (discards) it and proceeds; the registry is reset.
     """
     app, _store = await _bootstrap_app(tmp_path)
     async with app.run_test() as pilot:
@@ -394,7 +405,8 @@ async def test_new_session_blocked_when_workflow_queued(tmp_path: Path) -> None:
         await app._open_new_session()
         await pilot.pause()
 
-        assert app.session.session_id == old_ses  # unchanged — blocked
+        assert app.session.session_id != old_ses  # proceeded — not blocked
+        assert wf._workflow_registry == {}  # queued run discarded + reset
 
 
 @pytest.mark.asyncio

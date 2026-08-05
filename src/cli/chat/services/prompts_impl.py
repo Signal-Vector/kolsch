@@ -397,6 +397,27 @@ class PromptsImpl(AbstractPrompts):
         """
         return self._pending_prompt_id
 
+    async def cancel_pending_prompt(self, *, reason: str = "session_switched") -> bool:
+        """feat-127: cancel the in-flight prompt (if any) via the answered bridge.
+
+        Emits ``WIRE_PROMPT_CANCELLED`` for ``_pending_prompt_id`` so the
+        adapter's ``_handle_prompt_cancelled`` cancels the awaiting
+        ``choice()`` / ``text()`` future — unblocking a butler-turn approval
+        parked on a bare ``await`` (a workflow-node approval is handled by
+        ``WorkflowsImpl.cancel``) — and flips the mounted ``ApprovalBlock``.
+        Same bug-110/bug-128 consume path; the ``_resolved_prompt_ids`` guard
+        makes a duplicate emit a no-op. Returns ``True`` when a cancel was
+        emitted, ``False`` when no prompt is pending.
+        """
+        prompt_id = self._pending_prompt_id
+        if prompt_id is None:
+            return False
+        await self._append_ui_event(
+            WIRE_PROMPT_CANCELLED,
+            {"prompt_id": str(prompt_id), "reason": reason},
+        )
+        return True
+
     def resolve_pending(
         self,
         prompt_id: str,
