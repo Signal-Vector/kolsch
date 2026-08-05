@@ -29,7 +29,7 @@ from __future__ import annotations
 
 import asyncio
 from types import SimpleNamespace
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
 import pytest
@@ -184,7 +184,7 @@ async def test_cancel_emits_prompt_cancelled_for_matched_run(
         ok = await impl.cancel(rid)  # rid = queue-time id
         assert ok is True
 
-        payloads: list[dict] = []
+        payloads: list[dict[str, Any]] = []
         async for ev in store.read_events(impl._thread_id):
             if ev.type != EventType.UI_EVENT or not isinstance(ev.data, dict):
                 continue
@@ -368,7 +368,7 @@ async def test_finalize_reconciles_meta_with_on_disk_id(
         # through would just FileNotFoundError. The id is what we verify.
         calls.append(str(run_id))
 
-    impl._run_store.update_status = _spy  # type: ignore[method-assign]
+    impl._run_store.update_status = _spy  # type: ignore[assignment]
     try:
         install_mock_executor_factory(
             impl,
@@ -402,7 +402,7 @@ def test_real_closure_matches_by_on_disk_id() -> None:
     """
     from cli.chat.event_adapter import EventAdapter
 
-    adapter = EventAdapter(SimpleNamespace())  # type: ignore[arg-type]
+    adapter = EventAdapter(SimpleNamespace())
     store_id = f"wrk_{uuid4()}"
     queue_id = f"wrk_{uuid4()}"
     prompt_id = "prm_real"
