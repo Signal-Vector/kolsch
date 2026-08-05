@@ -34,8 +34,21 @@ class MockExecutor:
     observer: Callable[[WorkflowEvent], None]
     cancel_token: Any
     per_event_delay: float = 0.0
+    # bug-128: simulate an in-node approval being cancelled. When set,
+    # `run()` emits its first event then raises a bare
+    # `asyncio.CancelledError` — exactly what happens when the pending
+    # approval future is cancelled (`PromptsImpl.cancel_pending`) while
+    # the coroutine runs inside the shared FIFO-drain task that itself
+    # was NOT cancelled. Exercises the stray-cancel guard in
+    # `WorkflowsImpl._run_one_workflow`.
+    raise_cancelled: bool = False
 
     async def run(self) -> WorkflowRunStatus:
+        if self.raise_cancelled:
+            if self.events:
+                self.observer(self.events[0])
+            await asyncio.sleep(0)
+            raise asyncio.CancelledError
         for event in self.events:
             if self.cancel_token is not None and self.cancel_token.is_cancelled():
                 # Synthesise an aborted terminal and stop.
@@ -83,6 +96,9 @@ class MockExecutorSpec:
     events: list[WorkflowEvent] = field(default_factory=list)
     per_event_delay: float = 0.0
     on_construct: Callable[[str], None] | None = None
+    # bug-128: forwarded to `MockExecutor.raise_cancelled` — the run
+    # raises a stray `asyncio.CancelledError` mid-flight.
+    raise_cancelled: bool = False
 
 
 def install_mock_executor_factory(
@@ -124,6 +140,7 @@ def install_mock_executor_factory(
                 observer=observer,
                 cancel_token=cancel_token,
                 per_event_delay=spec.per_event_delay,
+                raise_cancelled=spec.raise_cancelled,
             ),
             run_dir,
         )

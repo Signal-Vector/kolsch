@@ -924,6 +924,32 @@ class ChatApp(App[None]):
         ):
             self.event_adapter.register_workflows_impl(active_workflows)
 
+            # bug-128: wire a run_id → pending-prompt_id lookup into
+            # `WorkflowsImpl` so `cancel(run_id)` can find the in-flight
+            # approval prompt bound to a run and drive
+            # `WIRE_PROMPT_CANCELLED` — unwinding a node parked on a bare
+            # `await prompts.choice(...)` future the cancel token can't
+            # wake. The (prompt_id → run_id) map lives on the adapter;
+            # `PromptsImpl` is serial (≤1 pending prompt), so matching the
+            # single pending prompt's owner against the target run_id
+            # suffices. No-op when the impls lack the hooks (headless).
+            if hasattr(active_workflows, "set_pending_prompt_lookup") and (
+                active_prompts is not None
+                and hasattr(active_prompts, "pending_prompt_id")
+            ):
+
+                def _pending_prompt_for_run(
+                    run_id: Any,
+                    _prompts: Any = active_prompts,
+                ) -> str | None:
+                    pid = _prompts.pending_prompt_id
+                    if pid is None:
+                        return None
+                    owner = self.event_adapter.run_id_for_prompt(str(pid))
+                    return str(pid) if owner == str(run_id) else None
+
+                active_workflows.set_pending_prompt_lookup(_pending_prompt_for_run)
+
         # bug-020: thread the finalised service registry into the
         # slash-handler `ChatSessionState` so `/workflow` can reach
         # `cards.open` + `workflows.start` without reconstructing

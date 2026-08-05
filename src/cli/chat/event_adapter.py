@@ -898,6 +898,19 @@ class EventAdapter:
         """
         self._workflows_impl = workflows_impl
 
+    def run_id_for_prompt(self, prompt_id: str) -> str | None:
+        """bug-128: the workflow run_id that owns ``prompt_id``, or ``None``.
+
+        Reads the live ``_workflow_prompt_sources`` map (populated on the
+        workflow-scoped prompt-requested branch). Used by the
+        ``WorkflowsImpl.cancel`` → pending-prompt lookup wired in
+        ``ChatApp.on_mount`` so cancelling a run can find its in-flight
+        approval prompt. Returns ``None`` for a non-workflow prompt or an
+        unknown id.
+        """
+        entry = self._workflow_prompt_sources.get(prompt_id)
+        return entry[0] if entry is not None else None
+
     def register_prompts_impl(self, prompts_impl: PromptsImpl) -> None:
         """Wire a live `PromptsImpl` in after construction.
 

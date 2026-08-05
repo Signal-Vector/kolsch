@@ -385,6 +385,18 @@ class PromptsImpl(AbstractPrompts):
     # Friend-of-class helpers (called by EventAdapter)
     # ------------------------------------------------------------------
 
+    @property
+    def pending_prompt_id(self) -> PromptId | None:
+        """The id of the in-flight prompt, or ``None``.
+
+        bug-128: read-only accessor so the `/new` + workflow-cancel
+        wiring can look up whether the single in-flight prompt (the
+        impl is serial) belongs to a given workflow run before driving
+        `WIRE_PROMPT_CANCELLED`. Returns `None` when no prompt is
+        awaiting an answer.
+        """
+        return self._pending_prompt_id
+
     def resolve_pending(
         self,
         prompt_id: str,

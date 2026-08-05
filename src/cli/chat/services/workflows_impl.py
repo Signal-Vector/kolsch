@@ -59,6 +59,7 @@ from schemas.entities import Actor
 from schemas.events import Event, EventType
 from schemas.identifiers import EventId
 from schemas.wire_kinds import (
+    WIRE_PROMPT_CANCELLED,
     WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED,
     WIRE_WORKFLOW_NODE_AWAITING_APPROVAL,
     WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT,
@@ -404,6 +405,20 @@ class WorkflowsImpl(AbstractWorkflows):
         # is a silent no-op in that case.
         self._layout_manager: WorkflowLayoutManager | None = None
 
+        # bug-128: run_id → pending-prompt_id lookup, injected by
+        # ChatApp.on_mount. `cancel()` uses it to find the in-flight
+        # approval prompt for a run being cancelled and drive
+        # `WIRE_PROMPT_CANCELLED` so a node parked on `await
+        # prompts.choice(...)` (a bare future the cancel token never
+        # wakes) unwinds. The map lives on the EventAdapter
+        # (`_workflow_prompt_sources`), which `WorkflowsImpl` can't see
+        # directly — hence a callback. `None` (headless / adapter-less)
+        # → the prompt-cancel step is a no-op, matching pre-bug-128
+        # behaviour.
+        self._pending_prompt_lookup: (
+            Callable[[WorkflowRunId], str | None] | None
+        ) = None
+
     def rebind_session(self, session_id: SessionId, thread_id: ThreadId) -> None:
         """feat-117: retarget durable writes + drop the old run registry (`/new`).
 
@@ -416,6 +431,20 @@ class WorkflowsImpl(AbstractWorkflows):
         self._session_id = session_id
         self._thread_id = thread_id
         self._workflow_registry.clear()
+
+    def set_pending_prompt_lookup(
+        self,
+        lookup: Callable[[WorkflowRunId], str | None] | None,
+    ) -> None:
+        """bug-128: inject the run_id → pending-prompt_id resolver.
+
+        Called from `ChatApp.on_mount` with a closure over the live
+        `EventAdapter` (`_workflow_prompt_sources`) + `PromptsImpl`
+        (`pending_prompt_id`). `cancel()` calls it per target run to
+        find the in-flight approval prompt (if any) bound to that run,
+        then drives `WIRE_PROMPT_CANCELLED` to unwind the parked node.
+        """
+        self._pending_prompt_lookup = lookup
 
     # ------------------------------------------------------------------
     # spec-016: WorkflowLayoutManager wiring
@@ -606,9 +635,8 @@ class WorkflowsImpl(AbstractWorkflows):
 
         fired_any = False
         for target_id in targets:
-            token = self._workflow_cancels.get(target_id)
             record = self._workflow_registry.get(target_id)
-            if token is None or record is None:
+            if record is None:
                 # Cascade walk may include a terminal run whose token +
                 # bridge were dropped by `_finalize_terminal`; skip.
                 continue
@@ -616,24 +644,78 @@ class WorkflowsImpl(AbstractWorkflows):
             if record.phase in ("success", "error", "cancelled"):
                 continue
 
-            token.cancel()
+            # bug-128: a node parked on an in-node approval blocks the
+            # executor on a bare `await prompts.choice(...)` future the cancel
+            # token never wakes (the token is only observed at node boundaries
+            # / around LLM streams). Drive the existing WIRE_PROMPT_CANCELLED
+            # path for this run's pending prompt so the parked node unwinds:
+            # adapter → PromptsImpl.cancel_pending → CancelledError → the run
+            # terminates `cancelled` (the shared FIFO drain survives via the
+            # stray-cancel guard in `_run_one_workflow`). Independent of the
+            # token — a child run (token=None) can still be parked.
+            #
+            # bug-066 id split: the prompt's `source.run_id` is the STORE-
+            # minted id (`run_dir.root.name`), NOT the queue-time registry key
+            # `target_id` — so match the lookup on the on-disk id. A parked run
+            # always has a `run_dir` (its executor was constructed); a still-
+            # queued run has none and can't be parked, so it's skipped below.
+            prompt_id: str | None = None
+            if self._pending_prompt_lookup is not None and record.run_dir is not None:
+                prompt_id = self._pending_prompt_lookup(
+                    WorkflowRunId(record.run_dir.root.name)
+                )
 
-            if record.run_dir is not None:
-                try:
-                    record.run_dir.cancel_flag_path.write_text("user_cancel")
-                except OSError:
-                    _LOGGER.exception(
-                        "WorkflowsImpl: cancel flag write failed for %s",
-                        target_id,
-                    )
+            token = self._workflow_cancels.get(target_id)
+            if token is None and prompt_id is None:
+                # Queued run (token minted at drain time) with no pending
+                # prompt, or a cascade-terminal whose token was dropped:
+                # nothing to stop. Preserves the pre-bug-128 queued no-op.
+                continue
 
+            # bug-128 Finding A (clobber race): the WIRE_PROMPT_CANCELLED emit
+            # below publishes on the bus, which dispatches the adapter INLINE —
+            # `cancel_pending` wakes the parked node, whose unwind runs
+            # `_finalize_terminal` (flipping the record TERMINAL) during a
+            # `render_terminal` yield, on a task DISTINCT from this one. So
+            # write `phase`/card ONLY here, BEFORE that yield, and drive the
+            # emit LAST: a finalize during the emit then lands on `cancelled`
+            # and there is no post-yield write to clobber the terminal phase
+            # back to `cancelling`. Marking `cancelling` for any run we stop
+            # (token OR prompt-cancel) also lets a parked CHILD (token=None)
+            # finalize as `cancelled` rather than `error` (reviewer 5a).
             record.phase = "cancelling"
             if record.card is not None:
                 with contextlib.suppress(Exception):
                     await record.card.set_status("cancelling")
-            # spec-016: running -> cancelling.
             self._notify_layout(target_id)
+
+            if token is not None:
+                token.cancel()
+                if record.run_dir is not None:
+                    try:
+                        record.run_dir.cancel_flag_path.write_text("user_cancel")
+                    except OSError:
+                        _LOGGER.exception(
+                            "WorkflowsImpl: cancel flag write failed for %s",
+                            target_id,
+                        )
+
             fired_any = True
+
+            # Drive WIRE_PROMPT_CANCELLED LAST (see the race note above). Log
+            # rather than suppress: if the durable append fails the parked node
+            # is NOT unwound, so the failure must be visible (Finding B).
+            if prompt_id is not None:
+                try:
+                    await self._emit_ui_event(
+                        WIRE_PROMPT_CANCELLED,
+                        {"prompt_id": prompt_id, "reason": "workflow_cancelled"},
+                    )
+                except Exception:
+                    _LOGGER.exception(
+                        "WorkflowsImpl: WIRE_PROMPT_CANCELLED emit failed for %s",
+                        target_id,
+                    )
 
         return fired_any
 
@@ -1200,12 +1282,24 @@ class WorkflowsImpl(AbstractWorkflows):
             try:
                 await _executor_run()
             except asyncio.CancelledError:
-                # Aclose raced with a live executor. Best-effort card
-                # transition, then re-raise to unwind the drain.
+                # Best-effort card transition to cancelled.
                 with contextlib.suppress(Exception):
                     if spec.card is not None and not spec.card.is_closed:
                         await spec.card.close(final_status="cancelled")
-                raise
+                # bug-128: distinguish a STRAY cancel from a TASK cancel.
+                # `cancel()` unwinds an approval-parked node by cancelling
+                # the pending PROMPT future (WIRE_PROMPT_CANCELLED →
+                # PromptsImpl.cancel_pending); that raises CancelledError
+                # here even though THIS shared FIFO-drain task was never
+                # cancelled (`current.cancelling() == 0`). Swallow it so
+                # the drain keeps serving subsequent runs — the `finally`
+                # below runs `_finalize_terminal`, flipping the record to
+                # `cancelled`. A real task-cancel (aclose tearing down the
+                # drain → `cancelling() > 0`) still re-raises so aclose
+                # unwinds cleanly, preserving the pre-bug-128 behaviour.
+                current = asyncio.current_task()
+                if current is None or current.cancelling() > 0:
+                    raise
             except Exception as _run_exc:
                 _LOGGER.exception(
                     "WorkflowsImpl: executor run failed for %s",
@@ -1280,6 +1374,33 @@ class WorkflowsImpl(AbstractWorkflows):
                     record.phase = "cancelled"
                 else:
                     record.phase = "error"
+                # bug-128: the executor unwound WITHOUT writing a
+                # terminal JSONL event — an approval-cancel via
+                # CancelledError (the pending prompt was cancelled), or a
+                # construction-time raise. `meta.json` may still read
+                # `running` / `waiting_for_input`, so a later cold-read
+                # `status()` (after the 60s registry eviction, or from a
+                # fresh process) would report a phantom non-terminal run.
+                # Reconcile the durable status here — best-effort; the
+                # in-memory record is authoritative until eviction.
+                # ABORTED for a cancel, FAILED for an error (matches
+                # `EXECUTOR_STATUS_TO_PHASE`).
+                # bug-066 id split: `meta.json` is keyed by the STORE id
+                # (`run_dir.root.name`), NOT the queue-time `run_id`.
+                # Reconcile against the on-disk id or the write silently
+                # `FileNotFoundError`s and the phantom-`running` cold-read
+                # this exists to fix is never fixed.
+                reconciled_status = (
+                    WorkflowRunStatus.ABORTED
+                    if record.phase == "cancelled"
+                    else WorkflowRunStatus.FAILED
+                )
+                if record.run_dir is not None:
+                    with contextlib.suppress(Exception):
+                        self._run_store.update_status(
+                            WorkflowRunId(record.run_dir.root.name),
+                            reconciled_status,
+                        )
             # spec-069 Part A — belt-and-braces reconciliation of the
             # in-flight node count. `_update_node_counts` already
             # decrements `running` on `NODE_COMPLETED` / `NODE_FAILED` /
