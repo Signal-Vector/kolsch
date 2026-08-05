@@ -385,7 +385,9 @@ async def test_new_session_clears_per_turn_flags(tmp_path: Path) -> None:
 
 
 @pytest.mark.asyncio
-async def test_new_session_proceeds_and_discards_queued_workflow(tmp_path: Path) -> None:
+async def test_new_session_proceeds_and_discards_queued_workflow(
+    tmp_path: Path,
+) -> None:
     """feat-127: a QUEUED workflow no longer blocks `/new` — it's discarded.
 
     Pre-feat-127 a queued run blocked the switch (it would promote + be lost).
