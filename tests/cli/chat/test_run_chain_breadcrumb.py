@@ -66,7 +66,12 @@ class _MockApp:
         target: Any,
         *,
         parent_hint: Any = None,
+        auto_approve: bool = False,
     ) -> None:
+        # feat-126: accept the kwarg so the adapter's live-primary call
+        # (which now always passes it) stays on the primary path and
+        # `parent_hint` keeps forwarding — the TypeError fallback drops it.
+        _ = auto_approve
         self._mount_calls.append(
             {
                 "rule_id": rule_id,

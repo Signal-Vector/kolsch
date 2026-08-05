@@ -214,7 +214,15 @@ def _install_launch_spy(monkeypatch: pytest.MonkeyPatch) -> _NeverLaunched:
         return _StubSessionBundle(session_id=str(args.session or ""))
 
     class _StubChatApp:
-        def __init__(self, *, session: Any, engine: Any, full_history: bool) -> None:
+        def __init__(
+            self,
+            *,
+            session: Any,
+            engine: Any,
+            full_history: bool,
+            auto_approve: bool = False,
+        ) -> None:
+            _ = auto_approve
             spy.chat_app_constructed = True
             self.return_code = 0
 

@@ -15,6 +15,7 @@ kolsch chat                          # uses the configured starter agent
 kolsch chat kolsch/agents/helper     # explicit agent ref
 kolsch chat --model haiku            # session-scoped model override
 kolsch chat --session ses_abc123     # resume a prior conversation
+kolsch chat --auto-approve           # allow every tool ask once (trusted contexts only)
 ```
 
 The agent's `model:` field stays the same on disk — `--model`

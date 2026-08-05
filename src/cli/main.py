@@ -501,6 +501,18 @@ def _add_chat_subparser(sub: argparse._SubParsersAction[Any]) -> None:
             "and resume the chosen one. Conflicts with --session."
         ),
     )
+    chat.add_argument(
+        "--auto-approve",
+        dest="auto_approve",
+        action="store_true",
+        default=False,
+        help=(
+            "Auto-approve EVERY tool authorization prompt (allow-once, no "
+            "persisted rule) for the whole session — bypasses all approval "
+            "gating. Cards still render and flip to '✓ Auto-approved "
+            "(once)'. Use only in trusted, low-risk contexts."
+        ),
+    )
 
 
 # ---------------------------------------------------------------------------
@@ -1008,6 +1020,7 @@ async def _cmd_chat(args: argparse.Namespace) -> int:
         session=session,
         engine=session.runtime.engine,
         full_history=getattr(args, "full_history", False),
+        auto_approve=getattr(args, "auto_approve", False),
     )
     # bug-116: install a SIGHUP hard-exit before the app runs. If the
     # controlling terminal is torn away (window closed / SSH drop) while
