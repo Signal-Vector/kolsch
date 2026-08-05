@@ -53,7 +53,9 @@ memory budget applies.
 Memory resets; the old session is preserved on disk (you can
 resume it later with `--session <old_id>`). Different from
 `/clear` — `/clear` keeps the same session, `/new` starts
-another.
+another. `/new` always works: any in-progress turn or workflow
+is cancelled first (durably-paused `user_input` runs stay
+resumable via `kolsch workflows resume`).
 
 Rule of thumb: switching from "help me debug this Python" to
 "draft a release note" → `/new`. Asking the same agent the

@@ -19,7 +19,7 @@ from workflows.events import WorkflowEvent, WorkflowEventKind
 from workflows.run import RunDirectory, WorkflowRunStatus
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import Awaitable, Callable
 
 
 @dataclass
@@ -34,8 +34,34 @@ class MockExecutor:
     observer: Callable[[WorkflowEvent], None]
     cancel_token: Any
     per_event_delay: float = 0.0
+    # bug-128: simulate an in-node approval being cancelled. When set,
+    # `run()` emits its first event then raises a bare
+    # `asyncio.CancelledError` — exactly what happens when the pending
+    # approval future is cancelled (`PromptsImpl.cancel_pending`) while
+    # the coroutine runs inside the shared FIFO-drain task that itself
+    # was NOT cancelled. Exercises the stray-cancel guard in
+    # `WorkflowsImpl._run_one_workflow`.
+    raise_cancelled: bool = False
+    # feat-127: park the run on a REAL in-node await. When set, `run()`
+    # emits its first event then awaits `block_on(on_disk_run_id)` — a
+    # test wires it to a live `prompts.choice(...)` so the run blocks on
+    # a genuine approval future. A `CancelledError` from the await
+    # propagates out of `run()` unhandled (the production unwind shape
+    # bug-128's `cancel()` drives).
+    block_on: Callable[[str], Awaitable[Any]] | None = None
+    on_disk_run_id: str = ""
 
     async def run(self) -> WorkflowRunStatus:
+        if self.block_on is not None:
+            if self.events:
+                self.observer(self.events[0])
+            await self.block_on(self.on_disk_run_id)
+            return WorkflowRunStatus.SUCCEEDED
+        if self.raise_cancelled:
+            if self.events:
+                self.observer(self.events[0])
+            await asyncio.sleep(0)
+            raise asyncio.CancelledError
         for event in self.events:
             if self.cancel_token is not None and self.cancel_token.is_cancelled():
                 # Synthesise an aborted terminal and stop.
@@ -83,6 +109,13 @@ class MockExecutorSpec:
     events: list[WorkflowEvent] = field(default_factory=list)
     per_event_delay: float = 0.0
     on_construct: Callable[[str], None] | None = None
+    # bug-128: forwarded to `MockExecutor.raise_cancelled` — the run
+    # raises a stray `asyncio.CancelledError` mid-flight.
+    raise_cancelled: bool = False
+    # feat-127: forwarded to `MockExecutor.block_on` — the run parks on
+    # this awaitable (called with the on-disk run id) after its first
+    # event, e.g. a real `prompts.choice(...)`.
+    block_on: Callable[[str], Awaitable[Any]] | None = None
 
 
 def install_mock_executor_factory(
@@ -124,6 +157,9 @@ def install_mock_executor_factory(
                 observer=observer,
                 cancel_token=cancel_token,
                 per_event_delay=spec.per_event_delay,
+                raise_cancelled=spec.raise_cancelled,
+                block_on=spec.block_on,
+                on_disk_run_id=str(run_dir.root.name),
             ),
             run_dir,
         )

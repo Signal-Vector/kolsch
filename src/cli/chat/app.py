@@ -924,6 +924,32 @@ class ChatApp(App[None]):
         ):
             self.event_adapter.register_workflows_impl(active_workflows)
 
+            # bug-128: wire a run_id → pending-prompt_id lookup into
+            # `WorkflowsImpl` so `cancel(run_id)` can find the in-flight
+            # approval prompt bound to a run and drive
+            # `WIRE_PROMPT_CANCELLED` — unwinding a node parked on a bare
+            # `await prompts.choice(...)` future the cancel token can't
+            # wake. The (prompt_id → run_id) map lives on the adapter;
+            # `PromptsImpl` is serial (≤1 pending prompt), so matching the
+            # single pending prompt's owner against the target run_id
+            # suffices. No-op when the impls lack the hooks (headless).
+            if hasattr(active_workflows, "set_pending_prompt_lookup") and (
+                active_prompts is not None
+                and hasattr(active_prompts, "pending_prompt_id")
+            ):
+
+                def _pending_prompt_for_run(
+                    run_id: Any,
+                    _prompts: Any = active_prompts,
+                ) -> str | None:
+                    pid = _prompts.pending_prompt_id
+                    if pid is None:
+                        return None
+                    owner = self.event_adapter.run_id_for_prompt(str(pid))
+                    return str(pid) if owner == str(run_id) else None
+
+                active_workflows.set_pending_prompt_lookup(_pending_prompt_for_run)
+
         # bug-020: thread the finalised service registry into the
         # slash-handler `ChatSessionState` so `/workflow` can reach
         # `cards.open` + `workflows.start` without reconstructing
@@ -2458,33 +2484,35 @@ class ChatApp(App[None]):
             self._workflow_layout_manager.reset()
 
     async def _open_new_session(self) -> None:
-        """feat-117: mint + switch to a fresh session under the same agent.
+        """feat-117 / feat-127: ALWAYS mint + switch to a fresh session.
 
         Called from `_handle_slash` when `/new` set `pending_new_session`.
-        Guarded to idle: a butler turn in flight, or a live (running/
-        cancelling) OR queued workflow, blocks the switch (a mid-turn switch
-        would orphan durable writes to the old thread; a live/queued workflow
-        would lose its registry handle) — the user is told to finish/cancel
-        first and NOTHING changes. Otherwise: mint a new session + thread,
-        repoint every per-session handle (`self.session`, `_chat_state`
-        [incl. clearing its per-turn flags], the `EventAdapter`, and the three
-        durable-writing impls `PromptsImpl`/`CardsImpl`/`WorkflowsImpl`), reset
-        the transcript (which also resets the workflow layout manager,
-        bug-115), refresh the info bar, and announce the new id. The old
-        session stays intact on disk (resumable via
+        feat-127: `/new` never refuses. It first RETIRES all live work — the
+        workflows (bug-128's `cancel` unwinds an approval-parked node;
+        `user_input`-suspended runs stay resumable on disk), the in-flight
+        prompt, and the butler turn — driving every writer to completion BEFORE
+        repointing anything, because `rebind_session` clears the registry
+        without draining and an orphaned writer would corrupt the new thread.
+        Then mint a new session + thread, repoint every per-session handle
+        (`self.session`, `_chat_state` [incl. clearing its per-turn flags], the
+        `EventAdapter`, and the three durable-writing impls
+        `PromptsImpl`/`CardsImpl`/`WorkflowsImpl`), reset the transcript (which
+        also resets the workflow layout manager, bug-115), refresh the info
+        bar, announce the new id, and report how many workflows were cancelled.
+        The old session stays intact on disk (resumable via
         `kolsch chat <agent> --session <old_id>`).
         """
-        if (
-            self._butler_turn_active()
-            or self._has_live_workflow()
-            or self._has_queued_workflow()
-        ):
-            await self._mount_transcript_notice(
-                "/new: can't start a new session while a turn or workflow is "
-                "active — cancel or wait for it to finish, then /new again.",
-                kind="warning",
-            )
-            return
+        # feat-127: `/new` ALWAYS proceeds. Retire all live work BEFORE
+        # repointing any handle — `rebind_session` clears the registry without
+        # draining, so an orphaned writer (a per-run drain, the FIFO-hosted
+        # `_finalize_terminal` tail, or the prompt path) would append the old
+        # run's / prompt's tail into the NEW thread. Order: workflows (bug-128's
+        # cancel unwinds an approval-parked node; `user_input`-suspended runs
+        # stay resumable on disk), then the in-flight prompt (a butler-turn
+        # approval parked on a bare await), then the butler turn itself.
+        cancelled_workflows = await self._retire_workflows()
+        await self._cancel_pending_prompt()
+        await self._retire_butler_turn()
 
         runtime = self.session.runtime
         try:
@@ -2544,6 +2572,89 @@ class ChatApp(App[None]):
             f"kolsch chat • {self.session.config.name} • "
             f"{self.session.model_label} • {new_session_id}"
         )
+        # feat-127: honest notice of what `/new` cancelled to make room.
+        if cancelled_workflows:
+            plural = "s" if cancelled_workflows != 1 else ""
+            await self._mount_transcript_notice(
+                f"Cancelled {cancelled_workflows} in-progress workflow{plural}.",
+                kind="warning",
+            )
+
+    async def _retire_workflows(
+        self,
+        *,
+        timeout: float = 5.0,  # noqa: ASYNC109 — bound is the point
+    ) -> int:
+        """feat-127: retire live workflows for a `/new` switch; return the count.
+
+        Delegates to `WorkflowsImpl.retire_live_for_switch`, which drives every
+        drain to `done()` before returning (so the id-repoint that follows
+        can't race a live writer). `getattr` guards headless / adapter-less
+        fixtures. A retire fault must not wedge `/new`.
+        """
+        workflows = self._active_workflows()
+        retire = getattr(workflows, "retire_live_for_switch", None)
+        if retire is None:
+            return 0
+        try:
+            return int(await retire(timeout=timeout))
+        except Exception:
+            _LOGGER.exception(
+                "ChatApp._open_new_session: retire_live_for_switch failed",
+            )
+            return 0
+
+    async def _cancel_pending_prompt(self) -> None:
+        """feat-127: cancel any in-flight prompt before the switch.
+
+        Unblocks a butler-turn approval parked on a bare `await` (a
+        workflow-node approval was already handled by `_retire_workflows` →
+        `WorkflowsImpl.cancel`; a duplicate is deduped by the adapter). No-op
+        when no prompt is pending or the impl lacks the hook.
+        """
+        registry = self._service_registry
+        prompts = registry.prompts if registry is not None else None
+        cancel = getattr(prompts, "cancel_pending_prompt", None)
+        if cancel is None:
+            return
+        with contextlib.suppress(Exception):
+            await cancel()
+
+    async def _retire_butler_turn(
+        self,
+        *,
+        timeout: float = 5.0,  # noqa: ASYNC109 — bound is the point
+    ) -> None:
+        """feat-127: cancel the in-flight butler turn and await its unwind.
+
+        Fires the cancel token, then polls `active_cancel` until it clears or
+        `timeout` elapses. `_run_exchange`'s finally nulls the token BEFORE
+        any further statement, so a cleared token means the worker's event
+        loop (its `event_adapter.handle` writer) has exited — the quiescence
+        signal the switch relies on.
+
+        The token is cooperative (checked at engine attempt boundaries), so
+        a turn wedged in a long tool call can outlive the bound. Walking
+        away then would leave the worker pumping old-turn events into the
+        repointed adapter — durably appended to the NEW thread. On expiry,
+        escalate: hard-cancel the `_run_exchange` worker (`CancelledError`
+        bypasses its `except Exception` and lands in the finally) and
+        re-poll briefly, then proceed regardless — `/new` never hangs.
+        """
+        if not self._butler_turn_active():
+            return
+        request_cancel(self)
+        for _ in range(max(1, int(timeout / 0.05))):
+            if self.active_cancel is None:
+                return
+            await asyncio.sleep(0.05)
+        for worker in list(self.workers):
+            if worker.name == "_run_exchange" and not worker.is_finished:
+                worker.cancel()
+        for _ in range(max(1, int(min(2.0, timeout) / 0.05))):
+            if self.active_cancel is None:
+                return
+            await asyncio.sleep(0.05)
 
     # ------------------------------------------------------------------
     # Action handlers (from BINDINGS)
@@ -2585,26 +2696,6 @@ class ChatApp(App[None]):
             if getattr(record, "phase", None) in ("running", "cancelling"):
                 return True
         return False
-
-    def _has_queued_workflow(self) -> bool:
-        """True when at least one workflow is ``queued`` (feat-117 `/new` guard).
-
-        `/new` blocks on queued runs too — not just the running/cancelling
-        that :meth:`_has_live_workflow` covers. The drain is serial, so a
-        queued run will be promoted to running and written into the session;
-        switching + clearing the registry mid-queue would silently drop it.
-        Kept separate from :meth:`_has_live_workflow` so the Esc-cancel-oldest
-        path (which targets running runs) is unaffected.
-        """
-        workflows_impl = self._active_workflows()
-        if workflows_impl is None:
-            return False
-        registry = getattr(workflows_impl, "_workflow_registry", None)
-        if registry is None:
-            return False
-        return any(
-            getattr(record, "phase", None) == "queued" for record in registry.values()
-        )
 
     def _find_oldest_running_workflow(self) -> Any:
         """Return the ``run_id`` of the oldest live workflow, or None.

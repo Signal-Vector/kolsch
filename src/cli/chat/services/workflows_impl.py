@@ -59,6 +59,7 @@ from schemas.entities import Actor
 from schemas.events import Event, EventType
 from schemas.identifiers import EventId
 from schemas.wire_kinds import (
+    WIRE_PROMPT_CANCELLED,
     WIRE_WORKFLOW_NODE_APPROVAL_RESOLVED,
     WIRE_WORKFLOW_NODE_AWAITING_APPROVAL,
     WIRE_WORKFLOW_NODE_SUB_AGENT_EVENT,
@@ -390,6 +391,11 @@ class WorkflowsImpl(AbstractWorkflows):
         self._workflow_drain_task: asyncio.Task[None] | None = None
         self._drain_started: bool = False
         self._closed: bool = False
+        # feat-127: True while `retire_live_for_switch` tears down live work
+        # for a `/new` session switch. Gates the FIFO drain so a spec popped
+        # mid-retirement is dropped instead of promoted (the start-queue can't
+        # be drained race-free while its consumer is live otherwise).
+        self._retiring: bool = False
 
         # feat-015: boot-time orphan sweep bookkeeping. `sweep_orphans`
         # counts reconciled in-process runs into this field; the
@@ -404,6 +410,18 @@ class WorkflowsImpl(AbstractWorkflows):
         # is a silent no-op in that case.
         self._layout_manager: WorkflowLayoutManager | None = None
 
+        # bug-128: run_id → pending-prompt_id lookup, injected by
+        # ChatApp.on_mount. `cancel()` uses it to find the in-flight
+        # approval prompt for a run being cancelled and drive
+        # `WIRE_PROMPT_CANCELLED` so a node parked on `await
+        # prompts.choice(...)` (a bare future the cancel token never
+        # wakes) unwinds. The map lives on the EventAdapter
+        # (`_workflow_prompt_sources`), which `WorkflowsImpl` can't see
+        # directly — hence a callback. `None` (headless / adapter-less)
+        # → the prompt-cancel step is a no-op, matching pre-bug-128
+        # behaviour.
+        self._pending_prompt_lookup: Callable[[WorkflowRunId], str | None] | None = None
+
     def rebind_session(self, session_id: SessionId, thread_id: ThreadId) -> None:
         """feat-117: retarget durable writes + drop the old run registry (`/new`).
 
@@ -416,6 +434,20 @@ class WorkflowsImpl(AbstractWorkflows):
         self._session_id = session_id
         self._thread_id = thread_id
         self._workflow_registry.clear()
+
+    def set_pending_prompt_lookup(
+        self,
+        lookup: Callable[[WorkflowRunId], str | None] | None,
+    ) -> None:
+        """bug-128: inject the run_id → pending-prompt_id resolver.
+
+        Called from `ChatApp.on_mount` with a closure over the live
+        `EventAdapter` (`_workflow_prompt_sources`) + `PromptsImpl`
+        (`pending_prompt_id`). `cancel()` calls it per target run to
+        find the in-flight approval prompt (if any) bound to that run,
+        then drives `WIRE_PROMPT_CANCELLED` to unwind the parked node.
+        """
+        self._pending_prompt_lookup = lookup
 
     # ------------------------------------------------------------------
     # spec-016: WorkflowLayoutManager wiring
@@ -606,9 +638,8 @@ class WorkflowsImpl(AbstractWorkflows):
 
         fired_any = False
         for target_id in targets:
-            token = self._workflow_cancels.get(target_id)
             record = self._workflow_registry.get(target_id)
-            if token is None or record is None:
+            if record is None:
                 # Cascade walk may include a terminal run whose token +
                 # bridge were dropped by `_finalize_terminal`; skip.
                 continue
@@ -616,24 +647,79 @@ class WorkflowsImpl(AbstractWorkflows):
             if record.phase in ("success", "error", "cancelled"):
                 continue
 
-            token.cancel()
+            # bug-128: a node parked on an in-node approval blocks the
+            # executor on a bare `await prompts.choice(...)` future the cancel
+            # token never wakes (the token is only observed at node boundaries
+            # / around LLM streams). Drive the existing WIRE_PROMPT_CANCELLED
+            # path for this run's pending prompt so the parked node unwinds:
+            # adapter → PromptsImpl.cancel_pending → CancelledError → the run
+            # terminates `cancelled` (the shared FIFO drain survives via the
+            # stray-cancel guard in `_run_one_workflow`). Independent of the
+            # token — a child run (token=None) can still be parked.
+            #
+            # bug-066 id split: the prompt's `source.run_id` is the STORE-
+            # minted id (`run_dir.root.name`), NOT the queue-time registry key
+            # `target_id` — so match the lookup on the on-disk id. A parked run
+            # always has a `run_dir` (its executor was constructed); a still-
+            # queued run has none and can't be parked, so it's skipped below.
+            prompt_id: str | None = None
+            run_dir = getattr(record, "run_dir", None)
+            if self._pending_prompt_lookup is not None and run_dir is not None:
+                prompt_id = self._pending_prompt_lookup(
+                    WorkflowRunId(run_dir.root.name)
+                )
 
-            if record.run_dir is not None:
-                try:
-                    record.run_dir.cancel_flag_path.write_text("user_cancel")
-                except OSError:
-                    _LOGGER.exception(
-                        "WorkflowsImpl: cancel flag write failed for %s",
-                        target_id,
-                    )
+            token = self._workflow_cancels.get(target_id)
+            if token is None and prompt_id is None:
+                # Queued run (token minted at drain time) with no pending
+                # prompt, or a cascade-terminal whose token was dropped:
+                # nothing to stop. Preserves the pre-bug-128 queued no-op.
+                continue
 
+            # bug-128 Finding A (clobber race): the WIRE_PROMPT_CANCELLED emit
+            # below publishes on the bus, which dispatches the adapter INLINE —
+            # `cancel_pending` wakes the parked node, whose unwind runs
+            # `_finalize_terminal` (flipping the record TERMINAL) during a
+            # `render_terminal` yield, on a task DISTINCT from this one. So
+            # write `phase`/card ONLY here, BEFORE that yield, and drive the
+            # emit LAST: a finalize during the emit then lands on `cancelled`
+            # and there is no post-yield write to clobber the terminal phase
+            # back to `cancelling`. Marking `cancelling` for any run we stop
+            # (token OR prompt-cancel) also lets a parked CHILD (token=None)
+            # finalize as `cancelled` rather than `error` (reviewer 5a).
             record.phase = "cancelling"
             if record.card is not None:
                 with contextlib.suppress(Exception):
                     await record.card.set_status("cancelling")
-            # spec-016: running -> cancelling.
             self._notify_layout(target_id)
+
+            if token is not None:
+                token.cancel()
+                if record.run_dir is not None:
+                    try:
+                        record.run_dir.cancel_flag_path.write_text("user_cancel")
+                    except OSError:
+                        _LOGGER.exception(
+                            "WorkflowsImpl: cancel flag write failed for %s",
+                            target_id,
+                        )
+
             fired_any = True
+
+            # Drive WIRE_PROMPT_CANCELLED LAST (see the race note above). Log
+            # rather than suppress: if the durable append fails the parked node
+            # is NOT unwound, so the failure must be visible (Finding B).
+            if prompt_id is not None:
+                try:
+                    await self._emit_ui_event(
+                        WIRE_PROMPT_CANCELLED,
+                        {"prompt_id": prompt_id, "reason": "workflow_cancelled"},
+                    )
+                except Exception:
+                    _LOGGER.exception(
+                        "WorkflowsImpl: WIRE_PROMPT_CANCELLED emit failed for %s",
+                        target_id,
+                    )
 
         return fired_any
 
@@ -723,6 +809,150 @@ class WorkflowsImpl(AbstractWorkflows):
             self._workflow_drain_task.cancel()
             with contextlib.suppress(asyncio.CancelledError):
                 await self._workflow_drain_task
+
+    # ------------------------------------------------------------------
+    # feat-127 — retire live work for a `/new` session switch.
+    # ------------------------------------------------------------------
+
+    async def retire_live_for_switch(
+        self,
+        *,
+        timeout: float = 5.0,  # noqa: ASYNC109 — bound is the point
+    ) -> int:
+        """Retire all live workflow work for a `/new` switch; keep impl OPEN.
+
+        Unlike :meth:`aclose`, the impl stays usable afterward (the new session
+        must be able to start workflows). Discards queued specs, cancels every
+        non-terminal run (bug-128 unwinds an approval-parked node; a durably-
+        suspended ``user_input`` run is LEFT on disk, resumable), then drives
+        every retired task to ``done()`` — force-cancelling + re-arming the
+        FIFO drain if a run won't unwind within ``timeout`` — so no live writer
+        survives into the id-repoint that follows. Returns the count of runs
+        cancelled (for the caller's notice).
+
+        The ``/new`` caller MUST await this fully BEFORE repointing session ids:
+        :meth:`rebind_session` clears the registry without draining, so an
+        orphaned drain task would append the old run's tail into the NEW thread.
+        """
+        self._retiring = True
+        try:
+            # 1. Drain the start-queue so no queued run promotes. The drain
+            #    worker also drops any spec it pops while `_retiring` (belt-
+            #    and-braces against the pop-vs-drain race).
+            while True:
+                try:
+                    spec = self._workflow_queue.get_nowait()
+                except asyncio.QueueEmpty:
+                    break
+                self._workflow_registry.pop(spec.run_id, None)
+
+            # 2. Cancel every non-terminal run — but LEAVE a durably-suspended
+            #    `user_input` run untouched on disk (resumable).
+            cancelled = 0
+            for run_id in list(self._workflow_registry.keys()):
+                record = self._workflow_registry.get(run_id)
+                if record is None or record.phase in (
+                    "success",
+                    "error",
+                    "cancelled",
+                ):
+                    continue
+                if self._is_durably_suspended(record):
+                    continue
+                await self.cancel(run_id)
+                cancelled += 1
+
+            # 3. Drive every retired task to `done()` (bounded + force path).
+            await self._drain_to_quiescent(timeout)
+
+            # 4. Clear stale per-run trackers so the new session starts clean.
+            #    `_finalize_terminal` never pops `_children_of` (a leak); the
+            #    rest mirror `rebind_session`'s registry clear.
+            self._children_of.clear()
+            self._workflow_bridges.clear()
+            self._workflow_cancels.clear()
+            self._per_run_drain_tasks.clear()
+            return cancelled
+        finally:
+            self._retiring = False
+
+    def _is_durably_suspended(self, record: WorkflowRunRecord) -> bool:
+        """True if the run is durably paused (`waiting_for_input`) on disk.
+
+        feat-127: such a run has already RETURNED from the executor (the
+        ``user_input`` pause writes a ``waiting_at`` sidecar + flips
+        ``meta.json`` and returns), so it is off the live machinery and
+        resumable via ``kolsch workflows resume``. ``/new`` must NOT cancel it
+        (a ``cancel.flag`` would abort the resume). Guards the narrow window
+        where the in-memory phase is still ``running`` but the on-disk status
+        already flipped. Best-effort; ``False`` on any read fault.
+        """
+        run_dir = getattr(record, "run_dir", None)
+        if run_dir is None:
+            return False
+        try:
+            return bool(run_dir.waiting_at_path.exists())
+        except Exception:  # noqa: BLE001 — a read fault must not wedge /new
+            return False
+
+    async def _drain_to_quiescent(self, timeout: float) -> None:  # noqa: ASYNC109 — bound is the point
+        """Await all retired drain tasks to ``done()``; force any straggler.
+
+        Awaits the per-run bridge drains (each completes as its run unwinds and
+        ``_finalize_terminal`` posts the stop sentinel; the shared FIFO task
+        then returns to idle). If anything is still live after ``timeout`` — a
+        wedged run whose executor won't unwind — force-cancel the per-run
+        drains AND the FIFO task (breaking a stuck ``_run_one_workflow``),
+        await them to ``done()`` (bounded), and re-arm the FIFO drain. The
+        second wait (not just ``.cancel()``) is what keeps a straggler from
+        emitting one more ``append_event`` after the caller repoints the ids.
+
+        The force waits are BOUNDED: a coroutine can swallow its
+        ``CancelledError`` (a node body's ``except BaseException``, or the
+        delivery landing inside ``_finalize_terminal``'s bridge-await
+        suppress) and survive the cancel — an unbounded await there would
+        hang ``/new`` inside its own safety net. Python cannot force-kill a
+        swallower; proceeding after the bound is the accepted residual, and
+        the unconditional re-arm keeps the impl usable either way (a
+        surviving old task has re-parked on ``queue.get()`` — a harmless
+        duplicate consumer — or is wedged and never consumes again).
+        """
+        live = [t for t in self._per_run_drain_tasks.values() if not t.done()]
+        pending: set[asyncio.Task[None]] = set()
+        if live:
+            _done, pending = await asyncio.wait(set(live), timeout=timeout)
+
+        still_running = any(
+            r.phase not in ("success", "error", "cancelled")
+            and not self._is_durably_suspended(r)
+            for r in self._workflow_registry.values()
+        )
+        if not pending and not still_running:
+            return
+
+        # Force path — a run would not unwind within the bound.
+        force_bound = min(1.0, timeout)
+        stragglers: set[asyncio.Task[None]] = set()
+        for task in list(self._per_run_drain_tasks.values()):
+            if not task.done():
+                task.cancel()
+            stragglers.add(task)
+        if (
+            self._workflow_drain_task is not None
+            and not self._workflow_drain_task.done()
+        ):
+            self._workflow_drain_task.cancel()
+            stragglers.add(self._workflow_drain_task)
+            # Re-arm: the next `start()` lazily recreates the FIFO drain.
+            self._workflow_drain_task = None
+            self._drain_started = False
+        if stragglers:
+            done, _pending = await asyncio.wait(stragglers, timeout=force_bound)
+            for task in done:
+                # Retrieve so a task that died on a real exception doesn't
+                # log "exception was never retrieved" at GC time.
+                with contextlib.suppress(asyncio.CancelledError):
+                    task.exception()
 
     # ------------------------------------------------------------------
     # feat-015 — boot-time in-process orphan sweep.
@@ -842,6 +1072,13 @@ class WorkflowsImpl(AbstractWorkflows):
         """
         while True:
             spec = await self._workflow_queue.get()
+            if self._retiring:
+                # feat-127: a `/new` switch is retiring live work — drop this
+                # popped-but-not-started spec instead of promoting it into the
+                # new session (belt-and-braces with `retire_live_for_switch`
+                # draining the queue; closes the pop-vs-drain race).
+                self._workflow_registry.pop(spec.run_id, None)
+                continue
             try:
                 await self._run_one_workflow(spec)
             except asyncio.CancelledError:
@@ -1200,12 +1437,24 @@ class WorkflowsImpl(AbstractWorkflows):
             try:
                 await _executor_run()
             except asyncio.CancelledError:
-                # Aclose raced with a live executor. Best-effort card
-                # transition, then re-raise to unwind the drain.
+                # Best-effort card transition to cancelled.
                 with contextlib.suppress(Exception):
                     if spec.card is not None and not spec.card.is_closed:
                         await spec.card.close(final_status="cancelled")
-                raise
+                # bug-128: distinguish a STRAY cancel from a TASK cancel.
+                # `cancel()` unwinds an approval-parked node by cancelling
+                # the pending PROMPT future (WIRE_PROMPT_CANCELLED →
+                # PromptsImpl.cancel_pending); that raises CancelledError
+                # here even though THIS shared FIFO-drain task was never
+                # cancelled (`current.cancelling() == 0`). Swallow it so
+                # the drain keeps serving subsequent runs — the `finally`
+                # below runs `_finalize_terminal`, flipping the record to
+                # `cancelled`. A real task-cancel (aclose tearing down the
+                # drain → `cancelling() > 0`) still re-raises so aclose
+                # unwinds cleanly, preserving the pre-bug-128 behaviour.
+                current = asyncio.current_task()
+                if current is None or current.cancelling() > 0:
+                    raise
             except Exception as _run_exc:
                 _LOGGER.exception(
                     "WorkflowsImpl: executor run failed for %s",
@@ -1280,6 +1529,33 @@ class WorkflowsImpl(AbstractWorkflows):
                     record.phase = "cancelled"
                 else:
                     record.phase = "error"
+                # bug-128: the executor unwound WITHOUT writing a
+                # terminal JSONL event — an approval-cancel via
+                # CancelledError (the pending prompt was cancelled), or a
+                # construction-time raise. `meta.json` may still read
+                # `running` / `waiting_for_input`, so a later cold-read
+                # `status()` (after the 60s registry eviction, or from a
+                # fresh process) would report a phantom non-terminal run.
+                # Reconcile the durable status here — best-effort; the
+                # in-memory record is authoritative until eviction.
+                # ABORTED for a cancel, FAILED for an error (matches
+                # `EXECUTOR_STATUS_TO_PHASE`).
+                # bug-066 id split: `meta.json` is keyed by the STORE id
+                # (`run_dir.root.name`), NOT the queue-time `run_id`.
+                # Reconcile against the on-disk id or the write silently
+                # `FileNotFoundError`s and the phantom-`running` cold-read
+                # this exists to fix is never fixed.
+                reconciled_status = (
+                    WorkflowRunStatus.ABORTED
+                    if record.phase == "cancelled"
+                    else WorkflowRunStatus.FAILED
+                )
+                if record.run_dir is not None:
+                    with contextlib.suppress(Exception):
+                        self._run_store.update_status(
+                            WorkflowRunId(record.run_dir.root.name),
+                            reconciled_status,
+                        )
             # spec-069 Part A — belt-and-braces reconciliation of the
             # in-flight node count. `_update_node_counts` already
             # decrements `running` on `NODE_COMPLETED` / `NODE_FAILED` /
