@@ -119,8 +119,15 @@ async def test_cmd_chat_hard_exits_with_app_return_code(
     """
 
     class _FakeApp:
-        def __init__(self, *, session: Any, engine: Any, full_history: bool) -> None:
-            _ = (session, engine, full_history)
+        def __init__(
+            self,
+            *,
+            session: Any,
+            engine: Any,
+            full_history: bool,
+            auto_approve: bool = False,
+        ) -> None:
+            _ = (session, engine, full_history, auto_approve)
             self.return_code = 7
 
         async def run_async(self, **kwargs: Any) -> None:

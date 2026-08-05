@@ -2098,6 +2098,20 @@ class EventAdapter:
             # (AC #4 primary defence).
             return
 
+        # feat-126: whole-session auto-approve. The `kind == "choice"`
+        # gate is LOAD-BEARING, not belt-and-braces — this handler
+        # mounts an `ApprovalBlock` for every `WIRE_PROMPT_REQUESTED`
+        # regardless of payload kind, so this check is the only thing
+        # preventing a future `text()` caller from being force-answered
+        # "y". Only the LIVE primary mount gets the flag: the terminal
+        # branch above already returned (replay/historical rows never
+        # auto-resolve), and the `except TypeError` fallback below
+        # (legacy mock doubles) stays flag-free. `getattr` so headless
+        # / partial fixtures without the attr don't break.
+        auto_approve = (
+            bool(getattr(self._app, "auto_approve", False))
+            and payload.get("kind") == "choice"
+        )
         block: Any = None
         try:
             block = await self._app.mount_approval_block(
@@ -2105,6 +2119,7 @@ class EventAdapter:
                 action_val,
                 target_val,
                 parent_hint=parent_hint,
+                auto_approve=auto_approve,
             )
         except TypeError:
             # Back-compat with mock apps that don't accept the

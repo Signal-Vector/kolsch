@@ -200,6 +200,7 @@ class ApprovalBlock(Widget):
         *,
         parent_hint: str | None = None,
         terminal_state: tuple[bool | None, str] | None = None,
+        auto_approve: bool = False,
     ) -> None:
         super().__init__()
         # Preserve the exact strings the callback was fired with so the
@@ -246,6 +247,14 @@ class ApprovalBlock(Widget):
         # ``(allowed, footer)`` — matching the interactive path's
         # `_resolve` footer/class choice.
         self._terminal_state: tuple[bool | None, str] | None = terminal_state
+        # feat-126: when True, `on_mount` schedules `_auto_resolve_allow`
+        # — the block resolves itself to allow-once (no keypress, no
+        # Rule) through the SAME `_resolve` path a real `y` uses, so
+        # the adapter's bridge appends exactly one durable
+        # `WIRE_PROMPT_ANSWERED`. Gated upstream to `kind == "choice"`
+        # live prompts only; the `_terminal_state` guard in `on_mount`
+        # additionally excludes replay/historical rows.
+        self._auto_approve = auto_approve
 
     # ------------------------------------------------------------------
     # Compose
@@ -384,6 +393,16 @@ class ApprovalBlock(Widget):
         # the composer (AC #9).
         if self._terminal_state is not None:
             return
+        if self._auto_approve:
+            # feat-126: single-time auto-authorize. Drive the SAME
+            # _resolve path a real `y` keypress uses (allow-once, no
+            # Rule) after one refresh frame so the card visibly renders
+            # then flips — and so `compose` has already set `self._body`
+            # before `_resolve` mounts the footer. This produces exactly
+            # one durable WIRE_PROMPT_ANSWERED via the normal
+            # _bridge_widget_resolution path — no new emit, no race.
+            self.call_after_refresh(self._auto_resolve_allow)
+            return
         if self._current_pane is not None:
             self._current_pane.focus()
         # qol-047: the args row's overflow flag is only meaningful once
@@ -391,6 +410,14 @@ class ApprovalBlock(Widget):
         # the next render frame so the initial "Tab → expand args"
         # suffix appears when the target is already too long to fit.
         self.call_after_refresh(self._refresh_footer_help)
+
+    async def _auto_resolve_allow(self) -> None:
+        """feat-126: resolve this approval as allow-once, no keypress."""
+        await self._resolve(
+            AuthzEffect.ALLOW,
+            footer="✓ Auto-approved (once)",
+            allowed=True,
+        )
 
     async def render_terminal(
         self,
@@ -704,6 +731,15 @@ class ApprovalBlock(Widget):
         allowed: bool,
     ) -> None:
         """Record the resolution, mount the frozen footer, wake waiters."""
+        # One-shot: a block that is already resolved OR already frozen
+        # terminal (a bug-110 live-cancel `render_terminal` can race the
+        # feat-126 auto-resolve callback) must not mount a second footer
+        # or overwrite the result a waiter may have already read. The
+        # cancelled direction deliberately leaves `_resolved_event`
+        # unset — the bridge must never append an answered write for a
+        # cancelled prompt.
+        if self.is_resolved:
+            return
         if self._current_pane is not None:
             await self._current_pane.remove()
             self._current_pane = None

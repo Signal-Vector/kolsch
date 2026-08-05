@@ -538,6 +538,10 @@ class ChatApp(App[None]):
         full_history: If ``True``, replay the full JSONL. If
             ``False`` (default), replay the tail-20 turns and mount
             a ``ScrollbackCue`` at the top when truncating.
+        auto_approve: feat-126. If ``True``, every live
+            tool-authorization ``ApprovalBlock`` resolves itself to
+            allow-once on mount (footer ``✓ Auto-approved (once)``,
+            no persisted rule) instead of waiting for a keypress.
     """
 
     BINDINGS = CHAT_BINDINGS
@@ -595,6 +599,7 @@ class ChatApp(App[None]):
         session: ChatSessionBundle,
         engine: Any,
         full_history: bool = False,
+        auto_approve: bool = False,
     ) -> None:
         # Resolve theme path per-instance so NO_COLOR toggles work
         # in tests that monkeypatch the env between constructions.
@@ -639,6 +644,11 @@ class ChatApp(App[None]):
         # `on_mount` before authz registration.
         self.approval_callback: InlineApprovalCallback | None = None
         self.full_history = full_history
+        # feat-126: whole-session auto-approve mode. Read by the
+        # adapter's `_handle_prompt_requested` live-primary mount site
+        # (gated there on `kind == "choice"`) and forwarded into each
+        # live `ApprovalBlock`.
+        self.auto_approve = auto_approve
         # Set by the exchange worker; cleared in a finally.
         self.active_cancel: Any = None
         self.last_cancel_reason: str | None = None
@@ -1886,6 +1896,7 @@ class ChatApp(App[None]):
         *,
         parent_hint: str | None = None,
         terminal: tuple[bool | None, str] | None = None,
+        auto_approve: bool = False,
     ) -> ApprovalBlock:
         """Mount an approval block and recompute the composer gate."""
         transcript = self.query_one("#transcript", VerticalScroll)
@@ -1895,6 +1906,7 @@ class ChatApp(App[None]):
             target,
             parent_hint=parent_hint,
             terminal_state=terminal,
+            auto_approve=auto_approve,
         )
         await transcript.mount(block)
         # bug-056: a terminal (replay) block does not gate the composer
