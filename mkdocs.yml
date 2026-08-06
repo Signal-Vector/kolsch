@@ -1,5 +1,6 @@
 site_name: Kolsch
 site_description: Local-first, definition-orchestrated multi-agent workflow platform.
+site_url: https://signal-vector.github.io/kolsch/
 repo_url: https://github.com/Signal-Vector/kolsch
 repo_name: Signal-Vector/kolsch
 edit_uri: edit/main/docs/
