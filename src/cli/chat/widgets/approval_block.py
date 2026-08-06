@@ -441,6 +441,10 @@ class ApprovalBlock(Widget):
         `__init__`; this instance method exists as a symmetric transform
         for callers that already hold a live block reference.
         """
+        # bug-129: engine-driven flip (live cancel / auto-deny) can land
+        # while the pane holds focus — release it first (guarded, so a
+        # user who deliberately parked focus elsewhere is untouched).
+        self._release_focus_if_inside_pane()
         if self._current_pane is not None:
             with contextlib.suppress(Exception):
                 await self._current_pane.remove()
@@ -700,6 +704,10 @@ class ApprovalBlock(Widget):
 
     async def _swap_pane(self, new_pane: Widget, *, footer_help: str) -> None:
         """Replace the current pane and update the footer hint."""
+        # bug-129: the removed pane (or its inner Input) holds focus —
+        # release it first or the removal scroll-jumps the transcript.
+        # `new_pane.focus()` below re-establishes focus deliberately.
+        self._release_focus_if_inside_pane()
         if self._current_pane is not None:
             await self._current_pane.remove()
         self._current_pane = new_pane
@@ -723,6 +731,54 @@ class ApprovalBlock(Widget):
         # Focus the new pane so its bindings + Input see keystrokes.
         new_pane.focus()
 
+    def _release_focus_if_inside_pane(self) -> None:
+        """Release keyboard focus if it sits inside the current pane.
+
+        bug-129: removing a FOCUSED pane triggers Textual's
+        ``Screen._reset_focus``, which hands focus to the nearest
+        previous focusable transcript widget and scroll-CENTERS it —
+        jumping the view mid-conversation and releasing the
+        transcript's follow-the-tail anchor. Clearing focus first
+        short-circuits ``App._prune``'s focus branch entirely, so
+        nothing scrolls; the successor is then chosen deliberately by
+        ``ChatApp.recompute_awaiting_approval`` (next unresolved
+        approval pane, else the composer).
+
+        Two traps, both probe-verified:
+        - ``Widget.blur()`` is FORBIDDEN here — it IS ``_reset_focus``,
+          so it performs the very jump this helper exists to prevent.
+        - The guard must be descendant-aware: in the pattern-edit step
+          the focused widget is the pane's inner ``Input``, not the
+          pane itself. It also must stay conditional — an unconditional
+          clear would steal deliberately-parked user focus on the
+          engine-driven ``render_terminal`` paths.
+        """
+        pane = self._current_pane
+        if pane is None:
+            return
+        with contextlib.suppress(Exception):
+            focused = self.screen.focused
+            if focused is not None and pane in focused.ancestors_with_self:
+                self.screen.set_focus(None)
+
+    def focus_pane(self) -> bool:
+        """Focus the live interactive pane, if one is mounted.
+
+        bug-129: called by ``ChatApp.recompute_awaiting_approval`` to
+        hand the keyboard to the next unresolved approval after a
+        sibling resolves. Returns ``True`` when a pane took focus.
+        Mid-``_swap_pane`` the pane can be ``None`` and a resolved /
+        terminal block has no answerable pane — both return ``False``
+        so the caller falls through to the composer.
+        """
+        pane = self._current_pane
+        if pane is None or self.is_resolved:
+            return False
+        with contextlib.suppress(Exception):
+            pane.focus()
+            return True
+        return False
+
     async def _resolve(
         self,
         result: PromptCallbackReturn,
@@ -740,6 +796,9 @@ class ApprovalBlock(Widget):
         # cancelled prompt.
         if self.is_resolved:
             return
+        # bug-129: after the one-shot guard, so a no-op double-resolve
+        # never clears focus.
+        self._release_focus_if_inside_pane()
         if self._current_pane is not None:
             await self._current_pane.remove()
             self._current_pane = None
