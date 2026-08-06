@@ -1940,6 +1940,30 @@ class ChatApp(App[None]):
         with contextlib.suppress(Exception):
             turn = self.query_one(TurnStatus)
             turn.awaiting_approval = awaiting
+        # bug-129: deliberate focus successor. Resolving/removing an
+        # approval pane clears focus first (see
+        # `ApprovalBlock._release_focus_if_inside_pane`) — without a
+        # named successor, Textual would pick the nearest previous
+        # focusable transcript widget and scroll-CENTER it (the
+        # mid-conversation jump + anchor release). Gated on
+        # `focused is None` so deliberately-parked focus (e.g. the user
+        # Tab'd onto a transcript widget before an engine-driven
+        # cancel) is never stolen. Also runs at boot/replay, where the
+        # gate reduces it to a benign composer-focus matching the
+        # explicit boot focus in `on_mount`. The composer's `disabled`
+        # is already current here: the reactive watcher fires
+        # synchronously on the assignment above.
+        with contextlib.suppress(Exception):
+            if self.screen.focused is None:
+                handed_off = False
+                for block in blocks:
+                    if block.focus_pane():
+                        handed_off = True
+                        break
+                if not handed_off:
+                    composer = self.query_one(Composer)
+                    if not composer.disabled:
+                        composer.focus()
 
     def clear_awaiting_approval(self) -> None:
         """Recompute the composer gate after an approval resolves."""
