@@ -54,7 +54,7 @@ kolsch setup                          # walks you through it
 kolsch chat kolsch/agents/helper      # streaming REPL: tokens, tool calls, /commands
 
 # Or one-shot
-kolsch run starter/agents/helper --input content="hello"
+kolsch run kolsch/agents/helper --input content="hello"
 ```
 
 `kolsch chat` is the recommended day-2 command: a streaming

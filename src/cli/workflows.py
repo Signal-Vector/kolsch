@@ -103,7 +103,7 @@ def add_workflows_subparser(
         help="Print a workflow's parsed structure.",
         parents=[fmt_parent],
     )
-    show.add_argument("ref", help="Catalog ref (e.g. acme/workflows/triage).")
+    show.add_argument("ref", help="Catalog ref (e.g. kolsch/workflows/hello).")
 
     validate = workflows_sub.add_parser(
         "validate",
@@ -124,7 +124,7 @@ def add_workflows_subparser(
         help="Execute a workflow end-to-end.",
         parents=[fmt_parent],
     )
-    run.add_argument("ref", help="Catalog ref (e.g. acme/workflows/triage).")
+    run.add_argument("ref", help="Catalog ref (e.g. kolsch/workflows/hello).")
     run.add_argument(
         "--input",
         action="append",
