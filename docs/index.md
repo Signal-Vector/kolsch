@@ -95,10 +95,12 @@ Kolsch is in early development. What's not yet in place:
 - One thread per session. No user-visible branching.
 - YAML shapes may still shift.
 - No bundle registry. Sharing means copying the folder.
-- License is TBD.
 
 Use it for local, replayable, YAML-defined agents and workflows. Not
 for a multi-tenant SaaS.
+
+Kolsch is MIT-licensed; see the `LICENSE` file in the repository
+root.
 
 ## Get started in 15 minutes
 
