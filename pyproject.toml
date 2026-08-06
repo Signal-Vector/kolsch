@@ -4,9 +4,9 @@ version = "0.0.0"
 description = "Local-first, definition-orchestrated multi-agent workflow platform."
 readme = "README.md"
 requires-python = ">=3.12"
-license = { text = "TBD" }
+license = "MIT"
 authors = [
-    { name = "Agent Platform Contributors" },
+    { name = "The kolsch authors" },
 ]
 dependencies = [
     # Runtime deps. Kept minimal at scaffold time; modules add what they

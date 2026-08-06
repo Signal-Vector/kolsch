@@ -20,9 +20,9 @@ Early but real. What ships today: the single-agent foundation, the
 workflow engine (agents and Python steps composed into DAGs), three
 framework adapters (a built-in minimal loop by default, opt-in CrewAI,
 and an external-harness subprocess adapter), three LLM connectors
-(OpenRouter, OpenCode, and Claude Code), and an MCP operator server. Still moving: YAML shapes may shift, there's no bundle
-registry yet, and the license is TBD. Use it locally — not for a
-multi-tenant SaaS.
+(OpenRouter, OpenCode, and Claude Code), and an MCP operator server.
+Still moving: YAML shapes may shift and there's no bundle registry
+yet. Use it locally — not for a multi-tenant SaaS.
 
 ## Design at a glance
 
@@ -140,4 +140,4 @@ The `cov` mode adds it back when you want to reproduce CI numbers.
 
 ## License
 
-TBD.
+MIT — see [LICENSE](LICENSE).

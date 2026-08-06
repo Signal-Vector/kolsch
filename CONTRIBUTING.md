@@ -32,3 +32,11 @@ Conventions for **spec / process files**, **PR templates**, and
 **MkDocs build configuration** are not yet captured. They'll land as
 their own files in `docs/process/` as the conventions get pinned down.
 If you find yourself wishing one of them existed, open an issue or PR.
+
+---
+
+## License
+
+Kolsch is released under the [MIT license](LICENSE). By contributing,
+you agree that your contributions will be licensed under the same
+terms.
