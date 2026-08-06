@@ -111,10 +111,19 @@ def default_platform_payload() -> dict[str, Any]:
             "denied_paths": [".env", ".platform/"],
         },
         "defaults": {
-            "model": {
-                "provider": "anthropic",
-                "model": "claude-opus-4-7",
-            },
+            # No "model" key here on purpose: this payload is what
+            # `load_or_create` persists to disk before `kolsch setup`
+            # Step D ever runs (and is reachable directly whenever
+            # anything boots the platform on a fresh root outside the
+            # setup flow). A placeholder provider/model pair here
+            # would silently pin an unusable connector; an agent that
+            # omits its own `model:` field and finds no
+            # `defaults.model` instead fails fast with a clear
+            # "field required" validation error at Layer 1 — see
+            # `schemas.config.ResolvedAgentConfig.model`. `kolsch
+            # setup` always writes a real (possibly mock) value here
+            # via `_write_defaults_model` before the starter agent
+            # runs.
             "memory": {
                 "variant": "recent_buffer",
                 "config": {"recent_turns": 20, "max_tokens": 4000},

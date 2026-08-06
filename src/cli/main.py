@@ -17,6 +17,7 @@ from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
+from errors import AssetsNotFound, ConfigInvalid, PlatformError
 from platform_runtime import (
     bootstrap_runtime,
     resolve_workspace,
@@ -47,6 +48,43 @@ _MISSING_WORKSPACE_MESSAGE = (
 # Exit code for the missing-workspace path — distinct from generic
 # error code 1, so shell pipelines can tell them apart.
 _EXIT_MISSING_WORKSPACE = 3
+
+
+def _format_resolve_config_error(exc: PlatformError, *, agent_ref: str) -> str:
+    """Render a `build_resolved_config` failure as readable stderr text.
+
+    `workspace_is_initialized` (checked in `main()`) only proves
+    `platform.yaml` exists — not that it's complete. A workspace left
+    mid-`kolsch setup` (interrupted before Step D writes
+    `defaults.model`) passes that gate and then fails here instead,
+    inside `runtime.build_resolved_config`. Without this formatter
+    that failure was an uncaught `PlatformError` — a raw traceback
+    with no indication of what to do about it.
+
+    The hint line is deliberately keyed off exception type:
+    `ConfigInvalid` (the motivating case — an incomplete/malformed
+    config) genuinely IS fixed by re-running `kolsch setup`, but a
+    typo'd or renamed ref (`AssetsNotFound`) is not — pointing that
+    user at `kolsch setup` would be actively misleading.
+    """
+    lines = [f"error: could not resolve agent {agent_ref!r}: {exc}"]
+    if isinstance(exc, ConfigInvalid):
+        for finding in exc.detail.get("validation_errors", []):
+            path = finding.get("path", "?")
+            message = finding.get("message", "")
+            lines.append(f"  - {path}: {message}")
+        lines.append(
+            "Run `kolsch setup` to finish configuring this workspace "
+            "(or `kolsch doctor` to diagnose it)."
+        )
+    elif isinstance(exc, AssetsNotFound):
+        lines.append(
+            "Check the ref — agents live under "
+            "<workspace>/bundles/<bundle>/agents/<name>.yaml."
+        )
+    else:
+        lines.append("Run `kolsch doctor` to diagnose the workspace.")
+    return "\n".join(lines) + "\n"
 
 
 def main(argv: Sequence[str] | None = None) -> int:
@@ -155,7 +193,7 @@ def _build_parser() -> argparse.ArgumentParser:
     run = sub.add_parser("run", help="Execute one agent exchange.")
     run.add_argument(
         "agent_ref",
-        help="Full agent ref (e.g. acme/researcher).",
+        help="Full agent ref (e.g. kolsch/agents/helper).",
     )
     run.add_argument(
         "--input",
@@ -569,7 +607,11 @@ async def _cmd_run(args: argparse.Namespace) -> int:
     runtime = await bootstrap_runtime(root=args.root)
     # Route through runtime.build_resolved_config so Layer 3
     # validators fire — see PlatformRuntime docstring.
-    config = await runtime.build_resolved_config(args.agent_ref)
+    try:
+        config = await runtime.build_resolved_config(args.agent_ref)
+    except PlatformError as exc:
+        sys.stderr.write(_format_resolve_config_error(exc, agent_ref=args.agent_ref))
+        return 2
 
     # qol-122 — `--model` overrides the resolved model for THIS run only,
     # applied before the silent-echo check so the warning reflects it.
@@ -991,7 +1033,7 @@ async def _cmd_chat(args: argparse.Namespace) -> int:
         force_process_exit,
         register_chat_slash_commands,
     )
-    from cli.chat.session import build_session  # noqa: PLC0415
+    from cli.chat.session import _DEFAULT_AGENT_REF, build_session  # noqa: PLC0415
 
     # Register ChatApp-owned slash commands (`/export`) on the shared
     # registry only when the chat entry point actually runs. Doing this
@@ -1014,6 +1056,13 @@ async def _cmd_chat(args: argparse.Namespace) -> int:
         session = await build_session(args, runtime=resume_runtime)
     except ValueError as exc:
         sys.stderr.write(f"{exc}\n")
+        return 1
+    except PlatformError as exc:
+        sys.stderr.write(
+            _format_resolve_config_error(
+                exc, agent_ref=args.agent_ref or _DEFAULT_AGENT_REF
+            )
+        )
         return 1
 
     app = ChatApp(

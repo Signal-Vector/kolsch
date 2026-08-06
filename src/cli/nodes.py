@@ -79,7 +79,7 @@ def add_nodes_subparser(
         help="Print a node's catalog entry + introspection.",
         parents=[fmt_parent],
     )
-    show.add_argument("ref", help="Catalog ref (e.g. acme/nodes/echo).")
+    show.add_argument("ref", help="Catalog ref (e.g. kolsch/nodes/echo).")
 
     return nodes
 
