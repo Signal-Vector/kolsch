@@ -56,7 +56,7 @@ async def test_snapshot_header_shows_ref_and_inputs_top_level() -> None:
         renderer._on_run_started(
             {
                 "run_id": "wrk_snapshot_top",
-                "workflow_ref": "andre/workflows/jd_review",
+                "workflow_ref": "acme/workflows/jd_review",
                 "inputs": {"url": "https://example.com/jd"},
                 "ts": "2026-07-09T00:00:00Z",
             }

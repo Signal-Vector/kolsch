@@ -29,7 +29,7 @@ SESSION_ID = "ses_d3029e63-7157-46c2-8834-070d0210f073"
 THREAD_ID = "th_5f757b2c-a32e-4dbc-83d6-3f9408f1608a"
 TRACE_ID = "tr_f7fdf208-af4a-4bc3-bb92-6af3d5af314c"
 RUN_ID = "wrk_a11f4371-8c49-4b5f-9617-5e84b22b6867"
-WORKFLOW_REF = "andre/workflows/job_description_review"
+WORKFLOW_REF = "acme/workflows/job_description_review"
 
 DEDUPER_INVOCATION = "inv_e3d0221c-804b-41a1-809d-89066173cb85"
 

@@ -62,9 +62,9 @@ def test_priority_tuple_includes_ref_and_run_id() -> None:
 
 def test_priority_includes_ref() -> None:
     """Args with only `ref` → extractor returns the ref value."""
-    args = _RefArgs(ref="andre/workflows/job_description_review")
+    args = _RefArgs(ref="acme/workflows/job_description_review")
     result = _extract_target_from_args(args)
-    assert result == "andre/workflows/job_description_review"
+    assert result == "acme/workflows/job_description_review"
 
 
 def test_priority_includes_run_id() -> None:
@@ -82,7 +82,7 @@ def test_priority_order_preserved_path_beats_ref() -> None:
     coincidentally declare both fields don't shift under the
     extension.
     """
-    args = _PathAndRefArgs(path="/tmp/data.json", ref="andre/workflows/x")
+    args = _PathAndRefArgs(path="/tmp/data.json", ref="acme/workflows/x")
     result = _extract_target_from_args(args)
     assert result == "/tmp/data.json"
 

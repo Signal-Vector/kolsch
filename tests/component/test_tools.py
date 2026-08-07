@@ -823,12 +823,12 @@ async def echo(args, ctx):
 # Regression: bug-authz-rule-caller-bundle-mismatch
 # ---------------------------------------------------------------------------
 #
-# Butler agent (`andre` bundle) extends `kolsch/agents/helper`. Helper's
+# Butler agent (`acme` bundle) extends `kolsch/agents/helper`. Helper's
 # tools config lists them as `declared:` refs like
 # `kolsch/tools/read_file`. Before the fix, the engine passed the CALLER
-# agent's bundle (`andre`) as `home_bundle=` to `register_for_agent` for
+# agent's bundle (`acme`) as `home_bundle=` to `register_for_agent` for
 # ALL declared tools, so `defn.action_name` returned
-# `andre/tools/read_file`. Modal-granted rules then landed under `andre/`
+# `acme/tools/read_file`. Modal-granted rules then landed under `acme/`
 # and boot on today's main fails with `AuthzToolRefUnknown` because
 # the ref doesn't resolve to a catalogued tool.
 #
@@ -844,11 +844,11 @@ async def test_declared_owner_bundles_overrides_home_bundle(
     """Declared owner map wins over `home_bundle=` for declared tools.
 
     Regression for bug-authz-rule-caller-bundle-mismatch. Simulates a
-    butler (`ag_butler` in `andre` bundle) inheriting a
+    butler (`ag_butler` in `acme` bundle) inheriting a
     `kolsch/tools/greet` declared ref via
     ``extends: kolsch/agents/helper``. The tool file lives under
     ``bundles/kolsch/tools/`` on disk. Owner-bundle map says the tool
-    belongs to ``kolsch``; the ``home_bundle`` kwarg says ``andre``
+    belongs to ``kolsch``; the ``home_bundle`` kwarg says ``acme``
     (caller's bundle). The map must win.
     """
     bundle = tmp_path / "bundles" / "kolsch" / "tools"
@@ -877,7 +877,7 @@ async def greet(args, ctx):
         declared_owner_bundles={tool_file: "kolsch"},
         # The caller-derived default that USED to leak into every
         # declared tool's home_bundle. Must be overridden by the map.
-        home_bundle="andre",
+        home_bundle="acme",
     )
     defns = subsystem._registry.list_tools(AgentId("ag_butler"))
     greet_defn = next(d for d in defns if d.name == "greet")

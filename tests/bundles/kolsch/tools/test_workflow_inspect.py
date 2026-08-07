@@ -127,14 +127,14 @@ async def test_valid_ref_returns_expected_shape() -> None:
     """Returns the full 5-key dict and correctly classifies inputs."""
     workflow_inspect = _load_workflow_inspect()
     workflows = _MockWorkflows(
-        yaml_by_ref={"andre/workflows/job_description_review": _JD_YAML},
+        yaml_by_ref={"acme/workflows/job_description_review": _JD_YAML},
     )
     ctx = _mk_ctx(workflows)
 
     args_schema = workflow_inspect._tool_definition.args_schema
     args = args_schema.model_validate(
         {
-            "ref": "andre/workflows/job_description_review",
+            "ref": "acme/workflows/job_description_review",
         }
     )
     result = await workflow_inspect._tool_definition.func(args, ctx)
@@ -148,7 +148,7 @@ async def test_valid_ref_returns_expected_shape() -> None:
         "required_inputs_including_children",
         "example_call",
     }
-    assert result["ref"] == "andre/workflows/job_description_review"
+    assert result["ref"] == "acme/workflows/job_description_review"
     assert result["description"] == ("job description review — requires inputs.url")
     assert result["required_inputs"] == ["url"]
     assert result["optional_inputs"] == []
@@ -183,11 +183,11 @@ graph:
 async def test_required_and_optional_correctly_partitioned() -> None:
     """`{{ inputs.a }}` → required; `{{ inputs.b | default(...) }}` → optional."""
     workflow_inspect = _load_workflow_inspect()
-    workflows = _MockWorkflows(yaml_by_ref={"andre/workflows/mixed": _MIXED_YAML})
+    workflows = _MockWorkflows(yaml_by_ref={"acme/workflows/mixed": _MIXED_YAML})
     ctx = _mk_ctx(workflows)
 
     args_schema = workflow_inspect._tool_definition.args_schema
-    args = args_schema.model_validate({"ref": "andre/workflows/mixed"})
+    args = args_schema.model_validate({"ref": "acme/workflows/mixed"})
     result = await workflow_inspect._tool_definition.func(args, ctx)
 
     assert result["required_inputs"] == ["a"]
@@ -216,24 +216,24 @@ async def test_example_call_is_valid_run_workflow_template(
     monkeypatch.setenv("KOLSCH_VIRTUAL_WORKFLOW_TOOLS", "0")
     workflow_inspect = _load_workflow_inspect()
     workflows = _MockWorkflows(
-        yaml_by_ref={"andre/workflows/job_description_review": _JD_YAML},
+        yaml_by_ref={"acme/workflows/job_description_review": _JD_YAML},
     )
     ctx = _mk_ctx(workflows)
 
     args_schema = workflow_inspect._tool_definition.args_schema
     args = args_schema.model_validate(
         {
-            "ref": "andre/workflows/job_description_review",
+            "ref": "acme/workflows/job_description_review",
         }
     )
     result = await workflow_inspect._tool_definition.func(args, ctx)
 
     example = result["example_call"]
     assert isinstance(example, str)
-    # Shape: run_workflow(ref="andre/workflows/job_description_review",
+    # Shape: run_workflow(ref="acme/workflows/job_description_review",
     # inputs={"url": "<value from user request>"}).
     assert example.startswith("run_workflow(")
-    assert 'ref="andre/workflows/job_description_review"' in example
+    assert 'ref="acme/workflows/job_description_review"' in example
     assert "inputs={" in example
     assert '"url"' in example
 
@@ -287,7 +287,7 @@ async def test_unknown_ref_raises_with_available_refs() -> None:
     workflow_inspect = _load_workflow_inspect()
     workflows = _MockWorkflows(
         yaml_by_ref={"kolsch/workflows/hello": "nodes: {}\n"},
-        list_refs=["kolsch/workflows/hello", "andre/workflows/foo"],
+        list_refs=["kolsch/workflows/hello", "acme/workflows/foo"],
     )
     ctx = _mk_ctx(workflows)
 
@@ -300,7 +300,7 @@ async def test_unknown_ref_raises_with_available_refs() -> None:
     assert "kolsch/workflows/does_not_exist" in str(err)
     assert "not found" in str(err)
     assert "kolsch/workflows/hello" in str(err)
-    assert "andre/workflows/foo" in str(err)
+    assert "acme/workflows/foo" in str(err)
 
 
 @pytest.mark.asyncio

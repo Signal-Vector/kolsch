@@ -132,7 +132,7 @@ async def test_register_for_agent_emits_virtual_tools_when_workflows_declared(
     monkeypatch.setenv("KOLSCH_VIRTUAL_WORKFLOW_TOOLS", "1")
     workflows = _MockWorkflows(
         yaml_by_ref={
-            "andre/workflows/job_description_review": _JD_YAML,
+            "acme/workflows/job_description_review": _JD_YAML,
             "kolsch/workflows/hello": _HELLO_YAML,
         },
     )
@@ -149,7 +149,7 @@ async def test_register_for_agent_emits_virtual_tools_when_workflows_declared(
     # Generic still present.
     assert "run_workflow" in names
     # One virtual per catalogued workflow.
-    assert "run_workflow_andre_workflows_job_description_review" in names
+    assert "run_workflow_acme_workflows_job_description_review" in names
     assert "run_workflow_kolsch_workflows_hello" in names
 
 
@@ -215,7 +215,7 @@ async def test_feature_flag_disables_virtuals(
     monkeypatch.setenv("KOLSCH_VIRTUAL_WORKFLOW_TOOLS", "0")
     workflows = _MockWorkflows(
         yaml_by_ref={
-            "andre/workflows/job_description_review": _JD_YAML,
+            "acme/workflows/job_description_review": _JD_YAML,
         },
     )
     _subsystem.set_chat_services(ChatServiceRegistry(workflows=workflows))
@@ -229,7 +229,7 @@ async def test_feature_flag_disables_virtuals(
     names = {info.name for info in infos}
     assert "run_workflow" in names
     # No virtuals when flag disabled.
-    assert "run_workflow_andre_workflows_job_description_review" not in names
+    assert "run_workflow_acme_workflows_job_description_review" not in names
 
 
 # ---------------------------------------------------------------------------
@@ -246,7 +246,7 @@ async def test_generic_run_workflow_still_registered_alongside_virtuals(
     monkeypatch.setenv("KOLSCH_VIRTUAL_WORKFLOW_TOOLS", "1")
     workflows = _MockWorkflows(
         yaml_by_ref={
-            "andre/workflows/job_description_review": _JD_YAML,
+            "acme/workflows/job_description_review": _JD_YAML,
         },
     )
     _subsystem.set_chat_services(ChatServiceRegistry(workflows=workflows))
@@ -260,7 +260,7 @@ async def test_generic_run_workflow_still_registered_alongside_virtuals(
     names = {info.name for info in infos}
     # Both present.
     assert "run_workflow" in names
-    assert "run_workflow_andre_workflows_job_description_review" in names
+    assert "run_workflow_acme_workflows_job_description_review" in names
 
     # Virtual carries the same home_bundle as the generic (authz
     # rules for `kolsch/tools/run_workflow` apply symmetrically —
@@ -271,7 +271,7 @@ async def test_generic_run_workflow_still_registered_alongside_virtuals(
     virtual_defn = next(
         i
         for i in listed
-        if i.name == "run_workflow_andre_workflows_job_description_review"
+        if i.name == "run_workflow_acme_workflows_job_description_review"
     )
     # Different args schemas — the generic has opaque `inputs: dict`,
     # the virtual has a typed `url` field.

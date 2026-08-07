@@ -2231,7 +2231,7 @@ class _Exchange:
             declared_paths=declared_paths,
             # Per-declared-path owner bundle derived from the ref's
             # leading segment (bug-authz-rule-caller-bundle-mismatch).
-            # A butler-in-`andre` extending `kolsch/agents/helper`
+            # A butler-in-`acme` extending `kolsch/agents/helper`
             # inherits declared refs like `kolsch/tools/read_file` —
             # the tool's authoritative home is `kolsch`, NOT the
             # caller agent's bundle. Threading the map through
@@ -2308,11 +2308,11 @@ class _Exchange:
 
         Threading the owner bundle through fixes
         bug-authz-rule-caller-bundle-mismatch: a butler agent in the
-        `andre` bundle extending `kolsch/agents/helper` inherits
+        `acme` bundle extending `kolsch/agents/helper` inherits
         declared refs like `kolsch/tools/read_file`; before this
         change, `register_for_agent` stamped each tool with the
-        caller agent's bundle (`andre`) so `defn.action_name`
-        returned `andre/tools/read_file` and modal-granted rules
+        caller agent's bundle (`acme`) so `defn.action_name`
+        returned `acme/tools/read_file` and modal-granted rules
         landed under the wrong bundle.
 
         The asset catalog (built at runtime bootstrap via

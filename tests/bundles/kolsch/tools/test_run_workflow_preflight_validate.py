@@ -155,13 +155,13 @@ async def test_invalid_workflow_rejected_no_card_no_run() -> None:
     ctx = _mk_ctx(cards, workflows)
 
     args_schema = run_workflow._tool_definition.args_schema
-    args = args_schema.model_validate({"ref": "andre/workflows/broken", "inputs": {}})
+    args = args_schema.model_validate({"ref": "acme/workflows/broken", "inputs": {}})
     with pytest.raises(PlatformError):
         await run_workflow._tool_definition.func(args, ctx)
 
     # The validate pre-flight was consulted, and it rejected the launch
     # BEFORE any card open / workflow start.
-    assert workflows.validate_calls == ["andre/workflows/broken"]
+    assert workflows.validate_calls == ["acme/workflows/broken"]
     assert workflows.starts == []
     assert cards.opened == []
 
@@ -196,7 +196,7 @@ async def test_error_message_enumerates_each_validation_issue_messages() -> None
     ctx = _mk_ctx(cards, workflows)
 
     args_schema = run_workflow._tool_definition.args_schema
-    args = args_schema.model_validate({"ref": "andre/workflows/broken", "inputs": {}})
+    args = args_schema.model_validate({"ref": "acme/workflows/broken", "inputs": {}})
     with pytest.raises(PlatformError) as exc_info:
         await run_workflow._tool_definition.func(args, ctx)
     text = str(exc_info.value)
@@ -207,7 +207,7 @@ async def test_error_message_enumerates_each_validation_issue_messages() -> None
     # And the count phrasing is helpful, not a bare "N sub-exceptions".
     assert "2 issues" in text
     # The message names the ref so the LLM knows WHICH workflow to fix.
-    assert "andre/workflows/broken" in text
+    assert "acme/workflows/broken" in text
 
 
 # ----------------------------------------------------------------------
@@ -227,10 +227,10 @@ async def test_valid_workflow_launches_unchanged_valid() -> None:
     ctx = _mk_ctx(cards, workflows)
 
     args_schema = run_workflow._tool_definition.args_schema
-    args = args_schema.model_validate({"ref": "andre/workflows/good", "inputs": {}})
+    args = args_schema.model_validate({"ref": "acme/workflows/good", "inputs": {}})
     result = await run_workflow._tool_definition.func(args, ctx)
     assert result["run_id"] == "wrk_probe"
-    assert workflows.starts == [("andre/workflows/good", {})]
+    assert workflows.starts == [("acme/workflows/good", {})]
     assert len(cards.opened) == 1
 
 
@@ -336,7 +336,7 @@ async def test_validator_absent_falls_back_to_pre_qol088_shape() -> None:
     ctx = _mk_ctx(cards, workflows)
 
     args_schema = run_workflow._tool_definition.args_schema
-    args = args_schema.model_validate({"ref": "andre/workflows/good", "inputs": {}})
+    args = args_schema.model_validate({"ref": "acme/workflows/good", "inputs": {}})
     result = await run_workflow._tool_definition.func(args, ctx)
     assert result["run_id"] == "wrk_headless"
-    assert workflows.starts == [("andre/workflows/good", {})]
+    assert workflows.starts == [("acme/workflows/good", {})]

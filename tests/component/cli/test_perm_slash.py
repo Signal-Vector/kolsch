@@ -68,7 +68,7 @@ def _platform_seed() -> dict[str, Any]:
 
 def _seed_workspace(root: Path) -> None:
     """Build a workspace with a kolsch bundle that owns `bash` +
-    a second `andre` bundle that also ships a tool named `note`
+    a second `acme` bundle that also ships a tool named `note`
     so we can test ambiguous-bare-name validation."""
     (root / "bundles" / "kolsch" / "tools").mkdir(parents=True)
     (root / "bundles" / "kolsch" / "bundle.yaml").write_text(
@@ -86,18 +86,18 @@ def _seed_workspace(root: Path) -> None:
             f"# stub for {name}\n",
             encoding="utf-8",
         )
-    (root / "bundles" / "andre" / "tools").mkdir(parents=True)
-    (root / "bundles" / "andre" / "bundle.yaml").write_text(
+    (root / "bundles" / "acme" / "tools").mkdir(parents=True)
+    (root / "bundles" / "acme" / "bundle.yaml").write_text(
         yaml.safe_dump(
             {
-                "name": "andre",
+                "name": "acme",
                 "version": "0.1.0",
-                "description": "andre bundle (test fixture)",
+                "description": "acme bundle (test fixture)",
             }
         ),
         encoding="utf-8",
     )
-    (root / "bundles" / "andre" / "tools" / "fetch_url.py").write_text(
+    (root / "bundles" / "acme" / "tools" / "fetch_url.py").write_text(
         "# stub\n",
         encoding="utf-8",
     )

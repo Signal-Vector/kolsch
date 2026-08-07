@@ -202,7 +202,7 @@ def test_bare_tool_name_rejected_with_candidates() -> None:
 
 def test_bare_tool_name_ambiguous_across_bundles() -> None:
     """Two bundles ship `bash` + a rule has `what: bash` → ambiguous error."""
-    catalog = _catalog(("kolsch", "bash"), ("andre", "bash"))
+    catalog = _catalog(("kolsch", "bash"), ("acme", "bash"))
     with pytest.raises(AssetsAmbiguousShorthand) as excinfo:
         RuleBasedAuthorizationProvider(
             config={"rules": [{"what": "bash", "pattern": "*", "effect": "allow"}]},
@@ -210,7 +210,7 @@ def test_bare_tool_name_ambiguous_across_bundles() -> None:
         )
     assert set(excinfo.value.detail["candidates"]) == {
         "kolsch/tools/bash",
-        "andre/tools/bash",
+        "acme/tools/bash",
     }
 
 
@@ -400,12 +400,12 @@ def test_migration_two_seg_unresolvable_survives_with_warning() -> None:
     """2-seg refs that don't resolve to a tool stay as-is + warn."""
     catalog = _catalog(("kolsch", "bash"))
     out = migrate_authz_rules(
-        [{"what": "andre/unknown", "pattern": "*", "effect": "allow"}],
+        [{"what": "acme/unknown", "pattern": "*", "effect": "allow"}],
         catalog=catalog,
     )
     # Survives in 2-seg form (catalog doesn't own this tool).
     assert out.rules == [
-        {"what": "andre/unknown", "pattern": "*", "effect": "allow"},
+        {"what": "acme/unknown", "pattern": "*", "effect": "allow"},
     ]
     assert len(out.deprecated) == 1
     assert out.deprecated[0].kind == "two_seg"
@@ -414,7 +414,7 @@ def test_migration_two_seg_unresolvable_survives_with_warning() -> None:
 def test_migration_reattributes_orphaned_3seg_to_owner_bundle() -> None:
     """bug-authz-rule-caller-bundle-mismatch — orphaned 3-seg refs.
 
-    A rule with `what: andre/tools/read_file` gets rewritten to
+    A rule with `what: acme/tools/read_file` gets rewritten to
     `kolsch/tools/read_file` when the catalog says `read_file` lives
     in `kolsch`. Simulates the modal-granted rule the butler agent
     produces after inheriting `read_file` from
@@ -422,7 +422,7 @@ def test_migration_reattributes_orphaned_3seg_to_owner_bundle() -> None:
     """
     catalog = _catalog(("kolsch", "read_file"))
     out = migrate_authz_rules(
-        [{"what": "andre/tools/read_file", "pattern": "*", "effect": "allow"}],
+        [{"what": "acme/tools/read_file", "pattern": "*", "effect": "allow"}],
         catalog=catalog,
     )
     assert out.rules == [
@@ -430,7 +430,7 @@ def test_migration_reattributes_orphaned_3seg_to_owner_bundle() -> None:
     ]
     assert len(out.deprecated) == 1
     assert out.deprecated[0].kind == "orphan_3seg"
-    assert out.deprecated[0].what == "andre/tools/read_file"
+    assert out.deprecated[0].what == "acme/tools/read_file"
     assert "bug-authz-rule-caller-bundle-mismatch" in out.deprecated[0].reason
 
 
@@ -443,12 +443,12 @@ def test_migration_orphaned_3seg_ambiguous_leaves_alone() -> None:
     """
     catalog = _catalog(("kolsch", "bash"), ("otherbundle", "bash"))
     out = migrate_authz_rules(
-        [{"what": "andre/tools/bash", "pattern": "*", "effect": "allow"}],
+        [{"what": "acme/tools/bash", "pattern": "*", "effect": "allow"}],
         catalog=catalog,
     )
     # Unchanged.
     assert out.rules == [
-        {"what": "andre/tools/bash", "pattern": "*", "effect": "allow"},
+        {"what": "acme/tools/bash", "pattern": "*", "effect": "allow"},
     ]
     # No deprecation event either — nothing was actionable.
     assert out.deprecated == []
@@ -464,7 +464,7 @@ def test_migration_orphaned_3seg_no_matching_tool_leaves_alone() -> None:
     out = migrate_authz_rules(
         [
             {
-                "what": "andre/tools/fetch_website",
+                "what": "acme/tools/fetch_website",
                 "pattern": "*",
                 "effect": "allow",
             }
@@ -472,7 +472,7 @@ def test_migration_orphaned_3seg_no_matching_tool_leaves_alone() -> None:
         catalog=catalog,
     )
     assert out.rules == [
-        {"what": "andre/tools/fetch_website", "pattern": "*", "effect": "allow"},
+        {"what": "acme/tools/fetch_website", "pattern": "*", "effect": "allow"},
     ]
     assert out.deprecated == []
 
@@ -563,27 +563,27 @@ async def test_cross_bundle_tools_are_distinct_authz_subjects() -> None:
     """qol-action-namespace-bundle-scoped.md acceptance #7 — the
     headline win: two bundles shipping a tool of the same name now
     have distinct rule subjects. ``kolsch/tools/bash`` and
-    ``andre/tools/bash`` are NOT bridged by any translation map."""
-    catalog = _catalog(("kolsch", "bash"), ("andre", "bash"))
+    ``acme/tools/bash`` are NOT bridged by any translation map."""
+    catalog = _catalog(("kolsch", "bash"), ("acme", "bash"))
     provider = RuleBasedAuthorizationProvider(
         config={
             "rules": [
                 {"what": "kolsch/tools/bash", "pattern": "*", "effect": "allow"},
-                {"what": "andre/tools/bash", "pattern": "*", "effect": "deny"},
+                {"what": "acme/tools/bash", "pattern": "*", "effect": "deny"},
             ],
         },
         catalog=catalog,
     )
     kolsch_ok = await provider.allow("u", "kolsch/tools/bash", target="ls")
-    andre_blocked = await provider.allow("u", "andre/tools/bash", target="ls")
+    acme_blocked = await provider.allow("u", "acme/tools/bash", target="ls")
     assert kolsch_ok.allowed
-    assert not andre_blocked.allowed
-    # And the rules cross-fire test: an `andre` rule does NOT match
+    assert not acme_blocked.allowed
+    # And the rules cross-fire test: an `acme` rule does NOT match
     # a `kolsch` action and vice versa.
     assert kolsch_ok.matched_rule is not None
     assert kolsch_ok.matched_rule.what == "kolsch/tools/bash"
-    assert andre_blocked.matched_rule is not None
-    assert andre_blocked.matched_rule.what == "andre/tools/bash"
+    assert acme_blocked.matched_rule is not None
+    assert acme_blocked.matched_rule.what == "acme/tools/bash"
 
 
 async def test_translation_map_no_longer_carries_tool_entries() -> None:
@@ -591,7 +591,7 @@ async def test_translation_map_no_longer_carries_tool_entries() -> None:
     ``_build_action_to_tool_ref`` tool branch is deleted. The map
     still exists for node entries (separate ticket); for tools it
     should be empty."""
-    catalog = _catalog(("kolsch", "bash"), ("andre", "bash"))
+    catalog = _catalog(("kolsch", "bash"), ("acme", "bash"))
     provider = RuleBasedAuthorizationProvider(
         config={"rules": []},
         catalog=catalog,
@@ -599,7 +599,7 @@ async def test_translation_map_no_longer_carries_tool_entries() -> None:
     # Tool actions: no bridge entries.
     assert provider.lookup_tool_ref("tool.bash") is None
     assert provider.lookup_tool_ref("kolsch/tools/bash") is None
-    assert provider.lookup_tool_ref("andre/tools/bash") is None
+    assert provider.lookup_tool_ref("acme/tools/bash") is None
 
 
 # ---------------------------------------------------------------------------

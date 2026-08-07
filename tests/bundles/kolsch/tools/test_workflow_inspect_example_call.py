@@ -94,13 +94,13 @@ async def test_example_call_prefers_virtual_name_when_available(
     monkeypatch.setenv("KOLSCH_VIRTUAL_WORKFLOW_TOOLS", "1")
     workflow_inspect = _load_workflow_inspect()
     workflows = _MockWorkflows(
-        yaml_by_ref={"andre/workflows/job_description_review": _JD_YAML},
+        yaml_by_ref={"acme/workflows/job_description_review": _JD_YAML},
     )
     ctx = _mk_ctx(workflows)
     args_schema = workflow_inspect._tool_definition.args_schema
     args = args_schema.model_validate(
         {
-            "ref": "andre/workflows/job_description_review",
+            "ref": "acme/workflows/job_description_review",
         }
     )
     result = await workflow_inspect._tool_definition.func(args, ctx)
@@ -108,7 +108,7 @@ async def test_example_call_prefers_virtual_name_when_available(
     example = result["example_call"]
     assert isinstance(example, str)
     # Virtual tool name shape.
-    assert example.startswith("run_workflow_andre_workflows_job_description_review(")
+    assert example.startswith("run_workflow_acme_workflows_job_description_review(")
     # Typed-arg shape — ``url="<...>"`` not ``inputs={"url": ...}``.
     assert 'url="<value from user request>"' in example
     assert "inputs=" not in example
@@ -127,21 +127,21 @@ async def test_example_call_falls_back_to_generic_when_virtuals_disabled(
     monkeypatch.setenv("KOLSCH_VIRTUAL_WORKFLOW_TOOLS", "0")
     workflow_inspect = _load_workflow_inspect()
     workflows = _MockWorkflows(
-        yaml_by_ref={"andre/workflows/job_description_review": _JD_YAML},
+        yaml_by_ref={"acme/workflows/job_description_review": _JD_YAML},
     )
     ctx = _mk_ctx(workflows)
     args_schema = workflow_inspect._tool_definition.args_schema
     args = args_schema.model_validate(
         {
-            "ref": "andre/workflows/job_description_review",
+            "ref": "acme/workflows/job_description_review",
         }
     )
     result = await workflow_inspect._tool_definition.func(args, ctx)
 
     example = result["example_call"]
     # bug-027 shape.
-    assert example.startswith('run_workflow(ref="andre/workflows/')
+    assert example.startswith('run_workflow(ref="acme/workflows/')
     assert "inputs={" in example
     assert '"url": "<value from user request>"' in example
     # Virtual tool name NOT used.
-    assert "run_workflow_andre_workflows_" not in example
+    assert "run_workflow_acme_workflows_" not in example

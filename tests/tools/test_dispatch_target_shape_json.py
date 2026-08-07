@@ -188,7 +188,7 @@ def test_auto_shape_path_beats_ref_still() -> None:
         path: str
         ref: str
 
-    args = _PathAndRef(path="/tmp/x", ref="andre/workflows/x")
+    args = _PathAndRef(path="/tmp/x", ref="acme/workflows/x")
     result = _extract_target_from_args(args, target_shape="auto")
     assert result == "/tmp/x"
 

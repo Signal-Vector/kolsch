@@ -14,7 +14,7 @@ ensures the flagship stays true to D-010.
 Composition covered:
 
 1. Fire ``authz.allow(principal, "kolsch/tools/run_workflow",
-   target="andre/workflows/x")`` — the registered
+   target="acme/workflows/x")`` — the registered
    ``InlineApprovalCallback`` fires; ``PromptsImpl.choice`` emits
    ``WIRE_PROMPT_REQUESTED`` on the live bus.
 2. The adapter's ``_handle_prompt_requested`` mounts an
@@ -27,7 +27,7 @@ Composition covered:
    ``src/providers/authz.py:1106`` fires: the rule is inserted +
    the ``_rule_added_hook`` writes ``platform.yaml``.
 5. A subsequent ``authz.allow(principal, "kolsch/tools/run_workflow",
-   target="andre/workflows/x")`` short-circuits — ``allowed=True``
+   target="acme/workflows/x")`` short-circuits — ``allowed=True``
    without any ``WIRE_PROMPT_REQUESTED`` event.
 6. Args line contains the workflow ref (``target`` from step 1).
 7. ``run_workflow`` tool with missing inputs surfaces
@@ -268,7 +268,7 @@ async def test_persist_rule_prevents_reprompt(chat_app: Any) -> None:
         # --------------------------------------------------------------
         # (1) Fire authz.allow — the real callback fires the prompt.
         # --------------------------------------------------------------
-        target_ref = "andre/workflows/job_description_review"
+        target_ref = "acme/workflows/job_description_review"
         allow_task = asyncio.create_task(
             authz.allow(
                 "agent.test",
@@ -391,7 +391,7 @@ async def test_args_line_shows_workflow_ref(chat_app: Any) -> None:
         await pilot.pause()
 
         authz = pilot.app.session.runtime.authz
-        target_ref = "andre/workflows/some_workflow_probe"
+        target_ref = "acme/workflows/some_workflow_probe"
         _allow_task = asyncio.create_task(
             authz.allow(
                 "agent.test",
@@ -515,7 +515,7 @@ async def test_run_workflow_input_validation_surfaces_error() -> None:
     args_schema = run_workflow._tool_definition.args_schema
     args = args_schema.model_validate(
         {
-            "ref": "andre/workflows/job_description_review",
+            "ref": "acme/workflows/job_description_review",
             "inputs": {},  # missing `url`
         }
     )

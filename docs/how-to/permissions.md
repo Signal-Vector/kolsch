@@ -43,7 +43,7 @@ agent.execute.<agent_id>
 ```
 
 For the starter `kolsch/agents/helper` (whose `agent_id: ag_helper`),
-that's `agent.execute.ag_helper`. For a personal `andre/agents/butler`
+that's `agent.execute.ag_helper`. For a personal `acme/agents/butler`
 (`agent_id: ag_butler`) it's `agent.execute.ag_butler`. Rule shape
 matches on the `what:` field the same way as tool rules:
 
@@ -168,7 +168,7 @@ ref in an agent YAML all use the same 3-segment catalog ref
 (`<bundle>/tools/<name>`, e.g. `kolsch/tools/bash`). The matcher
 fnmatches `what` against the action directly — no translation,
 no bridge map. Two bundles can ship a tool with the same name
-(`kolsch/tools/bash` vs `andre/tools/bash`) and authz rules
+(`kolsch/tools/bash` vs `acme/tools/bash`) and authz rules
 target them independently.
 
 To see what tools are available in your workspace:

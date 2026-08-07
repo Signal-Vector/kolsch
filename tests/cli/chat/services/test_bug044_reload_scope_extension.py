@@ -229,7 +229,7 @@ async def test_reload_picks_up_bundle_yaml_change(tmp_path: Path) -> None:
 
     _write_bundle(
         tmp_path,
-        "andre",
+        "acme",
         permissions=[],  # empty at "startup"
         agent_permissions={"butler": [{"what": "*", "effect": "allow"}]},
     )
@@ -245,13 +245,13 @@ async def test_reload_picks_up_bundle_yaml_change(tmp_path: Path) -> None:
 
     # Pin an empty registration for the catalogued agent, matching
     # what the engine's tool-subsystem setup would have done at boot.
-    agent_id: AgentId = derive_agent_id("andre", "butler")
+    agent_id: AgentId = derive_agent_id("acme", "butler")
     runtime.tools_subsystem._registry.ensure_agent(agent_id)
 
     # Edit the bundle.yaml on disk — add a new deny rule.
     _write_bundle(
         tmp_path,
-        "andre",
+        "acme",
         permissions=[{"what": "kolsch/tools/bash", "effect": "deny"}],
         agent_permissions={"butler": [{"what": "*", "effect": "allow"}]},
     )
@@ -277,7 +277,7 @@ async def test_reload_picks_up_workflow_policy_change(tmp_path: Path) -> None:
     """
     _write_bundle(
         tmp_path,
-        "andre",
+        "acme",
         permissions=[],
         workflow_policy={
             "job_review": [{"what": "kolsch/tools/write_file", "effect": "deny"}],
@@ -294,7 +294,7 @@ async def test_reload_picks_up_workflow_policy_change(tmp_path: Path) -> None:
     # /reload without a restart.
     _write_bundle(
         tmp_path,
-        "andre",
+        "acme",
         permissions=[],
         workflow_policy={
             "job_review": [
@@ -317,18 +317,18 @@ async def test_reload_picks_up_agent_permissions_change(tmp_path: Path) -> None:
 
     _write_bundle(
         tmp_path,
-        "andre",
+        "acme",
         permissions=[],
         agent_permissions={"butler": []},
     )
     runtime = _build_runtime(tmp_path)
-    agent_id: AgentId = derive_agent_id("andre", "butler")
+    agent_id: AgentId = derive_agent_id("acme", "butler")
     runtime.tools_subsystem._registry.ensure_agent(agent_id)
 
     # Author a new rule on the agent YAML.
     _write_bundle(
         tmp_path,
-        "andre",
+        "acme",
         permissions=[],
         agent_permissions={
             "butler": [
@@ -369,7 +369,7 @@ async def test_reload_reports_4_layer_count_on_success(tmp_path: Path) -> None:
     )
     _write_bundle(
         tmp_path,
-        "andre",
+        "acme",
         permissions=[
             {"what": "kolsch/tools/read_file", "effect": "allow"},
             {"what": "kolsch/tools/list_files", "effect": "allow"},
@@ -416,7 +416,7 @@ async def test_reload_partial_failure_preserves_old_provider(
     # Two valid bundles. Runtime built here scans them.
     _write_bundle(
         tmp_path,
-        "andre",
+        "acme",
         permissions=[{"what": "kolsch/tools/bash", "effect": "deny"}],
     )
     _write_bundle(
@@ -428,8 +428,8 @@ async def test_reload_partial_failure_preserves_old_provider(
     old_authz = runtime.authz
 
     # Now corrupt one of the bundles' YAMLs mid-session.
-    (tmp_path / "bundles" / "andre" / "bundle.yaml").write_text(
-        "name: andre\n"
+    (tmp_path / "bundles" / "acme" / "bundle.yaml").write_text(
+        "name: acme\n"
         "version: 0.1.0\n"
         "description: broken\n"
         "permissions:\n"
@@ -442,7 +442,7 @@ async def test_reload_partial_failure_preserves_old_provider(
     assert result.summary is None
     assert result.error is not None
     assert "Old rules still active" in result.error
-    assert "andre" in result.error  # cites the offending file
+    assert "acme" in result.error  # cites the offending file
     # Provider was NOT swapped.
     assert runtime.authz is old_authz
 
@@ -478,13 +478,13 @@ async def test_reload_ac5_manual_verify_three_layer_edit(tmp_path: Path) -> None
     )
     _write_bundle(
         tmp_path,
-        "andre",
+        "acme",
         permissions=[],
         agent_permissions={"butler": []},
         workflow_policy={"job_review": []},
     )
     runtime = _build_runtime(tmp_path)
-    agent_id: AgentId = derive_agent_id("andre", "butler")
+    agent_id: AgentId = derive_agent_id("acme", "butler")
     runtime.tools_subsystem._registry.ensure_agent(agent_id)
 
     # Sim the operator: edit all three layers between the last
@@ -500,7 +500,7 @@ async def test_reload_ac5_manual_verify_three_layer_edit(tmp_path: Path) -> None
     )
     _write_bundle(
         tmp_path,
-        "andre",
+        "acme",
         permissions=[
             {"what": "kolsch/tools/bash", "effect": "deny"},
         ],
@@ -575,15 +575,15 @@ async def test_reload_discovers_new_bundle_yaml_added_since_startup(
     )
     _write_bundle(
         tmp_path,
-        "andre",
+        "acme",
         permissions=[],
         agent_permissions={"butler": []},
     )
     runtime = _build_runtime(tmp_path)
 
-    # Sanity: the boot catalog only carries "andre".
+    # Sanity: the boot catalog only carries "acme".
     boot_catalog = runtime.asset_management.catalog()
-    assert set(boot_catalog.bundles.keys()) == {"andre"}
+    assert set(boot_catalog.bundles.keys()) == {"acme"}
 
     # Operator drops a second bundle on disk mid-session — this is the
     # workflow the boot-time-only reload could never catch.
@@ -632,7 +632,7 @@ async def test_reload_notices_deleted_bundle_yaml(tmp_path: Path) -> None:
     )
     _write_bundle(
         tmp_path,
-        "andre",
+        "acme",
         permissions=[{"what": "kolsch/tools/bash", "effect": "deny"}],
     )
     _write_bundle(
@@ -644,7 +644,7 @@ async def test_reload_notices_deleted_bundle_yaml(tmp_path: Path) -> None:
 
     # Sanity: boot catalog carries both bundles.
     boot_catalog = runtime.asset_management.catalog()
-    assert set(boot_catalog.bundles.keys()) == {"andre", "removed"}
+    assert set(boot_catalog.bundles.keys()) == {"acme", "removed"}
 
     # Delete the "removed" bundle's YAML mid-session — the directory
     # stays but the manifest is gone.
@@ -661,7 +661,7 @@ async def test_reload_notices_deleted_bundle_yaml(tmp_path: Path) -> None:
     # asset_management reads see the deletion.
     fresh_catalog = runtime.asset_management.catalog()
     assert "removed" not in fresh_catalog.bundles
-    assert "andre" in fresh_catalog.bundles
+    assert "acme" in fresh_catalog.bundles
 
 
 # ---------------------------------------------------------------------------
@@ -697,18 +697,18 @@ async def test_reload_handles_missing_bundle_yaml_consistently(
     )
     _write_bundle(
         tmp_path,
-        "andre",
+        "acme",
         permissions=[{"what": "kolsch/tools/bash", "effect": "deny"}],
     )
     runtime = _build_runtime(tmp_path)
 
     # Synthesize the mid-reload race: monkey-patch
     # ``catalog_module.scan`` so the rescan returns the stale (still
-    # carrying "andre") catalog even though the YAML has been deleted.
+    # carrying "acme") catalog even though the YAML has been deleted.
     from assets import catalog as catalog_module
 
     stale_catalog = runtime.asset_management.catalog()
-    (tmp_path / "bundles" / "andre" / "bundle.yaml").unlink()
+    (tmp_path / "bundles" / "acme" / "bundle.yaml").unlink()
 
     original_scan = catalog_module.scan
     try:
@@ -723,7 +723,7 @@ async def test_reload_handles_missing_bundle_yaml_consistently(
     assert result.error is not None
     assert "Old rules still active" in result.error
     # File path cited in the message so the operator can find it.
-    assert "andre" in result.error and "bundle.yaml" in result.error
+    assert "acme" in result.error and "bundle.yaml" in result.error
 
 
 @pytest.mark.asyncio
@@ -747,7 +747,7 @@ async def test_reload_handles_missing_agent_yaml_consistently(
     )
     _write_bundle(
         tmp_path,
-        "andre",
+        "acme",
         permissions=[],
         agent_permissions={"butler": [{"what": "*", "effect": "allow"}]},
     )
@@ -756,7 +756,7 @@ async def test_reload_handles_missing_agent_yaml_consistently(
     from assets import catalog as catalog_module
 
     stale_catalog = runtime.asset_management.catalog()
-    (tmp_path / "bundles" / "andre" / "agents" / "butler.yaml").unlink()
+    (tmp_path / "bundles" / "acme" / "agents" / "butler.yaml").unlink()
 
     original_scan = catalog_module.scan
     try:

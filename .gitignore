@@ -46,6 +46,10 @@ logs/
 *.swp
 .DS_Store
 
+# Claude Code local state — permission allowlists, scheduled-task
+# locks, worktree bookkeeping. All machine-local, never shared.
+.claude/
+
 # Codanna already lives in .codannaignore; index data is local.
 # Keep `.codannaignore` itself tracked — it's the project's index policy.
 .codanna/

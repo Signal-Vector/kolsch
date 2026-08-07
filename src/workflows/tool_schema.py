@@ -78,8 +78,8 @@ _HASH_SUFFIX_LEN = 8  # 8 hex chars from blake2b — 32 bits of collision-resist
 def virtual_tool_name(ref: str) -> str:
     """Return the identifier-safe virtual tool name for ``ref``.
 
-    ``andre/workflows/job_description_review`` →
-    ``run_workflow_andre_workflows_job_description_review`` — the
+    ``acme/workflows/job_description_review`` →
+    ``run_workflow_acme_workflows_job_description_review`` — the
     full ref is mangled to preserve the ``bundle`` segment (needed
     when two bundles ship a workflow with the same terminal name).
     Any non-``[a-z0-9_]`` character is collapsed to ``_``; the result

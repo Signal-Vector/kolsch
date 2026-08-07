@@ -100,7 +100,7 @@ def test_build_virtual_defs_returns_one_per_workflow() -> None:
     """Two workflows in catalog → two virtual defs."""
     workflows = _MockWorkflows(
         yaml_by_ref={
-            "andre/workflows/job_description_review": _JD_YAML,
+            "acme/workflows/job_description_review": _JD_YAML,
             "kolsch/workflows/hello": _HELLO_YAML,
         },
     )
@@ -112,7 +112,7 @@ def test_build_virtual_defs_returns_one_per_workflow() -> None:
     names = sorted(d.name for d in defs)
     assert names == sorted(
         [
-            "run_workflow_andre_workflows_job_description_review",
+            "run_workflow_acme_workflows_job_description_review",
             "run_workflow_kolsch_workflows_hello",
         ]
     )
@@ -141,8 +141,8 @@ def test_build_virtual_defs_empty_when_no_seams() -> None:
 
 def test_virtual_tool_name_is_identifier_safe() -> None:
     """No dots, no dashes, ≤ 64 chars; matches Pydantic name pattern."""
-    name = virtual_tool_name("andre/workflows/job_description_review")
-    assert name == "run_workflow_andre_workflows_job_description_review"
+    name = virtual_tool_name("acme/workflows/job_description_review")
+    assert name == "run_workflow_acme_workflows_job_description_review"
     assert "." not in name
     assert "-" not in name
     assert len(name) <= 64
@@ -179,7 +179,7 @@ def test_virtual_tool_name_collapses_hyphens_to_underscores() -> None:
 def test_virtual_args_model_has_required_field_for_url() -> None:
     """Unguarded ``{{ inputs.url }}`` → ``url: str`` required."""
     model = build_workflow_args_model(
-        "andre/workflows/job_description_review",
+        "acme/workflows/job_description_review",
         _JD_YAML,
     )
     assert issubclass(model, BaseModel)
@@ -198,7 +198,7 @@ def test_virtual_args_model_missing_required_raises_validation_error() -> None:
     from pydantic import ValidationError
 
     model = build_workflow_args_model(
-        "andre/workflows/job_description_review",
+        "acme/workflows/job_description_review",
         _JD_YAML,
     )
     with pytest.raises(ValidationError):
@@ -213,7 +213,7 @@ def test_virtual_args_model_missing_required_raises_validation_error() -> None:
 def test_virtual_args_model_has_optional_field_with_probed_default() -> None:
     """``{{ inputs.limit | default(10) }}`` → optional ``limit: int = 10``."""
     model = build_workflow_args_model(
-        "andre/workflows/job_description_review",
+        "acme/workflows/job_description_review",
         _JD_YAML,
     )
     fields = model.model_fields
@@ -230,7 +230,7 @@ def test_virtual_args_model_has_optional_field_with_probed_default() -> None:
 def test_virtual_args_model_probes_bool_default() -> None:
     """``| default(true)`` → optional ``bool = True``."""
     model = build_workflow_args_model(
-        "andre/workflows/multi",
+        "acme/workflows/multi",
         _MULTI_YAML,
     )
     fields = model.model_fields
@@ -257,7 +257,7 @@ def test_virtual_args_model_probes_string_default() -> None:
 def test_virtual_args_model_field_description_references_yaml_line() -> None:
     """Field descriptions carry the YAML line where the input appears."""
     model = build_workflow_args_model(
-        "andre/workflows/job_description_review",
+        "acme/workflows/job_description_review",
         _JD_YAML,
     )
     schema = model.model_json_schema()
