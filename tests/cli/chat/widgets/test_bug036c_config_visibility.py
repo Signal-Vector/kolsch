@@ -44,7 +44,7 @@ async def test_header_shows_ref_and_inputs_top_level() -> None:
         renderer._on_run_started(
             {
                 "run_id": "run_abc",
-                "workflow_ref": "andre/workflows/jd_review",
+                "workflow_ref": "acme/workflows/jd_review",
                 "inputs": {"url": "https://example.com/jd"},
                 "ts": "2026-07-09T00:00:00Z",
             }
@@ -52,7 +52,7 @@ async def test_header_shows_ref_and_inputs_top_level() -> None:
         text = renderer._header._compute_text()
         lines = text.split("\n")
         assert len(lines) == 3, f"expected 3 lines, got {lines!r}"
-        assert lines[0] == "andre/workflows/jd_review"
+        assert lines[0] == "acme/workflows/jd_review"
         assert lines[1] == "inputs: url=https://example.com/jd"
         # qol-077: header counts are bare N/M (no brackets).
         assert lines[2].startswith("0/0")

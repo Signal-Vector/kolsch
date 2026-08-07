@@ -160,11 +160,11 @@ class ToolsSubsystem:
 
         The declared-owner map is what fixes
         bug-authz-rule-caller-bundle-mismatch: a butler agent in
-        `andre` extending `kolsch/agents/helper` inherits declared
+        `acme` extending `kolsch/agents/helper` inherits declared
         refs like `kolsch/tools/read_file`. Before this parameter,
         the single `home_bundle` kwarg (the caller agent's bundle)
         was stamped onto every declared tool, so `defn.action_name`
-        returned `andre/tools/read_file` and modal-granted rules
+        returned `acme/tools/read_file` and modal-granted rules
         landed under the wrong bundle. The map preserves each
         ref's authoritative bundle.
 

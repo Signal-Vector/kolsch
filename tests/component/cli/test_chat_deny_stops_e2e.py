@@ -283,7 +283,7 @@ async def test_scenario_1_deny_once_stops_exchange_end_to_end(
         script=[
             ToolCallResponse(
                 tool="bash",
-                args={"command": "ls -la /Users/andrecohen/Desktop"},
+                args={"command": "ls -la ."},
                 tool_call_id="tc_scenario1",
             ),
             # If the loop INCORRECTLY continued after the deny, this
@@ -322,7 +322,7 @@ async def test_scenario_1_deny_once_stops_exchange_end_to_end(
         thread_id=threads[0].thread_id,
         trigger={
             "kind": "user_message",
-            "content": "run `ls -la /Users/andrecohen/Desktop`",
+            "content": "run `ls -la .`",
         },
         cancellation=cancel,
     )

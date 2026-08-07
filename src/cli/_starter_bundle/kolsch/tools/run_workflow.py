@@ -165,7 +165,7 @@ class RunWorkflowArgs(BaseModel):
         "with the values sourced from the user's request. If unsure, "
         "call `workflow_inspect(ref=...)` first — it returns the "
         "required/optional input names and an example call.\n\n"
-        'Example: run_workflow(ref="andre/workflows/job_description_review", '
+        'Example: run_workflow(ref="acme/workflows/job_description_review", '
         'inputs={"url": "https://example.com/job"}).'
     ),
     args_schema=RunWorkflowArgs,

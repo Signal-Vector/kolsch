@@ -138,7 +138,7 @@ async def test_missing_required_input_returns_is_error_true() -> None:
     args_schema = run_workflow._tool_definition.args_schema
     args = args_schema.model_validate(
         {
-            "ref": "andre/workflows/job_description_review",
+            "ref": "acme/workflows/job_description_review",
             "inputs": {},
         }
     )
@@ -167,14 +167,14 @@ async def test_valid_inputs_proceed_normally() -> None:
     args_schema = run_workflow._tool_definition.args_schema
     args = args_schema.model_validate(
         {
-            "ref": "andre/workflows/job_description_review",
+            "ref": "acme/workflows/job_description_review",
             "inputs": {"url": "https://example.com"},
         }
     )
     result = await run_workflow._tool_definition.func(args, ctx)
     assert result["run_id"] == "wrk_probe"
     assert workflows.starts == [
-        ("andre/workflows/job_description_review", {"url": "https://example.com"}),
+        ("acme/workflows/job_description_review", {"url": "https://example.com"}),
     ]
     assert len(cards.opened) == 1
 
@@ -316,7 +316,7 @@ async def test_resolver_absent_falls_back_to_pre_bug025_shape() -> None:
     args_schema = run_workflow._tool_definition.args_schema
     args = args_schema.model_validate(
         {
-            "ref": "andre/workflows/job_description_review",
+            "ref": "acme/workflows/job_description_review",
             "inputs": {},
         }
     )

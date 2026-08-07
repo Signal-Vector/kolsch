@@ -1,10 +1,18 @@
 """Extract the bug-036a JSONL fixture from a real user session.
 
 The fixture backs ``tests/cli/chat/test_bug036a_fixture_replay.py``
-(the AC #3 flagship test) + the AC #5 snapshot tests. It is a slice
+(the AC #3 flagship test) + the AC #5 snapshot tests. The EVENT
+SHAPE (envelope kinds, ordering, ids, node/tool wiring) is a slice
 of a real session, not synthetic — the whole point of AC #3 is
 "replay the events a real user's chat produced and prove the fix
-holds against that shape".
+holds against that shape". The ``job_description`` CONTENT is not:
+pub-004 (2026-08) replaced the original real-world job-posting text
+with fully original synthetic copy (same theme, so the sub-agent
+summaries elsewhere in the fixture stay consistent, but not derived
+from any real posting) after the shipped repo went public. If you
+re-run this extractor against a fresh real session, replace the new
+excerpt's ``job_description`` field with synthetic content again
+before committing — don't ship a real captured job posting.
 
 Refresh the fixture:
 

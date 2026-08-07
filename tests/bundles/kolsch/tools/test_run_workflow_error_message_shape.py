@@ -9,7 +9,7 @@ message less actionable.
 
 Asserted substrings:
 
-1. Workflow ref (``andre/workflows/job_description_review``).
+1. Workflow ref (``acme/workflows/job_description_review``).
 2. Missing input names (``'url'``).
 3. Literal JSON retry template (``inputs={"url":`` — the marker
    that lets the model see the shape).
@@ -141,7 +141,7 @@ async def test_error_message_contains_four_required_substrings() -> None:
     args_schema = run_workflow._tool_definition.args_schema
     args = args_schema.model_validate(
         {
-            "ref": "andre/workflows/job_description_review",
+            "ref": "acme/workflows/job_description_review",
             "inputs": {},
         }
     )
@@ -150,7 +150,7 @@ async def test_error_message_contains_four_required_substrings() -> None:
     msg = str(exc_info.value)
 
     # (a) The workflow ref appears somewhere in the message.
-    assert "andre/workflows/job_description_review" in msg, (
+    assert "acme/workflows/job_description_review" in msg, (
         f"error message missing workflow ref: {msg!r}"
     )
     # (b) The missing input name ``'url'`` appears.
@@ -189,7 +189,7 @@ graph:
     args_schema = run_workflow._tool_definition.args_schema
     args = args_schema.model_validate(
         {
-            "ref": "andre/workflows/two_inputs",
+            "ref": "acme/workflows/two_inputs",
             "inputs": {},
         }
     )
@@ -224,7 +224,7 @@ graph:
     args_schema = run_workflow._tool_definition.args_schema
     args = args_schema.model_validate(
         {
-            "ref": "andre/workflows/partial",
+            "ref": "acme/workflows/partial",
             "inputs": {"title": "Engineer"},
         }
     )

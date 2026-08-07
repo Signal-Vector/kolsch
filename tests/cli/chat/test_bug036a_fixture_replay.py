@@ -13,9 +13,10 @@ Replays a slice of a real user session through the real
   row. bug-036d migrated ``USER_MESSAGE`` inside a workflow row
   from suppressed to sink-routed.
 
-The fixture is a real session excerpt extended for the 036d test
-surface. See ``tests/fixtures/sessions/extract_bug036a_fixture.py``
-for the refresh workflow.
+The fixture's event shape is a real session excerpt extended for
+the 036d test surface (the job_description CONTENT is synthetic —
+see ``tests/fixtures/sessions/extract_bug036a_fixture.py`` for the
+refresh workflow and why).
 """
 
 from __future__ import annotations
@@ -170,7 +171,7 @@ def test_predicate_catches_run_workflow_and_virtuals() -> None:
     """
     assert _is_card_mounting_tool("run_workflow")
     assert _is_card_mounting_tool(
-        "run_workflow_andre_workflows_job_description_review",
+        "run_workflow_acme_workflows_job_description_review",
     )
     assert _is_card_mounting_tool("run_workflow_kolsch_workflows_hello")
     assert not _is_card_mounting_tool("bash")

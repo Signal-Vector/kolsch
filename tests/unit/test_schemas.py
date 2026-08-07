@@ -172,8 +172,8 @@ def test_derive_agent_id_format() -> None:
     # ag_<bundle>_<name> from the asset ref's (bundle, name) tuple
     # and returns an AgentId instance (so downstream typed fields
     # accept it without re-validation).
-    derived = derive_agent_id("andre", "butler")
-    assert derived == "ag_andre_butler"
+    derived = derive_agent_id("acme", "butler")
+    assert derived == "ag_acme_butler"
     assert isinstance(derived, AgentId)
     # Hyphens in either segment survive the AgentId body regex.
     assert derive_agent_id("customer-support", "weekly-summary") == (
@@ -183,7 +183,7 @@ def test_derive_agent_id_format() -> None:
     # surfaces the underlying ValueError rather than producing a
     # malformed id — Step 1 §4 documented this as the failure mode.
     with pytest.raises(ValueError, match="characters"):
-        derive_agent_id("andre", "has space")
+        derive_agent_id("acme", "has space")
 
 
 def test_subscription_id_rejects_empty() -> None:
