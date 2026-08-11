@@ -63,6 +63,7 @@ from cli.chat.widgets import (
     UserChatbox,
 )
 from cli.chat.widgets.notice import NoticeWidget
+from cli.chat.widgets.working_placeholder import WorkingPlaceholder
 from engine import ExecutionContext
 from providers import RuleBasedAuthorizationProvider
 from schemas.events import Event, EventType
@@ -657,6 +658,13 @@ class ChatApp(App[None]):
         # cancellation UI to append `⚠ Cancelled` to the partial.
         self._last_assistant_widget: AssistantProse | None = None
         self._last_assistant_text: str = ""
+        # spec-130 Step 2: the WorkingPlaceholder mounted at the start
+        # of the current turn by `_run_exchange`. `None` before the
+        # first turn and briefly during app construction; later steps
+        # (morph-on-content, cancel/error terminal states) read this to
+        # find the still-mounted placeholder for the active turn. Not
+        # cleared/removed by this step — that's steps 3-7's job.
+        self._working_placeholder: WorkingPlaceholder | None = None
         # Mutable session state used by the legacy slash handlers.
         # Populated in `on_mount` once the runtime handles are wired.
         self._chat_state: ChatSessionState | None = None
@@ -1719,6 +1727,15 @@ class ChatApp(App[None]):
         to ``user_message_with_force_skill``. The list is cleared
         after use so a subsequent unqualified message returns to
         the default trigger shape.
+
+        spec-130 Step 2: mounts a ``WorkingPlaceholder`` into
+        ``#transcript`` before ``event_stream`` iteration begins, so
+        the turn has an inline "working" indicator at the exact spot
+        the reply will land the instant the turn starts — before any
+        event has been processed. The reference is stashed on
+        ``self._working_placeholder`` so later steps (morph-on-content,
+        cancel/error terminal states) can find and replace/flip it.
+        This step only mounts it; nothing else reacts to it yet.
         """
         from cli.chat.cancel import new_cancel_token  # noqa: PLC0415
 
@@ -1726,6 +1743,7 @@ class ChatApp(App[None]):
         self.active_cancel = cancel
         self.last_cancel_reason = None
         try:
+            self._working_placeholder = await self.mount_working_placeholder()
             force_skills: list[str] = []
             if self._chat_state is not None and self._chat_state.pending_force_skill:
                 force_skills = list(self._chat_state.pending_force_skill)
@@ -1751,7 +1769,8 @@ class ChatApp(App[None]):
                 turn.target = ""
 
     # ------------------------------------------------------------------
-    # Mount helpers — called by EventAdapter and InlineApprovalCallback
+    # Mount helpers — called by EventAdapter, InlineApprovalCallback, and
+    # _run_exchange (turn-start placeholder)
     # ------------------------------------------------------------------
 
     async def mount_user_message(
@@ -1774,6 +1793,24 @@ class ChatApp(App[None]):
         # covered widgets inside a row aren't reached by the outer
         # compaction unmount pass.
         return widget
+
+    async def mount_working_placeholder(self) -> WorkingPlaceholder:
+        """Mount a turn-start ``WorkingPlaceholder`` at the transcript root.
+
+        spec-130 Step 2: called from ``_run_exchange`` before
+        ``event_stream`` iteration begins, so the placeholder appears
+        inline at the exact spot the reply will occupy the instant a
+        turn starts — before any event has been processed. The caller
+        stashes the returned widget (``self._working_placeholder``) so
+        later steps can find and remove/replace it once real content
+        (streamed token, tool call, complete response) or a terminal
+        outcome (cancel, error) arrives. This step only mounts it —
+        nothing reacts to or removes it yet.
+        """
+        transcript = self.query_one("#transcript", VerticalScroll)
+        placeholder = WorkingPlaceholder()
+        await transcript.mount(placeholder)
+        return placeholder
 
     async def mount_assistant_message(
         self,

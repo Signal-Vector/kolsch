@@ -1,7 +1,7 @@
-"""Tests for :class:`WorkingPlaceholder` (spec-130 Step 1).
+"""Tests for :class:`WorkingPlaceholder` (spec-130 Steps 1-2).
 
 Step 1 builds the widget standalone — not wired into any event flow.
-These tests cover:
+Those tests cover:
 
 - Working state: GutterBlock composed with rail ``$hint``, spinner
   glyph cycling through ``SPINNER_FRAMES`` on the ~0.08s interval.
@@ -13,24 +13,42 @@ These tests cover:
   ``test_glyph_present_under_no_color_construction`` pattern: construct
   under ``mock.patch.dict(os.environ, {"NO_COLOR": "1"})`` and assert
   the glyph is present and identical to the color-mode glyph.
+
+Step 2 wires the turn-start mount: ``ChatApp._run_exchange`` mounts a
+``WorkingPlaceholder`` into ``#transcript`` before ``event_stream``
+iteration begins. The integration tests below drive a real ``ChatApp``
+(same scaffolding as ``tests/cli/chat/test_composer_submitted_exit_verbs.py``)
+against a fake engine whose ``execute_stream`` sleeps before yielding
+its first (and only) event, and assert the placeholder is mounted in
+``#transcript`` immediately — i.e. before that first event is ever
+processed.
 """
 
 from __future__ import annotations
 
+import asyncio
 import os
-from typing import TYPE_CHECKING
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from typing import TYPE_CHECKING, Any
 from unittest import mock
+from uuid import uuid4
 
 import pytest
 from textual.widgets import Static
 
+from cli.chat.app import ChatApp
 from cli.chat.spinner import SPINNER_FRAMES
 from cli.chat.state_tokens import resolve_state
 from cli.chat.widgets._gutter_block import GutterBlock
 from cli.chat.widgets.working_placeholder import WorkingPlaceholder
+from schemas.entities import Actor
+from schemas.events import Event, EventType
+from schemas.identifiers import EventId, SessionId, ThreadId
 
 if TYPE_CHECKING:
-    from collections.abc import Callable
+    from collections.abc import AsyncGenerator, Callable
+    from pathlib import Path
 
     from textual.app import App
     from textual.widget import Widget
@@ -392,3 +410,204 @@ async def test_widget_mounts_standalone_with_no_wiring(
         await pilot.pause()
         assert widget.is_mounted
         assert widget.query_one(GutterBlock) is not None
+
+
+# ----------------------------------------------------------------------
+# spec-130 Step 2: turn-start mount via `ChatApp._run_exchange`
+# ----------------------------------------------------------------------
+#
+# Scaffolding mirrors `tests/cli/chat/test_composer_submitted_exit_verbs.py`
+# — a real `ChatApp` wired against a mock runtime/engine, driven through
+# `app.run_test()`. `_MockEngine.execute_stream` here is a *delayed*
+# async generator (sleeps before yielding its one event) so the test can
+# assert the placeholder is mounted in `#transcript` strictly before
+# that first event is ever handed to `EventAdapter.handle`.
+
+_FIRST_EVENT_DELAY_SECONDS = 0.15
+"""Delay before the fake stream yields its first event.
+
+Long enough that a broken implementation (mount happening only after
+the first event, or not at all before iteration) would reliably fail
+`test_placeholder_mounted_before_first_event_processed` on any
+reasonable CI/dev machine, short enough to keep the test fast.
+"""
+
+
+class _MockAuthzStep2:
+    def register_prompt_callback(
+        self,
+        callback: Any,
+        *,
+        on_rule_added: Any = None,
+    ) -> None:
+        _ = callback, on_rule_added
+
+    def clear_prompt_callback(self) -> None:
+        return None
+
+
+async def _empty_async_gen(*_args: Any, **_kwargs: Any) -> AsyncGenerator[Any, None]:
+    """Async generator that yields nothing — same shape as sibling tests."""
+    return
+    yield  # type: ignore[unreachable]  # pragma: no cover
+
+
+class _MockStoreStep2:
+    read_path_to_leaf = staticmethod(_empty_async_gen)
+
+
+def _make_canonical_agent_message_event(thread_id: str) -> Event:
+    """Build a real, fully-valid ``AGENT_MESSAGE`` ``Event``.
+
+    Same shape ``tests/cli/chat/conftest.py``'s ``canonical_event``
+    fixture builds — a plain module-level helper is used here (rather
+    than that fixture) since it's needed inside a closure built before
+    the test body runs, not directly from a test parameter.
+    """
+    return Event(
+        event_id=EventId(f"ev_{uuid4()}"),
+        thread_id=ThreadId(thread_id),
+        session_id=SessionId(f"ses_{uuid4()}"),
+        type=EventType.AGENT_MESSAGE,
+        data={"content": {"type": "text", "text": "hi back"}},
+        actor=Actor(kind="system"),
+        created_at=datetime.now(UTC),
+    )
+
+
+def _make_delayed_event_stream(
+    thread_id: str,
+    events_seen: list[Event],
+) -> Callable[..., AsyncGenerator[Event, None]]:
+    """Build a fake ``engine.execute_stream`` that delays its first event.
+
+    Appends each event to ``events_seen`` as it's yielded, so the test
+    can assert ordering ("placeholder mounted" happened-before "first
+    event recorded") without needing to inspect `EventAdapter` internals.
+    """
+
+    async def _delayed_stream(
+        *_args: Any, **_kwargs: Any
+    ) -> AsyncGenerator[Event, None]:
+        await asyncio.sleep(_FIRST_EVENT_DELAY_SECONDS)
+        event = _make_canonical_agent_message_event(thread_id)
+        events_seen.append(event)
+        yield event
+
+    return _delayed_stream
+
+
+class _MockEngineStep2:
+    def __init__(self, thread_id: str, events_seen: list[Event]) -> None:
+        self.execute_stream = _make_delayed_event_stream(thread_id, events_seen)
+
+
+class _MockRuntimeStep2:
+    def __init__(self, thread_id: str, events_seen: list[Event]) -> None:
+        self.store = _MockStoreStep2()
+        self.authz = _MockAuthzStep2()
+        self.engine = _MockEngineStep2(thread_id, events_seen)
+
+
+@dataclass
+class _MockConfigStep2:
+    name: str = "TestAgent"
+    agent_id: str = "ag_mock"
+    model: Any = None
+
+
+@dataclass
+class _MockBundleStep2:
+    runtime: Any
+    config: Any
+    session_id: str
+    thread_id: str
+    agent_ref: str
+    root: Path
+    model_label: str
+    is_resume: bool
+
+
+def _make_app_step2(tmp_path: Path, events_seen: list[Event]) -> ChatApp:
+    # `_run_exchange` (unlike the spied version in
+    # test_composer_submitted_exit_verbs.py) really constructs an
+    # `ExecutionContext`, whose `thread_id` is a `ThreadId` — validated
+    # to have a uuid body. A plain `"th_test"` string fails that
+    # validation; use a real uuid4 body instead.
+    thread_id = f"th_{uuid4()}"
+    bundle = _MockBundleStep2(
+        runtime=_MockRuntimeStep2(thread_id, events_seen),
+        config=_MockConfigStep2(),
+        session_id="ses_test",
+        thread_id=thread_id,
+        agent_ref="kolsch/agents/mock",
+        root=tmp_path,
+        model_label="mock/test",
+        is_resume=False,
+    )
+    return ChatApp(
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_placeholder_mounted_at_turn_start(tmp_path: Path) -> None:
+    """`_run_exchange` mounts a `WorkingPlaceholder` into `#transcript`.
+
+    Drives a real turn through the app's normal `_run_exchange` worker
+    (not a spy) against a fake engine whose stream delays its first
+    event, then asserts the placeholder is mounted before the delay
+    elapses — i.e. before any event has been processed.
+    """
+    events_seen: list[Event] = []
+    app = _make_app_step2(tmp_path, events_seen)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        app._run_exchange("hello there")
+        # Pump the loop just enough for the worker to start and mount
+        # the placeholder, but well short of `_FIRST_EVENT_DELAY_SECONDS`
+        # — the fake stream has not yielded anything yet.
+        await pilot.pause()
+        await pilot.pause()
+
+        assert events_seen == [], (
+            "the fake stream's first event fired before the assertion — "
+            "the delay is too short for this to be a meaningful check"
+        )
+        placeholders = app.query(WorkingPlaceholder)
+        assert len(placeholders) == 1
+        assert placeholders.first().is_mounted
+        assert app._working_placeholder is not None
+        assert app._working_placeholder is placeholders.first()
+
+
+@pytest.mark.asyncio
+async def test_placeholder_reference_stashed_for_later_steps(
+    tmp_path: Path,
+) -> None:
+    """The mounted placeholder is reachable via `ChatApp._working_placeholder`.
+
+    Later spec-130 steps (morph-on-content, cancel/error terminal
+    states) need a handle to the placeholder mounted for the active
+    turn. This asserts that handle exists, is the actual mounted
+    instance (identity, not just "a" WorkingPlaceholder), and is still
+    in its initial working (non-terminal) state — this step doesn't
+    wire any transitions.
+    """
+    events_seen: list[Event] = []
+    app = _make_app_step2(tmp_path, events_seen)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        app._run_exchange("hello there")
+        await pilot.pause()
+        await pilot.pause()
+
+        placeholder = app._working_placeholder
+        assert placeholder is not None
+        assert placeholder in app.query(WorkingPlaceholder)
+        assert placeholder.is_terminal is False
+        assert placeholder.terminal_kind is None
