@@ -665,6 +665,13 @@ class ChatApp(App[None]):
         # find the still-mounted placeholder for the active turn. Not
         # cleared/removed by this step — that's steps 3-7's job.
         self._working_placeholder: WorkingPlaceholder | None = None
+        # spec-130 Step 5: the running/pending `ToolCallBlock` mounted
+        # by `mount_tool_call_running()` on `TOOL_CALLED`, awaiting its
+        # `TOOL_RESULT` fill. Mirrors `_working_placeholder`'s shape —
+        # a single nullable slot, not yet a keyed registry (Step 6
+        # retrofits everything into a real registry). `None` whenever
+        # no tool call is in flight for the active turn.
+        self._pending_tool_call_block: ToolCallBlock | None = None
         # Mutable session state used by the legacy slash handlers.
         # Populated in `on_mount` once the runtime handles are wired.
         self._chat_state: ChatSessionState | None = None
@@ -1812,6 +1819,30 @@ class ChatApp(App[None]):
         await transcript.mount(placeholder)
         return placeholder
 
+    async def clear_working_placeholder(self) -> None:
+        """Remove the turn's placeholder without mounting a replacement.
+
+        spec-130 Step 5 (fixup): every OTHER morph path
+        (``mount_assistant_streaming_widget``, ``mount_assistant_message``,
+        ``mount_tool_call_running``) removes the placeholder as a side
+        effect of mounting the widget that takes its place. Card-
+        mounting tool calls (``run_workflow`` and friends) have no
+        such replacement here — the tool opens its own ``WorkflowCard``
+        through a separate mount path (``EventAdapter._get_or_mount_card``)
+        that doesn't know about ``_working_placeholder`` at all. Without
+        this, a card-mounting ``TOOL_CALLED`` leaves the placeholder
+        mounted, non-terminal, and orphaned forever alongside the
+        eventual card — spinning with nothing left to remove it. Same
+        capture/clear/guarded-remove shape as every other morph method
+        in this file, just without a widget to mount afterward.
+        """
+        placeholder = self._working_placeholder
+        if placeholder is None:
+            return
+        self._working_placeholder = None
+        if placeholder.is_mounted:
+            await placeholder.remove()
+
     async def mount_assistant_message(
         self,
         text: str,
@@ -1883,6 +1914,46 @@ class ChatApp(App[None]):
         self._last_assistant_widget = prose
         return prose
 
+    async def mount_tool_call_running(
+        self,
+        tool_name: str,
+        args: str,
+    ) -> ToolCallBlock:
+        """Mount a ``ToolCallBlock`` in a running/pending state, empty body.
+
+        spec-130 Step 5: called from
+        ``EventAdapter._handle_tool_called`` — the moment a tool call
+        *starts*, not when it finishes. Mirrors
+        ``WorkflowNodeRow.mount_tool_call``'s two-phase pattern
+        (``workflow_node_row.py:1550-1642``): an empty body signals
+        "running" the same way it does there (``ToolCallBlock``
+        itself has no distinct running/failed/success state — the
+        empty body plus the absence of the ``-failed`` class *is* the
+        running state, matching the row's ``state = "running" if not
+        body and not failed`` rule). If a ``WorkingPlaceholder`` is
+        still mounted for this turn, this is a morph point: remove the
+        placeholder first, then mount the running block — same
+        remove-before-mount ordering ``mount_assistant_streaming_widget``
+        / ``mount_assistant_message`` use, so the block lands in the
+        placeholder's former transcript position.
+
+        The returned block is stashed on
+        ``self._pending_tool_call_block`` so the matching
+        ``TOOL_RESULT`` (``mount_tool_call`` below) can find it and
+        call ``update_body()`` in place instead of mounting a second,
+        separate block.
+        """
+        transcript = self.query_one("#transcript", VerticalScroll)
+        placeholder = self._working_placeholder
+        if placeholder is not None:
+            self._working_placeholder = None
+            if placeholder.is_mounted:
+                await placeholder.remove()
+        block = ToolCallBlock(tool_name, args, "")
+        await transcript.mount(block)
+        self._pending_tool_call_block = block
+        return block
+
     async def mount_tool_call(
         self,
         tool_name: str,
@@ -1894,8 +1965,80 @@ class ChatApp(App[None]):
         matched_rule: dict[str, object] | None = None,
         event_id: str | None = None,
     ) -> Any | None:
-        """Mount a tool-call block at the transcript root."""
+        """Mount a tool-call block at the transcript root, or fill a running one.
+
+        spec-130 Step 5: this is the ``ChatMountSink`` Protocol method
+        (``services/mount_sink.py``) — its signature is polymorphic
+        (also implemented by ``WorkflowNodeRow``) and must not change.
+        If ``mount_tool_call_running()`` above already mounted a
+        running block for this turn (``self._pending_tool_call_block``
+        is set), fill that SAME widget in place via
+        ``ToolCallBlock.update_body()`` rather than constructing a
+        second, separate block — this is the "fill" half of the
+        two-phase morph, mirroring
+        ``WorkflowNodeRow.mount_tool_call``'s transition branch.
+
+        A ``TOOL_CALLED`` event always precedes exactly one of
+        ``TOOL_RESULT`` (``failed=False``) or ``TOOL_FAILED``
+        (``failed=True``) — both ``_handle_tool_result`` and
+        ``_handle_tool_failed`` call this same method, so both must
+        correctly consume the pending running block, not just the
+        success path. When ``failed`` is True and a pending block is
+        being filled: ``ToolCallBlock.set_failed_state(tool_name,
+        args)`` rewrites the title to the same ``✗ {tool_name}(...)``
+        form the constructor would have produced for ``failed=True``
+        (title-glyph parity between the single-shot and fill paths)
+        and adds the ``-failed`` CSS class (border-left rail + title
+        color flip, per ``DEFAULT_CSS`` — also mirrors
+        ``WorkflowNodeRow._populate_tool_call_result``'s existing
+        transition precedent, which only had the class half of this).
+
+        ``matched_rule`` (feat-041's authz-denial hint): at
+        construction time ``ToolCallBlock`` appends a 2-line denial
+        hint into the body text itself (``tool_call_block.py``) —
+        that's plain text, so this fill path replicates the same
+        composition via ``format_denial_hint`` before calling
+        ``update_body()``, keeping single-shot and fill-path parity.
+
+        ``recovery_hint`` is rendered as a separate child ``Static``
+        that ``ToolCallBlock.__init__`` now ALWAYS creates (hidden/
+        empty when no hint is supplied — see that widget's
+        ``_apply_recovery_hint``), specifically so it can be safely
+        revealed/set post-mount via ``set_recovery_hint()`` without
+        mounting a NEW child into an already-live ``Collapsible``
+        (unsafe — ``Collapsible``'s ``Contents`` pane composes its
+        children at mount time). This fill path calls
+        ``set_recovery_hint(recovery_hint)`` unconditionally — passing
+        ``None`` clears/re-hides it, matching a result with no hint.
+
+        Falls back to the original single-shot mount (construct a
+        fresh block with the final body, `failed` styling baked in at
+        construction as before) whenever no running block is pending
+        — e.g. this sink method invoked directly outside the normal
+        ``TOOL_CALLED`` -> ``TOOL_RESULT``/``TOOL_FAILED`` flow, or a
+        card-mounting tool call (``mount_tool_call_running`` is
+        skipped for those — see ``EventAdapter._handle_tool_called``).
+        """
         _ = event_id  # bug-036d: sink-protocol dedupe key — App ignores.
+        pending = self._pending_tool_call_block
+        if pending is not None and pending.is_mounted:
+            self._pending_tool_call_block = None
+            fill_body = body
+            if failed and matched_rule:
+                from cli.chat.services.authz_introspection import (  # noqa: PLC0415
+                    format_denial_hint,
+                )
+
+                hint = format_denial_hint(matched_rule)
+                fill_body = f"{body}\n{hint}" if body else hint
+            pending.update_body(fill_body)
+            pending.set_recovery_hint(recovery_hint)
+            if failed:
+                pending.set_failed_state(tool_name, args)
+            # bug-060 Part 1: return the (same) widget for event-id
+            # registration — identity matters here, not just content.
+            return pending
+        self._pending_tool_call_block = None
         transcript = self.query_one("#transcript", VerticalScroll)
         block = ToolCallBlock(
             tool_name,

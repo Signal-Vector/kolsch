@@ -23,7 +23,7 @@ from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
 from textual.widgets import Collapsible, Static
 
-from cli.chat.event_adapter import EventAdapter
+from cli.chat.event_adapter import EventAdapter, _is_card_mounting_tool
 from cli.chat.widgets.card_body.workflow import WorkflowProgressHeader
 from cli.chat.widgets.card_widget import CardWidget
 from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
@@ -72,6 +72,13 @@ class _StubTranscriptApp(App[None]):
 
     def __init__(self) -> None:
         super().__init__()
+        # spec-130 Step 5 review fixup: this stub's `mount_tool_call`
+        # was already a pure no-op (no DOM mount, no tracking). Track
+        # calls the same way `test_bug036a_fixture_replay.py`'s stub
+        # does so this test can assert bug-036a's AC #1 (no
+        # transcript-root ToolCallBlock for a card-mounting tool) on
+        # the SAME shared fixture, not just its own AC #1/#4.
+        self.mounted_tool_calls: list[tuple[str, ...]] = []
 
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="transcript")
@@ -111,7 +118,31 @@ class _StubTranscriptApp(App[None]):
         recovery_hint: str | None = None,
         event_id: Any = None,
     ) -> None:
-        _ = tool_name, args, body, failed, recovery_hint, event_id
+        _ = failed, recovery_hint, event_id
+        self.mounted_tool_calls.append((tool_name, args, body))
+
+    async def mount_tool_call_running(self, tool_name: str, args: str) -> None:
+        """Record a running-block mount the SAME way `mount_tool_call` does.
+
+        spec-130 Step 5 review fixup: `_handle_tool_called` calls this
+        directly for non-card-mounting tools only — the fixture's
+        `run_workflow*` call is card-mounting, so the correctly-
+        behaving adapter takes `clear_working_placeholder` below, not
+        this one. Must append to `mounted_tool_calls` (not no-op): a
+        no-op stub would make a wrongly-taken branch invisible to the
+        AC #1 assertion below, since neither branch mounts a real
+        widget in this stub either way.
+        """
+        self.mounted_tool_calls.append((tool_name, args, ""))
+
+    async def clear_working_placeholder(self) -> None:
+        # spec-130 Step 5 (fixup): `_handle_tool_called` calls this
+        # for card-mounting tool calls — confirmed by instrumentation
+        # this IS the branch exercised by the shared fixture's
+        # `run_workflow*` call — instead of `mount_tool_call_running`,
+        # so nothing orphans `_working_placeholder`. This stub has no
+        # placeholder concept; a no-op satisfies the call.
+        return None
 
     async def mount_notice(
         self,
@@ -154,6 +185,16 @@ async def test_fixture_replay_header_and_bash_command() -> None:
             event = _event_from_row(row)
             await adapter.handle(event)
         await pilot.pause()
+
+        # bug-036a AC #1 (same invariant, same shared fixture): no
+        # transcript-root ToolCallBlock mount for a card-mounting
+        # tool. Distinct from this file's own "AC #1" (header content,
+        # below).
+        for tool_name, _args, _body in app.mounted_tool_calls:
+            assert not _is_card_mounting_tool(tool_name), (
+                f"transcript-root ToolCallBlock mounted for "
+                f"card-mounting tool {tool_name!r}; bug-036a AC #1 violated"
+            )
 
         # AC #1: header carries the workflow ref + inputs line.
         headers = list(pilot.app.query(WorkflowProgressHeader))

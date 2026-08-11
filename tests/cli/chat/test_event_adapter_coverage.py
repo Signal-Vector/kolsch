@@ -61,6 +61,25 @@ class _MockChatApp:
         _ = kwargs
         self.notices.append(f"tool:{args}")
 
+    async def mount_tool_call_running(self, *args: Any, **kwargs: Any) -> Any:
+        # spec-130 Step 5: `_handle_tool_called` calls this directly
+        # (not through the `ChatMountSink` Protocol) to mount the
+        # running/pending block. Same no-op-with-notice shape as
+        # `mount_tool_call` above — this double only needs to satisfy
+        # the call, not track pending-block identity.
+        _ = kwargs
+        self.notices.append(f"tool_running:{args}")
+        return None
+
+    async def clear_working_placeholder(self) -> None:
+        # spec-130 Step 5 (fixup): `_handle_tool_called` calls this
+        # directly for card-mounting tool calls. The canonical
+        # TOOL_CALLED payload (`tests/cli/chat/conftest.py`) uses
+        # `read_file`, which is never card-mounting, so this branch
+        # isn't exercised by this sweep today — present for symmetry/
+        # forward-compat with the rest of the double's App surface.
+        self.notices.append("placeholder_cleared")
+
     async def mount_notice(
         self,
         notice_id: str = "",
