@@ -64,7 +64,7 @@ from cli.chat.widgets import (
     UserChatbox,
 )
 from cli.chat.widgets.notice import NoticeWidget
-from cli.chat.widgets.working_placeholder import WorkingPlaceholder
+from cli.chat.widgets.working_placeholder import TerminalKind, WorkingPlaceholder
 from engine import ExecutionContext
 from errors import ExchangeCancelled
 from providers import RuleBasedAuthorizationProvider
@@ -1822,6 +1822,46 @@ class ChatApp(App[None]):
         already be active, and this dead turn's placeholder is the one
         that actually needs flipping, not whatever the fresh
         ``self._working_placeholder`` alias now points at.
+
+        spec-130 Step 7: the inner ``try`` (feeding the ``except
+        ExchangeCancelled`` / generic ``except Exception`` branches
+        below) now starts BEFORE ``mount_working_placeholder()``,
+        not just around the ``async for event in event_stream`` loop.
+        Previously a mount-time failure (the placeholder mount itself
+        raising) sat outside that inner ``try`` entirely, so it skipped
+        straight past ``mount_exchange_failed()``'s transcript-visible
+        failure notice and propagated to Textual's default worker
+        exception handling instead — silent from the transcript's
+        point of view. Widening the inner ``try`` to cover the mount
+        call gives it the exact same treatment as an event-stream-time
+        failure: a real error there is now caught by the generic
+        ``except Exception`` branch below, same as any other exchange
+        failure. This does NOT change the ``ExchangeCancelled`` /
+        ``asyncio.CancelledError`` handling: ``mount_working_placeholder()``
+        can itself be cancelled mid-``await`` by an exclusive-worker
+        preemption exactly as Step 6 already documented for the
+        mount-call sites inside ``app.py`` — that still surfaces as
+        ``asyncio.CancelledError``, which the inner ``try`` doesn't
+        catch (no matching ``except`` clause here), so it still
+        propagates straight to the outer ``except asyncio.CancelledError``
+        below, unchanged from before this step. ``ExchangeCancelled``
+        itself cannot be raised by the mount call (it's an engine-side
+        exception type, only ever raised from inside ``event_stream``
+        iteration) — including the mount inside this inner ``try``
+        does not create any new way to reach that branch.
+
+        spec-130 Step 7: a real (non-cancellation) error now also
+        sweeps the live registries — via ``_fail_live_registries()``,
+        the error-flavored sibling of ``_interrupt_live_registries()``
+        — before mounting the generic "[exchange failed — ...]"
+        notice. Without this, an error occurring before any content
+        exists for the turn (including a mount-time failure, per the
+        above) left this turn's ``WorkingPlaceholder``/pending
+        ``ToolCallBlock`` mounted, non-terminal, and orphaned — spinning
+        forever underneath the new failure notice. See
+        ``_fail_live_registries()`` for why this is a separate method
+        from ``_interrupt_live_registries()`` rather than the same
+        method taking a ``kind`` argument.
         """
         from cli.chat.cancel import new_cancel_token  # noqa: PLC0415
 
@@ -1831,19 +1871,22 @@ class ChatApp(App[None]):
         turn_id = str(uuid4())
         self._active_turn_id = turn_id
         try:
-            self._working_placeholder = await self.mount_working_placeholder()
-            force_skills: list[str] = []
-            if self._chat_state is not None and self._chat_state.pending_force_skill:
-                force_skills = list(self._chat_state.pending_force_skill)
-                self._chat_state.pending_force_skill.clear()
-            trigger = _build_user_trigger(user_text, force_skills)
-            ctx = ExecutionContext(
-                thread_id=self.session.thread_id,
-                trigger=trigger,
-                cancellation=cancel,
-            )
-            event_stream = self.engine.execute_stream(self.session.config, ctx)
             try:
+                self._working_placeholder = await self.mount_working_placeholder()
+                force_skills: list[str] = []
+                if (
+                    self._chat_state is not None
+                    and self._chat_state.pending_force_skill
+                ):
+                    force_skills = list(self._chat_state.pending_force_skill)
+                    self._chat_state.pending_force_skill.clear()
+                trigger = _build_user_trigger(user_text, force_skills)
+                ctx = ExecutionContext(
+                    thread_id=self.session.thread_id,
+                    trigger=trigger,
+                    cancellation=cancel,
+                )
+                event_stream = self.engine.execute_stream(self.session.config, ctx)
                 async for event in event_stream:
                     await self.event_adapter.handle(event)
             except ExchangeCancelled:
@@ -1852,6 +1895,13 @@ class ChatApp(App[None]):
                 # here (bug-110 precedent).
                 await self._interrupt_live_registries()
             except Exception as exc:  # noqa: BLE001 — surface any exchange failure to the transcript
+                # spec-130 Step 7: a real error (model/tool failure, or
+                # now also a mount-time failure — see this method's
+                # docstring) — flip any still-live placeholder/pending
+                # tool-call block to the error terminal state before
+                # mounting the generic failure notice, so nothing is
+                # left orphaned and spinning underneath it.
+                await self._fail_live_registries()
                 await self.mount_exchange_failed(str(exc))
         except asyncio.CancelledError:
             # spec-130 Step 6: exclusive-worker hard preemption — a
@@ -1890,26 +1940,83 @@ class ChatApp(App[None]):
         registries (keyed by each turn's own id, not "whichever is
         current") is what makes this correct regardless of ordering.
 
+        spec-130 Step 7: thin wrapper around ``_sweep_live_registries("interrupted")``
+        — see that method for the shared sweep-iteration logic and
+        ``_fail_live_registries`` for the error-flavored sibling. Kept
+        as its own named method (rather than inlining the call at both
+        ``_run_exchange`` call sites) because tests spy on it by name
+        (``app._interrupt_live_registries = _spy_sweep``) to confirm
+        the cooperative-cancel and exclusive-worker-preemption paths
+        both route through the same cancel sweep.
+
         Presentation-only, per the bug-110 precedent
         (``EventAdapter._handle_prompt_cancelled``): this never
         resolves a durable-write future, never touches
         ``PromptsImpl``/``WorkflowsImpl``, and never appends to the
         session JSONL. It only flips already-mounted widgets to a
         terminal visual state.
+        """
+        await self._sweep_live_registries("interrupted")
+
+    async def _fail_live_registries(self) -> None:
+        """spec-130 Step 7: flip EVERY live, not-yet-terminal entry to error.
+
+        Sibling of ``_interrupt_live_registries()`` — same sweep-over-
+        every-entry shape (not just "the current turn's"), same
+        registry pair, same presentation-only guarantee, but for the
+        "a real, un-recovered exchange error occurred" case rather than
+        a cancellation: ``_run_exchange``'s generic ``except Exception``
+        handler (a real model/tool error, distinct from the
+        ``ExchangeCancelled``/``asyncio.CancelledError`` branches that
+        route to ``_interrupt_live_registries`` instead) calls this
+        before falling back to ``mount_exchange_failed()``'s notice.
+
+        Deliberately a SEPARATE method rather than parameterizing every
+        call site with a ``kind`` argument: the two call sites
+        (cancel vs. error) are already textually distinct in
+        ``_run_exchange`` (different ``except`` clauses), and a
+        same-named-but-different-outcome method at each site reads more
+        clearly there than a shared name with a kind argument threaded
+        through. Both delegate to the same private
+        ``_sweep_live_registries()`` so the iteration/registry-pop/
+        alias-clear logic itself is written exactly once.
+        """
+        await self._sweep_live_registries("error")
+
+    async def _sweep_live_registries(self, kind: TerminalKind) -> None:
+        """Shared sweep body for the cancel/error registry sweeps.
+
+        Called only by ``_interrupt_live_registries()`` (``kind ==
+        "interrupted"``) and ``_fail_live_registries()`` (``kind ==
+        "error"``) — see those methods for why each gets its own named
+        wrapper rather than callers passing ``kind`` directly.
+
+        Flips every live, not-yet-terminal ``WorkingPlaceholder`` to
+        ``render_terminal(kind)`` and every live, not-yet-filled
+        ``ToolCallBlock`` to ``render_interrupted()`` (cancel) or
+        ``render_failed()`` (error) — the two widget kinds don't share
+        a terminal-flip API (see the registries' own docstring at
+        ``__init__`` for why they're two parallel dicts, not one), so
+        this still branches on ``kind`` once per widget kind rather
+        than being fully polymorphic, but the iteration, registry
+        pop, and alias-clear bookkeeping — the part that actually needs
+        to be written once, not duplicated per cancel/error path — is
+        shared here.
 
         Idempotent — sweeping an already-empty pair of registries (the
-        common case: most turns morph away cleanly before any
-        cancellation ever occurs) is a no-op. Safe to call from
-        multiple cancel paths in the same turn's teardown (cooperative
-        ``ExchangeCancelled`` and hard ``asyncio.CancelledError`` are
-        mutually exclusive within one ``_run_exchange`` call, but nothing
-        here would break if that ever changed).
+        common case: most turns morph away cleanly before either
+        cancellation or an error ever occurs) is a no-op. Safe to call
+        from multiple teardown paths in the same turn (cooperative
+        ``ExchangeCancelled``, hard ``asyncio.CancelledError``, and the
+        generic ``except Exception`` error branch are mutually
+        exclusive within one ``_run_exchange`` call, but nothing here
+        would break if that ever changed).
 
         Clears the convenience aliases (``self._working_placeholder`` /
         ``self._pending_tool_call_block``) ONLY when they still point at
-        a widget this sweep just interrupted — a superseding turn's
-        fresh alias (already re-pointed at ITS OWN new placeholder by
-        the time this sweep runs — ``mount_working_placeholder()`` /
+        a widget this sweep just flipped — a superseding turn's fresh
+        alias (already re-pointed at ITS OWN new placeholder by the
+        time this sweep runs — ``mount_working_placeholder()`` /
         ``mount_tool_call_running()`` set the alias and registry entry
         SYNCHRONOUSLY, before their own ``await transcript.mount(...)``,
         so there is no window where a fresh alias could still be stale
@@ -1921,9 +2028,9 @@ class ChatApp(App[None]):
         can land while ``mount_working_placeholder()`` /
         ``mount_tool_call_running()`` are still suspended inside their
         own ``await transcript.mount(...)`` — see those methods'
-        "review fixup" docstring notes): both
-        ``WorkingPlaceholder.render_terminal()`` and
-        ``ToolCallBlock.render_interrupted()`` are safe to call on a
+        "review fixup" docstring notes): ``WorkingPlaceholder.render_terminal()``,
+        ``ToolCallBlock.render_interrupted()``, and
+        ``ToolCallBlock.render_failed()`` are all safe to call on a
         not-yet-mounted widget (verified directly against bare,
         never-mounted instances) — the widget's internal state still
         flips correctly even though there's nothing on screen yet to
@@ -1932,14 +2039,17 @@ class ChatApp(App[None]):
         for placeholder in self._live_placeholders.values():
             if not placeholder.is_terminal:
                 with contextlib.suppress(Exception):
-                    placeholder.render_terminal("interrupted")
+                    placeholder.render_terminal(kind)
             if self._working_placeholder is placeholder:
                 self._working_placeholder = None
         self._live_placeholders.clear()
 
         for block in self._live_tool_call_blocks.values():
             with contextlib.suppress(Exception):
-                block.render_interrupted()
+                if kind == "interrupted":
+                    block.render_interrupted()
+                else:
+                    block.render_failed()
             if self._pending_tool_call_block is block:
                 self._pending_tool_call_block = None
         self._live_tool_call_blocks.clear()

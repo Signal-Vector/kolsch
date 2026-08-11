@@ -259,6 +259,41 @@ class ToolCallBlock(Collapsible):
         self.add_class("-interrupted")
         self.update_body("Interrupted")
 
+    def render_failed(self) -> None:
+        """Flip a still-running block to the error terminal state.
+
+        spec-130 Step 7: companion to ``render_interrupted()`` for the
+        error sweep (``ChatApp._fail_live_registries``) — the same
+        "a real, un-recovered exchange error occurred while this block
+        was still running/pending" case ``_run_exchange``'s generic
+        ``except Exception`` handler now covers. A block reaching this
+        method is, by construction, always a RUNNING one (mounted empty
+        by ``mount_tool_call_running()`` and never yet filled — see
+        that method's two-phase docstring): a block that already
+        reached ``TOOL_RESULT``/``TOOL_FAILED`` has already been popped
+        out of the registry that feeds this call, so this never
+        overwrites real result content.
+
+        Unlike ``render_interrupted()``, this call DOES reuse
+        ``set_failed_state``/``-failed`` deliberately: the tool call
+        genuinely did not complete because the exchange itself failed
+        (a model/tool error) — that is a **failure**, not a **user
+        cancellation** — so it should read identically to any other
+        failed tool call in the transcript (``$error`` rail, ``✗``
+        title glyph via ``set_failed_state``), matching the decided
+        glyph/color table's ``error`` row
+        (``state_tokens.py``'s ``"failed"`` token, matching
+        ``NoticeWidget``'s error kind and
+        ``WorkflowNodeRow.-failed``). No ``matched_rule`` hint applies
+        here (this isn't an authz denial), so the body is set directly
+        to a plain "Error" marker — mirroring
+        ``WorkingPlaceholder.render_terminal("error")``'s own terminal
+        body text — rather than routing through ``update_body(body)``
+        with real tool output that was never produced.
+        """
+        self.set_failed_state(self._tool_name, self._args)
+        self.update_body("Error")
+
     def action_collapse(self) -> None:
         """Collapse this block. Bound to `c` (see `BINDINGS`)."""
         self.collapsed = True

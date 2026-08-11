@@ -2826,3 +2826,449 @@ async def test_tool_call_block_registered_before_dom_attach_survives_mid_mount_c
 
             release_mount.set()
             await pilot.pause()
+
+
+# ----------------------------------------------------------------------
+# spec-130 Step 7: error -> error terminal state, via the same keyed
+# registries Step 6 introduced, plus the widened `_run_exchange` inner
+# `try` now also covering `mount_working_placeholder()` itself.
+# ----------------------------------------------------------------------
+#
+# Reuses the Step 2 scaffolding (`_MockAuthzStep2`, `_MockStoreStep2`,
+# `_MockConfigStep2`, `_MockBundleStep2`) with three new fake-stream /
+# fake-mount shapes:
+#
+# - `_make_erroring_event_stream`: raises a generic `RuntimeError`
+#   before ever yielding an event — exercises `_run_exchange`'s
+#   generic `except Exception` branch with no preceding content.
+# - `_make_erroring_after_tool_called_stream`: yields `TOOL_CALLED`
+#   then raises — exercises the same branch with a pending running
+#   `ToolCallBlock` still live when the error hits.
+# - A monkeypatched `ChatApp.mount_working_placeholder` that raises
+#   directly — exercises the widened inner `try`'s coverage of the
+#   mount call itself, distinct from an event-stream-time failure.
+
+
+def _make_erroring_event_stream(
+    *_ignored: Any,
+) -> Callable[..., AsyncGenerator[Event, None]]:
+    """Build a fake ``engine.execute_stream`` that raises a generic error.
+
+    Raises before yielding anything — a real (non-cancellation)
+    exchange failure occurring before any content exists for the turn,
+    the exact case Step 7's ``except Exception`` branch (now paired
+    with ``_fail_live_registries()``) must catch.
+    """
+
+    async def _stream(*_args: Any, **_kwargs: Any) -> AsyncGenerator[Event, None]:
+        raise RuntimeError("model backend unavailable")
+        yield  # type: ignore[unreachable]  # pragma: no cover — makes this an async generator
+
+    return _stream
+
+
+class _MockEngineStep7Erroring:
+    def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+        self.execute_stream = _make_erroring_event_stream()
+
+
+class _MockRuntimeStep7Erroring:
+    def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+        self.store = _MockStoreStep2()
+        self.authz = _MockAuthzStep2()
+        self.engine = _MockEngineStep7Erroring()
+
+
+def _make_app_step7_erroring(tmp_path: Path) -> ChatApp:
+    thread_id = f"th_{uuid4()}"
+    bundle = _MockBundleStep2(
+        runtime=_MockRuntimeStep7Erroring(),
+        config=_MockConfigStep2(),
+        session_id="ses_test",
+        thread_id=thread_id,
+        agent_ref="kolsch/agents/mock",
+        root=tmp_path,
+        model_label="mock/test",
+        is_resume=False,
+    )
+    return ChatApp(
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_generic_error_flips_placeholder_to_error_terminal_state(
+    tmp_path: Path,
+) -> None:
+    """A real exchange error (no preceding content) flips the placeholder to error.
+
+    Before spec-130 Step 7, a generic error already fell into
+    `_run_exchange`'s `except Exception` branch and mounted the
+    "[exchange failed — ...]" notice — but never touched the turn's
+    `WorkingPlaceholder`, leaving it mounted, non-terminal, and
+    orphaned (spinning forever) underneath that notice. This asserts
+    the placeholder is now flipped: still mounted (never silently
+    removed), `is_terminal`, `terminal_kind == "error"`, `✗` glyph —
+    AND the generic failure notice is still mounted alongside it (this
+    step doesn't replace that notice, it additionally fixes up the
+    placeholder that used to be left behind).
+    """
+    app = _make_app_step7_erroring(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        app._run_exchange("hello")
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.pause()
+
+        placeholders = app.query(WorkingPlaceholder)
+        assert len(placeholders) == 1, (
+            "the placeholder must still be mounted — flipped terminal, not removed"
+        )
+        placeholder = placeholders.first()
+        assert placeholder.is_terminal is True
+        assert placeholder.terminal_kind == "error"
+        assert _glyph_text(placeholder) == "✗"
+
+        # Registry hygiene: the errored entry must not linger.
+        assert app._live_placeholders == {}
+        assert app._working_placeholder is None
+
+        # The generic failure notice is still mounted — Step 7 adds
+        # the placeholder fixup, it doesn't remove the existing notice.
+        assert len(app.query(".error")) == 1
+
+
+@pytest.mark.asyncio
+async def test_generic_error_does_not_resolve_a_durable_future(
+    tmp_path: Path,
+) -> None:
+    """The error sweep is presentation-only, same guarantee as the cancel sweep."""
+    app = _make_app_step7_erroring(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        registry = app._service_registry
+        assert registry is not None and registry.prompts is not None
+        prompts_calls: list[str] = []
+        original_cancel_pending = registry.prompts.cancel_pending
+
+        def _spy_cancel_pending(prompt_id: str) -> None:
+            prompts_calls.append(prompt_id)
+            original_cancel_pending(prompt_id)
+
+        registry.prompts.cancel_pending = _spy_cancel_pending
+
+        sweep_calls: list[None] = []
+        original_sweep = app._fail_live_registries
+
+        async def _spy_sweep() -> None:
+            sweep_calls.append(None)
+            await original_sweep()
+
+        app._fail_live_registries = _spy_sweep  # type: ignore[method-assign]
+
+        app._run_exchange("hello")
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.pause()
+
+        assert len(sweep_calls) == 1
+        placeholder = app.query(WorkingPlaceholder).first()
+        assert placeholder.terminal_kind == "error"
+        assert prompts_calls == [], (
+            "the presentation-only error sweep must never resolve/cancel a "
+            "durable prompt future"
+        )
+
+
+def _make_erroring_after_tool_called_stream(
+    thread_id: str,
+    events_seen: list[Event],
+    *,
+    tool_call_id: str = "call-1",
+    tool_name: str = "read_file",
+) -> Callable[..., AsyncGenerator[Event, None]]:
+    """Build a fake stream: yields ``TOOL_CALLED``, then raises a generic error.
+
+    Leaves a running/pending ``ToolCallBlock`` mounted and never filled
+    when the error hits — the state needed to exercise the error sweep
+    on a pending tool-call block (as opposed to a bare placeholder).
+    """
+
+    async def _stream(*_args: Any, **_kwargs: Any) -> AsyncGenerator[Event, None]:
+        called = _make_tool_called_event(
+            thread_id,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            arguments={"path": "/tmp/x"},
+        )
+        events_seen.append(called)
+        yield called
+        raise RuntimeError("tool backend crashed mid-call")
+
+    return _stream
+
+
+class _MockEngineStep7ToolErroring:
+    def __init__(self, thread_id: str, events_seen: list[Event]) -> None:
+        self.execute_stream = _make_erroring_after_tool_called_stream(
+            thread_id, events_seen
+        )
+
+
+class _MockRuntimeStep7ToolErroring:
+    def __init__(self, thread_id: str, events_seen: list[Event]) -> None:
+        self.store = _MockStoreStep2()
+        self.authz = _MockAuthzStep2()
+        self.engine = _MockEngineStep7ToolErroring(thread_id, events_seen)
+
+
+def _make_app_step7_tool_erroring(tmp_path: Path, events_seen: list[Event]) -> ChatApp:
+    thread_id = f"th_{uuid4()}"
+    bundle = _MockBundleStep2(
+        runtime=_MockRuntimeStep7ToolErroring(thread_id, events_seen),
+        config=_MockConfigStep2(),
+        session_id="ses_test",
+        thread_id=thread_id,
+        agent_ref="kolsch/agents/mock",
+        root=tmp_path,
+        model_label="mock/test",
+        is_resume=False,
+    )
+    return ChatApp(
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_generic_error_flips_pending_tool_call_block_to_failed(
+    tmp_path: Path,
+) -> None:
+    """A running `ToolCallBlock` still live when the error hits reaches `-failed`.
+
+    Documents the chosen terminal treatment for a tool call in flight
+    when the exchange itself errors out: `ToolCallBlock.render_failed()`
+    reuses `set_failed_state()`/`-failed` (the SAME visual a real
+    `TOOL_FAILED` result produces) rather than the cancel path's
+    `-interrupted` — this genuinely is a failure (the exchange itself
+    errored), not a user cancellation, so it should read identically to
+    any other failed tool call in the transcript, per the decided
+    glyph/color table's ``error`` row.
+    """
+    events_seen: list[Event] = []
+    app = _make_app_step7_tool_erroring(tmp_path, events_seen)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        app._run_exchange("read a file for me")
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.pause()
+
+        assert len(events_seen) == 1
+        assert events_seen[0].type == EventType.TOOL_CALLED
+        running_blocks = app.query(ToolCallBlock)
+        assert len(running_blocks) == 1
+        block = running_blocks.first()
+
+        # Still mounted (never removed) and flipped to the failed
+        # visual state — distinct from the cancel path's `-interrupted`.
+        assert block.has_class("-failed")
+        assert not block.has_class("-interrupted")
+        assert _tool_body_text(block) == "Error"
+        assert str(block.title).startswith("✗ ")
+
+        # Registry hygiene: no longer live/pending.
+        assert app._pending_tool_call_block is None
+        assert app._live_tool_call_blocks == {}
+
+        # The placeholder was already morphed away by TOOL_CALLED
+        # (Step 5's two-phase mount) before the error — nothing left
+        # to flip there for this particular turn shape.
+        assert len(app.query(WorkingPlaceholder)) == 0
+
+
+@pytest.mark.asyncio
+async def test_mount_time_failure_now_produces_exchange_failed_notice(
+    tmp_path: Path,
+) -> None:
+    """A failure inside `mount_working_placeholder()` itself is now caught.
+
+    Before spec-130 Step 7, `mount_working_placeholder()` sat OUTSIDE
+    `_run_exchange`'s inner `try/except Exception` — a mount-time
+    failure propagated straight out of `_run_exchange` entirely,
+    skipping `mount_exchange_failed()`'s transcript-visible failure
+    notice and hitting Textual's default (uncaught) worker exception
+    handling instead. This monkeypatches `ChatApp.mount_working_placeholder`
+    to raise directly (simulating e.g. a `query_one("#transcript", ...)`
+    failure or a widget-construction error) and asserts the SAME
+    user-visible "[exchange failed — ...]" notice now appears — the
+    widened inner `try` gives a mount-time failure the identical
+    treatment an event-stream-time failure already got. Also confirms
+    the worker itself does not raise past `_run_exchange` (Textual's
+    `Worker` surfaces an uncaught exception via `worker.error`, not by
+    re-raising into the caller — this asserts the app is still alive
+    and responsive afterward, which a truly-uncaught exception would
+    have prevented).
+    """
+    events_seen: list[Event] = []
+    app = _make_app_step2(tmp_path, events_seen)
+
+    async def _raising_mount_working_placeholder() -> WorkingPlaceholder:
+        raise RuntimeError("transcript not ready")
+
+    app.mount_working_placeholder = _raising_mount_working_placeholder  # type: ignore[method-assign]
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        app._run_exchange("hello")
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.pause()
+
+        # No placeholder was ever mounted (the mount call raised before
+        # producing one) — nothing to flip, nothing orphaned either.
+        assert len(app.query(WorkingPlaceholder)) == 0
+        assert app._live_placeholders == {}
+        assert app._working_placeholder is None
+
+        # The same generic failure notice an event-stream-time error
+        # produces is now mounted for a mount-time error too.
+        notices = app.query(".error")
+        assert len(notices) == 1
+        assert "transcript not ready" in str(notices.first().content)
+
+        # The fake stream's event never fired — the mount failure short-
+        # circuited before `event_stream` was ever constructed/iterated.
+        assert events_seen == []
+
+        # The app is still alive and responsive — the worker's raise
+        # was caught inside `_run_exchange`, not left to become a truly
+        # uncaught exception that would tear down the app/test harness.
+        await pilot.pause()
+        assert app.is_running
+
+
+# ----------------------------------------------------------------------
+# spec-130 Step 7: cancel and error stay distinct terminal states,
+# neither one accidentally routing through the other's sweep method.
+# ----------------------------------------------------------------------
+
+
+@pytest.mark.asyncio
+async def test_cancel_and_error_are_distinct_and_do_not_cross_wires(
+    tmp_path: Path,
+) -> None:
+    """Cancellation still yields "interrupted"; a real error still yields "error".
+
+    Directly guards against the two sweep paths bleeding into each
+    other now that they share `_sweep_live_registries()`'s iteration
+    logic: drives one turn down the cooperative-cancel path
+    (`ExchangeCancelled`) and a second, independent turn down the
+    generic-error path (`RuntimeError`), asserting each placeholder
+    lands on its OWN distinct terminal kind/glyph/CSS class — the
+    shared plumbing must not collapse the two into one outcome.
+    """
+    cancelled_app = _make_app_step6_cancelled(tmp_path)
+    async with cancelled_app.run_test() as pilot:
+        await pilot.pause()
+        cancelled_app._run_exchange("hello")
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.pause()
+
+        cancelled_placeholder = cancelled_app.query(WorkingPlaceholder).first()
+        assert cancelled_placeholder.terminal_kind == "interrupted"
+        assert _glyph_text(cancelled_placeholder) == "─"
+        assert cancelled_placeholder.has_class("-interrupted")
+        assert not cancelled_placeholder.has_class("-error")
+
+    erroring_app = _make_app_step7_erroring(tmp_path)
+    async with erroring_app.run_test() as pilot:
+        await pilot.pause()
+        erroring_app._run_exchange("hello")
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.pause()
+
+        erroring_placeholder = erroring_app.query(WorkingPlaceholder).first()
+        assert erroring_placeholder.terminal_kind == "error"
+        assert _glyph_text(erroring_placeholder) == "✗"
+        assert erroring_placeholder.has_class("-error")
+        assert not erroring_placeholder.has_class("-interrupted")
+
+
+@pytest.mark.asyncio
+async def test_error_sweep_does_not_touch_interrupted_helper_and_vice_versa(
+    tmp_path: Path,
+) -> None:
+    """`_interrupt_live_registries` and `_fail_live_registries` never call each other.
+
+    A narrower unit-level guard on top of the behavioural test above:
+    spies on BOTH sweep methods across the cancel path and asserts only
+    `_interrupt_live_registries` fired (never `_fail_live_registries`),
+    then does the same across the error path and asserts only
+    `_fail_live_registries` fired. Catches a refactor that accidentally
+    routes one path through the other's public method, even if the
+    resulting widget state happened to look right by coincidence.
+    """
+    cancelled_app = _make_app_step6_cancelled(tmp_path)
+    interrupt_calls: list[None] = []
+    fail_calls: list[None] = []
+    original_interrupt = cancelled_app._interrupt_live_registries
+    original_fail = cancelled_app._fail_live_registries
+
+    async def _spy_interrupt() -> None:
+        interrupt_calls.append(None)
+        await original_interrupt()
+
+    async def _spy_fail() -> None:
+        fail_calls.append(None)
+        await original_fail()
+
+    cancelled_app._interrupt_live_registries = _spy_interrupt  # type: ignore[method-assign]
+    cancelled_app._fail_live_registries = _spy_fail  # type: ignore[method-assign]
+
+    async with cancelled_app.run_test() as pilot:
+        await pilot.pause()
+        cancelled_app._run_exchange("hello")
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.pause()
+
+        assert interrupt_calls == [None]
+        assert fail_calls == []
+
+    erroring_app = _make_app_step7_erroring(tmp_path)
+    interrupt_calls_2: list[None] = []
+    fail_calls_2: list[None] = []
+    original_interrupt_2 = erroring_app._interrupt_live_registries
+    original_fail_2 = erroring_app._fail_live_registries
+
+    async def _spy_interrupt_2() -> None:
+        interrupt_calls_2.append(None)
+        await original_interrupt_2()
+
+    async def _spy_fail_2() -> None:
+        fail_calls_2.append(None)
+        await original_fail_2()
+
+    erroring_app._interrupt_live_registries = _spy_interrupt_2  # type: ignore[method-assign]
+    erroring_app._fail_live_registries = _spy_fail_2  # type: ignore[method-assign]
+
+    async with erroring_app.run_test() as pilot:
+        await pilot.pause()
+        erroring_app._run_exchange("hello")
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.pause()
+
+        assert fail_calls_2 == [None]
+        assert interrupt_calls_2 == []
