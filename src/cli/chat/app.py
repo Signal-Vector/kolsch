@@ -1832,8 +1832,27 @@ class ChatApp(App[None]):
         return prose
 
     async def mount_assistant_streaming_widget(self) -> AssistantProse:
-        """Mount an empty assistant prose widget for incremental streaming."""
+        """Mount an empty assistant prose widget for incremental streaming.
+
+        spec-130 Step 3: called once per streaming call (only when no
+        widget exists yet for that ``call_id`` — see
+        ``EventAdapter._handle_model_streaming_token``), i.e. exactly on
+        the first token of a turn. If a ``WorkingPlaceholder`` is still
+        mounted for this turn (``self._working_placeholder``), this is
+        the morph point: remove the placeholder first, then mount
+        ``AssistantProse`` — removing before mounting means the prose
+        widget becomes the new last child of ``#transcript`` in the
+        placeholder's former position (nothing else has been mounted
+        for this turn yet at this point). The reference is cleared
+        (``None``) so later steps (cancel/error) don't act on an
+        already-removed widget.
+        """
         transcript = self.query_one("#transcript", VerticalScroll)
+        placeholder = self._working_placeholder
+        if placeholder is not None:
+            self._working_placeholder = None
+            if placeholder.is_mounted:
+                await placeholder.remove()
         prose = AssistantProse(
             agent_name=self.session.config.name,
             timestamp=datetime.now(),  # noqa: DTZ005 — local time is right for the wall-clock header

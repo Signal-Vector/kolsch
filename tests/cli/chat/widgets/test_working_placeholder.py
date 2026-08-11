@@ -35,12 +35,14 @@ from unittest import mock
 from uuid import uuid4
 
 import pytest
+from textual.containers import VerticalScroll
 from textual.widgets import Static
 
 from cli.chat.app import ChatApp
 from cli.chat.spinner import SPINNER_FRAMES
 from cli.chat.state_tokens import resolve_state
 from cli.chat.widgets._gutter_block import GutterBlock
+from cli.chat.widgets.assistant_prose import AssistantProse
 from cli.chat.widgets.working_placeholder import WorkingPlaceholder
 from schemas.entities import Actor
 from schemas.events import Event, EventType
@@ -611,3 +613,290 @@ async def test_placeholder_reference_stashed_for_later_steps(
         assert placeholder in app.query(WorkingPlaceholder)
         assert placeholder.is_terminal is False
         assert placeholder.terminal_kind is None
+
+
+# ----------------------------------------------------------------------
+# spec-130 Step 3: streaming-token morph via
+# `ChatApp.mount_assistant_streaming_widget` /
+# `EventAdapter._handle_model_streaming_token`
+# ----------------------------------------------------------------------
+#
+# Reuses the Step 2 scaffolding (`_MockAuthzStep2`, `_MockStoreStep2`,
+# `_MockConfigStep2`, `_MockBundleStep2`) but with a fake
+# `engine.execute_stream` that yields real `MODEL_STREAMING_TOKEN`
+# events instead of a single delayed `AGENT_MESSAGE`. Drives the real
+# `ChatApp._run_exchange` -> `EventAdapter.handle` -> `app.py` mount
+# helper path — not a spy on the morph logic — so the test exercises
+# the exact code path `kolsch chat` would.
+
+
+def _make_streaming_token_event(
+    thread_id: str, *, call_id: str, text_delta: str
+) -> Event:
+    """Build a real, fully-valid ``MODEL_STREAMING_TOKEN`` ``Event``.
+
+    Data shape matches ``tests/cli/chat/conftest.py``'s
+    ``canonical_event`` fixture for this event type: ``{"call_id":
+    ..., "text_delta": ...}``.
+    """
+    return Event(
+        event_id=EventId(f"ev_{uuid4()}"),
+        thread_id=ThreadId(thread_id),
+        session_id=SessionId(f"ses_{uuid4()}"),
+        type=EventType.MODEL_STREAMING_TOKEN,
+        data={"call_id": call_id, "text_delta": text_delta},
+        actor=Actor(kind="system"),
+        created_at=datetime.now(UTC),
+    )
+
+
+def _make_streaming_event_stream(
+    thread_id: str,
+    events_seen: list[Event],
+    *,
+    deltas: list[str],
+    call_id: str = "call-1",
+    delay_first_seconds: float = 0.0,
+) -> Callable[..., AsyncGenerator[Event, None]]:
+    """Build a fake ``engine.execute_stream`` yielding N streaming-token events.
+
+    Each entry in ``deltas`` becomes one ``MODEL_STREAMING_TOKEN``
+    event for the same ``call_id`` — i.e. one turn, N incremental
+    tokens, matching how a real streamed reply arrives. When
+    ``delay_first_seconds`` is nonzero, the stream sleeps before
+    yielding its first event — same delayed-stream trick Step 2's
+    tests use — so a test can pump the loop just enough to observe the
+    placeholder mounted-but-not-yet-morphed before the first token
+    arrives.
+    """
+
+    async def _streaming_stream(
+        *_args: Any, **_kwargs: Any
+    ) -> AsyncGenerator[Event, None]:
+        if delay_first_seconds:
+            await asyncio.sleep(delay_first_seconds)
+        for delta in deltas:
+            event = _make_streaming_token_event(
+                thread_id,
+                call_id=call_id,
+                text_delta=delta,
+            )
+            events_seen.append(event)
+            yield event
+
+    return _streaming_stream
+
+
+class _MockEngineStep3:
+    def __init__(
+        self,
+        thread_id: str,
+        events_seen: list[Event],
+        *,
+        deltas: list[str],
+        delay_first_seconds: float = 0.0,
+    ) -> None:
+        self.execute_stream = _make_streaming_event_stream(
+            thread_id,
+            events_seen,
+            deltas=deltas,
+            delay_first_seconds=delay_first_seconds,
+        )
+
+
+class _MockRuntimeStep3:
+    def __init__(
+        self,
+        thread_id: str,
+        events_seen: list[Event],
+        *,
+        deltas: list[str],
+        delay_first_seconds: float = 0.0,
+    ) -> None:
+        self.store = _MockStoreStep2()
+        self.authz = _MockAuthzStep2()
+        self.engine = _MockEngineStep3(
+            thread_id,
+            events_seen,
+            deltas=deltas,
+            delay_first_seconds=delay_first_seconds,
+        )
+
+
+def _make_app_step3(
+    tmp_path: Path,
+    events_seen: list[Event],
+    *,
+    deltas: list[str],
+    delay_first_seconds: float = 0.0,
+) -> ChatApp:
+    thread_id = f"th_{uuid4()}"
+    bundle = _MockBundleStep2(
+        runtime=_MockRuntimeStep3(
+            thread_id,
+            events_seen,
+            deltas=deltas,
+            delay_first_seconds=delay_first_seconds,
+        ),
+        config=_MockConfigStep2(),
+        session_id="ses_test",
+        thread_id=thread_id,
+        agent_ref="kolsch/agents/mock",
+        root=tmp_path,
+        model_label="mock/test",
+        is_resume=False,
+    )
+    return ChatApp(
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_first_streaming_token_removes_placeholder_and_mounts_prose(
+    tmp_path: Path,
+) -> None:
+    """First `MODEL_STREAMING_TOKEN` morphs the placeholder into `AssistantProse`.
+
+    Drives a real turn through `_run_exchange` with a fake stream that
+    emits one streaming-token event, then asserts: the placeholder is
+    gone (unmounted, no longer queryable), `AssistantProse` is mounted
+    with the token's text, and `ChatApp._working_placeholder` has been
+    cleared back to `None` so later steps don't act on a removed
+    widget.
+    """
+    events_seen: list[Event] = []
+    app = _make_app_step3(tmp_path, events_seen, deltas=["hello"])
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        app._run_exchange("hi")
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.pause()
+
+        assert len(events_seen) == 1, "expected exactly one streaming-token event"
+
+        # Placeholder is gone — not just hidden.
+        assert len(app.query(WorkingPlaceholder)) == 0
+        assert app._working_placeholder is None
+
+        prose_widgets = app.query(AssistantProse)
+        assert len(prose_widgets) == 1
+        prose = prose_widgets.first()
+        assert prose.is_mounted
+        assert "hello" in prose.source
+
+
+@pytest.mark.asyncio
+async def test_first_streaming_token_prose_lands_in_placeholder_position(
+    tmp_path: Path,
+) -> None:
+    """The mounted `AssistantProse` occupies the same transcript child slot.
+
+    The placeholder is mounted first (nothing else added to
+    `#transcript` for this turn yet), so remove-then-mount should land
+    `AssistantProse` at the same index the placeholder held — verified
+    directly against `#transcript`'s child list, not just "is
+    mounted somewhere." Uses a first-event delay (same trick as Step
+    2's `test_placeholder_mounted_at_turn_start`) so the placeholder's
+    mounted-but-not-yet-morphed position can be reliably observed
+    before the morph fires.
+    """
+    events_seen: list[Event] = []
+    app = _make_app_step3(
+        tmp_path,
+        events_seen,
+        deltas=["hello"],
+        delay_first_seconds=_FIRST_EVENT_DELAY_SECONDS,
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        transcript = app.query_one("#transcript", VerticalScroll)
+        children_before = list(transcript.children)
+
+        app._run_exchange("hi")
+        # Pump well short of the delay so the stream has not yielded
+        # its first event yet, but the placeholder mount has landed.
+        await pilot.pause()
+        await pilot.pause()
+        assert events_seen == [], (
+            "the fake stream's first event fired before the assertion — "
+            "the delay is too short for this to be a meaningful check"
+        )
+        placeholder_index = next(
+            (
+                i
+                for i, child in enumerate(transcript.children)
+                if isinstance(child, WorkingPlaceholder)
+            ),
+            None,
+        )
+        assert placeholder_index is not None, (
+            "placeholder was not mounted before the morph — test setup "
+            "invalid, can't verify position"
+        )
+
+        # Pump past the delay so the first token arrives and the morph
+        # (remove placeholder, mount prose) completes.
+        await asyncio.sleep(_FIRST_EVENT_DELAY_SECONDS)
+        await pilot.pause()
+        await pilot.pause()
+
+        children_after = list(transcript.children)
+        assert len(children_after) == len(children_before) + 1, (
+            "expected exactly one net new child (placeholder removed, prose mounted)"
+        )
+        prose_index = next(
+            i
+            for i, child in enumerate(children_after)
+            if isinstance(child, AssistantProse)
+        )
+        # The prose widget is the last child (same as the placeholder
+        # was, at the time it alone had been added for this turn).
+        assert prose_index == len(children_after) - 1
+        assert prose_index == placeholder_index, (
+            "AssistantProse did not land in the placeholder's former "
+            "transcript position"
+        )
+
+
+@pytest.mark.asyncio
+async def test_second_streaming_token_appends_not_second_morph(
+    tmp_path: Path,
+) -> None:
+    """A second token for the same turn appends via the existing flow.
+
+    Only the FIRST token for a `call_id` should trigger the
+    mount/morph path (`EventAdapter._handle_model_streaming_token`
+    only calls `mount_assistant_streaming_widget` when no widget is
+    yet cached for that `call_id`). This asserts: still exactly one
+    `AssistantProse` instance, its text contains both deltas
+    concatenated, and no second `WorkingPlaceholder` was ever
+    (re)mounted.
+    """
+    events_seen: list[Event] = []
+    app = _make_app_step3(tmp_path, events_seen, deltas=["hello ", "world"])
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        app._run_exchange("hi")
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.pause()
+
+        assert len(events_seen) == 2, "expected exactly two streaming-token events"
+
+        prose_widgets = app.query(AssistantProse)
+        assert len(prose_widgets) == 1, (
+            "a second token must not mount a second AssistantProse"
+        )
+        prose = prose_widgets.first()
+        assert "hello" in prose.source
+        assert "world" in prose.source
+
+        assert len(app.query(WorkingPlaceholder)) == 0
+        assert app._working_placeholder is None
