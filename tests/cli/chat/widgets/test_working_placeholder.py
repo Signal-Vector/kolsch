@@ -2100,3 +2100,729 @@ async def test_tool_called_then_failed_with_recovery_hint_reveals_hint_line(
         assert "↳ hint:" in hint_text
         assert "pip install kolsch[browser]" in hint_text
         assert block.has_class("-failed")
+
+
+# ----------------------------------------------------------------------
+# spec-130 Step 6: cancel / turn-supersession -> interrupted terminal
+# state, via the real keyed registries
+# `ChatApp._live_placeholders` / `ChatApp._live_tool_call_blocks`
+# ----------------------------------------------------------------------
+#
+# Reuses the Step 2 scaffolding (`_MockAuthzStep2`, `_MockStoreStep2`,
+# `_MockConfigStep2`, `_MockBundleStep2`) with two new fake-stream
+# shapes:
+#
+# - `_make_cancelled_event_stream`: raises `ExchangeCancelled` (the
+#   engine's cooperative-cancel exception, e.g. after Esc) before ever
+#   yielding an event — exercises `_run_exchange`'s
+#   `except ExchangeCancelled` branch.
+# - `_make_hanging_event_stream` / `_make_hanging_after_tool_called_stream`:
+#   `await asyncio.Event().wait()` (never completes) so a turn can be
+#   left "in flight, not yet terminal" indefinitely — exercises real
+#   `@work(exclusive=True)` supersession by calling `_run_exchange` a
+#   SECOND time while the first is still parked on that `await`.
+
+from errors import ExchangeCancelled  # noqa: E402
+
+
+def _make_cancelled_event_stream(
+    *_ignored: Any,
+) -> Callable[..., AsyncGenerator[Event, None]]:
+    """Build a fake ``engine.execute_stream`` that raises ``ExchangeCancelled``.
+
+    Raises before yielding anything — matches the engine's real
+    cooperative-cancel shape when ``CancelToken.is_cancelled()`` is
+    already true at the first safe point (Esc fired before any content
+    arrived).
+    """
+
+    async def _stream(*_args: Any, **_kwargs: Any) -> AsyncGenerator[Event, None]:
+        raise ExchangeCancelled(cancelled_at_event_id="")
+        yield  # type: ignore[unreachable]  # pragma: no cover — makes this an async generator
+
+    return _stream
+
+
+class _MockEngineStep6Cancelled:
+    def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+        self.execute_stream = _make_cancelled_event_stream()
+
+
+class _MockRuntimeStep6Cancelled:
+    def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+        self.store = _MockStoreStep2()
+        self.authz = _MockAuthzStep2()
+        self.engine = _MockEngineStep6Cancelled()
+
+
+def _make_app_step6_cancelled(tmp_path: Path) -> ChatApp:
+    thread_id = f"th_{uuid4()}"
+    bundle = _MockBundleStep2(
+        runtime=_MockRuntimeStep6Cancelled(),
+        config=_MockConfigStep2(),
+        session_id="ses_test",
+        thread_id=thread_id,
+        agent_ref="kolsch/agents/mock",
+        root=tmp_path,
+        model_label="mock/test",
+        is_resume=False,
+    )
+    return ChatApp(
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_cooperative_cancel_flips_placeholder_to_interrupted(
+    tmp_path: Path,
+) -> None:
+    """A cooperative cancel (Esc, `ExchangeCancelled`) interrupts the placeholder.
+
+    Before spec-130 Step 6, `ExchangeCancelled` fell into
+    `_run_exchange`'s generic `except Exception` branch and mounted an
+    unrelated "[exchange failed — ...]" notice, leaving the turn's
+    `WorkingPlaceholder` orphaned (mounted, non-terminal, spinning
+    forever). This asserts the placeholder is flipped instead: still
+    mounted (never silently removed), `is_terminal`, `terminal_kind ==
+    "interrupted"`, and popped out of the registry.
+    """
+    app = _make_app_step6_cancelled(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        app._run_exchange("hello")
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.pause()
+
+        placeholders = app.query(WorkingPlaceholder)
+        assert len(placeholders) == 1, (
+            "the placeholder must still be mounted — flipped terminal, not removed"
+        )
+        placeholder = placeholders.first()
+        assert placeholder.is_terminal is True
+        assert placeholder.terminal_kind == "interrupted"
+        assert _glyph_text(placeholder) == "─"
+
+        # Registry hygiene: the interrupted entry must not linger.
+        assert app._live_placeholders == {}
+        assert app._working_placeholder is None
+
+        # No generic "[exchange failed — ...]" notice for this path —
+        # the interrupted placeholder IS the terminal signal.
+        assert len(app.query(".error")) == 0
+
+
+@pytest.mark.asyncio
+async def test_cooperative_cancel_does_not_resolve_a_durable_future(
+    tmp_path: Path,
+) -> None:
+    """The interrupt sweep never touches a durable-write future.
+
+    bug-110 precedent: this path is presentation-only. Spies on
+    `ChatApp._interrupt_live_registries` to confirm it's the sweep that
+    ran (not some other code path), and independently spies on the
+    live `PromptsImpl.cancel_pending`/`resolve` surface (the actual
+    durable-write future resolution hook bug-110 warns against reusing
+    here) to confirm the sweep never calls it — the interrupted
+    placeholder has no associated prompt at all, so any call into that
+    surface from this path would be a bug, not incidental.
+    """
+    app = _make_app_step6_cancelled(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        registry = app._service_registry
+        assert registry is not None and registry.prompts is not None
+        prompts_calls: list[str] = []
+        original_cancel_pending = registry.prompts.cancel_pending
+
+        def _spy_cancel_pending(prompt_id: str) -> None:
+            prompts_calls.append(prompt_id)
+            original_cancel_pending(prompt_id)
+
+        registry.prompts.cancel_pending = _spy_cancel_pending
+
+        sweep_calls: list[None] = []
+        original_sweep = app._interrupt_live_registries
+
+        async def _spy_sweep() -> None:
+            sweep_calls.append(None)
+            await original_sweep()
+
+        app._interrupt_live_registries = _spy_sweep  # type: ignore[method-assign]
+
+        app._run_exchange("hello")
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.pause()
+
+        assert len(sweep_calls) == 1
+        placeholder = app.query(WorkingPlaceholder).first()
+        assert placeholder.terminal_kind == "interrupted"
+        assert prompts_calls == [], (
+            "the presentation-only sweep must never resolve/cancel a "
+            "durable prompt future"
+        )
+
+
+def _make_hanging_event_stream() -> Callable[..., AsyncGenerator[Event, None]]:
+    """Build a fake ``engine.execute_stream`` that never yields or completes.
+
+    Parks on a never-set ``asyncio.Event`` so the turn stays "in
+    flight, not yet terminal" indefinitely — the state needed to
+    exercise real `@work(exclusive=True)` supersession by starting a
+    second turn while this one is still running.
+    """
+
+    async def _stream(*_args: Any, **_kwargs: Any) -> AsyncGenerator[Event, None]:
+        await asyncio.Event().wait()
+        return
+        # Unreachable — `asyncio.Event().wait()` above never returns
+        # (the event is never set). A `yield` after the `return` is
+        # required for this `def` to satisfy `AsyncGenerator[Event,
+        # None]` at the type level (same idiom `_empty_async_gen`
+        # above uses, though that one's `Any` yield type happens to
+        # suppress mypy's unreachable check on its own — this
+        # function's concrete `Event` yield type does not).
+        yield _make_canonical_agent_message_event(  # type: ignore[unreachable]  # pragma: no cover
+            "th_unreachable"
+        )
+
+    return _stream
+
+
+class _MockEngineStep6Hanging:
+    def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+        self.execute_stream = _make_hanging_event_stream()
+
+
+class _MockRuntimeStep6Hanging:
+    def __init__(self, *_args: Any, **_kwargs: Any) -> None:
+        self.store = _MockStoreStep2()
+        self.authz = _MockAuthzStep2()
+        self.engine = _MockEngineStep6Hanging()
+
+
+def _make_app_step6_hanging(tmp_path: Path) -> ChatApp:
+    thread_id = f"th_{uuid4()}"
+    bundle = _MockBundleStep2(
+        runtime=_MockRuntimeStep6Hanging(),
+        config=_MockConfigStep2(),
+        session_id="ses_test",
+        thread_id=thread_id,
+        agent_ref="kolsch/agents/mock",
+        root=tmp_path,
+        model_label="mock/test",
+        is_resume=False,
+    )
+    return ChatApp(
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_exclusive_worker_supersession_interrupts_turn_a_placeholder(
+    tmp_path: Path,
+) -> None:
+    """Starting turn B while turn A is still live interrupts turn A's placeholder.
+
+    THE KEY spec-130 Step 6 regression test (closes the Step 2 review
+    gap): `_run_exchange` is `@work(exclusive=True)`, so calling it a
+    second time makes Textual cancel the FIRST worker outright — a real
+    `asyncio.CancelledError` raised inside turn A's `_run_exchange`,
+    confirmed by direct reproduction against this repo's actual
+    Textual version (see the probe in this step's implementation
+    notes). A naive "flip whichever turn is currently active" cancel
+    handler would flip turn B's fresh placeholder (wrong widget) or do
+    nothing (if it read `self._working_placeholder`, which by the time
+    turn A's cancel branch runs has ALREADY been overwritten by turn
+    B's `mount_working_placeholder()` call). This asserts the actual
+    orphaned widget — turn A's placeholder, found via the DOM query,
+    independent of any App-side reference — ends up interrupted, while
+    turn B's own fresh placeholder is untouched and still working.
+    """
+    app = _make_app_step6_hanging(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        app._run_exchange("first message")
+        await pilot.pause()
+        await pilot.pause()
+
+        placeholders_after_a = app.query(WorkingPlaceholder)
+        assert len(placeholders_after_a) == 1, (
+            "turn A's placeholder must be mounted before turn B starts — "
+            "test setup invalid otherwise"
+        )
+        placeholder_a = placeholders_after_a.first()
+        assert placeholder_a.is_terminal is False
+
+        # Start turn B — same `on_composer_submitted` -> `_run_exchange`
+        # call shape a rapid resubmit takes. Textual's `exclusive=True`
+        # cancels turn A's worker synchronously as part of scheduling
+        # this call.
+        app._run_exchange("second message, before the first settled")
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.pause()
+
+        placeholders_after_b = app.query(WorkingPlaceholder)
+        assert len(placeholders_after_b) == 2, (
+            "turn A's placeholder must still be mounted (flipped "
+            "terminal, not removed) alongside turn B's fresh one"
+        )
+
+        # Turn A's placeholder (same widget identity as captured above)
+        # is now interrupted. `terminal_kind == "interrupted"` implies
+        # `is_terminal` — checking only this (stronger) assertion also
+        # sidesteps a mypy narrowing false-positive: asserting
+        # `is_terminal is False` earlier on this same object, then
+        # `is True` later (a real state change from the intervening
+        # `_run_exchange` call mypy can't see through), makes mypy
+        # incorrectly flag the second assert as unreachable.
+        assert placeholder_a.terminal_kind == "interrupted"
+
+        # Turn B's placeholder is the OTHER one, still working.
+        placeholder_b = next(p for p in placeholders_after_b if p is not placeholder_a)
+        assert placeholder_b.is_terminal is False
+
+        # The alias now points at turn B's placeholder, not turn A's —
+        # confirms the sweep read the registry, not just the alias.
+        assert app._working_placeholder is placeholder_b
+        assert app._live_placeholders == {app._active_turn_id: placeholder_b}
+
+
+@pytest.mark.asyncio
+async def test_exclusive_worker_supersession_does_not_resolve_durable_future(
+    tmp_path: Path,
+) -> None:
+    """The supersession sweep is presentation-only, same as the simple-cancel path."""
+    app = _make_app_step6_hanging(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        registry = app._service_registry
+        assert registry is not None and registry.prompts is not None
+        prompts_calls: list[str] = []
+        original_cancel_pending = registry.prompts.cancel_pending
+
+        def _spy_cancel_pending(prompt_id: str) -> None:
+            prompts_calls.append(prompt_id)
+            original_cancel_pending(prompt_id)
+
+        registry.prompts.cancel_pending = _spy_cancel_pending
+
+        app._run_exchange("first message")
+        await pilot.pause()
+        await pilot.pause()
+
+        app._run_exchange("second message")
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.pause()
+
+        placeholder_a = next(p for p in app.query(WorkingPlaceholder) if p.is_terminal)
+        assert placeholder_a.terminal_kind == "interrupted"
+        assert prompts_calls == [], (
+            "the presentation-only sweep must never resolve/cancel a "
+            "durable prompt future"
+        )
+
+
+def _make_hanging_after_tool_called_stream(
+    thread_id: str,
+    events_seen: list[Event],
+    *,
+    tool_call_id: str = "call-1",
+    tool_name: str = "read_file",
+) -> Callable[..., AsyncGenerator[Event, None]]:
+    """Build a fake stream: yields ``TOOL_CALLED``, then hangs forever.
+
+    Leaves a running/pending ``ToolCallBlock`` mounted and never
+    filled — the state needed to exercise supersession of a pending
+    tool-call block (as opposed to a bare placeholder).
+    """
+
+    async def _stream(*_args: Any, **_kwargs: Any) -> AsyncGenerator[Event, None]:
+        called = _make_tool_called_event(
+            thread_id,
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            arguments={"path": "/tmp/x"},
+        )
+        events_seen.append(called)
+        yield called
+        await asyncio.Event().wait()
+
+    return _stream
+
+
+class _MockEngineStep6ToolHanging:
+    def __init__(self, thread_id: str, events_seen: list[Event]) -> None:
+        self.execute_stream = _make_hanging_after_tool_called_stream(
+            thread_id, events_seen
+        )
+
+
+class _MockRuntimeStep6ToolHanging:
+    def __init__(self, thread_id: str, events_seen: list[Event]) -> None:
+        self.store = _MockStoreStep2()
+        self.authz = _MockAuthzStep2()
+        self.engine = _MockEngineStep6ToolHanging(thread_id, events_seen)
+
+
+def _make_app_step6_tool_hanging(tmp_path: Path, events_seen: list[Event]) -> ChatApp:
+    thread_id = f"th_{uuid4()}"
+    bundle = _MockBundleStep2(
+        runtime=_MockRuntimeStep6ToolHanging(thread_id, events_seen),
+        config=_MockConfigStep2(),
+        session_id="ses_test",
+        thread_id=thread_id,
+        agent_ref="kolsch/agents/mock",
+        root=tmp_path,
+        model_label="mock/test",
+        is_resume=False,
+    )
+    return ChatApp(
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=False,
+    )
+
+
+@pytest.mark.asyncio
+async def test_exclusive_worker_supersession_interrupts_pending_tool_call_block(
+    tmp_path: Path,
+) -> None:
+    """Superseding a turn with a pending running `ToolCallBlock` interrupts it.
+
+    Same shape as the placeholder supersession test, but for a tool
+    call already in its running (empty-body) state when turn B starts.
+    Asserts the running block reaches `render_interrupted()`'s visual
+    state — `-interrupted` CSS class, `─`-prefixed title, "Interrupted"
+    body — documenting the chosen terminal treatment for a superseded
+    tool call: distinct from `-failed` (a user cancellation is not a
+    tool error) and consistent with the placeholder's own interrupted
+    glyph/color vocabulary.
+
+    Turn B, driven against the SAME fake-stream shape, also reaches
+    its own `TOOL_CALLED` and mounts its own (distinct) running block
+    before it too parks on the hang — so the registry legitimately
+    holds turn B's entry afterward. The assertions key off turn A's
+    block by IDENTITY (not "the registry is empty"), so this doesn't
+    conflate "turn A's block was cleaned up" with "no tool call is
+    running at all."
+    """
+    events_seen: list[Event] = []
+    app = _make_app_step6_tool_hanging(tmp_path, events_seen)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        app._run_exchange("read a file for me")
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.pause()
+
+        assert len(events_seen) == 1
+        assert events_seen[0].type == EventType.TOOL_CALLED
+        running_blocks = app.query(ToolCallBlock)
+        assert len(running_blocks) == 1
+        running_block_a = running_blocks.first()
+        assert _tool_body_text(running_block_a) == ""
+        assert app._pending_tool_call_block is running_block_a
+
+        # Start turn B — cancels turn A's worker, which was parked
+        # past TOOL_CALLED with its running block still pending. Turn
+        # B runs against the same fake-stream shape, so it mounts its
+        # OWN running block before it, too, hangs.
+        app._run_exchange("second message, before the tool call settled")
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.pause()
+
+        # Turn A's block (same identity captured above) is now
+        # interrupted — never removed from the transcript, just flipped.
+        assert running_block_a.has_class("-interrupted")
+        assert not running_block_a.has_class("-failed")
+        assert _tool_body_text(running_block_a) == "Interrupted"
+        assert str(running_block_a.title).startswith("─ ")
+
+        # Turn A's registry entry specifically is gone.
+        assert running_block_a not in app._live_tool_call_blocks.values()
+
+        # Turn B's own running block is a DIFFERENT instance, still
+        # running (not interrupted) — the sweep didn't touch it.
+        running_blocks_after = app.query(ToolCallBlock)
+        assert len(running_blocks_after) == 2
+        running_block_b = next(
+            b for b in running_blocks_after if b is not running_block_a
+        )
+        assert not running_block_b.has_class("-interrupted")
+        assert _tool_body_text(running_block_b) == ""
+        assert app._pending_tool_call_block is running_block_b
+        assert app._live_tool_call_blocks == {app._active_turn_id: running_block_b}
+
+
+@pytest.mark.asyncio
+async def test_card_mounting_tool_call_still_clears_placeholder_after_registry_retrofit(
+    tmp_path: Path,
+) -> None:
+    """Re-verification (spec-130 Step 6 item 8): the card-mounting-tool fix still holds.
+
+    Step 5 fixed a card-mounting tool call (``run_workflow``) leaving
+    the turn's `WorkingPlaceholder` orphaned by having `_handle_tool_called`
+    call `clear_working_placeholder()` directly for that case. This
+    step's registry retrofit changed `clear_working_placeholder`'s
+    internals (it now goes through `_remove_working_placeholder()` and
+    pops `self._live_placeholders`) — this test re-confirms the
+    end-to-end behaviour Step 5 fixed is still correct after that
+    retrofit: no `WorkingPlaceholder` survives mounted-and-non-terminal
+    once a card-mounting tool call's `TOOL_CALLED` -> `TOOL_RESULT`
+    cycle completes, AND the registry entry (not just the alias) is
+    gone too.
+    """
+    events_seen: list[Event] = []
+    app = _make_app_step5(
+        tmp_path,
+        events_seen,
+        tool_call_id="call-wf-1",
+        tool_name="run_workflow",
+        arguments={"bundle": "kolsch/workflows/example"},
+        result={"card_id": None},
+    )
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        app._run_exchange("run the example workflow")
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.pause()
+
+        assert len(events_seen) == 2
+        assert [e.type for e in events_seen] == [
+            EventType.TOOL_CALLED,
+            EventType.TOOL_RESULT,
+        ]
+
+        # No running ToolCallBlock for a card-mounting tool.
+        assert len(app.query(ToolCallBlock)) == 0
+        assert app._pending_tool_call_block is None
+        assert app._live_tool_call_blocks == {}
+
+        # The placeholder must be gone — not orphaned — AND its
+        # registry entry must be gone too (not just the alias).
+        assert len(app.query(WorkingPlaceholder)) == 0
+        assert app._working_placeholder is None
+        assert app._live_placeholders == {}
+
+
+# ----------------------------------------------------------------------
+# spec-130 Step 6 (review fixup): the mid-mount-await orphan window
+# ----------------------------------------------------------------------
+#
+# Two independent reviewers reproduced, under NATURAL async scheduling
+# (no monkeypatching of registration logic — just a real race against
+# the real `VerticalScroll.mount()` coroutine), that
+# `mount_working_placeholder()` / `mount_tool_call_running()` used to
+# register into the Step 6 registry AFTER `await transcript.mount(...)`
+# rather than before. `Widget.mount()` itself attaches the widget to
+# the DOM SYNCHRONOUSLY (calls `self.app._register(...)` inline before
+# returning the awaitable — see `textual.widget.Widget.mount`); the
+# `await` only waits for the mount message pump to finish. So a turn
+# whose `@work(exclusive=True)` worker is cancelled while suspended on
+# that `await` used to leave its widget attached to the DOM with the
+# post-await registration line never having run — a permanent,
+# non-terminal, un-sweepable orphan.
+#
+# These tests reproduce the exact window by wrapping the REAL
+# `VerticalScroll.mount` (calling through to it, not replacing its
+# behaviour) so it signals once the real synchronous attach has
+# happened, then parks on a never-set `asyncio.Event` — the same
+# "suspended mid-await" shape a genuine `@work(exclusive=True)`
+# preemption produces, just deterministically triggered instead of
+# depending on scheduler-timing luck.
+
+
+@pytest.mark.asyncio
+async def test_placeholder_registered_before_dom_attach_survives_mid_mount_cancel(
+    tmp_path: Path,
+) -> None:
+    """A turn cancelled while suspended inside `transcript.mount(placeholder)`
+    still has its placeholder found and interrupted by the sweep.
+
+    Reproduces the exact window both reviewers found: wraps the REAL
+    `VerticalScroll.mount` so, for the ``WorkingPlaceholder`` mount
+    only, it calls through to the genuine Textual `mount()` (the
+    widget is now truly, synchronously attached to the DOM — confirmed
+    by asserting on `transcript.children` before this coroutine
+    proceeds any further) and then blocks on a never-set
+    `asyncio.Event`, i.e. execution is suspended exactly where a real
+    exclusive-worker preemption would land it: after the synchronous
+    DOM attach, before whatever comes after `await transcript.mount(...)`
+    in the caller. A second turn is then started, superseding the
+    first via the same real `@work(exclusive=True)` mechanism every
+    other Step 6 test uses (no manual `CancelledError` injection). If
+    registration happened AFTER the mount await (the bug), the widget
+    would be attached but absent from `self._live_placeholders`, and
+    the sweep would find nothing to interrupt — it would spin forever,
+    reachable only by walking the DOM. With the fix (register before
+    the mount call), the entry already exists when the cancel fires.
+    """
+    app = _make_app_step6_hanging(tmp_path)
+    attached_before_suspend = asyncio.Event()
+    release_mount = asyncio.Event()
+    real_mount = VerticalScroll.mount
+
+    def _racing_mount(
+        self: VerticalScroll, *widgets: object, **kwargs: object
+    ) -> object:
+        awaitable = real_mount(self, *widgets, **kwargs)
+        if any(isinstance(w, WorkingPlaceholder) for w in widgets):
+            # The real `Widget.mount()` call above has ALREADY
+            # synchronously attached the widget to the DOM (Textual's
+            # `_register` runs inline, before any `await`) — confirm
+            # that directly, then wrap the awaitable so the caller
+            # suspends indefinitely on it, simulating a worker
+            # parked mid-await at exactly this point.
+            assert any(isinstance(c, WorkingPlaceholder) for c in self.children), (
+                "test setup invalid: the widget must already be DOM-attached "
+                "synchronously by Widget.mount() before this wrapper runs"
+            )
+
+            async def _suspend_then_await() -> None:
+                attached_before_suspend.set()
+                await release_mount.wait()
+                await awaitable
+
+            return _suspend_then_await()
+        return awaitable
+
+    with mock.patch.object(VerticalScroll, "mount", _racing_mount):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            app._run_exchange("first message")
+            # Yield until turn A's placeholder is genuinely attached to
+            # the DOM AND its worker is suspended inside the mount
+            # await — not an artificial delay, a real signal fired
+            # from inside the real mount path.
+            await asyncio.wait_for(attached_before_suspend.wait(), timeout=2.0)
+
+            # At this exact moment: the widget IS in the DOM. Assert
+            # the registration already happened too (the fix under
+            # test) — this is the core assertion the bug violated.
+            transcript = app.query_one("#transcript", VerticalScroll)
+            dom_placeholders = [
+                c for c in transcript.children if isinstance(c, WorkingPlaceholder)
+            ]
+            assert len(dom_placeholders) == 1, (
+                "the placeholder must be DOM-attached at this point — "
+                "test setup invalid otherwise"
+            )
+            placeholder_a = dom_placeholders[0]
+            assert app._live_placeholders.get(app._active_turn_id) is placeholder_a, (
+                "the registry entry must already exist WHILE the mount "
+                "await is still pending — registering after the await "
+                "is exactly the bug this test guards against"
+            )
+
+            # Now supersede — the real `@work(exclusive=True)` cancel
+            # path fires while turn A is suspended exactly inside
+            # `transcript.mount(placeholder)`'s await.
+            app._run_exchange("second message, superseding mid-mount")
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+
+            # Turn A's placeholder must be interrupted — not a
+            # permanent, unreachable-via-registry orphan. Checking
+            # `terminal_kind` (stronger than `is_terminal`) also
+            # confirms it landed in the right terminal state, not just
+            # any terminal state.
+            assert placeholder_a.terminal_kind == "interrupted"
+            # And its registry entry is gone — the sweep found and
+            # consumed it, it didn't just leave it dangling.
+            assert placeholder_a not in app._live_placeholders.values()
+
+            # Release the never-actually-awaited real mount coroutine
+            # so it doesn't leak a pending task past the test body.
+            release_mount.set()
+            await pilot.pause()
+
+
+@pytest.mark.asyncio
+async def test_tool_call_block_registered_before_dom_attach_survives_mid_mount_cancel(
+    tmp_path: Path,
+) -> None:
+    """Same mid-mount-await race, for `mount_tool_call_running`'s `ToolCallBlock`.
+
+    Identical shape to the placeholder version above, applied to the
+    OTHER call site the reviewers flagged
+    (`mount_tool_call_running()`), confirming the same fix (register
+    before the mount call) closes the window there too.
+    """
+    events_seen: list[Event] = []
+    app = _make_app_step6_tool_hanging(tmp_path, events_seen)
+    attached_before_suspend = asyncio.Event()
+    release_mount = asyncio.Event()
+    real_mount = VerticalScroll.mount
+
+    def _racing_mount(
+        self: VerticalScroll, *widgets: object, **kwargs: object
+    ) -> object:
+        awaitable = real_mount(self, *widgets, **kwargs)
+        if any(isinstance(w, ToolCallBlock) for w in widgets):
+            assert any(isinstance(c, ToolCallBlock) for c in self.children), (
+                "test setup invalid: the widget must already be DOM-attached "
+                "synchronously by Widget.mount() before this wrapper runs"
+            )
+
+            async def _suspend_then_await() -> None:
+                attached_before_suspend.set()
+                await release_mount.wait()
+                await awaitable
+
+            return _suspend_then_await()
+        return awaitable
+
+    with mock.patch.object(VerticalScroll, "mount", _racing_mount):
+        async with app.run_test() as pilot:
+            await pilot.pause()
+
+            app._run_exchange("read a file for me")
+            await asyncio.wait_for(attached_before_suspend.wait(), timeout=2.0)
+
+            transcript = app.query_one("#transcript", VerticalScroll)
+            dom_blocks = [
+                c for c in transcript.children if isinstance(c, ToolCallBlock)
+            ]
+            assert len(dom_blocks) == 1, (
+                "the running block must be DOM-attached at this point — "
+                "test setup invalid otherwise"
+            )
+            block_a = dom_blocks[0]
+            assert app._live_tool_call_blocks.get(app._active_turn_id) is block_a, (
+                "the registry entry must already exist WHILE the mount "
+                "await is still pending"
+            )
+            assert app._pending_tool_call_block is block_a, (
+                "the alias must also already be set before the mount await "
+                "resolves, for the same reason"
+            )
+
+            app._run_exchange("second message, superseding mid-mount")
+            await pilot.pause()
+            await pilot.pause()
+            await pilot.pause()
+
+            assert block_a.has_class("-interrupted")
+            assert not block_a.has_class("-failed")
+            assert _tool_body_text(block_a) == "Interrupted"
+
+            release_mount.set()
+            await pilot.pause()

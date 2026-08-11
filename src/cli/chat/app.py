@@ -25,6 +25,7 @@ from concurrent.futures.thread import _threads_queues, _worker
 from datetime import datetime
 from pathlib import Path
 from typing import Any
+from uuid import uuid4
 
 from textual import events, work
 from textual.app import App, ComposeResult
@@ -65,6 +66,7 @@ from cli.chat.widgets import (
 from cli.chat.widgets.notice import NoticeWidget
 from cli.chat.widgets.working_placeholder import WorkingPlaceholder
 from engine import ExecutionContext
+from errors import ExchangeCancelled
 from providers import RuleBasedAuthorizationProvider
 from schemas.events import Event, EventType
 
@@ -658,19 +660,58 @@ class ChatApp(App[None]):
         # cancellation UI to append `⚠ Cancelled` to the partial.
         self._last_assistant_widget: AssistantProse | None = None
         self._last_assistant_text: str = ""
-        # spec-130 Step 2: the WorkingPlaceholder mounted at the start
-        # of the current turn by `_run_exchange`. `None` before the
-        # first turn and briefly during app construction; later steps
-        # (morph-on-content, cancel/error terminal states) read this to
-        # find the still-mounted placeholder for the active turn. Not
-        # cleared/removed by this step — that's steps 3-7's job.
+        # spec-130 Step 6: turn/call-id-keyed registries of currently
+        # mounted, not-yet-terminal placeholder-ish widgets. Mirrors
+        # `EventAdapter._live_prompt_blocks`'s shape (a plain `dict[str,
+        # Any]`, entries added on mount, removed on morph/terminal) —
+        # see that dict's docstring at `event_adapter.py:634-645` for
+        # the bug-110 prior art this generalizes.
+        #
+        # Two PARALLEL dicts (one per widget kind) rather than one
+        # dict-with-a-type-discriminant: `WorkingPlaceholder` and
+        # `ToolCallBlock` have different terminal-flip APIs
+        # (`render_terminal(kind)` vs `render_interrupted()` — a tool
+        # call's running state has no natural "error" terminal the way
+        # the placeholder does), so a unified dict would still need an
+        # `isinstance` branch at every consumer. This also mirrors
+        # `WorkflowNodeRow`'s own `_tool_sections`/`_tool_blocks`
+        # parallel-dict precedent (`workflow_node_row.py:666-667`)
+        # exactly. Both dicts are swept together by
+        # `_interrupt_live_registries()` below — never one without the
+        # other — so they always stay consistent as a pair.
+        #
+        # Keyed by `self._active_turn_id` (minted fresh per
+        # `_run_exchange` call, see that method) rather than any
+        # existing event/call id: the turn-start `WorkingPlaceholder`
+        # mount happens BEFORE the event stream yields anything, so no
+        # `tool_call_id`/`call_id` exists yet at that point to key by.
+        # Using one turn-scoped id for both dicts keeps a turn's
+        # placeholder AND its pending tool-call block swept as a unit
+        # when that turn is superseded — see `_interrupt_live_registries`.
+        self._live_placeholders: dict[str, WorkingPlaceholder] = {}
+        self._live_tool_call_blocks: dict[str, ToolCallBlock] = {}
+        # spec-130 Step 6: id of the turn currently mounting widgets,
+        # minted fresh at the top of each `_run_exchange` call. This is
+        # the registries' key space — NOT cleared in `_run_exchange`'s
+        # `finally` (a stale value here is harmless: it's only ever
+        # used to key a NEW registry insert, and every insert site
+        # guards on the widget it just mounted, not on this id's
+        # freshness).
+        self._active_turn_id: str | None = None
+        # spec-130 Step 2/5: convenience aliases for "the current
+        # turn's" placeholder / pending tool-call block. KEPT (not
+        # removed) alongside the Step 6 registries — existing Step 2-5
+        # code and tests read these directly (e.g.
+        # `app._working_placeholder is placeholder`), and within a
+        # single non-superseded turn there is exactly one live entry
+        # per registry, so the alias and the registry entry are always
+        # the same object. Every mount site sets both; every
+        # morph/clear site clears both. The one place they can
+        # legitimately diverge is immediately after
+        # `_interrupt_live_registries()` sweeps an ORPHANED (superseded)
+        # turn's entry that is no longer the alias's target — see that
+        # method's docstring.
         self._working_placeholder: WorkingPlaceholder | None = None
-        # spec-130 Step 5: the running/pending `ToolCallBlock` mounted
-        # by `mount_tool_call_running()` on `TOOL_CALLED`, awaiting its
-        # `TOOL_RESULT` fill. Mirrors `_working_placeholder`'s shape —
-        # a single nullable slot, not yet a keyed registry (Step 6
-        # retrofits everything into a real registry). `None` whenever
-        # no tool call is in flight for the active turn.
         self._pending_tool_call_block: ToolCallBlock | None = None
         # Mutable session state used by the legacy slash handlers.
         # Populated in `on_mount` once the runtime handles are wired.
@@ -1742,13 +1783,53 @@ class ChatApp(App[None]):
         event has been processed. The reference is stashed on
         ``self._working_placeholder`` so later steps (morph-on-content,
         cancel/error terminal states) can find and replace/flip it.
-        This step only mounts it; nothing else reacts to it yet.
+
+        spec-130 Step 6: mints a fresh ``turn_id`` and registers it as
+        ``self._active_turn_id`` BEFORE mounting the placeholder, so
+        every mount call site this turn reaches (here and in
+        ``EventAdapter``'s ``TOOL_CALLED``/streaming-token handlers)
+        keys its registry entry by the same id. Two cancellation shapes
+        can end this method without ever reaching a content-morph:
+
+        - **Cooperative** (Esc / ``request_cancel``): the engine polls
+          ``cancel.is_cancelled()`` at safe points and raises
+          ``ExchangeCancelled`` from inside ``event_stream`` — a plain
+          ``Exception``, caught below. Previously this fell into the
+          generic ``except Exception`` branch and mounted an unrelated
+          "[exchange failed — ...]" notice, leaving this turn's
+          placeholder (if still mounted) orphaned. Now handled
+          explicitly: sweep the registries (flips this turn's
+          placeholder/pending tool-call block to interrupted) instead
+          of mounting the generic failure notice.
+        - **Exclusive-worker preemption** (a second turn started via
+          ``on_composer_submitted`` -> ``self._run_exchange(...)``
+          while this one is still running): Textual's
+          ``@work(exclusive=True)`` cancels THIS worker outright —
+          confirmed by direct reproduction against this repo's actual
+          Textual version: a real ``asyncio.CancelledError`` is raised
+          at whatever ``await`` this turn was parked on, bypassing the
+          inner ``except Exception`` entirely. Caught by the outer
+          ``except asyncio.CancelledError`` below, which sweeps the
+          registries (interrupting the turn Textual just killed) and
+          then re-raises — swallowing ``CancelledError`` would corrupt
+          asyncio's own cancellation bookkeeping and Textual's worker
+          state tracking, so it must always propagate.
+
+        Either shape reaches the same sweep helper,
+        ``_interrupt_live_registries()`` — see its docstring for why
+        the sweep is over EVERY live entry, not just this turn's: by
+        the time cancellation is observed, a *different* turn may
+        already be active, and this dead turn's placeholder is the one
+        that actually needs flipping, not whatever the fresh
+        ``self._working_placeholder`` alias now points at.
         """
         from cli.chat.cancel import new_cancel_token  # noqa: PLC0415
 
         cancel = new_cancel_token()
         self.active_cancel = cancel
         self.last_cancel_reason = None
+        turn_id = str(uuid4())
+        self._active_turn_id = turn_id
         try:
             self._working_placeholder = await self.mount_working_placeholder()
             force_skills: list[str] = []
@@ -1765,8 +1846,22 @@ class ChatApp(App[None]):
             try:
                 async for event in event_stream:
                     await self.event_adapter.handle(event)
+            except ExchangeCancelled:
+                # spec-130 Step 6: cooperative cancel (Esc / ctrl+c) —
+                # presentation-only; no durable-write future is touched
+                # here (bug-110 precedent).
+                await self._interrupt_live_registries()
             except Exception as exc:  # noqa: BLE001 — surface any exchange failure to the transcript
                 await self.mount_exchange_failed(str(exc))
+        except asyncio.CancelledError:
+            # spec-130 Step 6: exclusive-worker hard preemption — a
+            # second turn's `_run_exchange` call cancelled this one via
+            # Textual's `@work(exclusive=True)`. Sweep before
+            # re-raising so this (now-dead) turn's placeholder/pending
+            # tool-call block don't orphan underneath the turn that
+            # superseded it.
+            await self._interrupt_live_registries()
+            raise
         finally:
             self.active_cancel = None
             # Ensure turn status clears after any exchange path.
@@ -1774,6 +1869,80 @@ class ChatApp(App[None]):
                 turn = self.query_one(TurnStatus)
                 turn.verb = ""
                 turn.target = ""
+
+    async def _interrupt_live_registries(self) -> None:
+        """spec-130 Step 6: flip EVERY live, not-yet-terminal entry to interrupted.
+
+        Sweeps ``self._live_placeholders`` and
+        ``self._live_tool_call_blocks`` — never just "the current
+        turn's" entry. This matters because ``_run_exchange`` is
+        ``@work(exclusive=True)``: when a second turn supersedes a
+        first (``on_composer_submitted`` calling ``self._run_exchange``
+        again while the first is still in flight — the same worker-
+        cancellation shape ``_retire_butler_turn``'s hard-cancel
+        escalation drives for ``/new``, confirmed by direct
+        reproduction against this repo's actual Textual version), the
+        FIRST turn's placeholder/pending tool-call block are what need
+        flipping — but by the time either turn's cancel path calls this
+        method, ``self._working_placeholder`` / ``self._active_turn_id``
+        may already have been overwritten by the second turn's own
+        ``mount_working_placeholder()`` call. Reading off the
+        registries (keyed by each turn's own id, not "whichever is
+        current") is what makes this correct regardless of ordering.
+
+        Presentation-only, per the bug-110 precedent
+        (``EventAdapter._handle_prompt_cancelled``): this never
+        resolves a durable-write future, never touches
+        ``PromptsImpl``/``WorkflowsImpl``, and never appends to the
+        session JSONL. It only flips already-mounted widgets to a
+        terminal visual state.
+
+        Idempotent — sweeping an already-empty pair of registries (the
+        common case: most turns morph away cleanly before any
+        cancellation ever occurs) is a no-op. Safe to call from
+        multiple cancel paths in the same turn's teardown (cooperative
+        ``ExchangeCancelled`` and hard ``asyncio.CancelledError`` are
+        mutually exclusive within one ``_run_exchange`` call, but nothing
+        here would break if that ever changed).
+
+        Clears the convenience aliases (``self._working_placeholder`` /
+        ``self._pending_tool_call_block``) ONLY when they still point at
+        a widget this sweep just interrupted — a superseding turn's
+        fresh alias (already re-pointed at ITS OWN new placeholder by
+        the time this sweep runs — ``mount_working_placeholder()`` /
+        ``mount_tool_call_running()`` set the alias and registry entry
+        SYNCHRONOUSLY, before their own ``await transcript.mount(...)``,
+        so there is no window where a fresh alias could still be stale
+        when a DIFFERENT turn's cleanup runs) must survive the sweep
+        untouched.
+
+        Also safe to call while an entry's widget is registered but not
+        yet actually attached to the DOM (a superseding turn's cancel
+        can land while ``mount_working_placeholder()`` /
+        ``mount_tool_call_running()`` are still suspended inside their
+        own ``await transcript.mount(...)`` — see those methods'
+        "review fixup" docstring notes): both
+        ``WorkingPlaceholder.render_terminal()`` and
+        ``ToolCallBlock.render_interrupted()`` are safe to call on a
+        not-yet-mounted widget (verified directly against bare,
+        never-mounted instances) — the widget's internal state still
+        flips correctly even though there's nothing on screen yet to
+        visually update.
+        """
+        for placeholder in self._live_placeholders.values():
+            if not placeholder.is_terminal:
+                with contextlib.suppress(Exception):
+                    placeholder.render_terminal("interrupted")
+            if self._working_placeholder is placeholder:
+                self._working_placeholder = None
+        self._live_placeholders.clear()
+
+        for block in self._live_tool_call_blocks.values():
+            with contextlib.suppress(Exception):
+                block.render_interrupted()
+            if self._pending_tool_call_block is block:
+                self._pending_tool_call_block = None
+        self._live_tool_call_blocks.clear()
 
     # ------------------------------------------------------------------
     # Mount helpers — called by EventAdapter, InlineApprovalCallback, and
@@ -1811,13 +1980,81 @@ class ChatApp(App[None]):
         stashes the returned widget (``self._working_placeholder``) so
         later steps can find and remove/replace it once real content
         (streamed token, tool call, complete response) or a terminal
-        outcome (cancel, error) arrives. This step only mounts it —
-        nothing reacts to or removes it yet.
+        outcome (cancel, error) arrives.
+
+        spec-130 Step 6: also registers the placeholder into
+        ``self._live_placeholders`` keyed by ``self._active_turn_id``
+        (set by ``_run_exchange`` just before calling this) — this is
+        the entry ``_interrupt_live_registries()`` sweeps on cancel/
+        supersession. ``self._active_turn_id`` is always set by the
+        time this is called (``_run_exchange`` is its only caller), but
+        the guard keeps this method safe to call standalone (e.g. from
+        a test) without silently mounting an unregistered placeholder.
+
+        spec-130 Step 6 (review fixup): registers BEFORE ``await
+        transcript.mount(...)``, not after. Two independent reviewers
+        reproduced (under natural async scheduling, no monkeypatching)
+        that a superseding turn's ``@work(exclusive=True)`` cancel can
+        land while this coroutine is suspended INSIDE the mount await
+        — the widget is then attached to the DOM but the post-await
+        registration line never runs, leaving it a permanent orphan
+        the sweep can never find. Registering first closes that window:
+        if cancellation lands mid-mount-await, the registry entry
+        already exists, so the sweep finds and interrupts it —
+        ``WorkingPlaceholder.render_terminal()`` is safe to call on a
+        widget that isn't mounted yet (its query-based updates are
+        already wrapped in ``contextlib.suppress(Exception)``; verified
+        directly against a never-mounted instance), so this is safe
+        regardless of whether the mount ultimately completes.
         """
         transcript = self.query_one("#transcript", VerticalScroll)
         placeholder = WorkingPlaceholder()
+        if self._active_turn_id is not None:
+            self._live_placeholders[self._active_turn_id] = placeholder
         await transcript.mount(placeholder)
         return placeholder
+
+    async def _remove_working_placeholder(self) -> None:
+        """Unmount the turn's placeholder and deregister it, if any.
+
+        spec-130 Step 6: shared by every morph/clear call site
+        (``clear_working_placeholder``, ``mount_assistant_message``,
+        ``mount_assistant_streaming_widget``, ``mount_tool_call_running``)
+        so the registry pop (``self._live_placeholders``) can't drift
+        out of sync with the alias clear/unmount — previously each site
+        duplicated the same four lines independently. Pops by identity
+        (removes whichever registry entry currently maps to THIS
+        widget instance) rather than by ``self._active_turn_id``, so a
+        stale/late call after the turn id has moved on still cleans up
+        the correct entry.
+        """
+        placeholder = self._working_placeholder
+        if placeholder is None:
+            return
+        self._working_placeholder = None
+        for key, value in list(self._live_placeholders.items()):
+            if value is placeholder:
+                del self._live_placeholders[key]
+        if placeholder.is_mounted:
+            await placeholder.remove()
+
+    def _deregister_tool_call_block(self, block: ToolCallBlock) -> None:
+        """Pop ``block``'s entry from ``self._live_tool_call_blocks``, if any.
+
+        spec-130 Step 6: companion to ``_remove_working_placeholder``'s
+        registry pop, for the tool-call-block registry. Pops by
+        identity (whichever key currently maps to THIS widget), not by
+        ``self._active_turn_id`` — a fill/fallback call arriving after
+        the turn id has moved on (e.g. this is a superseded turn's
+        stale pending block) must still deregister the correct entry,
+        not whatever the CURRENT turn id happens to be. Synchronous —
+        unlike the placeholder's counterpart, there's no widget removal
+        here (the block either gets filled in place or was never
+        mounted by the running-block path to begin with).
+        """
+        for key, value in list(self._live_tool_call_blocks.items()):
+            if value is block:
+                del self._live_tool_call_blocks[key]
 
     async def clear_working_placeholder(self) -> None:
         """Remove the turn's placeholder without mounting a replacement.
@@ -1832,16 +2069,13 @@ class ChatApp(App[None]):
         that doesn't know about ``_working_placeholder`` at all. Without
         this, a card-mounting ``TOOL_CALLED`` leaves the placeholder
         mounted, non-terminal, and orphaned forever alongside the
-        eventual card — spinning with nothing left to remove it. Same
-        capture/clear/guarded-remove shape as every other morph method
-        in this file, just without a widget to mount afterward.
+        eventual card — spinning with nothing left to remove it.
+
+        spec-130 Step 6: delegates to ``_remove_working_placeholder()``
+        so the registry entry is popped alongside the unmount, same as
+        every other morph site.
         """
-        placeholder = self._working_placeholder
-        if placeholder is None:
-            return
-        self._working_placeholder = None
-        if placeholder.is_mounted:
-            await placeholder.remove()
+        await self._remove_working_placeholder()
 
     async def mount_assistant_message(
         self,
@@ -1866,14 +2100,14 @@ class ChatApp(App[None]):
         ``mount_assistant_streaming_widget``'s Step 3 pattern). The
         reference is cleared (``None``) so later steps (cancel/error)
         don't act on an already-removed widget.
+
+        spec-130 Step 6: the removal goes through
+        ``_remove_working_placeholder()`` so the ``_live_placeholders``
+        registry entry is popped in lockstep with the alias clear.
         """
         _ = event_id  # bug-036d: sink-protocol dedupe key — App ignores.
         transcript = self.query_one("#transcript", VerticalScroll)
-        placeholder = self._working_placeholder
-        if placeholder is not None:
-            self._working_placeholder = None
-            if placeholder.is_mounted:
-                await placeholder.remove()
+        await self._remove_working_placeholder()
         prose = AssistantProse(
             agent_name=self.session.config.name,
             timestamp=datetime.now(),  # noqa: DTZ005 — local time is right for the wall-clock header
@@ -1899,13 +2133,13 @@ class ChatApp(App[None]):
         for this turn yet at this point). The reference is cleared
         (``None``) so later steps (cancel/error) don't act on an
         already-removed widget.
+
+        spec-130 Step 6: the removal goes through
+        ``_remove_working_placeholder()`` so the ``_live_placeholders``
+        registry entry is popped in lockstep with the alias clear.
         """
         transcript = self.query_one("#transcript", VerticalScroll)
-        placeholder = self._working_placeholder
-        if placeholder is not None:
-            self._working_placeholder = None
-            if placeholder.is_mounted:
-                await placeholder.remove()
+        await self._remove_working_placeholder()
         prose = AssistantProse(
             agent_name=self.session.config.name,
             timestamp=datetime.now(),  # noqa: DTZ005 — local time is right for the wall-clock header
@@ -1942,16 +2176,31 @@ class ChatApp(App[None]):
         ``TOOL_RESULT`` (``mount_tool_call`` below) can find it and
         call ``update_body()`` in place instead of mounting a second,
         separate block.
+
+        spec-130 Step 6: the placeholder removal goes through
+        ``_remove_working_placeholder()`` (registry pop in lockstep),
+        and the new running block is registered into
+        ``self._live_tool_call_blocks`` keyed by ``self._active_turn_id``
+        — the entry ``_interrupt_live_registries()`` sweeps on cancel/
+        supersession, mirroring the placeholder registry exactly.
+
+        spec-130 Step 6 (review fixup): registers (and sets the
+        ``self._pending_tool_call_block`` alias) BEFORE ``await
+        transcript.mount(...)``, not after — same ordering bug and
+        same fix as ``mount_working_placeholder()``'s fixup above. A
+        superseding turn's cancel landing while this coroutine is
+        suspended inside the mount await must not leave the block
+        attached to the DOM but unregistered/un-sweepable.
+        ``ToolCallBlock.render_interrupted()`` is safe to call on a
+        not-yet-mounted block (verified directly).
         """
         transcript = self.query_one("#transcript", VerticalScroll)
-        placeholder = self._working_placeholder
-        if placeholder is not None:
-            self._working_placeholder = None
-            if placeholder.is_mounted:
-                await placeholder.remove()
+        await self._remove_working_placeholder()
         block = ToolCallBlock(tool_name, args, "")
-        await transcript.mount(block)
         self._pending_tool_call_block = block
+        if self._active_turn_id is not None:
+            self._live_tool_call_blocks[self._active_turn_id] = block
+        await transcript.mount(block)
         return block
 
     async def mount_tool_call(
@@ -2018,11 +2267,22 @@ class ChatApp(App[None]):
         ``TOOL_CALLED`` -> ``TOOL_RESULT``/``TOOL_FAILED`` flow, or a
         card-mounting tool call (``mount_tool_call_running`` is
         skipped for those — see ``EventAdapter._handle_tool_called``).
+
+        spec-130 Step 6: both branches that consume/clear
+        ``self._pending_tool_call_block`` also pop the matching entry
+        from ``self._live_tool_call_blocks`` (via
+        ``_deregister_tool_call_block()``) — the block just reached a
+        terminal-ish outcome (filled with a result, or the slot is
+        simply being reset), so it must leave the registry
+        ``_interrupt_live_registries()`` sweeps, the same way the
+        placeholder registry is kept in lockstep by
+        ``_remove_working_placeholder()``.
         """
         _ = event_id  # bug-036d: sink-protocol dedupe key — App ignores.
         pending = self._pending_tool_call_block
         if pending is not None and pending.is_mounted:
             self._pending_tool_call_block = None
+            self._deregister_tool_call_block(pending)
             fill_body = body
             if failed and matched_rule:
                 from cli.chat.services.authz_introspection import (  # noqa: PLC0415
@@ -2038,6 +2298,8 @@ class ChatApp(App[None]):
             # bug-060 Part 1: return the (same) widget for event-id
             # registration — identity matters here, not just content.
             return pending
+        if pending is not None:
+            self._deregister_tool_call_block(pending)
         self._pending_tool_call_block = None
         transcript = self.query_one("#transcript", VerticalScroll)
         block = ToolCallBlock(

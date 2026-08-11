@@ -27,6 +27,8 @@ from typing import ClassVar
 from textual.binding import Binding
 from textual.widgets import Collapsible, Static
 
+from cli.chat.state_tokens import resolve_state
+
 
 class ToolCallBlock(Collapsible):
     """One tool call, collapsed by default, expandable with `Enter`.
@@ -85,11 +87,18 @@ class ToolCallBlock(Collapsible):
     ToolCallBlock.-failed {
         border-left: outer $error;
     }
+    ToolCallBlock.-interrupted {
+        border-left: outer $hint;
+    }
     ToolCallBlock > CollapsibleTitle {
         color: $tool-fg;
     }
     ToolCallBlock.-failed > CollapsibleTitle {
         color: $error;
+    }
+    ToolCallBlock.-interrupted > CollapsibleTitle {
+        color: $hint;
+        text-style: dim;
     }
     ToolCallBlock .body {
         color: $hint;
@@ -220,6 +229,35 @@ class ToolCallBlock(Collapsible):
         """
         self.title = f"✗ {tool_name}({args})"
         self.add_class("-failed")
+
+    def render_interrupted(self) -> None:
+        """Flip a still-running block to an interrupted terminal state.
+
+        spec-130 Step 6: companion to ``set_failed_state`` for the
+        cancel/turn-supersession sweep (``ChatApp._interrupt_live_registries``).
+        A block reaching this method is, by construction, always a
+        RUNNING one (mounted empty by ``mount_tool_call_running`` and
+        never yet filled — see that method's two-phase docstring) — a
+        block that already reached ``TOOL_RESULT``/``TOOL_FAILED`` has
+        already been popped out of the registry that feeds this call,
+        so this never overwrites real result content.
+
+        Deliberately does NOT reuse ``set_failed_state``/``-failed``:
+        an interrupted tool call is a **user cancellation**, not a
+        **tool error** — conflating the two would make "the user hit
+        Esc" look identical to "the tool actually failed" in the
+        transcript, which is misleading after the fact. Instead this
+        mirrors ``WorkingPlaceholder.render_terminal("interrupted")``'s
+        own glyph/color choice: ``state_tokens.py``'s ``"cancelled"``
+        token (``─``, ``$hint``, dim) via the new ``-interrupted`` CSS
+        class, keeping the "user-cancelled" visual vocabulary
+        consistent across both widget kinds spec-130 introduces.
+        """
+        glyph = resolve_state("cancelled").glyph
+        self.title = f"{glyph} {self._tool_name}({self._args})"
+        self.remove_class("-failed")
+        self.add_class("-interrupted")
+        self.update_body("Interrupted")
 
     def action_collapse(self) -> None:
         """Collapse this block. Bound to `c` (see `BINDINGS`)."""
