@@ -1818,9 +1818,31 @@ class ChatApp(App[None]):
         *,
         event_id: str | None = None,
     ) -> Any | None:
-        """Mount a completed assistant prose message at the transcript root."""
+        """Mount a completed assistant prose message at the transcript root.
+
+        spec-130 Step 4: called for a complete, non-streamed response
+        (``EventAdapter._handle_agent_message`` / a non-streaming
+        ``_handle_model_response``), i.e. the reply text is already
+        fully known at mount time — unlike
+        ``mount_assistant_streaming_widget``, there is no later
+        ``append()`` phase. If a ``WorkingPlaceholder`` is still
+        mounted for this turn (``self._working_placeholder``), this is
+        the morph point: remove the placeholder first, then mount
+        ``AssistantProse`` with the full text already appended — one
+        clean swap, never empty-then-fill. Removing before mounting
+        means the prose widget becomes the new last child of
+        ``#transcript`` in the placeholder's former position (mirrors
+        ``mount_assistant_streaming_widget``'s Step 3 pattern). The
+        reference is cleared (``None``) so later steps (cancel/error)
+        don't act on an already-removed widget.
+        """
         _ = event_id  # bug-036d: sink-protocol dedupe key — App ignores.
         transcript = self.query_one("#transcript", VerticalScroll)
+        placeholder = self._working_placeholder
+        if placeholder is not None:
+            self._working_placeholder = None
+            if placeholder.is_mounted:
+                await placeholder.remove()
         prose = AssistantProse(
             agent_name=self.session.config.name,
             timestamp=datetime.now(),  # noqa: DTZ005 — local time is right for the wall-clock header
