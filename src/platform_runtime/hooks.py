@@ -65,6 +65,44 @@ _log = logging.getLogger("platform_runtime.hooks")
 # to SIGINT before escalating to SIGKILL.
 _SIGINT_GRACE_SECONDS = 0.5
 
+# spec-131 Step 6 review fix — bound on the POST-CANCELLATION cleanup
+# (`_reap_after_kill` / `_close_transport_quietly`, below). Real,
+# review-caught defect (two independent reviewers, matching empirical
+# data): `drain_background_hook_tasks`'s short grace window did not
+# actually bound process-exit time, because when it expired,
+# `asyncio.run()`'s own shutdown cancellation could hit an UNBOUNDED
+# wait deep inside the hook-runner's cleanup path. Two distinct forms
+# of the same root cause, both fixed here:
+#
+# 1. `_kill_with_grace`'s post-kill `proc.communicate()` and
+#    `_run_hook_command_inner`'s `finally`-block `proc.wait()` were
+#    unbounded. `SIGKILL` only terminates the DIRECT child; if the
+#    hook's shell command spawned a grandchild that inherited the
+#    stdout/stderr pipes (`cmd &`, `cmd1 && cmd2`, a pipeline) and is
+#    still alive, the pipes stay open and the awaited call blocks
+#    until THAT process exits — up to the hook's own `timeout_seconds`
+#    ceiling (60s max).
+# 2. Separately (and more subtly — found via direct empirical
+#    tracing, not just reasoning): even when the DIRECT child has
+#    already exited on its own (`proc.returncode` already set, no
+#    kill needed at all), a `proc.communicate()` call cancelled
+#    mid-flight — which is exactly what happens when
+#    `drain_background_hook_tasks`'s window expires and
+#    `asyncio.run()`'s shutdown cancels the still-suspended hook
+#    task — leaves the underlying asyncio subprocess transport/pipe
+#    reader in a state that later triggers an unclean
+#    `BaseSubprocessTransport.__del__` at garbage-collection time
+#    (logged as "Exception ignored in: ...", `RuntimeError: Event
+#    loop is closed`) — harmless in production but a real, confirmed
+#    leftover from the pipe never being closed synchronously.
+#
+# `_POST_KILL_REAP_TIMEOUT_SECONDS` bounds case 1; explicit transport
+# closing (`_close_transport_quietly`) in `_run_hook_command_inner`'s
+# cancellation path fixes case 2. 1.5s is generous for a normal
+# OS-level kill+reap (typically sub-millisecond) while still being
+# negligible against a CLI command's overall runtime.
+_POST_KILL_REAP_TIMEOUT_SECONDS = 1.5
+
 # `_OUTPUT_TRUNCATE_BYTES` is deliberately much smaller than the bash
 # tool's `_OUTPUT_TRUNCATE_BYTES = 64 * 1024` (`bash.py:54`,
 # `builtins.py:101`). Bash-tool output is fed back to the model as
@@ -300,13 +338,34 @@ async def _run_hook_command_inner(command: str, timeout_seconds: int) -> None:
         except OSError:
             _log.exception("hook command communicate() failed: %r", command)
             return
+        except asyncio.CancelledError:
+            # spec-131 Step 6 review fix (case 2 — see
+            # `_POST_KILL_REAP_TIMEOUT_SECONDS`'s module comment): this
+            # branch fires when `drain_background_hook_tasks`'s grace
+            # window expired and `asyncio.run()`'s own shutdown
+            # cancelled the still-suspended `communicate()` call. The
+            # DIRECT child may already have exited on its own
+            # (`proc.returncode` already set — no kill needed at all),
+            # but the cancelled `communicate()` leaves the transport's
+            # internal pipe-reader state dangling; explicitly closing
+            # the transport here (not just relying on `finally`'s
+            # kill/reap guard below, which only fires when
+            # `proc.returncode is None`) avoids an unclean
+            # `BaseSubprocessTransport.__del__` later at GC time.
+            # Re-raised afterward — cancellation must still propagate.
+            _close_transport_quietly(proc)
+            raise
     finally:
         # Ensure the subprocess is reaped on every path, matching
-        # bash.py:194-200 / builtins.py:749-756.
+        # bash.py:194-200 / builtins.py:749-756. Bounded via
+        # `_reap_after_kill` (spec-131 Step 6 review fix) — a bare
+        # `proc.wait()` here can block indefinitely if the hook's
+        # shell command spawned a grandchild still holding the
+        # stdout/stderr pipes open; see `_POST_KILL_REAP_TIMEOUT_SECONDS`.
         if proc.returncode is None:
             try:
                 proc.kill()
-                await proc.wait()
+                await _reap_after_kill(proc)
             except (ProcessLookupError, OSError):
                 pass
 
@@ -339,6 +398,19 @@ async def _kill_with_grace(proc: asyncio.subprocess.Process) -> tuple[bytes, byt
     swallowing `OSError` from `communicate()` the same way
     `bash.py:181-184` / `builtins.py:731-734` do (best-effort partial
     output; a failure here must not escalate past this timeout path).
+
+    **spec-131 Step 6 review fix:** the final `proc.communicate()`
+    call (collecting whatever output buffered before the kill) is
+    bounded via `_reap_after_kill`, not called bare. A bare
+    `communicate()` after `kill()` only guarantees the DIRECT child
+    was signaled — if the hook's shell command spawned a grandchild
+    that inherited the stdout/stderr pipes (`cmd & `, `cmd1 && cmd2`,
+    a pipeline) and is still running, `communicate()` blocks reading
+    those pipes until EOF, i.e. until the grandchild itself exits —
+    which can be far longer than this function's own timeout-driven
+    kill was supposed to bound. See
+    `_POST_KILL_REAP_TIMEOUT_SECONDS`'s module-level comment for the
+    full reasoning.
     """
     if proc.returncode is None:
         try:
@@ -353,10 +425,101 @@ async def _kill_with_grace(proc: asyncio.subprocess.Process) -> tuple[bytes, byt
         with contextlib.suppress(ProcessLookupError, OSError):
             proc.kill()
 
+    return await _reap_after_kill(proc)
+
+
+async def _reap_after_kill(proc: asyncio.subprocess.Process) -> tuple[bytes, bytes]:
+    """Bounded post-kill reap: collect output, but never wait forever.
+
+    **spec-131 Step 6 review fix (case 1 — see
+    `_POST_KILL_REAP_TIMEOUT_SECONDS`'s module comment):** after
+    `proc.kill()`, calling `proc.wait()` or `proc.communicate()`
+    unbounded is NOT safe against every hook command shape. `SIGKILL`
+    only terminates the process this `Process` handle refers to — a
+    grandchild the hook's shell command spawned (background `&`, a
+    `&&`/`;` chain, a pipeline) is unaffected and may still hold the
+    stdout/stderr pipes open. Since `communicate()`/reading from those
+    pipes only returns at EOF, the awaited call blocks until that
+    unrelated grandchild exits on its own — which could be the hook's
+    full `timeout_seconds` (up to the 60s ceiling) or longer,
+    defeating both `run_hook_command`'s own timeout-kill contract AND
+    `drain_background_hook_tasks`'s short process-exit grace window
+    (Step 6). Confirmed via a minimal, kolsch-independent repro:
+    `proc.communicate()` called after `proc.kill()` hangs indefinitely
+    against a still-alive grandchild holding the pipe, regardless of
+    the (already-dead) direct child.
+
+    This function is the fix: it bounds the reap itself with a short
+    `asyncio.wait_for(timeout=_POST_KILL_REAP_TIMEOUT_SECONDS)`. If
+    even that expires, it gives up on collecting output/confirming a
+    clean reap, closes the transport explicitly (see
+    `_close_transport_quietly`), and returns `(b"", b"")` anyway —
+    leaving the OS-level process technically un-`wait()`-ed is a
+    normal, safe Unix pattern for a short-lived CLI process (the
+    kernel reaps it once its own grandchildren eventually exit and it
+    becomes fully detached, or `init`/the process's session leader
+    inherits it); it is NOT a resource leak in any way that matters
+    here, and is strictly better than blocking the entire process
+    (and therefore the CLI command the user is waiting on) for up to a
+    minute.
+
+    Returns:
+        Whatever stdout/stderr bytes were collected before either
+        `communicate()` returning normally or the bound expiring;
+        `(b"", b"")` on any `OSError` or on timeout.
+    """
     try:
-        return await proc.communicate()
+        return await asyncio.wait_for(
+            proc.communicate(), timeout=_POST_KILL_REAP_TIMEOUT_SECONDS
+        )
+    except TimeoutError:
+        _log.warning(
+            "hook subprocess reap exceeded %.1fs after kill — a "
+            "grandchild process may still be holding stdout/stderr "
+            "open; giving up on a clean reap and continuing",
+            _POST_KILL_REAP_TIMEOUT_SECONDS,
+        )
+        _close_transport_quietly(proc)
+        return b"", b""
     except OSError:
         return b"", b""
+
+
+def _close_transport_quietly(proc: asyncio.subprocess.Process) -> None:
+    """Explicitly close `proc`'s underlying asyncio transport.
+
+    **spec-131 Step 6 review fix (case 2 — see
+    `_POST_KILL_REAP_TIMEOUT_SECONDS`'s module comment):** without
+    this, a subprocess whose `communicate()`/reap call was cancelled
+    or timed out mid-flight leaves its `Transport`/pipe objects open
+    on the Python side. Those objects eventually get
+    garbage-collected — possibly after the event loop itself has
+    already closed (e.g. at `asyncio.run()`'s own shutdown, which is
+    exactly when `drain_background_hook_tasks`'s cancellation path
+    hits this) — which asyncio reports as "Exception ignored in:
+    BaseSubprocessTransport.__del__" (`RuntimeError: Event loop is
+    closed`). Harmless in production (a logged warning; nothing
+    breaks; the OS-level process is unaffected either way — this is
+    purely about the Python-side wrapper object's cleanup), but a
+    strictly cleaner outcome than leaving it to `__del__`, and
+    confirmed to matter for at least one downstream consumer (a
+    pytest plugin that escalates the ignored exception into a hard
+    test-session failure). Calling `.close()` here performs the same
+    cleanup `__del__` would, just synchronously and on our own terms
+    instead of at an unpredictable GC time against an already-closed
+    loop.
+
+    `_transport` is a private, undocumented attribute of
+    `asyncio.subprocess.Process` (not in its public type stub, hence
+    the `type: ignore`) — reading it to call the one cleanup method it
+    exists to provide is a narrow, well-understood use of a private
+    API, not a fragile reach into implementation detail we depend on
+    for correctness (this call is a best-effort cleanup; every path
+    that reaches it already accepts a `(b"", b"")` degraded result
+    either way).
+    """
+    with contextlib.suppress(Exception):
+        proc._transport.close()  # type: ignore[attr-defined]
 
 
 def _truncate_for_log(data: bytes) -> str:
@@ -481,6 +644,26 @@ class HookDispatcher:
                 task.add_done_callback(_BACKGROUND_TASKS.discard)
                 task.add_done_callback(_log_background_task_exception)
 
+    async def observe(self, event: Event) -> None:
+        """`EventObserver`-Protocol-shaped alias for `handle` (Step 6).
+
+        `AgentEngine`'s constructor accepts an `observer:
+        EventObserver | None` (`src/engine/event_observer.py`, Step
+        5), a structural `Protocol` whose one method is
+        `async def observe(self, event) -> None`. `HookDispatcher`'s
+        own public method is `handle` — named to match Claude Code's
+        hook-dispatch vocabulary rather than the engine's observer
+        vocabulary, since this class is usable standalone (Steps 2-4's
+        tests feed it events directly, with no engine involved). This
+        thin alias is what lets a `HookDispatcher` instance be passed
+        directly as `AgentEngine(..., observer=dispatcher)` (Step 6's
+        real construction sites) without a separate wrapper class —
+        it just forwards to `handle`, which already satisfies every
+        `EventObserver` contract requirement (never raises, never
+        blocks on subprocess completion, never mutates the event).
+        """
+        await self.handle(event)
+
 
 def _log_background_task_exception(task: asyncio.Task[None]) -> None:
     """Defensively log any exception that escaped a fired hook task.
@@ -516,3 +699,101 @@ def _log_background_task_exception(task: asyncio.Task[None]) -> None:
 # awaits or otherwise tracks completion; this set is purely about
 # object lifetime, not synchronization.
 _BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
+
+# spec-131 Step 6 — default grace window for `drain_background_hook_tasks`.
+# Deliberately short: this only exists to close the short-lived-process
+# race documented on that function, not to make a slow hook command
+# block process exit for a long time.
+_DRAIN_TIMEOUT_SECONDS = 2.0
+
+
+async def drain_background_hook_tasks(
+    timeout_seconds: float = _DRAIN_TIMEOUT_SECONDS,
+) -> None:
+    """Best-effort wait for in-flight fire-and-forget hook tasks to finish.
+
+    **Why this exists (spec-131 Step 6 finding, not anticipated by the
+    original spec):** `HookDispatcher.handle()` (Step 4) is deliberately
+    fire-and-forget — it launches each matching hook's command via
+    `asyncio.create_task` and returns without awaiting it, so a slow or
+    hung hook command never delays the engine's own event stream. That
+    contract is correct and unchanged. But it interacts badly with a
+    **short-lived process** like `kolsch run` (`kolsch chat` and the
+    HTTP API stay alive for many exchanges, so this race never matters
+    for them): if the process's `asyncio.run()` call returns — and
+    therefore starts tearing down the event loop — while a hook's
+    `run_hook_command` task is still suspended inside
+    `proc.communicate()`, cancelling that task during
+    `asyncio.run()`'s shutdown sequence does not reliably deliver
+    `CancelledError` on this platform (confirmed empirically: a
+    minimal, kolsch-independent repro — spawn a subprocess inside an
+    unawaited `asyncio.create_task`, return from `main()` immediately —
+    hangs the process indefinitely on macOS + CPython 3.13's default
+    child-watcher/event-loop-shutdown interaction, 100% reproducible
+    across repeated runs). The task is never cancelled, never
+    completes, and `asyncio.run()` never returns, so the whole `kolsch
+    run` process wedges forever instead of exiting after printing its
+    result.
+
+    The fix is NOT inside `run_hook_command` or `HookDispatcher` — both
+    behave correctly; cancellation delivery during interpreter/loop
+    shutdown is out of kolsch's control. Instead,
+    `src/cli/main.py`'s `_run_handler_and_drain_hooks` wraps EVERY CLI
+    subcommand at the single dispatch choke point (`main`'s
+    `asyncio.run(...)` call) and calls this function once, right
+    before returning, to let any hook tasks fired during that command
+    ACTUALLY FINISH (not be cancelled) within a short bounded window —
+    closing the race by avoiding it, not by fixing cancellation
+    semantics this module doesn't control. This covers `kolsch run`
+    (where the race was first found) and every other short-lived
+    headless command (`kolsch workflows run`/`resume`, etc.) uniformly;
+    `kolsch chat` is unaffected in practice (bug-116's
+    `force_process_exit` hard-exits before this coroutine would return
+    normally, and a long-lived session gives any hook task ample real
+    time to finish on its own well before that).
+
+    Uses `asyncio.wait` (not `asyncio.gather`/`wait_for`) specifically
+    because `wait` does not cancel outstanding tasks on timeout — it
+    just returns the `(done, pending)` split and leaves `pending`
+    running. If the grace window expires with a hook task still
+    pending, this function simply returns; `main()`'s `finally` then
+    returns too, and `asyncio.run()`'s own shutdown sequence cancels
+    that still-running task.
+
+    **Second review-caught defect, now fixed at its own root cause
+    (`_reap_after_kill`/`_close_transport_quietly`, not here):** that
+    shutdown-driven cancellation used to be able to reintroduce an
+    unbounded wait of its own — the cancelled task's cleanup path
+    (`_run_hook_command_inner`) kills the subprocess (if still alive)
+    and then reaps it, and a BARE reap
+    (`proc.wait()`/`proc.communicate()`) blocks until the process's
+    stdout/stderr pipes hit EOF, which does not happen until every
+    process holding the write end exits — including a grandchild the
+    hook's shell command spawned (`cmd &`, `cmd1 && cmd2`, a pipeline)
+    that SIGKILL to the direct child never touches. That could add up
+    to the hook's own `timeout_seconds` (60s ceiling) to process exit,
+    regardless of THIS function's `timeout_seconds`.
+    `_reap_after_kill` now bounds that reap independently
+    (`_POST_KILL_REAP_TIMEOUT_SECONDS`, 1.5s), and
+    `_close_transport_quietly` ensures the transport is closed
+    cleanly even when the direct child had already exited on its own
+    (the cancellation can land there too, with nothing left to kill —
+    see that function's docstring). So the total added-to-process-exit
+    time this function is responsible for is now genuinely
+    `timeout_seconds` (this drain's own wait) plus at most
+    `_POST_KILL_REAP_TIMEOUT_SECONDS` (the one bounded reap on the
+    cancellation path) — a small, fixed ceiling regardless of how long
+    the hook command (or anything it spawns) actually runs, not a
+    ceiling that tracks the hook's duration.
+
+    Args:
+        timeout_seconds: How long to wait for outstanding hook tasks
+            before giving up. Defaults to a short, fixed grace window —
+            not user-configurable via `platform.yaml`, since this is
+            an internal process-exit safety net, not a documented hook
+            behavior.
+    """
+    pending = {task for task in _BACKGROUND_TASKS if not task.done()}
+    if not pending:
+        return
+    await asyncio.wait(pending, timeout=timeout_seconds)

@@ -54,7 +54,10 @@ import pytest
 
 from platform_runtime.hooks import (
     _BACKGROUND_TASKS,
+    _POST_KILL_REAP_TIMEOUT_SECONDS,
     HookDispatcher,
+    _reap_after_kill,
+    drain_background_hook_tasks,
     match,
     run_hook_command,
 )
@@ -491,6 +494,93 @@ async def _wait_until_dead(pid: int, *, timeout_seconds: float) -> bool:
             return False
         await asyncio.sleep(0.1)
     return _pid_alive(pid)
+
+
+async def test_runner_timeout_with_grandchild_holding_pipe_still_returns_promptly(
+    tmp_path: Path,
+) -> None:
+    """spec-131 Step 6 review fix regression test.
+
+    Two independent reviewers caught: a hook command that spawns a
+    detached grandchild inheriting the stdout/stderr pipes (here:
+    `(sleep 30 &)` — a background job in a subshell, so the DIRECT
+    child exits almost immediately but the grandchild `sleep 30`
+    keeps the pipes open) used to make `run_hook_command` block for
+    up to the grandchild's lifetime after the timeout-kill fired,
+    because `_kill_with_grace`'s final `proc.communicate()` read the
+    pipes to EOF — which only happens once every holder of the write
+    end (including the grandchild SIGKILL never touched) exits.
+    `_reap_after_kill` now bounds that read via
+    `_POST_KILL_REAP_TIMEOUT_SECONDS` (1.5s) instead. This test's
+    `timeout_seconds=1` command doesn't even need to hit the SIGINT
+    grace path — the outer `wait_for(proc.communicate(), timeout=1)`
+    itself already blocks on the same held-open pipe, so this also
+    exercises `_run_hook_command_inner`'s own `finally`-block reap
+    (`proc.kill()` -> `_reap_after_kill`), the second call site the
+    reviewers flagged.
+    """
+    # 4s: long enough to prove the reap bound (1.5s) actually applies —
+    # without the fix this test would take ~4s (tracking the
+    # grandchild's lifetime), not the ~1-3s the fix produces — while
+    # short enough that the grandchild has always exited by the time
+    # the interpreter/event loop tears down at test-session end. A
+    # much longer sleep (e.g. 30s) reproduces the same defect just as
+    # well but leaks a live background process across the whole test
+    # session, which trips pytest's `unraisableexception` plugin via a
+    # `BaseSubprocessTransport.__del__` warning at a LATER, unrelated
+    # point in the run — a real hazard for CI, not just cosmetic.
+    command = "(sleep 4 &)"
+
+    started = time.monotonic()
+    await run_hook_command(command, timeout_seconds=1)
+    elapsed = time.monotonic() - started
+
+    # Without the fix this would track the grandchild's ~4s lifetime.
+    # With the fix: ~1s (outer timeout) + a beat for the SIGINT-grace
+    # escalation + at most _POST_KILL_REAP_TIMEOUT_SECONDS (1.5s) for
+    # the bounded reap — comfortably under 3.5s, well under the
+    # grandchild's full lifetime.
+    assert elapsed < 3.5, (
+        f"run_hook_command took {elapsed:.1f}s with a grandchild holding "
+        "the pipe open — expected well under 3.5s (was previously "
+        "unbounded, tracking the grandchild's own lifetime)"
+    )
+
+
+async def test_reap_after_kill_bounds_communicate_against_held_open_pipe() -> None:
+    """Unit-level version of the same fix, isolated to `_reap_after_kill`
+    itself (not the full `run_hook_command` timeout ladder): a process
+    whose direct child exits immediately but leaves a grandchild
+    holding the stdout pipe open must still have its reap bounded.
+
+    Uses a 4s grandchild sleep (not a much longer one) so it always
+    exits before the test session ends — see the sibling test's
+    comment for why a long-lived leaked background process is a real
+    CI hazard (a `BaseSubprocessTransport.__del__` warning pytest's
+    `unraisableexception` plugin escalates), not just cosmetic.
+    """
+    proc = await asyncio.create_subprocess_shell(
+        "(sleep 4 &)",
+        stdout=asyncio.subprocess.PIPE,
+        stderr=asyncio.subprocess.PIPE,
+    )
+    # Let the direct child actually exit (it should, almost
+    # immediately — only the backgrounded grandchild lingers).
+    await proc.wait()
+    assert proc.returncode is not None
+
+    started = time.monotonic()
+    stdout_b, stderr_b = await _reap_after_kill(proc)
+    elapsed = time.monotonic() - started
+
+    assert elapsed < _POST_KILL_REAP_TIMEOUT_SECONDS + 2.0, (
+        f"_reap_after_kill took {elapsed:.1f}s against a grandchild "
+        f"holding the pipe open — expected close to "
+        f"_POST_KILL_REAP_TIMEOUT_SECONDS ({_POST_KILL_REAP_TIMEOUT_SECONDS}s)"
+    )
+    # Timed out on the pipe read — no output was ever collected.
+    assert stdout_b == b""
+    assert stderr_b == b""
 
 
 async def test_runner_nonexistent_command_does_not_raise() -> None:
@@ -957,6 +1047,193 @@ class TestHookDispatcherPromptAnsweredWarning:
             )
 
         assert len(caplog.records) == 0
+
+
+# ---------------------------------------------------------------------------
+# HookDispatcher.observe — the EventObserver-Protocol-shaped alias
+# (Step 6). `AgentEngine`'s `observer:` param expects a structural
+# `async def observe(self, event) -> None`; `HookDispatcher`'s own
+# public method is `handle` (Step 4's naming, matching Claude Code's
+# hook vocabulary). `observe` is a thin forwarding alias added at Step
+# 6 so a `HookDispatcher` instance can be passed directly as
+# `AgentEngine(..., observer=dispatcher)` at every real construction
+# site (`src/platform_runtime/runtime.py:bootstrap_runtime`).
+# ---------------------------------------------------------------------------
+
+
+class TestHookDispatcherObserveAlias:
+    async def test_observe_forwards_to_handle_for_matching_event(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = _spy_calls(monkeypatch)
+        dispatcher = HookDispatcher(
+            [_rule("kolsch.prompt.requested", matcher="kolsch/bash")]
+        )
+        event = _ui_event(
+            "kolsch.prompt.requested",
+            {"prompt_id": "prm_x", "action": "kolsch/bash"},
+        )
+
+        await dispatcher.observe(event)
+        await _drain_background_tasks()
+
+        assert len(calls) == 1
+
+    async def test_observe_no_op_for_non_matching_event(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        calls = _spy_calls(monkeypatch)
+        dispatcher = HookDispatcher(
+            [_rule("kolsch.prompt.requested", matcher="kolsch/bash")]
+        )
+        event = _ui_event(
+            "kolsch.prompt.requested",
+            {"prompt_id": "prm_x", "action": "kolsch/write_file"},
+        )
+
+        await dispatcher.observe(event)
+        await _drain_background_tasks()
+
+        assert calls == []
+
+    async def test_observe_returns_promptly_for_slow_command(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """Same fire-and-forget contract as `handle()` — `observe()`
+        must not block on a slow fired command, since it's `observe()`
+        (not `handle()`) that `AgentEngine.execute_stream` actually
+        awaits per event (Step 5)."""
+
+        async def _slow_spy(command: str, timeout_seconds: int) -> None:
+            await asyncio.sleep(10)
+
+        monkeypatch.setattr("platform_runtime.hooks.run_hook_command", _slow_spy)
+        dispatcher = HookDispatcher([_rule("tool.failed")])
+        event = _make_event(EventType.TOOL_FAILED, {"tool_name": "kolsch/bash"})
+
+        await asyncio.wait_for(dispatcher.observe(event), timeout=1.0)
+
+    def test_dispatcher_satisfies_event_observer_protocol_shape(self) -> None:
+        """Structural check: `HookDispatcher` has the one method the
+        `EventObserver` Protocol (`src/engine/event_observer.py`)
+        requires — `async def observe(self, event) -> None` — so it is
+        usable directly as `AgentEngine(observer=dispatcher)` without a
+        separate wrapper class. `EventObserver` is a plain (not
+        `@runtime_checkable`) `Protocol`, so this checks the method's
+        presence directly rather than via `isinstance`, which would
+        raise `TypeError` against a non-runtime-checkable Protocol."""
+        dispatcher = HookDispatcher([])
+        assert hasattr(dispatcher, "observe")
+        assert asyncio.iscoroutinefunction(dispatcher.observe)
+
+
+# ---------------------------------------------------------------------------
+# drain_background_hook_tasks (Step 6) — the short-lived-process fix.
+#
+# Real root cause (verified via a minimal, kolsch-independent repro,
+# not just inferred): a fire-and-forget `HookDispatcher.handle()` task
+# still suspended inside `proc.communicate()` when a short-lived
+# process's top-level coroutine returns does NOT reliably get
+# `CancelledError` delivered during `asyncio.run()`'s shutdown
+# sequence on macOS + CPython 3.13 — the process hangs forever instead
+# of exiting. `drain_background_hook_tasks` closes the race by
+# best-effort AWAITING (never cancelling) in-flight hook tasks for a
+# short bounded window before the caller returns. `kolsch run` and
+# `kolsch workflows run`/`resume` (any short-lived CLI command) need
+# this; `kolsch chat`/the HTTP API don't (long-lived processes, ample
+# real time for a hook task to finish on its own).
+# ---------------------------------------------------------------------------
+
+
+class TestDrainBackgroundHookTasks:
+    async def test_drain_waits_for_in_flight_task_to_finish(self) -> None:
+        """A task that finishes well within the grace window is awaited
+        to completion, not abandoned."""
+        finished = False
+
+        async def _slow_but_finishes() -> None:
+            nonlocal finished
+            await asyncio.sleep(0.05)
+            finished = True
+
+        task = asyncio.create_task(_slow_but_finishes())
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
+
+        await drain_background_hook_tasks(timeout_seconds=2.0)
+
+        assert finished
+        assert task.done()
+
+    async def test_drain_does_not_cancel_on_timeout(self) -> None:
+        """A task that outlives the grace window is left running, not
+        cancelled — the whole point is to avoid the cancellation path
+        that hangs; timing out just means this function gives up
+        waiting and returns, same outcome as if it didn't exist."""
+
+        async def _never_finishes_in_time() -> None:
+            await asyncio.sleep(10)
+
+        task = asyncio.create_task(_never_finishes_in_time())
+        _BACKGROUND_TASKS.add(task)
+        task.add_done_callback(_BACKGROUND_TASKS.discard)
+
+        await drain_background_hook_tasks(timeout_seconds=0.05)
+
+        assert not task.done()
+        assert not task.cancelled()
+
+        # Cleanup: this test's own task must not leak into later tests.
+        task.cancel()
+        with contextlib.suppress(asyncio.CancelledError):
+            await task
+
+    async def test_drain_no_op_when_nothing_pending(self) -> None:
+        """No in-flight tasks — returns immediately, no error."""
+        assert not _BACKGROUND_TASKS
+        await drain_background_hook_tasks(timeout_seconds=2.0)  # must not hang/raise
+
+    async def test_drain_ignores_already_done_tasks(self) -> None:
+        """A task already finished before drain runs doesn't block
+        or error the wait — only genuinely pending tasks are waited
+        on."""
+
+        async def _instant() -> None:
+            return None
+
+        task = asyncio.create_task(_instant())
+        await task  # already done by the time drain runs
+        _BACKGROUND_TASKS.add(task)
+
+        await drain_background_hook_tasks(timeout_seconds=2.0)
+
+        _BACKGROUND_TASKS.discard(task)
+
+    async def test_drain_real_end_to_end_via_dispatcher(self, tmp_path: Path) -> None:
+        """The actual scenario `_run_handler_and_drain_hooks` (Step 6,
+        `src/cli/main.py`) exists to fix: a real `HookDispatcher.handle()`
+        call launches a real subprocess task, the caller does NOT await
+        `handle()`'s background work, and `drain_background_hook_tasks`
+        is what lets that subprocess actually finish before the process
+        would otherwise exit."""
+        marker = tmp_path / f"kolsch-drain-e2e-{uuid.uuid4().hex}"
+        assert not marker.exists()
+
+        dispatcher = HookDispatcher(
+            [
+                HookRule(
+                    event="tool.failed", command=f"touch {marker}", timeout_seconds=5
+                )
+            ]
+        )
+        event = _make_event(EventType.TOOL_FAILED, {"tool_name": "kolsch/bash"})
+
+        await dispatcher.handle(event)  # fire-and-forget, per its contract
+        assert not marker.exists()  # not yet — handle() didn't wait
+
+        await drain_background_hook_tasks(timeout_seconds=5.0)
+
+        assert marker.exists()
 
 
 # ---------------------------------------------------------------------------

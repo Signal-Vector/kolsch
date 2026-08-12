@@ -25,7 +25,7 @@ from platform_runtime import (
 )
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Awaitable, Callable, Sequence
 
     from platform_runtime import PlatformRuntime
     from schemas import ResolvedAgentConfig
@@ -130,7 +130,54 @@ def main(argv: Sequence[str] | None = None) -> int:
         _run_orphan_sweep(args.root)
 
     handler = _DISPATCH[args.command]
-    return asyncio.run(handler(args))
+    return asyncio.run(_run_handler_and_drain_hooks(handler, args))
+
+
+async def _run_handler_and_drain_hooks(
+    handler: Callable[[argparse.Namespace], Awaitable[int]],
+    args: argparse.Namespace,
+) -> int:
+    """Run `handler(args)`, then give in-flight hook tasks a grace window.
+
+    **spec-131 Step 6 finding, not anticipated by the original spec:**
+    every CLI subcommand is a short-lived process — `asyncio.run()`
+    tears down the event loop the moment its coroutine returns. A
+    configured `hooks:` rule fires its command as a fire-and-forget
+    background task (`HookDispatcher.handle`, Step 4 — deliberately
+    never awaited, so a slow hook never delays the engine's own event
+    stream). If that task is still suspended inside
+    `proc.communicate()` when the handler coroutine returns,
+    cancelling it during `asyncio.run()`'s shutdown sequence does not
+    reliably deliver on this platform (empirically reproduced:
+    spawning a subprocess inside an unawaited `asyncio.create_task`
+    then returning from `main()` immediately hangs the process
+    indefinitely on macOS + CPython 3.13's child-watcher/event-loop-
+    shutdown interaction — 100% reproducible, independent of any
+    kolsch-specific code) — wedging the WHOLE CLI process forever
+    instead of exiting with the handler's return code.
+
+    This wraps every subcommand at the single dispatch choke point
+    (`main`'s `asyncio.run(...)` call) rather than fixing each command
+    handler individually, mirroring the injected-single-choke-point
+    philosophy the rest of spec-131 uses (Step 5's engine-level
+    observer seam). `kolsch chat` is unaffected in practice — bug-116's
+    `force_process_exit` hard-exits via `os._exit()` before this
+    coroutine would ever return normally, and a long-lived chat session
+    gives any hook task ample real time to finish well before that
+    hard-exit fires anyway.
+
+    See `platform_runtime.hooks.drain_background_hook_tasks`'s
+    docstring for the full root-cause writeup and why the fix belongs
+    here (waiting it out) rather than inside `HookDispatcher`/
+    `run_hook_command` (cancellation delivery during interpreter/loop
+    shutdown is outside kolsch's control).
+    """
+    from platform_runtime.hooks import drain_background_hook_tasks  # noqa: PLC0415
+
+    try:
+        return await handler(args)
+    finally:
+        await drain_background_hook_tasks()
 
 
 def _run_orphan_sweep(root: Path) -> None:

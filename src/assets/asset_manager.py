@@ -20,10 +20,10 @@ from assets.assembler import (
     load_agent_definition,
     pre_resolve_prompts,
 )
-from assets.platform_config import load_or_create
+from assets.platform_config import load_or_create, parse_hooks_section
 from errors import AssetsNotFound, ConfigInputsInAgentTemplate
 from kernel import resolve_and_validate
-from schemas import ResolvedAgentConfig, derive_agent_id
+from schemas import HookRule, ResolvedAgentConfig, derive_agent_id
 
 if TYPE_CHECKING:
     from assets.catalog import AssetCatalog, AssetEntry
@@ -124,6 +124,42 @@ class AssetManagement:
             raise KeyError(msg)
         value: dict[str, Any] = cfg[section]
         return value
+
+    def hooks_config(self) -> list[HookRule]:
+        """Return `platform.yaml`'s parsed `hooks:` rules (spec-131).
+
+        Unlike every other section, `hooks` is a *list*, not a
+        mapping, so it cannot go through
+        [`get_platform_config`][assets.asset_manager.AssetManagement.get_platform_config]
+        (typed `dict[str, Any]`). This accessor mirrors that method's
+        shape for the one section that needs a different return type:
+        absent `hooks:` key returns `[]` (the documented "zero hooks,
+        zero overhead" default — see
+        `assets.platform_config._KNOWN_SECTIONS`'s `hooks` entry), a
+        present key returns the already-validated `HookRule` objects.
+
+        Re-parses via `parse_hooks_section` rather than caching parsed
+        rules on `self`, since `load_or_create` already validated the
+        raw payload at `initialize()` time (`_validate_section_shape`
+        calls `parse_hooks_section` eagerly) — re-parsing here is
+        re-deriving typed objects from already-known-valid data, not a
+        new failure mode, and keeps this class from holding two
+        representations of the same config in memory.
+
+        Callers (`bootstrap_runtime`, Step 6) MUST call this only once
+        at process start and never again mid-session — hooks config is
+        deliberately excluded from `/reload` (spec-131 Step 7); this
+        method itself has no reload-awareness, the exclusion is the
+        caller's responsibility.
+
+        Returns:
+            The parsed hook rules, in file order; `[]` when the
+            `hooks:` section is absent.
+        """
+        cfg = self._require_initialized()[0]
+        if "hooks" not in cfg:
+            return []
+        return parse_hooks_section(cfg["hooks"])
 
     # --- catalog read API ---------------------------------------------
 

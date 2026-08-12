@@ -34,6 +34,7 @@ from engine.dev_llm import EchoLLMDriver
 from engine.framework import Framework
 from engine.subprocess_framework import ClaudeCodeHarness, SubprocessAgentFramework
 from files import PathPolicy, load_policy
+from platform_runtime.hooks import HookDispatcher
 from providers import (
     AuthorizationProvider,
     ContextCompactionProvider,
@@ -447,6 +448,40 @@ async def bootstrap_runtime(  # noqa: PLR0915 — linear runtime-assembly sequen
         else None
     )
 
+    # spec-131 Step 6 — the real HookDispatcher, backed by
+    # `platform.yaml`'s `hooks:` section (Step 1's
+    # `AssetManagement.hooks_config()`), constructed here so it can be
+    # injected as the engine's `observer=`. `bootstrap_runtime` is
+    # kolsch's single `AgentEngine` construction site (every CLI
+    # command and the HTTP API route through `PlatformRuntime.engine`
+    # — see this module's docstring), so wiring it once here covers
+    # every current and future live-turn surface, matching Step 5's
+    # single-choke-point design (Acceptance Criterion #7).
+    #
+    # Constructed unconditionally, even with zero configured rules —
+    # deliberately, not defaulted to `None` on an empty list:
+    # `HookDispatcher.__init__` is trivially cheap for `rules=[]` (a
+    # list store plus a zero-iteration warning scan, no I/O), so there
+    # is no meaningful cost difference between an empty-rules
+    # dispatcher and `observer=None`. Keeping construction unconditional
+    # avoids a second branch here, mirrors how `subprocess_framework`
+    # just below is "constructed unconditionally — cheap" rather than
+    # conditionally omitted, and means `runtime.engine._observer` is
+    # always a real `HookDispatcher` — one less "is hooks config even
+    # wired" question when debugging. `execute_stream`'s own
+    # `observer is not None` branch-skip (Step 5) is what actually
+    # keeps the zero-hooks case at "zero measurable behavior/latency
+    # regression" (Acceptance Criterion #8), not withholding
+    # construction here — an empty-rules `handle()` call is a for-loop
+    # over `[]`, not a meaningfully different cost.
+    #
+    # Loaded once, here, at process start — never re-read.
+    # `hooks_config()` is deliberately NOT part of whatever `/reload`
+    # (`authz_introspection.py`) re-reads (spec-131 Step 7's trust
+    # boundary control); this call site is the only place hook config
+    # is read for the lifetime of the process.
+    hook_dispatcher = HookDispatcher(am.hooks_config())
+
     engine = AgentEngine(
         store=store,
         bus=bus,
@@ -467,6 +502,9 @@ async def bootstrap_runtime(  # noqa: PLR0915 — linear runtime-assembly sequen
         llm_for_model=chosen_llm_for_model,
         llm_providers_config=llm_providers_config,
         compaction_provider=compaction_provider,
+        # spec-131 Step 6 — real hook dispatch for every event
+        # `execute_stream` yields, from this single construction site.
+        observer=hook_dispatcher,
     )
 
     # Per-subsystem Layer 3 validators — dispatch shape: subsystem
