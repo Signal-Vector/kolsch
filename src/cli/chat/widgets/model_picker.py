@@ -1,12 +1,16 @@
-"""``ModelPickerScreen`` — spec-132's `/model` picker (Step 3: shell only).
+"""``ModelPickerScreen`` — spec-132's `/model` picker (Steps 3+4).
 
 Renders a **given, static** ``list[ModelChoice]`` (`cli._model_catalog`)
 as a three-column list — name / provider / context size — inside a
-Textual ``ModalScreen``. This step builds only the shell: mounting,
-rendering, and the active-row visual design. It does **not** wire
-selection to `_apply_model` (Step 4) and does **not** call the live
-`assemble_model_choices()` (Step 5/2) — the caller passes fixture or
-already-assembled data in.
+Textual ``ModalScreen``. Step 3 built the shell: mounting, rendering,
+and the active-row visual design. Step 4 (this revision) wires
+selection and cancel: choosing a row dismisses the screen with the
+chosen ``ModelChoice``; Escape dismisses with ``None``. The screen
+itself stays dumb/testable — it never calls `_apply_model` or touches
+a `SlashContext` directly (see :func:`open_model_picker` below for the
+caller-side glue, and the class docstring for why). It does **not**
+call the live `assemble_model_choices()` (Step 5/2) — the caller
+passes fixture or already-assembled data in.
 
 **Why a `ModalScreen`.** This is kolsch's first Textual dropdown/
 picker widget — a repo-wide grep found zero prior uses of `Select` /
@@ -84,11 +88,13 @@ from textual.screen import ModalScreen
 from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
+from cli._model_catalog import ModelChoice
+
 if TYPE_CHECKING:
-    from textual.app import ComposeResult
+    from textual.app import App, ComposeResult
     from textual.binding import BindingType
 
-    from cli._model_catalog import ModelChoice
+    from cli._slash import SlashContext
 
 # See the module docstring's "Active-row NO_COLOR design" section for
 # the collision check this glyph was picked against.
@@ -228,22 +234,34 @@ def _row_text(choice: ModelChoice, *, is_current: bool) -> Text:
     return text
 
 
-class ModelPickerScreen(ModalScreen[None]):
+class ModelPickerScreen(ModalScreen[ModelChoice | None]):
     """Modal picker listing `ModelChoice` rows — name / provider / context.
 
-    Step 3 scope: mounts a **given, static** ``list[ModelChoice]`` (no
-    live `assemble_model_choices()` call — that's Step 5) and marks
-    whichever entry matches ``current`` per the 3-carrier active-row
-    design. Selection handling and Escape-cancel semantics beyond
-    "close with no side effect" are Step 4's job; this step's
-    `OptionList` is fully interactive (arrow keys, Enter highlights)
-    but nothing yet consumes an `OptionList.Selected` message.
+    Mounts a **given, static** ``list[ModelChoice]`` (no live
+    `assemble_model_choices()` call — that's Step 5) and marks whichever
+    entry matches ``current`` per the 3-carrier active-row design.
 
-    Escape dismisses the modal via Textual's own `ModalScreen`
-    binding idiom (`BINDINGS` below) — no mutation, matching the
-    "Escape cancels with no mutation" acceptance criterion; Step 4
-    will confirm this at the apply-model layer once selection is
-    wired up.
+    **Selection/cancel (Step 4).** Choosing a row (Enter, or a mouse
+    click on an `Option`) fires Textual's `OptionList.OptionSelected`
+    message; `on_option_list_option_selected` below dismisses the
+    screen with the corresponding `ModelChoice`. Escape dismisses with
+    `None` (`action_dismiss_picker`, bound below) — no mutation,
+    matching the "Escape cancels with no mutation" acceptance
+    criterion.
+
+    **This screen never calls `_apply_model` itself and takes no
+    `SlashContext`.** `Screen.dismiss(result)` returning a typed
+    result — `ModelChoice | None` — is Textual's own idiom for a
+    modal's answer, and keeping the *widget* limited to "which row did
+    the user pick" keeps it trivially unit-testable without a real
+    chat session (mount, press keys, assert what `dismiss` received —
+    no session/runtime double needed). The actual `_apply_model` call
+    (turning the chosen `ModelChoice` into a `ModelSpec` and applying
+    it to a `SlashContext`) is the caller's job — see
+    :func:`open_model_picker`, the thin glue function below that an
+    `App`/`Screen` with a real `SlashContext` calls via
+    `push_screen_wait`. Step 5 wires `/model` (no-arg) to invoke
+    `open_model_picker`.
     """
 
     DEFAULT_CSS = """
@@ -342,9 +360,74 @@ class ModelPickerScreen(ModalScreen[None]):
             for index, choice in enumerate(self._choices)
         ]
 
+    def on_option_list_option_selected(self, event: OptionList.OptionSelected) -> None:
+        """Selecting a row dismisses the screen with its `ModelChoice`.
+
+        `event.option.id` is the `str(index)` `_build_options` set —
+        the stable link back into `self._choices` (the same list
+        `_matches_current` walks for active-row marking). Applying the
+        chosen model (constructing a `ModelSpec`, calling
+        `_apply_model`) is deliberately NOT done here — see the class
+        docstring's "This screen never calls `_apply_model`" section;
+        that's :func:`open_model_picker`'s job once this returns.
+        """
+        event.stop()
+        option_id = event.option.id
+        assert option_id is not None  # every Option here is built with an id
+        choice = self._choices[int(option_id)]
+        self.dismiss(choice)
+
     def action_dismiss_picker(self) -> None:
-        """Escape binding target — close with no side effect (no arg)."""
+        """Escape binding target — close with no side effect (`None`)."""
         self.dismiss(None)
 
 
-__all__ = ["ModelPickerScreen"]
+async def open_model_picker(
+    ctx: SlashContext,
+    app: App[object],
+    choices: list[ModelChoice],
+    *,
+    current: ModelChoice | None = None,
+) -> None:
+    """Push `ModelPickerScreen`, apply the selection (if any) via `_apply_model`.
+
+    The caller-side half of Step 4's selection wiring — see
+    `ModelPickerScreen`'s class docstring for why the screen itself
+    stays dumb (no `SlashContext`, no `_apply_model` call). This
+    function is the seam Step 5 will call from `/model`'s no-arg
+    branch, once ``choices`` comes from `assemble_model_choices()`
+    instead of a fixture list.
+
+    Pushes the screen via `app.push_screen_wait`, Textual's own
+    idiom for "show a modal, await its typed `dismiss()` result."
+    A `None` result (Escape, or `ModelPickerScreen.action_dismiss_picker`)
+    applies nothing and leaves `ctx.state` untouched. A `ModelChoice`
+    result is converted straight to a `ModelSpec(provider=..., model=...)`
+    — no string round-trip through `provider/model` text — and handed
+    to `_apply_model`, the exact same function `/model <ref>` (Step 1)
+    uses, so a picker selection and the equivalent typed `/model <ref>`
+    produce identical `ChatSessionState.model_override` /
+    `ChatSessionState.config.model` results.
+
+    Args:
+        ctx: The slash-command context `_apply_model` mutates.
+            `ctx.state` must not be `None` (same precondition
+            `_apply_model` itself asserts).
+        app: The running `App` (or any `Screen`/`App`-like object
+            exposing Textual's `push_screen_wait`) to push the modal
+            onto.
+        choices: The rows to render — passed straight through to
+            `ModelPickerScreen`.
+        current: The active-model marker — passed straight through to
+            `ModelPickerScreen`.
+    """
+    from cli._slash import _apply_model  # noqa: PLC0415
+    from schemas import ModelSpec  # noqa: PLC0415
+
+    chosen = await app.push_screen_wait(ModelPickerScreen(choices, current=current))
+    if chosen is None:
+        return
+    _apply_model(ctx, ModelSpec(provider=chosen.provider, model=chosen.entry.id))
+
+
+__all__ = ["ModelPickerScreen", "open_model_picker"]

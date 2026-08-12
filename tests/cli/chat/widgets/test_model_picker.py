@@ -1,8 +1,8 @@
-"""Tests for :class:`ModelPickerScreen` (spec-132 Step 3 — shell only).
+"""Tests for :class:`ModelPickerScreen` (spec-132 Steps 3 + 4).
 
-This step mounts a **given, static** ``list[ModelChoice]`` — no live
-`assemble_model_choices()` call, no selection wiring (Step 4), no
-`/model` no-arg wiring (Step 5). Covers:
+Step 3 mounted a **given, static** ``list[ModelChoice]`` — no live
+`assemble_model_choices()` call, no `/model` no-arg wiring (Step 5).
+Covers:
 
 - Row content per column (name / provider / context size), including
   the `—` placeholder for `context_length is None`.
@@ -27,6 +27,19 @@ This step mounts a **given, static** ``list[ModelChoice]`` — no live
   applied unconditionally, not gated behind color availability).
 - Real keyboard interaction via Pilot: arrow-down moves
   `OptionList.highlighted`; Escape dismisses the modal screen.
+
+Step 4 (this revision) adds:
+
+- Selecting a row (Enter on the highlighted option) dismisses the
+  screen with that row's exact `ModelChoice` — asserted via
+  `push_screen_wait`'s return value, not just "the screen closed."
+- Escape dismisses with `None` — distinct from Step 3's weaker
+  "no longer a `ModelPickerScreen`" check.
+- `open_model_picker` (the caller-side glue that turns a selection
+  into an `_apply_model` call) is covered separately in
+  `tests/cli/_slash/test_open_model_picker.py`, where it's spied/
+  mocked against a bare `SlashContext` — no real chat session needed,
+  per the spec's testing note.
 
 ``ModalScreen`` is a ``Screen`` (itself a ``Widget`` subclass) but
 isn't the kind of single in-isolation widget ``mock_app_factory``
@@ -518,3 +531,98 @@ async def test_escape_dismisses_picker_with_no_mutation() -> None:
         assert not isinstance(app.screen, ModelPickerScreen), (
             "Escape must dismiss the picker screen"
         )
+
+
+# ---------------------------------------------------------------------------
+# Selection → dismiss(ModelChoice), Escape → dismiss(None) (Step 4)
+# ---------------------------------------------------------------------------
+
+
+class _PickerResultHostApp(App[None]):
+    """Pushes the picker via `push_screen_wait` and records its result.
+
+    Distinct from `_PickerHostApp` (Step 3, fire-and-forget
+    `push_screen`): Step 4's tests need the actual value
+    `ModelPickerScreen.dismiss(...)` was called with, not just
+    "the screen went away." `result` is `_UNSET` until the awaited
+    `push_screen_wait` call resolves, so a test can assert the modal
+    genuinely dismissed (as opposed to the app tearing down first).
+
+    `push_screen_wait` (unlike `push_screen`) must run inside a
+    Textual worker (`NoActiveWorker` otherwise) — `on_mount` schedules
+    it via `run_worker` rather than awaiting it directly.
+    """
+
+    _UNSET = object()
+
+    def __init__(self, choices: list[ModelChoice], current: ModelChoice | None) -> None:
+        super().__init__()
+        self._choices = choices
+        self._current = current
+        self.result: ModelChoice | None | object = self._UNSET
+
+    def on_mount(self) -> None:
+        self.run_worker(self._await_selection(), exclusive=True)
+
+    async def _await_selection(self) -> None:
+        self.result = await self.push_screen_wait(
+            ModelPickerScreen(self._choices, current=self._current)
+        )
+
+
+@pytest.mark.asyncio
+async def test_selecting_highlighted_row_dismisses_with_its_model_choice() -> None:
+    """Enter on the highlighted option dismisses with that row's `ModelChoice`.
+
+    Uses `push_screen_wait` (not `push_screen`) so the test can assert
+    the exact object `dismiss()` received, matching the acceptance
+    criterion that selection produces the *same* identity the picker
+    displayed — not just "some" choice.
+    """
+    choices = _fixture_choices()
+    app = _PickerResultHostApp(choices, current=None)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ModelPickerScreen)
+        option_list = screen.query_one(OptionList)
+        assert option_list.highlighted == 0  # default highlight is the first row
+
+        # Move to row 2 (gpt-5 / openrouter) then confirm.
+        await pilot.press("down")
+        await pilot.press("down")
+        await pilot.pause()
+        assert option_list.highlighted == 2
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert app.result == choices[2]
+
+
+@pytest.mark.asyncio
+async def test_selecting_first_row_without_moving_dismisses_with_it() -> None:
+    """Confirming the default-highlighted row (no arrow presses) works too."""
+    choices = _fixture_choices()
+    app = _PickerResultHostApp(choices, current=None)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        await pilot.press("enter")
+        await pilot.pause()
+
+    assert app.result == choices[0]
+
+
+@pytest.mark.asyncio
+async def test_escape_dismisses_with_none_via_push_screen_wait() -> None:
+    """Escape's `dismiss(None)` — verified via the awaited return value,
+    not just "the screen is gone" (the weaker Step 3 check above)."""
+    choices = _fixture_choices()
+    app = _PickerResultHostApp(choices, current=choices[0])
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert isinstance(app.screen, ModelPickerScreen)
+
+        await pilot.press("escape")
+        await pilot.pause()
+
+    assert app.result is None

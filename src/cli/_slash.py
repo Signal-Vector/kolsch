@@ -354,7 +354,7 @@ async def _handler_new(arg_text: str, ctx: SlashContext) -> ControlSignal:
     return ControlSignal.NEW_SESSION
 
 
-def _apply_model(ctx: SlashContext, spec_or_ref: str) -> ModelSpec:
+def _apply_model(ctx: SlashContext, spec_or_ref: ModelSpec | str) -> ModelSpec:
     """Validate + apply a model ref to `ctx.state`, in place.
 
     Extracted (spec-132 Step 1) from `_handler_model`'s argument-form
@@ -362,30 +362,46 @@ def _apply_model(ctx: SlashContext, spec_or_ref: str) -> ModelSpec:
     model through the exact same path — one function, not two
     implementations of "apply a model."
 
-    `spec_or_ref` is the free-form ref text a slash-command argument
-    carries: a compact `provider/model` string or an alias label (the
-    shapes `_normalize_model_value` accepts). Validates via
-    `assets.assembler._normalize_model_value`, constructs the
-    `ModelSpec`, and swaps both `ChatSessionState.model_override` and
+    `spec_or_ref` accepts two shapes:
+
+    - A `str`: the free-form ref text a slash-command argument
+      carries — a compact `provider/model` string or an alias label
+      (the shapes `_normalize_model_value` accepts). Validated via
+      `assets.assembler._normalize_model_value`, then wrapped in a
+      `ModelSpec`.
+    - A `ModelSpec`: already-validated/typed input (spec-132 Step 4's
+      picker selection — `ModelPickerScreen`'s chosen `ModelChoice` is
+      turned into a `ModelSpec` by the caller before reaching here).
+      `_normalize_model_value` only special-cases `str`/`dict`
+      shapes — any other object (a `ModelSpec` included) passes
+      through it unchanged, so a `ModelSpec` is applied directly with
+      no string round-trip and no re-validation (it's already a valid
+      `ModelSpec` instance by construction).
+
+    Swaps both `ChatSessionState.model_override` and
     `ChatSessionState.config.model` for this session only. Returns the
     new `ModelSpec` on success.
 
     Raises whatever `_normalize_model_value` / `ModelSpec(**...)`
-    raise on an invalid ref (e.g. `ConfigInvalid`, `ConfigUnknownAlias`,
-    `ValidationError`, `TypeError`) — unchanged from the pre-extraction
-    inline code. Callers catch broadly and turn the exception into a
-    friendly one-line message; this function does not print anything
-    itself.
+    raise on an invalid `str` ref (e.g. `ConfigInvalid`,
+    `ConfigUnknownAlias`, `ValidationError`, `TypeError`) — unchanged
+    from the pre-extraction inline code. Callers catch broadly and
+    turn the exception into a friendly one-line message; this function
+    does not print anything itself.
     """
-    from assets.assembler import _normalize_model_value  # noqa: PLC0415
     from schemas import ModelSpec  # noqa: PLC0415
 
     assert ctx.state is not None  # guarded by every current caller
-    normalized = _normalize_model_value(spec_or_ref, ctx.state.model_aliases)
-    if not isinstance(normalized, dict):
-        msg = f"unexpected normalization shape: {type(normalized).__name__}"
-        raise TypeError(msg)
-    new_spec = ModelSpec(**normalized)
+    if isinstance(spec_or_ref, ModelSpec):
+        new_spec = spec_or_ref
+    else:
+        from assets.assembler import _normalize_model_value  # noqa: PLC0415
+
+        normalized = _normalize_model_value(spec_or_ref, ctx.state.model_aliases)
+        if not isinstance(normalized, dict):
+            msg = f"unexpected normalization shape: {type(normalized).__name__}"
+            raise TypeError(msg)
+        new_spec = ModelSpec(**normalized)
     ctx.state.model_override = new_spec
     ctx.state.config = ctx.state.config.model_copy(update={"model": new_spec})
     return new_spec
