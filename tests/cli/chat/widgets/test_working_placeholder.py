@@ -15,13 +15,20 @@ Those tests cover:
   the glyph is present and identical to the color-mode glyph.
 
 Step 2 wires the turn-start mount: ``ChatApp._run_exchange`` mounts a
-``WorkingPlaceholder`` into ``#transcript`` before ``event_stream``
-iteration begins. The integration tests below drive a real ``ChatApp``
-(same scaffolding as ``tests/cli/chat/test_composer_submitted_exit_verbs.py``)
-against a fake engine whose ``execute_stream`` sleeps before yielding
-its first (and only) event, and assert the placeholder is mounted in
-``#transcript`` immediately — i.e. before that first event is ever
-processed.
+``WorkingPlaceholder`` into ``#transcript`` from inside its
+``event_stream`` loop, gated per-event on ``not placeholder_mounted
+and event.type == EventType.USER_MESSAGE`` — i.e. right after the
+engine's ``USER_MESSAGE`` event has been handled (and the
+``UserChatbox`` it triggers has been mounted), not before the loop
+starts. The integration tests below drive a real ``ChatApp`` (same
+scaffolding as
+``tests/cli/chat/test_composer_submitted_exit_verbs.py``) against a
+fake engine whose ``execute_stream`` yields a real ``USER_MESSAGE``
+first (matching production), then sleeps before yielding its next
+(and only other) event, and assert the placeholder is mounted in
+``#transcript`` immediately after that ``USER_MESSAGE`` is processed —
+i.e. before the *subsequent* event is ever processed, and below the
+``UserChatbox`` the ``USER_MESSAGE`` itself mounted.
 """
 
 from __future__ import annotations
@@ -44,6 +51,7 @@ from cli.chat.state_tokens import resolve_state
 from cli.chat.widgets._gutter_block import GutterBlock
 from cli.chat.widgets.assistant_prose import AssistantProse
 from cli.chat.widgets.tool_call_block import ToolCallBlock
+from cli.chat.widgets.user_chatbox import UserChatbox
 from cli.chat.widgets.working_placeholder import WorkingPlaceholder
 from schemas.entities import Actor
 from schemas.events import Event, EventType
@@ -488,20 +496,59 @@ def _make_canonical_agent_message_event(thread_id: str) -> Event:
     )
 
 
+def _make_user_message_event(thread_id: str, *, text: str = "hi") -> Event:
+    """Build a real, fully-valid ``USER_MESSAGE`` ``Event``.
+
+    Mirrors what ``src/engine/engine.py`` actually emits as the very
+    first event of any user-submitted trigger. Traced via
+    ``src/cli/chat/session.py::_build_user_trigger`` (produces
+    ``{"kind": "user_message", "content": text}``) through
+    ``src/engine/engine.py::_extract_trigger_content`` (~line 3349),
+    which for a plain string ``content`` returns ``{"text": text}`` —
+    no ``"type"`` key — wrapped in ``UserMessageData(content=...)`` at
+    the ``_emit`` call (~line 1713-1721). The real event's ``data`` is
+    therefore ``{"content": {"text": ...}}``, with an
+    ``Actor(kind="user", id="user.local")`` — NOT ``kind="system"``
+    (that's reserved for synthetic platform events; a real
+    ``USER_MESSAGE`` is always attributed to the user). Every fake
+    ``execute_stream`` in this file yields one of these first, matching
+    production — the engine always emits ``USER_MESSAGE`` before
+    anything else for a user-submitted turn, and ``_run_exchange`` (post
+    the in-transcript-placeholder-position fix) only mounts the
+    ``WorkingPlaceholder`` in response to seeing it.
+    """
+    return Event(
+        event_id=EventId(f"ev_{uuid4()}"),
+        thread_id=ThreadId(thread_id),
+        session_id=SessionId(f"ses_{uuid4()}"),
+        type=EventType.USER_MESSAGE,
+        data={"content": {"text": text}},
+        actor=Actor(kind="user", id="user.local"),
+        created_at=datetime.now(UTC),
+    )
+
+
 def _make_delayed_event_stream(
     thread_id: str,
     events_seen: list[Event],
 ) -> Callable[..., AsyncGenerator[Event, None]]:
     """Build a fake ``engine.execute_stream`` that delays its first event.
 
-    Appends each event to ``events_seen`` as it's yielded, so the test
-    can assert ordering ("placeholder mounted" happened-before "first
-    event recorded") without needing to inspect `EventAdapter` internals.
+    Yields a real ``USER_MESSAGE`` first (matching the engine's actual
+    ordering — see ``_make_user_message_event``), then delays before
+    yielding the "interesting" ``AGENT_MESSAGE``. Only the
+    ``AGENT_MESSAGE`` is appended to ``events_seen`` — callers use that
+    list to assert "placeholder mounted" happened-before "first
+    [interesting] event recorded" without needing to inspect
+    `EventAdapter` internals, and the delay/assertions in those tests
+    are keyed off the AGENT_MESSAGE specifically, not the immediate
+    USER_MESSAGE that now precedes it.
     """
 
     async def _delayed_stream(
         *_args: Any, **_kwargs: Any
     ) -> AsyncGenerator[Event, None]:
+        yield _make_user_message_event(thread_id)
         await asyncio.sleep(_FIRST_EVENT_DELAY_SECONDS)
         event = _make_canonical_agent_message_event(thread_id)
         events_seen.append(event)
@@ -570,9 +617,11 @@ async def test_placeholder_mounted_at_turn_start(tmp_path: Path) -> None:
     """`_run_exchange` mounts a `WorkingPlaceholder` into `#transcript`.
 
     Drives a real turn through the app's normal `_run_exchange` worker
-    (not a spy) against a fake engine whose stream delays its first
-    event, then asserts the placeholder is mounted before the delay
-    elapses — i.e. before any event has been processed.
+    (not a spy) against a fake engine whose stream yields a real
+    `USER_MESSAGE` first, then delays before yielding its next event,
+    and asserts the placeholder is mounted before that delay elapses —
+    i.e. right after the `USER_MESSAGE` event has been processed (one
+    event in), not before any event has been processed.
     """
     events_seen: list[Event] = []
     app = _make_app_step2(tmp_path, events_seen)
@@ -626,6 +675,80 @@ async def test_placeholder_reference_stashed_for_later_steps(
         assert placeholder.terminal_kind is None
 
 
+@pytest.mark.asyncio
+async def test_placeholder_mounts_below_user_chatbox_not_above_it(
+    tmp_path: Path,
+) -> None:
+    """Regression test: the placeholder must land BELOW the user's own message.
+
+    Real-world bug found post-ship: `_run_exchange` used to mount
+    `WorkingPlaceholder` unconditionally as the first line of its try
+    block, before `event_stream` iteration even began — but
+    `UserChatbox` only ever mounts later, in response to the engine's
+    `USER_MESSAGE` event (`EventAdapter._handle_user_message`, the
+    single mount site shared by the live and replay paths — see
+    `on_composer_submitted`'s docstring). Since `USER_MESSAGE` is
+    always the first event a user-submitted trigger yields
+    (`src/engine/engine.py` ~line 1713-1721), mounting the placeholder
+    before the loop started landed it ABOVE the user's own message
+    every time.
+
+    Uses the same delayed-stream shape Step 2's tests use (`USER_MESSAGE`
+    immediately, then a delay before a non-terminal `AGENT_MESSAGE`) so
+    the placeholder is mounted and still visible (not yet morphed away)
+    at the point this test inspects `#transcript` — both widgets must
+    be present, with `UserChatbox` at a LOWER child index than
+    `WorkingPlaceholder`.
+    """
+    events_seen: list[Event] = []
+    app = _make_app_step2(tmp_path, events_seen)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        app._run_exchange("hello there")
+        # Pump just enough for USER_MESSAGE to be processed (mounting
+        # UserChatbox) and the placeholder to mount in response, but
+        # well short of `_FIRST_EVENT_DELAY_SECONDS` so the fake
+        # stream's AGENT_MESSAGE (which would morph the placeholder
+        # away) has not fired yet.
+        await pilot.pause()
+        await pilot.pause()
+
+        assert events_seen == [], (
+            "the fake stream's AGENT_MESSAGE fired before the assertion — "
+            "the delay is too short for this to be a meaningful check"
+        )
+
+        transcript = app.query_one("#transcript", VerticalScroll)
+        children = list(transcript.children)
+
+        user_chatbox_index = next(
+            (i for i, child in enumerate(children) if isinstance(child, UserChatbox)),
+            None,
+        )
+        placeholder_index = next(
+            (
+                i
+                for i, child in enumerate(children)
+                if isinstance(child, WorkingPlaceholder)
+            ),
+            None,
+        )
+
+        assert user_chatbox_index is not None, (
+            "UserChatbox was never mounted — USER_MESSAGE was not processed"
+        )
+        assert placeholder_index is not None, (
+            "WorkingPlaceholder was never mounted for this turn"
+        )
+        assert user_chatbox_index < placeholder_index, (
+            "the user's own message must appear BEFORE (above) the "
+            "working placeholder in the transcript — got UserChatbox "
+            f"at index {user_chatbox_index}, WorkingPlaceholder at "
+            f"index {placeholder_index}"
+        )
+
+
 # ----------------------------------------------------------------------
 # spec-130 Step 3: streaming-token morph via
 # `ChatApp.mount_assistant_streaming_widget` /
@@ -671,19 +794,22 @@ def _make_streaming_event_stream(
 ) -> Callable[..., AsyncGenerator[Event, None]]:
     """Build a fake ``engine.execute_stream`` yielding N streaming-token events.
 
-    Each entry in ``deltas`` becomes one ``MODEL_STREAMING_TOKEN``
-    event for the same ``call_id`` — i.e. one turn, N incremental
-    tokens, matching how a real streamed reply arrives. When
-    ``delay_first_seconds`` is nonzero, the stream sleeps before
-    yielding its first event — same delayed-stream trick Step 2's
-    tests use — so a test can pump the loop just enough to observe the
-    placeholder mounted-but-not-yet-morphed before the first token
-    arrives.
+    Yields a real ``USER_MESSAGE`` first (matching the engine's actual
+    ordering), which is what triggers the placeholder mount. Each entry
+    in ``deltas`` becomes one ``MODEL_STREAMING_TOKEN`` event for the
+    same ``call_id`` — i.e. one turn, N incremental tokens, matching
+    how a real streamed reply arrives. When ``delay_first_seconds`` is
+    nonzero, the stream sleeps (AFTER yielding ``USER_MESSAGE``, before
+    the first streaming-token event) — same delayed-stream trick Step
+    2's tests use — so a test can pump the loop just enough to observe
+    the placeholder mounted (in response to ``USER_MESSAGE``) but not
+    yet morphed before the first token arrives.
     """
 
     async def _streaming_stream(
         *_args: Any, **_kwargs: Any
     ) -> AsyncGenerator[Event, None]:
+        yield _make_user_message_event(thread_id)
         if delay_first_seconds:
             await asyncio.sleep(delay_first_seconds)
         for delta in deltas:
@@ -806,14 +932,15 @@ async def test_first_streaming_token_prose_lands_in_placeholder_position(
 ) -> None:
     """The mounted `AssistantProse` occupies the same transcript child slot.
 
-    The placeholder is mounted first (nothing else added to
-    `#transcript` for this turn yet), so remove-then-mount should land
-    `AssistantProse` at the same index the placeholder held — verified
-    directly against `#transcript`'s child list, not just "is
-    mounted somewhere." Uses a first-event delay (same trick as Step
-    2's `test_placeholder_mounted_at_turn_start`) so the placeholder's
-    mounted-but-not-yet-morphed position can be reliably observed
-    before the morph fires.
+    The placeholder is mounted right after `USER_MESSAGE` is processed
+    (which mounts its own `UserChatbox` first — nothing else added to
+    `#transcript` for this turn beyond those two), so remove-then-mount
+    should land `AssistantProse` at the same index the placeholder
+    held — verified directly against `#transcript`'s child list, not
+    just "is mounted somewhere." Uses a first-event delay (same trick
+    as Step 2's `test_placeholder_mounted_at_turn_start`) so the
+    placeholder's mounted-but-not-yet-morphed position can be reliably
+    observed before the morph fires.
     """
     events_seen: list[Event] = []
     app = _make_app_step3(
@@ -830,7 +957,9 @@ async def test_first_streaming_token_prose_lands_in_placeholder_position(
 
         app._run_exchange("hi")
         # Pump well short of the delay so the stream has not yielded
-        # its first event yet, but the placeholder mount has landed.
+        # its first (interesting) event yet, but USER_MESSAGE has been
+        # processed (mounting UserChatbox) and the placeholder mount
+        # has landed.
         await pilot.pause()
         await pilot.pause()
         assert events_seen == [], (
@@ -857,8 +986,10 @@ async def test_first_streaming_token_prose_lands_in_placeholder_position(
         await pilot.pause()
 
         children_after = list(transcript.children)
-        assert len(children_after) == len(children_before) + 1, (
-            "expected exactly one net new child (placeholder removed, prose mounted)"
+        assert len(children_after) == len(children_before) + 2, (
+            "expected exactly two net new children (UserChatbox from "
+            "USER_MESSAGE, plus the placeholder removed / prose mounted "
+            "swap netting one more)"
         )
         prose_index = next(
             i
@@ -959,17 +1090,21 @@ def _make_complete_response_event_stream(
 ) -> Callable[..., AsyncGenerator[Event, None]]:
     """Build a fake ``engine.execute_stream`` yielding one complete ``AGENT_MESSAGE``.
 
-    No ``MODEL_STREAMING_TOKEN`` precedes it — the full text is
-    present on the single event, matching a non-streamed reply. When
-    ``delay_first_seconds`` is nonzero, the stream sleeps before
-    yielding, mirroring Steps 2-3's delayed-stream trick so a test can
-    observe the placeholder mounted-but-not-yet-morphed before the
-    response arrives.
+    Yields a real ``USER_MESSAGE`` first (matching the engine's actual
+    ordering; triggers the placeholder mount). No
+    ``MODEL_STREAMING_TOKEN`` precedes the ``AGENT_MESSAGE`` — the full
+    text is present on the single event, matching a non-streamed
+    reply. When ``delay_first_seconds`` is nonzero, the stream sleeps
+    (after ``USER_MESSAGE``, before the complete response) mirroring
+    Steps 2-3's delayed-stream trick so a test can observe the
+    placeholder mounted-but-not-yet-morphed before the response
+    arrives.
     """
 
     async def _complete_stream(
         *_args: Any, **_kwargs: Any
     ) -> AsyncGenerator[Event, None]:
+        yield _make_user_message_event(thread_id)
         if delay_first_seconds:
             await asyncio.sleep(delay_first_seconds)
         event = _make_agent_message_event(thread_id, call_id=call_id, text=text)
@@ -1090,11 +1225,12 @@ async def test_complete_agent_message_prose_lands_in_placeholder_position(
 ) -> None:
     """The mounted `AssistantProse` occupies the same transcript child slot.
 
-    The placeholder is mounted first (nothing else added to
-    `#transcript` for this turn yet), so remove-then-mount should land
-    `AssistantProse` at the same index the placeholder held — verified
-    directly against `#transcript`'s child list. Uses a first-event
-    delay (same trick as Steps 2-3) so the placeholder's
+    The placeholder is mounted right after `USER_MESSAGE` is processed
+    (which mounts its own `UserChatbox` first — nothing else added to
+    `#transcript` for this turn beyond those two), so remove-then-mount
+    should land `AssistantProse` at the same index the placeholder
+    held — verified directly against `#transcript`'s child list. Uses a
+    first-event delay (same trick as Steps 2-3) so the placeholder's
     mounted-but-not-yet-morphed position can be reliably observed
     before the morph fires.
     """
@@ -1113,7 +1249,9 @@ async def test_complete_agent_message_prose_lands_in_placeholder_position(
 
         app._run_exchange("hi")
         # Pump well short of the delay so the stream has not yielded
-        # its event yet, but the placeholder mount has landed.
+        # its (interesting) event yet, but USER_MESSAGE has been
+        # processed (mounting UserChatbox) and the placeholder mount
+        # has landed.
         await pilot.pause()
         await pilot.pause()
         assert events_seen == [], (
@@ -1140,8 +1278,10 @@ async def test_complete_agent_message_prose_lands_in_placeholder_position(
         await pilot.pause()
 
         children_after = list(transcript.children)
-        assert len(children_after) == len(children_before) + 1, (
-            "expected exactly one net new child (placeholder removed, prose mounted)"
+        assert len(children_after) == len(children_before) + 2, (
+            "expected exactly two net new children (UserChatbox from "
+            "USER_MESSAGE, plus the placeholder removed / prose mounted "
+            "swap netting one more)"
         )
         prose_index = next(
             i
@@ -1322,8 +1462,10 @@ def _make_tool_call_event_stream(
 ) -> Callable[..., AsyncGenerator[Event, None]]:
     """Build a fake ``engine.execute_stream`` yielding TOOL_CALLED then TOOL_RESULT.
 
-    One tool call, two events, same ``tool_call_id`` — matching how a
-    real tool invocation arrives. ``delay_first_seconds`` (before
+    Yields a real ``USER_MESSAGE`` first (matching the engine's actual
+    ordering; triggers the placeholder mount). One tool call, two
+    events, same ``tool_call_id`` — matching how a real tool invocation
+    arrives. ``delay_first_seconds`` (after ``USER_MESSAGE``, before
     TOOL_CALLED) and ``delay_between_seconds`` (between TOOL_CALLED and
     TOOL_RESULT) reuse the delayed-stream trick from Steps 2-4 so a
     test can pump the loop just enough to observe an intermediate
@@ -1335,6 +1477,7 @@ def _make_tool_call_event_stream(
     async def _tool_call_stream(
         *_args: Any, **_kwargs: Any
     ) -> AsyncGenerator[Event, None]:
+        yield _make_user_message_event(thread_id)
         if delay_first_seconds:
             await asyncio.sleep(delay_first_seconds)
         called = _make_tool_called_event(
@@ -1556,7 +1699,10 @@ async def test_tool_call_running_block_lands_in_placeholder_position(
     """The running `ToolCallBlock` occupies the placeholder's former slot.
 
     Same remove-before-mount position check Steps 3-4 run for
-    `AssistantProse`, applied to the tool-call running block.
+    `AssistantProse`, applied to the tool-call running block. The
+    placeholder is mounted right after `USER_MESSAGE` is processed
+    (which mounts its own `UserChatbox` first), so the net-new-children
+    count includes that extra widget too.
     """
     events_seen: list[Event] = []
     app = _make_app_step5(
@@ -1595,9 +1741,10 @@ async def test_tool_call_running_block_lands_in_placeholder_position(
         await pilot.pause()
 
         children_after = list(transcript.children)
-        assert len(children_after) == len(children_before) + 1, (
-            "expected exactly one net new child (placeholder removed, "
-            "running block mounted)"
+        assert len(children_after) == len(children_before) + 2, (
+            "expected exactly two net new children (UserChatbox from "
+            "USER_MESSAGE, plus the placeholder removed / running block "
+            "mounted swap netting one more)"
         )
         block_index = next(
             i
@@ -1736,17 +1883,20 @@ def _make_tool_call_then_failed_event_stream(
 ) -> Callable[..., AsyncGenerator[Event, None]]:
     """Build a fake ``engine.execute_stream`` yielding TOOL_CALLED then TOOL_FAILED.
 
-    A ``TOOL_CALLED`` event always precedes exactly one of
-    ``TOOL_RESULT`` (success) or ``TOOL_FAILED`` (failure) — see
-    ``src/engine/engine.py``'s force-invoke path for a concrete
-    real-code example of that exact sequencing. This exercises the
-    failure branch: the running block mounted at ``TOOL_CALLED`` must
-    still be the SAME widget ``_handle_tool_failed`` fills, with the
-    ``-failed`` CSS class correctly applied.
+    Yields a real ``USER_MESSAGE`` first (matching the engine's actual
+    ordering; triggers the placeholder mount). A ``TOOL_CALLED`` event
+    always precedes exactly one of ``TOOL_RESULT`` (success) or
+    ``TOOL_FAILED`` (failure) — see ``src/engine/engine.py``'s
+    force-invoke path for a concrete real-code example of that exact
+    sequencing. This exercises the failure branch: the running block
+    mounted at ``TOOL_CALLED`` must still be the SAME widget
+    ``_handle_tool_failed`` fills, with the ``-failed`` CSS class
+    correctly applied.
     """
     args = arguments if arguments is not None else {"path": "/tmp/missing"}
 
     async def _stream(*_args: Any, **_kwargs: Any) -> AsyncGenerator[Event, None]:
+        yield _make_user_message_event(thread_id)
         called = _make_tool_called_event(
             thread_id,
             tool_call_id=tool_call_id,
@@ -2130,15 +2280,33 @@ def _make_cancelled_event_stream(
 ) -> Callable[..., AsyncGenerator[Event, None]]:
     """Build a fake ``engine.execute_stream`` that raises ``ExchangeCancelled``.
 
-    Raises before yielding anything — matches the engine's real
-    cooperative-cancel shape when ``CancelToken.is_cancelled()`` is
-    already true at the first safe point (Esc fired before any content
-    arrived).
+    Yields a real ``USER_MESSAGE`` first (matching the engine's actual
+    ordering — ``USER_MESSAGE`` is always emitted early in
+    ``_Exchange.run()``, well before the framework call that raises
+    ``ExchangeCancelled`` on a mid-exchange cooperative cancel — see
+    ``src/engine/engine.py``'s ``_run_framework``/spawn-loop cancellation
+    checks, all of which run after Step 11's ``USER_MESSAGE`` emit).
+    ``_run_exchange`` mounts the placeholder in response to seeing
+    ``USER_MESSAGE``, so this fixture must yield it before raising —
+    otherwise the interrupt-sweep test below would be asserting against
+    a placeholder that (per the fixed, realistic ordering) was never
+    mounted in the first place, which is not the scenario this test
+    means to cover. Then raises before yielding anything else — matches
+    the engine's real cooperative-cancel shape when
+    ``CancelToken.is_cancelled()`` is true at the next safe point (Esc
+    fired before any further content arrived).
+
+    ``thread_id`` is read off the real ``ExecutionContext`` the caller
+    passes to ``execute_stream(config, ctx)`` (the second positional
+    arg) rather than threaded through every mock class's constructor —
+    keeps this fixture's call sites (which never needed a thread_id
+    before) unchanged.
     """
 
-    async def _stream(*_args: Any, **_kwargs: Any) -> AsyncGenerator[Event, None]:
+    async def _stream(*args: Any, **_kwargs: Any) -> AsyncGenerator[Event, None]:
+        ctx = args[1]
+        yield _make_user_message_event(str(ctx.thread_id))
         raise ExchangeCancelled(cancelled_at_event_id="")
-        yield  # type: ignore[unreachable]  # pragma: no cover — makes this an async generator
 
     return _stream
 
@@ -2269,27 +2437,24 @@ async def test_cooperative_cancel_does_not_resolve_a_durable_future(
 
 
 def _make_hanging_event_stream() -> Callable[..., AsyncGenerator[Event, None]]:
-    """Build a fake ``engine.execute_stream`` that never yields or completes.
+    """Build a fake ``engine.execute_stream`` that yields USER_MESSAGE then hangs.
 
-    Parks on a never-set ``asyncio.Event`` so the turn stays "in
-    flight, not yet terminal" indefinitely — the state needed to
-    exercise real `@work(exclusive=True)` supersession by starting a
-    second turn while this one is still running.
+    Yields a real ``USER_MESSAGE`` first (matching the engine's actual
+    ordering; triggers the placeholder mount) — this fixture is reused
+    for BOTH turn A and turn B in the supersession tests below, so each
+    invocation yields its own ``USER_MESSAGE`` and each turn gets its
+    own mounted placeholder, matching what the real engine would do for
+    two independently-submitted turns. Then parks on a never-set
+    ``asyncio.Event`` so the turn stays "in flight, not yet terminal"
+    indefinitely — the state needed to exercise real
+    `@work(exclusive=True)` supersession by starting a second turn
+    while this one is still running.
     """
 
-    async def _stream(*_args: Any, **_kwargs: Any) -> AsyncGenerator[Event, None]:
+    async def _stream(*args: Any, **_kwargs: Any) -> AsyncGenerator[Event, None]:
+        ctx = args[1]
+        yield _make_user_message_event(str(ctx.thread_id))
         await asyncio.Event().wait()
-        return
-        # Unreachable — `asyncio.Event().wait()` above never returns
-        # (the event is never set). A `yield` after the `return` is
-        # required for this `def` to satisfy `AsyncGenerator[Event,
-        # None]` at the type level (same idiom `_empty_async_gen`
-        # above uses, though that one's `Any` yield type happens to
-        # suppress mypy's unreachable check on its own — this
-        # function's concrete `Event` yield type does not).
-        yield _make_canonical_agent_message_event(  # type: ignore[unreachable]  # pragma: no cover
-            "th_unreachable"
-        )
 
     return _stream
 
@@ -2440,14 +2605,21 @@ def _make_hanging_after_tool_called_stream(
     tool_call_id: str = "call-1",
     tool_name: str = "read_file",
 ) -> Callable[..., AsyncGenerator[Event, None]]:
-    """Build a fake stream: yields ``TOOL_CALLED``, then hangs forever.
+    """Build a fake stream: yields USER_MESSAGE, then ``TOOL_CALLED``, then hangs forever.
 
-    Leaves a running/pending ``ToolCallBlock`` mounted and never
-    filled — the state needed to exercise supersession of a pending
-    tool-call block (as opposed to a bare placeholder).
+    Yields a real ``USER_MESSAGE`` first (matching the engine's actual
+    ordering; triggers the placeholder mount) — this fixture is reused
+    for both turn A and turn B in the supersession test below, so each
+    invocation mounts its own placeholder before it two-phase-morphs
+    into its own running ``ToolCallBlock`` at ``TOOL_CALLED``. Leaves a
+    running/pending ``ToolCallBlock`` mounted and never filled — the
+    state needed to exercise supersession of a pending tool-call block
+    (as opposed to a bare placeholder).
     """
 
-    async def _stream(*_args: Any, **_kwargs: Any) -> AsyncGenerator[Event, None]:
+    async def _stream(*args: Any, **_kwargs: Any) -> AsyncGenerator[Event, None]:
+        ctx = args[1]
+        yield _make_user_message_event(str(ctx.thread_id))
         called = _make_tool_called_event(
             thread_id,
             tool_call_id=tool_call_id,
@@ -2854,15 +3026,20 @@ def _make_erroring_event_stream(
 ) -> Callable[..., AsyncGenerator[Event, None]]:
     """Build a fake ``engine.execute_stream`` that raises a generic error.
 
-    Raises before yielding anything — a real (non-cancellation)
-    exchange failure occurring before any content exists for the turn,
-    the exact case Step 7's ``except Exception`` branch (now paired
-    with ``_fail_live_registries()``) must catch.
+    Yields a real ``USER_MESSAGE`` first (matching the engine's actual
+    ordering; triggers the placeholder mount — a real model/tool
+    failure always occurs deep inside the framework call, well after
+    Step 11's ``USER_MESSAGE`` emit). Then raises before yielding
+    anything else — a real (non-cancellation) exchange failure
+    occurring before any further content exists for the turn, the
+    exact case Step 7's ``except Exception`` branch (now paired with
+    ``_fail_live_registries()``) must catch.
     """
 
-    async def _stream(*_args: Any, **_kwargs: Any) -> AsyncGenerator[Event, None]:
+    async def _stream(*args: Any, **_kwargs: Any) -> AsyncGenerator[Event, None]:
+        ctx = args[1]
+        yield _make_user_message_event(str(ctx.thread_id))
         raise RuntimeError("model backend unavailable")
-        yield  # type: ignore[unreachable]  # pragma: no cover — makes this an async generator
 
     return _stream
 
@@ -2992,14 +3169,19 @@ def _make_erroring_after_tool_called_stream(
     tool_call_id: str = "call-1",
     tool_name: str = "read_file",
 ) -> Callable[..., AsyncGenerator[Event, None]]:
-    """Build a fake stream: yields ``TOOL_CALLED``, then raises a generic error.
+    """Build a fake stream: yields USER_MESSAGE, ``TOOL_CALLED``, then raises a generic error.
 
-    Leaves a running/pending ``ToolCallBlock`` mounted and never filled
-    when the error hits — the state needed to exercise the error sweep
-    on a pending tool-call block (as opposed to a bare placeholder).
+    Yields a real ``USER_MESSAGE`` first (matching the engine's actual
+    ordering; triggers the placeholder mount, which then two-phase-morphs
+    into the running ``ToolCallBlock`` at ``TOOL_CALLED``). Leaves that
+    running/pending ``ToolCallBlock`` mounted and never filled when the
+    error hits — the state needed to exercise the error sweep on a
+    pending tool-call block (as opposed to a bare placeholder).
     """
 
-    async def _stream(*_args: Any, **_kwargs: Any) -> AsyncGenerator[Event, None]:
+    async def _stream(*args: Any, **_kwargs: Any) -> AsyncGenerator[Event, None]:
+        ctx = args[1]
+        yield _make_user_message_event(str(ctx.thread_id))
         called = _make_tool_called_event(
             thread_id,
             tool_call_id=tool_call_id,
@@ -3116,6 +3298,16 @@ async def test_mount_time_failure_now_produces_exchange_failed_notice(
     re-raising into the caller — this asserts the app is still alive
     and responsive afterward, which a truly-uncaught exception would
     have prevented).
+
+    Post-ship placeholder-position fix: `mount_working_placeholder()`
+    is now only ever called from INSIDE the `event_stream` loop (gated
+    on `USER_MESSAGE`, not before iteration begins), so the fake
+    stream's `USER_MESSAGE` IS processed (mounting a real `UserChatbox`)
+    before the mount call raises — `event_stream` is both constructed
+    and partially iterated by the time this failure hits. That's a real
+    difference from the original (pre-fix) shape of this test, so the
+    assertions below check the `UserChatbox` outcome explicitly rather
+    than asserting the stream was never touched.
     """
     events_seen: list[Event] = []
     app = _make_app_step2(tmp_path, events_seen)
@@ -3139,14 +3331,20 @@ async def test_mount_time_failure_now_produces_exchange_failed_notice(
         assert app._live_placeholders == {}
         assert app._working_placeholder is None
 
+        # USER_MESSAGE WAS processed before the mount call raised — the
+        # user's own message still appears, same as it would for any
+        # other later-stage failure.
+        assert len(app.query(UserChatbox)) == 1
+
         # The same generic failure notice an event-stream-time error
         # produces is now mounted for a mount-time error too.
         notices = app.query(".error")
         assert len(notices) == 1
         assert "transcript not ready" in str(notices.first().content)
 
-        # The fake stream's event never fired — the mount failure short-
-        # circuited before `event_stream` was ever constructed/iterated.
+        # The fake stream's AGENT_MESSAGE event never fired — the mount
+        # failure short-circuited right after USER_MESSAGE, before the
+        # delay/second event was ever reached.
         assert events_seen == []
 
         # The app is still alive and responsive — the worker's raise

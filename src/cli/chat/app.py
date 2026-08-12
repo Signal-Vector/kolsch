@@ -1777,13 +1777,22 @@ class ChatApp(App[None]):
         after use so a subsequent unqualified message returns to
         the default trigger shape.
 
-        spec-130 Step 2: mounts a ``WorkingPlaceholder`` into
-        ``#transcript`` before ``event_stream`` iteration begins, so
-        the turn has an inline "working" indicator at the exact spot
-        the reply will land the instant the turn starts — before any
-        event has been processed. The reference is stashed on
-        ``self._working_placeholder`` so later steps (morph-on-content,
-        cancel/error terminal states) can find and replace/flip it.
+        spec-130 Step 2 (amended post-ship): mounts a
+        ``WorkingPlaceholder`` into ``#transcript`` right after the
+        ``USER_MESSAGE`` event is handled — not before ``event_stream``
+        iteration begins, which is what the original design did and
+        which reliably landed the placeholder *above* the user's own
+        just-submitted message (``UserChatbox`` only mounts in
+        response to ``USER_MESSAGE``, never synchronously at submit
+        time — see ``on_composer_submitted``'s docstring). The
+        ``not placeholder_mounted and event.type == EventType.USER_MESSAGE``
+        gate is per-event, not an index-0 assumption, so it correctly
+        waits through any preflight events that may precede
+        ``USER_MESSAGE`` (``CONFIG_SET`` on every fresh session,
+        ``AGENT_TEMPLATE_WARNING``, synthetic force-skill/reconciliation
+        events). The reference is stashed on ``self._working_placeholder``
+        so later steps (morph-on-content, cancel/error terminal states)
+        can find and replace/flip it.
 
         spec-130 Step 6: mints a fresh ``turn_id`` and registers it as
         ``self._active_turn_id`` BEFORE mounting the placeholder, so
@@ -1873,7 +1882,6 @@ class ChatApp(App[None]):
         self._active_turn_id = turn_id
         try:
             try:
-                self._working_placeholder = await self.mount_working_placeholder()
                 force_skills: list[str] = []
                 if (
                     self._chat_state is not None
@@ -1888,8 +1896,32 @@ class ChatApp(App[None]):
                     cancellation=cancel,
                 )
                 event_stream = self.engine.execute_stream(self.session.config, ctx)
+                placeholder_mounted = False
                 async for event in event_stream:
                     await self.event_adapter.handle(event)
+                    # spec-130 step 2 (amended post-ship): UserChatbox is
+                    # only ever mounted in response to the engine's
+                    # USER_MESSAGE event (EventAdapter._handle_user_message)
+                    # -- never synchronously at submit time, so the adapter
+                    # stays the single mount site shared by the live and
+                    # replay paths (see on_composer_submitted's docstring).
+                    # Mounting the placeholder before this loop started (the
+                    # original design) landed it ABOVE the user's own
+                    # message every time. USER_MESSAGE is the first event
+                    # *of interest* here, not necessarily the first event
+                    # overall -- preflight can emit CONFIG_SET (every
+                    # fresh session), AGENT_TEMPLATE_WARNING, or synthetic
+                    # force-skill/reconciliation events first, none of
+                    # which mount a UserChatbox. The `not placeholder_mounted`
+                    # gate is per-event, not an index-0 check, so it
+                    # correctly waits through any of those before mounting
+                    # right after USER_MESSAGE lands the placeholder below
+                    # the just-mounted UserChatbox.
+                    if not placeholder_mounted and event.type == EventType.USER_MESSAGE:
+                        self._working_placeholder = (
+                            await self.mount_working_placeholder()
+                        )
+                        placeholder_mounted = True
             except ExchangeCancelled:
                 # spec-130 Step 6: cooperative cancel (Esc / ctrl+c) —
                 # presentation-only; no durable-write future is touched
@@ -2086,14 +2118,22 @@ class ChatApp(App[None]):
     async def mount_working_placeholder(self) -> WorkingPlaceholder:
         """Mount a turn-start ``WorkingPlaceholder`` at the transcript root.
 
-        spec-130 Step 2: called from ``_run_exchange`` before
-        ``event_stream`` iteration begins, so the placeholder appears
-        inline at the exact spot the reply will occupy the instant a
-        turn starts — before any event has been processed. The caller
-        stashes the returned widget (``self._working_placeholder``) so
-        later steps can find and remove/replace it once real content
-        (streamed token, tool call, complete response) or a terminal
-        outcome (cancel, error) arrives.
+        spec-130 Step 2 (amended post-ship): called from inside
+        ``_run_exchange``'s ``event_stream`` loop, gated per-event on
+        ``not placeholder_mounted and event.type == EventType.USER_MESSAGE``
+        — i.e. right after the engine's ``USER_MESSAGE`` event has been
+        handled, not before the loop starts. This lands the placeholder
+        inline at the exact spot the reply will occupy, directly below
+        the ``UserChatbox`` that ``EventAdapter._handle_user_message``
+        mounts in response to that same event. ``USER_MESSAGE`` is the
+        first event *of interest* here, not necessarily the very first
+        event in the stream — preflight events (``CONFIG_SET`` on every
+        fresh session, ``AGENT_TEMPLATE_WARNING``, synthetic force-skill/
+        reconciliation events) can precede it. The caller stashes the
+        returned widget (``self._working_placeholder``) so later steps
+        can find and remove/replace it once real content (streamed
+        token, tool call, complete response) or a terminal outcome
+        (cancel, error) arrives.
 
         spec-130 Step 6: also registers the placeholder into
         ``self._live_placeholders`` keyed by ``self._active_turn_id``
