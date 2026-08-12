@@ -19,6 +19,7 @@ see the
 
 from schemas.config import (
     ContextFileSpec,
+    HookRule,
     IOSpec,
     ModelSpec,
     PermissionRule,
@@ -91,6 +92,7 @@ __all__ = [
     "EventId",
     "EventType",
     "FromWorkflowRun",
+    "HookRule",
     "IOSpec",
     "MemoryDeletedData",
     "MemoryItemId",

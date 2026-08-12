@@ -165,6 +165,49 @@ class PermissionRule(BaseModel):
     who: str | None = None
 
 
+# Ceiling for `HookRule.timeout_seconds` — matches the bash tool's
+# default max timeout (`_DEFAULT_BASH_TIMEOUT_SECONDS` in
+# `tools/builtins.py`). Hook subprocesses are fire-and-forget
+# side-effects (e.g. a desktop notification), not model-facing tool
+# calls, so there is no reason for one to run longer than the bash
+# tool's own default ceiling.
+_HOOK_TIMEOUT_CEILING_SECONDS = 60
+
+
+class HookRule(BaseModel):
+    """One entry in `platform.yaml`'s `hooks:` block (spec-131).
+
+    A hook rule pairs a kolsch event (by `EventType`/wire-kind string)
+    with a shell `command` to run as a fire-and-forget notification
+    side-effect — e.g. a desktop notification when an approval prompt
+    is requested. v1 is notify-only: hooks cannot block or alter
+    engine/authz behavior (see spec-131 Scope § Out of scope).
+
+    - `event` is the exact kolsch event-type or `ui.event` wire-kind
+      string (e.g. `"kolsch.prompt.requested"`,
+      `"thread.exchange_completed"`) to match against.
+    - `matcher` is an optional glob (default `"*"`, matches
+      everything), evaluated with `fnmatch.fnmatchcase` against the
+      per-event subject — see spec-131's matching table.
+    - `command` is the shell command to run.
+    - `timeout_seconds` bounds how long the subprocess may run before
+      being killed; defaults to 10s and is capped at
+      `_HOOK_TIMEOUT_CEILING_SECONDS` (60s), matching the bash tool's
+      default max timeout.
+
+    Unknown keys are rejected (`extra="forbid"`) so a typo'd field
+    fails fast at config-load time rather than being silently
+    ignored.
+    """
+
+    model_config = ConfigDict(frozen=True, extra="forbid")
+
+    event: str
+    matcher: str = "*"
+    command: str
+    timeout_seconds: int = Field(default=10, gt=0, le=_HOOK_TIMEOUT_CEILING_SECONDS)
+
+
 class SubsystemConfig(BaseModel):
     """One entry in the agent config's `subsystems:` map.
 
