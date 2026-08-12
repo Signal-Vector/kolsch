@@ -64,6 +64,7 @@ from tools import ToolContext, ToolsSubsystem, tool
 if TYPE_CHECKING:
     from pathlib import Path
 
+    from engine.event_observer import EventObserver
     from schemas import Event
 
 
@@ -136,6 +137,7 @@ async def _build_engine(
     *,
     authz_rules: list[dict[str, str]] | None = None,
     extra_tools: list[Any] | None = None,
+    observer: EventObserver | None = None,
 ) -> tuple[AgentEngine, SessionStore, AssetManagement]:
     _platform_yaml(tmp_path)
     backend = SqliteBackend(tmp_path / ".platform" / "entities.db")
@@ -230,6 +232,7 @@ async def _build_engine(
         authz=authz,
         framework=framework,
         llm=llm_callable,
+        observer=observer,
     )
     return engine, store, am
 

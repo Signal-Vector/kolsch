@@ -11,7 +11,12 @@ reads `platform.yaml` directly. This file provides:
 
 The exact per-section shape is owned by the consuming subsystem; this
 loader only validates that each declared section is a mapping and
-exposes it as a dict.
+exposes it as a dict. `hooks` (spec-131) is the one exception: it is a
+*list* of rules rather than a mapping, and — because no consuming
+subsystem exists yet to own its shape (dispatch lands in later
+spec-131 steps) — this loader eagerly validates each entry against
+`schemas.config.HookRule` via `parse_hooks_section`, failing fast at
+load time on a malformed rule.
 """
 
 from __future__ import annotations
@@ -19,8 +24,11 @@ from __future__ import annotations
 import logging
 from typing import TYPE_CHECKING, Any
 
+from pydantic import ValidationError as _PydanticValidationError
+
 from errors import ConfigInvalid
 from kolsch._yamlio import YAMLError, dump, load, load_with_positions
+from schemas import HookRule
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -67,6 +75,20 @@ _KNOWN_SECTIONS: frozenset[str] = frozenset(
         # for a terminal phase before returning ``phase="running"``.
         # Section absent → hardcoded 300s default preserved.
         "workflows",
+        # Shell-command event hooks (spec-131). A list of
+        # ``{event, matcher?, command, timeout_seconds?}`` rules — see
+        # ``schemas.config.HookRule``. No default is written at setup
+        # time — leaving the section absent IS the documented "zero
+        # hooks, zero overhead" mode; nothing fires unless the operator
+        # opts in explicitly. Unlike every other known section this one
+        # is a *list*, not a mapping — see the carve-out in
+        # ``_validate_section_shape`` (same shape as
+        # ``workspace_summary``'s string carve-out). Loaded once at
+        # process start and deliberately excluded from ``/reload``
+        # (spec-131 Step 7) — a hook's `command` is an arbitrary shell
+        # string, so config-in-the-loop hot-reload is a wider trust
+        # boundary than the other sections here.
+        "hooks",
     }
 )
 
@@ -199,9 +221,9 @@ def _load_existing(path: Path) -> dict[str, Any]:
 def _validate_section_shape(payload: dict[str, Any]) -> None:
     """Validate that each declared section is a mapping.
 
-    Two exceptions: `workspace_summary` is a string, and
-    `model_aliases` is a flat alias-to-ref string map (which still
-    satisfies the mapping check).
+    Two exceptions: `workspace_summary` is a string, and `hooks` is a
+    list (`model_aliases` is a flat alias-to-ref string map, which
+    still satisfies the mapping check).
     """
     errors: list[dict[str, Any]] = []
     for key, value in payload.items():
@@ -209,6 +231,10 @@ def _validate_section_shape(payload: dict[str, Any]) -> None:
         # shape check; downstream consumers treat any non-string as
         # None.
         if key == "workspace_summary":
+            continue
+        if key == "hooks":
+            # hooks is a list of rule mappings, not a mapping itself —
+            # validated element-by-element below, not here.
             continue
         if not isinstance(value, dict):
             errors.append(
@@ -227,6 +253,70 @@ def _validate_section_shape(payload: dict[str, Any]) -> None:
             validation_errors=errors,
             where="assets.bootstrap.load_platform_yaml",
         )
+    if "hooks" in payload:
+        parse_hooks_section(payload["hooks"])
+
+
+def parse_hooks_section(raw: Any) -> list[HookRule]:  # noqa: ANN401 — unvalidated YAML input
+    """Validate and parse `platform.yaml`'s `hooks:` section.
+
+    Absent `hooks:` key → callers pass `[]` (not called at all, since
+    `_validate_section_shape` only invokes this when the key is
+    present) — see `default_platform_payload`'s "absent = off"
+    convention, matched here for `hooks`.
+
+    Args:
+        raw: The raw value of `payload["hooks"]` — expected to be a
+            list of rule mappings matching `HookRule`'s shape
+            (`event`, optional `matcher`, `command`, optional
+            `timeout_seconds`).
+
+    Returns:
+        The validated `HookRule` objects, in file order.
+
+    Raises:
+        ConfigInvalid: `raw` is not a list, an entry is not a mapping,
+            a required field (`event`/`command`) is missing, an entry
+            carries an unknown key, or a field fails its own
+            validation (e.g. `timeout_seconds` over the ceiling).
+    """
+    if not isinstance(raw, list):
+        raise ConfigInvalid(
+            validation_errors=[
+                {
+                    "layer": 1,
+                    "source": "platform.yaml",
+                    "path": "/hooks",
+                    "code": "not_a_list",
+                    "message": (
+                        f"section 'hooks' must be a list; got {type(raw).__name__}"
+                    ),
+                }
+            ],
+            where="assets.bootstrap.load_platform_yaml",
+        )
+
+    rules: list[HookRule] = []
+    errors: list[dict[str, Any]] = []
+    for index, entry in enumerate(raw):
+        try:
+            rules.append(HookRule.model_validate(entry))
+        except _PydanticValidationError as exc:
+            errors.append(
+                {
+                    "layer": 1,
+                    "source": "platform.yaml",
+                    "path": f"/hooks/{index}",
+                    "code": "hook_rule_invalid",
+                    "message": f"hooks[{index}] is invalid: {exc}",
+                }
+            )
+    if errors:
+        raise ConfigInvalid(
+            validation_errors=errors,
+            where="assets.bootstrap.load_platform_yaml",
+        )
+    return rules
 
 
 def _write_yaml(path: Path, payload: dict[str, Any]) -> None:

@@ -81,6 +81,7 @@ if TYPE_CHECKING:
     from bus import EventBus
     from engine.assembly import AssembledContext
     from engine.context import ExecutionContext
+    from engine.event_observer import EventObserver
     from engine.framework import Framework, LLMRequest, LLMResponse
     from llm import ProviderConfig
     from providers import (
@@ -100,6 +101,21 @@ _log = logging.getLogger("engine")
 
 # Sentinel pushed to the stream queue when the runner finishes.
 _QUEUE_END: Any = object()
+
+# spec-131 Step 5 — upper bound on how long `execute_stream` will wait
+# for an injected `EventObserver.observe()` call before giving up and
+# continuing the stream. Chosen to be generous for any real
+# synchronous observer work (the Step 4 `HookDispatcher.handle()` this
+# seam exists for only launches subprocess hooks as background tasks
+# and returns in roughly 0.0001s — nowhere near this bound in the
+# happy path) while still tightly bounding the worst case: a hung or
+# pathologically slow observer must not be able to stall the primary
+# event-delivery path for more than a few seconds. 3 seconds sits
+# in the middle of the "1-5s is reasonable" range — long enough that
+# no plausible synchronous observer work trips it spuriously, short
+# enough that even a chat user watching the stream live would not
+# read a 3s stall as the app being broken.
+_OBSERVER_TIMEOUT_SECONDS = 3.0
 
 
 # spec-068 Part A — span registry type. A "span" is any begin/end
@@ -232,6 +248,7 @@ class AgentEngine:
             | None
         ) = None,
         compaction_provider: ContextCompactionProvider | None = None,
+        observer: EventObserver | None = None,
     ) -> None:
         self._store = store
         self._bus = bus
@@ -300,6 +317,17 @@ class AgentEngine:
         # sessions. Only the ``no_context_length`` reason is gated —
         # ``no_net_savings`` intentionally repeats per attempt.
         self._no_context_length_skip_emitted: set[str] = set()
+        # spec-131 Step 5 — optional event-stream observer, mirroring
+        # how ``framework`` is injected rather than imported directly.
+        # ``None`` (every caller before Step 6 wires a real
+        # ``HookDispatcher`` in) means `execute_stream` skips the
+        # observer call entirely — zero overhead, zero behavior
+        # change. The engine depends only on the tiny
+        # ``EventObserver`` Protocol; it never imports or knows about
+        # ``HookDispatcher``, subprocess execution, or
+        # ``platform.yaml`` (those live in
+        # ``src/platform_runtime/hooks.py``, wired at Step 6).
+        self._observer: EventObserver | None = observer
 
     # ---- Public API ----------------------------------------------------
 
@@ -415,6 +443,75 @@ class AgentEngine:
                 # sentinel; the runner is the sole producer and only
                 # puts Events.
                 if isinstance(item, Event):
+                    # spec-131 Step 5 — notify the optional observer
+                    # BEFORE the yield. Rationale: `yield` suspends
+                    # this generator frame and hands control to the
+                    # caller, which may run arbitrarily long (or
+                    # cancel this generator, e.g. via `aclose()`/GC)
+                    # before ever resuming us — an after-yield call
+                    # could be skipped entirely on early
+                    # termination, silently dropping the observer's
+                    # notification for the last event(s) the caller
+                    # actually received. Calling before the yield
+                    # guarantees the observer sees every event the
+                    # caller is about to see, in the same order,
+                    # with no dependency on the caller ever resuming
+                    # this generator. `observer=None` short-circuits
+                    # before touching the observer at all — zero
+                    # overhead, zero code path change versus before
+                    # this step.
+                    #
+                    # Awaiting the observer before the yield also
+                    # means a SLOW observer measurably delays event
+                    # delivery to the caller, not just a hanging one
+                    # — this is real latency injected directly into
+                    # the primary event-delivery path. Nothing about
+                    # this engine code structurally prevents that;
+                    # today's safety rests entirely on the Step 4
+                    # property that the real `HookDispatcher.handle()`
+                    # is fire-and-forget (it launches subprocess hooks
+                    # as background tasks and returns almost
+                    # immediately, independently measured at roughly
+                    # 0.0001s). The `wait_for` bound below is a
+                    # backstop against BOTH failure modes — an
+                    # observer that never returns at all, and one
+                    # that's merely slow enough to be a de facto
+                    # latency injection — not a structural guarantee
+                    # that observation is free.
+                    #
+                    # Never let the observer raise OR hang into the
+                    # generator: a hook dispatcher (or any future
+                    # observer) misbehaving must not break or stall
+                    # the engine's own event stream. Defense in depth
+                    # — this does not rely on the observer's own
+                    # implementation never raising or always
+                    # returning promptly. The timeout is generous for
+                    # any real synchronous observer work (Step 4's
+                    # dispatcher only launches background tasks — it
+                    # never itself does slow I/O) but tight enough to
+                    # actually bound the risk to primary execution.
+                    if self._observer is not None:
+                        try:
+                            await asyncio.wait_for(
+                                self._observer.observe(item),
+                                timeout=_OBSERVER_TIMEOUT_SECONDS,
+                            )
+                        except TimeoutError:
+                            _log.warning(
+                                "execute_stream: observer.observe exceeded "
+                                "%.1fs for event_id=%s type=%s — continuing "
+                                "stream without waiting further",
+                                _OBSERVER_TIMEOUT_SECONDS,
+                                item.event_id,
+                                item.type,
+                            )
+                        except Exception:  # noqa: BLE001 — observer is untrusted
+                            _log.exception(
+                                "execute_stream: observer.observe raised for "
+                                "event_id=%s type=%s — continuing stream",
+                                item.event_id,
+                                item.type,
+                            )
                     yield item
         finally:
             if not runner.done():

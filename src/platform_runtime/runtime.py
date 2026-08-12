@@ -34,6 +34,7 @@ from engine.dev_llm import EchoLLMDriver
 from engine.framework import Framework
 from engine.subprocess_framework import ClaudeCodeHarness, SubprocessAgentFramework
 from files import PathPolicy, load_policy
+from platform_runtime.hooks import HookDispatcher
 from providers import (
     AuthorizationProvider,
     ContextCompactionProvider,
@@ -142,6 +143,16 @@ class PlatformRuntime:
     # engine adapter via `set_llm_call_timeout_default`, kept here
     # for observability + parity with the sibling timeout fields.
     llm_call_timeout_seconds: float | None = 210.0
+    # spec-131 Step 9 — the same `HookDispatcher` instance passed into
+    # `AgentEngine(observer=...)` below, ALSO stashed here so CLI-layer
+    # code (e.g. `PromptsImpl._append_ui_event`) has one clean,
+    # intentional, shared reference point instead of reaching into
+    # `AgentEngine`'s private `_observer` attribute. `None` only when a
+    # `PlatformRuntime` is hand-constructed outside `bootstrap_runtime`
+    # (e.g. some test doubles) without wiring one — `bootstrap_runtime`
+    # itself always sets a real `HookDispatcher`, even with zero
+    # configured rules (see the field's construction site below).
+    hook_dispatcher: HookDispatcher | None = None
 
     async def build_resolved_config(
         self,
@@ -447,6 +458,49 @@ async def bootstrap_runtime(  # noqa: PLR0915 — linear runtime-assembly sequen
         else None
     )
 
+    # spec-131 Step 6 — the real HookDispatcher, backed by
+    # `platform.yaml`'s `hooks:` section (Step 1's
+    # `AssetManagement.hooks_config()`), constructed here so it can be
+    # injected as the engine's `observer=`. `bootstrap_runtime` is
+    # kolsch's single `AgentEngine` construction site (every CLI
+    # command and the HTTP API route through `PlatformRuntime.engine`
+    # — see this module's docstring), so wiring it once here covers
+    # every current and future live-turn surface, matching Step 5's
+    # single-choke-point design (Acceptance Criterion #7).
+    #
+    # Constructed unconditionally, even with zero configured rules —
+    # deliberately, not defaulted to `None` on an empty list:
+    # `HookDispatcher.__init__` is trivially cheap for `rules=[]` (a
+    # list store plus a zero-iteration warning scan, no I/O), so there
+    # is no meaningful cost difference between an empty-rules
+    # dispatcher and `observer=None`. Keeping construction unconditional
+    # avoids a second branch here, mirrors how `subprocess_framework`
+    # just below is "constructed unconditionally — cheap" rather than
+    # conditionally omitted, and means `runtime.engine._observer` is
+    # always a real `HookDispatcher` — one less "is hooks config even
+    # wired" question when debugging. `execute_stream`'s own
+    # `observer is not None` branch-skip (Step 5) is what actually
+    # keeps the zero-hooks case at "zero measurable behavior/latency
+    # regression" (Acceptance Criterion #8), not withholding
+    # construction here — an empty-rules `handle()` call is a for-loop
+    # over `[]`, not a meaningfully different cost.
+    #
+    # Loaded once, here, at process start — never re-read.
+    # `hooks_config()` is deliberately NOT part of whatever `/reload`
+    # (`authz_introspection.py`) re-reads (spec-131 Step 7's trust
+    # boundary control); this call site is the only place hook config
+    # is read for the lifetime of the process.
+    #
+    # spec-131 Step 9 — this same instance is ALSO stashed on the
+    # returned `PlatformRuntime` (`hook_dispatcher=` below) rather than
+    # only injected into the engine, so CLI-layer code that emits
+    # events outside `execute_stream`'s queue (e.g. `PromptsImpl`,
+    # which writes `kolsch.prompt.requested`/`.answered` straight to
+    # the store — see `prompts_impl.py`'s `_append_ui_event`) can reach
+    # the exact same dispatcher via `runtime.hook_dispatcher` instead of
+    # reaching into `AgentEngine`'s private `_observer`.
+    hook_dispatcher = HookDispatcher(am.hooks_config())
+
     engine = AgentEngine(
         store=store,
         bus=bus,
@@ -467,6 +521,9 @@ async def bootstrap_runtime(  # noqa: PLR0915 — linear runtime-assembly sequen
         llm_for_model=chosen_llm_for_model,
         llm_providers_config=llm_providers_config,
         compaction_provider=compaction_provider,
+        # spec-131 Step 6 — real hook dispatch for every event
+        # `execute_stream` yields, from this single construction site.
+        observer=hook_dispatcher,
     )
 
     # Per-subsystem Layer 3 validators — dispatch shape: subsystem
@@ -548,4 +605,9 @@ async def bootstrap_runtime(  # noqa: PLR0915 — linear runtime-assembly sequen
         workflow_default_node_timeout_seconds=workflow_default_node_timeout_seconds,
         workflow_approval_response_seconds=workflow_approval_response_seconds,
         llm_call_timeout_seconds=llm_call_timeout_seconds,
+        # spec-131 Step 9 — same instance just injected into the engine
+        # as `observer=hook_dispatcher` above, so CLI-layer emitters
+        # (`PromptsImpl`) can reach the identical dispatcher through
+        # `runtime.hook_dispatcher` rather than `runtime.engine._observer`.
+        hook_dispatcher=hook_dispatcher,
     )

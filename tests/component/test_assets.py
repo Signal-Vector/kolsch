@@ -375,6 +375,85 @@ async def test_platform_config_sections_dispatch_distinctly(
 
 
 # ---------------------------------------------------------------------------
+# hooks_config() — spec-131 Step 6's dedicated accessor for the one
+# list-shaped (not mapping-shaped) platform.yaml section.
+# ---------------------------------------------------------------------------
+
+
+async def test_hooks_config_returns_empty_list_when_section_absent(
+    platform_root: Path,
+) -> None:
+    """The common case: no `hooks:` key at all — `hooks_config()`
+    returns `[]`, matching the "absent = off" convention (Step 1),
+    rather than raising `KeyError` the way `get_platform_config` would
+    for any other absent section."""
+    _write_platform_yaml(platform_root)
+
+    am = AssetManagement(root=platform_root)
+    await am.initialize()
+
+    assert am.hooks_config() == []
+
+
+async def test_hooks_config_returns_parsed_rules_when_present(
+    platform_root: Path,
+) -> None:
+    """A present `hooks:` list round-trips into validated `HookRule`
+    objects — same shape `parse_hooks_section` (Step 1) produces,
+    since `hooks_config()` delegates to it rather than re-implementing
+    parsing."""
+    payload = _default_platform_payload()
+    payload["hooks"] = [
+        {
+            "event": "kolsch.prompt.requested",
+            "matcher": "kolsch/bash",
+            "command": "terminal-notifier -message hi",
+            "timeout_seconds": 7,
+        },
+        {"event": "thread.exchange_failed", "command": "echo failed"},
+    ]
+    _write_platform_yaml(platform_root, payload)
+
+    am = AssetManagement(root=platform_root)
+    await am.initialize()
+
+    rules = am.hooks_config()
+    assert len(rules) == 2
+    assert rules[0].event == "kolsch.prompt.requested"
+    assert rules[0].matcher == "kolsch/bash"
+    assert rules[0].timeout_seconds == 7
+    assert rules[1].event == "thread.exchange_failed"
+    assert rules[1].matcher == "*"  # default
+    assert rules[1].timeout_seconds == 10  # default
+
+
+async def test_hooks_config_does_not_go_through_get_platform_config(
+    platform_root: Path,
+) -> None:
+    """`get_platform_config("hooks")` would violate its own `dict[str,
+    Any]` contract (hooks is a *list*) — confirms callers must use the
+    dedicated `hooks_config()` accessor instead. Not asserting a
+    specific exception type/message here (that's an implementation
+    detail of the generic section accessor, not part of this
+    contract) — only that `hooks_config()` is the one that actually
+    works."""
+    payload = _default_platform_payload()
+    payload["hooks"] = [{"event": "session.opened", "command": "true"}]
+    _write_platform_yaml(platform_root, payload)
+
+    am = AssetManagement(root=platform_root)
+    await am.initialize()
+
+    # The dedicated accessor works and returns the real list.
+    assert len(am.hooks_config()) == 1
+    # The generic accessor's return type annotation (dict[str, Any])
+    # doesn't match hooks' actual list shape — exercising it here
+    # would be asserting an accident of the untyped runtime rather
+    # than a real contract, so this test only pins the accessor
+    # that IS the documented contract for `hooks`.
+
+
+# ---------------------------------------------------------------------------
 # TC-ASM-09 — missing bundle.yaml skipped with warning
 # ---------------------------------------------------------------------------
 

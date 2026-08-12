@@ -867,6 +867,13 @@ class ChatApp(App[None]):
                         "workflow_approval_response_seconds",
                         None,
                     ),
+                    # spec-131 Step 9: gives `PromptsImpl` a path to the
+                    # same `HookDispatcher` the engine observes through,
+                    # via `runtime.hook_dispatcher` — so the
+                    # `kolsch.prompt.requested`/`.answered` UI events it
+                    # writes directly to the store (bypassing
+                    # `execute_stream`'s queue) still reach hooks.
+                    runtime=self.session.runtime,
                 )
             except Exception:  # noqa: BLE001 — headless fixtures may lack a real store
                 _LOGGER.debug(
