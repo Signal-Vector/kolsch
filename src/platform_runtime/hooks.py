@@ -1,9 +1,10 @@
 """Hook matcher + subprocess runner for shell-command hooks (spec-131).
 
-This module holds the matching logic (`match`) and the subprocess
-execution primitive (`run_hook_command`). No dispatcher, no engine
-wiring lives here yet — those are later spec-131 steps (4:
-`HookDispatcher`, 5/6: engine injection).
+This module holds the matching logic (`match`), the subprocess
+execution primitive (`run_hook_command`), and the `HookDispatcher`
+that combines them into a fire-and-forget event handler. Engine
+wiring (injecting a real `HookDispatcher` into `AgentEngine`) is a
+later spec-131 step (5/6).
 
 Matching has two stages, per spec-131's Scope § Matching table:
 
@@ -25,9 +26,14 @@ Matching has two stages, per spec-131's Scope § Matching table:
 `run_hook_command` (Step 3) executes a hook's `command` as a subprocess,
 mirroring the bash tool's subprocess-safety conventions verbatim —
 see the function docstring for the exact conventions reused and their
-source citations. It is a **standalone execution primitive**: nothing
-in this module calls it yet (no dispatcher, no matcher-to-runner
-wiring) — that lands in Step 4.
+source citations. It is a **standalone execution primitive**.
+
+`HookDispatcher` (Step 4) combines the two: given a list of `HookRule`s,
+its `handle(event)` calls `match()` for each rule and fires
+`run_hook_command` as a background task for every match, without
+awaiting it — see the class docstring for the fire-and-forget contract.
+Nothing in this module wires a `HookDispatcher` to a real event stream
+yet (no engine, no `platform.yaml` loading) — that's Steps 5 and 6.
 """
 
 from __future__ import annotations
@@ -360,3 +366,153 @@ def _truncate_for_log(data: bytes) -> str:
     if overflow > 0:
         return f"{text}\n[... truncated {overflow} more bytes]"
     return text
+
+
+# ---------------------------------------------------------------------------
+# HookDispatcher (Step 4)
+# ---------------------------------------------------------------------------
+
+# The wire-kind `kolsch.prompt.answered` never actually carries an
+# `action` field in its real payload shapes (see the
+# `_ACTION_SUBJECT_KINDS` module comment above — `PromptsImpl._emit_auto_deny`
+# and the widget-bridge path only ever emit `prompt_id`/`response`/`rule`).
+# `_subject_for` already tolerates this by falling back to `"*"`, which
+# means a rule on this event with any `matcher` other than the literal
+# wildcard can structurally never match a real event — a config author
+# who writes one almost certainly meant `kolsch.prompt.requested`
+# instead, or intended `"*"`. This was flagged as a Step 2 review
+# recommendation; `HookDispatcher.__init__` is the right place to warn
+# about it once, at construction/startup time, rather than re-deriving
+# the same verdict on every event.
+_PROMPT_ANSWERED_EVENT = "kolsch.prompt.answered"
+
+
+class HookDispatcher:
+    """Fire-and-forget dispatcher: matches events against rules, runs hits.
+
+    Constructed once with the fully-resolved list of `HookRule`s (Step
+    1's config schema — real `platform.yaml` loading is Step 6's job,
+    not this class's). `handle()` is the single entry point: it is
+    `await`-ed by whatever feeds it events (a spy in this step's tests,
+    the engine's observer seam from Step 5 onward), but it never itself
+    awaits a hook subprocess to completion — every matching rule's
+    command is launched via `asyncio.create_task` and left to run in
+    the background, so `handle()` returns as soon as the (fast, in-
+    process) matching pass is done, independent of how slow or hung any
+    fired command is.
+
+    This class does not track or await the background tasks it creates
+    (true fire-and-forget) — a hook's outcome is only ever visible via
+    `run_hook_command`'s own logging, never fed back to the caller of
+    `handle()`.
+    """
+
+    def __init__(self, rules: list[HookRule]) -> None:
+        """Store `rules` and emit the one-time prompt.answered warning.
+
+        Args:
+            rules: The fully-resolved hook rules to dispatch against,
+                in the order they should be evaluated. An empty list
+                means `handle()` is a no-op for every event (matches
+                the "absent hooks section = zero hooks" convention).
+        """
+        self._rules = rules
+        self._warn_unmatchable_prompt_answered_rules()
+
+    def _warn_unmatchable_prompt_answered_rules(self) -> None:
+        """Log once, at construction, about structurally dead rules.
+
+        A rule targeting `kolsch.prompt.answered` with a `matcher`
+        other than `"*"` can never match a real event, because that
+        event's real payload shapes never carry the `action` field the
+        matcher would be compared against (see the module-level
+        `_PROMPT_ANSWERED_EVENT` comment). This is config feedback,
+        not an error — the rule is still accepted and kept in
+        `self._rules` (Step 1 already validated its shape; this isn't
+        re-litigating that), it just will never fire in practice.
+        """
+        for rule in self._rules:
+            targets_prompt_answered = rule.event == _PROMPT_ANSWERED_EVENT
+            has_non_wildcard_matcher = rule.matcher != _WILDCARD_SUBJECT
+            if targets_prompt_answered and has_non_wildcard_matcher:
+                _log.warning(
+                    "hook rule targets %r with matcher %r, but this event's "
+                    "real payload never carries an 'action' field to match "
+                    'against — this rule can never fire. Use matcher: "*", '
+                    "or did you mean event: %r?",
+                    _PROMPT_ANSWERED_EVENT,
+                    rule.matcher,
+                    "kolsch.prompt.requested",
+                )
+
+    async def handle(self, event: Event) -> None:
+        """Dispatch `event` to every matching rule's command, then return.
+
+        For each rule in construction order, calls `match(rule, event)`
+        and — for every match — launches `run_hook_command` as a
+        background `asyncio.create_task`, without awaiting it. This
+        method itself only awaits the (synchronous, fast) matching
+        pass, never a subprocess, so it returns promptly regardless of
+        how long any fired command takes to run (bounded at
+        `HookRule.timeout_seconds`, up to the 60s ceiling, on the
+        background task's own time — never on this call's).
+
+        Args:
+            event: The event to test against every configured rule.
+
+        Note:
+            Requires a running event loop — `asyncio.create_task`
+            raises `RuntimeError` if called outside one. Not a concern
+            for how this class is actually driven (Step 5 onward calls
+            it from inside `AgentEngine.execute_stream`, an async
+            generator that can only run under a live loop); documented
+            here for anyone constructing/calling it standalone.
+        """
+        for rule in self._rules:
+            if match(rule, event):
+                task = asyncio.create_task(
+                    run_hook_command(rule.command, rule.timeout_seconds)
+                )
+                # Keep a reference only long enough to suppress
+                # "task was never retained" warnings/GC surprises;
+                # deliberately not awaited or stored beyond that — see
+                # the class docstring's fire-and-forget contract.
+                _BACKGROUND_TASKS.add(task)
+                task.add_done_callback(_BACKGROUND_TASKS.discard)
+                task.add_done_callback(_log_background_task_exception)
+
+
+def _log_background_task_exception(task: asyncio.Task[None]) -> None:
+    """Defensively log any exception that escaped a fired hook task.
+
+    `run_hook_command` (Step 3) is verified to never raise today, so
+    this is a non-issue in practice — but relying on that staying true
+    forever would make `handle()`'s "never breaks a turn, always
+    logged" claim true only incidentally, not structurally. If a
+    future edit to Step 3 (or anything else scheduled the same way)
+    ever let an exception through, this done-callback is what turns it
+    into a real, findable log line via kolsch's own logger instead of
+    silently surfacing only through asyncio's default handler ("Task
+    exception was never retrieved", printed to stderr at GC time,
+    easy to miss and not routed through kolsch's logging at all).
+
+    `CancelledError` is excluded deliberately: a cancelled background
+    task is expected, unremarkable behavior (e.g. process shutdown),
+    not a hook failure worth logging as one.
+    """
+    if task.cancelled():
+        return
+    exc = task.exception()
+    if exc is not None:
+        _log.exception("hook background task raised unexpectedly", exc_info=exc)
+
+
+# Strong references to in-flight background hook tasks. `asyncio` only
+# holds a *weak* reference to a task once nothing else references it,
+# which can let a still-running task be garbage-collected out from
+# under itself (a documented asyncio footgun). Retaining a strong
+# reference here — pruned via each task's own done-callback — avoids
+# that without turning `HookDispatcher.handle()` into something that
+# awaits or otherwise tracks completion; this set is purely about
+# object lifetime, not synchronization.
+_BACKGROUND_TASKS: set[asyncio.Task[None]] = set()
