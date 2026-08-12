@@ -1,4 +1,4 @@
-"""Tests for :class:`ModelPickerScreen` (spec-132 Steps 3 + 4).
+"""Tests for :class:`ModelPickerScreen` (spec-132 Steps 3 + 4 + 6).
 
 Step 3 mounted a **given, static** ``list[ModelChoice]`` — no live
 `assemble_model_choices()` call, no `/model` no-arg wiring (Step 5).
@@ -41,6 +41,21 @@ Step 4 (this revision) adds:
   mocked against a bare `SlashContext` — no real chat session needed,
   per the spec's testing note.
 
+Step 6 adds:
+
+- `ModelPickerScreen(..., failures=[...])` renders one inline note
+  line per `ProviderFailure`, always (not just when `choices` is also
+  empty).
+- The "all configured providers failed" case (`choices=[]`,
+  `failures` non-empty) renders an additional plain "No models
+  available" note in place of the (otherwise silently empty)
+  `OptionList` — Step 5 review carry-forward #1.
+- `ModelPickerLoadingScreen` (the Step 6 block-with-spinner loading
+  modal `open_model_picker`'s caller pushes while `assemble_catalog()`
+  is in flight — see `_slash.py`'s `_open_model_picker_from_slash`):
+  mounts, shows a spinner + "Loading models…", and the spinner glyph
+  advances on its own tick timer.
+
 ``ModalScreen`` is a ``Screen`` (itself a ``Widget`` subclass) but
 isn't the kind of single in-isolation widget ``mock_app_factory``
 wraps (that fixture composes one widget as a *child*; a `Screen` is
@@ -59,11 +74,13 @@ from rich.text import Text
 from textual.app import App
 from textual.widgets import OptionList
 
-from cli._model_catalog import ModelChoice
+from cli._model_catalog import ModelChoice, ProviderFailure
 from cli.chat.widgets.model_picker import (
     _ACTIVE_GLYPH,
+    _FAILURE_GLYPH,
     _MISSING_CONTEXT_PLACEHOLDER,
     _NAME_COLUMN_WIDTH,
+    ModelPickerLoadingScreen,
     ModelPickerScreen,
 )
 from llm.protocol import ModelEntry
@@ -626,3 +643,172 @@ async def test_escape_dismisses_with_none_via_push_screen_wait() -> None:
         await pilot.pause()
 
     assert app.result is None
+
+
+# ---------------------------------------------------------------------------
+# Step 6 — inline failure notes
+# ---------------------------------------------------------------------------
+
+
+def _option_texts_from_statics(screen: ModelPickerScreen) -> list[str]:
+    """Plain text of every `.picker-failure-note`/`.picker-empty-note`
+    `Static`, in mount order — the note lines rendered above (or
+    instead of) the `OptionList`."""
+    from textual.widgets import Static
+
+    notes: list[str] = []
+    for static in screen.query(".picker-failure-note"):
+        assert isinstance(static, Static)
+        content = static.content
+        assert isinstance(content, Text)
+        notes.append(content.plain)
+    return notes
+
+
+@pytest.mark.asyncio
+async def test_failures_render_as_inline_notes_above_option_list() -> None:
+    """One note line per `ProviderFailure`, distinct from the row list."""
+    choices = _fixture_choices()
+    failures = [
+        ProviderFailure(provider="openrouter", reason="401 unauthorized"),
+        ProviderFailure(provider="opencode", reason="connection refused"),
+    ]
+    app = _PickerHostAppWithFailures(choices, failures)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ModelPickerScreen)
+        notes = _option_texts_from_statics(screen)
+
+        assert len(notes) == 2
+        assert notes[0] == f"{_FAILURE_GLYPH} openrouter: 401 unauthorized"
+        assert notes[1] == f"{_FAILURE_GLYPH} opencode: connection refused"
+        # The option list itself is untouched — still every choice.
+        option_list = screen.query_one(OptionList)
+        assert option_list.option_count == len(choices)
+
+
+@pytest.mark.asyncio
+async def test_no_failures_renders_no_notes() -> None:
+    """`failures=None`/empty (the pre-Step-6 shape) renders zero notes."""
+    choices = _fixture_choices()
+    app = _PickerHostAppWithFailures(choices, [])
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ModelPickerScreen)
+        assert _option_texts_from_statics(screen) == []
+
+
+@pytest.mark.asyncio
+async def test_all_providers_failed_shows_explanation_not_silent_empty_list() -> None:
+    """`choices=[]` + non-empty `failures` → the picker still opens,
+    with an inline "no models available" explanation instead of a
+    silently empty `OptionList` (Step 5 review carry-forward #1)."""
+    failures = [ProviderFailure(provider="openrouter", reason="timeout")]
+    app = _PickerHostAppWithFailures([], failures)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ModelPickerScreen)
+
+        # The failure note is there.
+        notes = _option_texts_from_statics(screen)
+        assert notes == [f"{_FAILURE_GLYPH} openrouter: timeout"]
+
+        # AND a distinct "nothing to pick" explanation is shown...
+        empty_notes = list(screen.query(".picker-empty-note"))
+        assert len(empty_notes) == 1
+
+        # ...and there's no OptionList at all (nothing to select).
+        assert not list(screen.query(OptionList))
+
+
+@pytest.mark.asyncio
+async def test_zero_choices_zero_failures_still_shows_plain_option_list() -> None:
+    """`choices=[]`, `failures=[]` (e.g. a provider legitimately
+    returned no models) is NOT the "all failed" case — no explanation
+    note, just an empty (but present) `OptionList`, matching
+    pre-Step-6 behaviour for an empty catalog."""
+    app = _PickerHostAppWithFailures([], [])
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ModelPickerScreen)
+        assert not list(screen.query(".picker-empty-note"))
+        option_list = screen.query_one(OptionList)
+        assert option_list.option_count == 0
+
+
+class _PickerHostAppWithFailures(App[None]):
+    """Mounts `ModelPickerScreen` with `failures=` — mirrors `_PickerHostApp`
+    but exercises the Step 6 constructor parameter."""
+
+    def __init__(
+        self, choices: list[ModelChoice], failures: list[ProviderFailure]
+    ) -> None:
+        super().__init__()
+        self._choices = choices
+        self._failures = failures
+
+    async def on_mount(self) -> None:
+        await self.push_screen(
+            ModelPickerScreen(self._choices, failures=self._failures)
+        )
+
+
+# ---------------------------------------------------------------------------
+# Step 6 — ModelPickerLoadingScreen
+# ---------------------------------------------------------------------------
+
+
+class _LoadingHostApp(App[None]):
+    """Mounts `ModelPickerLoadingScreen` directly — mirrors `_PickerHostApp`."""
+
+    async def on_mount(self) -> None:
+        await self.push_screen(ModelPickerLoadingScreen())
+
+
+@pytest.mark.asyncio
+async def test_loading_screen_mounts_with_spinner_and_verb() -> None:
+    from textual.widgets import Static
+
+    app = _LoadingHostApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ModelPickerLoadingScreen)
+        body = screen.query_one(".picker-loading-body", Static)
+        rendered = str(body.content)
+        assert "Loading models" in rendered
+
+
+@pytest.mark.asyncio
+async def test_loading_screen_spinner_advances_over_time() -> None:
+    """The spinner glyph changes on its own tick timer — proof the
+    screen is animating (not a static, frozen-looking placeholder)."""
+    app = _LoadingHostApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ModelPickerLoadingScreen)
+
+        start_index = screen._spinner_index
+        await pilot.pause(0.3)
+        assert screen._spinner_index != start_index
+
+
+@pytest.mark.asyncio
+async def test_loading_screen_stops_timer_on_unmount() -> None:
+    """Popping the loading screen stops its tick timer (no leaked
+    timer callbacks against an unmounted widget)."""
+    app = _LoadingHostApp()
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        screen = app.screen
+        assert isinstance(screen, ModelPickerLoadingScreen)
+        assert screen._frame_timer is not None
+
+        await app.pop_screen()
+        await pilot.pause()
+        assert screen._frame_timer is None

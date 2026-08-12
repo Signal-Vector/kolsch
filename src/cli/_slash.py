@@ -407,6 +407,52 @@ def _apply_model(ctx: SlashContext, spec_or_ref: ModelSpec | str) -> ModelSpec:
     return new_spec
 
 
+async def _open_model_picker_from_slash(ctx: SlashContext) -> None:
+    """Resolve the running app, assemble the catalog, and drive the picker.
+
+    Extracted from `_handler_model`'s no-arg branch so the try/except
+    around it can distinguish `LookupError` (no running app — see its
+    call site) from every other failure flavour, without the
+    resolve-app / assemble-catalog / open-picker sequence itself
+    ballooning that `except` block.
+
+    Step 6: shows `ModelPickerLoadingScreen` while `assemble_catalog()`
+    (the failure-surfacing wrapper around `assemble_model_choices()`)
+    is in flight, so a slow or failing provider never leaves the UI
+    looking frozen — see `model_picker.py`'s module docstring, "Step 6
+    — loading-state UX", for why block-with-spinner was chosen over
+    progressive-fill. The loading screen is popped before the real,
+    fully-populated `ModelPickerScreen` is pushed via
+    `open_model_picker`, which also receives any collected
+    `ProviderFailure`s so a total-failure catalog isn't a silent empty
+    picker (Step 5 review carry-forward #1).
+    """
+    from textual._context import active_app  # noqa: PLC0415
+
+    from cli._model_catalog import ModelChoice, assemble_catalog  # noqa: PLC0415
+    from cli.chat.widgets.model_picker import (  # noqa: PLC0415
+        ModelPickerLoadingScreen,
+        open_model_picker,
+    )
+    from llm.protocol import ModelEntry  # noqa: PLC0415
+
+    assert ctx.state is not None  # guarded by the caller
+
+    app = active_app.get()
+    await app.push_screen(ModelPickerLoadingScreen())
+    try:
+        choices, failures = await assemble_catalog(ctx)
+    finally:
+        await app.pop_screen()
+
+    current_spec = ctx.state.config.model
+    current = ModelChoice(
+        provider=current_spec.provider,
+        entry=ModelEntry(id=current_spec.model),
+    )
+    await open_model_picker(ctx, app, choices, current=current, failures=failures)
+
+
 async def _handler_model(arg_text: str, ctx: SlashContext) -> ControlSignal:
     """`/model [<ref>]` — open the model picker, or switch directly.
 
@@ -414,10 +460,13 @@ async def _handler_model(arg_text: str, ctx: SlashContext) -> ControlSignal:
     slash command), compact string (`opencode/gpt-oss-120b`), and
     alias (`opus` → `platform.yaml` `model_aliases.opus`).
 
-    Without arg (spec-132 Step 5): opens `ModelPickerScreen` populated
-    by `assemble_model_choices()` — the session's actually-configured
-    providers (`ctx.state.runtime.llm_providers_config`), not a
-    hardcoded list. The active model is derived from
+    Without arg (spec-132 Step 5, loading UX + failure surfacing added
+    Step 6): opens `ModelPickerScreen` populated by
+    `assemble_catalog()` — the session's actually-configured providers
+    (`ctx.state.runtime.llm_providers_config`), not a hardcoded list —
+    via `_open_model_picker_from_slash`, which also shows a loading
+    spinner while assembly is in flight and forwards any per-provider
+    failures for inline display. The active model is derived from
     `ctx.state.config.model` and marked in the opened list via
     `ModelPickerScreen`'s `(provider, entry.id)` matching (see
     `_matches_current`'s docstring — only `provider`/`entry.id` need
@@ -426,7 +475,10 @@ async def _handler_model(arg_text: str, ctx: SlashContext) -> ControlSignal:
     `open_model_picker`, which calls the exact same `_apply_model`
     helper the argument form below uses; Escape leaves state
     untouched. Zero configured providers short-circuits to a plain
-    message instead of opening a picker with nothing to show.
+    message instead of opening a picker with nothing to show — this is
+    the pre-existing, distinct-from-Step-6 short-circuit for "nothing
+    is even configured," resolved before `_open_model_picker_from_slash`
+    is ever called.
 
     With arg: validates and applies via the shared `_apply_model`
     helper, which swaps `state.config.model` for this session only,
@@ -445,24 +497,19 @@ async def _handler_model(arg_text: str, ctx: SlashContext) -> ControlSignal:
             ctx.stdout.write("/model: no providers configured; nothing to pick from.\n")
             return ControlSignal.CONTINUE
         try:
-            from textual._context import active_app  # noqa: PLC0415
-
-            from cli._model_catalog import (  # noqa: PLC0415
-                ModelChoice,
-                assemble_model_choices,
-            )
-            from cli.chat.widgets.model_picker import open_model_picker  # noqa: PLC0415
-            from llm.protocol import ModelEntry  # noqa: PLC0415
-
-            app = active_app.get()
-            choices = await assemble_model_choices(ctx)
-            current_spec = ctx.state.config.model
-            current = ModelChoice(
-                provider=current_spec.provider,
-                entry=ModelEntry(id=current_spec.model),
-            )
-            await open_model_picker(ctx, app, choices, current=current)
-        except Exception as exc:  # noqa: BLE001 — surface every failure flavour
+            await _open_model_picker_from_slash(ctx)
+        except LookupError:
+            # `textual._context.active_app.get()` raises this when
+            # there's no running Textual App in context — not
+            # reachable on any current production/test path (there is
+            # always a live ChatApp by the time a slash command
+            # dispatches), but a future non-interactive `/model`
+            # caller could hit it. Caught ahead of the broad
+            # `except Exception` below so this prints a clear message
+            # instead of the raw `ContextVar` object repr the generic
+            # handler would otherwise surface.
+            ctx.stdout.write("/model: requires a running chat session\n")
+        except Exception as exc:  # noqa: BLE001 — surface every other failure flavour
             ctx.stdout.write(f"/model: could not open picker: {exc}\n")
         return ControlSignal.CONTINUE
     try:

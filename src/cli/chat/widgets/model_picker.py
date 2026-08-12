@@ -1,4 +1,4 @@
-"""``ModelPickerScreen`` — spec-132's `/model` picker (Steps 3+4).
+"""``ModelPickerScreen`` — spec-132's `/model` picker (Steps 3+4+6).
 
 Renders a **given, static** ``list[ModelChoice]`` (`cli._model_catalog`)
 as a three-column list — name / provider / context size — inside a
@@ -74,6 +74,47 @@ is now unconditional, only the literal hex hue is gated.
 `margin: 0 0 1 0` between the picker and its future sibling chrome.
 Nothing forces this automatically for a multi-column widget, so it's
 stated explicitly here rather than left to CSS defaults.
+
+**Step 6 — loading-state UX.** `assemble_catalog()` (the Step 6
+failure-surfacing wrapper around `assemble_model_choices()`) is async
+and can be slow (real network calls for `openrouter`/`opencode`) or
+fail per-provider. Chosen design: **block-with-spinner, not
+progressive-fill**. `_slash.py`'s `_open_model_picker_from_slash`
+(the actual `/model` no-arg call site — this module's own
+`open_model_picker` still just takes an already-assembled `choices`
+list, unchanged in shape from Step 4/5) pushes a small
+:class:`ModelPickerLoadingScreen` first (a spinner + "Loading
+models…", reusing `cli.chat.spinner`'s canonical braille alphabet),
+awaits the catalog assembly while it's showing, pops the loading
+screen, then calls `open_model_picker` to push the real,
+fully-populated `ModelPickerScreen`. This was picked over
+progressive-fill (mounting rows as each provider's discovery
+resolves) because `ModelPickerScreen.__init__` already takes a
+**fully-formed** `choices` list by design (Step 4's review confirmed
+this doesn't block either approach) — block-with-spinner needed zero
+changes to the picker's own state model or to `open_model_picker`'s
+existing contract, while progressive-fill would need `OptionList`
+rows to be added/removed live and the active-row/column-alignment
+logic (both already non-trivial — see the off-by-one this file's
+history mentions) to re-run mid-render. Given the catalog is at most
+~9-20 entries and a per-provider round-trip is one HTTP call, the
+brief blocked window is an acceptable trade for a simpler, more
+obviously-correct implementation. If a provider is unusually slow
+this still doesn't "freeze" anything — the spinner keeps animating
+the whole time, satisfying the acceptance bar ("never looks frozen"),
+because `assemble_catalog` is awaited cooperatively, not run inside a
+blocking call.
+
+**Step 6 — failure surfacing.** When one or more configured providers'
+discovery failed, `open_model_picker` passes the collected
+`ProviderFailure` list through to `ModelPickerScreen`, which renders
+one dim `$hint`-styled note line per failure above the option list
+(`"⚠ <provider>: <reason>"`) — always shown when failures exist, not
+just when the picker would otherwise be empty, so a partial failure
+(e.g. 1 of 3 providers down) isn't silently invisible either. This
+directly answers Step 5 review carry-forward #1: "N providers
+configured, all discovery failed" no longer opens a silent, empty
+picker — it opens a picker that explains why there's nothing to pick.
 """
 
 from __future__ import annotations
@@ -89,11 +130,14 @@ from textual.widgets import OptionList, Static
 from textual.widgets.option_list import Option
 
 from cli._model_catalog import ModelChoice
+from cli.chat.spinner import SPINNER_FRAMES, spinner_frame
 
 if TYPE_CHECKING:
     from textual.app import App, ComposeResult
     from textual.binding import BindingType
+    from textual.timer import Timer
 
+    from cli._model_catalog import ProviderFailure
     from cli._slash import SlashContext
 
 # See the module docstring's "Active-row NO_COLOR design" section for
@@ -134,6 +178,18 @@ _PROVIDER_COLUMN_WIDTH = 14
 # of what `mono.tcss` does for CSS-cascaded widgets.
 _TOOL_FG_HEX = "#4dd0e1"
 _HINT_HEX = "#6e7681"
+_WARNING_HEX = "#ffb454"
+"""Literal hex for `$warning`, duplicated from `notice.py`'s
+`DEFAULT_CSS` for the same Rich-`Text`-vs-CSS-variable reason
+documented above `_TOOL_FG_HEX`/`_HINT_HEX`. Used only for the Step 6
+per-provider failure note glyph."""
+
+_FAILURE_GLYPH = "⚠"
+"""`state_tokens.py`'s canonical `"paused"`/`"awaiting"` glyph —
+reused here for "this provider's discovery failed," a related-enough
+meaning (something needs attention) that introducing a distinct
+glyph isn't warranted. Unused elsewhere in this file, so no
+collision with `_ACTIVE_GLYPH` (`◆`)."""
 
 
 def _format_context_length(context_length: int | None) -> str:
@@ -234,6 +290,24 @@ def _row_text(choice: ModelChoice, *, is_current: bool) -> Text:
     return text
 
 
+def _failure_note_text(failure: ProviderFailure) -> Text:
+    """Build one styled note line for a `ProviderFailure` (Step 6).
+
+    ``"⚠ <provider>: <reason>"`` — glyph + dim text-style are always
+    applied (carrier survival under `NO_COLOR`, mirroring `_row_text`'s
+    missing-context placeholder); the literal `$warning` hex is gated
+    behind `_use_color()`. Built as a `Text`, not markup, for the same
+    reason `_row_text` uses `Text`: `reason` may echo untrusted
+    exception text (a bad `base_url`, a raw connector error message).
+    """
+    use_color = _use_color()
+    text = Text(no_wrap=False, overflow="fold")
+    text.append(f"{_FAILURE_GLYPH} {failure.provider}: {failure.reason}")
+    style = "dim " + _WARNING_HEX if use_color else "dim"
+    text.stylize(style)
+    return text
+
+
 class ModelPickerScreen(ModalScreen[ModelChoice | None]):
     """Modal picker listing `ModelChoice` rows — name / provider / context.
 
@@ -262,11 +336,18 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
     `App`/`Screen` with a real `SlashContext` calls via
     `push_screen_wait`. Step 5 wires `/model` (no-arg) to invoke
     `open_model_picker`.
+
+    **Failure notes (Step 6).** ``failures`` renders as one dim
+    ``⚠ <provider>: <reason>`` line per entry, above the option list —
+    always shown when non-empty, whether or not ``choices`` is also
+    empty. See the module docstring's "Step 6 — failure surfacing"
+    section.
     """
 
     DEFAULT_CSS = """
     $tool-fg: #4dd0e1;
     $hint: #6e7681;
+    $warning: #ffb454;
     $chat-surface: #1a1d24;
 
     ModelPickerScreen {
@@ -289,6 +370,18 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
         padding: 0 1;
     }
 
+    ModelPickerScreen .picker-failure-note {
+        height: auto;
+        padding: 0 1;
+    }
+
+    ModelPickerScreen .picker-empty-note {
+        color: $hint;
+        text-style: dim;
+        height: auto;
+        padding: 0 1;
+    }
+
     ModelPickerScreen OptionList {
         border: none;
         background: $chat-surface;
@@ -305,6 +398,7 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
         choices: list[ModelChoice],
         *,
         current: ModelChoice | None = None,
+        failures: list[ProviderFailure] | None = None,
         name: str | None = None,
         id: str | None = None,  # noqa: A002 - Textual's own param name
         classes: str | None = None,
@@ -332,6 +426,10 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
                 `ModelChoice` a live `discover_models()` call returns
                 for that same model — `_matches_current` is what
                 makes the active-row marking work despite that.
+            failures: Providers whose discovery didn't complete
+                (Step 6's `assemble_catalog`), rendered as inline note
+                lines above the option list. `None`/empty renders no
+                notes — the pre-Step-6 shape.
             name: Forwarded to `ModalScreen`.
             id: Forwarded to `ModalScreen`.
             classes: Forwarded to `ModalScreen`.
@@ -339,11 +437,34 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
         super().__init__(name=name, id=id, classes=classes)
         self._choices = list(choices)
         self._current = current
+        self._failures = list(failures) if failures else []
 
     def compose(self) -> ComposeResult:
-        """Yield the title + the option list built from `self._choices`."""
+        """Yield the title, any failure notes, then the option list.
+
+        When `self._choices` is empty (every configured provider
+        failed, or none returned any models) and there ARE failures to
+        explain why, an additional plain note is shown in place of the
+        (otherwise silently empty) `OptionList` — see the module
+        docstring's "Step 6 — failure surfacing" section and Step 5's
+        carried-forward review item #1.
+        """
         with Vertical():
             yield Static("Switch model", classes="picker-title", markup=False)
+            for failure in self._failures:
+                yield Static(
+                    _failure_note_text(failure),
+                    classes="picker-failure-note",
+                    markup=False,
+                )
+            if not self._choices and self._failures:
+                yield Static(
+                    "No models available — every configured provider failed "
+                    "to respond (see above).",
+                    classes="picker-empty-note",
+                    markup=False,
+                )
+                return
             option_list = OptionList(*self._build_options())
             yield option_list
 
@@ -382,21 +503,120 @@ class ModelPickerScreen(ModalScreen[ModelChoice | None]):
         self.dismiss(None)
 
 
+class ModelPickerLoadingScreen(ModalScreen[None]):
+    """Step 6's loading-state modal — shown while `assemble_catalog()` runs.
+
+    A minimal spinner + "Loading models…" line in the same visual
+    family as `ModelPickerScreen` (flat `$chat-surface`, no heavy
+    border). Never returns a result (`ModalScreen[None]`) — it isn't
+    interactive; `_slash.py`'s `_open_model_picker_from_slash` pushes
+    it, awaits the catalog assembly, pops it, then calls
+    `open_model_picker` to push the real picker in its place (see the
+    module docstring's "Step 6 — loading-state UX" section for the
+    block-with-spinner vs. progressive-fill design decision).
+
+    Escape is intentionally NOT bound here — there is nothing to
+    cancel back to mid-assembly that wouldn't leave a dangling
+    in-flight `assemble_catalog()` coroutine; the wait is expected to
+    be short (at most a couple of per-provider HTTP round-trips), same
+    as `refresh`'s existing (unskippable) discovery wait.
+    """
+
+    DEFAULT_CSS = """
+    $tool-fg: #4dd0e1;
+    $chat-surface: #1a1d24;
+
+    ModelPickerLoadingScreen {
+        align: center middle;
+    }
+
+    ModelPickerLoadingScreen > Vertical {
+        width: auto;
+        height: auto;
+        background: $chat-surface;
+        padding: 0 1;
+        margin: 0 0 1 0;
+    }
+
+    ModelPickerLoadingScreen .picker-title {
+        color: $tool-fg;
+        text-style: bold;
+        height: 1;
+        padding: 0 1;
+    }
+
+    ModelPickerLoadingScreen .picker-loading-body {
+        color: $tool-fg;
+        height: 1;
+        padding: 0 1;
+    }
+    """
+
+    _VERB = "Loading models…"
+
+    def __init__(
+        self,
+        *,
+        name: str | None = None,
+        id: str | None = None,  # noqa: A002 - Textual's own param name
+        classes: str | None = None,
+    ) -> None:
+        super().__init__(name=name, id=id, classes=classes)
+        self._spinner_index = 0
+        self._frame_timer: Timer | None = None
+        self._body_static = Static("", classes="picker-loading-body", markup=False)
+
+    def compose(self) -> ComposeResult:
+        """Yield the title + a spinner/verb line."""
+        with Vertical():
+            yield Static("Switch model", classes="picker-title", markup=False)
+            yield self._body_static
+
+    def on_mount(self) -> None:
+        """Render the first spinner frame and start the tick timer.
+
+        Same ~12.5 Hz cadence as `WorkingPlaceholder`/`TurnStatus`
+        (`set_interval(0.08, ...)`) — this file has no prior spinner
+        use, so the cadence is copied directly from those two rather
+        than invented fresh.
+        """
+        self._render_frame()
+        self._frame_timer = self.set_interval(0.08, self._advance_spinner)
+
+    def on_unmount(self) -> None:
+        """Stop the tick timer so a dismissed loading screen costs nothing."""
+        self._stop_timer()
+
+    def _advance_spinner(self) -> None:
+        self._spinner_index = (self._spinner_index + 1) % len(SPINNER_FRAMES)
+        self._render_frame()
+
+    def _render_frame(self) -> None:
+        glyph = spinner_frame(self._spinner_index)
+        self._body_static.update(f"{glyph} {self._VERB}")
+
+    def _stop_timer(self) -> None:
+        if self._frame_timer is not None:
+            self._frame_timer.stop()
+            self._frame_timer = None
+
+
 async def open_model_picker(
     ctx: SlashContext,
     app: App[object],
     choices: list[ModelChoice],
     *,
     current: ModelChoice | None = None,
+    failures: list[ProviderFailure] | None = None,
 ) -> None:
     """Push `ModelPickerScreen`, apply the selection (if any) via `_apply_model`.
 
     The caller-side half of Step 4's selection wiring — see
     `ModelPickerScreen`'s class docstring for why the screen itself
     stays dumb (no `SlashContext`, no `_apply_model` call). This
-    function is the seam Step 5 will call from `/model`'s no-arg
-    branch, once ``choices`` comes from `assemble_model_choices()`
-    instead of a fixture list.
+    function is the seam Step 5 wired `/model`'s no-arg branch to,
+    with ``choices`` coming from `assemble_model_choices()`/
+    `assemble_catalog()` instead of a fixture list.
 
     Pushes the screen via `app.push_screen_wait`, Textual's own
     idiom for "show a modal, await its typed `dismiss()` result."
@@ -409,6 +629,17 @@ async def open_model_picker(
     produce identical `ChatSessionState.model_override` /
     `ChatSessionState.config.model` results.
 
+    This function does NOT itself call `assemble_catalog()` /
+    `assemble_model_choices()` — ``choices``/``failures`` are already
+    fully assembled by the time this is called (unchanged from Step
+    4/5's contract, and load-bearing for `test_open_model_picker.py`'s
+    existing fixture-driven tests, which call this directly with no
+    assembly step at all). The Step 6 loading-state UX (pushing
+    `ModelPickerLoadingScreen` while assembly is in flight) lives at
+    the call site — see `_slash.py`'s `_handler_model` no-arg branch —
+    not in here, precisely so this function's contract doesn't need to
+    change shape for callers that already have their data.
+
     Args:
         ctx: The slash-command context `_apply_model` mutates.
             `ctx.state` must not be `None` (same precondition
@@ -420,14 +651,19 @@ async def open_model_picker(
             `ModelPickerScreen`.
         current: The active-model marker — passed straight through to
             `ModelPickerScreen`.
+        failures: Providers whose discovery didn't complete (Step 6) —
+            passed straight through to `ModelPickerScreen` for inline
+            display. `None`/omitted renders no failure notes.
     """
     from cli._slash import _apply_model  # noqa: PLC0415
     from schemas import ModelSpec  # noqa: PLC0415
 
-    chosen = await app.push_screen_wait(ModelPickerScreen(choices, current=current))
+    chosen = await app.push_screen_wait(
+        ModelPickerScreen(choices, current=current, failures=failures)
+    )
     if chosen is None:
         return
     _apply_model(ctx, ModelSpec(provider=chosen.provider, model=chosen.entry.id))
 
 
-__all__ = ["ModelPickerScreen", "open_model_picker"]
+__all__ = ["ModelPickerLoadingScreen", "ModelPickerScreen", "open_model_picker"]

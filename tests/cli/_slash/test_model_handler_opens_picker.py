@@ -1,14 +1,23 @@
-"""spec-132 Step 5 — tests for `/model` (no-arg) opening the picker.
+"""spec-132 Step 5 (+ Step 6 loading/failure wiring) — tests for `/model`
+(no-arg) opening the picker.
 
-Before this step, `_handler_model`'s no-arg branch just printed the
+Before Step 5, `_handler_model`'s no-arg branch just printed the
 current `provider/model` as text (covered by
-`test_model_handler_apply.py`, pre-Step-5). This step replaces that
-with opening `ModelPickerScreen`, populated by
+`test_model_handler_apply.py`, pre-Step-5). Step 5 replaced that with
+opening `ModelPickerScreen`, populated by
 `cli._model_catalog.assemble_model_choices()` over the session's
 actually-configured providers (`ctx.state.runtime.llm_providers_config`)
 — not a hardcoded list — and wired through `open_model_picker` so a
 selection applies via the same `_apply_model` helper `/model <ref>`
-uses (Step 1/4).
+uses (Step 1/4). Step 6 additionally routes the no-arg branch through
+`_open_model_picker_from_slash`, which shows `ModelPickerLoadingScreen`
+while `cli._model_catalog.assemble_catalog()` (the failure-surfacing
+wrapper Step 6 added around `assemble_model_choices()`) is in flight,
+then forwards any collected `ProviderFailure`s into the real picker.
+This file patches `assemble_catalog` (not `assemble_model_choices`) as
+of Step 6, since that's the function `_handler_model`'s no-arg branch
+now actually calls; Step 6's dedicated loading-state tests live in
+`test_model_handler_loading.py`.
 
 Two things need a real, running Textual `App` to exercise honestly:
 
@@ -25,14 +34,14 @@ Two things need a real, running Textual `App` to exercise honestly:
   `test_open_model_picker.py`'s own host-app docstring) must run
   inside a Textual worker.
 
-`assemble_model_choices` is patched at its source
-(`cli._model_catalog.assemble_model_choices`) rather than injected via
-its `connector_factory`/`credentials_resolver` seam — `_handler_model`
-does a lazy `from cli._model_catalog import assemble_model_choices`
-*inside* its own body (mirroring `open_model_picker`'s lazy
-`_apply_model` import, per `test_open_model_picker.py`'s note), so the
-name is looked up on `cli._model_catalog` fresh at call time; patching
-the source module's attribute is what actually intercepts the call.
+`assemble_catalog` is patched at its source
+(`cli._model_catalog.assemble_catalog`) rather than injected via its
+`connector_factory`/`credentials_resolver` seam — `_handler_model`
+does a lazy `from cli._model_catalog import assemble_catalog` *inside*
+its own body (mirroring `open_model_picker`'s lazy `_apply_model`
+import, per `test_open_model_picker.py`'s note), so the name is looked
+up on `cli._model_catalog` fresh at call time; patching the source
+module's attribute is what actually intercepts the call.
 
 Covers:
 - non-empty `llm_providers_config` + a stubbed catalog → the picker
@@ -41,9 +50,8 @@ Covers:
 - the "current" marker passed to the picker is built from
   `ctx.state.config.model` (`provider`/`id` only).
 - empty `llm_providers_config` → short-circuits to a plain message,
-  no picker opened, `assemble_model_choices` never called (this
-  step's chosen edge-case handling — see `_handler_model`'s
-  docstring).
+  no picker opened, `assemble_catalog` never called (this step's
+  chosen edge-case handling — see `_handler_model`'s docstring).
 """
 
 from __future__ import annotations
@@ -145,16 +153,16 @@ class _ModelHandlerHostApp(App[None]):
 @pytest.mark.asyncio
 async def test_model_no_arg_opens_picker_populated_from_stub() -> None:
     """`/model` with no argument, stubbed `llm_providers_config` +
-    stubbed `assemble_model_choices`, mounts `ModelPickerScreen`
-    populated with exactly the stub's rows."""
+    stubbed `assemble_catalog`, mounts `ModelPickerScreen` populated
+    with exactly the stub's rows (after the loading screen resolves)."""
     state = _state(llm_providers_config={"claude_code": object()})
     ctx = _ctx(state)
     choices = _fixture_choices()
 
     with mock.patch(
-        "cli._model_catalog.assemble_model_choices",
+        "cli._model_catalog.assemble_catalog",
         autospec=True,
-        return_value=choices,
+        return_value=(choices, []),
     ) as mock_assemble:
         app = _ModelHandlerHostApp(ctx)
         async with app.run_test() as pilot:
@@ -181,9 +189,9 @@ async def test_model_no_arg_marks_current_model_from_session_config() -> None:
     choices = _fixture_choices()
 
     with mock.patch(
-        "cli._model_catalog.assemble_model_choices",
+        "cli._model_catalog.assemble_catalog",
         autospec=True,
-        return_value=choices,
+        return_value=(choices, []),
     ):
         app = _ModelHandlerHostApp(ctx)
         async with app.run_test() as pilot:
@@ -210,9 +218,9 @@ async def test_model_no_arg_selecting_a_row_applies_it() -> None:
     choices = _fixture_choices()
 
     with mock.patch(
-        "cli._model_catalog.assemble_model_choices",
+        "cli._model_catalog.assemble_catalog",
         autospec=True,
-        return_value=choices,
+        return_value=(choices, []),
     ):
         app = _ModelHandlerHostApp(ctx)
         async with app.run_test() as pilot:
@@ -237,13 +245,13 @@ async def test_model_no_arg_selecting_a_row_applies_it() -> None:
 @pytest.mark.asyncio
 async def test_model_no_arg_with_zero_providers_never_opens_picker() -> None:
     """Empty `llm_providers_config` short-circuits to a plain message
-    instead of a picker with nothing to show; `assemble_model_choices`
-    is never called."""
+    instead of a picker with nothing to show; `assemble_catalog` is
+    never called."""
     state = _state(llm_providers_config={})
     ctx = _ctx(state)
 
     with mock.patch(
-        "cli._model_catalog.assemble_model_choices", autospec=True
+        "cli._model_catalog.assemble_catalog", autospec=True
     ) as mock_assemble:
         signal = await _handler_model("", ctx)
 

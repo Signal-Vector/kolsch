@@ -7,6 +7,17 @@ providers — the same source `apply_run_model_override`
 --model`), resolves credentials, and calls `discover_models()` per
 provider, pairing each returned `ModelEntry` with its provider's name.
 
+**Step 6 addition — failure surfacing.** `assemble_model_choices` itself
+keeps its original `list[ModelChoice]`-only contract unchanged (every
+Step 2 test asserts exactly that return shape). :func:`assemble_catalog`
+is a thin wrapper, built for Step 6's loading-state UX, that runs the
+same per-provider assembly but ALSO returns which configured providers
+failed (and why) as a list of :class:`ProviderFailure` — so a caller
+(the picker's loading screen) can distinguish "0 providers configured"
+(an existing, separately-handled short-circuit in `_handler_model`) from
+"N providers configured, all N failed" and show an inline explanation
+instead of a silently empty picker.
+
 `ModelEntry` (`llm.protocol`) deliberately stays unmodified — no `provider`
 field. The pairing lives here, one layer up, in the local
 :class:`ModelChoice` dataclass, per spec-132's Scope ("`ModelEntry` stays
@@ -84,6 +95,26 @@ class ModelChoice:
     entry: ModelEntry
 
 
+@dataclass(frozen=True)
+class ProviderFailure:
+    """One configured provider whose discovery could not complete.
+
+    Surfaced by :func:`assemble_catalog` (Step 6) alongside whatever
+    `ModelChoice` rows the OTHER configured providers contributed —
+    the failure isolation `assemble_model_choices` already performs
+    (log + skip) is unchanged; this dataclass just carries the same
+    information back to a caller that wants to *show* it instead of
+    only logging it.
+    """
+
+    provider: str
+    """The `llm_providers.<name>` dictionary key that failed."""
+
+    reason: str
+    """Short, human-readable failure reason (`str(exc)` or the
+    exception's class name when `str(exc)` is empty)."""
+
+
 # ---------------------------------------------------------------------------
 # Injectable seam types — mirrors session_picker.py's Chooser seam.
 # ---------------------------------------------------------------------------
@@ -135,6 +166,65 @@ async def _default_resolve_credentials(
 # ---------------------------------------------------------------------------
 
 
+async def _discover_one_provider(
+    provider_name: str,
+    provider_config: ProviderConfig,
+    *,
+    factory: ConnectorFactory,
+    resolve_credentials: CredentialsResolver,
+) -> tuple[list[ModelChoice], ProviderFailure | None]:
+    """Resolve + discover one provider; never raises.
+
+    Shared by :func:`assemble_model_choices` and :func:`assemble_catalog`
+    so both expose the exact same per-provider failure-isolation
+    behaviour (log + skip) — the only difference between the two public
+    functions is whether the caller also wants the failure reason back
+    as data instead of only as a log line.
+
+    Returns `(choices, None)` on success (`choices` may be empty if
+    `discover_models()` legitimately returned nothing) or `([],
+    ProviderFailure(...))` on any `PlatformError` or unexpected
+    exception — both flavours are logged here exactly as before this
+    helper was extracted.
+    """
+    try:
+        connector = factory(provider_config.type)
+        credentials = await resolve_credentials(provider_config)
+        entries = await connector.discover_models(credentials, provider_config.base_url)
+    except PlatformError as exc:
+        _log.warning(
+            "model picker: discovery failed for provider %r (type %r): %s",
+            provider_name,
+            provider_config.type,
+            exc,
+        )
+        reason = str(exc) or type(exc).__name__
+        return [], ProviderFailure(provider=provider_name, reason=reason)
+    except Exception as exc:  # noqa: BLE001 — one broken provider must not sink the rest
+        _log.exception(
+            "model picker: unexpected error discovering provider %r (type %r)",
+            provider_name,
+            provider_config.type,
+        )
+        reason = str(exc) or type(exc).__name__
+        return [], ProviderFailure(provider=provider_name, reason=reason)
+    choices = [ModelChoice(provider=provider_name, entry=entry) for entry in entries]
+    return choices, None
+
+
+def _resolve_seams(
+    ctx: SlashContext,
+    connector_factory: ConnectorFactory | None,
+    credentials_resolver: CredentialsResolver | None,
+) -> tuple[ConnectorFactory, CredentialsResolver]:
+    """Apply the injectable-seam defaults shared by both public entry points."""
+    factory: ConnectorFactory = connector_factory or registry_get
+    resolve_credentials: CredentialsResolver = credentials_resolver or (
+        lambda provider_config: _default_resolve_credentials(provider_config, ctx)
+    )
+    return factory, resolve_credentials
+
+
 async def assemble_model_choices(
     ctx: SlashContext,
     *,
@@ -179,37 +269,64 @@ async def assemble_model_choices(
         order (dict insertion order — `platform.yaml`'s `llm_providers`
         key order), then each provider's own `discover_models()` order.
     """
+    choices, _failures = await assemble_catalog(
+        ctx,
+        connector_factory=connector_factory,
+        credentials_resolver=credentials_resolver,
+    )
+    return choices
+
+
+async def assemble_catalog(
+    ctx: SlashContext,
+    *,
+    connector_factory: ConnectorFactory | None = None,
+    credentials_resolver: CredentialsResolver | None = None,
+) -> tuple[list[ModelChoice], list[ProviderFailure]]:
+    """Like :func:`assemble_model_choices`, but also returns per-provider failures.
+
+    Step 6 addition. Runs the exact same per-provider
+    resolve-construct-discover sequence (via the shared
+    :func:`_discover_one_provider` helper — same failure isolation, same
+    log lines) but additionally collects a :class:`ProviderFailure` for
+    every configured provider that didn't come back clean, so a caller
+    can tell "0 providers configured" (handled earlier, before this is
+    ever called — see `_handler_model`'s short-circuit) apart from "N
+    providers configured, some or all of them failed" and show *why*
+    instead of a silently empty or partial picker.
+
+    Args:
+        ctx: Same as :func:`assemble_model_choices`'s `ctx`.
+        connector_factory: Same as :func:`assemble_model_choices`'s
+            `connector_factory`.
+        credentials_resolver: Same as :func:`assemble_model_choices`'s
+            `credentials_resolver`.
+
+    Returns:
+        `(choices, failures)`. `choices` is identical in shape/order to
+        `assemble_model_choices`'s return value. `failures` has one
+        `ProviderFailure` per configured provider whose discovery did
+        not complete, in `llm_providers_config`'s iteration order;
+        empty when every configured provider succeeded (which may
+        still mean zero models if `discover_models()` legitimately
+        returned an empty list for all of them).
+    """
     assert ctx.state is not None  # every current/planned caller sets this
-    factory: ConnectorFactory = connector_factory or registry_get
-    resolve_credentials: CredentialsResolver = credentials_resolver or (
-        lambda provider_config: _default_resolve_credentials(provider_config, ctx)
+    factory, resolve_credentials = _resolve_seams(
+        ctx, connector_factory, credentials_resolver
     )
 
     choices: list[ModelChoice] = []
+    failures: list[ProviderFailure] = []
     providers = ctx.state.runtime.llm_providers_config
     for provider_name, provider_config in providers.items():
-        try:
-            connector = factory(provider_config.type)
-            credentials = await resolve_credentials(provider_config)
-            entries = await connector.discover_models(
-                credentials, provider_config.base_url
-            )
-        except PlatformError as exc:
-            _log.warning(
-                "model picker: discovery failed for provider %r (type %r): %s",
-                provider_name,
-                provider_config.type,
-                exc,
-            )
-            continue
-        except Exception:  # noqa: BLE001 — one broken provider must not sink the rest
-            _log.exception(
-                "model picker: unexpected error discovering provider %r (type %r)",
-                provider_name,
-                provider_config.type,
-            )
-            continue
-        choices.extend(
-            ModelChoice(provider=provider_name, entry=entry) for entry in entries
+        provider_choices, failure = await _discover_one_provider(
+            provider_name,
+            provider_config,
+            factory=factory,
+            resolve_credentials=resolve_credentials,
         )
-    return choices
+        choices.extend(provider_choices)
+        if failure is not None:
+            failures.append(failure)
+    return choices, failures
