@@ -143,6 +143,16 @@ class PlatformRuntime:
     # engine adapter via `set_llm_call_timeout_default`, kept here
     # for observability + parity with the sibling timeout fields.
     llm_call_timeout_seconds: float | None = 210.0
+    # spec-131 Step 9 — the same `HookDispatcher` instance passed into
+    # `AgentEngine(observer=...)` below, ALSO stashed here so CLI-layer
+    # code (e.g. `PromptsImpl._append_ui_event`) has one clean,
+    # intentional, shared reference point instead of reaching into
+    # `AgentEngine`'s private `_observer` attribute. `None` only when a
+    # `PlatformRuntime` is hand-constructed outside `bootstrap_runtime`
+    # (e.g. some test doubles) without wiring one — `bootstrap_runtime`
+    # itself always sets a real `HookDispatcher`, even with zero
+    # configured rules (see the field's construction site below).
+    hook_dispatcher: HookDispatcher | None = None
 
     async def build_resolved_config(
         self,
@@ -480,6 +490,15 @@ async def bootstrap_runtime(  # noqa: PLR0915 — linear runtime-assembly sequen
     # (`authz_introspection.py`) re-reads (spec-131 Step 7's trust
     # boundary control); this call site is the only place hook config
     # is read for the lifetime of the process.
+    #
+    # spec-131 Step 9 — this same instance is ALSO stashed on the
+    # returned `PlatformRuntime` (`hook_dispatcher=` below) rather than
+    # only injected into the engine, so CLI-layer code that emits
+    # events outside `execute_stream`'s queue (e.g. `PromptsImpl`,
+    # which writes `kolsch.prompt.requested`/`.answered` straight to
+    # the store — see `prompts_impl.py`'s `_append_ui_event`) can reach
+    # the exact same dispatcher via `runtime.hook_dispatcher` instead of
+    # reaching into `AgentEngine`'s private `_observer`.
     hook_dispatcher = HookDispatcher(am.hooks_config())
 
     engine = AgentEngine(
@@ -586,4 +605,9 @@ async def bootstrap_runtime(  # noqa: PLR0915 — linear runtime-assembly sequen
         workflow_default_node_timeout_seconds=workflow_default_node_timeout_seconds,
         workflow_approval_response_seconds=workflow_approval_response_seconds,
         llm_call_timeout_seconds=llm_call_timeout_seconds,
+        # spec-131 Step 9 — same instance just injected into the engine
+        # as `observer=hook_dispatcher` above, so CLI-layer emitters
+        # (`PromptsImpl`) can reach the identical dispatcher through
+        # `runtime.hook_dispatcher` rather than `runtime.engine._observer`.
+        hook_dispatcher=hook_dispatcher,
     )

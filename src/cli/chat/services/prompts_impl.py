@@ -33,6 +33,7 @@ at ``src/providers/authz.py:1106`` fires and persists the rule to
 from __future__ import annotations
 
 import asyncio
+import logging
 from datetime import UTC, datetime
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
@@ -47,6 +48,20 @@ from schemas.wire_kinds import (
 )
 from tools.services.exceptions import PromptBusy
 from tools.services.prompts import AbstractPrompts, PromptSource
+
+_log = logging.getLogger("cli.chat.services.prompts_impl")
+
+# spec-131 Step 9 — mirrors `engine.engine._OBSERVER_TIMEOUT_SECONDS`
+# exactly (same value, same reasoning: generous for the real
+# `HookDispatcher.observe()`, which only launches background tasks and
+# returns in roughly 0.0001s, while still tightly bounding a hung or
+# pathologically slow observer). Kept as its own private constant
+# rather than importing the engine's — this call site is structurally
+# independent of `execute_stream` (that's the whole reason this fix is
+# needed; see this module's `_append_ui_event`), and importing a
+# private name across module/layer boundaries would be worse than a
+# small, intentional duplication of one float.
+_HOOK_OBSERVE_TIMEOUT_SECONDS = 3.0
 
 
 class PromptResponse(str):
@@ -108,6 +123,7 @@ if TYPE_CHECKING:
     from collections.abc import Callable
 
     from bus.event_bus import EventBus
+    from platform_runtime import PlatformRuntime
     from schemas.identifiers import SessionId, ThreadId
     from store.session_store import SessionStore
 
@@ -143,10 +159,21 @@ class PromptsImpl(AbstractPrompts):
         thread_id: ThreadId,
         bus: EventBus | None = None,
         approval_response_seconds: float | None = None,
+        runtime: PlatformRuntime | None = None,
     ) -> None:
         self._session_store = session_store
         self._session_id = session_id
         self._thread_id = thread_id
+        # spec-131 Step 9 — the same `PlatformRuntime` (and therefore
+        # the same `HookDispatcher`, via `runtime.hook_dispatcher`)
+        # `ChatApp.on_mount` wires into every other per-session impl.
+        # `runtime` itself never changes across a `/new` session switch
+        # (only `session_id`/`thread_id` are repointed via
+        # `rebind_session` — see that method), so it is captured once
+        # here at construction time and never re-threaded. `None` in
+        # headless tests / adapter-less fixtures that construct
+        # `PromptsImpl` directly without a runtime, exactly like `bus`.
+        self._runtime = runtime
         # bug-114 — approval-response window for prompts raised INSIDE a
         # workflow node. `None`/`<= 0` = OFF (unbounded wait, pre-bug-114
         # behavior). When set, an unanswered workflow-scoped approval
@@ -609,6 +636,45 @@ class PromptsImpl(AbstractPrompts):
         mount site in the SAME session. Bus failures are swallowed —
         the store append is the durability contract.
 
+        spec-131 Step 9 (reordered post-review — see "ordering" note
+        below): AFTER the bus publish, forward the SAME `Event` to
+        `runtime.hook_dispatcher.observe()` (if a runtime + dispatcher
+        are wired) for both `WIRE_PROMPT_REQUESTED` and
+        `WIRE_PROMPT_ANSWERED` kinds. This writer bypasses
+        `_Exchange._emit`/the queue `AgentEngine.execute_stream` reads
+        from entirely (see this module's top-of-file docstring), so
+        Step 5's engine-level observer seam never sees these events on
+        its own — this call is what closes that gap for the spec's
+        headline `kolsch.prompt.requested` use case (and its
+        `.answered` counterpart) without routing through the engine at
+        all. `None` runtime / `None` `hook_dispatcher` is a silent
+        no-op — zero behavior change from before this call existed.
+        Matches Step 5's own call-site posture in `execute_stream`
+        exactly: bounded by `_HOOK_OBSERVE_TIMEOUT_SECONDS` via
+        `asyncio.wait_for` and never allowed to raise into this
+        method — a hook dispatcher (or any future observer)
+        misbehaving must not break this method.
+
+        Ordering (fixed after a Step 9 review finding — do not reorder
+        back): the bus publish MUST happen BEFORE the hook-observe
+        call, not after. `bus.publish` is what drives
+        `EventAdapter.handle` to mount the live `ApprovalBlock` widget
+        for `WIRE_PROMPT_REQUESTED` — the user-visible signal that a
+        prompt is happening. With the hook-observe call sequenced
+        first (the original Step 9 shape), a slow or hung
+        `observer.observe()` delayed that widget mount by up to
+        `_HOOK_OBSERVE_TIMEOUT_SECONDS` (measured: 3.002s with a
+        hanging observer double) — a real, user-visible latency
+        injection into the approval flow, contradicting AC #5 ("never
+        delays... the underlying kolsch turn"). Publishing first means
+        the widget mount is fully decoupled from hook-observer speed;
+        the awaited hook-observe call only affects how long THIS
+        METHOD takes to return, which nothing else depends on — the
+        approval itself resolves later via the `Future` the user's own
+        response resolves (`resolve_pending`), not via this method's
+        return. Store-append still comes first, unchanged — durability
+        before either side-effect.
+
         spec-068 Part B: on a `WIRE_PROMPT_REQUESTED` write, plug
         the prompt into the active exchange's span registry (if
         any). The registered terminal-factory produces the exact
@@ -639,9 +705,31 @@ class PromptsImpl(AbstractPrompts):
             created_at=datetime.now(UTC),
         )
         await self._session_store.append_event(self._thread_id, event)
+
+        # Publish to the bus BEFORE the hook-observe call below — this
+        # ordering is load-bearing, not incidental (Step 9 review
+        # finding). `bus.publish` is what drives `EventAdapter.handle`
+        # to mount the live `ApprovalBlock` widget for
+        # `WIRE_PROMPT_REQUESTED` — the user-visible signal that a
+        # prompt is happening — and must not be gated behind a
+        # potentially-slow hook observer. See the docstring's
+        # "Ordering" section for the full reasoning and the measured
+        # 3.002s delay this fixes.
         if self._bus is not None:
             with _cl.suppress(Exception):
                 await self._bus.publish(event)
+
+        # spec-131 Step 9 — fire-and-forget hook observation for the
+        # two documented UI-event kinds, AFTER the bus publish above.
+        # See the docstring above for why this call exists at all (the
+        # structural bypass of `execute_stream`'s observer seam) and
+        # its error-handling posture (mirrors
+        # `engine.engine.execute_stream`'s own observer call site
+        # exactly: timeout-bounded, exceptions caught and logged, never
+        # raised into the caller). A slow/hung observer here only
+        # delays this method's own return, not the widget mount above.
+        if kind in (WIRE_PROMPT_REQUESTED, WIRE_PROMPT_ANSWERED):
+            await self._observe_hook_event(event)
 
         # spec-068 Part B — register the span AFTER the store
         # append so no factory can fire a terminal for a
@@ -674,6 +762,70 @@ class PromptsImpl(AbstractPrompts):
 
                     register_span(span_id, _terminal_factory)
                     self._pending_close_span = close_span
+
+    async def _observe_hook_event(self, event: Event) -> None:
+        """Forward `event` to `runtime.hook_dispatcher.observe()`, if wired.
+
+        spec-131 Step 9. Silent no-op when `self._runtime` is `None`
+        (headless tests / adapter-less fixtures — matches every other
+        `self._runtime`-independent code path in this class) or when
+        `runtime.hook_dispatcher` is `None` (a `PlatformRuntime`
+        constructed without one — `bootstrap_runtime` itself always
+        wires a real `HookDispatcher`, even with zero configured
+        rules, but this method does not assume that of every possible
+        `PlatformRuntime`).
+
+        Error-handling posture mirrors `engine.engine.execute_stream`'s
+        own observer call site exactly (spec-131 Step 5): bounded by
+        `asyncio.wait_for(..., timeout=_HOOK_OBSERVE_TIMEOUT_SECONDS)`,
+        with `TimeoutError` and any other `Exception` caught and
+        logged rather than propagated — a hung or misbehaving hook
+        dispatcher can never raise into or otherwise break the caller.
+
+        **What is and isn't guaranteed about delay (precise, post-
+        review — an earlier version of this docstring overclaimed
+        here):** a slow or hung `observer.observe()` CAN still delay
+        THIS METHOD's own return by up to
+        `_HOOK_OBSERVE_TIMEOUT_SECONDS` — that bound is real, not
+        eliminated. What's actually guaranteed is that this delay is
+        harmless: `_append_ui_event` (the sole caller) awaits
+        `self._bus.publish(event)` — the call that mounts the visible
+        `ApprovalBlock` widget — BEFORE calling this method, so the
+        user-visible prompt-appearing signal is never gated behind
+        this method's latency. Nothing else downstream depends on
+        `_append_ui_event`'s own return timing either: the approval
+        itself resolves later, asynchronously, via the `Future` the
+        user's actual response resolves (`resolve_pending`), fully
+        decoupled from when this call happens to finish. In short: a
+        slow hook observer can make one internal `await` take longer;
+        it cannot delay anything the user perceives.
+        """
+        runtime = self._runtime
+        if runtime is None:
+            return
+        dispatcher = getattr(runtime, "hook_dispatcher", None)
+        if dispatcher is None:
+            return
+        try:
+            await asyncio.wait_for(
+                dispatcher.observe(event),
+                timeout=_HOOK_OBSERVE_TIMEOUT_SECONDS,
+            )
+        except TimeoutError:
+            _log.warning(
+                "PromptsImpl._observe_hook_event: hook_dispatcher.observe "
+                "exceeded %.1fs for event_id=%s kind=%s — continuing",
+                _HOOK_OBSERVE_TIMEOUT_SECONDS,
+                event.event_id,
+                event.data.get("kind"),
+            )
+        except Exception:  # noqa: BLE001 — observer is untrusted, mirrors engine.py
+            _log.exception(
+                "PromptsImpl._observe_hook_event: hook_dispatcher.observe "
+                "raised for event_id=%s kind=%s — continuing",
+                event.event_id,
+                event.data.get("kind"),
+            )
 
 
 __all__ = ["PromptResponse", "PromptsImpl"]

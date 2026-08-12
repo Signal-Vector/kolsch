@@ -1,4 +1,4 @@
-"""spec-131 Step 8 — end-to-end approval-notify verification.
+"""spec-131 Steps 8-9 — end-to-end approval-notify verification.
 
 The spec's headline use case: a hook configured on
 `kolsch.prompt.requested` should fire the moment an approval prompt is
@@ -15,69 +15,61 @@ Step 6 module docstring) with a real `InlineApprovalCallback` /
 `PromptsImpl` pair (the same wiring `ChatApp.on_mount` does), not a
 synthetic `Event` fed to `HookDispatcher.handle()` directly.
 
-**Finding (documented here, not swept under the rug):** this does NOT
-pass. `PromptsImpl._append_ui_event` — which is what actually emits the
+**Step 8 finding (historical — fixed by Step 9, kept here for
+context):** this did NOT pass as originally built.
+`PromptsImpl._append_ui_event` — which is what actually emits the
 durable `WIRE_PROMPT_REQUESTED` UI event `InlineApprovalCallback` /
 `PromptsImpl.choice()` produce — appends directly to
 `SessionStore.append_event` (see
-`src/cli/chat/services/prompts_impl.py:598-644`, and its own
-docstring: "writes WIRE_PROMPT_REQUESTED durably from the renderer
-package with no direct engine handle"). It does NOT go through
-`_Exchange._emit` (`src/engine/engine.py:3177`), which is the ONLY
+`src/cli/chat/services/prompts_impl.py`). It does NOT go through
+`_Exchange._emit` (`src/engine/engine.py`), which is the ONLY
 site that calls `queue.put_nowait(appended)` — the sole feed for the
 queue `AgentEngine.execute_stream` iterates and hands to the Step 5
-observer seam (`src/engine/engine.py:493`,
-`self._observer.observe(item)`, called only for items pulled off that
-same queue). Concretely: `TOOL_CALLED` IS emitted via `_emit` (so it
-DOES reach the observer/hook seam — confirmed by
+observer seam (`self._observer.observe(item)`, called only for items
+pulled off that same queue). Concretely: `TOOL_CALLED` IS emitted via
+`_emit` (so it DOES reach the observer/hook seam — confirmed by
 `test_bootstrap_hooks_wiring.py`'s `tool.failed`-matcher coverage
 elsewhere in this spec), but the approval prompt that authz's `prompt`
 effect raises INSIDE that tool's dispatch — before `TOOL_RESULT`/
 `TOOL_FAILED` — is authored by `PromptsImpl`, a completely different,
 engine-external emit path with no queue access at all.
 
-This was verified empirically with a throwaway script before writing
-this test (real `bootstrap_runtime`-built engine, real `ping` tool with
-an `effect: "prompt"` authz rule, real `InlineApprovalCallback` +
-`PromptsImpl` registered as the authz prompt callback, a spy
-`EventObserver`): `WIRE_PROMPT_REQUESTED` reliably lands in the
-DURABLE STORE (the approval flow itself works exactly as designed —
-the widget/adapter bridge that consumes it is a live-bus subscriber,
-not an `execute_stream` consumer) but is NEVER observed by the
-engine-level spy — i.e., it never reaches `execute_stream`'s yielded
-items at all. `HookDispatcher.handle()` (Step 4) and `match()`
-(Step 2) both work correctly on `kolsch.prompt.requested` in isolation
-(see `tests/platform_runtime/test_hooks.py`'s matcher-logic and
-dispatcher tests) — no defect there. The gap is structural: the single
-choke point Step 5 chose (`execute_stream`'s queue) simply never
-receives this specific event, for the same underlying reason
-`test_bootstrap_hooks_wiring.py`'s module docstring documents for
-`session.opened` (`SessionStore.create_session` writes directly to the
-store, bypassing the exchange entirely) — except `session.opened` was
-flagged explicitly as a known, accepted, out-of-scope gap, while
-`kolsch.prompt.requested` was the spec's literal headline example and
-was never verified end-to-end (every existing `kolsch.prompt.requested`
-test across Steps 1-7 — `tests/platform_runtime/test_hooks.py` — feeds
-a *fabricated* `Event` directly to `match()` / `HookDispatcher.handle()`
-by hand; none drives a real engine exchange with a real pending
-prompt).
+**Step 9 fix:** `PromptsImpl` now takes an optional `runtime:
+PlatformRuntime | None` constructor arg (the same `PlatformRuntime`
+`ChatApp.on_mount` already holds) and, immediately after each
+`SessionStore.append_event` call inside `_append_ui_event`, forwards
+the SAME `Event` to `runtime.hook_dispatcher.observe()` for both
+`WIRE_PROMPT_REQUESTED` and `WIRE_PROMPT_ANSWERED` — `PlatformRuntime`
+now carries `hook_dispatcher` as a first-class field (set in
+`bootstrap_runtime`, alongside the identical instance injected into
+`AgentEngine(observer=...)`), so CLI-layer code reaches it without
+touching the engine's private `_observer`. This is a second,
+independent dispatch path alongside Step 5's engine-level seam — NOT a
+change to `execute_stream` itself — deliberately scoped to the
+UI-event emitters that bypass the queue, per spec-131 Step 9's
+"Build" section. `test_hook_fires_before_prompt_is_answered` below is
+no longer `xfail`: it passes for real now, driven through the actual
+`PromptsImpl`/`InlineApprovalCallback` path.
 
-The tests below are written exactly as the spec describes the
-scenario (Implementation Step 8's "Tests" bullet + the file-level
-smoke-test YAML). `test_hook_fires_before_prompt_is_answered` is
-expected to (and does) FAIL given the current architecture — kept as
-an executable, precise regression/gap marker rather than only a prose
-claim, with `pytest.mark.xfail(strict=True)` so it flips to a loud
-failure (not a silent pass) the moment this gap is closed, which would
-mean this xfail marker needs to be deleted rather than the test being
-otherwise wrong. `test_hook_never_fires_for_pending_prompt_documents_gap`
-is the same scenario asserting the CURRENT (gap) behavior directly, so
-the suite has a non-xfail witness of what actually happens today, for
-CI/coverage purposes.
-
-This is a Step-8-verification-only finding (no production code is
-changed by this file) — see the final report for the Decision-needed
-framing handed back to the Coordinator.
+**Scope caveat on `.answered` — read before trusting "both kinds work":**
+Step 9 only wired the ONE code path that actually calls
+`PromptsImpl._append_ui_event`. `WIRE_PROMPT_REQUESTED` always goes
+through that path (fixed, verified below). `WIRE_PROMPT_ANSWERED`
+does NOT always go through it: the common, interactive case — a user
+answering a mounted `ApprovalBlock` widget in a real chat session — is
+appended by `EventAdapter._bridge_widget_resolution`, a widget-layer
+bridge that calls `SessionStore.append_event` directly and NEVER
+touches `PromptsImpl`/`_observe_hook_event` at all. That path is
+UNFIXED by Step 9 — it's the same "widget-layer prompt-answered echo"
+bypass Step 8's scoping pass already named as 1 of 5 known gaps,
+explicitly out of this step's scope. The ONLY `.answered` path Step 9
+actually fixes is the narrower one that genuinely runs through
+`PromptsImpl` itself: bug-114's `_emit_auto_deny` (a workflow
+approval-response-window auto-deny). `test_hook_fires_for_prompt_answered_too`
+below exercises exactly that narrow path — it is NOT evidence that a
+hook fires when a human interactively answers a prompt in `kolsch
+chat`. Don't read "both kinds" above as "fully fixed for every real
+answered scenario."
 """
 
 from __future__ import annotations
@@ -88,7 +80,6 @@ import uuid
 from typing import TYPE_CHECKING, Any
 from uuid import uuid4
 
-import pytest
 import yaml
 from pydantic import BaseModel
 
@@ -111,6 +102,8 @@ from tools import ToolContext, tool
 
 if TYPE_CHECKING:
     from pathlib import Path
+
+    from tools.services.prompts import PromptSource
 
 
 class _PingArgs(BaseModel):
@@ -253,6 +246,11 @@ async def _drive_exchange_with_pending_approval(
         session_id=session.session_id,
         thread_id=thread_id,
         bus=runtime.bus,
+        # spec-131 Step 9: this is the wiring `ChatApp.on_mount` does
+        # (`runtime=self.session.runtime`) that closes the Step 8 gap —
+        # without it, `_append_ui_event` has no dispatcher to observe
+        # through and the hook never fires for a real pending prompt.
+        runtime=runtime,
     )
     callback = InlineApprovalCallback(_MockApp(), prompts)
     runtime.authz.register_prompt_callback(callback)
@@ -311,28 +309,21 @@ async def _collect_stream(runtime: Any, ctx: ExecutionContext) -> list[Any]:
 # ---------------------------------------------------------------------------
 
 
-@pytest.mark.xfail(
-    strict=True,
-    reason=(
-        "spec-131 Step 8 finding: PromptsImpl._append_ui_event appends "
-        "WIRE_PROMPT_REQUESTED directly to the store, bypassing "
-        "_Exchange._emit — the only site that feeds execute_stream's "
-        "queue. The Step-5 observer seam therefore never sees "
-        "kolsch.prompt.requested, so a hook configured on it cannot "
-        "fire before (or ever, via this path) the prompt is answered. "
-        "See this module's docstring for the full empirical trace. "
-        "Delete this xfail (and update the docstring) if this is ever "
-        "fixed — the assertions below encode the spec's literal "
-        "acceptance criterion."
-    ),
-)
 async def test_hook_fires_before_prompt_is_answered(tmp_path: Path) -> None:
     """The spec's headline use case: a `kolsch.prompt.requested` hook
     fires BEFORE the user answers the prompt.
 
-    Currently fails: the sentinel file never appears at all (the hook
-    never fires), so `existed_before_answer` is `False` — see the
-    module docstring for why.
+    spec-131 Step 8 found this failed (the sentinel file never
+    appeared) because `PromptsImpl._append_ui_event` bypasses
+    `execute_stream`'s observer seam entirely — see the module
+    docstring. Step 9 closed the gap by giving `PromptsImpl` a direct
+    reference to the same `HookDispatcher` (via `runtime.
+    hook_dispatcher`) and calling `.observe()` right after the store
+    append. This test was `xfail(strict=True)` under Step 8; Step 9
+    un-xfails it — it must now pass for real, not be skipped or
+    xpass. If this ever regresses, this test fails loudly instead of
+    silently — do not re-add an xfail marker without first
+    understanding why the fix stopped working.
     """
     marker = tmp_path / f"kolsch-approval-hook-{uuid.uuid4().hex}"
     assert not marker.exists()
@@ -347,24 +338,99 @@ async def test_hook_fires_before_prompt_is_answered(tmp_path: Path) -> None:
     )
 
 
-async def test_hook_never_fires_for_pending_prompt_documents_gap(
-    tmp_path: Path,
-) -> None:
-    """Non-xfail witness of the CURRENT behavior (kept green): the
-    sentinel file never appears, neither before nor after the prompt
-    is answered, because `kolsch.prompt.requested` never reaches the
-    observer seam at all through a real approval flow. This is the
-    load-bearing regression marker for CI — flips to a real failure
-    (not silently skipped) if some other change accidentally makes the
-    hook fire, which would be a signal to reconcile this file's
-    documented finding, not a bug in this test.
-    """
-    marker = tmp_path / f"kolsch-approval-hook-gap-{uuid.uuid4().hex}"
-    assert not marker.exists()
+async def test_hook_fires_for_prompt_answered_too(tmp_path: Path) -> None:
+    """`kolsch.prompt.answered` reaches the hook dispatcher — ONLY via
+    the narrow `PromptsImpl`-internal path (bug-114 auto-deny), NOT via
+    the common interactive-widget-answer path. See this module's
+    docstring "Scope caveat on `.answered`" section before assuming
+    this covers every real-world `.answered` scenario — it doesn't.
 
-    existed_before_answer, existed_after = await _drive_exchange_with_pending_approval(
-        tmp_path, marker
+    Step 9's fix wires whatever DOES go through `_observe_hook_event`
+    for both `WIRE_PROMPT_REQUESTED` and `WIRE_PROMPT_ANSWERED` — this
+    test is the `.answered` counterpart to
+    `test_hook_fires_before_prompt_is_answered`, replacing the old
+    Step-8 `test_hook_never_fires_for_pending_prompt_documents_gap`
+    (which documented that NEITHER kind ever fired via `PromptsImpl`;
+    that specific gap — the `PromptsImpl`-internal one — is now closed
+    for both, so the old test no longer describes real behavior and
+    was removed rather than kept green by accident). The SEPARATE,
+    still-open gap — `EventAdapter._bridge_widget_resolution`'s direct
+    store-append for interactively-answered prompts, which never calls
+    `PromptsImpl` at all — is untouched by Step 9 and is NOT what this
+    test exercises or proves.
+
+    Production `WIRE_PROMPT_ANSWERED` is normally appended by
+    `EventAdapter._bridge_widget_resolution` — a widget-layer bridge
+    that needs a mounted `ApprovalBlock` and is out of scope for this
+    engine-less test file (see `test_approval_e2e.py` for that
+    machinery). The ONE real, non-fabricated `PromptsImpl`-internal
+    code path that appends `WIRE_PROMPT_ANSWERED` itself is bug-114's
+    `_emit_auto_deny` (the workflow approval-response-window auto-deny
+    bridge) — driven here through the real `choice()` public API with
+    `approval_response_seconds` configured and a `workflow`-kind
+    `source`, exactly as bug-114 exercises it in production. This is
+    still "driven through the actual PromptsImpl path, not a
+    fabricated Event fed to match() directly," per spec-131 Step 9's
+    test requirement — it just uses the real internal path that emits
+    `.answered`, rather than requiring the full widget/adapter stack.
+    """
+    marker = tmp_path / f"kolsch-approval-hook-answered-{uuid.uuid4().hex}"
+    root = tmp_path
+
+    payload_hooks = default_platform_payload()
+    payload_hooks["hooks"] = [
+        {
+            "event": "kolsch.prompt.answered",
+            "matcher": "*",
+            "command": f"touch {marker}",
+            "timeout_seconds": 10,
+        }
+    ]
+    (root / "platform.yaml").write_text(yaml.safe_dump(payload_hooks), encoding="utf-8")
+
+    runtime = await bootstrap_runtime(root=root, llm=_llm_callable(MockLLM(script=[])))
+    observer = runtime.hook_dispatcher
+    assert isinstance(observer, HookDispatcher)
+    assert observer is runtime.engine._observer, (
+        "runtime.hook_dispatcher must be the SAME instance injected "
+        "into the engine (spec-131 Step 9's whole point) — a "
+        "coincidentally-equal but distinct instance would defeat it"
     )
 
-    assert existed_before_answer is False
-    assert existed_after is False
+    session = await runtime.store.create_session("ag_test", name="answered-hook")
+    threads = await runtime.store.list_threads(session.session_id)
+    thread_id = threads[0].thread_id
+
+    prompts = PromptsImpl(
+        session_store=runtime.store,
+        session_id=session.session_id,
+        thread_id=thread_id,
+        bus=runtime.bus,
+        runtime=runtime,
+        # bug-114: a positive window + a workflow-kind source below is
+        # what makes `choice()` race an internal timer and, on
+        # expiry, call `_emit_auto_deny` → `_append_ui_event(
+        # WIRE_PROMPT_ANSWERED, ...)` — a real production code path,
+        # not a test-only shortcut.
+        approval_response_seconds=0.2,
+    )
+    source: PromptSource = {"kind": "workflow", "id": "run_test"}
+
+    assert not marker.exists()
+    response = await asyncio.wait_for(
+        prompts.choice("Approve?", ["y", "n"], source=source),
+        timeout=10.0,
+    )
+    assert response == "n"  # bug-114 auto-deny
+
+    deadline = time.monotonic() + 5
+    while time.monotonic() < deadline:
+        if marker.exists():
+            break
+        await asyncio.sleep(0.05)
+
+    assert marker.exists(), (
+        "expected the kolsch.prompt.answered hook's sentinel file to "
+        "exist after the approval-window auto-deny appended "
+        "WIRE_PROMPT_ANSWERED"
+    )
