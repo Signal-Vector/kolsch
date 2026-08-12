@@ -354,6 +354,43 @@ async def _handler_new(arg_text: str, ctx: SlashContext) -> ControlSignal:
     return ControlSignal.NEW_SESSION
 
 
+def _apply_model(ctx: SlashContext, spec_or_ref: str) -> ModelSpec:
+    """Validate + apply a model ref to `ctx.state`, in place.
+
+    Extracted (spec-132 Step 1) from `_handler_model`'s argument-form
+    branch so a future picker-selection handler can apply a chosen
+    model through the exact same path — one function, not two
+    implementations of "apply a model."
+
+    `spec_or_ref` is the free-form ref text a slash-command argument
+    carries: a compact `provider/model` string or an alias label (the
+    shapes `_normalize_model_value` accepts). Validates via
+    `assets.assembler._normalize_model_value`, constructs the
+    `ModelSpec`, and swaps both `ChatSessionState.model_override` and
+    `ChatSessionState.config.model` for this session only. Returns the
+    new `ModelSpec` on success.
+
+    Raises whatever `_normalize_model_value` / `ModelSpec(**...)`
+    raise on an invalid ref (e.g. `ConfigInvalid`, `ConfigUnknownAlias`,
+    `ValidationError`, `TypeError`) — unchanged from the pre-extraction
+    inline code. Callers catch broadly and turn the exception into a
+    friendly one-line message; this function does not print anything
+    itself.
+    """
+    from assets.assembler import _normalize_model_value  # noqa: PLC0415
+    from schemas import ModelSpec  # noqa: PLC0415
+
+    assert ctx.state is not None  # guarded by every current caller
+    normalized = _normalize_model_value(spec_or_ref, ctx.state.model_aliases)
+    if not isinstance(normalized, dict):
+        msg = f"unexpected normalization shape: {type(normalized).__name__}"
+        raise TypeError(msg)
+    new_spec = ModelSpec(**normalized)
+    ctx.state.model_override = new_spec
+    ctx.state.config = ctx.state.config.model_copy(update={"model": new_spec})
+    return new_spec
+
+
 async def _handler_model(arg_text: str, ctx: SlashContext) -> ControlSignal:
     """`/model [<ref>]` — show or switch the current model.
 
@@ -361,18 +398,15 @@ async def _handler_model(arg_text: str, ctx: SlashContext) -> ControlSignal:
     slash command), compact string (`opencode/gpt-oss-120b`), and
     alias (`opus` → `platform.yaml` `model_aliases.opus`).
 
-    Without arg: prints the active model. With arg: validates
-    via `assets.assembler._normalize_model_value`, swaps
-    `state.config.model` for this session only, and prints a
+    Without arg: prints the active model. With arg: validates and
+    applies via the shared `_apply_model` helper, which swaps
+    `state.config.model` for this session only, then prints a
     confirmation. Invalid refs print an error and the chat stays
     in the session. A `model.overridden` event is not appended
     here — the engine is the sole writer of the log; the override
     lives in memory and the next turn's `model.request` reflects
     it.
     """
-    from assets.assembler import _normalize_model_value  # noqa: PLC0415
-    from schemas import ModelSpec  # noqa: PLC0415
-
     if ctx.state is None:
         ctx.stdout.write("/model requires a chat runtime; not available here.\n")
         return ControlSignal.CONTINUE
@@ -382,16 +416,10 @@ async def _handler_model(arg_text: str, ctx: SlashContext) -> ControlSignal:
         ctx.stdout.write(f"current model: {current.provider}/{current.model}\n")
         return ControlSignal.CONTINUE
     try:
-        normalized = _normalize_model_value(arg, ctx.state.model_aliases)
-        if not isinstance(normalized, dict):
-            msg = f"unexpected normalization shape: {type(normalized).__name__}"
-            raise TypeError(msg)  # noqa: TRY301
-        new_spec = ModelSpec(**normalized)
+        new_spec = _apply_model(ctx, arg)
     except Exception as exc:  # noqa: BLE001 — surface every validation flavour
         ctx.stdout.write(f"/model: invalid model ref {arg!r}: {exc}\n")
         return ControlSignal.CONTINUE
-    ctx.state.model_override = new_spec
-    ctx.state.config = ctx.state.config.model_copy(update={"model": new_spec})
     ctx.stdout.write(f"model set to {new_spec.provider}/{new_spec.model}\n")
     return ControlSignal.CONTINUE
 
