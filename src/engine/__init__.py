@@ -24,6 +24,7 @@ from engine.context import (
     ExecutionContext,
 )
 from engine.engine import ENGINE_VERSION, AgentEngine
+from engine.event_observer import EventObserver
 from engine.mock_framework import MinimalFramework
 
 # CrewAIFramework imports CrewAI; only available when the test
@@ -56,6 +57,7 @@ __all__ = [
     "ClaudeCodeHarness",
     "CrewAIFramework",
     "EngineCapabilities",
+    "EventObserver",
     "ExecutionContext",
     "Framework",
     "LLMDriver",
