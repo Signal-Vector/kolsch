@@ -560,6 +560,15 @@ convention = "google"
 # only runs after a successful compile). Same type-narrowing pattern
 # as above; not a security-sensitive assertion.
 "src/providers/authz.py" = ["S101"]
+# `src/cli/_model_catalog.py` — same `ctx.state is not None` caller-guarded
+# type-narrowing idiom as `_slash.py` above (spec-132).
+"src/cli/_model_catalog.py" = ["S101"]
+# `src/cli/chat/widgets/model_picker.py` — `assert option_id is not None`
+# type-narrows an `OptionList.Option.id` that this module always sets
+# (`_build_options` gives every `Option` an `id=str(index)`); same
+# caller-guarded invariant pattern as `_slash.py`/`_model_catalog.py`
+# above (spec-132 Step 4).
+"src/cli/chat/widgets/model_picker.py" = ["S101"]
 # `src/templating/**` — the Jinja environments render LLM prompts,
 # not HTML. Enabling autoescape would break prompt syntax (e.g. a
 # literal `<system>` becomes `&lt;system&gt;`), so `autoescape=False`

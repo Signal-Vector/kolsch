@@ -354,44 +354,169 @@ async def _handler_new(arg_text: str, ctx: SlashContext) -> ControlSignal:
     return ControlSignal.NEW_SESSION
 
 
+def _apply_model(ctx: SlashContext, spec_or_ref: ModelSpec | str) -> ModelSpec:
+    """Validate + apply a model ref to `ctx.state`, in place.
+
+    Extracted (spec-132 Step 1) from `_handler_model`'s argument-form
+    branch so a future picker-selection handler can apply a chosen
+    model through the exact same path — one function, not two
+    implementations of "apply a model."
+
+    `spec_or_ref` accepts two shapes:
+
+    - A `str`: the free-form ref text a slash-command argument
+      carries — a compact `provider/model` string or an alias label
+      (the shapes `_normalize_model_value` accepts). Validated via
+      `assets.assembler._normalize_model_value`, then wrapped in a
+      `ModelSpec`.
+    - A `ModelSpec`: already-validated/typed input (spec-132 Step 4's
+      picker selection — `ModelPickerScreen`'s chosen `ModelChoice` is
+      turned into a `ModelSpec` by the caller before reaching here).
+      `_normalize_model_value` only special-cases `str`/`dict`
+      shapes — any other object (a `ModelSpec` included) passes
+      through it unchanged, so a `ModelSpec` is applied directly with
+      no string round-trip and no re-validation (it's already a valid
+      `ModelSpec` instance by construction).
+
+    Swaps both `ChatSessionState.model_override` and
+    `ChatSessionState.config.model` for this session only. Returns the
+    new `ModelSpec` on success.
+
+    Raises whatever `_normalize_model_value` / `ModelSpec(**...)`
+    raise on an invalid `str` ref (e.g. `ConfigInvalid`,
+    `ConfigUnknownAlias`, `ValidationError`, `TypeError`) — unchanged
+    from the pre-extraction inline code. Callers catch broadly and
+    turn the exception into a friendly one-line message; this function
+    does not print anything itself.
+    """
+    from schemas import ModelSpec  # noqa: PLC0415
+
+    assert ctx.state is not None  # guarded by every current caller
+    if isinstance(spec_or_ref, ModelSpec):
+        new_spec = spec_or_ref
+    else:
+        from assets.assembler import _normalize_model_value  # noqa: PLC0415
+
+        normalized = _normalize_model_value(spec_or_ref, ctx.state.model_aliases)
+        if not isinstance(normalized, dict):
+            msg = f"unexpected normalization shape: {type(normalized).__name__}"
+            raise TypeError(msg)
+        new_spec = ModelSpec(**normalized)
+    ctx.state.model_override = new_spec
+    ctx.state.config = ctx.state.config.model_copy(update={"model": new_spec})
+    return new_spec
+
+
+async def _open_model_picker_from_slash(ctx: SlashContext) -> None:
+    """Resolve the running app, assemble the catalog, and drive the picker.
+
+    Extracted from `_handler_model`'s no-arg branch so the try/except
+    around it can distinguish `LookupError` (no running app — see its
+    call site) from every other failure flavour, without the
+    resolve-app / assemble-catalog / open-picker sequence itself
+    ballooning that `except` block.
+
+    Step 6: shows `ModelPickerLoadingScreen` while `assemble_catalog()`
+    (the failure-surfacing wrapper around `assemble_model_choices()`)
+    is in flight, so a slow or failing provider never leaves the UI
+    looking frozen — see `model_picker.py`'s module docstring, "Step 6
+    — loading-state UX", for why block-with-spinner was chosen over
+    progressive-fill. The loading screen is popped before the real,
+    fully-populated `ModelPickerScreen` is pushed via
+    `open_model_picker`, which also receives any collected
+    `ProviderFailure`s so a total-failure catalog isn't a silent empty
+    picker (Step 5 review carry-forward #1).
+    """
+    from textual._context import active_app  # noqa: PLC0415
+
+    from cli._model_catalog import ModelChoice, assemble_catalog  # noqa: PLC0415
+    from cli.chat.widgets.model_picker import (  # noqa: PLC0415
+        ModelPickerLoadingScreen,
+        open_model_picker,
+    )
+    from llm.protocol import ModelEntry  # noqa: PLC0415
+
+    assert ctx.state is not None  # guarded by the caller
+
+    app = active_app.get()
+    await app.push_screen(ModelPickerLoadingScreen())
+    try:
+        choices, failures = await assemble_catalog(ctx)
+    finally:
+        await app.pop_screen()
+
+    current_spec = ctx.state.config.model
+    current = ModelChoice(
+        provider=current_spec.provider,
+        entry=ModelEntry(id=current_spec.model),
+    )
+    await open_model_picker(ctx, app, choices, current=current, failures=failures)
+
+
 async def _handler_model(arg_text: str, ctx: SlashContext) -> ControlSignal:
-    """`/model [<ref>]` — show or switch the current model.
+    """`/model [<ref>]` — open the model picker, or switch directly.
 
     Accepts the three ModelSpec input shapes: object (rare from a
     slash command), compact string (`opencode/gpt-oss-120b`), and
     alias (`opus` → `platform.yaml` `model_aliases.opus`).
 
-    Without arg: prints the active model. With arg: validates
-    via `assets.assembler._normalize_model_value`, swaps
-    `state.config.model` for this session only, and prints a
-    confirmation. Invalid refs print an error and the chat stays
-    in the session. A `model.overridden` event is not appended
-    here — the engine is the sole writer of the log; the override
-    lives in memory and the next turn's `model.request` reflects
-    it.
-    """
-    from assets.assembler import _normalize_model_value  # noqa: PLC0415
-    from schemas import ModelSpec  # noqa: PLC0415
+    Without arg (spec-132 Step 5, loading UX + failure surfacing added
+    Step 6): opens `ModelPickerScreen` populated by
+    `assemble_catalog()` — the session's actually-configured providers
+    (`ctx.state.runtime.llm_providers_config`), not a hardcoded list —
+    via `_open_model_picker_from_slash`, which also shows a loading
+    spinner while assembly is in flight and forwards any per-provider
+    failures for inline display. The active model is derived from
+    `ctx.state.config.model` and marked in the opened list via
+    `ModelPickerScreen`'s `(provider, entry.id)` matching (see
+    `_matches_current`'s docstring — only `provider`/`entry.id` need
+    to be populated on the `current` marker, which is all a bare
+    `ModelSpec` can supply). Selecting a row applies it through
+    `open_model_picker`, which calls the exact same `_apply_model`
+    helper the argument form below uses; Escape leaves state
+    untouched. Zero configured providers short-circuits to a plain
+    message instead of opening a picker with nothing to show — this is
+    the pre-existing, distinct-from-Step-6 short-circuit for "nothing
+    is even configured," resolved before `_open_model_picker_from_slash`
+    is ever called.
 
+    With arg: validates and applies via the shared `_apply_model`
+    helper, which swaps `state.config.model` for this session only,
+    then prints a confirmation. Invalid refs print an error and the
+    chat stays in the session. A `model.overridden` event is not
+    appended here — the engine is the sole writer of the log; the
+    override lives in memory and the next turn's `model.request`
+    reflects it.
+    """
     if ctx.state is None:
         ctx.stdout.write("/model requires a chat runtime; not available here.\n")
         return ControlSignal.CONTINUE
     arg = arg_text.strip()
     if not arg:
-        current = ctx.state.config.model
-        ctx.stdout.write(f"current model: {current.provider}/{current.model}\n")
+        if not ctx.state.runtime.llm_providers_config:
+            ctx.stdout.write("/model: no providers configured; nothing to pick from.\n")
+            return ControlSignal.CONTINUE
+        try:
+            await _open_model_picker_from_slash(ctx)
+        except LookupError:
+            # `textual._context.active_app.get()` raises this when
+            # there's no running Textual App in context — not
+            # reachable on any current production/test path (there is
+            # always a live ChatApp by the time a slash command
+            # dispatches), but a future non-interactive `/model`
+            # caller could hit it. Caught ahead of the broad
+            # `except Exception` below so this prints a clear message
+            # instead of the raw `ContextVar` object repr the generic
+            # handler would otherwise surface.
+            ctx.stdout.write("/model: requires a running chat session\n")
+        except Exception as exc:  # noqa: BLE001 — surface every other failure flavour
+            ctx.stdout.write(f"/model: could not open picker: {exc}\n")
         return ControlSignal.CONTINUE
     try:
-        normalized = _normalize_model_value(arg, ctx.state.model_aliases)
-        if not isinstance(normalized, dict):
-            msg = f"unexpected normalization shape: {type(normalized).__name__}"
-            raise TypeError(msg)  # noqa: TRY301
-        new_spec = ModelSpec(**normalized)
+        new_spec = _apply_model(ctx, arg)
     except Exception as exc:  # noqa: BLE001 — surface every validation flavour
         ctx.stdout.write(f"/model: invalid model ref {arg!r}: {exc}\n")
         return ControlSignal.CONTINUE
-    ctx.state.model_override = new_spec
-    ctx.state.config = ctx.state.config.model_copy(update={"model": new_spec})
     ctx.stdout.write(f"model set to {new_spec.provider}/{new_spec.model}\n")
     return ControlSignal.CONTINUE
 
