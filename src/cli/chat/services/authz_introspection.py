@@ -697,6 +697,32 @@ async def handle_reload(runtime: PlatformRuntime) -> ReloadResult:
     since last reload] — new decisions use the updated config.`` ``N``
     is the true total across every layer. The diff clause only appears
     when the rescan surfaced additions or deletions.
+
+    **spec-131 Step 7 — hooks config is deliberately NOT one of the four
+    layers this function reloads.** ``platform.yaml`` isn't read-once in
+    general — this function re-reads it via its own ``load_or_create``
+    call below and rebuilds the authorization/bundle/workflow/agent
+    layers from that fresh read every time ``/reload`` runs. Hook rules
+    are the one section that IS read-once, at process start
+    (``bootstrap_runtime`` → ``AssetManagement.hooks_config()``, see
+    that method's docstring), and this function never re-reads or
+    re-derives them: the ``payload`` parsed here is used only for its
+    ``authorization`` key, and nothing below ever touches
+    ``runtime.engine._observer`` (the live ``HookDispatcher``) or calls
+    ``hooks_config()`` again. That is a deliberate trust-boundary
+    control (spec-131 Rev. 2), not an oversight — see
+    ``test_reload_does_not_change_hook_dispatcher_rules`` in
+    ``tests/platform_runtime/test_hooks_reload_isolation.py`` for the
+    locking-in test. It narrows, but does not eliminate, the residual
+    risk that a model-driven ``write_file`` (allow-by-default in
+    kolsch's starter ACL) could append a ``hooks:`` entry to
+    ``platform.yaml`` on disk: with this guarantee, that edit only takes
+    effect on the *next full process restart*, never on the next
+    ``/reload`` and never immediately. If a future change to this
+    function ever needs to reload hooks too, that decision must be made
+    deliberately (and re-litigate the trust-boundary tradeoff above),
+    not fall out accidentally from generalizing this function's rescan
+    loop.
     """
     from assets import catalog as catalog_module  # noqa: PLC0415
     from assets.platform_config import (  # noqa: PLC0415
@@ -739,6 +765,12 @@ async def handle_reload(runtime: PlatformRuntime) -> ReloadResult:
                 "Old rules still active; no change to enforcement."
             ),
         )
+
+    # spec-131 Step 7: `payload` above is used ONLY for `authorization`.
+    # Deliberately not reading `payload.get("hooks")` here or anywhere
+    # else in this function — see this function's docstring ("spec-131
+    # Step 7" section) for why hooks config stays read-once at process
+    # start rather than joining this function's rescan.
 
     # --- qol-051 C1: filesystem rescan ---------------------------------
     #
