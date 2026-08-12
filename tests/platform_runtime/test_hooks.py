@@ -1,30 +1,47 @@
-"""Tests for `platform_runtime.hooks.match` — spec-131 Step 2.
+"""Tests for `platform_runtime.hooks` — spec-131 Steps 2 and 3.
 
 `tests/platform_runtime/` is a new test directory (did not exist before
-this step) mirroring the new `src/platform_runtime/hooks.py` module.
+Step 2) mirroring the new `src/platform_runtime/hooks.py` module.
 
-Covers, per spec-131's Step 2 spec: one case per documented event type
-(the six-row Matching table in the spec's Scope section), a `"*"`
-wildcard case, and non-matching cases (wrong event type, wrong
-subject). Every case runs `match(rule, event)` directly — no
-subprocess, no dispatcher, no engine involved (that's Steps 3-6).
+Matcher coverage (`-k matcher`), per spec-131's Step 2 spec: one case
+per documented event type (the six-row Matching table in the spec's
+Scope section), a `"*"` wildcard case, and non-matching cases (wrong
+event type, wrong subject). Every case runs `match(rule, event)`
+directly — no subprocess, no dispatcher, no engine involved.
 
 Fabricated `Event`/`*Data` objects use the real schemas
 (`schemas.events.Event`, `schemas.entities.Actor`,
 `schemas.identifiers.*`) — not an invented fake shape.
+
+Runner coverage (`-k runner`), per spec-131's Step 3 spec: real
+subprocess execution (not mocked — that's the point of these tests)
+against `run_hook_command`, covering success, timeout-kills-the-process,
+and command-not-found, verifying the "never raises" contract and the
+SIGINT-grace-then-SIGKILL escalation actually terminates the process
+(not just that the awaiting call returns). No matcher, dispatcher, or
+engine code is involved here either — `run_hook_command` is called
+directly with a literal `command`/`timeout_seconds`.
 """
 
 from __future__ import annotations
 
+import asyncio
+import os
+import time
+import uuid
 from datetime import UTC, datetime
+from typing import TYPE_CHECKING
 
 import pytest
 
-from platform_runtime.hooks import match
+from platform_runtime.hooks import match, run_hook_command
 from schemas.config import HookRule
 from schemas.entities import Actor
 from schemas.events import Event, EventType
 from schemas.identifiers import EventId, SessionId, ThreadId
+
+if TYPE_CHECKING:
+    from pathlib import Path
 
 _SESSION_ID = SessionId("ses_11111111-1111-1111-1111-111111111111")
 _THREAD_ID = ThreadId("th_22222222-2222-2222-2222-222222222222")
@@ -353,3 +370,120 @@ def test_matcher_glob_prefix_matches_tool_name() -> None:
     )
     rule = _rule("tool.failed", matcher="kolsch/*")
     assert match(rule, event) is True
+
+
+# ---------------------------------------------------------------------------
+# Runner tests (Step 3) — `-k runner`
+#
+# Real subprocess execution throughout (not mocked): this is exactly the
+# behavior spec-131 Step 3 needs verified — shell invocation, timeout/kill
+# escalation, and the "never raises" contract are all subprocess-level
+# concerns that a mock would beg the question on.
+# ---------------------------------------------------------------------------
+
+
+def _pid_alive(pid: int) -> bool:
+    """Return whether a POSIX process id is still alive.
+
+    `os.kill(pid, 0)` sends no signal — it only performs the
+    existence/permission check the kernel does before delivering a
+    real signal, so this is a safe, side-effect-free liveness probe.
+    `ProcessLookupError` means the pid is gone; any other outcome
+    (success, or `PermissionError` for a pid we don't own — not
+    expected here since we spawned it) means it's still around.
+    """
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    else:
+        return True
+
+
+async def test_runner_success_runs_command(tmp_path: Path) -> None:
+    """A working command actually executes — file appears after the call."""
+    marker = tmp_path / f"kolsch-hook-test-{uuid.uuid4().hex}"
+    assert not marker.exists()
+    try:
+        await run_hook_command(f"touch {marker}", timeout_seconds=5)
+        assert marker.exists()
+    finally:
+        marker.unlink(missing_ok=True)
+
+
+async def test_runner_timeout_kills_process_and_returns_promptly(
+    tmp_path: Path,
+) -> None:
+    """A hanging command is killed within the grace+kill budget, not awaited to completion.
+
+    Verifies two things `-k runner`'s spec explicitly calls out:
+    1. `run_hook_command` returns within a couple of seconds for a
+       1s timeout — not anywhere close to the full duration of the
+       hanging command (`sleep 100`) — proving it doesn't block the
+       caller.
+    2. The underlying OS process is actually terminated (not just
+       that the awaiting call returned) — verified by having the
+       shell write its own PID to a file, then probing that PID with
+       `os.kill(pid, 0)` after the call returns and asserting it's
+       gone.
+    """
+    pid_file = tmp_path / f"kolsch-hook-pid-{uuid.uuid4().hex}"
+    # `$$` in `sh -c` is the shell's own pid; `exec sleep 100` replaces
+    # the shell process image with `sleep` (same pid) so the pid we
+    # capture is the one that actually needs to die, not a parent
+    # shell that would otherwise be left orphaned by a plain `kill()`
+    # of a *different* pid than the one doing the sleeping.
+    command = f"echo $$ > {pid_file}; exec sleep 100"
+
+    started = time.monotonic()
+    await run_hook_command(command, timeout_seconds=1)
+    elapsed = time.monotonic() - started
+
+    # Grace window is 0.5s on top of the 1s timeout; a few seconds of
+    # slack comfortably distinguishes "killed promptly" from
+    # "accidentally waited for the full 100s sleep."
+    assert elapsed < 10, (
+        f"run_hook_command took {elapsed:.1f}s — expected well under 10s"
+    )
+
+    assert pid_file.exists(), "hook command never started"
+    pid = int(pid_file.read_text().strip())
+    still_alive = await _wait_until_dead(pid, timeout_seconds=5)
+    assert not still_alive, f"pid {pid} is still alive after timeout+kill"
+
+
+async def _wait_until_dead(pid: int, *, timeout_seconds: float) -> bool:
+    """Poll `pid` until it exits or `timeout_seconds` elapses.
+
+    SIGKILL delivery/reaping can lag `run_hook_command`'s return by a
+    beat under load, so this gives the OS a short, bounded grace
+    window rather than asserting liveness immediately.
+
+    Returns whether `pid` is still alive when the wait ends (`True` =
+    still alive / timed out, `False` = confirmed dead).
+    """
+    deadline = time.monotonic() + timeout_seconds
+    while time.monotonic() < deadline:
+        if not _pid_alive(pid):
+            return False
+        await asyncio.sleep(0.1)
+    return _pid_alive(pid)
+
+
+async def test_runner_nonexistent_command_does_not_raise() -> None:
+    """A genuinely bad command is caught internally — no exception propagates.
+
+    A command name that will not exist on PATH; the shell reports
+    "command not found" and exits non-zero — `run_hook_command` must
+    swallow this (log it) rather than let it surface. Simply
+    completing this `await` without raising is the assertion.
+    """
+    unique = uuid.uuid4().hex
+    await run_hook_command(
+        f"kolsch-hook-test-nonexistent-command-{unique}", timeout_seconds=5
+    )
+
+
+async def test_runner_success_does_not_raise() -> None:
+    """A trivially successful command also completes without raising."""
+    await run_hook_command("true", timeout_seconds=5)
