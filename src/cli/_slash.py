@@ -408,28 +408,62 @@ def _apply_model(ctx: SlashContext, spec_or_ref: ModelSpec | str) -> ModelSpec:
 
 
 async def _handler_model(arg_text: str, ctx: SlashContext) -> ControlSignal:
-    """`/model [<ref>]` — show or switch the current model.
+    """`/model [<ref>]` — open the model picker, or switch directly.
 
     Accepts the three ModelSpec input shapes: object (rare from a
     slash command), compact string (`opencode/gpt-oss-120b`), and
     alias (`opus` → `platform.yaml` `model_aliases.opus`).
 
-    Without arg: prints the active model. With arg: validates and
-    applies via the shared `_apply_model` helper, which swaps
-    `state.config.model` for this session only, then prints a
-    confirmation. Invalid refs print an error and the chat stays
-    in the session. A `model.overridden` event is not appended
-    here — the engine is the sole writer of the log; the override
-    lives in memory and the next turn's `model.request` reflects
-    it.
+    Without arg (spec-132 Step 5): opens `ModelPickerScreen` populated
+    by `assemble_model_choices()` — the session's actually-configured
+    providers (`ctx.state.runtime.llm_providers_config`), not a
+    hardcoded list. The active model is derived from
+    `ctx.state.config.model` and marked in the opened list via
+    `ModelPickerScreen`'s `(provider, entry.id)` matching (see
+    `_matches_current`'s docstring — only `provider`/`entry.id` need
+    to be populated on the `current` marker, which is all a bare
+    `ModelSpec` can supply). Selecting a row applies it through
+    `open_model_picker`, which calls the exact same `_apply_model`
+    helper the argument form below uses; Escape leaves state
+    untouched. Zero configured providers short-circuits to a plain
+    message instead of opening a picker with nothing to show.
+
+    With arg: validates and applies via the shared `_apply_model`
+    helper, which swaps `state.config.model` for this session only,
+    then prints a confirmation. Invalid refs print an error and the
+    chat stays in the session. A `model.overridden` event is not
+    appended here — the engine is the sole writer of the log; the
+    override lives in memory and the next turn's `model.request`
+    reflects it.
     """
     if ctx.state is None:
         ctx.stdout.write("/model requires a chat runtime; not available here.\n")
         return ControlSignal.CONTINUE
     arg = arg_text.strip()
     if not arg:
-        current = ctx.state.config.model
-        ctx.stdout.write(f"current model: {current.provider}/{current.model}\n")
+        if not ctx.state.runtime.llm_providers_config:
+            ctx.stdout.write("/model: no providers configured; nothing to pick from.\n")
+            return ControlSignal.CONTINUE
+        try:
+            from textual._context import active_app  # noqa: PLC0415
+
+            from cli._model_catalog import (  # noqa: PLC0415
+                ModelChoice,
+                assemble_model_choices,
+            )
+            from cli.chat.widgets.model_picker import open_model_picker  # noqa: PLC0415
+            from llm.protocol import ModelEntry  # noqa: PLC0415
+
+            app = active_app.get()
+            choices = await assemble_model_choices(ctx)
+            current_spec = ctx.state.config.model
+            current = ModelChoice(
+                provider=current_spec.provider,
+                entry=ModelEntry(id=current_spec.model),
+            )
+            await open_model_picker(ctx, app, choices, current=current)
+        except Exception as exc:  # noqa: BLE001 — surface every failure flavour
+            ctx.stdout.write(f"/model: could not open picker: {exc}\n")
         return ControlSignal.CONTINUE
     try:
         new_spec = _apply_model(ctx, arg)
