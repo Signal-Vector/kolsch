@@ -132,6 +132,38 @@ class _StubTranscriptApp(App[None]):
         _ = failed, recovery_hint, event_id
         self.mounted_tool_calls.append((tool_name, args, body))
 
+    async def mount_tool_call_running(
+        self,
+        tool_name: str,
+        args: str,
+    ) -> None:
+        """Record a running-block mount the SAME way `mount_tool_call` does.
+
+        spec-130 Step 5: `_handle_tool_called` calls this directly for
+        non-card-mounting tools only — AC #1's fixture is a
+        `run_workflow` call (card-mounting), so the correctly-behaving
+        adapter takes the OTHER branch (`clear_working_placeholder`
+        below), never this one. This must still append to
+        `mounted_tool_calls` (not silently no-op): AC #1's assertion
+        loop is the safety net that catches a card-mounting tool
+        wrongly taking the running-mount path — a no-op stub here
+        would make that regression invisible to both of AC #1's
+        enforcement mechanisms (this tracked list AND the live
+        `pilot.app.query(ToolCallBlock)` scan, since a stub mounts no
+        real widget either way). Body is empty (`""`) here, matching
+        a real running block's empty-body state.
+        """
+        self.mounted_tool_calls.append((tool_name, args, ""))
+
+    async def clear_working_placeholder(self) -> None:
+        # spec-130 Step 5 (fixup): `_handle_tool_called` calls this
+        # for card-mounting tool calls — exactly AC #1's `run_workflow`
+        # fixture, confirmed by instrumentation this IS the branch
+        # exercised here — instead of `mount_tool_call_running`, so
+        # nothing orphans `_working_placeholder`. This stub has no
+        # placeholder concept; a no-op satisfies the call.
+        return None
+
     async def mount_notice(
         self,
         notice_id: str,

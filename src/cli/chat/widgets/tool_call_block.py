@@ -27,6 +27,8 @@ from typing import ClassVar
 from textual.binding import Binding
 from textual.widgets import Collapsible, Static
 
+from cli.chat.state_tokens import resolve_state
+
 
 class ToolCallBlock(Collapsible):
     """One tool call, collapsed by default, expandable with `Enter`.
@@ -85,11 +87,18 @@ class ToolCallBlock(Collapsible):
     ToolCallBlock.-failed {
         border-left: outer $error;
     }
+    ToolCallBlock.-interrupted {
+        border-left: outer $hint;
+    }
     ToolCallBlock > CollapsibleTitle {
         color: $tool-fg;
     }
     ToolCallBlock.-failed > CollapsibleTitle {
         color: $error;
+    }
+    ToolCallBlock.-interrupted > CollapsibleTitle {
+        color: $hint;
+        text-style: dim;
     }
     ToolCallBlock .body {
         color: $hint;
@@ -146,18 +155,144 @@ class ToolCallBlock(Collapsible):
         # first (markup=True by Textual default), which crashes when
         # rendering tool output with `[...]` sequences.
         self._body_static = Static(body_text, classes="body", markup=False)
-        children: list[Static] = [self._body_static]
-        if recovery_hint is not None:
-            children.append(
-                Static(f"↳ hint: {recovery_hint}", classes="hint", markup=False),
-            )
-        super().__init__(*children, title=title, collapsed=True)
+        # spec-130 Step 5 (fixup): the hint Static is now ALWAYS
+        # created (previously only when `recovery_hint is not None`)
+        # so `set_recovery_hint()` has a mounted child to reveal/set
+        # later — see that method's docstring for why a post-hoc
+        # `mount()` into an already-live `Collapsible` isn't the
+        # chosen fix. Starts hidden (`display = False`) and empty when
+        # no hint is supplied at construction time; `_apply_recovery_hint`
+        # (shared by the constructor and `set_recovery_hint`) fills
+        # and reveals it.
+        self._hint_static = Static("", classes="hint", markup=False)
+        super().__init__(
+            self._body_static, self._hint_static, title=title, collapsed=True
+        )
+        self._apply_recovery_hint(recovery_hint)
         if failed:
             self.add_class("-failed")
 
     def update_body(self, text: str) -> None:
         """bug-042: update the body Static directly (markup=False safe)."""
         self._body_static.update(text)
+
+    def _apply_recovery_hint(self, recovery_hint: str | None) -> None:
+        """Set (or clear) the hint Static's text and visibility.
+
+        Shared by ``__init__`` and ``set_recovery_hint`` so both paths
+        render the identical `"↳ hint: {text}"` format and the
+        identical show/hide rule (hidden when there's no hint).
+        """
+        if recovery_hint is None:
+            self._hint_static.update("")
+            self._hint_static.display = False
+            return
+        self._hint_static.update(f"↳ hint: {recovery_hint}")
+        self._hint_static.display = True
+
+    def set_recovery_hint(self, recovery_hint: str | None) -> None:
+        """Reveal/update the hint line on an already-mounted block.
+
+        spec-130 Step 5: the two-phase tool-call fill path
+        (``ChatApp.mount_tool_call``) needs to surface a
+        ``TOOL_FAILED`` result's ``recovery_hint`` on a block that was
+        already mounted running/empty at ``TOOL_CALLED`` time —
+        mounting a NEW child ``Static`` into an already-live
+        ``Collapsible`` post-hoc is not safe (``Collapsible``'s
+        ``Contents`` pane composes its children at mount time; there
+        is no supported "add a child after the fact" API). Instead,
+        the hint ``Static`` is always created in ``__init__``
+        (hidden/empty by default — see ``_apply_recovery_hint``), and
+        this method only toggles its text/visibility on that
+        already-mounted child, which is safe post-mount. Passing
+        ``None`` clears and re-hides it (symmetric with construction).
+        """
+        self._apply_recovery_hint(recovery_hint)
+
+    def set_failed_state(self, tool_name: str, args: str) -> None:
+        """Transition an already-mounted block to the failed visual state.
+
+        spec-130 Step 5: companion to ``update_body``/``set_recovery_hint``
+        for the tool-call two-phase fill path. A running block is
+        always constructed with ``failed=False`` (its title has no
+        ``✗`` prefix — see ``__init__``'s ``title = f"✗ ..." if failed
+        else ...``); when the matching result turns out to be a
+        ``TOOL_FAILED``, this rewrites the title to match what the
+        constructor would have produced for ``failed=True`` — keeping
+        title-glyph parity between the single-shot and fill paths —
+        and adds the ``-failed`` CSS class (border-left rail + title
+        color flip, per ``DEFAULT_CSS``). ``tool_name``/``args`` are
+        passed explicitly (rather than read off ``self._tool_name``/
+        ``self._args``) so the title always reflects the exact values
+        the caller has on hand for this result, matching how the
+        single-shot constructor path works.
+        """
+        self.title = f"✗ {tool_name}({args})"
+        self.add_class("-failed")
+
+    def render_interrupted(self) -> None:
+        """Flip a still-running block to an interrupted terminal state.
+
+        spec-130 Step 6: companion to ``set_failed_state`` for the
+        cancel/turn-supersession sweep (``ChatApp._interrupt_live_registries``).
+        A block reaching this method is, by construction, always a
+        RUNNING one (mounted empty by ``mount_tool_call_running`` and
+        never yet filled — see that method's two-phase docstring) — a
+        block that already reached ``TOOL_RESULT``/``TOOL_FAILED`` has
+        already been popped out of the registry that feeds this call,
+        so this never overwrites real result content.
+
+        Deliberately does NOT reuse ``set_failed_state``/``-failed``:
+        an interrupted tool call is a **user cancellation**, not a
+        **tool error** — conflating the two would make "the user hit
+        Esc" look identical to "the tool actually failed" in the
+        transcript, which is misleading after the fact. Instead this
+        mirrors ``WorkingPlaceholder.render_terminal("interrupted")``'s
+        own glyph/color choice: ``state_tokens.py``'s ``"cancelled"``
+        token (``─``, ``$hint``, dim) via the new ``-interrupted`` CSS
+        class, keeping the "user-cancelled" visual vocabulary
+        consistent across both widget kinds spec-130 introduces.
+        """
+        glyph = resolve_state("cancelled").glyph
+        self.title = f"{glyph} {self._tool_name}({self._args})"
+        self.remove_class("-failed")
+        self.add_class("-interrupted")
+        self.update_body("Interrupted")
+
+    def render_failed(self) -> None:
+        """Flip a still-running block to the error terminal state.
+
+        spec-130 Step 7: companion to ``render_interrupted()`` for the
+        error sweep (``ChatApp._fail_live_registries``) — the same
+        "a real, un-recovered exchange error occurred while this block
+        was still running/pending" case ``_run_exchange``'s generic
+        ``except Exception`` handler now covers. A block reaching this
+        method is, by construction, always a RUNNING one (mounted empty
+        by ``mount_tool_call_running()`` and never yet filled — see
+        that method's two-phase docstring): a block that already
+        reached ``TOOL_RESULT``/``TOOL_FAILED`` has already been popped
+        out of the registry that feeds this call, so this never
+        overwrites real result content.
+
+        Unlike ``render_interrupted()``, this call DOES reuse
+        ``set_failed_state``/``-failed`` deliberately: the tool call
+        genuinely did not complete because the exchange itself failed
+        (a model/tool error) — that is a **failure**, not a **user
+        cancellation** — so it should read identically to any other
+        failed tool call in the transcript (``$error`` rail, ``✗``
+        title glyph via ``set_failed_state``), matching the decided
+        glyph/color table's ``error`` row
+        (``state_tokens.py``'s ``"failed"`` token, matching
+        ``NoticeWidget``'s error kind and
+        ``WorkflowNodeRow.-failed``). No ``matched_rule`` hint applies
+        here (this isn't an authz denial), so the body is set directly
+        to a plain "Error" marker — mirroring
+        ``WorkingPlaceholder.render_terminal("error")``'s own terminal
+        body text — rather than routing through ``update_body(body)``
+        with real tool output that was never produced.
+        """
+        self.set_failed_state(self._tool_name, self._args)
+        self.update_body("Error")
 
     def action_collapse(self) -> None:
         """Collapse this block. Bound to `c` (see `BINDINGS`)."""

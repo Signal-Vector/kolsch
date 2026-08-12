@@ -1316,12 +1316,38 @@ class EventAdapter:
         self._register_widget_for_event(event, widget)
 
     async def _handle_tool_called(self, event: Event) -> None:
-        """Capture args + fire the turn verb on the main-chat surface.
+        """Capture args, fire the turn verb, and mount a running block.
 
         bug-036d: arg capture is adapter-scoped (survives across
         sink boundaries so ``_handle_tool_result`` can still look up
         the args). Turn verb is main-chat-only — sub-agent calls
         must not trample the outer chat's status line.
+
+        spec-130 Step 5: on the main-chat surface only (``sink is
+        self._app``), also mounts a running/pending ``ToolCallBlock``
+        via ``ChatApp.mount_tool_call_running`` — the two-phase morph's
+        first half (see that method's docstring). Row sinks are
+        unchanged: main-chat parity there was already "the widget
+        lands on TOOL_RESULT" (``WorkflowNodeRow.mount_tool_call``
+        implements its OWN two-phase running/filled pattern
+        internally, keyed by ``tool_call_id`` — this step only adds
+        the missing top-level main-chat half, it doesn't touch the
+        row's existing implementation).
+
+        Card-mounting tools (``run_workflow`` and friends) are
+        skipped: they're suppressed at ``TOOL_RESULT`` time (below,
+        and in ``_handle_tool_result``) because the tool opens its own
+        ``WorkflowCard`` instead — mounting a running block here for
+        those would leave it permanently stuck (its suppressed
+        ``TOOL_RESULT`` never calls ``mount_tool_call`` to fill or
+        remove it). For the SAME reason, the turn's ``WorkingPlaceholder``
+        (if still mounted) must still be explicitly cleared here via
+        ``ChatApp.clear_working_placeholder`` — no other morph path
+        runs for a card-mounting call (the card mounts through a
+        separate mechanism, ``EventAdapter._get_or_mount_card``, that
+        never touches ``_working_placeholder``), so without this the
+        placeholder would orphan: mounted, non-terminal, spinning
+        forever next to the eventual card.
         """
         tool_call_id = str(event.data.get("tool_call_id", ""))
         if tool_call_id:
@@ -1336,7 +1362,8 @@ class EventAdapter:
         # (the tool opens its own card). Suppression is set on the
         # adapter regardless of sink so the matching TOOL_RESULT
         # can consult it.
-        if _is_card_mounting_tool(tool_name) and tool_call_id:
+        card_mounting = _is_card_mounting_tool(tool_name)
+        if card_mounting and tool_call_id:
             self._suppressed_tool_calls.add(tool_call_id)
         # bug-036d: only the main App has a turn verb. Sub-agent
         # calls inside a workflow row bump the row's counter via
@@ -1348,11 +1375,19 @@ class EventAdapter:
                 f"Calling {tool_name}",
                 target=args_summary,
             )
+            # spec-130 Step 5: mount the running block now, not at
+            # TOOL_RESULT — see docstring above for the card-mounting
+            # skip (and why that skip still clears the placeholder).
+            if card_mounting:
+                await self._app.clear_working_placeholder()
+            else:
+                await self._app.mount_tool_call_running(tool_name, args_summary)
         else:
-            # Row sink: TOOL_CALLED doesn't mount (main-chat parity —
-            # the widget lands on TOOL_RESULT). Still bump the row's
-            # activity counter so the collapsed title reflects that
-            # a sub-agent tool call happened.
+            # Row sink: TOOL_CALLED doesn't mount at the top level
+            # (main-chat parity — the widget lands on TOOL_RESULT via
+            # the row's own two-phase `mount_tool_call`). Still bump
+            # the row's activity counter so the collapsed title
+            # reflects that a sub-agent tool call happened.
             _count_row_lifecycle(sink)
 
     async def _handle_tool_result(self, event: Event) -> None:

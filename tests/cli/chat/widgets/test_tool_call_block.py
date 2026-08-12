@@ -19,8 +19,18 @@ What we assert:
 4. Non-failed default: no ``-failed`` class present.
 5. ``failed=True`` adds the ``-failed`` CSS class. No conditional
    Python drives the colour; it's CSS-only.
-6. ``recovery_hint`` mounts an extra ``↳ hint: {text}`` Static
-   inside the body. Omitting it mounts no hint Static.
+6. ``recovery_hint`` reveals the ``↳ hint: {text}`` Static inside
+   the body. Omitting it leaves that Static mounted but hidden
+   (``display = False``) — spec-130 Step 5's fixup: the hint
+   Static is now ALWAYS created at construction time (rather than
+   only when ``recovery_hint is not None``) so
+   ``ToolCallBlock.set_recovery_hint()`` has a stable, already-
+   mounted child to reveal/update post-construction, without
+   needing to mount a NEW child into an already-live
+   ``Collapsible`` (unsafe post-mount). ``_visible_body_statics``
+   below filters to what a user would actually see, which is the
+   behavior these tests care about — the hidden-but-present Static
+   is an implementation detail, not a regression in visible output.
 7. Pressing ``c`` while the block has focus collapses it. This is
    the widget's declared ``c`` binding, not the parent
    ``Collapsible``'s default enter/space toggle.
@@ -52,6 +62,19 @@ def _body_statics(widget: ToolCallBlock) -> list[Static]:
     """
 
     return [s for s in widget.query(Static) if not isinstance(s, CollapsibleTitle)]
+
+
+def _visible_body_statics(widget: ToolCallBlock) -> list[Static]:
+    """Return only the body/hint ``Static``\\ s a user would actually see.
+
+    spec-130 Step 5's fixup: the hint ``Static`` is now always
+    mounted (see module docstring point 6) but hidden via
+    ``display = False`` when there's no hint yet. Filtering by
+    ``display`` here keeps these tests asserting user-visible
+    behavior rather than internal child-count bookkeeping.
+    """
+
+    return [s for s in _body_statics(widget) if s.display]
 
 
 @pytest.mark.asyncio
@@ -98,9 +121,10 @@ async def test_tool_call_block_body_static_rendered(
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        bodies = _body_statics(widget)
-        # Exactly one body Static — no hint Static when
-        # recovery_hint is not provided.
+        # Exactly one VISIBLE Static — the hint Static is mounted
+        # (spec-130 Step 5 fixup) but hidden when recovery_hint is
+        # not provided. See `_visible_body_statics`.
+        bodies = _visible_body_statics(widget)
         assert len(bodies) == 1
         body = bodies[0]
         assert "body" in body.classes
@@ -143,14 +167,104 @@ async def test_tool_call_block_recovery_hint_renders_arrow_line(
 async def test_tool_call_block_no_hint_when_recovery_omitted(
     mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
+    """No hint is visible when ``recovery_hint`` is omitted.
+
+    spec-130 Step 5 fixup: the hint ``Static`` is now always mounted
+    (see module docstring point 6), so this asserts it's present-but-
+    hidden rather than absent — the user-visible outcome (no hint
+    line shown) is unchanged.
+    """
     widget = ToolCallBlock("read_file", "path=/tmp/x", "output")
     app = mock_app_factory(widget)
 
     async with app.run_test() as pilot:
         await pilot.pause()
-        bodies = _body_statics(widget)
-        assert len(bodies) == 1
-        assert "hint" not in bodies[0].classes
+        visible = _visible_body_statics(widget)
+        assert len(visible) == 1
+        assert "hint" not in visible[0].classes
+
+        all_bodies = _body_statics(widget)
+        assert len(all_bodies) == 2, (
+            "hint Static should be mounted (hidden), not absent"
+        )
+        hint_static = next(s for s in all_bodies if "hint" in s.classes)
+        assert hint_static.display is False
+
+
+@pytest.mark.asyncio
+async def test_tool_call_block_set_recovery_hint_reveals_hidden_static(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
+    """``set_recovery_hint`` reveals + fills the hint Static post-mount.
+
+    spec-130 Step 5's two-phase tool-call fill path calls this on an
+    already-mounted block (constructed with no ``recovery_hint``) once
+    a ``TOOL_FAILED`` result carrying one arrives — this is the
+    widget-level contract that fill path depends on.
+    """
+    widget = ToolCallBlock("write_file", "path=/tmp/x", "output")
+    app = mock_app_factory(widget)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert len(_visible_body_statics(widget)) == 1
+
+        widget.set_recovery_hint("try with sudo")
+        await pilot.pause()
+
+        visible = _visible_body_statics(widget)
+        assert len(visible) == 2
+        hint = next(s for s in visible if "hint" in s.classes)
+        rendered_hint = str(hint.render())
+        assert "↳ hint:" in rendered_hint
+        assert "try with sudo" in rendered_hint
+
+
+@pytest.mark.asyncio
+async def test_tool_call_block_set_recovery_hint_none_clears_and_hides(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
+    """``set_recovery_hint(None)`` re-hides and clears an already-shown hint."""
+    widget = ToolCallBlock(
+        "write_file", "path=/tmp/x", "output", recovery_hint="try with sudo"
+    )
+    app = mock_app_factory(widget)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert len(_visible_body_statics(widget)) == 2
+
+        widget.set_recovery_hint(None)
+        await pilot.pause()
+
+        assert len(_visible_body_statics(widget)) == 1
+
+
+@pytest.mark.asyncio
+async def test_tool_call_block_set_failed_state_rewrites_title_and_class(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
+    """``set_failed_state`` matches a single-shot ``failed=True`` construction.
+
+    spec-130 Step 5's fill path calls this when a running block
+    (constructed with ``failed=False``, no ``✗`` prefix) turns out to
+    have failed — the title/class must end up identical to what
+    constructing fresh with ``failed=True`` would have produced.
+    """
+    running = ToolCallBlock("write_file", "path=/tmp/x", "")
+    reference = ToolCallBlock("write_file", "path=/tmp/x", "denied", failed=True)
+    app = mock_app_factory(running)
+
+    async with app.run_test() as pilot:
+        await pilot.pause()
+        assert running.title == "write_file(path=/tmp/x)"
+        assert not running.has_class("-failed")
+
+        running.set_failed_state("write_file", "path=/tmp/x")
+        await pilot.pause()
+
+        assert running.title == reference.title
+        assert running.has_class("-failed")
 
 
 @pytest.mark.asyncio

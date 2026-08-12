@@ -26,7 +26,7 @@ import pytest
 from textual.app import App, ComposeResult
 from textual.containers import VerticalScroll
 
-from cli.chat.event_adapter import EventAdapter
+from cli.chat.event_adapter import EventAdapter, _is_card_mounting_tool
 from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 from schemas.entities import Actor
 from schemas.events import Event, EventType
@@ -70,6 +70,17 @@ class _StubTranscriptApp(App[None]):
 
     def __init__(self) -> None:
         super().__init__()
+        # spec-130 Step 5 review fixup: this stub's `mount_tool_call`
+        # was already a pure no-op (no DOM mount, no tracking) — the
+        # snapshot golden alone was never sensitive to a card-mounting
+        # tool wrongly reaching a mount call, since neither branch
+        # touches the DOM here. Track calls the same way
+        # `test_bug036a_fixture_replay.py`'s `_StubTranscriptApp` does
+        # so each mockup test (all of which replay the SAME
+        # `ses_bug036a_jd_review_excerpt.jsonl` fixture, containing the
+        # same card-mounting `run_workflow*` call) can assert AC #1
+        # directly instead of relying only on the golden.
+        self.mounted_tool_calls: list[tuple[str, ...]] = []
 
     def compose(self) -> ComposeResult:
         yield VerticalScroll(id="transcript")
@@ -109,7 +120,32 @@ class _StubTranscriptApp(App[None]):
         recovery_hint: str | None = None,
         event_id: Any = None,
     ) -> None:
-        _ = tool_name, args, body, failed, recovery_hint, event_id
+        _ = failed, recovery_hint, event_id
+        self.mounted_tool_calls.append((tool_name, args, body))
+
+    async def mount_tool_call_running(self, tool_name: str, args: str) -> None:
+        """Record a running-block mount the SAME way `mount_tool_call` does.
+
+        spec-130 Step 5 review fixup: `_handle_tool_called` calls this
+        directly for non-card-mounting tools only — the fixture's
+        `run_workflow*` call is card-mounting, so the correctly-
+        behaving adapter takes `clear_working_placeholder` below, not
+        this one. Must append to `mounted_tool_calls` (not no-op): a
+        no-op stub would make a wrongly-taken branch invisible to
+        both AC #1 enforcement mechanisms — this tracked list and any
+        golden-snapshot diff, since neither branch mounts a real
+        widget in this stub either way.
+        """
+        self.mounted_tool_calls.append((tool_name, args, ""))
+
+    async def clear_working_placeholder(self) -> None:
+        # spec-130 Step 5 (fixup): `_handle_tool_called` calls this
+        # for card-mounting tool calls — confirmed by instrumentation
+        # this IS the branch exercised by the shared fixture's
+        # `run_workflow*` call — instead of `mount_tool_call_running`,
+        # so nothing orphans `_working_placeholder`. This stub has no
+        # placeholder concept; a no-op satisfies the call.
+        return None
 
     async def mount_notice(
         self,
@@ -146,6 +182,15 @@ async def _replay_fixture(app: _StubTranscriptApp) -> EventAdapter:
     for row in _load_fixture():
         event = _event_from_row(row)
         await adapter.handle(event)
+    # AC #1 (same invariant `test_bug036a_fixture_replay.py` asserts
+    # on the same fixture): no transcript-root ToolCallBlock mount for
+    # a card-mounting tool. Checked here (once, shared by every mockup
+    # test below) rather than duplicated 4x.
+    for tool_name, _args, _body in app.mounted_tool_calls:
+        assert not _is_card_mounting_tool(tool_name), (
+            f"transcript-root ToolCallBlock mounted for "
+            f"card-mounting tool {tool_name!r}; AC #1 violated"
+        )
     return adapter
 
 
