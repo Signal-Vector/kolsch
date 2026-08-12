@@ -72,8 +72,6 @@ signals (state = hue; focus = inversion).
 Non-migrated widgets — the following stay borderless / bare and
 intentionally do **not** inherit from or compose ``GutterBlock``:
 
-- ``TurnStatus`` — fixed chrome (single top-of-turn line), not part
-  of the scrollable stream.
 - ``StatusBar``, ``InfoBar`` — persistent app chrome docked outside
   the transcript region.
 - ``SlashPopup`` — transient overlay, not a stream row.

@@ -23,7 +23,6 @@ from cli.chat.widgets.scrollback_cue import ScrollbackCue
 from cli.chat.widgets.slash_popup import SlashPopup
 from cli.chat.widgets.status_bar import StatusBar
 from cli.chat.widgets.tool_call_block import ToolCallBlock
-from cli.chat.widgets.turn_status import TurnStatus
 from cli.chat.widgets.user_chatbox import UserChatbox
 from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 
@@ -41,7 +40,6 @@ __all__ = [
     "SlashPopup",
     "StatusBar",
     "ToolCallBlock",
-    "TurnStatus",
     "UserChatbox",
     "WorkflowNodeRow",
 ]

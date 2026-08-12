@@ -11,12 +11,16 @@ Design principles (feat-019 §Scope + §Coordinator locks):
    class toggled from :meth:`set_workflow_strip` / :meth:`set_toast`).
    No hand-rolled clock — the 3s toast auto-dismiss is scheduled by
    the caller (``ChatApp.on_key``) using ``call_later``.
-2. **Turn precedence.** When ``TurnStatus`` is active the app owns the
-   bottom transient row; :class:`StatusBar` mounts *below*
-   ``TurnStatus`` and *above* ``InfoBar`` in the bottom stack, and its
+2. **Turn precedence.** While a turn is active, :class:`StatusBar`'s
    internal :attr:`turn_active` reactive collapses the workflow strip
-   so the turn spinner is the single line-2 signal during an active
-   turn. Coordinator Q1 lock.
+   so line 2 stays quiet rather than competing with the in-transcript
+   ``WorkingPlaceholder`` (spec-130) that now owns turn-scoped
+   "working" indication. :class:`StatusBar` mounts *above* ``InfoBar``
+   in the bottom stack. Coordinator Q1 lock. (Historical: this
+   precedence rule originally existed to let the bottom-docked
+   ``TurnStatus`` bar own the row uncontested; ``TurnStatus`` was
+   retired in spec-130, but the "keep line 2 quiet during a turn"
+   behavior itself is still wanted, so ``turn_active`` stays.)
 3. **Best-effort 78-char width.** :meth:`set_workflow_strip` and
    :meth:`set_toast` accept a plain string; no elision performed —
    Textual's CSS ``min-width: 0`` on the child ``Static`` collapses
@@ -59,10 +63,12 @@ class StatusBar(Horizontal):
       ``ChatApp.on_key`` for the 3s Esc-Esc window. Empty string
       collapses the toast.
     - :attr:`turn_active` — bool driven by ``ChatApp`` at
-      ``set_turn_verb`` time. True → the strip is suppressed so the
-      companion ``TurnStatus`` is the single line-2 signal (Coordinator
-      Q1 lock). The toast still wins even while the turn is active
-      because the toast is a one-shot dismissable teach.
+      ``set_turn_verb`` time. True → the strip is suppressed so line 2
+      stays quiet during an active turn (Coordinator Q1 lock; the
+      turn's own "working" indication lives in-transcript via
+      ``WorkingPlaceholder`` since spec-130, not on this row). The
+      toast still wins even while the turn is active because the toast
+      is a one-shot dismissable teach.
 
     Precedence (highest → lowest): ``toast_text`` > ``workflow_strip_text``
     (unless ``turn_active``).
@@ -101,8 +107,8 @@ class StatusBar(Horizontal):
     """
 
     turn_active: reactive[bool] = reactive(False)  # noqa: FBT003 — Textual reactive API
-    """When True, the workflow strip is suppressed so ``TurnStatus``
-    owns the transient bottom row (Coordinator Q1 lock).
+    """When True, the workflow strip is suppressed during an active
+    turn (Coordinator Q1 lock).
 
     Toggled by ``ChatApp.set_turn_verb`` — non-empty verb = True; empty
     verb = False.

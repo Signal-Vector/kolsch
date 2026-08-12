@@ -46,7 +46,6 @@ from cli.chat.widgets.scrollback_cue import ScrollbackCue
 from cli.chat.widgets.slash_popup import SlashPopup
 from cli.chat.widgets.status_bar import StatusBar
 from cli.chat.widgets.tool_call_block import ToolCallBlock
-from cli.chat.widgets.turn_status import TurnStatus
 from cli.chat.widgets.user_chatbox import UserChatbox
 from cli.chat.widgets.workflow_node_row import WorkflowNodeRow
 
@@ -231,24 +230,6 @@ def _set_slash_popup_filtered(w: Any) -> None:  # noqa: ANN401
 
 def _set_slash_popup_empty(w: Any) -> None:  # noqa: ANN401
     w.prefix = "/zzz"
-
-
-def _set_turn_status_active(w: Any) -> None:  # noqa: ANN401
-    w.verb = "reading"
-    w.target = "file.py"
-
-
-def _set_turn_status_elapsed(w: Any) -> None:  # noqa: ANN401
-    w.verb = "writing"
-    w.target = "output.md"
-    w.show_elapsed = True
-    w.elapsed_seconds = 15
-
-
-def _set_turn_status_awaiting(w: Any) -> None:  # noqa: ANN401
-    w.verb = "waiting"
-    w.target = "approval"
-    w.awaiting_approval = True
 
 
 def _set_info_bar_populated(w: Any) -> None:  # noqa: ANN401
@@ -617,19 +598,6 @@ CATALOG: list[CatalogEntry] = [
                 "3 nodes · 1 running · 2 pending"
             ),
             "toast": lambda w: w.set_toast("Press Esc-Esc to exit"),
-        },
-        widths=(80, 40),
-    ),
-    CatalogEntry(
-        name="TurnStatus",
-        family="chrome",
-        source_file="turn_status.py",
-        make=TurnStatus,
-        states={
-            "hidden": lambda _w: None,  # default (verb="")
-            "active": _set_turn_status_active,
-            "elapsed": _set_turn_status_elapsed,
-            "awaiting": _set_turn_status_awaiting,
         },
         widths=(80, 40),
     ),

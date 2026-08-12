@@ -1,8 +1,8 @@
 """InfoBar — persistent bottom status segment strip.
 
 Renders `agent · model [· session] · branch` on the left and
-`cwd_basename` on the right. Docked to the bottom of the app region
-below `TurnStatus`.
+`cwd_basename` on the right. Docked to the bottom of the app region,
+below `StatusBar` in the bottom stack.
 
 Per the spec (see ``process/spec-textual-chat-ui.md`` → Technical
 Context → Status bar → InfoBar), layout collapse under narrow

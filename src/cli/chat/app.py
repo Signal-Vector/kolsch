@@ -60,7 +60,6 @@ from cli.chat.widgets import (
     SlashPopup,
     StatusBar,
     ToolCallBlock,
-    TurnStatus,
     UserChatbox,
 )
 from cli.chat.widgets.notice import NoticeWidget
@@ -777,12 +776,14 @@ class ChatApp(App[None]):
         """Yield the chat surface's child widgets in mount order."""
         yield VerticalScroll(id="transcript")
         with Vertical(id="bottom-stack"):
-            yield TurnStatus(id="turn-status")
-            # feat-019: line 2 — workflow-strip / Esc-toast surface.
-            # Sits BELOW ``TurnStatus`` so the turn spinner (line-2
-            # transient) still wins when active; the StatusBar's
-            # ``turn_active`` flag suppresses the workflow strip while
-            # the turn owns the row (Coordinator Q1 lock).
+            # spec-130 step 8: ``TurnStatus`` (the bottom-docked turn
+            # spinner) is retired — the in-transcript
+            # ``WorkingPlaceholder`` now owns turn-scoped "working"
+            # indication. ``StatusBar``'s ``turn_active`` flag (set by
+            # ``set_turn_verb``, still driven by ``EventAdapter``) keeps
+            # suppressing the workflow strip during an active turn
+            # (feat-019, Coordinator Q1 lock) — that precedence rule
+            # survives even though its companion widget is gone.
             yield StatusBar(id="status-bar")
             yield SlashPopup(id="slash-popup")
             yield Composer(id="composer")
@@ -1914,11 +1915,13 @@ class ChatApp(App[None]):
             raise
         finally:
             self.active_cancel = None
-            # Ensure turn status clears after any exchange path.
+            # spec-130 step 8: ``TurnStatus`` is gone, but
+            # ``set_turn_verb("")`` still clears ``StatusBar.turn_active``
+            # (feat-019) so the workflow strip un-suppresses after any
+            # exchange path — that sync is independent of the retired
+            # widget.
             with contextlib.suppress(Exception):
-                turn = self.query_one(TurnStatus)
-                turn.verb = ""
-                turn.target = ""
+                await self.set_turn_verb("")
 
     async def _interrupt_live_registries(self) -> None:
         """spec-130 Step 6: flip EVERY live, not-yet-terminal entry to interrupted.
@@ -2530,9 +2533,10 @@ class ChatApp(App[None]):
         with contextlib.suppress(Exception):
             composer = self.query_one(Composer)
             composer.awaiting_approval = awaiting
-        with contextlib.suppress(Exception):
-            turn = self.query_one(TurnStatus)
-            turn.awaiting_approval = awaiting
+        # spec-130 step 8: ``TurnStatus`` (and its own
+        # ``awaiting_approval`` reactive, which drove the retired
+        # warning-glyph slot) is gone. The ``Composer`` gate above is
+        # the actual approval-freeze mechanism and is untouched.
         # bug-129: deliberate focus successor. Resolving/removing an
         # approval pane clears focus first (see
         # `ApprovalBlock._release_focus_if_inside_pane`) — without a
@@ -2567,15 +2571,28 @@ class ChatApp(App[None]):
         # resolves (AC #10).
         self.recompute_awaiting_approval()
 
-    async def set_turn_verb(self, verb: str, *, target: str = "") -> None:
-        """Set the turn-status verb/target and sync the StatusBar flag."""
-        with contextlib.suppress(Exception):
-            turn = self.query_one(TurnStatus)
-            turn.verb = verb
-            turn.target = target
-        # feat-019: keep the StatusBar's ``turn_active`` in lockstep so
-        # the workflow strip is suppressed during an active turn
-        # (Coordinator Q1 lock). Empty verb clears the flag.
+    async def set_turn_verb(
+        self,
+        verb: str,
+        *,
+        target: str = "",  # noqa: ARG002 — kept for call-site/protocol compatibility; see docstring
+    ) -> None:
+        """Sync the StatusBar's turn-active flag for the given verb.
+
+        spec-130 step 8: this used to also drive the now-deleted
+        ``TurnStatus`` bar's ``verb``/``target`` reactives (the verb
+        text itself is no longer rendered anywhere — the in-transcript
+        ``WorkingPlaceholder`` doesn't show per-tool verb text, per the
+        spec's decided glyph/color table). The method — and its
+        ``target`` parameter — are kept because every call site in
+        ``EventAdapter`` (10 of them) and several test-double protocols
+        still call it with this exact signature, and its ONE surviving
+        responsibility, keeping ``StatusBar.turn_active`` in lockstep
+        (feat-019, Coordinator Q1 lock — suppresses the workflow strip
+        during an active turn), is independent of ``TurnStatus`` and
+        still required. ``target`` is accepted for call-site
+        compatibility but unused now that nothing renders it.
+        """
         with contextlib.suppress(Exception):
             status_bar = self.query_one("#status-bar", StatusBar)
             status_bar.set_turn_active(bool(verb))
