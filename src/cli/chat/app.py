@@ -2782,6 +2782,9 @@ class ChatApp(App[None]):
         if command.name == "/why-compact":
             await self._handle_why_compact(arg_text)
             return
+        if command.name == "/model" and not arg_text.strip():
+            await self._handle_model_picker()
+            return
 
         if command.handler is None:
             await self._mount_transcript_notice(
@@ -3151,6 +3154,81 @@ class ChatApp(App[None]):
         transcript = self.query_one("#transcript", VerticalScroll)
         card = Static(text, markup=False)
         await transcript.mount(card)
+
+    async def _handle_model_picker(self) -> None:
+        """`/model` with no argument — open the model-switching picker.
+
+        Special-cased here (like `/export`, `/why`, `/reload`,
+        `/compact`) rather than going through the generic
+        `command.handler(arg_text, ctx) -> ControlSignal` + `ctx.stdout`
+        protocol every other slash command uses (`_handler_model` still
+        handles `/model <ref>` that way, unaffected — see its docstring
+        in `cli._slash` for the full write-up of why the no-arg case
+        can't).
+
+        Opening the picker needs `App.push_screen_wait`, which Textual
+        hard-requires to run inside a worker — and critically, that
+        worker must run DETACHED (fire-and-forget), never awaited from
+        a message handler: `push_screen_wait`'s future only resolves
+        once further messages (the keypress that dismisses the modal)
+        are processed by the App's own message pump, and that pump
+        can't dequeue the next message until the CURRENT handler
+        returns (`textual/message_pump.py`'s `_process_messages_loop`
+        awaits `_dispatch_message` for one message fully before
+        fetching the next — strictly sequential dispatch). Awaiting the
+        worker from here would therefore deadlock the whole app —
+        confirmed via a minimal repro before this fix landed, and the
+        actual root cause of a real post-ship bug (users saw "push_screen
+        must be run from a worker" because an earlier revision of this
+        fix tried exactly that: wrap-and-await from inside
+        `_handler_model` itself).
+
+        `_run_model_picker` is fired via `self.run_worker(...)` and NOT
+        awaited; it owns its own error reporting (mounting a transcript
+        notice directly) since nothing here waits around to catch it —
+        matching the codebase's existing `_run_exchange`
+        (`@work(exclusive=True)`) fire-and-forget pattern for the same
+        reason.
+        """
+        if self._chat_state is None:
+            await self._mount_transcript_notice("/model: chat runtime not ready yet.")
+            return
+        if not self._chat_state.runtime.llm_providers_config:
+            await self._mount_transcript_notice(
+                "/model: no providers configured; nothing to pick from."
+            )
+            return
+        ctx = SlashContext(
+            stdout=io.StringIO(),
+            agent_config=self.session.config,
+            authz=self.session.runtime.authz,
+            agent_name=self.session.config.name,
+            state=self._chat_state,
+        )
+        self.run_worker(
+            self._run_model_picker(ctx),
+            name="model-picker",
+            group="model-picker",
+            exclusive=True,
+            exit_on_error=False,
+        )
+
+    async def _run_model_picker(self, ctx: SlashContext) -> None:
+        """Worker body for `_handle_model_picker` — runs detached.
+
+        Any failure here (catalog assembly, picker construction, the
+        eventual `_apply_model` call on selection) is reported by
+        mounting a transcript notice directly, since
+        `_handle_model_picker` has already returned by the time this
+        runs — there is no `ctx.stdout` capture left waiting to relay
+        it, unlike the generic slash-command dispatch path.
+        """
+        from cli._slash import _open_model_picker_from_slash  # noqa: PLC0415
+
+        try:
+            await _open_model_picker_from_slash(ctx, self)
+        except Exception as exc:  # noqa: BLE001 — surface every failure flavour
+            await self._mount_transcript_notice(f"/model: could not open picker: {exc}")
 
     async def _clear_transcript(self) -> None:
         """Remove every mounted widget from the transcript.

@@ -96,6 +96,22 @@ def _extras(parameters: Mapping[str, Any] | None) -> dict[str, Any]:
     return {k: v for k, v in parameters.items() if k not in _INFRA_KEYS}
 
 
+def _is_zero_cost(entry: ModelEntry) -> bool:
+    """`True` only when pricing is KNOWN and both components are exactly 0.
+
+    An entry with unparseable/missing pricing (`entry.pricing is None`)
+    is deliberately excluded, not included defensively — when
+    `discover_models` is filtering because the account's balance is
+    exhausted, showing a model whose actual cost is unknown risks
+    showing one more paid-and-unaffordable model, exactly what the
+    filter exists to prevent.
+    """
+    pricing = entry.pricing
+    if pricing is None:
+        return False
+    return pricing.prompt_per_million == 0 and pricing.completion_per_million == 0
+
+
 class OpenRouterConnector:
     """The OpenRouter provider — proxy and cross-provider metadata source.
 
@@ -202,12 +218,33 @@ class OpenRouterConnector:
         """Fetch the catalog by GET `{base_url}/models`.
 
         Yields one populated `ModelEntry` per `data[]` item. Populates
-        the per-instance cache as a side effect.
+        the per-instance cache as a side effect — always with the FULL
+        catalog, regardless of any filtering below, since
+        `lookup_model_metadata`'s cross-provider augmentation needs
+        every entry, not an account-filtered subset.
+
+        OpenRouter has no per-model access list: every catalog model is
+        callable against one account-level, pay-as-you-go credit
+        balance (`GET /auth/key`), deducted per token. When that
+        balance is *positively known* to be exhausted
+        (`limit - usage &lt;= 0`), the RETURNED list (not the cache) is
+        narrowed to OpenRouter's zero-cost models — the only ones that
+        would actually succeed — since listing a paid model the
+        account can't afford is worse than not listing it. A balance
+        that's unlimited (`limit` is `null`) or couldn't be determined
+        (network failure, no key, unparseable response) fails OPEN:
+        the full catalog is returned, because a side-channel balance
+        check has nothing to do with whether the catalog fetch itself
+        succeeded, and hiding real, usable models behind a transient
+        failure of this check would be worse than showing a model that
+        might turn out to be unaffordable.
         """
         entries = await self._fetch_catalog(credentials, base_url)
-        # `_fetch_catalog` populates the per-instance cache as a side
-        # effect; return it as a list in the order the API returned.
-        return list(entries.values())
+        all_entries = list(entries.values())
+        remaining = await self._fetch_credits_remaining(credentials, base_url)
+        if remaining is not None and remaining <= 0:
+            return [entry for entry in all_entries if _is_zero_cost(entry)]
+        return all_entries
 
     async def build_llm(
         self,
@@ -281,6 +318,42 @@ class OpenRouterConnector:
         )
 
     # ---- Internals --------------------------------------------------------
+
+    async def _fetch_credits_remaining(
+        self,
+        credentials: Credentials,
+        base_url: str | None,
+    ) -> float | None:
+        """GET `/auth/key` and return `limit - usage`, or `None`.
+
+        `None` covers "unlimited" (`limit` is `null`), "couldn't be
+        determined" (network failure, non-2xx, unparseable body), and
+        "not present in the response" — every one of those is treated
+        identically by `discover_models`: fail open, don't filter.
+        Deliberately never raises; this is a best-effort side-channel
+        check for `discover_models`'s filtering, not a validation of
+        the credentials themselves (that's `validate_credentials`'s
+        job, which has its own, more detailed failure reporting for
+        the connect-flow UX and is not reused here to keep that
+        reporting independent of this method's fail-open semantics).
+        """
+        url = f"{self._base(base_url)}/auth/key"
+        token = credentials.values.get("api_key", "")
+        try:
+            async with self._client() as client:
+                response = await client.get(
+                    url,
+                    headers={"Authorization": f"Bearer {token}"},
+                )
+            if response.status_code >= _HTTP_CLIENT_ERROR_MIN:
+                return None
+            body = response.json()
+        except (httpx.HTTPError, ValueError):
+            return None
+        data = body.get("data") if isinstance(body, dict) else None
+        if not isinstance(data, dict):
+            return None
+        return self._compute_credits_remaining(data)
 
     async def _fetch_catalog(
         self,

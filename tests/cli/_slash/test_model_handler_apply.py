@@ -21,19 +21,24 @@ Covers:
 - a direct assertion that `ChatSessionState.model_override` /
   `ctx.state.config` reflect the new model after a successful call
 
-spec-132 Step 5 changed the no-arg branch from a plain-text print into
-opening `ModelPickerScreen`; the no-arg test below was updated to match
-(previously named `test_model_no_arg_still_just_prints_current_model`,
-pinning the pre-Step-5 print-only behavior). It exercises only the
-zero-configured-providers short-circuit, which needs no `App`/picker —
-the picker-opening path itself is covered by
-`tests/cli/_slash/test_model_handler_opens_picker.py`.
+spec-132 Steps 5/6 briefly changed the no-arg branch to open
+`ModelPickerScreen` itself; a post-ship fix reverted that —
+`_handler_model` synchronously invoked from `ChatApp._handle_slash`
+can't safely open a picker (Textual's `push_screen_wait` needs worker
+context, and awaiting that worker from the calling message handler
+deadlocks — see `_handler_model`'s current docstring in `cli._slash`
+for the full write-up). The no-arg branch is back to printing the
+current model as plain text (byte-identical to the original,
+pre-spec-132 behavior) — this is a FALLBACK for direct callers only;
+in the real `kolsch chat` UI, `ChatApp._handle_slash` intercepts
+`/model` with no argument before it ever reaches this function and
+routes to `ChatApp._handle_model_picker` instead, covered by
+`tests/cli/chat/test_model_picker_slash_dispatch.py`.
 """
 
 from __future__ import annotations
 
 import io
-from dataclasses import dataclass, field
 from typing import Any, cast
 from uuid import uuid4
 
@@ -145,29 +150,19 @@ async def test_model_arg_malformed_compact_string_prints_error() -> None:
     assert state.model_override is None
 
 
-@dataclass
-class _EmptyRuntime:
-    """Minimal runtime stand-in exposing only what the no-arg,
-    zero-providers short-circuit reads (spec-132 Step 5)."""
-
-    llm_providers_config: dict[str, Any] = field(default_factory=dict)
-
-
 @pytest.mark.asyncio
-async def test_model_no_arg_with_no_providers_configured_prints_message() -> None:
-    """Bare `/model` with an empty `llm_providers_config` short-circuits
-    to a plain message instead of opening a picker with nothing to show
-    (spec-132 Step 5's documented edge-case handling) — no picker/`App`
-    needed to exercise this path, so it stays a fast unit test."""
+async def test_model_no_arg_prints_current_model_as_fallback() -> None:
+    """Bare `/model`, called directly (not via `ChatApp._handle_slash`),
+    prints the current `provider/model` as text and mutates nothing —
+    the safe, no-`App`-required fallback behaviour. In real `kolsch
+    chat` usage this branch is unreachable (`ChatApp._handle_slash`
+    intercepts first); see `tests/cli/chat/test_model_picker_slash_dispatch.py`
+    for the real no-arg picker-opening coverage."""
     state = _state()
-    state.runtime = cast("Any", _EmptyRuntime())
     ctx = _ctx(state)
 
     signal = await _handler_model("", ctx)
 
     assert signal is ControlSignal.CONTINUE
-    assert (
-        ctx.stdout.getvalue()
-        == "/model: no providers configured; nothing to pick from.\n"
-    )
+    assert ctx.stdout.getvalue() == "current model: openrouter/anthropic/claude-3\n"
     assert state.model_override is None

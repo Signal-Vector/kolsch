@@ -155,6 +155,7 @@ nav:
       - Forcing a skill: how-to/forcing-a-skill.md
       - Configuring fallbacks: how-to/configure-fallbacks.md
       - Permissions: how-to/permissions.md
+      - Event hooks: how-to/event-hooks.md
       - Context compaction: how-to/context-compaction.md
       - Finding models: how-to/find-models.md
   - Reference:

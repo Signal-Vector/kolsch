@@ -457,6 +457,159 @@ async def test_openrouter_validate_credentials_surfaces_credits() -> None:
 
 
 # ===========================================================================
+# discover_models — account-balance filtering (post-ship fix: a key with
+# no credits was showing every OpenRouter model, including ones it can't
+# actually afford, because /models is OpenRouter's public, unauthenticated
+# catalog with no per-account filtering).
+# ===========================================================================
+
+
+def _openrouter_catalog_payload() -> dict[str, Any]:
+    return {
+        "data": [
+            {
+                "id": "anthropic/claude-opus-4-7",
+                "context_length": 200000,
+                "supported_parameters": ["tools", "stream"],
+                "pricing": {"prompt": "0.000015", "completion": "0.000075"},
+            },
+            {
+                "id": "meta/llama-3-free",
+                "context_length": 8192,
+                "supported_parameters": ["tools"],
+                "pricing": {"prompt": "0.0", "completion": "0.0"},
+            },
+            {
+                "id": "unknown/no-pricing-data",
+                "context_length": 4096,
+                "supported_parameters": [],
+                # No `pricing` key at all -> ModelEntry.pricing is None.
+            },
+        ]
+    }
+
+
+def _openrouter_handler_with_auth(
+    *, limit: float | None, usage: float = 0.0
+) -> SyncHandler:
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/auth/key"):
+            return httpx.Response(
+                200,
+                json={"data": {"limit": limit, "usage": usage, "label": "test"}},
+            )
+        return httpx.Response(200, json=_openrouter_catalog_payload())
+
+    return handler
+
+
+async def test_openrouter_discover_models_positive_balance_shows_everything() -> None:
+    """A key with a real, positive balance sees the full catalog,
+    unfiltered — the existing/expected behaviour."""
+    connector = OpenRouterConnector(
+        transport=_mock_transport(_openrouter_handler_with_auth(limit=5.0, usage=1.0))
+    )
+    entries = await connector.discover_models(
+        Credentials(values={"api_key": "sk-or"}), None
+    )
+    ids = {e.id for e in entries}
+    assert ids == {
+        "anthropic/claude-opus-4-7",
+        "meta/llama-3-free",
+        "unknown/no-pricing-data",
+    }
+
+
+async def test_openrouter_discover_models_exhausted_balance_filters_to_free() -> None:
+    """`limit - usage <= 0` narrows the returned list to zero-cost
+    models only — the paid model and the unknown-pricing model (can't
+    be confirmed free) are both excluded."""
+    connector = OpenRouterConnector(
+        transport=_mock_transport(_openrouter_handler_with_auth(limit=5.0, usage=5.0))
+    )
+    entries = await connector.discover_models(
+        Credentials(values={"api_key": "sk-or"}), None
+    )
+    ids = {e.id for e in entries}
+    assert ids == {"meta/llama-3-free"}
+
+
+async def test_openrouter_discover_models_negative_balance_filters_to_free() -> None:
+    """Usage exceeding limit (a real, if edge-case, OpenRouter state)
+    is also treated as exhausted."""
+    connector = OpenRouterConnector(
+        transport=_mock_transport(_openrouter_handler_with_auth(limit=5.0, usage=6.5))
+    )
+    entries = await connector.discover_models(
+        Credentials(values={"api_key": "sk-or"}), None
+    )
+    ids = {e.id for e in entries}
+    assert ids == {"meta/llama-3-free"}
+
+
+async def test_openrouter_discover_models_unlimited_balance_shows_everything() -> None:
+    """`limit` is `null` (an unlimited-balance key) fails OPEN — shown
+    as `None` after `_compute_credits_remaining`, not zero."""
+    connector = OpenRouterConnector(
+        transport=_mock_transport(_openrouter_handler_with_auth(limit=None))
+    )
+    entries = await connector.discover_models(
+        Credentials(values={"api_key": "sk-or"}), None
+    )
+    ids = {e.id for e in entries}
+    assert ids == {
+        "anthropic/claude-opus-4-7",
+        "meta/llama-3-free",
+        "unknown/no-pricing-data",
+    }
+
+
+async def test_openrouter_discover_models_auth_key_failure_shows_everything() -> None:
+    """A failed `/auth/key` call (network error, 5xx, garbage body)
+    fails OPEN — the catalog fetch itself still succeeded, so a
+    transient failure of this side-channel balance check must not hide
+    real, potentially-usable models."""
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        if request.url.path.endswith("/auth/key"):
+            return httpx.Response(500, text="oops")
+        return httpx.Response(200, json=_openrouter_catalog_payload())
+
+    connector = OpenRouterConnector(transport=_mock_transport(handler))
+    entries = await connector.discover_models(
+        Credentials(values={"api_key": "sk-or"}), None
+    )
+    ids = {e.id for e in entries}
+    assert ids == {
+        "anthropic/claude-opus-4-7",
+        "meta/llama-3-free",
+        "unknown/no-pricing-data",
+    }
+
+
+async def test_openrouter_discover_models_cache_stays_full_catalog_even_when_filtered() -> (
+    None
+):
+    """The per-instance `_catalog` cache (used by
+    `lookup_model_metadata` for cross-provider augmentation) always
+    holds the FULL catalog, even when `discover_models`'s own return
+    value is filtered down to free models."""
+    connector = OpenRouterConnector(
+        transport=_mock_transport(_openrouter_handler_with_auth(limit=5.0, usage=5.0))
+    )
+    entries = await connector.discover_models(
+        Credentials(values={"api_key": "sk-or"}), None
+    )
+    assert {e.id for e in entries} == {"meta/llama-3-free"}
+    # The cache, however, has all three — confirmed via a metadata
+    # lookup for a model that discover_models() itself filtered out.
+    metadata = await connector.lookup_model_metadata("anthropic", "claude-opus-4-7")
+    assert metadata is not None
+    assert metadata.pricing is not None
+    assert metadata.pricing.prompt_per_million == pytest.approx(15.0)
+
+
+# ===========================================================================
 # TC-LLM-09 — registry rejects duplicate `register` calls
 # ===========================================================================
 

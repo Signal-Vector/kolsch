@@ -45,6 +45,9 @@ agents, and working with the CLI.
 - [Permissions](permissions.md) — write tool permission rules, allow
   patterns at runtime with `/perm`, use the four-choice approval
   modal.
+- [Event hooks](event-hooks.md) — run a shell command (a desktop
+  notification, a webhook) when an approval is needed or a tool call
+  fails, via `platform.yaml`'s `hooks:` section.
 - [Context compaction](context-compaction.md) — configure the
   `compaction:` section in `platform.yaml`, use `/compact`,
   `/uncompact`, `/compaction-history`, and `/why-compact`, and

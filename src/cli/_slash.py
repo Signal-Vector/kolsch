@@ -31,6 +31,7 @@ if TYPE_CHECKING:
 
     from prompt_toolkit.completion import CompleteEvent
     from prompt_toolkit.document import Document
+    from textual.app import App
 
     from engine import CancelToken
     from platform_runtime import PlatformRuntime
@@ -407,14 +408,18 @@ def _apply_model(ctx: SlashContext, spec_or_ref: ModelSpec | str) -> ModelSpec:
     return new_spec
 
 
-async def _open_model_picker_from_slash(ctx: SlashContext) -> None:
-    """Resolve the running app, assemble the catalog, and drive the picker.
+async def _open_model_picker_from_slash(ctx: SlashContext, app: App[Any]) -> None:
+    """Assemble the catalog and drive the picker on the given `app`.
 
-    Extracted from `_handler_model`'s no-arg branch so the try/except
-    around it can distinguish `LookupError` (no running app — see its
+    Extracted from `_handler_model`'s no-arg branch so its caller's
+    try/except can distinguish `LookupError` (no running app — see its
     call site) from every other failure flavour, without the
-    resolve-app / assemble-catalog / open-picker sequence itself
-    ballooning that `except` block.
+    assemble-catalog / open-picker sequence itself ballooning that
+    `except` block. Takes `app` as a parameter rather than resolving it
+    itself (as an earlier revision did via `active_app.get()`) because
+    the caller must resolve `app` *before* deciding whether to run this
+    whole function inside a worker — see the caller's docstring for why
+    that's required.
 
     Step 6: shows `ModelPickerLoadingScreen` while `assemble_catalog()`
     (the failure-surfacing wrapper around `assemble_model_choices()`)
@@ -427,8 +432,6 @@ async def _open_model_picker_from_slash(ctx: SlashContext) -> None:
     `ProviderFailure`s so a total-failure catalog isn't a silent empty
     picker (Step 5 review carry-forward #1).
     """
-    from textual._context import active_app  # noqa: PLC0415
-
     from cli._model_catalog import ModelChoice, assemble_catalog  # noqa: PLC0415
     from cli.chat.widgets.model_picker import (  # noqa: PLC0415
         ModelPickerLoadingScreen,
@@ -438,7 +441,6 @@ async def _open_model_picker_from_slash(ctx: SlashContext) -> None:
 
     assert ctx.state is not None  # guarded by the caller
 
-    app = active_app.get()
     await app.push_screen(ModelPickerLoadingScreen())
     try:
         choices, failures = await assemble_catalog(ctx)
@@ -454,31 +456,46 @@ async def _open_model_picker_from_slash(ctx: SlashContext) -> None:
 
 
 async def _handler_model(arg_text: str, ctx: SlashContext) -> ControlSignal:
-    """`/model [<ref>]` — open the model picker, or switch directly.
+    """`/model [<ref>]` — print the current model, or switch directly.
 
     Accepts the three ModelSpec input shapes: object (rare from a
     slash command), compact string (`opencode/gpt-oss-120b`), and
     alias (`opus` → `platform.yaml` `model_aliases.opus`).
 
-    Without arg (spec-132 Step 5, loading UX + failure surfacing added
-    Step 6): opens `ModelPickerScreen` populated by
-    `assemble_catalog()` — the session's actually-configured providers
-    (`ctx.state.runtime.llm_providers_config`), not a hardcoded list —
-    via `_open_model_picker_from_slash`, which also shows a loading
-    spinner while assembly is in flight and forwards any per-provider
-    failures for inline display. The active model is derived from
-    `ctx.state.config.model` and marked in the opened list via
-    `ModelPickerScreen`'s `(provider, entry.id)` matching (see
-    `_matches_current`'s docstring — only `provider`/`entry.id` need
-    to be populated on the `current` marker, which is all a bare
-    `ModelSpec` can supply). Selecting a row applies it through
-    `open_model_picker`, which calls the exact same `_apply_model`
-    helper the argument form below uses; Escape leaves state
-    untouched. Zero configured providers short-circuits to a plain
-    message instead of opening a picker with nothing to show — this is
-    the pre-existing, distinct-from-Step-6 short-circuit for "nothing
-    is even configured," resolved before `_open_model_picker_from_slash`
-    is ever called.
+    Without arg: prints the current `provider/model` as text. **This
+    is a fallback, not the real no-arg behaviour** — in the real
+    `kolsch chat` UI, `ChatApp._handle_slash` intercepts `/model` with
+    no argument BEFORE it ever reaches this function (see
+    `ChatApp._handle_model_picker`'s docstring for why) and opens the
+    picker instead. This branch only runs for a caller that invokes
+    `_handler_model` directly, bypassing that interception — tests, or
+    any hypothetical future non-interactive caller. It deliberately
+    does NOT attempt to open the picker itself: earlier revisions did
+    (spec-132 Steps 5/6), calling `open_model_picker`, which awaits
+    `App.push_screen_wait` — Textual hard-requires that to run inside a
+    worker (`NoActiveWorker` otherwise). Wrapping the call in a worker
+    and awaiting its result from HERE seemed like the fix, but that
+    deadlocks: `_handler_model` is itself invoked synchronously from
+    `ChatApp._handle_slash` -> `on_composer_submitted`, one of the
+    App's own message handlers, and Textual's message pump dispatches
+    handlers strictly sequentially (`message_pump.py:654`,
+    `await self._dispatch_message(message)` inside a `while` loop that
+    doesn't advance to the next message until the current handler
+    returns) — so a handler that awaits a worker's completion blocks
+    the very message processing (e.g. the keypress that would dismiss
+    the picker) the worker is waiting on. Confirmed empirically with a
+    minimal repro before this fix landed: awaiting `Worker.wait()`
+    directly from a message handler hangs forever, while a *detached*
+    worker (kicked off but not awaited, matching this codebase's
+    existing `_run_exchange` `@work`-decorated fire-and-forget pattern)
+    runs correctly. Since opening the picker needs to be fire-and-
+    forget, and this function's contract (`(arg_text, ctx) ->
+    ControlSignal`, with `ctx.stdout` read synchronously by the caller
+    right after it returns) has no way to report a LATER failure from
+    inside a detached worker, that responsibility moved to
+    `ChatApp._handle_model_picker` / `_run_model_picker`, which have
+    direct, always-available access to `self._mount_transcript_notice`
+    for exactly that.
 
     With arg: validates and applies via the shared `_apply_model`
     helper, which swaps `state.config.model` for this session only,
@@ -493,24 +510,8 @@ async def _handler_model(arg_text: str, ctx: SlashContext) -> ControlSignal:
         return ControlSignal.CONTINUE
     arg = arg_text.strip()
     if not arg:
-        if not ctx.state.runtime.llm_providers_config:
-            ctx.stdout.write("/model: no providers configured; nothing to pick from.\n")
-            return ControlSignal.CONTINUE
-        try:
-            await _open_model_picker_from_slash(ctx)
-        except LookupError:
-            # `textual._context.active_app.get()` raises this when
-            # there's no running Textual App in context — not
-            # reachable on any current production/test path (there is
-            # always a live ChatApp by the time a slash command
-            # dispatches), but a future non-interactive `/model`
-            # caller could hit it. Caught ahead of the broad
-            # `except Exception` below so this prints a clear message
-            # instead of the raw `ContextVar` object repr the generic
-            # handler would otherwise surface.
-            ctx.stdout.write("/model: requires a running chat session\n")
-        except Exception as exc:  # noqa: BLE001 — surface every other failure flavour
-            ctx.stdout.write(f"/model: could not open picker: {exc}\n")
+        current = ctx.state.config.model
+        ctx.stdout.write(f"current model: {current.provider}/{current.model}\n")
         return ControlSignal.CONTINUE
     try:
         new_spec = _apply_model(ctx, arg)
