@@ -35,7 +35,9 @@ from ruamel.yaml.error import YAMLError
 __all__ = [
     "YAMLError",
     "dump",
+    "dump_preserving_trailing_comment_block",
     "dump_round_trip",
+    "extract_trailing_comment_block",
     "load",
     "load_round_trip",
     "load_with_positions",
@@ -102,6 +104,169 @@ def dump(data: Any) -> str:  # noqa: ANN401
     buf = StringIO()
     _yaml.dump(data, buf)
     return buf.getvalue()
+
+
+# qol-133 — generic "trailing scaffold" preservation for the plain
+# load()/dump() pair.
+#
+# Several independent call sites across the CLI (``cli._setup``'s
+# migration helpers, ``cli.llm_commands``'s ``_write_platform_yaml_
+# atomic`` — shared by ``cmd_connect``/``cmd_disconnect``/``cmd_
+# refresh`` — and ``cli.permissions``'s ``_write_back``) all follow
+# the same "read platform.yaml as a plain dict, mutate it, dump() it
+# back" pattern. Plain ``load()``/``dump()`` is safe-mode: it has no
+# comment-preservation machinery at all (that's what the separate
+# ``load_round_trip``/``dump_round_trip`` pair is for), so every one
+# of those call sites silently drops any trailing, fully-commented,
+# inert content that isn't live YAML — e.g. qol-133's fresh-install
+# ``hooks:`` scaffold example. Migrating every write site to the
+# round-trip pair is out of scope (it would require passing
+# ``CommentedMap`` payloads through every caller); instead, these two
+# helpers let a caller keep using plain dicts while still not
+# clobbering a purely-decorative trailing block.
+#
+# The mechanism is intentionally generic — it does not know about
+# ``hooks:`` or any specific scaffold content. It only recognizes
+# "the tail of the file, from the first line of a contiguous
+# comment/blank-line run that reaches EOF without any more live YAML
+# after it". That block, by construction, contributes nothing to
+# ``load()``'s parsed result (comments and blank lines are not
+# data), so re-appending it verbatim after a fresh ``dump()`` is safe
+# for ANY such trailing block, not just this spec's.
+def _trailing_block_start_index(lines: list[str]) -> int | None:
+    """Return the confirmed decorative block's first line index, or ``None``.
+
+    Two-phase: find the maximal trailing run of blank/``#`` lines,
+    then require that run's own first line be blank — that blank
+    line is the separator between live content and the block, and is
+    excluded from the returned index (the block starts right after
+    it). See :func:`extract_trailing_comment_block` for the full
+    rationale (the docstring lives there since that's the public
+    entry point).
+    """
+    run_start = len(lines)
+    for idx in range(len(lines) - 1, -1, -1):
+        stripped = lines[idx].strip()
+        if not stripped or stripped.startswith("#"):
+            run_start = idx
+            continue
+        break
+
+    no_trailing_run = run_start == len(lines)
+    whole_file_is_the_run = run_start == 0
+    if no_trailing_run or whole_file_is_the_run:
+        return None
+
+    separator_present = not lines[run_start].strip()
+    if not separator_present:
+        # The run's first line is a `#` line glued directly onto live
+        # content, no blank between — the adversarial case: a
+        # `#`-shaped tail of a real multi-line scalar, not a
+        # decorative block.
+        return None
+
+    first_comment_idx = run_start + 1
+    has_content_after_separator = (
+        first_comment_idx < len(lines) and "".join(lines[first_comment_idx:]).strip()
+    )
+    return first_comment_idx if has_content_after_separator else None
+
+
+def extract_trailing_comment_block(text: str) -> str | None:
+    """Return the trailing all-comment/blank-line block of ``text``, if any.
+
+    Scans lines from the end of ``text`` backwards; as long as each
+    line is blank or starts with ``#`` (after stripping leading
+    whitespace), it's part of the candidate trailing run. Stops at
+    the first line that has live content — that run (start index
+    through EOF) is the *candidate* block.
+
+    The candidate is only recognized as a genuine decorative block
+    when it is separated from the preceding live content by at least
+    one BLANK line — i.e. the line immediately above the candidate's
+    first line must itself be blank (after stripping). Without this
+    requirement, a `#`-shaped physical line that's actually the tail
+    of a real multi-line scalar (e.g. a `hooks:` rule's
+    ``command: |`` field whose last line happens to start with ``#``,
+    such as a shell script ending in ``echo '# done'``) would be
+    misidentified as decorative and get orphaned as a duplicated
+    fragment after a rewrite — the scalar's *parsed value* stays
+    correct either way (comments inside a block scalar are literal
+    content, not YAML syntax), but the fragment would still wrongly
+    reappear as junk text past EOF. Every known call site writes a
+    real blank-line separator before the scaffold (``dump(payload)``
+    followed by a blank line and then the block), so requiring one
+    here costs nothing for the legitimate case while closing the
+    misattribution.
+
+    A blank line INSIDE the candidate run (not just at its start) is
+    fine and stays part of the returned block — only the boundary
+    between real content and the run's first line matters.
+
+    Returns ``None`` when the file has no trailing comment block
+    (e.g. the last line is real YAML), when the run isn't preceded by
+    a blank-line separator (the adversarial case above), when the
+    candidate run is only blank lines (nothing worth preserving), or
+    when ``text`` is empty.
+
+    The returned string starts at the first ``#`` line of the run
+    (the blank separator line itself is not included — callers
+    re-add their own separator) and preserves everything verbatim
+    through EOF, including the original line endings inside the
+    block.
+
+    Known narrow gap (non-blocking, cosmetic only): this heuristic is
+    line-level, not indentation-aware. A block scalar containing an
+    embedded blank line immediately followed by one more *indented*
+    line that strips to a ``#``-prefix, as the very last line of the
+    file, can still be misattributed as decorative — the scalar's
+    parsed value stays correct (comments inside a block scalar are
+    literal content), but a duplicated, harmless junk fragment can
+    reappear past EOF after a rewrite. Not reachable via any
+    documented hook-writing pattern (`docs/how-to/event-hooks.md`
+    steers users toward single-line commands), and none of this
+    module's real call sites' generated content can trigger it on
+    its own — only a hand-authored, unusually-shaped multi-line
+    ``command:`` block could. Flagged here rather than fixed because
+    closing it fully would require real indentation-tracking, not a
+    line-level heuristic.
+    """
+    if not text:
+        return None
+    lines = text.splitlines(keepends=True)
+    start = _trailing_block_start_index(lines)
+    return None if start is None else "".join(lines[start:])
+
+
+def dump_preserving_trailing_comment_block(
+    previous_text: str | None,
+    data: Any,  # noqa: ANN401
+) -> str:
+    """Like :func:`dump`, but re-appends ``previous_text``'s trailing comment block.
+
+    Re-appends the trailing comment block (if any) after the
+    freshly-dumped content.
+
+    Callers that read `platform.yaml` (or any similarly-scaffolded
+    file) as a plain dict, mutate it, and write it back via ``dump()``
+    should use this instead whenever the *previous* on-disk text is
+    available — it makes the previously-described class of bug
+    (silently dropping a trailing, purely-decorative comment block on
+    any load-dict-dump-write round-trip) structurally impossible at
+    every call site that adopts it, rather than requiring each site
+    to hand-roll its own detect-and-reappend check.
+
+    ``previous_text`` is the file's content *before* this write (pass
+    ``None`` or ``""`` when there is no previous file, e.g. first
+    creation — the return value is then identical to ``dump(data)``).
+    """
+    new_text = dump(data)
+    if not previous_text:
+        return new_text
+    trailing = extract_trailing_comment_block(previous_text)
+    if trailing is None:
+        return new_text
+    return new_text + "\n" + trailing
 
 
 # Round-trip pair: ``load_round_trip`` + ``dump_round_trip`` preserve

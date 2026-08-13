@@ -29,7 +29,7 @@ from errors import (
     LlmDiscoveryFailed,
     LlmValidationFailed,
 )
-from kolsch._yamlio import dump, load
+from kolsch._yamlio import dump_preserving_trailing_comment_block, load
 from llm import (
     Credentials,
     ProviderConfig,
@@ -127,13 +127,27 @@ def _write_platform_yaml_atomic(root: Path, payload: dict[str, Any]) -> None:
 
     Pattern: temp file in same directory → fsync → atomic rename.
     On any failure the original file is left untouched.
+
+    qol-133: this is the single write chokepoint shared by
+    `cmd_connect`/`cmd_disconnect`/`cmd_refresh` — all three read
+    `platform.yaml` as a plain dict via `_load_platform_yaml` (backed
+    by `kolsch._yamlio.load`, which has no comment-preservation) and
+    end up here to write it back. Uses
+    `dump_preserving_trailing_comment_block` (not raw `dump()`) so a
+    trailing, fully-commented scaffold block already on disk — e.g.
+    the fresh-install `hooks:` example — survives a standalone
+    `kolsch connect`/`disconnect`/`refresh` run against a workspace
+    that still has it, not just a `kolsch setup` re-run. No-op when
+    there's no such block (including first-ever write, when the file
+    doesn't exist yet).
     """
     path = root / "platform.yaml"
     path.parent.mkdir(parents=True, exist_ok=True)
+    previous_text = path.read_text(encoding="utf-8") if path.is_file() else ""
     tmp = path.with_suffix(path.suffix + ".tmp")
     try:
         with tmp.open("w", encoding="utf-8") as f:
-            f.write(dump(payload))
+            f.write(dump_preserving_trailing_comment_block(previous_text, payload))
             f.flush()
             os.fsync(f.fileno())
         tmp.replace(path)

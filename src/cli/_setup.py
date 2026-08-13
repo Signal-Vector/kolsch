@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any, Protocol, TextIO
 
 from assets.platform_config import default_platform_payload as _stock_defaults
-from kolsch._yamlio import dump, load
+from kolsch._yamlio import dump, dump_preserving_trailing_comment_block, load
 
 if TYPE_CHECKING:
     from collections.abc import Awaitable, Callable
@@ -379,6 +379,28 @@ _WORKSPACE_DIRS: tuple[str, ...] = (
 )
 
 
+# qol-133 step 1 — a fully-commented, inert worked example appended
+# (as raw text, NOT as data) after a fresh workspace's
+# `dump(_setup_platform_payload())` output. `dump()` on a plain dict
+# cannot carry comments (ruamel.yaml's comment API only works on its
+# own CommentedMap/CommentedSeq types), so the example lives here as
+# a literal string rather than inside `_setup_platform_payload()`.
+# Every line starts with `#` — confirmed by a round-trip through
+# `kolsch._yamlio.load()` in tests, which must see no `hooks` key.
+_HOOKS_EXAMPLE_BLOCK = """\
+# Example: notify yourself when kolsch is about to ask for approval.
+# Uncomment and edit `command` for your platform (macOS shown below;
+# Linux: notify-send, or any shell command you'd run by hand).
+# See docs/how-to/event-hooks.md for the full guide.
+#
+# hooks:
+#   - event: "kolsch.prompt.requested"
+#     matcher: "*"
+#     command: "terminal-notifier -title kolsch -message 'waiting on your approval'"
+#     timeout_seconds: 10
+"""
+
+
 async def _step_b_skeleton(io: _SetupIO, *, non_interactive: bool) -> str:
     yaml_path = io.root / "platform.yaml"
     env_path = io.root / ".env"
@@ -425,7 +447,7 @@ async def _step_b_skeleton(io: _SetupIO, *, non_interactive: bool) -> str:
         io.out.write(f"  ✓ {name}/\n")
 
     yaml_path.write_text(
-        dump(_setup_platform_payload()),
+        dump(_setup_platform_payload()) + "\n" + _HOOKS_EXAMPLE_BLOCK,
         encoding="utf-8",
     )
     io.out.write("  ✓ platform.yaml\n")
@@ -602,14 +624,21 @@ def _write_defaults_model(yaml_path: Path, model: str | dict[str, str]) -> None:
     the agent's resolved `model:` field. Alias strings are written
     verbatim; canonical `{provider, model}` dicts are written
     as-is.
+
+    qol-133: uses `dump_preserving_trailing_comment_block` (not raw
+    `dump()`) so a trailing, fully-commented scaffold block — e.g.
+    the fresh-install `hooks:` example — already on disk survives
+    this rewrite. A no-op on a workspace with no such block.
     """
+    previous_text = yaml_path.read_text(encoding="utf-8") if yaml_path.is_file() else ""
     payload = _read_yaml(yaml_path)
     defaults = payload.get("defaults")
     if not isinstance(defaults, dict):
         defaults = {}
     defaults["model"] = model
     payload["defaults"] = defaults
-    yaml_path.write_text(dump(payload), encoding="utf-8")
+    new_text = dump_preserving_trailing_comment_block(previous_text, payload)
+    yaml_path.write_text(new_text, encoding="utf-8")
 
 
 def _announce_picked_model(io: _SetupIO, model: str | dict[str, str]) -> None:
@@ -1054,9 +1083,13 @@ def _maybe_migrate_authz_rules(
 
     if choice == "m":
         backup = _backup_platform_yaml(yaml_path)
+        previous_text = yaml_path.read_text(encoding="utf-8")
         new_rules = _migrate_rules_preserving_customs(rules)
         payload["authorization"]["config"]["rules"] = new_rules
-        yaml_path.write_text(dump(payload), encoding="utf-8")
+        yaml_path.write_text(
+            dump_preserving_trailing_comment_block(previous_text, payload),
+            encoding="utf-8",
+        )
         io.out.write("  ✓ migrated authorization rules → canonical defaults\n")
         io.out.write(f"  ✓ backup written to {backup.relative_to(yaml_path.parent)}\n")
     elif choice == "k":
@@ -1157,9 +1190,10 @@ async def _maybe_migrate_authz_rules_to_qol_schema(io: _SetupIO) -> None:
     if converted_count == 0:
         return
     backup = _backup_platform_yaml(yaml_path)
+    previous_text = yaml_path.read_text(encoding="utf-8")
     payload["authorization"]["config"]["rules"] = result.rules
     yaml_path.write_text(
-        dump(payload),
+        dump_preserving_trailing_comment_block(previous_text, payload),
         encoding="utf-8",
     )
     io.out.write(
@@ -1201,9 +1235,10 @@ def _maybe_add_workspace_root_to_file_access(io: _SetupIO) -> None:
     if "." in allowed:
         return
     backup = _backup_platform_yaml(yaml_path)
+    previous_text = yaml_path.read_text(encoding="utf-8")
     file_access["allowed_paths"] = [".", *allowed]
     yaml_path.write_text(
-        dump(payload),
+        dump_preserving_trailing_comment_block(previous_text, payload),
         encoding="utf-8",
     )
     io.out.write(
@@ -1303,6 +1338,7 @@ def _maybe_ensure_agent_execute_allow(io: _SetupIO) -> None:
         return
 
     backup = _backup_platform_yaml(yaml_path)
+    previous_text = yaml_path.read_text(encoding="utf-8")
     new_rule = {
         "what": "agent.execute.*",
         "pattern": "*",
@@ -1314,7 +1350,7 @@ def _maybe_ensure_agent_execute_allow(io: _SetupIO) -> None:
     # policy statement.
     payload["authorization"]["config"]["rules"] = [new_rule, *rules]
     yaml_path.write_text(
-        dump(payload),
+        dump_preserving_trailing_comment_block(previous_text, payload),
         encoding="utf-8",
     )
     io.out.write(

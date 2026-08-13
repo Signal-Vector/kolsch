@@ -40,6 +40,7 @@ from cli._setup import (
     run_setup,
 )
 from cli.main import main
+from kolsch._yamlio import load
 from llm.providers.opencode import OpenCodeConnector
 from llm.providers.openrouter import OpenRouterConnector
 
@@ -1692,3 +1693,147 @@ async def test_migration_idempotent_on_already_migrated_workspace(
         if "allow-all" in c[0] or "Choose:" in c[0]
     ]
     assert migration_calls == []
+
+
+# ===========================================================================
+# qol-133 step 1 — fresh-workspace hooks example scaffold
+# ===========================================================================
+
+
+async def test_qol133_fresh_setup_scaffolds_commented_hooks_example(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test 1: a fresh `kolsch setup` run writes a `platform.yaml`
+    whose `load()`-parsed content has no `hooks` key, but whose raw
+    text contains a fully-commented worked example (every line
+    prefixed `#`) naming `event`, `matcher`, `command`, and pointing
+    at docs/how-to/event-hooks.md."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    io_ = _make_test_io(root=tmp_path)
+    assert (
+        await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
+        == 0
+    )
+
+    yaml_path = tmp_path / "platform.yaml"
+    raw_text = yaml_path.read_text(encoding="utf-8")
+
+    # The parsed config has no live `hooks` key.
+    parsed = load(raw_text)
+    assert isinstance(parsed, dict)
+    assert "hooks" not in parsed
+
+    # The raw text contains a commented block referencing the
+    # required fields + the docs pointer.
+    assert "event" in raw_text
+    assert "matcher" in raw_text
+    assert "command" in raw_text
+    assert "docs/how-to/event-hooks.md" in raw_text
+
+    # Every line of the appended example block is commented — locate
+    # the block via its known first line and verify each subsequent
+    # non-blank line up to EOF starts with `#`.
+    marker = "# Example: notify yourself when kolsch is about to ask for approval."
+    assert marker in raw_text
+    block_start = raw_text.index(marker)
+    block_text = raw_text[block_start:]
+    for line in block_text.splitlines():
+        if not line.strip():
+            continue
+        assert line.startswith("#"), f"non-commented line in hooks example: {line!r}"
+
+
+_HOOKS_SCAFFOLD_MARKER = (
+    "# Example: notify yourself when kolsch is about to ask for approval."
+)
+
+
+def _assert_hooks_scaffold_intact(raw_text: str) -> None:
+    """Shared assertion: the qol-133 scaffold is present, byte-for-byte,
+    and every line of it is commented (no live `hooks:` key)."""
+    assert _HOOKS_SCAFFOLD_MARKER in raw_text
+    block_text = raw_text[raw_text.index(_HOOKS_SCAFFOLD_MARKER) :]
+    for line in block_text.splitlines():
+        if not line.strip():
+            continue
+        assert line.startswith("#"), f"non-commented line in hooks example: {line!r}"
+    parsed = load(raw_text)
+    assert isinstance(parsed, dict)
+    assert "hooks" not in parsed
+
+
+async def test_qol133_hooks_scaffold_survives_provider_connect_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reviewer-found gap: Step C's `cmd_connect` write path
+    (`llm_commands._write_platform_yaml_atomic`) does its own
+    load-dict-dump round-trip on `platform.yaml`, independently of
+    Step D's `_write_defaults_model`. A workspace where a provider
+    actually gets connected (the `KOLSCH_PROVIDER`/`KOLSCH_PROVIDER_
+    KEY` env-driven non-interactive path — mirrors
+    `test_tc_ux_07_env_driven_auto_connect`) exercises Step B → Step C
+    → Step D in sequence; the scaffold must survive ALL of them, not
+    just B → D with C skipped (the gap the original Test 1 missed,
+    since it explicitly deletes both env vars)."""
+    monkeypatch.setenv("KOLSCH_PROVIDER", "openrouter")
+    monkeypatch.setenv("KOLSCH_PROVIDER_KEY", "sk-test-or")
+    io_ = _make_test_io(root=tmp_path)
+    rc = await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
+    assert rc == 0
+
+    # Sanity: Step C really did run and write a connected provider —
+    # otherwise this test would silently degrade into a copy of Test 1.
+    raw_text = (tmp_path / "platform.yaml").read_text(encoding="utf-8")
+    parsed = load(raw_text)
+    assert "openrouter" in (parsed.get("llm_providers") or {})
+
+    _assert_hooks_scaffold_intact(raw_text)
+
+
+async def test_qol133_hooks_scaffold_survives_standalone_cmd_connect(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The scaffold must also survive a LATER, standalone `kolsch
+    connect` run against an already-set-up workspace that still has
+    the untouched scaffold — not just writes that happen to fire
+    inside the same `kolsch setup` invocation that created it."""
+    from cli.llm_commands import _CommandIO, cmd_connect
+
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    io_ = _make_test_io(root=tmp_path)
+    assert (
+        await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
+        == 0
+    )
+    before_connect = (tmp_path / "platform.yaml").read_text(encoding="utf-8")
+    _assert_hooks_scaffold_intact(before_connect)
+
+    captured = io.StringIO()
+
+    class _EnvKeyPrompter:
+        def ask(self, field: PromptField) -> str:
+            if field.name == "api_key":
+                return "sk-test-or-2"
+            return field.default or ""
+
+    connect_io = _CommandIO(
+        root=tmp_path,
+        out=captured,
+        prompter=_EnvKeyPrompter(),
+        connector_factory=_mock_connector_factory,
+    )
+    rc = await cmd_connect(
+        argparse.Namespace(provider="openrouter"),
+        connect_io,
+    )
+    assert rc == 0
+
+    raw_text = (tmp_path / "platform.yaml").read_text(encoding="utf-8")
+    parsed = load(raw_text)
+    assert "openrouter" in (parsed.get("llm_providers") or {})
+    _assert_hooks_scaffold_intact(raw_text)
