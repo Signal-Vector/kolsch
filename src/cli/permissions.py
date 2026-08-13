@@ -27,7 +27,7 @@ from errors import (
     AuthzRuleNotFound,
     WorkspaceNotInitialized,
 )
-from kolsch._yamlio import dump, load
+from kolsch._yamlio import dump_preserving_trailing_comment_block, load
 from platform_runtime.workspace import workspace_is_initialized
 from providers import (
     DEFAULT_DENY_RULE_ID,
@@ -323,10 +323,17 @@ def _write_back(yaml_path: Path, rules: list[Rule]) -> None:
     Preserves every other section of the file verbatim — only the
     rules list is replaced. Temp + fsync + `os.replace` for
     crash-safety.
+
+    qol-133: uses `dump_preserving_trailing_comment_block` (not raw
+    `dump()`) so a trailing, fully-commented scaffold block already
+    on disk — e.g. the fresh-install `hooks:` example — survives a
+    standalone `kolsch permissions` edit. No-op when there's no such
+    block.
     """
+    previous_text = yaml_path.read_text(encoding="utf-8") if yaml_path.is_file() else ""
     payload: dict[str, Any] = {}
-    if yaml_path.is_file():
-        existing = load(yaml_path.read_text(encoding="utf-8"))
+    if previous_text:
+        existing = load(previous_text)
         if isinstance(existing, dict):
             payload = existing
 
@@ -341,7 +348,7 @@ def _write_back(yaml_path: Path, rules: list[Rule]) -> None:
         authz["config"] = cfg
     cfg["rules"] = [_rule_to_dict(r) for r in rules]
 
-    serialized = dump(payload)
+    serialized = dump_preserving_trailing_comment_block(previous_text, payload)
     temp = yaml_path.with_name(f"{yaml_path.name}.tmp.{os.getpid()}")
     try:
         encoded = serialized.encode("utf-8")

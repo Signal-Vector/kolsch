@@ -40,6 +40,7 @@ from cli._setup import (
     run_setup,
 )
 from cli.main import main
+from kolsch._yamlio import load
 from llm.providers.opencode import OpenCodeConnector
 from llm.providers.openrouter import OpenRouterConnector
 
@@ -471,6 +472,16 @@ async def test_tc_ux_06_setup_is_idempotent(
     args = argparse.Namespace(non_interactive=True, root=tmp_path)
     first_io = _make_test_io(root=tmp_path)
     assert await run_setup(args, first_io) == 0
+
+    # qol-133 step 2: the very first re-run against a freshly-installed
+    # workspace legitimately writes a one-time `.kolsch/hooks-notice-
+    # shown` marker (the workspace has no `hooks:` key yet). That one
+    # write is a deliberate, single, self-limiting side effect — not a
+    # break in idempotency — so it happens here, before the snapshot
+    # this test actually asserts on, rather than between the two
+    # snapshots being compared.
+    warmup_io = _make_test_io(root=tmp_path)
+    assert await run_setup(args, warmup_io) == 0
 
     snapshot_before = _hash_workspace(tmp_path)
 
@@ -1692,3 +1703,276 @@ async def test_migration_idempotent_on_already_migrated_workspace(
         if "allow-all" in c[0] or "Choose:" in c[0]
     ]
     assert migration_calls == []
+
+
+# ===========================================================================
+# qol-133 step 1 — fresh-workspace hooks example scaffold
+# ===========================================================================
+
+
+async def test_qol133_fresh_setup_scaffolds_commented_hooks_example(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test 1: a fresh `kolsch setup` run writes a `platform.yaml`
+    whose `load()`-parsed content has no `hooks` key, but whose raw
+    text contains a fully-commented worked example (every line
+    prefixed `#`) naming `event`, `matcher`, `command`, and pointing
+    at docs/how-to/event-hooks.md."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    io_ = _make_test_io(root=tmp_path)
+    assert (
+        await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
+        == 0
+    )
+
+    yaml_path = tmp_path / "platform.yaml"
+    raw_text = yaml_path.read_text(encoding="utf-8")
+
+    # The parsed config has no live `hooks` key.
+    parsed = load(raw_text)
+    assert isinstance(parsed, dict)
+    assert "hooks" not in parsed
+
+    # The raw text contains a commented block referencing the
+    # required fields + the docs pointer.
+    assert "event" in raw_text
+    assert "matcher" in raw_text
+    assert "command" in raw_text
+    assert "docs/how-to/event-hooks.md" in raw_text
+
+    # Every line of the appended example block is commented — locate
+    # the block via its known first line and verify each subsequent
+    # non-blank line up to EOF starts with `#`.
+    marker = "# Example: notify yourself when kolsch is about to ask for approval."
+    assert marker in raw_text
+    block_start = raw_text.index(marker)
+    block_text = raw_text[block_start:]
+    for line in block_text.splitlines():
+        if not line.strip():
+            continue
+        assert line.startswith("#"), f"non-commented line in hooks example: {line!r}"
+
+
+_HOOKS_SCAFFOLD_MARKER = (
+    "# Example: notify yourself when kolsch is about to ask for approval."
+)
+
+
+def _assert_hooks_scaffold_intact(raw_text: str) -> None:
+    """Shared assertion: the qol-133 scaffold is present, byte-for-byte,
+    and every line of it is commented (no live `hooks:` key)."""
+    assert _HOOKS_SCAFFOLD_MARKER in raw_text
+    block_text = raw_text[raw_text.index(_HOOKS_SCAFFOLD_MARKER) :]
+    for line in block_text.splitlines():
+        if not line.strip():
+            continue
+        assert line.startswith("#"), f"non-commented line in hooks example: {line!r}"
+    parsed = load(raw_text)
+    assert isinstance(parsed, dict)
+    assert "hooks" not in parsed
+
+
+async def test_qol133_hooks_scaffold_survives_provider_connect_write(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Reviewer-found gap: Step C's `cmd_connect` write path
+    (`llm_commands._write_platform_yaml_atomic`) does its own
+    load-dict-dump round-trip on `platform.yaml`, independently of
+    Step D's `_write_defaults_model`. A workspace where a provider
+    actually gets connected (the `KOLSCH_PROVIDER`/`KOLSCH_PROVIDER_
+    KEY` env-driven non-interactive path — mirrors
+    `test_tc_ux_07_env_driven_auto_connect`) exercises Step B → Step C
+    → Step D in sequence; the scaffold must survive ALL of them, not
+    just B → D with C skipped (the gap the original Test 1 missed,
+    since it explicitly deletes both env vars)."""
+    monkeypatch.setenv("KOLSCH_PROVIDER", "openrouter")
+    monkeypatch.setenv("KOLSCH_PROVIDER_KEY", "sk-test-or")
+    io_ = _make_test_io(root=tmp_path)
+    rc = await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
+    assert rc == 0
+
+    # Sanity: Step C really did run and write a connected provider —
+    # otherwise this test would silently degrade into a copy of Test 1.
+    raw_text = (tmp_path / "platform.yaml").read_text(encoding="utf-8")
+    parsed = load(raw_text)
+    assert "openrouter" in (parsed.get("llm_providers") or {})
+
+    _assert_hooks_scaffold_intact(raw_text)
+
+
+async def test_qol133_hooks_scaffold_survives_standalone_cmd_connect(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The scaffold must also survive a LATER, standalone `kolsch
+    connect` run against an already-set-up workspace that still has
+    the untouched scaffold — not just writes that happen to fire
+    inside the same `kolsch setup` invocation that created it."""
+    from cli.llm_commands import _CommandIO, cmd_connect
+
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    io_ = _make_test_io(root=tmp_path)
+    assert (
+        await run_setup(argparse.Namespace(non_interactive=True, root=tmp_path), io_)
+        == 0
+    )
+    before_connect = (tmp_path / "platform.yaml").read_text(encoding="utf-8")
+    _assert_hooks_scaffold_intact(before_connect)
+
+    captured = io.StringIO()
+
+    class _EnvKeyPrompter:
+        def ask(self, field: PromptField) -> str:
+            if field.name == "api_key":
+                return "sk-test-or-2"
+            return field.default or ""
+
+    connect_io = _CommandIO(
+        root=tmp_path,
+        out=captured,
+        prompter=_EnvKeyPrompter(),
+        connector_factory=_mock_connector_factory,
+    )
+    rc = await cmd_connect(
+        argparse.Namespace(provider="openrouter"),
+        connect_io,
+    )
+    assert rc == 0
+
+    raw_text = (tmp_path / "platform.yaml").read_text(encoding="utf-8")
+    parsed = load(raw_text)
+    assert "openrouter" in (parsed.get("llm_providers") or {})
+    _assert_hooks_scaffold_intact(raw_text)
+
+
+# ===========================================================================
+# qol-133 step 2 — one-time hooks-availability notice for existing workspaces
+# ===========================================================================
+
+_HOOKS_NOTICE_POINTER = "docs/how-to/event-hooks.md"
+
+
+async def test_qol133_existing_workspace_without_hooks_gets_notice_once(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test 2: a `kolsch setup` re-run against a workspace whose
+    `platform.yaml` has no `hooks` key prints a notice pointing at
+    docs/how-to/event-hooks.md, and does not modify `platform.yaml`.
+
+    Uses the fresh-setup path (Test 1's fixture) as the base
+    workspace: `test_tc_ux_06_setup_is_idempotent` already establishes
+    that a second non-interactive re-run against a freshly-set-up
+    workspace is a byte-for-byte no-op across every other `_maybe_*`
+    helper, so any `platform.yaml` diff observed here is unambiguously
+    attributable to this step.
+    """
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    args = argparse.Namespace(non_interactive=True, root=tmp_path)
+    assert await run_setup(args, _make_test_io(root=tmp_path)) == 0
+
+    yaml_path = tmp_path / "platform.yaml"
+    before = yaml_path.read_bytes()
+    parsed_before = load(before.decode("utf-8"))
+    assert isinstance(parsed_before, dict)
+    assert "hooks" not in parsed_before
+
+    rerun_out = io.StringIO()
+    rerun_io = _make_test_io(root=tmp_path, out=rerun_out)
+    assert await run_setup(args, rerun_io) == 0
+
+    captured = rerun_out.getvalue()
+    assert _HOOKS_NOTICE_POINTER in captured
+
+    after = yaml_path.read_bytes()
+    assert after == before, "the hooks notice must never mutate platform.yaml"
+
+
+async def test_qol133_hooks_notice_does_not_repeat_on_second_rerun(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test 3: immediately after a re-run that showed the notice, a
+    second re-run against the same still-hooks-less workspace does NOT
+    show it again."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    args = argparse.Namespace(non_interactive=True, root=tmp_path)
+    assert await run_setup(args, _make_test_io(root=tmp_path)) == 0
+
+    first_rerun_out = io.StringIO()
+    assert await run_setup(args, _make_test_io(root=tmp_path, out=first_rerun_out)) == 0
+    assert _HOOKS_NOTICE_POINTER in first_rerun_out.getvalue()
+
+    second_rerun_out = io.StringIO()
+    assert (
+        await run_setup(args, _make_test_io(root=tmp_path, out=second_rerun_out)) == 0
+    )
+    assert _HOOKS_NOTICE_POINTER not in second_rerun_out.getvalue()
+
+
+async def test_qol133_workspace_with_hooks_key_never_sees_notice(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Test 4: a workspace whose `platform.yaml` already has a `hooks`
+    key (here, an empty list) never sees the notice, even on the very
+    first re-run with no pre-existing marker file. No marker file
+    should be written either, since the presence check alone is
+    sufficient (Acceptance Criterion 4) — verified as a nice-to-have,
+    not load-bearing."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    args = argparse.Namespace(non_interactive=True, root=tmp_path)
+    assert await run_setup(args, _make_test_io(root=tmp_path)) == 0
+
+    yaml_path = tmp_path / "platform.yaml"
+    payload = yaml.safe_load(yaml_path.read_text())
+    payload["hooks"] = []
+    yaml_path.write_text(yaml.safe_dump(payload, sort_keys=False))
+
+    marker_path = tmp_path / ".kolsch" / "hooks-notice-shown"
+    assert not marker_path.exists()
+
+    rerun_out = io.StringIO()
+    rerun_io = _make_test_io(root=tmp_path, out=rerun_out)
+    assert await run_setup(args, rerun_io) == 0
+
+    assert _HOOKS_NOTICE_POINTER not in rerun_out.getvalue()
+    assert not marker_path.exists(), (
+        "a workspace with a `hooks` key already present should never "
+        "need the one-time marker written"
+    )
+
+
+async def test_qol133_corrupt_marker_degrades_to_showing_notice_again(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A corrupted/unparseable marker file must be treated as "not yet
+    shown" — fail toward showing the notice once more, never toward a
+    crash or permanent silence (Acceptance Criterion 5)."""
+    monkeypatch.delenv("KOLSCH_PROVIDER", raising=False)
+    monkeypatch.delenv("KOLSCH_PROVIDER_KEY", raising=False)
+    args = argparse.Namespace(non_interactive=True, root=tmp_path)
+    assert await run_setup(args, _make_test_io(root=tmp_path)) == 0
+
+    first_rerun_out = io.StringIO()
+    assert await run_setup(args, _make_test_io(root=tmp_path, out=first_rerun_out)) == 0
+    assert _HOOKS_NOTICE_POINTER in first_rerun_out.getvalue()
+
+    marker_path = tmp_path / ".kolsch" / "hooks-notice-shown"
+    assert marker_path.is_file()
+    marker_path.write_text("{not valid json", encoding="utf-8")
+
+    second_rerun_out = io.StringIO()
+    rc = await run_setup(args, _make_test_io(root=tmp_path, out=second_rerun_out))
+    assert rc == 0, "a corrupt marker must never crash setup"
+    assert _HOOKS_NOTICE_POINTER in second_rerun_out.getvalue(), (
+        "a corrupt marker must degrade toward showing the notice again"
+    )
