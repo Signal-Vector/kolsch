@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import argparse
 import difflib
+import json
 import os
 import shutil
 import sys
@@ -438,6 +439,10 @@ async def _step_b_skeleton(io: _SetupIO, *, non_interactive: bool) -> str:
         # Advisory skill validation. Warning-only — never blocks
         # setup so a user mid-editing a SKILL.md doesn't get stuck.
         await _maybe_warn_invalid_skills(io)
+        # qol-133 step 2 — read-only, one-time advisory pointing an
+        # existing workspace without `hooks:` at the docs. Never
+        # mutates platform.yaml; never blocks setup.
+        _maybe_notify_hooks_available(io)
         return _SKIPPED
 
     io.root.mkdir(parents=True, exist_ok=True)
@@ -1462,6 +1467,104 @@ async def _maybe_warn_invalid_skills(io: _SetupIO) -> None:
         "    (Run `kolsch skills validate` for details; "
         "warnings do not block setup.)\n",
     )
+
+
+# ---------------------------------------------------------------------------
+# qol-133 step 2 — one-time "hooks: exists" notice for existing workspaces
+# ---------------------------------------------------------------------------
+
+# Sentinel file: its mere existence means the notice has already been
+# shown. Content is a small JSON blob for debuggability only — nothing
+# reads it back except `_hooks_notice_shown`, and any read failure
+# (missing file, corrupt JSON, wrong shape) is treated identically to
+# "not shown yet". Lives alongside `.kolsch/bundle-baseline.json`
+# (see `cli._bundle_baseline._BASELINE_REL`).
+_HOOKS_NOTICE_MARKER_REL = ".kolsch/hooks-notice-shown"
+
+
+def _hooks_notice_marker_path(root: Path) -> Path:
+    """Return the absolute path to the one-time hooks-notice marker."""
+    return root / _HOOKS_NOTICE_MARKER_REL
+
+
+def _hooks_notice_shown(root: Path) -> bool:
+    """True when the one-time hooks-availability notice already fired.
+
+    A missing, unreadable, or unparseable marker file all count as
+    "not shown yet" — the failure mode this must fail toward is
+    showing the notice one extra time, never permanent silence and
+    never a crash.
+    """
+    path = _hooks_notice_marker_path(root)
+    if not path.is_file():
+        return False
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return False
+    return isinstance(raw, dict) and raw.get("shown") is True
+
+
+def _mark_hooks_notice_shown(root: Path) -> None:
+    """Atomically record that the one-time hooks notice has fired."""
+    path = _hooks_notice_marker_path(root)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    tmp = path.with_suffix(path.suffix + ".tmp")
+    try:
+        with tmp.open("w", encoding="utf-8") as fh:
+            json.dump(
+                {"shown": True, "shown_at": datetime.now(UTC).isoformat()},
+                fh,
+            )
+            fh.write("\n")
+            fh.flush()
+            os.fsync(fh.fileno())
+        tmp.replace(path)
+    finally:
+        if tmp.exists():
+            tmp.unlink(missing_ok=True)
+
+
+def _maybe_notify_hooks_available(io: _SetupIO) -> None:
+    """Advisory: point an existing, hooks-unaware workspace at the docs.
+
+    spec-131 shipped `platform.yaml`'s `hooks:` section; a workspace
+    created before that (or one that never uncommented Step B's
+    scaffold — see `_HOOKS_EXAMPLE_BLOCK`) has no way to discover the
+    feature short of already knowing to look for it. This is a
+    **read-only** advisory, never a migration: it prints a one-line
+    pointer to `docs/how-to/event-hooks.md` and never touches
+    `platform.yaml`. Never blocks setup.
+
+    Fires at most once ever per workspace, tracked by the
+    `.kolsch/hooks-notice-shown` marker — since this step does not
+    write `hooks:` for the user, the "missing key" condition never
+    self-clears, so without a marker this would nag on every re-run
+    forever.
+
+    Silent no-op when:
+
+    - `platform.yaml` is absent.
+    - `platform.yaml` already has a `hooks` key (any shape, including
+      an empty list) — no marker is written in this case; the
+      presence check alone is sufficient to stay silent forever.
+    - The one-time marker shows the notice already fired.
+    """
+    yaml_path = io.root / "platform.yaml"
+    if not yaml_path.is_file():
+        return
+    payload = _read_yaml(yaml_path)
+    if "hooks" in payload:
+        return
+    if _hooks_notice_shown(io.root):
+        return
+
+    io.out.write(
+        "  ℹ kolsch can run a shell command on events like an approval "  # noqa: RUF001
+        "prompt (e.g. a desktop notification) — see "
+        "docs/how-to/event-hooks.md to set up a hook.\n",
+    )
+    _mark_hooks_notice_shown(io.root)
 
 
 def _print_migration_diff(io: _SetupIO, current_rules: list[dict[str, Any]]) -> None:
