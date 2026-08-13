@@ -56,6 +56,49 @@ services:
     #        sanity: the whole tree MINUS tests/cli + tests/component,
     #                no coverage (fast; what GitHub CI runs).
     #
+    # bug-134: the `full` scope carries a hard wall-clock ceiling via
+    # `pytest-timeout` so a wedged test fails loud instead of hanging
+    # the gate silently for 45+ minutes (this happened once — a live
+    # asyncio hang inside the ~4390-test sequential run left the
+    # container "Up 45 minutes" at ~2% CPU with a byte-identical frozen
+    # log; root cause not conclusively pinned to a single code bug, see
+    # process/bug-134-full-gate-hang-nested-workflows.md).
+    #   --timeout=300           per-TEST ceiling (resets each test); no
+    #                           test in this suite legitimately runs
+    #                           anywhere near 5 minutes, so this is pure
+    #                           headroom over the real worst case while
+    #                           still firing FAR short of "45+ minutes
+    #                           with no signal".
+    #   --timeout-method=signal SIGALRM-based: dumps every thread's live
+    #                           stack, fails JUST the hung test (clear
+    #                           node id + traceback down to the exact
+    #                           blocked call), then lets the run
+    #                           continue — verified live against a
+    #                           deliberate `asyncio.sleep(3600)` hang,
+    #                           including confirming SIGALRM correctly
+    #                           interrupts a coroutine parked in
+    #                           asyncio's blocking `select()`/`epoll`
+    #                           call. `thread` method was considered and
+    #                           rejected: its expiry path hard-kills the
+    #                           whole process via `os._exit()`, which
+    #                           would lose the coverage report and the
+    #                           run's final summary — strictly less
+    #                           diagnostic for this use case.
+    #   --session-timeout=1500  belt-and-braces whole-run ceiling (25
+    #                           min vs. the script's own ~16-min normal
+    #                           runtime — a single point estimate, not a
+    #                           measured variance series; if a genuinely
+    #                           clean run starts creeping past ~20 min,
+    #                           revisit this margin before assuming a
+    #                           real hang). Only checked BETWEEN tests
+    #                           (per pytest-timeout's own docs, it can't
+    #                           by itself interrupt one still-running
+    #                           test) — a secondary guard against "many
+    #                           tests each individually under the
+    #                           per-test ceiling but the aggregate still
+    #                           runs away", not a replacement for
+    #                           --timeout above.
+    #
     # In the `full` scope the pytest target is the whole `tests/` tree so
     # `--cov` (source = ["src"]) measures the real, gate-enforced coverage
     # floor (fail_under = 85). Listing only a subset of tiers here silently
@@ -90,6 +133,9 @@ services:
                 --cov \
                 --cov-report=xml \
                 --cov-report=term \
+                --timeout=300 \
+                --timeout-method=signal \
+                --session-timeout=1500 \
                 tests
             ;;
           sanity)

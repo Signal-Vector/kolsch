@@ -226,6 +226,14 @@ test = [
     "pytest>=8",
     "pytest-asyncio>=0.23",
     "pytest-cov>=5",
+    # bug-134: hard wall-clock ceiling on the FULL local gate
+    # (`scripts/commit-gate` / `.githooks/pre-push`). Per-test timeout
+    # (resets each test) via `--timeout` in compose.test.yml's `full`
+    # branch — a single wedged test fails loudly with its node id +
+    # a stack dump of every thread, instead of the whole gate hanging
+    # silently for 45+ minutes with no diagnostic trail (see
+    # process/bug-134-full-gate-hang-nested-workflows.md).
+    "pytest-timeout>=2.3",
     # Parallel test execution — required to keep the CLI smoke suite
     # (tests/component/test_cli_smoke.py) under the
     # bug-sessions-namespace-attr-error.md AC 5 <10s target. Each smoke
