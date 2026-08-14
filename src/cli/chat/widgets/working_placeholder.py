@@ -15,7 +15,9 @@ Three renderable states:
 - **interrupted** (terminal) — set via
   :meth:`WorkingPlaceholder.render_terminal`. Glyph is
   ``state_tokens.py``'s ``"cancelled"`` token (``─``), rail ``$hint``,
-  dim text-style.
+  dim **and struck-through** text-style, with a widened body message
+  (``"Interrupted — turn cancelled"``) — see bug-135's Background for
+  why the glyph/color swap alone read as "still stuck," not "done."
 - **error** (terminal) — set via :meth:`WorkingPlaceholder.render_terminal`.
   Glyph is ``state_tokens.py``'s ``"failed"`` token (``✗``), rail
   ``$error``, bold text-style.
@@ -76,7 +78,10 @@ class WorkingPlaceholder(Widget):
     - Working (default): spinner cycling through ``SPINNER_FRAMES``,
       rail ``$hint``.
     - Interrupted (terminal, via ``render_terminal("interrupted")``):
-      ``─`` glyph, rail ``$hint``, dim text.
+      ``─`` glyph, rail ``$hint``, dim + struck-through text, widened
+      body copy ("Interrupted — turn cancelled") — bug-135's
+      at-a-glance fix so this terminal state doesn't read as a still-
+      spinning "Thinking…" row that merely swapped its glyph.
     - Error (terminal, via ``render_terminal("error")``): ``✗`` glyph,
       rail ``$error``, bold text.
 
@@ -99,7 +104,7 @@ class WorkingPlaceholder(Widget):
     }
     WorkingPlaceholder.-interrupted .working-body {
         color: $hint;
-        text-style: dim;
+        text-style: dim strike;
     }
     WorkingPlaceholder.-error .working-body {
         color: $error;
@@ -114,7 +119,16 @@ class WorkingPlaceholder(Widget):
     """
 
     _TERMINAL_BODY: ClassVar[dict[TerminalKind, str]] = {
-        "interrupted": "Interrupted",
+        # bug-135: widened from a bare "Interrupted" — a single word
+        # that only differed from "Thinking…" by its text and a small
+        # glyph swap was easy to misread as still-running. The em-dash
+        # phrase is more visually weighted (longer, reads as a
+        # sentence) and, combined with the `strike` text-style above,
+        # reads unambiguously as a resolved/terminal row rather than a
+        # stuck spinner. Does not touch `state_tokens.py` — this is
+        # this widget's own body copy, not the shared glyph/color
+        # vocabulary.
+        "interrupted": "Interrupted — turn cancelled",
         "error": "Error",
     }
     """Body text shown once ``render_terminal`` flips the placeholder."""
