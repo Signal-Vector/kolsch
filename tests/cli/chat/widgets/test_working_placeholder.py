@@ -42,6 +42,7 @@ from unittest import mock
 from uuid import uuid4
 
 import pytest
+from textual import events
 from textual.containers import VerticalScroll
 from textual.widgets import Static
 
@@ -188,7 +189,16 @@ async def test_render_terminal_interrupted_glyph_and_class(
 async def test_render_terminal_interrupted_rail_stays_hint(
     mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
-    """Interrupted state keeps the ``$hint`` rail (per the glyph/color table)."""
+    """Interrupted state keeps the ``$hint`` rail (per the glyph/color table).
+
+    bug-135: the shared ``"cancelled"`` token's rail color is
+    deliberately untouched (that's ``state_tokens.py``'s call, out of
+    this widget's scope) — the at-a-glance distinction bug-135 adds
+    lives in the body's text-style + copy instead (see
+    ``test_render_terminal_interrupted_body_is_dim_and_struck`` and
+    ``test_render_terminal_interrupted_body_text_is_widened`` below),
+    not the rail.
+    """
     widget = WorkingPlaceholder()
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
@@ -203,10 +213,16 @@ async def test_render_terminal_interrupted_rail_stays_hint(
 
 
 @pytest.mark.asyncio
-async def test_render_terminal_interrupted_body_is_dim(
+async def test_render_terminal_interrupted_body_is_dim_and_struck(
     mock_app_factory: Callable[[Widget], App[None]],
 ) -> None:
-    """Interrupted body text renders with ``dim`` text-style."""
+    """Interrupted body text renders with ``dim`` AND ``strike`` text-style.
+
+    bug-135: ``strike`` was added alongside the pre-existing ``dim`` so
+    the interrupted row reads unambiguously as terminal/dead rather
+    than "still thinking" — a bare glyph/text swap wasn't enough (see
+    bug-135's Background).
+    """
     widget = WorkingPlaceholder()
     app = mock_app_factory(widget)
     async with app.run_test() as pilot:
@@ -217,6 +233,28 @@ async def test_render_terminal_interrupted_body_is_dim(
 
         body = widget.query_one(".working-body", Static)
         assert bool(body.styles.text_style.dim)
+        assert bool(body.styles.text_style.strike)
+
+
+@pytest.mark.asyncio
+async def test_render_terminal_interrupted_body_text_is_widened(
+    mock_app_factory: Callable[[Widget], App[None]],
+) -> None:
+    """bug-135: interrupted body copy is widened beyond a bare "Interrupted".
+
+    A single word that only differed from "Thinking…" by its text
+    read as too subtle a change at a glance. The widened phrase is a
+    concrete, assertable part of the new visual contract.
+    """
+    widget = WorkingPlaceholder()
+    app = mock_app_factory(widget)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        widget.render_terminal("interrupted")
+        await pilot.pause()
+
+        assert _body_text(widget) == "Interrupted — turn cancelled"
 
 
 @pytest.mark.asyncio
@@ -3470,3 +3508,185 @@ async def test_error_sweep_does_not_touch_interrupted_helper_and_vice_versa(
 
         assert fail_calls_2 == [None]
         assert interrupt_calls_2 == []
+
+
+# ----------------------------------------------------------------------
+# bug-135: real Escape-keypress end-to-end cancel-visibility test
+# ----------------------------------------------------------------------
+#
+# Every cancel-flip test above drives `ExchangeCancelled` by having the
+# fake `engine.execute_stream` raise it directly (`_make_cancelled_event_
+# stream`) or by relying on Textual's `@work(exclusive=True)` preemption
+# (`_make_hanging_event_stream`) — neither ever calls `ChatApp.on_key`,
+# so neither exercises the real Escape key-routing state machine
+# (composer-approval guard -> esc-toast window -> `_cancel_butler_turn`
+# -> `request_cancel` -> `CancelToken.cancel()`) that a live `kolsch
+# chat` session actually uses. `test_esc_toast.py` DOES drive real Esc
+# keypresses through `on_key` (via its `_press_escape` helper) but its
+# fake `execute_stream` never yields any events at all, so it has no
+# `WorkingPlaceholder` to assert against.
+#
+# This fixture bridges the gap: a fake stream that yields USER_MESSAGE
+# (mounting a real, live, spinning WorkingPlaceholder) and then AWAITS
+# the real `ExecutionContext.cancellation` token — i.e. it behaves like
+# the real engine's cooperative-cancel checkpoint (see
+# `src/engine/_cancellation.py`, out of scope to touch/import here, but
+# this fixture reproduces its externally-observable contract: block
+# until the CancelToken fires, then raise `ExchangeCancelled`). A
+# physical `events.Key(key="escape")` fed through `app.on_key` is what
+# fires that token, exactly as a live Esc keypress does.
+
+
+def _make_token_aware_cancel_stream(
+    thread_id: str,
+) -> Callable[..., AsyncGenerator[Event, None]]:
+    """Fake ``engine.execute_stream``: yields USER_MESSAGE, then waits on the REAL token.
+
+    Mirrors the real engine's cooperative-cancel contract (see
+    ``src/engine/_cancellation.py``, not imported/touched here) closely
+    enough for this test's purposes: the turn stays genuinely "in
+    flight" (placeholder mounted, spinning) until
+    ``ctx.cancellation.wait_cancelled()`` resolves — which only happens
+    when something calls ``CancelToken.cancel()`` on the SAME token
+    instance the app attached to ``ExecutionContext.cancellation`` in
+    ``_run_exchange``. That's exactly what a real Escape keypress does
+    via ``on_key`` -> ``_cancel_butler_turn`` -> ``request_cancel``, so
+    driving this fixture via ``app.on_key`` (rather than injecting
+    ``ExchangeCancelled`` directly) genuinely exercises the real
+    Esc-to-cancel wiring, not just the placeholder's rendering.
+    """
+
+    async def _stream(*args: Any, **_kwargs: Any) -> AsyncGenerator[Event, None]:
+        ctx = args[1]
+        yield _make_user_message_event(thread_id)
+        await ctx.cancellation.wait_cancelled()
+        raise ExchangeCancelled(cancelled_at_event_id="")
+
+    return _stream
+
+
+class _MockEngineEscE2E:
+    def __init__(self, thread_id: str, *_args: Any, **_kwargs: Any) -> None:
+        self.execute_stream = _make_token_aware_cancel_stream(thread_id)
+
+
+class _MockRuntimeEscE2E:
+    def __init__(self, thread_id: str, *_args: Any, **_kwargs: Any) -> None:
+        self.store = _MockStoreStep2()
+        self.authz = _MockAuthzStep2()
+        self.engine = _MockEngineEscE2E(thread_id)
+
+
+def _make_app_esc_e2e(tmp_path: Path) -> ChatApp:
+    thread_id = f"th_{uuid4()}"
+    bundle = _MockBundleStep2(
+        runtime=_MockRuntimeEscE2E(thread_id),
+        config=_MockConfigStep2(),
+        session_id="ses_test",
+        thread_id=thread_id,
+        agent_ref="kolsch/agents/mock",
+        root=tmp_path,
+        model_label="mock/test",
+        is_resume=False,
+    )
+    return ChatApp(
+        session=bundle,
+        engine=bundle.runtime.engine,
+        full_history=False,
+    )
+
+
+async def _press_escape(app: ChatApp) -> None:
+    """Fire a real ``escape`` key event through ``ChatApp.on_key``.
+
+    Same shape as ``test_esc_toast.py``'s helper of the same name —
+    duplicated locally (rather than imported across test modules) since
+    this file has no existing cross-import of that module and a single
+    two-line helper doesn't warrant introducing one.
+    """
+    event = events.Key(key="escape", character=None)
+    await app.on_key(event)
+
+
+@pytest.mark.asyncio
+async def test_real_escape_keypress_flips_placeholder_to_visually_distinct_interrupted(
+    tmp_path: Path,
+) -> None:
+    """bug-135 AC #4: a real Esc keypress through `on_key` yields the new terminal look.
+
+    Drives the full real path — `events.Key("escape")` -> `ChatApp.
+    on_key` -> `_cancel_butler_turn()` -> `request_cancel()` ->
+    `CancelToken.cancel()` -> the fake stream's `wait_cancelled()`
+    resolves -> `ExchangeCancelled` raised inside `_run_exchange` ->
+    `_interrupt_live_registries()` -> `_sweep_live_registries
+    ("interrupted")` -> `placeholder.render_terminal("interrupted")` —
+    with a REAL `WorkingPlaceholder` mounted for the in-flight turn.
+    Not a direct `render_terminal()` call, not an injected
+    `ExchangeCancelled` bypassing `on_key`.
+
+    Asserts both the pre-existing terminal markers (glyph/class,
+    `is_terminal`/`terminal_kind`) AND the bug-135 visual-distinction
+    additions (struck-through body text-style, widened body copy) —
+    the new contract this bug adds, not just what the old tests already
+    covered.
+    """
+    app = _make_app_esc_e2e(tmp_path)
+    async with app.run_test() as pilot:
+        await pilot.pause()
+
+        app._run_exchange("hello there")
+        # Pump enough for USER_MESSAGE to be processed (mounting the
+        # placeholder) but the fake stream is now parked on
+        # `wait_cancelled()` — it will hang here until Esc fires below.
+        await pilot.pause()
+        await pilot.pause()
+
+        placeholders = app.query(WorkingPlaceholder)
+        assert len(placeholders) == 1, (
+            "the placeholder must be mounted and still live before Esc — "
+            "test setup invalid otherwise"
+        )
+        placeholder = placeholders.first()
+        assert placeholder.is_terminal is False, (
+            "placeholder must still be in its live working state before "
+            "the real Esc keypress — otherwise this test wouldn't be "
+            "exercising a real live-to-terminal transition"
+        )
+        assert app._butler_turn_active() is True, (
+            "on_key's cancel branch requires an active butler turn — "
+            "test setup invalid otherwise"
+        )
+
+        # The real Escape keypress, routed through the real handler —
+        # NOT a direct render_terminal() call, NOT an injected
+        # ExchangeCancelled.
+        await _press_escape(app)
+        await pilot.pause()
+        await pilot.pause()
+        await pilot.pause()
+
+        # Terminal markers (pre-existing contract, still true).
+        # `terminal_kind == "interrupted"` implies `is_terminal` — checking
+        # only this (stronger) assertion also sidesteps a mypy narrowing
+        # false-positive: asserting `is_terminal is False` earlier on this
+        # same object, then `is True` later (a real state change from the
+        # intervening `_press_escape` call mypy can't see through), makes
+        # mypy incorrectly flag the later code as unreachable. Same
+        # precedent as
+        # `test_exclusive_worker_supersession_interrupts_turn_a_placeholder`
+        # above.
+        assert placeholder.terminal_kind == "interrupted"
+        assert _glyph_text(placeholder) == "─"
+        assert placeholder.has_class("-interrupted")
+
+        # bug-135's new visual-distinction contract: struck-through
+        # body text-style (alongside the pre-existing dim) and widened
+        # body copy — reached via the REAL Esc path, not a direct call.
+        body = placeholder.query_one(".working-body", Static)
+        assert bool(body.styles.text_style.dim)
+        assert bool(body.styles.text_style.strike)
+        assert _body_text(placeholder) == "Interrupted — turn cancelled"
+
+        # Registry hygiene, matching the direct-injection cancel tests.
+        assert app._live_placeholders == {}
+        assert app._working_placeholder is None
