@@ -124,7 +124,16 @@ Issues = "https://github.com/Signal-Vector/kolsch/issues"
 kolsch = "cli:main"
 
 [build-system]
-requires = ["hatchling>=1.25"]
+# Exact-pinned, not a floor: PEP 517 build-backend deps aren't covered
+# by uv.lock's --frozen guarantee, so an unpinned hatchling>=1.25 let
+# the gate's container silently resolve a fresh hatchling/trove-
+# classifiers pair from PyPI on every build. That drifted into an
+# incompatible combo (hatchling's classifiers validation hit
+# `AttributeError: module 'trove_classifiers' has no attribute
+# 'classifiers'`) and broke the local full gate (bug-135). Pinning both
+# exactly restores the "reproducible from uv.lock" guarantee the
+# Containerfile already documents for the rest of the dependency graph.
+requires = ["hatchling==1.32.0", "trove-classifiers==2026.6.1.19"]
 build-backend = "hatchling.build"
 
 # The src/ layout follows AGENTS.md exactly: each subsystem is a
