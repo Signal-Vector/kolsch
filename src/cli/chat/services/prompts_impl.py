@@ -455,7 +455,7 @@ class PromptsImpl(AbstractPrompts):
         """Resolve the in-flight future for `prompt_id` with `response`.
 
         Called by
-        [`EventAdapter._handle_ui_event`][cli.chat.event_adapter.EventAdapter._handle_ui_event]
+        `EventAdapter._handle_ui_event`
         on `WIRE_PROMPT_ANSWERED`. Idempotent — no-op when the future
         is already done or the prompt_id doesn't match the in-flight
         one (a stale event from a previous prompt).
@@ -493,7 +493,7 @@ class PromptsImpl(AbstractPrompts):
         """Cancel the in-flight future for `prompt_id`.
 
         Called by
-        [`EventAdapter._handle_ui_event`][cli.chat.event_adapter.EventAdapter._handle_ui_event]
+        `EventAdapter._handle_ui_event`
         on `WIRE_PROMPT_CANCELLED`. Idempotent — no-op when the
         future is already done or the prompt_id doesn't match.
         Raises `asyncio.CancelledError` from the awaiting `choice()`

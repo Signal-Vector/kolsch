@@ -6,7 +6,7 @@ spec-013 §WorkflowNodeRow. Mounted inside a
 [`WorkflowNodeList`][cli.chat.widgets.card_body.workflow.WorkflowNodeList]
 by [`WorkflowRenderer.apply_event`][cli.chat.widgets.card_body.workflow.WorkflowRenderer.apply_event]
 on `workflow.node.started`. The row is a
-[`Collapsible`][textual.widgets.Collapsible] with a reactive
+`Collapsible` with a reactive
 `state` field driving CSS class + glyph.
 
 State machine (6 canonical states — qol-084 migrated the historical
@@ -852,7 +852,7 @@ class WorkflowNodeRow(Collapsible):
         """feat-104: mount a forward link to the child sub-workflow's card.
 
         Called by
-        [`WorkflowRenderer._on_called_workflow`][cli.chat.widgets.card_body.workflow.WorkflowRenderer._on_called_workflow]
+        `WorkflowRenderer._on_called_workflow`
         when the parent's ``workflow.node.called_workflow`` event lands.
         Gated on ``self._node_type == "kolsch/nodes/workflow"`` (same gate
         style as the ``kolsch/nodes/agent`` check in ``set_output``); a
@@ -884,7 +884,7 @@ class WorkflowNodeRow(Collapsible):
         """feat-104: update the child link's status suffix on completion.
 
         Called by
-        [`WorkflowRenderer._on_called_workflow_completed`][cli.chat.widgets.card_body.workflow.WorkflowRenderer._on_called_workflow_completed]
+        `WorkflowRenderer._on_called_workflow_completed`
         when the parent's ``workflow.node.called_workflow_completed``
         event lands. Gated on the workflow node type; a no-op when no
         link was mounted (e.g. a CALLED_WORKFLOW_COMPLETED that arrived

@@ -1,7 +1,7 @@
 """`ProgressRenderer` — progress card body renderer.
 
 spec-007 §Body renderers. Renders a message line + a
-[`ProgressBar`][textual.widgets.ProgressBar]. Consumes
+`ProgressBar`. Consumes
 `kolsch.card.set_progress` events; snapshots are a no-op (progress
 cards carry no cumulative history).
 """

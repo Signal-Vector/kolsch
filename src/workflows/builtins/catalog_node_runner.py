@@ -147,8 +147,7 @@ class CatalogNodeRunner:
 
         Returns `None` when the catalog entry can't be resolved or
         its `run` signature isn't typed with a Pydantic model.
-        Invoked by
-        [`workflows._inputs_models.inputs_model_for`][workflows._inputs_models.inputs_model_for]
+        Invoked by `workflows._inputs_models.inputs_model_for`
         so the executor's strict-mode bind-validation hook covers
         authored Python receivers too. Caches via `_resolve`'s
         import cache — repeat lookups for the same ref don't

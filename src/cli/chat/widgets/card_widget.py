@@ -1,7 +1,7 @@
 """`CardWidget` — Textual `Collapsible` subclass for a live card.
 
 spec-007 §CardWidget. Mounted per `card_id` by
-[`EventAdapter._handle_card_opened`][cli.chat.event_adapter.EventAdapter._handle_card_opened].
+`EventAdapter._handle_card_opened`.
 Implements the
 [`CardMountState`][cli.chat.event_adapter.CardMountState] Protocol
 from spec-006 so the adapter's card handlers dispatch through the

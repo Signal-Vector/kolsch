@@ -45,7 +45,7 @@ CardStatus = Literal["queued", "running", "cancelling", "success", "error", "can
 still working; the three terminal states are what `close(final_status=...)`
 accepts. `queued` and `cancelling` are intermediate states — the
 widget layer paints a glyph for each (see
-[`CARD_KIND_REGISTRY`][tools.services.card_kinds.CARD_KIND_REGISTRY]'s
+`CARD_KIND_REGISTRY`'s
 `header_glyph_by_status`); `cancelling` is the services-only state
 `WorkflowsImpl.cancel()` drives cards through. `set_status` may drive
 through any of the six.
@@ -69,7 +69,7 @@ class Card(Protocol):
     transfer to a service (e.g.
     [`Workflows.start(card=)`][tools.services.workflows.Workflows.start]
     in spec-017) which then owns the terminal transition. See
-    [`_owner_transferred`][tools.services.cards.Card._owner_transferred].
+    `_owner_transferred`.
     """
 
     id: CardId

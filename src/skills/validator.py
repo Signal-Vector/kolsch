@@ -6,7 +6,7 @@ resolves to a discovered skill in the catalog, and that no `ref`
 appears twice.
 
 The validator dispatched by the kernel must honour the
-[`ConfigValidator`][kernel.ConfigValidator] signature — sync,
+`ConfigValidator` signature — sync,
 `Callable[[dict], ValidationResult]`. To carry the catalog dependency
 we expose a *factory* that closes over an [`AssetManagement`]
 [assets.AssetManagement] and returns the closure the kernel calls. The
@@ -32,8 +32,8 @@ _SOURCE = "skills.standard"
 def make_standard_validator(asset_management: AssetManagement) -> ConfigValidator:
     """Build the Layer 3 validator dispatched for `skills.variant=standard`.
 
-    The returned callable matches [`ConfigValidator`]
-    [kernel.ConfigValidator] exactly: it takes the `config` body (the
+    The returned callable matches `ConfigValidator`
+    exactly: it takes the `config` body (the
     dict inside `{variant, config}`) and returns a [`ValidationResult`]
     [kernel.ValidationResult].
 

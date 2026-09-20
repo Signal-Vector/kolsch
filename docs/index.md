@@ -1,37 +1,25 @@
 # Kolsch
 
-Kolsch is a local Python runtime where the agents you build and the
-workflows that call them share one context, one event log, one
-package format.
+Define an agent once, in YAML. Run it as a conversation, a one-shot
+call, or a step inside a bigger workflow — the same definition, three
+ways to use it. Kolsch is the local-first, Python-native harness that
+runs it: every exchange lands in an append-only JSONL event log you
+can replay and resume byte-for-byte (see the
+[event log contract](explanation/event-log-contract.md)).
 
 ---
 
 ## What it is
 
 - **Agents.** Configurations you inherit from, extend, and pair with
-  your own tools and instructions.
-- **Workflows.** YAML files that describe a graph of steps. Steps
-  can call agents, run Python, read and write state, or invoke other
-  workflows.
+  your own tools and instructions. Talk to one directly, or call it
+  as a step from a workflow.
+- **Workflows.** Deterministic, YAML-defined graphs of steps (DAGs) —
+  not another agent loop. A step can call an agent, run Python, read
+  and write state, branch, fan out, or invoke another workflow.
 
 Both live in the same catalog. Both run on the same local runtime.
 Every session lands as a plain JSONL log on disk.
-
-## Where it sits
-
-Agent tools handle open-ended one-to-one chat but not multi-step
-orchestration. Workflow tools handle deterministic pipelines but
-know nothing about the person running them. Kolsch is one runtime
-for both.
-
-|  | Workflow tools (n8n, CrewAI) | Agent chat tools | Kolsch |
-|---|---|---|---|
-| Multi-step orchestration | Yes | No | Yes |
-| Agent context that travels between steps | No | Yes | Yes |
-| Extend an agent you already built | No | Partial | Yes |
-| Reuse the same tool across agents and workflows | Partial | No | Yes |
-| Resume a conversation from last week | No | Partial | Yes |
-| Runs locally with no external services | Partial | No | Yes |
 
 ## Bundles
 
@@ -43,8 +31,12 @@ with one name.
 That means:
 
 - **Extend someone else's agent.** Point `extends:` at another
-  bundle's agent and inherit its instructions, tools, and skills.
-  Override what you want, keep the rest.
+  bundle's agent. Any field you don't set falls through to the
+  parent; any field you do set replaces the parent's value for that
+  field — including list fields like `tools:` and `skills:`, which
+  replace rather than merge. See
+  [Extending an agent](how-to/extending-an-agent.md) for the exact
+  rules.
 - **Reuse tools across agents.** A tool written in one bundle is
   callable from any agent in any bundle, subject to permissions.
 - **Bundles don't share permissions.** A new bundle's tools don't
@@ -56,7 +48,7 @@ That means:
 
 ```
 bundles/my-bundle/
-├── bundle.yaml       # name, version, permissions
+├── bundle.yaml       # name, version, description, permissions
 ├── agents/           # *.yaml
 ├── tools/            # @tool Python modules
 ├── skills/           # SKILL.md folders
@@ -73,9 +65,8 @@ copying a directory into `bundles/` — git clone, tar, cp.
   build on any bundle. Your work stacks on top of what already
   exists instead of forking it.
 - **Strictly typed configuration.** Mistakes in a YAML file surface
-  at load time with the filename, the field, and a Fix: line — not
-  as a stack trace three steps into a run. See
-  [Schemas](reference/schemas.md).
+  at load time — the field that's wrong and why, not a stack trace
+  three steps into a run. See [Schemas](reference/schemas.md).
 - **Workflows compose your agents, tools, and bundle assets.** A
   workflow step can call any agent you've built, any tool you've
   written, and any asset any bundle exposes — all under the same
@@ -110,7 +101,10 @@ kolsch setup
 kolsch chat kolsch/agents/helper
 ```
 
-The [first-agent tutorial](tutorials/first-agent.md) walks the same
+`kolsch setup` is interactive — it walks you through connecting a
+provider. Skip that step and the starter agent runs on a mock LLM
+instead (kolsch tells you when it does). The
+[first-agent tutorial](tutorials/first-agent.md) walks the same
 three commands and shows the JSONL.
 
 ---
@@ -136,7 +130,6 @@ three commands and shows the JSONL.
 
 - [Architecture](architecture/index.md)
 - [Event log contract](explanation/event-log-contract.md)
-- [Framework protocol design](explanation/framework-protocol-design.md)
 
 ### Look up
 

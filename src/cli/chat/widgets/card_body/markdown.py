@@ -1,7 +1,7 @@
 """`MarkdownRenderer` — buffered `Markdown` body renderer.
 
 spec-007 §Body renderers. Wraps Textual's built-in
-[`Markdown`][textual.widgets.Markdown] with a 100ms flush interval
+`Markdown` widget with a 100ms flush interval
 so a 40 Hz `card.appended` stream doesn't repaint the terminal 40
 times per second (see spec-007 AC #7 — no visible flicker under
 high-frequency streaming).

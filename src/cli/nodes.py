@@ -9,7 +9,7 @@ Two subcommands, symmetric in shape with `kolsch workflows`:
   registration).
 
 Both commands accept `--format text|json`; output routes through the
-shared [`render`][cli._format.render] helper.
+shared `render` (private) helper.
 
 `kolsch nodes run` is not shipped here; deferred to a later milestone.
 """

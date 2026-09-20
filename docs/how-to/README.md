@@ -1,18 +1,20 @@
 # Guides
 
-Walkthroughs for common tasks: setting up a workspace, configuring
-agents, and working with the CLI.
+Task-focused recipes for one specific job — connecting a provider,
+writing a tool, configuring permissions — assuming kolsch is already
+set up.
 
 ## Start here
 
 - [First agent](../tutorials/first-agent.md) — set up a workspace,
   write an agent YAML, and run a chat session end-to-end.
 - [Connect a provider](connect-a-provider.md) — from an empty
-  workspace to a real LLM. OpenRouter and OpenCode connectors.
+  workspace to a real LLM. OpenRouter, OpenCode, and Claude Code
+  connectors.
 - [Workspace and setup](workspace-and-setup.md) — where the workspace
   lives, switching between workspaces, scripting setup for CI.
 
-## Extend the platform
+## Extend and integrate
 
 - [Build a workflow](build-a-workflow.md) — wire the built-in node
   types into a DAG for a real task. Nodes, edges, binds, branching.
@@ -22,6 +24,9 @@ agents, and working with the CLI.
 - [Write a workflow node](write-a-workflow-node.md) — author a
   custom `@node`-decorated Python module that becomes a
   `<bundle>/nodes/<name>` step in workflow YAML.
+- [MCP operator server](mcp-operator-server.md) — run `kolsch mcp
+  serve` so an external agent (e.g. Claude Code) can list sessions
+  and read event logs over the Model Context Protocol.
 
 ## Configure agents
 
@@ -34,11 +39,11 @@ agents, and working with the CLI.
   the agent can't skip it.
 - [Configuring fallbacks](configure-fallbacks.md) — declare backup
   models per agent so a transient 429 doesn't end the exchange.
-- [Finding models](find-models.md) — list discovered models per
-  connected provider so you know what to put in `model:`.
 
 ## Day-to-day
 
+- [Finding models](find-models.md) — list discovered models per
+  connected provider so you know what to put in `model:`.
 - [Chatting effectively](chatting-effectively.md) — long sessions,
   mid-session model switches, approving bash patterns, resuming with
   `--session`.

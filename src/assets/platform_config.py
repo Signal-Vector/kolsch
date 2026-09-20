@@ -332,8 +332,7 @@ def is_known_section(name: str) -> bool:
 def authorization_rule_source_map(root: Path) -> dict[int, tuple[str, int]]:  # noqa: PLR0911 — one early-return per graceful-fallback path (§Design)
     """Return `{rule_index: (source_file, source_line)}` for the platform's rules.
 
-    Re-reads `platform.yaml` via
-    [`load_with_positions`][_yamlio.load_with_positions] and walks the
+    Re-reads `platform.yaml` via `load_with_positions` and walks the
     `authorization.config.rules` list, recording each rule's YAML line
     (1-indexed) alongside the absolute source path.
 

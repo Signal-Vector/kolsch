@@ -3,14 +3,21 @@
 [![ci](https://github.com/Signal-Vector/kolsch/actions/workflows/ci.yml/badge.svg)](https://github.com/Signal-Vector/kolsch/actions/workflows/ci.yml)
 [![docs](https://github.com/Signal-Vector/kolsch/actions/workflows/docs.yml/badge.svg)](https://signal-vector.github.io/kolsch/)
 
-A local-first, definition-orchestrated multi-agent workflow platform.
-YAML is the source of truth; a Python backend executes agents through a
-pluggable framework adapter; everything is captured in an append-only
-event log (JSONL) that serves as ground truth.
+Kolsch is a local-first, Python-native agent harness. Define an
+agent in YAML, run it from a CLI, an HTTP API, or a workflow step —
+every exchange is captured to an append-only JSONL event log you can
+replay and resume byte-for-byte (see the
+[event log contract](docs/explanation/event-log-contract.md)).
 
-Define an agent in YAML, run it via CLI or HTTP API, watch it work
-through tool use, or compose agents and Python steps into workflows —
-every session fully replayable, inspectable, and resumable.
+Two things anchor the design:
+
+- **Bundles.** An agent, the tools it calls, the skills it loads, and
+  the workflows that orchestrate it ship together as one folder with
+  one name. Extend someone else's agent, reuse someone else's tool,
+  share the whole thing by copying a directory.
+- **DAG workflows.** Deterministic multi-step processes — not just
+  single-agent chat — where each step can call an agent, run Python,
+  read or write state, or invoke another workflow.
 
 ---
 
@@ -21,8 +28,11 @@ workflow engine (agents and Python steps composed into DAGs), three
 framework adapters (a built-in minimal loop by default, opt-in CrewAI,
 and an external-harness subprocess adapter), three LLM connectors
 (OpenRouter, OpenCode, and Claude Code), and an MCP operator server.
-Still moving: YAML shapes may shift and there's no bundle registry
-yet. Use it locally — not for a multi-tenant SaaS.
+Still moving: agent and workflow YAML shapes may still change between
+releases, so expect to update files when you upgrade. Sharing a
+bundle (a packaged set of agents, tools, and workflows) today means
+copying a directory; there's no registry yet. Use it locally — not
+for a multi-tenant SaaS.
 
 ## Design at a glance
 
@@ -57,6 +67,11 @@ kolsch chat kolsch/agents/helper      # streaming REPL: tokens, tool calls, /com
 kolsch run kolsch/agents/helper --input content="hello"
 ```
 
+`kolsch/agents/helper` is a bundle reference: `kolsch` is the
+starter bundle `setup` installed, `agents/helper` is the agent
+inside it. Every agent, tool, skill, and workflow resolves the same
+way — `<bundle>/<type>/<name>`.
+
 `kolsch chat` is the recommended day-2 command: a streaming
 conversation against the agent (token-by-token rendering,
 collapsible tool-call blocks, a four-choice approval modal for
@@ -73,44 +88,50 @@ credentials.
 - **If you connect a provider during setup**, the starter agent uses
   its first model — real answers from the first run.
 - **If you skip the provider step**, the starter agent ships with the
-  built-in **mock LLM** (echoes your input back). `kolsch run` prints
-  a clearly-labelled warning to stderr so you don't mistake echoes
-  for real replies. Connect a provider any time via `kolsch connect`
-  and update the agent's `model:` field.
+  built-in **mock LLM** (echoes your input back). `kolsch setup`
+  prints a clearly-labelled notice so you don't mistake echoes for
+  real replies. Connect a provider any time via `kolsch connect` and
+  update the agent's `model:` field.
 
 The helper agent ships with four canonical tools — `read_file`,
 `write_file`, `list_files`, and `bash` — that the model can call
 inside the workspace. `read_file` and `list_files` run silently
 within `file_access.allowed_paths`; `write_file` and `bash` default
-to `prompt` so the chat surface (Phase 2.1) asks before the agent
-modifies your machine. `kolsch permissions {list, add, remove}`
-edits the rule list out of chat; see `docs/how-to/permissions.md`.
+to `prompt` so the chat surface asks before the agent modifies your
+machine. `kolsch permissions {list, add, remove, show}` edits the
+rule list out of chat; see `docs/how-to/permissions.md`.
 
 Find available models with `kolsch models` (all providers) or
 `kolsch models <provider>`. See `docs/how-to/workspace-and-setup.md`
 for switching between workspaces and `docs/how-to/find-models.md`
 for the model-discovery recipes.
 
-## Where to start reading
-
-Start with the documentation index: [`docs/index.md`](docs/index.md).
+## Documentation
 
 The full documentation renders at
 [signal-vector.github.io/kolsch](https://signal-vector.github.io/kolsch/).
+Fastest way in from here:
+
+- **New to Kolsch?** [First agent](docs/tutorials/first-agent.md) (a
+  10-minute walkthrough) or
+  [Connect a provider](docs/how-to/connect-a-provider.md).
+- **Building something?** [Build a workflow](docs/how-to/build-a-workflow.md),
+  [Write a tool](docs/how-to/write-a-tool.md),
+  [Extending an agent](docs/how-to/extending-an-agent.md).
+- **Understanding how it works?**
+  [Architecture overview](docs/architecture/index.md),
+  [Event log contract](docs/explanation/event-log-contract.md).
+- **Looking something up?** [Schemas](docs/reference/schemas.md),
+  [Workflow YAML](docs/reference/workflow-yaml.md),
+  [API reference](docs/api/index.md).
+
+Everything above lives under [`docs/`](docs/index.md), organized by
+the [Diátaxis](https://diataxis.fr/) framework: tutorials to learn,
+how-to guides to build, architecture/explanation to understand,
+reference to look up.
 
 If you are an AI agent working on this codebase, read
 [`AGENTS.md`](AGENTS.md) first.
-
-## Documentation structure
-
-Documentation follows the [Diátaxis](https://diataxis.fr/) framework:
-
-- **`docs/explanation/`** — architecture and rationale.
-- **`docs/architecture/`** — per-subsystem design overviews.
-- **`docs/reference/`** — schemas and the module API reference.
-- **`docs/process/`** — engineering practices and testing strategy.
-- **`docs/how-to/`** — task guides.
-- **`docs/tutorials/`** — learning paths.
 
 ## Development
 
@@ -121,8 +142,8 @@ by their parallelism profile so each one runs in the cheapest way:
 
 ```bash
 ./scripts/test.sh fast   # tests/unit only, serial (~1s)
-./scripts/test.sh slow   # component + integration + golden, -n auto (~32s)
-./scripts/test.sh all    # fast then slow (~34s total for ~1,900 tests)
+./scripts/test.sh slow   # component + integration + golden, -n auto
+./scripts/test.sh all    # fast then slow
 ./scripts/test.sh cov    # CI-style invocation with coverage on
 ```
 

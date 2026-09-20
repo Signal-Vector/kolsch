@@ -48,7 +48,7 @@ class CardKindSpec:
     """Frozen metadata for one entry in the card-kind registry.
 
     Instances live in
-    [`CARD_KIND_REGISTRY`][tools.services.card_kinds.CARD_KIND_REGISTRY]
+    `CARD_KIND_REGISTRY`
     keyed by `name`. Frozen so accidental mutation is a loud failure
     rather than a silent registry corruption.
     """
@@ -154,7 +154,7 @@ def get_kind_spec(kind: str) -> CardKindSpec:
 
     Raises:
         UnknownCardKind: `kind` is not in
-            [`CARD_KIND_REGISTRY`][tools.services.card_kinds.CARD_KIND_REGISTRY].
+            `CARD_KIND_REGISTRY`.
             The message includes the sorted list of known kinds and a
             pointer to the issue template so the caller has an
             actionable next step.
