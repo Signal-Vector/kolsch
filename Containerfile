@@ -51,15 +51,13 @@ WORKDIR /workspace
 # itself yet — that happens after the source is mounted/copied so the
 # wheel build sees real packages, not empty placeholders.
 COPY pyproject.toml uv.lock README.md ./
-# id=uv-cache-v2 (bug-135): the unnamed cache mount had gone stale on
-# this host's podman build-cache store, serving a build-isolation
-# resolution from before pyproject.toml's [build-system].requires was
-# exact-pinned — the gate kept reproducing a since-fixed hatchling/
-# trove-classifiers AttributeError even after the pin landed. Naming
-# the mount forces a clean cache instead of silently reusing whatever
-# unnamed cache happened to exist. Bump the suffix again if this ever
-# recurs.
-RUN --mount=type=cache,id=uv-cache-v2,target=/root/.cache/uv \
+# id=uv-cache-v3 (recurrence of bug-135): v2's named cache mount itself
+# went stale on this host — `uv sync` failed resolving the pinned
+# build backend with `ModuleNotFoundError: No module named
+# 'hatchling.build'` even though pyproject.toml's [build-system] pin
+# was already correct. Bumping the suffix again forces a clean cache,
+# per the v2 comment's own instruction. Bump again if this recurs.
+RUN --mount=type=cache,id=uv-cache-v3,target=/root/.cache/uv \
     uv sync --frozen --no-install-project --all-groups
 
 # --- Source layer --------------------------------------------------------
@@ -89,9 +87,9 @@ COPY docs ./docs
 COPY bundles ./bundles
 
 # Install the project package itself (editable in-tree).
-# id=uv-cache-v2: same cache as the dependency layer above — see that
+# id=uv-cache-v3: same cache as the dependency layer above — see that
 # RUN instruction's comment (bug-135).
-RUN --mount=type=cache,id=uv-cache-v2,target=/root/.cache/uv \
+RUN --mount=type=cache,id=uv-cache-v3,target=/root/.cache/uv \
     uv sync --frozen --all-groups
 
 # scripts/ holds commit-gate helpers — the gate runs
