@@ -254,6 +254,20 @@ test = [
     # no-op writers don't contend.
     "pytest-xdist>=3.5,<4",
     "testcontainers>=4.7",
+    # pty-spawning for tests/e2e/console/ — drives the real `kolsch
+    # chat` binary through a genuine pseudo-terminal (not Textual's
+    # in-process Pilot API) so process-boundary bugs (real subprocess
+    # boot, real credential loading, real terminal I/O) are in scope.
+    # Test-only; the tool itself never touches pexpect.
+    "pexpect>=4.9",
+    # Terminal emulator backing tests/e2e/console/harness.py's screen
+    # capture. Interpreting the pty byte stream as an ever-growing raw
+    # buffer was tried and discarded live: Textual's cursor blink alone
+    # keeps writing bytes forever, so a naive "no new bytes" idle check
+    # never fires. `pyte` interprets cursor movement/overwrites into an
+    # actual bounded rows x cols grid, so "idle" means the rendered
+    # screen itself stopped changing.
+    "pyte>=0.8",
     # FastAPI's TestClient is starlette.testclient.TestClient, which
     # tries `import httpx2 as httpx` first (starlette deprecated
     # httpx in favour of httpx2; see
@@ -654,7 +668,14 @@ exclude = [
 [[tool.mypy.overrides]]
 # Third-party libraries without type stubs land here as they get adopted.
 # Add ignores explicitly so the scope of "untyped" stays visible.
-module = ["testcontainers.*", "bs4", "trafilatura", "playwright.*"]
+module = [
+    "testcontainers.*",
+    "bs4",
+    "trafilatura",
+    "playwright.*",
+    "pexpect.*",
+    "pyte.*",
+]
 ignore_missing_imports = true
 
 [[tool.mypy.overrides]]
