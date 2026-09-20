@@ -58,7 +58,7 @@ to state.
   plugins, or MCP servers from the invoking workspace (a correctness-
   pollution AND instruction-injection vector). See the `--bare`
   deviation note on `_ClaudeCodeLLM._build_argv`.
-- *No headless hang.* `--disallowedTools "*"` + `--permission-mode
+- *No headless hang.* `--disallowedTools=*` + `--permission-mode
   dontAsk` so a no-TTY child never blocks on a permission prompt.
 - *Timeout + reap.* The subprocess timeout sits **below** the adapter's
   `asyncio.wait_for` wrap so the connector's own Recoverable
@@ -339,8 +339,26 @@ class _ClaudeCodeLLM(BaseLLM):
         The shared prefix comes from
         [`build_base_argv`][llm.claude_cli.build_base_argv] (spec-121
         extraction); this provider then appends its text-only mode flag
-        `--disallowedTools "*"` — a no-TTY child never blocks on a tool
+        `--disallowedTools=*` — a no-TTY child never blocks on a tool
         permission prompt and cannot run tools at all.
+
+        Live-verified bug (found while building the console e2e
+        harness): the installed `claude` CLI declares
+        `--disallowedTools`/`--allowedTools` as variadic
+        (`<tools...>`), greedily consuming every subsequent bare
+        argv token. Passed as two tokens (`"--disallowedTools", "*"`)
+        with no `system_prompt` to interpose `--append-system-prompt`
+        before `body`, the trailing prompt text itself got swallowed
+        into the tools list, leaving `claude -p` with no prompt
+        argument at all ("Input must be provided either through
+        stdin or as a prompt argument"). This broke
+        `validate_credentials`'s probe (a plain user message, no
+        system prompt) — i.e. `kolsch connect claude_code` itself —
+        while incidentally sparing ordinary chat turns, which always
+        carry an agent's `prompt:` as a system message. Fixed by
+        passing `--disallowedTools=*` as one single-`=`-bound argv
+        token, which cannot absorb anything that follows it
+        regardless of what comes next.
 
         DEVIATION FROM SPEC (spike-confirmed): the spec recommends
         `--bare`, but against the installed `claude` 2.1.x `--bare`
@@ -356,7 +374,7 @@ class _ClaudeCodeLLM(BaseLLM):
         this combination isolates config AND keeps subscription auth.
         """
         argv = build_base_argv(binary=self.binary_path, model=self.model)
-        argv += ["--disallowedTools", "*"]
+        argv.append("--disallowedTools=*")
         if system_prompt:
             argv += ["--append-system-prompt", system_prompt]
         argv.append(body)

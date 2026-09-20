@@ -5,7 +5,7 @@ BOTH consumers of the local `claude` binary share one source of truth:
 
 - the **provider** connector
   ([`ClaudeCodeConnector`][llm.providers.claude_code.ClaudeCodeConnector],
-  text-only `claude -p`, spec-118) — appends `--disallowedTools "*"`;
+  text-only `claude -p`, spec-118) — appends `--disallowedTools=*`;
 - the **framework** (`SubprocessAgentFramework` + `ClaudeCodeHarness`,
   spec-121 T3) — appends `--allowedTools <mcp wire names>` +
   `--mcp-config <inline json>` so Claude runs its own agentic loop
@@ -202,7 +202,7 @@ def build_base_argv(*, binary: str, model: str) -> list[str]:
       incompatible with subscription auth (spec-118's spike).
 
     Callers append their own tool-mode flags: the provider adds
-    `--disallowedTools "*"` (text-only); the framework adds
+    `--disallowedTools=*` (text-only); the framework adds
     `--allowedTools <wire names>` + `--mcp-config <json>`. Do not
     unify those here.
     """

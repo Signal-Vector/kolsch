@@ -8,7 +8,7 @@ through the **injected runner**, never a live `claude`:
   `LLMResponse(content=…, tool_calls=None)`; `supports_function_calling`
   is `False`.
 - **invocation** (Test 4): captured argv / env / cwd show the redirect
-  vars scrubbed, `--disallowedTools "*"`, `--permission-mode dontAsk`,
+  vars scrubbed, `--disallowedTools=*`, `--permission-mode dontAsk`,
   `--model <id>`, a neutral (temp, non-repo) cwd, and config isolation
   (`--setting-sources user`). See the `--bare` deviation note in the
   connector docstring — `--bare` is INCOMPATIBLE with subscription auth
@@ -293,7 +293,11 @@ def test_claude_code_invocation_argv_shape(tmp_path: Any) -> None:
     assert "-p" in argv
     assert argv[argv.index("--output-format") + 1] == "json"
     assert argv[argv.index("--model") + 1] == "sonnet"
-    assert argv[argv.index("--disallowedTools") + 1] == "*"
+    # Single `=`-bound token (not two separate argv entries) — the
+    # installed `claude` CLI declares `--disallowedTools` variadic
+    # (`<tools...>`), which would otherwise swallow a following bare
+    # `body` positional with no intervening recognized flag.
+    assert "--disallowedTools=*" in argv
     assert argv[argv.index("--permission-mode") + 1] == "dontAsk"
     # Config isolation (the --bare-replacement; see connector docstring).
     assert argv[argv.index("--setting-sources") + 1] == "user"
